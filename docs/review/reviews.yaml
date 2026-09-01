@@ -87,3 +87,56 @@ reviews:
     - docs/design/vision/concept_b_underbody/view-hero.png
     - docs/design/vision/concept_b_underbody/view-top.png
     - docs/design/vision/manifest.json
+- id: sizing
+  title: Top-level sizing and the actuator requirement
+  stage: sizing
+  summary: 'Mass budget (49 kg unloaded, 149 kg with a rider), load cases, joint torques and
+    speeds for both stances, stability, and the actuator requirement that falls out: 92 N·m
+    continuous, 151 N·m for 10 min, 179 N·m peak, 9 rad/s, Ø170 x 42 mm, 1.1 kg, eighteen
+    identical. First check of the PCB axial-flux motor with in-plane cycloid: two stators
+    at 50:1 close the requirement, one does not.'
+  questions:
+  - Is 1.1 kg per actuator and 49 kg unloaded a budget you accept, or should the robot be
+    lighter and the rider case go?
+  - Are the dynamic factors (1.5x walking, 3x stumble) and the 30 degree slope the right conservatism
+    for the terrain demo?
+  - Do you accept two stator PCBs per motor at 50:1 as the nominal actuator architecture to
+    take into the actuator stage, with 1 m/s as the speed target and 2 m/s dropped?
+  artifacts:
+  - path: docs/design/01-sizing.md
+    sha256: 9aa076ee791eec49
+  - path: docs/design/sizing/leg-stance.png
+    sha256: 48175d7678e12e45
+  - path: docs/design/sizing/ratio-trade.png
+    sha256: 8e118226542ffbde
+  - path: docs/design/sizing/torque-map.png
+    sha256: c97e698390bb1036
+  references:
+  - analysis/hexapod_model.py
+  - analysis/sizing.py
+  requested: '2026-09-01'
+  requested_commit: 93aacef
+  status: requested
+  packet: docs/review/sizing.md
+  history:
+  - 'on': '2026-09-01'
+    action: requested
+    commit: 93aacef
+    questions:
+    - Is 1.1 kg per actuator and 49 kg unloaded a budget you accept, or should the robot be
+      lighter and the rider case go?
+    - Are the dynamic factors (1.5x walking, 3x stumble) and the 30 degree slope the right
+      conservatism for the terrain demo?
+    - Do you accept two stator PCBs per motor at 50:1 as the nominal actuator architecture
+      to take into the actuator stage, with 1 m/s as the speed target and 2 m/s dropped?
+    summary: 'Mass budget (49 kg unloaded, 149 kg with a rider), load cases, joint torques
+      and speeds for both stances, stability, and the actuator requirement that falls out:
+      92 N·m continuous, 151 N·m for 10 min, 179 N·m peak, 9 rad/s, Ø170 x 42 mm, 1.1 kg,
+      eighteen identical. First check of the PCB axial-flux motor with in-plane cycloid: two
+      stators at 50:1 close the requirement, one does not.'
+    added:
+    - docs/design/01-sizing.md
+    - docs/design/sizing/leg-stance.png
+    - docs/design/sizing/ratio-trade.png
+    - docs/design/sizing/torque-map.png
+artifact_url: https://claude.ai/code/artifact/c27a8924-af18-4d17-bd9b-0fcb41e685e3

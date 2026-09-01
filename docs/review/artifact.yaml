@@ -6,11 +6,37 @@
 #
 # Regenerate the page with `review-artifact`, and check it with
 # `review-artifact --check` before you publish it.
-title: Example Widget
+title: Hexapod
 subtitle: >-
-  One or two lines on what this is and who it is for.
+  A large-dog-sized outdoor hexapod with all eighteen motors in the body.
+  First review: the top-level sizing and the two skeleton concepts.
 
 phases:
+  - id: sizing
+    title: Sizing
+    eyebrow: Stage 1 · analysis
+    after: vision
+    images:
+      - docs/design/sizing/leg-stance.png
+      - docs/design/sizing/torque-map.png
+      - docs/design/sizing/ratio-trade.png
+    captions:
+      docs/design/sizing/leg-stance.png: >-
+        One leg in its own plane at the rider load (585 N per foot), both
+        stances. The tibia is near vertical under load, so the femur joint
+        carries almost everything. Look at: is 80 / 300 / 400 mm the right
+        leg, and is a knee-up leg what you want?
+      docs/design/sizing/torque-map.png: >-
+        Femur and knee torque over the foot workspace at the rider load.
+        Contours are the continuous / 10-minute / peak ratings. Look at:
+        how much of the workspace the controller must fence off under a rider.
+      docs/design/sizing/ratio-trade.png: >-
+        What a Ø170 mm PCB axial-flux motor gives at the joint through an
+        in-plane cycloid, one or two stators, against the requirement bands.
+        Look at: a single stator does not close at 50:1; two do, and 2 m/s
+        is out of reach either way.
+    docs: [docs/design/01-sizing.md]
+
 #   - id: cad
 #     title: CAD
 #     eyebrow: Stage 5 · mechanical
@@ -59,33 +85,4 @@ phases:
 #         What this shows, and the thing you want looked at.
 #     docs: [docs/design/sim-results.md]
 
-  - id: mfg
-    title: Manufacturing
-    eyebrow: Stage 7
-    after: simulation
-    links_title: Release checklist
-    links_note: >-
-      Everything a fab, an assembler and a purchaser need in order to
-      quote and build. Rows still to produce are the answer to "can we
-      release?" — leave them listed.
-    links:
-      - {group: Fabrication, path: docs/design/pcb-fab.zip,
-         label: Gerbers and drill files, why: "RS-274X plus the drill schedule"}
-      - {group: Fabrication, path: docs/design/mfg/fab-drawing.svg,
-         label: Fabrication drawing, why: "Outline, hole schedule and tolerances"}
-      - {group: Fabrication, path: docs/design/stackup.svg,
-         label: Stackup drawing, why: "What the fab quotes against"}
-      - {group: Fabrication, path: docs/design/mfg/fab-notes.md,
-         label: Fabrication notes, why: "Material, finish, class, panelisation"}
-      - {group: Assembly, path: docs/design/mfg/assembly-drawing.svg,
-         label: Assembly drawing, why: "Placement, orientation and polarity"}
-      - {group: Assembly, path: docs/design/pcb-pos.csv,
-         label: Pick and place, why: "Centroid file"}
-      - {group: Assembly, path: docs/design/bom-summary.csv,
-         label: BOM, why: "Purchasing and the assembly house"}
-      - {group: Assembly, path: docs/design/mfg/assembly-process.md,
-         label: Assembly and test process, why: "The traveller, then the test sequence"}
-      - {group: Commercial, path: docs/design/mfg/quotes.csv,
-         label: Quotes, why: "Supplier, quantity, tooling, lead time and the date each was given"}
-      - {group: Commercial, path: docs/design/mfg/supplier-decision.md,
-         label: Supplier decision, why: "Which quote was taken and why"}
+# Manufacturing phase: re-enable from the template when release artefacts exist.
