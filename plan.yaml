@@ -1,0 +1,174 @@
+# Project plan — the agreement about what work exists and in what order.
+#
+# One chunk ≈ one AI session. Keep chunks at the altitude of "a thing you could
+# hand to a session and get a reviewable result back", not individual tasks.
+#
+#   status:       todo | in_progress | blocked | done
+#   depends_on:   chunk ids that must finish first (this drives the schedule)
+#   discipline:   groups rows in the chart; use only what the project needs
+#   outputs:      files this chunk must produce — checked against the disk
+#   review:       id of the human review that must be signed off first
+#   description:  what this chunk actually is; goes into docs/plan.md
+#
+# Render with:   plan-render          (docs/plan.{svg,md,drawio} + README block)
+# Validate with: plan-render --check
+
+project: Hexapod
+disciplines: [mechanical, electrical, firmware, software, test]
+
+chunks:
+  - id: V1
+    title: Top-level sizing and skeleton concepts
+    description: >-
+      Size and shape of the robot, mass budget, load cases, joint torques and
+      speeds, and the actuator requirement that falls out of them. Two stance
+      concepts rendered as skeletons with the eighteen actuators in the body.
+    discipline: mechanical
+    status: in_progress
+    depends_on: []
+    estimate_sessions: 1
+    review: vision
+    outputs: [analysis/hexapod_model.py, docs/design/01-sizing.md, concepts/, docs/design/vision.md, docs/design/vision/]
+
+  - id: R1
+    title: System requirements from the agreed vision
+    description: >-
+      VIS- intent decomposed into testable SYS- requirements with numbers and
+      units: terrain, payload, rider, endurance, environment, size.
+    discipline: mechanical
+    status: todo
+    depends_on: [V1]
+    estimate_sessions: 1
+    review: requirements
+    outputs:
+      - requirements/00-vision.sdoc
+      - requirements/10-system.sdoc
+      - docs/design/requirements-map.svg
+
+  - id: A1
+    title: Actuator concept — PCB axial-flux motor with in-plane cycloid
+    description: >-
+      Electromagnetic sizing of the PCB stator (layers, copper, pole count,
+      eddy losses), Halbach rotor, and the in-plane cycloid (lobe count, pin
+      loads, efficiency) against the requirement in 01-sizing.md. Decide
+      single vs two stators, ratio, and whether to buy for the first leg.
+    discipline: mechanical
+    status: todo
+    depends_on: [V1]
+    estimate_sessions: 2
+    outputs: [docs/design/adr-0001-actuator.md, cad/actuator/]
+
+  - id: A2
+    title: Actuator prototype and dyno
+    description: >-
+      Build one actuator (stator PCB, rotors, cycloid, housing), run it on a
+      dyno for torque constant, continuous thermal torque and efficiency.
+    discipline: test
+    status: todo
+    depends_on: [A1, E3]
+    estimate_sessions: 3
+    outputs: [docs/design/actuator-dyno.md]
+
+  - id: M1
+    title: Leg transmission — motors in the body, power to the joints
+    description: >-
+      How three coaxial hip pancakes drive yaw, femur and knee: concentric
+      shafts, cables/capstans or linkages. Losses, reflected inertia,
+      sealing, and whether the coaxial stack survives contact.
+    discipline: mechanical
+    status: todo
+    depends_on: [V1]
+    estimate_sessions: 2
+    outputs: [docs/design/adr-0002-transmission.md, cad/leg/]
+
+  - id: M2
+    title: Full skeleton CAD — body, hip pods, legs, battery bays
+    discipline: mechanical
+    status: todo
+    depends_on: [R1, M1]
+    estimate_sessions: 2
+    review: cad
+    outputs: [cad/hexapod.py, docs/design/cad/]
+
+  - id: M3
+    title: Structural check on femur, tibia and hip pod
+    discipline: mechanical
+    status: todo
+    depends_on: [M2]
+    estimate_sessions: 1
+    outputs: [sim/structural/]
+
+  - id: E1
+    title: Power architecture — 48 V bus, two hot-swap packs, charging
+    discipline: electrical
+    status: todo
+    depends_on: [R1]
+    estimate_sessions: 1
+    outputs: [docs/design/adr-0003-power.md]
+
+  - id: E1B
+    title: Electrical block diagram and power budget
+    discipline: electrical
+    status: todo
+    depends_on: [E1]
+    estimate_sessions: 1
+    review: architecture
+    outputs: [hw/block-diagram.yaml, docs/design/block-diagram.svg]
+
+  - id: E2
+    title: Joint driver schematic (48 V FOC stage, encoder, CAN-FD)
+    discipline: electrical
+    status: todo
+    depends_on: [E1B, A1]
+    estimate_sessions: 2
+    review: schematic
+    outputs: [hw/driver/driver.kicad_sch, docs/design/schematic.pdf]
+
+  - id: E3
+    title: Stator PCB and joint driver layout, DRC, fabrication outputs
+    discipline: electrical
+    status: todo
+    depends_on: [E2]
+    estimate_sessions: 2
+    review: layout
+    outputs: [hw/stator/stator.kicad_pcb, hw/driver/driver.kicad_pcb]
+
+  - id: F1
+    title: Joint controller firmware — FOC, torque estimate, CAN protocol
+    discipline: firmware
+    status: todo
+    depends_on: [E2]
+    estimate_sessions: 2
+    outputs: [fw/]
+
+  - id: S1
+    title: Locomotion — kinematics, gaits, terrain adaptation
+    discipline: software
+    status: todo
+    depends_on: [V1]
+    estimate_sessions: 3
+    outputs: [sw/locomotion/]
+
+  - id: S2
+    title: Perception and SLAM for the terrain demo
+    discipline: software
+    status: todo
+    depends_on: [S1]
+    estimate_sessions: 3
+    outputs: [sw/perception/]
+
+  - id: T1
+    title: One-leg testbed — actuator, transmission and controller together
+    discipline: test
+    status: todo
+    depends_on: [A2, M1, F1]
+    estimate_sessions: 2
+    outputs: [docs/design/leg-testbed.md]
+
+  - id: T2
+    title: Terrain demo mission
+    discipline: test
+    status: todo
+    depends_on: [T1, M2, S2, E1]
+    estimate_sessions: 3
+    outputs: [docs/design/terrain-demo.md]

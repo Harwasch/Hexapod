@@ -1,0 +1,13 @@
+[project]
+title = "Hexapod Requirements"
+path_to_output_dir = "build/requirements"
+# HTML for reading, ReqIF so requirements can leave for a supplier's tooling,
+# JSON because scripts/req_trace.py reads it.
+html_assets_strictdoc_dir = ""
+features = [
+  "TABLE_SCREEN",
+  "TRACEABILITY_SCREEN",
+  "DEEP_TRACEABILITY_SCREEN",
+  "SEARCH",
+  "REQUIREMENT_TO_SOURCE_TRACEABILITY",
+]

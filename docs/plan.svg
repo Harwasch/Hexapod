@@ -1,0 +1,137 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2196" height="874" viewBox="0 0 2196 874" font-family="ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif" role="img" aria-label="Project plan: Hexapod, 0 of 16 chunks done">
+<style>
+.s{fill:#fcfcfb} .ink{fill:#0b0b0b} .ink2{fill:#52514e} .ax{stroke:#c3c2b7} .bar-in_progress{fill:#2a78d6}
+@media (prefers-color-scheme:dark){.s{fill:#1a1a19} .ink{fill:#ffffff} .ink2{fill:#c3c2b7} .ax{stroke:#383835} .bar-in_progress{fill:#3987e5}}
+.mut{fill:#898781} .bar-done{fill:#0ca30c} .bar-blocked{fill:#d03b3b} .bar-todo{fill:#898781}
+.crit{stroke:#0b0b0b;stroke-opacity:0.62;stroke-width:2}
+@media (prefers-color-scheme:dark){.crit{stroke:#ffffff;stroke-opacity:0.72}}
+.t{font-size:12px} .tb{font-size:12px;font-weight:600} .ts{font-size:10.5px} .h{font-size:15px;font-weight:600}
+</style>
+<rect width="2196" height="874" class="s" rx="6"/>
+<text x="20" y="27" class="h ink">Hexapod</text>
+<text x="20" y="47" class="t ink2">0/16 chunks complete · 0% · 16 sessions on the critical path</text>
+<line x1="320" y1="76" x2="320" y2="796" class="ax" stroke-width="1" opacity="0.5"/>
+<text x="326" y="72" class="ts mut">S1</text>
+<line x1="436" y1="76" x2="436" y2="796" class="ax" stroke-width="1" opacity="0.5"/>
+<text x="442" y="72" class="ts mut">S2</text>
+<line x1="552" y1="76" x2="552" y2="796" class="ax" stroke-width="1" opacity="0.5"/>
+<text x="558" y="72" class="ts mut">S3</text>
+<line x1="668" y1="76" x2="668" y2="796" class="ax" stroke-width="1" opacity="0.5"/>
+<text x="674" y="72" class="ts mut">S4</text>
+<line x1="784" y1="76" x2="784" y2="796" class="ax" stroke-width="1" opacity="0.5"/>
+<text x="790" y="72" class="ts mut">S5</text>
+<line x1="900" y1="76" x2="900" y2="796" class="ax" stroke-width="1" opacity="0.5"/>
+<text x="906" y="72" class="ts mut">S6</text>
+<line x1="1016" y1="76" x2="1016" y2="796" class="ax" stroke-width="1" opacity="0.5"/>
+<text x="1022" y="72" class="ts mut">S7</text>
+<line x1="1132" y1="76" x2="1132" y2="796" class="ax" stroke-width="1" opacity="0.5"/>
+<text x="1138" y="72" class="ts mut">S8</text>
+<line x1="1248" y1="76" x2="1248" y2="796" class="ax" stroke-width="1" opacity="0.5"/>
+<text x="1254" y="72" class="ts mut">S9</text>
+<line x1="1364" y1="76" x2="1364" y2="796" class="ax" stroke-width="1" opacity="0.5"/>
+<text x="1370" y="72" class="ts mut">S10</text>
+<line x1="1480" y1="76" x2="1480" y2="796" class="ax" stroke-width="1" opacity="0.5"/>
+<text x="1486" y="72" class="ts mut">S11</text>
+<line x1="1596" y1="76" x2="1596" y2="796" class="ax" stroke-width="1" opacity="0.5"/>
+<text x="1602" y="72" class="ts mut">S12</text>
+<line x1="1712" y1="76" x2="1712" y2="796" class="ax" stroke-width="1" opacity="0.5"/>
+<text x="1718" y="72" class="ts mut">S13</text>
+<line x1="1828" y1="76" x2="1828" y2="796" class="ax" stroke-width="1" opacity="0.5"/>
+<text x="1834" y="72" class="ts mut">S14</text>
+<line x1="1944" y1="76" x2="1944" y2="796" class="ax" stroke-width="1" opacity="0.5"/>
+<text x="1950" y="72" class="ts mut">S15</text>
+<line x1="2060" y1="76" x2="2060" y2="796" class="ax" stroke-width="1" opacity="0.5"/>
+<text x="2066" y="72" class="ts mut">S16</text>
+<line x1="2176" y1="76" x2="2176" y2="796" class="ax" stroke-width="1" opacity="0.5"/>
+<text x="20" y="101" class="tb ink2">MECHANICAL</text>
+<line x1="20" y1="107" x2="2176" y2="107" class="ax" stroke-width="1" opacity="0.35"/>
+<text x="20" y="131.0" class="t ink">V1 · Top-level sizing and skeleton concepts</text>
+<rect x="323" y="117.0" width="110" height="20" rx="4" class="bar-in_progress crit"/>
+<text x="331" y="131.0" class="ts" fill="#ffffff" opacity="0.96">▶ In progress</text>
+<text x="20" y="165.0" class="t ink">R1 · System requirements from the agreed vis</text>
+<rect x="439" y="151.0" width="110" height="20" rx="4" class="bar-todo crit"/>
+<text x="447" y="165.0" class="ts" fill="#ffffff" opacity="0.96">○ To do</text>
+<text x="20" y="199.0" class="t ink">A1 · Actuator concept — PCB axial-flux motor</text>
+<rect x="439" y="185.0" width="226" height="20" rx="4" class="bar-todo"/>
+<text x="447" y="199.0" class="ts" fill="#ffffff" opacity="0.96">○ To do</text>
+<text x="20" y="233.0" class="t ink">M1 · Leg transmission — motors in the body, </text>
+<rect x="439" y="219.0" width="226" height="20" rx="4" class="bar-todo"/>
+<text x="447" y="233.0" class="ts" fill="#ffffff" opacity="0.96">○ To do</text>
+<text x="20" y="267.0" class="t ink">M2 · Full skeleton CAD — body, hip pods, leg</text>
+<rect x="671" y="253.0" width="226" height="20" rx="4" class="bar-todo"/>
+<text x="679" y="267.0" class="ts" fill="#ffffff" opacity="0.96">○ To do</text>
+<text x="20" y="301.0" class="t ink">M3 · Structural check on femur, tibia and hi</text>
+<rect x="903" y="287.0" width="110" height="20" rx="4" class="bar-todo"/>
+<text x="911" y="301.0" class="ts" fill="#ffffff" opacity="0.96">○ To do</text>
+<text x="20" y="333" class="tb ink2">TEST</text>
+<line x1="20" y1="339" x2="2176" y2="339" class="ax" stroke-width="1" opacity="0.35"/>
+<text x="20" y="363.0" class="t ink">A2 · Actuator prototype and dyno</text>
+<rect x="1251" y="349.0" width="342" height="20" rx="4" class="bar-todo crit"/>
+<text x="1259" y="363.0" class="ts" fill="#ffffff" opacity="0.96">○ To do</text>
+<text x="20" y="397.0" class="t ink">T1 · One-leg testbed — actuator, transmissio</text>
+<rect x="1599" y="383.0" width="226" height="20" rx="4" class="bar-todo crit"/>
+<text x="1607" y="397.0" class="ts" fill="#ffffff" opacity="0.96">○ To do</text>
+<text x="20" y="431.0" class="t ink">T2 · Terrain demo mission</text>
+<rect x="1831" y="417.0" width="342" height="20" rx="4" class="bar-todo crit"/>
+<text x="1839" y="431.0" class="ts" fill="#ffffff" opacity="0.96">○ To do</text>
+<text x="20" y="463" class="tb ink2">ELECTRICAL</text>
+<line x1="20" y1="469" x2="2176" y2="469" class="ax" stroke-width="1" opacity="0.35"/>
+<text x="20" y="493.0" class="t ink">E1 · Power architecture — 48 V bus, two hot-</text>
+<rect x="555" y="479.0" width="110" height="20" rx="4" class="bar-todo crit"/>
+<text x="563" y="493.0" class="ts" fill="#ffffff" opacity="0.96">○ To do</text>
+<text x="20" y="527.0" class="t ink">E1B · Electrical block diagram and power bud</text>
+<rect x="671" y="513.0" width="110" height="20" rx="4" class="bar-todo crit"/>
+<text x="679" y="527.0" class="ts" fill="#ffffff" opacity="0.96">○ To do</text>
+<text x="20" y="561.0" class="t ink">E2 · Joint driver schematic (48 V FOC stage,</text>
+<rect x="787" y="547.0" width="226" height="20" rx="4" class="bar-todo crit"/>
+<text x="795" y="561.0" class="ts" fill="#ffffff" opacity="0.96">○ To do</text>
+<text x="20" y="595.0" class="t ink">E3 · Stator PCB and joint driver layout, DRC</text>
+<rect x="1019" y="581.0" width="226" height="20" rx="4" class="bar-todo crit"/>
+<text x="1027" y="595.0" class="ts" fill="#ffffff" opacity="0.96">○ To do</text>
+<text x="20" y="627" class="tb ink2">FIRMWARE</text>
+<line x1="20" y1="633" x2="2176" y2="633" class="ax" stroke-width="1" opacity="0.35"/>
+<text x="20" y="657.0" class="t ink">F1 · Joint controller firmware — FOC, torque</text>
+<rect x="1019" y="643.0" width="226" height="20" rx="4" class="bar-todo"/>
+<text x="1027" y="657.0" class="ts" fill="#ffffff" opacity="0.96">○ To do</text>
+<text x="20" y="689" class="tb ink2">SOFTWARE</text>
+<line x1="20" y1="695" x2="2176" y2="695" class="ax" stroke-width="1" opacity="0.35"/>
+<text x="20" y="719.0" class="t ink">S1 · Locomotion — kinematics, gaits, terrain</text>
+<rect x="439" y="705.0" width="342" height="20" rx="4" class="bar-todo"/>
+<text x="447" y="719.0" class="ts" fill="#ffffff" opacity="0.96">○ To do</text>
+<text x="20" y="753.0" class="t ink">S2 · Perception and SLAM for the terrain dem</text>
+<rect x="787" y="739.0" width="342" height="20" rx="4" class="bar-todo"/>
+<text x="795" y="753.0" class="ts" fill="#ffffff" opacity="0.96">○ To do</text>
+<defs><marker id="ah" markerWidth="7" markerHeight="7" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 z" fill="#898781"/></marker></defs>
+<path d="M433,127.0 H443 V161.0 H436" fill="none" stroke="#898781" stroke-width="1.6" opacity="0.85" marker-end="url(#ah)"/>
+<path d="M433,127.0 H443 V195.0 H436" fill="none" stroke="#898781" stroke-width="1" opacity="0.45" marker-end="url(#ah)"/>
+<path d="M665,195.0 H958.0 V359.0 H1248" fill="none" stroke="#898781" stroke-width="1" opacity="0.45" marker-end="url(#ah)"/>
+<path d="M1245,591.0 H1255 V359.0 H1248" fill="none" stroke="#898781" stroke-width="1.6" opacity="0.85" marker-end="url(#ah)"/>
+<path d="M433,127.0 H443 V229.0 H436" fill="none" stroke="#898781" stroke-width="1" opacity="0.45" marker-end="url(#ah)"/>
+<path d="M549,161.0 H610.0 V263.0 H668" fill="none" stroke="#898781" stroke-width="1" opacity="0.45" marker-end="url(#ah)"/>
+<path d="M665,229.0 H675 V263.0 H668" fill="none" stroke="#898781" stroke-width="1" opacity="0.45" marker-end="url(#ah)"/>
+<path d="M897,263.0 H907 V297.0 H900" fill="none" stroke="#898781" stroke-width="1" opacity="0.45" marker-end="url(#ah)"/>
+<path d="M549,161.0 H559 V489.0 H552" fill="none" stroke="#898781" stroke-width="1.6" opacity="0.85" marker-end="url(#ah)"/>
+<path d="M665,489.0 H675 V523.0 H668" fill="none" stroke="#898781" stroke-width="1.6" opacity="0.85" marker-end="url(#ah)"/>
+<path d="M781,523.0 H791 V557.0 H784" fill="none" stroke="#898781" stroke-width="1.6" opacity="0.85" marker-end="url(#ah)"/>
+<path d="M665,195.0 H726.0 V557.0 H784" fill="none" stroke="#898781" stroke-width="1" opacity="0.45" marker-end="url(#ah)"/>
+<path d="M1013,557.0 H1023 V591.0 H1016" fill="none" stroke="#898781" stroke-width="1.6" opacity="0.85" marker-end="url(#ah)"/>
+<path d="M1013,557.0 H1023 V653.0 H1016" fill="none" stroke="#898781" stroke-width="1" opacity="0.45" marker-end="url(#ah)"/>
+<path d="M433,127.0 H443 V715.0 H436" fill="none" stroke="#898781" stroke-width="1" opacity="0.45" marker-end="url(#ah)"/>
+<path d="M781,715.0 H791 V749.0 H784" fill="none" stroke="#898781" stroke-width="1" opacity="0.45" marker-end="url(#ah)"/>
+<path d="M1593,359.0 H1603 V393.0 H1596" fill="none" stroke="#898781" stroke-width="1.6" opacity="0.85" marker-end="url(#ah)"/>
+<path d="M665,229.0 H1132.0 V393.0 H1596" fill="none" stroke="#898781" stroke-width="1" opacity="0.45" marker-end="url(#ah)"/>
+<path d="M1245,653.0 H1422.0 V393.0 H1596" fill="none" stroke="#898781" stroke-width="1" opacity="0.45" marker-end="url(#ah)"/>
+<path d="M1825,393.0 H1835 V427.0 H1828" fill="none" stroke="#898781" stroke-width="1.6" opacity="0.85" marker-end="url(#ah)"/>
+<path d="M897,263.0 H1364.0 V427.0 H1828" fill="none" stroke="#898781" stroke-width="1" opacity="0.45" marker-end="url(#ah)"/>
+<path d="M1129,749.0 H1480.0 V427.0 H1828" fill="none" stroke="#898781" stroke-width="1" opacity="0.45" marker-end="url(#ah)"/>
+<path d="M665,489.0 H1248.0 V427.0 H1828" fill="none" stroke="#898781" stroke-width="1.6" opacity="0.85" marker-end="url(#ah)"/>
+<rect x="20" y="817" width="11" height="11" rx="2.5" class="bar-done"/>
+<text x="37" y="826" class="ts ink2">✓ Done</text>
+<rect x="90.8" y="817" width="11" height="11" rx="2.5" class="bar-in_progress"/>
+<text x="107.8" y="826" class="ts ink2">▶ In progress</text>
+<rect x="205.0" y="817" width="11" height="11" rx="2.5" class="bar-blocked"/>
+<text x="222.0" y="826" class="ts ink2">✕ Blocked</text>
+<rect x="294.4" y="817" width="11" height="11" rx="2.5" class="bar-todo"/>
+<text x="311.4" y="826" class="ts ink2">○ To do</text>
+<text x="377.4" y="826" class="ts mut">outlined bars = critical path</text>
+</svg>

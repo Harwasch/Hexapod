@@ -1,0 +1,52 @@
+{
+  "concepts": [
+    {
+      "id": "concept_a_sprawl",
+      "title": "A \u2014 Sprawl",
+      "notes": "Leg planes radiate from the body; front and rear legs yawed \u00b130\u00b0. Hips 0.40 m up, feet 0.28 m out from the yaw axes, 0.88 m stance width. The yaw joints push, the pitch joints carry. Skeleton view: top deck and floor plate, side rails, six hip stacks of three \u00d8170 pancake actuators, two hot-swap packs and the compute box between them. The renderer's mass figure treats the skeleton as solid; the budget is 49 kg, see 01-sizing.md.",
+      "rationale": "Stability first. 26\u00b0 roll margin unloaded and 16\u00b0 with a rider on a tripod, so the rider case does not force a wave-gait-only machine. Costs a wide footprint and puts the propulsion duty on the yaw joint.",
+      "material": "graphite",
+      "source": "concepts/concept_a_sprawl.py",
+      "metrics": {
+        "bbox_mm": [
+          1111.64,
+          1136.67,
+          640.5
+        ],
+        "volume_mm3": 41075140.8,
+        "approx_mass_g_at_1p4": 57505.2
+      },
+      "images": {
+        "hero": "concept_a_sprawl/view-hero.png",
+        "front": "concept_a_sprawl/view-front.png",
+        "top": "concept_a_sprawl/view-top.png",
+        "iso": "concept_a_sprawl/iso.svg"
+      },
+      "styling": []
+    },
+    {
+      "id": "concept_b_underbody",
+      "title": "B \u2014 Under-body",
+      "notes": "Leg planes fore-aft, feet under the hips, front and mid knees forward, rear knees back. Hips 0.45 m up, 0.48 m stance width, 0.96 m stance length. The pitch joints both carry and push; yaw only steers and crabs. Same body, same eighteen actuators, same leg links. Mass figure below is the solid render, not the 49 kg budget.",
+      "rationale": "Narrow and tall: fits through a doorway, more ground clearance, and the walking motion is a pitch sweep that the femur transmission can be optimised for. Pays for it in roll margin (13\u00b0 unloaded, 8\u00b0 with a rider on a tripod), so a rider means a wave gait and splayed feet.",
+      "material": "graphite",
+      "source": "concepts/concept_b_underbody.py",
+      "metrics": {
+        "bbox_mm": [
+          1098.96,
+          530.0,
+          690.5
+        ],
+        "volume_mm3": 41075140.8,
+        "approx_mass_g_at_1p4": 57505.2
+      },
+      "images": {
+        "hero": "concept_b_underbody/view-hero.png",
+        "front": "concept_b_underbody/view-front.png",
+        "top": "concept_b_underbody/view-top.png",
+        "iso": "concept_b_underbody/iso.svg"
+      },
+      "styling": []
+    }
+  ]
+}

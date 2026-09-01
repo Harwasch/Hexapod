@@ -1,0 +1,6 @@
+[DOCUMENT]
+TITLE: Electrical Requirements
+UID: DOC-ELECTRICAL
+
+[GRAMMAR]
+IMPORT_FROM_FILE: hardware.sgra

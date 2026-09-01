@@ -1,0 +1,14 @@
+[DOCUMENT]
+TITLE: Vision
+UID: DOC-VISION
+
+[GRAMMAR]
+IMPORT_FROM_FILE: hardware.sgra
+
+[TEXT]
+STATEMENT: >>>
+What the human wants, in their words, captured during the vision interview.
+Vision entries are intentionally NOT testable: they are the thing the testable
+requirements have to add up to. Every ``SYS-`` requirement must Refine one of
+these, which is how we catch requirements nobody asked for.
+<<<

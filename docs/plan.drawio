@@ -1,0 +1,133 @@
+<mxfile host="MakeHardware" type="device">
+  <diagram name="Project plan" id="project-plan">
+    <mxGraphModel dx="4840" dy="438" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="4840" pageHeight="438" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="title" value="Hexapod" style="text=1;html=1;fillColor=none;strokeColor=none;align=left;verticalAlign=middle;fontSize=16;fontColor=#0b0b0b;fontStyle=1;" parent="1" vertex="1">
+          <mxGeometry x="20" y="14" width="520" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="subtitle" value="0/16 chunks complete · 16 sessions on the critical path · generated from plan.yaml" style="text=1;html=1;fillColor=none;strokeColor=none;align=left;verticalAlign=middle;fontSize=10;fontColor=#898781;" parent="1" vertex="1">
+          <mxGeometry x="20" y="38" width="620" height="18" as="geometry"/>
+        </mxCell>
+        <mxCell id="V1" value="&lt;b&gt;V1&lt;/b&gt; · Top-level sizing and skeleton concepts&lt;br/&gt;&lt;font color=&quot;#2a78d6&quot;&gt;▶ In progress&lt;/font&gt;&lt;font color=&quot;#898781&quot; style=&quot;font-size:9px&quot;&gt;  ·  mechanical · 1 session · review: vision&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#2a78d6;strokeWidth=3;align=left;spacingLeft=8;verticalAlign=middle;fontSize=11;arcSize=8;" parent="1" vertex="1">
+          <mxGeometry x="20" y="82" width="210" height="62" as="geometry"/>
+        </mxCell>
+        <mxCell id="R1" value="&lt;b&gt;R1&lt;/b&gt; · System requirements from the agreed vision&lt;br/&gt;&lt;font color=&quot;#898781&quot;&gt;○ To do&lt;/font&gt;&lt;font color=&quot;#898781&quot; style=&quot;font-size:9px&quot;&gt;  ·  mechanical · 1 session · review: requirements&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#898781;strokeWidth=3;align=left;spacingLeft=8;verticalAlign=middle;fontSize=11;arcSize=8;" parent="1" vertex="1">
+          <mxGeometry x="320" y="82" width="210" height="62" as="geometry"/>
+        </mxCell>
+        <mxCell id="A1" value="&lt;b&gt;A1&lt;/b&gt; · Actuator concept — PCB axial-flux motor with in-plane cycloid&lt;br/&gt;&lt;font color=&quot;#898781&quot;&gt;○ To do&lt;/font&gt;&lt;font color=&quot;#898781&quot; style=&quot;font-size:9px&quot;&gt;  ·  mechanical · 2 sessions&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#898781;strokeWidth=1;align=left;spacingLeft=8;verticalAlign=middle;fontSize=11;arcSize=8;" parent="1" vertex="1">
+          <mxGeometry x="320" y="166" width="210" height="62" as="geometry"/>
+        </mxCell>
+        <mxCell id="A2" value="&lt;b&gt;A2&lt;/b&gt; · Actuator prototype and dyno&lt;br/&gt;&lt;font color=&quot;#898781&quot;&gt;○ To do&lt;/font&gt;&lt;font color=&quot;#898781&quot; style=&quot;font-size:9px&quot;&gt;  ·  test · 3 sessions&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#898781;strokeWidth=3;align=left;spacingLeft=8;verticalAlign=middle;fontSize=11;arcSize=8;" parent="1" vertex="1">
+          <mxGeometry x="2420" y="82" width="210" height="62" as="geometry"/>
+        </mxCell>
+        <mxCell id="M1" value="&lt;b&gt;M1&lt;/b&gt; · Leg transmission — motors in the body, power to the joints&lt;br/&gt;&lt;font color=&quot;#898781&quot;&gt;○ To do&lt;/font&gt;&lt;font color=&quot;#898781&quot; style=&quot;font-size:9px&quot;&gt;  ·  mechanical · 2 sessions&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#898781;strokeWidth=1;align=left;spacingLeft=8;verticalAlign=middle;fontSize=11;arcSize=8;" parent="1" vertex="1">
+          <mxGeometry x="320" y="250" width="210" height="62" as="geometry"/>
+        </mxCell>
+        <mxCell id="M2" value="&lt;b&gt;M2&lt;/b&gt; · Full skeleton CAD — body, hip pods, legs, battery bays&lt;br/&gt;&lt;font color=&quot;#898781&quot;&gt;○ To do&lt;/font&gt;&lt;font color=&quot;#898781&quot; style=&quot;font-size:9px&quot;&gt;  ·  mechanical · 2 sessions · review: cad&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#898781;strokeWidth=1;align=left;spacingLeft=8;verticalAlign=middle;fontSize=11;arcSize=8;" parent="1" vertex="1">
+          <mxGeometry x="920" y="82" width="210" height="62" as="geometry"/>
+        </mxCell>
+        <mxCell id="M3" value="&lt;b&gt;M3&lt;/b&gt; · Structural check on femur, tibia and hip pod&lt;br/&gt;&lt;font color=&quot;#898781&quot;&gt;○ To do&lt;/font&gt;&lt;font color=&quot;#898781&quot; style=&quot;font-size:9px&quot;&gt;  ·  mechanical · 1 session&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#898781;strokeWidth=1;align=left;spacingLeft=8;verticalAlign=middle;fontSize=11;arcSize=8;" parent="1" vertex="1">
+          <mxGeometry x="1520" y="82" width="210" height="62" as="geometry"/>
+        </mxCell>
+        <mxCell id="E1" value="&lt;b&gt;E1&lt;/b&gt; · Power architecture — 48 V bus, two hot-swap packs, charging&lt;br/&gt;&lt;font color=&quot;#898781&quot;&gt;○ To do&lt;/font&gt;&lt;font color=&quot;#898781&quot; style=&quot;font-size:9px&quot;&gt;  ·  electrical · 1 session&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#898781;strokeWidth=3;align=left;spacingLeft=8;verticalAlign=middle;fontSize=11;arcSize=8;" parent="1" vertex="1">
+          <mxGeometry x="620" y="82" width="210" height="62" as="geometry"/>
+        </mxCell>
+        <mxCell id="E1B" value="&lt;b&gt;E1B&lt;/b&gt; · Electrical block diagram and power budget&lt;br/&gt;&lt;font color=&quot;#898781&quot;&gt;○ To do&lt;/font&gt;&lt;font color=&quot;#898781&quot; style=&quot;font-size:9px&quot;&gt;  ·  electrical · 1 session · review: architecture&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#898781;strokeWidth=3;align=left;spacingLeft=8;verticalAlign=middle;fontSize=11;arcSize=8;" parent="1" vertex="1">
+          <mxGeometry x="920" y="166" width="210" height="62" as="geometry"/>
+        </mxCell>
+        <mxCell id="E2" value="&lt;b&gt;E2&lt;/b&gt; · Joint driver schematic (48 V FOC stage, encoder, CAN-FD)&lt;br/&gt;&lt;font color=&quot;#898781&quot;&gt;○ To do&lt;/font&gt;&lt;font color=&quot;#898781&quot; style=&quot;font-size:9px&quot;&gt;  ·  electrical · 2 sessions · review: schematic&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#898781;strokeWidth=3;align=left;spacingLeft=8;verticalAlign=middle;fontSize=11;arcSize=8;" parent="1" vertex="1">
+          <mxGeometry x="1220" y="82" width="210" height="62" as="geometry"/>
+        </mxCell>
+        <mxCell id="E3" value="&lt;b&gt;E3&lt;/b&gt; · Stator PCB and joint driver layout, DRC, fabrication outputs&lt;br/&gt;&lt;font color=&quot;#898781&quot;&gt;○ To do&lt;/font&gt;&lt;font color=&quot;#898781&quot; style=&quot;font-size:9px&quot;&gt;  ·  electrical · 2 sessions · review: layout&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#898781;strokeWidth=3;align=left;spacingLeft=8;verticalAlign=middle;fontSize=11;arcSize=8;" parent="1" vertex="1">
+          <mxGeometry x="1820" y="82" width="210" height="62" as="geometry"/>
+        </mxCell>
+        <mxCell id="F1" value="&lt;b&gt;F1&lt;/b&gt; · Joint controller firmware — FOC, torque estimate, CAN protocol&lt;br/&gt;&lt;font color=&quot;#898781&quot;&gt;○ To do&lt;/font&gt;&lt;font color=&quot;#898781&quot; style=&quot;font-size:9px&quot;&gt;  ·  firmware · 2 sessions&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#898781;strokeWidth=1;align=left;spacingLeft=8;verticalAlign=middle;fontSize=11;arcSize=8;" parent="1" vertex="1">
+          <mxGeometry x="1820" y="166" width="210" height="62" as="geometry"/>
+        </mxCell>
+        <mxCell id="S1" value="&lt;b&gt;S1&lt;/b&gt; · Locomotion — kinematics, gaits, terrain adaptation&lt;br/&gt;&lt;font color=&quot;#898781&quot;&gt;○ To do&lt;/font&gt;&lt;font color=&quot;#898781&quot; style=&quot;font-size:9px&quot;&gt;  ·  software · 3 sessions&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#898781;strokeWidth=1;align=left;spacingLeft=8;verticalAlign=middle;fontSize=11;arcSize=8;" parent="1" vertex="1">
+          <mxGeometry x="320" y="334" width="210" height="62" as="geometry"/>
+        </mxCell>
+        <mxCell id="S2" value="&lt;b&gt;S2&lt;/b&gt; · Perception and SLAM for the terrain demo&lt;br/&gt;&lt;font color=&quot;#898781&quot;&gt;○ To do&lt;/font&gt;&lt;font color=&quot;#898781&quot; style=&quot;font-size:9px&quot;&gt;  ·  software · 3 sessions&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#898781;strokeWidth=1;align=left;spacingLeft=8;verticalAlign=middle;fontSize=11;arcSize=8;" parent="1" vertex="1">
+          <mxGeometry x="1220" y="166" width="210" height="62" as="geometry"/>
+        </mxCell>
+        <mxCell id="T1" value="&lt;b&gt;T1&lt;/b&gt; · One-leg testbed — actuator, transmission and controller together&lt;br/&gt;&lt;font color=&quot;#898781&quot;&gt;○ To do&lt;/font&gt;&lt;font color=&quot;#898781&quot; style=&quot;font-size:9px&quot;&gt;  ·  test · 2 sessions&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#898781;strokeWidth=3;align=left;spacingLeft=8;verticalAlign=middle;fontSize=11;arcSize=8;" parent="1" vertex="1">
+          <mxGeometry x="3320" y="82" width="210" height="62" as="geometry"/>
+        </mxCell>
+        <mxCell id="T2" value="&lt;b&gt;T2&lt;/b&gt; · Terrain demo mission&lt;br/&gt;&lt;font color=&quot;#898781&quot;&gt;○ To do&lt;/font&gt;&lt;font color=&quot;#898781&quot; style=&quot;font-size:9px&quot;&gt;  ·  test · 3 sessions&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#898781;strokeWidth=3;align=left;spacingLeft=8;verticalAlign=middle;fontSize=11;arcSize=8;" parent="1" vertex="1">
+          <mxGeometry x="3920" y="82" width="210" height="62" as="geometry"/>
+        </mxCell>
+        <mxCell id="V1--R1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#52514e;strokeWidth=2;endArrow=block;endSize=6;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" parent="1" edge="1" source="V1" target="R1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="V1--A1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#898781;strokeWidth=1;endArrow=block;endSize=6;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" parent="1" edge="1" source="V1" target="A1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="A1--A2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#898781;strokeWidth=1;endArrow=block;endSize=6;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" parent="1" edge="1" source="A1" target="A2">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="E3--A2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#52514e;strokeWidth=2;endArrow=block;endSize=6;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" parent="1" edge="1" source="E3" target="A2">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="V1--M1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#898781;strokeWidth=1;endArrow=block;endSize=6;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" parent="1" edge="1" source="V1" target="M1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="R1--M2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#898781;strokeWidth=1;endArrow=block;endSize=6;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" parent="1" edge="1" source="R1" target="M2">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="M1--M2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#898781;strokeWidth=1;endArrow=block;endSize=6;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" parent="1" edge="1" source="M1" target="M2">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="M2--M3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#898781;strokeWidth=1;endArrow=block;endSize=6;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" parent="1" edge="1" source="M2" target="M3">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="R1--E1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#52514e;strokeWidth=2;endArrow=block;endSize=6;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" parent="1" edge="1" source="R1" target="E1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="E1--E1B" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#52514e;strokeWidth=2;endArrow=block;endSize=6;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" parent="1" edge="1" source="E1" target="E1B">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="E1B--E2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#52514e;strokeWidth=2;endArrow=block;endSize=6;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" parent="1" edge="1" source="E1B" target="E2">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="A1--E2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#898781;strokeWidth=1;endArrow=block;endSize=6;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" parent="1" edge="1" source="A1" target="E2">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="E2--E3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#52514e;strokeWidth=2;endArrow=block;endSize=6;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" parent="1" edge="1" source="E2" target="E3">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="E2--F1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#898781;strokeWidth=1;endArrow=block;endSize=6;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" parent="1" edge="1" source="E2" target="F1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="V1--S1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#898781;strokeWidth=1;endArrow=block;endSize=6;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" parent="1" edge="1" source="V1" target="S1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="S1--S2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#898781;strokeWidth=1;endArrow=block;endSize=6;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" parent="1" edge="1" source="S1" target="S2">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="A2--T1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#52514e;strokeWidth=2;endArrow=block;endSize=6;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" parent="1" edge="1" source="A2" target="T1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="M1--T1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#898781;strokeWidth=1;endArrow=block;endSize=6;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" parent="1" edge="1" source="M1" target="T1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="F1--T1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#898781;strokeWidth=1;endArrow=block;endSize=6;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" parent="1" edge="1" source="F1" target="T1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="T1--T2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#52514e;strokeWidth=2;endArrow=block;endSize=6;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" parent="1" edge="1" source="T1" target="T2">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="M2--T2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#898781;strokeWidth=1;endArrow=block;endSize=6;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" parent="1" edge="1" source="M2" target="T2">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="S2--T2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#898781;strokeWidth=1;endArrow=block;endSize=6;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" parent="1" edge="1" source="S2" target="T2">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="E1--T2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#52514e;strokeWidth=2;endArrow=block;endSize=6;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" parent="1" edge="1" source="E1" target="T2">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

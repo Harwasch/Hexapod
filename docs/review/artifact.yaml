@@ -1,0 +1,91 @@
+# Which phases the review page shows, and what goes in each.
+#
+# Vision, plan, requirements and architecture are built automatically
+# from the repo and need nothing here. Everything below is a design
+# stage: it appears on the page only if it is listed.
+#
+# Regenerate the page with `review-artifact`, and check it with
+# `review-artifact --check` before you publish it.
+title: Example Widget
+subtitle: >-
+  One or two lines on what this is and who it is for.
+
+phases:
+#   - id: cad
+#     title: CAD
+#     eyebrow: Stage 5 · mechanical
+#     after: architecture
+#     images:
+#       - docs/design/cad/enclosure-render.png
+#       - docs/design/cad/enclosure-section.svg
+#     captions:
+#       docs/design/cad/enclosure-render.png: >-
+#         What this shows, and the thing you want looked at.
+#       docs/design/cad/enclosure-section.svg: >-
+#         What this shows, and the thing you want looked at.
+
+#   - id: schematic
+#     title: Schematic
+#     eyebrow: Stage 5 · electrical
+#     after: cad
+#     images:
+#       - docs/design/schematic/sheet-1.svg
+#     captions:
+#       docs/design/schematic/sheet-1.svg: >-
+#         What this shows, and the thing you want looked at.
+#     docs: [docs/design/adr-0001.md]
+
+#   - id: layout
+#     title: PCB layout
+#     eyebrow: Stage 5 · electrical
+#     after: schematic
+#     images:
+#       - docs/design/pcb-top.png
+#       - docs/design/stackup.svg
+#     captions:
+#       docs/design/pcb-top.png: >-
+#         What this shows, and the thing you want looked at.
+#       docs/design/stackup.svg: >-
+#         What this shows, and the thing you want looked at.
+
+#   - id: simulation
+#     title: Simulation
+#     eyebrow: Stage 6
+#     after: layout
+#     images:
+#       - docs/design/sim-results.svg
+#     captions:
+#       docs/design/sim-results.svg: >-
+#         What this shows, and the thing you want looked at.
+#     docs: [docs/design/sim-results.md]
+
+  - id: mfg
+    title: Manufacturing
+    eyebrow: Stage 7
+    after: simulation
+    links_title: Release checklist
+    links_note: >-
+      Everything a fab, an assembler and a purchaser need in order to
+      quote and build. Rows still to produce are the answer to "can we
+      release?" — leave them listed.
+    links:
+      - {group: Fabrication, path: docs/design/pcb-fab.zip,
+         label: Gerbers and drill files, why: "RS-274X plus the drill schedule"}
+      - {group: Fabrication, path: docs/design/mfg/fab-drawing.svg,
+         label: Fabrication drawing, why: "Outline, hole schedule and tolerances"}
+      - {group: Fabrication, path: docs/design/stackup.svg,
+         label: Stackup drawing, why: "What the fab quotes against"}
+      - {group: Fabrication, path: docs/design/mfg/fab-notes.md,
+         label: Fabrication notes, why: "Material, finish, class, panelisation"}
+      - {group: Assembly, path: docs/design/mfg/assembly-drawing.svg,
+         label: Assembly drawing, why: "Placement, orientation and polarity"}
+      - {group: Assembly, path: docs/design/pcb-pos.csv,
+         label: Pick and place, why: "Centroid file"}
+      - {group: Assembly, path: docs/design/bom-summary.csv,
+         label: BOM, why: "Purchasing and the assembly house"}
+      - {group: Assembly, path: docs/design/mfg/assembly-process.md,
+         label: Assembly and test process, why: "The traveller, then the test sequence"}
+      - {group: Commercial, path: docs/design/mfg/quotes.csv,
+         label: Quotes, why: "Supplier, quantity, tooling, lead time and the date each was given"}
+      - {group: Commercial, path: docs/design/mfg/supplier-decision.md,
+         label: Supplier decision, why: "Which quote was taken and why"}

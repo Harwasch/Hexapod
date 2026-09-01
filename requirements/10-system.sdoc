@@ -1,0 +1,12 @@
+[DOCUMENT]
+TITLE: System Requirements
+UID: DOC-SYSTEM
+
+[GRAMMAR]
+IMPORT_FROM_FILE: hardware.sgra
+
+[TEXT]
+STATEMENT: >>>
+Testable system-level requirements. Each one Refines a ``VIS-`` entry and is
+itself refined by the discipline requirements in the ``20-`` documents.
+<<<

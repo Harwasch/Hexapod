@@ -1,0 +1,37 @@
+# External reference material — datasheets, application notes, standards.
+#
+# These files are evidence. Never edit a fetched document; record what you
+# retrieved, when, and which requirement needs it.
+#
+#   revision   the document's own revision string. A datasheet that silently
+#              revised under you is a real failure mode; this is how you notice.
+#   retrieved  the date you fetched it.
+#   needed_by  requirement UIDs that depend on a number in this document.
+#   blocked    set when the environment could not fetch it, so a human must.
+#              Leave `local: null` and ASK — never substitute a number from
+#              memory for a datasheet you could not open.
+
+documents: []
+
+# Example of a fetched document:
+#
+# - id: mcp1700-datasheet
+#   title: MCP1700 Low Quiescent Current LDO
+#   part: MCP1700T-3302E/TT
+#   publisher: Microchip
+#   revision: DS20001826D
+#   url: https://ww1.microchip.com/downloads/en/DeviceDoc/20001826D.pdf
+#   local: docs/reference/mcp1700-DS20001826D.pdf
+#   retrieved: 2026-08-28
+#   needed_by: [ELE-001]
+#
+# Example of one a human must fetch:
+#
+# - id: iec-60601-1
+#   title: IEC 60601-1 Medical electrical equipment, general requirements
+#   publisher: IEC
+#   revision: Ed. 3.2
+#   url: https://webstore.iec.ch/publication/67497
+#   local: null
+#   blocked: paywalled — needs a purchased copy
+#   needed_by: [SYS-020]

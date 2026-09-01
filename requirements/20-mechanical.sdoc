@@ -1,0 +1,6 @@
+[DOCUMENT]
+TITLE: Mechanical Requirements
+UID: DOC-MECHANICAL
+
+[GRAMMAR]
+IMPORT_FROM_FILE: hardware.sgra

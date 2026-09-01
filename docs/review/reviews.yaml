@@ -1,0 +1,89 @@
+# Human review sign-off ledger — written by `review-gate`.
+#
+# A stage is done when its review here says `approved` and no artefact
+# has changed since. The digests are how staleness is detected; do not
+# hand-edit them. To record a decision:
+#
+#   review-gate sign <id> --approve --by <name> --note "what they said"
+#   review-gate sign <id> --changes "what they want different"
+reviews:
+- id: vision
+  title: Top-level sizing and skeleton concepts
+  stage: vision
+  summary: 'Two skeleton concepts of the same 49 kg robot with eighteen pancake actuators
+    in the body: A sprawl (radial leg planes, wide, stable, yaw joints propel) and B under-body
+    (sagittal leg planes, narrow, taller, pitch joints propel). docs/design/01-sizing.md derives
+    the actuator requirement (92 N·m continuous, 151 N·m 10-min, 179 N·m peak, 9 rad/s, Ø170
+    × 42 mm, ≤ 1.1 kg) from the mass budget, load cases and gaits.'
+  questions:
+  - Which stance, A (sprawl) or B (under-body), and what made you pick it?
+  - Does the rider case stay as a design driver, or is it a stretch goal we size for later?
+  - Is a 0.9 x 0.52 x 0.2 m body slab, with the hip stacks setting the width, the right size?
+  artifacts:
+  - path: docs/design/01-sizing.md
+    sha256: 9aa076ee791eec49
+  - path: docs/design/sizing/leg-stance.png
+    sha256: 48175d7678e12e45
+  - path: docs/design/sizing/ratio-trade.png
+    sha256: 8e118226542ffbde
+  - path: docs/design/sizing/torque-map.png
+    sha256: c97e698390bb1036
+  - path: docs/design/vision.md
+    sha256: 75cddc8c63710cd9
+  - path: docs/design/vision/concept_a_sprawl/iso.svg
+    sha256: c69275dfa54b4a19
+  - path: docs/design/vision/concept_a_sprawl/view-front.png
+    sha256: fe77b4d93400a85c
+  - path: docs/design/vision/concept_a_sprawl/view-hero.png
+    sha256: 11221d7213f399c0
+  - path: docs/design/vision/concept_a_sprawl/view-top.png
+    sha256: 04a83f7307ecad82
+  - path: docs/design/vision/concept_b_underbody/iso.svg
+    sha256: 5034f1f33823f27b
+  - path: docs/design/vision/concept_b_underbody/view-front.png
+    sha256: 022b046325225a87
+  - path: docs/design/vision/concept_b_underbody/view-hero.png
+    sha256: fa84e99e76de5490
+  - path: docs/design/vision/concept_b_underbody/view-top.png
+    sha256: dd9ec642cd41b30c
+  - path: docs/design/vision/manifest.json
+    sha256: a188b6478af2c66e
+  references:
+  - analysis/hexapod_model.py
+  - analysis/sizing.py
+  - concepts/concept_a_sprawl.py
+  - concepts/concept_b_underbody.py
+  - concepts/hexapod_skeleton.py
+  requested: '2026-09-01'
+  requested_commit: 0cc8e7d
+  status: requested
+  packet: docs/review/vision.md
+  history:
+  - 'on': '2026-09-01'
+    action: requested
+    commit: 0cc8e7d
+    questions:
+    - Which stance, A (sprawl) or B (under-body), and what made you pick it?
+    - Does the rider case stay as a design driver, or is it a stretch goal we size for later?
+    - Is a 0.9 x 0.52 x 0.2 m body slab, with the hip stacks setting the width, the right
+      size?
+    summary: 'Two skeleton concepts of the same 49 kg robot with eighteen pancake actuators
+      in the body: A sprawl (radial leg planes, wide, stable, yaw joints propel) and B under-body
+      (sagittal leg planes, narrow, taller, pitch joints propel). docs/design/01-sizing.md
+      derives the actuator requirement (92 N·m continuous, 151 N·m 10-min, 179 N·m peak, 9
+      rad/s, Ø170 × 42 mm, ≤ 1.1 kg) from the mass budget, load cases and gaits.'
+    added:
+    - docs/design/01-sizing.md
+    - docs/design/sizing/leg-stance.png
+    - docs/design/sizing/ratio-trade.png
+    - docs/design/sizing/torque-map.png
+    - docs/design/vision.md
+    - docs/design/vision/concept_a_sprawl/iso.svg
+    - docs/design/vision/concept_a_sprawl/view-front.png
+    - docs/design/vision/concept_a_sprawl/view-hero.png
+    - docs/design/vision/concept_a_sprawl/view-top.png
+    - docs/design/vision/concept_b_underbody/iso.svg
+    - docs/design/vision/concept_b_underbody/view-front.png
+    - docs/design/vision/concept_b_underbody/view-hero.png
+    - docs/design/vision/concept_b_underbody/view-top.png
+    - docs/design/vision/manifest.json

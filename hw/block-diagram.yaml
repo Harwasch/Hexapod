@@ -1,0 +1,13 @@
+# Electrical block diagram — the architecture agreement, settled before schematic capture.
+#
+#   block-diagram                 # -> hw/block-diagram.drawio + docs/design/block-diagram.svg
+#   block-diagram --check         # validate only; exit 1 on a broken tree or an over-budget rail
+#
+# Filled in at chunk E1B, after the power architecture ADR.
+
+project: Hexapod
+revision: A
+
+rails: []
+blocks: []
+buses: []
