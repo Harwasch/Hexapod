@@ -1,0 +1,28 @@
+# Build and simulation output — regenerate it, do not commit it.
+build/
+sim/**/*.raw
+sim/**/*.log
+*.op.raw
+
+# Generated documentation output
+docs/_build/
+output/
+
+# Secrets. .env.example is committed; .env is not.
+.env
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# KiCad backups and locks
+*-backups/
+*.kicad_prl
+fp-info-cache
+~*.lck
+*.kicad_sch-bak
+*.kicad_pcb-bak
+
+# OS
+.DS_Store

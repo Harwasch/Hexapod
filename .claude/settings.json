@@ -1,0 +1,14 @@
+{
+  "extraKnownMarketplaces": {
+    "makehardware": {
+      "source": { "source": "github", "repo": "Harwasch/MakeHardware" }
+    },
+    "kicad-happy": {
+      "source": { "source": "github", "repo": "aklofas/kicad-happy" }
+    }
+  },
+  "enabledPlugins": {
+    "makehardware@makehardware": true,
+    "kicad-happy@kicad-happy": true
+  }
+}
