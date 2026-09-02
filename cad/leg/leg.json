@@ -1,0 +1,352 @@
+{
+ "frame": "leg frame: origin on the yaw axis at the floor plate underside; +x forward, +y outboard, +z up",
+ "stance": {
+  "femur_deg": 45.0,
+  "knee_deg": 45.0,
+  "yaw_deg": 0.0
+ },
+ "mammal": {
+  "femur_deg": -45.0,
+  "knee_deg": 114.3,
+  "yaw_deg": 90.0
+ },
+ "femur_range_deg": [
+  -45.0,
+  85.0
+ ],
+ "knee_range_deg": [
+  15.0,
+  145.0
+ ],
+ "yaw_checked_deg": [
+  -90.0,
+  -45.0,
+  0.0,
+  45.0,
+  90.0
+ ],
+ "pivots": {
+  "yaw_axis": [
+   0,
+   0,
+   0
+  ],
+  "femur_pivot": [
+   0,
+   150.0,
+   -80.0
+  ],
+  "knee_stance": [
+   0,
+   326.7766952966369,
+   96.77669529663686
+  ],
+  "hip_height_mm": 323.22330470336317,
+  "floor_plate_above_ground_mm": 403.22330470336317,
+  "pod_bottom_z": -96.0
+ },
+ "links": {
+  "coxa": 150.0,
+  "femur": 250.0,
+  "tibia": 500.0,
+  "femur_beam": "30x60x3 6061-T6 rect tube, centreline 65 mm exterior of the pivot-knee line",
+  "tibia_tube": "30x50x3 6061-T6 rect tube",
+  "coxa_structure": "two 6 mm 6061 side plates at x = +-46..52 + three 6 mm hub plates"
+ },
+ "body": {
+  "slab_height": 220.0,
+  "slab_edge_from_yaw_axis": 75.0,
+  "slab_width": 390.0,
+  "level_pitch": 69.0,
+  "module_stack_top_z": 207.0,
+  "stack_fits": true,
+  "motors_xy": {
+   "yaw": [
+    50.0,
+    -115.0
+   ],
+   "knee": [
+    115.0,
+    0.0
+   ],
+   "femur": [
+    -115.0,
+    0.0
+   ]
+  }
+ },
+ "transmission": {
+  "r_drum": {
+   "femur": 20.0,
+   "knee": 35.0
+  },
+  "r_sector": {
+   "femur": 80.0,
+   "knee": 140.0
+  },
+  "r_idler": 35.0,
+  "x_rope_planes": {
+   "femur": 20.0,
+   "knee": 35.0
+  },
+  "drum_height": 32.0,
+  "rope": {
+   "name": "Marlow D12 Max 78, 5 mm",
+   "d_mm": 5.0,
+   "break_kN": 29.2,
+   "break_linear_kN": 32.4,
+   "mass_g_per_m": 15.6,
+   "E_eff_GPa": 60.0,
+   "creep_pct_per_yr_at_20pct": 0.5,
+   "T_critical_C": 80.0
+  },
+  "contact_angles_stance_deg": {
+   "femur_A": 119.9,
+   "femur_B": -124.5,
+   "knee_A_idler_in": -120.6,
+   "knee_A_idler_out": 159.8,
+   "knee_A_sector": 159.8,
+   "knee_B_idler_in": -120.6,
+   "knee_B_idler_out": -69.8,
+   "knee_B_sector": -69.8
+  },
+  "groove_femur_frame_deg": {
+   "A": [
+    34.9,
+    164.9
+   ],
+   "B": [
+    -209.5,
+    -79.5
+   ]
+  },
+  "groove_tibia_frame_deg": {
+   "A": [
+    -210.2,
+    -80.2
+   ],
+   "B": [
+    -439.8,
+    -309.8
+   ]
+  },
+  "run_lengths_stance_mm": {
+   "femur_A": 127.0,
+   "femur_B": 127.0,
+   "knee_A_in": 153.6,
+   "knee_A_out": 226.9,
+   "knee_B_in": 153.6,
+   "knee_B_out": 226.9
+  },
+  "rope_length_mm": {
+   "femur": 1164.0,
+   "knee": 2464.0
+  },
+  "drum_working_turns": {
+   "femur": 1.7083333333333333,
+   "knee": 2.0694444444444446
+  },
+  "coupling": {
+   "femur": {
+    "dL_dphi_mm_per_rad": {
+     "A": -80.0,
+     "B": 80.0
+    },
+    "formula": "theta_femur = (r_drum/r_sector) * (delta_femur - psi) = (delta_femur - psi) / 4"
+   },
+   "knee": {
+    "dL_dphi_mm_per_rad": {
+     "A": -35.0,
+     "B": 35.0
+    },
+    "dL_dtheta_mm_per_rad": {
+     "A": -140.0,
+     "B": 140.0
+    },
+    "loop_length_variation_mm": 47.953,
+    "formula": "theta_knee = (r_drum/r_sector) * (delta_knee - psi) - (r_idler/r_sector) * phi_femur = (delta_knee - psi - phi_femur) / 4"
+   }
+  },
+  "yaw_ratio_lobes": 40,
+  "femur_knee_ratio": "25-lobe cycloid x 4:1 capstan = 100:1",
+  "belt": "HTD 5M 1:1, 24T/24T, 15 mm"
+ },
+ "masses_g": {
+  "floor_plate": 1225.6,
+  "top_deck": 1363.2,
+  "side_rail": 2965.2,
+  "module_yaw": 1400.0,
+  "level_plate_yaw": 401.6,
+  "motor_yaw": 650.0,
+  "pulley_yaw": 110.0,
+  "belt_yaw": 30.0,
+  "module_knee": 1400.0,
+  "level_plate_knee": 360.3,
+  "motor_knee": 650.0,
+  "pulley_knee": 110.0,
+  "belt_knee": 30.0,
+  "module_femur": 1400.0,
+  "level_plate_femur": 360.3,
+  "motor_femur": 650.0,
+  "pulley_femur": 110.0,
+  "belt_femur": 30.0,
+  "yaw_flange": 108.9,
+  "hub_top": 94.3,
+  "hub_mid": 77.3,
+  "hub_bot": 81.7,
+  "hub_standoff_0": 19.1,
+  "hub_standoff_1": 19.1,
+  "hub_standoff_2": 19.1,
+  "hub_standoff_3": 19.1,
+  "hub_standoff_4": 19.1,
+  "knee_tube": 341.1,
+  "femur_shaft": 487.4,
+  "drum_bearings": 75.1,
+  "coxa_plate_L": 309.4,
+  "coxa_plate_R": 309.4,
+  "femur_pin": 383.5,
+  "femur_pivot_bearings": 48.0,
+  "femur_carrier": 401.8,
+  "femur_beam": 217.7,
+  "knee_cheek_L": 78.0,
+  "knee_spacer_L": 100.4,
+  "knee_cheek_R": 78.0,
+  "knee_spacer_R": 100.4,
+  "knee_pin": 383.5,
+  "femur_sector_A": 176.6,
+  "femur_tensioner_A": 45.0,
+  "femur_sector_B": 176.6,
+  "femur_tensioner_B": 45.0,
+  "tibia_carrier": 502.1,
+  "tibia_tube": 521.5,
+  "knee_pivot_bearings": 48.0,
+  "knee_sector_A": 381.4,
+  "knee_tensioner_A": 45.0,
+  "knee_sector_B": 381.4,
+  "knee_tensioner_B": 45.0,
+  "foot_plug": 104.9,
+  "foot_load_cell": 40.0,
+  "foot_pad": 54.7,
+  "drum_knee": 254.8,
+  "rope_knee_drum_0": 3.4,
+  "rope_knee_drum_1": 3.4,
+  "rope_knee_drum_2": 3.4,
+  "rope_knee_drum_3": 3.4,
+  "rope_knee_drum_4": 3.4,
+  "drum_femur": 75.6,
+  "rope_femur_drum_0": 2.0,
+  "rope_femur_drum_1": 2.0,
+  "rope_femur_drum_2": 2.0,
+  "rope_femur_drum_3": 2.0,
+  "rope_femur_drum_4": 2.0,
+  "knee_idler_A": 86.3,
+  "knee_idler_B": 86.3,
+  "rope_femur_A": 2.0,
+  "rope_femur_B": 2.0,
+  "rope_knee_A_in": 2.4,
+  "rope_knee_A_out": 3.5,
+  "rope_knee_B_in": 2.4,
+  "rope_knee_B_out": 3.5,
+  "rope_femur_A_arc": 0.9,
+  "rope_knee_A_idler_arc": 0.8,
+  "rope_knee_A_arc": 3.8,
+  "rope_femur_B_arc": 2.0,
+  "rope_knee_B_idler_arc": 0.5,
+  "rope_knee_B_arc": 1.1
+ },
+ "group_mass_g": {
+  "body_stub": 13246.3,
+  "hip_pod": 1361.2,
+  "coxa": 1050.4,
+  "femur": 1360.0,
+  "tibia": 1071.6,
+  "transmission": 1850.7,
+  "foot": 199.5
+ },
+ "unit_mass_g": 2450.0,
+ "unit_extras_g": {
+  "belt_pulleys_x3": 420.0,
+  "hollow_eccentric_and_bearing_upgrade_x3": 270.0,
+  "yaw_output_bearing_RB7013_vs_RB5013": 80.0
+ },
+ "leg_structure_g": 6893.5,
+ "leg_total_g": 15013.5,
+ "assigned_masses": [
+  "belt_femur",
+  "belt_knee",
+  "belt_yaw",
+  "drum_bearings",
+  "femur_pivot_bearings",
+  "femur_tensioner_A",
+  "femur_tensioner_B",
+  "foot_load_cell",
+  "knee_pivot_bearings",
+  "knee_tensioner_A",
+  "knee_tensioner_B",
+  "module_femur",
+  "module_knee",
+  "module_yaw",
+  "motor_femur",
+  "motor_knee",
+  "motor_yaw",
+  "pulley_femur",
+  "pulley_knee",
+  "pulley_yaw",
+  "rope_femur_A",
+  "rope_femur_A_arc",
+  "rope_femur_B",
+  "rope_femur_B_arc",
+  "rope_femur_drum_0",
+  "rope_femur_drum_1",
+  "rope_femur_drum_2",
+  "rope_femur_drum_3",
+  "rope_femur_drum_4",
+  "rope_knee_A_arc",
+  "rope_knee_A_idler_arc",
+  "rope_knee_A_in",
+  "rope_knee_A_out",
+  "rope_knee_B_arc",
+  "rope_knee_B_idler_arc",
+  "rope_knee_B_in",
+  "rope_knee_B_out",
+  "rope_knee_drum_0",
+  "rope_knee_drum_1",
+  "rope_knee_drum_2",
+  "rope_knee_drum_3",
+  "rope_knee_drum_4"
+ ],
+ "bearings": {
+  "femur_pivot": "2 x HK3012 (PTI: Cr 11.5, C0r 17.3 kN)",
+  "knee_pivot": "2 x HK3012",
+  "knee_drum": "HK4012 + HK3012 (PTI: C0r 23.1 / 17.3 kN)",
+  "femur_drum": "2 x HK2512 (NTN: C0r 16.3 kN)",
+  "yaw_output": "RB7013 (THK 382-5E: C0 27.7 kN, dp 84 -> M0 1163 N\u00b7m)",
+  "femur_eccentric": "HK3512 (PTI: C0r 20.25 kN), hollow sleeve bore 22",
+  "yaw_eccentric": "HK4012, hollow sleeve bore 32",
+  "idlers": "bronze bushes on the \u00d830 pin"
+ },
+ "clearances": {
+  "skipped": true
+ },
+ "static_gaps_mm": {
+  "femur_sector_A vs knee_idler_A (x gap)": 7.0,
+  "femur_sector_A vs femur_carrier": 2.5,
+  "knee_idler_A vs coxa_plate_R": 6.0,
+  "knee_sector_A vs knee_cheek_R": 8.0,
+  "rope_femur_A vs drum_knee": 3.67,
+  "rope_femur_A vs hub_mid": 5.6,
+  "rope_femur_A vs floor_plate": 24.24,
+  "rope_knee_A_in vs hub_mid": 11.27,
+  "rope_knee_B_in vs hub_bot": 41.29,
+  "rope_knee_A_out vs femur_beam": 17.5,
+  "femur_sector_A vs hub_top (stance)": 45.81,
+  "femur_beam vs side_rail (stance)": 39.64,
+  "motor_yaw vs module_knee": 37.9,
+  "motor_femur vs top_deck": 30.0
+ },
+ "bbox": [
+  60,
+  60,
+  17
+ ]
+}
