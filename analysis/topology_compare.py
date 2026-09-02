@@ -369,7 +369,7 @@ json.dump(out, open(os.path.join(ROOT, "hw", "stator", "topology_compare.json"),
 
 # ---- figure ----
 fig = plt.figure(figsize=(14, 9.5))
-gs = fig.add_gridspec(2, 3, height_ratios=(0.75, 1.0), left=0.05, right=0.98, top=0.95, bottom=0.07, hspace=0.45, wspace=0.55)
+gs = fig.add_gridspec(2, 3, height_ratios=(0.75, 1.0), left=0.05, right=0.98, top=0.95, bottom=0.08, hspace=0.45, wspace=0.35)
 maps = [("A  two Halbach rotors, one stator (1s-opt, baseline)", "A: two Halbach rotors, one stator (1s-opt)"),
         ("B  one N-S rotor, two iron-backed stators", "B: one N-S rotor, two iron-backed stators"),
         ("F  same with a laminated tooth 4.8 mm wide through the board", "F: iron teeth in the coil centres (6-turn coil)")]
@@ -388,12 +388,14 @@ for i, (key, title) in enumerate(maps):
         fig.colorbar(im, ax=ax, pad=0.02, label="B_z (T); black = iron")
 ax = fig.add_subplot(gs[1, 0:2])
 names = [u["name"] for u in UNITS]; y = np.arange(len(UNITS))
-ax.barh(y - 0.22, [u["T_cont"] for u in UNITS], 0.42, color="#0f9b8e", label="continuous torque per unit (N·m), each board at the 1s-opt copper-loss budget")
-ax.barh(y + 0.22, [u["mass_kg"] for u in UNITS], 0.42, color="#d98c3a", label="stator + rotor + iron mass (kg)")
+ax.barh(y - 0.17, [u["T_cont"] for u in UNITS], 0.32, color="#0f9b8e", label="continuous torque per unit (N·m), each board at the 1s-opt copper-loss budget")
+ax.barh(y + 0.17, [u["mass_kg"] for u in UNITS], 0.32, color="#d98c3a", label="stator + rotor + iron mass (kg)")
 for i, u in enumerate(UNITS):
     ax.text(max(u["T_cont"], u["mass_kg"]) + 0.08, i, f"${u['cost20']:.0f} / ${u['cost100']:.0f}, {u['stack_mm']:.0f} mm stack" + (f", iron {u['B_iron']:.1f} T" if u["iron_kg"] else ""), va="center", fontsize=8)
-ax.set_yticks(y); ax.set_yticklabels(names, fontsize=8); ax.invert_yaxis(); ax.set_xlim(0, 6.5); ax.grid(axis="x", alpha=0.3)
-ax.legend(fontsize=8, loc="lower right", bbox_to_anchor=(1.0, -0.28))
+for i, n in enumerate(names):
+    ax.text(0.05, i - 0.5, n, fontsize=8, va="bottom", ha="left", color="#222")
+ax.set_yticks(y); ax.set_yticklabels([""] * len(y)); ax.invert_yaxis(); ax.set_xlim(0, 6.5); ax.set_ylim(len(y) - 0.5, -1.0); ax.grid(axis="x", alpha=0.3)
+ax.legend(fontsize=8, loc="lower right")
 ax.set_title("1. Topologies in the same Ø190 package, 10 mm N48 blocks, 20L 2 oz boards", fontsize=10)
 ax = fig.add_subplot(gs[1, 2])
 gr = grade_rows
