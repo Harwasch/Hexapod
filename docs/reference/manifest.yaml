@@ -11,7 +11,18 @@
 #              Leave `local: null` and ASK — never substitute a number from
 #              memory for a datasheet you could not open.
 
-documents: []
+documents:
+- id: ntn-hk2512
+  title: NTN-SNR technical data, HK2512 drawn cup needle roller bearing, open end
+  part: HK2512
+  publisher: NTN-SNR
+  revision: unknown (web technical-data sheet, 2 pages)
+  url: https://media-pim.rubix.com/medias/technical_datasheet/47/52/1300000075247/EN-SI-NTN-HK2512.pdf
+  local: docs/reference/ntn-hk2512.pdf
+  retrieved: 2026-09-02
+  needed_by: []
+  notes: Fw 25, D 32, C 12 mm; Cr 11.8 kN; C0r 16.3 kN; n_lim grease 6500 rpm; Tmax 120 C; mass 0.02 kg. Used for the cycloid eccentric bearing life in docs/design/08-actuator-design.md.
+
 
 # Example of a fetched document:
 #

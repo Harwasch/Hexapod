@@ -40,14 +40,16 @@ os.makedirs(FIG, exist_ok=True)
 BORE_R = 50.0           # mm, inside the magnet ring (r < 50 mm available)
 RING_WALL = 4.0         # mm, housing wall carrying the ring pins
 R_PIN_CIRCLE = BORE_R - RING_WALL - 2.5   # mm, ring-pin circle radius ~43.5
-DISC_T = 8.0            # mm, each disc (two discs 180° apart)
-N_DISCS = 2
+DISC_T = 10.0           # mm, one disc (a second disc costs 12 mm of height the 42 mm envelope does not have; see cad/actuator)
+N_DISCS = 1
 E_STEEL = 207e3         # MPa
 NU = 0.3
 E_PRIME = E_STEEL / (1 - NU**2) / 2
 SIGMA_H_ALLOW = 1400.0  # MPa, hardened steel rollers/dowels on hardened disc, grease
-R_OUT = 22.0            # mm, output-pin circle radius
+R_OUT = 26.0            # mm, output-pin circle radius (holes clear the HK2512 needle cup, r 16)
 N_OUT = 8               # output pins
+OUT_PIN_D = 10.0        # mm, Ø10 dowels
+DOWEL_D = (3.0, 4.0, 5.0, 6.0)   # standard dowel diameters for the ring pins
 SAFETY = 1.0            # loads already include the peak case
 
 
@@ -63,8 +65,7 @@ JOINTS = {
 def design(N: int, T_cont: float, T_peak: float, R=R_PIN_CIRCLE):
     """Pick pin radius and eccentricity for N lobes on a pin circle R."""
     pitch = 2 * math.pi * R / (N + 1)            # mm between ring pins
-    r = 0.40 * pitch                             # pin radius: pins take ~80 % of the pitch? no — diameter 0.8·pitch is too tight
-    r = min(r, 0.35 * pitch)                     # keep ≥ 30 % of the pitch as lobe clearance
+    r = max([dd / 2 for dd in DOWEL_D if dd / 2 <= 0.35 * pitch] or [DOWEL_D[0] / 2])   # largest standard dowel ≤ 35 % of the pitch
     e = 0.8 * R / (N + 1)                        # eccentricity at the no-cusp margin
     F_pin = 4 * T_peak * 1000 / ((N + 1) * R) / N_DISCS       # N, per disc (two discs share)
     F_out = 4 * T_peak * 1000 / (N_OUT * R_OUT) / N_DISCS
@@ -106,7 +107,7 @@ def fig_profiles(designs):
             a = 2 * math.pi * k / (N + 1)
             ax.add_patch(plt.Circle((R * math.cos(a), R * math.sin(a)), r, color="#3a3a3a"))
         # output pins and holes (hole radius = pin radius + e)
-        r_o = 0.5 * (2 * math.pi * R_OUT / N_OUT) * 0.5
+        r_o = OUT_PIN_D / 2
         for k in range(N_OUT):
             a = 2 * math.pi * k / N_OUT
             ax.add_patch(plt.Circle((R_OUT * math.cos(a) - e, R_OUT * math.sin(a)), r_o + e, fill=False, color="#2980b9", lw=0.8))

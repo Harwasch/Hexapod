@@ -8,7 +8,9 @@
   "model_halbach_B": 1.007681828941748,
   "ratio_to_model": 0.8363256651805863,
   "magnet_mass_g": 809.9999999999999,
-  "note": "rectangular OTS block, 5 mm wide: 71 % of the 7.0 mm segment at r_m; 90 % at r_in, 58 % at r_out"
+  "note": "rectangular OTS block, 5 mm wide: 71 % of the 7.0 mm segment at r_m; 90 % at r_in, 58 % at r_out",
+  "attraction_kPa": 143.93605688224324,
+  "attraction_N": 1806.9450817161996
  },
  "trapezoid full": {
   "w_b_mm": 6.6953622633305665,
@@ -19,7 +21,9 @@
   "model_halbach_B": 1.007681828941748,
   "ratio_to_model": 1.071992722333297,
   "magnet_mass_g": 1084.6486866595517,
-  "note": "custom trapezoidal segment, 0.3 mm glue gaps"
+  "note": "custom trapezoidal segment, 0.3 mm glue gaps",
+  "attraction_kPa": 236.69204963705224,
+  "attraction_N": 2971.3856571942842
  },
  "rect 30x5x4 N48": {
   "w_b_mm": 5.0,
@@ -30,7 +34,9 @@
   "model_halbach_B": 0.8089375125113832,
   "ratio_to_model": 0.8338107267872552,
   "magnet_mass_g": 540.0,
-  "note": "thinner OTS block"
+  "note": "thinner OTS block",
+  "attraction_kPa": 92.272004684064,
+  "attraction_N": 1158.3646839816438
  },
  "rect 30x5x8 N48": {
   "w_b_mm": 5.0,
@@ -41,7 +47,9 @@
   "model_halbach_B": 1.1341212995006282,
   "ratio_to_model": 0.838424619660434,
   "magnet_mass_g": 1080.0,
-  "note": "thicker OTS block (30x8x5 listing)"
+  "note": "thicker OTS block (30x8x5 listing)",
+  "attraction_kPa": 183.1875256902632,
+  "attraction_N": 2299.700337411538
  },
  "rect 30x5x10 N48": {
   "w_b_mm": 5.0,
@@ -52,6 +60,8 @@
   "model_halbach_B": 1.2148014823404707,
   "ratio_to_model": 0.84029638611929,
   "magnet_mass_g": 1349.9999999999998,
-  "note": "30x10x5 listing stood on edge: +4 mm each side in the axial stack"
+  "note": "30x10x5 listing stood on edge: +4 mm each side in the axial stack",
+  "attraction_kPa": 211.09544767886993,
+  "attraction_N": 2650.0509269062086
  }
 }

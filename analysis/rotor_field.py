@@ -110,9 +110,14 @@ for name, (w_b, h_m, note) in CASES.items():
     # field at the magnet surface of rotor 1 (worst place for the copper eddy loss estimate) and inside a magnet (demag)
     _, bz_surf = array_field(xs, np.full_like(xs, -G_MAG / 2 + 0.2e-3), w_b, h_m, G_MAG)
     model = float(np.mean(mo.halbach_B(np.linspace(R1, R2, 50), P, h_m, G_MAG)))
+    # rotor-to-rotor attraction: Maxwell stress on the mid-plane, (Bz^2 - Bx^2)/(2 mu0), over the magnet annulus
+    bx0, _ = array_field(xs, np.zeros_like(xs), w_b, h_m, G_MAG)
+    sigma_zz = float(np.mean((bz0**2 - bx0**2) / (2 * mo.MU0)))
+    area = math.pi * ((R_M + 15e-3)**2 - (R_M - 15e-3)**2)
     results[name] = dict(w_b_mm=w_b * 1e3, h_m_mm=h_m * 1e3, B1_midplane=float(b1), B_peak_midplane=float(np.max(np.abs(bz0))),
                          B_peak_surface=float(np.max(np.abs(bz_surf))), model_halbach_B=model, ratio_to_model=float(b1 / model),
-                         magnet_mass_g=2 * 4 * P * (w_b * 30e-3 * h_m) * 7500 * 1e3, note=note)
+                         magnet_mass_g=2 * 4 * P * (w_b * 30e-3 * h_m) * 7500 * 1e3, note=note,
+                         attraction_kPa=sigma_zz * 1e-3, attraction_N=sigma_zz * area)
     axes[0].plot(xs * 1e3, bz0, label=f"{name}: B1 {b1:.2f} T")
 axes[0].axhline(0, color="#999", lw=0.6)
 axes[0].set_xlabel(f"circumference at r = {R_M*1e3:.0f} mm (mm), one pole pair = {LAMBDA*1e3:.1f} mm")
@@ -139,4 +144,4 @@ fig.tight_layout()
 fig.savefig(os.path.join(FIG, "rotor-field.png"), dpi=110)
 json.dump(results, open(os.path.join(ROOT, "hw", "stator", "rotor_field.json"), "w"), indent=1)
 for k, v in results.items():
-    print(f"{k:18s} w {v['w_b_mm']:.1f} h {v['h_m_mm']:.0f}: B1 {v['B1_midplane']:.3f} T (peak {v['B_peak_midplane']:.2f}), surface {v['B_peak_surface']:.2f} T, model {v['model_halbach_B']:.3f} -> ratio {v['ratio_to_model']:.2f}, magnets {v['magnet_mass_g']:.0f} g")
+    print(f"{k:18s} w {v['w_b_mm']:.1f} h {v['h_m_mm']:.0f}: B1 {v['B1_midplane']:.3f} T (peak {v['B_peak_midplane']:.2f}), surface {v['B_peak_surface']:.2f} T, model {v['model_halbach_B']:.3f} -> ratio {v['ratio_to_model']:.2f}, magnets {v['magnet_mass_g']:.0f} g, rotor attraction {v['attraction_N']/1e3:.2f} kN")

@@ -1,0 +1,126 @@
+{
+ "variants": {
+  "as built": {
+   "R_slab": 0.04026784997338442,
+   "R_faces": 0.7085252194730398,
+   "R_rotor_housing": 0.29981140271190504,
+   "R_rim": 3.027235260808328,
+   "R_to_housing": 0.7966593270540859,
+   "eddy_rings_W_1000rpm": 0.0,
+   "eddy_rings_W_2500rpm": 0.0,
+   "cases": {
+    "body holds 45 C": {
+     "R_housing_amb": 0.0,
+     "R_all": 0.7966593270540859,
+     "P_allow": 94.14312674570391,
+     "I_cont": 20.752969204054285,
+     "T_cont": 4.06003533251351,
+     "T_magnet": 66.17277832003597,
+     "share_via_rotor": 0.7501378611457072
+    },
+    "body at 60 C (15 K rise)": {
+     "R_housing_amb": 0.19916483176352148,
+     "R_all": 0.9958241588176074,
+     "P_allow": 75.31450139656313,
+     "I_cont": 18.490224246923283,
+     "T_cont": 3.6173601478645634,
+     "T_magnet": 76.93822265602878,
+     "share_via_rotor": 0.7501378611457072
+    },
+    "unit alone in still air": {
+     "R_housing_amb": 1.0828546406646427,
+     "R_all": 1.8795139677187285,
+     "P_allow": 39.90393329773,
+     "I_cont": 13.224570145883,
+     "T_cont": 2.587206752039079,
+     "T_magnet": 97.18454933708234,
+     "share_via_rotor": 0.7501378611457072
+    },
+    "three-unit hip pod (per unit)": {
+     "R_housing_amb": 1.5625,
+     "R_all": 2.359159327054086,
+     "P_allow": 31.790985517562948,
+     "I_cont": 11.688795055425794,
+     "T_cont": 2.2867533051736415,
+     "T_magnet": 101.8232038383357,
+     "share_via_rotor": 0.7501378611457072
+    },
+    "sustained: 300 W robot budget / 18": {
+     "R_housing_amb": null,
+     "R_all": null,
+     "P_allow": 16.666666666666668,
+     "I_cont": 8.080866560668102,
+     "T_cont": 1.5809113111019293,
+     "T_magnet": 74.99685671186508,
+     "share_via_rotor": null
+    }
+   }
+  },
+  "with thermal rings": {
+   "R_slab": 0.04026784997338442,
+   "R_faces": 0.7085252194730398,
+   "R_rotor_housing": 0.29981140271190504,
+   "R_rim": 2.5560657734489935,
+   "R_to_housing": 0.7633553249563299,
+   "eddy_rings_W_1000rpm": 0.0,
+   "eddy_rings_W_2500rpm": 0.0,
+   "cases": {
+    "body holds 45 C": {
+     "R_housing_amb": 0.0,
+     "R_all": 0.7633553249563299,
+     "P_allow": 98.2504445151943,
+     "I_cont": 21.21452751132093,
+     "T_cont": 4.150332919190968,
+     "T_magnet": 66.12360162349893,
+     "share_via_rotor": 0.7171092064633153
+    },
+    "body at 60 C (15 K rise)": {
+     "R_housing_amb": 0.19083883123908246,
+     "R_all": 0.9541941561954124,
+     "P_allow": 78.60035561215544,
+     "I_cont": 18.90462245316852,
+     "T_cont": 3.6984315040904088,
+     "T_magnet": 76.89888129879914,
+     "share_via_rotor": 0.7171092064633153
+    },
+    "unit alone in still air": {
+     "R_housing_amb": 1.0828546406646427,
+     "R_all": 1.8462099656209725,
+     "P_allow": 40.62376511697236,
+     "I_cont": 13.352304719187126,
+     "T_cont": 2.61219627887252,
+     "T_magnet": 97.72364121307423,
+     "share_via_rotor": 0.7171092064633153
+    },
+    "three-unit hip pod (per unit)": {
+     "R_housing_amb": 1.5625,
+     "R_all": 2.32585532495633,
+     "P_allow": 32.24620172856547,
+     "I_cont": 11.780270232629192,
+     "T_cont": 2.3046491757761562,
+     "T_magnet": 102.31754350802414,
+     "share_via_rotor": 0.7171092064633153
+    },
+    "sustained: 300 W robot budget / 18": {
+     "R_housing_amb": null,
+     "R_all": null,
+     "P_allow": 16.666666666666668,
+     "I_cont": 8.080866560668102,
+     "T_cont": 1.5809113111019293,
+     "T_magnet": 74.99685671186508,
+     "share_via_rotor": null
+    }
+   }
+  }
+ },
+ "assumptions": {
+  "k_fr4_inplane": 0.9,
+  "k_fr4_through": 0.3,
+  "k_air": 0.031,
+  "h_clamp": 5000.0,
+  "h_nat": 12.0,
+  "A_pod_m2": 0.16,
+  "A_unit_m2": 0.0769570819608663,
+  "sizing_R_th": 1.5
+ }
+}
