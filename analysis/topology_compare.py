@@ -368,8 +368,8 @@ out = dict(model=dict(grid_mm=H * 1e3, lam_mm=LAM * 1e3, r_m_mm=R_M * 1e3, coil_
 json.dump(out, open(os.path.join(ROOT, "hw", "stator", "topology_compare.json"), "w"), indent=1)
 
 # ---- figure ----
-fig = plt.figure(figsize=(14, 10), constrained_layout=True)
-gs = fig.add_gridspec(2, 3, height_ratios=(1.0, 1.15))
+fig = plt.figure(figsize=(14, 11), constrained_layout=True)
+gs = fig.add_gridspec(3, 3, height_ratios=(0.9, 1.3, 0.45))
 maps = [("A  two Halbach rotors, one stator (1s-opt, baseline)", "A: two Halbach rotors, one stator"),
         ("B  one N-S rotor, two iron-backed stators", "B: one N-S rotor, two iron-backed stators"),
         ("F  same with a laminated tooth 7.1 mm wide through the board", "F: iron teeth in the coil centres (4-turn coil)")]
@@ -384,16 +384,16 @@ for i, (key, title) in enumerate(maps):
         ax.contour(x[sel] * 1e3, z * 1e3, (mu[sel] > 1.5).T.astype(float), levels=[0.5], colors="k", linewidths=1.0)
     ax.set_title(title, fontsize=9); ax.set_xlabel("x along the circumference at r_m (mm)"); ax.set_ylabel("z (mm)")
     ax.set_aspect("equal")
-fig.colorbar(im, ax=fig.axes[:3], shrink=0.6, label="B_z (T), one pole pair; black = iron")
+fig.colorbar(im, ax=fig.axes[:3], shrink=0.8, pad=0.01, label="B_z (T), two pole pairs; black = iron")
 ax = fig.add_subplot(gs[1, 0:2])
 names = [u["name"] for u in UNITS]; y = np.arange(len(UNITS))
 ax.barh(y - 0.22, [u["T_cont"] for u in UNITS], 0.42, color="#0f9b8e", label="continuous torque per unit (N·m), each board at the 1s-opt copper-loss budget")
 ax.barh(y + 0.22, [u["mass_kg"] for u in UNITS], 0.42, color="#d98c3a", label="stator + rotor + iron mass (kg)")
 for i, u in enumerate(UNITS):
     ax.text(max(u["T_cont"], u["mass_kg"]) + 0.1, i, f"${u['cost20']:.0f} / ${u['cost100']:.0f}, {u['stack_mm']:.0f} mm stack" + (f", iron {u['B_iron']:.1f} T" if u["iron_kg"] else ""), va="center", fontsize=8)
-ax.set_yticks(y); ax.set_yticklabels(names, fontsize=8); ax.invert_yaxis(); ax.set_xlim(0, 8.5); ax.grid(axis="x", alpha=0.3); ax.legend(fontsize=8, loc="lower right")
+ax.set_yticks(y); ax.set_yticklabels(names, fontsize=8); ax.invert_yaxis(); ax.set_xlim(0, 6.2); ax.grid(axis="x", alpha=0.3); ax.legend(fontsize=8, loc="lower right")
 ax.set_title("Topologies in the same Ø190 package, 10 mm N48 blocks, 20L 2 oz boards", fontsize=10)
-ax = fig.add_subplot(gs[1, 2])
+ax = fig.add_subplot(gs[1:, 2])
 gr = grade_rows
 ax.barh(np.arange(len(gr)), [g["torque_ratio"] for g in gr], color=["#0f9b8e" if g["usable"] else "#b03a2e" for g in gr])
 ax.set_yticks(np.arange(len(gr))); ax.set_yticklabels([g["grade"].split(" (")[0] for g in gr], fontsize=8); ax.invert_yaxis()
@@ -403,6 +403,9 @@ for i, g in enumerate(gr):
 ax.set_xlim(0, 1.6); ax.set_xlabel(f"torque at fixed current, magnets at {T_MAG:.0f} °C (red: grade cannot run that hot)")
 ax.set_title("Magnet material: ±5 % within NdFeB", fontsize=10)
 tl = "\n".join(f"{n_t}-turn coil, {t['opening_mm']:.1f} mm tooth: x{t['gain_vs_8t_air']:.2f} vs the 8-turn air coil\n   (linear iron x{t['tooth_linear']/base:.2f}; tooth would see {t['B_tooth']:.1f} T, capped at {B_CAP} T), pull {t['attraction_N']/1e3:.1f} kN/rotor" for n_t, t in teeth.items())
-fig.text(0.68, 0.30, "Iron teeth in the coil centres (F):\n" + tl, fontsize=8, va="top", bbox=dict(fc="#f4f3f0", ec="#c3c2b7"))
+axt = fig.add_subplot(gs[2, 0:2]); axt.axis("off")
+axt.text(0.0, 1.0, "3. Iron teeth in the coil centres (F), same rotor as A, torque at the same current:\n" + tl +
+         f"\nAt the same copper loss the 6-turn coil with a 4.8 mm tooth gives x{teeth[6]['gain_vs_8t_air'] / math.sqrt(teeth[6]['copper_ratio']):.2f}; the tooth must be a lamination stack or an SMC plug in a slotted board, it cogs, and the rotor pull rises from {A['attraction_N']/1e3:.1f} kN.",
+         fontsize=8.5, va="top", ha="left", transform=axt.transAxes, bbox=dict(fc="#f4f3f0", ec="#c3c2b7"))
 fig.savefig(os.path.join(ROOT, "docs", "design", "actuator", "topology-compare.png"), dpi=110)
 print("wrote topology-compare.png")
