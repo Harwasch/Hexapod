@@ -636,7 +636,55 @@ measurement (the outrunner's heat-sunk continuous current) and one quote
 (the motor at quantity). Below that lies only a custom driver board (−$20),
 a cast base (−$30 at 500+), and relaxing the continuous load case.
 
-### 9.8 Open items from this round (updated in round 10)
+### 9.13 Round 11: the market search — `analysis/motor_market.py`
+
+Asked: the best off-the-shelf motor for this joint at the lowest price. The
+joint needs, through the 25-lobe cycloid and the 4:1 capstan, 2.35 N·m
+continuous from one motor at a 77 kg robot (or 3.38 N·m from two at 80:1 and
+89 kg), and 3629 rpm no-load at 48 V for the femur swing. Every candidate is
+rated the same way: not the listing's propeller-cooled current, but what its
+copper can dissipate through a heat-sink path assumed at 1.2 K/W for a
+Ø92 × 40 stator and scaled with stator area. Listing numbers, not datasheets;
+the flags say what was inferred.
+
+| Motor | Kt (N·m/A) | R (Ω) | kg | Heat-sunk cont. (N·m) | rpm at 48 V | Motors / unit | $ each at 20 | N·m per $100 | N·m per kg | Flags |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 8318 100KV (HL Q9XL / Alibaba class) | 0.095 | 0.055 | 0.65 | 2.63 | 4800 | 1 | 50 | 5.3 | 4.0 | R and mass from the listing; price est from GBP 49 and Aliba |
+| Turnigy Multistar 9235-100KV | 0.095 | 0.055 | 0.67 | 2.60 | 4800 | 1 | 75 | 3.5 | 3.9 | R, mass, 57 A prop-cooled from the listing; price from an eB |
+| 63100 190KV (skateboard, sensored) | 0.050 | 0.020 | 1.10 | 3.00 | 9120 | 1 | 80 | 3.8 | 2.7 | R and mass est from the class; price from the listing |
+| 6384 120KV (skateboard, sensored) | 0.080 | 0.125 | 0.95 | 1.74 | 5760 | 2 | 55 | 3.2 | 1.8 | R est: 0.05 ohm of the 190KV sibling x (190/120)^2; mass est |
+| MAD M8S C08 8108 EEE 100KV | 0.095 | 0.120 | 0.30 | 1.47 | 4800 | — | 230 | 0.6 | 4.9 | mass, 31.8 A prop-cooled and price from the listing; R est |
+| T-Motor U8 II KV100 | 0.095 | 0.700 | 0.28 | 0.61 | 4800 | — | 220 | 0.3 | 2.2 | mass and R from the listing (0.7 ohm as quoted; suspiciously |
+| 6.5 in hoverboard hub motor, 36 V 350 W | 0.434 | 0.300 | 2.90 | 7.23 | 1056 | — | 25 | 28.9 | 2.5 | 15 pole pairs, 800 rpm no-load at 36 V, rated 5 N·m / 10 pea |
+
+![Motor market](actuator/motor-market.png)
+
+* **Winner on price for the requirement: the 8318 100KV class** (HL Q9XL,
+  Alibaba clones): one motor per unit, 0.65 kg, about $50 at 20 pieces,
+  2.63 N·m heat-sunk against 2.35 needed. The Turnigy 9235-100KV is
+  the same motor with a published resistance and a brand behind it, at $75.
+  Buy one of each for the bench test; the 9235's listing is the better spec.
+* The skateboard 63100 190KV would give more torque per motor but needs
+  60 A continuous, beyond a $45 driver, and its resistance is an estimate.
+  The 6384 120KV is heavier and needs two per unit.
+* The premium drone motors (MAD 8108, T-Motor U8 II) are lighter per newton
+  metre but three to five times the price and cannot carry the current
+  without airflow: wrong market for us.
+* The hoverboard hub motor is the cheapest torque on earth
+  (29 N·m per $100) and is excluded by speed: 1000 rpm no-load at
+  48 V is a quarter of what the femur swing needs at any ratio that fits, and
+  it weighs 2.9 kg.
+* The PCB two-stator motor sits on the chart at 5.9 N·m and 2.7 kg: twice
+  the torque of an 8318 at four times the mass and three to four times the
+  price. It is the better machine per watt and the one we can make; it is
+  not the cheapest way to this joint.
+
+The one number all of this rests on is the heat-sunk continuous current of a
+propeller motor in a closed body. One 8318 or 9235 on an aluminium plate,
+locked rotor, 30 A, a thermocouple on the winding, is a $100 afternoon and
+decides the motor family.
+
+### 9.8 Open items from this round (updated in round 11)
 
 1. **OD 186, not 170** (§9.3): accepted by the review.
 2. **Mass and closure** (§9.7): the review chose to renegotiate the mass

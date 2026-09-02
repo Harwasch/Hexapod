@@ -103,6 +103,7 @@ BOM_BEFORE = sum(float(r["qty_per_unit"]) * float(r["price_before_usd"]) for r i
 BOM_100 = sum(float(r["qty_per_unit"]) * float(r["price_100_usd"]) for r in BOM)
 CAP = json.load(open(os.path.join(ROOT, "hw", "stator", "capstan.json")))
 CS = json.load(open(os.path.join(ROOT, "hw", "stator", "cost_search.json")))
+MM = json.load(open(os.path.join(ROOT, "hw", "stator", "motor_market.json")))
 HK2512 = dict(Cr=11.8e3, C0r=16.3e3, n_lim=6500)                # NTN sheet, docs/reference/ntn-hk2512.pdf
 HK3012 = dict(Cr=11.5e3, C0r=17.3e3)                            # PTI HK-series catalogue, docs/reference/pti-hk-series.pdf (round 7)
 RB5013 = dict(C=16.7e3, C0=20.9e3, mass=0.27)                    # THK catalogue 382-5E, docs/reference
@@ -260,6 +261,9 @@ def write_doc(figs):
     rrow = [(f"{r:.1f}", f"{t:.2f}", f"{t/A3_J['femur']['t_cont']:.2f}") for r, t in RTH_TRADE]
     mrows = [(k, f"{v*1e3:.0f}") for k, v in MASS_A3.items()] + [("**total, femur / knee unit**", f"**{TOTAL_A3*1e3:.0f}**")]
     mrows2 = [(f"same with 5 mm discs", f"{TOTAL_A3_THIN*1e3:.0f}"), (f"yaw unit: 6-layer board, {YAW_LEAN['h_m']*1e3:.1f} mm magnets, one disc", f"{TOTAL_YAW*1e3:.0f}")]
+    mm_rows = [(r["name"], f"{r['Kt']:.3f}", f"{r['R']:.3f}", f"{r['mass']:.2f}", f"{r['T_cont']:.2f}", f"{r['n_noload']:.0f}",
+                f"{r['motors_per_unit'] if r['motors_per_unit'] else '—'}", f"{r['price20']}", f"{r['T_per_usd']*100:.1f}", f"{r['T_per_kg']:.1f}", r["flags"][:60])
+               for r in MM["rows"]]
     cs_rows = [(r["option"], r["requirement"], f"{r['m_unit']:.2f}", f"{r['m_robot']:.0f}", f"{r['T_joint']:.0f} / {r['need_knee']:.0f}", f"{r['margin']:.2f}" + ("" if r["closes"] else " ✗"),
                 f"{r['cost']:.0f}", f"{[x for x in CS['rows'] if x['option']==r['option'] and x['requirement']==r['requirement'] and x['qty']==100][0]['cost']:.0f}")
                for r in CS["rows"] if r["qty"] == 20]
@@ -797,7 +801,47 @@ measurement (the outrunner's heat-sunk continuous current) and one quote
 (the motor at quantity). Below that lies only a custom driver board (−$20),
 a cast base (−$30 at 500+), and relaxing the continuous load case.
 
-### 9.8 Open items from this round (updated in round 10)
+### 9.13 Round 11: the market search — `analysis/motor_market.py`
+
+Asked: the best off-the-shelf motor for this joint at the lowest price. The
+joint needs, through the 25-lobe cycloid and the 4:1 capstan, {MM['assumptions']['need_T']['100:1']:.2f} N·m
+continuous from one motor at a 77 kg robot (or {MM['assumptions']['need_T']['80:1']:.2f} N·m from two at 80:1 and
+89 kg), and {MM['assumptions']['need_rpm']['100:1']:.0f} rpm no-load at 48 V for the femur swing. Every candidate is
+rated the same way: not the listing's propeller-cooled current, but what its
+copper can dissipate through a heat-sink path assumed at {MM['assumptions']['R_th_ref']} K/W for a
+Ø92 × 40 stator and scaled with stator area. Listing numbers, not datasheets;
+the flags say what was inferred.
+
+{md(("Motor", "Kt (N·m/A)", "R (Ω)", "kg", "Heat-sunk cont. (N·m)", "rpm at 48 V", "Motors / unit", "$ each at 20", "N·m per $100", "N·m per kg", "Flags"), mm_rows)}
+
+![Motor market]({rel(os.path.join(FIG, 'motor-market.png'))})
+
+* **Winner on price for the requirement: the 8318 100KV class** (HL Q9XL,
+  Alibaba clones): one motor per unit, 0.65 kg, about $50 at 20 pieces,
+  {[r for r in MM['rows'] if r['name'].startswith('8318')][0]['T_cont']:.2f} N·m heat-sunk against {MM['assumptions']['need_T']['100:1']:.2f} needed. The Turnigy 9235-100KV is
+  the same motor with a published resistance and a brand behind it, at $75.
+  Buy one of each for the bench test; the 9235's listing is the better spec.
+* The skateboard 63100 190KV would give more torque per motor but needs
+  60 A continuous, beyond a $45 driver, and its resistance is an estimate.
+  The 6384 120KV is heavier and needs two per unit.
+* The premium drone motors (MAD 8108, T-Motor U8 II) are lighter per newton
+  metre but three to five times the price and cannot carry the current
+  without airflow: wrong market for us.
+* The hoverboard hub motor is the cheapest torque on earth
+  ({[r for r in MM['rows'] if 'hoverboard' in r['name']][0]['T_per_usd']*100:.0f} N·m per $100) and is excluded by speed: 1000 rpm no-load at
+  48 V is a quarter of what the femur swing needs at any ratio that fits, and
+  it weighs 2.9 kg.
+* The PCB two-stator motor sits on the chart at 5.9 N·m and 2.7 kg: twice
+  the torque of an 8318 at four times the mass and three to four times the
+  price. It is the better machine per watt and the one we can make; it is
+  not the cheapest way to this joint.
+
+The one number all of this rests on is the heat-sunk continuous current of a
+propeller motor in a closed body. One 8318 or 9235 on an aluminium plate,
+locked rotor, 30 A, a thermocouple on the winding, is a $100 afternoon and
+decides the motor family.
+
+### 9.8 Open items from this round (updated in round 11)
 
 1. **OD 186, not 170** (§9.3): accepted by the review.
 2. **Mass and closure** (§9.7): the review chose to renegotiate the mass

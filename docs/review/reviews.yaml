@@ -606,31 +606,37 @@ reviews:
     - docs/design/drawing/side.png
     - docs/design/drawing/top.png
 - id: actuator
-  title: 'Actuator, round 10: the cost search — the floor is an OTS outrunner'
+  title: 'Actuator, round 11: cost search and motor market search'
   stage: design
-  summary: 'Review asked to exhaust the cost routes and be confident of the minimum. analysis/cost_search.py
-    evaluates every motor family (PCB axial 2-stator as designed, PCB 1-stator, 1 or 2 OTS
-    8318 outrunners), reduction (cycloid x capstan), quantity (20 / 100) and requirement definition
-    at the robot mass each implies. Result: the PCB two-stator unit is $597 / $396 at a 124
-    kg robot (margin 1.10); a single PCB stator does not close the requirement as written
-    at any mass; one OTS 8318 outrunner (0.65 kg, ~$65) heat-sunk, through a 25-lobe cycloid
-    and the 4:1 capstan, closes at a 77 kg robot with 1.12 margin for ~$423 / $284 — the cheapest
-    and lightest option, subject to measuring the outrunner''s heat-sunk continuous current
-    (assumed 1.2 K/W, 28 A) and a quantity quote. Also answered: the middle rotor is two back-to-back
-    Halbach rings whose carrier is only structural (2 mm sheet or none); the rotor can be
-    sheet plus OTS standoffs; two stators were needed only because the PCB machine is ironless.'
+  summary: 'Rounds 9-11 on the review''s ''exhaust all cost routes'': the stator laid out
+    again with the coils under the whole magnet span (+14 % torque, so the cheap 2 oz boards
+    match the 3 oz one and the magnets drop to 6 mm: unit 5.33 kg, 54 mm, $597 / $396 at 20
+    / 100), the base as four laser-cut and tube parts, an N-S rotor on steel tried and rejected
+    (+0.7 kg per unit for the same field). Then the design space searched as a whole (motor
+    family, stator count, reduction, quantity, requirement) at the robot mass each option
+    implies: the cost floor for the requirement as written is not the PCB machine but one
+    off-the-shelf 8318-class outrunner through the 25-lobe cycloid and the 4:1 capstan, ~$420
+    / $280 per unit on a 77 kg robot, subject to one bench measurement of the motor''s heat-sunk
+    continuous current. The market search ranks seven OTS motors the same way: the 8318 100KV
+    (~$50) and the Turnigy 9235-100KV ($75, published resistance) are the picks; premium drone
+    motors and hub motors are excluded with numbers.'
   questions:
-  - 'Motor family: switch to an OTS 8318-class outrunner (single motor per unit, 25-lobe cycloid,
-    4:1 capstan, ~$420 at 20 units, 77 kg robot, pending a heat-sunk bench measurement), or
-    stay with the PCB axial machine ($597, 124 kg, self-manufacturable)?'
-  - 'If the PCB machine stays: rebuild the rotor as sheet parts and OTS standoffs with the
-    middle rotor as two back-to-back rings on a 2 mm plate?'
-  - Is the continuous load case as written (30° slope, dyn 1.5, all day) the requirement,
-    or is level walking at dyn 1.2 with slopes as a minutes-long rating acceptable? It is
-    the largest cost lever in the search.
+  - 'Motor family: the PCB two-stator machine we can make ($597 / $396, 5.3 kg, 124 kg robot,
+    margin 1.10) or an OTS 8318/9235-class outrunner (~$420 / $280, 2.75 kg unit, 77 kg robot,
+    margin 1.12 on an assumed heat-sink path)? The bench test that decides it is one motor
+    on a plate at 30 A with a thermocouple.'
+  - 'If the PCB machine stays: rebuild its rotor from sheet parts and standoffs (two Halbach
+    rings back to back, no middle carrier, no turned drum)?'
+  - 'The continuous load case as written (30° slope, dyn 1.5, all day) is the largest cost
+    lever left: it forces two stators or the outrunner. Keep it as the requirement, or make
+    level walking at dyn 1.2 the continuous case and the slope a minutes-long rating?'
   artifacts:
+  - path: docs/design/01-sizing.md
+    sha256: e3032f107e83ad22
+  - path: docs/design/06-geometry.md
+    sha256: dd117a4e8d1c9ae9
   - path: docs/design/08-actuator-design.md
-    sha256: 5653a6b146aab240
+    sha256: d4b7f7c559c5eaa4
   - path: docs/design/actuator/cad-femur-1s-cutaway.png
     sha256: 77320684fabad2b9
   - path: docs/design/actuator/cad-femur-1s-section.png
@@ -661,6 +667,8 @@ reviews:
     sha256: 49bedafc7d12cfb9
   - path: docs/design/actuator/cycloid-profiles.png
     sha256: 522a620dceef72e6
+  - path: docs/design/actuator/motor-market.png
+    sha256: 53fdc915a8f48165
   - path: docs/design/actuator/operating-envelopes.png
     sha256: 43a86ce382781b60
   - path: docs/design/actuator/rotor-field.png
@@ -686,6 +694,7 @@ reviews:
   references:
   - analysis/closure.py
   - analysis/cost_search.py
+  - analysis/motor_market.py
   - cad/actuator/actuator.py
   - hw/stator/asbuilt.json
   - hw/stator/capstan.json
@@ -730,6 +739,7 @@ reviews:
   - hw/stator/gerbers/stator-job.gbrjob
   - hw/stator/gerbers/stator.drl
   - hw/stator/make_stator.py
+  - hw/stator/motor_market.json
   - hw/stator/rotor_field.json
   - hw/stator/stator-F_Cu.svg
   - hw/stator/stator-In9_Cu.svg
@@ -753,7 +763,7 @@ reviews:
   - hw/stator/variants/v1-r80/geometry.json
   - hw/stator/variants/v1-r80/stator.kicad_pcb
   requested: '2026-09-02'
-  requested_commit: ad4b74c
+  requested_commit: 6e42c38
   status: requested
   packet: docs/review/actuator.md
   history:
@@ -1122,5 +1132,36 @@ reviews:
     - docs/design/08-actuator-design.md
     added:
     - docs/design/actuator/cost-search.png
+  - 'on': '2026-09-02'
+    action: requested
+    commit: 6e42c38
+    questions:
+    - 'Motor family: the PCB two-stator machine we can make ($597 / $396, 5.3 kg, 124 kg robot,
+      margin 1.10) or an OTS 8318/9235-class outrunner (~$420 / $280, 2.75 kg unit, 77 kg
+      robot, margin 1.12 on an assumed heat-sink path)? The bench test that decides it is
+      one motor on a plate at 30 A with a thermocouple.'
+    - 'If the PCB machine stays: rebuild its rotor from sheet parts and standoffs (two Halbach
+      rings back to back, no middle carrier, no turned drum)?'
+    - 'The continuous load case as written (30° slope, dyn 1.5, all day) is the largest cost
+      lever left: it forces two stators or the outrunner. Keep it as the requirement, or make
+      level walking at dyn 1.2 the continuous case and the slope a minutes-long rating?'
+    summary: 'Rounds 9-11 on the review''s ''exhaust all cost routes'': the stator laid out
+      again with the coils under the whole magnet span (+14 % torque, so the cheap 2 oz boards
+      match the 3 oz one and the magnets drop to 6 mm: unit 5.33 kg, 54 mm, $597 / $396 at
+      20 / 100), the base as four laser-cut and tube parts, an N-S rotor on steel tried and
+      rejected (+0.7 kg per unit for the same field). Then the design space searched as a
+      whole (motor family, stator count, reduction, quantity, requirement) at the robot mass
+      each option implies: the cost floor for the requirement as written is not the PCB machine
+      but one off-the-shelf 8318-class outrunner through the 25-lobe cycloid and the 4:1 capstan,
+      ~$420 / $280 per unit on a 77 kg robot, subject to one bench measurement of the motor''s
+      heat-sunk continuous current. The market search ranks seven OTS motors the same way:
+      the 8318 100KV (~$50) and the Turnigy 9235-100KV ($75, published resistance) are the
+      picks; premium drone motors and hub motors are excluded with numbers.'
+    changed:
+    - docs/design/08-actuator-design.md
+    added:
+    - docs/design/01-sizing.md
+    - docs/design/06-geometry.md
+    - docs/design/actuator/motor-market.png
   decided_commit: e4963a5
 artifact_url: https://claude.ai/code/artifact/c27a8924-af18-4d17-bd9b-0fcb41e685e3
