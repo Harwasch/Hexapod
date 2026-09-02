@@ -1,58 +1,45 @@
-# Review — Top-level sizing and skeleton concepts
+# Review — Leg proportion and skeleton concepts (round 2)
 
-`vision` · requested 2026-09-01 · branch `claude/hexapod-robot-design-mt516g`
+`vision` · requested 2026-09-02 · branch `claude/hexapod-robot-design-mt516g`
 
-Two skeleton concepts of the same 49 kg robot with eighteen pancake actuators in the body: A sprawl (radial leg planes, wide, stable, yaw joints propel) and B under-body (sagittal leg planes, narrow, taller, pitch joints propel). docs/design/01-sizing.md derives the actuator requirement (92 N·m continuous, 151 N·m 10-min, 179 N·m peak, 9 rad/s, Ø170 × 42 mm, ≤ 1.1 kg) from the mass budget, load cases and gaits.
+Same 49 kg robot with eighteen pancake actuators in the body, reworked to the review decision: hips under the body, a 150 mm coxa carrying each leg out, femur up and out, tibia vertical. A: tibia 2.0x femur (250/500 mm, femur 45 deg, hips 0.32 m up, femur arm 177 mm). B: tibia 2.5x femur (220/550 mm, femur 55 deg, hips 0.37 m up, femur arm 126 mm, 20 % less femur torque). A 6 ft figure stands beside the robot in every render.
 
 ## What you are agreeing to
 
-**leg-stance.png**
-
-![leg-stance.png](../design/sizing/leg-stance.png)
-
-**ratio-trade.png**
-
-![ratio-trade.png](../design/sizing/ratio-trade.png)
-
-**torque-map.png**
-
-![torque-map.png](../design/sizing/torque-map.png)
-
 **iso.svg**
 
-![iso.svg](../design/vision/concept_a_sprawl/iso.svg)
+![iso.svg](../design/vision/concept_a_tibia2x/iso.svg)
 
 **view-front.png**
 
-![view-front.png](../design/vision/concept_a_sprawl/view-front.png)
+![view-front.png](../design/vision/concept_a_tibia2x/view-front.png)
 
 **view-hero.png**
 
-![view-hero.png](../design/vision/concept_a_sprawl/view-hero.png)
+![view-hero.png](../design/vision/concept_a_tibia2x/view-hero.png)
 
 **view-top.png**
 
-![view-top.png](../design/vision/concept_a_sprawl/view-top.png)
+![view-top.png](../design/vision/concept_a_tibia2x/view-top.png)
 
 **iso.svg**
 
-![iso.svg](../design/vision/concept_b_underbody/iso.svg)
+![iso.svg](../design/vision/concept_b_tibia2p5x/iso.svg)
 
 **view-front.png**
 
-![view-front.png](../design/vision/concept_b_underbody/view-front.png)
+![view-front.png](../design/vision/concept_b_tibia2p5x/view-front.png)
 
 **view-hero.png**
 
-![view-hero.png](../design/vision/concept_b_underbody/view-hero.png)
+![view-hero.png](../design/vision/concept_b_tibia2p5x/view-hero.png)
 
 **view-top.png**
 
-![view-top.png](../design/vision/concept_b_underbody/view-top.png)
+![view-top.png](../design/vision/concept_b_tibia2p5x/view-top.png)
 
 | File | Opens in |
 |---|---|
-| [docs/design/01-sizing.md](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/docs/design/01-sizing.md) | renders on GitHub |
 | [docs/design/vision.md](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/docs/design/vision.md) | renders on GitHub |
 | [docs/design/vision/manifest.json](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/docs/design/vision/manifest.json) | plain text on GitHub |
 
@@ -64,21 +51,36 @@ Sources and working files. Not part of the agreement — these change as work go
 |---|---|
 | [analysis/hexapod_model.py](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/analysis/hexapod_model.py) | plain text on GitHub |
 | [analysis/sizing.py](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/analysis/sizing.py) | plain text on GitHub |
-| [concepts/concept_a_sprawl.py](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/concepts/concept_a_sprawl.py) | plain text on GitHub |
-| [concepts/concept_b_underbody.py](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/concepts/concept_b_underbody.py) | plain text on GitHub |
+| [concepts/concept_a_tibia2x.py](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/concepts/concept_a_tibia2x.py) | plain text on GitHub |
+| [concepts/concept_b_tibia2p5x.py](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/concepts/concept_b_tibia2p5x.py) | plain text on GitHub |
 | [concepts/hexapod_skeleton.py](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/concepts/hexapod_skeleton.py) | plain text on GitHub |
 
 ## What we need decided
 
-1. Which stance, A (sprawl) or B (under-body), and what made you pick it?
+1. Which leg proportion, A (tibia 2.0x femur, squatter) or B (tibia 2.5x femur, taller, 20 % less femur torque), and what made you pick it?
 2. Does the rider case stay as a design driver, or is it a stretch goal we size for later?
-3. Is a 0.9 x 0.52 x 0.2 m body slab, with the hip stacks setting the width, the right size?
+3. Hips under the body on a 240 mm spacing with a 150 mm coxa: is that the right split between body width and coxa length?
 
 ## Decision
 
-**Changes requested** 2026-09-02 — the agent is working on these and will come back.
+**Not yet reviewed — this is waiting on you.**
 
-> Legs should sprawl out, but the femur needs to stick out and up from the body. Tibia at least twice as long as the femur so femur and tibia are both relatively up-and-down in a neutral stance, to reduce torque on each joint. The hip joint can still be underneath the robot, but then there needs to be a coxa sticking out to allow pitch-up of the femur. Also: add a 6 ft human to every render to judge size; the isometric line drawing is a blank frame; markdown tags showing as plain text on the review page.
+Answer in the Claude session that sent you this link. There is nothing to run and nothing to sign here.
+
+Say which option you want **and why**: the reason is worth more than the choice, and it is what gets re-read later when a number has to move. If something is wrong, say what would be right.
+
+<details><summary>How the answer gets recorded</summary>
+
+The agent writes your decision, in your words, into [`docs/review/reviews.yaml`](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/docs/review/reviews.yaml):
+
+```bash
+review-gate sign vision --approve --by <name> --note "..."
+review-gate sign vision --changes "what to change"
+```
+
+Until that happens, any chunk of work depending on this review cannot be marked done.
+
+</details>
 
 ---
 

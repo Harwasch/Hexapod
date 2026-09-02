@@ -1,8 +1,8 @@
-# Review — Top-level sizing and the actuator requirement
+# Review — Top-level sizing and the actuator requirement (round 2)
 
-`sizing` · requested 2026-09-01 · branch `claude/hexapod-robot-design-mt516g`
+`sizing` · requested 2026-09-02 · branch `claude/hexapod-robot-design-mt516g`
 
-Mass budget (49 kg unloaded, 149 kg with a rider), load cases, joint torques and speeds for both stances, stability, and the actuator requirement that falls out: 92 N·m continuous, 151 N·m for 10 min, 179 N·m peak, 9 rad/s, Ø170 x 42 mm, 1.1 kg, eighteen identical. First check of the PCB axial-flux motor with in-plane cycloid: two stators at 50:1 close the requirement, one does not.
+Mass budget (49 kg unloaded, 149 kg with a rider), load cases, joint torques and speeds for both leg proportions, stability, and the actuator requirement: 68 N.m continuous, 126 N.m for 10 min, 157 N.m peak, 9 rad/s, 170 x 42 mm, 1.1 kg, eighteen identical. With the reworked leg a single-stator PCB axial-flux motor closes the requirement at 55:1; two stators remain the fallback.
 
 ## What you are agreeing to
 
@@ -35,7 +35,7 @@ Sources and working files. Not part of the agreement — these change as work go
 
 1. Is 1.1 kg per actuator and 49 kg unloaded a budget you accept, or should the robot be lighter and the rider case go?
 2. Are the dynamic factors (1.5x walking, 3x stumble) and the 30 degree slope the right conservatism for the terrain demo?
-3. Do you accept two stator PCBs per motor at 50:1 as the nominal actuator architecture to take into the actuator stage, with 1 m/s as the speed target and 2 m/s dropped?
+3. Do you accept a single-stator PCB motor at 55:1 as the nominal actuator architecture for the actuator stage, with 1 m/s as the speed target and 2 m/s dropped?
 
 ## Decision
 

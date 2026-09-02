@@ -8,55 +8,49 @@
 #   review-gate sign <id> --changes "what they want different"
 reviews:
 - id: vision
-  title: Top-level sizing and skeleton concepts
+  title: Leg proportion and skeleton concepts (round 2)
   stage: vision
-  summary: 'Two skeleton concepts of the same 49 kg robot with eighteen pancake actuators
-    in the body: A sprawl (radial leg planes, wide, stable, yaw joints propel) and B under-body
-    (sagittal leg planes, narrow, taller, pitch joints propel). docs/design/01-sizing.md derives
-    the actuator requirement (92 N·m continuous, 151 N·m 10-min, 179 N·m peak, 9 rad/s, Ø170
-    × 42 mm, ≤ 1.1 kg) from the mass budget, load cases and gaits.'
+  summary: 'Same 49 kg robot with eighteen pancake actuators in the body, reworked to the
+    review decision: hips under the body, a 150 mm coxa carrying each leg out, femur up and
+    out, tibia vertical. A: tibia 2.0x femur (250/500 mm, femur 45 deg, hips 0.32 m up, femur
+    arm 177 mm). B: tibia 2.5x femur (220/550 mm, femur 55 deg, hips 0.37 m up, femur arm
+    126 mm, 20 % less femur torque). A 6 ft figure stands beside the robot in every render.'
   questions:
-  - Which stance, A (sprawl) or B (under-body), and what made you pick it?
+  - Which leg proportion, A (tibia 2.0x femur, squatter) or B (tibia 2.5x femur, taller, 20
+    % less femur torque), and what made you pick it?
   - Does the rider case stay as a design driver, or is it a stretch goal we size for later?
-  - Is a 0.9 x 0.52 x 0.2 m body slab, with the hip stacks setting the width, the right size?
+  - 'Hips under the body on a 240 mm spacing with a 150 mm coxa: is that the right split between
+    body width and coxa length?'
   artifacts:
-  - path: docs/design/01-sizing.md
-    sha256: 9aa076ee791eec49
-  - path: docs/design/sizing/leg-stance.png
-    sha256: 48175d7678e12e45
-  - path: docs/design/sizing/ratio-trade.png
-    sha256: 8e118226542ffbde
-  - path: docs/design/sizing/torque-map.png
-    sha256: c97e698390bb1036
   - path: docs/design/vision.md
-    sha256: 75cddc8c63710cd9
-  - path: docs/design/vision/concept_a_sprawl/iso.svg
-    sha256: c69275dfa54b4a19
-  - path: docs/design/vision/concept_a_sprawl/view-front.png
-    sha256: fe77b4d93400a85c
-  - path: docs/design/vision/concept_a_sprawl/view-hero.png
-    sha256: 11221d7213f399c0
-  - path: docs/design/vision/concept_a_sprawl/view-top.png
-    sha256: 04a83f7307ecad82
-  - path: docs/design/vision/concept_b_underbody/iso.svg
-    sha256: 5034f1f33823f27b
-  - path: docs/design/vision/concept_b_underbody/view-front.png
-    sha256: 022b046325225a87
-  - path: docs/design/vision/concept_b_underbody/view-hero.png
-    sha256: fa84e99e76de5490
-  - path: docs/design/vision/concept_b_underbody/view-top.png
-    sha256: dd9ec642cd41b30c
+    sha256: 4ead1c3b100b3702
+  - path: docs/design/vision/concept_a_tibia2x/iso.svg
+    sha256: c354b66320b49fb8
+  - path: docs/design/vision/concept_a_tibia2x/view-front.png
+    sha256: e94d7cac3742b017
+  - path: docs/design/vision/concept_a_tibia2x/view-hero.png
+    sha256: cd9e451225c96cc6
+  - path: docs/design/vision/concept_a_tibia2x/view-top.png
+    sha256: 948ad3955a245b82
+  - path: docs/design/vision/concept_b_tibia2p5x/iso.svg
+    sha256: c60c1431a2360b8d
+  - path: docs/design/vision/concept_b_tibia2p5x/view-front.png
+    sha256: ca8549e7dea3ce56
+  - path: docs/design/vision/concept_b_tibia2p5x/view-hero.png
+    sha256: 62d40827df2890a1
+  - path: docs/design/vision/concept_b_tibia2p5x/view-top.png
+    sha256: 19a3869cf49b0d6d
   - path: docs/design/vision/manifest.json
-    sha256: a188b6478af2c66e
+    sha256: b6c649d252b2ef6d
   references:
   - analysis/hexapod_model.py
   - analysis/sizing.py
-  - concepts/concept_a_sprawl.py
-  - concepts/concept_b_underbody.py
+  - concepts/concept_a_tibia2x.py
+  - concepts/concept_b_tibia2p5x.py
   - concepts/hexapod_skeleton.py
-  requested: '2026-09-01'
-  requested_commit: 0cc8e7d
-  status: changes_requested
+  requested: '2026-09-02'
+  requested_commit: a9b224a
+  status: requested
   packet: docs/review/vision.md
   history:
   - 'on': '2026-09-01'
@@ -97,44 +91,81 @@ reviews:
       the robot, but then there needs to be a coxa sticking out to allow pitch-up of the femur.
       Also: add a 6 ft human to every render to judge size; the isometric line drawing is
       a blank frame; markdown tags showing as plain text on the review page.'
-  note: 'Legs should sprawl out, but the femur needs to stick out and up from the body. Tibia
-    at least twice as long as the femur so femur and tibia are both relatively up-and-down
-    in a neutral stance, to reduce torque on each joint. The hip joint can still be underneath
-    the robot, but then there needs to be a coxa sticking out to allow pitch-up of the femur.
-    Also: add a 6 ft human to every render to judge size; the isometric line drawing is a
-    blank frame; markdown tags showing as plain text on the review page.'
-  decided: '2026-09-02'
+  - 'on': '2026-09-02'
+    action: requested
+    commit: a9b224a
+    questions:
+    - Which leg proportion, A (tibia 2.0x femur, squatter) or B (tibia 2.5x femur, taller,
+      20 % less femur torque), and what made you pick it?
+    - Does the rider case stay as a design driver, or is it a stretch goal we size for later?
+    - 'Hips under the body on a 240 mm spacing with a 150 mm coxa: is that the right split
+      between body width and coxa length?'
+    summary: 'Same 49 kg robot with eighteen pancake actuators in the body, reworked to the
+      review decision: hips under the body, a 150 mm coxa carrying each leg out, femur up
+      and out, tibia vertical. A: tibia 2.0x femur (250/500 mm, femur 45 deg, hips 0.32 m
+      up, femur arm 177 mm). B: tibia 2.5x femur (220/550 mm, femur 55 deg, hips 0.37 m up,
+      femur arm 126 mm, 20 % less femur torque). A 6 ft figure stands beside the robot in
+      every render.'
+    changed:
+    - docs/design/vision.md
+    - docs/design/vision/manifest.json
+    added:
+    - docs/design/vision/concept_a_tibia2x/iso.svg
+    - docs/design/vision/concept_a_tibia2x/view-front.png
+    - docs/design/vision/concept_a_tibia2x/view-hero.png
+    - docs/design/vision/concept_a_tibia2x/view-top.png
+    - docs/design/vision/concept_b_tibia2p5x/iso.svg
+    - docs/design/vision/concept_b_tibia2p5x/view-front.png
+    - docs/design/vision/concept_b_tibia2p5x/view-hero.png
+    - docs/design/vision/concept_b_tibia2p5x/view-top.png
+  - 'on': '2026-09-02'
+    action: requested
+    commit: a9b224a
+    questions:
+    - Which leg proportion, A (tibia 2.0x femur, squatter) or B (tibia 2.5x femur, taller,
+      20 % less femur torque), and what made you pick it?
+    - Does the rider case stay as a design driver, or is it a stretch goal we size for later?
+    - 'Hips under the body on a 240 mm spacing with a 150 mm coxa: is that the right split
+      between body width and coxa length?'
+    summary: 'Same 49 kg robot with eighteen pancake actuators in the body, reworked to the
+      review decision: hips under the body, a 150 mm coxa carrying each leg out, femur up
+      and out, tibia vertical. A: tibia 2.0x femur (250/500 mm, femur 45 deg, hips 0.32 m
+      up, femur arm 177 mm). B: tibia 2.5x femur (220/550 mm, femur 55 deg, hips 0.37 m up,
+      femur arm 126 mm, 20 % less femur torque). A 6 ft figure stands beside the robot in
+      every render.'
+    changed:
+    - docs/design/vision/concept_a_tibia2x/iso.svg
+    - docs/design/vision/concept_b_tibia2p5x/iso.svg
   decided_commit: 7f44f80
-  reviewer: harrison
 - id: sizing
-  title: Top-level sizing and the actuator requirement
+  title: Top-level sizing and the actuator requirement (round 2)
   stage: sizing
   summary: 'Mass budget (49 kg unloaded, 149 kg with a rider), load cases, joint torques and
-    speeds for both stances, stability, and the actuator requirement that falls out: 92 N·m
-    continuous, 151 N·m for 10 min, 179 N·m peak, 9 rad/s, Ø170 x 42 mm, 1.1 kg, eighteen
-    identical. First check of the PCB axial-flux motor with in-plane cycloid: two stators
-    at 50:1 close the requirement, one does not.'
+    speeds for both leg proportions, stability, and the actuator requirement: 68 N.m continuous,
+    126 N.m for 10 min, 157 N.m peak, 9 rad/s, 170 x 42 mm, 1.1 kg, eighteen identical. With
+    the reworked leg a single-stator PCB axial-flux motor closes the requirement at 55:1;
+    two stators remain the fallback.'
   questions:
   - Is 1.1 kg per actuator and 49 kg unloaded a budget you accept, or should the robot be
     lighter and the rider case go?
   - Are the dynamic factors (1.5x walking, 3x stumble) and the 30 degree slope the right conservatism
     for the terrain demo?
-  - Do you accept two stator PCBs per motor at 50:1 as the nominal actuator architecture to
-    take into the actuator stage, with 1 m/s as the speed target and 2 m/s dropped?
+  - Do you accept a single-stator PCB motor at 55:1 as the nominal actuator architecture for
+    the actuator stage, with 1 m/s as the speed target and 2 m/s dropped?
   artifacts:
   - path: docs/design/01-sizing.md
-    sha256: 9aa076ee791eec49
+    sha256: 29ca47acc2840b2b
   - path: docs/design/sizing/leg-stance.png
-    sha256: 48175d7678e12e45
+    sha256: 9588623acf167811
   - path: docs/design/sizing/ratio-trade.png
-    sha256: 8e118226542ffbde
+    sha256: 5c57462493b79885
   - path: docs/design/sizing/torque-map.png
-    sha256: c97e698390bb1036
+    sha256: 6ee2702d567e8e6b
   references:
   - analysis/hexapod_model.py
   - analysis/sizing.py
-  requested: '2026-09-01'
-  requested_commit: 93aacef
+  requested: '2026-09-02'
+  requested_commit: a9b224a
   status: requested
   packet: docs/review/sizing.md
   history:
@@ -157,5 +188,42 @@ reviews:
     - docs/design/01-sizing.md
     - docs/design/sizing/leg-stance.png
     - docs/design/sizing/ratio-trade.png
+    - docs/design/sizing/torque-map.png
+  - 'on': '2026-09-02'
+    action: requested
+    commit: a9b224a
+    questions:
+    - Is 1.1 kg per actuator and 49 kg unloaded a budget you accept, or should the robot be
+      lighter and the rider case go?
+    - Are the dynamic factors (1.5x walking, 3x stumble) and the 30 degree slope the right
+      conservatism for the terrain demo?
+    - Do you accept a single-stator PCB motor at 55:1 as the nominal actuator architecture
+      for the actuator stage, with 1 m/s as the speed target and 2 m/s dropped?
+    summary: 'Mass budget (49 kg unloaded, 149 kg with a rider), load cases, joint torques
+      and speeds for both leg proportions, stability, and the actuator requirement: 68 N.m
+      continuous, 126 N.m for 10 min, 157 N.m peak, 9 rad/s, 170 x 42 mm, 1.1 kg, eighteen
+      identical. With the reworked leg a single-stator PCB axial-flux motor closes the requirement
+      at 55:1; two stators remain the fallback.'
+    changed:
+    - docs/design/01-sizing.md
+    - docs/design/sizing/leg-stance.png
+    - docs/design/sizing/ratio-trade.png
+    - docs/design/sizing/torque-map.png
+  - 'on': '2026-09-02'
+    action: requested
+    commit: a9b224a
+    questions:
+    - Is 1.1 kg per actuator and 49 kg unloaded a budget you accept, or should the robot be
+      lighter and the rider case go?
+    - Are the dynamic factors (1.5x walking, 3x stumble) and the 30 degree slope the right
+      conservatism for the terrain demo?
+    - Do you accept a single-stator PCB motor at 55:1 as the nominal actuator architecture
+      for the actuator stage, with 1 m/s as the speed target and 2 m/s dropped?
+    summary: 'Mass budget (49 kg unloaded, 149 kg with a rider), load cases, joint torques
+      and speeds for both leg proportions, stability, and the actuator requirement: 68 N.m
+      continuous, 126 N.m for 10 min, 157 N.m peak, 9 rad/s, 170 x 42 mm, 1.1 kg, eighteen
+      identical. With the reworked leg a single-stator PCB axial-flux motor closes the requirement
+      at 55:1; two stators remain the fallback.'
+    changed:
     - docs/design/sizing/torque-map.png
 artifact_url: https://claude.ai/code/artifact/c27a8924-af18-4d17-bd9b-0fcb41e685e3

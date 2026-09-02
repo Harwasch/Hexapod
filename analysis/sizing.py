@@ -168,7 +168,7 @@ def fig_torque_map():
                  f"dotted: {REACH_LIMIT:.0f} mm reach limit", fontsize=10)
     fig.tight_layout()
     p = os.path.join(FIG, "torque-map.png")
-    fig.savefig(p, dpi=130)
+    fig.savefig(p, dpi=90)   # kept small enough to embed in the review page
     plt.close(fig)
     return p
 

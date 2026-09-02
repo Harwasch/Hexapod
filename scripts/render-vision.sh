@@ -24,8 +24,11 @@ for p in glob.glob("docs/design/vision/*/iso.svg"):
     vb = re.search(r'viewBox="([^"]+)"', s).group(1).split()
     w = float(vb[2])
     s = re.sub(r'<svg width="[^"]+" height="[^"]+"', '<svg width="100%"', s, count=1)
-    s = s.replace('id="hidden"', 'id="hidden" stroke-width="%.3f"' % (w * 0.0008), 1)
-    s = re.sub(r'stroke-width="0\.0833\d*"', 'stroke-width="%.3f"' % (w * 0.0016), s)
+    def fix_group(m):
+        tag = m.group(0)
+        sw = w * (0.0008 if 'id="hidden"' in tag else 0.0016)
+        return re.sub(r'stroke-width="[^"]+"', 'stroke-width="%.3f"' % sw, tag)
+    s = re.sub(r'<g [^>]*>', fix_group, s)
     s = re.sub(r'stroke-dasharray="[^"]+"', 'stroke-dasharray="%.2f %.2f"' % (w * 0.004, w * 0.004), s)
     open(p, "w").write(s)
 # 2. vision.md: the review page escapes raw HTML, so drop the <details> wrapper.
