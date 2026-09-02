@@ -581,7 +581,7 @@ and are not worth it.
 
 The requirement column is what 01-sizing derives **at the robot mass the CAD
 implies** ({CL['options']['B: 1 stator everywhere']['m_robot']:.0f} kg with single-stator units), not the 49 kg of round 1;
-§9.8 explains why that is the right mass to check against.
+§9.7 explains why that is the right mass to check against.
 
 {md(("Joint", "Ratio", "Board", "Motor cont / peak (N·m)", "Joint cont / peak (N·m)", "Needed at the CAD mass", "Margin", "Joint speed no-load (rad/s)", "Unit mass (kg)", "Height (mm)"), joint_rows)}
 
