@@ -91,3 +91,14 @@
 * A datasheet fetched as a PDF was image-only (`pdftotext` returned nothing); the Read tool
   rendered the page and the numbers were transcribed by eye. `hw-documentation` should say
   so and ask for the transcription to be recorded in the manifest note, as done here.
+
+## 2026-09-02 — round 9
+
+* The largest free torque gain in the whole project (+14 %) came from moving the stator's
+  interconnect rings out from under the magnets — a layout choice made in round 5 without a
+  check of "how much of the magnet span do the legs cover". The stator generator should print
+  that coverage ratio with its geometry report, and `hw-verification`'s pre-route checks should
+  include "active conductor under active field" for any PCB motor.
+* The N-S-on-iron rotor was rejected on back-plate mass, which only showed up when the yoke
+  flux was checked (≥ 4.5 mm of steel at 1.6 T). `analysis/motor_options.py` already has that
+  check for its iron-core candidates; the rotor field script did not, and needed it added.

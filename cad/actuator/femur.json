@@ -6,8 +6,11 @@
  "r_pin": 3.0,
  "n_pins": 21,
  "mass_g": {
-  "base": 447.2,
-  "ring_pins": 107.2,
+  "floor_plate": 355.8,
+  "wall_tube": 124.0,
+  "bearing_carrier": 39.4,
+  "pin_cage": 172.6,
+  "ring_pins": 112.8,
   "upper_ring": 354.7,
   "cover": 145.4,
   "stator": 267.9,
@@ -21,7 +24,7 @@
   "output_pins": 116.9,
   "bearings": 356.5
  },
- "total_g": 5769.1,
+ "total_g": 6019.2,
  "od_mm": 186.0,
  "height_mm": 62.4,
  "bbox": [

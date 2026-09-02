@@ -9,9 +9,9 @@
 title: Hexapod
 subtitle: >-
   A large-dog-sized outdoor hexapod with all eighteen motors in the body.
-  Round 8: the reduction split into a 20-lobe cycloid and a Dyneema capstan
-  stage at the joint, and every line of the unit re-sourced for cost — with
-  the two-stator unit, the closure loop and the 129 kg robot behind it.
+  Round 9: pushing the unit's cost — the stator laid out again with the coils
+  under the whole magnet span (+14 % torque for nothing), the base as four
+  cheap parts, the N-S rotor tried and rejected, the BOM at 20 and 100 units.
 
 phases:
   - id: geometry
@@ -121,10 +121,11 @@ phases:
       - docs/design/actuator/operating-envelopes.png
     captions:
       docs/design/actuator/stator-F_Cu.svg: >-
-        The stator board as laid out in KiCad (top copper of 12 layers, 3 oz):
-        36 ten-turn spiral coils, the three phase rings at the rim, the star
-        ring at the bore. DRC clean, gerbers in hw/stator. Look at: the rings
-        and pads outside the magnets are what pushes the housing to Ø186.
+        The stator board, layout v2 (top copper): 36 ten-turn spiral coils
+        now reaching r 84.6, the magnets' outer edge, with the phase rings and
+        pads moved out to the clamp rim. DRC clean, gerbers in hw/stator. That
+        one change is +14 % torque per board. Look at: the coils fill the
+        annulus; the board is Ø184 and the housing Ø192.
       docs/design/actuator/rotor-field.png: >-
         Two facing Halbach rings of rectangular off-the-shelf blocks, simulated.
         30×8×5 blocks give 0.95 T at the board, 84 % of what custom trapezoids

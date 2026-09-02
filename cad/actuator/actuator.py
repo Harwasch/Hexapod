@@ -43,9 +43,9 @@ P = GEO["pole_pairs"]
 N_MAG = 4 * P                                   # 4 Halbach segments per pole pair
 
 # ---- radial (mm) ------------------------------------------------------------
-R_OD = 93.0            # housing outside radius (Ø186)
-R_WALL_IN = 86.0       # outer wall bore; the board rim r 86-87.5 is clamped on it
-R_BOARD = GEO["r_board_mm"] if "r_board_mm" in GEO else 87.5
+R_OD = 95.9            # housing outside radius (Ø192): v2 board with the interconnect at the rim (round 9)
+R_WALL_IN = 90.4       # outer wall bore; the board rim r 90.4-91.9 is clamped on it
+R_BOARD = GEO["board_od_mm"] / 2 if "board_od_mm" in GEO else 91.9
 R_BORE = 50.0          # stator board bore
 R_CARRIER_OUT = 85.5
 R_MAG_OUT, R_MAG_IN = 85.0, 55.0
@@ -60,7 +60,7 @@ JOURNAL_R = 12.5                                # Ø25 eccentric journals: with 
 ECC_BRG_OUT, ECC_BRG_W = 16.0, 12.0             # HK2512 drawn-cup needle 25x32x12
 SHAFT_BRG_OUT, SHAFT_BRG_W = 21.0, 9.0          # 6905 25x42x9
 TOP_BRG_IN, TOP_BRG_OUT, TOP_BRG_W = 7.5, 12.0, 5.0    # 6802 15x24x5
-N_BOLTS, BOLT_D, R_BOLTS = 12, 4.4, 89.5
+N_BOLTS, BOLT_D, R_BOLTS = 12, 4.4, 93.2
 N_OUT_BOLTS, R_OUT_BOLTS = 6, 19.5              # M4 tapped in the output face (r 13.5-25)
 
 # ---- axial (mm) -------------------------------------------------------------
@@ -138,23 +138,37 @@ def build(joint="femur"):
     n_pins = N + 1
     parts, mass = {}, {}
 
-    # ---- base: floor + outer wall + pin cylinder --------------------------------
-    base = ring(R_OUT_BRG_OUT, R_OD, 0, T_FLOOR)
-    base += ring(R_WALL_IN, R_OD, T_FLOOR, BOARDS[0][0])
-    base += ring(R_OUT_BRG_OUT, R_CYL_OUT, 0, T_OUT_BRG)                 # bearing seat
-    base += ring(R_PINS - r_pin, R_CYL_OUT, T_OUT_BRG, Z_CYL_TOP)       # pin cylinder
-    for k in range(n_pins):
-        a = 2 * math.pi * k / n_pins
-        base -= cyl(r_pin + 0.03, Z_DISC0 - 1.5, Z_CYL_TOP + 1, R_PINS * math.cos(a), R_PINS * math.sin(a))
+    # ---- base, as three cheap parts (round 9): a laser-cut floor plate, a slice of
+    # 6061 tube for the wall, and a pin cage of laser-cut steel rings; the bearing
+    # carrier is a short turned ring under the cage ------------------------------
+    T_FLOORPLATE = 6.0
+    floor = ring(R_OUT_BRG_OUT, R_OD, 0, T_FLOORPLATE)                    # laser-cut 6 mm 6061 plate with the bearing bore
     for k in range(N_BOLTS):
         a = 2 * math.pi * (k + 0.5) / N_BOLTS
-        base -= cyl(BOLT_D / 2 - 0.5, T_FLOOR, Z_BOARD0 + 1, R_BOLTS * math.cos(a), R_BOLTS * math.sin(a))  # tapped M4
-    parts["base"] = base; mass["base"] = base.volume * AL
-
+        floor -= cyl(BOLT_D / 2, -1, T_FLOORPLATE + 1, R_BOLTS * math.cos(a), R_BOLTS * math.sin(a))
+    parts["floor_plate"] = floor; mass["floor_plate"] = floor.volume * AL
+    wall = ring(R_WALL_IN, R_OD, T_FLOORPLATE, BOARDS[0][0])               # slice of Ø186 x 7 wall 6061 tube, bonded to the floor
+    for k in range(N_BOLTS):
+        a = 2 * math.pi * (k + 0.5) / N_BOLTS
+        wall -= cyl(BOLT_D / 2 - 0.5, T_FLOORPLATE - 1, BOARDS[0][0] + 1, R_BOLTS * math.cos(a), R_BOLTS * math.sin(a))  # tapped M4
+    parts["wall_tube"] = wall; mass["wall_tube"] = wall.volume * AL
+    brg_ring = ring(R_OUT_BRG_OUT, R_CYL_OUT, T_FLOORPLATE, T_OUT_BRG + 2.0)   # turned 6061 bearing carrier: the RB5013 seat above the plate
+    parts["bearing_carrier"] = brg_ring; mass["bearing_carrier"] = brg_ring.volume * AL
+    cage = Part()                                                          # pin cage: laser-cut 8 mm steel rings, holes open to the bore
+    z0 = T_OUT_BRG + 2.0
+    while z0 < Z_CYL_TOP - 0.5:
+        z1 = min(z0 + 8.0, Z_CYL_TOP)
+        cage += ring(R_PINS - r_pin, R_CYL_OUT, z0, z1)
+        z0 = z1
+    for k in range(n_pins):
+        a = 2 * math.pi * k / n_pins
+        cage -= cyl(r_pin + 0.03, T_OUT_BRG + 1.0, Z_CYL_TOP + 1, R_PINS * math.cos(a), R_PINS * math.sin(a))
+    parts["pin_cage"] = cage; mass["pin_cage"] = cage.volume * STEEL
+    base = floor + wall + brg_ring                                           # for the section labels / bbox
     pins = Part()
     for k in range(n_pins):
         a = 2 * math.pi * k / n_pins
-        pins += cyl(r_pin, Z_DISC0 - 1.0, Z_CYL_TOP, R_PINS * math.cos(a), R_PINS * math.sin(a))
+        pins += cyl(r_pin, T_OUT_BRG + 2.0, Z_CYL_TOP, R_PINS * math.cos(a), R_PINS * math.sin(a))
     parts["ring_pins"] = pins; mass["ring_pins"] = pins.volume * STEEL
 
     # ---- upper wall ring and cover ---------------------------------------------
@@ -226,9 +240,9 @@ def build(joint="femur"):
         disc += d
     parts["disc"] = disc; mass["disc"] = disc.volume * STEEL
 
-    # ---- output flange + pins ----------------------------------------------------
-    flange = ring(SHAFT_R + 1.0, R_OUT_BRG_IN, 0, Z_FLANGE0)             # hub inside the crossed roller
-    flange += ring(SHAFT_R + 0.5, R_FLANGE, Z_FLANGE0, Z_FLANGE0 + T_FLANGE)
+    # ---- output flange (turned hub + laser-cut plate, round 9) + pins ----------------
+    flange = ring(SHAFT_R + 1.0, R_OUT_BRG_IN, 0, Z_FLANGE0)             # turned hub inside the crossed roller
+    flange += ring(SHAFT_R + 0.5, R_FLANGE, Z_FLANGE0, Z_FLANGE0 + T_FLANGE)   # laser-cut 4 mm plate, bolted to the hub
     flange -= cyl(SHAFT_BRG_OUT, Z_FLANGE0 - SHAFT_BRG_W, Z_FLANGE0 + 0.5)  # lower shaft bearing pocket, from above
     for k in range(N_OUT_BOLTS):                                          # leg / pulley attachment, tapped M4 in the z = 0 face
         a = 2 * math.pi * k / N_OUT_BOLTS
@@ -257,7 +271,7 @@ def build(joint="femur"):
     return parts, mass, dict(N=N, e=e, r_pin=r_pin, n_pins=n_pins)
 
 
-GROUPS = {"housing": ["base", "upper_ring", "cover"], "rotor": ["rotor_top", "rotor_bottom_ring", "shaft"], "magnets": ["magnets"],
+GROUPS = {"housing": ["floor_plate", "wall_tube", "bearing_carrier", "pin_cage", "upper_ring", "cover"], "rotor": ["rotor_top", "rotor_bottom_ring", "shaft"], "magnets": ["magnets"],
           "stator": ["stator"], "reducer": ["disc", "ring_pins", "output_flange", "output_pins"], "bearings": ["bearings"], "transmission": ["capstan_drum"]}
 COLORS = {"housing": "#9aa5ad", "rotor": "#d98c3a", "magnets": "#c0392b", "stator": "#0f9b8e", "reducer": "#3a3a3a", "bearings": "#e0e0e0", "transmission": "#6c8e3a"}
 

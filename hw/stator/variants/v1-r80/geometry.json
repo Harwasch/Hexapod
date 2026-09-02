@@ -11,28 +11,28 @@
  "trace_mm": 0.28,
  "space_mm": 0.15,
  "r_in_mm": 53.0,
- "r_out_mm": 84.6,
- "coil_track_mm_total": 303182.4062258044,
- "coil_track_mm_per_coil_layer": 701.8111255226954,
- "interconnect_track_mm": 8926.66776665109,
+ "r_out_mm": 80.2,
+ "coil_track_mm_total": 261044.2990420876,
+ "coil_track_mm_per_coil_layer": 604.2692107455731,
+ "interconnect_track_mm": 8394.186909462891,
  "vias": 108,
- "board_od_mm": 183.8,
+ "board_od_mm": 175.0,
  "repeats": 3,
  "gap_mm": 0.6,
  "ring_w_mm": 0.7,
  "m_w_mm": 0.7,
  "jumper_w_mm": 0.3,
  "r_ring_mm": {
-  "A": 87.1,
-  "B": 88.0,
-  "C": 88.9
+  "A": 82.7,
+  "B": 83.6,
+  "C": 84.5
  },
- "r_m_mm": 86.15,
+ "r_m_mm": 81.75,
  "r_n_mm": 50.9,
- "r_via_t_mm": 85.3,
+ "r_via_t_mm": 80.9,
  "marc_mm_per_phase": {
-  "A": 273.99613307518246,
-  "B": 357.51635017392584,
-  "C": 273.99613307518246
+  "A": 260.17574765866584,
+  "B": 339.0830510135872,
+  "C": 260.17574765866584
  }
 }

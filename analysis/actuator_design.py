@@ -100,6 +100,7 @@ CADJ = {j: json.load(open(os.path.join(ROOT, "cad", "actuator", f"{j}.json"))) f
 BOM = list(csv.DictReader(open(os.path.join(ROOT, "docs", "design", "bom-actuator.csv"))))
 BOM_UNIT = sum(float(r["qty_per_unit"]) * float(r["unit_price_usd"]) for r in BOM)
 BOM_BEFORE = sum(float(r["qty_per_unit"]) * float(r["price_before_usd"]) for r in BOM)
+BOM_100 = sum(float(r["qty_per_unit"]) * float(r["price_100_usd"]) for r in BOM)
 CAP = json.load(open(os.path.join(ROOT, "hw", "stator", "capstan.json")))
 HK2512 = dict(Cr=11.8e3, C0r=16.3e3, n_lim=6500)                # NTN sheet, docs/reference/ntn-hk2512.pdf
 HK3012 = dict(Cr=11.5e3, C0r=17.3e3)                            # PTI HK-series catalogue, docs/reference/pti-hk-series.pdf (round 7)
@@ -304,7 +305,8 @@ def write_doc(figs):
         b, a = r["B: 1 stator, 3 oz boards"], r["A-cost: 2 stators, 2 oz boards (chosen)"]
         case_rows.append((r["label"], f"{b['need']['femur']:.0f} / {b['need']['knee']:.0f} / {b['need']['yaw']:.0f}", "yes" if b["closes"] else "no",
                           f"{a['need']['femur']:.0f} / {a['need']['knee']:.0f} / {a['need']['yaw']:.0f}", "yes" if a["closes"] else "no"))
-    bom_rows = [(r["item"], r["qty_per_unit"], r["spec"][:90], f"{float(r['qty_per_unit'])*float(r['price_before_usd']):.0f}", f"{float(r['qty_per_unit'])*float(r['unit_price_usd']):.0f}", r["verified"]) for r in BOM]
+    bom_rows = [(r["item"], r["qty_per_unit"], r["spec"][:90], f"{float(r['qty_per_unit'])*float(r['price_before_usd']):.0f}", f"{float(r['qty_per_unit'])*float(r['unit_price_usd']):.0f}", f"{float(r['qty_per_unit'])*float(r['price_100_usd']):.0f}", r["verified"]) for r in BOM]
+    rf_ns = {k: v for k, v in RF.items() if v.get("kind") == "ns_iron"}
     cap = CAP["joints"]["knee"]; capg = CAP["geometry"]
     crows = []
     for name, d in CYC.items():
@@ -605,10 +607,10 @@ torque above scales by {AB16['ratings']['1000']['T_cont']/AB['ratings']['1000'][
 
 ### 9.6 Bill of materials — `docs/design/bom-actuator.csv`
 
-{md(("Item", "Qty", "Spec", "Round 7 ($)", "Round 8 cost-down ($)", "Price verified"), bom_rows)}
+{md(("Item", "Qty", "Spec", "Round 7 ($)", "20 units ($)", "100 units ($)", "Price verified"), bom_rows)}
 
-**${BOM_UNIT:.0f} per unit after the cost-down (${BOM_BEFORE:.0f} before), ${BOM_UNIT*18/1000:.1f}k for eighteen** at
-20-unit quantities. Verified prices are marked; the rest are estimates to be
+**${BOM_UNIT:.0f} per unit at 20 units (${BOM_BEFORE:.0f} before the cost-down), ${BOM_100:.0f} at 100 units;
+${BOM_UNIT*18/1000:.1f}k for eighteen.** Verified prices are marked; the rest are estimates to be
 replaced by quotes. The capstan sector, rope and tensioner are costed here
 although they live on the joint.
 
@@ -660,8 +662,44 @@ steel.
 The magnets and the boards are now the two biggest lines and both are
 physics, not machining: fewer magnets means less torque, and a cheaper board
 means less copper. Everything else is a manufacturing-route choice that a
-quote can confirm. Not done here: a custom driver board, casting the base,
-and the volume pricing that would take the unit under $500.
+quote can confirm.
+
+### 9.11 Round 9: pushing further on the unit itself
+
+The review asked for more. Three things were tried; two stayed.
+
+**1. The stator laid out again (v2).** The first layout kept the phase rings,
+M arcs and terminal vias inside the magnet span (r 80.9–86), so the coils'
+radial legs stopped at r 80.2 and the outer 4.8 mm of magnet did no work.
+Layout v2 moves the interconnect out to the clamp rim (rings at r 87.1–88.9,
+pads at 90.4, board Ø184) and runs the legs to r 84.6. Torque per amp rises
+with ∫B·r·dr, so this is +{(AB['Kt']/0.195 - 1)*100:.0f} % Kt and **+{(AB['ratings']['1000']['T_cont']/2.90 - 1)*100:.0f} % continuous torque for
+the same copper**: {AB['ratings']['1000']['T_cont']:.2f} N·m per 12L 3 oz board, {AB16['ratings']['1000']['T_cont']:.2f} per position of two
+8L 2 oz boards — the cheap boards now match what the expensive one did.
+The housing grows to Ø192 for the wider clamp. DRC clean, gerbers
+regenerated; the v1 board is kept in `hw/stator/variants/v1-r80`.
+
+**2. A conventional N-S rotor on steel back plates, tried and rejected.**
+Same blocks, all magnetised axially, two per pole on a laser-cut steel plate
+(no Halbach jig, one magnetisation direction, cheaper plates):
+{md(("Rotor", "Field at the board (T)", "Magnet mass per two rings (g)", "Note"), [(k, f"{v['B1_midplane']:.2f}", f"{v['magnet_mass_g']:.0f}", v['note'][:70]) for k, v in rf_ns.items()] + [("Halbach 30×5×8 (kept)", f"{RF['rect 30x5x8 N48']['B1_midplane']:.2f}", f"{RF['rect 30x5x8 N48']['magnet_mass_g']:.0f}", "no iron")])}
+The field is within 2 %, but the back plates have to carry the pole flux
+(≥ 4.5 mm of steel to stay under 1.6 T), which adds about 0.7 kg per unit —
+12 kg on the robot, 8 % more torque needed — for a saving of perhaps $15 in
+magnetisation and jigs. The Halbach ring is the mass-optimal choice; its cost
+premium is small. Rejected.
+
+**3. The base as four cheap parts.** The machined 7075 base (floor, wall
+and pin cylinder in one billet) is now a laser-cut 6 mm floor plate, a slice
+of Ø192 tube for the wall, a short turned bearing carrier, and a pin cage of
+three laser-cut 8 mm steel rings whose 21 holes are open to the bore so the
+pins press through — the half-grooves that needed a 4-axis mill are gone.
+The output flange is a turned hub with a laser-cut plate. All in the CAD and
+the BOM.
+
+**With the v2 board's torque in hand, the 6 mm magnet option** (30 × 5 × 6,
+{RF['rect 30x5x6 N48']['B1_midplane']:.2f} T, {RF['rect 30x5x6 N48']['magnet_mass_g']:.0f} g per two rings) is on the table: §9.7 carries it as "A-cost, 6 mm
+magnets". It is lighter by {2*(RF['rect 30x5x8 N48']['magnet_mass_g']-RF['rect 30x5x6 N48']['magnet_mass_g'])/1000:.2f} kg per unit and 4 mm shorter.
 
 ### 9.7 Does the robot close? — `analysis/closure.py`
 
@@ -695,7 +733,7 @@ the lighter robot that was not chosen. The 62 mm stack no longer fits the
 200 mm body slab (three units and two gaps are 202 mm), so the slab is now
 220 mm in `hexapod_model.py`; the drawings in 06 carry it.
 
-### 9.8 Open items from this round (updated in round 8)
+### 9.8 Open items from this round (updated in round 9)
 
 1. **OD 186, not 170** (§9.3): accepted by the review.
 2. **Mass and closure** (§9.7): the review chose to renegotiate the mass

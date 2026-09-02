@@ -60,6 +60,9 @@ m2, my2 = CAD["femur"]["total_g"] / 1000, CAD["yaw"]["total_g"] / 1000          
 T1, Ty1 = T_MOTOR * N_FK * ETA_FK, T_MOTOR * N_YAW * ETA_YAW
 T1c, Ty1c = T_MOTOR_CHEAP * N_FK * ETA_FK, T_MOTOR_CHEAP * N_YAW * ETA_YAW
 OPTIONS["A-cost: 2 stators, 2 oz boards (chosen)"] = dict(m_fk=m2, m_yaw=my2, T_fk=2 * T1c, T_yaw=2 * Ty1c, h=CAD["femur"]["height_mm"], h_yaw=CAD["yaw"]["height_mm"])
+B6 = RF["rect 30x5x6 N48"]["B1_midplane"] / RF["rect 30x5x8 N48"]["B1_midplane"]          # 6 mm blocks: lighter, cheaper, less field
+DM6 = 2 * (RF["rect 30x5x8 N48"]["magnet_mass_g"] - RF["rect 30x5x6 N48"]["magnet_mass_g"]) / 1000   # kg saved per two-stator unit
+OPTIONS["A-cost, 6 mm magnets"] = dict(m_fk=m2 - DM6, m_yaw=my2 - DM6, T_fk=2 * T1c * B6, T_yaw=2 * Ty1c * B6, h=CAD["femur"]["height_mm"] - 4, h_yaw=CAD["yaw"]["height_mm"] - 4)
 OPTIONS["A: 2 stators, 3 oz boards"] = dict(m_fk=m2, m_yaw=my2, T_fk=2 * T1, T_yaw=2 * Ty1, h=CAD["femur"]["height_mm"], h_yaw=CAD["yaw"]["height_mm"])
 if "femur-1s" in CAD and "yaw-1s" in CAD:
     m1, my = CAD["femur-1s"]["total_g"] / 1000, CAD["yaw-1s"]["total_g"] / 1000

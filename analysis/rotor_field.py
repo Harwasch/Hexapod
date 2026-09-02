@@ -44,7 +44,10 @@ SEG = LAMBDA / 4                # 4 Halbach segments per pole pair
 NPER = 5                        # periods summed either side
 
 CASES = {
-    # name: (block width along the circumference at r_m [m], thickness [m], fill note)
+    # name: (block width along the circumference at r_m [m], thickness [m], fill note[, kind, blocks per pole])
+    "NS 30x10x5 x2 on iron": (10.0e-3, 10.0e-3, "two 30x10x5 stacked per pole (10 mm thick, 10 of the 14 mm pole pitch) on a steel back plate; 30 stacks per ring", "ns_iron", 1),
+    "NS 30x10x5 on iron": (10.0e-3, 5.0e-3, "one 30x10x5 per pole, 5 mm thick, on a steel back plate", "ns_iron", 1),
+    "NS 2x 30x5x8 on iron": (5.0e-3, 8.0e-3, "the Halbach blocks, all magnetised axially, two side by side per pole on a steel back plate", "ns_iron", 2),
     "rect 30x5x6 N48": (5.0e-3, 6.0e-3, "rectangular OTS block, 5 mm wide: 71 % of the 7.0 mm segment at r_m; 90 % at r_in, 58 % at r_out"),
     "trapezoid full": (SEG * 0.96, 6.0e-3, "custom trapezoidal segment, 0.3 mm glue gaps"),
     "rect 30x5x4 N48": (5.0e-3, 4.0e-3, "thinner OTS block"),
@@ -80,20 +83,37 @@ def field_of_block(x, z, xc, zc, w, h, mdir):
     return Bx, Bz
 
 
-def array_field(x, z, w_b, h_m, gap):
-    """Two facing Halbach arrays; rotor 1 below the gap, rotor 2 above."""
+def array_field(x, z, w_b, h_m, gap, kind="halbach", n_per_pole=1):
+    """Two facing arrays; rotor 1 below the gap, rotor 2 above.
+    halbach: 4 segments per pole pair, no iron.
+    ns_iron: alternating +z / -z blocks on a steel back plate; the plate is a
+    first-order image (the block mirrored through the iron surface with the
+    same magnetisation: a magnet on iron acts like one twice as thick).
+    n_per_pole blocks side by side fill each pole."""
     Bx = np.zeros_like(x); Bz = np.zeros_like(z)
-    pattern = [(0, 1), (-1, 0), (0, -1), (1, 0)]         # rotor 1: +z, -x, -z, +x concentrates the field upward (into the gap); the other sign cancels the fundamental
-    for k in range(-NPER * 4, NPER * 4 + 4):
-        xc = k * SEG
-        mdir = pattern[k % 4]
-        # rotor 1 (below): centre at z = -(gap/2 + h/2)
-        bx, bz = field_of_block(x, z, xc, -(gap / 2 + h_m / 2), w_b, h_m, mdir)
-        Bx += bx; Bz += bz
-        # rotor 2 (above): mirror in z -> x-components of M flip sign so B_z adds at the mid-plane
-        mdir2 = (-mdir[0], mdir[1])
-        bx, bz = field_of_block(x, z, xc, +(gap / 2 + h_m / 2), w_b, h_m, mdir2)
-        Bx += bx; Bz += bz
+    if kind == "halbach":
+        pattern = [(0, 1), (-1, 0), (0, -1), (1, 0)]     # rotor 1: +z, -x, -z, +x concentrates the field upward (into the gap); the other sign cancels the fundamental
+        for k in range(-NPER * 4, NPER * 4 + 4):
+            xc = k * SEG
+            mdir = pattern[k % 4]
+            bx, bz = field_of_block(x, z, xc, -(gap / 2 + h_m / 2), w_b, h_m, mdir)
+            Bx += bx; Bz += bz
+            mdir2 = (-mdir[0], mdir[1])
+            bx, bz = field_of_block(x, z, xc, +(gap / 2 + h_m / 2), w_b, h_m, mdir2)
+            Bx += bx; Bz += bz
+        return Bx, Bz
+    pole = LAMBDA / 2
+    for k in range(-NPER * 2, NPER * 2 + 2):
+        mz = 1 if k % 2 == 0 else -1
+        for j in range(n_per_pole):
+            xc = k * pole + (j - (n_per_pole - 1) / 2) * w_b
+            for zc, sign in ((-(gap / 2 + h_m / 2), 1), (+(gap / 2 + h_m / 2), 1)):       # the two rotors, N facing S across the gap
+                bx, bz = field_of_block(x, z, xc, zc, w_b, h_m, (0, mz))
+                Bx += bx; Bz += bz
+                # image through the iron plate behind the ring (plate face at |z| = gap/2 + h_m)
+                z_img = np.sign(zc) * (gap / 2 + h_m + h_m / 2)
+                bx, bz = field_of_block(x, z, xc, z_img, w_b, h_m, (0, mz))
+                Bx += bx; Bz += bz
     return Bx, Bz
 
 
@@ -104,19 +124,21 @@ def fundamental(xs, bz):
 results = {}
 xs = np.linspace(0, LAMBDA, 240, endpoint=False)
 fig, axes = plt.subplots(1, 2, figsize=(12, 4.6))
-for name, (w_b, h_m, note) in CASES.items():
-    _, bz0 = array_field(xs, np.zeros_like(xs), w_b, h_m, G_MAG)
+for name, spec in CASES.items():
+    w_b, h_m, note = spec[:3]
+    kind, npp = (spec[3], spec[4]) if len(spec) > 3 else ("halbach", 1)
+    _, bz0 = array_field(xs, np.zeros_like(xs), w_b, h_m, G_MAG, kind, npp)
     b1 = fundamental(xs, bz0)
     # field at the magnet surface of rotor 1 (worst place for the copper eddy loss estimate) and inside a magnet (demag)
-    _, bz_surf = array_field(xs, np.full_like(xs, -G_MAG / 2 + 0.2e-3), w_b, h_m, G_MAG)
+    _, bz_surf = array_field(xs, np.full_like(xs, -G_MAG / 2 + 0.2e-3), w_b, h_m, G_MAG, kind, npp)
     model = float(np.mean(mo.halbach_B(np.linspace(R1, R2, 50), P, h_m, G_MAG)))
     # rotor-to-rotor attraction: Maxwell stress on the mid-plane, (Bz^2 - Bx^2)/(2 mu0), over the magnet annulus
-    bx0, _ = array_field(xs, np.zeros_like(xs), w_b, h_m, G_MAG)
+    bx0, _ = array_field(xs, np.zeros_like(xs), w_b, h_m, G_MAG, kind, npp)
     sigma_zz = float(np.mean((bz0**2 - bx0**2) / (2 * mo.MU0)))
     area = math.pi * ((R_M + 15e-3)**2 - (R_M - 15e-3)**2)
     results[name] = dict(w_b_mm=w_b * 1e3, h_m_mm=h_m * 1e3, B1_midplane=float(b1), B_peak_midplane=float(np.max(np.abs(bz0))),
                          B_peak_surface=float(np.max(np.abs(bz_surf))), model_halbach_B=model, ratio_to_model=float(b1 / model),
-                         magnet_mass_g=2 * 4 * P * (w_b * 30e-3 * h_m) * 7500 * 1e3, note=note,
+                         magnet_mass_g=(2 * 4 * P if kind == "halbach" else 2 * 2 * P * npp) * (w_b * 30e-3 * h_m) * 7500 * 1e3, note=note, kind=kind,
                          attraction_kPa=sigma_zz * 1e-3, attraction_N=sigma_zz * area)
     axes[0].plot(xs * 1e3, bz0, label=f"{name}: B1 {b1:.2f} T")
 axes[0].axhline(0, color="#999", lw=0.6)
