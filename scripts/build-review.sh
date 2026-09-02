@@ -8,3 +8,4 @@ review-artifact --check
 review-artifact
 $PY scripts/export_models.py
 $PY scripts/inject_viewer.py
+$PY scripts/inject_actuator_viewer.py

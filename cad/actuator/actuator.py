@@ -363,9 +363,15 @@ def render(parts, out, title, azim=-50, elev=28, cutter=None, size=(1000, 800), 
     fig.tight_layout(); fig.savefig(out, dpi=100); plt.close(fig)
 
 
-def draw_cutaway(parts, joint, out):
-    cutter = Box(200, 200, 200, align=(Align.MIN, Align.MIN, Align.MIN)).moved(Location((0, -200, -50)))  # remove x>0, y<0
-    render(parts, out, f"{joint} actuator, quarter cutaway (mounting/output face down)", azim=-45, elev=30, cutter=cutter)
+CUTTER = Box(200, 200, 200, align=(Align.MIN, Align.MIN, Align.MIN)).moved(Location((0, -200, -50)))  # remove x>0, y<0
+
+
+def cut_parts(parts):
+    return {n: p - CUTTER for n, p in parts.items()}
+
+
+def draw_cutaway(parts, joint, out, cut=None):
+    render(cut or cut_parts(parts), out, f"{joint} actuator, quarter cutaway (mounting/output face down)", azim=-45, elev=30, cutter=None)
 
 
 def draw_iso(parts, joint, out):
@@ -380,8 +386,10 @@ if __name__ == "__main__":
     fig_dir = os.path.join(ROOT, "docs", "design", "actuator")
     comp = Compound(children=[parts[n] for n in parts])
     export_step(comp, os.path.join(out_dir, f"actuator-{joint}.step"))
+    cut = cut_parts(parts)
     for g, names in GROUPS.items():
         export_stl(Compound(children=[parts[n] for n in names]), os.path.join(out_dir, f"{g}.stl"), tolerance=0.5, angular_tolerance=0.3)
+        export_stl(Compound(children=[cut[n] for n in names]), os.path.join(out_dir, f"{g}-cut.stl"), tolerance=0.5, angular_tolerance=0.3)
     total = sum(mass.values())
     bb = comp.bounding_box()
     rec = dict(joint=joint, stators=N_STATORS, **info, mass_g={k: round(v, 1) for k, v in mass.items()}, total_g=round(total, 1),
@@ -393,7 +401,7 @@ if __name__ == "__main__":
     json.dump(rec, open(os.path.join(ROOT, "cad", "actuator", f"{TAG}.json"), "w"), indent=1)
     print(json.dumps(rec, indent=1))
     draw_section(parts, TAG, info, os.path.join(fig_dir, f"cad-{TAG}-section.png"))
-    draw_cutaway(parts, TAG, os.path.join(fig_dir, f"cad-{TAG}-cutaway.png"))
+    draw_cutaway(parts, TAG, os.path.join(fig_dir, f"cad-{TAG}-cutaway.png"), cut=cut)
     if TAG == "femur":
         draw_iso(parts, joint, os.path.join(fig_dir, f"cad-{joint}-iso.png"))
     print("height", H_TOTAL, "mass", round(total), "g")

@@ -74,3 +74,8 @@
   overrides need a first-class home (StrictDoc `RATIONALE` once the requirements stage runs).
 * Bearing ratings differ by maker for the same drawn-cup size (NTN HK2512 11.8/16.3 kN,
   PTI 10.45/14.45). `hw-sourcing` should say which maker's number a BOM line is rated on.
+* The human said the review artifact is the only surface they can see. Every "look at" the
+  CAD stage asks for is therefore only as good as the page: the actuator model went into a
+  second orbit viewer (`scripts/inject_actuator_viewer.py`, quarter-cut and whole STL groups
+  exported by the CAD script). `review-artifact` should take a `models:` list per phase
+  natively; two hand-injected viewers is the workaround.
