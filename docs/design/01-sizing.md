@@ -25,14 +25,14 @@ and the wider architecture levers in [03-architecture-levers.md](03-architecture
 
 | Item | kg | Basis |
 |---|---|---|
-| 18 × joint actuators | 103.3 | 5.8 kg each, target (per-DOF sizing should bring the yaw and knee below this) |
+| 18 × joint actuators | 107.0 | 6.0 kg each, target (per-DOF sizing should bring the yaw and knee below this) |
 | Body structure | 6.0 | plates, hip pods, top deck |
 | 6 × legs | 7.2 | links, feet, in-leg transmission share |
-| 2 × hot-swap batteries | 8.0 | ~1498 Wh each, see §8 |
+| 2 × hot-swap batteries | 8.0 | ~1535 Wh each, see §8 |
 | Electronics | 3.0 | compute, drivers, sensors, harness |
 | Payload interface | 2.0 | deck rails, tool mount, solar skin |
 | Margin | 3.0 |  |
-| **Robot, unloaded** | **132.5** |  |
+| **Robot, unloaded** | **136.2** |  |
 | Mission payload | 8.0 | trash + gripper |
 | Rider (stretch goal) | 100.0 | adult male; reported, not a design driver |
 
@@ -47,7 +47,7 @@ every torque below grows by 15 %.
 
 Putting all eighteen motors in the body, as pancakes stacked three-high on
 each hip's yaw axis, is what sets the body's proportions: the hip stack is
-202 mm tall and Ø186 mm, so the body is a
+202 mm tall and Ø192 mm, so the body is a
 220 mm slab whose width is set by the stacks, not by the batteries.
 The yaw axes sit under the body at ±120 mm; the batteries, compute and
 payload bay fill the space between the six stacks. The flat top is the solar
@@ -75,14 +75,14 @@ knee sits high and only `femur × cos(angle)` outboard; and the **tibia**,
 
 | Parameter | Value | Why |
 |---|---|---|
-| Body slab, length × width × height | 900 × 458 × 220 mm | width = yaw-axis spacing + one actuator diameter + two side rails |
+| Body slab, length × width × height | 900 × 464 × 220 mm | width = yaw-axis spacing + one actuator diameter + two side rails |
 | Hip yaw axes | x = +330, +0, -330 mm, y = ±120 mm | six vertical axes, under the body |
 | Coxa / femur / tibia | 150 / 250 / 500 mm | tibia 2.0× femur, agreed in review |
 | Neutral stance | femur 45° up, tibia vertical | a posture, adjustable at run time |
 | Hip height / knee height | 323 / 500 mm | femur axis and knee above ground |
 | Femur arm / foot radius | 177 / 327 mm | horizontal, femur axis → foot / yaw axis → foot |
 | Minimum leg extension | 250 mm | tibia − femur; the closest the foot can come to the femur axis |
-| Actuator envelope | Ø186 × 62 mm, ≤ 5.8 kg | pancake; three stacked per hip on the yaw axis |
+| Actuator envelope | Ø192 × 62 mm, ≤ 6.0 kg | pancake; three stacked per hip on the yaw axis |
 | Top deck height | 543 mm | payload deck and solar skin |
 
 ![The agreed leg at the walking load](sizing/leg-stance.png)
@@ -101,9 +101,9 @@ impact and gait dynamics until there is a simulation.
 
 | Load case | Rating | Mass on feet (kg) | Legs down | Dyn. factor | Slope + accel | Vertical / foot (N) | Propulsion / foot (N) |
 |---|---|---|---|---|---|---|---|
-| Walk, tripod gait | continuous | 140 | 3 | 1.5 | 30° + 1.0 m/s² | **689** | 277 |
-| Stumble / step-down, two legs | peak | 140 | 2 | 3.0 | 0° + 2.0 m/s² | **2067** | 140 |
-| Rider, wave gait (stretch) | stretch | 232 | 3 | 1.2 | 15° + 0.3 m/s² | **912** | 220 |
+| Walk, tripod gait | continuous | 144 | 3 | 1.5 | 30° + 1.0 m/s² | **707** | 284 |
+| Stumble / step-down, two legs | peak | 144 | 2 | 3.0 | 0° + 2.0 m/s² | **2122** | 144 |
+| Rider, wave gait (stretch) | stretch | 236 | 3 | 1.2 | 15° + 0.3 m/s² | **927** | 224 |
 
 Joint torques at the neutral stance (N·m). The femur torque is `vertical
 load × femur arm`; the knee's comes from the in-plane share of the
@@ -113,9 +113,9 @@ propulsion:
 
 | Load case | Rating | Yaw | Femur | Knee |
 |---|---|---|---|---|
-| Walk, tripod gait | continuous | 78 | **167** | 69 |
-| Stumble / step-down, two legs | peak | 40 | **388** | 35 |
-| Rider, wave gait (stretch) | stretch | 62 | **197** | 55 |
+| Walk, tripod gait | continuous | 80 | **171** | 71 |
+| Stumble / step-down, two legs | peak | 41 | **398** | 36 |
+| Rider, wave gait (stretch) | stretch | 63 | **200** | 56 |
 
 ![Torque map over the foot workspace](sizing/torque-map.png)
 
@@ -184,16 +184,16 @@ that sideways) and records the worst moment about each joint's axis:
 
 | DOF | Neutral, walk (N·m) | Sprawl routine (N·m) | Mammal-stance routine (N·m) | Continuous (N·m) | Peak (N·m) | Rider, neutral (N·m) | Swing speed (rad/s) | Motor, ratio | Gives cont / peak (N·m) | Joint rad/s at 5500 rpm |
 |---|---|---|---|---|---|---|---|---|---|---|
-| yaw | 90 | 135 | 57 | **135** | **144** | 72 | 6 | 1 stator, **50:1** | 136 / 413 | 11.5 |
-| femur | 149 | 284 | 334 | **334** | **605** | 183 | 4 | 2 stators, **80:1** | 436 / 1320 | 7.2 |
-| knee | 41 | 301 | 352 | **352** | **739** | 33 | 4 | 2 stators, **80:1** | 436 / 1320 | 7.2 |
+| yaw | 93 | 138 | 58 | **138** | **147** | 73 | 6 | 1 stator, **55:1** | 150 / 454 | 10.5 |
+| femur | 153 | 291 | 342 | **342** | **621** | 186 | 4 | 2 stators, **80:1** | 436 / 1320 | 7.2 |
+| knee | 43 | 309 | 362 | **362** | **759** | 34 | 4 | 2 stators, **80:1** | 436 / 1320 | 7.2 |
 
 Two things the neutral-stance numbers hid. The **knee** is not the light
 joint it looks: whenever the foot is raised the long tibia has to fold, the
 knee swings out the far side of the femur axis, and the 500 mm tibia
 becomes the lever. At the corners of the routine volume and on a 300 mm step
 the knee's torque is above the femur's. And the **yaw** joint, which never
-sees weight, still needs 135 N·m for propulsion on a 30° slope over a
+sees weight, still needs 138 N·m for propulsion on a 30° slope over a
 327 mm foot radius — half the femur, and it is the fast joint.
 
 The remaining requirements common to all three:
@@ -201,13 +201,13 @@ The remaining requirements common to all three:
 | Quantity | Requirement | Driving case |
 |---|---|---|
 | Joint range | yaw ±95°, femur −70…+90°, knee 20…160° | yaw 90° puts the leg plane fore-aft for the mammal stance; fold-flat for transport; crouch to the deck |
-| Yaw bearing overturning moment (structural) | 676 N·m | peak foot load × foot radius; carried by the coxa and the yaw bearing, not the motor |
+| Yaw bearing overturning moment (structural) | 693 N·m | peak foot load × foot radius; carried by the coxa and the yaw bearing, not the motor |
 | Backdrivability / sensing | joint-torque estimate ≤ 10 % error, foot contact detection | high ratio ⇒ cannot rely on motor-current transparency; needs output-side sensing or SEA |
-| Envelope | Ø186 × 62 mm | pancake, axis = hip yaw axis |
-| Mass | ≤ 5.8 kg (femur); less for yaw and knee | one motor, three ratios |
+| Envelope | Ø192 × 62 mm | pancake, axis = hip yaw axis |
+| Mass | ≤ 6.0 kg (femur); less for yaw and knee | one motor, three ratios |
 | Bus voltage | 48 V | 13S Li-ion; 48 V drivers and connectors are commodity |
-| Continuous mechanical power, per leg | ~812 W | femur and yaw continuous torque × their stance rates |
-| Peak mechanical power, per joint | ~3.7 kW | peak torque × 5 rad/s |
+| Continuous mechanical power, per leg | ~834 W | femur and yaw continuous torque × their stance rates |
+| Peak mechanical power, per joint | ~3.8 kW | peak torque × 5 rad/s |
 | Environment | IP54 body, IP65 legs, −10…+45 °C | outdoor, mud, rain; heat rejection at 45 °C ambient sizes the stator copper |
 
 ## 7. Motor and reduction: one PCB axial-flux motor, three ratios
@@ -252,7 +252,7 @@ The per-DOF table in §6 picks, for each joint, the smallest 5:1 step that
 meets both its ratings, capped at 80:1 for a single-stage cycloid, with
 one stator if that leaves enough speed for the joint's swing and two
 stators otherwise. The result is **one stator and rotor design, stacked
-once or twice, with three cycloid discs**: yaw 1 stator at 50:1,
+once or twice, with three cycloid discs**: yaw 1 stator at 55:1,
 femur 2 stators at 80:1, knee 2 stators at 80:1. The femur gives
 436 N·m continuous and 1320 N·m peak with 7.2 rad/s at the joint. A
 two-stator unit is the same PCB twice and one more rotor, so the part count
@@ -270,8 +270,8 @@ stays at one stator, one rotor, one driver and three discs.
 * A single-stage cycloid ratio equals its lobe count. 80 lobes on a disc that
   fits inside a Ø110 mm bore means a lobe pitch of ~3.7 mm and pins of
   ~3 mm: fine for a machined steel disc and hardened pins, marginal for
-  printed or aluminium parts at 739 N·m. The output torque reacts through
-  those pins at ~47 mm radius, so the net pin load at peak is ~15.7 kN
+  printed or aluminium parts at 759 N·m. The output torque reacts through
+  those pins at ~47 mm radius, so the net pin load at peak is ~16.1 kN
   over roughly half the pins.
 * High ratio means low transparency: reflected motor inertia through
   80:1 is 6,400× the rotor's own. Foot-contact detection and torque
@@ -291,27 +291,27 @@ them so that the transmission and the software are not waiting on the motor.
 
 | Quantity | Value | Basis |
 |---|---|---|
-| Average electrical power, 1 m/s walk | 1498 W | cost of transport 1.0 × m·g·v + 120 W hotel |
-| Average electrical power, rider at 0.3 m/s (stretch) | 804 W | same model |
+| Average electrical power, 1 m/s walk | 1535 W | cost of transport 1.0 × m·g·v + 120 W hotel |
+| Average electrical power, rider at 0.3 m/s (stretch) | 815 W | same model |
 | Endurance target | 2 h walking | mission length |
-| Battery, each of 2 | **1498 Wh, 31 Ah at 48 V, ~8.8 kg** | 170 Wh/kg pack level |
-| Peak bus current | ~231 A | six joints near peak power, 50 % coincidence |
+| Battery, each of 2 | **1535 Wh, 32 Ah at 48 V, ~9.0 kg** | 170 Wh/kg pack level |
+| Peak bus current | ~237 A | six joints near peak power, 50 % coincidence |
 | Hot-swap | either pack alone must carry the full peak | a pack coming out must not brown out the drivers |
 
 A cost of transport of 1.0 is pessimistic for a good quadruped and
 realistic for a geared hexapod with cycloids in the loop; it puts the design
-in the ~3.0 kWh, two 9 kg packs range, which the mass budget carries.
+in the ~3.1 kWh, two 9 kg packs range, which the mass budget carries.
 
 ## 9. What this pass decided and what it left open
 
 Decided in review, or proposed here:
 
-1. Robot ~132 kg, 0.9 × 0.46 × 0.2 m slab body with the hips under it, hips 0.32 m up.
+1. Robot ~136 kg, 0.9 × 0.46 × 0.2 m slab body with the hips under it, hips 0.32 m up.
 2. Sprawled yaw–pitch–pitch legs (agreed): 150 mm coxa, femur 250 mm up and out at 45°, tibia 500 mm vertical (2.0×, shortened from 2.5× for the knee's sake), with ±95° of yaw so the same leg stands in a mammal stance when asked (agreed).
 3. The rider is a stretch goal, not a rating (agreed).
-4. Per-DOF actuators (agreed): yaw 135 / 144, femur 334 / 605, knee 352 / 739 N·m continuous / peak; 8 rad/s at the yaw; Ø186 × 62 mm.
-5. One Ø170 mm PCB axial-flux stator design, 1 stator / 2 stators / 2 stators for yaw / femur / knee, cycloid ratios 50 / 80 / 80:1, 48 V.
-6. Two 1498 Wh hot-swap packs.
+4. Per-DOF actuators (agreed): yaw 138 / 147, femur 342 / 621, knee 362 / 759 N·m continuous / peak; 8 rad/s at the yaw; Ø192 × 62 mm.
+5. One Ø170 mm PCB axial-flux stator design, 1 stator / 2 stators / 2 stators for yaw / femur / knee, cycloid ratios 55 / 80 / 80:1, 48 V.
+6. Two 1535 Wh hot-swap packs.
 
 Open, in order of how much they change the actuator:
 

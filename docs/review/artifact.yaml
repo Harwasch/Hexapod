@@ -136,8 +136,10 @@ phases:
         two stator boards between three Halbach rotors, two 8 mm 20-lobe
         cycloid discs 180° apart on HK2512 journals inside the fixed pin
         cylinder, the crossed-roller output in the mounting face with the
-        capstan drum below it. 62 mm tall, Ø186. Look at: 21 pins instead of
-        71, and the drum that takes the rope to the joint.
+        capstan drum below it; the base is now a laser-cut floor plate, a tube
+        wall, a turned bearing carrier and a steel pin cage. 58 mm tall, Ø192.
+        Look at: 21 pins instead of 71, and the drum that takes the rope to the
+        joint.
       docs/design/actuator/cad-femur-1s-section.png: >-
         The single-stator variant kept in the CAD as the record of
         configuration B: 50 mm, 3.9 kg. Look at: the empty 12 mm under the

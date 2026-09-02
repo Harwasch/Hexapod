@@ -57,16 +57,18 @@ def fixed_point(m_fk, m_yaw):
 
 OPTIONS = {}
 m2, my2 = CAD["femur"]["total_g"] / 1000, CAD["yaw"]["total_g"] / 1000          # canonical: two stators (round 7)
-T1, Ty1 = T_MOTOR * N_FK * ETA_FK, T_MOTOR * N_YAW * ETA_YAW
-T1c, Ty1c = T_MOTOR_CHEAP * N_FK * ETA_FK, T_MOTOR_CHEAP * N_YAW * ETA_YAW
-OPTIONS["A-cost: 2 stators, 2 oz boards (chosen)"] = dict(m_fk=m2, m_yaw=my2, T_fk=2 * T1c, T_yaw=2 * Ty1c, h=CAD["femur"]["height_mm"], h_yaw=CAD["yaw"]["height_mm"])
-B6 = RF["rect 30x5x6 N48"]["B1_midplane"] / RF["rect 30x5x8 N48"]["B1_midplane"]          # 6 mm blocks: lighter, cheaper, less field
-DM6 = 2 * (RF["rect 30x5x8 N48"]["magnet_mass_g"] - RF["rect 30x5x6 N48"]["magnet_mass_g"]) / 1000   # kg saved per two-stator unit
-OPTIONS["A-cost, 6 mm magnets"] = dict(m_fk=m2 - DM6, m_yaw=my2 - DM6, T_fk=2 * T1c * B6, T_yaw=2 * Ty1c * B6, h=CAD["femur"]["height_mm"] - 4, h_yaw=CAD["yaw"]["height_mm"] - 4)
-OPTIONS["A: 2 stators, 3 oz boards"] = dict(m_fk=m2, m_yaw=my2, T_fk=2 * T1, T_yaw=2 * Ty1, h=CAD["femur"]["height_mm"], h_yaw=CAD["yaw"]["height_mm"])
+BMAG = RF[CAD["femur"]["magnet"]]["B1_midplane"] / RF["rect 30x5x8 N48"]["B1_midplane"]   # asbuilt.json is rated with 8 mm blocks
+T1, Ty1 = T_MOTOR * BMAG * N_FK * ETA_FK, T_MOTOR * BMAG * N_YAW * ETA_YAW
+T1c, Ty1c = T_MOTOR_CHEAP * BMAG * N_FK * ETA_FK, T_MOTOR_CHEAP * BMAG * N_YAW * ETA_YAW
+MAG = CAD["femur"]["magnet"]                                                      # the CAD's magnets (6 mm from round 9)
+B8 = RF["rect 30x5x8 N48"]["B1_midplane"] / RF[MAG]["B1_midplane"]                # 8 mm blocks relative to the CAD's
+DM8 = 2 * (RF["rect 30x5x8 N48"]["magnet_mass_g"] - RF[MAG]["magnet_mass_g"]) / 1000   # kg added per two-stator unit
+OPTIONS["A-cost: 2 stators, 2 oz boards, 6 mm magnets (chosen)"] = dict(m_fk=m2, m_yaw=my2, T_fk=2 * T1c, T_yaw=2 * Ty1c, h=CAD["femur"]["height_mm"], h_yaw=CAD["yaw"]["height_mm"])
+OPTIONS["A-cost, 8 mm magnets"] = dict(m_fk=m2 + DM8, m_yaw=my2 + DM8, T_fk=2 * T1c * B8, T_yaw=2 * Ty1c * B8, h=CAD["femur"]["height_mm"] + 4, h_yaw=CAD["yaw"]["height_mm"] + 4)
+OPTIONS["A: 2 stators, 3 oz boards, 8 mm magnets"] = dict(m_fk=m2 + DM8, m_yaw=my2 + DM8, T_fk=2 * T1 * B8, T_yaw=2 * Ty1 * B8, h=CAD["femur"]["height_mm"] + 4, h_yaw=CAD["yaw"]["height_mm"] + 4)
 if "femur-1s" in CAD and "yaw-1s" in CAD:
     m1, my = CAD["femur-1s"]["total_g"] / 1000, CAD["yaw-1s"]["total_g"] / 1000
-    OPTIONS["B: 1 stator, 3 oz boards"] = dict(m_fk=m1, m_yaw=my, T_fk=T1, T_yaw=Ty1, h=CAD["femur-1s"]["height_mm"], h_yaw=CAD["yaw-1s"]["height_mm"])
+    OPTIONS["B: 1 stator, 3 oz boards, 8 mm magnets"] = dict(m_fk=m1, m_yaw=my, T_fk=T1 * B8, T_yaw=Ty1 * B8, h=CAD["femur-1s"]["height_mm"], h_yaw=CAD["yaw-1s"]["height_mm"])
 for name, o in OPTIONS.items():
     m = fixed_point(o["m_fk"], o["m_yaw"])
     o["m_robot"] = m
@@ -104,7 +106,7 @@ for label, dyn, slope, accel, sc in CASES:
         row[oname] = dict(need=need, margin_femur=o["T_fk"] / need["femur"], margin_knee=o["T_fk"] / need["knee"], margin_yaw=o["T_yaw"] / need["yaw"],
                           closes=min(o["T_fk"] / need["femur"], o["T_fk"] / need["knee"], o["T_yaw"] / need["yaw"]) >= 1.0)
     relief.append(row)
-T_single = OPTIONS["B: 1 stator, 3 oz boards"]["T_fk"] if "B: 1 stator, 3 oz boards" in OPTIONS else T1
+T_single = OPTIONS["B: 1 stator, 3 oz boards, 8 mm magnets"]["T_fk"] if "B: 1 stator, 3 oz boards, 8 mm magnets" in OPTIONS else T1
 RELIEF_SCALE = None
 
 out = dict(m_fixed=M_FIXED, torque_per_kg=C, torque_per_kg_peak=C_PEAK, T_motor=T_MOTOR, options=OPTIONS, cases=relief, T_single_unit=T_single)
@@ -125,7 +127,7 @@ ax.set_title("Each unit option at its own fixed-point robot mass", fontsize=10)
 ax = axes[1]
 labels = [r["label"].replace(", stride", ",\nstride").replace(": ", ":\n") for r in relief]
 y = np.arange(len(relief))
-for k, (oname, col) in enumerate((("B: 1 stator, 3 oz boards", "#0f9b8e"), ("A-cost: 2 stators, 2 oz boards (chosen)", "#d98c3a"))):
+for k, (oname, col) in enumerate((("B: 1 stator, 3 oz boards, 8 mm magnets", "#0f9b8e"), ("A-cost: 2 stators, 2 oz boards, 6 mm magnets (chosen)", "#d98c3a"))):
     if oname not in OPTIONS:
         continue
     vals = [max(r[oname]["need"]["femur"], r[oname]["need"]["knee"]) for r in relief]

@@ -36,7 +36,7 @@ import cycloid as cy  # noqa: E402
 GEO = json.load(open(os.path.join(ROOT, "hw", "stator", "geometry.json")))
 RF = json.load(open(os.path.join(ROOT, "hw", "stator", "rotor_field.json")))
 JOINT = sys.argv[1] if len(sys.argv) > 1 else "femur"
-JOINT_MAGNET = {"femur": "rect 30x5x8 N48", "knee": "rect 30x5x8 N48", "yaw": "rect 30x5x8 N48"}   # round 6: the heavier robot needs the 8 mm blocks on the yaw too
+JOINT_MAGNET = {"femur": "rect 30x5x6 N48", "knee": "rect 30x5x6 N48", "yaw": "rect 30x5x6 N48"}   # round 9: the v2 board's torque lets the magnets drop to 6 mm (lighter, cheaper, 4 mm shorter)
 MAGNET = JOINT_MAGNET[JOINT]
 MAG_L, MAG_W, MAG_H = 30.0, RF[MAGNET]["w_b_mm"], RF[MAGNET]["h_m_mm"]
 P = GEO["pole_pairs"]

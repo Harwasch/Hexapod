@@ -302,7 +302,7 @@ def write_doc(figs):
                         f"{o['margin_knee']:.2f}", f"{o['margin_yaw']:.2f}", "yes" if o["closes"] else "no"))
     case_rows = []
     for r in CL["cases"]:
-        b, a = r["B: 1 stator, 3 oz boards"], r["A-cost: 2 stators, 2 oz boards (chosen)"]
+        b, a = r["B: 1 stator, 3 oz boards, 8 mm magnets"], r["A-cost: 2 stators, 2 oz boards, 6 mm magnets (chosen)"]
         case_rows.append((r["label"], f"{b['need']['femur']:.0f} / {b['need']['knee']:.0f} / {b['need']['yaw']:.0f}", "yes" if b["closes"] else "no",
                           f"{a['need']['femur']:.0f} / {a['need']['knee']:.0f} / {a['need']['yaw']:.0f}", "yes" if a["closes"] else "no"))
     bom_rows = [(r["item"], r["qty_per_unit"], r["spec"][:90], f"{float(r['qty_per_unit'])*float(r['price_before_usd']):.0f}", f"{float(r['qty_per_unit'])*float(r['unit_price_usd']):.0f}", f"{float(r['qty_per_unit'])*float(r['price_100_usd']):.0f}", r["verified"]) for r in BOM]
@@ -549,10 +549,11 @@ surface-charge model at the mean radius, gap {AB['h_m_mm']*0+3.2:.1f} mm magnet 
 ![Rotor field]({rel(os.path.join(FIG, 'rotor-field.png'))})
 
 Rectangular 5 mm blocks fill 71 % of the 7 mm segment at the mean radius and
-give 84 % of the trapezoid field; 8 mm thick blocks (30 × 8 × 5, a standard
-size stood on edge) buy that back. **Chosen: 30 × 8 × 5 N48H for the femur and
-knee, 30 × 6 × 5 for the yaw.** Half the blocks are magnetised through their
-5 mm dimension, half through the 8 mm — specify both. The {RF['rect 30x5x8 N48']['attraction_N']/1e3:.1f} kN
+give 84 % of the trapezoid field; thicker blocks buy that back. **Chosen
+(round 9): 30 × 6 × 5 N48H on every unit** — the v2 board's extra torque paid
+for the thinner, lighter, cheaper block; 8 mm was the choice of rounds 5–8.
+Half the blocks are magnetised through their 5 mm dimension, half through the
+6 mm — specify both. The {RF['rect 30x5x8 N48']['attraction_N']/1e3:.1f} kN
 attraction between the rotors sizes the 4.5 mm carriers ({CADJ['femur']['carrier_deflection_mm']:.2f} mm deflection).
 
 ### 9.3 The unit — `cad/actuator/actuator.py`, STEP and STL in `build/cad/`
@@ -597,7 +598,7 @@ and are not worth it.
 ### 9.5 Each joint on the built motor
 
 The requirement column is what 01-sizing derives **at the robot mass the CAD
-implies** ({CL['options']['A-cost: 2 stators, 2 oz boards (chosen)']['m_robot']:.0f} kg with the two-stator units), not the 49 kg of round 1;
+implies** ({CL['options']['A-cost: 2 stators, 2 oz boards, 6 mm magnets (chosen)']['m_robot']:.0f} kg with the two-stator units), not the 49 kg of round 1;
 §9.7 explains why that is the right mass to check against.
 
 {md(("Joint", "Cycloid × capstan", "Board", "Motor cont / peak (N·m)", "Joint cont / peak (N·m)", "Needed at the CAD mass", "Margin", "Joint speed no-load (rad/s)", "Unit mass (kg)", "Height (mm)"), joint_rows)}
@@ -697,9 +698,10 @@ pins press through — the half-grooves that needed a 4-axis mill are gone.
 The output flange is a turned hub with a laser-cut plate. All in the CAD and
 the BOM.
 
-**With the v2 board's torque in hand, the 6 mm magnet option** (30 × 5 × 6,
-{RF['rect 30x5x6 N48']['B1_midplane']:.2f} T, {RF['rect 30x5x6 N48']['magnet_mass_g']:.0f} g per two rings) is on the table: §9.7 carries it as "A-cost, 6 mm
-magnets". It is lighter by {2*(RF['rect 30x5x8 N48']['magnet_mass_g']-RF['rect 30x5x6 N48']['magnet_mass_g'])/1000:.2f} kg per unit and 4 mm shorter.
+**4. With the v2 board's torque in hand, the magnets drop to 6 mm** (30 × 5 × 6,
+{RF['rect 30x5x6 N48']['B1_midplane']:.2f} T at the board, {RF['rect 30x5x6 N48']['magnet_mass_g']:.0f} g per two rings instead of {RF['rect 30x5x8 N48']['magnet_mass_g']:.0f}): the unit is
+{2*(RF['rect 30x5x8 N48']['magnet_mass_g']-RF['rect 30x5x6 N48']['magnet_mass_g'])/1000:.2f} kg lighter and 4 mm shorter, the robot ~10 kg lighter, and §9.7 still closes
+with 1.09 at the knee. The 8 mm blocks stay in §9.7 as the margin option.
 
 ### 9.7 Does the robot close? — `analysis/closure.py`
 
@@ -716,15 +718,15 @@ what its motor and ratio give. The fixed point for each unit option:
 The single-stator unit cannot close the requirement as defined at any mass:
 the torque it needs grows with the mass it adds faster than its own torque.
 Two stators per unit ({CADJ['femur']['height_mm']:.0f} mm tall, {CADJ['femur']['total_g']/1000:.1f} kg) close it at
-about {CL['options']['A-cost: 2 stators, 2 oz boards (chosen)']['m_robot']:.0f} kg. The other way to close would have been the definition of
+about {CL['options']['A-cost: 2 stators, 2 oz boards, 6 mm magnets (chosen)']['m_robot']:.0f} kg. The other way to close would have been the definition of
 "continuous": the walking load case is dyn 1.5 on three legs, on a 30° slope,
 accelerating at 1 m/s², over the whole routine working volume, all at once.
 Against gentler definitions:
 
-{md(("Continuous load case", "B: 1 stator, femur / knee / yaw needed at " + f"{CL['options']['B: 1 stator, 3 oz boards']['m_robot']:.0f} kg", "B closes?", "A: 2 stators, needed at " + f"{CL['options']['A-cost: 2 stators, 2 oz boards (chosen)']['m_robot']:.0f} kg", "A closes?"), case_rows)}
+{md(("Continuous load case", "B: 1 stator, femur / knee / yaw needed at " + f"{CL['options']['B: 1 stator, 3 oz boards, 8 mm magnets']['m_robot']:.0f} kg", "B closes?", "A: 2 stators, needed at " + f"{CL['options']['A-cost: 2 stators, 2 oz boards, 6 mm magnets (chosen)']['m_robot']:.0f} kg", "A closes?"), case_rows)}
 
 **The review chose A** (round 6): two stators everywhere, {CADJ['femur']['height_mm']:.0f} mm units, a
-~{CL['options']['A-cost: 2 stators, 2 oz boards (chosen)']['m_robot']:.0f} kg robot, the requirement as written. Round 8 then swapped the
+~{CL['options']['A-cost: 2 stators, 2 oz boards, 6 mm magnets (chosen)']['m_robot']:.0f} kg robot, the requirement as written. Round 8 then swapped the
 3 oz boards for two 8-layer 2 oz JLCPCB boards per position (11 % less torque,
 a quarter of the price) and raised the total ratio to 80:1 through the
 capstan stage to keep the margin ("A-cost" above). The single-stator unit
