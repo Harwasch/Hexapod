@@ -697,6 +697,58 @@ propeller motor in a closed body. One 8318 or 9235 on an aluminium plate,
 locked rotor, 30 A, a thermocouple on the winding, is a $100 afternoon and
 decides the motor family.
 
+### 9.14 Round 12: does the outrunner still need the cycloid? — `analysis/transmission_options.py`
+
+Asked: with these motors, do we need a gearbox, or can the motor drive the
+capstan joint directly? The ratio a joint needs is joint torque divided by
+motor continuous torque, whatever the motor. The 8318 gives
+2.63 N·m heat-sunk against the PCB motor's 5.9, so it needs *more* ratio,
+not less: about 90:1 at the load case as written, 100:1 as costed. The 4:1
+capstan on its own would put 10 N·m at the femur, enough for a
+4 kg robot.
+
+What limits a rope drive is not strength but wrap. The rope on the motor drum
+has to hold (total ratio × joint travel) turns: at 130° of travel that is
+ratio / 2.8, and past about 4 working turns the drum is a winch (fleet
+angle, rope stacking, a long drum) rather than a capstan. So a pure rope drive
+tops out near 10:1 whether it has one stage or two, which is why every
+quasi-direct legged robot pairs it with a motor ten times ours. Each option
+below is rated for the femur with one 8318 per unit, at the robot mass its own
+weight implies, against the continuous load case as written; the cost is the
+reducer plus capstan BOM lines at 20 units (cycloid lines $112, capstan
+lines $58).
+
+| Transmission | Ratio | η | Joint (N·m) | Needed | Robot it supports (kg) | Turns on motor drum | $ / unit | Verdict | Note |
+|---|---|---|---|---|---|---|---|---|---|
+| Direct: motor on the Ø60 drum, 4:1 capstan | 4:1 | 0.97 | 10 | 159 at 63 kg | 4 | 1.4 | 58 | short | no reducer at all; the joint gets 4 x the motor's torque |
+| Largest single capstan: Ø14 drum, Ø300 sector (21:1) | 21:1 | 0.97 | 54 | 165 at 65 kg | 21 | 7.6 | 73 | cannot be built | 1.8 mm rope at SF 3 on the burst torque; 7.6 working turns on the motor drum (a winch, not a capstan) |
+| Two rope stages, 10 x 10 (100:1) | 100:1 | 0.94 | 247 | 178 at 70 kg | 98 | 36.1 | 116 | cannot be built | 36 turns on the motor drum for 130 deg of joint travel: a multi-layer winch at 3600 rpm |
+| Belt 5:1 + belt 5:1 + capstan 4:1 (100:1) | 100:1 | 0.89 | 235 | 196 at 77 kg | 93 | 1.4 | 148 | cannot be built | stage-2 pulley carries 61 N·m continuous / 182 burst: HTD 8M, 30 mm wide, a Ø300 large pulley that does not fit the Ø192 pod |
+| 25-lobe cycloid + 4:1 capstan (100:1, as costed) | 100:1 | 0.87 | 229 | 194 at 77 kg | 91 | 1.4 | 170 | closes | the cost-search pick: reducer lines $112, capstan lines $58 at 20 units |
+| OTS 25:1 planetary (PLE/PLF-60 class) + 4:1 capstan | 100:1 | 0.91 | 240 | 205 at 81 kg | 95 | 1.4 | 198 | closes | a 60-frame two-stage planetary is listed around $120-160 (est, unverified) and rated ~40-60 N·m; the 66 N·m continuous here is at its limit, an 80-frame is $200+ |
+| Quasi-direct: 10-inch hub motor on a 10:1 capstan | 10:1 | 0.97 | 143 | 278 at 110 kg | 57 | 3.6 | 158 | cannot be built | 15 N·m heat-sunk from a Ø250 x 60 hub (est), 12 of them add 54 kg; the pod would be Ø260 and the sector Ø300; 8.4 rad/s joint no-load is fast enough but the mass never closes |
+
+![Transmission options for the outrunner](actuator/transmission-options.png)
+
+* **Direct to the capstan: no.** A 4:1 capstan gives the joint a twentieth of
+  what it needs; the largest single capstan the coxa pod could carry (a Ø300
+  sector, a Ø14 drum on 1.8 mm rope) is 21:1, still a quarter short,
+  and already 7.6 turns of rope on the motor drum.
+* **Two rope stages: no.** 100:1 in rope means 36 turns on a drum
+  spinning at 3600 rpm.
+* **Belts instead of the cycloid: no.** Two 5:1 belt stages reach the ratio,
+  but the second belt carries 60 N·m continuous and its large
+  pulley is a Ø300 HTD 8M, wider than the pod.
+* **A motor big enough to skip the reducer: no.** A 10-inch hub motor on a
+  10:1 capstan is the cheapest torque that would do it
+  (15 N·m heat-sunk, ~$80), but twelve of them add 54 kg and the
+  mass loop never closes; the hip pod would be Ø260.
+* **What stays: the 25-lobe cycloid × 4:1 capstan**, $170 of
+  transmission per unit. The one OTS alternative is a 60-frame planetary
+  (~$140, unverified) at its rated limit and a little heavier; it is worth a
+  quote as the drop-in fallback if the laser-cut cycloid discs disappoint,
+  not a cost-down.
+
 ### 9.8 Open items from this round (updated in round 11)
 
 1. **OD 186, not 170** (§9.3): accepted by the review.

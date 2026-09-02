@@ -9,9 +9,10 @@
 title: Hexapod
 subtitle: >-
   A large-dog-sized outdoor hexapod with all eighteen motors in the body.
-  Round 11: the market search for the cheapest off-the-shelf motor that does
-  the joint, on top of the cost search — the 8318 / 9235 outrunner class, one
-  per unit, subject to one bench test of its heat-sunk current.
+  Round 12: the BOM calibrated against a real JLCPCB quote, and the answer to
+  whether the off-the-shelf outrunner can skip the cycloid and drive the
+  capstan joint directly (it cannot: a rope drive tops out near 10:1, the
+  8318 needs 100:1).
 
 phases:
   - id: geometry
@@ -113,6 +114,7 @@ phases:
       - docs/design/actuator/cad-femur-section.png
       - docs/design/actuator/cad-femur-1s-section.png
       - docs/design/actuator/motor-market.png
+      - docs/design/actuator/transmission-options.png
       - docs/design/actuator/cost-search.png
       - docs/design/actuator/capstan.png
       - docs/design/actuator/closure.png
@@ -154,6 +156,14 @@ phases:
         Turnigy 9235-100KV is the same motor with a published resistance. Look
         at: every number is from a listing, and the heat-sunk current is the
         one bench test that decides the motor family.
+      docs/design/actuator/transmission-options.png: >-
+        Round 12: does the off-the-shelf outrunner still need the cycloid?
+        Left, what the femur gets from one 8318 through each transmission
+        against what it needs at that option's robot mass: only the cycloid
+        (or an OTS planetary) closes. Right, why: a rope drive must wrap
+        (ratio x joint travel) turns on the motor drum, so a capstan tops out
+        near 10:1 whatever the motor. Look at: direct-to-capstan supports a
+        4 kg robot; the cycloid stays.
       docs/design/actuator/cost-search.png: >-
         The cost search: each option at the robot mass its own weight implies,
         filled markers close the requirement as written. One OTS 8318

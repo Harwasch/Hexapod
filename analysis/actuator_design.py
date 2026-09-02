@@ -105,6 +105,7 @@ BOM_100 = sum(float(r["qty_per_unit"]) * float(r["price_100_usd"]) for r in BOM)
 CAP = json.load(open(os.path.join(ROOT, "hw", "stator", "capstan.json")))
 CS = json.load(open(os.path.join(ROOT, "hw", "stator", "cost_search.json")))
 MM = json.load(open(os.path.join(ROOT, "hw", "stator", "motor_market.json")))
+TO = json.load(open(os.path.join(ROOT, "hw", "stator", "transmission_options.json")))
 HK2512 = dict(Cr=11.8e3, C0r=16.3e3, n_lim=6500)                # NTN sheet, docs/reference/ntn-hk2512.pdf
 HK3012 = dict(Cr=11.5e3, C0r=17.3e3)                            # PTI HK-series catalogue, docs/reference/pti-hk-series.pdf (round 7)
 RB5013 = dict(C=16.7e3, C0=20.9e3, mass=0.27)                    # THK catalogue 382-5E, docs/reference
@@ -265,6 +266,9 @@ def write_doc(figs):
     mm_rows = [(r["name"], f"{r['Kt']:.3f}", f"{r['R']:.3f}", f"{r['mass']:.2f}", f"{r['T_cont']:.2f}", f"{r['n_noload']:.0f}",
                 f"{r['motors_per_unit'] if r['motors_per_unit'] else '—'}", f"{r['price20']}", f"{r['T_per_usd']*100:.1f}", f"{r['T_per_kg']:.1f}", r["flags"][:60])
                for r in MM["rows"]]
+    to_rows = [(r["name"], f"{r['ratio']:.0f}:1", f"{r['eta']:.2f}", f"{r['T_joint']:.0f}", f"{r['T_need']:.0f} at {r['m_robot']:.0f} kg", f"{r['robot_mass_supported']:.0f}",
+                f"{r['motor_drum_turns']:.1f}", f"{r['cost']:.0f}", "closes" if r["closes"] else ("short" if r["feasible"] else "cannot be built"), r["note"])
+               for r in TO["rows"]]
     cs_rows = [(r["option"], r["requirement"], f"{r['m_unit']:.2f}", f"{r['m_robot']:.0f}", f"{r['T_joint']:.0f} / {r['need_knee']:.0f}", f"{r['margin']:.2f}" + ("" if r["closes"] else " ✗"),
                 f"{r['cost']:.0f}", f"{[x for x in CS['rows'] if x['option']==r['option'] and x['requirement']==r['requirement'] and x['qty']==100][0]['cost']:.0f}")
                for r in CS["rows"] if r["qty"] == 20]
@@ -854,6 +858,50 @@ The one number all of this rests on is the heat-sunk continuous current of a
 propeller motor in a closed body. One 8318 or 9235 on an aluminium plate,
 locked rotor, 30 A, a thermocouple on the winding, is a $100 afternoon and
 decides the motor family.
+
+### 9.14 Round 12: does the outrunner still need the cycloid? — `analysis/transmission_options.py`
+
+Asked: with these motors, do we need a gearbox, or can the motor drive the
+capstan joint directly? The ratio a joint needs is joint torque divided by
+motor continuous torque, whatever the motor. The 8318 gives
+{TO['motor']['T_cont']:.2f} N·m heat-sunk against the PCB motor's 5.9, so it needs *more* ratio,
+not less: about 90:1 at the load case as written, 100:1 as costed. The 4:1
+capstan on its own would put {TO['rows'][0]['T_joint']:.0f} N·m at the femur, enough for a
+{TO['rows'][0]['robot_mass_supported']:.0f} kg robot.
+
+What limits a rope drive is not strength but wrap. The rope on the motor drum
+has to hold (total ratio × joint travel) turns: at {TO['joint_range_deg']:.0f}° of travel that is
+ratio / 2.8, and past about {TO['wrap_max_turns']:.0f} working turns the drum is a winch (fleet
+angle, rope stacking, a long drum) rather than a capstan. So a pure rope drive
+tops out near 10:1 whether it has one stage or two, which is why every
+quasi-direct legged robot pairs it with a motor ten times ours. Each option
+below is rated for the femur with one 8318 per unit, at the robot mass its own
+weight implies, against the continuous load case as written; the cost is the
+reducer plus capstan BOM lines at 20 units (cycloid lines ${TO['cost_cycloid_lines']:.0f}, capstan
+lines ${TO['cost_capstan_lines']:.0f}).
+
+{md(("Transmission", "Ratio", "η", "Joint (N·m)", "Needed", "Robot it supports (kg)", "Turns on motor drum", "$ / unit", "Verdict", "Note"), to_rows)}
+
+![Transmission options for the outrunner]({rel(os.path.join(FIG, 'transmission-options.png'))})
+
+* **Direct to the capstan: no.** A 4:1 capstan gives the joint a twentieth of
+  what it needs; the largest single capstan the coxa pod could carry (a Ø300
+  sector, a Ø14 drum on 1.8 mm rope) is {TO['rows'][1]['ratio']:.0f}:1, still a quarter short,
+  and already {TO['rows'][1]['motor_drum_turns']:.1f} turns of rope on the motor drum.
+* **Two rope stages: no.** 100:1 in rope means {TO['rows'][2]['motor_drum_turns']:.0f} turns on a drum
+  spinning at 3600 rpm.
+* **Belts instead of the cycloid: no.** Two 5:1 belt stages reach the ratio,
+  but the second belt carries {TO['motor']['T_cont']*25*0.92:.0f} N·m continuous and its large
+  pulley is a Ø300 HTD 8M, wider than the pod.
+* **A motor big enough to skip the reducer: no.** A 10-inch hub motor on a
+  10:1 capstan is the cheapest torque that would do it
+  ({TO['hub']['T_cont']:.0f} N·m heat-sunk, ~$80), but twelve of them add 54 kg and the
+  mass loop never closes; the hip pod would be Ø260.
+* **What stays: the 25-lobe cycloid × 4:1 capstan**, ${TO['rows'][4]['cost']:.0f} of
+  transmission per unit. The one OTS alternative is a 60-frame planetary
+  (~$140, unverified) at its rated limit and a little heavier; it is worth a
+  quote as the drop-in fallback if the laser-cut cycloid discs disappoint,
+  not a cost-down.
 
 ### 9.8 Open items from this round (updated in round 11)
 
