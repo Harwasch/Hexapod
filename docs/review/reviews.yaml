@@ -751,7 +751,7 @@ reviews:
   - hw/stator/variants/8t/stator-8t.kicad_pro
   requested: '2026-09-02'
   requested_commit: 7d80ca9
-  status: requested
+  status: changes_requested
   packet: docs/review/actuator.md
   history:
   - 'on': '2026-09-02'
@@ -1036,5 +1036,13 @@ reviews:
     - docs/design/bom-actuator.csv
     added:
     - docs/design/actuator/capstan.png
-  decided_commit: fd55ee1
+  - 'on': '2026-09-02'
+    action: changes_requested
+    commit: 6a12a2d
+    by: harrison.waschura@gmail.com
+    note: Push further on the cost of the unit itself
+  decided_commit: 6a12a2d
+  note: Push further on the cost of the unit itself
+  decided: '2026-09-02'
+  reviewer: harrison.waschura@gmail.com
 artifact_url: https://claude.ai/code/artifact/c27a8924-af18-4d17-bd9b-0fcb41e685e3
