@@ -606,63 +606,57 @@ reviews:
     - docs/design/drawing/side.png
     - docs/design/drawing/top.png
 - id: actuator
-  title: 'Actuator, round 6: two discs, the mass loop, one stator or two'
+  title: 'Actuator, round 7: configuration A as the canonical unit'
   stage: design
-  summary: Rebuilt to the round-5 decisions (Ø186 accepted, two discs, mass budget renegotiated,
-    3 oz board, thermal budget accepted). Two 8 mm discs on twin journals make the single-stator
-    unit 49.7 mm and 3.9 kg. Putting the CAD masses into the sizing makes the robot 99 kg
-    and the femur/knee requirement 255/269 N·m continuous — the single-stator unit gives 179
-    at 70:1, and no mass closes it because the torque it needs grows faster than the torque
-    it adds (analysis/closure.py). Two stators per unit (62 mm, 5.5 kg) close the requirement
-    as written at a 128 kg robot with 1.03–1.65 margin; one stator closes only if 'continuous'
-    is redefined as level walking at dyn 1.2 (slopes as a minutes-long rating). Ratios are
-    now 70/70/45; the yaw units take an 8-turn board for 7.9 rad/s. Board, gerbers, CAD (all
-    five variants), thermal network and BOM updated.
+  summary: 'The round-6 decisions applied: two stators and three Halbach rotors in every unit
+    (62 mm, 5.5 kg), two 8 mm discs on Ø30 journals with HK3012 needle bearings (PTI catalogue
+    ratings in docs/reference), the yaw swing-speed requirement lowered to 6.4 rad/s so every
+    unit shares the 10-turn board, and the body slab raised from 200 to 220 mm for the 202
+    mm hip stack. The closure loop now closes: a 129 kg robot, femur 358 N·m continuous against
+    324 needed (1.10), knee 1.04, yaw 1.76, against the continuous load case as written. 01-sizing,
+    06-geometry and the drawings carry the CAD masses and the Ø186 × 62 envelope; the BOM
+    is for the two-stator unit. The single-stator unit stays as the -1s variant.'
   questions:
-  - 'Configuration A: two stators everywhere, 62 mm, 5.5 kg units, a ~128 kg robot, the continuous
-    requirement as written (30° slope, dyn 1.5, all day). Configuration B: one stator, 50
-    mm, 3.9 kg units, a ~99 kg robot, ''continuous'' redefined as level walking at dyn 1.2
-    with slopes as a minutes-long rating. Which?'
-  - The eccentric bearing load is ~1.1 T/R per disc whatever the ratio; at the heavier robot's
-    peak it is 11.9 kN per disc against C0r 16.3 kN, with ~100 h L10 at the continuous rating.
-    Accept as a service item, or move to a Ø30 journal (HK3012) at the next revision?
-  - The yaw joint's 7.7 rad/s swing at 48 V forces a separate 8-turn board with 6× the eddy
-    loss at speed. Keep it, raise the bus to 60 V, or lower the yaw swing-speed requirement?
+  - Do you approve the actuator design stage as it now stands (two stators, two discs, HK3012,
+    70/70/45, Ø186 × 62 mm, 5.5 kg, a ~129 kg robot), so the next chunk (the transmission
+    from the hip stack to the femur and knee, M1) can start?
+  - The 62 mm stack made the body slab 220 mm instead of 200 mm. Accept, or should the hip
+    pods stand proud of a 200 mm slab instead?
   artifacts:
   - path: docs/design/01-sizing.md
-    sha256: 192b0b8b283c7091
+    sha256: 7b29aa3d0e01222c
   - path: docs/design/06-geometry.md
-    sha256: c59ca3d584fb15ea
+    sha256: 40fa8128fcd21706
   - path: docs/design/08-actuator-design.md
-    sha256: 0d33655ce06ea0a7
-  - path: docs/design/actuator/cad-femur-2s-cutaway.png
-    sha256: f01f7d015e14526d
-  - path: docs/design/actuator/cad-femur-2s-section.png
-    sha256: d36b366a9da10ea3
+    sha256: 70bb7f269513fc04
+  - path: docs/design/actuator/cad-femur-1s-cutaway.png
+    sha256: 36f2f221b6b579a6
+  - path: docs/design/actuator/cad-femur-1s-section.png
+    sha256: ab54778c856788ba
   - path: docs/design/actuator/cad-femur-cutaway.png
-    sha256: 3a8002c2754b7065
+    sha256: 8221a648c4f09cf2
   - path: docs/design/actuator/cad-femur-iso.png
-    sha256: ef4b44f282c5e537
+    sha256: 8d7323c057f996a4
   - path: docs/design/actuator/cad-femur-section.png
-    sha256: 9001d906e4c7421c
+    sha256: 0020a1945ba37fc8
   - path: docs/design/actuator/cad-knee-cutaway.png
-    sha256: 3f91141bc31b3728
+    sha256: a1073e3d1fe8bd14
   - path: docs/design/actuator/cad-knee-section.png
-    sha256: e260909c1a9d8845
-  - path: docs/design/actuator/cad-yaw-2s-cutaway.png
-    sha256: dd0606599542e0b9
-  - path: docs/design/actuator/cad-yaw-2s-section.png
-    sha256: 9b40dc0b5ab06160
+    sha256: 25409b37ebcea54d
+  - path: docs/design/actuator/cad-yaw-1s-cutaway.png
+    sha256: 3cae98453bc04279
+  - path: docs/design/actuator/cad-yaw-1s-section.png
+    sha256: 06c73ffd22fd405b
   - path: docs/design/actuator/cad-yaw-cutaway.png
-    sha256: d40c12c8f78af3e6
+    sha256: 3317b6b19a37e94d
   - path: docs/design/actuator/cad-yaw-section.png
-    sha256: 3bde86b0214bc8e1
+    sha256: 572159477a06ad97
   - path: docs/design/actuator/closure.png
-    sha256: d771e16e7f159f9f
+    sha256: f33d374b09677f28
   - path: docs/design/actuator/cycloid-profiles.png
     sha256: 8653edbc2c70d768
   - path: docs/design/actuator/operating-envelopes.png
-    sha256: 4fd41d5a5c7b7b51
+    sha256: 88a72eb6b18d5878
   - path: docs/design/actuator/rotor-field.png
     sha256: 2f7440ee443f95b7
   - path: docs/design/actuator/section-pcb-1.png
@@ -680,21 +674,20 @@ reviews:
   - path: docs/design/actuator/stator-rotor-layout.png
     sha256: aef21c21971a642e
   - path: docs/design/actuator/thermal-network.png
-    sha256: e63ae6e4119e43d6
+    sha256: a311801d65fe0a57
   - path: docs/design/bom-actuator.csv
-    sha256: f07eb4586b3b7ea0
+    sha256: ad06e0c07e9be9b8
   - path: docs/design/drawing/front.png
-    sha256: f221560371c5fe77
+    sha256: 15354d884a8d1bb0
   - path: docs/design/drawing/hip-stack.png
-    sha256: e081169b299c664a
+    sha256: 82aa8b4349fae9f4
   - path: docs/design/drawing/side.png
-    sha256: ca6c6f97108fdfb9
+    sha256: 65f8427ba2748110
   - path: docs/design/drawing/top.png
     sha256: f396c2d65bdb5991
   references:
   - analysis/closure.py
-  - analysis/stator_asbuilt.py
-  - analysis/stator_thermal.py
+  - analysis/hexapod_model.py
   - cad/actuator/actuator.py
   - hw/stator/asbuilt.json
   - hw/stator/closure.json
@@ -757,8 +750,8 @@ reviews:
   - hw/stator/variants/8t/stator-8t.kicad_prl
   - hw/stator/variants/8t/stator-8t.kicad_pro
   requested: '2026-09-02'
-  requested_commit: e49ed9e
-  status: changes_requested
+  requested_commit: 2c51f53
+  status: requested
   packet: docs/review/actuator.md
   history:
   - 'on': '2026-09-02'
@@ -962,9 +955,46 @@ reviews:
     by: harrison.waschura@gmail.com
     note: 'A: two stators everywhere. Move to HK3012 at the next revision. Lower the yaw swing
       requirement.'
+  - 'on': '2026-09-02'
+    action: requested
+    commit: 2c51f53
+    questions:
+    - Do you approve the actuator design stage as it now stands (two stators, two discs, HK3012,
+      70/70/45, Ø186 × 62 mm, 5.5 kg, a ~129 kg robot), so the next chunk (the transmission
+      from the hip stack to the femur and knee, M1) can start?
+    - The 62 mm stack made the body slab 220 mm instead of 200 mm. Accept, or should the hip
+      pods stand proud of a 200 mm slab instead?
+    summary: 'The round-6 decisions applied: two stators and three Halbach rotors in every
+      unit (62 mm, 5.5 kg), two 8 mm discs on Ø30 journals with HK3012 needle bearings (PTI
+      catalogue ratings in docs/reference), the yaw swing-speed requirement lowered to 6.4
+      rad/s so every unit shares the 10-turn board, and the body slab raised from 200 to 220
+      mm for the 202 mm hip stack. The closure loop now closes: a 129 kg robot, femur 358
+      N·m continuous against 324 needed (1.10), knee 1.04, yaw 1.76, against the continuous
+      load case as written. 01-sizing, 06-geometry and the drawings carry the CAD masses and
+      the Ø186 × 62 envelope; the BOM is for the two-stator unit. The single-stator unit stays
+      as the -1s variant.'
+    changed:
+    - docs/design/01-sizing.md
+    - docs/design/06-geometry.md
+    - docs/design/08-actuator-design.md
+    - docs/design/actuator/cad-femur-cutaway.png
+    - docs/design/actuator/cad-femur-iso.png
+    - docs/design/actuator/cad-femur-section.png
+    - docs/design/actuator/cad-knee-cutaway.png
+    - docs/design/actuator/cad-knee-section.png
+    - docs/design/actuator/cad-yaw-cutaway.png
+    - docs/design/actuator/cad-yaw-section.png
+    - docs/design/actuator/closure.png
+    - docs/design/actuator/operating-envelopes.png
+    - docs/design/actuator/thermal-network.png
+    - docs/design/bom-actuator.csv
+    - docs/design/drawing/front.png
+    - docs/design/drawing/hip-stack.png
+    - docs/design/drawing/side.png
+    added:
+    - docs/design/actuator/cad-femur-1s-cutaway.png
+    - docs/design/actuator/cad-femur-1s-section.png
+    - docs/design/actuator/cad-yaw-1s-cutaway.png
+    - docs/design/actuator/cad-yaw-1s-section.png
   decided_commit: fd55ee1
-  note: 'A: two stators everywhere. Move to HK3012 at the next revision. Lower the yaw swing
-    requirement.'
-  decided: '2026-09-02'
-  reviewer: harrison.waschura@gmail.com
 artifact_url: https://claude.ai/code/artifact/c27a8924-af18-4d17-bd9b-0fcb41e685e3

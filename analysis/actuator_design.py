@@ -95,6 +95,7 @@ AB8 = json.load(open(os.path.join(ROOT, "hw", "stator", "variants", "8t", "asbui
 CL = json.load(open(os.path.join(ROOT, "hw", "stator", "closure.json")))
 RF = json.load(open(os.path.join(ROOT, "hw", "stator", "rotor_field.json")))
 TH = json.load(open(os.path.join(ROOT, "hw", "stator", "thermal.json")))
+SUST = [k for k in TH["variants"]["as built"]["cases"] if k.startswith("sustained")][0]
 CADJ = {j: json.load(open(os.path.join(ROOT, "cad", "actuator", f"{j}.json"))) for j in ("femur", "knee", "yaw", "femur-1s", "yaw-1s")}
 BOM = list(csv.DictReader(open(os.path.join(ROOT, "docs", "design", "bom-actuator.csv"))))
 BOM_UNIT = sum(float(r["qty_per_unit"]) * float(r["unit_price_usd"]) for r in BOM)
@@ -298,7 +299,7 @@ def write_doc(figs):
                         f"{o['margin_knee']:.2f}", f"{o['margin_yaw']:.2f}", "yes" if o["closes"] else "no"))
     case_rows = []
     for r in CL["cases"]:
-        b, a = r["B: 1 stator everywhere"], r["A: 2 stators everywhere"]
+        b, a = r["B: 1 stator everywhere"], r["A: 2 stators everywhere (chosen)"]
         case_rows.append((r["label"], f"{b['need']['femur']:.0f} / {b['need']['knee']:.0f} / {b['need']['yaw']:.0f}", "yes" if b["closes"] else "no",
                           f"{a['need']['femur']:.0f} / {a['need']['knee']:.0f} / {a['need']['yaw']:.0f}", "yes" if a["closes"] else "no"))
     bom_rows = [(r["item"], r["qty_per_unit"], r["spec"][:90], f"{float(r['qty_per_unit'])*float(r['unit_price_usd']):.0f}", r["verified"]) for r in BOM]
@@ -445,8 +446,8 @@ from the model's solids, not estimates.
 
 {md(("Part", "Femur / knee (g)", "Yaw (g)"), cad_mrows)}
 
-Eighteen single-stator actuators are about {(2*CADJ['femur']['total_g'] + CADJ['yaw']['total_g'])*6/1000:.0f} kg (two-stator:
-{(2*CADJ['femur-2s']['total_g'] + CADJ['yaw-2s']['total_g'])*6/1000:.0f} kg) against the {18*1.1:.0f} kg the round-1 mass budget carried. The magnets
+Eighteen two-stator actuators are about {(2*CADJ['femur']['total_g'] + CADJ['yaw']['total_g'])*6/1000:.0f} kg (single-stator:
+{(2*CADJ['femur-1s']['total_g'] + CADJ['yaw-1s']['total_g'])*6/1000:.0f} kg) against the {18*1.1:.0f} kg the round-1 mass budget carried. The magnets
 ({CADJ['femur']['mass_g']['magnets']:.0f} g per stator), the rotor cup and the base are the big items. Per unit
 that is {AB['ratings']['1000']['T_cont']*JOINTS['femur']['N']*ETA/CADJ['femur']['total_g']*1e3:.0f} N·m/kg continuous and {AB['ratings']['1000']['T_peak']*JOINTS['femur']['N']*ETA/CADJ['femur']['total_g']*1e3:.0f} N·m/kg peak at the joint. 01-sizing
 now carries the CAD masses, and §9.7 shows what that does to the loop.
@@ -466,11 +467,11 @@ body it is bolted into.
 
 {md(("R_th stator→ambient (K/W)", "A3 continuous torque (N·m)", "Femur margin"), rrow)}
 
-Three motors share one hip pod. At the full continuous rating each unit
-dissipates ~50 W; eighteen of them are 900 W, which a ~1.2 m² body in still
-air cannot shed (it would run 75 K hot). The sustained thermal budget of the
-robot is nearer 300 W, i.e. 17 W per unit: {TH['variants']['as built']['cases']['sustained: 300 W robot budget / 18']['T_cont']:.2f} N·m per motor,
-{TH['variants']['as built']['cases']['sustained: 300 W robot budget / 18']['T_cont']*JOINTS['femur']['N']*ETA:.0f} N·m at the femur, all joints at once, indefinitely. The
+Three units share one hip pod. At the full continuous rating each stator
+board dissipates ~45 W; thirty-six of them are 1.6 kW, which a ~1.2 m² body
+in still air cannot shed. The sustained thermal budget of the robot is nearer
+300 W, i.e. 8 W per board: {TH['variants']['as built']['cases'][SUST]['T_cont']:.2f} N·m per board, {2*TH['variants']['as built']['cases'][SUST]['T_cont']:.2f} per unit,
+{2*TH['variants']['as built']['cases'][SUST]['T_cont']*JOINTS['femur']['N']*ETA:.0f} N·m at the femur, all joints at once, indefinitely. The
 per-joint continuous rating is a rating for one joint at a time or for
 minutes, not for the whole robot for hours; the gait's average torque is what
 the body has to be able to cool. Design rules that follow: the stator rim

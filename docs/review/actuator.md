@@ -1,18 +1,18 @@
-# Review — Actuator, round 6: two discs, the mass loop, one stator or two
+# Review — Actuator, round 7: configuration A as the canonical unit
 
 `actuator` · requested 2026-09-02 · branch `claude/hexapod-robot-design-mt516g`
 
-Rebuilt to the round-5 decisions (Ø186 accepted, two discs, mass budget renegotiated, 3 oz board, thermal budget accepted). Two 8 mm discs on twin journals make the single-stator unit 49.7 mm and 3.9 kg. Putting the CAD masses into the sizing makes the robot 99 kg and the femur/knee requirement 255/269 N·m continuous — the single-stator unit gives 179 at 70:1, and no mass closes it because the torque it needs grows faster than the torque it adds (analysis/closure.py). Two stators per unit (62 mm, 5.5 kg) close the requirement as written at a 128 kg robot with 1.03–1.65 margin; one stator closes only if 'continuous' is redefined as level walking at dyn 1.2 (slopes as a minutes-long rating). Ratios are now 70/70/45; the yaw units take an 8-turn board for 7.9 rad/s. Board, gerbers, CAD (all five variants), thermal network and BOM updated.
+The round-6 decisions applied: two stators and three Halbach rotors in every unit (62 mm, 5.5 kg), two 8 mm discs on Ø30 journals with HK3012 needle bearings (PTI catalogue ratings in docs/reference), the yaw swing-speed requirement lowered to 6.4 rad/s so every unit shares the 10-turn board, and the body slab raised from 200 to 220 mm for the 202 mm hip stack. The closure loop now closes: a 129 kg robot, femur 358 N·m continuous against 324 needed (1.10), knee 1.04, yaw 1.76, against the continuous load case as written. 01-sizing, 06-geometry and the drawings carry the CAD masses and the Ø186 × 62 envelope; the BOM is for the two-stator unit. The single-stator unit stays as the -1s variant.
 
 ## What you are agreeing to
 
-**cad-femur-2s-cutaway.png**
+**cad-femur-1s-cutaway.png**
 
-![cad-femur-2s-cutaway.png](../design/actuator/cad-femur-2s-cutaway.png)
+![cad-femur-1s-cutaway.png](../design/actuator/cad-femur-1s-cutaway.png)
 
-**cad-femur-2s-section.png**
+**cad-femur-1s-section.png**
 
-![cad-femur-2s-section.png](../design/actuator/cad-femur-2s-section.png)
+![cad-femur-1s-section.png](../design/actuator/cad-femur-1s-section.png)
 
 **cad-femur-cutaway.png**
 
@@ -34,13 +34,13 @@ Rebuilt to the round-5 decisions (Ø186 accepted, two discs, mass budget renegot
 
 ![cad-knee-section.png](../design/actuator/cad-knee-section.png)
 
-**cad-yaw-2s-cutaway.png**
+**cad-yaw-1s-cutaway.png**
 
-![cad-yaw-2s-cutaway.png](../design/actuator/cad-yaw-2s-cutaway.png)
+![cad-yaw-1s-cutaway.png](../design/actuator/cad-yaw-1s-cutaway.png)
 
-**cad-yaw-2s-section.png**
+**cad-yaw-1s-section.png**
 
-![cad-yaw-2s-section.png](../design/actuator/cad-yaw-2s-section.png)
+![cad-yaw-1s-section.png](../design/actuator/cad-yaw-1s-section.png)
 
 **cad-yaw-cutaway.png**
 
@@ -136,8 +136,7 @@ Sources and working files. Not part of the agreement — these change as work go
 | File | Opens in |
 |---|---|
 | [analysis/closure.py](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/analysis/closure.py) | plain text on GitHub |
-| [analysis/stator_asbuilt.py](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/analysis/stator_asbuilt.py) | plain text on GitHub |
-| [analysis/stator_thermal.py](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/analysis/stator_thermal.py) | plain text on GitHub |
+| [analysis/hexapod_model.py](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/analysis/hexapod_model.py) | plain text on GitHub |
 | [cad/actuator/actuator.py](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/cad/actuator/actuator.py) | plain text on GitHub |
 | [hw/stator/asbuilt.json](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/hw/stator/asbuilt.json) | plain text on GitHub |
 | [hw/stator/closure.json](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/hw/stator/closure.json) | plain text on GitHub |
@@ -200,15 +199,29 @@ Sources and working files. Not part of the agreement — these change as work go
 
 ## What we need decided
 
-1. Configuration A: two stators everywhere, 62 mm, 5.5 kg units, a ~128 kg robot, the continuous requirement as written (30° slope, dyn 1.5, all day). Configuration B: one stator, 50 mm, 3.9 kg units, a ~99 kg robot, 'continuous' redefined as level walking at dyn 1.2 with slopes as a minutes-long rating. Which?
-2. The eccentric bearing load is ~1.1 T/R per disc whatever the ratio; at the heavier robot's peak it is 11.9 kN per disc against C0r 16.3 kN, with ~100 h L10 at the continuous rating. Accept as a service item, or move to a Ø30 journal (HK3012) at the next revision?
-3. The yaw joint's 7.7 rad/s swing at 48 V forces a separate 8-turn board with 6× the eddy loss at speed. Keep it, raise the bus to 60 V, or lower the yaw swing-speed requirement?
+1. Do you approve the actuator design stage as it now stands (two stators, two discs, HK3012, 70/70/45, Ø186 × 62 mm, 5.5 kg, a ~129 kg robot), so the next chunk (the transmission from the hip stack to the femur and knee, M1) can start?
+2. The 62 mm stack made the body slab 220 mm instead of 200 mm. Accept, or should the hip pods stand proud of a 200 mm slab instead?
 
 ## Decision
 
-**Changes requested** 2026-09-02 — the agent is working on these and will come back.
+**Not yet reviewed — this is waiting on you.**
 
-> A: two stators everywhere. Move to HK3012 at the next revision. Lower the yaw swing requirement.
+Answer in the Claude session that sent you this link. There is nothing to run and nothing to sign here.
+
+Say which option you want **and why**: the reason is worth more than the choice, and it is what gets re-read later when a number has to move. If something is wrong, say what would be right.
+
+<details><summary>How the answer gets recorded</summary>
+
+The agent writes your decision, in your words, into [`docs/review/reviews.yaml`](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/docs/review/reviews.yaml):
+
+```bash
+review-gate sign actuator --approve --by <name> --note "..."
+review-gate sign actuator --changes "what to change"
+```
+
+Until that happens, any chunk of work depending on this review cannot be marked done.
+
+</details>
 
 ---
 
