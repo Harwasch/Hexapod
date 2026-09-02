@@ -641,6 +641,25 @@ clamping hub instead of the machined hub. That takes 2.5 mm and ~100 g out of
 the unit and the last turned part out of the rotor. It is not modelled,
 because the search above says the motor decision comes first.
 
+**Apples to apples: the outrunner price includes the gearbox.** Every unit
+price in the search is stacked from the same BOM lines; the OTS unit keeps
+the whole reducer, the capstan stage, the housing and the driver, and swaps
+only the motor lines for the bought motor plus a mount. Per unit, at 20 / 100
+units:
+
+| Lines | PCB two-stator unit ($) | 1 × 8318 unit ($) |
+|---|---|---|
+| Motor | 267 / 184 | 85 / 68 (motor + $20 mount and heat-sink plate) |
+| Reducer: cycloid, eccentric, bearings, output crossed-roller, flange, pin cage | 194 / 130 | 194 / 130 |
+| Capstan stage: drum, sector, rope, tensioner | 58 / 36 | 58 / 36 |
+| Housing: floor plate, wall, screws, connectors, thermistor | 35 / 20 | 35 / 20 |
+| Electronics: driver, encoder | 51 / 29 | 51 / 29 |
+| **Unit total** | **605 / 400** | **423 / 284** |
+
+The whole difference is the motor: a PCB motor costs 267 in boards, magnets,
+rotor and clamp parts against 85 for the outrunner and its plate. The reducer
+is the largest single block in either unit, and it is the same block.
+
 **The honest statement of the minimum.** Within this design space and these
 requirements, the cost floor is an OTS iron-core outrunner driving the
 20–25-lobe cycloid and the 4:1 capstan, in a laser-cut housing, at roughly

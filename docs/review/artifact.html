@@ -208,7 +208,7 @@ footer{margin-top:44px;padding-top:16px;border-top:1px solid var(--rule);
 <h1>Hexapod</h1>
 <p>A large-dog-sized outdoor hexapod with all eighteen motors in the body. Round 12: the BOM calibrated against a real JLCPCB quote, and the answer to whether the off-the-shelf outrunner can skip the cycloid and drive the capstan joint directly (it cannot: a rope drive tops out near 10:1, the 8318 needs 100:1).</p>
 </div><div class='fields'>
-<div class="field"><span class="k">Revision</span><span class="v"><a href="https://github.com/Harwasch/Hexapod/commit/b6efc7e" target="_blank" rel="noopener">b6efc7e ↗</a></span></div>
+<div class="field"><span class="k">Revision</span><span class="v"><a href="https://github.com/Harwasch/Hexapod/commit/1668866" target="_blank" rel="noopener">1668866 ↗</a></span></div>
 <div class="field"><span class="k">Branch</span><span class="v"><a href="https://github.com/Harwasch/Hexapod/tree/claude/hexapod-robot-design-mt516g" target="_blank" rel="noopener">claude/hexapod-robot-design-mt516g ↗</a></span></div>
 <div class="field"><span class="k">Generated</span><span class="v">2026-09-02</span></div>
 <div class="field"><span class="k">Phases</span><span class="v">7</span></div>
@@ -7573,6 +7573,16 @@ stroke-linecap:round; stroke-linejoin:round;">
 <li><strong>The requirement is the largest lever of all.</strong> Level walking at dyn 1.2 instead of the 30° slope at dyn 1.5 lets the single-stator PCB unit close at 94 kg and the single outrunner carry 1.66 margin.</li>
 </ul>
 <p><strong>On the rotor cup and the middle rotor</strong> (asked in review): the middle rotor is two Halbach rings back to back (red, orange, red in the cutaway is magnet, 4.5 mm aluminium carrier, magnet). Magnetically the carrier does nothing — a Halbach array is one-sided and each ring feeds its own gap — and the two 2.3 kN attractions on the middle ring cancel, so it only has to hold the blocks in place: a 2 mm laser-cut ring, or the two rings bonded back to back with no plate at all. The whole rotor can be sheet and off-the-shelf parts: laser-cut carrier plates, twelve turned standoffs instead of the drum, a clamping hub instead of the machined hub. That takes 2.5 mm and ~100 g out of the unit and the last turned part out of the rotor. It is not modelled, because the search above says the motor decision comes first.</p>
+<p><strong>Apples to apples: the outrunner price includes the gearbox.</strong> Every unit price in the search is stacked from the same BOM lines; the OTS unit keeps the whole reducer, the capstan stage, the housing and the driver, and swaps only the motor lines for the bought motor plus a mount. Per unit, at 20 / 100 units:</p>
+<div class="scroll"><table><thead><tr><th>Lines</th><th>PCB two-stator unit ($)</th><th>1 × 8318 unit ($)</th></tr></thead><tbody>
+<tr><td>Motor</td><td>267 / 184</td><td>85 / 68 (motor + $20 mount and heat-sink plate)</td></tr>
+<tr><td>Reducer: cycloid, eccentric, bearings, output crossed-roller, flange, pin cage</td><td>194 / 130</td><td>194 / 130</td></tr>
+<tr><td>Capstan stage: drum, sector, rope, tensioner</td><td>58 / 36</td><td>58 / 36</td></tr>
+<tr><td>Housing: floor plate, wall, screws, connectors, thermistor</td><td>35 / 20</td><td>35 / 20</td></tr>
+<tr><td>Electronics: driver, encoder</td><td>51 / 29</td><td>51 / 29</td></tr>
+<tr><td><strong>Unit total</strong></td><td><strong>605 / 400</strong></td><td><strong>423 / 284</strong></td></tr>
+</tbody></table></div>
+<p>The whole difference is the motor: a PCB motor costs 267 in boards, magnets, rotor and clamp parts against 85 for the outrunner and its plate. The reducer is the largest single block in either unit, and it is the same block.</p>
 <p><strong>The honest statement of the minimum.</strong> Within this design space and these requirements, the cost floor is an OTS iron-core outrunner driving the 20–25-lobe cycloid and the 4:1 capstan, in a laser-cut housing, at roughly $420 per unit at 20 and $280 at 100, on a ~77 kg robot — subject to one measurement (the outrunner&#x27;s heat-sunk continuous current) and one quote (the motor at quantity). Below that lies only a custom driver board (−$20), a cast base (−$30 at 500+), and relaxing the continuous load case.</p>
 <h4>9.13 Round 11: the market search — <code>analysis/motor_market.py</code></h4>
 <p>Asked: the best off-the-shelf motor for this joint at the lowest price. The joint needs, through the 25-lobe cycloid and the 4:1 capstan, 2.35 N·m continuous from one motor at a 77 kg robot (or 3.38 N·m from two at 80:1 and 89 kg), and 3629 rpm no-load at 48 V for the femur swing. Every candidate is rated the same way: not the listing&#x27;s propeller-cooled current, but what its copper can dissipate through a heat-sink path assumed at 1.2 K/W for a Ø92 × 40 stator and scaled with stator area. Listing numbers, not datasheets; the flags say what was inferred.</p>
@@ -8037,7 +8047,7 @@ stroke-linecap:round; stroke-linejoin:round;">
 <tr><td><a href="https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/plan.yaml" target="_blank" rel="noopener">Plan source ↗</a><div class="paths"><code>plan.yaml</code></div></td><td class="state t-ok">Ready</td><td>What both charts are generated from</td></tr>
 </tbody></table></div>
 </section>
-<footer>Generated by <code>review-artifact</code> from Harwasch/Hexapod at <code>b6efc7e</code>. Every figure and number here is read from the file that owns it — nothing on this page is typed by hand. Each phase is pinned to the commit it was reviewed at.</footer>
+<footer>Generated by <code>review-artifact</code> from Harwasch/Hexapod at <code>1668866</code>. Every figure and number here is read from the file that owns it — nothing on this page is typed by hand. Each phase is pinned to the commit it was reviewed at.</footer>
 </div>
 <script>
 const tabs=[...document.querySelectorAll('.tab')];

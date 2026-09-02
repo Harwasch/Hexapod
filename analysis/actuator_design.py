@@ -269,6 +269,20 @@ def write_doc(figs):
     to_rows = [(r["name"], f"{r['ratio']:.0f}:1", f"{r['eta']:.2f}", f"{r['T_joint']:.0f}", f"{r['T_need']:.0f} at {r['m_robot']:.0f} kg", f"{r['robot_mass_supported']:.0f}",
                 f"{r['motor_drum_turns']:.1f}", f"{r['cost']:.0f}", "closes" if r["closes"] else ("short" if r["feasible"] else "cannot be built"), r["note"])
                for r in TO["rows"]]
+    _cb = lambda names, q: sum(float(r["qty_per_unit"]) * float(r[{20: "unit_price_usd", 100: "price_100_usd"}[q]]) for r in BOM if r["item"] in names)
+    _grp = (("Motor", ["Stator boards", "Rotor magnets", "Clamp rings", "Cover", "Rotor cup", "Adhesive"], None),
+            ("Reducer: cycloid, eccentric, bearings, output crossed-roller, flange, pin cage", ["Eccentric bearing", "Shaft bearing (lower)", "Shaft bearing (top)", "Ring pins", "Output pins", "Cycloid disc", "Eccentric shaft", "Output flange", "Output bearing", "Bearing carrier", "Pin cage"], "same"),
+            ("Capstan stage: drum, sector, rope, tensioner", ["Capstan drum", "Capstan sector", "Capstan rope", "Rope tensioner"], "same"),
+            ("Housing: floor plate, wall, screws, connectors, thermistor", ["Floor plate", "Wall tube", "Housing screws", "Output screws", "Connectors", "Thermistor"], "same"),
+            ("Electronics: driver, encoder", ["Motor driver", "Rotor encoder"], "same"))
+    cb_rows = []
+    for label, names, same in _grp:
+        pcb = (_cb(names, 20), _cb(names, 100))
+        ots = pcb if same else (CS["outrunner"]["price"]["20"] + 20, CS["outrunner"]["price"]["100"] + 20)
+        cb_rows.append((label, f"{pcb[0]:.0f} / {pcb[1]:.0f}", f"{ots[0]:.0f} / {ots[1]:.0f}" + ("" if same else " (motor + $20 mount and heat-sink plate)")))
+    _t_pcb = (sum(_cb(g[1], 20) for g in _grp), sum(_cb(g[1], 100) for g in _grp))
+    _t_ots = (_t_pcb[0] - _cb(_grp[0][1], 20) + CS["outrunner"]["price"]["20"] + 20, _t_pcb[1] - _cb(_grp[0][1], 100) + CS["outrunner"]["price"]["100"] + 20)
+    cb_rows.append(("**Unit total**", f"**{_t_pcb[0]:.0f} / {_t_pcb[1]:.0f}**", f"**{_t_ots[0]:.0f} / {_t_ots[1]:.0f}**"))
     cs_rows = [(r["option"], r["requirement"], f"{r['m_unit']:.2f}", f"{r['m_robot']:.0f}", f"{r['T_joint']:.0f} / {r['need_knee']:.0f}", f"{r['margin']:.2f}" + ("" if r["closes"] else " ✗"),
                 f"{r['cost']:.0f}", f"{[x for x in CS['rows'] if x['option']==r['option'] and x['requirement']==r['requirement'] and x['qty']==100][0]['cost']:.0f}")
                for r in CS["rows"] if r["qty"] == 20]
@@ -810,6 +824,18 @@ laser-cut carrier plates, twelve turned standoffs instead of the drum, a
 clamping hub instead of the machined hub. That takes 2.5 mm and ~100 g out of
 the unit and the last turned part out of the rotor. It is not modelled,
 because the search above says the motor decision comes first.
+
+**Apples to apples: the outrunner price includes the gearbox.** Every unit
+price in the search is stacked from the same BOM lines; the OTS unit keeps
+the whole reducer, the capstan stage, the housing and the driver, and swaps
+only the motor lines for the bought motor plus a mount. Per unit, at 20 / 100
+units:
+
+{md(("Lines", "PCB two-stator unit ($)", "1 × 8318 unit ($)"), cb_rows)}
+
+The whole difference is the motor: a PCB motor costs {_cb(_grp[0][1], 20):.0f} in boards, magnets,
+rotor and clamp parts against {CS["outrunner"]["price"]["20"] + 20:.0f} for the outrunner and its plate. The reducer
+is the largest single block in either unit, and it is the same block.
 
 **The honest statement of the minimum.** Within this design space and these
 requirements, the cost floor is an OTS iron-core outrunner driving the
