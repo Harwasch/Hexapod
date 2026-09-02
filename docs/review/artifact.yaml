@@ -115,6 +115,7 @@ phases:
       - docs/design/actuator/cad-femur-1s-section.png
       - docs/design/actuator/motor-market.png
       - docs/design/actuator/transmission-options.png
+      - docs/design/actuator/topology-compare.png
       - docs/design/actuator/cost-search.png
       - docs/design/actuator/capstan.png
       - docs/design/actuator/closure.png
@@ -195,6 +196,17 @@ phases:
         Turnigy 9235-100KV is the same motor with a published resistance. Look
         at: every number is from a listing, and the heat-sunk current is the
         one bench test that decides the motor family.
+      docs/design/actuator/topology-compare.png: >-
+        Round 13b: three questions on the single-stator optimum, one 2-D
+        field model. Top: the field of the two-rotor single-stator unit, of a
+        single N-S rotor between two iron-backed stators, and of iron teeth in
+        the coil centres. Bottom left: torque, mass and cost of seven
+        arrangements in the same Ø190 package; the two-rotor single-stator unit
+        stays the best air-core unit per kg and per dollar, the N-S single
+        rotor needs laminated yokes at 250 Hz for 1.2x the torque at 1.7x the
+        mass. Bottom right: magnet grade moves torque by +-5 %, N52 cannot run
+        at the working temperature. Look at: the teeth box, a 20-35 % gain that
+        doubles the rotor pull and leaves JLCPCB.
       docs/design/actuator/transmission-options.png: >-
         Round 12: does the off-the-shelf outrunner still need the cycloid?
         Left, what the femur gets from one 8318 through each transmission

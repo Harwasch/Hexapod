@@ -1,0 +1,360 @@
+{
+ "model": {
+  "grid_mm": 0.2,
+  "lam_mm": 28.630381049714977,
+  "r_m_mm": 68.35,
+  "coil_w_mm": 11.32932543738124,
+  "t_board_mm": 3.11,
+  "Br_hot": 1.2091200000000002,
+  "T_magnet_C": 90.0,
+  "crosscheck_B1_FD": 1.0248351807985578,
+  "crosscheck_B1_rotor_field": 1.020793295463054
+ },
+ "fields": {
+  "A  two Halbach rotors, one stator (1s-opt, baseline)": {
+   "dlam_dx_per_turn": 9.954435773474346,
+   "dlam_dx_linear": 9.954435773474346,
+   "boards": 1,
+   "n_turns": 8,
+   "B1_board": 0.9252273542034458,
+   "B_tooth_linear": 0.0,
+   "B_peak_iron": 0.0,
+   "attraction_N": 2107.2704368391915
+  },
+  "B  one N-S rotor, two iron-backed stators": {
+   "dlam_dx_per_turn": 12.1587028831381,
+   "dlam_dx_linear": 12.1587028831381,
+   "boards": 2,
+   "n_turns": 8,
+   "B1_board": 0.5567667615470029,
+   "B_tooth_linear": 0.0,
+   "B_peak_iron": 0.6355775086498708,
+   "attraction_N": 681.4158633223187,
+   "yoke_B": 0.44002739125316126
+  },
+  "C  one back-to-back Halbach rotor (2 x 5 mm), two stators, no iron": {
+   "dlam_dx_per_turn": 7.616293548424798,
+   "dlam_dx_linear": 7.616293548424798,
+   "boards": 2,
+   "n_turns": 8,
+   "B1_board": 0.35660252624275224,
+   "B_tooth_linear": 0.0,
+   "B_peak_iron": 0.0
+  },
+  "C' same with two 10 mm rings (20 mm of magnet)": {
+   "dlam_dx_per_turn": 10.123683502263624,
+   "dlam_dx_linear": 10.123683502263624,
+   "boards": 2,
+   "n_turns": 8,
+   "B1_board": 0.47550708535598185,
+   "B_tooth_linear": 0.0,
+   "B_peak_iron": 0.0
+  },
+  "D  back-to-back Halbach rotor, two stators, iron behind each": {
+   "dlam_dx_per_turn": 10.825004417254997,
+   "dlam_dx_linear": 10.825004417254997,
+   "boards": 2,
+   "n_turns": 8,
+   "B1_board": 0.49259548479223164,
+   "B_tooth_linear": 0.0,
+   "B_peak_iron": 0.5735958398065621
+  },
+  "E  one Halbach rotor, one stator, iron behind the board": {
+   "dlam_dx_per_turn": 7.010001518343774,
+   "dlam_dx_linear": 7.010001518343774,
+   "boards": 1,
+   "n_turns": 8,
+   "B1_board": 0.6522889976195003,
+   "B_tooth_linear": 0.0,
+   "B_peak_iron": 0.7241781382777869
+  },
+  "E0 one Halbach rotor, one stator, nothing behind the board": {
+   "dlam_dx_per_turn": 5.109863903153979,
+   "dlam_dx_linear": 5.109863903153979,
+   "boards": 1,
+   "n_turns": 8,
+   "B1_board": 0.4748360347103811,
+   "B_tooth_linear": 0.0,
+   "B_peak_iron": 0.0
+  },
+  "F0 baseline coil with 8 turns (opening 2.7 mm), air core": {
+   "dlam_dx_per_turn": 9.954435773474346,
+   "dlam_dx_linear": 9.954435773474346,
+   "boards": 1,
+   "n_turns": 8,
+   "B1_board": 0.9252273542034458,
+   "B_tooth_linear": 0.0,
+   "B_peak_iron": 0.0
+  },
+  "F  same with a laminated tooth 2.7 mm wide through the board": {
+   "dlam_dx_per_turn": 11.786095118193948,
+   "dlam_dx_linear": 13.601375653230015,
+   "boards": 1,
+   "n_turns": 8,
+   "B1_board": 1.0519155364947304,
+   "B_tooth_linear": 2.69956191018621,
+   "B_peak_iron": 3.377876906577512,
+   "attraction_N": 3035.6724845671615
+  },
+  "F0 baseline coil with 6 turns (opening 4.8 mm), air core": {
+   "dlam_dx_per_turn": 8.457417137417636,
+   "dlam_dx_linear": 8.457417137417636,
+   "boards": 1,
+   "n_turns": 6,
+   "B1_board": 0.9252273542034458,
+   "B_tooth_linear": 0.0,
+   "B_peak_iron": 0.0
+  },
+  "F  same with a laminated tooth 4.8 mm wide through the board": {
+   "dlam_dx_per_turn": 11.738252602841982,
+   "dlam_dx_linear": 11.846712136853169,
+   "boards": 1,
+   "n_turns": 6,
+   "B1_board": 1.1043784346102459,
+   "B_tooth_linear": 2.5040116397001224,
+   "B_peak_iron": 3.194540051213167,
+   "attraction_N": 3494.290280792797
+  },
+  "F0 baseline coil with 4 turns (opening 7.0 mm), air core": {
+   "dlam_dx_per_turn": 6.208475755962468,
+   "dlam_dx_linear": 6.208475755962468,
+   "boards": 1,
+   "n_turns": 4,
+   "B1_board": 0.9252273542034458,
+   "B_tooth_linear": 0.0,
+   "B_peak_iron": 0.0
+  },
+  "F  same with a laminated tooth 7.0 mm wide through the board": {
+   "dlam_dx_per_turn": 8.910502796035786,
+   "dlam_dx_linear": 8.910502796035786,
+   "boards": 1,
+   "n_turns": 4,
+   "B1_board": 1.1621835928135142,
+   "B_tooth_linear": 2.4711213709742132,
+   "B_peak_iron": 3.257242406047084,
+   "attraction_N": 3930.232504735164
+  }
+ },
+ "units": [
+  {
+   "name": "A  two Halbach rotors + one stator (1s-opt)",
+   "T_cont": 2.81,
+   "kt_ratio_per_board": 1.0,
+   "boards": 1,
+   "magnet_g": 1350.0,
+   "iron_kg": 0.0,
+   "mass_kg": 2.097,
+   "cost20": 145.0,
+   "cost100": 107.0,
+   "stack_mm": 33.11,
+   "T_per_kg": 1.34000953743443,
+   "T_per_100usd": 1.9379310344827587,
+   "note": "the round-13 optimum; no iron, no cogging, 2.1 kN pull per rotor on its own carrier",
+   "attraction_N": 2107.2704368391915,
+   "B_iron": 0.0
+  },
+  {
+   "name": "B  one N-S rotor + two iron-backed stators",
+   "T_cont": 3.4322342199103155,
+   "kt_ratio_per_board": 0.6107178327242554,
+   "boards": 2,
+   "magnet_g": 1350.0,
+   "iron_kg": 1.2136418526974184,
+   "mass_kg": 3.5106418526974186,
+   "cost20": 267.8185111618451,
+   "cost100": 198.61388337138382,
+   "stack_mm": 30.72,
+   "T_per_kg": 0.9776657272154212,
+   "T_per_100usd": 1.2815522739711542,
+   "note": "through-magnetised blocks (2 x 30x5x10 per pole, 69 % fill); the yokes see 250 Hz at 1000 rpm and must be wound-strip laminations or SMC, not plate",
+   "attraction_N": 681.4158633223187,
+   "B_iron": 0.6355775086498708
+  },
+  {
+   "name": "C  one back-to-back Halbach rotor (2 x 5 mm) + two stators",
+   "T_cont": 2.1499746804437843,
+   "kt_ratio_per_board": 0.38255777232095806,
+   "boards": 2,
+   "magnet_g": 675.0,
+   "iron_kg": 0.0,
+   "mass_kg": 1.3485,
+   "cost20": 170.0,
+   "cost100": 124.0,
+   "stack_mm": 23.72,
+   "T_per_kg": 1.5943453321792986,
+   "T_per_100usd": 1.2646909884963438,
+   "note": "the canonical middle rotor on its own: each board sees one ring instead of two",
+   "attraction_N": 0.0,
+   "B_iron": 0.0
+  },
+  {
+   "name": "C' same with two 10 mm rings",
+   "T_cont": 2.8577763008090495,
+   "kt_ratio_per_board": 0.5085011211404002,
+   "boards": 2,
+   "magnet_g": 1350.0,
+   "iron_kg": 0.0,
+   "mass_kg": 2.297,
+   "cost20": 195.0,
+   "cost100": 144.0,
+   "stack_mm": 33.72,
+   "T_per_kg": 1.2441342188981495,
+   "T_per_100usd": 1.4655263081072047,
+   "note": "20 mm of magnet in the middle, two boards, no iron",
+   "attraction_N": 0.0,
+   "B_iron": 0.0
+  },
+  {
+   "name": "D  back-to-back Halbach rotor + two stators + iron behind each",
+   "T_cont": 3.0557495276168534,
+   "kt_ratio_per_board": 0.5437276739531768,
+   "boards": 2,
+   "magnet_g": 675.0,
+   "iron_kg": 1.2136418526974184,
+   "mass_kg": 2.5621418526974185,
+   "cost20": 242.8185111618451,
+   "cost100": 178.61388337138382,
+   "stack_mm": 30.72,
+   "T_per_kg": 1.1926543116259412,
+   "T_per_100usd": 1.258449989251484,
+   "note": "the iron images the ring; same 250 Hz yoke problem as B",
+   "attraction_N": 0.0,
+   "B_iron": 0.5735958398065621
+  },
+  {
+   "name": "E  one Halbach rotor + one stator + iron behind the board",
+   "T_cont": 1.9788267979020648,
+   "kt_ratio_per_board": 0.7042088248761796,
+   "boards": 1,
+   "magnet_g": 675.0,
+   "iron_kg": 0.6068209263487092,
+   "mass_kg": 1.7553209263487093,
+   "cost20": 156.40925558092255,
+   "cost100": 114.30694168569191,
+   "stack_mm": 23.61,
+   "T_per_kg": 1.127330488800288,
+   "T_per_100usd": 1.2651596547483506,
+   "note": "half the magnets of A",
+   "attraction_N": 0.0,
+   "B_iron": 0.7241781382777869
+  },
+  {
+   "name": "E0 one Halbach rotor + one stator, nothing behind",
+   "T_cont": 1.442444141949708,
+   "kt_ratio_per_board": 0.5133253174198249,
+   "boards": 1,
+   "magnet_g": 675.0,
+   "iron_kg": 0.0,
+   "mass_kg": 1.1485,
+   "cost20": 120.0,
+   "cost100": 87.0,
+   "stack_mm": 20.11,
+   "T_per_kg": 1.2559374331299156,
+   "T_per_100usd": 1.2020367849580902,
+   "note": "the cheapest possible unit",
+   "attraction_N": 0.0,
+   "B_iron": 0.0
+  }
+ ],
+ "teeth": {
+  "8": {
+   "opening_mm": 2.68932543738124,
+   "air": 9.954435773474346,
+   "tooth": 11.786095118193948,
+   "tooth_linear": 13.601375653230015,
+   "gain": 1.1840043359966657,
+   "gain_vs_8t_air": 1.1840043359966657,
+   "copper_ratio": 1.0,
+   "B_tooth": 2.69956191018621,
+   "attraction_N": 3035.6724845671615
+  },
+  "6": {
+   "opening_mm": 4.84932543738124,
+   "air": 8.457417137417636,
+   "tooth": 11.738252602841982,
+   "tooth_linear": 11.846712136853169,
+   "gain": 1.3879240449083616,
+   "gain_vs_8t_air": 1.1791981856089708,
+   "copper_ratio": 0.75,
+   "B_tooth": 2.5040116397001224,
+   "attraction_N": 3494.290280792797
+  },
+  "4": {
+   "opening_mm": 7.00932543738124,
+   "air": 6.208475755962468,
+   "tooth": 8.910502796035786,
+   "tooth_linear": 8.910502796035786,
+   "gain": 1.4352158478638428,
+   "gain_vs_8t_air": 0.8951288650412176,
+   "copper_ratio": 0.5,
+   "B_tooth": 2.4711213709742132,
+   "attraction_N": 3930.232504735164
+  }
+ },
+ "grades": [
+  {
+   "grade": "N45 typical (what every rating so far assumed: Br 1.32 T at 20 C)",
+   "Br20": 1.32,
+   "Br_hot": 1.2091200000000002,
+   "tmax_C": 80,
+   "usable": false,
+   "torque_ratio": 1.0,
+   "cost_ratio": 1.0
+  },
+  {
+   "grade": "N48H",
+   "Br20": 1.39,
+   "Br_hot": 1.27324,
+   "tmax_C": 120,
+   "usable": true,
+   "torque_ratio": 1.0530303030303028,
+   "cost_ratio": 1.05
+  },
+  {
+   "grade": "N52 (no H grade exists)",
+   "Br20": 1.44,
+   "Br_hot": 1.31904,
+   "tmax_C": 65,
+   "usable": false,
+   "torque_ratio": 1.0909090909090908,
+   "cost_ratio": 1.15
+  },
+  {
+   "grade": "N45SH",
+   "Br20": 1.34,
+   "Br_hot": 1.22744,
+   "tmax_C": 150,
+   "usable": true,
+   "torque_ratio": 1.0151515151515151,
+   "cost_ratio": 1.35
+  },
+  {
+   "grade": "N42UH",
+   "Br20": 1.3,
+   "Br_hot": 1.1908,
+   "tmax_C": 180,
+   "usable": true,
+   "torque_ratio": 0.9848484848484848,
+   "cost_ratio": 1.6
+  },
+  {
+   "grade": "SmCo 2:17 (Sm2Co17 28)",
+   "Br20": 1.08,
+   "Br_hot": 1.05732,
+   "tmax_C": 300,
+   "usable": true,
+   "torque_ratio": 0.8744541484716156,
+   "cost_ratio": 4.0
+  },
+  {
+   "grade": "Ferrite Y30",
+   "Br20": 0.4,
+   "Br_hot": 0.34400000000000003,
+   "tmax_C": 250,
+   "usable": true,
+   "torque_ratio": 0.28450443297604866,
+   "cost_ratio": 0.08
+  }
+ ],
+ "T_cont_1s": 2.81
+}

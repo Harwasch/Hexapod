@@ -967,6 +967,91 @@ this at v2's 68.8):
    2.66 N·m for $125 and the fallback if 20 layers cannot be had.
 
 
+### 9.16 Round 13b: single rotor between two stators, magnet material, iron in the coils — `analysis/topology_compare.py`
+
+Three questions on the round-13 optimum, answered with one 2-D magnetostatic
+model at the mean coil radius (scalar potential on a 0.2 mm grid over the
+12-coil / 5-pole-pair period, magnets as surface charges, iron as μr 1000
+with the tooth flux capped at 1.6 T). The torque figure is the fundamental of
+one coil's flux linkage as the rotor turns, which is the same as the per-leg
+Lorentz sum for an air-core coil and the only right way to count a tooth.
+Cross-check: the model gives 1.025 T where `rotor_field.py` gives
+1.021 T on the same inputs. Every unit below has 10 mm N48 blocks and the
+20-layer 2 oz board of §9.15, each board at the same copper-loss budget.
+
+**1. One rotor between two stators, same Ø190 package.**
+
+| Topology | T cont (N·m) | Kt per board vs A | Boards | Magnets (g) | Iron (kg) | Stator+rotor (kg) | $ at 20 / 100 | Stack (mm) | N·m/kg | N·m/$100 | Note |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| A  two Halbach rotors + one stator (1s-opt) | 2.81 | 1.00 | 1 | 1350 | — | 2.10 | 145 / 107 | 33 | 1.34 | 1.94 | the round-13 optimum; no iron, no cogging, 2.1 kN pull per rotor on its own carrier |
+| B  one N-S rotor + two iron-backed stators | 3.43 | 0.61 | 2 | 1350 | 1.21 | 3.51 | 268 / 199 | 31 | 0.98 | 1.28 | through-magnetised blocks (2 x 30x5x10 per pole, 69 % fill); the yokes see 250 Hz at 1000 rpm and must be wound-strip laminations or SMC, not plate |
+| C  one back-to-back Halbach rotor (2 x 5 mm) + two stators | 2.15 | 0.38 | 2 | 675 | — | 1.35 | 170 / 124 | 24 | 1.59 | 1.26 | the canonical middle rotor on its own: each board sees one ring instead of two |
+| C' same with two 10 mm rings | 2.86 | 0.51 | 2 | 1350 | — | 2.30 | 195 / 144 | 34 | 1.24 | 1.47 | 20 mm of magnet in the middle, two boards, no iron |
+| D  back-to-back Halbach rotor + two stators + iron behind each | 3.06 | 0.54 | 2 | 675 | 1.21 | 2.56 | 243 / 179 | 31 | 1.19 | 1.26 | the iron images the ring; same 250 Hz yoke problem as B |
+| E  one Halbach rotor + one stator + iron behind the board | 1.98 | 0.70 | 1 | 675 | 0.61 | 1.76 | 156 / 114 | 24 | 1.13 | 1.27 | half the magnets of A |
+| E0 one Halbach rotor + one stator, nothing behind | 1.44 | 0.51 | 1 | 675 | — | 1.15 | 120 / 87 | 20 | 1.26 | 1.20 | the cheapest possible unit |
+
+![Topologies](actuator/topology-compare.png)
+
+* **A stays.** The two-rotor single-stator unit is the best air-core
+  arrangement per kilogram and per dollar. The second rotor is worth
+  1.9× over one rotor with nothing behind the board (E0) because a
+  one-sided Halbach array only feeds the side it faces.
+* **B, a through-magnetised rotor between two iron-backed boards**, gives
+  3.43 N·m from two boards, 1.22× A for 1.7× the mass and
+  1.8× the cost: each board sees 0.56 T instead of 0.93, and the
+  yokes see the rotor field at 250 Hz, so they have to be wound-strip
+  laminations or SMC rings, not the steel plate the N-S-on-iron study of round 9
+  already rejected. The canonical two-stator three-rotor unit does 5.9 N·m
+  from the same two boards.
+* **C, the canonical middle rotor on its own** (two Halbach rings back to back
+  between two boards), is worse than A per board: each board gets one ring's
+  field. Iron behind each board (D) recovers some of it and brings the 250 Hz
+  yoke back.
+
+**2. Magnet material.** Torque at fixed current scales with the remanence at
+the magnet's working temperature (90 °C in every rating). Generic
+grade-chart values; no vendor sheet in `docs/reference` yet, so these are
+flagged, not verified:
+
+| Grade | Br at 20 °C (T) | Br at the working temperature (T) | Max working (°C) | Usable here | Torque | Cost |
+|---|---|---|---|---|---|---|
+| N45 typical (what every rating so far assumed: Br 1.32 T at 20 C) | 1.32 | 1.21 | 80 | no | x1.00 | x1.0 |
+| N48H | 1.39 | 1.27 | 120 | yes | x1.05 | x1.05 |
+| N52 (no H grade exists) | 1.44 | 1.32 | 65 | no | x1.09 | x1.15 |
+| N45SH | 1.34 | 1.23 | 150 | yes | x1.02 | x1.35 |
+| N42UH | 1.30 | 1.19 | 180 | yes | x0.98 | x1.6 |
+| SmCo 2:17 (Sm2Co17 28) | 1.08 | 1.06 | 300 | yes | x0.87 | x4.0 |
+| Ferrite Y30 | 0.40 | 0.34 | 250 | yes | x0.28 | x0.08 |
+
+Every rating so far used a typical N45 remanence; the N48H the BOM already
+specifies is worth about 5 % more. N52 is 9 % more but cannot run at
+90 °C, SH and UH grades buy temperature at a small torque cost, SmCo
+loses 13 % and costs four times as much, ferrite loses 72 %. **Magnet grade
+moves torque by ±5 %; thickness (6 → 10 mm, +12 % in §9.15) and topology
+(×2) are the levers.**
+
+**3. Iron in the centre of the coils.** A laminated tooth through the board
+in each coil's opening, for coils of 8, 6 and 4 turns (the opening is what
+the legs leave free, so a wider tooth means fewer turns and less copper):
+
+| Coil | Air core, vs the 8-turn coil | Tooth, linear iron | Tooth, flux capped at 1.6 T | At the same copper loss | Tooth would see (T) | Rotor pull (kN) |
+|---|---|---|---|---|---|---|
+| 8 turns, 2.7 mm opening | x1.00 | x1.37 | x1.18 | x1.18 | 2.7 | 3.0 |
+| 6 turns, 4.8 mm opening | x0.85 | x1.19 | x1.18 | x1.36 | 2.5 | 3.5 |
+| 4 turns, 7.0 mm opening | x0.62 | x0.90 | x0.90 | x1.27 | 2.5 | 3.9 |
+
+The linear model wants 2.7 T in a 2.7 mm tooth, so saturation eats most of the
+linear gain; the capped result is 1.36× at the same copper loss for the
+6-turn coil. Against that: the pull on each rotor rises from
+2.1 kN to 3.5 kN (carriers, bearings and the glue joints all
+resize), a Halbach rotor over teeth cogs and needs skew, the teeth carry
+250 Hz flux and have to be lamination stacks or SMC plugs pressed into slots
+in the board, which is not a JLCPCB process, and the eddy loss in the copper
+next to a 1.6 T tooth edge goes up. **A 20–35 % gain for a different
+manufacturing route and a heavier rotor structure; it is not the cheap lever,
+and it is not modelled beyond this bound.**
+
 ### 9.8 Open items from this round (updated in round 11)
 
 1. **OD 186, not 170** (§9.3): accepted by the review.

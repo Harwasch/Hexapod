@@ -106,6 +106,7 @@ CAP = json.load(open(os.path.join(ROOT, "hw", "stator", "capstan.json")))
 CS = json.load(open(os.path.join(ROOT, "hw", "stator", "cost_search.json")))
 MM = json.load(open(os.path.join(ROOT, "hw", "stator", "motor_market.json")))
 TO = json.load(open(os.path.join(ROOT, "hw", "stator", "transmission_options.json")))
+TC = json.load(open(os.path.join(ROOT, "hw", "stator", "topology_compare.json")))
 SO = json.load(open(os.path.join(ROOT, "hw", "stator", "single_stator_opt.json")))       # round 13: the single-stator sweep at Ø190
 HK2512 = dict(Cr=11.8e3, C0r=16.3e3, n_lim=6500)                # NTN sheet, docs/reference/ntn-hk2512.pdf
 HK3012 = dict(Cr=11.5e3, C0r=17.3e3)                            # PTI HK-series catalogue, docs/reference/pti-hk-series.pdf (round 7)
@@ -483,6 +484,12 @@ def write_doc(figs):
     _t_pcb = (sum(_cb(g[1], 20) for g in _grp), sum(_cb(g[1], 100) for g in _grp))
     _t_ots = (_t_pcb[0] - _cb(_grp[0][1], 20) + CS["outrunner"]["price"]["20"] + 20, _t_pcb[1] - _cb(_grp[0][1], 100) + CS["outrunner"]["price"]["100"] + 20)
     cb_rows.append(("**Unit total**", f"**{_t_pcb[0]:.0f} / {_t_pcb[1]:.0f}**", f"**{_t_ots[0]:.0f} / {_t_ots[1]:.0f}**"))
+    tc_rows = [(u["name"], f"{u['T_cont']:.2f}", f"{u['kt_ratio_per_board']:.2f}", f"{u['boards']}", f"{u['magnet_g']:.0f}", f"{u['iron_kg']:.2f}" if u["iron_kg"] else "—",
+                f"{u['mass_kg']:.2f}", f"{u['cost20']:.0f} / {u['cost100']:.0f}", f"{u['stack_mm']:.0f}", f"{u['T_per_kg']:.2f}", f"{u['T_per_100usd']:.2f}", u["note"]) for u in TC["units"]]
+    tg_rows = [(g["grade"], f"{g['Br20']:.2f}", f"{g['Br_hot']:.2f}", f"{g['tmax_C']}", "yes" if g["usable"] else "no", f"x{g['torque_ratio']:.2f}", f"x{g['cost_ratio']}") for g in TC["grades"]]
+    tt_rows = [(f"{n} turns, {t['opening_mm']:.1f} mm opening", f"x{t['air'] / TC['fields']['A  two Halbach rotors, one stator (1s-opt, baseline)']['dlam_dx_per_turn']:.2f}",
+                f"x{t['tooth_linear'] / TC['fields']['A  two Halbach rotors, one stator (1s-opt, baseline)']['dlam_dx_per_turn']:.2f}", f"x{t['gain_vs_8t_air']:.2f}",
+                f"x{t['gain_vs_8t_air'] / math.sqrt(t['copper_ratio']):.2f}", f"{t['B_tooth']:.1f}", f"{t['attraction_N'] / 1e3:.1f}") for n, t in TC["teeth"].items()]
     cs_rows = [(r["option"], r["requirement"], f"{r['m_unit']:.2f}", f"{r['m_robot']:.0f}", f"{r['T_joint']:.0f} / {r['need_knee']:.0f}", f"{r['margin']:.2f}" + ("" if r["closes"] else " ✗"),
                 f"{r['cost']:.0f}", f"{[x for x in CS['rows'] if x['option']==r['option'] and x['requirement']==r['requirement'] and x['qty']==100][0]['cost']:.0f}")
                for r in CS["rows"] if r["qty"] == 20]
@@ -1130,6 +1137,71 @@ lines ${TO['cost_capstan_lines']:.0f}).
   not a cost-down.
 
 {so_section(lambda f: rel(os.path.join(FIG, f)))}
+### 9.16 Round 13b: single rotor between two stators, magnet material, iron in the coils — `analysis/topology_compare.py`
+
+Three questions on the round-13 optimum, answered with one 2-D magnetostatic
+model at the mean coil radius (scalar potential on a {TC['model']['grid_mm']:.1f} mm grid over the
+12-coil / 5-pole-pair period, magnets as surface charges, iron as μr 1000
+with the tooth flux capped at 1.6 T). The torque figure is the fundamental of
+one coil's flux linkage as the rotor turns, which is the same as the per-leg
+Lorentz sum for an air-core coil and the only right way to count a tooth.
+Cross-check: the model gives {TC['model']['crosscheck_B1_FD']:.3f} T where `rotor_field.py` gives
+{TC['model']['crosscheck_B1_rotor_field']:.3f} T on the same inputs. Every unit below has 10 mm N48 blocks and the
+20-layer 2 oz board of §9.15, each board at the same copper-loss budget.
+
+**1. One rotor between two stators, same Ø190 package.**
+
+{md(("Topology", "T cont (N·m)", "Kt per board vs A", "Boards", "Magnets (g)", "Iron (kg)", "Stator+rotor (kg)", "$ at 20 / 100", "Stack (mm)", "N·m/kg", "N·m/$100", "Note"), tc_rows)}
+
+![Topologies]({rel(os.path.join(FIG, 'topology-compare.png'))})
+
+* **A stays.** The two-rotor single-stator unit is the best air-core
+  arrangement per kilogram and per dollar. The second rotor is worth
+  {TC['units'][0]['T_cont'] / TC['units'][6]['T_cont']:.1f}× over one rotor with nothing behind the board (E0) because a
+  one-sided Halbach array only feeds the side it faces.
+* **B, a through-magnetised rotor between two iron-backed boards**, gives
+  {TC['units'][1]['T_cont']:.2f} N·m from two boards, {TC['units'][1]['T_cont'] / TC['units'][0]['T_cont']:.2f}× A for {TC['units'][1]['mass_kg'] / TC['units'][0]['mass_kg']:.1f}× the mass and
+  {TC['units'][1]['cost20'] / TC['units'][0]['cost20']:.1f}× the cost: each board sees {TC['fields']['B  one N-S rotor, two iron-backed stators']['B1_board']:.2f} T instead of {TC['fields']['A  two Halbach rotors, one stator (1s-opt, baseline)']['B1_board']:.2f}, and the
+  yokes see the rotor field at 250 Hz, so they have to be wound-strip
+  laminations or SMC rings, not the steel plate the N-S-on-iron study of round 9
+  already rejected. The canonical two-stator three-rotor unit does 5.9 N·m
+  from the same two boards.
+* **C, the canonical middle rotor on its own** (two Halbach rings back to back
+  between two boards), is worse than A per board: each board gets one ring's
+  field. Iron behind each board (D) recovers some of it and brings the 250 Hz
+  yoke back.
+
+**2. Magnet material.** Torque at fixed current scales with the remanence at
+the magnet's working temperature ({TC['model']['T_magnet_C']:.0f} °C in every rating). Generic
+grade-chart values; no vendor sheet in `docs/reference` yet, so these are
+flagged, not verified:
+
+{md(("Grade", "Br at 20 °C (T)", "Br at the working temperature (T)", "Max working (°C)", "Usable here", "Torque", "Cost"), tg_rows)}
+
+Every rating so far used a typical N45 remanence; the N48H the BOM already
+specifies is worth about 5 % more. N52 is 9 % more but cannot run at
+{TC['model']['T_magnet_C']:.0f} °C, SH and UH grades buy temperature at a small torque cost, SmCo
+loses 13 % and costs four times as much, ferrite loses 72 %. **Magnet grade
+moves torque by ±5 %; thickness (6 → 10 mm, +12 % in §9.15) and topology
+(×2) are the levers.**
+
+**3. Iron in the centre of the coils.** A laminated tooth through the board
+in each coil's opening, for coils of 8, 6 and 4 turns (the opening is what
+the legs leave free, so a wider tooth means fewer turns and less copper):
+
+{md(("Coil", "Air core, vs the 8-turn coil", "Tooth, linear iron", "Tooth, flux capped at 1.6 T", "At the same copper loss", "Tooth would see (T)", "Rotor pull (kN)"), tt_rows)}
+
+The linear model wants {TC['teeth']['8']['B_tooth']:.1f} T in a 2.7 mm tooth, so saturation eats most of the
+linear gain; the capped result is {TC['teeth']['6']['gain_vs_8t_air'] / math.sqrt(TC['teeth']['6']['copper_ratio']):.2f}× at the same copper loss for the
+6-turn coil. Against that: the pull on each rotor rises from
+{TC['fields']['A  two Halbach rotors, one stator (1s-opt, baseline)']['attraction_N'] / 1e3:.1f} kN to {TC['teeth']['6']['attraction_N'] / 1e3:.1f} kN (carriers, bearings and the glue joints all
+resize), a Halbach rotor over teeth cogs and needs skew, the teeth carry
+250 Hz flux and have to be lamination stacks or SMC plugs pressed into slots
+in the board, which is not a JLCPCB process, and the eddy loss in the copper
+next to a 1.6 T tooth edge goes up. **A 20–35 % gain for a different
+manufacturing route and a heavier rotor structure; it is not the cheap lever,
+and it is not modelled beyond this bound.**
+
 ### 9.8 Open items from this round (updated in round 11)
 
 1. **OD 186, not 170** (§9.3): accepted by the review.
