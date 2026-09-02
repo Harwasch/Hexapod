@@ -25,10 +25,10 @@ stator that drops into the same rotors and housing as the torque upgrade.
   per-DOF plan is now 45 / 70 / 70:1 (round 6: the heavier robot moved the
   femur and knee to 70:1 and the yaw to 45:1 on a faster 8-turn board).
 * **The actuator mass budget does not close at 1.1 kg.** A femur or knee unit
-  is 5.77 kg in the CAD (§5, §9.3). The magnets alone are 2160 g. This has
+  is 5.33 kg in the CAD (§5, §9.3). The magnets alone are 1620 g. This has
   to go back to the mass budget.
 * **The whole result rests on the thermal path.** §6 and §9.4: the copper
-  to housing path is 0.90 K/W as built, but the robot as a whole can only
+  to housing path is 0.83 K/W as built, but the robot as a whole can only
   shed a few hundred watts, so the sustained torque is about half the rating.
 * **Round 5 (this revision) designed the parts**: the stator board is laid
   out and DRC-clean with gerbers (`hw/stator`), the rotor field is simulated
@@ -111,14 +111,14 @@ efficiency; current is torque over Kt; copper loss is 3 I² R.
 
 | Joint | Ratio | Motor torque cont / peak (N·m) | Current cont / peak (A rms) | Copper loss cont / peak (W) | A3 margin cont / peak | Joint speed no-load, rad/s | C1 margin cont / peak |
 |---|---|---|---|---|---|---|---|
-| yaw | 30.0:1 | 5.14 / 5.48 | 48 / 51 | 107 / 122 | 0.61 / 1.72 | 17.5 (need 6.4) | 0.55 / 1.55 |
-| femur | 80.0:1 | 4.78 / 8.66 | 45 / 81 | 92 / 304 | 0.66 / 1.09 | 6.5 (need 3.8) | 0.59 / 0.98 |
-| knee | 80.0:1 | 5.05 / 10.58 | 47 / 99 | 103 / 454 | 0.62 / 0.89 | 6.5 (need 3.8) | 0.56 / 0.80 |
+| yaw | 30.0:1 | 4.84 / 5.16 | 45 / 48 | 95 / 108 | 0.65 / 1.82 | 17.5 (need 6.4) | 0.58 / 1.64 |
+| femur | 80.0:1 | 4.50 / 8.16 | 42 / 77 | 82 / 270 | 0.70 / 1.15 | 6.5 (need 3.8) | 0.63 / 1.04 |
+| knee | 80.0:1 | 4.75 / 9.97 | 45 / 94 | 92 / 403 | 0.66 / 0.94 | 6.5 (need 3.8) | 0.59 / 0.85 |
 
 ![Operating envelopes](actuator/operating-envelopes.png)
 
-The femur is the binding joint at 0.66× continuous margin; its peak
-current, 81 A rms, is what the driver's FET stage has to carry for
+The femur is the binding joint at 0.70× continuous margin; its peak
+current, 77 A rms, is what the driver's FET stage has to carry for
 2 s. The yaw joint runs at half the current of the others and is the
 candidate for a lighter build (§5). Every joint has at least
 1.7× the swing speed it needs at 48 V.
@@ -129,7 +129,7 @@ The cycloid sits inside the r < 50 mm bore with its ring pins in a fixed
 cylinder that rises from the mounting plate, and **two 8 mm discs 180° apart**
 on twin journals (round 5 tried one 10 mm disc to stay inside 42 mm of height;
 the review chose bearing life over height, and the unit is now
-62.4 mm tall). **Round 8 split the reduction**: the review found 71 lobes
+54.4 mm tall). **Round 8 split the reduction**: the review found 71 lobes
 and pins too many, so the cycloid now does 20:1 (21 pins of Ø6, 13 mm
 pitch, 1.66 mm eccentricity) and a capstan cable stage at the joint does the
 other 4:1 (§9.9); the yaw stays a direct 30:1 cycloid (31 pins).
@@ -138,24 +138,24 @@ torque over the capstan ratio. From `analysis/cycloid.py`:
 
 | Joint | Ratio | Ring pins | Eccentricity (mm) | Peak ring-pin force (N, per disc) | Hertz, peak (MPa; 1400 allowed) | Eccentric bearing load, peak (N, per disc) | Output-pin force, peak (N) |
 |---|---|---|---|---|---|---|---|
-| yaw | 30:1 | 31 × Ø6.0 | 1.12 | 213 | 463 | 3780 | 1380 |
-| femur | 20:1 | 21 × Ø6.0 | 1.66 | 342 | 586 | 4147 | 1500 |
-| knee | 20:1 | 21 × Ø6.0 | 1.66 | 417 | 648 | 5064 | 1832 |
+| yaw | 30:1 | 31 × Ø6.0 | 1.12 | 201 | 449 | 3561 | 1300 |
+| femur | 20:1 | 21 × Ø6.0 | 1.66 | 322 | 569 | 3907 | 1413 |
+| knee | 20:1 | 21 × Ø6.0 | 1.66 | 393 | 629 | 4771 | 1726 |
 
 ![Cycloid profiles](actuator/cycloid-profiles.png)
 
 * **Discs**: two, 8 mm hardened steel (42CrMo4 or 1.2379, 58 HRC), wire-EDM
   profile from `cycloid.profile`, 624 g the pair with eight lightening
   holes each, balancing each other at motor speed. Hertz stress at the femur
-  peak is 586 MPa against 1400 allowed.
+  peak is 569 MPa against 1400 allowed.
 * **Ring pins**: standard hardened dowels, Ø6 mm for femur and knee,
   Ø6 mm for yaw, in half-grooves in the fixed cylinder's bore. Needle
   rollers on the pins are the first upgrade if efficiency measures below 85 %.
 * **Eccentric bearings**: back to one HK2512 drawn-cup needle per disc
   (25 × 32 × 12; Cr 11.8 kN, C0r 16.3 kN from the NTN sheet in `docs/reference`).
   The review had moved to HK3012 for life; with the capstan stage the cycloid
-  sees a quarter of the torque, so the load per disc is 4.1 kN at the femur
-  peak (static margin 3.93) and 2.3 kN at the continuous rating:
+  sees a quarter of the torque, so the load per disc is 3.9 kN at the femur
+  peak (static margin 4.17) and 2.2 kN at the continuous rating:
   L10 0 million revolutions (0 h at 1000 rpm) and
   0 h at 40 % of it. The HK3012 stays in the record as what a direct
   70:1 cycloid would have needed.
@@ -164,70 +164,73 @@ torque over the capstan ratio. From `analysis/cycloid.py`:
   drive torque. The coxa's 270 N·m overturning moment at the yaw output is a
   separate, larger bearing in the hip structure, not in the unit.
 * **Ratio**: the yaw joint dropped to 30:1 this round (e = 1.12 mm, 31 pins Ø6):
-  67 N·m continuous against 55 needed, and 19 rad/s at the joint against the
+  77 N·m continuous against 55 needed, and 19 rad/s at the joint against the
   8.6 rad/s swing. The three units still share one disc blank.
 
 ## 5. Stack-up, mass and cost
 
 The analytic stack-up of round 4 (24.0 mm) has been replaced by the
-CAD in §9.3: **62.4 mm tall, Ø186**. The masses below are
+CAD in §9.3: **54.4 mm tall, Ø192**. The masses below are
 from the model's solids, not estimates.
 
 | Part | Femur / knee (g) | Yaw (g) |
 |---|---|---|
-| base | 447 | 430 |
-| ring_pins | 107 | 158 |
-| upper_ring | 355 | 355 |
-| cover | 145 | 145 |
-| stator | 268 | 268 |
-| rotor_top | 394 | 394 |
+| floor_plate | 384 | 384 |
+| wall_tube | 84 | 84 |
+| bearing_carrier | 39 | 39 |
+| pin_cage | 173 | 121 |
+| ring_pins | 113 | 166 |
+| upper_ring | 238 | 238 |
+| cover | 155 | 155 |
+| stator | 288 | 288 |
+| rotor_top | 375 | 375 |
 | rotor_bottom_ring | 371 | 371 |
-| magnets | 2160 | 2160 |
-| shaft | 211 | 211 |
+| magnets | 1620 | 1620 |
+| shaft | 180 | 180 |
 | disc | 624 | 640 |
 | capstan_drum | 139 | — |
 | output_flange | 74 | 74 |
 | output_pins | 117 | 117 |
 | bearings | 356 | 356 |
-| **total** | **5769** | **5680** |
+| **total** | **5329** | **5208** |
 
-Eighteen two-stator actuators are about 103 kg (single-stator:
+Eighteen two-stator actuators are about 95 kg (single-stator:
 70 kg) against the 20 kg the round-1 mass budget carried. The magnets
-(2160 g per stator), the rotor cup and the base are the big items. Per unit
-that is 35 N·m/kg continuous and 105 N·m/kg peak at the joint. 01-sizing
+(1620 g per stator), the rotor cup and the base are the big items. Per unit
+that is 43 N·m/kg continuous and 130 N·m/kg peak at the joint. 01-sizing
 now carries the CAD masses, and §9.7 shows what that does to the loop.
 
-Parts cost per unit from the BOM in §9.6: about **$660 at prototype quantities
-including a $45 driver**, $11.9k for eighteen. Machining is
-~$260 of it at one-off prices and falls 2–3× at 50 units.
+Parts cost per unit from the BOM in §9.6: about **$597 at prototype quantities
+including a $45 driver**, $10.7k for eighteen. Machining is
+~$164 of it at one-off prices and falls 2–3× at 50 units.
 
 ## 6. Thermal: the assumption everything rests on
 
 The continuous rating is set by the thermal resistance from the copper to
 ambient. Round 4 assumed 1.5 K/W; §9.4 computes it from the built geometry:
-**0.90 K/W from the copper to the housing**, and three quarters of that heat
+**0.83 K/W from the copper to the housing**, and three quarters of that heat
 leaves through the 0.5 mm air films to the rotors, not through the board rim.
 What the number really depends on is the housing's own path to ambient — the
 body it is bolted into.
 
 | R_th stator→ambient (K/W) | A3 continuous torque (N·m) | Femur margin |
 |---|---|---|
-| 1.0 | 4.00 | 0.84 |
-| 1.5 | 3.13 | 0.66 |
-| 2.0 | 2.64 | 0.55 |
-| 3.0 | 2.04 | 0.43 |
+| 1.0 | 4.00 | 0.89 |
+| 1.5 | 3.13 | 0.70 |
+| 2.0 | 2.64 | 0.59 |
+| 3.0 | 2.04 | 0.45 |
 
 Three units share one hip pod. At the full continuous rating each stator
 board dissipates ~45 W; thirty-six of them are 1.6 kW, which a ~1.2 m² body
 in still air cannot shed. The sustained thermal budget of the robot is nearer
-300 W, i.e. 8 W per board: 0.99 N·m per board, 1.99 per unit,
-139 N·m at the femur, all joints at once, indefinitely. The
+300 W, i.e. 8 W per board: 1.08 N·m per board, 2.16 per unit,
+151 N·m at the femur, all joints at once, indefinitely. The
 per-joint continuous rating is a rating for one joint at a time or for
 minutes, not for the whole robot for hours; the gait's average torque is what
 the body has to be able to cool. Design rules that follow: the stator rim
 clamped, not glued, into the housing; the housing bolted face-to-face to the
 hip pod plate; a temperature sensor on every stator; N48**H** magnets (they run
-90 °C in a free-standing unit at its rating); and the dyno test that measures
+92 °C in a free-standing unit at its rating); and the dyno test that measures
 R_th on the real housing before anything else is trusted.
 
 ## 7. C1, the upgrade in the same rotors
@@ -244,8 +247,8 @@ part change.
 
 ## 8. Electrical interface
 
-* Bus 48 V; per joint a three-phase FOC stage rated 47 A rms continuous and
-  99 A rms for 2 s (knee), PWM ≥ 40 kHz for the 19-pole-pair machine,
+* Bus 48 V; per joint a three-phase FOC stage rated 45 A rms continuous and
+  94 A rms for 2 s (knee), PWM ≥ 40 kHz for the 19-pole-pair machine,
   phase inductance low (ironless) so switching ripple needs attention.
 * One driver board per hip pod, three axes, mounted on the pod plate.
 * Absolute encoder on the motor (magnetic, off-axis ring on the rotor) and
@@ -275,16 +278,16 @@ leg in the simulated field):
 | Used on | every unit (two per unit) | not used: the yaw swing requirement was lowered instead (round 7) | fallback |
 | Series turns per phase | 40 | 32 | 40 |
 | Trace width | 0.28 mm | 0.39 mm | 0.28 mm |
-| Phase resistance at 120 °C | 70.7 mΩ (interconnect 15.5) | 47.3 mΩ | 85.3 mΩ |
-| Kt | 0.195 N·m/A rms | 0.157 | 0.190 |
-| No-load speed at 48 V | 2741 rpm | 3394 rpm | 2809 rpm |
-| Continuous torque, 1000 / 1600 / 2500 rpm | 2.90 / 2.77 / 2.41 N·m | 2.77 / 2.45 / 1.47 | 2.59 / 2.49 / 2.23 |
-| Peak torque (3× current) | 8.71 N·m | 8.30 | 7.77 |
-| Eddy loss at 2500 rpm | 17 W | 38 W | 15 W |
-| Copper mass | 68 g | 76 g | 61 g |
+| Phase resistance at 120 °C | 80.5 mΩ (interconnect 16.5) | 47.3 mΩ | 96.8 mΩ |
+| Kt | 0.237 N·m/A rms | 0.157 | 0.232 |
+| No-load speed at 48 V | 2249 rpm | 3394 rpm | 2303 rpm |
+| Continuous torque, 1000 / 1600 / 2500 rpm | 3.30 / 3.11 / 2.60 N·m | 2.77 / 2.45 / 1.47 | 2.95 / 2.81 / 2.44 |
+| Peak torque (3× current) | 9.89 N·m | 8.30 | 8.86 |
+| Eddy loss at 2500 rpm | 21 W | 38 W | 18 W |
+| Copper mass | 79 g | 76 g | 71 g |
 
 The 8-turn board has the same copper mass and nearly the same torque at
-1000 rpm, but its wider traces lose 2.2× the eddy power at speed. It would have
+1000 rpm, but its wider traces lose 1.8× the eddy power at speed. It would have
 bought the 7.7 rad/s the 1 m/s walk asked of the yaw at 45:1; the review chose
 to lower that requirement to the 6.4 rad/s the shared 10-turn board gives
 instead, so every unit carries the same board.
@@ -300,6 +303,9 @@ surface-charge model at the mean radius, gap 3.2 mm magnet face to magnet face:
 
 | Blocks | w × h (mm) | B₁ at the board (T) | B at the magnet face (T) | vs the study's model | Magnet mass (g) | Rotor attraction (kN) |
 |---|---|---|---|---|---|---|
+| NS 30x10x5 x2 on iron | 10 × 10 | 0.94 | 0.91 | 0.77 | 1350 | 2.3 |
+| NS 30x10x5 on iron | 10 × 5 | 0.85 | 0.81 | 0.92 | 675 | 1.8 |
+| NS 2x 30x5x8 on iron | 5 × 8 | 0.93 | 1.01 | 0.82 | 1080 | 2.2 |
 | rect 30x5x6 N48 | 5 × 6 | 0.84 | 0.89 | 0.84 | 810 | 1.8 |
 | trapezoid full | 7 × 6 | 1.08 | 1.13 | 1.07 | 1085 | 3.0 |
 | rect 30x5x4 N48 | 5 × 4 | 0.67 | 0.72 | 0.83 | 540 | 1.2 |
@@ -309,11 +315,12 @@ surface-charge model at the mean radius, gap 3.2 mm magnet face to magnet face:
 ![Rotor field](actuator/rotor-field.png)
 
 Rectangular 5 mm blocks fill 71 % of the 7 mm segment at the mean radius and
-give 84 % of the trapezoid field; 8 mm thick blocks (30 × 8 × 5, a standard
-size stood on edge) buy that back. **Chosen: 30 × 8 × 5 N48H for the femur and
-knee, 30 × 6 × 5 for the yaw.** Half the blocks are magnetised through their
-5 mm dimension, half through the 8 mm — specify both. The 2.3 kN
-attraction between the rotors sizes the 4.5 mm carriers (0.06 mm deflection).
+give 84 % of the trapezoid field; thicker blocks buy that back. **Chosen
+(round 9): 30 × 6 × 5 N48H on every unit** — the v2 board's extra torque paid
+for the thinner, lighter, cheaper block; 8 mm was the choice of rounds 5–8.
+Half the blocks are magnetised through their 5 mm dimension, half through the
+6 mm — specify both. The 2.3 kN
+attraction between the rotors sizes the 4.5 mm carriers (0.05 mm deflection).
 
 ### 9.3 The unit — `cad/actuator/actuator.py`, STEP and STL in `build/cad/`
 
@@ -331,8 +338,8 @@ discs sit inside the cylinder and the two-stator motor stack sits above them,
 because the hub has to clear the upper disc; the output flange rides the crossed roller in the mounting face and
 exits through it, so the output and the mounting are on the same side, like a
 flat harmonic unit. The shaft runs in a 6905 in the flange hub and a 6802 in
-the cover. **62.4 mm tall against the 42 mm target (the review accepted the
-height for the second disc); Ø186 against the Ø170 target (accepted)**, because
+the cover. **54.4 mm tall against the 42 mm target (the review accepted the
+height for the second disc); Ø192 against the Ø170 target (accepted)**, because
 the stator's phase rings and pads sit at r 82–86 outside the magnets and the
 board is clamped at its rim. The 12 mm below the rotor at r > 50 is empty; it
 is where a future revision would put the driver if a slimmer one than the
@@ -345,19 +352,19 @@ neighbouring Halbach blocks repel; the pins drop into half-grooves.
 
 | Path | K/W |
 |---|---|
-| copper → board faces (2.25 mm slab) | 0.04 |
-| faces → magnets, two 0.5 mm air films | 0.71 |
-| rotor cup → housing, 0.5 mm air films | 0.24 |
-| board rim: FR4 gaps and the clamp | 3.03 |
-| **copper → housing** | **0.90** |
+| copper → board faces (2.25 mm slab) | 0.03 |
+| faces → magnets, two 0.5 mm air films | 0.59 |
+| rotor cup → housing, 0.5 mm air films | 0.26 |
+| board rim: FR4 gaps and the clamp | 2.88 |
+| **copper → housing** | **0.83** |
 
 | Housing condition | Loss allowed (W) | Current (A rms) | Motor torque, cont. (N·m) | Magnet temp (°C) |
 |---|---|---|---|---|
-| body holds 45 C | 84 | 19.5 | 3.80 | 60 |
-| body at 60 C (15 K rise) | 67 | 17.4 | 3.38 | 72 |
-| unit alone in still air | 41 | 13.5 | 2.62 | 90 |
-| three-unit hip pod (per unit) | 31 | 11.4 | 2.22 | 98 |
-| sustained: 300 W robot budget / 36 | 8 | 5.1 | 0.99 | 72 |
+| body holds 45 C | 90 | 18.9 | 4.49 | 62 |
+| body at 60 C (15 K rise) | 72 | 16.9 | 4.00 | 73 |
+| unit alone in still air | 43 | 12.8 | 3.03 | 92 |
+| three-unit hip pod (per unit) | 31 | 10.8 | 2.55 | 100 |
+| sustained: 300 W robot budget / 36 | 8 | 4.5 | 1.08 | 72 |
 
 ![Thermal network](actuator/thermal-network.png)
 
@@ -369,54 +376,57 @@ and are not worth it.
 ### 9.5 Each joint on the built motor
 
 The requirement column is what 01-sizing derives **at the robot mass the CAD
-implies** (132 kg with the two-stator units), not the 49 kg of round 1;
+implies** (124 kg with the two-stator units), not the 49 kg of round 1;
 §9.7 explains why that is the right mass to check against.
 
 | Joint | Cycloid × capstan | Board | Motor cont / peak (N·m) | Joint cont / peak (N·m) | Needed at the CAD mass | Margin | Joint speed no-load (rad/s) | Unit mass (kg) | Height (mm) |
 |---|---|---|---|---|---|---|---|---|---|
-| yaw, 2 stators (chosen) | 30 × 1 = 30:1 | 10-turn 3 oz | 5.81 / 17.42 | 152 / 456 | 135 / 144 | 1.13 / 3.18 | 9.6 (need 6.4) | 5.68 | 62 |
-| yaw, 1 stator | 30 × 1 = 30:1 | 10-turn 3 oz | 2.90 / 8.71 | 76 / 228 | 135 / 144 | 0.56 / 1.59 | 9.6 (need 6.4) | 3.96 | 50 |
-| femur, 2 stators (chosen) | 20 × 4 = 80:1 | 10-turn 3 oz | 5.81 / 17.42 | 405 / 1216 | 334 / 605 | 1.22 / 2.01 | 3.6 (need 3.8) | 5.77 | 62 |
-| femur, 1 stator | 20 × 4 = 80:1 | 10-turn 3 oz | 2.90 / 8.71 | 203 / 608 | 334 / 605 | 0.61 / 1.01 | 3.6 (need 3.8) | 3.89 | 50 |
-| knee, 2 stators (chosen) | 20 × 4 = 80:1 | 10-turn 3 oz | 5.81 / 17.42 | 405 / 1216 | 352 / 739 | 1.15 / 1.65 | 3.6 (need 3.8) | 5.77 | 62 |
-| knee, 1 stator | 20 × 4 = 80:1 | 10-turn 3 oz | 2.90 / 8.71 | 203 / 608 | 352 / 739 | 0.58 / 0.82 | 3.6 (need 3.8) | 3.89 | 50 |
+| yaw, 2 stators (chosen) | 30 × 1 = 30:1 | 10-turn 3 oz | 5.84 / 17.53 | 153 / 459 | 127 / 135 | 1.21 / 3.39 | 7.9 (need 6.4) | 5.21 | 54 |
+| yaw, 1 stator | 30 × 1 = 30:1 | 10-turn 3 oz | 2.92 / 8.76 | 77 / 230 | 127 / 135 | 0.60 / 1.70 | 7.9 (need 6.4) | 3.96 | 50 |
+| femur, 2 stators (chosen) | 20 × 4 = 80:1 | 10-turn 3 oz | 5.84 / 17.53 | 408 / 1224 | 314 / 570 | 1.30 / 2.15 | 2.9 (need 3.8) | 5.33 | 54 |
+| femur, 1 stator | 20 × 4 = 80:1 | 10-turn 3 oz | 2.92 / 8.76 | 204 / 612 | 314 / 570 | 0.65 / 1.07 | 2.9 (need 3.8) | 3.89 | 50 |
+| knee, 2 stators (chosen) | 20 × 4 = 80:1 | 10-turn 3 oz | 5.84 / 17.53 | 408 / 1224 | 332 / 697 | 1.23 / 1.76 | 2.9 (need 3.8) | 5.33 | 54 |
+| knee, 1 stator | 20 × 4 = 80:1 | 10-turn 3 oz | 2.92 / 8.76 | 204 / 612 | 332 / 697 | 0.61 / 0.88 | 2.9 (need 3.8) | 3.89 | 50 |
 
 With the cost-down boards (two 8-layer 2 oz per position, §9.10) every motor
-torque above scales by 0.89; §9.7 carries that case as "A-cost".
+torque above scales by 0.90; §9.7 carries that case as "A-cost".
 
 ### 9.6 Bill of materials — `docs/design/bom-actuator.csv`
 
-| Item | Qty | Spec | Round 7 ($) | Round 8 cost-down ($) | Price verified |
-|---|---|---|---|---|---|
-| Stator boards | 2 | 8 layer, 2 oz all layers, ~1.2 mm each, OD 175 / bore 100, HASL, 36 coils; two boards wire | 300 | 80 | no |
-| Rotor magnets | 240 | 60 per ring magnetised through the 8 mm, 60 through the 5 mm; H grade for 120 C | 144 | 72 | no |
-| Output bearing | 1 | crossed roller 50 x 80 x 13; the THK part is C 16.7 kN, C0 20.9 kN (cat. 382-5E) | 196 | 45 | partly |
-| Eccentric bearing | 2 | drawn-cup needle 25 x 32 x 12, Cr 11.8 kN, C0r 16.3 kN (NTN sheet) | 14 | 8 | partly |
-| Shaft bearing (lower) | 1 | deep groove 25 x 42 x 9, sealed | 3 | 2 | no |
-| Shaft bearing (top) | 1 | deep groove 15 x 24 x 5, sealed | 2 | 2 | no |
-| Ring pins | 21 | femur and knee 21 x Ø6 (20:1) / yaw 31 x Ø6 (30:1) | 2 | 3 | no |
-| Output pins | 8 |  | 6 | 6 | no |
-| Housing screws | 12 | cover + upper ring into the base | 1 | 1 | no |
-| Output screws | 6 | drum / pulley onto the output face | 0 | 0 | no |
-| Base | 1 | floor + outer wall + pin cylinder; Ø190 x 50 billet, 3-axis, one setup each side (cad/actu | 180 | 95 | no |
-| Clamp rings | 2 | r 86-93, 26 mm and 19 mm: stacked laser-cut 6 mm plates or a turned tube slice | 160 | 36 | no |
-| Cover | 1 | Ø186 disc with 12 holes; the 6802 boss is a turned insert, pressed | 45 | 15 | no |
-| Rotor cup | 1 | top carrier plate bolted/bonded to a turned drum tube; middle and bottom rings bonded on t | 150 | 60 | no |
-| Cycloid disc | 2 | 20 lobes, HK2512 bore, 8 output holes, 8 lightening holes; profile from analysis/cycloid.p | 180 | 44 | no |
-| Eccentric shaft | 1 | femur and knee e 1.66 / yaw 1.12 mm | 70 | 35 | no |
-| Output flange | 1 | hub in the CRB5013 + 4 mm plate, 8 pin holes, 6 x M4 | 60 | 35 | no |
-| Capstan drum | 1 | bolted to the output face; below the mounting face inside the hip pod (cad/actuator) | 0 | 20 | no |
-| Capstan sector | 1 | at the femur / knee pivot on the coxa (belongs to the transmission chunk M1; costed here s | 0 | 25 | no |
-| Capstan rope | 1.5 | min spliced strength 29.2 kN (datasheet); 1.48 m per joint incl. wraps, plus splices | 0 | 9 | partly |
-| Rope tensioner | 1 | pretension ~1 kN | 0 | 4 | no |
-| Motor driver | 1 | 12-48 V, 40 A continuous class, SPI encoder | 149 | 45 | no |
-| Rotor encoder | 1 | magnet in the Ø15 shaft stub end, sensor on the cover | 15 | 6 | no |
-| Thermistor | 1 | glued to a stator rim pad | 0 | 0 | no |
-| Adhesive | 1 |  | 8 | 8 | no |
-| Connectors | 1 |  | 3 | 3 | no |
+| Item | Qty | Spec | Round 7 ($) | 20 units ($) | 100 units ($) | Price verified |
+|---|---|---|---|---|---|---|
+| Stator boards | 2 | 8 layer, 2 oz all layers, ~1.2 mm each, OD 184 / bore 100, HASL, 36 coils (layout v2); two | 300 | 80 | 60 | no |
+| Rotor magnets | 240 | 60 per ring magnetised through the 6 mm, 60 through the 5 mm; H grade for 120 C (round 9:  | 144 | 60 | 48 | no |
+| Output bearing | 1 | crossed roller 50 x 80 x 13; the THK part is C 16.7 kN, C0 20.9 kN (cat. 382-5E) | 196 | 45 | 32 | partly |
+| Eccentric bearing | 2 | drawn-cup needle 25 x 32 x 12, Cr 11.8 kN, C0r 16.3 kN (NTN sheet) | 14 | 8 | 6 | partly |
+| Shaft bearing (lower) | 1 | deep groove 25 x 42 x 9, sealed | 3 | 2 | 2 | no |
+| Shaft bearing (top) | 1 | deep groove 15 x 24 x 5, sealed | 2 | 2 | 1 | no |
+| Ring pins | 21 | femur and knee 21 x Ø6 (20:1) / yaw 31 x Ø6 (30:1) | 2 | 3 | 2 | no |
+| Output pins | 8 |  | 6 | 6 | 5 | no |
+| Housing screws | 12 | cover + upper ring into the base | 1 | 1 | 1 | no |
+| Output screws | 6 | drum / pulley onto the output face | 0 | 0 | 0 | no |
+| Floor plate | 1 | Ø192 disc with the Ø80 bearing bore and 12 holes (cad/actuator floor_plate) | 180 | 14 | 8 | no |
+| Wall tube | 1 | bonded to the floor plate; 12 tapped M4 (cad/actuator wall_tube) | 0 | 16 | 9 | no |
+| Bearing carrier | 1 | the RB5013 seat above the floor plate (cad/actuator bearing_carrier) | 0 | 12 | 6 | no |
+| Pin cage | 3 | stacked on the bearing carrier; the ring pins press through (cad/actuator pin_cage) | 0 | 15 | 9 | no |
+| Clamp rings | 2 | r 86-93, 26 mm and 19 mm: stacked laser-cut 6 mm plates or a turned tube slice | 160 | 36 | 20 | no |
+| Cover | 1 | Ø186 disc with 12 holes; the 6802 boss is a turned insert, pressed | 45 | 15 | 8 | no |
+| Rotor cup | 1 | top carrier plate bolted/bonded to a turned drum tube; middle and bottom rings bonded on t | 150 | 60 | 38 | no |
+| Cycloid disc | 2 | 20 lobes, HK2512 bore, 8 output holes, 8 lightening holes; profile from analysis/cycloid.p | 180 | 44 | 28 | no |
+| Eccentric shaft | 1 | femur and knee e 1.66 / yaw 1.12 mm | 70 | 35 | 22 | no |
+| Output flange | 1 | hub in the CRB5013, plate with 8 pin holes and 6 x M4, bolted to the hub | 60 | 22 | 18 | no |
+| Capstan drum | 1 | bolted to the output face; below the mounting face inside the hip pod (cad/actuator) | 0 | 20 | 12 | no |
+| Capstan sector | 1 | at the femur / knee pivot on the coxa (belongs to the transmission chunk M1; costed here s | 0 | 25 | 14 | no |
+| Capstan rope | 1.5 | min spliced strength 29.2 kN (datasheet); 1.48 m per joint incl. wraps, plus splices | 0 | 9 | 8 | partly |
+| Rope tensioner | 1 | pretension ~1 kN | 0 | 4 | 3 | no |
+| Motor driver | 1 | 12-48 V, 40 A continuous class, SPI encoder | 149 | 45 | 25 | no |
+| Rotor encoder | 1 | magnet in the Ø15 shaft stub end, sensor on the cover | 15 | 6 | 4 | no |
+| Thermistor | 1 | glued to a stator rim pad | 0 | 0 | 0 | no |
+| Adhesive | 1 |  | 8 | 8 | 6 | no |
+| Connectors | 1 |  | 3 | 3 | 2 | no |
 
-**$660 per unit after the cost-down ($1690 before), $11.9k for eighteen** at
-20-unit quantities. Verified prices are marked; the rest are estimates to be
+**$597 per unit at 20 units ($1690 before the cost-down), $396 at 100 units;
+$10.7k for eighteen.** Verified prices are marked; the rest are estimates to be
 replaced by quotes. The capstan sector, rope and tensioner are costed here
 although they live on the joint.
 
@@ -468,44 +478,87 @@ steel.
 The magnets and the boards are now the two biggest lines and both are
 physics, not machining: fewer magnets means less torque, and a cheaper board
 means less copper. Everything else is a manufacturing-route choice that a
-quote can confirm. Not done here: a custom driver board, casting the base,
-and the volume pricing that would take the unit under $500.
+quote can confirm.
+
+### 9.11 Round 9: pushing further on the unit itself
+
+The review asked for more. Three things were tried; two stayed.
+
+**1. The stator laid out again (v2).** The first layout kept the phase rings,
+M arcs and terminal vias inside the magnet span (r 80.9–86), so the coils'
+radial legs stopped at r 80.2 and the outer 4.8 mm of magnet did no work.
+Layout v2 moves the interconnect out to the clamp rim (rings at r 87.1–88.9,
+pads at 90.4, board Ø184) and runs the legs to r 84.6. Torque per amp rises
+with ∫B·r·dr, so this is +22 % Kt and **+14 % continuous torque for
+the same copper**: 3.30 N·m per 12L 3 oz board, 2.95 per position of two
+8L 2 oz boards — the cheap boards now match what the expensive one did.
+The housing grows to Ø192 for the wider clamp. DRC clean, gerbers
+regenerated; the v1 board is kept in `hw/stator/variants/v1-r80`.
+
+**2. A conventional N-S rotor on steel back plates, tried and rejected.**
+Same blocks, all magnetised axially, two per pole on a laser-cut steel plate
+(no Halbach jig, one magnetisation direction, cheaper plates):
+| Rotor | Field at the board (T) | Magnet mass per two rings (g) | Note |
+|---|---|---|---|
+| NS 30x10x5 x2 on iron | 0.94 | 1350 | two 30x10x5 stacked per pole (10 mm thick, 10 of the 14 mm pole pitch) |
+| NS 30x10x5 on iron | 0.85 | 675 | one 30x10x5 per pole, 5 mm thick, on a steel back plate |
+| NS 2x 30x5x8 on iron | 0.93 | 1080 | the Halbach blocks, all magnetised axially, two side by side per pole  |
+| Halbach 30×5×8 (kept) | 0.95 | 1080 | no iron |
+The field is within 2 %, but the back plates have to carry the pole flux
+(≥ 4.5 mm of steel to stay under 1.6 T), which adds about 0.7 kg per unit —
+12 kg on the robot, 8 % more torque needed — for a saving of perhaps $15 in
+magnetisation and jigs. The Halbach ring is the mass-optimal choice; its cost
+premium is small. Rejected.
+
+**3. The base as four cheap parts.** The machined 7075 base (floor, wall
+and pin cylinder in one billet) is now a laser-cut 6 mm floor plate, a slice
+of Ø192 tube for the wall, a short turned bearing carrier, and a pin cage of
+three laser-cut 8 mm steel rings whose 21 holes are open to the bore so the
+pins press through — the half-grooves that needed a 4-axis mill are gone.
+The output flange is a turned hub with a laser-cut plate. All in the CAD and
+the BOM.
+
+**4. With the v2 board's torque in hand, the magnets drop to 6 mm** (30 × 5 × 6,
+0.84 T at the board, 810 g per two rings instead of 1080): the unit is
+0.54 kg lighter and 4 mm shorter, the robot ~10 kg lighter, and §9.7 still closes
+with 1.09 at the knee. The 8 mm blocks stay in §9.7 as the margin option.
 
 ### 9.7 Does the robot close? — `analysis/closure.py`
 
 Renegotiating the mass budget is not a number to write down; it is a loop.
-Joint torque is proportional to robot mass (2.52 N·m/kg at the femur,
-2.66 at the knee, 1.02 at the yaw, for the confirmed leg
+Joint torque is proportional to robot mass (2.53 N·m/kg at the femur,
+2.67 at the knee, 1.02 at the yaw, for the confirmed leg
 and the walking load case), the robot carries eighteen units, and a unit gives
 what its motor and ratio give. The fixed point for each unit option:
 
 | Configuration | Femur/knee unit (kg, mm) | Yaw unit (kg, mm) | Robot (kg) | Femur gives / needs (N·m) | Knee margin | Yaw margin | Closes? |
 |---|---|---|---|---|---|---|---|
-| A-cost: 2 stators, 2 oz boards (chosen) | 5.8, 62 | 5.7, 62 | 132 | 362 / 334 | 1.03 | 1.04 | yes |
-| A: 2 stators, 3 oz boards | 5.8, 62 | 5.7, 62 | 132 | 405 / 334 | 1.15 | 1.16 | yes |
-| B: 1 stator, 3 oz boards | 3.9, 50 | 4.0, 50 | 100 | 203 / 251 | 0.76 | 0.77 | no |
+| A-cost: 2 stators, 2 oz boards, 6 mm magnets (chosen) | 5.3, 54 | 5.2, 54 | 124 | 365 / 314 | 1.10 | 1.11 | yes |
+| A-cost, 8 mm magnets | 5.9, 58 | 5.7, 58 | 134 | 412 / 339 | 1.15 | 1.17 | yes |
+| A: 2 stators, 3 oz boards, 8 mm magnets | 5.9, 58 | 5.7, 58 | 134 | 460 / 339 | 1.29 | 1.30 | yes |
+| B: 1 stator, 3 oz boards, 8 mm magnets | 3.9, 50 | 4.0, 50 | 100 | 230 / 252 | 0.87 | 0.88 | no |
 
 ![Closure](actuator/closure.png)
 
 The single-stator unit cannot close the requirement as defined at any mass:
 the torque it needs grows with the mass it adds faster than its own torque.
-Two stators per unit (62 mm tall, 5.8 kg) close it at
-about 132 kg. The other way to close would have been the definition of
+Two stators per unit (54 mm tall, 5.3 kg) close it at
+about 124 kg. The other way to close would have been the definition of
 "continuous": the walking load case is dyn 1.5 on three legs, on a 30° slope,
 accelerating at 1 m/s², over the whole routine working volume, all at once.
 Against gentler definitions:
 
-| Continuous load case | B: 1 stator, femur / knee / yaw needed at 100 kg | B closes? | A: 2 stators, needed at 132 kg | A closes? |
+| Continuous load case | B: 1 stator, femur / knee / yaw needed at 100 kg | B closes? | A: 2 stators, needed at 124 kg | A closes? |
 |---|---|---|---|---|
-| as defined: dyn 1.5, 30° slope, 1 m/s², stride ±200 | 256 / 270 / 103 | no | 334 / 352 / 135 | yes |
-| dyn 1.5, 30° slope, 1 m/s², stride ±150 | 263 / 274 / 100 | no | 343 / 358 / 130 | yes |
-| dyn 1.2, 20° slope, 0.5 m/s², stride ±200 | 183 / 206 / 67 | no | 239 / 269 / 88 | yes |
-| dyn 1.2, 15° slope, 0.5 m/s², stride ±150 | 175 / 201 / 51 | yes | 229 / 263 / 67 | yes |
-| level: dyn 1.2, 0°, 0.5 m/s², stride ±200 | 140 / 176 / 9 | yes | 182 / 229 / 11 | yes |
-| static tripod stance, level | 113 / 143 / 0 | yes | 148 / 187 / 0 | yes |
+| as defined: dyn 1.5, 30° slope, 1 m/s², stride ±200 | 256 / 270 / 103 | no | 314 / 332 / 127 | yes |
+| dyn 1.5, 30° slope, 1 m/s², stride ±150 | 263 / 274 / 100 | no | 324 / 337 / 123 | yes |
+| dyn 1.2, 20° slope, 0.5 m/s², stride ±200 | 183 / 206 / 67 | yes | 226 / 253 / 83 | yes |
+| dyn 1.2, 15° slope, 0.5 m/s², stride ±150 | 175 / 201 / 51 | yes | 215 / 248 / 63 | yes |
+| level: dyn 1.2, 0°, 0.5 m/s², stride ±200 | 140 / 176 / 9 | yes | 172 / 216 / 11 | yes |
+| static tripod stance, level | 113 / 143 / 0 | yes | 139 / 176 / 0 | yes |
 
-**The review chose A** (round 6): two stators everywhere, 62 mm units, a
-~132 kg robot, the requirement as written. Round 8 then swapped the
+**The review chose A** (round 6): two stators everywhere, 54 mm units, a
+~124 kg robot, the requirement as written. Round 8 then swapped the
 3 oz boards for two 8-layer 2 oz JLCPCB boards per position (11 % less torque,
 a quarter of the price) and raised the total ratio to 80:1 through the
 capstan stage to keep the margin ("A-cost" above). The single-stator unit
@@ -514,7 +567,7 @@ the lighter robot that was not chosen. The 62 mm stack no longer fits the
 200 mm body slab (three units and two gaps are 202 mm), so the slab is now
 220 mm in `hexapod_model.py`; the drawings in 06 carry it.
 
-### 9.8 Open items from this round (updated in round 8)
+### 9.8 Open items from this round (updated in round 9)
 
 1. **OD 186, not 170** (§9.3): accepted by the review.
 2. **Mass and closure** (§9.7): the review chose to renegotiate the mass
@@ -523,7 +576,7 @@ the lighter robot that was not chosen. The 62 mm stack no longer fits the
    **This is the decision this round asks for.**
 3. **Eccentric bearings**: the capstan stage settled this. With a quarter of
    the torque on the cycloid, HK2512 on a straight Ø25 shaft has a static
-   margin of 3.9 at the femur peak and 0 h L10 at the
+   margin of 4.2 at the femur peak and 0 h L10 at the
    continuous rating (§4). The HK3012 decision of round 7 is withdrawn.
 4. **Sustained torque is set by the body's cooling**, not the motor (§6);
    the review accepted it: the gait is designed around a ~300 W average.

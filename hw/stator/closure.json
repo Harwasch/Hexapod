@@ -1,63 +1,79 @@
 {
  "m_fixed": 29.180000000000007,
  "torque_per_kg": {
-  "yaw": 1.0159886847662718,
-  "femur": 2.5173325413704157,
-  "knee": 2.659593543649027
+  "yaw": 1.0197554380230633,
+  "femur": 2.5266654903400356,
+  "knee": 2.669453921813166
  },
  "torque_per_kg_peak": {
-  "yaw": 1.083075375032544,
-  "femur": 4.566938752514166,
-  "knee": 5.578989308148465
+  "yaw": 1.0870908505564598,
+  "femur": 4.583870566497466,
+  "knee": 5.599673274870898
  },
- "T_motor": 2.902938624589317,
+ "T_motor": 3.2957756924007016,
  "options": {
-  "A-cost: 2 stators, 2 oz boards (chosen)": {
-   "m_fk": 5.769100000000001,
-   "m_yaw": 5.6795,
-   "T_fk": 361.7053814913295,
-   "T_yaw": 139.83455470025626,
-   "h": 62.4,
-   "h_yaw": 62.4,
-   "m_robot": 132.4862,
-   "need_femur": 333.51182254250915,
-   "need_knee": 352.3594421425937,
-   "need_yaw": 134.60448008768122,
-   "margin_femur": 1.08453541087056,
-   "margin_knee": 1.0265238793997002,
-   "margin_yaw": 1.0388551302985471,
+  "A-cost: 2 stators, 2 oz boards, 6 mm magnets (chosen)": {
+   "m_fk": 5.3292,
+   "m_yaw": 5.2078,
+   "T_fk": 365.44232333506426,
+   "T_yaw": 141.27924871200938,
+   "h": 54.4,
+   "h_yaw": 54.4,
+   "m_robot": 124.37720000000002,
+   "need_femur": 314.25957902512073,
+   "need_knee": 332.01920432414056,
+   "need_yaw": 126.83432606608217,
+   "margin_femur": 1.1628677301379957,
+   "margin_knee": 1.1006662222414512,
+   "margin_yaw": 1.1138881176252022,
    "closes": true
   },
-  "A: 2 stators, 3 oz boards": {
-   "m_fk": 5.769100000000001,
-   "m_yaw": 5.6795,
-   "T_fk": 405.4824670826358,
-   "T_yaw": 156.75868572782312,
-   "h": 62.4,
-   "h_yaw": 62.4,
-   "m_robot": 132.4862,
-   "need_femur": 333.51182254250915,
-   "need_knee": 352.3594421425937,
-   "need_yaw": 134.60448008768122,
-   "margin_femur": 1.2157963816438722,
-   "margin_knee": 1.1507637332407405,
-   "margin_yaw": 1.1645874314562983,
+  "A-cost, 8 mm magnets": {
+   "m_fk": 5.8692,
+   "m_yaw": 5.7478,
+   "T_fk": 412.32865829656185,
+   "T_yaw": 159.40540913526877,
+   "h": 58.4,
+   "h_yaw": 58.4,
+   "m_robot": 134.09720000000002,
+   "need_femur": 338.8187675912259,
+   "need_knee": 357.9662964441645,
+   "need_yaw": 136.74634892366635,
+   "margin_femur": 1.2169593237940801,
+   "margin_knee": 1.151864469902341,
+   "margin_yaw": 1.1657013908594445,
    "closes": true
   },
-  "B: 1 stator, 3 oz boards": {
+  "A: 2 stators, 3 oz boards, 8 mm magnets": {
+   "m_fk": 5.8692,
+   "m_yaw": 5.7478,
+   "T_fk": 460.35394871453,
+   "T_yaw": 177.9718873896379,
+   "h": 58.4,
+   "h_yaw": 58.4,
+   "m_robot": 134.09720000000002,
+   "need_femur": 338.8187675912259,
+   "need_knee": 357.9662964441645,
+   "need_yaw": 136.74634892366635,
+   "margin_femur": 1.3587026243774445,
+   "margin_knee": 1.2860259563188678,
+   "margin_yaw": 1.30147450948752,
+   "closes": true
+  },
+  "B: 1 stator, 3 oz boards, 8 mm magnets": {
    "m_fk": 3.8931,
    "m_yaw": 3.9596,
-   "T_fk": 202.7412335413179,
-   "T_yaw": 78.37934286391156,
+   "T_fk": 230.176974357265,
+   "T_yaw": 88.98594369481896,
    "h": 49.7,
    "h_yaw": 49.7,
    "m_robot": 99.6548,
-   "need_femur": 250.8642709437605,
-   "need_knee": 265.041262673635,
-   "need_yaw": 101.24814918264586,
-   "margin_femur": 0.8081710192471732,
-   "margin_knee": 0.7649421508792321,
-   "margin_yaw": 0.774131117424376,
+   "need_femur": 251.79434410673818,
+   "need_knee": 266.0238966875067,
+   "need_yaw": 101.62352422510077,
+   "margin_femur": 0.9141467222936932,
+   "margin_knee": 0.8652492397239395,
+   "margin_yaw": 0.8756431581501839,
    "closes": false
   }
  },
@@ -73,37 +89,48 @@
     "femur": 2.3739968806518155,
     "knee": 2.5081576123380502
    },
-   "A-cost: 2 stators, 2 oz boards (chosen)": {
+   "A-cost: 2 stators, 2 oz boards, 6 mm magnets (chosen)": {
     "need": {
-     "yaw": 134.6052784161567,
-     "femur": 333.51380057462706,
-     "knee": 352.36153195844577
+     "yaw": 126.8357309255376,
+     "femur": 314.26305986942157,
+     "knee": 332.0228818799966
     },
-    "margin_femur": 1.0845289786153671,
-    "margin_knee": 1.02651779120425,
-    "margin_yaw": 1.038848968967861,
+    "margin_femur": 1.1628548499683928,
+    "margin_knee": 1.1006540310289412,
+    "margin_yaw": 1.1138757799641745,
     "closes": true
    },
-   "A: 2 stators, 3 oz boards": {
+   "A-cost, 8 mm magnets": {
     "need": {
-     "yaw": 134.6052784161567,
-     "femur": 333.51380057462706,
-     "knee": 352.36153195844577
+     "yaw": 136.1488400152919,
+     "femur": 337.3383095493572,
+     "knee": 356.40217387192246
     },
-    "margin_femur": 1.215789170894909,
-    "margin_knee": 1.1507569081929598,
-    "margin_yaw": 1.1645805244217478,
+    "margin_femur": 1.222300126088207,
+    "margin_knee": 1.1569195939998314,
+    "margin_yaw": 1.1708172402891184,
     "closes": true
    },
-   "B: 1 stator, 3 oz boards": {
+   "A: 2 stators, 3 oz boards, 8 mm magnets": {
+    "need": {
+     "yaw": 136.1488400152919,
+     "femur": 337.3383095493572,
+     "knee": 356.40217387192246
+    },
+    "margin_femur": 1.3646654876806217,
+    "margin_knee": 1.2916698675355553,
+    "margin_yaw": 1.3071862189178294,
+    "closes": true
+   },
+   "B: 1 stator, 3 oz boards, 8 mm magnets": {
     "need": {
      "yaw": 103.14824037404148,
      "femur": 255.57215938719506,
      "knee": 270.0152061247303
     },
-    "margin_femur": 0.7932837208381621,
-    "margin_knee": 0.7508511703880263,
-    "margin_yaw": 0.7598708672071219,
+    "margin_femur": 0.9006339927994426,
+    "margin_knee": 0.8524593027954785,
+    "margin_yaw": 0.862699580449783,
     "closes": false
    }
   },
@@ -118,37 +145,48 @@
     "femur": 2.444486673676662,
     "knee": 2.549169949842822
    },
-   "A-cost: 2 stators, 2 oz boards (chosen)": {
+   "A-cost: 2 stators, 2 oz boards, 6 mm magnets (chosen)": {
     "need": {
-     "yaw": 130.45742336115669,
-     "femur": 343.4166437354743,
-     "knee": 358.1231994076087
+     "yaw": 122.92729409553758,
+     "femur": 323.5943012986302,
+     "knee": 337.4519802843333
     },
-    "margin_femur": 1.0532552457473279,
-    "margin_knee": 1.0100026529687165,
-    "margin_yaw": 1.0718788635978196,
+    "margin_femur": 1.129322493840256,
+    "margin_knee": 1.08294615141137,
+    "margin_yaw": 1.1492911297812256,
     "closes": true
    },
-   "A: 2 stators, 3 oz boards": {
+   "A-cost, 8 mm magnets": {
     "need": {
-     "yaw": 130.45742336115669,
-     "femur": 343.4166437354743,
-     "knee": 358.1231994076087
+     "yaw": 131.9534201852919,
+     "femur": 347.3547117667674,
+     "knee": 362.2299121968055
     },
-    "margin_femur": 1.1807303882305988,
-    "margin_knee": 1.132242948106592,
-    "margin_yaw": 1.2016080165392686,
+    "margin_femur": 1.187053591987609,
+    "margin_knee": 1.1383064855023262,
+    "margin_yaw": 1.2080430269365372,
     "closes": true
    },
-   "B: 1 stator, 3 oz boards": {
+   "A: 2 stators, 3 oz boards, 8 mm magnets": {
+    "need": {
+     "yaw": 131.9534201852919,
+     "femur": 347.3547117667674,
+     "knee": 362.2299121968055
+    },
+    "margin_femur": 1.3253136725078782,
+    "margin_knee": 1.2708888283759738,
+    "margin_yaw": 1.348747816765385,
+    "closes": true
+   },
+   "B: 1 stator, 3 oz boards, 8 mm magnets": {
     "need": {
      "yaw": 99.96973240404145,
      "femur": 263.1607239573263,
      "knee": 274.43038111633905
     },
-    "margin_femur": 0.7704084047670962,
-    "margin_knee": 0.7387710963946443,
-    "margin_yaw": 0.7840307358944469,
+    "margin_femur": 0.8746630990215323,
+    "margin_knee": 0.8387445056955494,
+    "margin_yaw": 0.8901288575543046,
     "closes": false
    }
   },
@@ -163,38 +201,49 @@
     "femur": 1.704357798544785,
     "knee": 1.9130271426727627
    },
-   "A-cost: 2 stators, 2 oz boards (chosen)": {
+   "A-cost: 2 stators, 2 oz boards, 6 mm magnets (chosen)": {
     "need": {
-     "yaw": 87.88020985839775,
-     "femur": 239.4387505579224,
-     "knee": 268.7539137709543
+     "yaw": 82.80767873618257,
+     "femur": 225.61811316952276,
+     "knee": 253.24117667102087
     },
-    "margin_femur": 1.5106384436458613,
-    "margin_knee": 1.3458608896746826,
-    "margin_yaw": 1.5911950475035628,
+    "margin_femur": 1.6197384075297259,
+    "margin_knee": 1.4430604380337446,
+    "margin_yaw": 1.7061128975986841,
     "closes": true
    },
-   "A: 2 stators, 3 oz boards": {
+   "A-cost, 8 mm magnets": {
     "need": {
-     "yaw": 87.88020985839775,
-     "femur": 239.4387505579224,
-     "knee": 268.7539137709543
+     "yaw": 88.88796021453152,
+     "femur": 242.18447097137806,
+     "knee": 271.8358004978001
     },
-    "margin_femur": 1.6934705269627857,
-    "margin_knee": 1.5087499988119562,
-    "margin_yaw": 1.783776870587928,
+    "margin_femur": 1.7025396246206548,
+    "margin_knee": 1.5168298566321425,
+    "margin_yaw": 1.7933295887378116,
     "closes": true
    },
-   "B: 1 stator, 3 oz boards": {
+   "A: 2 stators, 3 oz boards, 8 mm magnets": {
+    "need": {
+     "yaw": 88.88796021453152,
+     "femur": 242.18447097137806,
+     "knee": 271.8358004978001
+    },
+    "margin_femur": 1.9008400780945849,
+    "margin_knee": 1.6935000756762189,
+    "margin_yaw": 2.002204651339753,
+    "closes": true
+   },
+   "B: 1 stator, 3 oz boards, 8 mm magnets": {
     "need": {
      "yaw": 67.34274552421402,
      "femur": 183.4822979307791,
      "knee": 205.94655443900774
     },
-    "margin_femur": 1.104963453301661,
-    "margin_knee": 0.9844361518626955,
-    "margin_yaw": 1.163886952540852,
-    "closes": false
+    "margin_femur": 1.2544914520533312,
+    "margin_knee": 1.1176539223210615,
+    "margin_yaw": 1.3213887108719502,
+    "closes": true
    }
   },
   {
@@ -208,37 +257,48 @@
     "femur": 1.6275068901039904,
     "knee": 1.8703107128016077
    },
-   "A-cost: 2 stators, 2 oz boards (chosen)": {
+   "A-cost: 2 stators, 2 oz boards, 6 mm magnets (chosen)": {
     "need": {
-     "yaw": 67.14005835707225,
-     "femur": 228.6422584645272,
-     "knee": 262.7528448607892
+     "yaw": 63.264668936492164,
+     "femur": 215.444805092674,
+     "knee": 247.586495290681
     },
-    "margin_femur": 1.5819708216687618,
-    "margin_knee": 1.3765992968904561,
-    "margin_yaw": 2.082729120617851,
+    "margin_femur": 1.6962224880654169,
+    "margin_knee": 1.4760188067043545,
+    "margin_yaw": 2.2331461001373714,
     "closes": true
    },
-   "A: 2 stators, 3 oz boards": {
+   "A-cost, 8 mm magnets": {
     "need": {
-     "yaw": 67.14005835707225,
-     "femur": 228.6422584645272,
-     "knee": 262.7528448607892
+     "yaw": 67.90997479023967,
+     "femur": 231.26417206448477,
+     "knee": 265.7659154191126
     },
-    "margin_femur": 1.7734362396772099,
-    "margin_knee": 1.5432086655330683,
-    "margin_yaw": 2.3348011539419646,
+    "margin_femur": 1.7829335803108741,
+    "margin_knee": 1.5514730609691612,
+    "margin_yaw": 2.347304790314533,
     "closes": true
    },
-   "B: 1 stator, 3 oz boards": {
+   "A: 2 stators, 3 oz boards, 8 mm magnets": {
+    "need": {
+     "yaw": 67.90997479023967,
+     "femur": 231.26417206448477,
+     "knee": 265.7659154191126
+    },
+    "margin_femur": 1.990597785229641,
+    "margin_knee": 1.7321782892608792,
+    "margin_yaw": 2.6207031874088815,
+    "closes": true
+   },
+   "B: 1 stator, 3 oz boards, 8 mm magnets": {
     "need": {
      "yaw": 51.44953422057783,
      "femur": 175.20892875276706,
      "knee": 201.3479257245145
     },
-    "margin_femur": 1.1571398500324204,
-    "margin_knee": 1.006919901517683,
-    "margin_yaw": 1.5234218161796855,
+    "margin_femur": 1.3137285639253122,
+    "margin_knee": 1.1431802613759954,
+    "margin_yaw": 1.729577245798039,
     "closes": true
    }
   },
@@ -253,37 +313,48 @@
     "femur": 1.298335822650024,
     "knee": 1.6307483032544237
    },
-   "A-cost: 2 stators, 2 oz boards (chosen)": {
+   "A-cost: 2 stators, 2 oz boards, 6 mm magnets (chosen)": {
     "need": {
-     "yaw": 11.397568028463734,
-     "femur": 182.3982660479758,
-     "knee": 229.0976322806616
+     "yaw": 10.73968932477033,
+     "femur": 171.87006086210675,
+     "knee": 215.87389428957152
     },
-    "margin_femur": 1.9830527412809449,
-    "margin_knee": 1.5788263627631627,
-    "margin_yaw": 12.268806323510438,
+    "margin_femur": 2.1262709834510543,
+    "margin_knee": 1.6928509328916947,
+    "margin_yaw": 13.154872961376903,
     "closes": true
    },
-   "A: 2 stators, 3 oz boards": {
+   "A-cost, 8 mm magnets": {
     "need": {
-     "yaw": 11.397568028463734,
-     "femur": 182.3982660479758,
-     "knee": 229.0976322806616
+     "yaw": 11.528267571150883,
+     "femur": 184.489885058265,
+     "knee": 231.72476779720452
     },
-    "margin_femur": 2.2230609745817578,
-    "margin_knee": 1.769911207925055,
-    "margin_yaw": 13.75369599342084,
+    "margin_femur": 2.2349662051463772,
+    "margin_knee": 1.7793896708418067,
+    "margin_yaw": 13.827351607814487,
     "closes": true
    },
-   "B: 1 stator, 3 oz boards": {
+   "A: 2 stators, 3 oz boards, 8 mm magnets": {
+    "need": {
+     "yaw": 11.528267571150883,
+     "femur": 184.489885058265,
+     "knee": 231.72476779720452
+    },
+    "margin_femur": 2.4952801535387295,
+    "margin_knee": 1.9866411048361126,
+    "margin_yaw": 15.437869245419565,
+    "closes": true
+   },
+   "B: 1 stator, 3 oz boards, 8 mm magnets": {
     "need": {
      "yaw": 8.733974629470065,
      "femur": 139.77208332022377,
      "knee": 175.5578824371943
     },
-    "margin_femur": 1.4505130690284493,
-    "margin_knee": 1.1548398210706854,
-    "margin_yaw": 8.97407494171611,
+    "margin_femur": 1.6468022003358125,
+    "margin_knee": 1.3111172860017302,
+    "margin_yaw": 10.188482045111938,
     "closes": true
    }
   },
@@ -298,40 +369,51 @@
     "femur": 1.050701848418534,
     "knee": 1.3300581148992705
    },
-   "A-cost: 2 stators, 2 oz boards (chosen)": {
+   "A-cost: 2 stators, 2 oz boards, 6 mm magnets (chosen)": {
     "need": {
      "yaw": 1e-06,
-     "femur": 147.60911001729585,
-     "knee": 186.85481034136188
+     "femur": 139.08896872846998,
+     "knee": 176.06936908764374
     },
-    "margin_femur": 2.4504272226080577,
-    "margin_knee": 1.935756327763444,
-    "margin_yaw": 139834554.70025626,
+    "margin_femur": 2.627399762007598,
+    "margin_knee": 2.0755587711179593,
+    "margin_yaw": 141279248.71200937,
     "closes": true
    },
-   "A: 2 stators, 3 oz boards": {
+   "A-cost, 8 mm magnets": {
     "need": {
      "yaw": 1e-06,
-     "femur": 147.60911001729585,
-     "knee": 186.85481034136188
+     "femur": 149.30179069509813,
+     "knee": 188.99753396446465
     },
-    "margin_femur": 2.7470016385514695,
-    "margin_knee": 2.170040291399867,
-    "margin_yaw": 156758685.72782314,
+    "margin_femur": 2.7617127455531545,
+    "margin_knee": 2.1816615785795808,
+    "margin_yaw": 159405409.13526878,
     "closes": true
    },
-   "B: 1 stator, 3 oz boards": {
+   "A: 2 stators, 3 oz boards, 8 mm magnets": {
+    "need": {
+     "yaw": 1e-06,
+     "femur": 149.30179069509813,
+     "knee": 188.99753396446465
+    },
+    "margin_femur": 3.0833786156969674,
+    "margin_knee": 2.4357669598011045,
+    "margin_yaw": 177971887.38963792,
+    "closes": true
+   },
+   "B: 1 stator, 3 oz boards, 8 mm magnets": {
     "need": {
      "yaw": 1e-06,
      "femur": 113.11309735112759,
      "knee": 143.187140347858
     },
-    "margin_femur": 1.792376287884374,
-    "margin_knee": 1.4159178893354498,
-    "margin_yaw": 78379342.86391157,
+    "margin_femur": 2.034927694029505,
+    "margin_knee": 1.607525464913081,
+    "margin_yaw": 88985943.69481896,
     "closes": true
    }
   }
  ],
- "T_single_unit": 202.7412335413179
+ "T_single_unit": 230.176974357265
 }
