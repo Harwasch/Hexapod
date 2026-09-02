@@ -1,0 +1,57 @@
+{
+ "rect 30x5x6 N48": {
+  "w_b_mm": 5.0,
+  "h_m_mm": 6.0,
+  "B1_midplane": 0.8427501758800972,
+  "B_peak_midplane": 0.8594257461426091,
+  "B_peak_surface": 0.893655295983417,
+  "model_halbach_B": 1.007681828941748,
+  "ratio_to_model": 0.8363256651805863,
+  "magnet_mass_g": 809.9999999999999,
+  "note": "rectangular OTS block, 5 mm wide: 71 % of the 7.0 mm segment at r_m; 90 % at r_in, 58 % at r_out"
+ },
+ "trapezoid full": {
+  "w_b_mm": 6.6953622633305665,
+  "h_m_mm": 6.0,
+  "B1_midplane": 1.0802275870530602,
+  "B_peak_midplane": 1.0211740767253266,
+  "B_peak_surface": 1.1347464087515557,
+  "model_halbach_B": 1.007681828941748,
+  "ratio_to_model": 1.071992722333297,
+  "magnet_mass_g": 1084.6486866595517,
+  "note": "custom trapezoidal segment, 0.3 mm glue gaps"
+ },
+ "rect 30x5x4 N48": {
+  "w_b_mm": 5.0,
+  "h_m_mm": 4.0,
+  "B1_midplane": 0.6745007752325908,
+  "B_peak_midplane": 0.6916002012255033,
+  "B_peak_surface": 0.722088403408545,
+  "model_halbach_B": 0.8089375125113832,
+  "ratio_to_model": 0.8338107267872552,
+  "magnet_mass_g": 540.0,
+  "note": "thinner OTS block"
+ },
+ "rect 30x5x8 N48": {
+  "w_b_mm": 5.0,
+  "h_m_mm": 8.0,
+  "B1_midplane": 0.9508752191826114,
+  "B_peak_midplane": 0.9662624157495775,
+  "B_peak_surface": 1.0056097645558153,
+  "model_halbach_B": 1.1341212995006282,
+  "ratio_to_model": 0.838424619660434,
+  "magnet_mass_g": 1080.0,
+  "note": "thicker OTS block (30x8x5 listing)"
+ },
+ "rect 30x5x10 N48": {
+  "w_b_mm": 5.0,
+  "h_m_mm": 10.0,
+  "B1_midplane": 1.020793295463054,
+  "B_peak_midplane": 1.0344755426829246,
+  "B_peak_surface": 1.0769517874998416,
+  "model_halbach_B": 1.2148014823404707,
+  "ratio_to_model": 0.84029638611929,
+  "magnet_mass_g": 1349.9999999999998,
+  "note": "30x10x5 listing stood on edge: +4 mm each side in the axial stack"
+ }
+}

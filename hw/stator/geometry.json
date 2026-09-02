@@ -1,0 +1,36 @@
+{
+ "coils": 36,
+ "pole_pairs": 15,
+ "layers": 12,
+ "turns_per_layer": 10,
+ "series_turns_per_coil": 20,
+ "series_turns_per_phase": 40,
+ "parallel_paths_per_phase": 48,
+ "trace_mm": 0.28,
+ "space_mm": 0.15,
+ "r_in_mm": 53.0,
+ "r_out_mm": 80.2,
+ "coil_track_mm_total": 261044.2990420876,
+ "coil_track_mm_per_coil_layer": 604.2692107455731,
+ "interconnect_track_mm": 8394.186909462891,
+ "vias": 108,
+ "board_od_mm": 175.0,
+ "repeats": 3,
+ "gap_mm": 0.6,
+ "ring_w_mm": 0.7,
+ "m_w_mm": 0.7,
+ "jumper_w_mm": 0.3,
+ "r_ring_mm": {
+  "A": 82.7,
+  "B": 83.6,
+  "C": 84.5
+ },
+ "r_m_mm": 81.75,
+ "r_n_mm": 50.9,
+ "r_via_t_mm": 80.9,
+ "marc_mm_per_phase": {
+  "A": 260.17574765866584,
+  "B": 339.0830510135872,
+  "C": 260.17574765866584
+ }
+}
