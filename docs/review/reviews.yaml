@@ -762,7 +762,7 @@ reviews:
   - hw/stator/variants/v1-r80/stator.kicad_pcb
   requested: '2026-09-02'
   requested_commit: 2b78631
-  status: requested
+  status: changes_requested
   packet: docs/review/actuator.md
   history:
   - 'on': '2026-09-02'
@@ -1096,5 +1096,15 @@ reviews:
     - docs/design/drawing/hip-stack.png
     - docs/design/drawing/side.png
     - docs/design/drawing/top.png
-  decided_commit: 6a12a2d
+  - 'on': '2026-09-02'
+    action: changes_requested
+    commit: e4963a5
+    by: harrison.waschura@gmail.com
+    note: Not accepted yet; exhaust all possible routes of reducing cost and be confident
+      the global minimum for the requirements has been found
+  decided_commit: e4963a5
+  note: Not accepted yet; exhaust all possible routes of reducing cost and be confident the
+    global minimum for the requirements has been found
+  decided: '2026-09-02'
+  reviewer: harrison.waschura@gmail.com
 artifact_url: https://claude.ai/code/artifact/c27a8924-af18-4d17-bd9b-0fcb41e685e3
