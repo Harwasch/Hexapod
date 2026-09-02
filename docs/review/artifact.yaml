@@ -9,8 +9,9 @@
 title: Hexapod
 subtitle: >-
   A large-dog-sized outdoor hexapod with all eighteen motors in the body.
-  Round 4: the confirmed sprawl leg and its mammal stance, per-DOF ratings
-  over both, the topology trade, and the motor and reduction options.
+  Round 5: the actuator designed as parts — stator board laid out, rotor
+  field simulated with off-the-shelf blocks, the unit modelled in CAD with
+  its thermal path and a bill of materials.
 
 phases:
   - id: geometry
@@ -107,30 +108,56 @@ phases:
     after: bio
     images:
       - docs/design/motor/torque-density.png
-      - docs/design/actuator/stator-rotor-layout.png
-      - docs/design/actuator/operating-envelopes.png
-      - docs/design/actuator/section-pcb-1.png
+      - docs/design/actuator/stator-F_Cu.svg
+      - docs/design/actuator/rotor-field.png
+      - docs/design/actuator/cad-femur-section.png
+      - docs/design/actuator/cad-femur-cutaway.png
+      - docs/design/actuator/cad-femur-iso.png
+      - docs/design/actuator/thermal-network.png
       - docs/design/actuator/cycloid-profiles.png
+      - docs/design/actuator/operating-envelopes.png
     captions:
+      docs/design/actuator/stator-F_Cu.svg: >-
+        The stator board as laid out in KiCad (top copper of 12 layers, 3 oz):
+        36 ten-turn spiral coils, the three phase rings at the rim, the star
+        ring at the bore. DRC clean, gerbers in hw/stator. Look at: the rings
+        and pads outside the magnets are what pushes the housing to Ø186.
+      docs/design/actuator/rotor-field.png: >-
+        Two facing Halbach rings of rectangular off-the-shelf blocks, simulated.
+        30×8×5 blocks give 0.95 T at the board, 84 % of what custom trapezoids
+        would. Look at: the 2.3 kN pull between the rotors that sizes the
+        carriers.
+      docs/design/actuator/cad-femur-section.png: >-
+        Section through the femur unit from the build123d model: the fixed pin
+        cylinder rising through the open bottom of the rotor cup, one 10 mm
+        cycloid disc inside the motor's height, the crossed-roller output in
+        the mounting face. 38.7 mm tall, Ø186. Look at: is output-on-the-
+        mounting-face acceptable for the hip stack, and is Ø186 acceptable?
+      docs/design/actuator/cad-femur-cutaway.png: >-
+        Quarter cutaway of the same model. Look at: the drum through the board
+        bore joining the two rotor carriers; the disc between the pins.
+      docs/design/actuator/cad-femur-iso.png: >-
+        The mounting face: the output flange with its six M4 inside the Ø80
+        crossed roller. The leg's pulley or link bolts here.
+      docs/design/actuator/thermal-network.png: >-
+        Where the stator's heat goes, from the built geometry: 0.80 K/W copper
+        to housing, three quarters of it through the air films to the rotors.
+        The bars are the continuous torque for each way the housing is cooled.
+        Look at: the last bar — what the whole robot can sustain is set by the
+        body's ability to shed ~300 W, about half the per-joint rating.
       docs/design/motor/torque-density.png: >-
         The motor study: continuous torque per kilogram and per litre for
         every candidate that fits the Ø170 × 42 mm pancake, in both packagings.
         Look at: A3 (12-layer 3 oz PCB) leads per kilogram; two-stator
         variants and the iron-core option lose.
-      docs/design/actuator/stator-rotor-layout.png: >-
-        The A3 design point: the stator PCB face with its coils and one
-        Halbach rotor face with its magnet blocks. Look at: 19 pole pairs
-        means a fast drive; the Ø100 bore is where the cycloid goes.
       docs/design/actuator/operating-envelopes.png: >-
         The one motor through each joint's ratio against that joint's
         requirement. Look at: the femur is the binding joint; every joint has
         speed to spare.
-      docs/design/actuator/section-pcb-1.png: >-
-        Axial section through the A3 actuator with the cycloid in the bore.
-        Look at: 27 mm of the 42 mm used; where the heat has to get out.
       docs/design/actuator/cycloid-profiles.png: >-
-        The three cycloid discs. Look at: the 0.6 mm eccentricity that puts
-        7 kN on the eccentric bearings.
+        The three cycloid discs, one per unit since round 5. Look at: the
+        0.6 mm eccentricity that puts 12.8 kN on the femur's needle bearing at
+        peak, and 100 h of L10 life at the continuous rating.
     docs: [docs/design/07-motor-options-in-envelope.md, docs/design/08-actuator-design.md]
 
 #   - id: cad

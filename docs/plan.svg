@@ -52,8 +52,8 @@
 <rect x="439" y="151.0" width="110" height="20" rx="4" class="bar-todo crit"/>
 <text x="447" y="165.0" class="ts" fill="#ffffff" opacity="0.96">○ To do</text>
 <text x="20" y="199.0" class="t ink">A1 · Actuator concept — PCB axial-flux motor</text>
-<rect x="439" y="185.0" width="226" height="20" rx="4" class="bar-todo"/>
-<text x="447" y="199.0" class="ts" fill="#ffffff" opacity="0.96">○ To do</text>
+<rect x="439" y="185.0" width="226" height="20" rx="4" class="bar-in_progress"/>
+<text x="447" y="199.0" class="ts" fill="#ffffff" opacity="0.96">▶ In progress</text>
 <text x="20" y="233.0" class="t ink">M1 · Leg transmission — motors in the body, </text>
 <rect x="439" y="219.0" width="226" height="20" rx="4" class="bar-todo"/>
 <text x="447" y="233.0" class="ts" fill="#ffffff" opacity="0.96">○ To do</text>

@@ -22,6 +22,16 @@ documents:
   retrieved: 2026-09-02
   needed_by: []
   notes: Fw 25, D 32, C 12 mm; Cr 11.8 kN; C0r 16.3 kN; n_lim grease 6500 rpm; Tmax 120 C; mass 0.02 kg. Used for the cycloid eccentric bearing life in docs/design/08-actuator-design.md.
+- id: thk-cross-roller-ring-382-5E
+  title: THK Cross-Roller Ring Series, catalog 382-5E
+  part: RB5013
+  publisher: THK
+  revision: 382-5E
+  url: https://thk.ru/cataloguespdf/382-5E_Cross-Roller_Ring_Series.pdf
+  local: docs/reference/thk-cross-roller-ring-382-5E.pdf
+  retrieved: 2026-09-02
+  needed_by: []
+  notes: RB 5013 row, 50 x 80 x 13 mm, roller pitch dia 64, C 16.7 kN, C0 20.9 kN, mass 0.27 kg. Output bearing of the actuator (cad/actuator).
 
 
 # Example of a fetched document:

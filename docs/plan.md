@@ -35,7 +35,8 @@ Electromagnetic sizing of the PCB stator (layers, copper, pole count, eddy losse
 
 * **Needs first:** V1
 * **Estimate:** 2 sessions
-* **Produces:** `docs/design/adr-0001-actuator.md`, `cad/actuator/`
+* **Produces:** `docs/design/08-actuator-design.md`, `hw/stator/`, `cad/actuator/`, `docs/design/bom-actuator.csv`
+* **Human review:** `actuator` must be signed off before this chunk can be done
 
 #### M1 — Leg transmission — motors in the body, power to the joints
 

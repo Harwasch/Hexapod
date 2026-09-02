@@ -1,10 +1,38 @@
-# Review — Actuator: motor study and detailed design of A3 (PCB stator, in-plane cycloid)
+# Review — Actuator, round 5: the parts as designed
 
 `actuator` · requested 2026-09-02 · branch `claude/hexapod-robot-design-mt516g`
 
-07: six motor types sized in the 170 x 42 mm pancake, both packagings, with explicit thermal and copper assumptions; A3 (one 12-layer 3 oz PCB stator between two Halbach rotors, reducer in the bore) is the best buildable option at 3.13 N.m continuous, 9.4 N.m peak, 1.18 kg motor; C1 (wound flat coils) is the upgrade in the same rotors; the radial ring tops the chart only because it is iron-core. 08: the A3 design point (19 pole pairs, 48 coils, 76 Halbach blocks per rotor, Kt 0.107, 29 A continuous), each joint on it, the cycloid in the bore with pin loads and bearing loads, the 27 mm axial stack, the mass roll-up (2.7 kg per femur/knee unit, 2.3 kg yaw), the thermal sensitivity (R_th 1.0-3.0 K/W gives 4.0-2.0 N.m), the electrical interface and the first-unit test plan.
+The A3 actuator designed as parts, not models: a 36-coil 12-layer 3 oz stator board laid out with KiCad's API (DRC clean, gerbers), the Halbach rotor field simulated with off-the-shelf 30x8x5 N48H blocks (0.95 T at the board, 2.3 kN pull between rotors), the unit modelled in build123d (fixed pin cylinder through an open-bottom rotor cup, one 10 mm cycloid disc on an HK2512, RB5013 crossed-roller output in the mounting face: 38.7 mm tall but Ø186, 3.40 kg), the stator thermal network from that geometry (0.80 K/W copper to housing; the body's cooling, not the motor, sets the sustained torque), and a bill of materials at about $1.3k per unit at one-off prices. Femur 141 N·m continuous at 55:1 against 135 needed; yaw dropped to 30:1.
 
 ## What you are agreeing to
+
+**cad-femur-cutaway.png**
+
+![cad-femur-cutaway.png](../design/actuator/cad-femur-cutaway.png)
+
+**cad-femur-iso.png**
+
+![cad-femur-iso.png](../design/actuator/cad-femur-iso.png)
+
+**cad-femur-section.png**
+
+![cad-femur-section.png](../design/actuator/cad-femur-section.png)
+
+**cad-knee-cutaway.png**
+
+![cad-knee-cutaway.png](../design/actuator/cad-knee-cutaway.png)
+
+**cad-knee-section.png**
+
+![cad-knee-section.png](../design/actuator/cad-knee-section.png)
+
+**cad-yaw-cutaway.png**
+
+![cad-yaw-cutaway.png](../design/actuator/cad-yaw-cutaway.png)
+
+**cad-yaw-section.png**
+
+![cad-yaw-section.png](../design/actuator/cad-yaw-section.png)
 
 **cycloid-profiles.png**
 
@@ -13,6 +41,10 @@
 **operating-envelopes.png**
 
 ![operating-envelopes.png](../design/actuator/operating-envelopes.png)
+
+**rotor-field.png**
+
+![rotor-field.png](../design/actuator/rotor-field.png)
 
 **section-pcb-1.png**
 
@@ -30,18 +62,27 @@
 
 ![section-wound-2.png](../design/actuator/section-wound-2.png)
 
+**stator-F_Cu.svg**
+
+![stator-F_Cu.svg](../design/actuator/stator-F_Cu.svg)
+
+**stator-In9_Cu.svg**
+
+![stator-In9_Cu.svg](../design/actuator/stator-In9_Cu.svg)
+
 **stator-rotor-layout.png**
 
 ![stator-rotor-layout.png](../design/actuator/stator-rotor-layout.png)
 
-**torque-density.png**
+**thermal-network.png**
 
-![torque-density.png](../design/motor/torque-density.png)
+![thermal-network.png](../design/actuator/thermal-network.png)
 
 | File | Opens in |
 |---|---|
-| [docs/design/07-motor-options-in-envelope.md](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/docs/design/07-motor-options-in-envelope.md) | renders on GitHub |
+| [docs/design/01-sizing.md](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/docs/design/01-sizing.md) | renders on GitHub |
 | [docs/design/08-actuator-design.md](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/docs/design/08-actuator-design.md) | renders on GitHub |
+| [docs/design/bom-actuator.csv](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/docs/design/bom-actuator.csv) | GitHub table view |
 
 ## For context
 
@@ -49,15 +90,55 @@ Sources and working files. Not part of the agreement — these change as work go
 
 | File | Opens in |
 |---|---|
-| [analysis/actuator_design.py](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/analysis/actuator_design.py) | plain text on GitHub |
-| [analysis/cycloid.py](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/analysis/cycloid.py) | plain text on GitHub |
-| [analysis/motor_options.py](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/analysis/motor_options.py) | plain text on GitHub |
+| [analysis/rotor_field.py](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/analysis/rotor_field.py) | plain text on GitHub |
+| [analysis/stator_asbuilt.py](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/analysis/stator_asbuilt.py) | plain text on GitHub |
+| [analysis/stator_thermal.py](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/analysis/stator_thermal.py) | plain text on GitHub |
+| [cad/actuator/actuator.py](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/cad/actuator/actuator.py) | plain text on GitHub |
+| [hw/stator/gerbers/stator-B_Adhesive.gba](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/hw/stator/gerbers/stator-B_Adhesive.gba) | download |
+| [hw/stator/gerbers/stator-B_Courtyard.gbr](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/hw/stator/gerbers/stator-B_Courtyard.gbr) | a gerber viewer |
+| [hw/stator/gerbers/stator-B_Cu.gbl](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/hw/stator/gerbers/stator-B_Cu.gbl) | download |
+| [hw/stator/gerbers/stator-B_Fab.gbr](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/hw/stator/gerbers/stator-B_Fab.gbr) | a gerber viewer |
+| [hw/stator/gerbers/stator-B_Mask.gbs](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/hw/stator/gerbers/stator-B_Mask.gbs) | download |
+| [hw/stator/gerbers/stator-B_Paste.gbp](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/hw/stator/gerbers/stator-B_Paste.gbp) | download |
+| [hw/stator/gerbers/stator-B_Silkscreen.gbo](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/hw/stator/gerbers/stator-B_Silkscreen.gbo) | download |
+| [hw/stator/gerbers/stator-Edge_Cuts.gm1](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/hw/stator/gerbers/stator-Edge_Cuts.gm1) | download |
+| [hw/stator/gerbers/stator-F_Adhesive.gta](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/hw/stator/gerbers/stator-F_Adhesive.gta) | download |
+| [hw/stator/gerbers/stator-F_Courtyard.gbr](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/hw/stator/gerbers/stator-F_Courtyard.gbr) | a gerber viewer |
+| [hw/stator/gerbers/stator-F_Cu.gtl](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/hw/stator/gerbers/stator-F_Cu.gtl) | download |
+| [hw/stator/gerbers/stator-F_Fab.gbr](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/hw/stator/gerbers/stator-F_Fab.gbr) | a gerber viewer |
+| [hw/stator/gerbers/stator-F_Mask.gts](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/hw/stator/gerbers/stator-F_Mask.gts) | download |
+| [hw/stator/gerbers/stator-F_Paste.gtp](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/hw/stator/gerbers/stator-F_Paste.gtp) | download |
+| [hw/stator/gerbers/stator-F_Silkscreen.gto](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/hw/stator/gerbers/stator-F_Silkscreen.gto) | download |
+| [hw/stator/gerbers/stator-In10_Cu.g10](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/hw/stator/gerbers/stator-In10_Cu.g10) | download |
+| [hw/stator/gerbers/stator-In1_Cu.g1](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/hw/stator/gerbers/stator-In1_Cu.g1) | download |
+| [hw/stator/gerbers/stator-In2_Cu.g2](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/hw/stator/gerbers/stator-In2_Cu.g2) | download |
+| [hw/stator/gerbers/stator-In3_Cu.g3](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/hw/stator/gerbers/stator-In3_Cu.g3) | download |
+| [hw/stator/gerbers/stator-In4_Cu.g4](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/hw/stator/gerbers/stator-In4_Cu.g4) | download |
+| [hw/stator/gerbers/stator-In5_Cu.g5](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/hw/stator/gerbers/stator-In5_Cu.g5) | download |
+| [hw/stator/gerbers/stator-In6_Cu.g6](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/hw/stator/gerbers/stator-In6_Cu.g6) | download |
+| [hw/stator/gerbers/stator-In7_Cu.g7](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/hw/stator/gerbers/stator-In7_Cu.g7) | download |
+| [hw/stator/gerbers/stator-In8_Cu.g8](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/hw/stator/gerbers/stator-In8_Cu.g8) | download |
+| [hw/stator/gerbers/stator-In9_Cu.g9](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/hw/stator/gerbers/stator-In9_Cu.g9) | download |
+| [hw/stator/gerbers/stator-Margin.gbr](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/hw/stator/gerbers/stator-Margin.gbr) | a gerber viewer |
+| [hw/stator/gerbers/stator-User_1.gbr](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/hw/stator/gerbers/stator-User_1.gbr) | a gerber viewer |
+| [hw/stator/gerbers/stator-User_2.gbr](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/hw/stator/gerbers/stator-User_2.gbr) | a gerber viewer |
+| [hw/stator/gerbers/stator-User_3.gbr](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/hw/stator/gerbers/stator-User_3.gbr) | a gerber viewer |
+| [hw/stator/gerbers/stator-User_4.gbr](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/hw/stator/gerbers/stator-User_4.gbr) | a gerber viewer |
+| [hw/stator/gerbers/stator-User_Comments.gbr](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/hw/stator/gerbers/stator-User_Comments.gbr) | a gerber viewer |
+| [hw/stator/gerbers/stator-User_Drawings.gbr](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/hw/stator/gerbers/stator-User_Drawings.gbr) | a gerber viewer |
+| [hw/stator/gerbers/stator-User_Eco1.gbr](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/hw/stator/gerbers/stator-User_Eco1.gbr) | a gerber viewer |
+| [hw/stator/gerbers/stator-User_Eco2.gbr](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/hw/stator/gerbers/stator-User_Eco2.gbr) | a gerber viewer |
+| [hw/stator/gerbers/stator-job.gbrjob](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/hw/stator/gerbers/stator-job.gbrjob) | download |
+| [hw/stator/gerbers/stator.drl](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/hw/stator/gerbers/stator.drl) | download |
+| [hw/stator/stator.kicad_pcb](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/hw/stator/stator.kicad_pcb) | KiCad |
 
 ## What we need decided
 
-1. A3 (12-layer 3 oz PCB stator, one per joint, in-plane cycloid) as the design to prototype, with C1 wound coils as the fallback stator in the same housing?
-2. Pole count: 19 pole pairs with a 40 kHz-class custom driver, or 14 with an off-the-shelf FOC driver at ~10 % less torque?
-3. The mass roll-up says 2.3-2.7 kg per actuator, not 1.1 kg. Which lever: thinner discs, a smaller magnet annulus on the yaw unit, accept a heavier robot, or buy iron-core frameless motors at 2-3x the torque density and 3-4 kg each?
+1. The unit came out Ø186 instead of Ø170 because the board's phase rings and clamp sit outside the magnets. Accept Ø186, or spend a round moving the interconnect to the bore side?
+2. A femur/knee unit is 3.4 kg in the CAD against the 1.1 kg the mass budget carried (18 units: 60 kg instead of 20). Renegotiate the mass budget, or cut the joint torque requirement?
+3. One cycloid disc fits the 42 mm height but puts 12.8 kN on the needle bearing at the femur peak (about 100 h L10 at the continuous rating, 2000 h at walking loads). Keep one disc at 39 mm, or two discs at 52 mm?
+4. The canonical stator needs a 3 oz 12-layer board (PCBWay-class); the 2 oz 16-layer JLCPCB fallback gives 11 % less torque and needs 60:1 / 65:1. Which board do we order first?
+5. Sustained torque with all joints active is set by the body's ability to shed ~300 W, about half the per-joint rating. Is that acceptable for the terrain demo, or do the hip pods get forced air?
 
 ## Decision
 

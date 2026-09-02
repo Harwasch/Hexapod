@@ -53,10 +53,11 @@ chunks:
       loads, efficiency) against the requirement in 01-sizing.md. Decide
       single vs two stators, ratio, and whether to buy for the first leg.
     discipline: mechanical
-    status: todo
+    status: in_progress
     depends_on: [V1]
     estimate_sessions: 2
-    outputs: [docs/design/adr-0001-actuator.md, cad/actuator/]
+    review: actuator
+    outputs: [docs/design/08-actuator-design.md, hw/stator/, cad/actuator/, docs/design/bom-actuator.csv]
 
   - id: A2
     title: Actuator prototype and dyno

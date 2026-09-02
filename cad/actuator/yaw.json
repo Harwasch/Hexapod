@@ -1,24 +1,24 @@
 {
  "joint": "yaw",
- "N": 45,
- "e": 0.7565217391304349,
- "r_pin": 2.0,
- "n_pins": 46,
+ "N": 30,
+ "e": 1.1225806451612905,
+ "r_pin": 3.0,
+ "n_pins": 31,
  "mass_g": {
-  "base": 408.8,
-  "ring_pins": 54.5,
-  "upper_ring": 136.8,
+  "base": 431.3,
+  "ring_pins": 82.6,
+  "upper_ring": 116.6,
   "cover": 145.4,
   "stator": 133.9,
-  "rotor_cup": 516.5,
-  "magnets": 1080.0,
+  "rotor_cup": 506.7,
+  "magnets": 810.0,
   "shaft": 119.5,
-  "disc": 356.9,
+  "disc": 377.6,
   "output_flange": 74.1,
   "output_pins": 67.6,
   "bearings": 332.9
  },
- "total_g": 3426.9,
+ "total_g": 3198.2,
  "od_mm": 186.0,
  "height_mm": 38.7,
  "bbox": [
@@ -28,21 +28,21 @@
  ],
  "z": {
   "board": [
-   18.0,
-   20.2
+   20.0,
+   22.2
   ],
   "bot_mag": [
-   9.5,
-   17.5
+   13.5,
+   19.5
   ],
   "top_mag": [
-   20.7,
+   22.7,
    28.7
   ],
   "carriers": [
    [
-    5.0,
-    9.5
+    9.0,
+    13.5
    ],
    [
     28.7,
@@ -59,9 +59,9 @@
    38.7
   ]
  },
- "magnet": "rect 30x5x8 N48",
+ "magnet": "rect 30x5x6 N48",
  "gap_magnet_to_magnet_mm": 3.2,
- "rotor_attraction_N": 2300,
+ "rotor_attraction_N": 1807,
  "carrier_t_mm": 4.5,
- "carrier_deflection_mm": 0.06
+ "carrier_deflection_mm": 0.048
 }

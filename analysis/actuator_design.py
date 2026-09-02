@@ -11,6 +11,7 @@ docs/design/08-actuator-design.md and docs/design/actuator/*.png.
 """
 from __future__ import annotations
 
+import json
 import math
 import os
 import sys
@@ -33,7 +34,7 @@ os.makedirs(FIG, exist_ok=True)
 
 ETA = 0.88                                       # cycloid efficiency assumed in the sizing
 JOINTS = {                                       # ratio, joint continuous / peak N·m (01-sizing §6), swing rad/s
-    "yaw":   dict(N=45, T_cont=55.0, T_peak=58.0, w_swing=8.6),
+    "yaw":   dict(N=30, T_cont=55.0, T_peak=58.0, w_swing=8.6),
     "femur": dict(N=55, T_cont=135.0, T_peak=245.0, w_swing=3.8),
     "knee":  dict(N=60, T_cont=143.0, T_peak=300.0, w_swing=3.8),
 }
@@ -87,6 +88,18 @@ SEC_A3 = sec.draw("pcb", 1)
 SEC_C1 = sec.draw("wound", 1)
 
 RHO_STEEL, RHO_AL = 7.85e-6, 2.7e-6                          # kg/mm³
+
+# ---- round 5: what was actually built and simulated ---------------------------------
+import csv
+AB = json.load(open(os.path.join(ROOT, "hw", "stator", "asbuilt.json")))
+AB16 = json.load(open(os.path.join(ROOT, "hw", "stator", "variants", "asbuilt.json")))
+RF = json.load(open(os.path.join(ROOT, "hw", "stator", "rotor_field.json")))
+TH = json.load(open(os.path.join(ROOT, "hw", "stator", "thermal.json")))
+CADJ = {j: json.load(open(os.path.join(ROOT, "cad", "actuator", f"{j}.json"))) for j in ("femur", "knee", "yaw")}
+BOM = list(csv.DictReader(open(os.path.join(ROOT, "docs", "design", "bom-actuator.csv"))))
+BOM_UNIT = sum(float(r["qty_per_unit"]) * float(r["unit_price_usd"]) for r in BOM)
+HK2512 = dict(Cr=11.8e3, C0r=16.3e3, n_lim=6500)                # NTN sheet, docs/reference/ntn-hk2512.pdf
+RB5013 = dict(C=16.7e3, C0=20.9e3, mass=0.27)                    # THK catalogue 382-5E, docs/reference
 
 
 def mass_rollup(m, n_discs=2, t_disc=8.0):
@@ -241,6 +254,41 @@ def write_doc(figs):
     rrow = [(f"{r:.1f}", f"{t:.2f}", f"{t/A3_J['femur']['t_cont']:.2f}") for r, t in RTH_TRADE]
     mrows = [(k, f"{v*1e3:.0f}") for k, v in MASS_A3.items()] + [("**total, femur / knee unit**", f"**{TOTAL_A3*1e3:.0f}**")]
     mrows2 = [(f"same with 5 mm discs", f"{TOTAL_A3_THIN*1e3:.0f}"), (f"yaw unit: 6-layer board, {YAW_LEAN['h_m']*1e3:.1f} mm magnets, one disc", f"{TOTAL_YAW*1e3:.0f}")]
+    cad_mrows = [(k, f"{CADJ['femur']['mass_g'][k]:.0f}", f"{CADJ['yaw']['mass_g'][k]:.0f}") for k in CADJ['femur']['mass_g']] + \
+                [("**total**", f"**{CADJ['femur']['total_g']:.0f}**", f"**{CADJ['yaw']['total_g']:.0f}**")]
+    b12, b16 = AB, AB16
+    brd_rows = [
+        ("Layers × copper", f"{b12['layers']} × {b12['copper_oz']:.0f} oz", f"{b16['layers']} × {b16['copper_oz']:.0f} oz"),
+        ("Finished thickness", f"{b12['t_board_mm']:.2f} mm", f"{b16['t_board_mm']:.2f} mm"),
+        ("Who can build it", "PCBWay-class heavy copper", "JLCPCB standard (inner copper ≤ 2 oz)"),
+        ("Series turns per phase", f"{b12['series_turns_per_phase']}", f"{b16['series_turns_per_phase']}"),
+        ("Phase resistance at 120 °C", f"{b12['R_ph_mohm']:.1f} mΩ (interconnect {b12['R_inter_mohm']:.1f})", f"{b16['R_ph_mohm']:.1f} mΩ"),
+        ("Kt", f"{b12['Kt']:.3f} N·m/A rms", f"{b16['Kt']:.3f}"),
+        ("No-load speed at 48 V", f"{b12['n_noload_rpm']:.0f} rpm", f"{b16['n_noload_rpm']:.0f} rpm"),
+        ("Continuous torque, 1000 / 1600 / 2500 rpm", " / ".join(f"{b12['ratings'][k]['T_cont']:.2f}" for k in ("1000", "1600", "2500")) + " N·m",
+         " / ".join(f"{b16['ratings'][k]['T_cont']:.2f}" for k in ("1000", "1600", "2500"))),
+        ("Peak torque (3× current)", f"{b12['ratings']['1000']['T_peak']:.2f} N·m", f"{b16['ratings']['1000']['T_peak']:.2f}"),
+        ("Eddy loss at 2500 rpm", f"{b12['ratings']['2500']['P_eddy']:.0f} W", f"{b16['ratings']['2500']['P_eddy']:.0f} W"),
+        ("Copper mass", f"{b12['copper_mass_g']:.0f} g", f"{b16['copper_mass_g']:.0f} g"),
+        ("Ratios that close femur / knee", "55 / 60", "60 / 65"),
+    ]
+    rf_rows = [(k, f"{v['w_b_mm']:.0f} × {v['h_m_mm']:.0f}", f"{v['B1_midplane']:.2f}", f"{v['B_peak_surface']:.2f}", f"{v['ratio_to_model']:.2f}",
+                f"{v['magnet_mass_g']:.0f}", f"{v['attraction_N']/1e3:.1f}") for k, v in RF.items()]
+    th = TH["variants"]["as built"]
+    th_rows = [("copper → board faces (2.25 mm slab)", f"{th['R_slab']:.2f}"), ("faces → magnets, two 0.5 mm air films", f"{th['R_faces']:.2f}"),
+               ("rotor cup → housing, 0.5 mm air films", f"{th['R_rotor_housing']:.2f}"), ("board rim: FR4 gaps and the clamp", f"{th['R_rim']:.2f}"),
+               ("**copper → housing**", f"**{th['R_to_housing']:.2f}**")]
+    th_case_rows = [(k, f"{v['P_allow']:.0f}", f"{v['I_cont']:.1f}", f"{v['T_cont']:.2f}", f"{v['T_magnet']:.0f}") for k, v in th["cases"].items()]
+    joint_rows = []
+    for name, j in JOINTS.items():
+        b1 = RF[CADJ[name]["magnet"]]["B1_midplane"] / RF["rect 30x5x8 N48"]["B1_midplane"]
+        t_cont = AB["ratings"]["1000"]["T_cont"] * b1
+        t_peak = AB["ratings"]["1000"]["T_peak"] * b1
+        joint_rows.append((name, f"{j['N']}:1", CADJ[name]["magnet"].replace("rect ", "").replace(" N48", ""), f"{t_cont:.2f} / {t_peak:.2f}",
+                           f"{t_cont*j['N']*ETA:.0f} / {t_peak*j['N']*ETA:.0f}", f"{j['T_cont']:.0f} / {j['T_peak']:.0f}",
+                           f"{t_cont*j['N']*ETA/j['T_cont']:.2f} / {t_peak*j['N']*ETA/j['T_peak']:.2f}",
+                           f"{AB['n_noload_rpm']/b1/j['N']*2*math.pi/60:.1f} (need {j['w_swing']:.1f})", f"{CADJ[name]['total_g']/1000:.2f}"))
+    bom_rows = [(r["item"], r["qty_per_unit"], r["spec"][:90], f"{float(r['qty_per_unit'])*float(r['unit_price_usd']):.0f}", r["verified"]) for r in BOM]
     crows = []
     for name, d in CYC.items():
         crows.append((name, f"{d['N']}:1", f"{d['N']+1} × Ø{2*d['r_pin']:.1f}", f"{d['e']:.2f}", f"{d['F_pin']:.0f}", f"{d['sigma_peak']:.0f}", f"{d['F_ecc']:.0f}", f"{d['F_out']:.0f}"))
@@ -271,11 +319,16 @@ stator that drops into the same rotors and housing as the torque upgrade.
   magnets). The sizing model has been updated to the study's values and the
   per-DOF plan is now one stator at 45 / 55 / 60:1.
 * **The actuator mass budget does not close at 1.1 kg.** A femur or knee unit
-  rolls up to {TOTAL_A3*1e3:.0f} g with the reducer, bearings and housing (§5).
-  The magnets alone are {m['m_mag']*1e3:.0f} g. This has to go back to the mass budget.
-* **The whole result rests on the thermal path**: {mo.R_TH_NOMINAL} K/W from the stator
-  copper to ambient through the board rim and the housing. §6 shows what
-  1.0 to 3.0 K/W does.
+  is {CADJ['femur']['total_g']/1000:.2f} kg in the CAD (§5, §9.3). The magnets alone are {CADJ['femur']['mass_g']['magnets']:.0f} g. This has
+  to go back to the mass budget.
+* **The whole result rests on the thermal path.** §6 and §9.4: the copper
+  to housing path is {TH['variants']['as built']['R_to_housing']:.2f} K/W as built, but the robot as a whole can only
+  shed a few hundred watts, so the sustained torque is about half the rating.
+* **Round 5 (this revision) designed the parts**: the stator board is laid
+  out and DRC-clean with gerbers (`hw/stator`), the rotor field is simulated
+  with off-the-shelf blocks, the unit is modelled in build123d with a bill of
+  materials, and the numbers in §9 are from those artefacts. Where they
+  disagree with the model numbers above, §9 wins.
 
 ### Why the radial ring tops the study's chart, and why that is not "radial beats axial"
 
@@ -337,76 +390,78 @@ candidate for a lighter build (§5). Every joint has at least
 
 ## 4. The reducer in the bore
 
-The cycloid sits inside the r < 50 mm bore with its ring pins in the housing's
-bore wall and two discs 180° apart on a twin-lobe eccentric, which balances the
-disc mass at motor speed. From `analysis/cycloid.py`:
+The cycloid sits inside the r < 50 mm bore with its ring pins in a fixed
+cylinder that rises from the mounting plate, and (since round 5) **one 10 mm
+disc** on the eccentric: the CAD in §9 shows a second disc costs 12 mm of
+height the 42 mm envelope does not have. From `analysis/cycloid.py`:
 
 {md(("Joint", "Ratio", "Ring pins", "Eccentricity (mm)", "Peak ring-pin force (N, per disc)", "Hertz, peak (MPa; 1400 allowed)", "Eccentric bearing load, peak (N, per disc)", "Output-pin force, peak (N)"), crows)}
 
 ![Cycloid profiles]({rel(os.path.join(FIG, 'cycloid-profiles.png'))})
 
-* **Discs**: 8 mm hardened steel (4140 through-hardened or case-hardened
-  1018), profile laser- or water-jet cut then the lobes ground or left as-cut
-  for the first units; Ø{2*(cy.R_PIN_CIRCLE-3):.0f} mm, ~{MASS_A3[list(MASS_A3)[1]]*1e3/2:.0f} g each. 5 mm discs save
-  {(TOTAL_A3-TOTAL_A3_THIN)*1e3:.0f} g per actuator at {math.sqrt(8/5):.2f}× the Hertz stress, still inside the allowable.
-* **Ring pins**: hardened dowel pins, Ø{2*CYC['femur']['r_pin']:.1f} mm for femur, Ø{2*CYC['yaw']['r_pin']:.1f} mm for yaw,
-  pressed into the bore wall. Needle rollers on the pins would cut friction
-  and are the first upgrade if efficiency measures below 85 %.
-* **Eccentric bearings**: the input torque works through a {CYC['femur']['e']:.2f} mm
-  eccentricity, so the radial load on each disc's bearing is
-  {CYC['femur']['F_ecc']/1e3:.1f} kN at the femur peak and ~{CYC['femur']['F_ecc']/1e3*JOINTS['femur']['T_cont']/JOINTS['femur']['T_peak']:.1f} kN continuous. That is a
-  drawn-cup needle bearing (HK4012 class, 40 × 47 × 12: C0 ≈ 25 kN, C ≈ 20 kN
-  — catalogue values to verify), not a ball bearing. Life at the continuous
-  load is well over 10⁹ revolutions.
-* **Output bearing**: the yaw unit's output flange carries the coxa's
-  overturning moment (270 N·m at the peak foot load), which needs a
-  thin-section four-point-contact or cross-roller bearing of ~Ø110 mm on the
-  output flange; the femur and knee outputs see only their drive torque.
-* **Ratio note**: with a single stator at {m['T_cont']:.2f} N·m the yaw joint could drop
-  to ~25:1 (e = 1.3 mm, lower bearing load, more transparent). Kept at 45:1
-  this round so the three units share one disc family; revisit with the
-  transmission.
+* **Disc**: 10 mm hardened steel (42CrMo4 or 1.2379, 58 HRC), wire-EDM
+  profile from `cycloid.profile`, {CADJ['femur']['mass_g']['disc']:.0f} g with eight lightening holes.
+  Hertz stress at the femur peak is {CYC['femur']['sigma_peak']:.0f} MPa against 1400 allowed.
+* **Ring pins**: standard hardened dowels, Ø{2*CYC['femur']['r_pin']:.0f} mm for femur and knee,
+  Ø{2*CYC['yaw']['r_pin']:.0f} mm for yaw, in half-grooves in the fixed cylinder's bore. Needle
+  rollers on the pins are the first upgrade if efficiency measures below 85 %.
+* **Eccentric bearing**: HK2512 drawn-cup needle (25 × 32 × 12; Cr {HK2512['Cr']/1e3:.1f} kN,
+  C0r {HK2512['C0r']/1e3:.1f} kN from the NTN sheet in `docs/reference`). The load is
+  T/R + T/(N·e) ≈ 2.25 T/R whatever the ratio: {CYC['femur']['F_ecc']/1e3:.1f} kN at the femur peak
+  (static margin {HK2512['C0r']/CYC['femur']['F_ecc']:.2f}) and {CYC['femur']['F_ecc']/1e3*JOINTS['femur']['T_cont']/JOINTS['femur']['T_peak']:.1f} kN at the continuous
+  rating, where L10 is only {(HK2512['Cr']/(CYC['femur']['F_ecc']*JOINTS['femur']['T_cont']/JOINTS['femur']['T_peak']))**(10/3)/1e6:.0f} million revolutions
+  ({(HK2512['Cr']/(CYC['femur']['F_ecc']*JOINTS['femur']['T_cont']/JOINTS['femur']['T_peak']))**(10/3)/60/1000:.0f} h at 1000 rpm). At a walking-average torque of 40 % of the rating it is
+  {(HK2512['Cr']/(0.4*CYC['femur']['F_ecc']*JOINTS['femur']['T_cont']/JOINTS['femur']['T_peak']))**(10/3)/60/1000:.0f} h. **This is the single-disc penalty**: two discs halve the load and
+  give 10× the life, for 12 mm of height (§9.3). The choice is the human's.
+* **Output bearing**: RB5013 crossed roller (50 × 80 × 13; C {RB5013['C']/1e3:.1f} kN, C0 {RB5013['C0']/1e3:.1f} kN,
+  THK catalogue) in the mounting face; it carries the output flange and the
+  drive torque. The coxa's 270 N·m overturning moment at the yaw output is a
+  separate, larger bearing in the hip structure, not in the unit.
+* **Ratio**: the yaw joint dropped to 30:1 this round (e = {CYC['yaw']['e']:.2f} mm, 31 pins Ø6):
+  {AB['ratings']['1000']['T_cont']*RF['rect 30x5x6 N48']['B1_midplane']/RF['rect 30x5x8 N48']['B1_midplane']*30*ETA:.0f} N·m continuous against 55 needed, and 19 rad/s at the joint against the
+  8.6 rad/s swing. The three units still share one disc blank.
 
 ## 5. Stack-up, mass and cost
 
-![Actuator section, A3]({rel(SEC_A3[0])})
+The analytic stack-up of round 4 ({SEC_A3[1]['total']:.1f} mm) has been replaced by the
+CAD in §9.3: **{CADJ['femur']['height_mm']:.1f} mm tall, Ø{CADJ['femur']['od_mm']:.0f}**. The masses below are
+from the model's solids, not estimates.
 
-Axial stack for A3: {SEC_A3[1]['total']:.1f} mm of the 42 mm envelope, the cycloid's 18 mm
-inside the motor's height. C1 needs {SEC_C1[1]['total']:.1f} mm.
+{md(("Part", "Femur / knee (g)", "Yaw (g)"), cad_mrows)}
 
-{md(("Part", "Mass (g)"), mrows)}
+Eighteen actuators at about {(2*CADJ['femur']['total_g'] + CADJ['yaw']['total_g'])*6/1000:.0f} kg against the {18*1.1:.0f} kg the mass
+budget carries. The magnets ({CADJ['femur']['mass_g']['magnets']:.0f} g), the rotor cup and the base are the
+big items. Per unit that is {JOINTS['femur']['T_cont']*A3_J['femur']['margin_cont']/CADJ['femur']['total_g']*1e3:.0f} N·m/kg continuous and
+{JOINTS['femur']['T_peak']*A3_J['femur']['margin_peak']/CADJ['femur']['total_g']*1e3:.0f} N·m/kg peak at the joint — respectable for an actuator, but the 1.1 kg
+line in the mass budget was written for a much smaller joint torque and has
+to be renegotiated: the robot is ~{(2*CADJ['femur']['total_g'] + CADJ['yaw']['total_g'])*6/1000 - 18*1.1:.0f} kg heavier than 01-sizing carries.
 
-{md(("Variant", "Mass (g)"), mrows2)}
-
-So the femur and knee units land near {TOTAL_A3*1e3/1000:.1f} kg and a lean yaw unit near
-{TOTAL_YAW*1e3/1000:.1f} kg: eighteen actuators at about {(2*TOTAL_A3 + TOTAL_YAW)*6:.0f} kg against the
-{18*1.1:.0f} kg the mass budget carries. The magnets ({m['m_mag']*1e3:.0f} g per unit) and the
-steel discs are the two big items; the levers are thinner discs, a smaller
-magnet annulus on the yaw unit, and accepting a heavier robot. This is the
-first thing to renegotiate with the mass budget.
-
-Parts cost per unit, order of magnitude: motor ~${m['cost']:.0f}, cycloid discs and pins
-~$80 (laser-cut and hardened), bearings ~$40, housing ~$60 (machined), encoder
-and driver share ~$60 — about **$530 per actuator, $9.5k for eighteen**, against
-the $8–11k off-the-shelf benchmark. The custom unit wins on the pancake stack
-and on serviceability rather than on parts cost.
+Parts cost per unit from the BOM in §9.6: about **${BOM_UNIT:.0f} at prototype quantities
+including a ${[r for r in BOM if r['item']=='Motor driver'][0]['unit_price_usd']} driver**, ${BOM_UNIT*18/1000:.1f}k for eighteen. Machining is
+~${sum(float(r['unit_price_usd']) for r in BOM if 'machined' in r['part'] or 'EDM' in r['part'] or 'turned' in r['part']):.0f} of it at one-off prices and falls 2–3× at 50 units.
 
 ## 6. Thermal: the assumption everything rests on
 
-The continuous rating is set by {mo.R_TH_NOMINAL} K/W from copper to ambient. The
-board's own radial conduction is small (thin copper, short path to the rim),
-so the number is really the bond from the board rim to the housing and from
-the housing to the body.
+The continuous rating is set by the thermal resistance from the copper to
+ambient. Round 4 assumed {mo.R_TH_NOMINAL} K/W; §9.4 computes it from the built geometry:
+**{TH['variants']['as built']['R_to_housing']:.2f} K/W from the copper to the housing**, and three quarters of that heat
+leaves through the 0.5 mm air films to the rotors, not through the board rim.
+What the number really depends on is the housing's own path to ambient — the
+body it is bolted into.
 
 {md(("R_th stator→ambient (K/W)", "A3 continuous torque (N·m)", "Femur margin"), rrow)}
 
-Three motors share one hip pod, so at full continuous rating the pod has to
-reject about {3*(m['P_cu']+m['P_eddy']):.0f} W. On a walk the RMS torque is well under the corner
-rating the joints are sized to — at half the continuous torque the losses
-are a quarter — so the pod's steady load is nearer {3*(m['P_cu']+m['P_eddy'])/4:.0f} W. The design
-rules that follow: the stator rim clamped, not glued, into an aluminium ring
-that is part of the housing; the housing bolted face-to-face to the hip pod
-plate; a temperature sensor on every stator; and the dyno test that measures
+Three motors share one hip pod. At the full continuous rating each unit
+dissipates ~50 W; eighteen of them are 900 W, which a ~1.2 m² body in still
+air cannot shed (it would run 75 K hot). The sustained thermal budget of the
+robot is nearer 300 W, i.e. 17 W per unit: {TH['variants']['as built']['cases']['sustained: 300 W robot budget / 18']['T_cont']:.2f} N·m per motor,
+{TH['variants']['as built']['cases']['sustained: 300 W robot budget / 18']['T_cont']*55*ETA:.0f} N·m at the femur, all joints at once, indefinitely. The
+per-joint continuous rating is a rating for one joint at a time or for
+minutes, not for the whole robot for hours; the gait's average torque is what
+the body has to be able to cool. Design rules that follow: the stator rim
+clamped, not glued, into the housing; the housing bolted face-to-face to the
+hip pod plate; a temperature sensor on every stator; N48**H** magnets (they run
+{TH['variants']['as built']['cases']['unit alone in still air']['T_magnet']:.0f} °C in a free-standing unit at its rating); and the dyno test that measures
 R_th on the real housing before anything else is trusted.
 
 ## 7. C1, the upgrade in the same rotors
@@ -431,7 +486,104 @@ part change.
   on the output (the cycloid has backlash and the transmission adds
   compliance); temperature sensor on the stator.
 
-## 9. What the first unit has to prove
+## 9. Round 5: the parts, as designed
+
+### 9.1 The stator board — `hw/stator/stator.kicad_pcb`, DRC clean, gerbers in `hw/stator/gerbers`
+
+Generated with KiCad's `pcbnew` API by `hw/stator/make_stator.py`: 36 coils,
+15 pole pairs, 10-turn spirals on every layer (odd layers spiral in, even
+layers spiral out, joined by a centre via), 0.28 mm trace / 0.15 mm space,
+0.6 mm coil-to-coil gap. The winding respects what the study's sheet model
+skipped: only coils with identical EMF phasors may be paralleled, so each
+phase is four series turns-groups of two parallel coils per 12-coil repeat,
+four repeats in parallel through three-layer phase rings at the rim and a
+star ring at the bore. `analysis/stator_asbuilt.py` rates the copper that is
+actually on the board (resistance element by element, Kt from every radial
+leg in the simulated field):
+
+{md(("Quantity", "12 L × 3 oz (canonical)", "16 L × 2 oz (fallback)"), brd_rows)}
+
+![Stator F.Cu]({rel(os.path.join(FIG, 'stator-F_Cu.svg'))})
+
+![Stator In9.Cu, the M-arc and star layer]({rel(os.path.join(FIG, 'stator-In9_Cu.svg'))})
+
+### 9.2 The rotor field with blocks you can buy — `analysis/rotor_field.py`
+
+Two facing four-segment Halbach rings of rectangular blocks, 2-D
+surface-charge model at the mean radius, gap {AB['h_m_mm']*0+3.2:.1f} mm magnet face to magnet face:
+
+{md(("Blocks", "w × h (mm)", "B₁ at the board (T)", "B at the magnet face (T)", "vs the study's model", "Magnet mass (g)", "Rotor attraction (kN)"), rf_rows)}
+
+![Rotor field]({rel(os.path.join(FIG, 'rotor-field.png'))})
+
+Rectangular 5 mm blocks fill 71 % of the 7 mm segment at the mean radius and
+give 84 % of the trapezoid field; 8 mm thick blocks (30 × 8 × 5, a standard
+size stood on edge) buy that back. **Chosen: 30 × 8 × 5 N48H for the femur and
+knee, 30 × 6 × 5 for the yaw.** Half the blocks are magnetised through their
+5 mm dimension, half through the 8 mm — specify both. The {RF['rect 30x5x8 N48']['attraction_N']/1e3:.1f} kN
+attraction between the rotors sizes the 4.5 mm carriers ({CADJ['femur']['carrier_deflection_mm']:.2f} mm deflection).
+
+### 9.3 The unit — `cad/actuator/actuator.py`, STEP and STL in `build/cad/`
+
+![Femur unit, section]({rel(os.path.join(FIG, 'cad-femur-section.png'))})
+
+![Femur unit, cutaway]({rel(os.path.join(FIG, 'cad-femur-cutaway.png'))})
+
+![Femur unit from below]({rel(os.path.join(FIG, 'cad-femur-iso.png'))})
+
+The topology that makes "the reducer inside the motor" buildable: the fixed
+pin cylinder rises from the mounting plate through the **open bottom of the
+rotor cup** (a bottom carrier ring, a drum through the board bore, a top
+carrier with the hub); the disc sits inside the cylinder in the motor's own
+height; the output flange rides the crossed roller in the mounting face and
+exits through it, so the output and the mounting are on the same side, like a
+flat harmonic unit. The shaft runs in a 6905 in the flange hub and a 6802 in
+the cover. **{CADJ['femur']['height_mm']:.1f} mm tall against the 42 mm target; Ø{CADJ['femur']['od_mm']:.0f} against the Ø170
+target**, because the stator's phase rings and pads sit at r 82–86 outside the
+magnets and the board is clamped at its rim. Bringing the OD back to 170 means
+moving the interconnect to the bore side, which the star ring already uses.
+Assembly notes: the cup is two machined parts (the bottom ring bolts to the
+drum after the board is in); the magnets go on with a printed jig because
+neighbouring Halbach blocks repel; the pins drop into half-grooves.
+
+### 9.4 Where the heat goes — `analysis/stator_thermal.py`
+
+{md(("Path", "K/W"), th_rows)}
+
+{md(("Housing condition", "Loss allowed (W)", "Current (A rms)", "Motor torque, cont. (N·m)", "Magnet temp (°C)"), th_case_rows)}
+
+![Thermal network]({rel(os.path.join(FIG, 'thermal-network.png'))})
+
+The copper-to-housing path is better than assumed because the 0.5 mm air
+films to the rotors conduct; the housing-to-ambient path is the problem, and
+it is a body-level one. Floating "thermal rings" on the board were evaluated
+and are not worth it.
+
+### 9.5 Each joint on the built motor
+
+{md(("Joint", "Ratio", "Magnets", "Motor cont / peak (N·m)", "Joint cont / peak (N·m)", "Needed", "Margin", "Joint speed no-load (rad/s)", "Unit mass (kg)"), joint_rows)}
+
+### 9.6 Bill of materials — `docs/design/bom-actuator.csv`
+
+{md(("Item", "Qty", "Spec", "Cost per unit ($)", "Price verified"), bom_rows)}
+
+**${BOM_UNIT:.0f} per unit, ${BOM_UNIT*18/1000:.1f}k for eighteen**, at one-off machining prices.
+Verified prices are marked; the rest are estimates to be replaced by quotes.
+
+### 9.7 Open items from this round
+
+1. **OD 186, not 170** (§9.3). Accept, or move the interconnect inboard.
+2. **Mass {CADJ['femur']['total_g']/1000:.1f} kg per unit** against the 1.1 kg budgeted: the robot's
+   mass budget has to change, or the joint torque requirement does.
+3. **Eccentric bearing life** with one disc (§4): fine at walking loads, ~100 h
+   at the continuous rating. Two discs need 52 mm of height.
+4. **Sustained torque is set by the body's cooling**, not the motor (§6).
+5. **Heavy copper**: the canonical board needs a 3 oz multilayer house; the
+   2 oz fallback costs 11 % torque and one ratio step.
+6. **Magnet grade** N48H, not N48, because a free-standing unit runs its
+   magnets near 100 °C at the rating.
+
+## 10. What the first unit has to prove
 
 1. R_th of the stator in its housing, on the bench, with a heater and then
    with current: the continuous rating is that number.

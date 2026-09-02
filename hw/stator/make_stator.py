@@ -33,6 +33,7 @@ OUT = os.path.join(HERE, "stator.kicad_pcb")
 N_COILS = 36
 POLE_PAIRS = 15
 N_LAYERS = 12
+COPPER_OZ = 3               # per layer; JLCPCB multilayer stops at 2 oz, PCBWay-class houses do 3 oz
 N_T = 10                    # turns per layer
 TRACE = 0.28                # coil trace width
 SPACE = 0.15                # copper-to-copper
@@ -56,12 +57,27 @@ PAD_D, PAD_DRILL = 2.0, 1.0
 PITCH = TRACE + SPACE
 SECTOR = 360.0 / N_COILS
 # layers
-CU = [pcbnew.F_Cu] + [getattr(pcbnew, f"In{i}_Cu") for i in range(1, 11)] + [pcbnew.B_Cu]
-ODD = CU[0::2]              # inward spirals: F, In2, In4, In6, In8, In10
-EVEN = CU[1::2]             # outward spirals: In1, In3, In5, In7, In9, B
-RING_LAYERS = {"A": CU[0:3], "B": CU[3:6], "C": CU[6:9]}
-NM_LAYERS = CU[9:12]        # N ring + gap jumpers + M arcs
-M_LAYER = {"A": CU[9], "B": CU[10], "C": CU[11]}
+
+
+def set_layers(n):
+    """Layer roles for an n-layer board (n even, >= 12): coils on every layer;
+    rings on the first 9, N ring / jumpers / M arcs on 10-12; extra layers coil only."""
+    global CU, ODD, EVEN, RING_LAYERS, NM_LAYERS, M_LAYER, N_LAYERS
+    N_LAYERS = n
+    CU = [pcbnew.F_Cu] + [getattr(pcbnew, f"In{i}_Cu") for i in range(1, n - 1)] + [pcbnew.B_Cu]
+    ODD = CU[0::2]              # inward spirals
+    EVEN = CU[1::2]             # outward spirals (mirrored)
+    RING_LAYERS = {"A": CU[0:3], "B": CU[3:6], "C": CU[6:9]}
+    NM_LAYERS = CU[9:12]        # N ring + gap jumpers + M arcs
+    M_LAYER = {"A": CU[9], "B": CU[10], "C": CU[11]}
+
+
+set_layers(N_LAYERS)
+
+
+def board_thickness(n, oz):
+    """Finished thickness estimate: copper + ~0.09 mm dielectric per interface (12L 3 oz -> 2.25 mm)."""
+    return round(n * oz * 0.035 + (n - 1) * 0.09, 2)
 
 # 12-slot/10-pole star of slots, phasor angle 150*k: (phase, sign) per local coil
 PHASES = {0: ("A", +1), 6: ("A", -1), 7: ("A", +1), 1: ("A", -1),
@@ -270,7 +286,8 @@ def geometry_report(bld):
     coil_len_total = sum(v for (l, k), v in bld.length.items() if k == "coil")
     other = sum(v for (l, k), v in bld.length.items() if k != "coil")
     return {
-        "coils": N_COILS, "pole_pairs": POLE_PAIRS, "layers": N_LAYERS, "turns_per_layer": N_T,
+        "coils": N_COILS, "pole_pairs": POLE_PAIRS, "layers": N_LAYERS, "copper_oz": COPPER_OZ,
+        "t_board_mm": board_thickness(N_LAYERS, COPPER_OZ), "turns_per_layer": N_T,
         "series_turns_per_coil": 2 * N_T, "series_turns_per_phase": 4 * N_T, "parallel_paths_per_phase": 6 * 2 * 4,
         "trace_mm": TRACE, "space_mm": SPACE, "r_in_mm": R_IN, "r_out_mm": R_OUT,
         "coil_track_mm_total": coil_len_total, "coil_track_mm_per_coil_layer": coil_len_total / (N_COILS * N_LAYERS),
@@ -289,9 +306,12 @@ if __name__ == "__main__":
     ap.add_argument("--turns", type=int, default=N_T)
     ap.add_argument("--trace", type=float, default=None, help="trace width; default fills the leg")
     ap.add_argument("--gap", type=float, default=GAP, help="coil-to-coil gap at the legs, mm")
+    ap.add_argument("--layers", type=int, default=N_LAYERS)
+    ap.add_argument("--oz", type=float, default=COPPER_OZ, help="copper weight per layer, oz")
     ap.add_argument("--out", default=OUT)
     a = ap.parse_args()
-    N_COILS, POLE_PAIRS, N_T, OUT, GAP = a.coils, a.pp, a.turns, a.out, a.gap
+    N_COILS, POLE_PAIRS, N_T, OUT, GAP, COPPER_OZ = a.coils, a.pp, a.turns, a.out, a.gap, a.oz
+    set_layers(a.layers)
     SECTOR = 360.0 / N_COILS
     leg = (2 * math.pi * R_IN / N_COILS - GAP) / 2
     TRACE = a.trace if a.trace else math.floor((leg / N_T - SPACE) * 200) / 200
@@ -301,7 +321,7 @@ if __name__ == "__main__":
     bld.build()
     pcbnew.SaveBoard(OUT, bld.b)
     rep = geometry_report(bld)
-    with open(os.path.join(HERE, "geometry.json"), "w") as f:
+    with open(os.path.join(os.path.dirname(os.path.abspath(OUT)), "geometry.json"), "w") as f:
         json.dump(rep, f, indent=1)
     print("wrote", OUT)
     for k, v in rep.items():

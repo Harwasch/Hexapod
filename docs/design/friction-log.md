@@ -24,3 +24,29 @@
   thermal resistance only came through a distributor mirror, page by page with `pdftotext -f/-l`.
   `skills/hw-documentation/SKILL.md` could list the mirror-and-pdftotext route for vendor sites
   that block fetches.
+
+## 2026-09-02 — round 5: parts, CAD, thermal, BOM
+
+* `analysis/motor_options.py` `PCB_STACKS` lists "PCB 12L 3oz" as if it were a stock
+  order; JLCPCB's multilayer capability stops at 2 oz inner copper, so the canonical
+  stator needs a PCBWay-class heavy-copper house. `skills/hw-sourcing/SKILL.md` should say:
+  check the fab's copper-weight and layer-count capability before a stack-up becomes a
+  design point, and record the fab it assumes.
+* The Halbach segment order in a hand-written 2-D field model was flipped on the first
+  run (zero fundamental, the field concentrated on the far side). A one-line sanity check —
+  "the mid-plane fundamental must exceed the far-side field" — would have caught it before
+  the numbers were read. `skills/hw-simulation/SKILL.md` could list "sign of a Halbach
+  array" among the closed-form cross-checks.
+* `build123d` MCP `render_view` returned a blank PNG for imported STL shells and timed out
+  at 60 s on `quality: high` for the STEP assembly; `import_cad_file` loads STL as a shell
+  it then cannot render. The cutaway in `cad/actuator/actuator.py` is a numpy z-buffer
+  raster written from scratch. The server should either render shells or refuse them.
+* `hw/stator/make_stator.py` wrote `geometry.json` next to itself regardless of `--out`,
+  so generating a variant silently overwrote the canonical geometry. Fixed to write beside
+  the board; a generator template in `skills/hw-verification` should keep every output
+  next to its board file.
+* The 42 mm actuator envelope from the skeleton left no room for a second cycloid disc
+  once real bearings (RB5013 13 mm, HK2512 12 mm) were placed; the analytic stack-up in
+  `analysis/actuator_section.py` had assumed 8 mm discs with no bearing widths. The
+  section tool should take bearing catalogue widths as inputs, not a single "reducer
+  axial" number.

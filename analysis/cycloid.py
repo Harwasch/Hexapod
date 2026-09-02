@@ -56,7 +56,7 @@ SAFETY = 1.0            # loads already include the peak case
 # ---- per-joint requirement (joint torque / ratio; from 01-sizing.md §6) -----
 JOINTS = {
     # name: (ratio N, joint continuous N·m, joint peak N·m)
-    "yaw":   (45, 55.0, 58.0),
+    "yaw":   (30, 55.0, 58.0),       # 30:1 for swing speed: 2.5 N·m x 30 x 0.88 = 66 N·m continuous covers 55
     "femur": (55, 135.0, 245.0),
     "knee":  (60, 143.0, 300.0),
 }
@@ -125,7 +125,7 @@ def fig_profiles(designs):
     fig.suptitle("In-plane cycloid inside the Ø100 mm bore (teal dashed): disc (red), ring pins (dark), output pins in oversized holes (blue), eccentric (grey)", fontsize=9.5, y=0.995)
     fig.tight_layout(rect=(0, 0, 1, 0.95))
     p = os.path.join(FIG, "cycloid-profiles.png")
-    fig.savefig(p, dpi=120)
+    fig.savefig(p, dpi=85)
     plt.close(fig)
     return p
 

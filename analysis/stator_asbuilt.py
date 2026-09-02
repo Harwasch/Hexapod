@@ -25,9 +25,9 @@ G = json.load(open(GEOM))
 N_COILS, P, N_LAYERS, N_T = G["coils"], G["pole_pairs"], G["layers"], G["turns_per_layer"]
 TRACE, SPACE, GAP = G["trace_mm"] * 1e-3, G["space_mm"] * 1e-3, G.get("gap_mm", 0.8) * 1e-3
 R_IN, R_OUT = G["r_in_mm"] * 1e-3, G["r_out_mm"] * 1e-3
-T_CU = 3 * mo.OZ                       # 3 oz copper
+T_CU = G.get("copper_oz", 3) * mo.OZ   # copper per layer
 PITCH = TRACE + SPACE
-T_BOARD = 2.2e-3                       # 12-layer 3 oz board
+T_BOARD = G.get("t_board_mm", 2.2) * 1e-3
 G_MAG = T_BOARD + 2 * mo.AIR_CLEAR
 # magnets: the OTS block chosen in analysis/rotor_field.py; its simulated fundamental
 # (two facing 4-segment Halbach rings of rectangular blocks) scales the analytic field
@@ -136,7 +136,7 @@ def rating(rpm):
 
 
 n_noload = 3 * V_PH / Kt * 60 / (2 * math.pi)
-out = dict(series_turns_per_phase=4 * N_T, R_ph_mohm=R_ph * 1e3, R_inter_mohm=R_inter * 1e3, Kt=Kt, torque_ripple=ripple,
+out = dict(layers=N_LAYERS, copper_oz=G.get("copper_oz", 3), t_board_mm=T_BOARD * 1e3, series_turns_per_phase=4 * N_T, R_ph_mohm=R_ph * 1e3, R_inter_mohm=R_inter * 1e3, Kt=Kt, torque_ripple=ripple,
            n_noload_rpm=n_noload, copper_mass_g=m_cu * 1e3, copper_volume_cm3=vol_cu * 1e6, B_pk_mean=float(np.mean(B)),
            ratings={str(rpm): rating(rpm) for rpm in (1000, 1600, 2500, 3500)})
 out["h_m_mm"] = H_M * 1e3
