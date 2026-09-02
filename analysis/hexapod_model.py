@@ -117,14 +117,11 @@ class Stance:
         return self.leg.coxa + self.foot_reach
 
 
-LEG_A = Leg(coxa=150.0, femur=250.0, tibia=500.0)
-LEG_B = Leg(coxa=150.0, femur=220.0, tibia=550.0)
-
-STANCE_A = Stance("A — Tibia 2.0× femur", LEG_A, femur_deg=45.0, tibia_lean_deg=0.0,
-                  leg_plane="radial", yaw_deg=(30.0, 0.0, -30.0))
-STANCE_B = Stance("B — Tibia 2.5× femur", LEG_B, femur_deg=55.0, tibia_lean_deg=0.0,
-                  leg_plane="radial", yaw_deg=(30.0, 0.0, -30.0))
-STANCES = (STANCE_A, STANCE_B)
+# Review decision 2026-09-02: tibia 2.5× femur, with the longer (250 mm) femur.
+LEG = Leg(coxa=150.0, femur=250.0, tibia=625.0)
+STANCE = Stance("Sprawl, tibia 2.5× femur", LEG, femur_deg=55.0, tibia_lean_deg=0.0,
+                leg_plane="radial", yaw_deg=(30.0, 0.0, -30.0))
+STANCES = (STANCE,)
 
 # ----------------------------------------------------------------------------
 # Mass budget (kg)
@@ -163,7 +160,7 @@ class LoadCase:
     dyn_factor: float      # impact / acceleration multiplier on vertical load
     slope_deg: float       # slope the propulsion force must hold
     accel: float           # m/s² fore-aft acceleration the propulsion must provide
-    rating: str            # 'continuous' | '10 min' | 'peak'
+    rating: str            # 'continuous' | 'peak' | 'stretch' (reported, not a requirement)
 
     @property
     def foot_force_z(self) -> float:
@@ -178,10 +175,12 @@ class LoadCase:
 LOAD_CASES = (
     LoadCase("Walk, tripod gait", MASS.robot + MASS.mission_payload, legs_down=3,
              dyn_factor=1.5, slope_deg=30.0, accel=1.0, rating="continuous"),
-    LoadCase("Rider, wave gait", MASS.robot + MASS.rider, legs_down=3,
-             dyn_factor=1.2, slope_deg=15.0, accel=0.3, rating="10 min"),
     LoadCase("Stumble / step-down, two legs", MASS.robot + MASS.mission_payload, legs_down=2,
              dyn_factor=3.0, slope_deg=0.0, accel=2.0, rating="peak"),
+    # Review decision 2026-09-02: the rider is a stretch goal.  Reported so the
+    # margin is visible; it does not set a rating.
+    LoadCase("Rider, wave gait (stretch)", MASS.robot + MASS.rider, legs_down=3,
+             dyn_factor=1.2, slope_deg=15.0, accel=0.3, rating="stretch"),
 )
 
 

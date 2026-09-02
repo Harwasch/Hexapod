@@ -1,14 +1,14 @@
 """Shared build123d construction for the hexapod skeleton concepts.
 
-Not a concept itself (defines no PART).  Both concept modules call
-`build(stance)` and differ only in the Stance they pass in, so the two renders
-are the same robot with two leg proportions — which is exactly the choice on
-the table.
+Not a concept itself (defines no PART).  Each concept module calls
+`build(topology)` with one of the leg topologies from analysis/leg3d.py, so
+the renders are the same body with different legs — which is the choice on
+the table.  Joint positions and axes come from the 3-D leg model's forward
+kinematics, so the picture and the torque numbers cannot disagree.
 
-`build()` returns (robot, figure): the robot alone, and a 6 ft reference
-figure standing beside it on the ground plane.  The concept modules combine
-them into PART but report the robot-only envelope in NOTES, because the
-vision renderer measures whatever PART contains.
+`build_groups()` returns named groups of solids (body, actuators, coxa,
+femur, tibia, figure) for the review page's 3-D viewer; `build()` flattens
+them to (robot, figure) for the vision renderer.
 """
 from __future__ import annotations
 
@@ -16,10 +16,13 @@ import math
 import os
 import sys
 
-from build123d import (Axis, Box, Compound, Cylinder, Pos, Rot, Sphere, fillet)
+import numpy as np
+from build123d import Axis, Box, Compound, Cylinder, Pos, Rot, Sphere, fillet
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "analysis"))
-from hexapod_model import ACT, BODY, HUMAN_HEIGHT, Stance, ik  # noqa: E402
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(ROOT, "analysis"))
+from hexapod_model import ACT, BODY, HUMAN_HEIGHT  # noqa: E402
+from leg3d import Topology  # noqa: E402
 
 COXA_SECTION = (56.0, 34.0)    # width, thickness of the coxa arm (carries the overturning moment)
 FEMUR_SECTION = (40.0, 26.0)
@@ -28,48 +31,51 @@ FOOT_D = 45.0
 PLATE_T = 6.0
 BATTERY = (140.0, 200.0, 110.0)
 COMPUTE = (120.0, 140.0, 60.0)
-HIP_DROP = 18.0                # yaw output / coxa centreline below the floor plate
+HIP_DROP = 18.0                # first joint / coxa centreline below the floor plate
+LEG_YAW = (30.0, 0.0, -30.0)   # front, mid, rear leg-plane yaw for radial legs
 
 
-def _link(length: float, section: tuple[float, float]):
-    """A link along +x from the origin, rounded ends."""
+def _link_between(p, q, section):
+    """A rounded bar from point p to point q."""
+    d = np.asarray(q, float) - np.asarray(p, float)
+    L = float(np.linalg.norm(d))
     w, t = section
-    body = Pos(length / 2, 0, 0) * Box(length, w, t)
-    return fillet(body.edges().filter_by(Axis.Y), radius=min(w, t) * 0.45)
+    bar = Pos(L / 2, 0, 0) * Box(L, w, t)
+    bar = fillet(bar.edges().filter_by(Axis.Y), radius=min(w, t) * 0.45)
+    yaw = math.degrees(math.atan2(d[1], d[0]))
+    pitch = math.degrees(math.atan2(d[2], math.hypot(d[0], d[1])))
+    return Pos(*p) * Rot(0, 0, yaw) * Rot(0, -pitch, 0) * bar
 
 
-def _place(shape, at, yaw_deg: float, pitch_deg: float):
-    """Pitch about local y (positive tips +x up), then yaw about z, then move."""
-    return Pos(*at) * Rot(0, 0, yaw_deg) * Rot(0, -pitch_deg, 0) * shape
+def _hub(p, axis, radius, length):
+    """A cylinder centred on p along a unit axis."""
+    a = np.asarray(axis, float)
+    a = a / np.linalg.norm(a)
+    yaw = math.degrees(math.atan2(a[1], a[0]))
+    tilt = math.degrees(math.acos(max(-1.0, min(1.0, a[2]))))
+    return Pos(*p) * Rot(0, 0, yaw) * Rot(0, tilt, 0) * Cylinder(radius, length)
 
 
-def leg(hip, side: int, stance: Stance, yaw_deg: float):
-    """One leg.  hip = (x, y, z) of the yaw axis at the coxa centreline."""
-    lg = stance.leg
-    hx, hy, hz = hip
-    a1, k = ik(lg, stance.foot_reach, -stance.hip_height)
-    a2 = a1 + k - math.pi                       # tibia direction from the knee
-    if stance.leg_plane == "radial":
-        # leg plane direction from +y (outboard) rotated `yaw_deg` toward +x
-        d = (math.sin(math.radians(yaw_deg)), side * math.cos(math.radians(yaw_deg)))
-    else:
-        d = (1.0 if yaw_deg >= 0 else -1.0, 0.0)
-    phi = math.degrees(math.atan2(d[1], d[0]))
-    femur_axis = (hx + lg.coxa * d[0], hy + lg.coxa * d[1], hz)
-    coxa = _place(_link(lg.coxa, COXA_SECTION), (hx, hy, hz), phi, 0)
-    femur = _place(_link(lg.femur, FEMUR_SECTION), femur_axis, phi, math.degrees(a1))
-    knee = (femur_axis[0] + lg.femur * math.cos(a1) * d[0],
-            femur_axis[1] + lg.femur * math.cos(a1) * d[1],
-            femur_axis[2] + lg.femur * math.sin(a1))
-    tibia = _place(_link(lg.tibia, TIBIA_SECTION), knee, phi, math.degrees(a2))
-    foot_c = (knee[0] + lg.tibia * math.cos(a2) * d[0],
-              knee[1] + lg.tibia * math.cos(a2) * d[1],
-              knee[2] + lg.tibia * math.sin(a2))
-    foot = Pos(*foot_c) * Sphere(FOOT_D / 2)
-    # joint hubs so the axes read in the render
-    hub = Cylinder(FEMUR_SECTION[1] * 1.1, FEMUR_SECTION[0] + 10)
-    j1 = Pos(*femur_axis) * Rot(0, 0, phi) * Rot(90, 0, 0) * hub
-    j2 = Pos(*knee) * Rot(0, 0, phi) * Rot(90, 0, 0) * hub
+def leg_points(topo: Topology, hip, side: int, base_yaw_deg: float, mirror_x: bool):
+    """World joint points and axes for one leg at the neutral pose."""
+    pts, axes = topo.fk((0.0, 0.0, 0.0))
+    Rz = np.array([[math.cos(math.radians(base_yaw_deg)), -math.sin(math.radians(base_yaw_deg)), 0],
+                   [math.sin(math.radians(base_yaw_deg)), math.cos(math.radians(base_yaw_deg)), 0], [0, 0, 1]])
+    M = np.diag([-1.0 if mirror_x else 1.0, float(side), 1.0])
+    hip = np.asarray(hip, float)
+    P = [hip + M @ (Rz @ p) for p in pts]
+    A = [M @ (Rz @ a) for a in axes]
+    return P, A
+
+
+def leg(topo: Topology, hip, side: int, base_yaw_deg: float, mirror_x: bool):
+    P, A = leg_points(topo, hip, side, base_yaw_deg, mirror_x)
+    coxa = _link_between(P[0], P[1], COXA_SECTION)
+    femur = _link_between(P[1], P[2], FEMUR_SECTION)
+    tibia = _link_between(P[2], P[3], TIBIA_SECTION)
+    foot = Pos(*P[3]) * Sphere(FOOT_D / 2)
+    j1 = _hub(P[1], A[1], FEMUR_SECTION[1] * 1.1, FEMUR_SECTION[0] + 10)
+    j2 = _hub(P[2], A[2], FEMUR_SECTION[1] * 1.1, FEMUR_SECTION[0] + 10)
     return {"coxa": [coxa], "femur": [femur, j1, j2], "tibia": [tibia, foot]}
 
 
@@ -88,15 +94,18 @@ def human(x: float, ground_z: float):
     return Compound(children=parts)
 
 
-def build_groups(stance: Stance) -> dict:
-    """The skeleton as named groups of solids: body, actuators, coxa, femur,
-    tibia, figure.  The 3-D viewer colours by group; build() flattens them."""
+def ground_level(topo: Topology) -> float:
+    """z of the ground plane in the body frame."""
+    return -HIP_DROP - topo.hip_height
+
+
+def build_groups(topo: Topology) -> dict:
     W = BODY.slab_width(ACT)                      # hip stacks + a rail each side
     L, H = BODY.length, BODY.height
     RAIL = BODY.side_rail
-    parts = []
-    actuators = []
+    parts, actuators = [], []
     legs = {"coxa": [], "femur": [], "tibia": []}
+    radial = topo.stride_joint == "yaw"
 
     # Skeleton body: top deck, floor plate, two side rails
     for z in (PLATE_T / 2, H - PLATE_T / 2):
@@ -105,14 +114,13 @@ def build_groups(stance: Stance) -> dict:
     for s in (1, -1):
         parts.append(Pos(0, s * (W / 2 - RAIL / 2), H / 2) * Box(L - 120, RAIL, H))
 
-    # Six hip stacks: three pancake actuators on each yaw axis
+    # Six hip stacks: three pancake actuators on each hip
     z0 = PLATE_T + 4
     for hx in BODY.hip_x:
         for s in (1, -1):
             for i in range(3):
                 zc = z0 + ACT.thickness / 2 + i * (ACT.thickness + ACT.stack_gap)
                 actuators.append(Pos(hx, s * BODY.width / 2, zc) * Cylinder(ACT.od / 2, ACT.thickness))
-            # yaw output hub down through the floor to the coxa
             actuators.append(Pos(hx, s * BODY.width / 2, -HIP_DROP / 2) * Cylinder(40, HIP_DROP + 6))
 
     # Two hot-swap batteries in the gaps between hip stacks, compute in the centre
@@ -120,26 +128,23 @@ def build_groups(stance: Stance) -> dict:
         parts.append(Pos(s * 165, 0, PLATE_T + BATTERY[2] / 2 + 2) * Box(*BATTERY))
     parts.append(Pos(0, 0, PLATE_T + COMPUTE[2] / 2 + 2) * Box(*COMPUTE))
 
-    # Legs: the coxa centreline sits just below the floor plate
-    for hx, yaw in zip(BODY.hip_x, stance.yaw_deg):
+    # Legs: the first joint sits just below the floor plate
+    for i, hx in enumerate(BODY.hip_x):
         for s in (1, -1):
-            for k, v in leg((hx, s * BODY.width / 2, -HIP_DROP), s, stance, yaw).items():
+            hip = (hx, s * BODY.width / 2, -HIP_DROP)
+            base_yaw = LEG_YAW[i] if radial else 0.0
+            mirror_x = (not radial) and hx < 0          # rear mammal legs: knee back
+            for k, v in leg(topo, hip, s, base_yaw, mirror_x).items():
                 legs[k] += v
 
-    ground_z = -HIP_DROP - stance.hip_height
     groups = {"body": parts, "actuators": actuators, **legs,
-              "figure": list(human(-L / 2 - 650, ground_z).children)}
+              "figure": list(human(-L / 2 - 650, ground_level(topo)).children)}
     return {k: Compound(children=v) for k, v in groups.items()}
 
 
-def ground_level(stance: Stance) -> float:
-    """z of the ground plane in the body frame."""
-    return -HIP_DROP - stance.hip_height
-
-
-def build(stance: Stance):
+def build(topo: Topology):
     """(robot, figure) as two compounds — what the concept modules use."""
-    g = build_groups(stance)
+    g = build_groups(topo)
     robot = Compound(children=[s for k, c in g.items() if k != "figure" for s in c.solids()])
     return robot, g["figure"]
 

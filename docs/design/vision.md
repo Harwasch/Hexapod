@@ -2,59 +2,59 @@
 
 What we think you asked for, drawn from real geometry. Every image below comes from a parametric model, so nothing here is a shape that cannot be built, and every number is measured off the model rather than estimated.
 
-A hexapod the size of a large dog for outdoor missions: first navigating complex terrain, then picking up trash. Off-the-shelf where sensible, custom where it meaningfully improves cost or performance. Able to carry an adult male if needed. All eighteen motors housed statically in the body, power transmitted to the joints; the motors themselves axial-flux PCB stators with in-plane cycloidal reductions. Legs sprawl: a coxa carries each leg out from a hip under the body, the femur sticks out and up, and a tibia at least twice the femur comes straight down, so both links are up-and-down in the neutral stance and the joint torques stay low. Later: modular payloads and tools, two hot-swap batteries, wireless charging, a solar top, networking, SLAM, and a wheeled ground transport vehicle.
+A hexapod the size of a large dog for outdoor missions: first navigating complex terrain, then picking up trash. Off-the-shelf where sensible, custom where it meaningfully improves cost or performance. Carrying an adult is a stretch goal. All eighteen motors housed statically in the body, power transmitted to the joints; the motors themselves axial-flux PCB stators with in-plane cycloidal reductions, each DOF geared to its own rating. Legs sprawl: a coxa carries each leg out from a hip under the body, the femur sticks out and up, and a tibia 2.5 times the femur comes straight down. Concept B is the mammal (roll-pitch-pitch) alternative, rendered for the topology question in docs/design/02-leg-topology.md. Later: modular payloads and tools, two hot-swap batteries, wireless charging, a solar top, networking, SLAM, and a wheeled ground transport vehicle.
 
 ## The choice
 
-| | **A — Tibia 2.0× femur** | **B — Tibia 2.5× femur** |
+| | **A — Sprawl, yaw–pitch–pitch** | **B — Mammal, roll–pitch–pitch** |
 |---|---|---|
-| Envelope (mm) | 1739.34 × 950.75 × 1851.5 | 1714.04 × 849.57 × 1851.5 |
-| Volume (mm³) | 141,241,903 | 141,234,703 |
-| Approx. mass (g) | 197,739 | 197,729 |
+| Envelope (mm) | 1660.0 × 883.99 × 1851.5 | 1780.73 × 590.0 × 1851.5 |
+| Volume (mm³) | 141,691,903 | 140,262,703 |
+| Approx. mass (g) | 198,369 | 196,368 |
 
-## A — Tibia 2.0× femur
+## A — Sprawl, yaw–pitch–pitch
 
-Coxa 150 / femur 250 / tibia 500 mm. Femur up at 45°, tibia vertical; hips 0.32 m up, knees at 0.50 m, feet 0.33 m out from the yaw axes. Femur arm 177 mm. Skeleton view: top deck and floor plate, side rails, six hip stacks of three Ø170 pancake actuators under the deck, two hot-swap packs and the compute box between them. **Robot alone: 1059 × 951 × 564 mm** — the envelope, volume and mass figures below include the 1.83 m (6 ft) reference figure, and the mass treats the skeleton as solid; the budget is 49 kg.
+The leg agreed in review: coxa 150 / femur 250 / tibia 625 mm (tibia 2.5× femur). Femur up at 55°, tibia vertical; hips 0.42 m up, knees at 0.62 m, feet 0.29 m out from the yaw axes, femur arm 143 mm. Vertical yaw axis at the hip, so the weight never loads the first motor; the coxa carries it as bending. **Robot alone: 900 × 884 × 676 mm** — the envelope, volume and mass figures below include the 1.83 m (6 ft) reference figure, and the mass treats the skeleton as solid; the budget is 49 kg.
 
-**What this one bets on:** The shorter tibia keeps the swing mass and the knee height down (knee just below deck level) and the footprint wider, and pays for it with a 177 mm femur arm: ~126 N·m at the femur under a rider.
+**What this one bets on:** Stability and clearance: 0.83 m stance width, 0.42 m under the body, feet placed anywhere on a ring around each hip. Pays for the long tibia with a 375 mm minimum leg extension, so a high step is taken with the foot swung outward, and with a knee that must match the femur's rating at the workspace corners.
 
-**1739.34 × 950.75 × 1851.5 mm** · 141,241,903 mm³ · ~197,739 g at 1.4 g/cm³ · model: `concepts/concept_a_tibia2x.py`
+**1660.0 × 883.99 × 1851.5 mm** · 141,691,903 mm³ · ~198,369 g at 1.4 g/cm³ · model: `concepts/concept_a_sprawl.py`
 
-![A — Tibia 2.0× femur — three-quarter view](vision/concept_a_tibia2x/view-hero.png)
-
-| Front | Top |
-|---|---|
-| ![front](vision/concept_a_tibia2x/view-front.png) | ![top](vision/concept_a_tibia2x/view-top.png) |
-
-**Isometric line drawing, hidden edges dashed**
-
-![A — Tibia 2.0× femur — isometric](vision/concept_a_tibia2x/iso.svg)
-
-
-## B — Tibia 2.5× femur
-
-Coxa 150 / femur 220 / tibia 550 mm. Femur up at 55°, tibia vertical; hips 0.37 m up, knees at 0.55 m, feet 0.28 m out from the yaw axes. Femur arm 126 mm. Same body, same eighteen actuators. **Robot alone: 1008 × 850 × 610 mm** — the envelope, volume and mass figures below include the 1.83 m (6 ft) reference figure, and the mass treats the skeleton as solid; the budget is 49 kg.
-
-**What this one bets on:** The steeper femur and longer tibia pull the foot in under the knee: a 126 mm femur arm, ~100 N·m under a rider, 20 % less than A in every load case, and 50 mm more ground clearance. Costs a longer tibia to swing, a knee at deck level, and a slightly narrower footprint.
-
-**1714.04 × 849.57 × 1851.5 mm** · 141,234,703 mm³ · ~197,729 g at 1.4 g/cm³ · model: `concepts/concept_b_tibia2p5x.py`
-
-![B — Tibia 2.5× femur — three-quarter view](vision/concept_b_tibia2p5x/view-hero.png)
+![A — Sprawl, yaw–pitch–pitch — three-quarter view](vision/concept_a_sprawl/view-hero.png)
 
 | Front | Top |
 |---|---|
-| ![front](vision/concept_b_tibia2p5x/view-front.png) | ![top](vision/concept_b_tibia2p5x/view-top.png) |
+| ![front](vision/concept_a_sprawl/view-front.png) | ![top](vision/concept_a_sprawl/view-top.png) |
 
 **Isometric line drawing, hidden edges dashed**
 
-![B — Tibia 2.5× femur — isometric](vision/concept_b_tibia2p5x/iso.svg)
+![A — Sprawl, yaw–pitch–pitch — isometric](vision/concept_a_sprawl/iso.svg)
+
+
+## B — Mammal, roll–pitch–pitch
+
+The quadruped-style alternative, same body and hip stacks: a roll joint at the hip, a 100 mm carrier, femur 300 / tibia 300 mm hanging under the body edge, knees forward on the front and mid legs, back on the rear. Hips 0.42 m up, feet 0.10 m out from the hip axes, 0.44 m stance width. **Robot alone: 1141 × 490 × 665 mm** — the envelope, volume and mass figures below include the 1.83 m (6 ft) reference figure, and the mass treats the skeleton as solid; the budget is 49 kg.
+
+**What this one bets on:** Lowest joint torques when the feet stay under the hips, the proven quadruped actuator layout (pitch and knee motors coaxial on the hip carrier, no transmission through a coxa), and the whole step-up box is reachable. Pays with a 0.44 m stance, half the roll margin, and a roll joint that sees the weight the moment a foot moves sideways — see docs/design/02-leg-topology.md.
+
+**1780.73 × 590.0 × 1851.5 mm** · 140,262,703 mm³ · ~196,368 g at 1.4 g/cm³ · model: `concepts/concept_b_mammal.py`
+
+![B — Mammal, roll–pitch–pitch — three-quarter view](vision/concept_b_mammal/view-hero.png)
+
+| Front | Top |
+|---|---|
+| ![front](vision/concept_b_mammal/view-front.png) | ![top](vision/concept_b_mammal/view-top.png) |
+
+**Isometric line drawing, hidden edges dashed**
+
+![B — Mammal, roll–pitch–pitch — isometric](vision/concept_b_mammal/iso.svg)
 
 
 ## What we need from you
 
-1. Which leg proportion, A (tibia 2.0x femur, squatter) or B (tibia 2.5x femur, taller, 20 % less femur torque), and what made you pick it?
-2. Does the rider case stay as a design driver, or is it a stretch goal we size for later?
-3. Hips under the body on a 240 mm spacing with a 150 mm coxa: is that the right split between body width and coxa length?
+1. A (sprawl, yaw-pitch-pitch, the agreed 150/250/625 leg) stays the baseline: does the topology trade in 02-leg-topology.md settle it, or does B (mammal) deserve a prototype leg too?
+2. The 625 mm tibia cannot fold below 375 mm of extension, so a 300 mm step is taken with the foot swung 210 mm outward, and the folded knee then carries more than the femur. Acceptable, or shorten the tibia toward 2.0x?
+3. Per-DOF sizing came out as one stator design stacked once (yaw) or twice (femur, knee) with three cycloid ratios. Is a two-stator femur and knee acceptable, or should the motor diameter grow instead?
 
 Whatever you agree to here becomes the `VIS-` entries in `requirements/00-vision.sdoc`, in your words, and everything downstream is built on it.
 

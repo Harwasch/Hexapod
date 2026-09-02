@@ -1,26 +1,23 @@
-# Review — Sizing with the agreed leg, rider as stretch, per-DOF actuator ratings (round 3)
+# Review — Leg topology trade and early architecture levers
 
-`sizing` · requested 2026-09-02 · branch `claude/hexapod-robot-design-mt516g`
+`topology` · requested 2026-09-02 · branch `claude/hexapod-robot-design-mt516g`
 
-Mass budget 49 kg unloaded. Rider reported as margin only. Each DOF rated over its working volume with the 3-D leg model: yaw 51 / 70, femur 115 / 226, knee 177 / 172 N.m continuous / peak. The knee, not the femur, is the heaviest joint once the foot is raised, because the long tibia folds and the knee swings behind. Actuator plan: one PCB stator design, one stator at 45:1 for yaw, two stators at 50:1 for the femur and 75:1 for the knee.
+Four leg topologies under the same walking load over the same working volumes: the agreed sprawl yaw-pitch-pitch, the same leg with feet in, the mammal roll-pitch-pitch, and the sprawl with a roll hip (the first axis rotated 90 degrees). A vertical first axis never sees weight; a roll hip sees weight times the foot's lateral offset and is the worst of both worlds. The sprawl wins on stance, roll margin and foot placement; the mammal wins on fold-ability and coaxial hip motors. Plus what a 300 mm step costs each leg proportion, and the architecture levers (mass, one motor three ratios, gravity compensation, series elasticity, driver per hip pod).
 
 ## What you are agreeing to
 
-**leg-stance.png**
+**step-up.png**
 
-![leg-stance.png](../design/sizing/leg-stance.png)
+![step-up.png](../design/topology/step-up.png)
 
-**ratio-trade.png**
+**torques.png**
 
-![ratio-trade.png](../design/sizing/ratio-trade.png)
-
-**torque-map.png**
-
-![torque-map.png](../design/sizing/torque-map.png)
+![torques.png](../design/topology/torques.png)
 
 | File | Opens in |
 |---|---|
-| [docs/design/01-sizing.md](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/docs/design/01-sizing.md) | renders on GitHub |
+| [docs/design/02-leg-topology.md](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/docs/design/02-leg-topology.md) | renders on GitHub |
+| [docs/design/03-architecture-levers.md](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/docs/design/03-architecture-levers.md) | renders on GitHub |
 
 ## For context
 
@@ -35,9 +32,8 @@ Sources and working files. Not part of the agreement — these change as work go
 
 ## What we need decided
 
-1. Is a knee rated at 177 N.m continuous acceptable, or should the routine working volume (0-150 mm foot lift under load) be tightened?
-2. Is a two-stator femur and knee acceptable, or should the motor diameter grow so a single stator covers all three DOFs?
-3. Are the dynamic factors (1.5x walking, 3x stumble) and the 30 degree slope the right conservatism for the terrain demo?
+1. Does the topology trade answer the 'motor axis rotated 90 degrees' question to your satisfaction, and is the sprawl yaw-pitch-pitch leg confirmed?
+2. Which of the architecture levers in 03-architecture-levers.md do you want carried into requirements now: gravity-compensation springs, series elasticity in the tibia, one driver board per hip pod, five-bar knee drive?
 
 ## Decision
 
@@ -52,8 +48,8 @@ Say which option you want **and why**: the reason is worth more than the choice,
 The agent writes your decision, in your words, into [`docs/review/reviews.yaml`](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/docs/review/reviews.yaml):
 
 ```bash
-review-gate sign sizing --approve --by <name> --note "..."
-review-gate sign sizing --changes "what to change"
+review-gate sign topology --approve --by <name> --note "..."
+review-gate sign topology --changes "what to change"
 ```
 
 Until that happens, any chunk of work depending on this review cannot be marked done.

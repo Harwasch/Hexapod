@@ -1,42 +1,42 @@
-# Review — Leg proportion and skeleton concepts (round 2)
+# Review — The agreed leg, and the mammal alternative for the topology question (round 3)
 
 `vision` · requested 2026-09-02 · branch `claude/hexapod-robot-design-mt516g`
 
-Same 49 kg robot with eighteen pancake actuators in the body, reworked to the review decision: hips under the body, a 150 mm coxa carrying each leg out, femur up and out, tibia vertical. A: tibia 2.0x femur (250/500 mm, femur 45 deg, hips 0.32 m up, femur arm 177 mm). B: tibia 2.5x femur (220/550 mm, femur 55 deg, hips 0.37 m up, femur arm 126 mm, 20 % less femur torque). A 6 ft figure stands beside the robot in every render.
+A: the leg agreed in review — sprawl yaw-pitch-pitch, coxa 150 / femur 250 / tibia 625 mm, femur up at 55 deg, tibia vertical, hips 0.42 m up, 0.83 m stance. B: the mammal roll-pitch-pitch alternative on the same body, rendered so the topology trade in 02-leg-topology.md can be judged by eye. Both with a 6 ft figure; orbit them in the 3-D viewer.
 
 ## What you are agreeing to
 
 **iso.svg**
 
-![iso.svg](../design/vision/concept_a_tibia2x/iso.svg)
+![iso.svg](../design/vision/concept_a_sprawl/iso.svg)
 
 **view-front.png**
 
-![view-front.png](../design/vision/concept_a_tibia2x/view-front.png)
+![view-front.png](../design/vision/concept_a_sprawl/view-front.png)
 
 **view-hero.png**
 
-![view-hero.png](../design/vision/concept_a_tibia2x/view-hero.png)
+![view-hero.png](../design/vision/concept_a_sprawl/view-hero.png)
 
 **view-top.png**
 
-![view-top.png](../design/vision/concept_a_tibia2x/view-top.png)
+![view-top.png](../design/vision/concept_a_sprawl/view-top.png)
 
 **iso.svg**
 
-![iso.svg](../design/vision/concept_b_tibia2p5x/iso.svg)
+![iso.svg](../design/vision/concept_b_mammal/iso.svg)
 
 **view-front.png**
 
-![view-front.png](../design/vision/concept_b_tibia2p5x/view-front.png)
+![view-front.png](../design/vision/concept_b_mammal/view-front.png)
 
 **view-hero.png**
 
-![view-hero.png](../design/vision/concept_b_tibia2p5x/view-hero.png)
+![view-hero.png](../design/vision/concept_b_mammal/view-hero.png)
 
 **view-top.png**
 
-![view-top.png](../design/vision/concept_b_tibia2p5x/view-top.png)
+![view-top.png](../design/vision/concept_b_mammal/view-top.png)
 
 | File | Opens in |
 |---|---|
@@ -50,16 +50,17 @@ Sources and working files. Not part of the agreement — these change as work go
 | File | Opens in |
 |---|---|
 | [analysis/hexapod_model.py](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/analysis/hexapod_model.py) | plain text on GitHub |
+| [analysis/leg3d.py](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/analysis/leg3d.py) | plain text on GitHub |
 | [analysis/sizing.py](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/analysis/sizing.py) | plain text on GitHub |
-| [concepts/concept_a_tibia2x.py](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/concepts/concept_a_tibia2x.py) | plain text on GitHub |
-| [concepts/concept_b_tibia2p5x.py](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/concepts/concept_b_tibia2p5x.py) | plain text on GitHub |
+| [analysis/topology.py](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/analysis/topology.py) | plain text on GitHub |
+| [concepts/concept_a_sprawl.py](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/concepts/concept_a_sprawl.py) | plain text on GitHub |
+| [concepts/concept_b_mammal.py](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/concepts/concept_b_mammal.py) | plain text on GitHub |
 | [concepts/hexapod_skeleton.py](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/concepts/hexapod_skeleton.py) | plain text on GitHub |
 
 ## What we need decided
 
-1. Which leg proportion, A (tibia 2.0x femur, squatter) or B (tibia 2.5x femur, taller, 20 % less femur torque), and what made you pick it?
-2. Does the rider case stay as a design driver, or is it a stretch goal we size for later?
-3. Hips under the body on a 240 mm spacing with a 150 mm coxa: is that the right split between body width and coxa length?
+1. A (sprawl, yaw-pitch-pitch, the agreed 150/250/625 leg) stays the baseline: does the topology trade settle it, or does B (mammal) deserve a prototype leg too?
+2. The 625 mm tibia cannot fold below 375 mm of extension, so a 300 mm step is taken with the foot swung 210 mm outward, and the folded knee then carries more than the femur. Acceptable, or shorten the tibia toward 2.0x?
 
 ## Decision
 

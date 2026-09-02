@@ -8,48 +8,49 @@
 #   review-gate sign <id> --changes "what they want different"
 reviews:
 - id: vision
-  title: Leg proportion and skeleton concepts (round 2)
+  title: The agreed leg, and the mammal alternative for the topology question (round 3)
   stage: vision
-  summary: 'Same 49 kg robot with eighteen pancake actuators in the body, reworked to the
-    review decision: hips under the body, a 150 mm coxa carrying each leg out, femur up and
-    out, tibia vertical. A: tibia 2.0x femur (250/500 mm, femur 45 deg, hips 0.32 m up, femur
-    arm 177 mm). B: tibia 2.5x femur (220/550 mm, femur 55 deg, hips 0.37 m up, femur arm
-    126 mm, 20 % less femur torque). A 6 ft figure stands beside the robot in every render.'
+  summary: 'A: the leg agreed in review — sprawl yaw-pitch-pitch, coxa 150 / femur 250 / tibia
+    625 mm, femur up at 55 deg, tibia vertical, hips 0.42 m up, 0.83 m stance. B: the mammal
+    roll-pitch-pitch alternative on the same body, rendered so the topology trade in 02-leg-topology.md
+    can be judged by eye. Both with a 6 ft figure; orbit them in the 3-D viewer.'
   questions:
-  - Which leg proportion, A (tibia 2.0x femur, squatter) or B (tibia 2.5x femur, taller, 20
-    % less femur torque), and what made you pick it?
-  - Does the rider case stay as a design driver, or is it a stretch goal we size for later?
-  - 'Hips under the body on a 240 mm spacing with a 150 mm coxa: is that the right split between
-    body width and coxa length?'
+  - 'A (sprawl, yaw-pitch-pitch, the agreed 150/250/625 leg) stays the baseline: does the
+    topology trade settle it, or does B (mammal) deserve a prototype leg too?'
+  - The 625 mm tibia cannot fold below 375 mm of extension, so a 300 mm step is taken with
+    the foot swung 210 mm outward, and the folded knee then carries more than the femur. Acceptable,
+    or shorten the tibia toward 2.0x?
   artifacts:
   - path: docs/design/vision.md
-    sha256: 4ead1c3b100b3702
-  - path: docs/design/vision/concept_a_tibia2x/iso.svg
-    sha256: c354b66320b49fb8
-  - path: docs/design/vision/concept_a_tibia2x/view-front.png
-    sha256: e94d7cac3742b017
-  - path: docs/design/vision/concept_a_tibia2x/view-hero.png
-    sha256: cd9e451225c96cc6
-  - path: docs/design/vision/concept_a_tibia2x/view-top.png
-    sha256: 948ad3955a245b82
-  - path: docs/design/vision/concept_b_tibia2p5x/iso.svg
-    sha256: c60c1431a2360b8d
-  - path: docs/design/vision/concept_b_tibia2p5x/view-front.png
-    sha256: ca8549e7dea3ce56
-  - path: docs/design/vision/concept_b_tibia2p5x/view-hero.png
-    sha256: 62d40827df2890a1
-  - path: docs/design/vision/concept_b_tibia2p5x/view-top.png
-    sha256: 19a3869cf49b0d6d
+    sha256: 6208f2f2fcfcf73a
+  - path: docs/design/vision/concept_a_sprawl/iso.svg
+    sha256: 4dcbcb5d3225c7ec
+  - path: docs/design/vision/concept_a_sprawl/view-front.png
+    sha256: 3e0326850f5e3ac1
+  - path: docs/design/vision/concept_a_sprawl/view-hero.png
+    sha256: 22b6d25f720d70e5
+  - path: docs/design/vision/concept_a_sprawl/view-top.png
+    sha256: f0bfece9f08aebe1
+  - path: docs/design/vision/concept_b_mammal/iso.svg
+    sha256: 57fea15d6f5ea376
+  - path: docs/design/vision/concept_b_mammal/view-front.png
+    sha256: f3efa9bb89640a0f
+  - path: docs/design/vision/concept_b_mammal/view-hero.png
+    sha256: 6c7c339b7c319507
+  - path: docs/design/vision/concept_b_mammal/view-top.png
+    sha256: 06071ddd32c1f0b0
   - path: docs/design/vision/manifest.json
-    sha256: b6c649d252b2ef6d
+    sha256: 5018d408d21edd28
   references:
   - analysis/hexapod_model.py
+  - analysis/leg3d.py
   - analysis/sizing.py
-  - concepts/concept_a_tibia2x.py
-  - concepts/concept_b_tibia2p5x.py
+  - analysis/topology.py
+  - concepts/concept_a_sprawl.py
+  - concepts/concept_b_mammal.py
   - concepts/hexapod_skeleton.py
   requested: '2026-09-02'
-  requested_commit: a9b224a
+  requested_commit: f114c0f
   status: requested
   packet: docs/review/vision.md
   history:
@@ -136,36 +137,75 @@ reviews:
     changed:
     - docs/design/vision/concept_a_tibia2x/iso.svg
     - docs/design/vision/concept_b_tibia2p5x/iso.svg
-  decided_commit: 7f44f80
+  - 'on': '2026-09-02'
+    action: approved
+    commit: f114c0f
+    by: harrison
+    note: Let's do 2.5x femur - it looks like it will be better at navigating difficult terrain
+      - but use the longer femur length (250 mm femur, 625 mm tibia). The hip and coxa definition
+      is good; also think through other configs - most of the weight is levered against the
+      motor axis and mounting point; a motor axis rotated 90 degrees might be a little better
+      but not sure it is worth it. What performs best in complicated, high-obstacle terrain,
+      accommodating the most payload?
+  - 'on': '2026-09-02'
+    action: requested
+    commit: f114c0f
+    questions:
+    - 'A (sprawl, yaw-pitch-pitch, the agreed 150/250/625 leg) stays the baseline: does the
+      topology trade settle it, or does B (mammal) deserve a prototype leg too?'
+    - The 625 mm tibia cannot fold below 375 mm of extension, so a 300 mm step is taken with
+      the foot swung 210 mm outward, and the folded knee then carries more than the femur.
+      Acceptable, or shorten the tibia toward 2.0x?
+    summary: 'A: the leg agreed in review — sprawl yaw-pitch-pitch, coxa 150 / femur 250 /
+      tibia 625 mm, femur up at 55 deg, tibia vertical, hips 0.42 m up, 0.83 m stance. B:
+      the mammal roll-pitch-pitch alternative on the same body, rendered so the topology trade
+      in 02-leg-topology.md can be judged by eye. Both with a 6 ft figure; orbit them in the
+      3-D viewer.'
+    changed:
+    - docs/design/vision.md
+    - docs/design/vision/manifest.json
+    added:
+    - docs/design/vision/concept_a_sprawl/iso.svg
+    - docs/design/vision/concept_a_sprawl/view-front.png
+    - docs/design/vision/concept_a_sprawl/view-hero.png
+    - docs/design/vision/concept_a_sprawl/view-top.png
+    - docs/design/vision/concept_b_mammal/iso.svg
+    - docs/design/vision/concept_b_mammal/view-front.png
+    - docs/design/vision/concept_b_mammal/view-hero.png
+    - docs/design/vision/concept_b_mammal/view-top.png
+  decided_commit: f114c0f
 - id: sizing
-  title: Top-level sizing and the actuator requirement (round 2)
+  title: Sizing with the agreed leg, rider as stretch, per-DOF actuator ratings (round 3)
   stage: sizing
-  summary: 'Mass budget (49 kg unloaded, 149 kg with a rider), load cases, joint torques and
-    speeds for both leg proportions, stability, and the actuator requirement: 68 N.m continuous,
-    126 N.m for 10 min, 157 N.m peak, 9 rad/s, 170 x 42 mm, 1.1 kg, eighteen identical. With
-    the reworked leg a single-stator PCB axial-flux motor closes the requirement at 55:1;
-    two stators remain the fallback.'
+  summary: 'Mass budget 49 kg unloaded. Rider reported as margin only. Each DOF rated over
+    its working volume with the 3-D leg model: yaw 51 / 70, femur 115 / 226, knee 177 / 172
+    N.m continuous / peak. The knee, not the femur, is the heaviest joint once the foot is
+    raised, because the long tibia folds and the knee swings behind. Actuator plan: one PCB
+    stator design, one stator at 45:1 for yaw, two stators at 50:1 for the femur and 75:1
+    for the knee.'
   questions:
-  - Is 1.1 kg per actuator and 49 kg unloaded a budget you accept, or should the robot be
-    lighter and the rider case go?
+  - Is a knee rated at 177 N.m continuous acceptable, or should the routine working volume
+    (0-150 mm foot lift under load) be tightened?
+  - Is a two-stator femur and knee acceptable, or should the motor diameter grow so a single
+    stator covers all three DOFs?
   - Are the dynamic factors (1.5x walking, 3x stumble) and the 30 degree slope the right conservatism
     for the terrain demo?
-  - Do you accept a single-stator PCB motor at 55:1 as the nominal actuator architecture for
-    the actuator stage, with 1 m/s as the speed target and 2 m/s dropped?
   artifacts:
   - path: docs/design/01-sizing.md
-    sha256: 29ca47acc2840b2b
+    sha256: a680f3fee1f6347a
   - path: docs/design/sizing/leg-stance.png
-    sha256: 9588623acf167811
+    sha256: 8beb672282caa5ba
   - path: docs/design/sizing/ratio-trade.png
-    sha256: 5c57462493b79885
+    sha256: fbef268fe53f9e5c
   - path: docs/design/sizing/torque-map.png
-    sha256: 6ee2702d567e8e6b
+    sha256: a964363b55015bfd
   references:
   - analysis/hexapod_model.py
+  - analysis/leg3d.py
   - analysis/sizing.py
+  - analysis/topology.py
   requested: '2026-09-02'
-  requested_commit: a9b224a
+  requested_commit: f114c0f
   status: requested
   packet: docs/review/sizing.md
   history:
@@ -226,4 +266,91 @@ reviews:
       at 55:1; two stators remain the fallback.'
     changed:
     - docs/design/sizing/torque-map.png
+  - 'on': '2026-09-02'
+    action: changes_requested
+    commit: f114c0f
+    by: harrison
+    note: 'Rider case is a stretch goal, not a design driver. Size each actuator DOF to its
+      needed rating rather than eighteen identical units. Also: what other high-level early
+      architecture decisions can improve performance, efficiency and cost?'
+  - 'on': '2026-09-02'
+    action: requested
+    commit: f114c0f
+    questions:
+    - Is a knee rated at 177 N.m continuous acceptable, or should the routine working volume
+      (0-150 mm foot lift under load) be tightened?
+    - Is a two-stator femur and knee acceptable, or should the motor diameter grow so a single
+      stator covers all three DOFs?
+    - Are the dynamic factors (1.5x walking, 3x stumble) and the 30 degree slope the right
+      conservatism for the terrain demo?
+    summary: 'Mass budget 49 kg unloaded. Rider reported as margin only. Each DOF rated over
+      its working volume with the 3-D leg model: yaw 51 / 70, femur 115 / 226, knee 177 /
+      172 N.m continuous / peak. The knee, not the femur, is the heaviest joint once the foot
+      is raised, because the long tibia folds and the knee swings behind. Actuator plan: one
+      PCB stator design, one stator at 45:1 for yaw, two stators at 50:1 for the femur and
+      75:1 for the knee.'
+    changed:
+    - docs/design/01-sizing.md
+    - docs/design/sizing/leg-stance.png
+    - docs/design/sizing/ratio-trade.png
+    - docs/design/sizing/torque-map.png
+  decided_commit: f114c0f
+- id: topology
+  title: Leg topology trade and early architecture levers
+  stage: topology
+  summary: 'Four leg topologies under the same walking load over the same working volumes:
+    the agreed sprawl yaw-pitch-pitch, the same leg with feet in, the mammal roll-pitch-pitch,
+    and the sprawl with a roll hip (the first axis rotated 90 degrees). A vertical first axis
+    never sees weight; a roll hip sees weight times the foot''s lateral offset and is the
+    worst of both worlds. The sprawl wins on stance, roll margin and foot placement; the mammal
+    wins on fold-ability and coaxial hip motors. Plus what a 300 mm step costs each leg proportion,
+    and the architecture levers (mass, one motor three ratios, gravity compensation, series
+    elasticity, driver per hip pod).'
+  questions:
+  - Does the topology trade answer the 'motor axis rotated 90 degrees' question to your satisfaction,
+    and is the sprawl yaw-pitch-pitch leg confirmed?
+  - 'Which of the architecture levers in 03-architecture-levers.md do you want carried into
+    requirements now: gravity-compensation springs, series elasticity in the tibia, one driver
+    board per hip pod, five-bar knee drive?'
+  artifacts:
+  - path: docs/design/02-leg-topology.md
+    sha256: 167f3921efaae973
+  - path: docs/design/03-architecture-levers.md
+    sha256: 1a613a457b09945d
+  - path: docs/design/topology/step-up.png
+    sha256: 3bbdb7114862d65f
+  - path: docs/design/topology/torques.png
+    sha256: 329378655857e1f1
+  references:
+  - analysis/hexapod_model.py
+  - analysis/leg3d.py
+  - analysis/sizing.py
+  - analysis/topology.py
+  requested: '2026-09-02'
+  requested_commit: f114c0f
+  status: requested
+  packet: docs/review/topology.md
+  history:
+  - 'on': '2026-09-02'
+    action: requested
+    commit: f114c0f
+    questions:
+    - Does the topology trade answer the 'motor axis rotated 90 degrees' question to your
+      satisfaction, and is the sprawl yaw-pitch-pitch leg confirmed?
+    - 'Which of the architecture levers in 03-architecture-levers.md do you want carried into
+      requirements now: gravity-compensation springs, series elasticity in the tibia, one
+      driver board per hip pod, five-bar knee drive?'
+    summary: 'Four leg topologies under the same walking load over the same working volumes:
+      the agreed sprawl yaw-pitch-pitch, the same leg with feet in, the mammal roll-pitch-pitch,
+      and the sprawl with a roll hip (the first axis rotated 90 degrees). A vertical first
+      axis never sees weight; a roll hip sees weight times the foot''s lateral offset and
+      is the worst of both worlds. The sprawl wins on stance, roll margin and foot placement;
+      the mammal wins on fold-ability and coaxial hip motors. Plus what a 300 mm step costs
+      each leg proportion, and the architecture levers (mass, one motor three ratios, gravity
+      compensation, series elasticity, driver per hip pod).'
+    added:
+    - docs/design/02-leg-topology.md
+    - docs/design/03-architecture-levers.md
+    - docs/design/topology/step-up.png
+    - docs/design/topology/torques.png
 artifact_url: https://claude.ai/code/artifact/c27a8924-af18-4d17-bd9b-0fcb41e685e3
