@@ -8,49 +8,49 @@
 #   review-gate sign <id> --changes "what they want different"
 reviews:
 - id: vision
-  title: The agreed leg, and the mammal alternative for the topology question (round 3)
+  title: Confirmed sprawl leg (2.0x tibia) and its mammal stance (round 4)
   stage: vision
-  summary: 'A: the leg agreed in review — sprawl yaw-pitch-pitch, coxa 150 / femur 250 / tibia
-    625 mm, femur up at 55 deg, tibia vertical, hips 0.42 m up, 0.83 m stance. B: the mammal
-    roll-pitch-pitch alternative on the same body, rendered so the topology trade in 02-leg-topology.md
-    can be judged by eye. Both with a 6 ft figure; orbit them in the 3-D viewer.'
+  summary: 'A: the confirmed sprawl leg, coxa 150 / femur 250 / tibia 500 mm, femur up at
+    45 deg, tibia vertical, hips 0.32 m up, 0.89 m stance. B: the same robot with every leg
+    yawed 90 deg into its mammal stance, hips 0.64 m up, 0.24 m stance. One design, two postures,
+    both rendered with a 6 ft figure and in the 3-D viewer.'
   questions:
-  - 'A (sprawl, yaw-pitch-pitch, the agreed 150/250/625 leg) stays the baseline: does the
-    topology trade settle it, or does B (mammal) deserve a prototype leg too?'
-  - The 625 mm tibia cannot fold below 375 mm of extension, so a 300 mm step is taken with
-    the foot swung 210 mm outward, and the folded knee then carries more than the femur. Acceptable,
-    or shorten the tibia toward 2.0x?
+  - 'Concept B is the same robot reconfigured, not a different one: hips 0.64 m up, 0.24 m
+    stance, 5 deg roll margin. Is that the mammal stance you had in mind, or should it keep
+    some sprawl (yaw 60 deg, say)?'
+  - 'The tibia is now 500 mm (2.0x): hips 0.32 m up in the sprawl stance. Enough clearance
+    for the terrain demo, given the tall stance is available?'
   artifacts:
   - path: docs/design/vision.md
-    sha256: 6208f2f2fcfcf73a
+    sha256: daf9ebd52df51610
   - path: docs/design/vision/concept_a_sprawl/iso.svg
-    sha256: 4dcbcb5d3225c7ec
+    sha256: 0c87cb2f2a9c3b81
   - path: docs/design/vision/concept_a_sprawl/view-front.png
-    sha256: 3e0326850f5e3ac1
+    sha256: 1b301d15157ee233
   - path: docs/design/vision/concept_a_sprawl/view-hero.png
-    sha256: 22b6d25f720d70e5
+    sha256: ade9460bc5d6dddf
   - path: docs/design/vision/concept_a_sprawl/view-top.png
-    sha256: f0bfece9f08aebe1
-  - path: docs/design/vision/concept_b_mammal/iso.svg
-    sha256: 57fea15d6f5ea376
-  - path: docs/design/vision/concept_b_mammal/view-front.png
-    sha256: f3efa9bb89640a0f
-  - path: docs/design/vision/concept_b_mammal/view-hero.png
-    sha256: 6c7c339b7c319507
-  - path: docs/design/vision/concept_b_mammal/view-top.png
-    sha256: 06071ddd32c1f0b0
+    sha256: 5ddd3a8b12c7e325
+  - path: docs/design/vision/concept_b_mammal_mode/iso.svg
+    sha256: 71a965e6a4b46d70
+  - path: docs/design/vision/concept_b_mammal_mode/view-front.png
+    sha256: c9e54461e569be66
+  - path: docs/design/vision/concept_b_mammal_mode/view-hero.png
+    sha256: abe864ccb38a759b
+  - path: docs/design/vision/concept_b_mammal_mode/view-top.png
+    sha256: 71248ce5d5113a53
   - path: docs/design/vision/manifest.json
-    sha256: 5018d408d21edd28
+    sha256: 918f9d7f67187157
   references:
   - analysis/hexapod_model.py
   - analysis/leg3d.py
   - analysis/sizing.py
   - analysis/topology.py
   - concepts/concept_a_sprawl.py
-  - concepts/concept_b_mammal.py
+  - concepts/concept_b_mammal_mode.py
   - concepts/hexapod_skeleton.py
   requested: '2026-09-02'
-  requested_commit: f114c0f
+  requested_commit: cb9b0b1
   status: requested
   packet: docs/review/vision.md
   history:
@@ -173,39 +173,67 @@ reviews:
     - docs/design/vision/concept_b_mammal/view-front.png
     - docs/design/vision/concept_b_mammal/view-hero.png
     - docs/design/vision/concept_b_mammal/view-top.png
-  decided_commit: f114c0f
+  - 'on': '2026-09-02'
+    action: approved
+    commit: cb9b0b1
+    by: harrison
+    note: Sprawl confirmed, but if we can we should design everything so that it can reconfigure
+      to a mammal stance dynamically if it needs to. Can shorten the tibia toward 2x.
+  - 'on': '2026-09-02'
+    action: requested
+    commit: cb9b0b1
+    questions:
+    - 'Concept B is the same robot reconfigured, not a different one: hips 0.64 m up, 0.24
+      m stance, 5 deg roll margin. Is that the mammal stance you had in mind, or should it
+      keep some sprawl (yaw 60 deg, say)?'
+    - 'The tibia is now 500 mm (2.0x): hips 0.32 m up in the sprawl stance. Enough clearance
+      for the terrain demo, given the tall stance is available?'
+    summary: 'A: the confirmed sprawl leg, coxa 150 / femur 250 / tibia 500 mm, femur up at
+      45 deg, tibia vertical, hips 0.32 m up, 0.89 m stance. B: the same robot with every
+      leg yawed 90 deg into its mammal stance, hips 0.64 m up, 0.24 m stance. One design,
+      two postures, both rendered with a 6 ft figure and in the 3-D viewer.'
+    changed:
+    - docs/design/vision.md
+    - docs/design/vision/concept_a_sprawl/iso.svg
+    - docs/design/vision/concept_a_sprawl/view-front.png
+    - docs/design/vision/concept_a_sprawl/view-hero.png
+    - docs/design/vision/concept_a_sprawl/view-top.png
+    - docs/design/vision/manifest.json
+    added:
+    - docs/design/vision/concept_b_mammal_mode/iso.svg
+    - docs/design/vision/concept_b_mammal_mode/view-front.png
+    - docs/design/vision/concept_b_mammal_mode/view-hero.png
+    - docs/design/vision/concept_b_mammal_mode/view-top.png
+  decided_commit: cb9b0b1
 - id: sizing
-  title: Sizing with the agreed leg, rider as stretch, per-DOF actuator ratings (round 3)
+  title: Sizing with the 2.0x tibia, ratings over both stances (round 4)
   stage: sizing
-  summary: 'Mass budget 49 kg unloaded. Rider reported as margin only. Each DOF rated over
-    its working volume with the 3-D leg model: yaw 51 / 70, femur 115 / 226, knee 177 / 172
-    N.m continuous / peak. The knee, not the femur, is the heaviest joint once the foot is
-    raised, because the long tibia folds and the knee swings behind. Actuator plan: one PCB
-    stator design, one stator at 45:1 for yaw, two stators at 50:1 for the femur and 75:1
-    for the knee.'
+  summary: 'Each DOF rated over its working volume in both the sprawl and the mammal stance:
+    yaw 55 / 58, femur 135 / 245, knee 143 / 300 N.m continuous / peak. The mammal stance
+    sets the femur and knee continuous ratings (the pitch joints push there); the sprawl stance
+    alone would need 115 / 122. Plan: one PCB stator design, one stator at 45:1 for yaw, two
+    stators at 55:1 for the femur and 60:1 for the knee. Yaw range +/-95 deg.'
   questions:
-  - Is a knee rated at 177 N.m continuous acceptable, or should the routine working volume
-    (0-150 mm foot lift under load) be tightened?
-  - Is a two-stator femur and knee acceptable, or should the motor diameter grow so a single
-    stator covers all three DOFs?
+  - Is the 15-20 % femur and knee premium for the mammal stance acceptable, or should that
+    stance be limited (slower, smaller workspace) to keep the sprawl ratings?
   - Are the dynamic factors (1.5x walking, 3x stumble) and the 30 degree slope the right conservatism
     for the terrain demo?
   artifacts:
   - path: docs/design/01-sizing.md
-    sha256: a680f3fee1f6347a
+    sha256: e4e8c56e27fa20b6
   - path: docs/design/sizing/leg-stance.png
-    sha256: 8beb672282caa5ba
+    sha256: 53461f70b5fb9b7e
   - path: docs/design/sizing/ratio-trade.png
-    sha256: fbef268fe53f9e5c
+    sha256: e3bc4119f5593944
   - path: docs/design/sizing/torque-map.png
-    sha256: a964363b55015bfd
+    sha256: 100f6fe4705d0448
   references:
   - analysis/hexapod_model.py
   - analysis/leg3d.py
   - analysis/sizing.py
   - analysis/topology.py
   requested: '2026-09-02'
-  requested_commit: f114c0f
+  requested_commit: cb9b0b1
   status: requested
   packet: docs/review/sizing.md
   history:
@@ -294,40 +322,66 @@ reviews:
     - docs/design/sizing/leg-stance.png
     - docs/design/sizing/ratio-trade.png
     - docs/design/sizing/torque-map.png
-  decided_commit: f114c0f
+  - 'on': '2026-09-02'
+    action: changes_requested
+    commit: cb9b0b1
+    by: harrison
+    note: Shorten the tibia toward 2x (the 625 mm tibia's fold limit cost the knee). Ratings
+      must also cover the mammal stance.
+  - 'on': '2026-09-02'
+    action: requested
+    commit: cb9b0b1
+    questions:
+    - Is the 15-20 % femur and knee premium for the mammal stance acceptable, or should that
+      stance be limited (slower, smaller workspace) to keep the sprawl ratings?
+    - Are the dynamic factors (1.5x walking, 3x stumble) and the 30 degree slope the right
+      conservatism for the terrain demo?
+    summary: 'Each DOF rated over its working volume in both the sprawl and the mammal stance:
+      yaw 55 / 58, femur 135 / 245, knee 143 / 300 N.m continuous / peak. The mammal stance
+      sets the femur and knee continuous ratings (the pitch joints push there); the sprawl
+      stance alone would need 115 / 122. Plan: one PCB stator design, one stator at 45:1 for
+      yaw, two stators at 55:1 for the femur and 60:1 for the knee. Yaw range +/-95 deg.'
+    changed:
+    - docs/design/01-sizing.md
+    - docs/design/sizing/leg-stance.png
+    - docs/design/sizing/ratio-trade.png
+    - docs/design/sizing/torque-map.png
+  decided_commit: cb9b0b1
 - id: topology
-  title: Leg topology trade and early architecture levers
+  title: Topology confirmed; motor and reduction options
   stage: topology
-  summary: 'Four leg topologies under the same walking load over the same working volumes:
-    the agreed sprawl yaw-pitch-pitch, the same leg with feet in, the mammal roll-pitch-pitch,
-    and the sprawl with a roll hip (the first axis rotated 90 degrees). A vertical first axis
-    never sees weight; a roll hip sees weight times the foot''s lateral offset and is the
-    worst of both worlds. The sprawl wins on stance, roll margin and foot placement; the mammal
-    wins on fold-ability and coaxial hip motors. Plus what a 300 mm step costs each leg proportion,
-    and the architecture levers (mass, one motor three ratios, gravity compensation, series
-    elasticity, driver per hip pod).'
+  summary: 'The sprawl leg confirmed in review, now with its mammal stance evaluated as a
+    fifth configuration in the trade (100 % of the step-up box reachable, yaw nearly idle,
+    pitch joints take the propulsion). New: 04-motor-reduction-options.md surveys motors (PCB
+    stator, wound flat-coil, iron-core axial, radial outrunners, frameless) and reductions
+    (cycloid, compound cycloid, planetary, harmonic, capstan, belt) on torque per kg, cost
+    and in-house buildability. Verdict: keep PCB plus cycloid for the first build, design
+    the housing for a wound flat-coil stator swap and a second cycloid disc, build the first
+    leg on bought actuators, and look at a capstan or belt stage along the coxa.'
   questions:
-  - Does the topology trade answer the 'motor axis rotated 90 degrees' question to your satisfaction,
-    and is the sprawl yaw-pitch-pitch leg confirmed?
-  - 'Which of the architecture levers in 03-architecture-levers.md do you want carried into
-    requirements now: gravity-compensation springs, series elasticity in the tibia, one driver
-    board per hip pod, five-bar knee drive?'
+  - Does the options note change the plan, or is PCB stator plus in-plane cycloid still the
+    path, with the wound flat-coil stator as the torque upgrade?
+  - 'Which architecture levers go into requirements now: gravity-compensation springs, series
+    elasticity in the tibia, one driver board per hip pod, capstan or belt stage along the
+    coxa?'
   artifacts:
   - path: docs/design/02-leg-topology.md
-    sha256: 167f3921efaae973
+    sha256: 865847f2b007e14d
   - path: docs/design/03-architecture-levers.md
     sha256: 1a613a457b09945d
+  - path: docs/design/04-motor-reduction-options.md
+    sha256: 66759c1a3e617c9a
   - path: docs/design/topology/step-up.png
-    sha256: 3bbdb7114862d65f
+    sha256: ec52c11c94f9fa91
   - path: docs/design/topology/torques.png
-    sha256: 329378655857e1f1
+    sha256: 62753cc56b33608e
   references:
   - analysis/hexapod_model.py
   - analysis/leg3d.py
   - analysis/sizing.py
   - analysis/topology.py
   requested: '2026-09-02'
-  requested_commit: f114c0f
+  requested_commit: cb9b0b1
   status: requested
   packet: docs/review/topology.md
   history:
@@ -353,4 +407,54 @@ reviews:
     - docs/design/03-architecture-levers.md
     - docs/design/topology/step-up.png
     - docs/design/topology/torques.png
+  - 'on': '2026-09-02'
+    action: approved
+    commit: cb9b0b1
+    by: harrison
+    note: Sprawl confirmed; design so it can reconfigure to a mammal stance dynamically if
+      needed. Asked whether there are better options for motors or reductions — likes PCB/cycloid
+      because we could manufacture them ourselves at very low cost.
+  - 'on': '2026-09-02'
+    action: requested
+    commit: cb9b0b1
+    questions:
+    - Does the options note change the plan, or is PCB stator plus in-plane cycloid still
+      the path, with the wound flat-coil stator as the torque upgrade?
+    - 'Which architecture levers go into requirements now: gravity-compensation springs, series
+      elasticity in the tibia, one driver board per hip pod, capstan or belt stage along the
+      coxa?'
+    summary: 'The sprawl leg confirmed in review, now with its mammal stance evaluated as
+      a fifth configuration in the trade (100 % of the step-up box reachable, yaw nearly idle,
+      pitch joints take the propulsion). New: 04-motor-reduction-options.md surveys motors
+      (PCB stator, wound flat-coil, iron-core axial, radial outrunners, frameless) and reductions
+      (cycloid, compound cycloid, planetary, harmonic, capstan, belt) on torque per kg, cost
+      and in-house buildability. Verdict: keep PCB plus cycloid for the first build, design
+      the housing for a wound flat-coil stator swap and a second cycloid disc, build the first
+      leg on bought actuators, and look at a capstan or belt stage along the coxa.'
+    changed:
+    - docs/design/02-leg-topology.md
+    - docs/design/topology/step-up.png
+    - docs/design/topology/torques.png
+    added:
+    - docs/design/04-motor-reduction-options.md
+  - 'on': '2026-09-02'
+    action: requested
+    commit: cb9b0b1
+    questions:
+    - Does the options note change the plan, or is PCB stator plus in-plane cycloid still
+      the path, with the wound flat-coil stator as the torque upgrade?
+    - 'Which architecture levers go into requirements now: gravity-compensation springs, series
+      elasticity in the tibia, one driver board per hip pod, capstan or belt stage along the
+      coxa?'
+    summary: 'The sprawl leg confirmed in review, now with its mammal stance evaluated as
+      a fifth configuration in the trade (100 % of the step-up box reachable, yaw nearly idle,
+      pitch joints take the propulsion). New: 04-motor-reduction-options.md surveys motors
+      (PCB stator, wound flat-coil, iron-core axial, radial outrunners, frameless) and reductions
+      (cycloid, compound cycloid, planetary, harmonic, capstan, belt) on torque per kg, cost
+      and in-house buildability. Verdict: keep PCB plus cycloid for the first build, design
+      the housing for a wound flat-coil stator swap and a second cycloid disc, build the first
+      leg on bought actuators, and look at a capstan or belt stage along the coxa.'
+    changed:
+    - docs/design/topology/torques.png
+  decided_commit: cb9b0b1
 artifact_url: https://claude.ai/code/artifact/c27a8924-af18-4d17-bd9b-0fcb41e685e3

@@ -28,80 +28,89 @@ For the vertical part of the foot force — the weight — that means:
 
 So "rotate the first motor axis 90°" — a roll joint at the body instead of a
 yaw joint — does not remove the lever; it moves it. With the same sprawled
-leg the roll joint sees the full 293 mm lateral offset of the
-foot: 96 N·m at the neutral stance under the walking load, against
-33 N·m for the yaw joint (propulsion only). It becomes a good idea only if
+leg the roll joint sees the full 327 mm lateral offset of the
+foot: 102 N·m at the neutral stance under the walking load, against
+37 N·m for the yaw joint (propulsion only). It becomes a good idea only if
 the feet also move in under the hips, which is the mammal layout — a
 different robot with a different stance width, not a motor rotated in place.
 
-## 2. Four topologies under the same load
+## 2. Five configurations under the same load
 
 All four use the same body (240 mm between hip axes), the same walking load
 (280 N vertical, 112 N push, 30 % of that sideways) and the same
 working volumes: *routine* is ±200 mm fore-aft, ±100 mm lateral and 0–150 mm
 up from the neutral foot; the *step-up box* extends to +150 mm outboard and
-300 mm up. The sprawl legs use the agreed 150 / 250 / 625 mm links; the mammal
-leg uses proportions that suit it (100 mm carrier, 300 / 300 mm) because the
-comparison is between the best each can do, not the same links forced into
-both.
+300 mm up. The sprawl legs use the agreed 150 / 250 / 500 mm links, including
+the row where that same leg is yawed 90° into its mammal stance; the true
+mammal leg uses proportions that suit it (100 mm carrier, 300 / 300 mm)
+because the comparison is between the best each can do, not the same links
+forced into both.
 
 | Topology | Neutral, walk (N·m) | Routine max, walk (N·m) | Σ routine max | Stumble peak (N·m) | Step-up box reachable | Stance width (m) | Roll tip angle | Hip height (mm) |
 |---|---|---|---|---|---|---|---|---|
-| Sprawl, yaw–pitch–pitch, femur 55° | yaw 33 / femur 54 / knee 21 | 51 / 115 / 177 | **343** | 23 / 226 / 160 | 41 % | 0.83 | 24° | 420 |
-| Sprawl, yaw–pitch–pitch, femur 75° (feet in) | yaw 24 / femur 31 / knee 21 | 42 / 96 / 168 | **306** | 19 / 171 / 231 | 20 % | 0.67 | 21° | 384 |
+| Sprawl, yaw–pitch–pitch, femur 45° | yaw 37 / femur 60 / knee 17 | 55 / 115 / 122 | **292** | 25 / 245 / 135 | 71 % | 0.89 | 31° | 323 |
+| Sprawl, yaw–pitch–pitch, femur 65° (feet in) | yaw 29 / femur 39 / knee 17 | 47 / 95 / 146 | **288** | 21 / 193 / 198 | 43 % | 0.75 | 30° | 273 |
+| Sprawl leg in mammal stance (yaw 90°, femur -45°) | yaw 5 / femur 72 / knee 102 | 23 / 135 / 143 | **301** | 9 / 219 / 300 | 100 % | 0.24 | 5° | 644 |
 | Mammal, roll–pitch–pitch, feet under the body | roll 42 / femur 48 / knee 83 | 70 / 107 / 91 | **269** | 133 / 192 / 246 | 100 % | 0.44 | 13° | 424 |
-| Sprawl with a roll hip, roll–yaw–pitch | roll 96 / yaw 16 / knee 21 | 124 / 42 / 121 | **287** | 295 / 44 / 158 | 87 % | 0.83 | 24° | 420 |
+| Sprawl with a roll hip, roll–yaw–pitch | roll 102 / yaw 20 / knee 17 | 130 / 61 / 132 | **323** | 322 / 40 / 142 | 96 % | 0.89 | 31° | 323 |
 
 ![Joint torques by topology](topology/torques.png)
 
 Reading it:
 
 * **Sprawl, yaw–pitch–pitch (A, agreed).** Nothing on the yaw joint but
-  propulsion; the femur carries the weight over a 143 mm arm at neutral.
+  propulsion; the femur carries the weight over a 177 mm arm at neutral.
   The pale bars are the corners of the routine volume: pulling the foot out
   or up puts the load on the knee through the tibia's lean, so the knee's
   routine maximum is on par with the femur's. Widest stance, best roll
   margin, highest body.
-* **Same leg with the femur at 75° (feet in).** Lower femur torque, 0.67 m
-  stance, and the fold limit bites harder — only 20 % of the step-up box.
+* **Same leg with the femur at 65° (feet in).** Lower femur torque, 0.75 m
+  stance, and the fold limit bites harder — 43 % of the step-up box.
   It shows the trade inside the chosen topology: the femur angle is a
   posture the controller can choose, not a build decision.
+* **Same leg in its mammal stance (yaw 90°).** Hips 644 mm up, feet under
+  the hips, 0.24 m stance, the whole step-up box reachable. The yaw joint
+  goes almost idle (5 N·m) and the pitch joints take the propulsion over
+  the full leg height: femur 135 and knee 143 N·m in the routine volume,
+  which is what sets their continuous ratings in the sizing document. This
+  is the reconfiguration the review asked for, and it costs a yaw range of
+  ±90° and roughly 15–20 % on two actuators rather than a different robot.
 * **Mammal, roll–pitch–pitch (B).** Lowest sum at the neutral stance and the
   whole step-up box reachable, because 300 / 300 mm links fold to nothing.
   But the routine maximum is not lower than the sprawl's: as soon as the foot
   steps sideways the roll joint picks up weight × lateral offset, and the
   femur carries the whole propulsion force over the leg's height. Its stance
-  is 0.44 m against 0.83 m, so roll margin is 13° against 24°. With a
+  is 0.44 m against 0.89 m, so roll margin is 13° against 31°. With a
   payload on the deck that is the number that decides whether the robot
   walks a side slope or crawls it.
 * **Sprawl with a roll hip (roll–yaw–pitch).** The literal "first axis turned
-  90°". The roll joint sees 96 N·m standing still and 124 N·m in the routine
+  90°". The roll joint sees 102 N·m standing still and 130 N·m in the routine
   volume — the worst of both worlds. Not a candidate.
 
 ## 3. What a high step really costs: the leg proportion, not the topology
 
 The step-up box exposed something the neutral-stance sizing did not: a knee
-cannot fold the foot closer to the femur axis than **tibia − femur**. With a
-625 mm tibia and a 250 mm femur that is 375 mm, so a foot that has to
-come up 300 mm cannot stay where it was — it has to move outward, and the
-femur pays for the reach.
+cannot fold the foot closer to the femur axis than **tibia − femur**. With
+the 625 mm tibia first chosen that was 375 mm, so a foot that had to
+come up 300 mm could not stay where it was — it had to move outward, and the
+femur paid for the reach while the folded knee swung behind the femur axis
+and paid even more. That is why the tibia came down to 500 mm.
 
 | Femur / tibia (mm) | Hip height (mm) | Min. extension (mm) | Foot moves outward to stand on a 300 mm step (mm) | Femur torque, neutral (N·m) | Femur torque on the step (N·m) |
 |---|---|---|---|---|---|
-| 250 / 500 (2.0×) | 323 | 250 | +72 | 49 | **70** |
-| 250 / 625 (2.5×) — agreed | 420 | 375 | +212 | 40 | **99** |
+| 250 / 500 (2.0×) — agreed | 323 | 250 | +72 | 49 | **70** |
+| 250 / 625 (2.5×) — earlier | 420 | 375 | +212 | 40 | **99** |
 | 300 / 600 (2.0×) | 370 | 300 | +99 | 54 | **82** |
 | 300 / 480 (1.6×) | 287 | 180 | +0 | 64 | **64** |
 
 ![Step-up cost by leg proportion](topology/step-up.png)
 
-The agreed 2.5× leg is the tallest and clears the most, and it steps high by
-reaching out: +212 mm outward on a 300 mm foothold, at 99 N·m on the
-femur under the walking load. A 2.0× leg of the same femur folds further and
-stands on the same step at 70 N·m, but from a 323 mm hip instead of 420 mm.
-This is the real terrain trade-off and it is inside the chosen topology; the
-actuator ratings in `01-sizing.md` §6 are taken over the working volume so
-they already carry it.
+The agreed 2.0× leg stands on a 300 mm step with the foot only +72 mm
+outward at 70 N·m on the femur, from a 323 mm hip; the 2.5× leg needed
++212 mm and 99 N·m from a 420 mm hip. The height the shorter tibia gives up in
+the sprawl stance comes back in the mammal stance (644 mm hips), which is
+now the tall mode. The actuator ratings in `01-sizing.md` §6 are taken over
+the working volume in both stances, so they carry all of this.
 
 ## 4. Answer
 
@@ -112,7 +121,7 @@ free; the roll margin with a deck payload is roughly double the mammal's; and
 foot placement is a ring around each hip rather than a slot under it, which
 is what sparse footholds need. Its costs are real and now quantified: the
 knee must be rated with the femur, the coxa and yaw bearing carry a
-246 N·m overturning moment at the peak load, and the femur and knee
+274 N·m overturning moment at the peak load, and the femur and knee
 drives have to cross the yaw axis to reach their joints.
 
 The mammal layout wins on one thing that matters to the "motors in the body"
@@ -121,6 +130,9 @@ transmission through a coxa. That is an argument for building the first
 prototype leg of the sprawl design with the same coaxial idea — both pitch
 drives concentric on the yaw axis, then along the coxa — rather than for
 changing the topology. See `03-architecture-levers.md`.
+
+Confirmed in review: the sprawl leg, with the reconfiguration to the mammal
+stance designed in (yaw range ±90°, ratings taken over both stances).
 
 What was not varied here: a fourth joint per leg (a knee-yaw or an ankle),
 non-serial legs (a five-bar or pantograph puts both pitch motors at the hip

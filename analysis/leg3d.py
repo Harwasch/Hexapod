@@ -92,7 +92,7 @@ class Topology:
 # ----------------------------------------------------------------------------
 # The topologies on the table (left leg, mid-body, neutral stance)
 # ----------------------------------------------------------------------------
-def sprawl_ypp(coxa=150.0, femur=250.0, tibia=625.0, femur_deg=55.0, key="sprawl", name=None):
+def sprawl_ypp(coxa=150.0, femur=250.0, tibia=500.0, femur_deg=45.0, key="sprawl", name=None):
     a = math.radians(femur_deg)
     return Topology(
         key, name or f"Sprawl, yaw–pitch–pitch, femur {femur_deg:.0f}°",
@@ -117,7 +117,7 @@ def mammal_rpp(carrier=100.0, femur=300.0, tibia=300.0, femur_deg=-45.0, key="ma
         notes="Quadruped hip: roll at the body, pitch/knee motors coaxial on the carrier. Feet under the hips, stride is a pitch sweep.")
 
 
-def lizard_ryp(coxa=150.0, femur=250.0, tibia=625.0, femur_deg=55.0, key="lizard", name=None):
+def lizard_ryp(coxa=150.0, femur=250.0, tibia=500.0, femur_deg=45.0, key="lizard", name=None):
     a = math.radians(femur_deg)
     return Topology(
         key, name or "Sprawl with a roll hip, roll–yaw–pitch",
@@ -128,13 +128,31 @@ def lizard_ryp(coxa=150.0, femur=250.0, tibia=625.0, femur_deg=55.0, key="lizard
         notes="The 'first motor axis rotated 90°' case: a horizontal fore-aft hip axis lifts the whole sprawled leg, so it sees the weight times the full lateral offset.")
 
 
+def sprawl_mammal_mode(coxa=150.0, femur=250.0, tibia=500.0, femur_deg=-45.0, key="sprawl_mammal", name=None):
+    """The sprawl leg itself, yawed 90° so its plane is fore-aft, femur down and
+    forward, tibia back to put the foot under the femur axis: the reconfigured
+    'mammal stance' the review asked for.  Same joints, same actuators."""
+    a = math.radians(femur_deg)
+    kx, kz = femur * math.cos(a), femur * math.sin(a)
+    dz = -math.sqrt(max(tibia**2 - kx**2, 1.0))
+    return Topology(
+        key, name or f"Sprawl leg in mammal stance (yaw 90°, femur {femur_deg:.0f}°)",
+        joints=(Joint((0, 0, 1), (coxa, 0, 0)),
+                Joint((0, 1, 0), (kx, 0, kz)),
+                Joint((0, 1, 0), (-kx, 0, dz))),
+        joint_names=("yaw", "femur", "knee"), stride_joint="femur",
+        notes="The agreed leg reconfigured at run time: tall and narrow; propulsion moves to the pitch joints.")
+
+
 TOPOLOGIES = (
     sprawl_ypp(),
-    sprawl_ypp(femur_deg=75.0, key="sprawl_narrow", name="Sprawl, yaw–pitch–pitch, femur 75° (feet in)"),
+    sprawl_ypp(femur_deg=65.0, key="sprawl_narrow", name="Sprawl, yaw–pitch–pitch, femur 65° (feet in)"),
+    sprawl_mammal_mode(),
     mammal_rpp(),
     lizard_ryp(),
 )
 CHOSEN = TOPOLOGIES[0]
+MAMMAL_MODE = TOPOLOGIES[2]
 
 
 # ----------------------------------------------------------------------------

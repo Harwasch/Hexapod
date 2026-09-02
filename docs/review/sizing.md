@@ -1,8 +1,8 @@
-# Review — Sizing with the agreed leg, rider as stretch, per-DOF actuator ratings (round 3)
+# Review — Sizing with the 2.0x tibia, ratings over both stances (round 4)
 
 `sizing` · requested 2026-09-02 · branch `claude/hexapod-robot-design-mt516g`
 
-Mass budget 49 kg unloaded. Rider reported as margin only. Each DOF rated over its working volume with the 3-D leg model: yaw 51 / 70, femur 115 / 226, knee 177 / 172 N.m continuous / peak. The knee, not the femur, is the heaviest joint once the foot is raised, because the long tibia folds and the knee swings behind. Actuator plan: one PCB stator design, one stator at 45:1 for yaw, two stators at 50:1 for the femur and 75:1 for the knee.
+Each DOF rated over its working volume in both the sprawl and the mammal stance: yaw 55 / 58, femur 135 / 245, knee 143 / 300 N.m continuous / peak. The mammal stance sets the femur and knee continuous ratings (the pitch joints push there); the sprawl stance alone would need 115 / 122. Plan: one PCB stator design, one stator at 45:1 for yaw, two stators at 55:1 for the femur and 60:1 for the knee. Yaw range +/-95 deg.
 
 ## What you are agreeing to
 
@@ -35,9 +35,8 @@ Sources and working files. Not part of the agreement — these change as work go
 
 ## What we need decided
 
-1. Is a knee rated at 177 N.m continuous acceptable, or should the routine working volume (0-150 mm foot lift under load) be tightened?
-2. Is a two-stator femur and knee acceptable, or should the motor diameter grow so a single stator covers all three DOFs?
-3. Are the dynamic factors (1.5x walking, 3x stumble) and the 30 degree slope the right conservatism for the terrain demo?
+1. Is the 15-20 % femur and knee premium for the mammal stance acceptable, or should that stance be limited (slower, smaller workspace) to keep the sprawl ratings?
+2. Are the dynamic factors (1.5x walking, 3x stumble) and the 30 degree slope the right conservatism for the terrain demo?
 
 ## Decision
 

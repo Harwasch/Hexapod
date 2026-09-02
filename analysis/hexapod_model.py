@@ -117,10 +117,13 @@ class Stance:
         return self.leg.coxa + self.foot_reach
 
 
-# Review decision 2026-09-02: tibia 2.5× femur, with the longer (250 mm) femur.
-LEG = Leg(coxa=150.0, femur=250.0, tibia=625.0)
-STANCE = Stance("Sprawl, tibia 2.5× femur", LEG, femur_deg=55.0, tibia_lean_deg=0.0,
+# Review decisions 2026-09-02: sprawl confirmed; the 250 mm femur; tibia shortened
+# from 2.5× toward 2.0× (the 625 mm tibia's fold limit cost the knee its rating);
+# and the leg must be able to reconfigure into a mammal stance (yaw ±90°).
+LEG = Leg(coxa=150.0, femur=250.0, tibia=500.0)
+STANCE = Stance("Sprawl, tibia 2.0× femur", LEG, femur_deg=45.0, tibia_lean_deg=0.0,
                 leg_plane="radial", yaw_deg=(30.0, 0.0, -30.0))
+YAW_RANGE_DEG = 95.0   # ± ; 90° puts the leg plane fore-aft for the mammal stance
 STANCES = (STANCE,)
 
 # ----------------------------------------------------------------------------

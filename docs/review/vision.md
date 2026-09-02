@@ -1,8 +1,8 @@
-# Review — The agreed leg, and the mammal alternative for the topology question (round 3)
+# Review — Confirmed sprawl leg (2.0x tibia) and its mammal stance (round 4)
 
 `vision` · requested 2026-09-02 · branch `claude/hexapod-robot-design-mt516g`
 
-A: the leg agreed in review — sprawl yaw-pitch-pitch, coxa 150 / femur 250 / tibia 625 mm, femur up at 55 deg, tibia vertical, hips 0.42 m up, 0.83 m stance. B: the mammal roll-pitch-pitch alternative on the same body, rendered so the topology trade in 02-leg-topology.md can be judged by eye. Both with a 6 ft figure; orbit them in the 3-D viewer.
+A: the confirmed sprawl leg, coxa 150 / femur 250 / tibia 500 mm, femur up at 45 deg, tibia vertical, hips 0.32 m up, 0.89 m stance. B: the same robot with every leg yawed 90 deg into its mammal stance, hips 0.64 m up, 0.24 m stance. One design, two postures, both rendered with a 6 ft figure and in the 3-D viewer.
 
 ## What you are agreeing to
 
@@ -24,19 +24,19 @@ A: the leg agreed in review — sprawl yaw-pitch-pitch, coxa 150 / femur 250 / t
 
 **iso.svg**
 
-![iso.svg](../design/vision/concept_b_mammal/iso.svg)
+![iso.svg](../design/vision/concept_b_mammal_mode/iso.svg)
 
 **view-front.png**
 
-![view-front.png](../design/vision/concept_b_mammal/view-front.png)
+![view-front.png](../design/vision/concept_b_mammal_mode/view-front.png)
 
 **view-hero.png**
 
-![view-hero.png](../design/vision/concept_b_mammal/view-hero.png)
+![view-hero.png](../design/vision/concept_b_mammal_mode/view-hero.png)
 
 **view-top.png**
 
-![view-top.png](../design/vision/concept_b_mammal/view-top.png)
+![view-top.png](../design/vision/concept_b_mammal_mode/view-top.png)
 
 | File | Opens in |
 |---|---|
@@ -54,13 +54,13 @@ Sources and working files. Not part of the agreement — these change as work go
 | [analysis/sizing.py](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/analysis/sizing.py) | plain text on GitHub |
 | [analysis/topology.py](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/analysis/topology.py) | plain text on GitHub |
 | [concepts/concept_a_sprawl.py](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/concepts/concept_a_sprawl.py) | plain text on GitHub |
-| [concepts/concept_b_mammal.py](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/concepts/concept_b_mammal.py) | plain text on GitHub |
+| [concepts/concept_b_mammal_mode.py](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/concepts/concept_b_mammal_mode.py) | plain text on GitHub |
 | [concepts/hexapod_skeleton.py](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/concepts/hexapod_skeleton.py) | plain text on GitHub |
 
 ## What we need decided
 
-1. A (sprawl, yaw-pitch-pitch, the agreed 150/250/625 leg) stays the baseline: does the topology trade settle it, or does B (mammal) deserve a prototype leg too?
-2. The 625 mm tibia cannot fold below 375 mm of extension, so a 300 mm step is taken with the foot swung 210 mm outward, and the folded knee then carries more than the femur. Acceptable, or shorten the tibia toward 2.0x?
+1. Concept B is the same robot reconfigured, not a different one: hips 0.64 m up, 0.24 m stance, 5 deg roll margin. Is that the mammal stance you had in mind, or should it keep some sprawl (yaw 60 deg, say)?
+2. The tibia is now 500 mm (2.0x): hips 0.32 m up in the sprawl stance. Enough clearance for the terrain demo, given the tall stance is available?
 
 ## Decision
 

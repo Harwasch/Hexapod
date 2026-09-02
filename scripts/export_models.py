@@ -12,12 +12,12 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "concepts"))
 sys.path.insert(0, os.path.join(ROOT, "analysis"))
 from build123d import export_stl  # noqa: E402
-from leg3d import TOPOLOGIES, CHOSEN  # noqa: E402
+from leg3d import TOPOLOGIES, CHOSEN, MAMMAL_MODE  # noqa: E402
 from hexapod_skeleton import build_groups, ground_level  # noqa: E402
 
 BY_KEY = {t.key: t for t in TOPOLOGIES}
-CONCEPTS = {"concept_a_sprawl": ("A — Sprawl, yaw–pitch–pitch", CHOSEN),
-            "concept_b_mammal": ("B — Mammal, roll–pitch–pitch", BY_KEY["mammal"])}
+CONCEPTS = {"concept_a_sprawl": ("A — Sprawl stance", CHOSEN),
+            "concept_b_mammal_mode": ("B — Same robot, mammal stance", MAMMAL_MODE)}
 OUT = os.path.join(ROOT, "build", "models")
 
 manifest = {}

@@ -19,10 +19,10 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 sys.path.insert(0, os.path.dirname(__file__))
-from hexapod_model import (ACT, BODY, ENERGY, GAITS, LOAD_CASES, MASS, STANCE, G, PcbMotor,
+from hexapod_model import (ACT, BODY, ENERGY, GAITS, LOAD_CASES, MASS, STANCE, YAW_RANGE_DEG, G, PcbMotor,
                            Reduction, ik, joint_from_motor, joint_speeds, knee_pos,
                            motor_speed_for, stance_torques, tip_angles)
-from leg3d import CHOSEN, ROUTINE, STUMBLE, Workspace, evaluate, force_set
+from leg3d import CHOSEN, MAMMAL_MODE, ROUTINE, STUMBLE, Workspace, evaluate, force_set
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DOC = os.path.join(ROOT, "docs", "design", "01-sizing.md")
@@ -48,9 +48,14 @@ STEP = Workspace(dx=(-200.0, 200.0), dy=(STEP_DY + 2, STEP_DY + 60), dz=(STEP_H,
 EV_ROUTINE = evaluate(CHOSEN, WALK.foot_force_z, WALK.foot_force_prop, ROUTINE)
 EV_EXTREME = evaluate(CHOSEN, WALK.foot_force_z, WALK.foot_force_prop, STEP)
 EV_PEAK = evaluate(CHOSEN, PEAK.foot_force_z, PEAK.foot_force_prop, STUMBLE)
+# the same leg reconfigured into the mammal stance must also walk (review decision)
+EV_MAMMAL = evaluate(MAMMAL_MODE, WALK.foot_force_z, WALK.foot_force_prop, ROUTINE)
+EV_MAMMAL_PEAK = evaluate(MAMMAL_MODE, PEAK.foot_force_z, PEAK.foot_force_prop, STUMBLE)
 EV_RIDER = np.max([CHOSEN.torques((0, 0, 0), F) for F in force_set(RIDER.foot_force_z, RIDER.foot_force_prop)], axis=0)
-DOF_CONT = dict(zip(DOFS, EV_ROUTINE["max"]))
-DOF_PEAK = {d: max(a, b) for d, a, b in zip(DOFS, EV_EXTREME["max"], EV_PEAK["max"])}
+DOF_CONT_SPRAWL = dict(zip(DOFS, EV_ROUTINE["max"]))
+DOF_CONT_MAMMAL = dict(zip(DOFS, EV_MAMMAL["max"]))
+DOF_CONT = {d: max(DOF_CONT_SPRAWL[d], DOF_CONT_MAMMAL[d]) for d in DOFS}
+DOF_PEAK = {d: max(a, b, c) for d, a, b, c in zip(DOFS, EV_EXTREME["max"], EV_PEAK["max"], EV_MAMMAL_PEAK["max"])}
 DOF_NEUTRAL = dict(zip(DOFS, EV_ROUTINE["neutral"]))
 DOF_RIDER = dict(zip(DOFS, EV_RIDER))
 REQ = {"continuous": max(DOF_CONT.values()), "peak": max(DOF_PEAK.values())}
@@ -290,7 +295,7 @@ def write_doc(figs):
     dof_rows = []
     for d in DOFS:
         p = DOF_PLAN[d]
-        dof_rows.append((d, f"{DOF_NEUTRAL[d]:.0f}", f"**{DOF_CONT[d]:.0f}**", f"**{DOF_PEAK[d]:.0f}**", f"{DOF_RIDER[d]:.0f}",
+        dof_rows.append((d, f"{DOF_NEUTRAL[d]:.0f}", f"{DOF_CONT_SPRAWL[d]:.0f}", f"{DOF_CONT_MAMMAL[d]:.0f}", f"**{DOF_CONT[d]:.0f}**", f"**{DOF_PEAK[d]:.0f}**", f"{DOF_RIDER[d]:.0f}",
                          f"{DOF_SWING[d]:.0f}", f"{p['label']}, **{p['ratio']:.0f}:1**", f"{p['cont']:.0f} / {p['peak']:.0f}",
                          f"{p['speed']:.1f}" + ("" if p["ok"] else " ✗")))
 
@@ -302,7 +307,7 @@ def write_doc(figs):
                            f"{joint_speed_at(r):.1f}", f"{motor_speed_for(JOINT_SPEED_NOMINAL, red):.0f}", f"{motor_speed_for(JOINT_SPEED_FAST, red):.0f}"))
 
     spec_rows = [
-        ("Joint range", "yaw ±60°, femur −60…+90°, knee 20…160°", "fold-flat for transport, step-over 300 mm obstacle, crouch to the deck"),
+        ("Joint range", f"yaw ±{YAW_RANGE_DEG:.0f}°, femur −70…+90°, knee 20…160°", "yaw 90° puts the leg plane fore-aft for the mammal stance; fold-flat for transport; crouch to the deck"),
         ("Yaw bearing overturning moment (structural)", f"{COXA_MOMENT:.0f} N·m", "peak foot load × foot radius; carried by the coxa and the yaw bearing, not the motor"),
         ("Backdrivability / sensing", "joint-torque estimate ≤ 10 % error, foot contact detection", "high ratio ⇒ cannot rely on motor-current transparency; needs output-side sensing or SEA"),
         ("Envelope", f"Ø{ACT.od:.0f} × {ACT.thickness:.0f} mm", "pancake, axis = hip yaw axis"),
@@ -358,6 +363,14 @@ payload bay fill the space between the six stacks. The flat top is the solar
 skin and the payload deck.
 
 ### The leg
+
+Two stances, one leg. In the **sprawl** stance the leg planes radiate from
+the body and the yaw joints sweep the stride. Yawed 90° the same leg stands
+in a **mammal** stance: leg plane fore-aft, femur down and forward, foot
+under the hip, hips {MAMMAL_MODE.hip_height:.0f} mm up instead of {ST.hip_height:.0f} mm and a {BODY.width/1000:.2f} m stance
+instead of {(BODY.width + 2*ST.foot_radius())/1000:.2f} m. That is the tall, narrow mode for a doorway or a deep
+obstacle field, and the yaw range and the ratings below are set so the
+controller can move between the two at run time.
 
 The joint torque from a vertical foot load is that load times the
 **horizontal** distance from the joint axis to the foot — the link angles do
@@ -443,9 +456,13 @@ that sideways) and records the worst moment about each joint's axis:
   fore-aft, ±50 mm lateral, up to 50 mm up), or the walking load standing on
   a {STEP_H:.0f} mm step with the foot as close in as the leg can fold
   ({STEP_R_MIN:.0f}–{STEP_R_MIN + 60:.0f} mm from the femur axis, ±200 mm fore-aft);
+* **mammal stance** — the same leg yawed 90° with the femur down and forward
+  (hips {MAMMAL_MODE.hip_height:.0f} mm up, feet under the hips), walking load over its own
+  routine volume. The review asked for this reconfiguration to be designed
+  in, so it is part of the continuous envelope;
 * **rider** — the stretch case at the neutral stance, for margin only.
 
-{md_table(("DOF", "Neutral, walk (N·m)", "Continuous (N·m)", "Peak (N·m)", "Rider, neutral (N·m)", "Swing speed (rad/s)", "Motor, ratio", "Gives cont / peak (N·m)", f"Joint rad/s at {MOTOR_RPM_MAX:.0f} rpm"), dof_rows)}
+{md_table(("DOF", "Neutral, walk (N·m)", "Sprawl routine (N·m)", "Mammal-stance routine (N·m)", "Continuous (N·m)", "Peak (N·m)", "Rider, neutral (N·m)", "Swing speed (rad/s)", "Motor, ratio", "Gives cont / peak (N·m)", f"Joint rad/s at {MOTOR_RPM_MAX:.0f} rpm"), dof_rows)}
 
 Two things the neutral-stance numbers hid. The **knee** is not the light
 joint it looks: whenever the foot is raised the long tibia has to fold, the
@@ -547,7 +564,7 @@ in the ~{2*PACK_WH/1000:.1f} kWh, two {PACK_KG:.0f} kg packs range, which the ma
 Decided in review, or proposed here:
 
 1. Robot ~{MASS.robot:.0f} kg, {BODY.length/1000:.1f} × {BODY.slab_width(ACT)/1000:.2f} × {BODY.height/1000:.1f} m slab body with the hips under it, hips {ST.hip_height/1000:.2f} m up.
-2. Sprawled yaw–pitch–pitch legs: {LEG.coxa:.0f} mm coxa, femur {LEG.femur:.0f} mm up and out at {ST.femur_deg:.0f}°, tibia {LEG.tibia:.0f} mm vertical (agreed).
+2. Sprawled yaw–pitch–pitch legs (agreed): {LEG.coxa:.0f} mm coxa, femur {LEG.femur:.0f} mm up and out at {ST.femur_deg:.0f}°, tibia {LEG.tibia:.0f} mm vertical ({LEG.tibia_ratio:.1f}×, shortened from 2.5× for the knee's sake), with ±{YAW_RANGE_DEG:.0f}° of yaw so the same leg stands in a mammal stance when asked (agreed).
 3. The rider is a stretch goal, not a rating (agreed).
 4. Per-DOF actuators (agreed): yaw {DOF_CONT['yaw']:.0f} / {DOF_PEAK['yaw']:.0f}, femur {DOF_CONT['femur']:.0f} / {DOF_PEAK['femur']:.0f}, knee {DOF_CONT['knee']:.0f} / {DOF_PEAK['knee']:.0f} N·m continuous / peak; {JOINT_SPEED_NOMINAL:.0f} rad/s at the yaw; Ø{ACT.od:.0f} × {ACT.thickness:.0f} mm.
 5. One Ø{2*MOTOR.r_out:.0f} mm PCB axial-flux stator design, {DOF_PLAN['yaw']['label']} / {DOF_PLAN['femur']['label']} / {DOF_PLAN['knee']['label']} for yaw / femur / knee, cycloid ratios {DOF_PLAN['yaw']['ratio']:.0f} / {DOF_PLAN['femur']['ratio']:.0f} / {DOF_PLAN['knee']['ratio']:.0f}:1, {MOTOR.bus_v:.0f} V.

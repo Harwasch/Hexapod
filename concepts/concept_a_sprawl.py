@@ -14,7 +14,7 @@ lg = STANCE.leg
 
 TITLE = "A — Sprawl, yaw–pitch–pitch"
 NOTES = (
-    f"The leg agreed in review: coxa {lg.coxa:.0f} / femur {lg.femur:.0f} / tibia {lg.tibia:.0f} mm "
+    f"The leg agreed in review (sprawl confirmed, tibia shortened toward 2×): coxa {lg.coxa:.0f} / femur {lg.femur:.0f} / tibia {lg.tibia:.0f} mm "
     f"(tibia {lg.tibia_ratio:.1f}× femur). Femur up at {STANCE.femur_deg:.0f}°, tibia vertical; hips {STANCE.hip_height/1000:.2f} m up, "
     f"knees at {STANCE.knee_height/1000:.2f} m, feet {STANCE.foot_radius()/1000:.2f} m out from the yaw axes, femur arm {STANCE.foot_reach:.0f} mm. "
     "Vertical yaw axis at the hip, so the weight never loads the first motor; the coxa carries it as bending. "
@@ -23,9 +23,9 @@ NOTES = (
 )
 MATERIAL = "graphite"
 RATIONALE = (
-    "Stability and clearance: 0.83 m stance width, 0.42 m under the body, feet placed anywhere on a ring around "
-    "each hip. Pays for the long tibia with a 375 mm minimum leg extension, so a high step is taken with the foot "
-    "swung outward, and with a knee that must match the femur's rating at the workspace corners."
+    "Stability and clearance: 0.89 m stance width, 0.32 m under the body in this stance (0.64 m in the mammal stance), feet placed anywhere on a ring around "
+    "each hip. The 500 mm tibia folds to a 250 mm minimum extension, so a 300 mm step costs the foot only 72 mm of outward "
+    "reach, and the knee no longer out-rates the femur."
 )
 
 PART = Compound(children=[*_robot.solids(), *_figure.solids()])

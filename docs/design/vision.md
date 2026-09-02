@@ -2,23 +2,23 @@
 
 What we think you asked for, drawn from real geometry. Every image below comes from a parametric model, so nothing here is a shape that cannot be built, and every number is measured off the model rather than estimated.
 
-A hexapod the size of a large dog for outdoor missions: first navigating complex terrain, then picking up trash. Off-the-shelf where sensible, custom where it meaningfully improves cost or performance. Carrying an adult is a stretch goal. All eighteen motors housed statically in the body, power transmitted to the joints; the motors themselves axial-flux PCB stators with in-plane cycloidal reductions, each DOF geared to its own rating. Legs sprawl: a coxa carries each leg out from a hip under the body, the femur sticks out and up, and a tibia 2.5 times the femur comes straight down. Concept B is the mammal (roll-pitch-pitch) alternative, rendered for the topology question in docs/design/02-leg-topology.md. Later: modular payloads and tools, two hot-swap batteries, wireless charging, a solar top, networking, SLAM, and a wheeled ground transport vehicle.
+A hexapod the size of a large dog for outdoor missions: first navigating complex terrain, then picking up trash. Off-the-shelf where sensible, custom where it meaningfully improves cost or performance. Carrying an adult is a stretch goal. All eighteen motors housed statically in the body, power transmitted to the joints; the motors themselves axial-flux PCB stators with in-plane cycloidal reductions, each DOF geared to its own rating. Legs sprawl (confirmed): a 150 mm coxa carries each leg out from a hip under the body, the 250 mm femur sticks out and up, and a 500 mm tibia comes straight down. The same leg yaws 90 degrees into a mammal stance when the robot needs to be tall or narrow; both stances are rendered. Later: modular payloads and tools, two hot-swap batteries, wireless charging, a solar top, networking, SLAM, and a wheeled ground transport vehicle.
 
 ## The choice
 
-| | **A — Sprawl, yaw–pitch–pitch** | **B — Mammal, roll–pitch–pitch** |
+| | **A — Sprawl, yaw–pitch–pitch** | **B — Same robot, mammal stance** |
 |---|---|---|
-| Envelope (mm) | 1660.0 × 883.99 × 1851.5 | 1780.73 × 590.0 × 1851.5 |
-| Volume (mm³) | 141,691,903 | 140,262,703 |
-| Approx. mass (g) | 198,369 | 196,368 |
+| Envelope (mm) | 1660.0 × 950.75 × 1851.5 | 1895.38 × 590.0 × 1851.5 |
+| Volume (mm³) | 141,241,903 | 141,241,903 |
+| Approx. mass (g) | 197,739 | 197,739 |
 
 ## A — Sprawl, yaw–pitch–pitch
 
-The leg agreed in review: coxa 150 / femur 250 / tibia 625 mm (tibia 2.5× femur). Femur up at 55°, tibia vertical; hips 0.42 m up, knees at 0.62 m, feet 0.29 m out from the yaw axes, femur arm 143 mm. Vertical yaw axis at the hip, so the weight never loads the first motor; the coxa carries it as bending. **Robot alone: 900 × 884 × 676 mm** — the envelope, volume and mass figures below include the 1.83 m (6 ft) reference figure, and the mass treats the skeleton as solid; the budget is 49 kg.
+The leg agreed in review (sprawl confirmed, tibia shortened toward 2×): coxa 150 / femur 250 / tibia 500 mm (tibia 2.0× femur). Femur up at 45°, tibia vertical; hips 0.32 m up, knees at 0.50 m, feet 0.33 m out from the yaw axes, femur arm 177 mm. Vertical yaw axis at the hip, so the weight never loads the first motor; the coxa carries it as bending. **Robot alone: 900 × 951 × 564 mm** — the envelope, volume and mass figures below include the 1.83 m (6 ft) reference figure, and the mass treats the skeleton as solid; the budget is 49 kg.
 
-**What this one bets on:** Stability and clearance: 0.83 m stance width, 0.42 m under the body, feet placed anywhere on a ring around each hip. Pays for the long tibia with a 375 mm minimum leg extension, so a high step is taken with the foot swung outward, and with a knee that must match the femur's rating at the workspace corners.
+**What this one bets on:** Stability and clearance: 0.89 m stance width, 0.32 m under the body in this stance (0.64 m in the mammal stance), feet placed anywhere on a ring around each hip. The 500 mm tibia folds to a 250 mm minimum extension, so a 300 mm step costs the foot only 72 mm of outward reach, and the knee no longer out-rates the femur.
 
-**1660.0 × 883.99 × 1851.5 mm** · 141,691,903 mm³ · ~198,369 g at 1.4 g/cm³ · model: `concepts/concept_a_sprawl.py`
+**1660.0 × 950.75 × 1851.5 mm** · 141,241,903 mm³ · ~197,739 g at 1.4 g/cm³ · model: `concepts/concept_a_sprawl.py`
 
 ![A — Sprawl, yaw–pitch–pitch — three-quarter view](vision/concept_a_sprawl/view-hero.png)
 
@@ -31,30 +31,30 @@ The leg agreed in review: coxa 150 / femur 250 / tibia 625 mm (tibia 2.5× femur
 ![A — Sprawl, yaw–pitch–pitch — isometric](vision/concept_a_sprawl/iso.svg)
 
 
-## B — Mammal, roll–pitch–pitch
+## B — Same robot, mammal stance
 
-The quadruped-style alternative, same body and hip stacks: a roll joint at the hip, a 100 mm carrier, femur 300 / tibia 300 mm hanging under the body edge, knees forward on the front and mid legs, back on the rear. Hips 0.42 m up, feet 0.10 m out from the hip axes, 0.44 m stance width. **Robot alone: 1141 × 490 × 665 mm** — the envelope, volume and mass figures below include the 1.83 m (6 ft) reference figure, and the mass treats the skeleton as solid; the budget is 49 kg.
+Not a different design: concept A with every leg yawed 90° so its plane runs fore-aft, femur down and forward at 45°, tibia back to put the foot under the hip. Hips 0.64 m up, 0.24 m stance, knees forward on the front and mid legs, back on the rear. The tall, narrow mode: doorways, deep obstacle fields, looking over things. **Robot alone: 1371 × 442 × 885 mm** — the envelope, volume and mass figures below include the 1.83 m (6 ft) reference figure, and the mass treats the skeleton as solid; the budget is 49 kg.
 
-**What this one bets on:** Lowest joint torques when the feet stay under the hips, the proven quadruped actuator layout (pitch and knee motors coaxial on the hip carrier, no transmission through a coxa), and the whole step-up box is reachable. Pays with a 0.44 m stance, half the roll margin, and a roll joint that sees the weight the moment a foot moves sideways — see docs/design/02-leg-topology.md.
+**What this one bets on:** Reconfiguration instead of a second topology: the yaw joint's ±95° range and the pitch joints' ratings are the only things it costs. In this stance the pitch joints do the pushing, so the femur and knee continuous ratings in 01-sizing.md are set here, about 15–20 % above what the sprawl stance alone needs.
 
-**1780.73 × 590.0 × 1851.5 mm** · 140,262,703 mm³ · ~196,368 g at 1.4 g/cm³ · model: `concepts/concept_b_mammal.py`
+**1895.38 × 590.0 × 1851.5 mm** · 141,241,903 mm³ · ~197,739 g at 1.4 g/cm³ · model: `concepts/concept_b_mammal_mode.py`
 
-![B — Mammal, roll–pitch–pitch — three-quarter view](vision/concept_b_mammal/view-hero.png)
+![B — Same robot, mammal stance — three-quarter view](vision/concept_b_mammal_mode/view-hero.png)
 
 | Front | Top |
 |---|---|
-| ![front](vision/concept_b_mammal/view-front.png) | ![top](vision/concept_b_mammal/view-top.png) |
+| ![front](vision/concept_b_mammal_mode/view-front.png) | ![top](vision/concept_b_mammal_mode/view-top.png) |
 
 **Isometric line drawing, hidden edges dashed**
 
-![B — Mammal, roll–pitch–pitch — isometric](vision/concept_b_mammal/iso.svg)
+![B — Same robot, mammal stance — isometric](vision/concept_b_mammal_mode/iso.svg)
 
 
 ## What we need from you
 
-1. A (sprawl, yaw-pitch-pitch, the agreed 150/250/625 leg) stays the baseline: does the topology trade in 02-leg-topology.md settle it, or does B (mammal) deserve a prototype leg too?
-2. The 625 mm tibia cannot fold below 375 mm of extension, so a 300 mm step is taken with the foot swung 210 mm outward, and the folded knee then carries more than the femur. Acceptable, or shorten the tibia toward 2.0x?
-3. Per-DOF sizing came out as one stator design stacked once (yaw) or twice (femur, knee) with three cycloid ratios. Is a two-stator femur and knee acceptable, or should the motor diameter grow instead?
+1. Concept B is the same robot reconfigured, not a different one: hips 0.64 m up, 0.24 m stance. Is that the mammal stance you had in mind, or should the mammal stance keep some sprawl (yaw 60 degrees, say)?
+2. The tibia is now 500 mm (2.0x): hips 0.32 m up in the sprawl stance. Is that enough clearance for the terrain demo, given the tall mammal stance is available?
+3. Motor and reduction: does 04-motor-reduction-options.md change the plan, or is PCB stator plus in-plane cycloid still the path, with the wound flat-coil stator as the torque upgrade?
 
 Whatever you agree to here becomes the `VIS-` entries in `requirements/00-vision.sdoc`, in your words, and everything downstream is built on it.
 

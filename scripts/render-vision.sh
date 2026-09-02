@@ -11,12 +11,12 @@ PY=/opt/hw-py/bin/python
 $PY analysis/sizing.py
 $PY analysis/topology.py
 
-vision-board concepts/concept_a_sprawl.py concepts/concept_b_mammal.py \
+vision-board concepts/concept_a_sprawl.py concepts/concept_b_mammal_mode.py \
   --project "Hexapod" \
-  --description "A hexapod the size of a large dog for outdoor missions: first navigating complex terrain, then picking up trash. Off-the-shelf where sensible, custom where it meaningfully improves cost or performance. Carrying an adult is a stretch goal. All eighteen motors housed statically in the body, power transmitted to the joints; the motors themselves axial-flux PCB stators with in-plane cycloidal reductions, each DOF geared to its own rating. Legs sprawl: a coxa carries each leg out from a hip under the body, the femur sticks out and up, and a tibia 2.5 times the femur comes straight down. Concept B is the mammal (roll-pitch-pitch) alternative, rendered for the topology question in docs/design/02-leg-topology.md. Later: modular payloads and tools, two hot-swap batteries, wireless charging, a solar top, networking, SLAM, and a wheeled ground transport vehicle." \
-  --question "A (sprawl, yaw-pitch-pitch, the agreed 150/250/625 leg) stays the baseline: does the topology trade in 02-leg-topology.md settle it, or does B (mammal) deserve a prototype leg too?" \
-  --question "The 625 mm tibia cannot fold below 375 mm of extension, so a 300 mm step is taken with the foot swung 210 mm outward, and the folded knee then carries more than the femur. Acceptable, or shorten the tibia toward 2.0x?" \
-  --question "Per-DOF sizing came out as one stator design stacked once (yaw) or twice (femur, knee) with three cycloid ratios. Is a two-stator femur and knee acceptable, or should the motor diameter grow instead?"
+  --description "A hexapod the size of a large dog for outdoor missions: first navigating complex terrain, then picking up trash. Off-the-shelf where sensible, custom where it meaningfully improves cost or performance. Carrying an adult is a stretch goal. All eighteen motors housed statically in the body, power transmitted to the joints; the motors themselves axial-flux PCB stators with in-plane cycloidal reductions, each DOF geared to its own rating. Legs sprawl (confirmed): a 150 mm coxa carries each leg out from a hip under the body, the 250 mm femur sticks out and up, and a 500 mm tibia comes straight down. The same leg yaws 90 degrees into a mammal stance when the robot needs to be tall or narrow; both stances are rendered. Later: modular payloads and tools, two hot-swap batteries, wireless charging, a solar top, networking, SLAM, and a wheeled ground transport vehicle." \
+  --question "Concept B is the same robot reconfigured, not a different one: hips 0.64 m up, 0.24 m stance. Is that the mammal stance you had in mind, or should the mammal stance keep some sprawl (yaw 60 degrees, say)?" \
+  --question "The tibia is now 500 mm (2.0x): hips 0.32 m up in the sprawl stance. Is that enough clearance for the terrain demo, given the tall mammal stance is available?" \
+  --question "Motor and reduction: does 04-motor-reduction-options.md change the plan, or is PCB stator plus in-plane cycloid still the path, with the wound flat-coil stator as the torque upgrade?"
 
 $PY - <<'PYEOF'
 import glob, re

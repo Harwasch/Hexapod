@@ -3,18 +3,18 @@
     {
       "id": "concept_a_sprawl",
       "title": "A \u2014 Sprawl, yaw\u2013pitch\u2013pitch",
-      "notes": "The leg agreed in review: coxa 150 / femur 250 / tibia 625 mm (tibia 2.5\u00d7 femur). Femur up at 55\u00b0, tibia vertical; hips 0.42 m up, knees at 0.62 m, feet 0.29 m out from the yaw axes, femur arm 143 mm. Vertical yaw axis at the hip, so the weight never loads the first motor; the coxa carries it as bending. **Robot alone: 900 \u00d7 884 \u00d7 676 mm** \u2014 the envelope, volume and mass figures below include the 1.83 m (6 ft) reference figure, and the mass treats the skeleton as solid; the budget is 49 kg.",
-      "rationale": "Stability and clearance: 0.83 m stance width, 0.42 m under the body, feet placed anywhere on a ring around each hip. Pays for the long tibia with a 375 mm minimum leg extension, so a high step is taken with the foot swung outward, and with a knee that must match the femur's rating at the workspace corners.",
+      "notes": "The leg agreed in review (sprawl confirmed, tibia shortened toward 2\u00d7): coxa 150 / femur 250 / tibia 500 mm (tibia 2.0\u00d7 femur). Femur up at 45\u00b0, tibia vertical; hips 0.32 m up, knees at 0.50 m, feet 0.33 m out from the yaw axes, femur arm 177 mm. Vertical yaw axis at the hip, so the weight never loads the first motor; the coxa carries it as bending. **Robot alone: 900 \u00d7 951 \u00d7 564 mm** \u2014 the envelope, volume and mass figures below include the 1.83 m (6 ft) reference figure, and the mass treats the skeleton as solid; the budget is 49 kg.",
+      "rationale": "Stability and clearance: 0.89 m stance width, 0.32 m under the body in this stance (0.64 m in the mammal stance), feet placed anywhere on a ring around each hip. The 500 mm tibia folds to a 250 mm minimum extension, so a 300 mm step costs the foot only 72 mm of outward reach, and the knee no longer out-rates the femur.",
       "material": "graphite",
       "source": "concepts/concept_a_sprawl.py",
       "metrics": {
         "bbox_mm": [
           1660.0,
-          883.99,
+          950.75,
           1851.5
         ],
-        "volume_mm3": 141691903.1,
-        "approx_mass_g_at_1p4": 198368.7
+        "volume_mm3": 141241903.1,
+        "approx_mass_g_at_1p4": 197738.7
       },
       "images": {
         "hero": "concept_a_sprawl/view-hero.png",
@@ -25,26 +25,26 @@
       "styling": []
     },
     {
-      "id": "concept_b_mammal",
-      "title": "B \u2014 Mammal, roll\u2013pitch\u2013pitch",
-      "notes": "The quadruped-style alternative, same body and hip stacks: a roll joint at the hip, a 100 mm carrier, femur 300 / tibia 300 mm hanging under the body edge, knees forward on the front and mid legs, back on the rear. Hips 0.42 m up, feet 0.10 m out from the hip axes, 0.44 m stance width. **Robot alone: 1141 \u00d7 490 \u00d7 665 mm** \u2014 the envelope, volume and mass figures below include the 1.83 m (6 ft) reference figure, and the mass treats the skeleton as solid; the budget is 49 kg.",
-      "rationale": "Lowest joint torques when the feet stay under the hips, the proven quadruped actuator layout (pitch and knee motors coaxial on the hip carrier, no transmission through a coxa), and the whole step-up box is reachable. Pays with a 0.44 m stance, half the roll margin, and a roll joint that sees the weight the moment a foot moves sideways \u2014 see docs/design/02-leg-topology.md.",
+      "id": "concept_b_mammal_mode",
+      "title": "B \u2014 Same robot, mammal stance",
+      "notes": "Not a different design: concept A with every leg yawed 90\u00b0 so its plane runs fore-aft, femur down and forward at 45\u00b0, tibia back to put the foot under the hip. Hips 0.64 m up, 0.24 m stance, knees forward on the front and mid legs, back on the rear. The tall, narrow mode: doorways, deep obstacle fields, looking over things. **Robot alone: 1371 \u00d7 442 \u00d7 885 mm** \u2014 the envelope, volume and mass figures below include the 1.83 m (6 ft) reference figure, and the mass treats the skeleton as solid; the budget is 49 kg.",
+      "rationale": "Reconfiguration instead of a second topology: the yaw joint's \u00b195\u00b0 range and the pitch joints' ratings are the only things it costs. In this stance the pitch joints do the pushing, so the femur and knee continuous ratings in 01-sizing.md are set here, about 15\u201320 % above what the sprawl stance alone needs.",
       "material": "graphite",
-      "source": "concepts/concept_b_mammal.py",
+      "source": "concepts/concept_b_mammal_mode.py",
       "metrics": {
         "bbox_mm": [
-          1780.73,
+          1895.38,
           590.0,
           1851.5
         ],
-        "volume_mm3": 140262703.1,
-        "approx_mass_g_at_1p4": 196367.8
+        "volume_mm3": 141241903.1,
+        "approx_mass_g_at_1p4": 197738.7
       },
       "images": {
-        "hero": "concept_b_mammal/view-hero.png",
-        "front": "concept_b_mammal/view-front.png",
-        "top": "concept_b_mammal/view-top.png",
-        "iso": "concept_b_mammal/iso.svg"
+        "hero": "concept_b_mammal_mode/view-hero.png",
+        "front": "concept_b_mammal_mode/view-front.png",
+        "top": "concept_b_mammal_mode/view-top.png",
+        "iso": "concept_b_mammal_mode/iso.svg"
       },
       "styling": []
     }

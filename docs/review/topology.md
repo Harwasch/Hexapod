@@ -1,8 +1,8 @@
-# Review — Leg topology trade and early architecture levers
+# Review — Topology confirmed; motor and reduction options
 
 `topology` · requested 2026-09-02 · branch `claude/hexapod-robot-design-mt516g`
 
-Four leg topologies under the same walking load over the same working volumes: the agreed sprawl yaw-pitch-pitch, the same leg with feet in, the mammal roll-pitch-pitch, and the sprawl with a roll hip (the first axis rotated 90 degrees). A vertical first axis never sees weight; a roll hip sees weight times the foot's lateral offset and is the worst of both worlds. The sprawl wins on stance, roll margin and foot placement; the mammal wins on fold-ability and coaxial hip motors. Plus what a 300 mm step costs each leg proportion, and the architecture levers (mass, one motor three ratios, gravity compensation, series elasticity, driver per hip pod).
+The sprawl leg confirmed in review, now with its mammal stance evaluated as a fifth configuration in the trade (100 % of the step-up box reachable, yaw nearly idle, pitch joints take the propulsion). New: 04-motor-reduction-options.md surveys motors (PCB stator, wound flat-coil, iron-core axial, radial outrunners, frameless) and reductions (cycloid, compound cycloid, planetary, harmonic, capstan, belt) on torque per kg, cost and in-house buildability. Verdict: keep PCB plus cycloid for the first build, design the housing for a wound flat-coil stator swap and a second cycloid disc, build the first leg on bought actuators, and look at a capstan or belt stage along the coxa.
 
 ## What you are agreeing to
 
@@ -18,6 +18,7 @@ Four leg topologies under the same walking load over the same working volumes: t
 |---|---|
 | [docs/design/02-leg-topology.md](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/docs/design/02-leg-topology.md) | renders on GitHub |
 | [docs/design/03-architecture-levers.md](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/docs/design/03-architecture-levers.md) | renders on GitHub |
+| [docs/design/04-motor-reduction-options.md](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/docs/design/04-motor-reduction-options.md) | renders on GitHub |
 
 ## For context
 
@@ -32,8 +33,8 @@ Sources and working files. Not part of the agreement — these change as work go
 
 ## What we need decided
 
-1. Does the topology trade answer the 'motor axis rotated 90 degrees' question to your satisfaction, and is the sprawl yaw-pitch-pitch leg confirmed?
-2. Which of the architecture levers in 03-architecture-levers.md do you want carried into requirements now: gravity-compensation springs, series elasticity in the tibia, one driver board per hip pod, five-bar knee drive?
+1. Does the options note change the plan, or is PCB stator plus in-plane cycloid still the path, with the wound flat-coil stator as the torque upgrade?
+2. Which architecture levers go into requirements now: gravity-compensation springs, series elasticity in the tibia, one driver board per hip pod, capstan or belt stage along the coxa?
 
 ## Decision
 

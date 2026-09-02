@@ -9,8 +9,8 @@
 title: Hexapod
 subtitle: >-
   A large-dog-sized outdoor hexapod with all eighteen motors in the body.
-  Round 3: the agreed leg, the topology trade, per-DOF actuator ratings,
-  and the early architecture levers.
+  Round 4: the confirmed sprawl leg and its mammal stance, per-DOF ratings
+  over both, the topology trade, and the motor and reduction options.
 
 phases:
   - id: sizing
@@ -54,7 +54,7 @@ phases:
         What a 300 mm step costs each leg proportion: the foot has to move
         outward to clear the leg's minimum extension, and the femur pays for
         the reach. Look at: the 625 mm tibia's fold limit.
-    docs: [docs/design/02-leg-topology.md, docs/design/03-architecture-levers.md]
+    docs: [docs/design/02-leg-topology.md, docs/design/03-architecture-levers.md, docs/design/04-motor-reduction-options.md]
 
 #   - id: cad
 #     title: CAD
