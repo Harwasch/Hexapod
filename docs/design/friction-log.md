@@ -114,3 +114,28 @@
 * OTS motor listings quote current only with propeller airflow; the heat-sunk continuous
   rating that decides the design is an assumption until measured. `hw-documentation` should
   flag "rating conditions" as a field to capture with every motor datasheet.
+
+## 2026-09-02 — round 13
+
+* `hw/stator/rotor_field.json` was written at the v1 coil span (r_m 66.6, a 7.0 mm Halbach
+  segment) and never re-run after layout v2 moved the coils to r 84.6; the same block model at
+  v2's mean radius gives a field ratio 3 % lower than every rating since round 9 has used.
+  A generated JSON that another script reads as a constant needs a stamp of the inputs it was
+  computed from, and `hw-verification`'s pre-release check should diff those stamps against the
+  current geometry. `analysis/rotor_field.py` should take the geometry it is run against as an
+  argument instead of reading the canonical file.
+* The stator generator's layer roles were hard-wired for 12 layers and up, so every JLCPCB
+  stack below 12 layers had been rated only as a bonded pair of a 16-layer file; the sweep of
+  6/8/10-layer single boards needed `set_layers` generalised. A generator whose CLI advertises
+  `--layers` should assert the range it actually supports (`hw/stator/make_stator.py`).
+* The femur swing speed (3.8 rad/s at 80:1 = 2900 rpm) has been tabled as "2.9 (need 3.8)" since
+  round 8 without any stage asking whether the 48 V bus can reach it; the sweep shows that a
+  board fast enough at 48 V loses over half its torque to eddy loss or copper. `hw-requirements`
+  should carry the joint speed as a requirement with a parent, and `hw-verification` should
+  flag a tabled shortfall that survives three rounds as an open item, not a footnote.
+* No SVG rasteriser exists in the environment (no cairosvg, rsvg, inkscape or ImageMagick;
+  LibreOffice refuses KiCad's SVG), `kicad-cli pcb export pdf` has no board-area page mode so
+  the board falls off the page, and the review page refuses a PNG over ~400 kB. The layer
+  render for the page is now `scripts/render_layer.py` (pcbnew object model, matplotlib, a
+  palette PNG). `hw-documentation` should name the one raster route the environment build
+  guarantees, and `review-artifact` should downscale rather than refuse.

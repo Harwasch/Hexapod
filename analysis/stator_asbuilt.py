@@ -31,13 +31,15 @@ T_BOARD = G.get("t_board_mm", 2.2) * 1e-3
 G_MAG = T_BOARD + 2 * mo.AIR_CLEAR
 # magnets: the OTS block chosen in analysis/rotor_field.py; its simulated fundamental
 # (two facing 4-segment Halbach rings of rectangular blocks) scales the analytic field
-MAGNET = "rect 30x5x8 N48"
+MAGNET = sys.argv[2] if len(sys.argv) > 2 else "rect 30x5x8 N48"    # optional argv[2]: another rotor_field.json case (round 13 variants)
 _rf_path = os.path.join(ROOT, "hw", "stator", "rotor_field.json")
 if os.path.exists(_rf_path):
     _rf = json.load(open(_rf_path))[MAGNET]
     H_M = _rf["h_m_mm"] * 1e-3
     B_SCALE = _rf["ratio_to_model"]
     MAGNET_MASS_G = _rf["magnet_mass_g"]
+    if len(sys.argv) > 3:                       # optional argv[3]: block-to-model field ratio for a pole count rotor_field.json was not run at
+        B_SCALE = float(sys.argv[3])
 else:
     _m = mo.eval_axial("pcb", "in-plane", P, TRACE, 1, stack=mo.PCB_STACKS["PCB 12L 3oz"])
     H_M = _m["h_m"] if _m else 4.4e-3      # magnet thickness the study's axial budget allows at this pole count
@@ -61,7 +63,8 @@ N_REP = G.get("repeats", 4)
 #   phase ring: each repeat feeds I/N_REP into the ring at a different angle; path to the pad
 #   averages half of the half-circumference; 3 layers in parallel
 r_ring = G["r_ring_mm"]["A"] * 1e-3
-R_ring_path = rho * (math.pi * r_ring / 2) / (3 * G["ring_w_mm"] * 1e-3 * T_CU)
+N_RING_L, N_NM_L = G.get("ring_layers", 3), G.get("nm_layers", 3)   # layers per phase ring / per star jumper (3 and 3 on a 12-layer board)
+R_ring_path = rho * (math.pi * r_ring / 2) / (N_RING_L * G["ring_w_mm"] * 1e-3 * T_CU)
 R_inter_ring = N_REP * (1.0 / N_REP) ** 2 * R_ring_path
 #   M arc: carries the repeat current I/N_REP over its length on one layer
 L_marc = G["marc_mm_per_phase"]["A"] * 1e-3 / N_REP
@@ -69,7 +72,7 @@ R_marc = rho * L_marc / (G["m_w_mm"] * 1e-3 * T_CU)
 R_inter_m = N_REP * (1.0 / N_REP) ** 2 * R_marc
 #   star jumpers: I/(2 N_REP) each, r_via_t -> r_n on 3 layers
 L_j = (G["r_via_t_mm"] - G["r_n_mm"]) * 1e-3
-R_j = rho * L_j / (3 * G["jumper_w_mm"] * 1e-3 * T_CU)
+R_j = rho * L_j / (N_NM_L * G["jumper_w_mm"] * 1e-3 * T_CU)
 R_inter_j = 2 * N_REP * (1.0 / (2 * N_REP)) ** 2 * R_j
 R_inter = R_inter_ring + R_inter_m + R_inter_j
 R_ph = R_repeat / N_REP + R_inter

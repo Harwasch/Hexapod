@@ -60,23 +60,32 @@ SECTOR = 360.0 / N_COILS
 
 
 def set_layers(n):
-    """Layer roles for an n-layer board (n even, >= 12): coils on every layer;
-    rings on the first 9, N ring / jumpers / M arcs on 10-12; extra layers coil only."""
-    global CU, ODD, EVEN, RING_LAYERS, NM_LAYERS, M_LAYER, N_LAYERS
+    """Layer roles for an n-layer board (n even, >= 6): coils on every layer;
+    phase rings on the first 3 x RING_PER layers, N ring / jumpers / M arcs on
+    the next 3; extra layers coil only.  RING_PER is 3 for 12 layers and up
+    (rings on 1-9, N/M on 10-12, as always), 2 for 10 layers, 1 for 6 and 8."""
+    global CU, ODD, EVEN, RING_LAYERS, NM_LAYERS, M_LAYER, N_LAYERS, RING_PER
+    assert n >= 6 and n % 2 == 0, f"{n} layers: need an even count of at least 6 (3 ring layers + 3 N/M layers)"
     N_LAYERS = n
+    RING_PER = min(3, max(1, (n - 3) // 3))
     CU = [pcbnew.F_Cu] + [getattr(pcbnew, f"In{i}_Cu") for i in range(1, n - 1)] + [pcbnew.B_Cu]
     ODD = CU[0::2]              # inward spirals
     EVEN = CU[1::2]             # outward spirals (mirrored)
-    RING_LAYERS = {"A": CU[0:3], "B": CU[3:6], "C": CU[6:9]}
-    NM_LAYERS = CU[9:12]        # N ring + gap jumpers + M arcs
-    M_LAYER = {"A": CU[9], "B": CU[10], "C": CU[11]}
+    RING_LAYERS = {"A": CU[0:RING_PER], "B": CU[RING_PER:2 * RING_PER], "C": CU[2 * RING_PER:3 * RING_PER]}
+    NM_LAYERS = CU[3 * RING_PER:3 * RING_PER + 3]        # N ring + gap jumpers + M arcs
+    M_LAYER = {"A": NM_LAYERS[0], "B": NM_LAYERS[1], "C": NM_LAYERS[2]}
 
 
 set_layers(N_LAYERS)
 
 
+T_BOARD_OVERRIDE = None     # --t-board: recorded finished thickness (a bonded pair of boards is thicker than one board of the same layer count)
+
+
 def board_thickness(n, oz):
     """Finished thickness estimate: copper + ~0.09 mm dielectric per interface (12L 3 oz -> 2.25 mm)."""
+    if T_BOARD_OVERRIDE:
+        return T_BOARD_OVERRIDE
     return round(n * oz * 0.035 + (n - 1) * 0.09, 2)
 
 # 12-slot/10-pole star of slots, phasor angle 150*k: (phase, sign) per local coil
@@ -293,7 +302,8 @@ def geometry_report(bld):
         "coil_track_mm_total": coil_len_total, "coil_track_mm_per_coil_layer": coil_len_total / (N_COILS * N_LAYERS),
         "interconnect_track_mm": other, "vias": 3 * N_COILS, "board_od_mm": 2 * R_BOARD,
         "repeats": N_COILS // 12, "gap_mm": GAP, "ring_w_mm": RING_W, "m_w_mm": M_W, "jumper_w_mm": JUMPER_W,
-        "r_ring_mm": R_RING, "r_m_mm": R_M, "r_n_mm": R_N, "r_via_t_mm": R_VIA_T,
+        "r_ring_mm": R_RING, "r_m_mm": R_M, "r_n_mm": R_N, "r_via_t_mm": R_VIA_T, "r_pad_mm": R_PAD,
+        "ring_layers": RING_PER, "nm_layers": len(NM_LAYERS),
         "marc_mm_per_phase": {k: v for k, v in bld.marc_len.items()},
     }
 
@@ -308,10 +318,20 @@ if __name__ == "__main__":
     ap.add_argument("--gap", type=float, default=GAP, help="coil-to-coil gap at the legs, mm")
     ap.add_argument("--layers", type=int, default=N_LAYERS)
     ap.add_argument("--oz", type=float, default=COPPER_OZ, help="copper weight per layer, oz")
+    ap.add_argument("--od", type=float, default=2 * R_BOARD,
+                    help="board outside diameter, mm; the whole rim (R_OUT, terminal vias, M arcs, rings, pads, edge) shifts with it")
+    ap.add_argument("--r-in", type=float, default=R_IN, help="innermost coil copper radius, mm; the star ring follows at r_in - 2.1")
+    ap.add_argument("--t-board", type=float, default=None, help="record this finished thickness instead of the estimate (bonded pair)")
     ap.add_argument("--out", default=OUT)
     a = ap.parse_args()
     N_COILS, POLE_PAIRS, N_T, OUT, GAP, COPPER_OZ = a.coils, a.pp, a.turns, a.out, a.gap, a.oz
+    T_BOARD_OVERRIDE = a.t_board
     set_layers(a.layers)
+    shift = a.od / 2 - R_BOARD                     # rim radii move together (round 13: Ø182 board for a Ø190 housing)
+    R_OUT, R_VIA_T, R_M, R_PAD, R_BOARD = R_OUT + shift, R_VIA_T + shift, R_M + shift, R_PAD + shift, R_BOARD + shift
+    R_RING = {k: v + shift for k, v in R_RING.items()}
+    R_IN = a.r_in
+    R_N = R_IN - 2.1
     SECTOR = 360.0 / N_COILS
     leg = (2 * math.pi * R_IN / N_COILS - GAP) / 2
     TRACE = a.trace if a.trace else math.floor((leg / N_T - SPACE) * 200) / 200
