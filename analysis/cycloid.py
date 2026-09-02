@@ -54,16 +54,23 @@ SAFETY = 1.0            # loads already include the peak case
 
 
 # ---- per-joint requirement (joint torque / ratio; from 01-sizing.md §6) -----
-RATIOS = {"yaw": 45, "femur": 70, "knee": 70}      # round 6: femur/knee 70:1 (4.1 rad/s at 2740 rpm no-load), yaw 45:1 on the 8-turn board for 7.9 rad/s
+# Round 8: two stages.  The in-plane cycloid does the first stage; a capstan cable
+# stage between the unit's output drum and the joint does the second (analysis/capstan.py),
+# so the cycloid needs ~20 lobes instead of 70 and sees 3.5x less torque.
+STAGE2 = {"yaw": 1.0, "femur": 4.0, "knee": 4.0}     # capstan ratio (1.0 = direct drive); 4:1 so the cheaper 2 oz boards still close (08 §9.7)
+ETA2 = {"yaw": 1.0, "femur": 0.97, "knee": 0.97}     # capstan efficiency
+RATIOS = {"yaw": 30, "femur": 20, "knee": 20}         # cycloid lobes; total 30 / 80 / 80
+TOTAL = {d: RATIOS[d] * STAGE2[d] for d in RATIOS}
 try:                                                 # joint requirements from the sizing (01), not hand-copied
     import sizing as _sz
     _REQ = {d: (float(_sz.DOF_CONT[d]), float(_sz.DOF_PEAK[d])) for d in RATIOS}
     SWING = {d: float(v) for d, v in _sz.DOF_SWING.items()}
 except Exception as _e:                              # sizing needs the whole model; keep the last known numbers
-    _REQ = {"yaw": (55.0, 58.0), "femur": (135.0, 245.0), "knee": (143.0, 300.0)}
-    SWING = {"yaw": 8.6, "femur": 3.8, "knee": 3.8}
-JOINTS = {name: (RATIOS[name], round(_REQ[name][0], 1), round(_REQ[name][1], 1)) for name in RATIOS}
-# name: (ratio N, joint continuous N·m, joint peak N·m)
+    _REQ = {"yaw": (131.0, 140.0), "femur": (324.0, 585.0), "knee": (343.0, 715.0)}
+    SWING = {"yaw": 6.4, "femur": 3.8, "knee": 3.8}
+JOINTS = {name: (RATIOS[name], round(_REQ[name][0] / (STAGE2[name] * ETA2[name]), 1), round(_REQ[name][1] / (STAGE2[name] * ETA2[name]), 1)) for name in RATIOS}
+# name: (cycloid ratio N, cycloid OUTPUT continuous N·m, cycloid output peak N·m)  -- joint torque / stage 2
+JOINT_REQ = {name: _REQ[name] for name in RATIOS}    # at the joint
 
 
 def design(N: int, T_cont: float, T_peak: float, R=R_PIN_CIRCLE):

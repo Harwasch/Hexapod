@@ -1,32 +1,33 @@
 {
  "joint": "femur",
  "stators": 2,
- "N": 70,
- "e": 0.4901408450704226,
- "r_pin": 1.25,
- "n_pins": 71,
+ "N": 20,
+ "e": 1.6571428571428573,
+ "r_pin": 3.0,
+ "n_pins": 21,
  "mass_g": {
-  "base": 428.6,
-  "ring_pins": 62.9,
+  "base": 447.2,
+  "ring_pins": 107.2,
   "upper_ring": 354.7,
   "cover": 145.4,
   "stator": 267.9,
   "rotor_top": 394.4,
   "rotor_bottom_ring": 371.0,
   "magnets": 2160.0,
-  "shaft": 251.5,
-  "disc": 511.4,
+  "shaft": 210.8,
+  "disc": 624.3,
+  "capstan_drum": 138.6,
   "output_flange": 74.1,
   "output_pins": 116.9,
-  "bearings": 364.8
+  "bearings": 356.5
  },
- "total_g": 5503.6,
+ "total_g": 5769.1,
  "od_mm": 186.0,
  "height_mm": 62.4,
  "bbox": [
-  80.0,
-  80.0,
-  62.4
+  60.0,
+  60.0,
+  26.0
  ],
  "z": {
   "board": [

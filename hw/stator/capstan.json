@@ -1,0 +1,54 @@
+{
+ "geometry": {
+  "r_drum_mm": 30.0,
+  "r_sector_mm": 120.0,
+  "ratio": 4.0,
+  "n_wrap": 3.0,
+  "run_mm": 320.0,
+  "joint_range_deg": 130.0,
+  "d_over_d_min": 8.0,
+  "rope": {
+   "name": "Marlow D12 Max 78, 5 mm",
+   "d_mm": 5.0,
+   "break_kN": 29.2,
+   "break_linear_kN": 32.4,
+   "mass_g_per_m": 15.6,
+   "E_eff_GPa": 60.0,
+   "creep_pct_per_yr_at_20pct": 0.5,
+   "T_critical_C": 80.0
+  },
+  "yaw_coupling": "joint = sector angle - yaw angle x (r_drum / r_sector)"
+ },
+ "joints": {
+  "femur": {
+   "T_drum_cont": 85.6,
+   "T_drum_peak": 155.3,
+   "F_rope_cont": 2853.333333333333,
+   "F_rope_peak": 5176.666666666667,
+   "sf_cont": 10.233644859813085,
+   "sf_peak": 5.640695428203477,
+   "ok": true,
+   "D_over_d": 12.0,
+   "k_joint_Nm_per_rad": 63617.25123519332,
+   "wind_up_deg_at_cont": 0.3083766513701018,
+   "rope_length_mm": 1477.7580409572781,
+   "drum_turns_for_range": 1.4444444444444444,
+   "pretension_N": 776.5
+  },
+  "knee": {
+   "T_drum_cont": 90.4,
+   "T_drum_peak": 189.7,
+   "F_rope_cont": 3013.3333333333335,
+   "F_rope_peak": 6323.333333333333,
+   "sf_cont": 9.690265486725663,
+   "sf_peak": 4.617817606747496,
+   "ok": true,
+   "D_over_d": 12.0,
+   "k_joint_Nm_per_rad": 63617.25123519332,
+   "wind_up_deg_at_cont": 0.32566880004506077,
+   "rope_length_mm": 1477.7580409572781,
+   "drum_turns_for_range": 1.4444444444444444,
+   "pretension_N": 948.4999999999999
+  }
+ }
+}

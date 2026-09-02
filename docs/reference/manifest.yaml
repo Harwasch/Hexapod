@@ -41,7 +41,17 @@ documents:
   local: docs/reference/pti-hk-series.pdf
   retrieved: 2026-09-02
   needed_by: []
-  notes: HK3012 row, 30 x 37 x 12, Cr 11.5 kN, C0r 17.3 kN (PTI's own ratings; its HK2512 row reads 10.45 / 14.45 against NTN's 11.8 / 16.3, so treat as a lower bound). Eccentric bearings of the actuator from round 7.
+  notes: HK3012 row, 30 x 37 x 12, Cr 11.5 kN, C0r 17.3 kN (PTI's own ratings; its HK2512 row reads 10.45 / 14.45 against NTN's 11.8 / 16.3, so treat as a lower bound). Eccentric bearings of the actuator from round 7; back to HK2512 in round 8 once the capstan stage cut the cycloid torque 3.5x.
+- id: marlow-d12-max-75-78
+  title: Marlow D12 Max 75 / 78 Dyneema 12-strand rope datasheet
+  part: D12 Max 78, 5 mm
+  publisher: Marlow Ropes
+  revision: unknown (one-page datasheet, ISO 2307 strengths)
+  url: https://www.shopusa.marlowropes.com/content/files/datasheets/arboriculture/d12%20max%2075%20and%2078.pdf
+  local: docs/reference/marlow-d12-max-75-78.pdf
+  retrieved: 2026-09-02
+  needed_by: []
+  notes: 5 mm row, 15.6 g/m, minimum linear strength 32.4 kN, minimum spliced 29.2 kN, average spliced 31.4 kN. SK78 creep 0.5 %/yr at 20 % load and 16 C. Critical temperature 80 C (permanent strength loss above). Capstan rope of the second reduction stage (analysis/capstan.py).
 
 
 # Example of a fetched document:

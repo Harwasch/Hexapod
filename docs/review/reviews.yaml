@@ -606,57 +606,63 @@ reviews:
     - docs/design/drawing/side.png
     - docs/design/drawing/top.png
 - id: actuator
-  title: 'Actuator, round 7: configuration A as the canonical unit'
+  title: 'Actuator, round 8: two-stage reduction and cost-down'
   stage: design
-  summary: 'The round-6 decisions applied: two stators and three Halbach rotors in every unit
-    (62 mm, 5.5 kg), two 8 mm discs on Ø30 journals with HK3012 needle bearings (PTI catalogue
-    ratings in docs/reference), the yaw swing-speed requirement lowered to 6.4 rad/s so every
-    unit shares the 10-turn board, and the body slab raised from 200 to 220 mm for the 202
-    mm hip stack. The closure loop now closes: a 129 kg robot, femur 358 N·m continuous against
-    324 needed (1.10), knee 1.04, yaw 1.76, against the continuous load case as written. 01-sizing,
-    06-geometry and the drawings carry the CAD masses and the Ø186 × 62 envelope; the BOM
-    is for the two-stator unit. The single-stator unit stays as the -1s variant.'
+  summary: 'Review feedback: too many cycloid lobes and pins; radically reduce cost. The reduction
+    is now a 20-lobe cycloid (21 pins of Ø6, 1.66 mm eccentricity, HK2512 back on a straight
+    Ø25 shaft) plus a 4:1 Dyneema capstan stage from a Ø60 drum on the unit''s output to a
+    Ø240 sector at the femur/knee pivot (Marlow D12 Max 78 datasheet: SF 4.6 at the knee peak);
+    the yaw stays a direct 30-lobe cycloid. Every BOM line was re-sourced: two 8-layer 2 oz
+    JLCPCB boards per stator position instead of a 12L 3 oz board, laser-cut hardened discs,
+    6061 and laser-cut housing parts, a Chinese crossed roller, an ODrive-compatible driver,
+    volume magnets — $660 per unit against $1,690 (estimates at 20 units, verified lines marked).
+    The closure re-check with the cheaper boards at 80:1 total closes at a 132 kg robot with
+    1.08 / 1.03 / 1.04 margins.'
   questions:
-  - Do you approve the actuator design stage as it now stands (two stators, two discs, HK3012,
-    70/70/45, Ø186 × 62 mm, 5.5 kg, a ~129 kg robot), so the next chunk (the transmission
-    from the hip stack to the femur and knee, M1) can start?
-  - The 62 mm stack made the body slab 220 mm instead of 200 mm. Accept, or should the hip
-    pods stand proud of a 200 mm slab instead?
+  - 'Two-stage reduction: a 20-lobe cycloid plus a 4:1 Dyneema capstan at the femur and knee
+    joints (yaw stays a direct 30-lobe cycloid). Accept the capstan stage, with its re-tension
+    schedule and the yaw-to-pitch coupling the controller compensates?'
+  - 'Cost-down boards: two 8-layer 2 oz JLCPCB boards per stator position ($80 per unit instead
+    of $300) cost 11 % torque, taken back by the 80:1 total ratio; margins 1.08 femur / 1.03
+    knee. Accept the cheaper boards, or keep the 3 oz board for margin (1.22 / 1.15)?'
+  - 'The re-sourced BOM lands at about $660 per unit at 20 units ($1,690 before). The remaining
+    big lines are physics: magnets $72 and boards $80. Is that low enough, or do we also want
+    the custom driver board and the cast base costed for a 100-unit run?'
   artifacts:
   - path: docs/design/01-sizing.md
-    sha256: 7b29aa3d0e01222c
-  - path: docs/design/06-geometry.md
-    sha256: 40fa8128fcd21706
+    sha256: 2a51cc707b008f98
   - path: docs/design/08-actuator-design.md
     sha256: 70bb7f269513fc04
   - path: docs/design/actuator/cad-femur-1s-cutaway.png
-    sha256: 36f2f221b6b579a6
+    sha256: 77320684fabad2b9
   - path: docs/design/actuator/cad-femur-1s-section.png
     sha256: ab54778c856788ba
   - path: docs/design/actuator/cad-femur-cutaway.png
-    sha256: 8221a648c4f09cf2
+    sha256: 2771f81de26a022f
   - path: docs/design/actuator/cad-femur-iso.png
-    sha256: 8d7323c057f996a4
+    sha256: fb2a8b41004d98e5
   - path: docs/design/actuator/cad-femur-section.png
-    sha256: 0020a1945ba37fc8
+    sha256: 3730dfa913a43551
   - path: docs/design/actuator/cad-knee-cutaway.png
-    sha256: a1073e3d1fe8bd14
+    sha256: 68d97a3e908b3aff
   - path: docs/design/actuator/cad-knee-section.png
-    sha256: 25409b37ebcea54d
+    sha256: 0eb5ffc42825f8a7
   - path: docs/design/actuator/cad-yaw-1s-cutaway.png
     sha256: 3cae98453bc04279
   - path: docs/design/actuator/cad-yaw-1s-section.png
     sha256: 06c73ffd22fd405b
   - path: docs/design/actuator/cad-yaw-cutaway.png
-    sha256: 3317b6b19a37e94d
+    sha256: 73eb11c184814918
   - path: docs/design/actuator/cad-yaw-section.png
-    sha256: 572159477a06ad97
+    sha256: 9dc821d7be3a5693
+  - path: docs/design/actuator/capstan.png
+    sha256: 30a493ccb0858c08
   - path: docs/design/actuator/closure.png
-    sha256: f33d374b09677f28
+    sha256: b10fbcb777df843d
   - path: docs/design/actuator/cycloid-profiles.png
-    sha256: 8653edbc2c70d768
+    sha256: 522a620dceef72e6
   - path: docs/design/actuator/operating-envelopes.png
-    sha256: 88a72eb6b18d5878
+    sha256: be75bbc3c5550fcc
   - path: docs/design/actuator/rotor-field.png
     sha256: 2f7440ee443f95b7
   - path: docs/design/actuator/section-pcb-1.png
@@ -676,20 +682,14 @@ reviews:
   - path: docs/design/actuator/thermal-network.png
     sha256: a311801d65fe0a57
   - path: docs/design/bom-actuator.csv
-    sha256: ad06e0c07e9be9b8
-  - path: docs/design/drawing/front.png
-    sha256: 15354d884a8d1bb0
-  - path: docs/design/drawing/hip-stack.png
-    sha256: 82aa8b4349fae9f4
-  - path: docs/design/drawing/side.png
-    sha256: 65f8427ba2748110
-  - path: docs/design/drawing/top.png
-    sha256: f396c2d65bdb5991
+    sha256: 3d62b99511233dd4
   references:
+  - analysis/capstan.py
   - analysis/closure.py
-  - analysis/hexapod_model.py
+  - analysis/cycloid.py
   - cad/actuator/actuator.py
   - hw/stator/asbuilt.json
+  - hw/stator/capstan.json
   - hw/stator/closure.json
   - hw/stator/drc.json
   - hw/stator/geometry.json
@@ -750,7 +750,7 @@ reviews:
   - hw/stator/variants/8t/stator-8t.kicad_prl
   - hw/stator/variants/8t/stator-8t.kicad_pro
   requested: '2026-09-02'
-  requested_commit: 2c51f53
+  requested_commit: 7d80ca9
   status: requested
   packet: docs/review/actuator.md
   history:
@@ -996,5 +996,45 @@ reviews:
     - docs/design/actuator/cad-femur-1s-section.png
     - docs/design/actuator/cad-yaw-1s-cutaway.png
     - docs/design/actuator/cad-yaw-1s-section.png
+  - 'on': '2026-09-02'
+    action: requested
+    commit: 7d80ca9
+    questions:
+    - 'Two-stage reduction: a 20-lobe cycloid plus a 4:1 Dyneema capstan at the femur and
+      knee joints (yaw stays a direct 30-lobe cycloid). Accept the capstan stage, with its
+      re-tension schedule and the yaw-to-pitch coupling the controller compensates?'
+    - 'Cost-down boards: two 8-layer 2 oz JLCPCB boards per stator position ($80 per unit
+      instead of $300) cost 11 % torque, taken back by the 80:1 total ratio; margins 1.08
+      femur / 1.03 knee. Accept the cheaper boards, or keep the 3 oz board for margin (1.22
+      / 1.15)?'
+    - 'The re-sourced BOM lands at about $660 per unit at 20 units ($1,690 before). The remaining
+      big lines are physics: magnets $72 and boards $80. Is that low enough, or do we also
+      want the custom driver board and the cast base costed for a 100-unit run?'
+    summary: 'Review feedback: too many cycloid lobes and pins; radically reduce cost. The
+      reduction is now a 20-lobe cycloid (21 pins of Ø6, 1.66 mm eccentricity, HK2512 back
+      on a straight Ø25 shaft) plus a 4:1 Dyneema capstan stage from a Ø60 drum on the unit''s
+      output to a Ø240 sector at the femur/knee pivot (Marlow D12 Max 78 datasheet: SF 4.6
+      at the knee peak); the yaw stays a direct 30-lobe cycloid. Every BOM line was re-sourced:
+      two 8-layer 2 oz JLCPCB boards per stator position instead of a 12L 3 oz board, laser-cut
+      hardened discs, 6061 and laser-cut housing parts, a Chinese crossed roller, an ODrive-compatible
+      driver, volume magnets — $660 per unit against $1,690 (estimates at 20 units, verified
+      lines marked). The closure re-check with the cheaper boards at 80:1 total closes at
+      a 132 kg robot with 1.08 / 1.03 / 1.04 margins.'
+    changed:
+    - docs/design/01-sizing.md
+    - docs/design/actuator/cad-femur-1s-cutaway.png
+    - docs/design/actuator/cad-femur-cutaway.png
+    - docs/design/actuator/cad-femur-iso.png
+    - docs/design/actuator/cad-femur-section.png
+    - docs/design/actuator/cad-knee-cutaway.png
+    - docs/design/actuator/cad-knee-section.png
+    - docs/design/actuator/cad-yaw-cutaway.png
+    - docs/design/actuator/cad-yaw-section.png
+    - docs/design/actuator/closure.png
+    - docs/design/actuator/cycloid-profiles.png
+    - docs/design/actuator/operating-envelopes.png
+    - docs/design/bom-actuator.csv
+    added:
+    - docs/design/actuator/capstan.png
   decided_commit: fd55ee1
 artifact_url: https://claude.ai/code/artifact/c27a8924-af18-4d17-bd9b-0fcb41e685e3

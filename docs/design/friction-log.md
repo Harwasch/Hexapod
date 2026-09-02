@@ -79,3 +79,15 @@
   second orbit viewer (`scripts/inject_actuator_viewer.py`, quarter-cut and whole STL groups
   exported by the CAD script). `review-artifact` should take a `models:` list per phase
   natively; two hand-injected viewers is the workaround.
+
+## 2026-09-02 — round 8
+
+* The human's two questions ("that many lobes?", "have we optimised for cost?") were both
+  answerable from the record but neither had been asked by the workflow: no stage asks
+  "what is the cheapest manufacturing route for each part" or "is the part count sensible".
+  `hw-sourcing` should carry a cost-down checklist (process per part, quantity breaks, the
+  two or three lines that are physics rather than machining) and `hw-review` should ask it
+  before the CAD stage is signed.
+* A datasheet fetched as a PDF was image-only (`pdftotext` returned nothing); the Read tool
+  rendered the page and the numbers were transcribed by eye. `hw-documentation` should say
+  so and ask for the transcription to be recorded in the manifest note, as done here.

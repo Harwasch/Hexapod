@@ -1,8 +1,8 @@
-# Review — Actuator, round 7: configuration A as the canonical unit
+# Review — Actuator, round 8: two-stage reduction and cost-down
 
 `actuator` · requested 2026-09-02 · branch `claude/hexapod-robot-design-mt516g`
 
-The round-6 decisions applied: two stators and three Halbach rotors in every unit (62 mm, 5.5 kg), two 8 mm discs on Ø30 journals with HK3012 needle bearings (PTI catalogue ratings in docs/reference), the yaw swing-speed requirement lowered to 6.4 rad/s so every unit shares the 10-turn board, and the body slab raised from 200 to 220 mm for the 202 mm hip stack. The closure loop now closes: a 129 kg robot, femur 358 N·m continuous against 324 needed (1.10), knee 1.04, yaw 1.76, against the continuous load case as written. 01-sizing, 06-geometry and the drawings carry the CAD masses and the Ø186 × 62 envelope; the BOM is for the two-stator unit. The single-stator unit stays as the -1s variant.
+Review feedback: too many cycloid lobes and pins; radically reduce cost. The reduction is now a 20-lobe cycloid (21 pins of Ø6, 1.66 mm eccentricity, HK2512 back on a straight Ø25 shaft) plus a 4:1 Dyneema capstan stage from a Ø60 drum on the unit's output to a Ø240 sector at the femur/knee pivot (Marlow D12 Max 78 datasheet: SF 4.6 at the knee peak); the yaw stays a direct 30-lobe cycloid. Every BOM line was re-sourced: two 8-layer 2 oz JLCPCB boards per stator position instead of a 12L 3 oz board, laser-cut hardened discs, 6061 and laser-cut housing parts, a Chinese crossed roller, an ODrive-compatible driver, volume magnets — $660 per unit against $1,690 (estimates at 20 units, verified lines marked). The closure re-check with the cheaper boards at 80:1 total closes at a 132 kg robot with 1.08 / 1.03 / 1.04 margins.
 
 ## What you are agreeing to
 
@@ -49,6 +49,10 @@ The round-6 decisions applied: two stators and three Halbach rotors in every uni
 **cad-yaw-section.png**
 
 ![cad-yaw-section.png](../design/actuator/cad-yaw-section.png)
+
+**capstan.png**
+
+![capstan.png](../design/actuator/capstan.png)
 
 **closure.png**
 
@@ -98,26 +102,9 @@ The round-6 decisions applied: two stators and three Halbach rotors in every uni
 
 ![thermal-network.png](../design/actuator/thermal-network.png)
 
-**front.png**
-
-![front.png](../design/drawing/front.png)
-
-**hip-stack.png**
-
-![hip-stack.png](../design/drawing/hip-stack.png)
-
-**side.png**
-
-![side.png](../design/drawing/side.png)
-
-**top.png**
-
-![top.png](../design/drawing/top.png)
-
 | File | Opens in |
 |---|---|
 | [docs/design/01-sizing.md](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/docs/design/01-sizing.md) | renders on GitHub |
-| [docs/design/06-geometry.md](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/docs/design/06-geometry.md) | renders on GitHub |
 | [docs/design/08-actuator-design.md](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/docs/design/08-actuator-design.md) | renders on GitHub |
 | [docs/design/bom-actuator.csv](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/docs/design/bom-actuator.csv) | GitHub table view |
 
@@ -135,10 +122,12 @@ Sources and working files. Not part of the agreement — these change as work go
 
 | File | Opens in |
 |---|---|
+| [analysis/capstan.py](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/analysis/capstan.py) | plain text on GitHub |
 | [analysis/closure.py](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/analysis/closure.py) | plain text on GitHub |
-| [analysis/hexapod_model.py](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/analysis/hexapod_model.py) | plain text on GitHub |
+| [analysis/cycloid.py](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/analysis/cycloid.py) | plain text on GitHub |
 | [cad/actuator/actuator.py](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/cad/actuator/actuator.py) | plain text on GitHub |
 | [hw/stator/asbuilt.json](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/hw/stator/asbuilt.json) | plain text on GitHub |
+| [hw/stator/capstan.json](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/hw/stator/capstan.json) | plain text on GitHub |
 | [hw/stator/closure.json](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/hw/stator/closure.json) | plain text on GitHub |
 | [hw/stator/drc.json](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/hw/stator/drc.json) | plain text on GitHub |
 | [hw/stator/geometry.json](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/hw/stator/geometry.json) | plain text on GitHub |
@@ -199,8 +188,9 @@ Sources and working files. Not part of the agreement — these change as work go
 
 ## What we need decided
 
-1. Do you approve the actuator design stage as it now stands (two stators, two discs, HK3012, 70/70/45, Ø186 × 62 mm, 5.5 kg, a ~129 kg robot), so the next chunk (the transmission from the hip stack to the femur and knee, M1) can start?
-2. The 62 mm stack made the body slab 220 mm instead of 200 mm. Accept, or should the hip pods stand proud of a 200 mm slab instead?
+1. Two-stage reduction: a 20-lobe cycloid plus a 4:1 Dyneema capstan at the femur and knee joints (yaw stays a direct 30-lobe cycloid). Accept the capstan stage, with its re-tension schedule and the yaw-to-pitch coupling the controller compensates?
+2. Cost-down boards: two 8-layer 2 oz JLCPCB boards per stator position ($80 per unit instead of $300) cost 11 % torque, taken back by the 80:1 total ratio; margins 1.08 femur / 1.03 knee. Accept the cheaper boards, or keep the 3 oz board for margin (1.22 / 1.15)?
+3. The re-sourced BOM lands at about $660 per unit at 20 units ($1,690 before). The remaining big lines are physics: magnets $72 and boards $80. Is that low enough, or do we also want the custom driver board and the cast base costed for a 100-unit run?
 
 ## Decision
 

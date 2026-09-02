@@ -9,9 +9,9 @@
 title: Hexapod
 subtitle: >-
   A large-dog-sized outdoor hexapod with all eighteen motors in the body.
-  Round 7: configuration A made canonical — two stators and two discs in
-  every unit, HK3012 journals, the yaw swing requirement lowered — with the
-  closure loop that got us here and the 128 kg robot it implies.
+  Round 8: the reduction split into a 20-lobe cycloid and a Dyneema capstan
+  stage at the joint, and every line of the unit re-sourced for cost — with
+  the two-stator unit, the closure loop and the 129 kg robot behind it.
 
 phases:
   - id: geometry
@@ -112,6 +112,7 @@ phases:
       - docs/design/actuator/rotor-field.png
       - docs/design/actuator/cad-femur-section.png
       - docs/design/actuator/cad-femur-1s-section.png
+      - docs/design/actuator/capstan.png
       - docs/design/actuator/closure.png
       - docs/design/actuator/cad-femur-cutaway.png
       - docs/design/actuator/cad-femur-iso.png
@@ -131,15 +132,22 @@ phases:
         carriers.
       docs/design/actuator/cad-femur-section.png: >-
         The canonical unit (configuration A, chosen in the round-6 review):
-        two stator boards between three Halbach rotors, two 8 mm cycloid
-        discs 180° apart on Ø30 journals (HK3012) inside the fixed pin cylinder,
-        the crossed-roller output in the mounting face. 62 mm tall, Ø186,
-        5.5 kg. Look at: the middle rotor ring carries magnets on both faces
-        and is bonded onto the drum between the two boards.
+        two stator boards between three Halbach rotors, two 8 mm 20-lobe
+        cycloid discs 180° apart on HK2512 journals inside the fixed pin
+        cylinder, the crossed-roller output in the mounting face with the
+        capstan drum below it. 62 mm tall, Ø186. Look at: 21 pins instead of
+        71, and the drum that takes the rope to the joint.
       docs/design/actuator/cad-femur-1s-section.png: >-
         The single-stator variant kept in the CAD as the record of
         configuration B: 50 mm, 3.9 kg. Look at: the empty 12 mm under the
         rotor is the price of the second disc.
+      docs/design/actuator/capstan.png: >-
+        The second stage: a Ø60 drum on the unit's output, a Ø210 sector at the
+        femur / knee pivot, one pre-tensioned 5 mm Dyneema rope, 3.5:1. The
+        cycloid drops from 71 pins to 21 and sees 3.5× less torque. Look at:
+        rope tension against the datasheet break load (SF 4 at the knee peak),
+        and that the drum sits on the yaw axis so yaw winds the drum (a
+        software-compensated coupling).
       docs/design/actuator/closure.png: >-
         The loop the mass renegotiation opened. Left: each unit option at the
         robot mass it implies — the single-stator unit cannot close the

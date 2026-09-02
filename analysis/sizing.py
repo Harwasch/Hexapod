@@ -81,7 +81,7 @@ def joint_speed_at(ratio: float) -> float:
 
 
 MAX_RATIO = 80                  # single-stage in-plane cycloid: lobe pitch gets silly above this
-MIN_RATIO = {"yaw": 45, "femur": 70, "knee": 70}   # round 6 disc family (08-actuator-design); torque margin comes out as margin
+MIN_RATIO = {"yaw": 30, "femur": 80, "knee": 80}   # total ratio: 20-lobe cycloid x 4:1 capstan (femur, knee), 30-lobe cycloid direct (yaw); round 8
 
 
 def ratio_for(m: PcbMotor, cont: float, peak: float) -> float:

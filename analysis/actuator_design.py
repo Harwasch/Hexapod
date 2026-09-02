@@ -33,9 +33,9 @@ DOC = os.path.join(ROOT, "docs", "design", "08-actuator-design.md")
 FIG = os.path.join(ROOT, "docs", "design", "actuator")
 os.makedirs(FIG, exist_ok=True)
 
-ETA = 0.88                                       # cycloid efficiency assumed in the sizing
-JOINTS = {name: dict(N=cy.RATIOS[name], T_cont=cy.JOINTS[name][1], T_peak=cy.JOINTS[name][2], w_swing=cy.SWING[name])
-          for name in ("yaw", "femur", "knee")}   # ratio, joint continuous / peak N·m and swing rad/s, from 01-sizing via cycloid.py
+ETA = 0.90 * 0.97                                # cycloid (20 lobes) x capstan; the yaw is cycloid only (0.90)
+JOINTS = {name: dict(N=cy.TOTAL[name], N_cyc=cy.RATIOS[name], k2=cy.STAGE2[name], T_cont=cy.JOINT_REQ[name][0], T_peak=cy.JOINT_REQ[name][1], w_swing=cy.SWING[name])
+          for name in ("yaw", "femur", "knee")}   # total ratio (cycloid x capstan), joint continuous / peak N·m and swing rad/s, from 01-sizing via cycloid.py
 
 # ----------------------------------------------------------------------------
 # 1. The motor design point (A3) and the upgrade (C1), from the study's model
@@ -78,7 +78,7 @@ C1_J = joint_points(C1)
 # ----------------------------------------------------------------------------
 # 2. Mechanical: reducer (cycloid.py), bearings, stack-up, mass roll-up
 # ----------------------------------------------------------------------------
-CYC = {name: cy.design(j["N"], j["T_cont"], j["T_peak"]) for name, j in JOINTS.items()}
+CYC = {name: cy.design(cy.JOINTS[name][0], cy.JOINTS[name][1], cy.JOINTS[name][2]) for name in JOINTS}   # the cycloid stage at its own (reduced) torque
 sec.T_BACKIRON = 3.0                                          # aluminium carrier behind a Halbach ring; 3 mm
 sec.STATORS["pcb"].update(t_stator=STACK[2] * 1000, gap=mo.AIR_CLEAR * 1000, t_mag=A3["h_m"] * 1000, label="PCB stator 12-layer 3 oz")
 sec.STATORS["wound"].update(t_stator=(mo.COIL_THICK + 2 * mo.COIL_SKIN) * 1000, gap=mo.AIR_CLEAR * 1000, t_mag=C1["h_m"] * 1000)
@@ -99,6 +99,8 @@ SUST = [k for k in TH["variants"]["as built"]["cases"] if k.startswith("sustaine
 CADJ = {j: json.load(open(os.path.join(ROOT, "cad", "actuator", f"{j}.json"))) for j in ("femur", "knee", "yaw", "femur-1s", "yaw-1s")}
 BOM = list(csv.DictReader(open(os.path.join(ROOT, "docs", "design", "bom-actuator.csv"))))
 BOM_UNIT = sum(float(r["qty_per_unit"]) * float(r["unit_price_usd"]) for r in BOM)
+BOM_BEFORE = sum(float(r["qty_per_unit"]) * float(r["price_before_usd"]) for r in BOM)
+CAP = json.load(open(os.path.join(ROOT, "hw", "stator", "capstan.json")))
 HK2512 = dict(Cr=11.8e3, C0r=16.3e3, n_lim=6500)                # NTN sheet, docs/reference/ntn-hk2512.pdf
 HK3012 = dict(Cr=11.5e3, C0r=17.3e3)                            # PTI HK-series catalogue, docs/reference/pti-hk-series.pdf (round 7)
 RB5013 = dict(C=16.7e3, C0=20.9e3, mass=0.27)                    # THK catalogue 382-5E, docs/reference
@@ -289,7 +291,7 @@ def write_doc(figs):
         for ns, tag in ((2, name), (1, name + "-1s" if name != "knee" else "femur-1s")):
             t_cont = ab["ratings"]["1000"]["T_cont"] * b1 * ns
             t_peak = ab["ratings"]["1000"]["T_peak"] * b1 * ns
-            joint_rows.append((f"{name}, {ns} stator{'s' if ns > 1 else ''}" + (" (chosen)" if ns == 2 else ""), f"{j['N']}:1", "10-turn", f"{t_cont:.2f} / {t_peak:.2f}",
+            joint_rows.append((f"{name}, {ns} stator{'s' if ns > 1 else ''}" + (" (chosen)" if ns == 2 else ""), f"{j['N_cyc']} × {j['k2']:.0f} = {j['N']:.0f}:1", "10-turn 3 oz", f"{t_cont:.2f} / {t_peak:.2f}",
                                f"{t_cont*j['N']*ETA:.0f} / {t_peak*j['N']*ETA:.0f}", f"{j['T_cont']:.0f} / {j['T_peak']:.0f}",
                                f"{t_cont*j['N']*ETA/j['T_cont']:.2f} / {t_peak*j['N']*ETA/j['T_peak']:.2f}",
                                f"{ab['n_noload_rpm']/j['N']*2*math.pi/60:.1f} (need {j['w_swing']:.1f})", f"{CADJ[tag]['total_g']/1000:.2f}", f"{CADJ[tag]['height_mm']:.0f}"))
@@ -299,10 +301,11 @@ def write_doc(figs):
                         f"{o['margin_knee']:.2f}", f"{o['margin_yaw']:.2f}", "yes" if o["closes"] else "no"))
     case_rows = []
     for r in CL["cases"]:
-        b, a = r["B: 1 stator everywhere"], r["A: 2 stators everywhere (chosen)"]
+        b, a = r["B: 1 stator, 3 oz boards"], r["A-cost: 2 stators, 2 oz boards (chosen)"]
         case_rows.append((r["label"], f"{b['need']['femur']:.0f} / {b['need']['knee']:.0f} / {b['need']['yaw']:.0f}", "yes" if b["closes"] else "no",
                           f"{a['need']['femur']:.0f} / {a['need']['knee']:.0f} / {a['need']['yaw']:.0f}", "yes" if a["closes"] else "no"))
-    bom_rows = [(r["item"], r["qty_per_unit"], r["spec"][:90], f"{float(r['qty_per_unit'])*float(r['unit_price_usd']):.0f}", r["verified"]) for r in BOM]
+    bom_rows = [(r["item"], r["qty_per_unit"], r["spec"][:90], f"{float(r['qty_per_unit'])*float(r['price_before_usd']):.0f}", f"{float(r['qty_per_unit'])*float(r['unit_price_usd']):.0f}", r["verified"]) for r in BOM]
+    cap = CAP["joints"]["knee"]; capg = CAP["geometry"]
     crows = []
     for name, d in CYC.items():
         crows.append((name, f"{d['N']}:1", f"{d['N']+1} × Ø{2*d['r_pin']:.1f}", f"{d['e']:.2f}", f"{d['F_pin']:.0f}", f"{d['sigma_peak']:.0f}", f"{d['F_ecc']:.0f}", f"{d['F_out']:.0f}"))
@@ -409,7 +412,12 @@ The cycloid sits inside the r < 50 mm bore with its ring pins in a fixed
 cylinder that rises from the mounting plate, and **two 8 mm discs 180° apart**
 on twin journals (round 5 tried one 10 mm disc to stay inside 42 mm of height;
 the review chose bearing life over height, and the unit is now
-{CADJ['femur']['height_mm']:.1f} mm tall). From `analysis/cycloid.py`:
+{CADJ['femur']['height_mm']:.1f} mm tall). **Round 8 split the reduction**: the review found 71 lobes
+and pins too many, so the cycloid now does {JOINTS['femur']['N_cyc']}:1 (21 pins of Ø6, 13 mm
+pitch, 1.66 mm eccentricity) and a capstan cable stage at the joint does the
+other {JOINTS['femur']['k2']:.0f}:1 (§9.9); the yaw stays a direct {JOINTS['yaw']['N_cyc']}:1 cycloid (31 pins).
+The table is the cycloid stage at the torque it now sees, i.e. the joint
+torque over the capstan ratio. From `analysis/cycloid.py`:
 
 {md(("Joint", "Ratio", "Ring pins", "Eccentricity (mm)", "Peak ring-pin force (N, per disc)", "Hertz, peak (MPa; 1400 allowed)", "Eccentric bearing load, peak (N, per disc)", "Output-pin force, peak (N)"), crows)}
 
@@ -422,14 +430,14 @@ the review chose bearing life over height, and the unit is now
 * **Ring pins**: standard hardened dowels, Ø{2*CYC['femur']['r_pin']:.0f} mm for femur and knee,
   Ø{2*CYC['yaw']['r_pin']:.0f} mm for yaw, in half-grooves in the fixed cylinder's bore. Needle
   rollers on the pins are the first upgrade if efficiency measures below 85 %.
-* **Eccentric bearings**: one HK3012 drawn-cup needle per disc (30 × 37 × 12
-  on a Ø30 journal of the stepped shaft; Cr {HK3012['Cr']/1e3:.1f} kN, C0r {HK3012['C0r']/1e3:.1f} kN from the PTI
-  HK-series catalogue in `docs/reference`; round 7, replacing HK2512). The
-  load per disc is (T/R + T/(N·e))/2 ≈ 1.1 T/R whatever the ratio: {CYC['femur']['F_ecc']/1e3:.1f} kN at
-  the femur peak (static margin {HK3012['C0r']/CYC['femur']['F_ecc']:.2f}) and {CYC['femur']['F_ecc']/1e3*JOINTS['femur']['T_cont']/JOINTS['femur']['T_peak']:.1f} kN at the
-  continuous rating: L10 {(HK3012['Cr']/(CYC['femur']['F_ecc']*JOINTS['femur']['T_cont']/JOINTS['femur']['T_peak']))**(10/3)/1e6:.0f} million revolutions
-  ({(HK3012['Cr']/(CYC['femur']['F_ecc']*JOINTS['femur']['T_cont']/JOINTS['femur']['T_peak']))**(10/3)/60/1000:.0f} h at 1000 rpm), and at a walking-average torque of 40 % of the rating
-  {(HK3012['Cr']/(0.4*CYC['femur']['F_ecc']*JOINTS['femur']['T_cont']/JOINTS['femur']['T_peak']))**(10/3)/60/1000:.0f} h.
+* **Eccentric bearings**: back to one HK2512 drawn-cup needle per disc
+  (25 × 32 × 12; Cr {HK2512['Cr']/1e3:.1f} kN, C0r {HK2512['C0r']/1e3:.1f} kN from the NTN sheet in `docs/reference`).
+  The review had moved to HK3012 for life; with the capstan stage the cycloid
+  sees a quarter of the torque, so the load per disc is {CYC['femur']['F_ecc']/1e3:.1f} kN at the femur
+  peak (static margin {HK2512['C0r']/CYC['femur']['F_ecc']:.2f}) and {CYC['femur']['F_ecc']/1e3*JOINTS['femur']['T_cont']/JOINTS['femur']['T_peak']:.1f} kN at the continuous rating:
+  L10 {(HK2512['Cr']/(CYC['femur']['F_ecc']*JOINTS['femur']['T_cont']/JOINTS['femur']['T_peak']))**(10/3)/1e6:.0f} million revolutions ({(HK2512['Cr']/(CYC['femur']['F_ecc']*JOINTS['femur']['T_cont']/JOINTS['femur']['T_peak']))**(10/3)/60/1000:.0f} h at 1000 rpm) and
+  {(HK2512['Cr']/(0.4*CYC['femur']['F_ecc']*JOINTS['femur']['T_cont']/JOINTS['femur']['T_peak']))**(10/3)/60/1000:.0f} h at 40 % of it. The HK3012 stays in the record as what a direct
+  70:1 cycloid would have needed.
 * **Output bearing**: RB5013 crossed roller (50 × 80 × 13; C {RB5013['C']/1e3:.1f} kN, C0 {RB5013['C0']/1e3:.1f} kN,
   THK catalogue) in the mounting face; it carries the output flange and the
   drive torque. The coxa's 270 N·m overturning moment at the yaw output is a
@@ -587,17 +595,73 @@ and are not worth it.
 ### 9.5 Each joint on the built motor
 
 The requirement column is what 01-sizing derives **at the robot mass the CAD
-implies** ({CL['options']['A: 2 stators everywhere (chosen)']['m_robot']:.0f} kg with the two-stator units), not the 49 kg of round 1;
+implies** ({CL['options']['A-cost: 2 stators, 2 oz boards (chosen)']['m_robot']:.0f} kg with the two-stator units), not the 49 kg of round 1;
 §9.7 explains why that is the right mass to check against.
 
-{md(("Joint", "Ratio", "Board", "Motor cont / peak (N·m)", "Joint cont / peak (N·m)", "Needed at the CAD mass", "Margin", "Joint speed no-load (rad/s)", "Unit mass (kg)", "Height (mm)"), joint_rows)}
+{md(("Joint", "Cycloid × capstan", "Board", "Motor cont / peak (N·m)", "Joint cont / peak (N·m)", "Needed at the CAD mass", "Margin", "Joint speed no-load (rad/s)", "Unit mass (kg)", "Height (mm)"), joint_rows)}
+
+With the cost-down boards (two 8-layer 2 oz per position, §9.10) every motor
+torque above scales by {AB16['ratings']['1000']['T_cont']/AB['ratings']['1000']['T_cont']:.2f}; §9.7 carries that case as "A-cost".
 
 ### 9.6 Bill of materials — `docs/design/bom-actuator.csv`
 
-{md(("Item", "Qty", "Spec", "Cost per unit ($)", "Price verified"), bom_rows)}
+{md(("Item", "Qty", "Spec", "Round 7 ($)", "Round 8 cost-down ($)", "Price verified"), bom_rows)}
 
-**${BOM_UNIT:.0f} per unit, ${BOM_UNIT*18/1000:.1f}k for eighteen**, at one-off machining prices.
-Verified prices are marked; the rest are estimates to be replaced by quotes.
+**${BOM_UNIT:.0f} per unit after the cost-down (${BOM_BEFORE:.0f} before), ${BOM_UNIT*18/1000:.1f}k for eighteen** at
+20-unit quantities. Verified prices are marked; the rest are estimates to be
+replaced by quotes. The capstan sector, rope and tensioner are costed here
+although they live on the joint.
+
+### 9.9 The second stage: a capstan at the joint — `analysis/capstan.py`
+
+![Capstan stage]({rel(os.path.join(FIG, 'capstan.png'))})
+
+A Ø{2*capg['r_drum_mm']:.0f} drum on the unit's output face (below the mounting face, inside the
+hip pod, on the yaw axis) drives a Ø{2*capg['r_sector_mm']:.0f} sector at the femur or knee pivot
+through one pre-tensioned {capg['rope']['name']} rope, {capg['n_wrap']:.0f} wraps on the drum,
+spliced eyes at the sector: {capg['ratio']:.0f}:1, no backlash, ~97 % efficient. The cycloid
+therefore does {JOINTS['femur']['N_cyc']}:1 with 21 pins and sees a quarter of the joint torque, which
+is what let the needle bearings go back to HK2512 and the discs to laser-cut
+steel.
+
+* Rope tension at the knee: {cap['F_rope_cont']/1e3:.1f} kN continuous, {cap['F_rope_peak']/1e3:.1f} kN peak, against the
+  datasheet's {capg['rope']['break_kN']:.1f} kN minimum spliced strength: safety factor {cap['sf_cont']:.1f} / {cap['sf_peak']:.1f}.
+  Steel wire at this tension would need a drum 25–40× its diameter; Dyneema
+  is happy at D/d = {cap['D_over_d']:.0f}.
+* Joint stiffness from the rope's stretch: {cap['k_joint_Nm_per_rad']/1e3:.0f} kN·m/rad, a wind-up of
+  {cap['wind_up_deg_at_cont']:.2f}° at the continuous torque. That is compliance the controller sees;
+  the output-side encoder on the joint (§8) is what makes it harmless.
+* SK78 creeps {capg['rope']['creep_pct_per_yr_at_20pct']:.1f} % per year at 20 % load: a tensioner and a re-tension
+  interval. The rope loses strength above {capg['rope']['T_critical_C']:.0f} °C, so it must not touch the
+  housing, which runs at 60–100 °C at the rating.
+* The drum sits on the yaw axis and the sector on the coxa, so a yaw rotation
+  winds the drum by the yaw angle: femur angle = sector angle − yaw × (r_drum /
+  r_sector). A known coupling, compensated in software.
+* The sector at Ø{2*capg['r_sector_mm']:.0f} for {capg['joint_range_deg']:.0f}° of travel is the largest new part; it belongs
+  to the transmission chunk (M1) and is costed in the BOM so the stage is complete.
+
+### 9.10 Cost-down — what changed on every line
+
+| Line | Round 7 | Round 8 | How |
+|---|---|---|---|
+| Stator boards | 2 × 12L 3 oz, $300 | 4 × 8L 2 oz JLCPCB, $80 | two thin boards per position, wired in parallel; −11 % torque, taken back by the 80:1 total ratio |
+| Cycloid discs | 2 × wire-EDM, $180 | 2 × laser-cut + hardened, $44 | 20 lobes of 13 mm pitch tolerate laser-cut accuracy |
+| Eccentric bearings | HK3012, $14 | HK2512, $8 | a quarter of the torque on the cycloid |
+| Output bearing | THK RB5013, $196 | Chinese CRB5013, $45 | qualify on its own datasheet; THK as alternate |
+| Base | 7075 billet, $180 | 6061, 20 pcs, $95 | die-cast at volume |
+| Rotor cup | 7075 one-piece, $150 | turned drum + laser-cut plates, $60 | bonded, as before |
+| Clamp rings, cover | machined, $125 | laser-cut plates, $33 | |
+| Shaft, flange | $130 | $70 | straight Ø25 stock, 6061 flange |
+| Driver | ODrive S1, $149 | ODrive-compatible board, $45 | ODrive S1 as the qualified alternate; a custom board at volume |
+| Magnets | $144 | $72 | volume quote, 4320 pcs |
+| Capstan stage | — | $61 | drum, sector, rope, tensioner |
+| Encoder, misc | $27 | $18 | |
+
+The magnets and the boards are now the two biggest lines and both are
+physics, not machining: fewer magnets means less torque, and a cheaper board
+means less copper. Everything else is a manufacturing-route choice that a
+quote can confirm. Not done here: a custom driver board, casting the base,
+and the volume pricing that would take the unit under $500.
 
 ### 9.7 Does the robot close? — `analysis/closure.py`
 
@@ -614,32 +678,34 @@ what its motor and ratio give. The fixed point for each unit option:
 The single-stator unit cannot close the requirement as defined at any mass:
 the torque it needs grows with the mass it adds faster than its own torque.
 Two stators per unit ({CADJ['femur']['height_mm']:.0f} mm tall, {CADJ['femur']['total_g']/1000:.1f} kg) close it at
-about {CL['options']['A: 2 stators everywhere (chosen)']['m_robot']:.0f} kg. The other way to close would have been the definition of
+about {CL['options']['A-cost: 2 stators, 2 oz boards (chosen)']['m_robot']:.0f} kg. The other way to close would have been the definition of
 "continuous": the walking load case is dyn 1.5 on three legs, on a 30° slope,
 accelerating at 1 m/s², over the whole routine working volume, all at once.
 Against gentler definitions:
 
-{md(("Continuous load case", "B: 1 stator, femur / knee / yaw needed at " + f"{CL['options']['B: 1 stator everywhere']['m_robot']:.0f} kg", "B closes?", "A: 2 stators, needed at " + f"{CL['options']['A: 2 stators everywhere (chosen)']['m_robot']:.0f} kg", "A closes?"), case_rows)}
+{md(("Continuous load case", "B: 1 stator, femur / knee / yaw needed at " + f"{CL['options']['B: 1 stator, 3 oz boards']['m_robot']:.0f} kg", "B closes?", "A: 2 stators, needed at " + f"{CL['options']['A-cost: 2 stators, 2 oz boards (chosen)']['m_robot']:.0f} kg", "A closes?"), case_rows)}
 
 **The review chose A** (round 6): two stators everywhere, {CADJ['femur']['height_mm']:.0f} mm units, a
-~{CL['options']['A: 2 stators everywhere (chosen)']['m_robot']:.0f} kg robot, the requirement as written. The single-stator unit stays in
-the CAD as the `-1s` variant (§9.3) and B stays here as the record of the
-lighter robot that was not chosen. The 62 mm stack no longer fits the 200 mm
-body slab (three units and two gaps are 202 mm), so the slab is now 220 mm in
-`hexapod_model.py`; the drawings in 06 carry it.
+~{CL['options']['A-cost: 2 stators, 2 oz boards (chosen)']['m_robot']:.0f} kg robot, the requirement as written. Round 8 then swapped the
+3 oz boards for two 8-layer 2 oz JLCPCB boards per position (11 % less torque,
+a quarter of the price) and raised the total ratio to 80:1 through the
+capstan stage to keep the margin ("A-cost" above). The single-stator unit
+stays in the CAD as the `-1s` variant (§9.3) and B stays here as the record of
+the lighter robot that was not chosen. The 62 mm stack no longer fits the
+200 mm body slab (three units and two gaps are 202 mm), so the slab is now
+220 mm in `hexapod_model.py`; the drawings in 06 carry it.
 
-### 9.8 Open items from this round
+### 9.8 Open items from this round (updated in round 8)
 
 1. **OD 186, not 170** (§9.3): accepted by the review.
 2. **Mass and closure** (§9.7): the review chose to renegotiate the mass
    budget; 01-sizing now carries the CAD masses, and the loop only closes
    with two stators per unit (A) or a gentler continuous load case (B).
    **This is the decision this round asks for.**
-3. **Eccentric bearings**: the review moved them to HK3012 on Ø30 journals
-   (Cr {HK3012['Cr']/1e3:.1f} kN, C0r {HK3012['C0r']/1e3:.1f} kN, PTI HK-series catalogue in `docs/reference`):
-   {CYC['femur']['F_ecc']/1e3:.1f} kN per disc at the femur peak (static margin {HK3012['C0r']/CYC['femur']['F_ecc']:.2f}),
-   {(HK3012['Cr']/(CYC['femur']['F_ecc']*JOINTS['femur']['T_cont']/JOINTS['femur']['T_peak']))**(10/3)/60/1000:.0f} h L10 at the continuous rating and
-   {(HK3012['Cr']/(0.4*CYC['femur']['F_ecc']*JOINTS['femur']['T_cont']/JOINTS['femur']['T_peak']))**(10/3)/60/1000:.0f} h at 40 % of it. The load is ~1.1 T/R per disc whatever the ratio.
+3. **Eccentric bearings**: the capstan stage settled this. With a quarter of
+   the torque on the cycloid, HK2512 on a straight Ø25 shaft has a static
+   margin of {HK2512['C0r']/CYC['femur']['F_ecc']:.1f} at the femur peak and {(HK2512['Cr']/(CYC['femur']['F_ecc']*JOINTS['femur']['T_cont']/JOINTS['femur']['T_peak']))**(10/3)/60/1000:.0f} h L10 at the
+   continuous rating (§4). The HK3012 decision of round 7 is withdrawn.
 4. **Sustained torque is set by the body's cooling**, not the motor (§6);
    the review accepted it: the gait is designed around a ~300 W average.
 7. **The yaw joint was speed-limited by the 48 V bus**: 7.7 rad/s at 45:1

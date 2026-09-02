@@ -56,8 +56,8 @@ R_OUT_BRG_OUT, R_OUT_BRG_IN, T_OUT_BRG = 40.0, 25.0, 13.0   # crossed roller RB5
 R_FLANGE = 41.5
 R_OUT_PINS, OUT_PIN_D, N_OUT = cy.R_OUT, cy.OUT_PIN_D, cy.N_OUT
 SHAFT_R = 12.5                                  # Ø25 shaft at the bearings and the hub
-JOURNAL_R = 15.0                                # Ø30 eccentric journals (round 7: HK3012, review decision)
-ECC_BRG_OUT, ECC_BRG_W = 18.5, 12.0             # HK3012 drawn-cup needle 30x37x12
+JOURNAL_R = 12.5                                # Ø25 eccentric journals: with the capstan stage the cycloid sees 3.5x less torque (round 8), HK2512 has 3.5x static margin
+ECC_BRG_OUT, ECC_BRG_W = 16.0, 12.0             # HK2512 drawn-cup needle 25x32x12
 SHAFT_BRG_OUT, SHAFT_BRG_W = 21.0, 9.0          # 6905 25x42x9
 TOP_BRG_IN, TOP_BRG_OUT, TOP_BRG_W = 7.5, 12.0, 5.0    # 6802 15x24x5
 N_BOLTS, BOLT_D, R_BOLTS = 12, 4.4, 89.5
@@ -119,7 +119,8 @@ def carrier_deflection(t=T_CARRIER):
     return q * L**4 / (8 * D)
 
 
-R_LIGHT, LIGHT_D = 34.5, 9.0                    # disc lightening holes between the output-pin holes
+R_LIGHT, LIGHT_D = 33.0, 6.0                    # disc lightening holes between the output-pin holes (inside the 20-lobe root)
+DRUM_R, DRUM_H, DRUM_FLANGE = 30.0, 26.0, 3.0   # capstan drum on the output face (analysis/capstan.py): Ø60, below the mounting face
 
 
 def cyl(r, z0, z1, x=0.0, y=0.0):
@@ -237,6 +238,11 @@ def build(joint="femur"):
         a = 2 * math.pi * k / N_OUT
         opins += cyl(OUT_PIN_D / 2, Z_FLANGE0 + 1.0, Z_DISCS[-1] + DISC_T + 0.5, R_OUT_PINS * math.cos(a), R_OUT_PINS * math.sin(a))
         flange -= cyl(OUT_PIN_D / 2, Z_FLANGE0 + 0.5, Z_FLANGE0 + T_FLANGE + 1, R_OUT_PINS * math.cos(a), R_OUT_PINS * math.sin(a))
+    if cy.STAGE2[joint] > 1.0:                                           # capstan drum bolted to the output face
+        drum = ring(SHAFT_R + 1.0, DRUM_R, -DRUM_H, 0.0)
+        drum -= ring(DRUM_R - 2.0, DRUM_R + 1, -DRUM_H + DRUM_FLANGE, -DRUM_FLANGE)   # groove band between two flanges
+        drum += ring(SHAFT_R + 1.0, DRUM_R - 2.0, -DRUM_H, 0.0)
+        parts["capstan_drum"] = drum; mass["capstan_drum"] = drum.volume * AL
     parts["output_flange"] = flange; mass["output_flange"] = flange.volume * AL
     parts["output_pins"] = opins; mass["output_pins"] = opins.volume * STEEL
 
@@ -252,8 +258,8 @@ def build(joint="femur"):
 
 
 GROUPS = {"housing": ["base", "upper_ring", "cover"], "rotor": ["rotor_top", "rotor_bottom_ring", "shaft"], "magnets": ["magnets"],
-          "stator": ["stator"], "reducer": ["disc", "ring_pins", "output_flange", "output_pins"], "bearings": ["bearings"]}
-COLORS = {"housing": "#9aa5ad", "rotor": "#d98c3a", "magnets": "#c0392b", "stator": "#0f9b8e", "reducer": "#3a3a3a", "bearings": "#e0e0e0"}
+          "stator": ["stator"], "reducer": ["disc", "ring_pins", "output_flange", "output_pins"], "bearings": ["bearings"], "transmission": ["capstan_drum"]}
+COLORS = {"housing": "#9aa5ad", "rotor": "#d98c3a", "magnets": "#c0392b", "stator": "#0f9b8e", "reducer": "#3a3a3a", "bearings": "#e0e0e0", "transmission": "#6c8e3a"}
 
 
 def section_polys(part, tol=0.4):
@@ -277,6 +283,8 @@ def draw_section(parts, joint, info, out):
     fig, ax = plt.subplots(figsize=(12.5, 5.2))
     for g, names in GROUPS.items():
         for n in names:
+            if n not in parts:
+                continue
             for poly in section_polys(parts[n]):
                 ax.fill(*zip(*poly), color=COLORS[g], lw=0.3, ec="k", alpha=0.95 if g != "bearings" else 0.8)
     ax.axhline(0, color="#b03a2e", lw=0.6, ls="--")
@@ -290,8 +298,8 @@ def draw_section(parts, joint, info, out):
               (R_BOARD - 5, (Z_BOARD0 + Z_BOARD1) / 2, "stator PCB, 12L 3 oz, clamped at the rim"),
               (R_CARRIER_OUT - 10, (Z_TOPCAR0 + Z_TOPCAR1) / 2, "rotor: top carrier + drum, one part"),
               (R_CARRIER_OUT - 10, (Z_BOTCAR0 + Z_BOTMAG0) / 2, "bottom carrier ring, bonded on the drum foot"),
-              (R_PINS, Z_CYL_TOP - 4, f"{info['n_pins']} pins Ø{2*info['r_pin']:.0f} in the fixed cylinder"),
-              (R_OUT_PINS, Z_DISCS[-1] + DISC_T / 2, f"{N_DISCS} discs {info['N']}:1 on HK3012, e = {info['e']:.2f}, 180° apart"),
+              (R_PINS, Z_CYL_TOP - 4, f"{info['n_pins']} pins Ø{2*info['r_pin']:.1f} in the fixed cylinder"),
+              (R_OUT_PINS, Z_DISCS[-1] + DISC_T / 2, f"{N_DISCS} discs {info['N']}:1 on HK2512, e = {info['e']:.2f}, 180° apart"),
               (R_OUT_BRG_IN + 7, T_OUT_BRG / 2, "RB5013 crossed roller"),
               (0, Z_BOSS1 - 2, "6802"), (0, Z_FLANGE0 - 4, "6905"),
               (R_BOLTS, Z_COVER0 + 1.5, "12 × M4"),
@@ -299,7 +307,7 @@ def draw_section(parts, joint, info, out):
     for k, (x, z, t) in enumerate(labels):
         ax.annotate(t, (x, z), (-R_OD - 8 if k % 2 else R_OD + 30, 2 + 3.6 * k), fontsize=7, ha="right" if k % 2 else "left",
                     va="center", arrowprops=dict(arrowstyle="-", color="#777", lw=0.5))
-    ax.set_aspect("equal"); ax.set_xlim(-R_OD - 75, R_OD + 95); ax.set_ylim(-12, H_TOTAL + 6)
+    ax.set_aspect("equal"); ax.set_xlim(-R_OD - 75, R_OD + 95); ax.set_ylim(-DRUM_H - 8 if cy.STAGE2[joint] > 1 else -12, H_TOTAL + 6)
     ax.set_xlabel("mm"); ax.set_ylabel("mm (mounting face at 0)")
     ax.set_title(f"{joint} actuator{', two stators' if N_STATORS == 2 else ''}, section through the axis (from the build123d model)", fontsize=10)
     ax.grid(alpha=0.2)
@@ -327,6 +335,8 @@ def render(parts, out, title, azim=-50, elev=28, cutter=None, size=(1000, 800), 
     for g, names in GROUPS.items():
         base = np.array(matplotlib.colors.to_rgb(COLORS[g]))
         for n in names:
+            if n not in parts:
+                continue
             p = parts[n] - cutter if cutter is not None else parts[n]
             v, t = _mesh(p)
             if len(t) == 0:
@@ -388,6 +398,9 @@ if __name__ == "__main__":
     export_step(comp, os.path.join(out_dir, f"actuator-{joint}.step"))
     cut = cut_parts(parts)
     for g, names in GROUPS.items():
+        names = [n for n in names if n in parts]
+        if not names:
+            continue
         export_stl(Compound(children=[parts[n] for n in names]), os.path.join(out_dir, f"{g}.stl"), tolerance=0.5, angular_tolerance=0.3)
         export_stl(Compound(children=[cut[n] for n in names]), os.path.join(out_dir, f"{g}-cut.stl"), tolerance=0.5, angular_tolerance=0.3)
     total = sum(mass.values())
