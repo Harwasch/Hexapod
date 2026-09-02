@@ -533,4 +533,50 @@ reviews:
       the terrain mode.'
     changed:
     - docs/design/bio/insect-leg.png
+- id: geometry
+  title: The geometry, dimensioned
+  stage: geometry
+  summary: 'Four dimensioned views of the current rough geometry, all read from the model:
+    top (body, hip stacks, all six legs, foot circles, stance), front (sprawl stance with
+    a 6 ft figure, hip / knee / deck heights, link lengths), side (both stances), and a section
+    through one hip stack showing the three coaxial pancake actuators, the volume the motor
+    study has to fill.'
+  questions:
+  - Is this the geometry you meant, before the actuator is designed into it? Anything to change
+    in the body slab, hip spacing, coxa length or stack height?
+  artifacts:
+  - path: docs/design/06-geometry.md
+    sha256: eb8349b05aa15c7d
+  - path: docs/design/drawing/front.png
+    sha256: e0b6e0ac82229f52
+  - path: docs/design/drawing/hip-stack.png
+    sha256: 27307e24e13bb17c
+  - path: docs/design/drawing/side.png
+    sha256: a9c0b39c0ecb57d7
+  - path: docs/design/drawing/top.png
+    sha256: a38a6f53b7777a0e
+  references:
+  - analysis/drawing.py
+  requested: '2026-09-02'
+  requested_commit: b34806b
+  status: requested
+  packet: docs/review/geometry.md
+  history:
+  - 'on': '2026-09-02'
+    action: requested
+    commit: b34806b
+    questions:
+    - Is this the geometry you meant, before the actuator is designed into it? Anything to
+      change in the body slab, hip spacing, coxa length or stack height?
+    summary: 'Four dimensioned views of the current rough geometry, all read from the model:
+      top (body, hip stacks, all six legs, foot circles, stance), front (sprawl stance with
+      a 6 ft figure, hip / knee / deck heights, link lengths), side (both stances), and a
+      section through one hip stack showing the three coaxial pancake actuators, the volume
+      the motor study has to fill.'
+    added:
+    - docs/design/06-geometry.md
+    - docs/design/drawing/front.png
+    - docs/design/drawing/hip-stack.png
+    - docs/design/drawing/side.png
+    - docs/design/drawing/top.png
 artifact_url: https://claude.ai/code/artifact/c27a8924-af18-4d17-bd9b-0fcb41e685e3

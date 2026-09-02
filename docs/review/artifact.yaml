@@ -13,6 +13,32 @@ subtitle: >-
   over both, the topology trade, and the motor and reduction options.
 
 phases:
+  - id: geometry
+    title: Drawings
+    eyebrow: Stage 1 · dimensioned geometry
+    after: vision
+    images:
+      - docs/design/drawing/top.png
+      - docs/design/drawing/front.png
+      - docs/design/drawing/side.png
+      - docs/design/drawing/hip-stack.png
+    captions:
+      docs/design/drawing/top.png: >-
+        Body, hip stacks, batteries and all six legs at the sprawl neutral
+        stance, from above. Look at: the hip spacing, the foot circle each
+        leg can reach, and the ±30° yaw of the front and rear leg planes.
+      docs/design/drawing/front.png: >-
+        Front view of the sprawl stance with a 6 ft figure. Look at: hip,
+        knee and deck heights, and the coxa / femur / tibia lengths.
+      docs/design/drawing/side.png: >-
+        Side views of both stances of the same robot. Look at: how much
+        taller the mammal stance stands, and the stance lengths.
+      docs/design/drawing/hip-stack.png: >-
+        Section through one hip: three coaxial pancake actuators, the yaw
+        output through the floor and the coxa. This is the volume the motor
+        study has to fill.
+    docs: [docs/design/06-geometry.md]
+
   - id: sizing
     title: Sizing
     eyebrow: Stage 1 · analysis
