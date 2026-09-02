@@ -35,7 +35,7 @@
     "knee": 1.1006662222414512,
     "yaw": 1.1138881176252022
    },
-   "cost": 597.05,
+   "cost": 605.05,
    "closes": true,
    "note": "the round-9 unit"
   },
@@ -56,7 +56,7 @@
     "knee": 1.1006662222414512,
     "yaw": 1.1138881176252022
    },
-   "cost": 396.16,
+   "cost": 400.16,
    "closes": true,
    "note": "the round-9 unit"
   },
@@ -77,7 +77,7 @@
     "knee": 1.6928509328916947,
     "yaw": 13.154872961376903
    },
-   "cost": 597.05,
+   "cost": 605.05,
    "closes": true,
    "note": "the round-9 unit"
   },
@@ -98,7 +98,7 @@
     "knee": 1.6928509328916947,
     "yaw": 13.154872961376903
    },
-   "cost": 396.16,
+   "cost": 400.16,
    "closes": true,
    "note": "the round-9 unit"
   },
@@ -203,7 +203,7 @@
     "knee": 0.8711569616417111,
     "yaw": 0.940396637164536
    },
-   "cost": 497.04999999999995,
+   "cost": 501.04999999999995,
    "closes": false,
    "note": "joint speed 3.6 rad/s against 3.8 needed (0.95); the 8-turn board loses 6x the eddy power at speed"
   },
@@ -224,7 +224,7 @@
     "knee": 0.8711569616417111,
     "yaw": 0.940396637164536
    },
-   "cost": 320.16,
+   "cost": 322.16,
    "closes": false,
    "note": "joint speed 3.6 rad/s against 3.8 needed (0.95); the 8-turn board loses 6x the eddy power at speed"
   },
@@ -245,7 +245,7 @@
     "knee": 1.313969961926713,
     "yaw": 10.891359714111042
    },
-   "cost": 497.04999999999995,
+   "cost": 501.04999999999995,
    "closes": true,
    "note": "joint speed 3.6 rad/s against 3.8 needed (0.95); the 8-turn board loses 6x the eddy power at speed"
   },
@@ -266,7 +266,7 @@
     "knee": 1.313969961926713,
     "yaw": 10.891359714111042
    },
-   "cost": 320.16,
+   "cost": 322.16,
    "closes": true,
    "note": "joint speed 3.6 rad/s against 3.8 needed (0.95); the 8-turn board loses 6x the eddy power at speed"
   },

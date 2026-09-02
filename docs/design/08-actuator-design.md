@@ -200,8 +200,8 @@ Eighteen two-stator actuators are about 95 kg (single-stator:
 that is 43 N·m/kg continuous and 130 N·m/kg peak at the joint. 01-sizing
 now carries the CAD masses, and §9.7 shows what that does to the loop.
 
-Parts cost per unit from the BOM in §9.6: about **$597 at prototype quantities
-including a $45 driver**, $10.7k for eighteen. Machining is
+Parts cost per unit from the BOM in §9.6: about **$605 at prototype quantities
+including a $45 driver**, $10.9k for eighteen. Machining is
 ~$164 of it at one-off prices and falls 2–3× at 50 units.
 
 ## 6. Thermal: the assumption everything rests on
@@ -395,7 +395,7 @@ torque above scales by 0.90; §9.7 carries that case as "A-cost".
 
 | Item | Qty | Spec | Round 7 ($) | 20 units ($) | 100 units ($) | Price verified |
 |---|---|---|---|---|---|---|
-| Stator boards | 2 | 8 layer, 2 oz all layers, ~1.2 mm each, OD 184 / bore 100, HASL, 36 coils (layout v2); two | 300 | 80 | 60 | no |
+| Stator boards | 2 | 8 layer, 2 oz all layers, ~1.2 mm each, OD 184 / bore 100, HASL, 36 coils (layout v2); two | 300 | 88 | 64 | partly |
 | Rotor magnets | 240 | 60 per ring magnetised through the 6 mm, 60 through the 5 mm; H grade for 120 C (round 9:  | 144 | 60 | 48 | no |
 | Output bearing | 1 | crossed roller 50 x 80 x 13; the THK part is C 16.7 kN, C0 20.9 kN (cat. 382-5E) | 196 | 45 | 32 | partly |
 | Eccentric bearing | 2 | drawn-cup needle 25 x 32 x 12, Cr 11.8 kN, C0r 16.3 kN (NTN sheet) | 14 | 8 | 6 | partly |
@@ -425,8 +425,8 @@ torque above scales by 0.90; §9.7 carries that case as "A-cost".
 | Adhesive | 1 |  | 8 | 8 | 6 | no |
 | Connectors | 1 |  | 3 | 3 | 2 | no |
 
-**$597 per unit at 20 units ($1690 before the cost-down), $396 at 100 units;
-$10.7k for eighteen.** Verified prices are marked; the rest are estimates to be
+**$605 per unit at 20 units ($1690 before the cost-down), $400 at 100 units;
+$10.9k for eighteen.** Verified prices are marked; the rest are estimates to be
 replaced by quotes. The capstan sector, rope and tensioner are costed here
 although they live on the joint.
 
@@ -479,6 +479,19 @@ The magnets and the boards are now the two biggest lines and both are
 physics, not machining: fewer magnets means less torque, and a cheaper board
 means less copper. Everything else is a manufacturing-route choice that a
 quote can confirm.
+
+**Calibration against a real quote (round 12).** The reviewer ran JLCPCB's
+instant quote: 192 × 192 mm, 6 layers, 2 oz, $15 at 20 pieces and $11 at
+100. The BOM had carried $20 / $15 per 8-layer board; it now carries $22 /
+$16, scaled by layer count from that quote, and marks the line as partly
+verified. The same quote suggested a cheaper stack — three 6-layer boards
+per position instead of two 8-layer — so it was generated and rated
+(`hw/stator/variants/3x6L-2oz`): 18 layers of 2 oz in 3.2 mm gives
+2.85 N·m against 2.95 for the two-board stack, at the same $45 per
+position, because the 0.7 mm of extra gap costs more field than the extra
+copper adds. Two 8-layer boards stay. Every other machined and laser-cut line
+in the BOM is still an estimate and should get the same treatment: JLCPCB's
+CNC and sheet-metal quote tools take the STEP and DXF files in `build/cad`.
 
 ### 9.11 Round 9: pushing further on the unit itself
 
@@ -576,12 +589,12 @@ each option at the robot mass it implies and with the torque it actually gives.
 
 | Option | Requirement | Unit (kg) | Robot (kg) | Joint gives / knee needs (N·m) | Margin | $ at 20 | $ at 100 |
 |---|---|---|---|---|---|---|---|
-| PCB 2-stator v2, 2 oz boards (as designed) | as written | 5.33 | 124 | 365 / 332 | 1.10 | 597 | 396 |
-| PCB 2-stator v2, 2 oz boards (as designed) | level walking, dyn 1.2 | 5.33 | 124 | 365 / 216 | 1.69 | 597 | 396 |
+| PCB 2-stator v2, 2 oz boards (as designed) | as written | 5.33 | 124 | 365 / 332 | 1.10 | 605 | 400 |
+| PCB 2-stator v2, 2 oz boards (as designed) | level walking, dyn 1.2 | 5.33 | 124 | 365 / 216 | 1.69 | 605 | 400 |
 | PCB 1-stator v2, 3 oz board | as written | 3.89 | 99 | 230 / 263 | 0.87 ✗ | 637 | 422 |
 | PCB 1-stator v2, 3 oz board | level walking, dyn 1.2 | 3.89 | 99 | 230 / 174 | 1.32 | 637 | 422 |
-| PCB 1-stator v2, 2 oz, 8-turn board, 100:1 | as written | 3.62 | 94 | 218 / 250 | 0.87 ✗ | 497 | 320 |
-| PCB 1-stator v2, 2 oz, 8-turn board, 100:1 | level walking, dyn 1.2 | 3.62 | 94 | 218 / 166 | 1.31 | 497 | 320 |
+| PCB 1-stator v2, 2 oz, 8-turn board, 100:1 | as written | 3.62 | 94 | 218 / 250 | 0.87 ✗ | 501 | 322 |
+| PCB 1-stator v2, 2 oz, 8-turn board, 100:1 | level walking, dyn 1.2 | 3.62 | 94 | 218 / 166 | 1.31 | 501 | 322 |
 | 1 x 8318 outrunner, 100:1 | as written | 2.75 | 77 | 229 / 205 | 1.12 | 423 | 284 |
 | 1 x 8318 outrunner, 100:1 | level walking, dyn 1.2 | 2.75 | 77 | 229 / 138 | 1.66 | 423 | 284 |
 | 2 x 8318 outrunner, 80:1 | as written | 3.40 | 89 | 367 / 236 | 1.55 | 503 | 347 |

@@ -1,0 +1,39 @@
+{
+ "coils": 36,
+ "pole_pairs": 15,
+ "layers": 18,
+ "copper_oz": 2.0,
+ "t_board_mm": 3.2,
+ "turns_per_layer": 10,
+ "series_turns_per_coil": 20,
+ "series_turns_per_phase": 40,
+ "parallel_paths_per_phase": 48,
+ "trace_mm": 0.28,
+ "space_mm": 0.15,
+ "r_in_mm": 53.0,
+ "r_out_mm": 84.6,
+ "coil_track_mm_total": 454773.60933870677,
+ "coil_track_mm_per_coil_layer": 701.8111255226956,
+ "interconnect_track_mm": 8926.66776665109,
+ "vias": 108,
+ "board_od_mm": 183.8,
+ "repeats": 3,
+ "gap_mm": 0.6,
+ "ring_w_mm": 0.7,
+ "m_w_mm": 0.7,
+ "jumper_w_mm": 0.3,
+ "r_ring_mm": {
+  "A": 87.1,
+  "B": 88.0,
+  "C": 88.9
+ },
+ "r_m_mm": 86.15,
+ "r_n_mm": 50.9,
+ "r_via_t_mm": 85.3,
+ "marc_mm_per_phase": {
+  "A": 273.99613307518246,
+  "B": 357.51635017392584,
+  "C": 273.99613307518246
+ },
+ "note": "three 6-layer 2 oz JLCPCB boards (1.0 mm each) bonded, 0.1 mm bond lines: 18 layers of 2 oz in 3.2 mm"
+}

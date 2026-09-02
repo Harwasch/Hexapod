@@ -91,6 +91,7 @@ RHO_STEEL, RHO_AL = 7.85e-6, 2.7e-6                          # kg/mm³
 import csv
 AB = json.load(open(os.path.join(ROOT, "hw", "stator", "asbuilt.json")))
 AB16 = json.load(open(os.path.join(ROOT, "hw", "stator", "variants", "16L-2oz", "asbuilt.json")))
+AB3 = json.load(open(os.path.join(ROOT, "hw", "stator", "variants", "3x6L-2oz", "asbuilt.json")))
 AB8 = json.load(open(os.path.join(ROOT, "hw", "stator", "variants", "8t", "asbuilt.json")))
 CL = json.load(open(os.path.join(ROOT, "hw", "stator", "closure.json")))
 RF = json.load(open(os.path.join(ROOT, "hw", "stator", "rotor_field.json")))
@@ -672,6 +673,19 @@ The magnets and the boards are now the two biggest lines and both are
 physics, not machining: fewer magnets means less torque, and a cheaper board
 means less copper. Everything else is a manufacturing-route choice that a
 quote can confirm.
+
+**Calibration against a real quote (round 12).** The reviewer ran JLCPCB's
+instant quote: 192 × 192 mm, 6 layers, 2 oz, $15 at 20 pieces and $11 at
+100. The BOM had carried $20 / $15 per 8-layer board; it now carries $22 /
+$16, scaled by layer count from that quote, and marks the line as partly
+verified. The same quote suggested a cheaper stack — three 6-layer boards
+per position instead of two 8-layer — so it was generated and rated
+(`hw/stator/variants/3x6L-2oz`): 18 layers of 2 oz in 3.2 mm gives
+{AB3['ratings']['1000']['T_cont']:.2f} N·m against {AB16['ratings']['1000']['T_cont']:.2f} for the two-board stack, at the same $45 per
+position, because the 0.7 mm of extra gap costs more field than the extra
+copper adds. Two 8-layer boards stay. Every other machined and laser-cut line
+in the BOM is still an estimate and should get the same treatment: JLCPCB's
+CNC and sheet-metal quote tools take the STEP and DXF files in `build/cad`.
 
 ### 9.11 Round 9: pushing further on the unit itself
 
