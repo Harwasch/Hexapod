@@ -185,7 +185,7 @@ that sideways) and records the worst moment about each joint's axis:
 | DOF | Neutral, walk (N·m) | Sprawl routine (N·m) | Mammal-stance routine (N·m) | Continuous (N·m) | Peak (N·m) | Rider, neutral (N·m) | Swing speed (rad/s) | Motor, ratio | Gives cont / peak (N·m) | Joint rad/s at 5500 rpm |
 |---|---|---|---|---|---|---|---|---|---|---|
 | yaw | 37 | 55 | 23 | **55** | **58** | 46 | 8 | 1 stator, **30:1** | 82 / 248 | 19.2 |
-| femur | 60 | 115 | 135 | **135** | **245** | 117 | 4 | 1 stator, **55:1** | 150 / 454 | 10.5 |
+| femur | 60 | 115 | 135 | **135** | **245** | 117 | 4 | 1 stator, **60:1** | 163 / 495 | 9.6 |
 | knee | 17 | 122 | 143 | **143** | **300** | 21 | 4 | 1 stator, **60:1** | 163 / 495 | 9.6 |
 
 Two things the neutral-stance numbers hid. The **knee** is not the light
@@ -253,8 +253,8 @@ meets both its ratings, capped at 80:1 for a single-stage cycloid, with
 one stator if that leaves enough speed for the joint's swing and two
 stators otherwise. The result is **one stator and rotor design, stacked
 once or twice, with three cycloid discs**: yaw 1 stator at 30:1,
-femur 1 stator at 55:1, knee 1 stator at 60:1. The femur gives
-150 N·m continuous and 454 N·m peak with 10.5 rad/s at the joint. A
+femur 1 stator at 60:1, knee 1 stator at 60:1. The femur gives
+163 N·m continuous and 495 N·m peak with 9.6 rad/s at the joint. A
 two-stator unit is the same PCB twice and one more rotor, so the part count
 stays at one stator, one rotor, one driver and three discs.
 
@@ -267,14 +267,14 @@ stays at one stator, one rotor, one driver and three discs.
   129 A for the 2 s peak, per motor. Half-bridge MOSFETs at that rating
   are commodity; the bus capacitance and the connectors for eighteen of them
   are the real layout problem. A lower Kv trades peak current for top speed.
-* A single-stage cycloid ratio equals its lobe count. 55 lobes on a disc that
-  fits inside a Ø110 mm bore means a lobe pitch of ~5.4 mm and pins of
+* A single-stage cycloid ratio equals its lobe count. 60 lobes on a disc that
+  fits inside a Ø110 mm bore means a lobe pitch of ~4.9 mm and pins of
   ~3 mm: fine for a machined steel disc and hardened pins, marginal for
   printed or aluminium parts at 300 N·m. The output torque reacts through
   those pins at ~47 mm radius, so the net pin load at peak is ~6.4 kN
   over roughly half the pins.
 * High ratio means low transparency: reflected motor inertia through
-  55:1 is 3,025× the rotor's own. Foot-contact detection and torque
+  60:1 is 3,600× the rotor's own. Foot-contact detection and torque
   control cannot come from motor current alone; plan on an output-side
   torque sensor, a series-elastic element, or foot force sensing.
 
@@ -310,7 +310,7 @@ Decided in review, or proposed here:
 2. Sprawled yaw–pitch–pitch legs (agreed): 150 mm coxa, femur 250 mm up and out at 45°, tibia 500 mm vertical (2.0×, shortened from 2.5× for the knee's sake), with ±95° of yaw so the same leg stands in a mammal stance when asked (agreed).
 3. The rider is a stretch goal, not a rating (agreed).
 4. Per-DOF actuators (agreed): yaw 55 / 58, femur 135 / 245, knee 143 / 300 N·m continuous / peak; 8 rad/s at the yaw; Ø170 × 42 mm.
-5. One Ø170 mm PCB axial-flux stator design, 1 stator / 1 stator / 1 stator for yaw / femur / knee, cycloid ratios 30 / 55 / 60:1, 48 V.
+5. One Ø170 mm PCB axial-flux stator design, 1 stator / 1 stator / 1 stator for yaw / femur / knee, cycloid ratios 30 / 60 / 60:1, 48 V.
 6. Two 679 Wh hot-swap packs.
 
 Open, in order of how much they change the actuator:

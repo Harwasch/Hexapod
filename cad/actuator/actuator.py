@@ -155,11 +155,17 @@ def build(joint="femur"):
     parts["stator"] = board
     mass["stator"] = board.volume * FR4 + 68.0                          # copper from asbuilt.json
 
-    # ---- rotor cup ----------------------------------------------------------------
-    rotor = ring(R_DRUM_IN, R_CARRIER_OUT, Z_BOTCAR0, Z_BOTMAG0)          # bottom carrier ring
-    rotor += ring(R_DRUM_IN, R_DRUM_OUT, Z_BOTCAR0, Z_TOPCAR0)            # drum through the stator bore
+    # ---- rotor cup: two parts, because the board has to go on over the drum ------------
+    # top carrier + drum (one machined part, with a lip at the drum's foot) and the bottom
+    # carrier ring, bonded onto the drum foot against the lip after the board is on
+    Z_LIP0 = Z_BOTCAR0 - 1.5
+    assert Z_LIP0 >= T_FLOOR + CLR, (Z_LIP0, "drum lip hits the floor plate")
+    rotor = ring(R_DRUM_IN, R_DRUM_OUT, Z_LIP0, Z_TOPCAR0)                # drum through the stator bore
+    rotor += ring(R_DRUM_IN, R_DRUM_OUT + 1.5, Z_LIP0, Z_BOTCAR0)         # lip the bottom ring bears on
     rotor += ring(SHAFT_R, R_CARRIER_OUT, Z_TOPCAR0, Z_TOPCAR1)           # top carrier with hub bore
-    parts["rotor_cup"] = rotor; mass["rotor_cup"] = rotor.volume * AL
+    parts["rotor_top"] = rotor; mass["rotor_top"] = rotor.volume * AL
+    bring = ring(R_DRUM_OUT, R_CARRIER_OUT, Z_BOTCAR0, Z_BOTMAG0)         # bottom carrier ring
+    parts["rotor_bottom_ring"] = bring; mass["rotor_bottom_ring"] = bring.volume * AL
 
     mags = Part()
     for side, z0 in (("bot", Z_BOTMAG0), ("top", Z_TOPMAG0)):
@@ -215,7 +221,7 @@ def build(joint="femur"):
     return parts, mass, dict(N=N, e=e, r_pin=r_pin, n_pins=n_pins)
 
 
-GROUPS = {"housing": ["base", "upper_ring", "cover"], "rotor": ["rotor_cup", "shaft"], "magnets": ["magnets"],
+GROUPS = {"housing": ["base", "upper_ring", "cover"], "rotor": ["rotor_top", "rotor_bottom_ring", "shaft"], "magnets": ["magnets"],
           "stator": ["stator"], "reducer": ["disc", "ring_pins", "output_flange", "output_pins"], "bearings": ["bearings"]}
 COLORS = {"housing": "#9aa5ad", "rotor": "#d98c3a", "magnets": "#c0392b", "stator": "#0f9b8e", "reducer": "#3a3a3a", "bearings": "#e0e0e0"}
 
@@ -252,8 +258,8 @@ def draw_section(parts, joint, info, out):
     ax.text(0, -5.2, "Ø80 output bearing", ha="center", color="#b03a2e", fontsize=7)
     labels = [(R_MAG_OUT - 15, (Z_BOTMAG0 + Z_BOTMAG1) / 2, f"Halbach ring, 60 × 30×5×{MAG_H:.0f} N48"),
               (R_BOARD - 5, (Z_BOARD0 + Z_BOARD1) / 2, "stator PCB, 12L 3 oz, clamped at the rim"),
-              (R_CARRIER_OUT - 10, (Z_TOPCAR0 + Z_TOPCAR1) / 2, "rotor cup: top carrier"),
-              (R_DRUM_OUT, (Z_BOTCAR0 + Z_TOPCAR0) / 2, "drum through the board bore"),
+              (R_CARRIER_OUT - 10, (Z_TOPCAR0 + Z_TOPCAR1) / 2, "rotor: top carrier + drum, one part"),
+              (R_CARRIER_OUT - 10, (Z_BOTCAR0 + Z_BOTMAG0) / 2, "bottom carrier ring, bonded on the drum foot"),
               (R_PINS, Z_CYL_TOP - 4, f"{info['n_pins']} pins Ø{2*info['r_pin']:.0f} in the fixed cylinder"),
               (R_OUT_PINS, Z_DISC0 + DISC_T / 2, f"disc {info['N']}:1 on HK2512, e = {info['e']:.2f}"),
               (R_OUT_BRG_IN + 7, T_OUT_BRG / 2, "RB5013 crossed roller"),

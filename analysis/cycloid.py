@@ -57,7 +57,7 @@ SAFETY = 1.0            # loads already include the peak case
 JOINTS = {
     # name: (ratio N, joint continuous N·m, joint peak N·m)
     "yaw":   (30, 55.0, 58.0),       # 30:1 for swing speed: 2.5 N·m x 30 x 0.88 = 66 N·m continuous covers 55
-    "femur": (55, 135.0, 245.0),
+    "femur": (60, 135.0, 245.0),      # same disc blank as the knee (round 5)
     "knee":  (60, 143.0, 300.0),
 }
 

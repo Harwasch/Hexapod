@@ -609,14 +609,15 @@ reviews:
   title: 'Actuator, round 5: the parts as designed'
   stage: design
   summary: 'The A3 actuator designed as parts, not models: a 36-coil 12-layer 3 oz stator
-    board laid out with KiCad''s API (DRC clean, gerbers), the Halbach rotor field simulated
-    with off-the-shelf 30x8x5 N48H blocks (0.95 T at the board, 2.3 kN pull between rotors),
-    the unit modelled in build123d (fixed pin cylinder through an open-bottom rotor cup, one
-    10 mm cycloid disc on an HK2512, RB5013 crossed-roller output in the mounting face: 38.7
-    mm tall but Ø186, 3.40 kg), the stator thermal network from that geometry (0.80 K/W copper
-    to housing; the body''s cooling, not the motor, sets the sustained torque), and a bill
-    of materials at about $1.3k per unit at one-off prices. Femur 141 N·m continuous at 55:1
-    against 135 needed; yaw dropped to 30:1.'
+    board laid out with KiCad''s API (DRC clean, gerbers; a 16-layer 2 oz JLCPCB fallback
+    rated alongside), the Halbach rotor field simulated with off-the-shelf 30x8x5 N48H blocks
+    (0.95 T at the board, 2.3 kN pull between rotors), the unit modelled in build123d (fixed
+    pin cylinder through an open-bottom rotor cup, one 10 mm cycloid disc on an HK2512, RB5013
+    crossed-roller output in the mounting face: 38.7 mm tall but Ø186, 3.41 kg), the stator
+    thermal network from that geometry (0.80 K/W copper to housing; the body''s cooling, not
+    the motor, sets the sustained torque), and a bill of materials at about $1.3k per unit
+    at one-off prices. Femur and knee both 60:1 on one disc blank (153 N·m continuous against
+    135 / 143 needed); yaw 30:1.'
   questions:
   - The unit came out Ø186 instead of Ø170 because the board's phase rings and clamp sit outside
     the magnets. Accept Ø186, or spend a round moving the interconnect to the bore side?
@@ -626,33 +627,33 @@ reviews:
     peak (about 100 h L10 at the continuous rating, 2000 h at walking loads). Keep one disc
     at 39 mm, or two discs at 52 mm?
   - The canonical stator needs a 3 oz 12-layer board (PCBWay-class); the 2 oz 16-layer JLCPCB
-    fallback gives 11 % less torque and needs 60:1 / 65:1. Which board do we order first?
+    fallback gives 11 % less torque and needs the knee at 65:1. Which board do we order first?
   - Sustained torque with all joints active is set by the body's ability to shed ~300 W, about
     half the per-joint rating. Is that acceptable for the terrain demo, or do the hip pods
     get forced air?
   artifacts:
   - path: docs/design/01-sizing.md
-    sha256: 7fd1d02fbb9db4a3
+    sha256: efe80a89aa7f7055
   - path: docs/design/08-actuator-design.md
-    sha256: 08e68750050965ad
+    sha256: 1840b522b9bc1135
   - path: docs/design/actuator/cad-femur-cutaway.png
-    sha256: db09480e08431f4a
+    sha256: b5d3c89f4df40e4f
   - path: docs/design/actuator/cad-femur-iso.png
     sha256: bf071de21127512d
   - path: docs/design/actuator/cad-femur-section.png
-    sha256: 68ac74a38069e154
+    sha256: 0e5dce2f5ad73c68
   - path: docs/design/actuator/cad-knee-cutaway.png
-    sha256: e2d0d7fa7a3e4323
+    sha256: 6bde91731bcbefee
   - path: docs/design/actuator/cad-knee-section.png
-    sha256: 1b991c38d3b5bd49
+    sha256: ddb410812920856f
   - path: docs/design/actuator/cad-yaw-cutaway.png
-    sha256: 1830b8f24dbd87e8
+    sha256: 8acfeec68edde9a2
   - path: docs/design/actuator/cad-yaw-section.png
-    sha256: cc1a62a25fe106da
+    sha256: 79f28f1817103ae6
   - path: docs/design/actuator/cycloid-profiles.png
-    sha256: a3a87514e246a2bd
+    sha256: dcf9777aa1434c92
   - path: docs/design/actuator/operating-envelopes.png
-    sha256: ce1e9748a0e60a57
+    sha256: 62533a637ad5f8cc
   - path: docs/design/actuator/rotor-field.png
     sha256: 2f7440ee443f95b7
   - path: docs/design/actuator/section-pcb-1.png
@@ -670,9 +671,9 @@ reviews:
   - path: docs/design/actuator/stator-rotor-layout.png
     sha256: aef21c21971a642e
   - path: docs/design/actuator/thermal-network.png
-    sha256: 8df54b109551bbac
+    sha256: 064be4022aed0a26
   - path: docs/design/bom-actuator.csv
-    sha256: 945db66cf0c5c31f
+    sha256: 255b1fb2cda5b378
   references:
   - analysis/rotor_field.py
   - analysis/stator_asbuilt.py
@@ -715,8 +716,14 @@ reviews:
   - hw/stator/gerbers/stator-job.gbrjob
   - hw/stator/gerbers/stator.drl
   - hw/stator/stator.kicad_pcb
+  - hw/stator/variants/asbuilt.json
+  - hw/stator/variants/drc-16L.json
+  - hw/stator/variants/geometry.json
+  - hw/stator/variants/stator-16L-2oz.kicad_pcb
+  - hw/stator/variants/stator-16L-2oz.kicad_prl
+  - hw/stator/variants/stator-16L-2oz.kicad_pro
   requested: '2026-09-02'
-  requested_commit: 50eef8a
+  requested_commit: 5890f31
   status: requested
   packet: docs/review/actuator.md
   history:
@@ -817,6 +824,47 @@ reviews:
     - docs/design/actuator/rotor-field.png
     - docs/design/actuator/stator-F_Cu.svg
     - docs/design/actuator/stator-In9_Cu.svg
+    - docs/design/actuator/thermal-network.png
+    - docs/design/bom-actuator.csv
+  - 'on': '2026-09-02'
+    action: requested
+    commit: 5890f31
+    questions:
+    - The unit came out Ø186 instead of Ø170 because the board's phase rings and clamp sit
+      outside the magnets. Accept Ø186, or spend a round moving the interconnect to the bore
+      side?
+    - 'A femur/knee unit is 3.4 kg in the CAD against the 1.1 kg the mass budget carried (18
+      units: 60 kg instead of 20). Renegotiate the mass budget, or cut the joint torque requirement?'
+    - One cycloid disc fits the 42 mm height but puts 12.8 kN on the needle bearing at the
+      femur peak (about 100 h L10 at the continuous rating, 2000 h at walking loads). Keep
+      one disc at 39 mm, or two discs at 52 mm?
+    - The canonical stator needs a 3 oz 12-layer board (PCBWay-class); the 2 oz 16-layer JLCPCB
+      fallback gives 11 % less torque and needs the knee at 65:1. Which board do we order
+      first?
+    - Sustained torque with all joints active is set by the body's ability to shed ~300 W,
+      about half the per-joint rating. Is that acceptable for the terrain demo, or do the
+      hip pods get forced air?
+    summary: 'The A3 actuator designed as parts, not models: a 36-coil 12-layer 3 oz stator
+      board laid out with KiCad''s API (DRC clean, gerbers; a 16-layer 2 oz JLCPCB fallback
+      rated alongside), the Halbach rotor field simulated with off-the-shelf 30x8x5 N48H blocks
+      (0.95 T at the board, 2.3 kN pull between rotors), the unit modelled in build123d (fixed
+      pin cylinder through an open-bottom rotor cup, one 10 mm cycloid disc on an HK2512,
+      RB5013 crossed-roller output in the mounting face: 38.7 mm tall but Ø186, 3.41 kg),
+      the stator thermal network from that geometry (0.80 K/W copper to housing; the body''s
+      cooling, not the motor, sets the sustained torque), and a bill of materials at about
+      $1.3k per unit at one-off prices. Femur and knee both 60:1 on one disc blank (153 N·m
+      continuous against 135 / 143 needed); yaw 30:1.'
+    changed:
+    - docs/design/01-sizing.md
+    - docs/design/08-actuator-design.md
+    - docs/design/actuator/cad-femur-cutaway.png
+    - docs/design/actuator/cad-femur-section.png
+    - docs/design/actuator/cad-knee-cutaway.png
+    - docs/design/actuator/cad-knee-section.png
+    - docs/design/actuator/cad-yaw-cutaway.png
+    - docs/design/actuator/cad-yaw-section.png
+    - docs/design/actuator/cycloid-profiles.png
+    - docs/design/actuator/operating-envelopes.png
     - docs/design/actuator/thermal-network.png
     - docs/design/bom-actuator.csv
 artifact_url: https://claude.ai/code/artifact/c27a8924-af18-4d17-bd9b-0fcb41e685e3

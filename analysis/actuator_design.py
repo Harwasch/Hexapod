@@ -35,7 +35,7 @@ os.makedirs(FIG, exist_ok=True)
 ETA = 0.88                                       # cycloid efficiency assumed in the sizing
 JOINTS = {                                       # ratio, joint continuous / peak N·m (01-sizing §6), swing rad/s
     "yaw":   dict(N=30, T_cont=55.0, T_peak=58.0, w_swing=8.6),
-    "femur": dict(N=55, T_cont=135.0, T_peak=245.0, w_swing=3.8),
+    "femur": dict(N=60, T_cont=135.0, T_peak=245.0, w_swing=3.8),
     "knee":  dict(N=60, T_cont=143.0, T_peak=300.0, w_swing=3.8),
 }
 
@@ -270,7 +270,7 @@ def write_doc(figs):
         ("Peak torque (3× current)", f"{b12['ratings']['1000']['T_peak']:.2f} N·m", f"{b16['ratings']['1000']['T_peak']:.2f}"),
         ("Eddy loss at 2500 rpm", f"{b12['ratings']['2500']['P_eddy']:.0f} W", f"{b16['ratings']['2500']['P_eddy']:.0f} W"),
         ("Copper mass", f"{b12['copper_mass_g']:.0f} g", f"{b16['copper_mass_g']:.0f} g"),
-        ("Ratios that close femur / knee", "55 / 60", "60 / 65"),
+        ("Ratios that close femur / knee", "60 / 60 (one disc blank)", "60 / 65"),
     ]
     rf_rows = [(k, f"{v['w_b_mm']:.0f} × {v['h_m_mm']:.0f}", f"{v['B1_midplane']:.2f}", f"{v['B_peak_surface']:.2f}", f"{v['ratio_to_model']:.2f}",
                 f"{v['magnet_mass_g']:.0f}", f"{v['attraction_N']/1e3:.1f}") for k, v in RF.items()]
@@ -317,7 +317,8 @@ stator that drops into the same rotors and housing as the torque upgrade.
   and the two-stator variants do not fit the 42 mm envelope anyway
   (46.8 mm with 4 mm rotor plates; 39.8 mm only with 3 mm plates and 4 mm
   magnets). The sizing model has been updated to the study's values and the
-  per-DOF plan is now one stator at 45 / 55 / 60:1.
+  per-DOF plan is now one stator at 30 / 60 / 60:1 (round 5: the femur moved
+  from 55 to 60 so it shares the knee's disc blank with 1.1× margin).
 * **The actuator mass budget does not close at 1.1 kg.** A femur or knee unit
   is {CADJ['femur']['total_g']/1000:.2f} kg in the CAD (§5, §9.3). The magnets alone are {CADJ['femur']['mass_g']['magnets']:.0f} g. This has
   to go back to the mass budget.
@@ -455,7 +456,7 @@ Three motors share one hip pod. At the full continuous rating each unit
 dissipates ~50 W; eighteen of them are 900 W, which a ~1.2 m² body in still
 air cannot shed (it would run 75 K hot). The sustained thermal budget of the
 robot is nearer 300 W, i.e. 17 W per unit: {TH['variants']['as built']['cases']['sustained: 300 W robot budget / 18']['T_cont']:.2f} N·m per motor,
-{TH['variants']['as built']['cases']['sustained: 300 W robot budget / 18']['T_cont']*55*ETA:.0f} N·m at the femur, all joints at once, indefinitely. The
+{TH['variants']['as built']['cases']['sustained: 300 W robot budget / 18']['T_cont']*JOINTS['femur']['N']*ETA:.0f} N·m at the femur, all joints at once, indefinitely. The
 per-joint continuous rating is a rating for one joint at a time or for
 minutes, not for the whole robot for hours; the gait's average torque is what
 the body has to be able to cool. Design rules that follow: the stator rim
@@ -588,7 +589,7 @@ Verified prices are marked; the rest are estimates to be replaced by quotes.
 1. R_th of the stator in its housing, on the bench, with a heater and then
    with current: the continuous rating is that number.
 2. Kt and R_ph against this model (±10 % is a pass).
-3. Cycloid efficiency and noise at 55:1 with laser-cut discs and plain pins.
+3. Cycloid efficiency and noise at 60:1 with the EDM disc and plain pins.
 4. Demagnetisation margin at the 2 s peak, hot.
 5. Mass, against the roll-up above.
 """

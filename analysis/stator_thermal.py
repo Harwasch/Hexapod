@@ -193,7 +193,7 @@ for i, (name, col) in enumerate((("as built", "#0f9b8e"), ("with thermal rings",
     for xx, v in zip(x + (i - 0.5) * 0.36, vals):
         ax.text(xx, v + 0.03, f"{v:.2f}", ha="center", fontsize=7.5)
 ax.axhline(AB["ratings"]["1000"]["T_cont"], color="#b03a2e", ls="--", lw=0.9, label=f"rating at {mo.R_TH_NOMINAL:.1f} K/W: {AB['ratings']['1000']['T_cont']:.2f} N·m")
-ax.axhline(135 / (55 * 0.88), color="#555", ls=":", lw=0.9, label="femur needs 2.79 N·m at 55:1")
+ax.axhline(135 / (60 * 0.88), color="#555", ls=":", lw=0.9, label="femur needs 2.56 N·m at 60:1")
 ax.set_xticks(x); ax.set_xticklabels([c.replace(" (", "\n(").replace(": ", ":\n") for c in cases], fontsize=7)
 ax.set_ylabel("continuous motor torque at 1000 rpm (N·m), copper at 120 °C")
 ax.legend(fontsize=7.5, loc="upper right"); ax.grid(axis="y", alpha=0.3)

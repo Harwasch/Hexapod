@@ -10,7 +10,8 @@
   "upper_ring": 116.6,
   "cover": 145.4,
   "stator": 133.9,
-  "rotor_cup": 506.7,
+  "rotor_top": 326.8,
+  "rotor_bottom_ring": 185.5,
   "magnets": 810.0,
   "shaft": 119.5,
   "disc": 377.6,
@@ -18,7 +19,7 @@
   "output_pins": 67.6,
   "bearings": 332.9
  },
- "total_g": 3198.2,
+ "total_g": 3203.8,
  "od_mm": 186.0,
  "height_mm": 38.7,
  "bbox": [
