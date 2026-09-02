@@ -23,7 +23,9 @@ motor torque.
 """
 from __future__ import annotations
 
+import json
 import math
+import os
 from dataclasses import dataclass
 
 G = 9.81  # m/s²
@@ -60,12 +62,29 @@ class Body:
         return self.width + act.od + 2 * self.side_rail
 
 
+def _cad_actuator(joint):
+    """The built unit, if cad/actuator has been run (cad/actuator/<joint>.json)."""
+    p = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "cad", "actuator", f"{joint}.json")
+    if os.path.exists(p):
+        with open(p) as f:
+            return json.load(f)
+    return None
+
+
+_CAD_FEMUR, _CAD_YAW = _cad_actuator("femur"), _cad_actuator("yaw")
+
+
 @dataclass(frozen=True)
 class Actuator:
-    """Envelope of one joint actuator (motor + in-plane cycloid), a pancake."""
-    od: float = 170.0        # outer diameter
-    thickness: float = 42.0  # axial length incl. bearings
-    mass: float = 1.1        # kg, target
+    """Envelope of one joint actuator (motor + in-plane cycloid), a pancake.
+
+    Round 6: the numbers come from the CAD (cad/actuator) when it exists —
+    Ø186 × 50 mm, 3.9 kg femur/knee, 3.7 kg yaw — instead of the round-1
+    targets (Ø170 × 42, 1.1 kg) the review agreed to renegotiate."""
+    od: float = _CAD_FEMUR["od_mm"] if _CAD_FEMUR else 170.0
+    thickness: float = round(_CAD_FEMUR["height_mm"]) if _CAD_FEMUR else 42.0
+    mass: float = round(_CAD_FEMUR["total_g"] / 1000, 2) if _CAD_FEMUR else 1.1        # kg, femur / knee unit
+    mass_yaw: float = round(_CAD_YAW["total_g"] / 1000, 2) if _CAD_YAW else 1.1        # kg, yaw unit
     stack_gap: float = 8.0   # air/structure between stacked pancakes
 
 
@@ -131,7 +150,7 @@ STANCES = (STANCE,)
 # ----------------------------------------------------------------------------
 @dataclass(frozen=True)
 class MassBudget:
-    actuators: float = 18 * 1.1
+    actuators: float = 12 * Actuator.mass + 6 * Actuator.mass_yaw     # from the CAD (round 6); was 18 × 1.1
     body_structure: float = 6.0
     legs: float = 6 * 1.2            # coxa/femur/tibia links + foot + transmission share
     batteries: float = 2 * 4.0       # two hot-swap packs, ~680 Wh each (see Energy)

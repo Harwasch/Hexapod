@@ -50,3 +50,18 @@
   `analysis/actuator_section.py` had assumed 8 mm discs with no bearing widths. The
   section tool should take bearing catalogue widths as inputs, not a single "reducer
   axial" number.
+
+## 2026-09-02 — round 6: the mass loop
+
+* "Renegotiate the mass budget" is not a number, it is a fixed-point problem: joint torque
+  scales with robot mass and the robot carries eighteen of the actuators being sized. The
+  sizing skill (`skills/hw-sizing` / `analysis/sizing.py` pattern) should compute the fixed
+  point whenever an actuator mass changes, rather than reporting margins at a stale mass.
+  `analysis/closure.py` does it here; it took the CAD masses to notice the loop diverges.
+* `analysis/actuator_section.py` had no place for bearing widths or for a second disc, so
+  the 42 mm envelope was carried for three rounds before the CAD showed it was 50–62 mm.
+  The section tool should take catalogue bearing widths and the disc count as inputs.
+* The review's four answers arrived as one `AskUserQuestion`; one of them ("two discs")
+  was a change request and the other three were approvals. `review-gate sign` records one
+  decision per milestone, so the record says "changes requested" and the approvals live in
+  the note. A per-question decision in `reviews.yaml` would keep the record honest.

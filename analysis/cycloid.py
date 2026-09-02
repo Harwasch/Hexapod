@@ -40,8 +40,8 @@ os.makedirs(FIG, exist_ok=True)
 BORE_R = 50.0           # mm, inside the magnet ring (r < 50 mm available)
 RING_WALL = 4.0         # mm, housing wall carrying the ring pins
 R_PIN_CIRCLE = BORE_R - RING_WALL - 2.5   # mm, ring-pin circle radius ~43.5
-DISC_T = 10.0           # mm, one disc (a second disc costs 12 mm of height the 42 mm envelope does not have; see cad/actuator)
-N_DISCS = 1
+DISC_T = 8.0            # mm, each disc; two discs 180 deg apart (review decision round 5: 52 mm height accepted for bearing life)
+N_DISCS = 2
 E_STEEL = 207e3         # MPa
 NU = 0.3
 E_PRIME = E_STEEL / (1 - NU**2) / 2
@@ -49,17 +49,21 @@ SIGMA_H_ALLOW = 1400.0  # MPa, hardened steel rollers/dowels on hardened disc, g
 R_OUT = 26.0            # mm, output-pin circle radius (holes clear the HK2512 needle cup, r 16)
 N_OUT = 8               # output pins
 OUT_PIN_D = 10.0        # mm, Ø10 dowels
-DOWEL_D = (3.0, 4.0, 5.0, 6.0)   # standard dowel diameters for the ring pins
+DOWEL_D = (2.0, 2.5, 3.0, 4.0, 5.0, 6.0)   # standard dowel diameters for the ring pins
 SAFETY = 1.0            # loads already include the peak case
 
 
 # ---- per-joint requirement (joint torque / ratio; from 01-sizing.md §6) -----
-JOINTS = {
-    # name: (ratio N, joint continuous N·m, joint peak N·m)
-    "yaw":   (30, 55.0, 58.0),       # 30:1 for swing speed: 2.5 N·m x 30 x 0.88 = 66 N·m continuous covers 55
-    "femur": (60, 135.0, 245.0),      # same disc blank as the knee (round 5)
-    "knee":  (60, 143.0, 300.0),
-}
+RATIOS = {"yaw": 45, "femur": 70, "knee": 70}      # round 6: femur/knee 70:1 (4.1 rad/s at 2740 rpm no-load), yaw 45:1 on the 8-turn board for 7.9 rad/s
+try:                                                 # joint requirements from the sizing (01), not hand-copied
+    import sizing as _sz
+    _REQ = {d: (float(_sz.DOF_CONT[d]), float(_sz.DOF_PEAK[d])) for d in RATIOS}
+    SWING = {d: float(v) for d, v in _sz.DOF_SWING.items()}
+except Exception as _e:                              # sizing needs the whole model; keep the last known numbers
+    _REQ = {"yaw": (55.0, 58.0), "femur": (135.0, 245.0), "knee": (143.0, 300.0)}
+    SWING = {"yaw": 8.6, "femur": 3.8, "knee": 3.8}
+JOINTS = {name: (RATIOS[name], round(_REQ[name][0], 1), round(_REQ[name][1], 1)) for name in RATIOS}
+# name: (ratio N, joint continuous N·m, joint peak N·m)
 
 
 def design(N: int, T_cont: float, T_peak: float, R=R_PIN_CIRCLE):

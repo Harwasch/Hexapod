@@ -36,7 +36,7 @@ import cycloid as cy  # noqa: E402
 GEO = json.load(open(os.path.join(ROOT, "hw", "stator", "geometry.json")))
 RF = json.load(open(os.path.join(ROOT, "hw", "stator", "rotor_field.json")))
 JOINT = sys.argv[1] if len(sys.argv) > 1 else "femur"
-JOINT_MAGNET = {"femur": "rect 30x5x8 N48", "knee": "rect 30x5x8 N48", "yaw": "rect 30x5x6 N48"}   # the yaw needs less torque and more speed
+JOINT_MAGNET = {"femur": "rect 30x5x8 N48", "knee": "rect 30x5x8 N48", "yaw": "rect 30x5x8 N48"}   # round 6: the heavier robot needs the 8 mm blocks on the yaw too
 MAGNET = JOINT_MAGNET[JOINT]
 MAG_L, MAG_W, MAG_H = 30.0, RF[MAGNET]["w_b_mm"], RF[MAGNET]["h_m_mm"]
 P = GEO["pole_pairs"]
@@ -67,22 +67,38 @@ T_FLOOR = 3.0
 CLR = 0.5                                       # rotor to fixed parts, magnet face to board
 T_CARRIER = 4.5                                 # see carrier_deflection(): 0.06 mm under the rotor attraction
 T_BOARD = 2.2                                   # 12-layer 3 oz finished thickness
-DISC_T = cy.DISC_T                              # 10
+DISC_T, N_DISCS = cy.DISC_T, cy.N_DISCS         # 8 mm, two discs 180 deg apart
 Z_BRG0 = 0.0
 Z_FLANGE0 = T_OUT_BRG                           # 13
 T_FLANGE = 4.0
 Z_DISC0 = Z_FLANGE0 + T_FLANGE + 0.2            # 17.2
-Z_CUP0 = Z_DISC0 - (ECC_BRG_W - DISC_T) / 2     # needle cup protrudes 1 mm each side
-Z_CYL_TOP = Z_CUP0 + ECC_BRG_W                  # cylinder stops level with the cup top
-Z_TOPCAR0 = Z_CYL_TOP + CLR                     # top carrier (and hub) above the cup
-Z_TOPMAG0 = Z_TOPCAR0 - MAG_H
-Z_BOARD1 = Z_TOPMAG0 - CLR
-Z_BOARD0 = Z_BOARD1 - T_BOARD
-Z_BOTMAG1 = Z_BOARD0 - CLR
-Z_BOTMAG0 = Z_BOTMAG1 - MAG_H
-Z_BOTCAR0 = Z_BOTMAG0 - T_CARRIER
-assert Z_BOTCAR0 >= T_FLOOR + CLR, (Z_BOTCAR0, "bottom carrier hits the floor plate")
+CUP_OVER = (ECC_BRG_W - DISC_T) / 2             # needle cup protrudes this much each side of its disc
+DISC_PITCH = DISC_T + 2 * CUP_OVER              # cups of neighbouring discs touch: 12 mm per disc
+Z_DISCS = [Z_DISC0 + k * DISC_PITCH for k in range(N_DISCS)]
+Z_CUP0 = Z_DISC0 - CUP_OVER
+Z_CYL_TOP = Z_DISCS[-1] + DISC_T + CUP_OVER     # cylinder stops level with the last cup top
+N_STATORS = 2 if "--stators=2" in sys.argv or "2s" in sys.argv else 1
+TAG = JOINT + ("-2s" if N_STATORS == 2 else "")
+# the motor band hangs from the top carrier, which must clear the upper disc's cup;
+# with two stators the band is taller than the reducer and lifts the top carrier instead
+H_BAND = N_STATORS * (T_BOARD + 2 * CLR + 2 * MAG_H) + (N_STATORS + 1) * T_CARRIER
+Z_TOPCAR0 = max(Z_CYL_TOP + CLR, T_FLOOR + CLR + 1.5 + H_BAND - T_CARRIER)   # 1.5: the drum lip under the bottom ring
 Z_TOPCAR1 = Z_TOPCAR0 + T_CARRIER
+MAGS, BOARDS, CARRIERS = [], [], []               # (z0, z1) bottom -> top, built top-down
+z = Z_TOPCAR0
+for _k in range(N_STATORS):
+    MAGS.insert(0, (z - MAG_H, z)); z -= MAG_H
+    BOARDS.insert(0, (z - CLR - T_BOARD, z - CLR)); z -= CLR + T_BOARD + CLR
+    MAGS.insert(0, (z - MAG_H, z)); z -= MAG_H
+    if _k < N_STATORS - 1:
+        CARRIERS.insert(0, (z - T_CARRIER, z)); z -= T_CARRIER      # middle rotor ring, magnets both faces
+CARRIERS.insert(0, (z - T_CARRIER, z))                               # bottom carrier ring
+CARRIERS.append((Z_TOPCAR0, Z_TOPCAR1))                              # top carrier with the hub
+Z_BOTCAR0, Z_BOTMAG0 = CARRIERS[0]
+Z_BOTMAG1 = MAGS[0][1]
+Z_BOARD0, Z_BOARD1 = BOARDS[0]
+Z_TOPMAG0 = MAGS[-1][0]
+assert Z_BOTCAR0 >= T_FLOOR + CLR - 1e-9, (Z_BOTCAR0, "bottom carrier hits the floor plate")
 Z_COVER0 = Z_TOPCAR1 + CLR
 T_COVER = 2.0
 Z_BOSS1 = Z_COVER0 + TOP_BRG_W                  # the top bearing sits in a boss on the cover
@@ -122,7 +138,7 @@ def build(joint="femur"):
 
     # ---- base: floor + outer wall + pin cylinder --------------------------------
     base = ring(R_OUT_BRG_OUT, R_OD, 0, T_FLOOR)
-    base += ring(R_WALL_IN, R_OD, T_FLOOR, Z_BOARD0)
+    base += ring(R_WALL_IN, R_OD, T_FLOOR, BOARDS[0][0])
     base += ring(R_OUT_BRG_OUT, R_CYL_OUT, 0, T_OUT_BRG)                 # bearing seat
     base += ring(R_PINS - r_pin, R_CYL_OUT, T_OUT_BRG, Z_CYL_TOP)       # pin cylinder
     for k in range(n_pins):
@@ -140,60 +156,72 @@ def build(joint="femur"):
     parts["ring_pins"] = pins; mass["ring_pins"] = pins.volume * STEEL
 
     # ---- upper wall ring and cover ---------------------------------------------
-    upper = ring(R_WALL_IN, R_OD, Z_BOARD1, Z_COVER0)
+    upper = ring(R_WALL_IN, R_OD, BOARDS[-1][1], Z_COVER0)
+    for (a0, a1), (b0, b1) in zip(BOARDS[:-1], BOARDS[1:]):
+        upper += ring(R_WALL_IN, R_OD, a1, b0)                          # clamp ring between two boards
     cover = cyl(R_OD, Z_COVER0, Z_COVER0 + T_COVER) - cyl(TOP_BRG_OUT, Z_COVER0 - 1, Z_BOSS1 + 1)
     cover += ring(TOP_BRG_OUT, TOP_BRG_OUT + 3.0, Z_COVER0 + T_COVER, Z_BOSS1)
     for k in range(N_BOLTS):
         a = 2 * math.pi * (k + 0.5) / N_BOLTS
-        h = cyl(BOLT_D / 2, Z_BOARD1 - 1, Z_BOSS1 + 1, R_BOLTS * math.cos(a), R_BOLTS * math.sin(a))
+        h = cyl(BOLT_D / 2, BOARDS[0][1] - 1, Z_BOSS1 + 1, R_BOLTS * math.cos(a), R_BOLTS * math.sin(a))
         upper -= h; cover -= h
     parts["upper_ring"] = upper; mass["upper_ring"] = upper.volume * AL
     parts["cover"] = cover; mass["cover"] = cover.volume * AL
 
     # ---- stator board -------------------------------------------------------------
-    board = ring(R_BORE, R_BOARD, Z_BOARD0, Z_BOARD1)
+    board = Part()
+    for b0, b1 in BOARDS:
+        board += ring(R_BORE, R_BOARD, b0, b1)
     parts["stator"] = board
-    mass["stator"] = board.volume * FR4 + 68.0                          # copper from asbuilt.json
+    mass["stator"] = board.volume * FR4 + 68.0 * N_STATORS              # copper from asbuilt.json
 
     # ---- rotor cup: two parts, because the board has to go on over the drum ------------
     # top carrier + drum (one machined part, with a lip at the drum's foot) and the bottom
     # carrier ring, bonded onto the drum foot against the lip after the board is on
     Z_LIP0 = Z_BOTCAR0 - 1.5
-    assert Z_LIP0 >= T_FLOOR + CLR, (Z_LIP0, "drum lip hits the floor plate")
+    assert Z_LIP0 >= T_FLOOR + CLR - 1e-6, (Z_LIP0, "drum lip hits the floor plate")
     rotor = ring(R_DRUM_IN, R_DRUM_OUT, Z_LIP0, Z_TOPCAR0)                # drum through the stator bore
     rotor += ring(R_DRUM_IN, R_DRUM_OUT + 1.5, Z_LIP0, Z_BOTCAR0)         # lip the bottom ring bears on
     rotor += ring(SHAFT_R, R_CARRIER_OUT, Z_TOPCAR0, Z_TOPCAR1)           # top carrier with hub bore
     parts["rotor_top"] = rotor; mass["rotor_top"] = rotor.volume * AL
-    bring = ring(R_DRUM_OUT, R_CARRIER_OUT, Z_BOTCAR0, Z_BOTMAG0)         # bottom carrier ring
+    bring = Part()
+    for c0, c1 in CARRIERS[:-1]:                                         # bottom ring and any middle rings
+        bring += ring(R_DRUM_OUT, R_CARRIER_OUT, c0, c1)
     parts["rotor_bottom_ring"] = bring; mass["rotor_bottom_ring"] = bring.volume * AL
 
     mags = Part()
-    for side, z0 in (("bot", Z_BOTMAG0), ("top", Z_TOPMAG0)):
+    for z0, _z1 in MAGS:
         for k in range(N_MAG):
             a = 360.0 * k / N_MAG
             blk = Pos((R_MAG_IN + R_MAG_OUT) / 2, 0, z0) * Box(MAG_L, MAG_W, MAG_H, align=(Align.CENTER, Align.CENTER, Align.MIN))
             mags += Rot(0, 0, a) * blk
     parts["magnets"] = mags; mass["magnets"] = mags.volume * NDFEB
+    assert abs(mags.volume * NDFEB - RF[MAGNET]["magnet_mass_g"] * N_STATORS) < 5, "magnet count vs rotor_field.json"
 
-    # ---- shaft: lower journal, eccentric journal, hub section, top stub ---------
+    # ---- shaft: lower journal, one eccentric journal per disc (180 deg apart), hub, stub ---
     shaft = cyl(SHAFT_R, Z_FLANGE0 - SHAFT_BRG_W, Z_CUP0)
-    shaft += cyl(SHAFT_R, Z_CUP0, Z_CYL_TOP, e, 0)                       # eccentric journal, offset e
+    ecc = [(e * math.cos(math.pi * k), e * math.sin(math.pi * k)) for k in range(N_DISCS)]
+    for k, zd in enumerate(Z_DISCS):
+        shaft += cyl(SHAFT_R, zd - CUP_OVER, zd + DISC_T + CUP_OVER, *ecc[k])
     shaft += cyl(SHAFT_R, Z_CYL_TOP, Z_TOPCAR1)
     shaft -= Pos(SHAFT_R - 2.0, -20, Z_TOPCAR0) * Box(10, 40, T_CARRIER, align=(Align.MIN, Align.MIN, Align.MIN))  # D-flat
     shaft += cyl(TOP_BRG_IN, Z_TOPCAR1, Z_BOSS1)
     parts["shaft"] = shaft; mass["shaft"] = shaft.volume * STEEL
 
-    # ---- cycloid disc on the eccentric ---------------------------------------
+    # ---- cycloid discs on the eccentrics, 180 deg apart ----------------------------
     x, y = cy.profile(N, cy.R_PIN_CIRCLE, r_pin, e, n=720)
-    pts = [(float(px) + e, float(py)) for px, py in zip(x[:-1], y[:-1])]  # disc centre at (e, 0)
-    disc = extrude(Polygon(*pts, align=None), amount=DISC_T)
-    disc = Pos(0, 0, Z_DISC0) * disc
-    disc -= cyl(ECC_BRG_OUT, Z_DISC0 - 1, Z_DISC0 + DISC_T + 1, e, 0)
-    for k in range(N_OUT):
-        a = 2 * math.pi * k / N_OUT
-        disc -= cyl(OUT_PIN_D / 2 + e, Z_DISC0 - 1, Z_DISC0 + DISC_T + 1, R_OUT_PINS * math.cos(a) + e, R_OUT_PINS * math.sin(a))
-        b = a + math.pi / N_OUT
-        disc -= cyl(LIGHT_D / 2, Z_DISC0 - 1, Z_DISC0 + DISC_T + 1, R_LIGHT * math.cos(b) + e, R_LIGHT * math.sin(b))
+    disc = Part()
+    for k, zd in enumerate(Z_DISCS):
+        ex, ey = ecc[k]
+        pts = [(float(px) + ex, float(py) + ey) for px, py in zip(x[:-1], y[:-1])]   # disc centre on its journal
+        d = Pos(0, 0, zd) * extrude(Polygon(*pts, align=None), amount=DISC_T)
+        d -= cyl(ECC_BRG_OUT, zd - 1, zd + DISC_T + 1, ex, ey)
+        for i in range(N_OUT):
+            a = 2 * math.pi * i / N_OUT
+            d -= cyl(OUT_PIN_D / 2 + e, zd - 1, zd + DISC_T + 1, R_OUT_PINS * math.cos(a) + ex, R_OUT_PINS * math.sin(a) + ey)
+            b = a + math.pi / N_OUT
+            d -= cyl(LIGHT_D / 2, zd - 1, zd + DISC_T + 1, R_LIGHT * math.cos(b) + ex, R_LIGHT * math.sin(b) + ey)
+        disc += d
     parts["disc"] = disc; mass["disc"] = disc.volume * STEEL
 
     # ---- output flange + pins ----------------------------------------------------
@@ -206,7 +234,7 @@ def build(joint="femur"):
     opins = Part()
     for k in range(N_OUT):
         a = 2 * math.pi * k / N_OUT
-        opins += cyl(OUT_PIN_D / 2, Z_FLANGE0 + 1.0, Z_DISC0 + DISC_T + 0.5, R_OUT_PINS * math.cos(a), R_OUT_PINS * math.sin(a))
+        opins += cyl(OUT_PIN_D / 2, Z_FLANGE0 + 1.0, Z_DISCS[-1] + DISC_T + 0.5, R_OUT_PINS * math.cos(a), R_OUT_PINS * math.sin(a))
         flange -= cyl(OUT_PIN_D / 2, Z_FLANGE0 + 0.5, Z_FLANGE0 + T_FLANGE + 1, R_OUT_PINS * math.cos(a), R_OUT_PINS * math.sin(a))
     parts["output_flange"] = flange; mass["output_flange"] = flange.volume * AL
     parts["output_pins"] = opins; mass["output_pins"] = opins.volume * STEEL
@@ -214,7 +242,8 @@ def build(joint="femur"):
     # ---- bearings (as steel rings) ------------------------------------------
     brgs = ring(R_OUT_BRG_IN, R_OUT_BRG_OUT, 0, T_OUT_BRG)
     brgs += ring(SHAFT_R, SHAFT_BRG_OUT, Z_FLANGE0 - SHAFT_BRG_W, Z_FLANGE0)
-    brgs += ring(SHAFT_R, ECC_BRG_OUT, Z_CUP0, Z_CYL_TOP) .moved(Location((e, 0, 0)))
+    for k, zd in enumerate(Z_DISCS):
+        brgs += ring(SHAFT_R, ECC_BRG_OUT, zd - CUP_OVER, zd + DISC_T + CUP_OVER).moved(Location((ecc[k][0], ecc[k][1], 0)))
     brgs += ring(TOP_BRG_IN, TOP_BRG_OUT, Z_COVER0, Z_BOSS1)
     parts["bearings"] = brgs; mass["bearings"] = brgs.volume * STEEL * 0.8
 
@@ -256,12 +285,12 @@ def draw_section(parts, joint, info, out):
     ax.text(R_OD + 7, H_TOTAL / 2, f"{H_TOTAL:.1f} mm\n(target 42)", color="#b03a2e", fontsize=8, va="center")
     ax.annotate("", (-R_OUT_BRG_OUT, -3), (R_OUT_BRG_OUT, -3), arrowprops=dict(arrowstyle="<->", color="#b03a2e", lw=0.8))
     ax.text(0, -5.2, "Ø80 output bearing", ha="center", color="#b03a2e", fontsize=7)
-    labels = [(R_MAG_OUT - 15, (Z_BOTMAG0 + Z_BOTMAG1) / 2, f"Halbach ring, 60 × 30×5×{MAG_H:.0f} N48"),
+    labels = [(R_MAG_OUT - 15, (Z_BOTMAG0 + Z_BOTMAG1) / 2, f"Halbach rings ({len(MAGS)}), 60 × 30×5×{MAG_H:.0f} N48 each"),
               (R_BOARD - 5, (Z_BOARD0 + Z_BOARD1) / 2, "stator PCB, 12L 3 oz, clamped at the rim"),
               (R_CARRIER_OUT - 10, (Z_TOPCAR0 + Z_TOPCAR1) / 2, "rotor: top carrier + drum, one part"),
               (R_CARRIER_OUT - 10, (Z_BOTCAR0 + Z_BOTMAG0) / 2, "bottom carrier ring, bonded on the drum foot"),
               (R_PINS, Z_CYL_TOP - 4, f"{info['n_pins']} pins Ø{2*info['r_pin']:.0f} in the fixed cylinder"),
-              (R_OUT_PINS, Z_DISC0 + DISC_T / 2, f"disc {info['N']}:1 on HK2512, e = {info['e']:.2f}"),
+              (R_OUT_PINS, Z_DISCS[-1] + DISC_T / 2, f"{N_DISCS} discs {info['N']}:1 on HK2512, e = {info['e']:.2f}, 180° apart"),
               (R_OUT_BRG_IN + 7, T_OUT_BRG / 2, "RB5013 crossed roller"),
               (0, Z_BOSS1 - 2, "6802"), (0, Z_FLANGE0 - 4, "6905"),
               (R_BOLTS, Z_COVER0 + 1.5, "12 × M4"),
@@ -271,7 +300,7 @@ def draw_section(parts, joint, info, out):
                     va="center", arrowprops=dict(arrowstyle="-", color="#777", lw=0.5))
     ax.set_aspect("equal"); ax.set_xlim(-R_OD - 75, R_OD + 95); ax.set_ylim(-12, H_TOTAL + 6)
     ax.set_xlabel("mm"); ax.set_ylabel("mm (mounting face at 0)")
-    ax.set_title(f"{joint} actuator, section through the axis (from the build123d model)", fontsize=10)
+    ax.set_title(f"{joint} actuator{', two stators' if N_STATORS == 2 else ''}, section through the axis (from the build123d model)", fontsize=10)
     ax.grid(alpha=0.2)
     fig.tight_layout(); fig.savefig(out, dpi=110); plt.close(fig)
 
@@ -354,16 +383,16 @@ if __name__ == "__main__":
         export_stl(Compound(children=[parts[n] for n in names]), os.path.join(out_dir, f"{g}.stl"), tolerance=0.5, angular_tolerance=0.3)
     total = sum(mass.values())
     bb = comp.bounding_box()
-    rec = dict(joint=joint, **info, mass_g={k: round(v, 1) for k, v in mass.items()}, total_g=round(total, 1),
+    rec = dict(joint=joint, stators=N_STATORS, **info, mass_g={k: round(v, 1) for k, v in mass.items()}, total_g=round(total, 1),
                od_mm=2 * R_OD, height_mm=H_TOTAL, bbox=[round(bb.size.X, 1), round(bb.size.Y, 1), round(bb.size.Z, 1)],
                z=dict(board=[Z_BOARD0, Z_BOARD1], bot_mag=[Z_BOTMAG0, Z_BOTMAG1], top_mag=[Z_TOPMAG0, Z_TOPCAR0],
-                      carriers=[[Z_BOTCAR0, Z_BOTMAG0], [Z_TOPCAR0, Z_TOPCAR1]], disc=[Z_DISC0, Z_DISC0 + DISC_T], cylinder_top=Z_CYL_TOP, cover=[Z_COVER0, Z_BOSS1]),
+                      carriers=[list(c) for c in CARRIERS], boards=[list(b) for b in BOARDS], mags=[list(m) for m in MAGS], discs=[[zd, zd + DISC_T] for zd in Z_DISCS], cylinder_top=Z_CYL_TOP, cover=[Z_COVER0, Z_BOSS1]),
                magnet=MAGNET, gap_magnet_to_magnet_mm=T_BOARD + 2 * CLR, rotor_attraction_N=round(F_ATTRACT),
                carrier_t_mm=T_CARRIER, carrier_deflection_mm=round(carrier_deflection(), 3))
-    json.dump(rec, open(os.path.join(ROOT, "cad", "actuator", f"{joint}.json"), "w"), indent=1)
+    json.dump(rec, open(os.path.join(ROOT, "cad", "actuator", f"{TAG}.json"), "w"), indent=1)
     print(json.dumps(rec, indent=1))
-    draw_section(parts, joint, info, os.path.join(fig_dir, f"cad-{joint}-section.png"))
-    draw_cutaway(parts, joint, os.path.join(fig_dir, f"cad-{joint}-cutaway.png"))
-    if joint == "femur":
+    draw_section(parts, TAG, info, os.path.join(fig_dir, f"cad-{TAG}-section.png"))
+    draw_cutaway(parts, TAG, os.path.join(fig_dir, f"cad-{TAG}-cutaway.png"))
+    if TAG == "femur":
         draw_iso(parts, joint, os.path.join(fig_dir, f"cad-{joint}-iso.png"))
     print("height", H_TOTAL, "mass", round(total), "g")
