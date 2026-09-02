@@ -56,6 +56,25 @@ phases:
         the reach. Look at: the 625 mm tibia's fold limit.
     docs: [docs/design/02-leg-topology.md, docs/design/03-architecture-levers.md, docs/design/04-motor-reduction-options.md]
 
+  - id: bio
+    title: Bio-inspiration
+    eyebrow: Stage 1 · study of nature
+    after: topology
+    images:
+      - docs/design/bio/insect-leg.png
+      - docs/design/bio/grf-direction.png
+    captions:
+      docs/design/bio/insect-leg.png: >-
+        An insect leg and ours drawn to the same scheme. The insect's three
+        joints map onto our yaw, femur and knee almost one to one; what we
+        lack is the tarsus. Look at: the slanted first axis, and the power
+        joint being the second one in both.
+      docs/design/bio/grf-direction.png: >-
+        The cockroach's trick computed on our leg: pushing the foot inward as
+        well as down points the ground reaction force at the femur axis and
+        takes the femur torque to zero. Look at: the friction it needs.
+    docs: [docs/design/05-bio-inspiration.md]
+
 #   - id: cad
 #     title: CAD
 #     eyebrow: Stage 5 · mechanical

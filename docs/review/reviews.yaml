@@ -457,4 +457,80 @@ reviews:
     changed:
     - docs/design/topology/torques.png
   decided_commit: cb9b0b1
+- id: bio
+  title: 'Bio-inspiration: what real hexapods do and what transfers'
+  stage: bio
+  summary: 'A study of the insect leg (coxa, trochanter, femur, tibia, tarsus; the slanted
+    thorax-coxa axis, the coxa-trochanter power joint, the femur-tibia posture joint), the
+    cockroach''s ground reaction forces (every leg carries half the body weight, lateral and
+    fore-aft forces 35-52 % of vertical, aimed at the coxa to minimise joint moments), tripod
+    static stability, passive tarsus and spines, strain sensing in the cuticle, the Biewener
+    size-posture scaling, and the crevice posture. Each mapped to our design: what we already
+    have, what to add (compliant clawed foot, tibia elasticity, strain gauges, a flat posture),
+    what not to copy (the slanted first axis), and one reframing: the mammal stance is nature''s
+    posture at our size, so it may be the cruise mode and the sprawl the terrain mode.'
+  questions:
+  - 'Which of the additions go into requirements now: passive compliant foot with claws or
+    spines, elastic element in the tibia, strain gauges on the tibia and coxa, a flat splayed
+    posture?'
+  - Do you accept the reframing that the mammal stance is the economical cruise posture and
+    the sprawl the terrain posture, or should the sprawl stay the default?
+  artifacts:
+  - path: docs/design/05-bio-inspiration.md
+    sha256: 4eb15622bb848b68
+  - path: docs/design/bio/grf-direction.png
+    sha256: a04c73428532d7c9
+  - path: docs/design/bio/insect-leg.png
+    sha256: dc5a2024c59d1ec1
+  references:
+  - analysis/bio_figure.py
+  requested: '2026-09-02'
+  requested_commit: 56ba701
+  status: requested
+  packet: docs/review/bio.md
+  history:
+  - 'on': '2026-09-02'
+    action: requested
+    commit: 56ba701
+    questions:
+    - 'Which of the additions go into requirements now: passive compliant foot with claws
+      or spines, elastic element in the tibia, strain gauges on the tibia and coxa, a flat
+      splayed posture?'
+    - Do you accept the reframing that the mammal stance is the economical cruise posture
+      and the sprawl the terrain posture, or should the sprawl stay the default?
+    summary: 'A study of the insect leg (coxa, trochanter, femur, tibia, tarsus; the slanted
+      thorax-coxa axis, the coxa-trochanter power joint, the femur-tibia posture joint), the
+      cockroach''s ground reaction forces (every leg carries half the body weight, lateral
+      and fore-aft forces 35-52 % of vertical, aimed at the coxa to minimise joint moments),
+      tripod static stability, passive tarsus and spines, strain sensing in the cuticle, the
+      Biewener size-posture scaling, and the crevice posture. Each mapped to our design: what
+      we already have, what to add (compliant clawed foot, tibia elasticity, strain gauges,
+      a flat posture), what not to copy (the slanted first axis), and one reframing: the mammal
+      stance is nature''s posture at our size, so it may be the cruise mode and the sprawl
+      the terrain mode.'
+    added:
+    - docs/design/05-bio-inspiration.md
+    - docs/design/bio/grf-direction.png
+    - docs/design/bio/insect-leg.png
+  - 'on': '2026-09-02'
+    action: requested
+    commit: 56ba701
+    questions:
+    - 'Which of the additions go into requirements now: passive compliant foot with claws
+      or spines, elastic element in the tibia, strain gauges on the tibia and coxa, a flat
+      splayed posture?'
+    - Do you accept the reframing that the mammal stance is the economical cruise posture
+      and the sprawl the terrain posture, or should the sprawl stay the default?
+    summary: 'A study of the insect leg (coxa, trochanter, femur, tibia, tarsus; the slanted
+      thorax-coxa axis, the coxa-trochanter power joint, the femur-tibia posture joint), the
+      cockroach''s ground reaction forces (every leg carries half the body weight, lateral
+      and fore-aft forces 35-52 % of vertical, aimed at the coxa to minimise joint moments),
+      tripod static stability, passive tarsus and spines, strain sensing in the cuticle, the
+      Biewener size-posture scaling, and the crevice posture. Each mapped to our design: what
+      we already have, what to add (compliant clawed foot, tibia elasticity, strain gauges,
+      a flat posture), what not to copy (the slanted first axis), and one reframing: the mammal
+      stance is nature''s posture at our size, so it may be the cruise mode and the sprawl
+      the terrain mode.'
+    changed:
+    - docs/design/bio/insect-leg.png
 artifact_url: https://claude.ai/code/artifact/c27a8924-af18-4d17-bd9b-0fcb41e685e3
