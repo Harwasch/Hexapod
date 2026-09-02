@@ -1,8 +1,8 @@
-# Review — Sizing with the 2.0x tibia, ratings over both stances (round 4)
+# Review — Sizing with the study's motor: one stator per joint (round 5)
 
 `sizing` · requested 2026-09-02 · branch `claude/hexapod-robot-design-mt516g`
 
-Each DOF rated over its working volume in both the sprawl and the mammal stance: yaw 55 / 58, femur 135 / 245, knee 143 / 300 N.m continuous / peak. The mammal stance sets the femur and knee continuous ratings (the pitch joints push there); the sprawl stance alone would need 115 / 122. Plan: one PCB stator design, one stator at 45:1 for yaw, two stators at 55:1 for the femur and 60:1 for the knee. Yaw range +/-95 deg.
+The motor study (07) back-fits a single 12-layer 3 oz PCB stator at 3.13 N.m continuous / 9.4 N.m peak, twice the shear stress assumed in round 4, so the per-DOF plan is now one stator each at 45 / 55 / 60:1 with 1.1-1.2x continuous margin on the femur. Ratings unchanged: yaw 55 / 58, femur 135 / 245, knee 143 / 300 N.m. The 1.1 kg actuator mass target does not survive the detailed design (08): a femur or knee unit rolls up to about 2.7 kg.
 
 ## What you are agreeing to
 
@@ -28,14 +28,20 @@ Sources and working files. Not part of the agreement — these change as work go
 
 | File | Opens in |
 |---|---|
+| [analysis/actuator_design.py](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/analysis/actuator_design.py) | plain text on GitHub |
+| [analysis/actuator_section.py](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/analysis/actuator_section.py) | plain text on GitHub |
+| [analysis/bio_figure.py](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/analysis/bio_figure.py) | plain text on GitHub |
+| [analysis/cycloid.py](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/analysis/cycloid.py) | plain text on GitHub |
+| [analysis/drawing.py](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/analysis/drawing.py) | plain text on GitHub |
 | [analysis/hexapod_model.py](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/analysis/hexapod_model.py) | plain text on GitHub |
 | [analysis/leg3d.py](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/analysis/leg3d.py) | plain text on GitHub |
+| [analysis/motor_options.py](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/analysis/motor_options.py) | plain text on GitHub |
 | [analysis/sizing.py](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/analysis/sizing.py) | plain text on GitHub |
 | [analysis/topology.py](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/analysis/topology.py) | plain text on GitHub |
 
 ## What we need decided
 
-1. Is the 15-20 % femur and knee premium for the mammal stance acceptable, or should that stance be limited (slower, smaller workspace) to keep the sprawl ratings?
+1. The actuator mass budget: accept ~2.5 kg per femur/knee unit and a ~75 kg robot, or cut torque (drop the mammal-stance premium, lighter payload) to get the actuator back toward 1.5 kg?
 2. Are the dynamic factors (1.5x walking, 3x stumble) and the 30 degree slope the right conservatism for the terrain demo?
 
 ## Decision

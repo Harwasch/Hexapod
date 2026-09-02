@@ -184,9 +184,9 @@ that sideways) and records the worst moment about each joint's axis:
 
 | DOF | Neutral, walk (N·m) | Sprawl routine (N·m) | Mammal-stance routine (N·m) | Continuous (N·m) | Peak (N·m) | Rider, neutral (N·m) | Swing speed (rad/s) | Motor, ratio | Gives cont / peak (N·m) | Joint rad/s at 5500 rpm |
 |---|---|---|---|---|---|---|---|---|---|---|
-| yaw | 37 | 55 | 23 | **55** | **58** | 46 | 8 | 1 stator, **45:1** | 56 / 167 | 12.8 |
-| femur | 60 | 115 | 135 | **135** | **245** | 117 | 4 | 2 stators, **55:1** | 136 / 408 | 10.5 |
-| knee | 17 | 122 | 143 | **143** | **300** | 21 | 4 | 2 stators, **60:1** | 149 / 446 | 9.6 |
+| yaw | 37 | 55 | 23 | **55** | **58** | 46 | 8 | 1 stator, **45:1** | 123 / 371 | 12.8 |
+| femur | 60 | 115 | 135 | **135** | **245** | 117 | 4 | 1 stator, **55:1** | 150 / 454 | 10.5 |
+| knee | 17 | 122 | 143 | **143** | **300** | 21 | 4 | 1 stator, **60:1** | 163 / 495 | 9.6 |
 
 Two things the neutral-stance numbers hid. The **knee** is not the light
 joint it looks: whenever the foot is raised the long tibia has to fold, the
@@ -225,23 +225,26 @@ motors with good cooling reach 10–15 kPa continuous; an ironless PCB stator
 has a magnetic airgap the thickness of the board, copper fill limited by
 trace spacing, and ~1–1.5 mm of copper at best across a 12-layer board. With
 B ≈ 0.6 T from dual Halbach rotors and 5–6 A/mm² continuous, the model
-assumes **σ = 1.5 kPa continuous and 4.5 kPa for 2 s bursts** — numbers to
-be earned on a dyno, not assumed for long. That gives:
+uses **σ = 3.3 kPa continuous and 10.0 kPa for 2 s bursts** on the
+full annulus, back-fitted to the motor study's A3 design point
+([07](07-motor-options-in-envelope.md), [08](08-actuator-design.md)); the
+first sizing round assumed 1.5 / 4.5 kPa. Numbers to be earned on a dyno,
+not assumed for long. That gives:
 
 | Motor | Continuous (N·m) | Peak (N·m) |
 |---|---|---|
-| 1 stator, 2 rotors | 1.41 | 4.22 |
-| 2 stators, 3 rotors | 2.81 | 8.44 |
+| 1 stator, 2 rotors | 3.09 | 9.38 |
+| 2 stators, 3 rotors | 6.19 | 18.76 |
 
 Through a cycloid at 88 % efficiency:
 
 | Ratio | 1 stator: cont / peak (N·m) | 2 stators: cont / peak (N·m) | Joint rad/s at 5500 rpm | Motor rpm for 1 m/s walk | Motor rpm for 2 m/s |
 |---|---|---|---|---|---|
-| 30:1 | 37 / 111 | 74 / 223 | 19.2 | 2203 | 4076 |
-| 40:1 | 50 / 149 | 99 / 297 | 14.4 | 2938 | 5435 |
-| 50:1 | 62 / 186 | 124 / 371 | 11.5 | 3672 | 6794 |
-| 60:1 | 74 / 223 | 149 / 446 | 9.6 | 4407 | 8152 |
-| 80:1 | 99 / 297 | 198 / 594 | 7.2 | 5876 | 10870 |
+| 30:1 | 82 / 248 | 163 / 495 | 19.2 | 2203 | 4076 |
+| 40:1 | 109 / 330 | 218 / 660 | 14.4 | 2938 | 5435 |
+| 50:1 | 136 / 413 | 272 / 825 | 11.5 | 3672 | 6794 |
+| 60:1 | 163 / 495 | 327 / 990 | 9.6 | 4407 | 8152 |
+| 80:1 | 218 / 660 | 436 / 1320 | 7.2 | 5876 | 10870 |
 
 ![Torque and speed vs reduction ratio](sizing/ratio-trade.png)
 
@@ -250,8 +253,8 @@ meets both its ratings, capped at 80:1 for a single-stage cycloid, with
 one stator if that leaves enough speed for the joint's swing and two
 stators otherwise. The result is **one stator and rotor design, stacked
 once or twice, with three cycloid discs**: yaw 1 stator at 45:1,
-femur 2 stators at 55:1, knee 2 stators at 60:1. The femur gives
-136 N·m continuous and 408 N·m peak with 10.5 rad/s at the joint. A
+femur 1 stator at 55:1, knee 1 stator at 60:1. The femur gives
+150 N·m continuous and 454 N·m peak with 10.5 rad/s at the joint. A
 two-stator unit is the same PCB twice and one more rotor, so the part count
 stays at one stator, one rotor, one driver and three discs.
 
@@ -260,8 +263,8 @@ stays at one stator, one rotor, one driver and three discs.
   losses in wide PCB traces grow with the square of that. Trace segmentation
   or higher-layer-count thin traces are the levers; the stator design will
   have to check this.
-* Electrical: Kv ≈ 132 rpm/V (Kt ≈ 0.072 N·m/A) at 48 V ⇒ 39 A continuous and
-  116 A for the 2 s peak, per motor. Half-bridge MOSFETs at that rating
+* Electrical: Kv ≈ 132 rpm/V (Kt ≈ 0.072 N·m/A) at 48 V ⇒ 43 A continuous and
+  129 A for the 2 s peak, per motor. Half-bridge MOSFETs at that rating
   are commodity; the bus capacitance and the connectors for eighteen of them
   are the real layout problem. A lower Kv trades peak current for top speed.
 * A single-stage cycloid ratio equals its lobe count. 55 lobes on a disc that
@@ -307,12 +310,12 @@ Decided in review, or proposed here:
 2. Sprawled yaw–pitch–pitch legs (agreed): 150 mm coxa, femur 250 mm up and out at 45°, tibia 500 mm vertical (2.0×, shortened from 2.5× for the knee's sake), with ±95° of yaw so the same leg stands in a mammal stance when asked (agreed).
 3. The rider is a stretch goal, not a rating (agreed).
 4. Per-DOF actuators (agreed): yaw 55 / 58, femur 135 / 245, knee 143 / 300 N·m continuous / peak; 8 rad/s at the yaw; Ø170 × 42 mm.
-5. One Ø170 mm PCB axial-flux stator design, 1 stator / 2 stators / 2 stators for yaw / femur / knee, cycloid ratios 45 / 55 / 60:1, 48 V.
+5. One Ø170 mm PCB axial-flux stator design, 1 stator / 1 stator / 1 stator for yaw / femur / knee, cycloid ratios 45 / 55 / 60:1, 48 V.
 6. Two 679 Wh hot-swap packs.
 
 Open, in order of how much they change the actuator:
 
 * **The step-up cost of the 2.5× tibia** — the leg reaches out to stand high; see the topology document §3 for what a 2.0× leg of the same femur would do instead.
-* **σ for the PCB stator.** The whole motor concept rests on ~1.5 kPa continuous. The first actuator-stage task is a single-stator test motor on a dyno.
+* **σ for the PCB stator.** The whole motor concept rests on ~3.3 kPa continuous. The first actuator-stage task is a single-stator test motor on a dyno.
 * **Transmission from the body to the femur and knee, through the coxa.** Not sized here; it adds losses (budget 10 %) and reflected inertia, and it decides whether the three pancakes really can be coaxial.
 * **Dynamic simulation** to replace the 1.5× / 3× factors with numbers.

@@ -337,8 +337,12 @@ class PcbMotor:
     r_out: float = 85.0        # mm, active annulus outer radius
     r_in: float = 55.0         # mm, inner radius (cycloid lives inside this)
     stators: int = 1           # PCB stators in the stack (rotors = stators + 1)
-    sigma_cont: float = 1.5e3  # Pa, continuous shear stress (thermal limit)
-    sigma_peak: float = 4.5e3  # Pa, ~2 s bursts
+    # Shear stress on the full 55–85 mm annulus, back-fitted to the motor study's
+    # A3 design point (12-layer 3 oz PCB, Halbach rotors, R_th 1.5 K/W):
+    # 3.13 N·m continuous / 9.4 N·m peak — see docs/design/07 and 08.  The
+    # earlier assumption was 1.5 / 4.5 kPa.  A dyno measurement replaces this.
+    sigma_cont: float = 3.3e3  # Pa, continuous (thermal limit)
+    sigma_peak: float = 10.0e3 # Pa, ~2 s bursts
     bus_v: float = 48.0
 
     def _geom(self) -> float:

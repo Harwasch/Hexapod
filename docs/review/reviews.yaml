@@ -206,34 +206,42 @@ reviews:
     - docs/design/vision/concept_b_mammal_mode/view-top.png
   decided_commit: cb9b0b1
 - id: sizing
-  title: Sizing with the 2.0x tibia, ratings over both stances (round 4)
+  title: 'Sizing with the study''s motor: one stator per joint (round 5)'
   stage: sizing
-  summary: 'Each DOF rated over its working volume in both the sprawl and the mammal stance:
-    yaw 55 / 58, femur 135 / 245, knee 143 / 300 N.m continuous / peak. The mammal stance
-    sets the femur and knee continuous ratings (the pitch joints push there); the sprawl stance
-    alone would need 115 / 122. Plan: one PCB stator design, one stator at 45:1 for yaw, two
-    stators at 55:1 for the femur and 60:1 for the knee. Yaw range +/-95 deg.'
+  summary: 'The motor study (07) back-fits a single 12-layer 3 oz PCB stator at 3.13 N.m continuous
+    / 9.4 N.m peak, twice the shear stress assumed in round 4, so the per-DOF plan is now
+    one stator each at 45 / 55 / 60:1 with 1.1-1.2x continuous margin on the femur. Ratings
+    unchanged: yaw 55 / 58, femur 135 / 245, knee 143 / 300 N.m. The 1.1 kg actuator mass
+    target does not survive the detailed design (08): a femur or knee unit rolls up to about
+    2.7 kg.'
   questions:
-  - Is the 15-20 % femur and knee premium for the mammal stance acceptable, or should that
-    stance be limited (slower, smaller workspace) to keep the sprawl ratings?
+  - 'The actuator mass budget: accept ~2.5 kg per femur/knee unit and a ~75 kg robot, or cut
+    torque (drop the mammal-stance premium, lighter payload) to get the actuator back toward
+    1.5 kg?'
   - Are the dynamic factors (1.5x walking, 3x stumble) and the 30 degree slope the right conservatism
     for the terrain demo?
   artifacts:
   - path: docs/design/01-sizing.md
-    sha256: e4e8c56e27fa20b6
+    sha256: 7e135178fcae46e5
   - path: docs/design/sizing/leg-stance.png
     sha256: 53461f70b5fb9b7e
   - path: docs/design/sizing/ratio-trade.png
-    sha256: e3bc4119f5593944
+    sha256: 644e644a93d1aef2
   - path: docs/design/sizing/torque-map.png
     sha256: 100f6fe4705d0448
   references:
+  - analysis/actuator_design.py
+  - analysis/actuator_section.py
+  - analysis/bio_figure.py
+  - analysis/cycloid.py
+  - analysis/drawing.py
   - analysis/hexapod_model.py
   - analysis/leg3d.py
+  - analysis/motor_options.py
   - analysis/sizing.py
   - analysis/topology.py
   requested: '2026-09-02'
-  requested_commit: cb9b0b1
+  requested_commit: 66a79a2
   status: requested
   packet: docs/review/sizing.md
   history:
@@ -346,6 +354,24 @@ reviews:
     - docs/design/sizing/leg-stance.png
     - docs/design/sizing/ratio-trade.png
     - docs/design/sizing/torque-map.png
+  - 'on': '2026-09-02'
+    action: requested
+    commit: 66a79a2
+    questions:
+    - 'The actuator mass budget: accept ~2.5 kg per femur/knee unit and a ~75 kg robot, or
+      cut torque (drop the mammal-stance premium, lighter payload) to get the actuator back
+      toward 1.5 kg?'
+    - Are the dynamic factors (1.5x walking, 3x stumble) and the 30 degree slope the right
+      conservatism for the terrain demo?
+    summary: 'The motor study (07) back-fits a single 12-layer 3 oz PCB stator at 3.13 N.m
+      continuous / 9.4 N.m peak, twice the shear stress assumed in round 4, so the per-DOF
+      plan is now one stator each at 45 / 55 / 60:1 with 1.1-1.2x continuous margin on the
+      femur. Ratings unchanged: yaw 55 / 58, femur 135 / 245, knee 143 / 300 N.m. The 1.1
+      kg actuator mass target does not survive the detailed design (08): a femur or knee unit
+      rolls up to about 2.7 kg.'
+    changed:
+    - docs/design/01-sizing.md
+    - docs/design/sizing/ratio-trade.png
   decided_commit: cb9b0b1
 - id: topology
   title: Topology confirmed; motor and reduction options
@@ -579,4 +605,109 @@ reviews:
     - docs/design/drawing/hip-stack.png
     - docs/design/drawing/side.png
     - docs/design/drawing/top.png
+- id: actuator
+  title: 'Actuator: motor study and detailed design of A3 (PCB stator, in-plane cycloid)'
+  stage: actuator
+  summary: '07: six motor types sized in the 170 x 42 mm pancake, both packagings, with explicit
+    thermal and copper assumptions; A3 (one 12-layer 3 oz PCB stator between two Halbach rotors,
+    reducer in the bore) is the best buildable option at 3.13 N.m continuous, 9.4 N.m peak,
+    1.18 kg motor; C1 (wound flat coils) is the upgrade in the same rotors; the radial ring
+    tops the chart only because it is iron-core. 08: the A3 design point (19 pole pairs, 48
+    coils, 76 Halbach blocks per rotor, Kt 0.107, 29 A continuous), each joint on it, the
+    cycloid in the bore with pin loads and bearing loads, the 27 mm axial stack, the mass
+    roll-up (2.7 kg per femur/knee unit, 2.3 kg yaw), the thermal sensitivity (R_th 1.0-3.0
+    K/W gives 4.0-2.0 N.m), the electrical interface and the first-unit test plan.'
+  questions:
+  - A3 (12-layer 3 oz PCB stator, one per joint, in-plane cycloid) as the design to prototype,
+    with C1 wound coils as the fallback stator in the same housing?
+  - 'Pole count: 19 pole pairs with a 40 kHz-class custom driver, or 14 with an off-the-shelf
+    FOC driver at ~10 % less torque?'
+  - 'The mass roll-up says 2.3-2.7 kg per actuator, not 1.1 kg. Which lever: thinner discs,
+    a smaller magnet annulus on the yaw unit, accept a heavier robot, or buy iron-core frameless
+    motors at 2-3x the torque density and 3-4 kg each?'
+  artifacts:
+  - path: docs/design/07-motor-options-in-envelope.md
+    sha256: 42cb4396335a444b
+  - path: docs/design/08-actuator-design.md
+    sha256: 9342a155ee806f9e
+  - path: docs/design/actuator/cycloid-profiles.png
+    sha256: 6b69efb7e9351394
+  - path: docs/design/actuator/operating-envelopes.png
+    sha256: d169eb6eb31a3db3
+  - path: docs/design/actuator/section-pcb-1.png
+    sha256: 509539308490c5cb
+  - path: docs/design/actuator/section-pcb-2.png
+    sha256: b10c085c4d2e6ef0
+  - path: docs/design/actuator/section-wound-1.png
+    sha256: 063559d65a5bdb07
+  - path: docs/design/actuator/section-wound-2.png
+    sha256: 23654106a1a521b3
+  - path: docs/design/actuator/stator-rotor-layout.png
+    sha256: aef21c21971a642e
+  - path: docs/design/motor/torque-density.png
+    sha256: cddb0d1d300d77c9
+  references:
+  - analysis/actuator_design.py
+  - analysis/cycloid.py
+  - analysis/motor_options.py
+  requested: '2026-09-02'
+  requested_commit: 66a79a2
+  status: requested
+  packet: docs/review/actuator.md
+  history:
+  - 'on': '2026-09-02'
+    action: requested
+    commit: 66a79a2
+    questions:
+    - A3 (12-layer 3 oz PCB stator, one per joint, in-plane cycloid) as the design to prototype,
+      with C1 wound coils as the fallback stator in the same housing?
+    - 'Pole count: 19 pole pairs with a 40 kHz-class custom driver, or 14 with an off-the-shelf
+      FOC driver at ~10 % less torque?'
+    - 'The mass roll-up says 2.3-2.7 kg per actuator, not 1.1 kg. Which lever: thinner discs,
+      a smaller magnet annulus on the yaw unit, accept a heavier robot, or buy iron-core frameless
+      motors at 2-3x the torque density and 3-4 kg each?'
+    summary: '07: six motor types sized in the 170 x 42 mm pancake, both packagings, with
+      explicit thermal and copper assumptions; A3 (one 12-layer 3 oz PCB stator between two
+      Halbach rotors, reducer in the bore) is the best buildable option at 3.13 N.m continuous,
+      9.4 N.m peak, 1.18 kg motor; C1 (wound flat coils) is the upgrade in the same rotors;
+      the radial ring tops the chart only because it is iron-core. 08: the A3 design point
+      (19 pole pairs, 48 coils, 76 Halbach blocks per rotor, Kt 0.107, 29 A continuous), each
+      joint on it, the cycloid in the bore with pin loads and bearing loads, the 27 mm axial
+      stack, the mass roll-up (2.7 kg per femur/knee unit, 2.3 kg yaw), the thermal sensitivity
+      (R_th 1.0-3.0 K/W gives 4.0-2.0 N.m), the electrical interface and the first-unit test
+      plan.'
+    added:
+    - docs/design/07-motor-options-in-envelope.md
+    - docs/design/08-actuator-design.md
+    - docs/design/actuator/cycloid-profiles.png
+    - docs/design/actuator/operating-envelopes.png
+    - docs/design/actuator/section-pcb-1.png
+    - docs/design/actuator/section-pcb-2.png
+    - docs/design/actuator/section-wound-1.png
+    - docs/design/actuator/section-wound-2.png
+    - docs/design/actuator/stator-rotor-layout.png
+    - docs/design/motor/torque-density.png
+  - 'on': '2026-09-02'
+    action: requested
+    commit: 66a79a2
+    questions:
+    - A3 (12-layer 3 oz PCB stator, one per joint, in-plane cycloid) as the design to prototype,
+      with C1 wound coils as the fallback stator in the same housing?
+    - 'Pole count: 19 pole pairs with a 40 kHz-class custom driver, or 14 with an off-the-shelf
+      FOC driver at ~10 % less torque?'
+    - 'The mass roll-up says 2.3-2.7 kg per actuator, not 1.1 kg. Which lever: thinner discs,
+      a smaller magnet annulus on the yaw unit, accept a heavier robot, or buy iron-core frameless
+      motors at 2-3x the torque density and 3-4 kg each?'
+    summary: '07: six motor types sized in the 170 x 42 mm pancake, both packagings, with
+      explicit thermal and copper assumptions; A3 (one 12-layer 3 oz PCB stator between two
+      Halbach rotors, reducer in the bore) is the best buildable option at 3.13 N.m continuous,
+      9.4 N.m peak, 1.18 kg motor; C1 (wound flat coils) is the upgrade in the same rotors;
+      the radial ring tops the chart only because it is iron-core. 08: the A3 design point
+      (19 pole pairs, 48 coils, 76 Halbach blocks per rotor, Kt 0.107, 29 A continuous), each
+      joint on it, the cycloid in the bore with pin loads and bearing loads, the 27 mm axial
+      stack, the mass roll-up (2.7 kg per femur/knee unit, 2.3 kg yaw), the thermal sensitivity
+      (R_th 1.0-3.0 K/W gives 4.0-2.0 N.m), the electrical interface and the first-unit test
+      plan.'
+    changed:
+    - docs/design/actuator/stator-rotor-layout.png
 artifact_url: https://claude.ai/code/artifact/c27a8924-af18-4d17-bd9b-0fcb41e685e3

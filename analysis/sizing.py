@@ -81,6 +81,7 @@ def joint_speed_at(ratio: float) -> float:
 
 
 MAX_RATIO = 80                  # single-stage in-plane cycloid: lobe pitch gets silly above this
+MIN_RATIO = {"yaw": 45, "femur": 55, "knee": 60}   # the disc family chosen in 08-actuator-design; torque margin comes out as margin
 
 
 def ratio_for(m: PcbMotor, cont: float, peak: float) -> float:
@@ -93,7 +94,7 @@ def ratio_for(m: PcbMotor, cont: float, peak: float) -> float:
 DOF_PLAN = {}
 for d in DOFS:
     for m, label in ((MOTOR_1, "1 stator"), (MOTOR_2, "2 stators")):
-        r = ratio_for(m, DOF_CONT[d], DOF_PEAK[d])
+        r = max(ratio_for(m, DOF_CONT[d], DOF_PEAK[d]), MIN_RATIO[d])
         if r <= MAX_RATIO and joint_speed_at(r) >= DOF_SWING[d]:
             break
     j = joint_from_motor(m, Reduction(r))
@@ -491,8 +492,11 @@ motors with good cooling reach 10–15 kPa continuous; an ironless PCB stator
 has a magnetic airgap the thickness of the board, copper fill limited by
 trace spacing, and ~1–1.5 mm of copper at best across a 12-layer board. With
 B ≈ 0.6 T from dual Halbach rotors and 5–6 A/mm² continuous, the model
-assumes **σ = {MOTOR.sigma_cont/1000:.1f} kPa continuous and {MOTOR.sigma_peak/1000:.1f} kPa for 2 s bursts** — numbers to
-be earned on a dyno, not assumed for long. That gives:
+uses **σ = {MOTOR.sigma_cont/1000:.1f} kPa continuous and {MOTOR.sigma_peak/1000:.1f} kPa for 2 s bursts** on the
+full annulus, back-fitted to the motor study's A3 design point
+([07](07-motor-options-in-envelope.md), [08](08-actuator-design.md)); the
+first sizing round assumed 1.5 / 4.5 kPa. Numbers to be earned on a dyno,
+not assumed for long. That gives:
 
 | Motor | Continuous (N·m) | Peak (N·m) |
 |---|---|---|

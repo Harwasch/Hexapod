@@ -101,6 +101,38 @@ phases:
         takes the femur torque to zero. Look at: the friction it needs.
     docs: [docs/design/05-bio-inspiration.md]
 
+  - id: actuator
+    title: Actuator
+    eyebrow: Stage 2 · motor and reducer design
+    after: bio
+    images:
+      - docs/design/motor/torque-density.png
+      - docs/design/actuator/stator-rotor-layout.png
+      - docs/design/actuator/operating-envelopes.png
+      - docs/design/actuator/section-pcb-1.png
+      - docs/design/actuator/cycloid-profiles.png
+    captions:
+      docs/design/motor/torque-density.png: >-
+        The motor study: continuous torque per kilogram and per litre for
+        every candidate that fits the Ø170 × 42 mm pancake, in both packagings.
+        Look at: A3 (12-layer 3 oz PCB) leads per kilogram; two-stator
+        variants and the iron-core option lose.
+      docs/design/actuator/stator-rotor-layout.png: >-
+        The A3 design point: the stator PCB face with its coils and one
+        Halbach rotor face with its magnet blocks. Look at: 19 pole pairs
+        means a fast drive; the Ø100 bore is where the cycloid goes.
+      docs/design/actuator/operating-envelopes.png: >-
+        The one motor through each joint's ratio against that joint's
+        requirement. Look at: the femur is the binding joint; every joint has
+        speed to spare.
+      docs/design/actuator/section-pcb-1.png: >-
+        Axial section through the A3 actuator with the cycloid in the bore.
+        Look at: 27 mm of the 42 mm used; where the heat has to get out.
+      docs/design/actuator/cycloid-profiles.png: >-
+        The three cycloid discs. Look at: the 0.6 mm eccentricity that puts
+        7 kN on the eccentric bearings.
+    docs: [docs/design/07-motor-options-in-envelope.md, docs/design/08-actuator-design.md]
+
 #   - id: cad
 #     title: CAD
 #     eyebrow: Stage 5 · mechanical

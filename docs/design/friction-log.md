@@ -20,3 +20,7 @@
   reviewing a mechanical concept wants to orbit it, and the Artifact sandbox allows three.js
   from cdnjs, so a built-in STL/GLB viewer per phase is feasible. Done here by post-processing
   the page in `scripts/inject_viewer.py`; the vision phase should offer it natively.
+* `WebFetch` returns 403 on kollmorgen.com; the TBM2G datasheet used to anchor the motor study's
+  thermal resistance only came through a distributor mirror, page by page with `pdftotext -f/-l`.
+  `skills/hw-documentation/SKILL.md` could list the mirror-and-pdftotext route for vendor sites
+  that block fetches.
