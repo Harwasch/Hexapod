@@ -2,61 +2,59 @@
 
 What we think you asked for, drawn from real geometry. Every image below comes from a parametric model, so nothing here is a shape that cannot be built, and every number is measured off the model rather than estimated.
 
-A hexapod the size of a large dog for outdoor missions: first navigating complex terrain, then picking up trash. Off-the-shelf where sensible, custom where it meaningfully improves cost or performance. Able to carry an adult male if needed. All eighteen motors housed statically in the body, power transmitted to the joints; the motors themselves axial-flux PCB stators with in-plane cycloidal reductions. Later: modular payloads and tools, two hot-swap batteries, wireless charging, a solar top, networking, SLAM, and a wheeled ground transport vehicle.
+A hexapod the size of a large dog for outdoor missions: first navigating complex terrain, then picking up trash. Off-the-shelf where sensible, custom where it meaningfully improves cost or performance. Able to carry an adult male if needed. All eighteen motors housed statically in the body, power transmitted to the joints; the motors themselves axial-flux PCB stators with in-plane cycloidal reductions. Legs sprawl: a coxa carries each leg out from a hip under the body, the femur sticks out and up, and a tibia at least twice the femur comes straight down, so both links are up-and-down in the neutral stance and the joint torques stay low. Later: modular payloads and tools, two hot-swap batteries, wireless charging, a solar top, networking, SLAM, and a wheeled ground transport vehicle.
 
 ## The choice
 
-| | **A — Sprawl** | **B — Under-body** |
+| | **A — Tibia 2.0× femur** | **B — Tibia 2.5× femur** |
 |---|---|---|
-| Envelope (mm) | 1111.64 × 1136.67 × 640.5 | 1098.96 × 530.0 × 690.5 |
-| Volume (mm³) | 40,729,541 | 40,729,541 |
-| Approx. mass (g) | 57,021 | 57,021 |
+| Envelope (mm) | 1739.34 × 950.75 × 1851.5 | 1714.04 × 849.57 × 1851.5 |
+| Volume (mm³) | 141,241,903 | 141,234,703 |
+| Approx. mass (g) | 197,739 | 197,729 |
 
-## A — Sprawl
+## A — Tibia 2.0× femur
 
-Leg planes radiate from the body; front and rear legs yawed ±30°. Hips 0.40 m up, feet 0.28 m out from the yaw axes, 0.88 m stance width. The yaw joints push, the pitch joints carry. Skeleton view: top deck and floor plate, side rails, six hip stacks of three Ø170 pancake actuators, two hot-swap packs and the compute box between them. The renderer's mass figure treats the skeleton as solid; the budget is 49 kg, see 01-sizing.md.
+Coxa 150 / femur 250 / tibia 500 mm. Femur up at 45°, tibia vertical; hips 0.32 m up, knees at 0.50 m, feet 0.33 m out from the yaw axes. Femur arm 177 mm. Skeleton view: top deck and floor plate, side rails, six hip stacks of three Ø170 pancake actuators under the deck, two hot-swap packs and the compute box between them. **Robot alone: 1059 × 951 × 564 mm** — the envelope, volume and mass figures below include the 1.83 m (6 ft) reference figure, and the mass treats the skeleton as solid; the budget is 49 kg.
 
-**What this one bets on:** Stability first. 26° roll margin unloaded and 19° with a rider on a tripod, so the rider case does not force a wave-gait-only machine. Costs a wide footprint and puts the propulsion duty on the yaw joint.
+**What this one bets on:** The shorter tibia keeps the swing mass and the knee height down (knee just below deck level) and the footprint wider, and pays for it with a 177 mm femur arm: ~126 N·m at the femur under a rider.
 
-**1111.64 × 1136.67 × 640.5 mm** · 40,729,541 mm³ · ~57,021 g at 1.4 g/cm³ · model: `concepts/concept_a_sprawl.py`
+**1739.34 × 950.75 × 1851.5 mm** · 141,241,903 mm³ · ~197,739 g at 1.4 g/cm³ · model: `concepts/concept_a_tibia2x.py`
 
-![A — Sprawl — three-quarter view](vision/concept_a_sprawl/view-hero.png)
-
-| Front | Top |
-|---|---|
-| ![front](vision/concept_a_sprawl/view-front.png) | ![top](vision/concept_a_sprawl/view-top.png) |
-
-<details><summary>Dimensioned isometric line drawing</summary>
-
-![A — Sprawl — isometric](vision/concept_a_sprawl/iso.svg)
-
-</details>
-
-## B — Under-body
-
-Leg planes fore-aft, feet under the hips, front and mid knees forward, rear knees back. Hips 0.45 m up, 0.48 m stance width, 0.96 m stance length. The pitch joints both carry and push; yaw only steers and crabs. Same body, same eighteen actuators, same leg links. Mass figure below is the solid render, not the 49 kg budget.
-
-**What this one bets on:** Narrow and tall: fits through a doorway, more ground clearance, and the walking motion is a pitch sweep that the femur transmission can be optimised for. Pays for it in roll margin (13° unloaded, 10° with a rider on a tripod), so a rider means a wave gait and splayed feet.
-
-**1098.96 × 530.0 × 690.5 mm** · 40,729,541 mm³ · ~57,021 g at 1.4 g/cm³ · model: `concepts/concept_b_underbody.py`
-
-![B — Under-body — three-quarter view](vision/concept_b_underbody/view-hero.png)
+![A — Tibia 2.0× femur — three-quarter view](vision/concept_a_tibia2x/view-hero.png)
 
 | Front | Top |
 |---|---|
-| ![front](vision/concept_b_underbody/view-front.png) | ![top](vision/concept_b_underbody/view-top.png) |
+| ![front](vision/concept_a_tibia2x/view-front.png) | ![top](vision/concept_a_tibia2x/view-top.png) |
 
-<details><summary>Dimensioned isometric line drawing</summary>
+**Isometric line drawing, hidden edges dashed**
 
-![B — Under-body — isometric](vision/concept_b_underbody/iso.svg)
+![A — Tibia 2.0× femur — isometric](vision/concept_a_tibia2x/iso.svg)
 
-</details>
+
+## B — Tibia 2.5× femur
+
+Coxa 150 / femur 220 / tibia 550 mm. Femur up at 55°, tibia vertical; hips 0.37 m up, knees at 0.55 m, feet 0.28 m out from the yaw axes. Femur arm 126 mm. Same body, same eighteen actuators. **Robot alone: 1008 × 850 × 610 mm** — the envelope, volume and mass figures below include the 1.83 m (6 ft) reference figure, and the mass treats the skeleton as solid; the budget is 49 kg.
+
+**What this one bets on:** The steeper femur and longer tibia pull the foot in under the knee: a 126 mm femur arm, ~100 N·m under a rider, 20 % less than A in every load case, and 50 mm more ground clearance. Costs a longer tibia to swing, a knee at deck level, and a slightly narrower footprint.
+
+**1714.04 × 849.57 × 1851.5 mm** · 141,234,703 mm³ · ~197,729 g at 1.4 g/cm³ · model: `concepts/concept_b_tibia2p5x.py`
+
+![B — Tibia 2.5× femur — three-quarter view](vision/concept_b_tibia2p5x/view-hero.png)
+
+| Front | Top |
+|---|---|
+| ![front](vision/concept_b_tibia2p5x/view-front.png) | ![top](vision/concept_b_tibia2p5x/view-top.png) |
+
+**Isometric line drawing, hidden edges dashed**
+
+![B — Tibia 2.5× femur — isometric](vision/concept_b_tibia2p5x/iso.svg)
+
 
 ## What we need from you
 
-1. Which stance, A (sprawl) or B (under-body), and what made you pick it?
+1. Which leg proportion, A (tibia 2.0x femur, squatter) or B (tibia 2.5x femur, taller, 20 % less femur torque), and what made you pick it?
 2. Does the rider case stay as a design driver, or is it a stretch goal we size for later?
-3. Is a 0.9 m by 0.49 m by 0.2 m body slab with hip stacks as the widest point the right size, or should the yaw-axis spacing move?
+3. Hips under the body on a 240 mm spacing with a 150 mm coxa: is that the right split between body width and coxa length?
 
 Whatever you agree to here becomes the `VIS-` entries in `requirements/00-vision.sdoc`, in your words, and everything downstream is built on it.
 

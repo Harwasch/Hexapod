@@ -76,24 +76,9 @@ Sources and working files. Not part of the agreement — these change as work go
 
 ## Decision
 
-**Not yet reviewed — this is waiting on you.**
+**Changes requested** 2026-09-02 — the agent is working on these and will come back.
 
-Answer in the Claude session that sent you this link. There is nothing to run and nothing to sign here.
-
-Say which option you want **and why**: the reason is worth more than the choice, and it is what gets re-read later when a number has to move. If something is wrong, say what would be right.
-
-<details><summary>How the answer gets recorded</summary>
-
-The agent writes your decision, in your words, into [`docs/review/reviews.yaml`](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/docs/review/reviews.yaml):
-
-```bash
-review-gate sign vision --approve --by <name> --note "..."
-review-gate sign vision --changes "what to change"
-```
-
-Until that happens, any chunk of work depending on this review cannot be marked done.
-
-</details>
+> Legs should sprawl out, but the femur needs to stick out and up from the body. Tibia at least twice as long as the femur so femur and tibia are both relatively up-and-down in a neutral stance, to reduce torque on each joint. The hip joint can still be underneath the robot, but then there needs to be a coxa sticking out to allow pitch-up of the femur. Also: add a 6 ft human to every render to judge size; the isometric line drawing is a blank frame; markdown tags showing as plain text on the review page.
 
 ---
 

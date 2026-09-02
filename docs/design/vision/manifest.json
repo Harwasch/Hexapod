@@ -1,50 +1,50 @@
 {
   "concepts": [
     {
-      "id": "concept_a_sprawl",
-      "title": "A \u2014 Sprawl",
-      "notes": "Leg planes radiate from the body; front and rear legs yawed \u00b130\u00b0. Hips 0.40 m up, feet 0.28 m out from the yaw axes, 0.88 m stance width. The yaw joints push, the pitch joints carry. Skeleton view: top deck and floor plate, side rails, six hip stacks of three \u00d8170 pancake actuators, two hot-swap packs and the compute box between them. The renderer's mass figure treats the skeleton as solid; the budget is 49 kg, see 01-sizing.md.",
-      "rationale": "Stability first. 26\u00b0 roll margin unloaded and 16\u00b0 with a rider on a tripod, so the rider case does not force a wave-gait-only machine. Costs a wide footprint and puts the propulsion duty on the yaw joint.",
+      "id": "concept_a_tibia2x",
+      "title": "A \u2014 Tibia 2.0\u00d7 femur",
+      "notes": "Coxa 150 / femur 250 / tibia 500 mm. Femur up at 45\u00b0, tibia vertical; hips 0.32 m up, knees at 0.50 m, feet 0.33 m out from the yaw axes. Femur arm 177 mm. Skeleton view: top deck and floor plate, side rails, six hip stacks of three \u00d8170 pancake actuators under the deck, two hot-swap packs and the compute box between them. **Robot alone: 1059 \u00d7 951 \u00d7 564 mm** \u2014 the envelope, volume and mass figures below include the 1.83 m (6 ft) reference figure, and the mass treats the skeleton as solid; the budget is 49 kg.",
+      "rationale": "The shorter tibia keeps the swing mass and the knee height down (knee just below deck level) and the footprint wider, and pays for it with a 177 mm femur arm: ~126 N\u00b7m at the femur under a rider.",
       "material": "graphite",
-      "source": "concepts/concept_a_sprawl.py",
+      "source": "concepts/concept_a_tibia2x.py",
       "metrics": {
         "bbox_mm": [
-          1111.64,
-          1136.67,
-          640.5
+          1739.34,
+          950.75,
+          1851.5
         ],
-        "volume_mm3": 41075140.8,
-        "approx_mass_g_at_1p4": 57505.2
+        "volume_mm3": 141241903.1,
+        "approx_mass_g_at_1p4": 197738.7
       },
       "images": {
-        "hero": "concept_a_sprawl/view-hero.png",
-        "front": "concept_a_sprawl/view-front.png",
-        "top": "concept_a_sprawl/view-top.png",
-        "iso": "concept_a_sprawl/iso.svg"
+        "hero": "concept_a_tibia2x/view-hero.png",
+        "front": "concept_a_tibia2x/view-front.png",
+        "top": "concept_a_tibia2x/view-top.png",
+        "iso": "concept_a_tibia2x/iso.svg"
       },
       "styling": []
     },
     {
-      "id": "concept_b_underbody",
-      "title": "B \u2014 Under-body",
-      "notes": "Leg planes fore-aft, feet under the hips, front and mid knees forward, rear knees back. Hips 0.45 m up, 0.48 m stance width, 0.96 m stance length. The pitch joints both carry and push; yaw only steers and crabs. Same body, same eighteen actuators, same leg links. Mass figure below is the solid render, not the 49 kg budget.",
-      "rationale": "Narrow and tall: fits through a doorway, more ground clearance, and the walking motion is a pitch sweep that the femur transmission can be optimised for. Pays for it in roll margin (13\u00b0 unloaded, 8\u00b0 with a rider on a tripod), so a rider means a wave gait and splayed feet.",
+      "id": "concept_b_tibia2p5x",
+      "title": "B \u2014 Tibia 2.5\u00d7 femur",
+      "notes": "Coxa 150 / femur 220 / tibia 550 mm. Femur up at 55\u00b0, tibia vertical; hips 0.37 m up, knees at 0.55 m, feet 0.28 m out from the yaw axes. Femur arm 126 mm. Same body, same eighteen actuators. **Robot alone: 1008 \u00d7 850 \u00d7 610 mm** \u2014 the envelope, volume and mass figures below include the 1.83 m (6 ft) reference figure, and the mass treats the skeleton as solid; the budget is 49 kg.",
+      "rationale": "The steeper femur and longer tibia pull the foot in under the knee: a 126 mm femur arm, ~100 N\u00b7m under a rider, 20 % less than A in every load case, and 50 mm more ground clearance. Costs a longer tibia to swing, a knee at deck level, and a slightly narrower footprint.",
       "material": "graphite",
-      "source": "concepts/concept_b_underbody.py",
+      "source": "concepts/concept_b_tibia2p5x.py",
       "metrics": {
         "bbox_mm": [
-          1098.96,
-          530.0,
-          690.5
+          1714.04,
+          849.57,
+          1851.5
         ],
-        "volume_mm3": 41075140.8,
-        "approx_mass_g_at_1p4": 57505.2
+        "volume_mm3": 141234703.1,
+        "approx_mass_g_at_1p4": 197728.6
       },
       "images": {
-        "hero": "concept_b_underbody/view-hero.png",
-        "front": "concept_b_underbody/view-front.png",
-        "top": "concept_b_underbody/view-top.png",
-        "iso": "concept_b_underbody/iso.svg"
+        "hero": "concept_b_tibia2p5x/view-hero.png",
+        "front": "concept_b_tibia2p5x/view-front.png",
+        "top": "concept_b_tibia2p5x/view-top.png",
+        "iso": "concept_b_tibia2p5x/iso.svg"
       },
       "styling": []
     }

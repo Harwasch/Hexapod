@@ -56,7 +56,7 @@ reviews:
   - concepts/hexapod_skeleton.py
   requested: '2026-09-01'
   requested_commit: 0cc8e7d
-  status: requested
+  status: changes_requested
   packet: docs/review/vision.md
   history:
   - 'on': '2026-09-01'
@@ -87,6 +87,25 @@ reviews:
     - docs/design/vision/concept_b_underbody/view-hero.png
     - docs/design/vision/concept_b_underbody/view-top.png
     - docs/design/vision/manifest.json
+  - 'on': '2026-09-02'
+    action: changes_requested
+    commit: 7f44f80
+    by: harrison
+    note: 'Legs should sprawl out, but the femur needs to stick out and up from the body.
+      Tibia at least twice as long as the femur so femur and tibia are both relatively up-and-down
+      in a neutral stance, to reduce torque on each joint. The hip joint can still be underneath
+      the robot, but then there needs to be a coxa sticking out to allow pitch-up of the femur.
+      Also: add a 6 ft human to every render to judge size; the isometric line drawing is
+      a blank frame; markdown tags showing as plain text on the review page.'
+  note: 'Legs should sprawl out, but the femur needs to stick out and up from the body. Tibia
+    at least twice as long as the femur so femur and tibia are both relatively up-and-down
+    in a neutral stance, to reduce torque on each joint. The hip joint can still be underneath
+    the robot, but then there needs to be a coxa sticking out to allow pitch-up of the femur.
+    Also: add a 6 ft human to every render to judge size; the isometric line drawing is a
+    blank frame; markdown tags showing as plain text on the review page.'
+  decided: '2026-09-02'
+  decided_commit: 7f44f80
+  reviewer: harrison
 - id: sizing
   title: Top-level sizing and the actuator requirement
   stage: sizing
