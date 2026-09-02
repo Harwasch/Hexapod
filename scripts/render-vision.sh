@@ -36,6 +36,8 @@ p = "docs/design/vision.md"
 s = open(p).read()
 s = s.replace("<details><summary>Dimensioned isometric line drawing</summary>\n", "**Isometric line drawing, hidden edges dashed**\n")
 s = s.replace("</details>\n", "")
+# and the footer: a bare "---" and raw <sub> tags come out as text on the review page
+s = re.sub(r"\n---\n\n<sub>(.*?)</sub>\s*$", r"\n*\1*\n", s, flags=re.S)
 open(p, "w").write(s)
 print("post-processed iso.svg strokes and vision.md")
 PYEOF

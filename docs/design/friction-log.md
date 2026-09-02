@@ -16,3 +16,7 @@
   missed a load-bearing preference (steep femur, long tibia, coxa outboard of a hip under the body)
   that one question would have caught. `skills/hw-vision/SKILL.md` could offer a non-blocking
   variant: state the assumed answers to the load-bearing questions in the vision document itself.
+* `scripts/review_artifact.py` has `images:` and `docs:` per phase but no `models:`. A human
+  reviewing a mechanical concept wants to orbit it, and the Artifact sandbox allows three.js
+  from cdnjs, so a built-in STL/GLB viewer per phase is feasible. Done here by post-processing
+  the page in `scripts/inject_viewer.py`; the vision phase should offer it natively.

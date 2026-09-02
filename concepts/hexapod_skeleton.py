@@ -70,7 +70,7 @@ def leg(hip, side: int, stance: Stance, yaw_deg: float):
     hub = Cylinder(FEMUR_SECTION[1] * 1.1, FEMUR_SECTION[0] + 10)
     j1 = Pos(*femur_axis) * Rot(0, 0, phi) * Rot(90, 0, 0) * hub
     j2 = Pos(*knee) * Rot(0, 0, phi) * Rot(90, 0, 0) * hub
-    return [coxa, femur, tibia, foot, j1, j2]
+    return {"coxa": [coxa], "femur": [femur, j1, j2], "tibia": [tibia, foot]}
 
 
 def human(x: float, ground_z: float):
@@ -88,11 +88,15 @@ def human(x: float, ground_z: float):
     return Compound(children=parts)
 
 
-def build(stance: Stance):
+def build_groups(stance: Stance) -> dict:
+    """The skeleton as named groups of solids: body, actuators, coxa, femur,
+    tibia, figure.  The 3-D viewer colours by group; build() flattens them."""
     W = BODY.slab_width(ACT)                      # hip stacks + a rail each side
     L, H = BODY.length, BODY.height
     RAIL = BODY.side_rail
     parts = []
+    actuators = []
+    legs = {"coxa": [], "femur": [], "tibia": []}
 
     # Skeleton body: top deck, floor plate, two side rails
     for z in (PLATE_T / 2, H - PLATE_T / 2):
@@ -107,9 +111,9 @@ def build(stance: Stance):
         for s in (1, -1):
             for i in range(3):
                 zc = z0 + ACT.thickness / 2 + i * (ACT.thickness + ACT.stack_gap)
-                parts.append(Pos(hx, s * BODY.width / 2, zc) * Cylinder(ACT.od / 2, ACT.thickness))
+                actuators.append(Pos(hx, s * BODY.width / 2, zc) * Cylinder(ACT.od / 2, ACT.thickness))
             # yaw output hub down through the floor to the coxa
-            parts.append(Pos(hx, s * BODY.width / 2, -HIP_DROP / 2) * Cylinder(40, HIP_DROP + 6))
+            actuators.append(Pos(hx, s * BODY.width / 2, -HIP_DROP / 2) * Cylinder(40, HIP_DROP + 6))
 
     # Two hot-swap batteries in the gaps between hip stacks, compute in the centre
     for s in (1, -1):
@@ -119,12 +123,25 @@ def build(stance: Stance):
     # Legs: the coxa centreline sits just below the floor plate
     for hx, yaw in zip(BODY.hip_x, stance.yaw_deg):
         for s in (1, -1):
-            parts += leg((hx, s * BODY.width / 2, -HIP_DROP), s, stance, yaw)
+            for k, v in leg((hx, s * BODY.width / 2, -HIP_DROP), s, stance, yaw).items():
+                legs[k] += v
 
-    robot = Compound(children=parts)
     ground_z = -HIP_DROP - stance.hip_height
-    figure = human(-L / 2 - 650, ground_z)
-    return robot, figure
+    groups = {"body": parts, "actuators": actuators, **legs,
+              "figure": list(human(-L / 2 - 650, ground_z).children)}
+    return {k: Compound(children=v) for k, v in groups.items()}
+
+
+def ground_level(stance: Stance) -> float:
+    """z of the ground plane in the body frame."""
+    return -HIP_DROP - stance.hip_height
+
+
+def build(stance: Stance):
+    """(robot, figure) as two compounds — what the concept modules use."""
+    g = build_groups(stance)
+    robot = Compound(children=[s for k, c in g.items() if k != "figure" for s in c.solids()])
+    return robot, g["figure"]
 
 
 def describe(robot) -> str:
