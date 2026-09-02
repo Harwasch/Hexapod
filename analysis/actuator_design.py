@@ -258,7 +258,7 @@ def write_doc(figs):
     rrow = [(f"{r:.1f}", f"{t:.2f}", f"{t/A3_J['femur']['t_cont']:.2f}") for r, t in RTH_TRADE]
     mrows = [(k, f"{v*1e3:.0f}") for k, v in MASS_A3.items()] + [("**total, femur / knee unit**", f"**{TOTAL_A3*1e3:.0f}**")]
     mrows2 = [(f"same with 5 mm discs", f"{TOTAL_A3_THIN*1e3:.0f}"), (f"yaw unit: 6-layer board, {YAW_LEAN['h_m']*1e3:.1f} mm magnets, one disc", f"{TOTAL_YAW*1e3:.0f}")]
-    cad_mrows = [(k, f"{CADJ['femur']['mass_g'][k]:.0f}", f"{CADJ['yaw']['mass_g'][k]:.0f}") for k in CADJ['femur']['mass_g']] + \
+    cad_mrows = [(k, f"{CADJ['femur']['mass_g'][k]:.0f}", f"{CADJ['yaw']['mass_g'][k]:.0f}" if k in CADJ['yaw']['mass_g'] else "—") for k in CADJ['femur']['mass_g']] + \
                 [("**total**", f"**{CADJ['femur']['total_g']:.0f}**", f"**{CADJ['yaw']['total_g']:.0f}**")]
     b12, b16, b8 = AB, AB16, AB8
     brd_rows = [
