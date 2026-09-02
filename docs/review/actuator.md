@@ -1,8 +1,8 @@
-# Review — Actuator, round 9: layout v2, 6 mm magnets, cheap base — $597 per unit
+# Review — Actuator, round 10: the cost search — the floor is an OTS outrunner
 
 `actuator` · requested 2026-09-02 · branch `claude/hexapod-robot-design-mt516g`
 
-Pushing the unit's cost further. The stator was laid out again with the coils reaching the magnets' outer edge (r 84.6) and the interconnect moved out to the clamp rim: +14 % torque for the same copper, so the two 8-layer 2 oz JLCPCB boards per position now give 2.95 N·m (the 3 oz board gave 2.90 before). That paid for 6 mm magnets instead of 8 (unit 5.33 kg and 54 mm tall instead of 5.99 kg and 62 mm; robot 124 kg) with margins 1.16 femur / 1.10 knee / 1.11 yaw on the requirement as written. A conventional N-S rotor on steel back plates was simulated and rejected (same field, +0.7 kg per unit of yoke). The base became a laser-cut floor plate, a tube slice, a turned bearing carrier and a laser-cut steel pin cage; the flange a turned hub plus a plate. Housing Ø192. BOM $597 at 20 units, $396 at 100 ($1,690 in round 7).
+Review asked to exhaust the cost routes and be confident of the minimum. analysis/cost_search.py evaluates every motor family (PCB axial 2-stator as designed, PCB 1-stator, 1 or 2 OTS 8318 outrunners), reduction (cycloid x capstan), quantity (20 / 100) and requirement definition at the robot mass each implies. Result: the PCB two-stator unit is $597 / $396 at a 124 kg robot (margin 1.10); a single PCB stator does not close the requirement as written at any mass; one OTS 8318 outrunner (0.65 kg, ~$65) heat-sunk, through a 25-lobe cycloid and the 4:1 capstan, closes at a 77 kg robot with 1.12 margin for ~$423 / $284 — the cheapest and lightest option, subject to measuring the outrunner's heat-sunk continuous current (assumed 1.2 K/W, 28 A) and a quantity quote. Also answered: the middle rotor is two back-to-back Halbach rings whose carrier is only structural (2 mm sheet or none); the rotor can be sheet plus OTS standoffs; two stators were needed only because the PCB machine is ironless.
 
 ## What you are agreeing to
 
@@ -58,6 +58,10 @@ Pushing the unit's cost further. The stator was laid out again with the coils re
 
 ![closure.png](../design/actuator/closure.png)
 
+**cost-search.png**
+
+![cost-search.png](../design/actuator/cost-search.png)
+
 **cycloid-profiles.png**
 
 ![cycloid-profiles.png](../design/actuator/cycloid-profiles.png)
@@ -102,26 +106,8 @@ Pushing the unit's cost further. The stator was laid out again with the coils re
 
 ![thermal-network.png](../design/actuator/thermal-network.png)
 
-**front.png**
-
-![front.png](../design/drawing/front.png)
-
-**hip-stack.png**
-
-![hip-stack.png](../design/drawing/hip-stack.png)
-
-**side.png**
-
-![side.png](../design/drawing/side.png)
-
-**top.png**
-
-![top.png](../design/drawing/top.png)
-
 | File | Opens in |
 |---|---|
-| [docs/design/01-sizing.md](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/docs/design/01-sizing.md) | renders on GitHub |
-| [docs/design/06-geometry.md](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/docs/design/06-geometry.md) | renders on GitHub |
 | [docs/design/08-actuator-design.md](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/docs/design/08-actuator-design.md) | renders on GitHub |
 | [docs/design/bom-actuator.csv](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/docs/design/bom-actuator.csv) | GitHub table view |
 
@@ -139,13 +125,13 @@ Sources and working files. Not part of the agreement — these change as work go
 
 | File | Opens in |
 |---|---|
-| [analysis/capstan.py](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/analysis/capstan.py) | plain text on GitHub |
 | [analysis/closure.py](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/analysis/closure.py) | plain text on GitHub |
-| [analysis/rotor_field.py](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/analysis/rotor_field.py) | plain text on GitHub |
+| [analysis/cost_search.py](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/analysis/cost_search.py) | plain text on GitHub |
 | [cad/actuator/actuator.py](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/cad/actuator/actuator.py) | plain text on GitHub |
 | [hw/stator/asbuilt.json](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/hw/stator/asbuilt.json) | plain text on GitHub |
 | [hw/stator/capstan.json](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/hw/stator/capstan.json) | plain text on GitHub |
 | [hw/stator/closure.json](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/hw/stator/closure.json) | plain text on GitHub |
+| [hw/stator/cost_search.json](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/hw/stator/cost_search.json) | plain text on GitHub |
 | [hw/stator/drc.json](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/hw/stator/drc.json) | plain text on GitHub |
 | [hw/stator/geometry.json](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/hw/stator/geometry.json) | plain text on GitHub |
 | [hw/stator/gerbers/stator-B_Adhesive.gba](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/hw/stator/gerbers/stator-B_Adhesive.gba) | download |
@@ -208,15 +194,30 @@ Sources and working files. Not part of the agreement — these change as work go
 
 ## What we need decided
 
-1. Layout v2 puts the phase rings and pads at the clamp rim and grows the housing from Ø186 to Ø192 for +14 % torque. Accept?
-2. 6 mm magnets everywhere (5.33 kg, 54 mm, 124 kg robot, margins 1.10-1.16) or 8 mm for margin (5.87 kg, 62 mm, 134 kg, 1.15-1.22)?
-3. $597 per unit at 20 units, $396 at 100. The remaining lines that are physics are the boards ($80) and magnets ($60); the rest is machining route and the driver. Sign the actuator stage here, or name a target price to push against?
+1. Motor family: switch to an OTS 8318-class outrunner (single motor per unit, 25-lobe cycloid, 4:1 capstan, ~$420 at 20 units, 77 kg robot, pending a heat-sunk bench measurement), or stay with the PCB axial machine ($597, 124 kg, self-manufacturable)?
+2. If the PCB machine stays: rebuild the rotor as sheet parts and OTS standoffs with the middle rotor as two back-to-back rings on a 2 mm plate?
+3. Is the continuous load case as written (30° slope, dyn 1.5, all day) the requirement, or is level walking at dyn 1.2 with slopes as a minutes-long rating acceptable? It is the largest cost lever in the search.
 
 ## Decision
 
-**Changes requested** 2026-09-02 — the agent is working on these and will come back.
+**Not yet reviewed — this is waiting on you.**
 
-> Not accepted yet; exhaust all possible routes of reducing cost and be confident the global minimum for the requirements has been found
+Answer in the Claude session that sent you this link. There is nothing to run and nothing to sign here.
+
+Say which option you want **and why**: the reason is worth more than the choice, and it is what gets re-read later when a number has to move. If something is wrong, say what would be right.
+
+<details><summary>How the answer gets recorded</summary>
+
+The agent writes your decision, in your words, into [`docs/review/reviews.yaml`](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/docs/review/reviews.yaml):
+
+```bash
+review-gate sign actuator --approve --by <name> --note "..."
+review-gate sign actuator --changes "what to change"
+```
+
+Until that happens, any chunk of work depending on this review cannot be marked done.
+
+</details>
 
 ---
 

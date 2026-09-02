@@ -606,33 +606,31 @@ reviews:
     - docs/design/drawing/side.png
     - docs/design/drawing/top.png
 - id: actuator
-  title: 'Actuator, round 9: layout v2, 6 mm magnets, cheap base — $597 per unit'
+  title: 'Actuator, round 10: the cost search — the floor is an OTS outrunner'
   stage: design
-  summary: 'Pushing the unit''s cost further. The stator was laid out again with the coils
-    reaching the magnets'' outer edge (r 84.6) and the interconnect moved out to the clamp
-    rim: +14 % torque for the same copper, so the two 8-layer 2 oz JLCPCB boards per position
-    now give 2.95 N·m (the 3 oz board gave 2.90 before). That paid for 6 mm magnets instead
-    of 8 (unit 5.33 kg and 54 mm tall instead of 5.99 kg and 62 mm; robot 124 kg) with margins
-    1.16 femur / 1.10 knee / 1.11 yaw on the requirement as written. A conventional N-S rotor
-    on steel back plates was simulated and rejected (same field, +0.7 kg per unit of yoke).
-    The base became a laser-cut floor plate, a tube slice, a turned bearing carrier and a
-    laser-cut steel pin cage; the flange a turned hub plus a plate. Housing Ø192. BOM $597
-    at 20 units, $396 at 100 ($1,690 in round 7).'
+  summary: 'Review asked to exhaust the cost routes and be confident of the minimum. analysis/cost_search.py
+    evaluates every motor family (PCB axial 2-stator as designed, PCB 1-stator, 1 or 2 OTS
+    8318 outrunners), reduction (cycloid x capstan), quantity (20 / 100) and requirement definition
+    at the robot mass each implies. Result: the PCB two-stator unit is $597 / $396 at a 124
+    kg robot (margin 1.10); a single PCB stator does not close the requirement as written
+    at any mass; one OTS 8318 outrunner (0.65 kg, ~$65) heat-sunk, through a 25-lobe cycloid
+    and the 4:1 capstan, closes at a 77 kg robot with 1.12 margin for ~$423 / $284 — the cheapest
+    and lightest option, subject to measuring the outrunner''s heat-sunk continuous current
+    (assumed 1.2 K/W, 28 A) and a quantity quote. Also answered: the middle rotor is two back-to-back
+    Halbach rings whose carrier is only structural (2 mm sheet or none); the rotor can be
+    sheet plus OTS standoffs; two stators were needed only because the PCB machine is ironless.'
   questions:
-  - Layout v2 puts the phase rings and pads at the clamp rim and grows the housing from Ø186
-    to Ø192 for +14 % torque. Accept?
-  - 6 mm magnets everywhere (5.33 kg, 54 mm, 124 kg robot, margins 1.10-1.16) or 8 mm for
-    margin (5.87 kg, 62 mm, 134 kg, 1.15-1.22)?
-  - $597 per unit at 20 units, $396 at 100. The remaining lines that are physics are the boards
-    ($80) and magnets ($60); the rest is machining route and the driver. Sign the actuator
-    stage here, or name a target price to push against?
+  - 'Motor family: switch to an OTS 8318-class outrunner (single motor per unit, 25-lobe cycloid,
+    4:1 capstan, ~$420 at 20 units, 77 kg robot, pending a heat-sunk bench measurement), or
+    stay with the PCB axial machine ($597, 124 kg, self-manufacturable)?'
+  - 'If the PCB machine stays: rebuild the rotor as sheet parts and OTS standoffs with the
+    middle rotor as two back-to-back rings on a 2 mm plate?'
+  - Is the continuous load case as written (30° slope, dyn 1.5, all day) the requirement,
+    or is level walking at dyn 1.2 with slopes as a minutes-long rating acceptable? It is
+    the largest cost lever in the search.
   artifacts:
-  - path: docs/design/01-sizing.md
-    sha256: e3032f107e83ad22
-  - path: docs/design/06-geometry.md
-    sha256: dd117a4e8d1c9ae9
   - path: docs/design/08-actuator-design.md
-    sha256: c6dbc24f9c0432ba
+    sha256: 5653a6b146aab240
   - path: docs/design/actuator/cad-femur-1s-cutaway.png
     sha256: 77320684fabad2b9
   - path: docs/design/actuator/cad-femur-1s-section.png
@@ -659,6 +657,8 @@ reviews:
     sha256: 30a493ccb0858c08
   - path: docs/design/actuator/closure.png
     sha256: 929c064abfb320c6
+  - path: docs/design/actuator/cost-search.png
+    sha256: 49bedafc7d12cfb9
   - path: docs/design/actuator/cycloid-profiles.png
     sha256: 522a620dceef72e6
   - path: docs/design/actuator/operating-envelopes.png
@@ -683,22 +683,14 @@ reviews:
     sha256: 7ebaa6493681c605
   - path: docs/design/bom-actuator.csv
     sha256: 2d1fe417d651e045
-  - path: docs/design/drawing/front.png
-    sha256: f42d2c4003f5a23d
-  - path: docs/design/drawing/hip-stack.png
-    sha256: 143ecea4e64c8f56
-  - path: docs/design/drawing/side.png
-    sha256: 0dba92c293abdf58
-  - path: docs/design/drawing/top.png
-    sha256: 69ac74af0a3deaab
   references:
-  - analysis/capstan.py
   - analysis/closure.py
-  - analysis/rotor_field.py
+  - analysis/cost_search.py
   - cad/actuator/actuator.py
   - hw/stator/asbuilt.json
   - hw/stator/capstan.json
   - hw/stator/closure.json
+  - hw/stator/cost_search.json
   - hw/stator/drc.json
   - hw/stator/geometry.json
   - hw/stator/gerbers/stator-B_Adhesive.gba
@@ -761,8 +753,8 @@ reviews:
   - hw/stator/variants/v1-r80/geometry.json
   - hw/stator/variants/v1-r80/stator.kicad_pcb
   requested: '2026-09-02'
-  requested_commit: 2b78631
-  status: changes_requested
+  requested_commit: ad4b74c
+  status: requested
   packet: docs/review/actuator.md
   history:
   - 'on': '2026-09-02'
@@ -1102,9 +1094,33 @@ reviews:
     by: harrison.waschura@gmail.com
     note: Not accepted yet; exhaust all possible routes of reducing cost and be confident
       the global minimum for the requirements has been found
+  - 'on': '2026-09-02'
+    action: requested
+    commit: ad4b74c
+    questions:
+    - 'Motor family: switch to an OTS 8318-class outrunner (single motor per unit, 25-lobe
+      cycloid, 4:1 capstan, ~$420 at 20 units, 77 kg robot, pending a heat-sunk bench measurement),
+      or stay with the PCB axial machine ($597, 124 kg, self-manufacturable)?'
+    - 'If the PCB machine stays: rebuild the rotor as sheet parts and OTS standoffs with the
+      middle rotor as two back-to-back rings on a 2 mm plate?'
+    - Is the continuous load case as written (30° slope, dyn 1.5, all day) the requirement,
+      or is level walking at dyn 1.2 with slopes as a minutes-long rating acceptable? It is
+      the largest cost lever in the search.
+    summary: 'Review asked to exhaust the cost routes and be confident of the minimum. analysis/cost_search.py
+      evaluates every motor family (PCB axial 2-stator as designed, PCB 1-stator, 1 or 2 OTS
+      8318 outrunners), reduction (cycloid x capstan), quantity (20 / 100) and requirement
+      definition at the robot mass each implies. Result: the PCB two-stator unit is $597 /
+      $396 at a 124 kg robot (margin 1.10); a single PCB stator does not close the requirement
+      as written at any mass; one OTS 8318 outrunner (0.65 kg, ~$65) heat-sunk, through a
+      25-lobe cycloid and the 4:1 capstan, closes at a 77 kg robot with 1.12 margin for ~$423
+      / $284 — the cheapest and lightest option, subject to measuring the outrunner''s heat-sunk
+      continuous current (assumed 1.2 K/W, 28 A) and a quantity quote. Also answered: the
+      middle rotor is two back-to-back Halbach rings whose carrier is only structural (2 mm
+      sheet or none); the rotor can be sheet plus OTS standoffs; two stators were needed only
+      because the PCB machine is ironless.'
+    changed:
+    - docs/design/08-actuator-design.md
+    added:
+    - docs/design/actuator/cost-search.png
   decided_commit: e4963a5
-  note: Not accepted yet; exhaust all possible routes of reducing cost and be confident the
-    global minimum for the requirements has been found
-  decided: '2026-09-02'
-  reviewer: harrison.waschura@gmail.com
 artifact_url: https://claude.ai/code/artifact/c27a8924-af18-4d17-bd9b-0fcb41e685e3

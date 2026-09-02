@@ -567,7 +567,76 @@ the lighter robot that was not chosen. The 62 mm stack no longer fits the
 200 mm body slab (three units and two gaps are 202 mm), so the slab is now
 220 mm in `hexapod_model.py`; the drawings in 06 carry it.
 
-### 9.8 Open items from this round (updated in round 9)
+### 9.12 Round 10: exhausting the cost routes — `analysis/cost_search.py`
+
+The review asked for confidence that the minimum has been found, not another
+line trimmed. So the design space was searched as a whole: motor family,
+number of stators, reduction, quantity and the definition of "continuous",
+each option at the robot mass it implies and with the torque it actually gives.
+
+| Option | Requirement | Unit (kg) | Robot (kg) | Joint gives / knee needs (N·m) | Margin | $ at 20 | $ at 100 |
+|---|---|---|---|---|---|---|---|
+| PCB 2-stator v2, 2 oz boards (as designed) | as written | 5.33 | 124 | 365 / 332 | 1.10 | 597 | 396 |
+| PCB 2-stator v2, 2 oz boards (as designed) | level walking, dyn 1.2 | 5.33 | 124 | 365 / 216 | 1.69 | 597 | 396 |
+| PCB 1-stator v2, 3 oz board | as written | 3.89 | 99 | 230 / 263 | 0.87 ✗ | 637 | 422 |
+| PCB 1-stator v2, 3 oz board | level walking, dyn 1.2 | 3.89 | 99 | 230 / 174 | 1.32 | 637 | 422 |
+| PCB 1-stator v2, 2 oz, 8-turn board, 100:1 | as written | 3.62 | 94 | 218 / 250 | 0.87 ✗ | 497 | 320 |
+| PCB 1-stator v2, 2 oz, 8-turn board, 100:1 | level walking, dyn 1.2 | 3.62 | 94 | 218 / 166 | 1.31 | 497 | 320 |
+| 1 x 8318 outrunner, 100:1 | as written | 2.75 | 77 | 229 / 205 | 1.12 | 423 | 284 |
+| 1 x 8318 outrunner, 100:1 | level walking, dyn 1.2 | 2.75 | 77 | 229 / 138 | 1.66 | 423 | 284 |
+| 2 x 8318 outrunner, 80:1 | as written | 3.40 | 89 | 367 / 236 | 1.55 | 503 | 347 |
+| 2 x 8318 outrunner, 80:1 | level walking, dyn 1.2 | 3.40 | 89 | 367 / 157 | 2.33 | 503 | 347 |
+
+![Cost search](actuator/cost-search.png)
+
+What the search says:
+
+* **Two stators are needed only because the motor is ironless.** The PCB
+  machine's shear stress is ~3 kPa; an iron-core outrunner's is 10–15 kPa. A
+  single PCB stator closes the requirement as written at no mass (its own
+  weight is what defeats it), but closes level walking with 1.3 margin at
+  $497 / $320.
+* **The cheapest option that closes the requirement as written is not the
+  PCB machine.** One off-the-shelf 8318 outrunner (Ø92 × 40, 0.65 kg, 100 KV,
+  0.055 Ω, ~$65 / $48) heat-sunk to an aluminium mount gives an estimated
+  2.6 N·m continuous at 28 A; through a 25-lobe cycloid and the same 4:1
+  capstan (100:1) it closes at a **77 kg robot with 1.12 margin for
+  $423 / $284** — a lighter robot and a cheaper unit than anything the PCB machine
+  reaches, because the motor mass drops from ~2.7 kg of boards, magnets and
+  rotor plates to 0.65 kg. Two such motors on one eccentric shaft give 1.55
+  margin at 89 kg for $503 / $347. The number that carries this is the
+  outrunner's continuous current in a closed body, which the listings only
+  quote with propeller airflow: it is an assumption (1.2 K/W) until a motor
+  is bolted to a plate and measured — the first bench test either way.
+* **What the PCB machine keeps.** No cogging, a flat form, no dependence on a
+  motor vendor, and the ability to make the active parts in-house. At
+  $597 / $396 and 5.3 kg it is the more expensive and heavier way to the same
+  torque; its case is self-manufacture and volume, not unit cost at 20.
+* **The requirement is the largest lever of all.** Level walking at dyn 1.2
+  instead of the 30° slope at dyn 1.5 lets the single-stator PCB unit close
+  at 94 kg and the single outrunner carry 1.66 margin.
+
+**On the rotor cup and the middle rotor** (asked in review): the middle rotor
+is two Halbach rings back to back (red, orange, red in the cutaway is magnet,
+4.5 mm aluminium carrier, magnet). Magnetically the carrier does nothing — a
+Halbach array is one-sided and each ring feeds its own gap — and the two
+2.3 kN attractions on the middle ring cancel, so it only has to hold the
+blocks in place: a 2 mm laser-cut ring, or the two rings bonded back to back
+with no plate at all. The whole rotor can be sheet and off-the-shelf parts:
+laser-cut carrier plates, twelve turned standoffs instead of the drum, a
+clamping hub instead of the machined hub. That takes 2.5 mm and ~100 g out of
+the unit and the last turned part out of the rotor. It is not modelled,
+because the search above says the motor decision comes first.
+
+**The honest statement of the minimum.** Within this design space and these
+requirements, the cost floor is an OTS iron-core outrunner driving the
+20–25-lobe cycloid and the 4:1 capstan, in a laser-cut housing, at roughly
+$420 per unit at 20 and $280 at 100, on a ~77 kg robot — subject to one
+measurement (the outrunner's heat-sunk continuous current) and one quote
+(the motor at quantity). Below that lies only a custom driver board (−$20),
+a cast base (−$30 at 500+), and relaxing the continuous load case.
+
+### 9.8 Open items from this round (updated in round 10)
 
 1. **OD 186, not 170** (§9.3): accepted by the review.
 2. **Mass and closure** (§9.7): the review chose to renegotiate the mass

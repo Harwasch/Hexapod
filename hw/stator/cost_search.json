@@ -1,0 +1,442 @@
+{
+ "outrunner": {
+  "name": "8318 100KV outrunner",
+  "kv": 100.0,
+  "R_ll": 0.055,
+  "mass_kg": 0.65,
+  "d_mm": 92,
+  "h_mm": 40,
+  "price": {
+   "20": 65.0,
+   "100": 48.0
+  },
+  "R_th": 1.2,
+  "T_cu_max": 120.0,
+  "Kt": 0.0954929658551372,
+  "I_cont": 27.524094128159014,
+  "T_cont": 2.628357380773871,
+  "n_noload": 4800.0
+ },
+ "rows": [
+  {
+   "option": "PCB 2-stator v2, 2 oz boards (as designed)",
+   "motor": "PCB axial, 2 stators, 6 mm Halbach",
+   "family": "pcb",
+   "requirement": "as written",
+   "qty": 20,
+   "m_unit": 5.3292,
+   "m_robot": 124.37720000000002,
+   "T_joint": 365.44232333506426,
+   "need_femur": 314.25957902512073,
+   "need_knee": 332.01920432414056,
+   "margin": 1.1006662222414512,
+   "margins": {
+    "femur": 1.1628677301379957,
+    "knee": 1.1006662222414512,
+    "yaw": 1.1138881176252022
+   },
+   "cost": 597.05,
+   "closes": true,
+   "note": "the round-9 unit"
+  },
+  {
+   "option": "PCB 2-stator v2, 2 oz boards (as designed)",
+   "motor": "PCB axial, 2 stators, 6 mm Halbach",
+   "family": "pcb",
+   "requirement": "as written",
+   "qty": 100,
+   "m_unit": 5.3292,
+   "m_robot": 124.37720000000002,
+   "T_joint": 365.44232333506426,
+   "need_femur": 314.25957902512073,
+   "need_knee": 332.01920432414056,
+   "margin": 1.1006662222414512,
+   "margins": {
+    "femur": 1.1628677301379957,
+    "knee": 1.1006662222414512,
+    "yaw": 1.1138881176252022
+   },
+   "cost": 396.16,
+   "closes": true,
+   "note": "the round-9 unit"
+  },
+  {
+   "option": "PCB 2-stator v2, 2 oz boards (as designed)",
+   "motor": "PCB axial, 2 stators, 6 mm Halbach",
+   "family": "pcb",
+   "requirement": "level walking, dyn 1.2",
+   "qty": 20,
+   "m_unit": 5.3292,
+   "m_robot": 124.37720000000002,
+   "T_joint": 365.44232333506426,
+   "need_femur": 171.87006086210675,
+   "need_knee": 215.87389428957152,
+   "margin": 1.6928509328916947,
+   "margins": {
+    "femur": 2.1262709834510543,
+    "knee": 1.6928509328916947,
+    "yaw": 13.154872961376903
+   },
+   "cost": 597.05,
+   "closes": true,
+   "note": "the round-9 unit"
+  },
+  {
+   "option": "PCB 2-stator v2, 2 oz boards (as designed)",
+   "motor": "PCB axial, 2 stators, 6 mm Halbach",
+   "family": "pcb",
+   "requirement": "level walking, dyn 1.2",
+   "qty": 100,
+   "m_unit": 5.3292,
+   "m_robot": 124.37720000000002,
+   "T_joint": 365.44232333506426,
+   "need_femur": 171.87006086210675,
+   "need_knee": 215.87389428957152,
+   "margin": 1.6928509328916947,
+   "margins": {
+    "femur": 2.1262709834510543,
+    "knee": 1.6928509328916947,
+    "yaw": 13.154872961376903
+   },
+   "cost": 396.16,
+   "closes": true,
+   "note": "the round-9 unit"
+  },
+  {
+   "option": "PCB 1-stator v2, 3 oz board",
+   "motor": "PCB axial, 1 stator, 8 mm Halbach",
+   "family": "pcb",
+   "requirement": "as written",
+   "qty": 20,
+   "m_unit": 3.8931,
+   "m_robot": 98.6558,
+   "T_joint": 230.176974357265,
+   "need_femur": 249.27020528188848,
+   "need_knee": 263.3571122196154,
+   "margin": 0.8740108532376327,
+   "margins": {
+    "femur": 0.923403477350886,
+    "knee": 0.8740108532376327,
+    "yaw": 0.8845100216796673
+   },
+   "cost": 637.05,
+   "closes": false,
+   "note": "one board (3 oz, $150/$110) and two rings"
+  },
+  {
+   "option": "PCB 1-stator v2, 3 oz board",
+   "motor": "PCB axial, 1 stator, 8 mm Halbach",
+   "family": "pcb",
+   "requirement": "as written",
+   "qty": 100,
+   "m_unit": 3.8931,
+   "m_robot": 98.6558,
+   "T_joint": 230.176974357265,
+   "need_femur": 249.27020528188848,
+   "need_knee": 263.3571122196154,
+   "margin": 0.8740108532376327,
+   "margins": {
+    "femur": 0.923403477350886,
+    "knee": 0.8740108532376327,
+    "yaw": 0.8845100216796673
+   },
+   "cost": 422.16,
+   "closes": false,
+   "note": "one board (3 oz, $150/$110) and two rings"
+  },
+  {
+   "option": "PCB 1-stator v2, 3 oz board",
+   "motor": "PCB axial, 1 stator, 8 mm Halbach",
+   "family": "pcb",
+   "requirement": "level walking, dyn 1.2",
+   "qty": 20,
+   "m_unit": 3.8931,
+   "m_robot": 98.6558,
+   "T_joint": 230.176974357265,
+   "need_femur": 138.47504583339642,
+   "need_knee": 173.92876488224314,
+   "margin": 1.323397969928115,
+   "margins": {
+    "femur": 1.6622271036053529,
+    "knee": 1.323397969928115,
+    "yaw": 10.283913269321655
+   },
+   "cost": 637.05,
+   "closes": true,
+   "note": "one board (3 oz, $150/$110) and two rings"
+  },
+  {
+   "option": "PCB 1-stator v2, 3 oz board",
+   "motor": "PCB axial, 1 stator, 8 mm Halbach",
+   "family": "pcb",
+   "requirement": "level walking, dyn 1.2",
+   "qty": 100,
+   "m_unit": 3.8931,
+   "m_robot": 98.6558,
+   "T_joint": 230.176974357265,
+   "need_femur": 138.47504583339642,
+   "need_knee": 173.92876488224314,
+   "margin": 1.323397969928115,
+   "margins": {
+    "femur": 1.6622271036053529,
+    "knee": 1.323397969928115,
+    "yaw": 10.283913269321655
+   },
+   "cost": 422.16,
+   "closes": true,
+   "note": "one board (3 oz, $150/$110) and two rings"
+  },
+  {
+   "option": "PCB 1-stator v2, 2 oz, 8-turn board, 100:1",
+   "motor": "PCB axial, 1 stator, 6 mm Halbach, 25-lobe x 4",
+   "family": "pcb",
+   "requirement": "as written",
+   "qty": 20,
+   "m_unit": 3.6231,
+   "m_robot": 93.7958,
+   "T_joint": 218.1233867406164,
+   "need_femur": 236.9906109988359,
+   "need_knee": 250.38356615960336,
+   "margin": 0.8711569616417111,
+   "margins": {
+    "femur": 0.9203883049260877,
+    "knee": 0.8711569616417111,
+    "yaw": 0.940396637164536
+   },
+   "cost": 497.04999999999995,
+   "closes": false,
+   "note": "joint speed 3.6 rad/s against 3.8 needed (0.95); the 8-turn board loses 6x the eddy power at speed"
+  },
+  {
+   "option": "PCB 1-stator v2, 2 oz, 8-turn board, 100:1",
+   "motor": "PCB axial, 1 stator, 6 mm Halbach, 25-lobe x 4",
+   "family": "pcb",
+   "requirement": "as written",
+   "qty": 100,
+   "m_unit": 3.6231,
+   "m_robot": 93.7958,
+   "T_joint": 218.1233867406164,
+   "need_femur": 236.9906109988359,
+   "need_knee": 250.38356615960336,
+   "margin": 0.8711569616417111,
+   "margins": {
+    "femur": 0.9203883049260877,
+    "knee": 0.8711569616417111,
+    "yaw": 0.940396637164536
+   },
+   "cost": 320.16,
+   "closes": false,
+   "note": "joint speed 3.6 rad/s against 3.8 needed (0.95); the 8-turn board loses 6x the eddy power at speed"
+  },
+  {
+   "option": "PCB 1-stator v2, 2 oz, 8-turn board, 100:1",
+   "motor": "PCB axial, 1 stator, 6 mm Halbach, 25-lobe x 4",
+   "family": "pcb",
+   "requirement": "level walking, dyn 1.2",
+   "qty": 20,
+   "m_unit": 3.6231,
+   "m_robot": 93.7958,
+   "T_joint": 218.1233867406164,
+   "need_femur": 132.1651337353173,
+   "need_knee": 166.00332812842666,
+   "margin": 1.313969961926713,
+   "margins": {
+    "femur": 1.6503852459109587,
+    "knee": 1.313969961926713,
+    "yaw": 10.891359714111042
+   },
+   "cost": 497.04999999999995,
+   "closes": true,
+   "note": "joint speed 3.6 rad/s against 3.8 needed (0.95); the 8-turn board loses 6x the eddy power at speed"
+  },
+  {
+   "option": "PCB 1-stator v2, 2 oz, 8-turn board, 100:1",
+   "motor": "PCB axial, 1 stator, 6 mm Halbach, 25-lobe x 4",
+   "family": "pcb",
+   "requirement": "level walking, dyn 1.2",
+   "qty": 100,
+   "m_unit": 3.6231,
+   "m_robot": 93.7958,
+   "T_joint": 218.1233867406164,
+   "need_femur": 132.1651337353173,
+   "need_knee": 166.00332812842666,
+   "margin": 1.313969961926713,
+   "margins": {
+    "femur": 1.6503852459109587,
+    "knee": 1.313969961926713,
+    "yaw": 10.891359714111042
+   },
+   "cost": 320.16,
+   "closes": true,
+   "note": "joint speed 3.6 rad/s against 3.8 needed (0.95); the 8-turn board loses 6x the eddy power at speed"
+  },
+  {
+   "option": "1 x 8318 outrunner, 100:1",
+   "motor": "1 x 8318 100KV outrunner, heat-sunk",
+   "family": "ots",
+   "requirement": "as written",
+   "qty": 20,
+   "m_unit": 2.75,
+   "m_robot": 76.88000000000001,
+   "T_joint": 229.45559934155892,
+   "need_femur": 194.25004289734196,
+   "need_knee": 205.22761750899625,
+   "margin": 1.1180541981953311,
+   "margins": {
+    "femur": 1.181238345789311,
+    "knee": 1.1180541981953311,
+    "yaw": 1.2069173001489555
+   },
+   "cost": 423.05,
+   "closes": true,
+   "note": "continuous torque assumes 1.2 K/W to a heat-sunk mount (28 A, unverified)"
+  },
+  {
+   "option": "1 x 8318 outrunner, 100:1",
+   "motor": "1 x 8318 100KV outrunner, heat-sunk",
+   "family": "ots",
+   "requirement": "as written",
+   "qty": 100,
+   "m_unit": 2.75,
+   "m_robot": 76.88000000000001,
+   "T_joint": 229.45559934155892,
+   "need_femur": 194.25004289734196,
+   "need_knee": 205.22761750899625,
+   "margin": 1.1180541981953311,
+   "margins": {
+    "femur": 1.181238345789311,
+    "knee": 1.1180541981953311,
+    "yaw": 1.2069173001489555
+   },
+   "cost": 284.15999999999997,
+   "closes": true,
+   "note": "continuous torque assumes 1.2 K/W to a heat-sunk mount (28 A, unverified)"
+  },
+  {
+   "option": "1 x 8318 outrunner, 100:1",
+   "motor": "1 x 8318 100KV outrunner, heat-sunk",
+   "family": "ots",
+   "requirement": "level walking, dyn 1.2",
+   "qty": 20,
+   "m_unit": 2.75,
+   "m_robot": 76.88000000000001,
+   "T_joint": 229.45559934155892,
+   "need_femur": 110.20274462653404,
+   "need_knee": 138.4179159802355,
+   "margin": 1.6577015895422278,
+   "margins": {
+    "femur": 2.082122365637632,
+    "knee": 1.6577015895422278,
+    "yaw": 13.740515257962235
+   },
+   "cost": 423.05,
+   "closes": true,
+   "note": "continuous torque assumes 1.2 K/W to a heat-sunk mount (28 A, unverified)"
+  },
+  {
+   "option": "1 x 8318 outrunner, 100:1",
+   "motor": "1 x 8318 100KV outrunner, heat-sunk",
+   "family": "ots",
+   "requirement": "level walking, dyn 1.2",
+   "qty": 100,
+   "m_unit": 2.75,
+   "m_robot": 76.88000000000001,
+   "T_joint": 229.45559934155892,
+   "need_femur": 110.20274462653404,
+   "need_knee": 138.4179159802355,
+   "margin": 1.6577015895422278,
+   "margins": {
+    "femur": 2.082122365637632,
+    "knee": 1.6577015895422278,
+    "yaw": 13.740515257962235
+   },
+   "cost": 284.15999999999997,
+   "closes": true,
+   "note": "continuous torque assumes 1.2 K/W to a heat-sunk mount (28 A, unverified)"
+  },
+  {
+   "option": "2 x 8318 outrunner, 80:1",
+   "motor": "2 x 8318 100KV outrunner, heat-sunk",
+   "family": "ots",
+   "requirement": "as written",
+   "qty": 20,
+   "m_unit": 3.3999999999999995,
+   "m_robot": 88.58,
+   "T_joint": 367.12895894649427,
+   "need_femur": 223.81202913432034,
+   "need_knee": 236.46022839421025,
+   "margin": 1.5526034185099495,
+   "margins": {
+    "femur": 1.640345071560754,
+    "knee": 1.5526034185099495,
+    "yaw": 1.5712542679293022
+   },
+   "cost": 503.05,
+   "closes": true,
+   "note": "two motors share the eccentric shaft through a belt; continuous torque assumes 1.2 K/W to a heat-sunk mount (28 A, unverified)"
+  },
+  {
+   "option": "2 x 8318 outrunner, 80:1",
+   "motor": "2 x 8318 100KV outrunner, heat-sunk",
+   "family": "ots",
+   "requirement": "as written",
+   "qty": 100,
+   "m_unit": 3.3999999999999995,
+   "m_robot": 88.58,
+   "T_joint": 367.12895894649427,
+   "need_femur": 223.81202913432034,
+   "need_knee": 236.46022839421025,
+   "margin": 1.5526034185099495,
+   "margins": {
+    "femur": 1.640345071560754,
+    "knee": 1.5526034185099495,
+    "yaw": 1.5712542679293022
+   },
+   "cost": 347.15999999999997,
+   "closes": true,
+   "note": "two motors share the eccentric shaft through a belt; continuous torque assumes 1.2 K/W to a heat-sunk mount (28 A, unverified)"
+  },
+  {
+   "option": "2 x 8318 outrunner, 80:1",
+   "motor": "2 x 8318 100KV outrunner, heat-sunk",
+   "family": "ots",
+   "requirement": "level walking, dyn 1.2",
+   "qty": 20,
+   "m_unit": 3.3999999999999995,
+   "m_robot": 88.58,
+   "T_joint": 367.12895894649427,
+   "need_femur": 125.39327375153931,
+   "need_knee": 157.49767112831225,
+   "margin": 2.3310119845987876,
+   "margins": {
+    "femur": 2.927820192923127,
+    "knee": 2.3310119845987876,
+    "yaw": 18.113920093640008
+   },
+   "cost": 503.05,
+   "closes": true,
+   "note": "two motors share the eccentric shaft through a belt; continuous torque assumes 1.2 K/W to a heat-sunk mount (28 A, unverified)"
+  },
+  {
+   "option": "2 x 8318 outrunner, 80:1",
+   "motor": "2 x 8318 100KV outrunner, heat-sunk",
+   "family": "ots",
+   "requirement": "level walking, dyn 1.2",
+   "qty": 100,
+   "m_unit": 3.3999999999999995,
+   "m_robot": 88.58,
+   "T_joint": 367.12895894649427,
+   "need_femur": 125.39327375153931,
+   "need_knee": 157.49767112831225,
+   "margin": 2.3310119845987876,
+   "margins": {
+    "femur": 2.927820192923127,
+    "knee": 2.3310119845987876,
+    "yaw": 18.113920093640008
+   },
+   "cost": 347.15999999999997,
+   "closes": true,
+   "note": "two motors share the eccentric shaft through a belt; continuous torque assumes 1.2 K/W to a heat-sunk mount (28 A, unverified)"
+  }
+ ]
+}

@@ -102,3 +102,15 @@
 * The N-S-on-iron rotor was rejected on back-plate mass, which only showed up when the yoke
   flux was checked (≥ 4.5 mm of steel at 1.6 T). `analysis/motor_options.py` already has that
   check for its iron-core candidates; the rotor field script did not, and needed it added.
+
+## 2026-09-02 — round 10
+
+* "Have we found the global minimum" needed a search over the design space (motor family,
+  stator count, reduction, quantity, requirement), which no stage in the workflow asks for;
+  the answer overturned the round-4 motor choice (an OTS iron-core outrunner is cheaper and
+  lighter than the ironless PCB machine at these torques). `hw-sourcing` / `hw-planning`
+  should require a cost-and-mass search across motor families before a custom machine is
+  designed, with the closure loop (torque need grows with unit mass) built in.
+* OTS motor listings quote current only with propeller airflow; the heat-sunk continuous
+  rating that decides the design is an assumption until measured. `hw-documentation` should
+  flag "rating conditions" as a field to capture with every motor datasheet.

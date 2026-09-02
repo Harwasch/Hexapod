@@ -102,6 +102,7 @@ BOM_UNIT = sum(float(r["qty_per_unit"]) * float(r["unit_price_usd"]) for r in BO
 BOM_BEFORE = sum(float(r["qty_per_unit"]) * float(r["price_before_usd"]) for r in BOM)
 BOM_100 = sum(float(r["qty_per_unit"]) * float(r["price_100_usd"]) for r in BOM)
 CAP = json.load(open(os.path.join(ROOT, "hw", "stator", "capstan.json")))
+CS = json.load(open(os.path.join(ROOT, "hw", "stator", "cost_search.json")))
 HK2512 = dict(Cr=11.8e3, C0r=16.3e3, n_lim=6500)                # NTN sheet, docs/reference/ntn-hk2512.pdf
 HK3012 = dict(Cr=11.5e3, C0r=17.3e3)                            # PTI HK-series catalogue, docs/reference/pti-hk-series.pdf (round 7)
 RB5013 = dict(C=16.7e3, C0=20.9e3, mass=0.27)                    # THK catalogue 382-5E, docs/reference
@@ -259,6 +260,9 @@ def write_doc(figs):
     rrow = [(f"{r:.1f}", f"{t:.2f}", f"{t/A3_J['femur']['t_cont']:.2f}") for r, t in RTH_TRADE]
     mrows = [(k, f"{v*1e3:.0f}") for k, v in MASS_A3.items()] + [("**total, femur / knee unit**", f"**{TOTAL_A3*1e3:.0f}**")]
     mrows2 = [(f"same with 5 mm discs", f"{TOTAL_A3_THIN*1e3:.0f}"), (f"yaw unit: 6-layer board, {YAW_LEAN['h_m']*1e3:.1f} mm magnets, one disc", f"{TOTAL_YAW*1e3:.0f}")]
+    cs_rows = [(r["option"], r["requirement"], f"{r['m_unit']:.2f}", f"{r['m_robot']:.0f}", f"{r['T_joint']:.0f} / {r['need_knee']:.0f}", f"{r['margin']:.2f}" + ("" if r["closes"] else " ✗"),
+                f"{r['cost']:.0f}", f"{[x for x in CS['rows'] if x['option']==r['option'] and x['requirement']==r['requirement'] and x['qty']==100][0]['cost']:.0f}")
+               for r in CS["rows"] if r["qty"] == 20]
     cad_mrows = [(k, f"{CADJ['femur']['mass_g'][k]:.0f}", f"{CADJ['yaw']['mass_g'][k]:.0f}" if k in CADJ['yaw']['mass_g'] else "—") for k in CADJ['femur']['mass_g']] + \
                 [("**total**", f"**{CADJ['femur']['total_g']:.0f}**", f"**{CADJ['yaw']['total_g']:.0f}**")]
     b12, b16, b8 = AB, AB16, AB8
@@ -735,7 +739,65 @@ the lighter robot that was not chosen. The 62 mm stack no longer fits the
 200 mm body slab (three units and two gaps are 202 mm), so the slab is now
 220 mm in `hexapod_model.py`; the drawings in 06 carry it.
 
-### 9.8 Open items from this round (updated in round 9)
+### 9.12 Round 10: exhausting the cost routes — `analysis/cost_search.py`
+
+The review asked for confidence that the minimum has been found, not another
+line trimmed. So the design space was searched as a whole: motor family,
+number of stators, reduction, quantity and the definition of "continuous",
+each option at the robot mass it implies and with the torque it actually gives.
+
+{md(("Option", "Requirement", "Unit (kg)", "Robot (kg)", "Joint gives / knee needs (N·m)", "Margin", "$ at 20", "$ at 100"), cs_rows)}
+
+![Cost search]({rel(os.path.join(FIG, 'cost-search.png'))})
+
+What the search says:
+
+* **Two stators are needed only because the motor is ironless.** The PCB
+  machine's shear stress is ~3 kPa; an iron-core outrunner's is 10–15 kPa. A
+  single PCB stator closes the requirement as written at no mass (its own
+  weight is what defeats it), but closes level walking with 1.3 margin at
+  $497 / $320.
+* **The cheapest option that closes the requirement as written is not the
+  PCB machine.** One off-the-shelf 8318 outrunner (Ø92 × 40, 0.65 kg, 100 KV,
+  0.055 Ω, ~$65 / $48) heat-sunk to an aluminium mount gives an estimated
+  {CS['outrunner']['T_cont']:.1f} N·m continuous at {CS['outrunner']['I_cont']:.0f} A; through a 25-lobe cycloid and the same 4:1
+  capstan (100:1) it closes at a **77 kg robot with 1.12 margin for
+  ${[r for r in CS['rows'] if r['option'].startswith('1 x 8318') and r['requirement']=='as written' and r['qty']==20][0]['cost']:.0f} / ${[r for r in CS['rows'] if r['option'].startswith('1 x 8318') and r['requirement']=='as written' and r['qty']==100][0]['cost']:.0f}** — a lighter robot and a cheaper unit than anything the PCB machine
+  reaches, because the motor mass drops from ~2.7 kg of boards, magnets and
+  rotor plates to 0.65 kg. Two such motors on one eccentric shaft give 1.55
+  margin at 89 kg for $503 / $347. The number that carries this is the
+  outrunner's continuous current in a closed body, which the listings only
+  quote with propeller airflow: it is an assumption ({CS['outrunner']['R_th']} K/W) until a motor
+  is bolted to a plate and measured — the first bench test either way.
+* **What the PCB machine keeps.** No cogging, a flat form, no dependence on a
+  motor vendor, and the ability to make the active parts in-house. At
+  $597 / $396 and 5.3 kg it is the more expensive and heavier way to the same
+  torque; its case is self-manufacture and volume, not unit cost at 20.
+* **The requirement is the largest lever of all.** Level walking at dyn 1.2
+  instead of the 30° slope at dyn 1.5 lets the single-stator PCB unit close
+  at 94 kg and the single outrunner carry 1.66 margin.
+
+**On the rotor cup and the middle rotor** (asked in review): the middle rotor
+is two Halbach rings back to back (red, orange, red in the cutaway is magnet,
+4.5 mm aluminium carrier, magnet). Magnetically the carrier does nothing — a
+Halbach array is one-sided and each ring feeds its own gap — and the two
+2.3 kN attractions on the middle ring cancel, so it only has to hold the
+blocks in place: a 2 mm laser-cut ring, or the two rings bonded back to back
+with no plate at all. The whole rotor can be sheet and off-the-shelf parts:
+laser-cut carrier plates, twelve turned standoffs instead of the drum, a
+clamping hub instead of the machined hub. That takes 2.5 mm and ~100 g out of
+the unit and the last turned part out of the rotor. It is not modelled,
+because the search above says the motor decision comes first.
+
+**The honest statement of the minimum.** Within this design space and these
+requirements, the cost floor is an OTS iron-core outrunner driving the
+20–25-lobe cycloid and the 4:1 capstan, in a laser-cut housing, at roughly
+$420 per unit at 20 and $280 at 100, on a ~77 kg robot — subject to one
+measurement (the outrunner's heat-sunk continuous current) and one quote
+(the motor at quantity). Below that lies only a custom driver board (−$20),
+a cast base (−$30 at 500+), and relaxing the continuous load case.
+
+### 9.8 Open items from this round (updated in round 10)
 
 1. **OD 186, not 170** (§9.3): accepted by the review.
 2. **Mass and closure** (§9.7): the review chose to renegotiate the mass
