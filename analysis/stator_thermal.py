@@ -105,10 +105,11 @@ R_face_air = CLR / (K_AIR * A_FACE)                            # one face to its
 R_faces = R_face_air / 2                                       # two faces in parallel
 A_top = math.pi * (R_CARRIER_OUT**2 - R_HUB**2)
 A_bot = math.pi * (R_CARRIER_OUT**2 - R_DRUM_IN**2)
-H_rim = (Z["carriers"][1][1] - Z["carriers"][0][0]) * 1e-3
+H_rim = (Z["carriers"][-1][1] - Z["carriers"][0][0]) * 1e-3
+N_STATORS = CAD.get("stators", 1)                               # the boards share the rotor cup's path to the housing
 A_rim = 2 * math.pi * R_CARRIER_OUT * H_rim
 R_rotor_housing = 1 / (K_AIR / CLR * (A_top + A_bot + A_rim))
-R_via_rotor = R_faces + R_rotor_housing                         # copper -> rotor -> housing (excl. the slab)
+R_via_rotor = R_faces + N_STATORS * R_rotor_housing             # copper -> rotor -> housing, per board with every board running
 
 # ---- housing to ambient ---------------------------------------------------------------------
 OD, H = CAD["od_mm"] * 1e-3, CAD["height_mm"] * 1e-3
@@ -117,7 +118,7 @@ H_NAT = 12.0                                                    # W/m2K natural 
 A_POD = 0.16                                                    # m2, a three-unit hip pod's exposed surface (est.)
 HOUSING = {"body holds 45 C": ("R", 0.0), "body at 60 C (15 K rise)": ("dT", 15.0), "unit alone in still air": ("R", 1 / (H_NAT * A_unit)),
            "three-unit hip pod (per unit)": ("R", 3 / (H_NAT * A_POD))}
-ROBOT_BUDGET_W, N_UNITS = 300.0, 18                            # what a ~1.2 m2 body sheds at ~25 K in still air, shared by 18 units
+ROBOT_BUDGET_W, N_UNITS = 300.0, 18 * N_STATORS                # what a ~1.2 m2 body sheds at ~25 K in still air, shared by every board
 
 
 def ring_eddy(rings, rpm, B=0.95):

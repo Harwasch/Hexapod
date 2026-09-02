@@ -32,6 +32,16 @@ documents:
   retrieved: 2026-09-02
   needed_by: []
   notes: RB 5013 row, 50 x 80 x 13 mm, roller pitch dia 64, C 16.7 kN, C0 20.9 kN, mass 0.27 kg. Output bearing of the actuator (cad/actuator).
+- id: pti-hk-series
+  title: PTI HK series drawn cup needle roller bearings, dimension and load table
+  part: HK3012
+  publisher: PTI (pti.eu)
+  revision: unknown (4-page catalogue extract)
+  url: https://pti.eu/pdf/needle/HK.pdf
+  local: docs/reference/pti-hk-series.pdf
+  retrieved: 2026-09-02
+  needed_by: []
+  notes: HK3012 row, 30 x 37 x 12, Cr 11.5 kN, C0r 17.3 kN (PTI's own ratings; its HK2512 row reads 10.45 / 14.45 against NTN's 11.8 / 16.3, so treat as a lower bound). Eccentric bearings of the actuator from round 7.
 
 
 # Example of a fetched document:

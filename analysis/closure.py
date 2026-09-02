@@ -32,9 +32,8 @@ import cycloid as cy                                 # noqa: E402
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 AB = json.load(open(os.path.join(ROOT, "hw", "stator", "asbuilt.json")))
 RF = json.load(open(os.path.join(ROOT, "hw", "stator", "rotor_field.json")))
-AB8 = json.load(open(os.path.join(ROOT, "hw", "stator", "variants", "8t", "asbuilt.json")))   # the yaw units' faster board
 CAD = {}
-for tag in ("femur", "yaw", "femur-2s", "yaw-2s"):
+for tag in ("femur", "yaw", "femur-1s", "yaw-1s"):
     p = os.path.join(ROOT, "cad", "actuator", f"{tag}.json")
     if os.path.exists(p):
         CAD[tag] = json.load(open(p))
@@ -44,7 +43,6 @@ M_FIXED = M_ROBOT_NOW - hm.MASS.actuators             # body, legs, batteries, e
 C = {d: float(sz.DOF_CONT[d]) / M_ROBOT_NOW for d in ("yaw", "femur", "knee")}      # N·m per kg of robot, continuous
 C_PEAK = {d: float(sz.DOF_PEAK[d]) / M_ROBOT_NOW for d in ("yaw", "femur", "knee")}
 T_MOTOR = AB["ratings"]["1000"]["T_cont"]             # one stator, 8 mm blocks, at 1000 rpm
-T_MOTOR_8T = AB8["ratings"]["1000"]["T_cont"]       # 8-turn board (3400 rpm no-load) for the yaw's 7.7 rad/s swing
 N_FK, N_YAW = cy.RATIOS["femur"], cy.RATIOS["yaw"]
 
 
@@ -54,14 +52,14 @@ def fixed_point(m_fk, m_yaw):
 
 
 OPTIONS = {}
-m1, my = CAD["femur"]["total_g"] / 1000, CAD["yaw"]["total_g"] / 1000
-T1, Ty1 = T_MOTOR * N_FK * ETA, T_MOTOR_8T * N_YAW * ETA
-OPTIONS["B: 1 stator everywhere"] = dict(m_fk=m1, m_yaw=my, T_fk=T1, T_yaw=Ty1, h=CAD["femur"]["height_mm"], h_yaw=CAD["yaw"]["height_mm"])
-OPTIONS["B-: 1 stator, lightened -0.6 kg"] = dict(m_fk=m1 - 0.6, m_yaw=my - 0.6, T_fk=T1, T_yaw=Ty1, h=CAD["femur"]["height_mm"], h_yaw=CAD["yaw"]["height_mm"])
-if "femur-2s" in CAD and "yaw-2s" in CAD:
-    m2, my2 = CAD["femur-2s"]["total_g"] / 1000, CAD["yaw-2s"]["total_g"] / 1000
-    OPTIONS["A-: 2 stators femur/knee, 1 stator yaw"] = dict(m_fk=m2, m_yaw=my, T_fk=2 * T1, T_yaw=Ty1, h=CAD["femur-2s"]["height_mm"], h_yaw=CAD["yaw"]["height_mm"])
-    OPTIONS["A: 2 stators everywhere"] = dict(m_fk=m2, m_yaw=my2, T_fk=2 * T1, T_yaw=2 * Ty1, h=CAD["femur-2s"]["height_mm"], h_yaw=CAD["yaw-2s"]["height_mm"])
+m2, my2 = CAD["femur"]["total_g"] / 1000, CAD["yaw"]["total_g"] / 1000          # canonical: two stators (round 7)
+T1, Ty1 = T_MOTOR * N_FK * ETA, T_MOTOR * N_YAW * ETA
+OPTIONS["A: 2 stators everywhere (chosen)"] = dict(m_fk=m2, m_yaw=my2, T_fk=2 * T1, T_yaw=2 * Ty1, h=CAD["femur"]["height_mm"], h_yaw=CAD["yaw"]["height_mm"])
+if "femur-1s" in CAD and "yaw-1s" in CAD:
+    m1, my = CAD["femur-1s"]["total_g"] / 1000, CAD["yaw-1s"]["total_g"] / 1000
+    OPTIONS["A-: 2 stators femur/knee, 1 stator yaw"] = dict(m_fk=m2, m_yaw=my, T_fk=2 * T1, T_yaw=Ty1, h=CAD["femur"]["height_mm"], h_yaw=CAD["yaw-1s"]["height_mm"])
+    OPTIONS["B: 1 stator everywhere"] = dict(m_fk=m1, m_yaw=my, T_fk=T1, T_yaw=Ty1, h=CAD["femur-1s"]["height_mm"], h_yaw=CAD["yaw-1s"]["height_mm"])
+    OPTIONS["B-: 1 stator, lightened -0.6 kg"] = dict(m_fk=m1 - 0.6, m_yaw=my - 0.6, T_fk=T1, T_yaw=Ty1, h=CAD["femur-1s"]["height_mm"], h_yaw=CAD["yaw-1s"]["height_mm"])
 for name, o in OPTIONS.items():
     m = fixed_point(o["m_fk"], o["m_yaw"])
     o["m_robot"] = m
@@ -120,7 +118,7 @@ ax.set_title("Each unit option at its own fixed-point robot mass", fontsize=10)
 ax = axes[1]
 labels = [r["label"].replace(", stride", ",\nstride").replace(": ", ":\n") for r in relief]
 y = np.arange(len(relief))
-for k, (oname, col) in enumerate((("B: 1 stator everywhere", "#0f9b8e"), ("A: 2 stators everywhere", "#d98c3a"))):
+for k, (oname, col) in enumerate((("B: 1 stator everywhere", "#0f9b8e"), ("A: 2 stators everywhere (chosen)", "#d98c3a"))):
     if oname not in OPTIONS:
         continue
     vals = [max(r[oname]["need"]["femur"], r[oname]["need"]["knee"]) for r in relief]

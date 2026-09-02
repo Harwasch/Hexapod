@@ -758,7 +758,7 @@ reviews:
   - hw/stator/variants/8t/stator-8t.kicad_pro
   requested: '2026-09-02'
   requested_commit: e49ed9e
-  status: requested
+  status: changes_requested
   packet: docs/review/actuator.md
   history:
   - 'on': '2026-09-02'
@@ -956,5 +956,15 @@ reviews:
     - docs/design/drawing/hip-stack.png
     - docs/design/drawing/side.png
     - docs/design/drawing/top.png
-  decided_commit: 2bcfb2e
+  - 'on': '2026-09-02'
+    action: changes_requested
+    commit: fd55ee1
+    by: harrison.waschura@gmail.com
+    note: 'A: two stators everywhere. Move to HK3012 at the next revision. Lower the yaw swing
+      requirement.'
+  decided_commit: fd55ee1
+  note: 'A: two stators everywhere. Move to HK3012 at the next revision. Lower the yaw swing
+    requirement.'
+  decided: '2026-09-02'
+  reviewer: harrison.waschura@gmail.com
 artifact_url: https://claude.ai/code/artifact/c27a8924-af18-4d17-bd9b-0fcb41e685e3

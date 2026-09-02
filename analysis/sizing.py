@@ -19,7 +19,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 sys.path.insert(0, os.path.dirname(__file__))
-from hexapod_model import (ACT, BODY, ENERGY, GAITS, LOAD_CASES, MASS, STANCE, YAW_RANGE_DEG, G, PcbMotor,
+from hexapod_model import (ACT, BODY, ENERGY, GAITS, LOAD_CASES, MASS, STANCE, YAW_RANGE_DEG, YAW_SWING_CAP, G, PcbMotor,
                            Reduction, ik, joint_from_motor, joint_speeds, knee_pos,
                            motor_speed_for, stance_torques, tip_angles)
 from leg3d import CHOSEN, MAMMAL_MODE, ROUTINE, STUMBLE, Workspace, evaluate, force_set
@@ -66,7 +66,7 @@ SPEED_REQ = {g.label: max(joint_speeds(ST, g).values()) for g in GAITS}
 JOINT_SPEED_NOMINAL = SPEED_REQ["Walk, tripod gait"]
 JOINT_SPEED_FAST = SPEED_REQ["Fast walk, tripod gait (aspirational)"]
 _js = joint_speeds(ST, GAITS[1])
-DOF_SWING = {"yaw": _js["yaw_swing"], "femur": _js["pitch_swing"], "knee": _js["pitch_swing"]}
+DOF_SWING = {"yaw": min(_js["yaw_swing"], YAW_SWING_CAP), "femur": _js["pitch_swing"], "knee": _js["pitch_swing"]}   # yaw capped: review round 6
 DOF_STANCE_RATE = {"yaw": _js["yaw_stance"], "femur": _js["pitch_stance"], "knee": _js["pitch_stance"]}
 
 # Motor and per-DOF ratio

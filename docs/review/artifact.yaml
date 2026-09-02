@@ -9,9 +9,9 @@
 title: Hexapod
 subtitle: >-
   A large-dog-sized outdoor hexapod with all eighteen motors in the body.
-  Round 6: the actuator as parts (board, rotor field, CAD, thermal, BOM),
-  rebuilt to the review's decisions — two discs, Ø186, the mass budget
-  renegotiated — and the closure loop that decision opened: one stator or two.
+  Round 7: configuration A made canonical — two stators and two discs in
+  every unit, HK3012 journals, the yaw swing requirement lowered — with the
+  closure loop that got us here and the 128 kg robot it implies.
 
 phases:
   - id: geometry
@@ -111,7 +111,7 @@ phases:
       - docs/design/actuator/stator-F_Cu.svg
       - docs/design/actuator/rotor-field.png
       - docs/design/actuator/cad-femur-section.png
-      - docs/design/actuator/cad-femur-2s-section.png
+      - docs/design/actuator/cad-femur-1s-section.png
       - docs/design/actuator/closure.png
       - docs/design/actuator/cad-femur-cutaway.png
       - docs/design/actuator/cad-femur-iso.png
@@ -130,23 +130,22 @@ phases:
         would. Look at: the 2.3 kN pull between the rotors that sizes the
         carriers.
       docs/design/actuator/cad-femur-section.png: >-
-        Section through the single-stator femur unit from the build123d model,
-        rebuilt to the review: two 8 mm cycloid discs 180° apart on twin
-        journals inside the fixed pin cylinder, the motor above them, the
-        crossed-roller output in the mounting face. 49.7 mm tall, Ø186, 3.9 kg.
-        Look at: the empty 12 mm under the rotor is the price of the second disc.
-      docs/design/actuator/cad-femur-2s-section.png: >-
-        The same unit with two stators and three Halbach rotors: 62 mm tall,
-        5.5 kg, twice the torque. This is configuration A in the closure
-        question. Look at: the middle rotor ring carries magnets on both faces
+        The canonical unit (configuration A, chosen in the round-6 review):
+        two stator boards between three Halbach rotors, two 8 mm cycloid
+        discs 180° apart on Ø30 journals (HK3012) inside the fixed pin cylinder,
+        the crossed-roller output in the mounting face. 62 mm tall, Ø186,
+        5.5 kg. Look at: the middle rotor ring carries magnets on both faces
         and is bonded onto the drum between the two boards.
+      docs/design/actuator/cad-femur-1s-section.png: >-
+        The single-stator variant kept in the CAD as the record of
+        configuration B: 50 mm, 3.9 kg. Look at: the empty 12 mm under the
+        rotor is the price of the second disc.
       docs/design/actuator/closure.png: >-
         The loop the mass renegotiation opened. Left: each unit option at the
         robot mass it implies — the single-stator unit cannot close the
         requirement as written at any mass, two stators close it at ~130 kg.
-        Right: which definition of "continuous" each configuration closes. This
-        is the decision this round asks for: A (two stators, the requirement
-        as written) or B (one stator, continuous = level walking).
+        Right: which definition of "continuous" each configuration closes. The
+        review chose A; look at: the margins A carries at 128 kg.
       docs/design/actuator/cad-femur-cutaway.png: >-
         Quarter cutaway of the same model. Look at: the drum through the board
         bore joining the two rotor carriers; the disc between the pins.

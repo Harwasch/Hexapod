@@ -65,3 +65,12 @@
   was a change request and the other three were approvals. `review-gate sign` records one
   decision per milestone, so the record says "changes requested" and the approvals live in
   the note. A per-question decision in `reviews.yaml` would keep the record honest.
+
+## 2026-09-02 — round 7
+
+* The review answered "lower the yaw swing requirement": there was no place in the model
+  for a reviewed cap on a derived requirement, so `YAW_SWING_CAP` was added to
+  `hexapod_model.py` with the decision as its rationale. Derived requirements that a review
+  overrides need a first-class home (StrictDoc `RATIONALE` once the requirements stage runs).
+* Bearing ratings differ by maker for the same drawn-cup size (NTN HK2512 11.8/16.3 kN,
+  PTI 10.45/14.45). `hw-sourcing` should say which maker's number a BOM line is rated on.

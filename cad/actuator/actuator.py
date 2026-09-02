@@ -55,8 +55,9 @@ R_PINS = cy.R_PIN_CIRCLE                        # 43.5
 R_OUT_BRG_OUT, R_OUT_BRG_IN, T_OUT_BRG = 40.0, 25.0, 13.0   # crossed roller RB5013 (50x80x13)
 R_FLANGE = 41.5
 R_OUT_PINS, OUT_PIN_D, N_OUT = cy.R_OUT, cy.OUT_PIN_D, cy.N_OUT
-SHAFT_R = 12.5                                  # Ø25 shaft
-ECC_BRG_OUT, ECC_BRG_W = 16.0, 12.0             # HK2512 drawn-cup needle 25x32x12
+SHAFT_R = 12.5                                  # Ø25 shaft at the bearings and the hub
+JOURNAL_R = 15.0                                # Ø30 eccentric journals (round 7: HK3012, review decision)
+ECC_BRG_OUT, ECC_BRG_W = 18.5, 12.0             # HK3012 drawn-cup needle 30x37x12
 SHAFT_BRG_OUT, SHAFT_BRG_W = 21.0, 9.0          # 6905 25x42x9
 TOP_BRG_IN, TOP_BRG_OUT, TOP_BRG_W = 7.5, 12.0, 5.0    # 6802 15x24x5
 N_BOLTS, BOLT_D, R_BOLTS = 12, 4.4, 89.5
@@ -77,8 +78,8 @@ DISC_PITCH = DISC_T + 2 * CUP_OVER              # cups of neighbouring discs tou
 Z_DISCS = [Z_DISC0 + k * DISC_PITCH for k in range(N_DISCS)]
 Z_CUP0 = Z_DISC0 - CUP_OVER
 Z_CYL_TOP = Z_DISCS[-1] + DISC_T + CUP_OVER     # cylinder stops level with the last cup top
-N_STATORS = 2 if "--stators=2" in sys.argv or "2s" in sys.argv else 1
-TAG = JOINT + ("-2s" if N_STATORS == 2 else "")
+N_STATORS = 1 if "--stators=1" in sys.argv or "1s" in sys.argv else 2      # round 7: two stators is the canonical unit (review decision A)
+TAG = JOINT + ("-1s" if N_STATORS == 1 else "")
 # the motor band hangs from the top carrier, which must clear the upper disc's cup;
 # with two stators the band is taller than the reducer and lifts the top carrier instead
 H_BAND = N_STATORS * (T_BOARD + 2 * CLR + 2 * MAG_H) + (N_STATORS + 1) * T_CARRIER
@@ -202,7 +203,7 @@ def build(joint="femur"):
     shaft = cyl(SHAFT_R, Z_FLANGE0 - SHAFT_BRG_W, Z_CUP0)
     ecc = [(e * math.cos(math.pi * k), e * math.sin(math.pi * k)) for k in range(N_DISCS)]
     for k, zd in enumerate(Z_DISCS):
-        shaft += cyl(SHAFT_R, zd - CUP_OVER, zd + DISC_T + CUP_OVER, *ecc[k])
+        shaft += cyl(JOURNAL_R, zd - CUP_OVER, zd + DISC_T + CUP_OVER, *ecc[k])
     shaft += cyl(SHAFT_R, Z_CYL_TOP, Z_TOPCAR1)
     shaft -= Pos(SHAFT_R - 2.0, -20, Z_TOPCAR0) * Box(10, 40, T_CARRIER, align=(Align.MIN, Align.MIN, Align.MIN))  # D-flat
     shaft += cyl(TOP_BRG_IN, Z_TOPCAR1, Z_BOSS1)
@@ -243,7 +244,7 @@ def build(joint="femur"):
     brgs = ring(R_OUT_BRG_IN, R_OUT_BRG_OUT, 0, T_OUT_BRG)
     brgs += ring(SHAFT_R, SHAFT_BRG_OUT, Z_FLANGE0 - SHAFT_BRG_W, Z_FLANGE0)
     for k, zd in enumerate(Z_DISCS):
-        brgs += ring(SHAFT_R, ECC_BRG_OUT, zd - CUP_OVER, zd + DISC_T + CUP_OVER).moved(Location((ecc[k][0], ecc[k][1], 0)))
+        brgs += ring(JOURNAL_R, ECC_BRG_OUT, zd - CUP_OVER, zd + DISC_T + CUP_OVER).moved(Location((ecc[k][0], ecc[k][1], 0)))
     brgs += ring(TOP_BRG_IN, TOP_BRG_OUT, Z_COVER0, Z_BOSS1)
     parts["bearings"] = brgs; mass["bearings"] = brgs.volume * STEEL * 0.8
 
@@ -290,7 +291,7 @@ def draw_section(parts, joint, info, out):
               (R_CARRIER_OUT - 10, (Z_TOPCAR0 + Z_TOPCAR1) / 2, "rotor: top carrier + drum, one part"),
               (R_CARRIER_OUT - 10, (Z_BOTCAR0 + Z_BOTMAG0) / 2, "bottom carrier ring, bonded on the drum foot"),
               (R_PINS, Z_CYL_TOP - 4, f"{info['n_pins']} pins Ø{2*info['r_pin']:.0f} in the fixed cylinder"),
-              (R_OUT_PINS, Z_DISCS[-1] + DISC_T / 2, f"{N_DISCS} discs {info['N']}:1 on HK2512, e = {info['e']:.2f}, 180° apart"),
+              (R_OUT_PINS, Z_DISCS[-1] + DISC_T / 2, f"{N_DISCS} discs {info['N']}:1 on HK3012, e = {info['e']:.2f}, 180° apart"),
               (R_OUT_BRG_IN + 7, T_OUT_BRG / 2, "RB5013 crossed roller"),
               (0, Z_BOSS1 - 2, "6802"), (0, Z_FLANGE0 - 4, "6905"),
               (R_BOLTS, Z_COVER0 + 1.5, "12 × M4"),

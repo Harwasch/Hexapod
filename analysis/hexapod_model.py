@@ -53,7 +53,7 @@ class Leg:
 class Body:
     length: float = 900.0                        # overall slab length
     width: float = 240.0                         # between left/right yaw axes (hips under the body)
-    height: float = 200.0                        # slab height (actuator stacks live inside)
+    height: float = 220.0                        # slab height: three 62 mm two-stator units + 2 x 8 mm gaps = 202 (round 7; was 200)
     hip_x: tuple = (330.0, 0.0, -330.0)          # front, mid, rear hip yaw axes
     side_rail: float = 16.0                      # structural rail outboard of the hip stacks
 
@@ -295,6 +295,13 @@ GAITS = (
     Gait(1.0, 0.40, 0.5, 0.12, "Walk, tripod gait"),
     Gait(2.0, 0.50, 0.5, 0.12, "Fast walk, tripod gait (aspirational)"),
 )
+
+
+# Review decision (round 6): the yaw swing-speed requirement is lowered to what the 48 V
+# bus gives on the shared 10-turn stator board at 45:1 (2740 rpm no-load), so the yaw
+# does not need a second board variant.  The 1 m/s walk asked 7.7 rad/s; at 6.4 rad/s the
+# full-stride yaw swing supports ~0.83 m/s, and the fast gait leans on stance-phase yaw.
+YAW_SWING_CAP = 6.4          # rad/s
 
 
 def joint_speeds(stance: Stance, gait: Gait):

@@ -26,6 +26,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "analysis"))
 import motor_options as mo                       # noqa: E402
 import cycloid as cy                             # noqa: E402
+from hexapod_model import YAW_SWING_CAP          # noqa: E402
 import actuator_section as sec                   # noqa: E402
 
 DOC = os.path.join(ROOT, "docs", "design", "08-actuator-design.md")
@@ -94,10 +95,11 @@ AB8 = json.load(open(os.path.join(ROOT, "hw", "stator", "variants", "8t", "asbui
 CL = json.load(open(os.path.join(ROOT, "hw", "stator", "closure.json")))
 RF = json.load(open(os.path.join(ROOT, "hw", "stator", "rotor_field.json")))
 TH = json.load(open(os.path.join(ROOT, "hw", "stator", "thermal.json")))
-CADJ = {j: json.load(open(os.path.join(ROOT, "cad", "actuator", f"{j}.json"))) for j in ("femur", "knee", "yaw", "femur-2s", "yaw-2s")}
+CADJ = {j: json.load(open(os.path.join(ROOT, "cad", "actuator", f"{j}.json"))) for j in ("femur", "knee", "yaw", "femur-1s", "yaw-1s")}
 BOM = list(csv.DictReader(open(os.path.join(ROOT, "docs", "design", "bom-actuator.csv"))))
 BOM_UNIT = sum(float(r["qty_per_unit"]) * float(r["unit_price_usd"]) for r in BOM)
 HK2512 = dict(Cr=11.8e3, C0r=16.3e3, n_lim=6500)                # NTN sheet, docs/reference/ntn-hk2512.pdf
+HK3012 = dict(Cr=11.5e3, C0r=17.3e3)                            # PTI HK-series catalogue, docs/reference/pti-hk-series.pdf (round 7)
 RB5013 = dict(C=16.7e3, C0=20.9e3, mass=0.27)                    # THK catalogue 382-5E, docs/reference
 
 
@@ -260,7 +262,7 @@ def write_doc(figs):
         ("Layers × copper, turns per layer", f"{b12['layers']} × {b12['copper_oz']:.0f} oz, 10", f"{b8['layers']} × {b8['copper_oz']:.0f} oz, 8", f"{b16['layers']} × {b16['copper_oz']:.0f} oz, 10"),
         ("Finished thickness", f"{b12['t_board_mm']:.2f} mm", f"{b8['t_board_mm']:.2f} mm", f"{b16['t_board_mm']:.2f} mm"),
         ("Who can build it", "PCBWay-class heavy copper", "same", "JLCPCB standard (inner copper ≤ 2 oz)"),
-        ("Used on", "femur and knee units", "yaw units (7.7 rad/s swing)", "fallback"),
+        ("Used on", "every unit (two per unit)", "not used: the yaw swing requirement was lowered instead (round 7)", "fallback"),
         ("Series turns per phase", f"{b12['series_turns_per_phase']}", f"{b8['series_turns_per_phase']}", f"{b16['series_turns_per_phase']}"),
         ("Trace width", f"{0.28:.2f} mm", f"{0.39:.2f} mm", f"{0.28:.2f} mm"),
         ("Phase resistance at 120 °C", f"{b12['R_ph_mohm']:.1f} mΩ (interconnect {b12['R_inter_mohm']:.1f})", f"{b8['R_ph_mohm']:.1f} mΩ", f"{b16['R_ph_mohm']:.1f} mΩ"),
@@ -281,12 +283,12 @@ def write_doc(figs):
     th_case_rows = [(k, f"{v['P_allow']:.0f}", f"{v['I_cont']:.1f}", f"{v['T_cont']:.2f}", f"{v['T_magnet']:.0f}") for k, v in th["cases"].items()]
     joint_rows = []
     for name, j in JOINTS.items():
-        ab = AB8 if name == "yaw" else AB
+        ab = AB
         b1 = RF[CADJ[name]["magnet"]]["B1_midplane"] / RF["rect 30x5x8 N48"]["B1_midplane"]
-        for ns, tag in ((1, name), (2, name + "-2s" if name != "knee" else "femur-2s")):
+        for ns, tag in ((2, name), (1, name + "-1s" if name != "knee" else "femur-1s")):
             t_cont = ab["ratings"]["1000"]["T_cont"] * b1 * ns
             t_peak = ab["ratings"]["1000"]["T_peak"] * b1 * ns
-            joint_rows.append((f"{name}, {ns} stator{'s' if ns > 1 else ''}", f"{j['N']}:1", "8-turn" if name == "yaw" else "10-turn", f"{t_cont:.2f} / {t_peak:.2f}",
+            joint_rows.append((f"{name}, {ns} stator{'s' if ns > 1 else ''}" + (" (chosen)" if ns == 2 else ""), f"{j['N']}:1", "10-turn", f"{t_cont:.2f} / {t_peak:.2f}",
                                f"{t_cont*j['N']*ETA:.0f} / {t_peak*j['N']*ETA:.0f}", f"{j['T_cont']:.0f} / {j['T_peak']:.0f}",
                                f"{t_cont*j['N']*ETA/j['T_cont']:.2f} / {t_peak*j['N']*ETA/j['T_peak']:.2f}",
                                f"{ab['n_noload_rpm']/j['N']*2*math.pi/60:.1f} (need {j['w_swing']:.1f})", f"{CADJ[tag]['total_g']/1000:.2f}", f"{CADJ[tag]['height_mm']:.0f}"))
@@ -419,13 +421,14 @@ the review chose bearing life over height, and the unit is now
 * **Ring pins**: standard hardened dowels, Ø{2*CYC['femur']['r_pin']:.0f} mm for femur and knee,
   Ø{2*CYC['yaw']['r_pin']:.0f} mm for yaw, in half-grooves in the fixed cylinder's bore. Needle
   rollers on the pins are the first upgrade if efficiency measures below 85 %.
-* **Eccentric bearings**: one HK2512 drawn-cup needle per disc (25 × 32 × 12;
-  Cr {HK2512['Cr']/1e3:.1f} kN, C0r {HK2512['C0r']/1e3:.1f} kN from the NTN sheet in `docs/reference`). The
+* **Eccentric bearings**: one HK3012 drawn-cup needle per disc (30 × 37 × 12
+  on a Ø30 journal of the stepped shaft; Cr {HK3012['Cr']/1e3:.1f} kN, C0r {HK3012['C0r']/1e3:.1f} kN from the PTI
+  HK-series catalogue in `docs/reference`; round 7, replacing HK2512). The
   load per disc is (T/R + T/(N·e))/2 ≈ 1.1 T/R whatever the ratio: {CYC['femur']['F_ecc']/1e3:.1f} kN at
-  the femur peak (static margin {HK2512['C0r']/CYC['femur']['F_ecc']:.2f}) and {CYC['femur']['F_ecc']/1e3*JOINTS['femur']['T_cont']/JOINTS['femur']['T_peak']:.1f} kN at the
-  continuous rating: L10 {(HK2512['Cr']/(CYC['femur']['F_ecc']*JOINTS['femur']['T_cont']/JOINTS['femur']['T_peak']))**(10/3)/1e6:.0f} million revolutions
-  ({(HK2512['Cr']/(CYC['femur']['F_ecc']*JOINTS['femur']['T_cont']/JOINTS['femur']['T_peak']))**(10/3)/60/1000:.0f} h at 1000 rpm), and at a walking-average torque of 40 % of the rating
-  {(HK2512['Cr']/(0.4*CYC['femur']['F_ecc']*JOINTS['femur']['T_cont']/JOINTS['femur']['T_peak']))**(10/3)/60/1000:.0f} h. This is what the second disc bought (one disc: ~100 h at the rating).
+  the femur peak (static margin {HK3012['C0r']/CYC['femur']['F_ecc']:.2f}) and {CYC['femur']['F_ecc']/1e3*JOINTS['femur']['T_cont']/JOINTS['femur']['T_peak']:.1f} kN at the
+  continuous rating: L10 {(HK3012['Cr']/(CYC['femur']['F_ecc']*JOINTS['femur']['T_cont']/JOINTS['femur']['T_peak']))**(10/3)/1e6:.0f} million revolutions
+  ({(HK3012['Cr']/(CYC['femur']['F_ecc']*JOINTS['femur']['T_cont']/JOINTS['femur']['T_peak']))**(10/3)/60/1000:.0f} h at 1000 rpm), and at a walking-average torque of 40 % of the rating
+  {(HK3012['Cr']/(0.4*CYC['femur']['F_ecc']*JOINTS['femur']['T_cont']/JOINTS['femur']['T_peak']))**(10/3)/60/1000:.0f} h.
 * **Output bearing**: RB5013 crossed roller (50 × 80 × 13; C {RB5013['C']/1e3:.1f} kN, C0 {RB5013['C0']/1e3:.1f} kN,
   THK catalogue) in the mounting face; it carries the output flange and the
   drive torque. The coxa's 270 N·m overturning moment at the yaw output is a
@@ -516,8 +519,10 @@ leg in the simulated field):
 {md(("Quantity", "12 L × 3 oz, 10 turns (canonical)", "12 L × 3 oz, 8 turns (yaw)", "16 L × 2 oz (fallback)"), brd_rows)}
 
 The 8-turn board has the same copper mass and nearly the same torque at
-1000 rpm, but its wider traces lose {b8['ratings']['2500']['P_eddy']/b12['ratings']['2500']['P_eddy']:.1f}× the eddy power at speed. It buys the
-no-load speed the yaw swing needs at 45:1; the femur and knee stay on 10 turns.
+1000 rpm, but its wider traces lose {b8['ratings']['2500']['P_eddy']/b12['ratings']['2500']['P_eddy']:.1f}× the eddy power at speed. It would have
+bought the 7.7 rad/s the 1 m/s walk asked of the yaw at 45:1; the review chose
+to lower that requirement to the {YAW_SWING_CAP:.1f} rad/s the shared 10-turn board gives
+instead, so every unit carries the same board.
 
 ![Stator F.Cu]({rel(os.path.join(FIG, 'stator-F_Cu.svg'))})
 
@@ -549,9 +554,10 @@ attraction between the rotors sizes the 4.5 mm carriers ({CADJ['femur']['carrier
 
 The topology that makes "the reducer inside the motor" buildable: the fixed
 pin cylinder rises from the mounting plate through the **open bottom of the
-rotor cup** (a bottom carrier ring, a drum through the board bore, a top
-carrier with the hub); the two discs sit inside the cylinder and the motor
-sits above them, because the hub has to clear the upper disc; the output flange rides the crossed roller in the mounting face and
+rotor cup** (a bottom carrier ring, a middle ring with magnets on both
+faces, a drum through both board bores, a top carrier with the hub); the two
+discs sit inside the cylinder and the two-stator motor stack sits above them,
+because the hub has to clear the upper disc; the output flange rides the crossed roller in the mounting face and
 exits through it, so the output and the mounting are on the same side, like a
 flat harmonic unit. The shaft runs in a 6905 in the flange hub and a 6802 in
 the cover. **{CADJ['femur']['height_mm']:.1f} mm tall against the 42 mm target (the review accepted the
@@ -580,7 +586,7 @@ and are not worth it.
 ### 9.5 Each joint on the built motor
 
 The requirement column is what 01-sizing derives **at the robot mass the CAD
-implies** ({CL['options']['B: 1 stator everywhere']['m_robot']:.0f} kg with single-stator units), not the 49 kg of round 1;
+implies** ({CL['options']['A: 2 stators everywhere (chosen)']['m_robot']:.0f} kg with the two-stator units), not the 49 kg of round 1;
 §9.7 explains why that is the right mass to check against.
 
 {md(("Joint", "Ratio", "Board", "Motor cont / peak (N·m)", "Joint cont / peak (N·m)", "Needed at the CAD mass", "Margin", "Joint speed no-load (rad/s)", "Unit mass (kg)", "Height (mm)"), joint_rows)}
@@ -606,21 +612,20 @@ what its motor and ratio give. The fixed point for each unit option:
 
 The single-stator unit cannot close the requirement as defined at any mass:
 the torque it needs grows with the mass it adds faster than its own torque.
-Two stators per unit ({CADJ['femur-2s']['height_mm']:.0f} mm tall, {CADJ['femur-2s']['total_g']/1000:.1f} kg) close it at
-about {CL['options']['A: 2 stators everywhere']['m_robot']:.0f} kg. The other way to close is the definition of
+Two stators per unit ({CADJ['femur']['height_mm']:.0f} mm tall, {CADJ['femur']['total_g']/1000:.1f} kg) close it at
+about {CL['options']['A: 2 stators everywhere (chosen)']['m_robot']:.0f} kg. The other way to close would have been the definition of
 "continuous": the walking load case is dyn 1.5 on three legs, on a 30° slope,
 accelerating at 1 m/s², over the whole routine working volume, all at once.
 Against gentler definitions:
 
-{md(("Continuous load case", "B: 1 stator, femur / knee / yaw needed at " + f"{CL['options']['B: 1 stator everywhere']['m_robot']:.0f} kg", "B closes?", "A: 2 stators, needed at " + f"{CL['options']['A: 2 stators everywhere']['m_robot']:.0f} kg", "A closes?"), case_rows)}
+{md(("Continuous load case", "B: 1 stator, femur / knee / yaw needed at " + f"{CL['options']['B: 1 stator everywhere']['m_robot']:.0f} kg", "B closes?", "A: 2 stators, needed at " + f"{CL['options']['A: 2 stators everywhere (chosen)']['m_robot']:.0f} kg", "A closes?"), case_rows)}
 
-So the choice is **A**, two stators everywhere, {CADJ['femur-2s']['height_mm']:.0f} mm units, a ~{CL['options']['A: 2 stators everywhere']['m_robot']:.0f} kg robot,
-the requirement as written; or **B**, single-stator {CADJ['femur']['height_mm']:.0f} mm units, a ~{CL['options']['B: 1 stator everywhere']['m_robot']:.0f} kg robot,
-with "continuous" redefined as level walking at dyn 1.2 and the slopes as a
-minutes-long rating. B is the lighter, cheaper robot with the same peak
-capability; A is the one that walks a 30° slope all day. Both keep the same
-board, rotor, reducer and housing design; A adds a board, a rotor ring and a
-clamp ring per unit.
+**The review chose A** (round 6): two stators everywhere, {CADJ['femur']['height_mm']:.0f} mm units, a
+~{CL['options']['A: 2 stators everywhere (chosen)']['m_robot']:.0f} kg robot, the requirement as written. The single-stator unit stays in
+the CAD as the `-1s` variant (§9.3) and B stays here as the record of the
+lighter robot that was not chosen. The 62 mm stack no longer fits the 200 mm
+body slab (three units and two gaps are 202 mm), so the slab is now 220 mm in
+`hexapod_model.py`; the drawings in 06 carry it.
 
 ### 9.8 Open items from this round
 
@@ -629,18 +634,18 @@ clamp ring per unit.
    budget; 01-sizing now carries the CAD masses, and the loop only closes
    with two stators per unit (A) or a gentler continuous load case (B).
    **This is the decision this round asks for.**
-3. **Eccentric bearing life**: two discs, as the review decided — but the
-   heavier robot raises the peak load again: {CYC['femur']['F_ecc']/1e3:.1f} kN per disc at the femur
-   peak against C0r {HK2512['C0r']/1e3:.1f} kN, and {(HK2512['Cr']/(CYC['femur']['F_ecc']*JOINTS['femur']['T_cont']/JOINTS['femur']['T_peak']))**(10/3)/60/1000:.0f} h L10 at the continuous
-   rating. The load is ~1.1 T/R per disc whatever the ratio; the levers are a
-   larger needle bearing (HK3012 on a Ø30 journal) or a larger pin circle,
-   which the Ø100 bore does not allow.
+3. **Eccentric bearings**: the review moved them to HK3012 on Ø30 journals
+   (Cr {HK3012['Cr']/1e3:.1f} kN, C0r {HK3012['C0r']/1e3:.1f} kN, PTI HK-series catalogue in `docs/reference`):
+   {CYC['femur']['F_ecc']/1e3:.1f} kN per disc at the femur peak (static margin {HK3012['C0r']/CYC['femur']['F_ecc']:.2f}),
+   {(HK3012['Cr']/(CYC['femur']['F_ecc']*JOINTS['femur']['T_cont']/JOINTS['femur']['T_peak']))**(10/3)/60/1000:.0f} h L10 at the continuous rating and
+   {(HK3012['Cr']/(0.4*CYC['femur']['F_ecc']*JOINTS['femur']['T_cont']/JOINTS['femur']['T_peak']))**(10/3)/60/1000:.0f} h at 40 % of it. The load is ~1.1 T/R per disc whatever the ratio.
 4. **Sustained torque is set by the body's cooling**, not the motor (§6);
    the review accepted it: the gait is designed around a ~300 W average.
-7. **The yaw joint is speed-limited by the 48 V bus**: 7.7 rad/s at 45:1 needs
-   3300 rpm, so the yaw units take the 8-turn board, at {AB8['ratings']['2500']['P_eddy']:.0f} W of eddy loss at
-   2500 rpm. A 60 V bus or a lower yaw swing-speed requirement would let it
-   share the 10-turn board.
+7. **The yaw joint was speed-limited by the 48 V bus**: 7.7 rad/s at 45:1
+   needs 3300 rpm. The review lowered the yaw swing-speed requirement to the
+   {YAW_SWING_CAP:.1f} rad/s the shared 10-turn board gives (`YAW_SWING_CAP` in
+   `hexapod_model.py`); the 8-turn board stays in `hw/stator/variants/8t` as the
+   record of the alternative.
 5. **Heavy copper**: the canonical board needs a 3 oz multilayer house; the
    2 oz fallback costs 11 % torque and one ratio step.
 6. **Magnet grade** N48H, not N48, because a free-standing unit runs its
