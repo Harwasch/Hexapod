@@ -99,10 +99,32 @@ def profile(N: int, R: float, r: float, e: float, n=2000):
     dx = -R * np.sin(t) + e * (N + 1) * np.sin((N + 1) * t)
     dy = R * np.cos(t) - e * (N + 1) * np.cos((N + 1) * t)
     nrm = np.hypot(dx, dy)
-    # inward normal offset by the pin radius
-    x = x0 + r * dy / nrm
-    y = y0 - r * dx / nrm
+    # Offset INWARD by the pin radius.  The sign here was wrong until round 14c:
+    # (+dy, -dx) is the OUTWARD normal for this parameterisation, so the disc came
+    # out larger than its own pin circle (59.6-64.1 mm on R 59.3) and could not
+    # mesh at all -- the pins buried 2.8 mm into it.  Every disc drawn from this
+    # before round 14c is oversize, and the discs in cad/actuator/actuator.py
+    # intersected the pin cage.  mesh_gap() below is the check that catches it.
+    x = x0 - r * dy / nrm
+    y = y0 + r * dx / nrm
     return x, y
+
+
+def mesh_gap(N: int, R: float, r: float, e: float, n=1200, steps=180):
+    """Smallest distance from any ring-pin centre to the disc profile over a full
+    input revolution.  A correct profile gives exactly the pin radius: the pin
+    rolls on the flank and never penetrates.  Anything less is interference."""
+    x, y = profile(N, R, r, e, n)
+    pins = [(R * math.cos(2 * math.pi * i / (N + 1)), R * math.sin(2 * math.pi * i / (N + 1))) for i in range(N + 1)]
+    worst = float("inf")
+    for k in range(steps):
+        th = 2 * math.pi * k / steps
+        a = -th / N
+        xr = x * math.cos(a) - y * math.sin(a) + e * math.cos(th)
+        yr = x * math.sin(a) + y * math.cos(a) + e * math.sin(th)
+        for px, py in pins:
+            worst = min(worst, float(np.hypot(xr - px, yr - py).min()))
+    return worst
 
 
 def fig_profiles(designs):

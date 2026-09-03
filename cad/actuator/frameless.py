@@ -65,7 +65,13 @@ from build123d import (Align, Box, Compound, Cylinder, Location, Part, Polygon, 
                        export_step, export_stl, extrude)
 import cycloid as cy  # noqa: E402
 
-FM = json.load(open(os.path.join(ROOT, "hw", "stator", "frameless_motor.json")))
+_FM_PATH = os.path.join(ROOT, "hw", "stator", "frameless_motor.json")
+FM = json.load(open(_FM_PATH))
+# hw/stator/frameless_motor.json is regenerated whenever the closure is re-solved, and
+# the closure is solved on this CAD's unit mass — so the two feed each other.  Record
+# exactly which revision of it this model was built from.
+import hashlib  # noqa: E402
+FM_SHA = hashlib.sha256(open(_FM_PATH, "rb").read()).hexdigest()[:12]
 YAW = "--yaw" in sys.argv
 TAG = "frameless-yaw" if YAW else "frameless"
 FIG = os.path.join(ROOT, "docs", "design", "actuator")
@@ -769,7 +775,7 @@ def draw_compare(parts, out):
     cols = [(0.0, R_OD, 0.0, H_TOTAL, H_TOTAL,
              f"THIS DESIGN \u2014 frameless \u00d8{MOTOR_OD:.0f} \u00d7 {MOTOR_L:.0f} kit\n"
              f"\u00d8{2*R_OD:.0f} \u00d7 {H_TOTAL:.1f} mm   \u2022   {tot_g/1e3:.2f} kg from THIS CAD\n"
-             f"(\u00a79.17 assumed {FM['pick']['m_fk']:.2f} kg and {MOTOR_L+12:.0f} mm)\n"
+             f"(\u00a79.17 assumed {MOT['mass_kg']+1.8:.2f} kg and {MOTOR_L+12:.0f} mm)\n"
              f"{MOT['T_cont']:.1f} N\u00b7m motor, {N_LOBES}:1, {FM['pick']['T_joint_fk']:.0f} N\u00b7m at the joint, no capstan"),
             (X2, 95.9, -pcb.get("_meta", {}).get("drum_h", 26.0), fem["height_mm"], fem_env,
              f"PCB two-stator (round 9) \u2014 cad/actuator/actuator.py\n"
@@ -857,10 +863,16 @@ def checks(parts):
                                        "which is adequate, and it is kept." if CRB_NAME == "RB5013" else
                                        "below THK's 2-3 for impact loads, so %s is fitted here instead. This is a "
                                        "BOM change this CAD forces." % CRB_NAME))}
+    ecc_margin = HK2512["C0r_N"] / CYC["F_ecc"]
     c["eccentric_bearing"] = {"fitted": "HK2512", "F_ecc_peak_per_disc_N": round(CYC["F_ecc"], 0),
                               "C0r_N": HK2512["C0r_N"],
-                              "static_margin": round(HK2512["C0r_N"] / CYC["F_ecc"], 2),
-                              "source": "NTN sheet, docs/reference/ntn-hk2512.pdf"}
+                              "static_margin": round(ecc_margin, 2),
+                              "required_margin": FM.get("ecc_margin_min", 1.5),
+                              "ok": bool(ecc_margin >= FM.get("ecc_margin_min", 1.5)),
+                              "hk3012_static_margin": round(17300.0 / CYC["F_ecc"], 2),
+                              "source": "NTN sheet, docs/reference/ntn-hk2512.pdf; HK3012 C0r 17.3 kN from "
+                                        "docs/reference/pti-hk-series.pdf (a 30x37x12 cup: it needs a Ø30 "
+                                        "eccentric journal and a Ø37 disc bore, which this model is not drawn for)"}
     c["cycloid_loads"] = {"ring_pin_peak_N_per_disc": round(CYC["F_pin"], 0),
                           "hertz_peak_MPa": round(CYC["sigma_peak"], 0),
                           "hertz_cont_MPa": round(CYC["sigma_cont"], 0),
@@ -871,6 +883,20 @@ def checks(parts):
                                   "PCB-stator bore. This bore is Ø%.1f, so the circle moves out to r %.0f and the "
                                   "peak output-pin force falls %.0f%%." % (cy.R_OUT, 2 * R_BORE, R_OUT_PINS,
                                                                           100 * (1 - F_OUT_PIN / F_OUT_PIN_CY))}
+    # the output pins are cantilevered out of the flange plate, unsupported at the top
+    M_pin = sum(F_OUT_PIN * (zd + DISC_T / 2 - Z_FLANGE1) for zd in Z_DISCS)     # N.mm at the plate face
+    Z_pin = math.pi * OUT_PIN_D ** 3 / 32
+    c["output_pins"] = {"circle_r_mm": R_OUT_PINS, "count": N_OUT, "dia_mm": OUT_PIN_D,
+                        "peak_force_N_per_disc": round(F_OUT_PIN, 0),
+                        "engagement_in_flange_plate_mm": T_FLANGE,
+                        "root_bending_MPa": round(M_pin / Z_pin, 0),
+                        "note": ("Cantilevered out of the %.0f mm flange plate through both discs with nothing "
+                                 "supporting the far end, the pins see %.0f MPa of bending at the plate face at the "
+                                 "peak joint moment. Standard cycloid practice carries the output pins in a second "
+                                 "plate above the discs; that plate and its clearance would add roughly 6 mm to the "
+                                 "unit and is NOT drawn here. Flagged for the reducer designer."
+                                 % (T_FLANGE, M_pin / Z_pin))}
+
     # solid-body interference: every unordered pair of parts that should not touch
     inter = []
     names = [n for n in parts if n not in ("stator_annulus",)]
@@ -928,9 +954,20 @@ if __name__ == "__main__":
     m_fk_cad = total_g / 1e3 if not YAW else None
     CH = checks(PARTS)
     bb = comp.bounding_box()
+    m_robot_used = FM["pick"]["m_robot"]
     rec = dict(
         variant="yaw" if YAW else "femur/knee",
         source="hw/stator/frameless_motor.json " + ("['yaw']" if YAW else "['pick']") + "; analysis/cycloid.py; docs/design/08-actuator-design.md §9.17",
+        source_revision=dict(
+            frameless_motor_json_sha256_12=FM_SHA,
+            inputs_used=dict(motor_od_mm=MOTOR_OD, motor_len_mm=MOTOR_L, motor_bore_mm=round(2 * R_BORE, 3),
+                             active_mass_g=round(ACTIVE_MASS_G, 1), lobes=N_LOBES,
+                             T_cyc_cont_Nm=round(T_CYC_CONT, 2), T_cyc_peak_Nm=round(T_CYC_PEAK, 2),
+                             m_robot_kg_in_source=round(m_robot_used, 2)),
+            note=("The reducer, the output bearing and therefore this unit's mass are sized on T_cyc_peak, "
+                  "which the closure derives from the robot mass, which the closure derives from this unit's "
+                  "mass. The loop is live: rebuild this CAD whenever frameless_motor.json changes, and check "
+                  "the sha above before quoting a number from this file.")),
         modelled_vs_assumed=dict(
             modelled=["housing (floor plate, wall tube, bearing carrier, pin cage, cover)",
                       "reducer (cycloid discs from the corrected profile, ring pins, output pins, flange)",
@@ -1020,7 +1057,8 @@ if __name__ == "__main__":
                 m_robot_kg_in_9_17=round(FM["pick"]["m_robot"], 1),
                 need_Nm={j: round(v, 1) for j, v in need.items()},
                 margin={j: round(T[j] / need[j], 3) for j in need},
-                margin_in_9_17={j: round(v, 3) for j, v in FM["pick"]["margin"].items()},
+                margin_in_source_json={j: round(v, 3) for j, v in FM["pick"]["margin"].items()},
+                closes=bool(min(T[j] / need[j] for j in need) >= 1.0),
                 note=("Arithmetic only, on frameless_motor.json's own c_per_kg and m_fixed: it re-evaluates the "
                       "closure at the CAD unit mass without the mass fixed point being re-solved (the leg and body "
                       "structure would also grow). analysis/ was not modified. A margin below 1.0 means the design "

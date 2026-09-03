@@ -1122,8 +1122,8 @@ with iron behind it.
 ![Frameless scaling](actuator/frameless-scaling.png)
 
 **The design.** Sweeping diameter and stack length inside the actuator can and
-solving the mass/torque fixed point, 192 of 225 combinations close the
-requirement and 95 still close if the quoted resistance turns out to be a
+solving the mass/torque fixed point, 186 of 225 combinations close the
+requirement and 90 still close if the quoted resistance turns out to be a
 cold value. The pick:
 
 | | |
@@ -1134,8 +1134,8 @@ cold value. The pick:
 | Motor constant | Km 1.68 N·m/√W (the WxF70x24GT: 0.36) |
 | Reduction | **25-lobe cycloid alone, no capstan** |
 | Winding | Kt up to 0.62 N·m/A rms at the 900 rpm the femur swing needs → 18 A rms continuous |
-| Unit | 4.09 kg → robot **102.8 kg** |
-| Margins | femur **1.00**, knee **0.94**, yaw 2.97 |
+| Unit | 4.41 kg → robot **108.6 kg** |
+| Margins | femur **0.95**, knee **0.89**, yaw 2.81 |
 
 **The capstan can be deleted, and that is the real result.** The frameless
 motor is an annulus with a Ø132 hole, and the cycloid fits inside it rather
@@ -1146,9 +1146,9 @@ r 59. Deleting the capstan multiplies the cycloid's torque by four; moving
 the pin circle out takes most of that back. At 25 lobes on r 59 the pitch is
 **14.3 mm — coarser than the 13.0 mm of the current design**, so the
 round-8 worry about lobe count and laser-cut tolerance gets better, not worse.
-The cycloid then carries 274 / 576 N·m at 867 MPa peak Hertz
-(allowable 1400), and the eccentric bearing sees 11.2 kN — a static
-margin of 1.46 on the HK2512 already in the BOM, 1.55 on the HK3012.
+The cycloid then carries 290 / 608 N·m at 890 MPa peak Hertz
+(allowable 1400), and the eccentric bearing sees 11.8 kN — a static
+margin of 1.38 on the HK2512 already in the BOM, 1.47 on the HK3012.
 
 That matters beyond the actuator: the leg study (§09) found the capstan rope
 drive as drawn **cannot be wound**, with fleet angles of 5° to 53° where a
@@ -1158,20 +1158,20 @@ sectors, the two drums, four rope terminations and the tensioners.
 ![The frameless unit](actuator/frameless-unit.png)
 
 **The yaw joint should not share the motor.** At the pick's size the yaw
-margin is 2.97 — half a kilogram of iron per unit doing nothing. Sized on
-its own the yaw wants Ø130 × 20, 5.81 N·m, margin 1.50, saving
+margin is 2.81 — half a kilogram of iron per unit doing nothing. Sized on
+its own the yaw wants Ø130 × 20, 5.81 N·m, margin 1.42, saving
 379 g on each of six units.
 
 **Thermally it fits, on an estimated duty split.** All eighteen units at their
 own continuous ratings would put 905 W into the body and holding the
-requirement continuously would put 871 W; weighted by a stance duty of
-50% for the femur and knee units and 25% for yaw it is **399 W against the
+requirement continuously would put 953 W; weighted by a stance duty of
+50% for the femur and knee units and 25% for yaw it is **437 W against the
 300 W the body can shed**. The duty numbers are an estimate, not a gait
 simulation, and they are the weakest link in that sentence.
 
 **Peak is limited by the driver, not the motor.** The 40 A class board already
 in the BOM gives 25.0 N·m at the motor and 561 N·m at the joint against
-576 needed, a margin of 0.98. The iron could make 36 N·m, well past what
+608 needed, a margin of 0.92. The iron could make 36 N·m, well past what
 the cycloid is sized for, so **the drive has to current-limit to protect the
 reducer** — a firmware requirement this design creates.
 
@@ -1180,11 +1180,11 @@ were not in the datasheet were attacked directly:
 
 | Assumption | Continuous torque (N·m) | Worst margin | Verdict |
 |---|---|---|---|
-| nominal (f 0.50, build 14.0 mm) | 11.52 | 0.94 | **short** |
-| outer-rotor split (f 0.35) | 10.54 | 0.86 | **short** |
-| deep-stator split (f 0.65) | 12.73 | 1.04 | closes |
-| densest annulus (7.2 g/cm3, thin build) | 11.03 | 0.90 | **short** |
-| lightest annulus (5.8 g/cm3, thick build) | 12.07 | 0.99 | **short** |
+| nominal (f 0.50, build 14.0 mm) | 11.52 | 0.89 | **short** |
+| outer-rotor split (f 0.35) | 10.54 | 0.82 | **short** |
+| deep-stator split (f 0.65) | 12.73 | 0.99 | **short** |
+| densest annulus (7.2 g/cm3, thin build) | 11.03 | 0.85 | **short** |
+| lightest annulus (5.8 g/cm3, thick build) | 12.07 | 0.94 | **short** |
 
 The design survives every variant of the geometry inference. The one that
 bites is thermal, not geometric: **the datasheet does not say at what winding
@@ -1210,15 +1210,15 @@ robot around it (`analysis/arrangement.py`) contradicted §9.17 in three ways.
 All three are the same mistake: a number that stood in for a measurement was
 never re-solved after the design it came from changed.
 
-**1. The unit is 4.09 kg, not 2.84 kg.** §9.17 costed the unit as the
+**1. The unit is 4.41 kg, not 2.84 kg.** §9.17 costed the unit as the
 motor's active mass plus a 1.25 kg reducer and a 0.55 kg housing — both taken
 from the CAD table of the **Ø192 can with a Ø100 bore**. But this design moves
 the cycloid's pin circle from r 43.5 to r 59.3, which makes the discs much
 bigger (822 g for the pair), and puts them in a different can. The
-built unit is 4.09 kg: housing 997 g, reducer 1235 g, bearings 449 g,
+built unit is 4.41 kg: housing 893 g, reducer 1309 g, bearings 799 g,
 rotor carrier 369 g, motor 1039 g.
 
-**2. The unit is 49.7 mm tall, not 37 mm.** The 37 mm was the motor stack
+**2. The unit is 52.7 mm tall, not 37 mm.** The 37 mm was the motor stack
 plus 6 mm of case each end. It ignored the reducer's own axial stack — the
 crossed roller, the output flange, two discs on the HK2512's 12 mm cup pitch,
 and the rotor carrier. So the unit is not dramatically shorter than the PCB
@@ -1232,17 +1232,18 @@ The result is a ladder, and it is the real state of the design:
 | What is assumed and what is measured | Unit (kg) | Leg structure (kg) | Robot (kg) | Worst margin |  |
 |---|---|---|---|---|---|
 | as published in §9.17: reducer and housing borrowed from the Ø192 design | 2.84 | 1.2 | 80 | **1.21** | closes |
-| with the unit as actually built in CAD | 4.09 | 1.2 | 100 | **0.97** | **does not close** |
-| and with the leg structure the round-14 leg CAD measured | 4.09 | 8.0 | 141 | **0.69** | **does not close** |
+| with the unit as actually built in CAD | 4.41 | 1.2 | 106 | **0.91** | **does not close** |
+| and with the leg structure the round-14 leg CAD measured | 4.41 | 8.0 | 147 | **0.66** | **does not close** |
 
 ![The mass ladder](actuator/frameless-mass-ladder.png)
 
-**On the unit as built, the design does not close at all.** Not at the
-measured leg mass, and not even at the 1.2 kg a leg the budget has always
-assumed: the margin is 0.97 there and 0.69 on the measured leg. The
-design stops closing once a leg's structure and transmission pass
-**0.7 kg** — below the round-1 estimate that was never designed to, and
-12 times lighter than the only leg anyone has actually built (8.0 kg, §09).
+**On the unit as built, the design does not close at all — not at any leg mass.**
+At the 1.2 kg a leg the budget has always assumed the margin is 0.91; on the leg
+that was actually measured it is 0.66. Solving for the leg mass at which it
+would close returns **0.0 kg** — the loop does not close even with a
+weightless leg. The unit grew from the 2.84 kg §9.17 assumed to
+4.41 kg as it was drawn, and that alone is enough to take the design
+under.
 
 **And a bigger motor does not rescue it.** Re-sweeping every diameter and
 stack length inside the Ø170 the can allows, at the CAD-anchored unit mass and
@@ -1262,6 +1263,37 @@ units have to sit on their own joints. The project's founding premise is
 The general arrangement (§10) draws the consequence: with a Ø172 can on each
 knee, **the robot is wider across its knee cans (1066 mm) than across its
 feet (894 mm)**, and the eighteen cans no longer fit in the body slab.
+
+**What building it also found.** Five things that only appear when the parts
+are drawn to size, all recorded in `cad/actuator/frameless.json`:
+
+1. **`analysis/cycloid.py::profile()` offset the disc the wrong way.** It
+   applied the pin-radius offset along the outward normal, so every disc it
+   has ever drawn came out **larger than its own pin circle** — 59.6 to 64.1 mm
+   on an R 59.3 pin circle — and could not mesh; the pins buried 2.8 mm into
+   the flank. The discs in `cad/actuator/actuator.py` therefore intersect the
+   pin cage by about 3 mm and every disc mass in `cad/actuator/*.json` is high.
+   Fixed in round 14c, with `cycloid.mesh_gap()` added as the check that
+   catches it: a correct profile returns exactly the pin radius, and all three
+   lobe counts now do. **The canonical PCB actuator CAD has not yet been
+   re-run on the corrected profile.**
+2. **The output bearing in the BOM is inadequate now the capstan is gone.**
+   The RB5013 carries the whole joint moment instead of a quarter of it: a
+   static safety factor of 1.16 against THK's 1–2 normal and 2–3 impact
+   (cat. 382-5E p. 6). The CAD fits an **RB8016** (80 × 120 × 16, C0 42.1 kN)
+   for 3.58, and that bearing is 350 g of the unit's overshoot.
+3. **The eccentric bearing is now under this study's own threshold.** 11.16 kN
+   per disc against the HK2512's 16.3 kN static rating is 1.46, below the 1.5
+   required. The HK3012 gives 1.55 but needs a Ø30 journal and a Ø37 disc bore,
+   which is not drawn.
+4. **The output pins are cantilevered.** Eight Ø10 pins out of a 4 mm flange
+   plate, through both discs, unsupported at the top: 3.6 kN per disc and
+   748 MPa of root bending. The standard fix is a second carrier plate above
+   the discs, which is about 6 mm more height and is not drawn either.
+5. **The radial budget is exactly zero.** From the Ø131.6 bore to the r 59.3
+   pin circle there are 6.5 mm for a Ø6 pin, its backing steel, clearance and
+   the rotor carrier skirt — and they add to 6.5 mm with nothing spare. The
+   ring pins sit in grooves only 2.05 mm deep, 34 % of their diameter.
 
 **What still stands from §9.17.** The datasheet decoding (four checks within
 1 %), the scaling law and its sensitivity, the shear stress, the reducer load

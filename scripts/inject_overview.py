@@ -171,8 +171,9 @@ full-screen and zoom.</strong></p>
 <strong>{num((FM.get('cad_unit_kg') or 0), '{:.2f}')} kg</strong>. Re-solved on that the worst joint margin is
 <strong>{num(FM['mass_ladder'][1]['worst'] if FM and len(FM.get('mass_ladder',[]))>1 else None, '{:.2f}')}</strong>, and with the structure
 mass of the only leg anyone has actually built it is <strong>{num(FM['mass_ladder'][2]['worst'] if FM and len(FM.get('mass_ladder',[]))>2 else None, '{:.2f}')}</strong>.
-A bigger motor does not rescue it: nothing inside the Ø170 the housing allows closes on that leg. <strong>The leg has to get
-lighter before any motor choice can be validated.</strong> The motor work stands; the closure does not. §9.18 has the correction.</p></div>
+A bigger motor does not rescue it: nothing inside the Ø170 the housing allows closes,
+and solving for the leg mass that would close returns 0.0 kg — it does not close even with a weightless leg.
+<strong>The unit has to get lighter, and so does the leg, before any motor choice can be validated.</strong> The motor work stands; the closure does not. §9.18 has the correction.</p></div>
 {ladder_fig}
 
 <h3 class="ov-h">The machine</h3>

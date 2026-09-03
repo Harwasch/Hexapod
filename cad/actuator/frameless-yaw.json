@@ -1,6 +1,20 @@
 {
  "variant": "yaw",
  "source": "hw/stator/frameless_motor.json ['yaw']; analysis/cycloid.py; docs/design/08-actuator-design.md \u00a79.17",
+ "source_revision": {
+  "frameless_motor_json_sha256_12": "622802a84d70",
+  "inputs_used": {
+   "motor_od_mm": 130.0,
+   "motor_len_mm": 20.0,
+   "motor_bore_mm": 101.603,
+   "active_mass_g": 660.2,
+   "lobes": 30,
+   "T_cyc_cont_Nm": 104.83,
+   "T_cyc_peak_Nm": 111.76,
+   "m_robot_kg_in_source": 102.8
+  },
+  "note": "The reducer, the output bearing and therefore this unit's mass are sized on T_cyc_peak, which the closure derives from the robot mass, which the closure derives from this unit's mass. The loop is live: rebuild this CAD whenever frameless_motor.json changes, and check the sha above before quoting a number from this file."
+ },
  "modelled_vs_assumed": {
   "modelled": [
    "housing (floor plate, wall tube, bearing carrier, pin cage, cover)",
@@ -51,17 +65,17 @@
   "disc_root_r_mm": 40.158,
   "disc_tip_r_mm": 42.445,
   "disc_swept_r_mm": 43.588,
-  "T_cont_Nm": 91.1,
-  "T_peak_Nm": 97.1
+  "T_cont_Nm": 104.8,
+  "T_peak_Nm": 111.8
  },
  "envelope": {
   "od_mm": 142.0,
   "bore_mm": 101.6034309985339,
   "height_mm": 49.7,
   "bbox_mm": [
-   42.0,
-   42.0,
-   45.7
+   142.0,
+   142.0,
+   49.7
   ],
   "height_claimed_in_9_17_mm": 32.0,
   "height_note": "\u00a79.17 quotes 32 mm for this unit, which is the motor stack plus 6 mm of case each end. It does not include the reducer's own axial stack: the output crossed roller (13), the output flange (4), two 8 mm discs on the 12 mm HK2512 cup pitch (24), and the rotor carrier plus cover (10.5). The modelled unit is 49.7 mm."
@@ -214,35 +228,47 @@
    ],
    "dp_mm": 64.0,
    "C0_kN": 20.9,
-   "peak_joint_moment_Nm": 97.1,
-   "P0_from_moment_N": 3034.0,
-   "static_safety_factor_fs": 6.89,
+   "peak_joint_moment_Nm": 111.8,
+   "P0_from_moment_N": 3492.0,
+   "static_safety_factor_fs": 5.98,
    "source": "THK 382-5E p.19, docs/reference/thk-cross-roller-ring-382-5E.pdf; P0 = 2M/dp with Fr = Fa = 0, fs = C0/P0 (THK p.6)",
    "alternates_fs": {
-    "RB5013": 6.89,
-    "RB6013": 9.26,
-    "RB7013": 11.98,
-    "RB8016": 21.25
+    "RB5013": 5.98,
+    "RB6013": 8.05,
+    "RB7013": 10.41,
+    "RB8016": 18.46
    },
    "fs_target": 2.5,
    "fs_limits_THK": "1-2 normal load, 2-3 impact load (THK 382-5E p.6)",
-   "note": "The BOM's RB5013 was picked in round 8, when the capstan carried the joint moment and the bearing saw rope pull. With the capstan deleted the output bearing carries the whole joint moment: the RB5013 then gives fs 6.89, which is adequate, and it is kept."
+   "note": "The BOM's RB5013 was picked in round 8, when the capstan carried the joint moment and the bearing saw rope pull. With the capstan deleted the output bearing carries the whole joint moment: the RB5013 then gives fs 5.98, which is adequate, and it is kept."
   },
   "eccentric_bearing": {
    "fitted": "HK2512",
-   "F_ecc_peak_per_disc_N": 2511.0,
+   "F_ecc_peak_per_disc_N": 2891.0,
    "C0r_N": 16300.0,
-   "static_margin": 6.49,
-   "source": "NTN sheet, docs/reference/ntn-hk2512.pdf"
+   "static_margin": 5.64,
+   "required_margin": 1.5,
+   "ok": true,
+   "hk3012_static_margin": 5.99,
+   "source": "NTN sheet, docs/reference/ntn-hk2512.pdf; HK3012 C0r 17.3 kN from docs/reference/pti-hk-series.pdf (a 30x37x12 cup: it needs a \u00d830 eccentric journal and a \u00d837 disc bore, which this model is not drawn for)"
   },
   "cycloid_loads": {
-   "ring_pin_peak_N_per_disc": 141.0,
-   "hertz_peak_MPa": 377.0,
-   "hertz_cont_MPa": 365.0,
+   "ring_pin_peak_N_per_disc": 163.0,
+   "hertz_peak_MPa": 405.0,
+   "hertz_cont_MPa": 392.0,
    "hertz_allowable_MPa": 1400.0,
-   "output_pin_peak_N_per_disc_at_r27": 899.0,
-   "output_pin_peak_N_per_disc_at_cycloid_py_r26": 934.0,
+   "output_pin_peak_N_per_disc_at_r27": 1035.0,
+   "output_pin_peak_N_per_disc_at_cycloid_py_r26": 1075.0,
    "note": "analysis/cycloid.py fixes the output-pin circle at r 26, sized for the \u00d8100 PCB-stator bore. This bore is \u00d8101.6, so the circle moves out to r 27 and the peak output-pin force falls 4%."
+  },
+  "output_pins": {
+   "circle_r_mm": 27,
+   "count": 8,
+   "dia_mm": 10.0,
+   "peak_force_N_per_disc": 1035.0,
+   "engagement_in_flange_plate_mm": 4.0,
+   "root_bending_MPa": 215.0,
+   "note": "Cantilevered out of the 4 mm flange plate through both discs with nothing supporting the far end, the pins see 215 MPa of bending at the plate face at the peak joint moment. Standard cycloid practice carries the output pins in a second plate above the discs; that plate and its clearance would add roughly 6 mm to the unit and is NOT drawn here. Flagged for the reducer designer."
   },
   "solid_interferences": [],
   "solid_interference_pairs_skipped": [

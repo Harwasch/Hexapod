@@ -1372,12 +1372,13 @@ The result is a ladder, and it is the real state of the design:
 
 ![The mass ladder]({rel(os.path.join(FIG, 'frameless-mass-ladder.png'))})
 
-**On the unit as built, the design does not close at all.** Not at the
-measured leg mass, and not even at the 1.2 kg a leg the budget has always
-assumed: the margin is {FM['mass_ladder'][1]['worst']:.2f} there and {FM['mass_ladder'][2]['worst']:.2f} on the measured leg. The
-design stops closing once a leg's structure and transmission pass
-**{FM['leg_struct']['breakeven_kg']:.1f} kg** — below the round-1 estimate that was never designed to, and
-{FM['leg_struct']['cad_kg']/FM['leg_struct']['breakeven_kg']:.0f} times lighter than the only leg anyone has actually built ({FM['leg_struct']['cad_kg']:.1f} kg, §09).
+**On the unit as built, the design does not close at all — not at any leg mass.**
+At the 1.2 kg a leg the budget has always assumed the margin is {FM['mass_ladder'][1]['worst']:.2f}; on the leg
+that was actually measured it is {FM['mass_ladder'][2]['worst']:.2f}. Solving for the leg mass at which it
+would close returns **{FM['leg_struct']['breakeven_kg']:.1f} kg** — the loop does not close even with a
+weightless leg. The unit grew from the 2.84 kg §9.17 assumed to
+{FM['cad_unit_kg']:.2f} kg as it was drawn, and that alone is enough to take the design
+under.
 
 **And a bigger motor does not rescue it.** Re-sweeping every diameter and
 stack length inside the Ø{FM['limits']['od_max_mm']:.0f} the can allows, at the CAD-anchored unit mass and
@@ -1397,6 +1398,37 @@ units have to sit on their own joints. The project's founding premise is
 The general arrangement (§10) draws the consequence: with a Ø{FCAD['envelope']['od_mm']:.0f} can on each
 knee, **the robot is wider across its knee cans ({ARR['overall']['width_over_cans_mm'] if ARR and 'overall' in ARR and 'width_over_cans_mm' in ARR.get('overall', {}) else 1066:.0f} mm) than across its
 feet ({ARR['overall']['width_over_feet_mm'] if ARR and 'overall' in ARR and 'width_over_feet_mm' in ARR.get('overall', {}) else 894:.0f} mm)**, and the eighteen cans no longer fit in the body slab.
+
+**What building it also found.** Five things that only appear when the parts
+are drawn to size, all recorded in `cad/actuator/frameless.json`:
+
+1. **`analysis/cycloid.py::profile()` offset the disc the wrong way.** It
+   applied the pin-radius offset along the outward normal, so every disc it
+   has ever drawn came out **larger than its own pin circle** — 59.6 to 64.1 mm
+   on an R 59.3 pin circle — and could not mesh; the pins buried 2.8 mm into
+   the flank. The discs in `cad/actuator/actuator.py` therefore intersect the
+   pin cage by about 3 mm and every disc mass in `cad/actuator/*.json` is high.
+   Fixed in round 14c, with `cycloid.mesh_gap()` added as the check that
+   catches it: a correct profile returns exactly the pin radius, and all three
+   lobe counts now do. **The canonical PCB actuator CAD has not yet been
+   re-run on the corrected profile.**
+2. **The output bearing in the BOM is inadequate now the capstan is gone.**
+   The RB5013 carries the whole joint moment instead of a quarter of it: a
+   static safety factor of 1.16 against THK's 1–2 normal and 2–3 impact
+   (cat. 382-5E p. 6). The CAD fits an **RB8016** (80 × 120 × 16, C0 42.1 kN)
+   for 3.58, and that bearing is 350 g of the unit's overshoot.
+3. **The eccentric bearing is now under this study's own threshold.** 11.16 kN
+   per disc against the HK2512's 16.3 kN static rating is 1.46, below the 1.5
+   required. The HK3012 gives 1.55 but needs a Ø30 journal and a Ø37 disc bore,
+   which is not drawn.
+4. **The output pins are cantilevered.** Eight Ø10 pins out of a 4 mm flange
+   plate, through both discs, unsupported at the top: 3.6 kN per disc and
+   748 MPa of root bending. The standard fix is a second carrier plate above
+   the discs, which is about 6 mm more height and is not drawn either.
+5. **The radial budget is exactly zero.** From the Ø131.6 bore to the r 59.3
+   pin circle there are 6.5 mm for a Ø6 pin, its backing steel, clearance and
+   the rotor carrier skirt — and they add to 6.5 mm with nothing spare. The
+   ring pins sit in grooves only 2.05 mm deep, 34 % of their diameter.
 
 **What still stands from §9.17.** The datasheet decoding (four checks within
 1 %), the scaling law and its sensitivity, the shear stress, the reducer load
