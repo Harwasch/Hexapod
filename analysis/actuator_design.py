@@ -107,6 +107,7 @@ CS = json.load(open(os.path.join(ROOT, "hw", "stator", "cost_search.json")))
 MM = json.load(open(os.path.join(ROOT, "hw", "stator", "motor_market.json")))
 TO = json.load(open(os.path.join(ROOT, "hw", "stator", "transmission_options.json")))
 TC = json.load(open(os.path.join(ROOT, "hw", "stator", "topology_compare.json")))
+FM = json.load(open(os.path.join(ROOT, "hw", "stator", "frameless_motor.json")))
 SO = json.load(open(os.path.join(ROOT, "hw", "stator", "single_stator_opt.json")))       # round 13: the single-stator sweep at Ø190
 HK2512 = dict(Cr=11.8e3, C0r=16.3e3, n_lim=6500)                # NTN sheet, docs/reference/ntn-hk2512.pdf
 HK3012 = dict(Cr=11.5e3, C0r=17.3e3)                            # PTI HK-series catalogue, docs/reference/pti-hk-series.pdf (round 7)
@@ -490,6 +491,13 @@ def write_doc(figs):
     tt_rows = [(f"{n} turns, {t['opening_mm']:.1f} mm opening", f"x{t['air'] / TC['fields']['A  two Halbach rotors, one stator (1s-opt, baseline)']['dlam_dx_per_turn']:.2f}",
                 f"x{t['tooth_linear'] / TC['fields']['A  two Halbach rotors, one stator (1s-opt, baseline)']['dlam_dx_per_turn']:.2f}", f"x{t['gain_vs_8t_air']:.2f}",
                 f"x{t['gain_vs_8t_air'] / math.sqrt(t['copper_ratio']):.2f}", f"{t['B_tooth']:.1f}", f"{t['attraction_N'] / 1e3:.1f}") for n, t in TC["teeth"].items()]
+    fm_chk = [("Kt from the quoted Ke (1.5 × Ke phase peak)", f"{FM['checks']['kt_from_ke']*1e3:.2f} mN·m/A", f"{FM['datasheet']['kt_per_A_peak']*1e3:.1f}", f"{FM['checks']['kt_err']*100:+.1f} %"),
+              ("continuous torque from Kt × √2 × I", f"{FM['checks']['t_from_kt']:.3f} N·m", f"{FM['datasheet']['t_cont']:.2f}", f"{FM['checks']['t_err']*100:+.1f} %"),
+              ("Km from Kt and R (Kt_rms/√(3R))", f"{FM['checks']['km_from_kt']*1e3:.1f} mN·m/√W", f"{FM['datasheet']['km']*1e3:.1f}", f"{FM['checks']['km_err']*100:+.1f} %"),
+              ("no-load speed against the V_dc/√3 modulation ceiling", f"{FM['checks']['e_peak_at_noload']:.2f} V", f"{FM['checks']['v_svpwm_peak']:.2f} V", f"{FM['checks']['noload_err']*100:+.1f} %")]
+    fm_stock = [(k, f"{v['m_robot']:.0f}", f"{v['margin']['femur']:.2f}", f"{v['margin']['knee']:.2f}", f"{v['margin']['yaw']:.2f}", f"{v['robot_supported']:.0f}")
+                for k, v in FM["stock_unit"].items()]
+    fm_sens = [(x["label"], f"{x['T_cont']:.2f}", f"{min(x['margin'].values()):.2f}", "closes" if x["closes"] else "**short**") for x in FM["sensitivity"]]
     cs_rows = [(r["option"], r["requirement"], f"{r['m_unit']:.2f}", f"{r['m_robot']:.0f}", f"{r['T_joint']:.0f} / {r['need_knee']:.0f}", f"{r['margin']:.2f}" + ("" if r["closes"] else " ✗"),
                 f"{r['cost']:.0f}", f"{[x for x in CS['rows'] if x['option']==r['option'] and x['requirement']==r['requirement'] and x['qty']==100][0]['cost']:.0f}")
                for r in CS["rows"] if r["qty"] == 20]
@@ -1201,6 +1209,127 @@ in the board, which is not a JLCPCB process, and the eddy loss in the copper
 next to a 1.6 T tooth edge goes up. **A 20–35 % gain for a different
 manufacturing route and a heavier rotor structure; it is not the cheap lever,
 and it is not modelled beyond this bound.**
+
+### 9.17 Round 14: the Wheemo frameless motor as the basis — `analysis/frameless_motor.py`
+
+The review supplied the datasheet for a **{FM['datasheet']['part']}** frameless
+kit motor ([`docs/reference/wheemo-WxF70x24GT.pdf`](../reference/wheemo-WxF70x24GT.pdf),
+filed in the manifest) and asked that our motors be built on it, scaled up if
+the requirement needs more torque. It does need more, and the scaled motor
+turns out to change the architecture rather than just the part number.
+
+**The datasheet decodes cleanly.** It gives terminal quantities and no
+geometry, so before using it the conventions were pinned by checking it
+against itself four ways:
+
+{md(("Check", "Computed", "Datasheet", "Error"), fm_chk)}
+
+So Kt is quoted per amp of *peak* phase current, the {FM['datasheet']['current_A']:.1f} A is rms, and the
+no-load speed is exactly where the peak phase back-EMF meets the
+V_dc/√3 space-vector ceiling. Of the {FM['datasheet']['loss_cont_W']:.1f} W of quoted loss, {FM['checks']['P_cu']:.1f} W is
+copper and the remaining {FM['checks']['P_fe_implied']:.1f} W is iron and windage at {FM['datasheet']['rpm_rated']:.0f} rpm.
+
+**The stock motor is a fifth of what the joint needs.** {FM['datasheet']['t_cont']:.2f} N·m
+continuous, {FM['datasheet']['mass_g']:.0f} g, and at every ratio the requirement stays out of reach:
+
+{md(("Reduction", "Robot at the fixed point (kg)", "Femur", "Knee", "Yaw", "Robot it supports (kg)"), fm_stock)}
+
+**Scaling it.** The datasheet gives no internal geometry, so the radial build
+is inferred from the active mass: an annulus of laminations, copper at
+realistic slot fill and sintered magnet sits between 5.8 and 7.2 g/cm³, which
+brackets the bore at {FM['inferred']['bore_bracket_mm'][1]:.0f}–{FM['inferred']['bore_bracket_mm'][0]:.0f} mm and the total radial build at
+{FM['inferred']['t_tot_bracket_mm'][0]:.1f}–{FM['inferred']['t_tot_bracket_mm'][1]:.1f} mm. That implies an airgap shear stress of
+{FM['inferred']['sigma_cont_Pa']['nom']/1e3:.1f} kPa continuous and {FM['inferred']['sigma_peak_Pa']/1e3:.0f} kPa peak — squarely in the range a
+conduction-cooled machine of this class runs at, which is the independent
+sanity check on the inference.
+
+The scaling law is the one that holds when a frameless torque motor grows at
+**constant pole pitch**: the pole count rises with diameter, so the radial
+build, the end-turn length per coil and the flux per pole all stay put. Then
+torque goes as the square of the airgap diameter while copper loss goes only
+as the mounting area, so the heat flux through the stator's outside face — the
+only path a frameless stator has — never changes. **Torque per kilogram grows
+linearly with diameter.** That is the whole argument for making the motor big
+and thin, and it is the same argument the PCB axial motor was built on, now
+with iron behind it.
+
+![Frameless scaling]({rel(os.path.join(FIG, 'frameless-scaling.png'))})
+
+**The design.** Sweeping diameter and stack length inside the actuator can and
+solving the mass/torque fixed point, {FM['n_closing']} of {FM['n_rows']} combinations close the
+requirement and {FM['n_robust']} still close if the quoted resistance turns out to be a
+cold value. The pick:
+
+| | |
+|---|---|
+| Motor | **Ø{FM['pick']['motor']['od_mm']:.0f} × {FM['pick']['motor']['len_mm']:.0f} mm**, bore Ø{FM['pick']['motor']['bore_mm']:.0f}, airgap Ø{FM['pick']['motor']['d_gap_mm']:.0f} |
+| Torque | **{FM['pick']['motor']['T_cont']:.2f} N·m continuous**, {FM['pick']['motor']['T_peak']:.1f} N·m the iron could make |
+| Active mass | {FM['pick']['motor']['mass_kg']*1e3:.0f} g → **{FM['pick']['motor']['T_per_kg']:.1f} N·m/kg** (the WxF70x24GT itself: {FM['datasheet']['t_cont']/(FM['datasheet']['mass_g']/1e3):.2f}; the 8318: 4.0) |
+| Motor constant | Km {FM['pick']['motor']['Km']:.2f} N·m/√W (the WxF70x24GT: {FM['datasheet']['km']:.2f}) |
+| Reduction | **{FM['pick']['ratio_name']}** |
+| Winding | Kt up to {FM['pick']['kt_max_rms_at_speed']:.2f} N·m/A rms at the {FM['pick']['rpm_fk']:.0f} rpm the femur swing needs → {FM['pick']['I_at_cont']:.0f} A rms continuous |
+| Unit | {FM['pick']['m_fk']:.2f} kg → robot **{FM['pick']['m_robot']:.1f} kg** |
+| Margins | femur **{FM['pick']['margin']['femur']:.2f}**, knee **{FM['pick']['margin']['knee']:.2f}**, yaw {FM['pick']['margin']['yaw']:.2f} |
+
+**The capstan can be deleted, and that is the real result.** The frameless
+motor is an annulus with a Ø{FM['pick']['motor']['bore_mm']:.0f} hole, and the cycloid fits inside it rather
+than underneath it. Two things follow. The unit gets shorter — {FM['pick']['motor']['len_mm']+12:.0f} mm against
+54 for the PCB unit and 64 for the outrunner — and the cycloid's ring-pin
+circle moves from r 43.5, all the Ø100 PCB-stator bore allowed, out to
+r {FM['pick']['reducer']['r_pin_circle_mm']:.0f}. Deleting the capstan multiplies the cycloid's torque by four; moving
+the pin circle out takes most of that back. At {FM['pick']['reducer']['lobes']} lobes on r {FM['pick']['reducer']['r_pin_circle_mm']:.0f} the pitch is
+**{FM['pick']['reducer']['pitch_mm']:.1f} mm — coarser than the {CYC['femur']['pitch']:.1f} mm of the current design**, so the
+round-8 worry about lobe count and laser-cut tolerance gets better, not worse.
+The cycloid then carries {FM['pick']['reducer']['T_cyc_cont']:.0f} / {FM['pick']['reducer']['T_cyc_peak']:.0f} N·m at {FM['pick']['reducer']['hertz_peak']:.0f} MPa peak Hertz
+(allowable {CYC['femur']['sigma_allow'] if 'sigma_allow' in CYC['femur'] else 1400:.0f}), and the eccentric bearing sees {FM['pick']['reducer']['F_ecc']/1e3:.1f} kN — a static
+margin of {FM['pick']['reducer']['hk2512_static_margin']:.2f} on the HK2512 already in the BOM, {FM['pick']['reducer']['hk3012_static_margin']:.2f} on the HK3012.
+
+That matters beyond the actuator: the leg study (§09) found the capstan rope
+drive as drawn **cannot be wound**, with fleet angles of 5° to 53° where a
+grooved drum wants 1.5°. Deleting the stage removes that blocker, the two
+sectors, the two drums, four rope terminations and the tensioners.
+
+![The frameless unit]({rel(os.path.join(FIG, 'frameless-unit.png'))})
+
+**The yaw joint should not share the motor.** At the pick's size the yaw
+margin is {FM['pick']['margin']['yaw']:.2f} — half a kilogram of iron per unit doing nothing. Sized on
+its own the yaw wants Ø{FM['yaw']['motor']['od_mm']:.0f} × {FM['yaw']['motor']['len_mm']:.0f}, {FM['yaw']['motor']['T_cont']:.2f} N·m, margin {FM['yaw']['margin']:.2f}, saving
+{FM['yaw']['saving_g']:.0f} g on each of six units.
+
+**Thermally it fits, on an estimated duty split.** All eighteen units at their
+own continuous ratings would put {FM['body']['all_at_continuous_W']:.0f} W into the body and holding the
+requirement continuously would put {FM['body']['at_requirement_W']:.0f} W; weighted by a stance duty of
+{FM['body']['duty']['fk']:.0%} for the femur and knee units and {FM['body']['duty']['yaw']:.0%} for yaw it is **{FM['body']['duty_weighted_W']:.0f} W against the
+{FM['body']['budget_W']:.0f} W the body can shed**. The duty numbers are an estimate, not a gait
+simulation, and they are the weakest link in that sentence.
+
+**Peak is limited by the driver, not the motor.** The 40 A class board already
+in the BOM gives {FM['driver_limit']['T_motor']:.1f} N·m at the motor and {FM['driver_limit']['T_joint']:.0f} N·m at the joint against
+{FM['driver_limit']['T_joint_needed']:.0f} needed, a margin of {FM['driver_limit']['T_joint']/FM['driver_limit']['T_joint_needed']:.2f}. The iron could make {FM['pick']['motor']['T_peak']:.0f} N·m, well past what
+the cycloid is sized for, so **the drive has to current-limit to protect the
+reducer** — a firmware requirement this design creates.
+
+**How much of this depends on the inferred geometry.** The two numbers that
+were not in the datasheet were attacked directly:
+
+{md(("Assumption", "Continuous torque (N·m)", "Worst margin", "Verdict"), fm_sens)}
+
+The design survives every variant of the geometry inference. The one that
+bites is thermal, not geometric: **the datasheet does not say at what winding
+temperature the {FM['datasheet']['R_ph']*1e3:.1f} mΩ is quoted.** If it is a 20 °C value and the winding
+runs at 120 °C, every torque here falls 15 %, which is why the pick was
+required to show a margin of {FM['margin_min']:.2f} rather than 1.00.
+
+**What is not known.** The datasheet carries **no price**, and that is the one
+number that decides whether this replaces the outrunner on cost as well as on
+performance. The frameless unit deletes the capstan stage (${FM['unit_8318_usd']:.0f} unit, of which
+$58 is capstan lines) and the outrunner's mount, so **it undercuts the $423
+8318 unit while the kit costs under ${FM['breakeven_motor_price_usd']:.0f}**. A Ø160 frameless kit is likely to
+cost more than that, in which case this is a performance and packaging choice,
+not a cost-down — and the round-10 cost floor still stands. Also missing:
+the airgap diameter, the pole and slot count, and the thermal resistance or
+reference ambient behind the {FM['datasheet']['loss_cont_W']:.1f} W rating. All are recorded as needed in
+the manifest.
 
 ### 9.8 Open items from this round (updated in round 11)
 

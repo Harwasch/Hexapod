@@ -9,12 +9,12 @@
 title: Hexapod
 subtitle: >-
   A large-dog-sized outdoor hexapod with all eighteen motors in the body.
-  Round 14: one full leg on the off-the-shelf outrunner units, in CAD, with
-  loads, range of motion and a BOM. Two findings lead: the capstan rope
-  drive as drawn cannot be wound (fleet angles of 5 to 53 degrees), and the
-  leg weighs 16 kg against the 9 kg the cost search assumed, so the robot
-  does not close at 119 kg. Round 13 added the optimised single-stator PCB
-  motor and the topology, magnet-grade and iron-teeth comparison.
+  Round 14b: the Wheemo frameless kit motor adopted as the basis for the
+  actuator and scaled to Ø160 x 25 mm (11.5 N.m continuous), which closes the
+  requirement at an 80 kg robot and deletes the capstan stage entirely -- the
+  stage the leg study had just found could not be wound. Round 14 built that
+  full leg on the outrunner units, in CAD, with loads, range of motion and a
+  BOM; it weighs 16 kg against the 9 kg assumed and does not close at 119 kg.
 
 phases:
   - id: geometry
@@ -111,6 +111,8 @@ phases:
     after: bio
     images:
       - docs/design/motor/torque-density.png
+      - docs/design/actuator/frameless-unit.png
+      - docs/design/actuator/frameless-scaling.png
       - docs/design/actuator/stator-F_Cu.svg
       - docs/design/actuator/rotor-field.png
       - docs/design/actuator/cad-femur-section.png
@@ -198,8 +200,29 @@ phases:
         Turnigy 9235-100KV is the same motor with a published resistance. Look
         at: every number is from a listing, and the heat-sunk current is the
         one bench test that decides the motor family.
+      docs/design/actuator/frameless-unit.png: >-
+        Round 14, the Wheemo frameless motor scaled to the requirement. Top:
+        the three actuators to the same scale. The frameless motor is an
+        annulus, so the cycloid sits inside its bore instead of underneath it,
+        and the unit drops to 37 mm from 54 and 64. Bottom left: deleting the
+        capstan puts four times the torque on the cycloid, and moving the pin
+        circle out into the motor's bore takes it back off, at a coarser
+        14.3 mm lobe pitch than the current design. Bottom right: the heat the
+        eighteen units put into the body. Look at: the capstan stage
+        disappears, which is what the leg study said could not be wound.
+      docs/design/actuator/frameless-scaling.png: >-
+        Why a bigger frameless motor is the lever: at constant pole pitch the
+        torque grows with the square of the airgap diameter while the copper
+        loss grows only with the mounting area, so torque per kilogram rises
+        linearly with diameter. Left, torque against diameter at the
+        datasheet's own shear stress; middle, torque per kilogram against the
+        WxF70x24GT itself and the 8318; right, the closure margin with unit
+        mass and robot mass solved together. Look at: the stock 70 mm motor is
+        a fifth of what the joint needs, and Ø160 x 25 closes it.
       docs/design/actuator/topology-compare.png: >-
-        Round 13b: three questions on the single-stator optimum, one 2-D
+        Round 14: the Wheemo frameless kit motor adopted as the basis and scaled to
+  Ø160 x 25 mm (11.5 N·m), which closes the requirement at an 80 kg robot and
+  deletes the capstan stage entirely. Earlier: round 13b, three questions on the single-stator optimum, one 2-D
         field model. Top: the field of the two-rotor single-stator unit, of a
         single N-S rotor between two iron-backed stators, and of iron teeth in
         the coil centres. Bottom left: torque, mass and cost of seven

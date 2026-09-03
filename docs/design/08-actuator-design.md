@@ -1052,6 +1052,144 @@ next to a 1.6 T tooth edge goes up. **A 20–35 % gain for a different
 manufacturing route and a heavier rotor structure; it is not the cheap lever,
 and it is not modelled beyond this bound.**
 
+### 9.17 Round 14: the Wheemo frameless motor as the basis — `analysis/frameless_motor.py`
+
+The review supplied the datasheet for a **Wheemo WxF70x24GT** frameless
+kit motor ([`docs/reference/wheemo-WxF70x24GT.pdf`](../reference/wheemo-WxF70x24GT.pdf),
+filed in the manifest) and asked that our motors be built on it, scaled up if
+the requirement needs more torque. It does need more, and the scaled motor
+turns out to change the architecture rather than just the part number.
+
+**The datasheet decodes cleanly.** It gives terminal quantities and no
+geometry, so before using it the conventions were pinned by checking it
+against itself four ways:
+
+| Check | Computed | Datasheet | Error |
+|---|---|---|---|
+| Kt from the quoted Ke (1.5 × Ke phase peak) | 136.79 mN·m/A | 136.7 | +0.1 % |
+| continuous torque from Kt × √2 × I | 1.585 N·m | 1.60 | -0.9 % |
+| Km from Kt and R (Kt_rms/√(3R)) | 362.3 mN·m/√W | 362.1 | +0.0 % |
+| no-load speed against the V_dc/√3 modulation ceiling | 27.72 V | 27.71 V | +0.0 % |
+
+So Kt is quoted per amp of *peak* phase current, the 8.2 A is rms, and the
+no-load speed is exactly where the peak phase back-EMF meets the
+V_dc/√3 space-vector ceiling. Of the 23.8 W of quoted loss, 19.5 W is
+copper and the remaining 4.3 W is iron and windage at 2500 rpm.
+
+**The stock motor is a fifth of what the joint needs.** 1.60 N·m
+continuous, 377 g, and at every ratio the requirement stays out of reach:
+
+| Reduction | Robot at the fixed point (kg) | Femur | Knee | Yaw | Robot it supports (kg) |
+|---|---|---|---|---|---|
+| 25-lobe cycloid x 4:1 capstan | 72 | 0.77 | 0.73 | 0.59 | 42 |
+| 20-lobe cycloid x 4:1 capstan (as designed) | 72 | 0.61 | 0.58 | 0.59 | 42 |
+| 25-lobe cycloid alone, no capstan | 68 | 0.21 | 0.20 | 0.62 | 13 |
+| 30-lobe cycloid alone, no capstan | 68 | 0.25 | 0.24 | 0.62 | 16 |
+| 40-lobe cycloid alone, no capstan | 68 | 0.33 | 0.32 | 0.62 | 22 |
+
+**Scaling it.** The datasheet gives no internal geometry, so the radial build
+is inferred from the active mass: an annulus of laminations, copper at
+realistic slot fill and sintered magnet sits between 5.8 and 7.2 g/cm³, which
+brackets the bore at 38–46 mm and the total radial build at
+12.2–16.2 mm. That implies an airgap shear stress of
+13.8 kPa continuous and 44 kPa peak — squarely in the range a
+conduction-cooled machine of this class runs at, which is the independent
+sanity check on the inference.
+
+The scaling law is the one that holds when a frameless torque motor grows at
+**constant pole pitch**: the pole count rises with diameter, so the radial
+build, the end-turn length per coil and the flux per pole all stay put. Then
+torque goes as the square of the airgap diameter while copper loss goes only
+as the mounting area, so the heat flux through the stator's outside face — the
+only path a frameless stator has — never changes. **Torque per kilogram grows
+linearly with diameter.** That is the whole argument for making the motor big
+and thin, and it is the same argument the PCB axial motor was built on, now
+with iron behind it.
+
+![Frameless scaling](actuator/frameless-scaling.png)
+
+**The design.** Sweeping diameter and stack length inside the actuator can and
+solving the mass/torque fixed point, 209 of 225 combinations close the
+requirement and 169 still close if the quoted resistance turns out to be a
+cold value. The pick:
+
+| | |
+|---|---|
+| Motor | **Ø160 × 25 mm**, bore Ø132, airgap Ø146 |
+| Torque | **11.52 N·m continuous**, 36.4 N·m the iron could make |
+| Active mass | 1039 g → **11.1 N·m/kg** (the WxF70x24GT itself: 4.24; the 8318: 4.0) |
+| Motor constant | Km 1.68 N·m/√W (the WxF70x24GT: 0.36) |
+| Reduction | **25-lobe cycloid alone, no capstan** |
+| Winding | Kt up to 0.62 N·m/A rms at the 900 rpm the femur swing needs → 18 A rms continuous |
+| Unit | 2.84 kg → robot **80.3 kg** |
+| Margins | femur **1.28**, knee **1.21**, yaw 3.80 |
+
+**The capstan can be deleted, and that is the real result.** The frameless
+motor is an annulus with a Ø132 hole, and the cycloid fits inside it rather
+than underneath it. Two things follow. The unit gets shorter — 37 mm against
+54 for the PCB unit and 64 for the outrunner — and the cycloid's ring-pin
+circle moves from r 43.5, all the Ø100 PCB-stator bore allowed, out to
+r 59. Deleting the capstan multiplies the cycloid's torque by four; moving
+the pin circle out takes most of that back. At 25 lobes on r 59 the pitch is
+**14.3 mm — coarser than the 13.0 mm of the current design**, so the
+round-8 worry about lobe count and laser-cut tolerance gets better, not worse.
+The cycloid then carries 214 / 450 N·m at 766 MPa peak Hertz
+(allowable 1400), and the eccentric bearing sees 8.7 kN — a static
+margin of 1.87 on the HK2512 already in the BOM, 1.98 on the HK3012.
+
+That matters beyond the actuator: the leg study (§09) found the capstan rope
+drive as drawn **cannot be wound**, with fleet angles of 5° to 53° where a
+grooved drum wants 1.5°. Deleting the stage removes that blocker, the two
+sectors, the two drums, four rope terminations and the tensioners.
+
+![The frameless unit](actuator/frameless-unit.png)
+
+**The yaw joint should not share the motor.** At the pick's size the yaw
+margin is 3.80 — half a kilogram of iron per unit doing nothing. Sized on
+its own the yaw wants Ø130 × 20, 5.81 N·m, margin 1.92, saving
+379 g on each of six units.
+
+**Thermally it fits, on an estimated duty split.** All eighteen units at their
+own continuous ratings would put 905 W into the body and holding the
+requirement continuously would put 593 W; weighted by a stance duty of
+50% for the femur and knee units and 25% for yaw it is **267 W against the
+300 W the body can shed**. The duty numbers are an estimate, not a gait
+simulation, and they are the weakest link in that sentence.
+
+**Peak is limited by the driver, not the motor.** The 40 A class board already
+in the BOM gives 25.0 N·m at the motor and 561 N·m at the joint against
+450 needed, a margin of 1.25. The iron could make 36 N·m, well past what
+the cycloid is sized for, so **the drive has to current-limit to protect the
+reducer** — a firmware requirement this design creates.
+
+**How much of this depends on the inferred geometry.** The two numbers that
+were not in the datasheet were attacked directly:
+
+| Assumption | Continuous torque (N·m) | Worst margin | Verdict |
+|---|---|---|---|
+| nominal (f 0.50, build 14.0 mm) | 11.52 | 1.21 | closes |
+| outer-rotor split (f 0.35) | 10.54 | 1.11 | closes |
+| deep-stator split (f 0.65) | 12.73 | 1.34 | closes |
+| densest annulus (7.2 g/cm3, thin build) | 11.03 | 1.19 | closes |
+| lightest annulus (5.8 g/cm3, thick build) | 12.07 | 1.23 | closes |
+
+The design survives every variant of the geometry inference. The one that
+bites is thermal, not geometric: **the datasheet does not say at what winding
+temperature the 96.7 mΩ is quoted.** If it is a 20 °C value and the winding
+runs at 120 °C, every torque here falls 15 %, which is why the pick was
+required to show a margin of 1.18 rather than 1.00.
+
+**What is not known.** The datasheet carries **no price**, and that is the one
+number that decides whether this replaces the outrunner on cost as well as on
+performance. The frameless unit deletes the capstan stage ($423 unit, of which
+$58 is capstan lines) and the outrunner's mount, so **it undercuts the $423
+8318 unit while the kit costs under $128**. A Ø160 frameless kit is likely to
+cost more than that, in which case this is a performance and packaging choice,
+not a cost-down — and the round-10 cost floor still stands. Also missing:
+the airgap diameter, the pole and slot count, and the thermal resistance or
+reference ambient behind the 23.8 W rating. All are recorded as needed in
+the manifest.
+
 ### 9.8 Open items from this round (updated in round 11)
 
 1. **OD 186, not 170** (§9.3): accepted by the review.

@@ -53,6 +53,25 @@ documents:
   needed_by: []
   notes: 5 mm row, 15.6 g/m, minimum linear strength 32.4 kN, minimum spliced 29.2 kN, average spliced 31.4 kN. SK78 creep 0.5 %/yr at 20 % load and 16 C. Critical temperature 80 C (permanent strength loss above). Capstan rope of the second reduction stage (analysis/capstan.py).
 
+- id: wheemo-WxF70x24GT
+  title: Wheemo WxF70x24GT frameless motor datasheet
+  part: WxF70x24GT
+  publisher: Wheemo (wheemo.dev)
+  revision: unknown (single-page datasheet, no revision string printed)
+  url: https://wheemo.dev/
+  local: docs/reference/wheemo-WxF70x24GT.pdf
+  retrieved: 2026-09-03
+  needed_by: []
+  notes: >-
+    Frameless kit motor supplied by the human on 2026-09-03 as the basis for the
+    hexapod actuator. OD 70.0 mm, length 23.7 mm, active mass 377 g, 48 V,
+    -40..85 C. Continuous 1.60 N.m at 2500 rpm with 23.8 W of loss and 8.2 A;
+    peak 5.05 N.m; no-load 2903 rpm. R_ph 96.7 mOhm, Ltt 531.8 uH, Ld 272.6 uH,
+    Ke 9.55 mV/rpm phase peak, Kt 136.7 mN.m/A peak, Km 362.1 mN.m/sqrt(W).
+    NOT given and needed: airgap diameter, bore, pole/slot count, the winding
+    temperature at which R_ph is quoted, the thermal resistance or reference
+    ambient behind the 23.8 W rating, and the price. analysis/frameless_motor.py
+    infers the geometry from the mass and brackets the result.
 
 # Example of a fetched document:
 #
