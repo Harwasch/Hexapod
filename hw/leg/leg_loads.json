@@ -1,0 +1,600 @@
+{
+ "inputs": {
+  "leg_json": "cad/leg/leg.json",
+  "motor": "8318 100KV outrunner",
+  "T_motor_cont": 2.628357380773871,
+  "T_motor_peak_assumed": 7.885072142321613,
+  "R_th_assumed": 1.2,
+  "eta": {
+   "cycloid": 0.9,
+   "capstan": 0.97,
+   "belt": 0.98
+  },
+  "materials": {
+   "6061-T6": {
+    "E": 69000.0,
+    "sy": 240.0,
+    "note": "handbook: yield 240-276 MPa, taken at 240 as the design allowable (HAZ at welds would be lower; this design is bolted/bonded)"
+   },
+   "42CrMo4 QT": {
+    "E": 207000.0,
+    "sy": 700.0,
+    "note": "handbook: yield 650-900 MPa QT, taken at 700; shear allowable 0.58 sy"
+   },
+   "bolt 8.8": {
+    "sut": 800.0,
+    "note": "ISO 898-1 class 8.8: UTS 800 MPa; shear strength taken as 0.6 UTS on the shank area"
+   },
+   "rubber pad": {
+    "note": "60 Shore A natural rubber, replaceable, bonded to a bolt-on aluminium disc"
+   }
+  },
+  "bearings": {
+   "HK2512": {
+    "Cr": 11.8,
+    "C0r": 16.3,
+    "src": "ntn-hk2512"
+   },
+   "HK3012": {
+    "Cr": 11.5,
+    "C0r": 17.3,
+    "src": "pti-hk-series"
+   },
+   "HK3512": {
+    "Cr": 12.45,
+    "C0r": 20.25,
+    "src": "pti-hk-series"
+   },
+   "HK4012": {
+    "Cr": 13.3,
+    "C0r": 23.1,
+    "src": "pti-hk-series"
+   },
+   "RB7013": {
+    "C": 19.4,
+    "C0": 27.7,
+    "dp": 84.0,
+    "mass_kg": 0.35,
+    "src": "thk-cross-roller-ring-382-5E"
+   }
+  },
+  "rope": {
+   "name": "Marlow D12 Max 78, 5 mm",
+   "d_mm": 5.0,
+   "break_kN": 29.2,
+   "break_linear_kN": 32.4,
+   "mass_g_per_m": 15.6,
+   "E_eff_GPa": 60.0,
+   "creep_pct_per_yr_at_20pct": 0.5,
+   "T_critical_C": 80.0
+  },
+  "drop_factor": 1.5
+ },
+ "mass": {
+  "leg_structure_kg": 7.598199999999999,
+  "units_and_extras_kg": 8.12,
+  "leg_total_kg": 15.718200000000001,
+  "groups_g": {
+   "body_stub": 13246.3,
+   "hip_pod": 1361.2,
+   "coxa": 963.0,
+   "femur": 1078.6,
+   "tibia": 1439.0,
+   "transmission": 2556.7,
+   "foot": 199.5
+  },
+  "cost_search_leg_kg": 9.15,
+  "cost_search_structure_allowance_kg": 1.7999999999999998,
+  "over_cost_search_kg": 6.568200000000001,
+  "m_fixed_no_legs_kg": 21.980000000000008
+ },
+ "closure": {
+  "m_robot": 116.28920000000001,
+  "m_robot_cost_search": 76.88000000000001,
+  "torque_per_kg": {
+   "yaw": 1.0197554380230633,
+   "femur": 2.5266654903400356,
+   "knee": 2.669453921813166
+  },
+  "torque_per_kg_peak": {
+   "yaw": 1.0870908505564598,
+   "femur": 4.583870566497466,
+   "knee": 5.599673274870898
+  },
+  "joint_gives": {
+   "femur": 224.86648735472775,
+   "knee": 224.86648735472775,
+   "yaw": 92.72844839370217
+  },
+  "joint_gives_peak": {
+   "femur": 674.5994620641833,
+   "knee": 674.5994620641833,
+   "yaw": 278.18534518110647
+  },
+  "need": {
+   "yaw": 118.58654408335163,
+   "femur": 293.8239085392505,
+   "knee": 310.4286610045157
+  },
+  "need_peak": {
+   "yaw": 126.41692533853028,
+   "femur": 533.0546410815372,
+   "knee": 651.1815253961169
+  },
+  "margin": {
+   "yaw": 0.781947472291001,
+   "femur": 0.7653103808762687,
+   "knee": 0.724374117477048
+  },
+  "margin_peak": {
+   "yaw": 2.200538768334679,
+   "femur": 1.265535294272009,
+   "knee": 1.0359622252087406
+  },
+  "closes": false,
+  "m_robot_that_closes": 84.23688662211194,
+  "leg_mass_that_closes_kg": 10.37614777035199,
+  "levers": {
+   "as built": {
+    "m_robot": 116.28920000000001,
+    "margin": {
+     "yaw": 0.781947472291001,
+     "femur": 0.7653103808762687,
+     "knee": 0.724374117477048
+    },
+    "closes": false
+   },
+   "2 x 8318 per unit, 80:1 (20-lobe x 4) / yaw 30-lobe": {
+    "m_robot": 129.7892,
+    "margin": {
+     "yaw": 1.0509200225605368,
+     "femur": 1.097130817587862,
+     "knee": 0.6490284755751015
+    },
+    "closes": false
+   },
+   "as built, level walking dyn 1.2 (closure.py case)": {
+    "m_robot": 116.28920000000001,
+    "margin": {
+     "yaw": 9.19604467961752,
+     "femur": 1.393491433426362,
+     "knee": 1.109441501771171
+    },
+    "closes": true
+   }
+  },
+  "requirement_over_reachable_set": {
+   "c_per_kg_on_feet_all": {
+    "yaw": 0.958,
+    "femur": 2.374,
+    "knee": 2.508
+   },
+   "c_per_kg_on_feet_reachable": {
+    "yaw": 0.958,
+    "femur": 2.374,
+    "knee": 2.508
+   },
+   "need": {
+    "yaw": 119.0690536,
+    "femur": 295.0625608,
+    "knee": 311.7173136
+   },
+   "margin": {
+    "yaw": 0.7787787472067567,
+    "femur": 0.7620976607301503,
+    "knee": 0.7213795241520641
+   },
+   "closes": false
+  }
+ },
+ "load_cases": {
+  "m_total": 124.28920000000001,
+  "cases": {
+   "walk x 1.5 drop": {
+    "Fz": 914.457789,
+    "Fp": 366.963863,
+    "Fy": 110.0891589
+   },
+   "stumble": {
+    "Fz": 1828.915578,
+    "Fp": 124.28920000000001,
+    "Fy": 37.28676
+   }
+  },
+  "design": {
+   "Fz": 1828.915578,
+   "Fp": 124.28920000000001,
+   "Fy": 37.28676
+  },
+  "joint_torque_design": {
+   "yaw": 177.87981612502745,
+   "femur": 533.0546410815372,
+   "knee": 651.1815253961169
+  },
+  "joint_torque_cont": {
+   "yaw": 118.58654408335163,
+   "femur": 293.8239085392505,
+   "knee": 310.4286610045157
+  }
+ },
+ "structure": {
+  "femur beam 30x60x3 (in-plane bending + axial + lateral)": {
+   "stress_MPa": 88.58812851853097,
+   "allow_MPa": 240.0,
+   "SF": 2.709166611977772,
+   "detail": "M 623 N\u00b7m incl. 1381 N x 65 mm offset; lateral 37 N x 368 mm -> 3 MPa"
+  },
+  "femur beam buckling (weak axis, free length 160)": {
+   "load_N": 1381.1243435697652,
+   "crit_N": 1936388.625231354,
+   "SF": 1402.0378644738157
+  },
+  "tibia tube 30x50x3 (root bending + axial + lateral)": {
+   "stress_MPa": 123.18155563260595,
+   "allow_MPa": 240.0,
+   "SF": 1.9483436360863136,
+   "detail": "M 651 N\u00b7m (knee design torque); lateral 37 N x 500 mm -> 5 MPa"
+  },
+  "tibia buckling (fixed-free, K = 2)": {
+   "load_N": 1828.915578,
+   "crit_N": 50832.19311625327,
+   "SF": 27.79362466355091
+  }
+ },
+ "ropes": {
+  "femur capstan (drum r 20 -> sector r 80)": {
+   "F_cont_N": 3786.390573959414,
+   "F_peak_N": 6869.260838679603,
+   "SF_cont": 7.711829889082381,
+   "SF_peak": 4.250821258028218,
+   "ok": true,
+   "D_over_d": 8.0,
+   "pretension_N": 1030.3891258019403,
+   "drum_torque_peak_Nm": 137.38521677359205
+  },
+  "knee capstan (drum r 32 -> sector r 80)": {
+   "F_cont_N": 4000.369342841697,
+   "F_peak_N": 8391.51450252728,
+   "SF_cont": 7.299326011547106,
+   "SF_peak": 3.4797055991747152,
+   "ok": true,
+   "D_over_d": 12.8,
+   "pretension_N": 1258.727175379092,
+   "drum_torque_peak_Nm": 268.52846408087294
+  },
+  "knee link loop (1:1, pulleys r 70, one loop on the +x side)": {
+   "F_cont_N": 4434.695157207367,
+   "F_peak_N": 9302.593219944525,
+   "SF_cont": 6.584443567117235,
+   "SF_peak": 3.138909689977192,
+   "ok": true,
+   "D_over_d": 28.0,
+   "pretension_N": 1395.3889829916786
+  }
+ },
+ "windup": {
+  "femur": {
+   "k_joint_Nm_per_rad": 69867.07986361856,
+   "windup_deg_at_cont": 0.2409556820207578
+  },
+  "knee": {
+   "k_joint_Nm_per_rad": 62831.85307179587,
+   "windup_deg_at_cont": 0.28307699432535194
+  },
+  "knee link": {
+   "k_joint_Nm_per_rad": 27708.847204661983,
+   "windup_deg_at_cont": 0.6418979463159907
+  },
+  "knee total (crank + link in series)": {
+   "k_joint_Nm_per_rad": 19228.90159934905,
+   "windup_deg_at_cont": 0.9249749406413427
+  }
+ },
+ "cycloid": {
+  "knee 40-lobe, R 48.5 (hollow module)": {
+   "N": 40,
+   "R": 48.5,
+   "pitch": 7.4325484731270715,
+   "r_pin": 2.5,
+   "e": 0.9463414634146342,
+   "F_pin": 270.08143231669396,
+   "F_out": 2582.004462316086,
+   "F_ecc": 6315.263491592694,
+   "sigma_peak": 570.9016248995035,
+   "sigma_cont": 394.1768817292974,
+   "T_cont": 128.0118189709343,
+   "T_peak": 268.52846408087294,
+   "ok": true,
+   "ecc_bearing": "HK3512",
+   "ecc_static_SF": 3.2065170403353984
+  },
+  "femur 25-lobe, R 43.5": {
+   "N": 25,
+   "R": 43.5,
+   "pitch": 10.512252340858153,
+   "r_pin": 3.0,
+   "e": 1.3384615384615386,
+   "F_pin": 242.94468041307172,
+   "F_out": 1321.0116997460775,
+   "F_ecc": 3632.0229721754213,
+   "sigma_peak": 494.28449677822016,
+   "sigma_cont": 366.9734884893926,
+   "T_cont": 75.72781147918828,
+   "T_peak": 137.38521677359205,
+   "ok": true,
+   "ecc_bearing": "HK2512",
+   "ecc_static_SF": 4.487857077136552
+  },
+  "yaw 40-lobe, R 53.5 (hollow module)": {
+   "N": 40,
+   "R": 53.5,
+   "pitch": 8.19879058375873,
+   "r_pin": 2.5,
+   "e": 1.0439024390243903,
+   "F_pin": 162.18811591067012,
+   "F_out": 1710.3828473560332,
+   "F_ecc": 3792.414304067466,
+   "sigma_peak": 442.40846631335216,
+   "sigma_cont": 361.22500011833114,
+   "T_cont": 118.58654408335163,
+   "T_peak": 177.87981612502745,
+   "ok": true,
+   "ecc_bearing": "HK4012",
+   "ecc_static_SF": 6.091106653411952
+  }
+ },
+ "pivots": {
+  "crank shaft \u00d830/18 42CrMo4: torsion (knee design torque)": {
+   "stress_MPa": 141.1203140208505,
+   "allow_MPa": 406.0,
+   "SF": 2.876977725120521
+  },
+  "crank shaft: bending at the cheek from the link loop overhang": {
+   "stress_MPa": 64.91534444959122,
+   "allow_MPa": 700.0,
+   "SF": 10.783274831786063,
+   "detail": "10698 N x 14 mm"
+  },
+  "cheek bearings 2 x HK3012 (crank shaft in the coxa): static": {
+   "load_N": 30081.00777297035,
+   "C0_N": 34600.0,
+   "SF": 1.1502274212731078,
+   "detail": "femur rope 7900 + crank rope 9650 + link 10698 + joint 1833 N, summed as scalars"
+  },
+  "femur carrier bearings 2 x HK3012: static": {
+   "load_N": 9732.783892127778,
+   "C0_N": 34600.0,
+   "SF": 3.554995198032262
+  },
+  "knee pin \u00d830/18: torsion (knee design torque from the knee pulley)": {
+   "stress_MPa": 141.1203140208505,
+   "allow_MPa": 406.0,
+   "SF": 2.876977725120521
+  },
+  "knee bearings 2 x HK3012 (knee pin in the femur cheeks): static": {
+   "load_N": 12531.116130582439,
+   "C0_N": 34600.0,
+   "SF": 2.7611267535505486
+  },
+  "knee drum bearings HK4012 + HK3012: static (rope resultant)": {
+   "load_N": 9650.241677906371,
+   "C0_N": 40400.00000000001,
+   "SF": 4.186423651181016
+  },
+  "femur drum bearings 2 x HK2512: static (rope resultant)": {
+   "load_N": 7899.649964481543,
+   "C0_N": 32600.0,
+   "SF": 4.126765128401426
+  },
+  "yaw bearing RB7013: static moment (foot force x 327 mm reach)": {
+   "load_Nm": 597.6469885553785,
+   "M0_Nm": 1163.4,
+   "SF": 1.9466340871425616,
+   "detail": "M0 = C0 x dp / 2 (THK 382-5E)"
+  }
+ },
+ "keys": {
+  "crank plates x 2 on the crank shaft (8 x 7 key, 20 mm)": {
+   "force_N": 21706.05084653723,
+   "key_shear_MPa": 135.66281779085767,
+   "hub_bearing_MPa": 310.0864406648176,
+   "SF_shear": 2.9927138961974324,
+   "SF_hub_bearing_6061": 0.7739777317751979
+  },
+  "drive pulley on the crank shaft (8 x 7 key, 12 mm)": {
+   "force_N": 43412.10169307446,
+   "key_shear_MPa": 452.20939263619226,
+   "hub_bearing_MPa": 1033.6214688827251,
+   "SF_shear": 0.8978141688592296,
+   "SF_hub_bearing_6061": 0.2321933195325594
+  },
+  "knee pulley on the knee pin (8 x 7 key, 12 mm)": {
+   "force_N": 43412.10169307446,
+   "key_shear_MPa": 452.20939263619226,
+   "hub_bearing_MPa": 1033.6214688827251,
+   "SF_shear": 0.8978141688592296,
+   "SF_hub_bearing_6061": 0.2321933195325594
+  },
+  "tibia carrier on the knee pin (2 x 8 x 7 keys, 30 mm)": {
+   "force_N": 21706.05084653723,
+   "key_shear_MPa": 90.44187852723846,
+   "hub_bearing_MPa": 206.72429377654504,
+   "SF_shear": 4.4890708442961476,
+   "SF_hub_bearing_6061": 1.160966597662797
+  }
+ },
+ "bolts": {
+  "femur sector plates to the carrier: 6 x M6 at r 32 (shear, per plate pair)": {
+   "force_per_bolt_N": 2776.326255633006,
+   "shear_MPa": 98.19245493773465,
+   "SF_vs_0p6UTS": 4.888359297100529,
+   "plate_bearing_MPa": 77.1201737675835,
+   "SF_plate_bearing": 3.1120261829710896
+  },
+  "knee crank: plates keyed; drive pulley flange 6 x M6 at r 30 (alternative to the key)": {
+   "force_per_bolt_N": 3617.675141089538,
+   "shear_MPa": 127.94908471223775,
+   "SF_vs_0p6UTS": 3.7514922524028824,
+   "plate_bearing_MPa": 100.49097614137605,
+   "SF_plate_bearing": 2.3882741437634682
+  },
+  "coxa cheek to hub plates: 8 x M5 at ~60 mm, rope pull of both capstans": {
+   "force_per_bolt_N": 2193.7364552984886,
+   "shear_MPa": 111.7260802245271,
+   "SF_vs_0p6UTS": 4.296221607662077,
+   "plate_bearing_MPa": 73.12454850994962,
+   "SF_plate_bearing": 3.2820715462926193
+  }
+ },
+ "speed": {
+  "femur_joint_rad_s_noload": 5.026548245743669,
+  "tibia_absolute_rad_s_noload": 5.026548245743669,
+  "yaw_rad_s_noload": 12.566370614359172,
+  "note": "the knee motor drives the tibia's ABSOLUTE angle (parallelogram): motor rate = 100 x d(tau)/dt + 40 x d(psi)/dt; the femur motor rate = 100 x d(phi)/dt + 25 x d(psi)/dt.  Lifting the foot with a hanging tibia costs the knee motor nothing; a knee flex with the femur fixed costs the full 3.8 rad/s the sizing asked.  Under load the motor holds ~75 % of no-load."
+ },
+ "coupling": {
+  "femur": {
+   "dL_dphi_mm_per_rad": {
+    "A": -80.0,
+    "B": 80.0
+   },
+   "dL_dtau_mm_per_rad": {
+    "A": 0.0,
+    "B": 0.0
+   },
+   "formula": "phi_femur = (r_drum/r_sector) * (delta_femur - psi) = (delta_femur - psi) / 4"
+  },
+  "knee": {
+   "dL_dphi_mm_per_rad": {
+    "A": 0.0,
+    "B": 0.0
+   },
+   "dL_dtau_mm_per_rad": {
+    "A": -80.0,
+    "B": 80.0
+   },
+   "formula": "tau_tibia = (r_drum/r_crank) * (delta_knee - psi) = (delta_knee - psi) / 2.5; theta_knee = tau_tibia - phi_femur - 180"
+  },
+  "link": {
+   "dL_dphi_mm_per_rad": {
+    "ext": -0.0,
+    "int": 0.0
+   },
+   "dL_dtau_mm_per_rad": {
+    "ext": 0.0,
+    "int": 0.0
+   }
+  },
+  "loop_length_variation_over_range_mm": {
+   "femur": 0.0,
+   "knee": 0.0,
+   "link_ext": 0.0,
+   "link_int": 0.0
+  }
+ },
+ "workspace_coverage": {
+  "sprawl routine": {
+   "ik_reached": 158,
+   "of": 180,
+   "within_joint_windows": 120,
+   "blocked_by": {
+    "femur": 38,
+    "tau": 0,
+    "knee": 13,
+    "yaw": 0
+   },
+   "torque_per_kg_all": {
+    "yaw": 0.958,
+    "femur": 2.019,
+    "knee": 2.146
+   },
+   "torque_per_kg_reachable": {
+    "yaw": 0.958,
+    "femur": 2.019,
+    "knee": 1.915
+   }
+  },
+  "sprawl stumble": {
+   "ik_reached": 54,
+   "of": 54,
+   "within_joint_windows": 54,
+   "blocked_by": {
+    "femur": 0,
+    "tau": 0,
+    "knee": 0,
+    "yaw": 0
+   },
+   "torque_per_kg_all": {
+    "yaw": 0.86,
+    "femur": 1.823,
+    "knee": 1.368
+   },
+   "torque_per_kg_reachable": {
+    "yaw": 0.86,
+    "femur": 1.823,
+    "knee": 1.368
+   }
+  },
+  "mammal routine": {
+   "ik_reached": 180,
+   "of": 180,
+   "within_joint_windows": 93,
+   "blocked_by": {
+    "femur": 17,
+    "tau": 0,
+    "knee": 7,
+    "yaw": 80
+   },
+   "torque_per_kg_all": {
+    "yaw": 0.404,
+    "femur": 2.374,
+    "knee": 2.508
+   },
+   "torque_per_kg_reachable": {
+    "yaw": 0.404,
+    "femur": 2.374,
+    "knee": 2.508
+   }
+  },
+  "mammal stumble": {
+   "ik_reached": 54,
+   "of": 54,
+   "within_joint_windows": 30,
+   "blocked_by": {
+    "femur": 8,
+    "tau": 0,
+    "knee": 4,
+    "yaw": 20
+   },
+   "torque_per_kg_all": {
+    "yaw": 0.305,
+    "femur": 2.308,
+    "knee": 2.346
+   },
+   "torque_per_kg_reachable": {
+    "yaw": 0.305,
+    "femur": 2.308,
+    "knee": 2.346
+   }
+  }
+ },
+ "joint_windows": {
+  "femur": [
+   -60.0,
+   85.0
+  ],
+  "tau": [
+   200.0,
+   330.0
+  ],
+  "knee": [
+   15.0,
+   145.0
+  ],
+  "yaw": [
+   -95.0,
+   95.0
+  ]
+ },
+ "clearances": "sweep not run"
+}
