@@ -1,0 +1,139 @@
+#!/opt/hw-py/bin/python
+"""Leg bill of materials: docs/design/bom-leg.csv, in the columns of
+docs/design/bom-actuator.csv, from the part list of cad/leg/leg.py (masses and
+rope lengths from cad/leg/leg.json) and the unit prices of hw/stator/
+cost_search.json (the 1 x 8318 option).
+
+    /opt/hw-py/bin/python analysis/bom_leg.py
+
+Quantities are per leg.  unit_price_usd is at 20 legs (the 20-unit price
+break of the actuator BOM), price_100_usd at 100 legs.  price_before_usd is
+the round-9 PCB-motor unit ($605) for the unit lines and 0 where the line did
+not exist before.  Every leg-specific price is an estimate against the shop
+rates the actuator BOM used (a laser-cut 6 mm 6061 disc at $14 / $8, a turned
+6061 ring at $12 / $6, a turned 42CrMo4 shaft at $35 / $22, a drawn-cup needle
+bearing at $4 / $3); none is a quote.  Prints the totals.
+"""
+import csv
+import json
+import os
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+LEG = json.load(open(os.path.join(ROOT, "cad", "leg", "leg.json")))
+CS = json.load(open(os.path.join(ROOT, "hw", "stator", "cost_search.json")))
+OUT = os.path.join(ROOT, "docs", "design", "bom-leg.csv")
+M = LEG["masses_g"]
+RL = LEG["transmission"]["rope_length_mm"]
+rope_m = (RL["femur"] + RL["knee"] + 2 * RL["link_each"]) / 1000 * 1.10        # + 10 % for the splices
+unit20 = [r for r in CS["rows"] if r["option"].startswith("1 x 8318") and r["requirement"] == "as written" and r["qty"] == 20][0]["cost"]
+unit100 = [r for r in CS["rows"] if r["option"].startswith("1 x 8318") and r["requirement"] == "as written" and r["qty"] == 100][0]["cost"]
+pcb20 = [r for r in CS["rows"] if r["option"].startswith("PCB 2-stator") and r["requirement"] == "as written" and r["qty"] == 20][0]["cost"]
+
+COLS = ["item", "qty_per_unit", "part", "spec", "source", "unit_price_usd", "price_before_usd", "price_100_usd", "price_basis", "verified", "notes"]
+rows = []
+
+
+def add(item, qty, part, spec, source, p20, before, p100, basis, verified, notes=""):
+    rows.append(dict(item=item, qty_per_unit=qty, part=part, spec=spec, source=source, unit_price_usd=p20, price_before_usd=before,
+                     price_100_usd=p100, price_basis=basis, verified=verified, notes=notes))
+
+
+# ---- the three actuator units, as the cost search priced them ---------------------------------
+add("Actuator unit", 3, "1 x 8318 100KV outrunner + 25/40-lobe cycloid + housing + driver + encoder (docs/design/bom-actuator.csv with the motor lines swapped)",
+    "yaw 40-lobe hollow, knee 40-lobe hollow, femur 25-lobe; 2.45 kg each as costed", "analysis/cost_search.py '1 x 8318 outrunner, 100:1'",
+    round(unit20, 2), round(pcb20, 2), round(unit100, 2), "cost_search.json roll-up of the actuator BOM lines at 20 / 100 units; price_before is the PCB two-stator unit", "partly",
+    "Motor price from listings (GBP 49 / Alibaba), reducer and housing lines are estimates; the capstan lines of that BOM (drum, sector, rope, tensioner) are replaced by the leg lines below and are not double counted here: $58 / $36 of them are deducted on the next line")
+add("Capstan lines of the unit BOM, deducted", 3, "capstan drum, sector, rope, tensioner of bom-actuator.csv", "the leg carries its own drums, sectors, ropes and tensioners below", "docs/design/bom-actuator.csv",
+    -58.0, 0, -36.0, "the actuator BOM's capstan block at 20 / 100 (08-actuator-design.md 9.12)", "partly", "")
+add("Unit delta: belt drive", 3, "HTD 5M 24T aluminium pulley x 2 + HTD 5M-375-15 belt, per unit", "1:1 from the motor beside the module to the hollow eccentric sleeve (cad/leg/leg.py)", "belt distributor",
+    22, 0, 15, "typical: two 24T 5M pulleys ~$8 each, belt ~$6", "no", "Replaces the coaxial motor of the costed unit; 140 g per unit")
+add("Unit delta: hollow eccentric sleeve + bearings", 2, "hollow eccentric sleeve (bore 22 knee / 32 yaw) on HK3512 / HK4012 instead of the solid Ø25 eccentric on HK2512",
+    "knee and yaw modules only; the femur module keeps the costed eccentric", "turned 42CrMo4 + bearing distributor", 30, 0, 18, "estimate: a larger turned eccentric ($25 vs $35 costed, but two HK3512/HK4012 at $5)", "no",
+    "PTI HK3512 C0r 20.25 kN, HK4012 C0r 23.1 kN (docs/reference/pti-hk-series.pdf); +90 g per module")
+add("Unit delta: yaw output bearing", 1, "RB7013 / CRB7013 crossed roller instead of the RB5013 / CRB5013 of the costed unit", "70 x 100 x 13; THK 382-5E: C 19.4 kN, C0 27.7 kN, 0.35 kg",
+    "Luoyang-class CRB7013; THK as alternate", 20, 0, 12, "estimate: the price step from a Chinese CRB5013 ($45) to a CRB7013 (~$65); THK list is ~$250", "no",
+    "Static moment SF 1.9 at the stumble foot load (analysis/leg_loads.py); +80 g")
+
+# ---- hip pod (rotates with the coxa) -------------------------------------------------------------
+add("Yaw flange", 1, "turned 6061 ring, r 19..50 x 6, bolted to the RB7013 inner ring", f"{M['yaw_flange']:.0f} g; carries the coxa hub plates", "turned, 20 pcs", 18, 0, 11, "estimate", "no", "")
+add("Hub plate, top", 1, "laser-cut 6 mm 6061, 92 x 52 + r 42 disc, HK4012 seat bored", f"{M['hub_top']:.0f} g; knee drum upper bearing", "laser-cut + bored, 20 pcs", 12, 0, 7, "estimate", "no", "")
+add("Hub plate, middle", 1, "laser-cut 6 mm 6061, r 26 disc, HK3012 seat bored", f"{M['hub_mid']:.0f} g; knee drum lower bearing", "laser-cut + bored, 20 pcs", 10, 0, 6, "estimate", "no", "")
+add("Hub plate, bottom", 1, "laser-cut 6 mm 6061, r 22 disc, HK2512 seat bored", f"{M['hub_bot']:.0f} g; femur drum lower bearing; the femur rope B passes it at 1.5 mm (leg-rom)", "laser-cut + bored, 20 pcs", 10, 0, 6, "estimate", "no", "")
+add("Hub standoff", 5, "6061 Ø10 x 84, tapped M6 both ends", f"{M['hub_standoff_0']:.0f} g each", "turned, 100 pcs", 3, 0, 2, "estimate", "no", "")
+add("Knee output tube", 1, "42CrMo4 tube Ø30/22 x 133, keyed both ends", f"{M['knee_tube']:.0f} g; from the knee module flange down through the yaw module to the knee drum", "turned, 20 pcs", 30, 0, 20, "estimate (actuator BOM eccentric shaft $35 / $22 as the reference)", "no", "Carries 268 N·m peak drum torque")
+add("Femur output shaft", 1, "42CrMo4 tube Ø18/10 x 244, keyed both ends", f"{M['femur_shaft']:.0f} g; from the femur module flange down through the knee and yaw modules to the femur drum", "turned, 20 pcs", 28, 0, 18, "estimate", "no", "137 N·m peak drum torque -> 88 MPa")
+add("Knee drum", 1, "turned 6061 Ø70 x 32 + flanges and bearing bosses, rope groove r 32 at 5.5 mm pitch, 2 x 8x7 keys", f"{M['drum_knee']:.0f} g; HK4012 above, HK3012 below", "turned, 20 pcs", 28, 0, 17, "estimate (actuator BOM capstan drum $20 / $12 + bosses)", "no",
+    "Groove 26 mm; the rope band + walk needs 26.4 (leg.json drum_bands)")
+add("Femur drum", 1, "turned 6061 Ø46 x 32 + flanges and bosses, rope groove r 20, 2 x 6x6 keys", f"{M['drum_femur']:.0f} g; 2 x HK2512", "turned, 20 pcs", 22, 0, 13, "estimate", "no",
+    "Groove 26 mm; the rope band + walk needs 34 mm: the drum has to grow to 40 mm (open item)")
+add("Drum bearing HK4012", 1, "drawn-cup needle 40 x 47 x 12", "PTI: Cr 13.3 kN, C0r 23.1 kN", "bearing distributor", 5, 0, 4, "typical (actuator BOM HK2512 $4 / $3)", "partly", "knee drum, upper")
+add("Drum bearing HK3012", 1, "drawn-cup needle 30 x 37 x 12", "PTI: Cr 11.5 kN, C0r 17.3 kN", "bearing distributor", 4.5, 0, 3.5, "typical", "partly", "knee drum, lower")
+add("Drum bearing HK2512", 2, "drawn-cup needle 25 x 32 x 12", "NTN: Cr 11.8 kN, C0r 16.3 kN", "bearing distributor", 4, 0, 3, "typical", "partly", "femur drum; rope resultant 7.9 kN -> static SF 4.1")
+
+# ---- coxa ------------------------------------------------------------------------------------------
+add("Coxa side plate", 2, "laser-cut 6 mm 6061, ~230 x 140, HK3012 bore", f"{M['coxa_plate_L']:.0f} g each, x = +-46..52", "laser-cut, 40 pcs", 16, 0, 9, "estimate (actuator floor plate Ø192 $14 / $8)", "no", "")
+add("Coxa bearing boss", 2, "turned 6061 ring r 18.5..28 x 6, bonded and bolted inside the cheek", f"{M['coxa_boss_L']:.0f} g each", "turned, 40 pcs", 8, 0, 5, "estimate", "no", "HK3012 cup seat")
+add("Crank shaft bearing HK3012", 2, "drawn-cup needle 30 x 37 x 12 in the coxa cheek bosses", "PTI: C0r 17.3 kN each; 30 kN static resultant summed as scalars -> SF 1.15", "bearing distributor", 4.5, 0, 3.5, "typical", "partly",
+    "The tightest bearing on the leg; the scalar sum is conservative (directions differ)")
+add("Femur pivot bearing HK3012", 2, "drawn-cup needle 30 x 37 x 12 in the femur carrier, on the crank shaft", "static SF 3.6", "bearing distributor", 4.5, 0, 3.5, "typical", "partly", "")
+
+# ---- femur -------------------------------------------------------------------------------------------
+add("Femur carrier", 1, "6061 plate 25 mm, CNC profile ~90 x 120 with the Ø37 bearing bore and the beam socket", f"{M['femur_carrier']:.0f} g; the femur sector plates bolt to it (6 x M6 at r 32 each side)", "CNC, 20 pcs", 60, 0, 38, "estimate", "no", "")
+add("Femur beam", 1, "6061-T6 rectangular tube 30 x 60 x 3, 160 mm", f"{M['femur_beam']:.0f} g; bending SF 2.7 at the design load", "tube stock, cut", 6, 0, 4, "estimate", "no", "")
+add("Knee cheek", 2, "laser-cut 6 mm 6061 with the HK3012 bore", f"{M['knee_cheek_L']:.0f} g each", "laser-cut, 40 pcs", 9, 0, 5, "estimate", "no", "")
+add("Knee bearing boss", 2, "turned 6061 ring r 18.5..28 x 6", f"{M['knee_boss_L']:.0f} g each", "turned, 40 pcs", 8, 0, 5, "estimate", "no", "")
+add("Knee spacer block", 2, "6061 block 31 x 20 x 60, clamps the beam end between the cheeks", f"{M['knee_spacer_L']:.0f} g each", "milled, 40 pcs", 10, 0, 6, "estimate", "no", "")
+add("Knee pin bearing HK3012", 2, "drawn-cup needle 30 x 37 x 12 in the knee cheek bosses", "static SF 2.8", "bearing distributor", 4.5, 0, 3.5, "typical", "partly", "")
+
+# ---- transmission at the femur pivot ------------------------------------------------------------------
+add("Femur sector plate", 2, "laser-cut 6061 laminate: 6 mm core + 2 x 2 mm cheeks over the groove arc, r 80 rope groove, 157 deg arc, bore 16", f"{M['femur_sector_A']:.0f} g each; bronze bush on the crank shaft; bolted to the carrier", "laser-cut, 60 pcs + bonding", 30, 0, 17, "estimate (actuator BOM sector Ø240 $25 / $14)", "no", "")
+add("Crank sector plate", 2, "laser-cut 6061 laminate as above, r 80, 142 deg arc; A dowelled to the crank shaft flange, B to its hub", f"{M['crank_sector_A']:.0f} g each", "laser-cut, 60 pcs + bonding", 30, 0, 17, "estimate", "no", "")
+add("Crank shaft", 1, "42CrMo4 QT turned from Ø80 bar: Ø30/18 x 106 with an integral Ø76 x 3 flange at x 35..38, Ø24/10 x 30 stub with 2 x 8x7 keyways, 2 x 10x8 keyways at the pulley end",
+    f"{M['crank_shaft']:.0f} g; torsion SF 2.9 (Ø30/18) / 1.6 (Ø24/10 stub)", "turned, 20 pcs", 75, 0, 48, "estimate: Ø80 bar stock and a flange turned between centres (actuator eccentric shaft $35 / $22 from Ø25 bar)", "no",
+    "Round 14b: the flange replaces the key in the aluminium crank plate A (hub bearing SF 0.77)")
+add("Crank hub B", 1, "42CrMo4 hub, bore 24 with 2 x 8x7 keyways x 26, OD 30 (the left cheek bearing's journal), Ø76 x 3 flange", f"{M['crank_hub_B']:.0f} g; hub bearing SF 2.2, key shear 3.1", "turned + keyseated, 20 pcs", 28, 0, 18, "estimate", "no",
+    "Needle rollers run on the hub OD: harden to 58 HRC or accept the derating (same caveat as the shaft journals)")
+add("Link pulley", 2, "turned 6061 Ø146: 12 mm rim with the r 70 rope groove, 6 mm web, bore 40, 4 x Ø8 dowel holes at r 36", f"{M['drive_pulley']:.0f} g each; drive pulley on the crank shaft, knee pulley on the knee pin", "turned, 40 pcs", 45, 0, 28, "estimate", "no", "")
+add("Link pulley hub", 2, "42CrMo4 hub, bore 30 with 2 x 10x8 keyways x 24, OD 40, Ø76 x 3 flange dowelled to the pulley web", f"{M['drive_pulley_hub']:.0f} g each; hub bearing SF 2.6, key shear 4.5", "turned + keyseated, 40 pcs", 30, 0, 19, "estimate", "no",
+    "Round 14b: replaces the 12 mm key in the aluminium pulley hub (SF 0.9 / 0.23)")
+add("Knee pin", 1, "42CrMo4 QT tube Ø30/18 x 136, 2 x 10x8 keyways x 50 (tibia carrier) + 2 x 10x8 x 24 (pulley hub)", f"{M['knee_pin']:.0f} g; torsion SF 2.9", "turned, 20 pcs", 32, 0, 20, "estimate", "no", "")
+add("Parallel key", 8, "DIN 6885 A: 2 x 8x7x26 (crank hub B), 4 x 10x8x24 (pulley hubs), 2 x 10x8x50 (tibia carrier)", "C45 keysteel", "fastener distributor", 0.6, 0, 0.4, "typical", "no", "Drum keys (2 x 8x7x30, 2 x 6x6x30) counted with the drums")
+add("Dowel pin Ø8 x 16", 16, "ISO 8734 hardened, 4 per flange (crank flange, crank hub B, two pulley hubs)", "torque into the aluminium: 4.5 kN per dowel, plate bearing SF 2.6 (6 mm)", "fastener distributor", 0.4, 0, 0.3, "typical", "no", "")
+add("Bronze bush", 2, "sintered bronze Ø30/32 x 10 under the femur sector plates", "the sectors turn with the femur on the crank shaft", "bearing distributor", 3, 0, 2, "typical", "no", "")
+add("Capstan rope", round(rope_m, 2), "Marlow D12 Max 78 (Dyneema SK78) 5 mm, spliced eyes", f"femur {RL['femur'] / 1000:.2f} m, knee {RL['knee'] / 1000:.2f} m, two link loops {RL['link_each'] / 1000:.2f} m each, +10 % for eight splices",
+    "Marlow / rope distributor", 6, 0, 5, "per metre estimate (actuator BOM); splicing in-house", "partly",
+    "Min spliced strength 29.2 kN (docs/reference/marlow-d12-max-75-78.pdf): SF 3.1-4.3 at the design load, 6.6-7.7 continuous; critical temperature 80 C")
+add("Rope tensioner", 6, "M8 turnbuckle with an eye and a spring-washer stack", "one per rope end on the sectors (4) and on the drive pulley (2); pretension 1.0-1.4 kN", "fastener distributor", 4, 0, 3, "typical (actuator BOM)", "no",
+    "Re-tension on a schedule: SK78 creeps 0.5 %/yr at 20 % load")
+
+# ---- tibia and foot -----------------------------------------------------------------------------------
+add("Tibia carrier", 1, "CNC 6061: Ø56 x 60 keyed hub + web + tube plug", f"{M['tibia_carrier']:.0f} g; 2 x 10x8x50 keys, hub bearing SF 1.8", "CNC, 20 pcs", 55, 0, 35, "estimate", "no", "")
+add("Tibia tube", 1, "6061-T6 rectangular tube 30 x 50 x 3, 435 mm", f"{M['tibia_tube']:.0f} g; root bending SF 1.9 at the knee design torque", "tube stock, cut", 10, 0, 6, "estimate", "no", "")
+add("Foot plug", 1, "6061 block, fits the tube bore, carries the load cell", f"{M['foot_plug']:.0f} g", "milled, 20 pcs", 12, 0, 8, "estimate", "no", "")
+add("Foot contact sensor", 1, "Ø25 button load cell, 0-2 kN class (or a snap-action switch behind the pad as the cheap alternate)", "40 g; contact detection and the foot force for the controller", "AliExpress-class / Digikey", 12, 0, 8, "typical (switch alternate ~$2)", "no", "")
+add("Foot pad", 1, "60 Shore A natural rubber dome bonded to a bolt-on aluminium disc, Ø60", f"{M['foot_pad']:.0f} g; replaceable", "moulded, 100 pcs / turned disc", 10, 0, 6, "estimate", "no", "")
+
+# ---- fasteners and consumables ------------------------------------------------------------------------
+add("Socket cap screw M6", 64, "M6 x 16..25, 8.8, zinc", "sector plates to carrier 12, four flanges 24, knee cheeks/spacers 12, standoffs 10, misc 6", "fastener distributor", 0.1, 0, 0.06, "typical", "no", "")
+add("Socket cap screw M5", 20, "M5 x 16, 8.8", "coxa cheeks to the hub plates 16, misc 4", "fastener distributor", 0.08, 0, 0.05, "typical", "no", "")
+add("Socket cap screw M4", 16, "M4 x 10..16, 8.8", "yaw flange to the RB7013 inner ring 8, foot 4, sensor 4", "fastener distributor", 0.06, 0, 0.04, "typical", "no", "")
+add("Washers, nuts, circlips", 1, "DIN 471 circlips x 4 (shaft ends), spring washers, nyloc nuts", "", "fastener distributor", 4, 0, 3, "typical, per leg share", "no", "")
+add("Adhesive", 1, "3M DP460 (sector laminates, bosses), Loctite 638 (bearing cups, bushes)", "", "", 6, 0, 4, "per leg share (actuator BOM $8 per unit)", "no", "")
+
+with open(OUT, "w", newline="") as f:
+    w = csv.DictWriter(f, fieldnames=COLS)
+    w.writeheader()
+    for r in rows:
+        w.writerow(r)
+
+tot20 = sum(r["qty_per_unit"] * r["unit_price_usd"] for r in rows)
+tot100 = sum(r["qty_per_unit"] * r["price_100_usd"] for r in rows)
+units20 = sum(r["qty_per_unit"] * r["unit_price_usd"] for r in rows[:5])
+units100 = sum(r["qty_per_unit"] * r["price_100_usd"] for r in rows[:5])
+TOTALS = dict(one_leg_20=round(tot20, 2), one_leg_100=round(tot100, 2), six_legs_20=round(6 * tot20, 2), six_legs_100=round(6 * tot100, 2),
+              units_share_20=round(units20, 2), units_share_100=round(units100, 2), leg_specific_20=round(tot20 - units20, 2), leg_specific_100=round(tot100 - units100, 2),
+              lines=len(rows), verified_lines=sum(1 for r in rows if r["verified"] == "yes"), partly_verified_lines=sum(1 for r in rows if r["verified"] == "partly"))
+json.dump(TOTALS, open(os.path.join(ROOT, "hw", "leg", "bom_totals.json"), "w"), indent=1)
+if __name__ == "__main__":
+    print(json.dumps(TOTALS, indent=1))
+    print(f"wrote {OUT}: {len(rows)} lines")

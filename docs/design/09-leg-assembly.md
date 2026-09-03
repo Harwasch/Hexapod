@@ -30,11 +30,19 @@ the keys, wrote the BOM and this note. Every number below is a model number.*
    assumed; the robot is 119 kg instead of 77, and the joints have **0.71 (knee),
    0.75 (femur), 0.77 (yaw)** of the continuous torque they need. It closes at an
    84 kg robot, i.e. 10.4 kg per leg. Level walking at dyn 1.2 closes at 1.09.
-3. **The tightest things that are not the rope drive:** the two HK3012 cheek
-   bearings that carry the crank shaft in the coxa (static SF 1.15 with the
-   four rope pulls and the foot load summed as scalars), the knee pulley's
+3. **The femur cannot lift as far as the sizing assumed.** The sweep (§6) finds
+   58 collisions in the 165 poses of the joint window, all of the femur root
+   (carrier, beam, link rope) with the body's floor plate: the femur-up limit is
+   **75° at yaw 0, 37° at yaw ±45 and 6° at yaw ±90** against the 85° the
+   window asks for. Below z = 0 the leg is clean: the tightest feasible pose is
+   3.4 mm (femur carrier under the floor plate at yaw +45, femur 37°), and no
+   leg-side pair is ever the minimum. The rope runs are the other exception:
+   they pass the hub plates at 0–1.5 mm once the wrap's walk is allowed for.
+4. **The tightest things that are not the rope drive or the floor plate:** the
+   two HK3012 cheek bearings that carry the crank shaft in the coxa (static SF
+   1.15 with the four rope pulls and the foot load summed as scalars), the
    link-loop rope at SF 3.1 on the design (stumble) load, the tibia tube at SF
-   1.9, and — from the sweep — see §6.
+   1.9.
 
 ## 1. Architecture
 
@@ -206,7 +214,71 @@ each; 3.5 m per leg with the splices.
 
 ## 6. Range of motion and clearances
 
-<<ROM>>
+`cad/leg/leg_rom.py`: a 7 × 7 grid of femur (−60..85°) × tibia absolute
+angle (200..330°, the crank window) at yaw −90, −45, 0, +45, +90 — 245 poses,
+165 of them inside the knee limits (15..145°) — assembled from the CAD and
+measured with exact OCCT distances between every moving group and everything
+it can meet. Pairs of leg-side parts whose x-extents do not overlap cannot
+collide (all leg-side motion is about x-parallel axes) and are reported once as
+designed axial gaps. A pose is "blocked" below 3 mm.
+
+![Range of motion and clearances](leg/leg-rom.png)
+
+**Collisions: 58 of the 165 poses, all with the body slab.** The femur
+beam sits 65 mm exterior of the pivot–knee line, so when the femur lifts the
+beam swings inboard and up into the floor plate (z = 0..6, out to y = 75 at
+yaw 0 and across the whole hip pitch at yaw 90). The femur-up limit with the
+knee at 45° (bisected to 0.5°, 3 mm to the body):
+
+| yaw | femur-up limit | what it meets |
+|---|---|---|
+| 0° | **75.1°** | femur beam vs floor plate (the beam swings inboard of the slab edge at y = 75) |
+| ±45° | **37.4°** | femur carrier vs floor plate |
+| ±90° | **5.7°** | femur carrier vs floor plate (the leg lies under the slab; anything above z = 0 hits it) |
+
+The sizing window asked for −60..85°; the leg gives −60..~75° in the
+sprawl stance and −60..~6° at yaw 90. That is why `leg_loads.json`
+`workspace_coverage` reports 38 of the 158 reachable sprawl-routine poses and
+17 of the 180 mammal-routine poses blocked by the femur window, and it is a
+second reason the femur root has to change shape: at yaw 90 the mammal stance (femur −45°) is reachable but the femur cannot lift above 6° without the carrier hitting the floor plate, so the mammal routine workspace is largely unreachable. The first reason is the mass.
+
+**Minimum clearances at the feasible poses** (`leg.json` `clearances.by_yaw`):
+
+| yaw | feasible poses | min clearance over them | blocked poses |
+|---|---|---|---|
+| −90° | 15 / 33 | 14.8 mm | 18: femur carrier / beam vs floor plate above femur 12°, beam vs the knee level plate at 61° |
+| −45° | 21 / 33 | 14.3 mm | 12: link-loop rope vs floor plate from femur 37°, beam vs floor plate from 61° |
+| 0° | 30 / 33 | 19.2 mm | 3: beam vs floor plate at femur 85° |
+| +45° | 26 / 33 | 3.4 mm | 7: beam vs floor plate from femur 61° (the 3.4 mm is femur 37° at tibia 330°, beam vs floor plate) |
+| +90° | 15 / 33 | 14.8 mm | 18: as −90°, plus the link-loop rope vs floor plate at 61° |
+
+At every feasible pose the closest pair is a femur part — carrier, beam or
+sector — or the knee rope A against the floor plate; no leg-side pair (tibia
+vs femur, sectors, crank, drums; knee pulley vs drive pulley) is the minimum
+anywhere in the window. The 3.4 mm at yaw +45° is the femur carrier under the
+floor plate at femur 37°, one grid step from the 37.4° limit.
+
+**Rope runs against the coxa frame** are pose-independent, and they are the
+clearances that fail. As drawn (each run leaving its drum at mid-height) the
+femur rope B passes the bottom hub plate at **1.5 mm** and the knee rope B the
+middle plate at 5.4 mm. The wrapped band walks along the drum by one pitch
+per working turn, so the runs actually leave between the ends of the band;
+at those heights the femur rope B **touches `hub_bot` (0.0 mm)**, the knee rope
+B passes `hub_mid` at 1.0 mm and the femur rope A passes `hub_mid` at 1.3 mm.
+The three hub plates and the drums need 8–10 mm more axial room between them
+than they have — which is moot until the fleet-angle problem of §0 is settled,
+because that changes where the runs go.
+
+**Designed axial gaps** (constant, none under 1 mm): each capstan rope passes
+the other joint's sector plate at 4.5 mm, the femur rope A passes the femur
+carrier at 5.0 mm, and the link loop passes the coxa cheek and the knee cheek
+at 5.5 mm. The tibia tube (30 wide) and the femur sector plates (starting at
+x = ±15) are face to face at zero gap at deep knee flexion — the tube does not
+reach them within the knee window, but a 27 mm tube or ±16.5 sectors would be
+prudent.
+
+**Fleet angles** (§0): femur A 21.9°, femur B 41.5°, knee A 4.7°, knee B 53.4°.
+
 
 ## 7. Bill of materials
 
@@ -250,16 +322,23 @@ The units are 56 % of the leg at 20 and 58 % at 100; the transmission (four sect
 2. **Femur drum height**: 40 mm instead of 32 for the band and its walk, which
    moves the bottom hub plate and the pod bottom down by 8 mm; the knee drum
    needs 27.
-3. **Cheek bearings** at SF 1.15 with scalar-summed loads: resolve the four
+3. **Femur root vs the floor plate** (§6): the 65 mm beam offset and the
+   95 mm tall carrier put the femur root above z = 0 from femur 6° at yaw 90
+   and 37° at yaw 45. Either the femur pivot drops (Z_PIVOT −100 → ~−160, which
+   lengthens the pod and the through-shafts), the carrier and beam move to the
+   interior side of the pivot–knee line, or the floor plate is cut back
+   outboard of the yaw bearing. The mammal-mode workspace is not reachable
+   until one of these is done.
+4. **Cheek bearings** at SF 1.15 with scalar-summed loads: resolve the four
    pulls by direction (they do not all point the same way) before accepting or
    growing to an HK3016 pair.
-4. **Closure** (§3): the transmission mass and the 2.5:1 knee stage. Either
+5. **Closure** (§3): the transmission mass and the 2.5:1 knee stage. Either
    the requirement moves (level walking closes) or the leg loses 5.7 kg, and
    the rope-drive rework of item 1 will not make it lighter.
-5. **Needle rollers on 30 HRC journals**: the crank shaft, knee pin and crank
+6. **Needle rollers on 30 HRC journals**: the crank shaft, knee pin and crank
    hub B are 42CrMo4 QT; drawn-cup needle bearings want ~58 HRC. Harden the
    journals (induction) or derate the ratings.
-6. **Not modelled**: fasteners, cable routing, rope keepers on the sectors,
+7. **Not modelled**: fasteners, cable routing, rope keepers on the sectors,
    the foot sensor's wiring down the tibia, hard stops at the joint limits,
    the RB7013 preload, and the body slab beyond one hip.
 

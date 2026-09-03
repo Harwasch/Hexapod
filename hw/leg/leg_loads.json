@@ -654,7 +654,1403 @@
    95.0
   ]
  },
- "clearances": "sweep not run (cad/leg/leg_rom.py)",
+ "clearances": {
+  "summary": {
+   "min_clearance_mm": 0.0,
+   "min_pair": "femur + sectors",
+   "rope_vs_coxa_frame_min_mm": 0.0,
+   "rope_vs_coxa_frame_min_pair": "rope_femur_B (femur band: A low / B low) vs hub_bot",
+   "femur_up_limit_deg": {
+    "-90": 5.7,
+    "-45": 37.4,
+    "+0": 75.1,
+    "+45": 37.4,
+    "+90": 5.7
+   },
+   "collisions": 58,
+   "poses_blocked": {
+    "-90": 18,
+    "-45": 12,
+    "+0": 3,
+    "+45": 7,
+    "+90": 18
+   },
+   "axial_gaps_under_1mm": [],
+   "fleet_angle_max_deg": 53.4
+  },
+  "worst_by_group": {
+   "femur + sectors": {
+    "min_mm": 0.0,
+    "femur": 36.7,
+    "tau": 243.3,
+    "knee": 26.7,
+    "yaw": -90.0,
+    "a": "femur_beam",
+    "b": "floor_plate",
+    "at": [
+     131.7,
+     15.0,
+     0.0
+    ]
+   },
+   "tibia + foot": {
+    "min_mm": 0.0,
+    "femur": 85.0,
+    "tau": 286.7,
+    "knee": 21.7,
+    "yaw": -90.0,
+    "a": "tibia_carrier",
+    "b": "level_plate_knee",
+    "at": [
+     155.9,
+     -15.0,
+     115.0
+    ]
+   },
+   "knee pulley": {
+    "min_mm": 0.0,
+    "femur": 85.0,
+    "tau": 286.7,
+    "knee": 21.7,
+    "yaw": -90.0,
+    "a": "knee_pulley",
+    "b": "top_deck",
+    "at": [
+     138.5,
+     -54.0,
+     214.0
+    ]
+   },
+   "capstan rope runs": {
+    "min_mm": 17.77,
+    "femur": -60.0,
+    "tau": 200.0,
+    "knee": 80.0,
+    "yaw": -90.0,
+    "a": "rope_knee_A",
+    "b": "floor_plate",
+    "at": [
+     143.3,
+     -32.0,
+     -17.8
+    ]
+   },
+   "link loop runs": {
+    "min_mm": 0.0,
+    "femur": 36.7,
+    "tau": 243.3,
+    "knee": 26.7,
+    "yaw": -90.0,
+    "a": "rope_link_ext",
+    "b": "floor_plate",
+    "at": [
+     162.9,
+     -60.0,
+     0.0
+    ]
+   }
+  },
+  "collisions": [
+   {
+    "yaw": -90.0,
+    "femur": 12.5,
+    "tau": 221.66666666666666,
+    "knee": 29.2,
+    "clearance": 0.0,
+    "pair": "femur_carrier vs floor_plate [femur + sectors]"
+   },
+   {
+    "yaw": -90.0,
+    "femur": 12.5,
+    "tau": 243.33333333333334,
+    "knee": 50.8,
+    "clearance": 0.0,
+    "pair": "femur_carrier vs floor_plate [femur + sectors]"
+   },
+   {
+    "yaw": -90.0,
+    "femur": 12.5,
+    "tau": 265.0,
+    "knee": 72.5,
+    "clearance": 0.0,
+    "pair": "femur_carrier vs floor_plate [femur + sectors]"
+   },
+   {
+    "yaw": -90.0,
+    "femur": 12.5,
+    "tau": 286.6666666666667,
+    "knee": 94.2,
+    "clearance": 0.0,
+    "pair": "femur_carrier vs floor_plate [femur + sectors]"
+   },
+   {
+    "yaw": -90.0,
+    "femur": 12.5,
+    "tau": 308.33333333333337,
+    "knee": 115.8,
+    "clearance": 0.0,
+    "pair": "femur_carrier vs floor_plate [femur + sectors]"
+   },
+   {
+    "yaw": -90.0,
+    "femur": 12.5,
+    "tau": 330.0,
+    "knee": 137.5,
+    "clearance": 0.0,
+    "pair": "femur_carrier vs floor_plate [femur + sectors]"
+   },
+   {
+    "yaw": -90.0,
+    "femur": 36.66666666666667,
+    "tau": 243.33333333333334,
+    "knee": 26.7,
+    "clearance": 0.0,
+    "pair": "femur_beam vs floor_plate [femur + sectors]"
+   },
+   {
+    "yaw": -90.0,
+    "femur": 36.66666666666667,
+    "tau": 265.0,
+    "knee": 48.3,
+    "clearance": 0.0,
+    "pair": "femur_beam vs floor_plate [femur + sectors]"
+   },
+   {
+    "yaw": -90.0,
+    "femur": 36.66666666666667,
+    "tau": 286.6666666666667,
+    "knee": 70.0,
+    "clearance": 0.0,
+    "pair": "femur_beam vs floor_plate [femur + sectors]"
+   },
+   {
+    "yaw": -90.0,
+    "femur": 36.66666666666667,
+    "tau": 308.33333333333337,
+    "knee": 91.7,
+    "clearance": 0.0,
+    "pair": "femur_beam vs floor_plate [femur + sectors]"
+   },
+   {
+    "yaw": -90.0,
+    "femur": 36.66666666666667,
+    "tau": 330.0,
+    "knee": 113.3,
+    "clearance": 0.0,
+    "pair": "femur_beam vs floor_plate [femur + sectors]"
+   },
+   {
+    "yaw": -90.0,
+    "femur": 60.83333333333334,
+    "tau": 265.0,
+    "knee": 24.2,
+    "clearance": 0.0,
+    "pair": "femur_beam vs level_plate_knee [femur + sectors]"
+   },
+   {
+    "yaw": -90.0,
+    "femur": 60.83333333333334,
+    "tau": 286.6666666666667,
+    "knee": 45.8,
+    "clearance": 0.0,
+    "pair": "femur_beam vs level_plate_knee [femur + sectors]"
+   },
+   {
+    "yaw": -90.0,
+    "femur": 60.83333333333334,
+    "tau": 308.33333333333337,
+    "knee": 67.5,
+    "clearance": 0.0,
+    "pair": "femur_beam vs level_plate_knee [femur + sectors]"
+   },
+   {
+    "yaw": -90.0,
+    "femur": 60.83333333333334,
+    "tau": 330.0,
+    "knee": 89.2,
+    "clearance": 0.0,
+    "pair": "femur_beam vs level_plate_knee [femur + sectors]"
+   },
+   {
+    "yaw": -90.0,
+    "femur": 85.0,
+    "tau": 286.6666666666667,
+    "knee": 21.7,
+    "clearance": 0.0,
+    "pair": "femur_beam vs floor_plate [femur + sectors]"
+   },
+   {
+    "yaw": -90.0,
+    "femur": 85.0,
+    "tau": 308.33333333333337,
+    "knee": 43.3,
+    "clearance": 0.0,
+    "pair": "femur_beam vs floor_plate [femur + sectors]"
+   },
+   {
+    "yaw": -90.0,
+    "femur": 85.0,
+    "tau": 330.0,
+    "knee": 65.0,
+    "clearance": 0.0,
+    "pair": "femur_beam vs floor_plate [femur + sectors]"
+   },
+   {
+    "yaw": -45.0,
+    "femur": 36.66666666666667,
+    "tau": 243.33333333333334,
+    "knee": 26.7,
+    "clearance": 0.0,
+    "pair": "rope_link_ext vs floor_plate [link loop runs]"
+   },
+   {
+    "yaw": -45.0,
+    "femur": 36.66666666666667,
+    "tau": 265.0,
+    "knee": 48.3,
+    "clearance": 0.0,
+    "pair": "rope_link_ext vs floor_plate [link loop runs]"
+   },
+   {
+    "yaw": -45.0,
+    "femur": 36.66666666666667,
+    "tau": 286.6666666666667,
+    "knee": 70.0,
+    "clearance": 0.0,
+    "pair": "rope_link_ext vs floor_plate [link loop runs]"
+   },
+   {
+    "yaw": -45.0,
+    "femur": 36.66666666666667,
+    "tau": 308.33333333333337,
+    "knee": 91.7,
+    "clearance": 0.0,
+    "pair": "rope_link_ext vs floor_plate [link loop runs]"
+   },
+   {
+    "yaw": -45.0,
+    "femur": 36.66666666666667,
+    "tau": 330.0,
+    "knee": 113.3,
+    "clearance": 0.0,
+    "pair": "rope_link_ext vs floor_plate [link loop runs]"
+   },
+   {
+    "yaw": -45.0,
+    "femur": 60.83333333333334,
+    "tau": 265.0,
+    "knee": 24.2,
+    "clearance": 0.0,
+    "pair": "femur_beam vs floor_plate [femur + sectors]"
+   },
+   {
+    "yaw": -45.0,
+    "femur": 60.83333333333334,
+    "tau": 286.6666666666667,
+    "knee": 45.8,
+    "clearance": 0.0,
+    "pair": "femur_beam vs floor_plate [femur + sectors]"
+   },
+   {
+    "yaw": -45.0,
+    "femur": 60.83333333333334,
+    "tau": 308.33333333333337,
+    "knee": 67.5,
+    "clearance": 0.0,
+    "pair": "femur_beam vs floor_plate [femur + sectors]"
+   },
+   {
+    "yaw": -45.0,
+    "femur": 60.83333333333334,
+    "tau": 330.0,
+    "knee": 89.2,
+    "clearance": 0.0,
+    "pair": "femur_beam vs floor_plate [femur + sectors]"
+   },
+   {
+    "yaw": -45.0,
+    "femur": 85.0,
+    "tau": 286.6666666666667,
+    "knee": 21.7,
+    "clearance": 0.0,
+    "pair": "femur_beam vs floor_plate [femur + sectors]"
+   },
+   {
+    "yaw": -45.0,
+    "femur": 85.0,
+    "tau": 308.33333333333337,
+    "knee": 43.3,
+    "clearance": 0.0,
+    "pair": "femur_beam vs floor_plate [femur + sectors]"
+   },
+   {
+    "yaw": -45.0,
+    "femur": 85.0,
+    "tau": 330.0,
+    "knee": 65.0,
+    "clearance": 0.0,
+    "pair": "femur_beam vs floor_plate [femur + sectors]"
+   },
+   {
+    "yaw": 0.0,
+    "femur": 85.0,
+    "tau": 286.6666666666667,
+    "knee": 21.7,
+    "clearance": 0.0,
+    "pair": "femur_beam vs floor_plate [femur + sectors]"
+   },
+   {
+    "yaw": 0.0,
+    "femur": 85.0,
+    "tau": 308.33333333333337,
+    "knee": 43.3,
+    "clearance": 0.0,
+    "pair": "femur_beam vs floor_plate [femur + sectors]"
+   },
+   {
+    "yaw": 0.0,
+    "femur": 85.0,
+    "tau": 330.0,
+    "knee": 65.0,
+    "clearance": 0.0,
+    "pair": "femur_beam vs floor_plate [femur + sectors]"
+   },
+   {
+    "yaw": 45.0,
+    "femur": 60.83333333333334,
+    "tau": 265.0,
+    "knee": 24.2,
+    "clearance": 0.0,
+    "pair": "femur_beam vs floor_plate [femur + sectors]"
+   },
+   {
+    "yaw": 45.0,
+    "femur": 60.83333333333334,
+    "tau": 286.6666666666667,
+    "knee": 45.8,
+    "clearance": 0.0,
+    "pair": "femur_beam vs floor_plate [femur + sectors]"
+   },
+   {
+    "yaw": 45.0,
+    "femur": 60.83333333333334,
+    "tau": 308.33333333333337,
+    "knee": 67.5,
+    "clearance": 0.0,
+    "pair": "femur_beam vs floor_plate [femur + sectors]"
+   },
+   {
+    "yaw": 45.0,
+    "femur": 60.83333333333334,
+    "tau": 330.0,
+    "knee": 89.2,
+    "clearance": 0.0,
+    "pair": "femur_beam vs floor_plate [femur + sectors]"
+   },
+   {
+    "yaw": 45.0,
+    "femur": 85.0,
+    "tau": 286.6666666666667,
+    "knee": 21.7,
+    "clearance": 0.0,
+    "pair": "femur_beam vs floor_plate [femur + sectors]"
+   },
+   {
+    "yaw": 45.0,
+    "femur": 85.0,
+    "tau": 308.33333333333337,
+    "knee": 43.3,
+    "clearance": 0.0,
+    "pair": "femur_beam vs floor_plate [femur + sectors]"
+   },
+   {
+    "yaw": 45.0,
+    "femur": 85.0,
+    "tau": 330.0,
+    "knee": 65.0,
+    "clearance": 0.0,
+    "pair": "femur_beam vs floor_plate [femur + sectors]"
+   },
+   {
+    "yaw": 90.0,
+    "femur": 12.5,
+    "tau": 221.66666666666666,
+    "knee": 29.2,
+    "clearance": 0.0,
+    "pair": "femur_carrier vs floor_plate [femur + sectors]"
+   },
+   {
+    "yaw": 90.0,
+    "femur": 12.5,
+    "tau": 243.33333333333334,
+    "knee": 50.8,
+    "clearance": 0.0,
+    "pair": "femur_carrier vs floor_plate [femur + sectors]"
+   },
+   {
+    "yaw": 90.0,
+    "femur": 12.5,
+    "tau": 265.0,
+    "knee": 72.5,
+    "clearance": 0.0,
+    "pair": "femur_carrier vs floor_plate [femur + sectors]"
+   },
+   {
+    "yaw": 90.0,
+    "femur": 12.5,
+    "tau": 286.6666666666667,
+    "knee": 94.2,
+    "clearance": 0.0,
+    "pair": "femur_carrier vs floor_plate [femur + sectors]"
+   },
+   {
+    "yaw": 90.0,
+    "femur": 12.5,
+    "tau": 308.33333333333337,
+    "knee": 115.8,
+    "clearance": 0.0,
+    "pair": "femur_carrier vs floor_plate [femur + sectors]"
+   },
+   {
+    "yaw": 90.0,
+    "femur": 12.5,
+    "tau": 330.0,
+    "knee": 137.5,
+    "clearance": 0.0,
+    "pair": "femur_carrier vs floor_plate [femur + sectors]"
+   },
+   {
+    "yaw": 90.0,
+    "femur": 36.66666666666667,
+    "tau": 243.33333333333334,
+    "knee": 26.7,
+    "clearance": 0.0,
+    "pair": "femur_beam vs floor_plate [femur + sectors]"
+   },
+   {
+    "yaw": 90.0,
+    "femur": 36.66666666666667,
+    "tau": 265.0,
+    "knee": 48.3,
+    "clearance": 0.0,
+    "pair": "femur_beam vs floor_plate [femur + sectors]"
+   },
+   {
+    "yaw": 90.0,
+    "femur": 36.66666666666667,
+    "tau": 286.6666666666667,
+    "knee": 70.0,
+    "clearance": 0.0,
+    "pair": "femur_beam vs floor_plate [femur + sectors]"
+   },
+   {
+    "yaw": 90.0,
+    "femur": 36.66666666666667,
+    "tau": 308.33333333333337,
+    "knee": 91.7,
+    "clearance": 0.0,
+    "pair": "femur_beam vs floor_plate [femur + sectors]"
+   },
+   {
+    "yaw": 90.0,
+    "femur": 36.66666666666667,
+    "tau": 330.0,
+    "knee": 113.3,
+    "clearance": 0.0,
+    "pair": "femur_beam vs floor_plate [femur + sectors]"
+   },
+   {
+    "yaw": 90.0,
+    "femur": 60.83333333333334,
+    "tau": 265.0,
+    "knee": 24.2,
+    "clearance": 0.0,
+    "pair": "rope_link_ext vs floor_plate [link loop runs]"
+   },
+   {
+    "yaw": 90.0,
+    "femur": 60.83333333333334,
+    "tau": 286.6666666666667,
+    "knee": 45.8,
+    "clearance": 0.0,
+    "pair": "rope_link_ext vs floor_plate [link loop runs]"
+   },
+   {
+    "yaw": 90.0,
+    "femur": 60.83333333333334,
+    "tau": 308.33333333333337,
+    "knee": 67.5,
+    "clearance": 0.0,
+    "pair": "rope_link_ext vs floor_plate [link loop runs]"
+   },
+   {
+    "yaw": 90.0,
+    "femur": 60.83333333333334,
+    "tau": 330.0,
+    "knee": 89.2,
+    "clearance": 0.0,
+    "pair": "rope_link_ext vs floor_plate [link loop runs]"
+   },
+   {
+    "yaw": 90.0,
+    "femur": 85.0,
+    "tau": 286.6666666666667,
+    "knee": 21.7,
+    "clearance": 0.0,
+    "pair": "femur_beam vs floor_plate [femur + sectors]"
+   },
+   {
+    "yaw": 90.0,
+    "femur": 85.0,
+    "tau": 308.33333333333337,
+    "knee": 43.3,
+    "clearance": 0.0,
+    "pair": "femur_beam vs floor_plate [femur + sectors]"
+   },
+   {
+    "yaw": 90.0,
+    "femur": 85.0,
+    "tau": 330.0,
+    "knee": 65.0,
+    "clearance": 0.0,
+    "pair": "femur_beam vs floor_plate [femur + sectors]"
+   }
+  ],
+  "designed_axial_gaps_mm": {
+   "rope_femur_A vs crank_sector_A": 4.5,
+   "rope_femur_B vs crank_sector_B": 4.5,
+   "rope_knee_A vs femur_sector_A": 4.5,
+   "rope_knee_B vs femur_sector_B": 4.5,
+   "rope_femur_A vs femur_carrier": 5.0,
+   "rope_link_ext vs knee_cheek_R": 5.5,
+   "rope_link_ext vs coxa_plate_R": 5.5
+  },
+  "departure_cases": {
+   "mid": "mid-height, as leg.py draws",
+   "femur band: A low / B low": {
+    "femur_A": 9.4,
+    "femur_B": -10.5
+   },
+   "femur band: A high / B high": {
+    "femur_A": 10.5,
+    "femur_B": -1.6
+   },
+   "knee band: A low / B low": {
+    "knee_A": 5.5,
+    "knee_B": -10.5
+   },
+   "knee band: A high / B high": {
+    "knee_A": 10.4,
+    "knee_B": -5.5
+   }
+  },
+  "grid": {
+   "femur_deg": [
+    -60.0,
+    -35.83333333333333,
+    -11.666666666666664,
+    12.5,
+    36.66666666666667,
+    60.83333333333334,
+    85.0
+   ],
+   "tau_deg": [
+    200.0,
+    221.66666666666666,
+    243.33333333333334,
+    265.0,
+    286.6666666666667,
+    308.33333333333337,
+    330.0
+   ],
+   "yaw_deg": [
+    -90.0,
+    -45.0,
+    0.0,
+    45.0,
+    90.0
+   ],
+   "n_poses": 245,
+   "block_mm": 3.0,
+   "knee_limits_deg": [
+    15.0,
+    145.0
+   ]
+  },
+  "by_yaw": {
+   "-90": {
+    "min_over_feasible_poses_mm": 14.8,
+    "feasible": 15,
+    "within_knee_limits": 33,
+    "total": 49,
+    "blocked": [
+     {
+      "femur": 12.5,
+      "tau": 221.66666666666666,
+      "knee": 29.2,
+      "clearance": 0.0,
+      "pair": "femur_carrier vs floor_plate [femur + sectors]"
+     },
+     {
+      "femur": 12.5,
+      "tau": 243.33333333333334,
+      "knee": 50.8,
+      "clearance": 0.0,
+      "pair": "femur_carrier vs floor_plate [femur + sectors]"
+     },
+     {
+      "femur": 12.5,
+      "tau": 265.0,
+      "knee": 72.5,
+      "clearance": 0.0,
+      "pair": "femur_carrier vs floor_plate [femur + sectors]"
+     },
+     {
+      "femur": 12.5,
+      "tau": 286.6666666666667,
+      "knee": 94.2,
+      "clearance": 0.0,
+      "pair": "femur_carrier vs floor_plate [femur + sectors]"
+     },
+     {
+      "femur": 12.5,
+      "tau": 308.33333333333337,
+      "knee": 115.8,
+      "clearance": 0.0,
+      "pair": "femur_carrier vs floor_plate [femur + sectors]"
+     },
+     {
+      "femur": 12.5,
+      "tau": 330.0,
+      "knee": 137.5,
+      "clearance": 0.0,
+      "pair": "femur_carrier vs floor_plate [femur + sectors]"
+     },
+     {
+      "femur": 36.66666666666667,
+      "tau": 243.33333333333334,
+      "knee": 26.7,
+      "clearance": 0.0,
+      "pair": "femur_beam vs floor_plate [femur + sectors]"
+     },
+     {
+      "femur": 36.66666666666667,
+      "tau": 265.0,
+      "knee": 48.3,
+      "clearance": 0.0,
+      "pair": "femur_beam vs floor_plate [femur + sectors]"
+     },
+     {
+      "femur": 36.66666666666667,
+      "tau": 286.6666666666667,
+      "knee": 70.0,
+      "clearance": 0.0,
+      "pair": "femur_beam vs floor_plate [femur + sectors]"
+     },
+     {
+      "femur": 36.66666666666667,
+      "tau": 308.33333333333337,
+      "knee": 91.7,
+      "clearance": 0.0,
+      "pair": "femur_beam vs floor_plate [femur + sectors]"
+     },
+     {
+      "femur": 36.66666666666667,
+      "tau": 330.0,
+      "knee": 113.3,
+      "clearance": 0.0,
+      "pair": "femur_beam vs floor_plate [femur + sectors]"
+     },
+     {
+      "femur": 60.83333333333334,
+      "tau": 265.0,
+      "knee": 24.2,
+      "clearance": 0.0,
+      "pair": "femur_beam vs level_plate_knee [femur + sectors]"
+     },
+     {
+      "femur": 60.83333333333334,
+      "tau": 286.6666666666667,
+      "knee": 45.8,
+      "clearance": 0.0,
+      "pair": "femur_beam vs level_plate_knee [femur + sectors]"
+     },
+     {
+      "femur": 60.83333333333334,
+      "tau": 308.33333333333337,
+      "knee": 67.5,
+      "clearance": 0.0,
+      "pair": "femur_beam vs level_plate_knee [femur + sectors]"
+     },
+     {
+      "femur": 60.83333333333334,
+      "tau": 330.0,
+      "knee": 89.2,
+      "clearance": 0.0,
+      "pair": "femur_beam vs level_plate_knee [femur + sectors]"
+     },
+     {
+      "femur": 85.0,
+      "tau": 286.6666666666667,
+      "knee": 21.7,
+      "clearance": 0.0,
+      "pair": "femur_beam vs floor_plate [femur + sectors]"
+     },
+     {
+      "femur": 85.0,
+      "tau": 308.33333333333337,
+      "knee": 43.3,
+      "clearance": 0.0,
+      "pair": "femur_beam vs floor_plate [femur + sectors]"
+     },
+     {
+      "femur": 85.0,
+      "tau": 330.0,
+      "knee": 65.0,
+      "clearance": 0.0,
+      "pair": "femur_beam vs floor_plate [femur + sectors]"
+     }
+    ],
+    "pair_grid": [
+     [
+      "femur_sector_A vs floor_plate [femur + sectors]",
+      "femur_sector_A vs floor_plate [femur + sectors]",
+      "femur_sector_A vs floor_plate [femur + sectors]",
+      "femur_sector_A vs floor_plate [femur + sectors]",
+      null,
+      null,
+      null
+     ],
+     [
+      "femur_sector_A vs floor_plate [femur + sectors]",
+      "femur_sector_A vs floor_plate [femur + sectors]",
+      "femur_sector_A vs floor_plate [femur + sectors]",
+      "femur_sector_A vs floor_plate [femur + sectors]",
+      "femur_sector_A vs floor_plate [femur + sectors]",
+      null,
+      null
+     ],
+     [
+      "femur_carrier vs floor_plate [femur + sectors]",
+      "femur_carrier vs floor_plate [femur + sectors]",
+      "femur_carrier vs floor_plate [femur + sectors]",
+      "femur_carrier vs floor_plate [femur + sectors]",
+      "femur_carrier vs floor_plate [femur + sectors]",
+      "femur_carrier vs floor_plate [femur + sectors]",
+      null
+     ],
+     [
+      null,
+      "femur_carrier vs floor_plate [femur + sectors]",
+      "femur_carrier vs floor_plate [femur + sectors]",
+      "femur_carrier vs floor_plate [femur + sectors]",
+      "femur_carrier vs floor_plate [femur + sectors]",
+      "femur_carrier vs floor_plate [femur + sectors]",
+      "femur_carrier vs floor_plate [femur + sectors]"
+     ],
+     [
+      null,
+      null,
+      "femur_beam vs floor_plate [femur + sectors]",
+      "femur_beam vs floor_plate [femur + sectors]",
+      "femur_beam vs floor_plate [femur + sectors]",
+      "femur_beam vs floor_plate [femur + sectors]",
+      "femur_beam vs floor_plate [femur + sectors]"
+     ],
+     [
+      null,
+      null,
+      null,
+      "femur_beam vs level_plate_knee [femur + sectors]",
+      "femur_beam vs level_plate_knee [femur + sectors]",
+      "femur_beam vs level_plate_knee [femur + sectors]",
+      "femur_beam vs level_plate_knee [femur + sectors]"
+     ],
+     [
+      null,
+      null,
+      null,
+      null,
+      "femur_beam vs floor_plate [femur + sectors]",
+      "femur_beam vs floor_plate [femur + sectors]",
+      "femur_beam vs floor_plate [femur + sectors]"
+     ]
+    ]
+   },
+   "-45": {
+    "min_over_feasible_poses_mm": 14.3,
+    "feasible": 21,
+    "within_knee_limits": 33,
+    "total": 49,
+    "blocked": [
+     {
+      "femur": 36.66666666666667,
+      "tau": 243.33333333333334,
+      "knee": 26.7,
+      "clearance": 0.0,
+      "pair": "rope_link_ext vs floor_plate [link loop runs]"
+     },
+     {
+      "femur": 36.66666666666667,
+      "tau": 265.0,
+      "knee": 48.3,
+      "clearance": 0.0,
+      "pair": "rope_link_ext vs floor_plate [link loop runs]"
+     },
+     {
+      "femur": 36.66666666666667,
+      "tau": 286.6666666666667,
+      "knee": 70.0,
+      "clearance": 0.0,
+      "pair": "rope_link_ext vs floor_plate [link loop runs]"
+     },
+     {
+      "femur": 36.66666666666667,
+      "tau": 308.33333333333337,
+      "knee": 91.7,
+      "clearance": 0.0,
+      "pair": "rope_link_ext vs floor_plate [link loop runs]"
+     },
+     {
+      "femur": 36.66666666666667,
+      "tau": 330.0,
+      "knee": 113.3,
+      "clearance": 0.0,
+      "pair": "rope_link_ext vs floor_plate [link loop runs]"
+     },
+     {
+      "femur": 60.83333333333334,
+      "tau": 265.0,
+      "knee": 24.2,
+      "clearance": 0.0,
+      "pair": "femur_beam vs floor_plate [femur + sectors]"
+     },
+     {
+      "femur": 60.83333333333334,
+      "tau": 286.6666666666667,
+      "knee": 45.8,
+      "clearance": 0.0,
+      "pair": "femur_beam vs floor_plate [femur + sectors]"
+     },
+     {
+      "femur": 60.83333333333334,
+      "tau": 308.33333333333337,
+      "knee": 67.5,
+      "clearance": 0.0,
+      "pair": "femur_beam vs floor_plate [femur + sectors]"
+     },
+     {
+      "femur": 60.83333333333334,
+      "tau": 330.0,
+      "knee": 89.2,
+      "clearance": 0.0,
+      "pair": "femur_beam vs floor_plate [femur + sectors]"
+     },
+     {
+      "femur": 85.0,
+      "tau": 286.6666666666667,
+      "knee": 21.7,
+      "clearance": 0.0,
+      "pair": "femur_beam vs floor_plate [femur + sectors]"
+     },
+     {
+      "femur": 85.0,
+      "tau": 308.33333333333337,
+      "knee": 43.3,
+      "clearance": 0.0,
+      "pair": "femur_beam vs floor_plate [femur + sectors]"
+     },
+     {
+      "femur": 85.0,
+      "tau": 330.0,
+      "knee": 65.0,
+      "clearance": 0.0,
+      "pair": "femur_beam vs floor_plate [femur + sectors]"
+     }
+    ],
+    "pair_grid": [
+     [
+      "rope_knee_A vs floor_plate [capstan rope runs]",
+      "rope_knee_A vs floor_plate [capstan rope runs]",
+      "rope_knee_A vs floor_plate [capstan rope runs]",
+      "rope_knee_A vs floor_plate [capstan rope runs]",
+      null,
+      null,
+      null
+     ],
+     [
+      "rope_knee_A vs floor_plate [capstan rope runs]",
+      "rope_knee_A vs floor_plate [capstan rope runs]",
+      "rope_knee_A vs floor_plate [capstan rope runs]",
+      "rope_knee_A vs floor_plate [capstan rope runs]",
+      "rope_knee_A vs floor_plate [capstan rope runs]",
+      null,
+      null
+     ],
+     [
+      "rope_knee_A vs floor_plate [capstan rope runs]",
+      "rope_knee_A vs floor_plate [capstan rope runs]",
+      "rope_knee_A vs floor_plate [capstan rope runs]",
+      "rope_knee_A vs floor_plate [capstan rope runs]",
+      "rope_knee_A vs floor_plate [capstan rope runs]",
+      "rope_knee_A vs floor_plate [capstan rope runs]",
+      null
+     ],
+     [
+      null,
+      "femur_carrier vs floor_plate [femur + sectors]",
+      "femur_carrier vs floor_plate [femur + sectors]",
+      "femur_carrier vs floor_plate [femur + sectors]",
+      "femur_carrier vs floor_plate [femur + sectors]",
+      "femur_carrier vs floor_plate [femur + sectors]",
+      "femur_carrier vs floor_plate [femur + sectors]"
+     ],
+     [
+      null,
+      null,
+      "rope_link_ext vs floor_plate [link loop runs]",
+      "rope_link_ext vs floor_plate [link loop runs]",
+      "rope_link_ext vs floor_plate [link loop runs]",
+      "rope_link_ext vs floor_plate [link loop runs]",
+      "rope_link_ext vs floor_plate [link loop runs]"
+     ],
+     [
+      null,
+      null,
+      null,
+      "femur_beam vs floor_plate [femur + sectors]",
+      "femur_beam vs floor_plate [femur + sectors]",
+      "femur_beam vs floor_plate [femur + sectors]",
+      "femur_beam vs floor_plate [femur + sectors]"
+     ],
+     [
+      null,
+      null,
+      null,
+      null,
+      "femur_beam vs floor_plate [femur + sectors]",
+      "femur_beam vs floor_plate [femur + sectors]",
+      "femur_beam vs floor_plate [femur + sectors]"
+     ]
+    ]
+   },
+   "+0": {
+    "min_over_feasible_poses_mm": 19.2,
+    "feasible": 30,
+    "within_knee_limits": 33,
+    "total": 49,
+    "blocked": [
+     {
+      "femur": 85.0,
+      "tau": 286.6666666666667,
+      "knee": 21.7,
+      "clearance": 0.0,
+      "pair": "femur_beam vs floor_plate [femur + sectors]"
+     },
+     {
+      "femur": 85.0,
+      "tau": 308.33333333333337,
+      "knee": 43.3,
+      "clearance": 0.0,
+      "pair": "femur_beam vs floor_plate [femur + sectors]"
+     },
+     {
+      "femur": 85.0,
+      "tau": 330.0,
+      "knee": 65.0,
+      "clearance": 0.0,
+      "pair": "femur_beam vs floor_plate [femur + sectors]"
+     }
+    ],
+    "pair_grid": [
+     [
+      "rope_knee_A vs floor_plate [capstan rope runs]",
+      "rope_knee_A vs floor_plate [capstan rope runs]",
+      "rope_knee_A vs floor_plate [capstan rope runs]",
+      "rope_knee_A vs floor_plate [capstan rope runs]",
+      null,
+      null,
+      null
+     ],
+     [
+      "rope_knee_A vs floor_plate [capstan rope runs]",
+      "rope_knee_A vs floor_plate [capstan rope runs]",
+      "rope_knee_A vs floor_plate [capstan rope runs]",
+      "rope_knee_A vs floor_plate [capstan rope runs]",
+      "rope_knee_A vs floor_plate [capstan rope runs]",
+      null,
+      null
+     ],
+     [
+      "rope_knee_A vs floor_plate [capstan rope runs]",
+      "rope_knee_A vs floor_plate [capstan rope runs]",
+      "rope_knee_A vs floor_plate [capstan rope runs]",
+      "rope_knee_A vs floor_plate [capstan rope runs]",
+      "rope_knee_A vs floor_plate [capstan rope runs]",
+      "rope_knee_A vs floor_plate [capstan rope runs]",
+      null
+     ],
+     [
+      null,
+      "rope_knee_A vs floor_plate [capstan rope runs]",
+      "rope_knee_A vs floor_plate [capstan rope runs]",
+      "rope_knee_A vs floor_plate [capstan rope runs]",
+      "rope_knee_A vs floor_plate [capstan rope runs]",
+      "rope_knee_A vs floor_plate [capstan rope runs]",
+      "rope_knee_A vs floor_plate [capstan rope runs]"
+     ],
+     [
+      null,
+      null,
+      "rope_knee_A vs floor_plate [capstan rope runs]",
+      "rope_knee_A vs floor_plate [capstan rope runs]",
+      "rope_knee_A vs floor_plate [capstan rope runs]",
+      "rope_knee_A vs floor_plate [capstan rope runs]",
+      "rope_knee_A vs floor_plate [capstan rope runs]"
+     ],
+     [
+      null,
+      null,
+      null,
+      "femur_beam vs floor_plate [femur + sectors]",
+      "femur_beam vs floor_plate [femur + sectors]",
+      "femur_beam vs floor_plate [femur + sectors]",
+      "femur_beam vs floor_plate [femur + sectors]"
+     ],
+     [
+      null,
+      null,
+      null,
+      null,
+      "femur_beam vs floor_plate [femur + sectors]",
+      "femur_beam vs floor_plate [femur + sectors]",
+      "femur_beam vs floor_plate [femur + sectors]"
+     ]
+    ]
+   },
+   "+45": {
+    "min_over_feasible_poses_mm": 3.4,
+    "feasible": 26,
+    "within_knee_limits": 33,
+    "total": 49,
+    "blocked": [
+     {
+      "femur": 60.83333333333334,
+      "tau": 265.0,
+      "knee": 24.2,
+      "clearance": 0.0,
+      "pair": "femur_beam vs floor_plate [femur + sectors]"
+     },
+     {
+      "femur": 60.83333333333334,
+      "tau": 286.6666666666667,
+      "knee": 45.8,
+      "clearance": 0.0,
+      "pair": "femur_beam vs floor_plate [femur + sectors]"
+     },
+     {
+      "femur": 60.83333333333334,
+      "tau": 308.33333333333337,
+      "knee": 67.5,
+      "clearance": 0.0,
+      "pair": "femur_beam vs floor_plate [femur + sectors]"
+     },
+     {
+      "femur": 60.83333333333334,
+      "tau": 330.0,
+      "knee": 89.2,
+      "clearance": 0.0,
+      "pair": "femur_beam vs floor_plate [femur + sectors]"
+     },
+     {
+      "femur": 85.0,
+      "tau": 286.6666666666667,
+      "knee": 21.7,
+      "clearance": 0.0,
+      "pair": "femur_beam vs floor_plate [femur + sectors]"
+     },
+     {
+      "femur": 85.0,
+      "tau": 308.33333333333337,
+      "knee": 43.3,
+      "clearance": 0.0,
+      "pair": "femur_beam vs floor_plate [femur + sectors]"
+     },
+     {
+      "femur": 85.0,
+      "tau": 330.0,
+      "knee": 65.0,
+      "clearance": 0.0,
+      "pair": "femur_beam vs floor_plate [femur + sectors]"
+     }
+    ],
+    "pair_grid": [
+     [
+      "femur_sector_B vs floor_plate [femur + sectors]",
+      "femur_sector_B vs floor_plate [femur + sectors]",
+      "femur_sector_B vs floor_plate [femur + sectors]",
+      "femur_sector_B vs floor_plate [femur + sectors]",
+      null,
+      null,
+      null
+     ],
+     [
+      "femur_sector_B vs floor_plate [femur + sectors]",
+      "femur_sector_B vs floor_plate [femur + sectors]",
+      "femur_sector_B vs floor_plate [femur + sectors]",
+      "femur_sector_B vs floor_plate [femur + sectors]",
+      "femur_sector_B vs floor_plate [femur + sectors]",
+      null,
+      null
+     ],
+     [
+      "rope_knee_A vs floor_plate [capstan rope runs]",
+      "rope_knee_A vs floor_plate [capstan rope runs]",
+      "rope_knee_A vs floor_plate [capstan rope runs]",
+      "rope_knee_A vs floor_plate [capstan rope runs]",
+      "rope_knee_A vs floor_plate [capstan rope runs]",
+      "rope_knee_A vs floor_plate [capstan rope runs]",
+      null
+     ],
+     [
+      null,
+      "femur_carrier vs floor_plate [femur + sectors]",
+      "femur_carrier vs floor_plate [femur + sectors]",
+      "femur_carrier vs floor_plate [femur + sectors]",
+      "femur_carrier vs floor_plate [femur + sectors]",
+      "femur_carrier vs floor_plate [femur + sectors]",
+      "femur_carrier vs floor_plate [femur + sectors]"
+     ],
+     [
+      null,
+      null,
+      "femur_carrier vs floor_plate [femur + sectors]",
+      "femur_carrier vs floor_plate [femur + sectors]",
+      "femur_carrier vs floor_plate [femur + sectors]",
+      "femur_carrier vs floor_plate [femur + sectors]",
+      "femur_carrier vs floor_plate [femur + sectors]"
+     ],
+     [
+      null,
+      null,
+      null,
+      "femur_beam vs floor_plate [femur + sectors]",
+      "femur_beam vs floor_plate [femur + sectors]",
+      "femur_beam vs floor_plate [femur + sectors]",
+      "femur_beam vs floor_plate [femur + sectors]"
+     ],
+     [
+      null,
+      null,
+      null,
+      null,
+      "femur_beam vs floor_plate [femur + sectors]",
+      "femur_beam vs floor_plate [femur + sectors]",
+      "femur_beam vs floor_plate [femur + sectors]"
+     ]
+    ]
+   },
+   "+90": {
+    "min_over_feasible_poses_mm": 14.8,
+    "feasible": 15,
+    "within_knee_limits": 33,
+    "total": 49,
+    "blocked": [
+     {
+      "femur": 12.5,
+      "tau": 221.66666666666666,
+      "knee": 29.2,
+      "clearance": 0.0,
+      "pair": "femur_carrier vs floor_plate [femur + sectors]"
+     },
+     {
+      "femur": 12.5,
+      "tau": 243.33333333333334,
+      "knee": 50.8,
+      "clearance": 0.0,
+      "pair": "femur_carrier vs floor_plate [femur + sectors]"
+     },
+     {
+      "femur": 12.5,
+      "tau": 265.0,
+      "knee": 72.5,
+      "clearance": 0.0,
+      "pair": "femur_carrier vs floor_plate [femur + sectors]"
+     },
+     {
+      "femur": 12.5,
+      "tau": 286.6666666666667,
+      "knee": 94.2,
+      "clearance": 0.0,
+      "pair": "femur_carrier vs floor_plate [femur + sectors]"
+     },
+     {
+      "femur": 12.5,
+      "tau": 308.33333333333337,
+      "knee": 115.8,
+      "clearance": 0.0,
+      "pair": "femur_carrier vs floor_plate [femur + sectors]"
+     },
+     {
+      "femur": 12.5,
+      "tau": 330.0,
+      "knee": 137.5,
+      "clearance": 0.0,
+      "pair": "femur_carrier vs floor_plate [femur + sectors]"
+     },
+     {
+      "femur": 36.66666666666667,
+      "tau": 243.33333333333334,
+      "knee": 26.7,
+      "clearance": 0.0,
+      "pair": "femur_beam vs floor_plate [femur + sectors]"
+     },
+     {
+      "femur": 36.66666666666667,
+      "tau": 265.0,
+      "knee": 48.3,
+      "clearance": 0.0,
+      "pair": "femur_beam vs floor_plate [femur + sectors]"
+     },
+     {
+      "femur": 36.66666666666667,
+      "tau": 286.6666666666667,
+      "knee": 70.0,
+      "clearance": 0.0,
+      "pair": "femur_beam vs floor_plate [femur + sectors]"
+     },
+     {
+      "femur": 36.66666666666667,
+      "tau": 308.33333333333337,
+      "knee": 91.7,
+      "clearance": 0.0,
+      "pair": "femur_beam vs floor_plate [femur + sectors]"
+     },
+     {
+      "femur": 36.66666666666667,
+      "tau": 330.0,
+      "knee": 113.3,
+      "clearance": 0.0,
+      "pair": "femur_beam vs floor_plate [femur + sectors]"
+     },
+     {
+      "femur": 60.83333333333334,
+      "tau": 265.0,
+      "knee": 24.2,
+      "clearance": 0.0,
+      "pair": "rope_link_ext vs floor_plate [link loop runs]"
+     },
+     {
+      "femur": 60.83333333333334,
+      "tau": 286.6666666666667,
+      "knee": 45.8,
+      "clearance": 0.0,
+      "pair": "rope_link_ext vs floor_plate [link loop runs]"
+     },
+     {
+      "femur": 60.83333333333334,
+      "tau": 308.33333333333337,
+      "knee": 67.5,
+      "clearance": 0.0,
+      "pair": "rope_link_ext vs floor_plate [link loop runs]"
+     },
+     {
+      "femur": 60.83333333333334,
+      "tau": 330.0,
+      "knee": 89.2,
+      "clearance": 0.0,
+      "pair": "rope_link_ext vs floor_plate [link loop runs]"
+     },
+     {
+      "femur": 85.0,
+      "tau": 286.6666666666667,
+      "knee": 21.7,
+      "clearance": 0.0,
+      "pair": "femur_beam vs floor_plate [femur + sectors]"
+     },
+     {
+      "femur": 85.0,
+      "tau": 308.33333333333337,
+      "knee": 43.3,
+      "clearance": 0.0,
+      "pair": "femur_beam vs floor_plate [femur + sectors]"
+     },
+     {
+      "femur": 85.0,
+      "tau": 330.0,
+      "knee": 65.0,
+      "clearance": 0.0,
+      "pair": "femur_beam vs floor_plate [femur + sectors]"
+     }
+    ],
+    "pair_grid": [
+     [
+      "femur_sector_A vs floor_plate [femur + sectors]",
+      "femur_sector_A vs floor_plate [femur + sectors]",
+      "femur_sector_A vs floor_plate [femur + sectors]",
+      "femur_sector_A vs floor_plate [femur + sectors]",
+      null,
+      null,
+      null
+     ],
+     [
+      "femur_sector_A vs floor_plate [femur + sectors]",
+      "femur_sector_A vs floor_plate [femur + sectors]",
+      "femur_sector_A vs floor_plate [femur + sectors]",
+      "femur_sector_A vs floor_plate [femur + sectors]",
+      "femur_sector_A vs floor_plate [femur + sectors]",
+      null,
+      null
+     ],
+     [
+      "femur_carrier vs floor_plate [femur + sectors]",
+      "femur_carrier vs floor_plate [femur + sectors]",
+      "femur_carrier vs floor_plate [femur + sectors]",
+      "femur_carrier vs floor_plate [femur + sectors]",
+      "femur_carrier vs floor_plate [femur + sectors]",
+      "femur_carrier vs floor_plate [femur + sectors]",
+      null
+     ],
+     [
+      null,
+      "femur_carrier vs floor_plate [femur + sectors]",
+      "femur_carrier vs floor_plate [femur + sectors]",
+      "femur_carrier vs floor_plate [femur + sectors]",
+      "femur_carrier vs floor_plate [femur + sectors]",
+      "femur_carrier vs floor_plate [femur + sectors]",
+      "femur_carrier vs floor_plate [femur + sectors]"
+     ],
+     [
+      null,
+      null,
+      "femur_beam vs floor_plate [femur + sectors]",
+      "femur_beam vs floor_plate [femur + sectors]",
+      "femur_beam vs floor_plate [femur + sectors]",
+      "femur_beam vs floor_plate [femur + sectors]",
+      "femur_beam vs floor_plate [femur + sectors]"
+     ],
+     [
+      null,
+      null,
+      null,
+      "rope_link_ext vs floor_plate [link loop runs]",
+      "rope_link_ext vs floor_plate [link loop runs]",
+      "rope_link_ext vs floor_plate [link loop runs]",
+      "rope_link_ext vs floor_plate [link loop runs]"
+     ],
+     [
+      null,
+      null,
+      null,
+      null,
+      "femur_beam vs floor_plate [femur + sectors]",
+      "femur_beam vs floor_plate [femur + sectors]",
+      "femur_beam vs floor_plate [femur + sectors]"
+     ]
+    ]
+   }
+  }
+ },
  "fleet_angle_deg": {
   "femur_A": 21.9,
   "femur_B": 41.5,

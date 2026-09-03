@@ -220,7 +220,7 @@ def sweep(leg, profile=False):
         for i, phi in enumerate(phis):
             for k, tau in enumerate(taus):
                 th = L.theta_of(phi, tau)
-                if th < 0 or th > 180:
+                if not (L.KNEE_LIMITS[0] <= th <= L.KNEE_LIMITS[1]):      # not a pose the leg can take
                     M[i, k] = np.nan
                     continue
                 A = leg.assemble(phi, tau, psi, ropes=True)
@@ -245,10 +245,30 @@ def sweep(leg, profile=False):
                 if profile:
                     print(f"  pose femur {phi:.0f} tau {tau:.0f} yaw {psi:.0f}: {pose_min[0]:.1f} mm, {time.time() - t0:.1f} s")
                     return
-        result[psi] = (M, who, worst_by_group)
+        result[psi] = (M, who, worst_by_group, femur_up_limit(leg, pose_pairs["femur + sectors"], psi))
         fin = M[np.isfinite(M)]
         print(f"  yaw {psi:+.0f}: min {fin.min():.1f} mm over {fin.size} poses, {int((fin < BLOCK_MM).sum())} blocked; {time.time() - t0:.0f} s, {n_done} poses")
     return phis, taus, result, axial, pairs, z_cases, fixed
+
+
+def femur_up_limit(leg, femur_pairs, psi, knee_deg=45.0, tol=0.5):
+    """Largest femur angle (deg) at which the femur group still clears the body by BLOCK_MM, with the knee at knee_deg;
+    bisection between the window's ends.  The floor plate is what the femur beam meets when it lifts."""
+    lo, hi = L.FEMUR_RANGE
+    A = leg.assemble(hi, L.tau_of(hi, knee_deg), psi, ropes=False)
+    body = [n for n in leg.body]
+    if min(group_min(A, [a], [b for b in bl if b in body], {})[0] for a, bl in femur_pairs.items()) >= BLOCK_MM:
+        return dict(femur_deg=hi, limited_by=None)
+    who = None
+    while hi - lo > tol:
+        mid = 0.5 * (lo + hi)
+        A = leg.assemble(mid, L.tau_of(mid, knee_deg), psi, ropes=False)
+        best = min((group_min(A, [a], [b for b in bl if b in body], {}) for a, bl in femur_pairs.items()), key=lambda r: r[0])
+        if best[0] >= BLOCK_MM:
+            lo = mid
+        else:
+            hi, who = mid, f"{best[1]} vs {best[2]}"
+    return dict(femur_deg=round(lo, 1), limited_by=who, knee_deg=knee_deg)
 
 
 # ---- record ------------------------------------------------------------------------------------
@@ -257,9 +277,10 @@ def summarise(phis, taus, result, axial, z_cases, fixed):
                         block_mm=BLOCK_MM, knee_limits_deg=list(L.KNEE_LIMITS)),
            "departure_cases": {k: ({r: round(v, 1) for r, v in v.items()} if v else "mid-height, as leg.py draws") for k, v in z_cases.items()},
            "by_yaw": {}, "worst_by_group": {}, "collisions": [], "designed_axial_gaps_mm": dict(sorted(axial.items(), key=lambda kv: kv[1])),
-           "rope_runs_vs_coxa_frame_mm": dict(sorted(fixed.items(), key=lambda kv: kv[1]["min_mm"]))}
+           "rope_runs_vs_coxa_frame_mm": dict(sorted(((k, v) for k, v in fixed.items() if np.isfinite(v["min_mm"])), key=lambda kv: kv[1]["min_mm"]))}
     gmin = {}
-    for psi, (M, who, wbg) in result.items():
+    rec["femur_up_limit_deg"] = {f"{psi:+.0f}": result[psi][3] for psi in result}
+    for psi, (M, who, wbg, _lim) in result.items():
         valid = np.array([[L.KNEE_LIMITS[0] <= L.theta_of(p, t) <= L.KNEE_LIMITS[1] for t in taus] for p in phis])
         fin = np.isfinite(M)
         ok = fin & valid & (M >= BLOCK_MM)
@@ -268,7 +289,8 @@ def summarise(phis, taus, result, axial, z_cases, fixed):
         feas = M[ok]
         rec["by_yaw"][f"{psi:+.0f}"] = dict(min_over_feasible_poses_mm=round(float(feas.min()), 1) if feas.size else None,
                                              feasible=int(ok.sum()), within_knee_limits=int((valid & fin).sum()), total=int(M.size),
-                                             blocked=blocked, grid=[[None if not np.isfinite(v) else round(float(v), 1) for v in row] for row in M])
+                                             blocked=blocked, grid=[[None if not np.isfinite(v) else round(float(v), 1) for v in row] for row in M],
+                                             pair_grid=[[who.get((i, k)) for k in range(len(taus))] for i in range(len(phis))])
         for g, (d, info) in wbg.items():
             if info and (g not in gmin or d < gmin[g][0]):
                 gmin[g] = (d, info)
@@ -284,8 +306,9 @@ def summarise(phis, taus, result, axial, z_cases, fixed):
     rec["summary"] = dict(
         min_clearance_mm=round(min(v[0] for v in gmin.values()), 2),
         min_pair=min(gmin.items(), key=lambda kv: kv[1][0])[0],
-        rope_vs_coxa_frame_min_mm=min(v["min_mm"] for v in fixed.values()),
-        rope_vs_coxa_frame_min_pair=min(fixed.items(), key=lambda kv: kv[1]["min_mm"])[0] + " vs " + min(fixed.values(), key=lambda v: v["min_mm"])["vs"],
+        rope_vs_coxa_frame_min_mm=min(v["min_mm"] for v in rec["rope_runs_vs_coxa_frame_mm"].values()),
+        rope_vs_coxa_frame_min_pair=next(iter(rec["rope_runs_vs_coxa_frame_mm"])) + " vs " + next(iter(rec["rope_runs_vs_coxa_frame_mm"].values()))["vs"],
+        femur_up_limit_deg={k: v["femur_deg"] for k, v in rec["femur_up_limit_deg"].items()},
         collisions=len(rec["collisions"]),
         poses_blocked={k: len(v["blocked"]) for k, v in rec["by_yaw"].items()},
         axial_gaps_under_1mm=[k for k, v in axial.items() if v < 1.0],
@@ -393,6 +416,10 @@ def draw(phis, taus, result, rec, out):
     lines.append("Poses blocked (< 3 mm) per yaw, of those within the knee limits:")
     for y_, v in rec["by_yaw"].items():
         lines.append(f"     yaw {y_:>3s}: {len(v['blocked'])} of {v['within_knee_limits']}; min over feasible {v['min_over_feasible_poses_mm']} mm")
+    lines.append("")
+    lines.append("Femur-up limit (knee 45°, 3 mm to the body), bisected:")
+    for y_, v in rec["femur_up_limit_deg"].items():
+        lines.append(f"     yaw {y_:>3s}: femur {v['femur_deg']:5.1f}°" + (f"  ({v['limited_by']})" if v["limited_by"] else "  (the window's end, 85°)"))
     lines.append("")
     lines.append("Capstan runs at the drum (inclination to the drum's plane of rotation):")
     for n, a in rec["fleet_angle_deg"].items():

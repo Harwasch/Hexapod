@@ -9,10 +9,12 @@
 title: Hexapod
 subtitle: >-
   A large-dog-sized outdoor hexapod with all eighteen motors in the body.
-  Round 12: the BOM calibrated against a real JLCPCB quote, and the answer to
-  whether the off-the-shelf outrunner can skip the cycloid and drive the
-  capstan joint directly (it cannot: a rope drive tops out near 10:1, the
-  8318 needs 100:1).
+  Round 14: one full leg on the off-the-shelf outrunner units, in CAD, with
+  loads, range of motion and a BOM. Two findings lead: the capstan rope
+  drive as drawn cannot be wound (fleet angles of 5 to 53 degrees), and the
+  leg weighs 16 kg against the 9 kg the cost search assumed, so the robot
+  does not close at 119 kg. Round 13 added the optimised single-stator PCB
+  motor and the topology, magnet-grade and iron-teeth comparison.
 
 phases:
   - id: geometry
@@ -311,3 +313,59 @@ phases:
 #     docs: [docs/design/sim-results.md]
 
 # Manufacturing phase: re-enable from the template when release artefacts exist.
+
+  - id: leg
+    title: Leg assembly
+    eyebrow: Stage 3 · one leg on the off-the-shelf units
+    after: actuator
+    images:
+      - docs/design/leg/leg-side.png
+      - docs/design/leg/leg-iso.png
+      - docs/design/leg/leg-section-hip.png
+      - docs/design/leg/leg-rom.png
+      - docs/design/leg/leg-loads.png
+      - docs/design/leg/leg-top.png
+      - docs/design/leg/leg-iso-hip.png
+    captions:
+      docs/design/leg/leg-side.png: >-
+        Round 14: one leg on three 8318 outrunner units, sprawl stance, side
+        view with dimensions. The three modules stack on nested shafts in the
+        hip pod, two capstan drums sit in the coxa hub, the femur sector and
+        the knee crank are Ø160 at the femur pivot, and a link loop over
+        Ø140 pulleys drives the knee. Look at: the coxa 150, femur 250 and
+        tibia 500 as sized, and the femur axis 323 mm above ground.
+      docs/design/leg/leg-iso.png: >-
+        The same leg in isometric view, colour by group: hip pod, coxa,
+        femur, tibia, transmission, foot. Look at: how much of the leg is
+        transmission.
+      docs/design/leg/leg-section-hip.png: >-
+        Section through the yaw axis and the femur pivot: femur module on top,
+        knee module in the middle with a hollow eccentric, yaw module at the
+        bottom carrying the coxa; the femur and knee drums in the coxa hub;
+        rope runs projected to the off-plane sectors. Look at: the drums are
+        on the vertical yaw axis and the sectors on the horizontal femur
+        pivot. That is the fleet-angle problem the next caption names.
+      docs/design/leg/leg-rom.png: >-
+        Range-of-motion sweep, 165 poses, exact CAD distances. The finding
+        that leads the note: the rope leaves the drums at 5 to 53 degrees to
+        their plane of rotation where a grooved capstan tolerates about 1.5,
+        so the rope drive as drawn cannot be wound; and 58 poses collide at
+        the femur root against the floor plate, so the femur-up limit is 75
+        degrees at zero yaw and 37 at 45 degrees of yaw instead of 85. Look
+        at: the per-yaw heat maps and the callouts on the rope runs.
+      docs/design/leg/leg-loads.png: >-
+        Mass roll-up, closure, structural margins and rope safety factors.
+        The leg is 16.1 kg against the 9.2 kg the cost search assumed, so the
+        robot is 119 kg and the joints have 0.71 to 0.77 of the torque they
+        need; it closes at an 84 kg robot. Look at: every structural margin
+        above 1.5 after the key fix, and the two rope drives at SF 7 continuous.
+      docs/design/leg/leg-top.png: >-
+        Top view: the hip pod under the slab edge, the coxa reaching outboard,
+        the femur and tibia in the leg plane. Look at: the sector and crank
+        are offset from the leg plane at x = plus and minus 20 and 32.
+      docs/design/leg/leg-iso-hip.png: >-
+        Close view of the hip pod and coxa hub: three stacked modules, the two
+        drums, the femur sector and the knee crank with their rope runs. Look
+        at: the drum-to-sector geometry that has to change.
+    docs: [docs/design/09-leg-assembly.md, docs/design/bom-leg.csv]
+
