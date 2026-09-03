@@ -599,6 +599,12 @@ each option at the robot mass it implies and with the torque it actually gives.
 | 1 x 8318 outrunner, 100:1 | level walking, dyn 1.2 | 2.75 | 77 | 229 / 138 | 1.66 | 423 | 284 |
 | 2 x 8318 outrunner, 80:1 | as written | 3.40 | 89 | 367 / 236 | 1.55 | 503 | 347 |
 | 2 x 8318 outrunner, 80:1 | level walking, dyn 1.2 | 3.40 | 89 | 367 / 157 | 2.33 | 503 | 347 |
+| Wheemo frameless Ø160, kit at $80 | as written | 2.84 | 80 | 259 / 214 | 1.21 | 375 | 275 |
+| Wheemo frameless Ø160, kit at $80 | level walking, dyn 1.2 | 2.84 | 80 | 259 / 144 | 1.80 | 375 | 275 |
+| Wheemo frameless Ø160, kit at $130 | as written | 2.84 | 80 | 259 / 214 | 1.21 | 425 | 325 |
+| Wheemo frameless Ø160, kit at $130 | level walking, dyn 1.2 | 2.84 | 80 | 259 / 144 | 1.80 | 425 | 325 |
+| Wheemo frameless Ø160, kit at $250 | as written | 2.84 | 80 | 259 / 214 | 1.21 | 545 | 445 |
+| Wheemo frameless Ø160, kit at $250 | level walking, dyn 1.2 | 2.84 | 80 | 259 / 144 | 1.80 | 545 | 445 |
 
 ![Cost search](actuator/cost-search.png)
 

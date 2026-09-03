@@ -437,6 +437,258 @@
    "cost": 347.15999999999997,
    "closes": true,
    "note": "two motors share the eccentric shaft through a belt; continuous torque assumes 1.2 K/W to a heat-sunk mount (28 A, unverified)"
+  },
+  {
+   "option": "Wheemo frameless \u00d8160, kit at $80",
+   "motor": "frameless kit \u00d8160 x 25, 11.5 N\u00b7m",
+   "family": "frameless",
+   "requirement": "as written",
+   "qty": 20,
+   "m_unit": 2.839077871879625,
+   "m_robot": 80.28340169383327,
+   "T_joint": 259.253322064227,
+   "need_femur": 202.84930050691528,
+   "need_knee": 214.312841508105,
+   "margin": 1.209695696440208,
+   "margins": {
+    "femur": 1.2780587431968435,
+    "knee": 1.209695696440208,
+    "yaw": 1.9176903636225784
+   },
+   "cost": 375.05,
+   "closes": true,
+   "note": "no capstan stage and no motor case or bearings: the rotor runs on the cycloid's eccentric shaft. Price is unknown -- the break-even against the 8318 unit is $128 a kit"
+  },
+  {
+   "option": "Wheemo frameless \u00d8160, kit at $80",
+   "motor": "frameless kit \u00d8160 x 25, 11.5 N\u00b7m",
+   "family": "frameless",
+   "requirement": "as written",
+   "qty": 100,
+   "m_unit": 2.839077871879625,
+   "m_robot": 80.28340169383327,
+   "T_joint": 259.253322064227,
+   "need_femur": 202.84930050691528,
+   "need_knee": 214.312841508105,
+   "margin": 1.209695696440208,
+   "margins": {
+    "femur": 1.2780587431968435,
+    "knee": 1.209695696440208,
+    "yaw": 1.9176903636225784
+   },
+   "cost": 274.65999999999997,
+   "closes": true,
+   "note": "no capstan stage and no motor case or bearings: the rotor runs on the cycloid's eccentric shaft. Price is unknown -- the break-even against the 8318 unit is $128 a kit"
+  },
+  {
+   "option": "Wheemo frameless \u00d8160, kit at $80",
+   "motor": "frameless kit \u00d8160 x 25, 11.5 N\u00b7m",
+   "family": "frameless",
+   "requirement": "level walking, dyn 1.2",
+   "qty": 20,
+   "m_unit": 2.839077871879625,
+   "m_robot": 80.28340169383327,
+   "T_joint": 259.253322064227,
+   "need_femur": 114.62150296450554,
+   "need_knee": 143.9680075177473,
+   "margin": 1.8007703692938042,
+   "margins": {
+    "femur": 2.2618209965760885,
+    "knee": 1.8007703692938042,
+    "yaw": 21.92010828268607
+   },
+   "cost": 375.05,
+   "closes": true,
+   "note": "no capstan stage and no motor case or bearings: the rotor runs on the cycloid's eccentric shaft. Price is unknown -- the break-even against the 8318 unit is $128 a kit"
+  },
+  {
+   "option": "Wheemo frameless \u00d8160, kit at $80",
+   "motor": "frameless kit \u00d8160 x 25, 11.5 N\u00b7m",
+   "family": "frameless",
+   "requirement": "level walking, dyn 1.2",
+   "qty": 100,
+   "m_unit": 2.839077871879625,
+   "m_robot": 80.28340169383327,
+   "T_joint": 259.253322064227,
+   "need_femur": 114.62150296450554,
+   "need_knee": 143.9680075177473,
+   "margin": 1.8007703692938042,
+   "margins": {
+    "femur": 2.2618209965760885,
+    "knee": 1.8007703692938042,
+    "yaw": 21.92010828268607
+   },
+   "cost": 274.65999999999997,
+   "closes": true,
+   "note": "no capstan stage and no motor case or bearings: the rotor runs on the cycloid's eccentric shaft. Price is unknown -- the break-even against the 8318 unit is $128 a kit"
+  },
+  {
+   "option": "Wheemo frameless \u00d8160, kit at $130",
+   "motor": "frameless kit \u00d8160 x 25, 11.5 N\u00b7m",
+   "family": "frameless",
+   "requirement": "as written",
+   "qty": 20,
+   "m_unit": 2.839077871879625,
+   "m_robot": 80.28340169383327,
+   "T_joint": 259.253322064227,
+   "need_femur": 202.84930050691528,
+   "need_knee": 214.312841508105,
+   "margin": 1.209695696440208,
+   "margins": {
+    "femur": 1.2780587431968435,
+    "knee": 1.209695696440208,
+    "yaw": 1.9176903636225784
+   },
+   "cost": 425.05,
+   "closes": true,
+   "note": "no capstan stage and no motor case or bearings: the rotor runs on the cycloid's eccentric shaft. Price is unknown -- the break-even against the 8318 unit is $128 a kit"
+  },
+  {
+   "option": "Wheemo frameless \u00d8160, kit at $130",
+   "motor": "frameless kit \u00d8160 x 25, 11.5 N\u00b7m",
+   "family": "frameless",
+   "requirement": "as written",
+   "qty": 100,
+   "m_unit": 2.839077871879625,
+   "m_robot": 80.28340169383327,
+   "T_joint": 259.253322064227,
+   "need_femur": 202.84930050691528,
+   "need_knee": 214.312841508105,
+   "margin": 1.209695696440208,
+   "margins": {
+    "femur": 1.2780587431968435,
+    "knee": 1.209695696440208,
+    "yaw": 1.9176903636225784
+   },
+   "cost": 324.65999999999997,
+   "closes": true,
+   "note": "no capstan stage and no motor case or bearings: the rotor runs on the cycloid's eccentric shaft. Price is unknown -- the break-even against the 8318 unit is $128 a kit"
+  },
+  {
+   "option": "Wheemo frameless \u00d8160, kit at $130",
+   "motor": "frameless kit \u00d8160 x 25, 11.5 N\u00b7m",
+   "family": "frameless",
+   "requirement": "level walking, dyn 1.2",
+   "qty": 20,
+   "m_unit": 2.839077871879625,
+   "m_robot": 80.28340169383327,
+   "T_joint": 259.253322064227,
+   "need_femur": 114.62150296450554,
+   "need_knee": 143.9680075177473,
+   "margin": 1.8007703692938042,
+   "margins": {
+    "femur": 2.2618209965760885,
+    "knee": 1.8007703692938042,
+    "yaw": 21.92010828268607
+   },
+   "cost": 425.05,
+   "closes": true,
+   "note": "no capstan stage and no motor case or bearings: the rotor runs on the cycloid's eccentric shaft. Price is unknown -- the break-even against the 8318 unit is $128 a kit"
+  },
+  {
+   "option": "Wheemo frameless \u00d8160, kit at $130",
+   "motor": "frameless kit \u00d8160 x 25, 11.5 N\u00b7m",
+   "family": "frameless",
+   "requirement": "level walking, dyn 1.2",
+   "qty": 100,
+   "m_unit": 2.839077871879625,
+   "m_robot": 80.28340169383327,
+   "T_joint": 259.253322064227,
+   "need_femur": 114.62150296450554,
+   "need_knee": 143.9680075177473,
+   "margin": 1.8007703692938042,
+   "margins": {
+    "femur": 2.2618209965760885,
+    "knee": 1.8007703692938042,
+    "yaw": 21.92010828268607
+   },
+   "cost": 324.65999999999997,
+   "closes": true,
+   "note": "no capstan stage and no motor case or bearings: the rotor runs on the cycloid's eccentric shaft. Price is unknown -- the break-even against the 8318 unit is $128 a kit"
+  },
+  {
+   "option": "Wheemo frameless \u00d8160, kit at $250",
+   "motor": "frameless kit \u00d8160 x 25, 11.5 N\u00b7m",
+   "family": "frameless",
+   "requirement": "as written",
+   "qty": 20,
+   "m_unit": 2.839077871879625,
+   "m_robot": 80.28340169383327,
+   "T_joint": 259.253322064227,
+   "need_femur": 202.84930050691528,
+   "need_knee": 214.312841508105,
+   "margin": 1.209695696440208,
+   "margins": {
+    "femur": 1.2780587431968435,
+    "knee": 1.209695696440208,
+    "yaw": 1.9176903636225784
+   },
+   "cost": 545.05,
+   "closes": true,
+   "note": "no capstan stage and no motor case or bearings: the rotor runs on the cycloid's eccentric shaft. Price is unknown -- the break-even against the 8318 unit is $128 a kit"
+  },
+  {
+   "option": "Wheemo frameless \u00d8160, kit at $250",
+   "motor": "frameless kit \u00d8160 x 25, 11.5 N\u00b7m",
+   "family": "frameless",
+   "requirement": "as written",
+   "qty": 100,
+   "m_unit": 2.839077871879625,
+   "m_robot": 80.28340169383327,
+   "T_joint": 259.253322064227,
+   "need_femur": 202.84930050691528,
+   "need_knee": 214.312841508105,
+   "margin": 1.209695696440208,
+   "margins": {
+    "femur": 1.2780587431968435,
+    "knee": 1.209695696440208,
+    "yaw": 1.9176903636225784
+   },
+   "cost": 444.65999999999997,
+   "closes": true,
+   "note": "no capstan stage and no motor case or bearings: the rotor runs on the cycloid's eccentric shaft. Price is unknown -- the break-even against the 8318 unit is $128 a kit"
+  },
+  {
+   "option": "Wheemo frameless \u00d8160, kit at $250",
+   "motor": "frameless kit \u00d8160 x 25, 11.5 N\u00b7m",
+   "family": "frameless",
+   "requirement": "level walking, dyn 1.2",
+   "qty": 20,
+   "m_unit": 2.839077871879625,
+   "m_robot": 80.28340169383327,
+   "T_joint": 259.253322064227,
+   "need_femur": 114.62150296450554,
+   "need_knee": 143.9680075177473,
+   "margin": 1.8007703692938042,
+   "margins": {
+    "femur": 2.2618209965760885,
+    "knee": 1.8007703692938042,
+    "yaw": 21.92010828268607
+   },
+   "cost": 545.05,
+   "closes": true,
+   "note": "no capstan stage and no motor case or bearings: the rotor runs on the cycloid's eccentric shaft. Price is unknown -- the break-even against the 8318 unit is $128 a kit"
+  },
+  {
+   "option": "Wheemo frameless \u00d8160, kit at $250",
+   "motor": "frameless kit \u00d8160 x 25, 11.5 N\u00b7m",
+   "family": "frameless",
+   "requirement": "level walking, dyn 1.2",
+   "qty": 100,
+   "m_unit": 2.839077871879625,
+   "m_robot": 80.28340169383327,
+   "T_joint": 259.253322064227,
+   "need_femur": 114.62150296450554,
+   "need_knee": 143.9680075177473,
+   "margin": 1.8007703692938042,
+   "margins": {
+    "femur": 2.2618209965760885,
+    "knee": 1.8007703692938042,
+    "yaw": 21.92010828268607
+   },
+   "cost": 444.65999999999997,
+   "closes": true,
+   "note": "no capstan stage and no motor case or bearings: the rotor runs on the cycloid's eccentric shaft. Price is unknown -- the break-even against the 8318 unit is $128 a kit"
   }
  ]
 }

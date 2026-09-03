@@ -101,6 +101,20 @@ for n_mot, ratio in ((1, 100), (2, 80)):
         (lambda q, n=n_mot: n * OUT["price"][q] + bom(REDUCER_LINES + CAPSTAN_LINES + HOUSING_LINES + ELEC_LINES, COL[q]) + (15 if n == 2 else 0) + 20),
         f"{'two motors share the eccentric shaft through a belt; ' if n_mot == 2 else ''}continuous torque assumes {OUT['R_th']} K/W to a heat-sunk mount ({OUT['I_cont']:.0f} A, unverified)", "ots")
 
+# ---- the frameless kit motor (round 14b): no capstan, no motor case, no motor bearings ----
+# analysis/frameless_motor.py sizes it; the datasheet carries no price, so the
+# unit is costed at three prices per kit and the break-even is marked.
+FM = json.load(open(os.path.join(ROOT, "hw", "stator", "frameless_motor.json")))
+_fp, _fy = FM["pick"], FM["yaw"]
+FRAMELESS_PRICES = (80.0, 130.0, 250.0)
+for _pr in FRAMELESS_PRICES:
+    add(f"Wheemo frameless Ø{_fp['motor']['od_mm']:.0f}, kit at ${_pr:.0f}",
+        f"frameless kit Ø{_fp['motor']['od_mm']:.0f} x {_fp['motor']['len_mm']:.0f}, {_fp['motor']['T_cont']:.1f} N·m",
+        _fp["m_fk"], _fp["m_yaw"], _fp["motor"]["T_cont"], _fy["motor"]["T_cont"], _fp["ratio_fk"], _fp["ratio_yaw"],
+        (lambda q, pr=_pr: pr + bom(REDUCER_LINES + HOUSING_LINES + ELEC_LINES, COL[q]) + 15),
+        "no capstan stage and no motor case or bearings: the rotor runs on the cycloid's eccentric shaft. "
+        f"Price is unknown -- the break-even against the 8318 unit is ${FM['breakeven_motor_price_usd']:.0f} a kit", "frameless")
+
 rows = []
 for o in OPTIONS:
     for req_name, req in (("as written", None), ("level walking, dyn 1.2", CASE_LEVEL)):
@@ -109,7 +123,8 @@ for o in OPTIONS:
             need = {d: C[d] * m_robot for d in ("femur", "knee", "yaw")}
         else:
             need = {d: req[d] * (m_robot + PAYLOAD) for d in ("femur", "knee", "yaw")}
-        T_fk = o["T_motor_fk"] * o["ratio_fk"] * ETA_CYC * ETA_CAP
+        eta2 = 1.0 if o["family"] == "frameless" else ETA_CAP        # the frameless unit deletes the capstan
+        T_fk = o["T_motor_fk"] * o["ratio_fk"] * ETA_CYC * eta2
         T_yaw = o["T_motor_yaw"] * o["ratio_yaw"] * ETA_CYC
         margins = dict(femur=T_fk / need["femur"], knee=T_fk / need["knee"], yaw=T_yaw / max(need["yaw"], 1e-6))
         for q in (20, 100):
@@ -120,21 +135,49 @@ for o in OPTIONS:
 json.dump(dict(outrunner=OUT, rows=rows), open(os.path.join(ROOT, "hw", "stator", "cost_search.json"), "w"), indent=1)
 
 # ---- figure: cost against robot mass, closing options filled -------------------------------------
-fig, ax = plt.subplots(figsize=(11, 5.6))
-mk = {"pcb": "o", "ots": "s"}
-for r in rows:
-    if r["requirement"] != "as written":
-        continue
-    col = "#0f9b8e" if r["qty"] == 20 else "#d98c3a"
-    ax.scatter(r["m_robot"], r["cost"], marker=mk[r["family"]], s=110, facecolors=col if r["closes"] else "none", edgecolors=col, lw=1.6)
-    ax.annotate(f"{r['option']}\n{'closes' if r['closes'] else 'does not close'}: margin {r['margin']:.2f}", (r["m_robot"], r["cost"]), (6, 6),
-                textcoords="offset points", fontsize=7)
-ax.scatter([], [], marker="o", color="#0f9b8e", label="20 units (filled = closes the requirement as written)")
+# There are enough options now that naming each point on the chart makes it
+# unreadable, so the points carry numbers and the key sits beside them.
+fig, axes = plt.subplots(1, 2, figsize=(14.5, 6.4), gridspec_kw=dict(width_ratios=(1.25, 1.0)))
+ax = axes[0]
+mk = {"pcb": "o", "ots": "s", "frameless": "D"}
+fam_name = {"pcb": "PCB axial motor we make", "ots": "off-the-shelf outrunner", "frameless": "frameless kit motor"}
+as_written = [r for r in rows if r["requirement"] == "as written"]
+options = []
+for r in as_written:
+    if r["option"] not in [o["option"] for o in options]:
+        options.append(dict(option=r["option"], family=r["family"], m_robot=r["m_robot"], margin=r["margin"],
+                            closes=r["closes"], c20=None, c100=None))
+for r in as_written:
+    o = [x for x in options if x["option"] == r["option"]][0]
+    o["c20" if r["qty"] == 20 else "c100"] = r["cost"]
+options.sort(key=lambda o: (not o["closes"], o["c20"]))
+for i, o in enumerate(options, 1):
+    o["n"] = i
+    ax.plot([o["m_robot"], o["m_robot"]], [o["c100"], o["c20"]], color="#bbb", lw=1, zorder=1)
+    for cost, col in ((o["c20"], "#0f9b8e"), (o["c100"], "#d98c3a")):
+        ax.scatter(o["m_robot"], cost, marker=mk[o["family"]], s=150, zorder=3,
+                   facecolors=col if o["closes"] else "none", edgecolors=col, lw=1.7)
+    ax.annotate(str(i), (o["m_robot"], o["c20"]), (0, 11), textcoords="offset points",
+                fontsize=8.5, ha="center", fontweight="bold", color="#222", zorder=4)
+ax.scatter([], [], marker="o", color="#0f9b8e", label="20 units")
 ax.scatter([], [], marker="o", color="#d98c3a", label="100 units")
-ax.scatter([], [], marker="s", color="#555", facecolors="none", label="OTS outrunner options")
+ax.scatter([], [], marker="o", color="#555", facecolors="none", label="hollow = does not close as written")
+for f, m in mk.items():
+    ax.scatter([], [], marker=m, color="#555", label=fam_name[f])
 ax.set_xlabel("robot mass at the fixed point (kg)"); ax.set_ylabel("actuator unit cost ($, BOM-based estimate)")
-ax.set_title("Cost search: every motor/quantity option at the robot mass it implies (requirement as written)", fontsize=10)
-ax.grid(alpha=0.3); ax.legend(fontsize=8, loc="upper right")
+ax.set_title("Every option at the robot mass its own weight implies\n(the vertical line is the 20 → 100 unit price drop)", fontsize=10)
+ax.grid(alpha=0.3); ax.legend(fontsize=7.5, loc="upper left", framealpha=0.95)
+ax = axes[1]; ax.axis("off")
+ax.set_title("The key, cheapest closing option first", fontsize=10, loc="left")
+hdr = f"{'#':>2}  {'option':<44}{'robot':>7}{'margin':>8}{'$ 20':>7}{'$ 100':>7}"
+lines = [hdr, "-" * len(hdr)]
+for o in options:
+    nm = o["option"] if len(o["option"]) <= 43 else o["option"][:42] + "…"
+    lines.append(f"{o['n']:>2}  {nm:<44}{o['m_robot']:>6.0f}k{o['margin']:>8.2f}{o['c20']:>7.0f}{o['c100']:>7.0f}"
+                 + ("" if o["closes"] else "  ✗"))
+ax.text(0.0, 1.0, "\n".join(lines), family="monospace", fontsize=7.6, va="top", ha="left", transform=ax.transAxes)
+ax.text(0.0, 0.02, "✗ = does not close the requirement as written.\nThe frameless kit has no published price; it is shown at three.",
+        fontsize=7.6, va="bottom", ha="left", transform=ax.transAxes, color="#666")
 fig.tight_layout()
 fig.savefig(os.path.join(ROOT, "docs", "design", "actuator", "cost-search.png"), dpi=110)
 

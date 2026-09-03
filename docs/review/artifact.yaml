@@ -220,9 +220,7 @@ phases:
         mass and robot mass solved together. Look at: the stock 70 mm motor is
         a fifth of what the joint needs, and Ø160 x 25 closes it.
       docs/design/actuator/topology-compare.png: >-
-        Round 14: the Wheemo frameless kit motor adopted as the basis and scaled to
-  Ø160 x 25 mm (11.5 N·m), which closes the requirement at an 80 kg robot and
-  deletes the capstan stage entirely. Earlier: round 13b, three questions on the single-stator optimum, one 2-D
+        Round 13b: three questions on the single-stator optimum, one 2-D
         field model. Top: the field of the two-rotor single-stator unit, of a
         single N-S rotor between two iron-backed stators, and of iron teeth in
         the coil centres. Bottom left: torque, mass and cost of seven

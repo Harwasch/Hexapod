@@ -606,7 +606,7 @@ reviews:
     - docs/design/drawing/side.png
     - docs/design/drawing/top.png
 - id: actuator
-  title: 'Actuator, round 11: cost search and motor market search'
+  title: 'Actuator, round 14b: the Wheemo frameless motor as the basis'
   stage: design
   summary: 'Rounds 9-11 on the review''s ''exhaust all cost routes'': the stator laid out
     again with the coils under the whole magnet span (+14 % torque, so the cheap 2 oz boards
@@ -621,149 +621,31 @@ reviews:
     (~$50) and the Turnigy 9235-100KV ($75, published resistance) are the picks; premium drone
     motors and hub motors are excluded with numbers.'
   questions:
-  - 'Motor family: the PCB two-stator machine we can make ($597 / $396, 5.3 kg, 124 kg robot,
-    margin 1.10) or an OTS 8318/9235-class outrunner (~$420 / $280, 2.75 kg unit, 77 kg robot,
-    margin 1.12 on an assumed heat-sink path)? The bench test that decides it is one motor
-    on a plate at 30 A with a thermocouple.'
-  - 'If the PCB machine stays: rebuild its rotor from sheet parts and standoffs (two Halbach
-    rings back to back, no middle carrier, no turned drum)?'
-  - 'The continuous load case as written (30° slope, dyn 1.5, all day) is the largest cost
-    lever left: it forces two stators or the outrunner. Keep it as the requirement, or make
-    level walking at dyn 1.2 the continuous case and the slope a minutes-long rating?'
+  - 'Motor family: adopt the Wheemo frameless kit scaled to Ø160 x 25 mm (11.5 N·m, 1039 g)
+    as the basis for all eighteen joints? It is the first option that closes the requirement
+    as written (80 kg robot, worst margin 1.21) and it deletes the capstan stage entirely
+    — the stage the leg study found could not be wound.'
+  - 'The frameless kit has no price on its datasheet, and that decides whether this is also
+    a cost-down: it undercuts the $423 outrunner unit only below $128 a kit. Can you get a
+    quote from Wheemo for the Ø160 x 25 size, or should I design around a price band?'
+  - The datasheet does not say at what winding temperature the 96.7 mΩ phase resistance is
+    quoted. If it is a 20 °C value, every torque in this round falls 15 %. Ask Wheemo, or
+    accept the 1.18 design margin that already covers it?
+  - The leg (round 14) weighs 16.1 kg against the 9.2 kg the cost search assumed, so on the
+    outrunner units the robot does not close at 119 kg. The frameless unit changes the actuator,
+    not the leg structure. Rebuild the leg on the frameless unit next, or fix the leg structure
+    first?
   artifacts:
-  - path: docs/design/01-sizing.md
-    sha256: e3032f107e83ad22
-  - path: docs/design/06-geometry.md
-    sha256: dd117a4e8d1c9ae9
   - path: docs/design/08-actuator-design.md
-    sha256: d4b7f7c559c5eaa4
-  - path: docs/design/actuator/cad-femur-1s-cutaway.png
-    sha256: 77320684fabad2b9
-  - path: docs/design/actuator/cad-femur-1s-section.png
-    sha256: ab54778c856788ba
-  - path: docs/design/actuator/cad-femur-cutaway.png
-    sha256: 7bb11e615fc22230
-  - path: docs/design/actuator/cad-femur-iso.png
-    sha256: b462367550c3da11
-  - path: docs/design/actuator/cad-femur-section.png
-    sha256: 219b109e7aa688a7
-  - path: docs/design/actuator/cad-knee-cutaway.png
-    sha256: 6b0a0b6ee3b9592e
-  - path: docs/design/actuator/cad-knee-section.png
-    sha256: 3b6351cbcaa1ebea
-  - path: docs/design/actuator/cad-yaw-1s-cutaway.png
-    sha256: 3cae98453bc04279
-  - path: docs/design/actuator/cad-yaw-1s-section.png
-    sha256: 06c73ffd22fd405b
-  - path: docs/design/actuator/cad-yaw-cutaway.png
-    sha256: 95b1b23be1a8bd80
-  - path: docs/design/actuator/cad-yaw-section.png
-    sha256: 0eb41a88c2b1cbbc
-  - path: docs/design/actuator/capstan.png
-    sha256: 30a493ccb0858c08
-  - path: docs/design/actuator/closure.png
-    sha256: 929c064abfb320c6
-  - path: docs/design/actuator/cost-search.png
-    sha256: 49bedafc7d12cfb9
-  - path: docs/design/actuator/cycloid-profiles.png
-    sha256: 522a620dceef72e6
-  - path: docs/design/actuator/motor-market.png
-    sha256: 53fdc915a8f48165
-  - path: docs/design/actuator/operating-envelopes.png
-    sha256: 43a86ce382781b60
-  - path: docs/design/actuator/rotor-field.png
-    sha256: c1624661d5ccabbb
-  - path: docs/design/actuator/section-pcb-1.png
-    sha256: 509539308490c5cb
-  - path: docs/design/actuator/section-pcb-2.png
-    sha256: b10c085c4d2e6ef0
-  - path: docs/design/actuator/section-wound-1.png
-    sha256: 063559d65a5bdb07
-  - path: docs/design/actuator/section-wound-2.png
-    sha256: 23654106a1a521b3
-  - path: docs/design/actuator/stator-F_Cu.svg
-    sha256: ceeed13e28c8abda
-  - path: docs/design/actuator/stator-In9_Cu.svg
-    sha256: 5c47651efc944041
-  - path: docs/design/actuator/stator-rotor-layout.png
-    sha256: aef21c21971a642e
-  - path: docs/design/actuator/thermal-network.png
-    sha256: 7ebaa6493681c605
-  - path: docs/design/bom-actuator.csv
-    sha256: 2d1fe417d651e045
-  references:
-  - analysis/closure.py
-  - analysis/cost_search.py
-  - analysis/motor_market.py
-  - cad/actuator/actuator.py
-  - hw/stator/asbuilt.json
-  - hw/stator/capstan.json
-  - hw/stator/closure.json
-  - hw/stator/cost_search.json
-  - hw/stator/drc.json
-  - hw/stator/geometry.json
-  - hw/stator/gerbers/stator-B_Adhesive.gba
-  - hw/stator/gerbers/stator-B_Courtyard.gbr
-  - hw/stator/gerbers/stator-B_Cu.gbl
-  - hw/stator/gerbers/stator-B_Fab.gbr
-  - hw/stator/gerbers/stator-B_Mask.gbs
-  - hw/stator/gerbers/stator-B_Paste.gbp
-  - hw/stator/gerbers/stator-B_Silkscreen.gbo
-  - hw/stator/gerbers/stator-Edge_Cuts.gm1
-  - hw/stator/gerbers/stator-F_Adhesive.gta
-  - hw/stator/gerbers/stator-F_Courtyard.gbr
-  - hw/stator/gerbers/stator-F_Cu.gtl
-  - hw/stator/gerbers/stator-F_Fab.gbr
-  - hw/stator/gerbers/stator-F_Mask.gts
-  - hw/stator/gerbers/stator-F_Paste.gtp
-  - hw/stator/gerbers/stator-F_Silkscreen.gto
-  - hw/stator/gerbers/stator-In10_Cu.g10
-  - hw/stator/gerbers/stator-In1_Cu.g1
-  - hw/stator/gerbers/stator-In2_Cu.g2
-  - hw/stator/gerbers/stator-In3_Cu.g3
-  - hw/stator/gerbers/stator-In4_Cu.g4
-  - hw/stator/gerbers/stator-In5_Cu.g5
-  - hw/stator/gerbers/stator-In6_Cu.g6
-  - hw/stator/gerbers/stator-In7_Cu.g7
-  - hw/stator/gerbers/stator-In8_Cu.g8
-  - hw/stator/gerbers/stator-In9_Cu.g9
-  - hw/stator/gerbers/stator-Margin.gbr
-  - hw/stator/gerbers/stator-User_1.gbr
-  - hw/stator/gerbers/stator-User_2.gbr
-  - hw/stator/gerbers/stator-User_3.gbr
-  - hw/stator/gerbers/stator-User_4.gbr
-  - hw/stator/gerbers/stator-User_Comments.gbr
-  - hw/stator/gerbers/stator-User_Drawings.gbr
-  - hw/stator/gerbers/stator-User_Eco1.gbr
-  - hw/stator/gerbers/stator-User_Eco2.gbr
-  - hw/stator/gerbers/stator-job.gbrjob
-  - hw/stator/gerbers/stator.drl
-  - hw/stator/make_stator.py
-  - hw/stator/motor_market.json
-  - hw/stator/rotor_field.json
-  - hw/stator/stator-F_Cu.svg
-  - hw/stator/stator-In9_Cu.svg
-  - hw/stator/stator.kicad_pcb
-  - hw/stator/stator.kicad_prl
-  - hw/stator/stator.kicad_pro
-  - hw/stator/thermal.json
-  - hw/stator/variants/16L-2oz/asbuilt.json
-  - hw/stator/variants/16L-2oz/drc-16L.json
-  - hw/stator/variants/16L-2oz/geometry.json
-  - hw/stator/variants/16L-2oz/stator-16L-2oz.kicad_pcb
-  - hw/stator/variants/16L-2oz/stator-16L-2oz.kicad_prl
-  - hw/stator/variants/16L-2oz/stator-16L-2oz.kicad_pro
-  - hw/stator/variants/8t/asbuilt.json
-  - hw/stator/variants/8t/drc.json
-  - hw/stator/variants/8t/geometry.json
-  - hw/stator/variants/8t/stator-8t.kicad_pcb
-  - hw/stator/variants/8t/stator-8t.kicad_prl
-  - hw/stator/variants/8t/stator-8t.kicad_pro
-  - hw/stator/variants/v1-r80/asbuilt.json
-  - hw/stator/variants/v1-r80/geometry.json
-  - hw/stator/variants/v1-r80/stator.kicad_pcb
-  requested: '2026-09-02'
-  requested_commit: 6e42c38
+    sha256: a92479d763bcd9ee
+  - path: docs/design/actuator/frameless-scaling.png
+    sha256: 24af0b34def6b3d4
+  - path: docs/design/actuator/frameless-unit.png
+    sha256: 25820072a4167b9a
+  - path: docs/reference/wheemo-WxF70x24GT.pdf
+    sha256: c8129ef7449dff2f
+  requested: '2026-09-03'
+  requested_commit: 339d34f
   status: requested
   packet: docs/review/actuator.md
   history:
@@ -1163,5 +1045,29 @@ reviews:
     - docs/design/01-sizing.md
     - docs/design/06-geometry.md
     - docs/design/actuator/motor-market.png
+  - 'on': '2026-09-03'
+    action: requested
+    commit: 339d34f
+    questions:
+    - 'Motor family: adopt the Wheemo frameless kit scaled to Ø160 x 25 mm (11.5 N·m, 1039
+      g) as the basis for all eighteen joints? It is the first option that closes the requirement
+      as written (80 kg robot, worst margin 1.21) and it deletes the capstan stage entirely
+      — the stage the leg study found could not be wound.'
+    - 'The frameless kit has no price on its datasheet, and that decides whether this is also
+      a cost-down: it undercuts the $423 outrunner unit only below $128 a kit. Can you get
+      a quote from Wheemo for the Ø160 x 25 size, or should I design around a price band?'
+    - The datasheet does not say at what winding temperature the 96.7 mΩ phase resistance
+      is quoted. If it is a 20 °C value, every torque in this round falls 15 %. Ask Wheemo,
+      or accept the 1.18 design margin that already covers it?
+    - The leg (round 14) weighs 16.1 kg against the 9.2 kg the cost search assumed, so on
+      the outrunner units the robot does not close at 119 kg. The frameless unit changes the
+      actuator, not the leg structure. Rebuild the leg on the frameless unit next, or fix
+      the leg structure first?
+    changed:
+    - docs/design/08-actuator-design.md
+    added:
+    - docs/design/actuator/frameless-scaling.png
+    - docs/design/actuator/frameless-unit.png
+    - docs/reference/wheemo-WxF70x24GT.pdf
   decided_commit: e4963a5
 artifact_url: https://claude.ai/code/artifact/c27a8924-af18-4d17-bd9b-0fcb41e685e3
