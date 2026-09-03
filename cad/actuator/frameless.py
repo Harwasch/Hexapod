@@ -51,6 +51,7 @@ STL), cad/actuator/frameless[-yaw].json and docs/design/actuator/frameless-cad-*
 """
 from __future__ import annotations
 
+import copy
 import json
 import math
 import os
@@ -898,16 +899,22 @@ if __name__ == "__main__":
     os.makedirs(FIG, exist_ok=True)
     PARTS, MASS = build()
 
-    comp = Compound(children=[PARTS[n] for n in PARTS])
-    export_step(comp, os.path.join(OUT_DIR, f"actuator-{TAG}.step"))
+    # Compound(children=...) re-parents the shapes it is given, and a part that has
+    # been re-parented a few times starts failing later booleans with "Dimensions of
+    # objects to subtract from are inconsistent".  Hand the compounds shallow copies.
+    def _cmp(ps):
+        return Compound(children=[copy.copy(q) for q in ps])
+
     cut = {n: cut_part(p) for n, p in PARTS.items()}
+    comp = _cmp([PARTS[n] for n in PARTS])
+    export_step(comp, os.path.join(OUT_DIR, f"actuator-{TAG}.step"))
     for g, names in GROUPS.items():
         names = [n for n in names if n in PARTS]
         if not names:
             continue
-        export_stl(Compound(children=[PARTS[n] for n in names]), os.path.join(OUT_DIR, f"{g}.stl"),
+        export_stl(_cmp([PARTS[n] for n in names]), os.path.join(OUT_DIR, f"{g}.stl"),
                    tolerance=0.4, angular_tolerance=0.3)
-        export_stl(Compound(children=[cut[n] for n in names]), os.path.join(OUT_DIR, f"{g}-cut.stl"),
+        export_stl(_cmp([cut[n] for n in names]), os.path.join(OUT_DIR, f"{g}-cut.stl"),
                    tolerance=0.4, angular_tolerance=0.3)
 
     total_g = sum(MASS.values())
