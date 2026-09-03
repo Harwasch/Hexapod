@@ -51,20 +51,20 @@
   "disc_root_r_mm": 54.477,
   "disc_tip_r_mm": 58.126,
   "disc_swept_r_mm": 59.951,
-  "T_cont_Nm": 214.3,
-  "T_peak_Nm": 449.6
+  "T_cont_Nm": 274.4,
+  "T_peak_Nm": 575.7
  },
  "envelope": {
   "od_mm": 172.0,
   "bore_mm": 131.6034309985339,
-  "height_mm": 49.7,
+  "height_mm": 52.7,
   "bbox_mm": [
-   42.0,
-   42.0,
-   45.7
+   172.0,
+   172.0,
+   52.7
   ],
   "height_claimed_in_9_17_mm": 37.0,
-  "height_note": "\u00a79.17 quotes 37 mm for this unit, which is the motor stack plus 6 mm of case each end. It does not include the reducer's own axial stack: the output crossed roller (13), the output flange (4), two 8 mm discs on the 12 mm HK2512 cup pitch (24), and the rotor carrier plus cover (10.5). The modelled unit is 49.7 mm."
+  "height_note": "\u00a79.17 quotes 37 mm for this unit, which is the motor stack plus 6 mm of case each end. It does not include the reducer's own axial stack: the output crossed roller (16), the output flange (4), two 8 mm discs on the 12 mm HK2512 cup pitch (24), and the rotor carrier plus cover (10.5). The modelled unit is 52.7 mm."
  },
  "axial_stack_mm": {
   "mounting/output face": 0.0,
@@ -72,83 +72,83 @@
    0.0,
    6.0
   ],
-  "output crossed roller RB7013": [
+  "output crossed roller RB8016": [
    0.0,
-   13
+   16
   ],
   "6905 shaft bearing": [
-   4.0,
-   13
+   7.0,
+   16
   ],
   "output flange plate": [
-   13,
-   17.0
+   16,
+   20.0
   ],
   "bearing carrier": [
    6.0,
-   15.0
+   18.0
   ],
   "pin cage / ring pins": [
-   15.0,
-   39.2
+   18.0,
+   42.2
   ],
   "HK2512 cups": [
    [
-    15.2,
-    27.2
+    18.2,
+    30.2
    ],
    [
-    27.2,
-    39.2
+    30.2,
+    42.2
    ]
   ],
   "cycloid discs": [
    [
-    17.2,
-    25.2
+    20.2,
+    28.2
    ],
    [
-    29.2,
-    37.2
+    32.2,
+    40.2
    ]
   ],
   "output pins": [
-   13,
-   38.0
+   16,
+   41.0
   ],
   "stator annulus": [
-   14.2,
-   39.2
+   17.2,
+   42.2
   ],
   "rotor ring": [
-   14.2,
-   39.2
+   17.2,
+   42.2
   ],
   "rotor carrier skirt": [
-   14.2,
-   39.7
+   17.2,
+   42.7
   ],
   "rotor carrier disc": [
-   39.7,
-   44.2
+   42.7,
+   47.2
   ],
   "wall tube": [
    6.0,
-   44.7
+   47.7
   ],
   "cover plate": [
-   44.7,
-   46.7
+   47.7,
+   49.7
   ],
   "6802 / cover boss (top of unit)": [
-   44.7,
-   49.7
+   47.7,
+   52.7
   ]
  },
  "mass_g": {
-  "floor_plate": 246.2,
-  "wall_tube": 315.6,
-  "bearing_carrier": 117.0,
+  "floor_plate": 190.2,
+  "wall_tube": 340.0,
+  "bearing_carrier": 44.0,
   "pin_cage": 194.5,
   "cover": 124.1,
   "stator_annulus": 544.8,
@@ -157,26 +157,26 @@
   "shaft": 161.9,
   "cycloid_discs": 822.3,
   "ring_pins": 139.7,
-  "output_flange": 150.2,
+  "output_flange": 224.0,
   "output_pins": 123.3,
-  "output_bearing": 350.0,
+  "output_bearing": 700.0,
   "eccentric_bearings": 40.0,
   "shaft_bearings": 59.2
  },
  "mass_by_group_g": {
-  "housing": 997.4,
+  "housing": 892.9,
   "stator": 544.8,
   "magnets": 494.2,
   "rotor": 369.0,
-  "reducer": 1235.4,
-  "bearings": 449.2
+  "reducer": 1309.3,
+  "bearings": 799.2
  },
- "total_g": 4090.1,
+ "total_g": 4409.4,
  "mass_assumed_in_closure_kg": 2.839,
- "mass_delta_g": 1251.0,
- "mass_note": "\u00a79.17 costed the unit at 2.84 kg = 1.039 kg of active motor + 1.25 kg reducer + 0.55 kg housing (analysis/frameless_motor.py M_REDUCER / M_HOUSING, themselves the CAD mass table of the \u00d8100-bore / \u00d8192 design in cost_search.py). Neither fixed number survives this design: the cycloid pin circle moves from r 43.5 out to r 59.3 so the two discs alone weigh 822 g, and the housing is a \u00d8172 can. This CAD gives 4.09 kg, +1251 g.",
- "mass_reducer_g": 1684.6,
- "mass_housing_g": 997.4,
+ "mass_delta_g": 1570.4,
+ "mass_note": "\u00a79.17 costed the unit at 2.84 kg = 1.039 kg of active motor + 1.25 kg reducer + 0.55 kg housing (analysis/frameless_motor.py M_REDUCER / M_HOUSING, themselves the CAD mass table of the \u00d8100-bore / \u00d8192 design in cost_search.py). Neither fixed number survives this design: the cycloid pin circle moves from r 43.5 out to r 59.3 so the two discs alone weigh 822 g, and the housing is a \u00d8172 can. This CAD gives 4.41 kg, +1570 g.",
+ "mass_reducer_g": 2108.5,
+ "mass_housing_g": 892.9,
  "checks": {
   "cycloid_mesh_min_gap_mm": 3.0,
   "cycloid_mesh_ok": true,
@@ -202,46 +202,46 @@
   "disc_bore_to_lightening_hole_web_mm": 2.675,
   "flange_plate_to_disc_clearance_mm": 0.2,
   "flange_plate_bore_to_needle_cup_clearance_mm": 0.5,
-  "flange_plate_to_bearing_carrier_clearance_mm": 2.0,
+  "flange_plate_to_bearing_carrier_clearance_mm": 12.0,
   "rotor_carrier_to_cage_top_clearance_mm": 0.5,
   "cover_to_rotor_carrier_clearance_mm": 0.5,
   "output_bearing": {
-   "fitted": "RB7013",
+   "fitted": "RB8016",
    "d_D_B": [
-    70,
-    100,
-    13
+    80,
+    120,
+    16
    ],
-   "dp_mm": 84.0,
-   "C0_kN": 27.7,
-   "peak_joint_moment_Nm": 449.6,
-   "P0_from_moment_N": 10704.0,
-   "static_safety_factor_fs": 2.59,
+   "dp_mm": 98.0,
+   "C0_kN": 42.1,
+   "peak_joint_moment_Nm": 575.7,
+   "P0_from_moment_N": 11748.0,
+   "static_safety_factor_fs": 3.58,
    "source": "THK 382-5E p.19, docs/reference/thk-cross-roller-ring-382-5E.pdf; P0 = 2M/dp with Fr = Fa = 0, fs = C0/P0 (THK p.6)",
    "alternates_fs": {
-    "RB5013": 1.49,
-    "RB6013": 2.0,
-    "RB7013": 2.59,
-    "RB8016": 4.59
+    "RB5013": 1.16,
+    "RB6013": 1.56,
+    "RB7013": 2.02,
+    "RB8016": 3.58
    },
    "fs_target": 2.5,
    "fs_limits_THK": "1-2 normal load, 2-3 impact load (THK 382-5E p.6)",
-   "note": "The BOM's RB5013 was picked in round 8, when the capstan carried the joint moment and the bearing saw rope pull. With the capstan deleted the output bearing carries the whole joint moment: the RB5013 then gives fs 1.49, below THK's 2-3 for impact loads, so RB7013 is fitted here instead. This is a BOM change this CAD forces."
+   "note": "The BOM's RB5013 was picked in round 8, when the capstan carried the joint moment and the bearing saw rope pull. With the capstan deleted the output bearing carries the whole joint moment: the RB5013 then gives fs 1.16, below THK's 2-3 for impact loads, so RB8016 is fitted here instead. This is a BOM change this CAD forces."
   },
   "eccentric_bearing": {
    "fitted": "HK2512",
-   "F_ecc_peak_per_disc_N": 8718.0,
+   "F_ecc_peak_per_disc_N": 11164.0,
    "C0r_N": 16300.0,
-   "static_margin": 1.87,
+   "static_margin": 1.46,
    "source": "NTN sheet, docs/reference/ntn-hk2512.pdf"
   },
   "cycloid_loads": {
-   "ring_pin_peak_N_per_disc": 583.0,
-   "hertz_peak_MPa": 766.0,
-   "hertz_cont_MPa": 529.0,
+   "ring_pin_peak_N_per_disc": 747.0,
+   "hertz_peak_MPa": 867.0,
+   "hertz_cont_MPa": 598.0,
    "hertz_allowable_MPa": 1400.0,
-   "output_pin_peak_N_per_disc_at_r40": 2810.0,
-   "output_pin_peak_N_per_disc_at_cycloid_py_r26": 4323.0,
+   "output_pin_peak_N_per_disc_at_r40": 3598.0,
+   "output_pin_peak_N_per_disc_at_cycloid_py_r26": 5535.0,
    "note": "analysis/cycloid.py fixes the output-pin circle at r 26, sized for the \u00d8100 PCB-stator bore. This bore is \u00d8131.6, so the circle moves out to r 40 and the peak output-pin force falls 35%."
   },
   "solid_interferences": [],
@@ -287,27 +287,33 @@
    "build/cad/frameless/rotor-cut.stl",
    "build/cad/frameless/reducer-cut.stl",
    "build/cad/frameless/bearings-cut.stl"
+  ],
+  "renders": [
+   "docs/design/actuator/frameless-cad-section.png",
+   "docs/design/actuator/frameless-cad-iso.png",
+   "docs/design/actuator/frameless-cad-exploded.png",
+   "docs/design/actuator/frameless-cad-compare.png"
   ]
  },
  "closure_with_cad_mass": {
-  "m_fk_kg": 4.09,
+  "m_fk_kg": 4.409,
   "m_yaw_kg": 2.716,
-  "m_robot_kg": 94.6,
-  "m_robot_kg_in_9_17": 80.3,
+  "m_robot_kg": 98.4,
+  "m_robot_kg_in_9_17": 102.8,
   "need_Nm": {
-   "yaw": 96.4,
-   "femur": 238.9,
-   "knee": 252.4
+   "yaw": 100.3,
+   "femur": 248.6,
+   "knee": 262.6
   },
   "margin": {
-   "yaw": 3.226,
-   "femur": 1.085,
-   "knee": 1.027
+   "yaw": 3.101,
+   "femur": 1.043,
+   "knee": 0.987
   },
   "margin_in_9_17": {
-   "femur": 1.278,
-   "knee": 1.21,
-   "yaw": 3.8
+   "femur": 0.998,
+   "knee": 0.945,
+   "yaw": 2.968
   },
   "note": "Arithmetic only, on frameless_motor.json's own c_per_kg and m_fixed: it re-evaluates the closure at the CAD unit mass without the mass fixed point being re-solved (the leg and body structure would also grow). analysis/ was not modified. A margin below 1.0 means the design as drawn does not close and the parent session has to re-run the study."
  }
