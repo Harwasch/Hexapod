@@ -114,7 +114,17 @@ R_DRUM = {"femur": 20.0, "knee": 32.0}      # rope centreline radii; D/d = 8 (th
 R_SECTOR = {j: CAPSTAN_RATIO[j] * R_DRUM[j] for j in R_DRUM}  # 80 / 80
 R_LINK = 70.0                    # the 1:1 knee link loop pulleys (drive pulley on the crank shaft, knee pulley on the tibia)
 X_LINK = (54.0, 66.0)            # the link loop lives outside the +x cheeks; rope plane x = 60
+# Round 14b: torque into the aluminium parts on the two Ø30 shafts goes through 42CrMo4 hubs, not keys in aluminium
+# (the 12 mm key in the pulley hub was SF 0.9 in shear and 0.23 in hub bearing, analysis/leg_loads.py 'keys'):
+HUB_L = 24.0                     # link pulley hubs: keyed sleeve x 54..78, two 10 x 8 keys; the pulley web is dowelled to the hub flange
+HUB_R = 20.0                     # hub sleeve OD 40 under the pulley (r 15..20)
+HUB_FLANGE_R, HUB_FLANGE_T = 38.0, 3.0   # the flange the aluminium part is dowelled to: 4 x Ø8 at r 36 + 6 x M6
+STUB_D, STUB_BORE = 24.0, 10.0   # the crank shaft's -x end steps down to Ø24: crank plate B's hub (bore 24, two keys 26 mm) is the Ø30 journal there
+STUB_X = (-56.0, -26.0)
+SHAFT_END = X_LINK[0] + HUB_L + 2.0      # 80: both shafts run to the end of the pulley hub
 Z_DRUM = {"knee": (-16.0, -48.0), "femur": (-58.0, -90.0)}   # knee drum on the tube (upper), femur drum on the inner shaft (lower)
+N_DEAD_WRAPS = 3.0               # capstan.py: turns of rope on the drum beyond the working turns
+ROPE_PITCH = 5.5                 # mm per turn on the drum
 DRUM_FLANGE = 3.0
 X_ROPE = {"femur": R_DRUM["femur"], "knee": R_DRUM["knee"]}  # the plane each rope's runs live in: x = +-r_drum
 SHAFT_D = 18.0                   # femur output shaft, 42CrMo4
@@ -234,16 +244,35 @@ def unwrap_to(a, ref):
 PIV = np.array([L_COXA, Z_PIVOT])
 
 
-def rope_geometry(phi, tau):
+def drum_band(j):
+    """Where the rope leaves each drum, mm from the drum's mid-height: the wrapped band is N_DEAD_WRAPS + the working
+    turns, it walks along the drum by one pitch per working turn, and run A leaves one end of it, run B the other.
+    Returns (A range, B range, band height, groove height, walk)."""
+    work = (FEMUR_RANGE[1] - FEMUR_RANGE[0] if j == "femur" else TAU_RANGE[1] - TAU_RANGE[0]) * CAPSTAN_RATIO[j] / 360
+    band, walk = (N_DEAD_WRAPS + work) * ROPE_PITCH, work * ROPE_PITCH
+    z0, z1 = Z_DRUM[j]
+    groove = (z0 - z1) - 2 * DRUM_FLANGE
+    lo = z1 + DRUM_FLANGE + ROPE_D / 2 - 0.5 * (z0 + z1)          # lowest turn centre, relative to mid-height
+    hi = z0 - DRUM_FLANGE - ROPE_D / 2 - 0.5 * (z0 + z1)          # highest turn centre
+    # run B (the lower run) leaves the bottom of the band, run A the top; the band starts at the bottom of the groove.
+    # Where the band + walk does not fit the groove (leg.json drum_bands.fits) the departures are clamped to the groove.
+    B = (lo, min(lo + walk, hi))
+    A = (min(lo + band - ROPE_PITCH, hi), min(lo + band - ROPE_PITCH + walk, hi))
+    return A, B, band, groove, walk
+
+
+def rope_geometry(phi, tau, z_off=None):
     """All rope runs in the coxa frame for femur angle phi and tibia absolute angle tau (deg).
-    Returns dict of run name -> (P, Q) endpoints as 3-vectors, plus contact angles (coxa frame)."""
+    Returns dict of run name -> (P, Q) endpoints as 3-vectors, plus contact angles (coxa frame).
+    z_off: optional {run name: dz} moving a capstan run's drum departure from the drum's mid-height (see drum_band)."""
     out = {"runs": {}, "contact": {}}
     for j in ("femur", "knee"):
         zd = 0.5 * (Z_DRUM[j][0] + Z_DRUM[j][1])
         for run, sgn, upper in (("A", 1, True), ("B", -1, False)):
             x = sgn * X_ROPE[j]
-            T = tangent_point_circle((0.0, zd), PIV, R_SECTOR[j], upper)
-            out["runs"][f"{j}_{run}"] = (np.array([x, 0.0, zd]), np.array([x, T[0], T[1]]))
+            zr = zd + (z_off or {}).get(f"{j}_{run}", 0.0)
+            T = tangent_point_circle((0.0, zr), PIV, R_SECTOR[j], upper)
+            out["runs"][f"{j}_{run}"] = (np.array([x, 0.0, zr]), np.array([x, T[0], T[1]]))
             out["contact"][f"{j}_{run}"] = ang(PIV, T)
     # the 1:1 link loop along the femur: both runs parallel to the pivot-knee line at +-R_LINK, in the plane x = 60
     u = yz_dir(phi)
@@ -440,10 +469,21 @@ def build_crank_local():
         a_eye = (GROOVE_C[run][0] if run == "A" else GROOVE_C[run][1])
         P[f"crank_tensioner_{run}"] = x_disc(x0, x1, 5.0, (R_SECTOR["knee"] - 14) * math.cos(math.radians(a_eye)), (R_SECTOR["knee"] - 14) * math.sin(math.radians(a_eye)))
         ASSIGNED[f"crank_tensioner_{run}"] = 45.0
-    P["crank_shaft"] = x_disc(-X_CHEEK[1] - 4, X_LINK[1] + 2, PIN_D / 2) - x_disc(-60, 70, PIN_BORE / 2)
+    # Round 14b: the crank shaft is Ø30/18 with a flange integral with it at x 35..38 (turned from Ø80 bar) that crank
+    # plate A is dowelled to; its -x end steps down to Ø24/10 and crank plate B's 42CrMo4 hub (bore 24, two 8 x 7 keys
+    # over 26 mm, OD 30 = the left cheek bearing's journal) carries its flange at x -38..-35.  No key in aluminium.
+    xf = X_CRANK[1]
+    P["crank_shaft"] = ((x_disc(STUB_X[1], SHAFT_END, PIN_D / 2) - x_disc(STUB_X[1] - 1, SHAFT_END + 1, PIN_BORE / 2))
+                        + (x_disc(xf - 2, xf + 1, HUB_FLANGE_R) - x_disc(xf - 3, xf + 2, PIN_D / 2))
+                        + (x_disc(STUB_X[0], STUB_X[1], STUB_D / 2) - x_disc(STUB_X[0] - 1, STUB_X[1] + 1, STUB_BORE / 2)))
     DENS["crank_shaft"] = STEEL
+    P["crank_hub_B"] = ((x_disc(-X_CHEEK[1], STUB_X[1], PIN_D / 2) - x_disc(-X_CHEEK[1] - 1, STUB_X[1] + 1, STUB_D / 2))
+                        + (x_disc(-xf - 1, -xf + 2, HUB_FLANGE_R) - x_disc(-xf - 2, -xf + 3, PIN_D / 2)))
+    DENS["crank_hub_B"] = STEEL
     P["drive_pulley"] = _link_pulley()
     DENS["drive_pulley"] = AL
+    P["drive_pulley_hub"] = _pulley_hub()
+    DENS["drive_pulley_hub"] = STEEL
     for run in ("ext", "int"):
         a = LINK_EYES[run]["drive"]
         P[f"link_tensioner_{run}"] = x_disc(X_LINK[0], X_LINK[1], 5.0, (R_LINK - 12) * math.cos(math.radians(a)), (R_LINK - 12) * math.sin(math.radians(a)))
@@ -452,18 +492,25 @@ def build_crank_local():
 
 
 def _link_pulley():
-    """Turned 6061 pulley: 12 mm rim with the groove, 4 mm web, keyed hub; two flanges."""
+    """Turned 6061 pulley: 12 mm rim with the groove, 6 mm web dowelled to the steel hub's flange, bore = the hub OD;
+    two flanges.  (Round 14b: was a 4 mm web and a keyed aluminium hub.)"""
     x0, x1 = X_LINK
-    xm = 0.5 * (x0 + x1)
     rim = x_disc(x0, x1, R_LINK - ROPE_D / 2) - x_disc(x0 - 1, x1 + 1, R_LINK - 14.0)
-    web = x_disc(xm - 2, xm + 2, R_LINK - 13.0) - x_disc(xm - 3, xm + 3, PIN_D / 2 + 8)
-    hub = x_disc(x0, x1, PIN_D / 2 + 8) - x_disc(x0 - 1, x1 + 1, PIN_D / 2)
-    p = rim + web + hub + x_disc(x0, x0 + 2, R_LINK + 3) + x_disc(x1 - 2, x1, R_LINK + 3)
-    p = p - x_disc(x0 - 1, x1 + 1, PIN_D / 2)
+    web = x_disc(x1 - 6, x1, R_LINK - 13.0)
+    p = rim + web + x_disc(x0, x0 + 2, R_LINK + 3) + x_disc(x1 - 2, x1, R_LINK + 3)
+    p = p - x_disc(x0 - 1, x1 + 1, HUB_R)
     for k in range(6):
-        a = k * 60.0 + 30.0
-        p = p - x_disc(x0 - 1, x1 + 1, 12.0, 40.0 * math.cos(math.radians(a)), 40.0 * math.sin(math.radians(a)))
+        a = k * 60.0
+        p = p - x_disc(x0 - 1, x1 + 1, 6.0, 48.0 * math.cos(math.radians(a)), 48.0 * math.sin(math.radians(a)))
     return p
+
+
+def _pulley_hub():
+    """42CrMo4 hub of a link pulley on its Ø30 shaft: keyed sleeve (two 10 x 8 keys over HUB_L) with a flange the
+    pulley web is dowelled to (4 x Ø8 at r 36 + 6 x M6).  Sleeve x 54..78, flange x 66..69 against the web."""
+    x0, x1 = X_LINK
+    return ((x_disc(x0, x0 + HUB_L, HUB_R) - x_disc(x0 - 1, x0 + HUB_L + 1, PIN_D / 2))
+            + (x_disc(x1, x1 + HUB_FLANGE_T, HUB_FLANGE_R) - x_disc(x1 - 1, x1 + HUB_FLANGE_T + 1, HUB_R)))
 
 
 def build_tibia_local():
@@ -474,12 +521,14 @@ def build_tibia_local():
     plug = Pos(0, TIBIA_U[0] - 1, 0) * Box(w - 2 * t - 0.5, 40.0, h - 2 * t - 0.5, align=(Align.CENTER, Align.MIN, Align.CENTER))
     P["tibia_carrier"] = hub + web + plug
     DENS["tibia_carrier"] = AL
-    P["knee_pin"] = x_disc(-X_CHEEK[1] - 4, X_LINK[1] + 2, PIN_D / 2) - x_disc(-60, 70, PIN_BORE / 2)
+    P["knee_pin"] = x_disc(-X_CHEEK[1] - 4, SHAFT_END, PIN_D / 2) - x_disc(-60, 90, PIN_BORE / 2)     # keyed to the carrier: two 10 x 8 x 50
     DENS["knee_pin"] = STEEL
     P["tibia_tube"] = rect_tube(w, h, t, TIBIA_U[0], TIBIA_U[1], 0.0)
     DENS["tibia_tube"] = AL
     P["knee_pulley"] = _link_pulley()
     DENS["knee_pulley"] = AL
+    P["knee_pulley_hub"] = _pulley_hub()
+    DENS["knee_pulley_hub"] = STEEL
     return P
 
 
@@ -523,9 +572,23 @@ def build_transmission_coxa():
     return P
 
 
-def rope_solids(phi, tau):
+def fleet_angles(g=None):
+    """Angle (deg) between each capstan run and the drum's plane of rotation at the departure point.  The drum turns
+    about z and the sector about x, so a straight run from drum to sector is inclined; a grooved capstan drum wants
+    this under ~1.5 deg.  The runs are in the planes x = +-r_drum (no fleet in x); this is the other component."""
+    g = g or rope_geometry(STANCE["femur_deg"], tau_of(STANCE["femur_deg"], STANCE["knee_deg"]))
+    out = {}
+    for n, (p, q) in g["runs"].items():
+        if n.startswith("link"):
+            continue
+        d = q - p
+        out[n] = round(math.degrees(math.atan2(abs(d[2]), abs(d[1]))), 1)
+    return out
+
+
+def rope_solids(phi, tau, z_off=None):
     """Rope runs and wound arcs for a pose, in the coxa frame."""
-    g = rope_geometry(phi, tau)
+    g = rope_geometry(phi, tau, z_off)
     P = {}
     for name, (p, q) in g["runs"].items():
         P[f"rope_{name}"] = cyl_between(p, q, ROPE_D / 2)
@@ -609,7 +672,7 @@ class Leg:
             A[n] = (s.moved(cl), "transmission")
         tl = tibia_loc(phi, tau, psi)
         for n, s in self.tibia.items():
-            A[n] = (s.moved(tl), "transmission" if n == "knee_pulley" else "tibia")
+            A[n] = (s.moved(tl), "transmission" if n.startswith("knee_pulley") else "tibia")
         for n, s in self.foot.items():
             A[n] = (s.moved(tl), "foot")
         for n, s in self.trans.items():
@@ -641,14 +704,16 @@ def clearance_pairs(leg):
     drums = ["drum_knee", "drum_femur"] + [f"rope_{j}_drum_{k}" for j in ("knee", "femur") for k in range(5)]
     femur_struct = [n for n in leg.femur if "bearing" not in n]
     femur_all = femur_struct + list(leg.fsect)
-    crank_plates = ["crank_sector_A", "crank_sector_B", "crank_tensioner_A", "crank_tensioner_B"]
+    crank_plates = ["crank_sector_A", "crank_sector_B", "crank_tensioner_A", "crank_tensioner_B", "crank_hub_B"]
+    drive = ["drive_pulley", "drive_pulley_hub"]
+    knee_pulley = ["knee_pulley", "knee_pulley_hub"]
     tibia_struct = ["tibia_carrier", "tibia_tube"] + list(leg.foot)
     return {
         "femur+sectors vs body/coxa/hub/drums": (femur_all, body_names + fixed_hub + coxa_names + drums),
-        "tibia+foot vs body/coxa/hub/drums/femur/sectors/crank/pulley": (tibia_struct, body_names + fixed_hub + coxa_names + drums + femur_all + crank_plates + ["drive_pulley"]),
-        "knee pulley vs body/coxa/hub/drums/crank/drive pulley": (["knee_pulley"], body_names + fixed_hub + coxa_names + drums + crank_plates + ["drive_pulley"]),
-        "femur rope runs vs everything but their drum/sector": (["rope_femur_A", "rope_femur_B"], body_names + fixed_hub + coxa_names + ["drum_knee"] + [f"rope_knee_drum_{k}" for k in range(5)] + femur_struct + crank_plates + tibia_struct + ["knee_pulley"]),
-        "knee rope runs vs everything but their drum/crank": (["rope_knee_A", "rope_knee_B"], body_names + fixed_hub + coxa_names + ["drum_femur"] + [f"rope_femur_drum_{k}" for k in range(5)] + femur_all + tibia_struct + ["knee_pulley"]),
+        "tibia+foot vs body/coxa/hub/drums/femur/sectors/crank/pulley": (tibia_struct, body_names + fixed_hub + coxa_names + drums + femur_all + crank_plates + drive),
+        "knee pulley vs body/coxa/hub/drums/crank/drive pulley": (knee_pulley, body_names + fixed_hub + coxa_names + drums + crank_plates + drive),
+        "femur rope runs vs everything but their drum/sector": (["rope_femur_A", "rope_femur_B"], body_names + fixed_hub + coxa_names + ["drum_knee"] + [f"rope_knee_drum_{k}" for k in range(5)] + femur_struct + crank_plates + tibia_struct + knee_pulley),
+        "knee rope runs vs everything but their drum/crank": (["rope_knee_A", "rope_knee_B"], body_names + fixed_hub + coxa_names + ["drum_femur"] + [f"rope_femur_drum_{k}" for k in range(5)] + femur_all + tibia_struct + knee_pulley),
         "link loop runs vs everything but their pulleys": (["rope_link_ext", "rope_link_int"], body_names + coxa_names + femur_struct + list(leg.fsect) + tibia_struct + crank_plates),
     }
 
@@ -758,6 +823,8 @@ def colour_by_name(n, g):
         return COLORS["sector"]
     if n.endswith("pulley") and n not in ("pulley_yaw", "pulley_knee", "pulley_femur"):
         return COLORS["pulley"]
+    if n.endswith("pulley_hub"):
+        return "#6d6d6d"
     if n.startswith("drum"):
         return COLORS["drum"]
     if n.startswith("motor"):
@@ -957,6 +1024,12 @@ if __name__ == "__main__":
                                 round(max(link_wound(r, p, ph, t)[0] for ph in np.linspace(*FEMUR_RANGE, 9) for t in np.linspace(*TAU_RANGE, 9) if KNEE_LIMITS[0] <= theta_of(ph, t) <= KNEE_LIMITS[1]), 1)]
                             for p in ("drive", "knee")} for r in ("ext", "int")}
     drum_turns = dict(femur=(FEMUR_RANGE[1] - FEMUR_RANGE[0]) * CAPSTAN_RATIO["femur"] / 360, knee=(TAU_RANGE[1] - TAU_RANGE[0]) * CAPSTAN_RATIO["knee"] / 360)
+    bands = {}
+    for j in ("femur", "knee"):
+        Ab, Bb, band, groove, walk = drum_band(j)
+        bands[j] = dict(dead_wraps=N_DEAD_WRAPS, working_turns=round(drum_turns[j], 2), band_mm=round(band, 1), walk_mm=round(walk, 1), groove_mm=round(groove, 1),
+                        needs_mm=round(band + walk, 1), fits=bool(band + walk <= groove + 0.05),
+                        departure_from_mid_mm=dict(A=[round(v, 1) for v in Ab], B=[round(v, 1) for v in Bb]))
     rope_total = dict(femur=round(sum(run_len[n] for n in run_len if n.startswith("femur")) + math.radians(FEMUR_RANGE[1] - FEMUR_RANGE[0]) * R_SECTOR["femur"] + (3 + drum_turns["femur"]) * 2 * math.pi * R_DRUM["femur"], 0),
                       knee=round(sum(run_len[n] for n in run_len if n.startswith("knee")) + math.radians(TAU_RANGE[1] - TAU_RANGE[0]) * R_SECTOR["knee"] + (3 + drum_turns["knee"]) * 2 * math.pi * R_DRUM["knee"], 0),
                       link_each=round(L_FEMUR + math.radians(KNEE_LIMITS[1] - KNEE_LIMITS[0] + 2 * EYE_MARGIN) * R_LINK, 0))
@@ -987,6 +1060,9 @@ if __name__ == "__main__":
               "crank_sector_A vs drum_knee": dist("crank_sector_A", "drum_knee"),
               "crank_sector_A vs hub_top": dist("crank_sector_A", "hub_top"),
               "drive_pulley vs coxa_plate_R (x gap)": dist("drive_pulley", "coxa_plate_R"),
+              "drive_pulley_hub vs coxa_shaft_bearings (x gap)": dist("drive_pulley_hub", "coxa_shaft_bearings"),
+              "crank_hub_B flange vs coxa_boss_L (x gap)": dist("crank_hub_B", "coxa_boss_L"),
+              "crank_shaft flange vs coxa_boss_R (x gap)": dist("crank_shaft", "coxa_boss_R"),
               "knee_pulley vs knee_cheek_R (x gap)": dist("knee_pulley", "knee_cheek_R"),
               "rope_femur_A vs drum_knee": dist("rope_femur_A", "drum_knee"),
               "rope_femur_A vs hub_mid": dist("rope_femur_A", "hub_mid"),
@@ -1027,7 +1103,13 @@ if __name__ == "__main__":
                           groove_femur_frame_deg={k: [round(a, 1) for a in v] for k, v in GROOVE_F.items()},
                           groove_crank_frame_deg={k: [round(a, 1) for a in v] for k, v in GROOVE_C.items()},
                           link_eyes_deg=LINK_EYES, link_wound_range_deg=link_wound_range,
-                          run_lengths_stance_mm=run_len, rope_length_mm=rope_total, drum_working_turns=drum_turns, coupling=coupling,
+                          run_lengths_stance_mm=run_len, rope_length_mm=rope_total, drum_working_turns=drum_turns, drum_bands=bands,
+                          fleet_angle_deg=fleet_angles(g_stance),
+                          fleet_angle_note="inclination of each straight run to its drum's plane of rotation (the drum turns about z, the sector about x); "
+                                           "a grooved capstan drum wants < ~1.5 deg. The runs have no fleet in x (planes x = +-r_drum).",
+                          coupling=coupling,
+                          hubs="crank plate A on a flange integral with the crank shaft; crank plate B on a 42CrMo4 hub (bore 24, 2 x 8x7 keys x 26, OD 30 = the left journal); "
+                               "link pulleys on 42CrMo4 hubs (2 x 10x8 keys x 24) with dowelled flanges; tibia carrier 2 x 10x8 keys x 50 in 6061",
                           belt="HTD 5M 1:1, 24T/24T, 15 mm"),
         masses_g=masses, group_mass_g={k: round(v, 1) for k, v in by_group.items()},
         unit_mass_g=UNIT_MASS, unit_extras_g={k: round(v, 1) for k, v in unit_extra.items()},

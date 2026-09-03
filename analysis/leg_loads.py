@@ -233,19 +233,37 @@ reach = L_COXA + L_FEMUR * math.cos(math.radians(45))
 M_yaw_brg = Fz * reach * 1e-3
 M0 = BEARINGS["RB7013"]["C0"] * 1e3 * BEARINGS["RB7013"]["dp"] * 1e-3 / 2
 PIVOT["yaw bearing RB7013: static moment (foot force x 327 mm reach)"] = dict(load_Nm=M_yaw_brg, M0_Nm=M0, SF=M0 / M_yaw_brg, detail="M0 = C0 x dp / 2 (THK 382-5E)")
-# keys and bolt groups
+# keys and bolt groups.  Round 14b: no torque goes through a key in aluminium at the pivots any more.  Crank plate A sits
+# on a flange integral with the crank shaft; crank plate B on a 42CrMo4 hub keyed to the shaft's Ø24 stub (the hub OD is
+# the left journal); both link pulleys on 42CrMo4 hubs keyed over 24 mm; the aluminium parts are dowelled to the hub
+# flanges.  The tibia carrier's keys grew to 50 mm and the drums are checked too.  Key sections and seat depths are the
+# DIN 6885-1 nominals (handbook): 6x6 t1 3.5 / t2 2.8, 8x7 4.0 / 3.3, 10x8 5.0 / 3.3.
 KEY = {}
-for name, T, r_shaft, n_keys, key_len, key_w in (("crank plates x 2 on the crank shaft (8 x 7 key, 20 mm)", tau_design["knee"], PIN_D / 2, 2, 20.0, 8.0),
-                                                 ("drive pulley on the crank shaft (8 x 7 key, 12 mm)", tau_design["knee"], PIN_D / 2, 1, 12.0, 8.0),
-                                                 ("knee pulley on the knee pin (8 x 7 key, 12 mm)", tau_design["knee"], PIN_D / 2, 1, 12.0, 8.0),
-                                                 ("tibia carrier on the knee pin (2 x 8 x 7 keys, 30 mm)", tau_design["knee"], PIN_D / 2, 2, 30.0, 8.0)):
+STUB_D, STUB_BORE = 24.0, 10.0
+T_drum_knee = ROPES[[k for k in ROPES if k.startswith("knee capstan")][0]]["drum_torque_peak_Nm"]
+T_drum_femur = ROPES[[k for k in ROPES if k.startswith("femur")][0]]["drum_torque_peak_Nm"]
+for name, T, r_shaft, n_keys, key_len, (b, t1, t2), hub_mat in (
+        ("crank hub B (42CrMo4) on the crank shaft's Ø24 stub: 2 x 8x7 keys x 26", tau_design["knee"], STUB_D / 2, 2, 26.0, (8.0, 4.0, 3.3), "42CrMo4 QT"),
+        ("drive pulley hub (42CrMo4) on the crank shaft: 2 x 10x8 keys x 24", tau_design["knee"], PIN_D / 2, 2, 24.0, (10.0, 5.0, 3.3), "42CrMo4 QT"),
+        ("knee pulley hub (42CrMo4) on the knee pin: 2 x 10x8 keys x 24", tau_design["knee"], PIN_D / 2, 2, 24.0, (10.0, 5.0, 3.3), "42CrMo4 QT"),
+        ("tibia carrier (6061) on the knee pin: 2 x 10x8 keys x 50", tau_design["knee"], PIN_D / 2, 2, 50.0, (10.0, 5.0, 3.3), "6061-T6"),
+        ("knee drum (6061) on the Ø30 output tube: 2 x 8x7 keys x 30", T_drum_knee, PIN_D / 2, 2, 30.0, (8.0, 4.0, 3.3), "6061-T6"),
+        ("femur drum (6061) on the Ø18 output shaft: 2 x 6x6 keys x 30", T_drum_femur, 9.0, 2, 30.0, (6.0, 3.5, 2.8), "6061-T6")):
     F = T * 1e3 / (r_shaft * n_keys)
-    shear = F / (key_len * key_w)
-    bearing = F / (key_len * 3.5)                                     # 7 mm key, half in the hub
-    KEY[name] = dict(force_N=F, key_shear_MPa=shear, hub_bearing_MPa=bearing, SF_shear=(0.58 * SY_ST) / shear, SF_hub_bearing_6061=SY_AL / bearing)
+    shear = F / (key_len * b)
+    hub_b, shaft_b = F / (key_len * t2), F / (key_len * t1)
+    sy_hub = MAT[hub_mat]["sy"]
+    KEY[name] = dict(force_N=F, key_shear_MPa=shear, hub_bearing_MPa=hub_b, shaft_bearing_MPa=shaft_b, SF_shear=(0.58 * SY_ST) / shear,
+                     SF_hub_bearing=sy_hub / hub_b, SF_shaft_bearing=SY_ST / shaft_b, SF=min((0.58 * SY_ST) / shear, sy_hub / hub_b, SY_ST / shaft_b), hub=hub_mat)
+KEY_BEFORE = {"drive / knee pulley on the shaft, 8 x 7 key x 12 in the 6061 hub (round 14)": dict(SF_shear=0.90, SF_hub_bearing_6061=0.23),
+              "crank plates x 2 on the crank shaft, 8 x 7 key x 20 in 6061 (round 14)": dict(SF_shear=2.99, SF_hub_bearing_6061=0.77),
+              "tibia carrier, 2 x 8 x 7 keys x 30 in 6061 (round 14)": dict(SF_shear=4.49, SF_hub_bearing_6061=1.16)}
+J_stub = math.pi * (STUB_D ** 4 - STUB_BORE ** 4) / 32
+tau_stub = tau_design["knee"] * 1e3 * (STUB_D / 2) / J_stub
+PIVOT["crank shaft Ø24/10 stub (crank hub B): torsion (knee design torque from plate B)"] = dict(stress_MPa=tau_stub, allow_MPa=0.58 * SY_ST, SF=0.58 * SY_ST / tau_stub)
 BOLTS = {}
 for name, T, n, r, d in (("femur sector plates to the carrier: 6 x M6 at r 32 (shear, per plate pair)", tau_design["femur"], 6, 32.0, 6.0),
-                         ("knee crank: plates keyed; drive pulley flange 6 x M6 at r 30 (alternative to the key)", tau_design["knee"], 6, 30.0, 6.0),
+                         ("hub flanges to the crank plates and pulley webs: 4 x Ø8 dowels at r 36 in 6 mm 6061 (each of four joints)", tau_design["knee"], 4, 36.0, 8.0),
                          ("coxa cheek to hub plates: 8 x M5 at ~60 mm, rope pull of both capstans", (R_rope_f + R_rope_k) * 0.06, 8, 60.0, 5.0)):
     F = T * 1e3 / (n * r)
     A_shank = math.pi * d ** 2 / 4
@@ -313,6 +331,15 @@ c_all = {j: max(COVER[k]["torque_per_kg_all"][j] for k in COVER if k.endswith("r
 need_reach = {j: c_reach[j] * (m_robot + hm.MASS.mission_payload) for j in c_reach}
 margin_reach = {j: T_JOINT[j] / max(need_reach[j], 1e-6) for j in c_reach}
 
+# ---- clearance sweep (cad/leg/leg_rom.py writes it into leg.json) -------------------------------------
+CL_ = LEG.get("clearances", {})
+if "summary" in CL_:
+    CLEAR = dict(summary=CL_["summary"], worst_by_group=CL_["worst_by_group"], collisions=CL_["collisions"],
+                 designed_axial_gaps_mm=CL_["designed_axial_gaps_mm"], departure_cases=CL_["departure_cases"], grid=CL_["grid"],
+                 by_yaw={k: {kk: vv for kk, vv in v.items() if kk != "grid"} for k, v in CL_["by_yaw"].items()})
+else:
+    CLEAR = "sweep not run (cad/leg/leg_rom.py)"
+
 # ---- roll-up and output -----------------------------------------------------------------------------
 GROUPS = LEG["group_mass_g"]
 out = dict(
@@ -327,9 +354,12 @@ out = dict(
                  requirement_over_reachable_set=dict(c_per_kg_on_feet_all=c_all, c_per_kg_on_feet_reachable=c_reach, need=need_reach, margin=margin_reach,
                                                      closes=min(margin_reach.values()) >= 1.0)),
     load_cases=dict(m_total=m_total, cases=F_cases, design=F_design, joint_torque_design=tau_design, joint_torque_cont=tau_cont),
-    structure=STRUCT, ropes=ROPES, windup=WINDUP, cycloid=CYC, pivots=PIVOT, keys=KEY, bolts=BOLTS, speed=SPEED,
+    structure=STRUCT, ropes=ROPES, windup=WINDUP, cycloid=CYC, pivots=PIVOT, keys=KEY, keys_before_round_14b=KEY_BEFORE,
+    keys_note="round 14b: crank plate A on a flange integral with the crank shaft, crank plate B and both link pulleys on keyed 42CrMo4 hubs with dowelled flanges, "
+              "tibia carrier keys 50 mm; +0.65 kg of hubs per leg against the round-14 leg.json, net +0.40 kg after that file was regenerated from the committed leg.py",
+    bolts=BOLTS, speed=SPEED,
     coupling=TR["coupling"], workspace_coverage=COVER, joint_windows=dict(femur=FR, tau=TAUR, knee=KL, yaw=[-YAW_LIM, YAW_LIM]),
-    clearances=LEG["clearances"] if "skipped" not in LEG["clearances"] else "sweep not run",
+    clearances=CLEAR, fleet_angle_deg=TR.get("fleet_angle_deg"), fleet_angle_note=TR.get("fleet_angle_note"), drum_bands=TR.get("drum_bands"),
 )
 json.dump(out, open(OUT_JSON, "w"), indent=1, default=float)
 
@@ -357,7 +387,7 @@ ax.set_xticks(x); ax.set_xticklabels(J); ax.set_ylabel("N·m"); ax.legend(fontsi
 ax.set_title(f"Closure: {'closes' if out['closure']['closes'] else 'does not close'} as written; closes at {m_close:.0f} kg robot = {m_leg_close:.2f} kg per leg", fontsize=10)
 ax = axes[1, 0]
 rows = [(k.split(" (")[0][:44], v["SF"]) for k, v in STRUCT.items()] + [(k.split(":")[0][:44], v["SF"]) for k, v in PIVOT.items()] + \
-       [(k[:44], v["SF_shear"]) for k, v in KEY.items()] + [(k.split(":")[0][:44], v["SF_vs_0p6UTS"]) for k, v in BOLTS.items()] + \
+       [(k.split(":")[0][:44], v["SF"]) for k, v in KEY.items()] + [(k.split(":")[0][:44], min(v["SF_vs_0p6UTS"], v["SF_plate_bearing"])) for k, v in BOLTS.items()] + \
        [(f"{k.split(',')[0]} Hertz", cy.SIGMA_H_ALLOW / v["sigma_peak"]) for k, v in CYC.items()] + [(f"{k.split(',')[0]} ecc. bearing static", v["ecc_static_SF"]) for k, v in CYC.items()]
 lab, sf = zip(*rows)
 cols = ["#0f9b8e" if s >= 1.5 else ("#d98c3a" if s >= 1.0 else "#b03a2e") for s in sf]
@@ -392,7 +422,11 @@ if __name__ == "__main__":
     for sect in (STRUCT, PIVOT, KEY, BOLTS):
         for k, v in sect.items():
             sf = v.get("SF", v.get("SF_shear", v.get("SF_vs_0p6UTS")))
-            print(f"  {k}: SF {sf:.2f}")
+            extra = f" (shear {v['SF_shear']:.2f}, hub bearing {v['SF_hub_bearing']:.2f}, shaft seat {v['SF_shaft_bearing']:.2f})" if "SF_hub_bearing" in v else (f" (plate bearing {v['SF_plate_bearing']:.2f})" if "SF_plate_bearing" in v else "")
+            print(f"  {k}: SF {sf:.2f}{extra}")
+    if isinstance(CLEAR, dict):
+        print("clearances:", json.dumps(CLEAR["summary"]))
+    print("fleet angles", TR.get("fleet_angle_deg"), "drum bands", {j: (b["needs_mm"], b["groove_mm"], b["fits"]) for j, b in (TR.get("drum_bands") or {}).items()})
     for k, v in ROPES.items():
         print(f"  {k}: {v['F_cont_N'] / 1e3:.2f} / {v['F_peak_N'] / 1e3:.2f} kN, SF {v['SF_cont']:.1f} / {v['SF_peak']:.1f}, {'ok' if v['ok'] else 'NOT ok'}")
     for k, v in CYC.items():

@@ -217,6 +217,53 @@
    "femur": 1.6111111111111112,
    "knee": 0.9027777777777778
   },
+  "drum_bands": {
+   "femur": {
+    "dead_wraps": 3.0,
+    "working_turns": 1.61,
+    "band_mm": 25.4,
+    "walk_mm": 8.9,
+    "groove_mm": 26.0,
+    "needs_mm": 34.2,
+    "fits": false,
+    "departure_from_mid_mm": {
+     "A": [
+      9.4,
+      18.2
+     ],
+     "B": [
+      -10.5,
+      -1.6
+     ]
+    }
+   },
+   "knee": {
+    "dead_wraps": 3.0,
+    "working_turns": 0.9,
+    "band_mm": 21.5,
+    "walk_mm": 5.0,
+    "groove_mm": 26.0,
+    "needs_mm": 26.4,
+    "fits": false,
+    "departure_from_mid_mm": {
+     "A": [
+      5.5,
+      10.4
+     ],
+     "B": [
+      -10.5,
+      -5.5
+     ]
+    }
+   }
+  },
+  "fleet_angle_deg": {
+   "femur_A": 21.9,
+   "femur_B": 41.5,
+   "knee_A": 4.7,
+   "knee_B": 53.4
+  },
+  "fleet_angle_note": "inclination of each straight run to its drum's plane of rotation (the drum turns about z, the sector about x); a grooved capstan drum wants < ~1.5 deg. The runs have no fleet in x (planes x = +-r_drum).",
   "coupling": {
    "femur": {
     "dL_dphi_mm_per_rad": {
@@ -257,6 +304,7 @@
     "link_int": 0.0
    }
   },
+  "hubs": "crank plate A on a flange integral with the crank shaft; crank plate B on a 42CrMo4 hub (bore 24, 2 x 8x7 keys x 26, OD 30 = the left journal); link pulleys on 42CrMo4 hubs (2 x 10x8 keys x 24) with dowelled flanges; tibia carrier 2 x 10x8 keys x 50 in 6061",
   "belt": "HTD 5M 1:1, 24T/24T, 15 mm"
  },
  "masses_g": {
@@ -281,14 +329,14 @@
   "yaw_flange": 108.9,
   "hub_top": 94.3,
   "hub_mid": 77.3,
-  "hub_bot": 81.7,
+  "hub_bot": 76.8,
   "hub_standoff_0": 19.1,
   "hub_standoff_1": 19.1,
   "hub_standoff_2": 19.1,
   "hub_standoff_3": 19.1,
   "hub_standoff_4": 19.1,
   "knee_tube": 341.1,
-  "femur_shaft": 487.4,
+  "femur_shaft": 337.0,
   "drum_bearings": 75.1,
   "coxa_plate_L": 411.0,
   "coxa_boss_L": 22.5,
@@ -313,14 +361,17 @@
   "crank_tensioner_A": 45.0,
   "crank_sector_B": 176.6,
   "crank_tensioner_B": 45.0,
-  "crank_shaft": 440.4,
-  "drive_pulley": 393.2,
+  "crank_shaft": 554.7,
+  "crank_hub_B": 142.1,
+  "drive_pulley": 341.8,
+  "drive_pulley_hub": 180.8,
   "link_tensioner_ext": 45.0,
   "link_tensioner_int": 45.0,
   "tibia_carrier": 477.2,
-  "knee_pin": 440.4,
+  "knee_pin": 483.0,
   "tibia_tube": 521.5,
-  "knee_pulley": 393.2,
+  "knee_pulley": 341.8,
+  "knee_pulley_hub": 180.8,
   "foot_plug": 104.9,
   "foot_load_cell": 40.0,
   "foot_pad": 54.7,
@@ -353,11 +404,11 @@
  },
  "group_mass_g": {
   "body_stub": 13246.3,
-  "hip_pod": 1361.2,
+  "hip_pod": 1205.8,
   "coxa": 963.0,
   "femur": 1078.6,
-  "tibia": 1439.0,
-  "transmission": 2556.7,
+  "tibia": 1481.6,
+  "transmission": 3071.9,
   "foot": 199.5
  },
  "unit_mass_g": 2450.0,
@@ -366,8 +417,8 @@
   "hollow_eccentric_and_bearing_upgrade_x3": 270.0,
   "yaw_output_bearing_RB7013_vs_RB5013": 80.0
  },
- "leg_structure_g": 7598.2,
- "leg_total_g": 15718.2,
+ "leg_structure_g": 8000.7,
+ "leg_total_g": 16120.7,
  "assigned_masses": [
   "belt_femur",
   "belt_knee",
@@ -438,12 +489,15 @@
   "crank_sector_A vs drum_knee": 47.67,
   "crank_sector_A vs hub_top": 59.65,
   "drive_pulley vs coxa_plate_R (x gap)": 2.0,
+  "drive_pulley_hub vs coxa_shaft_bearings (x gap)": 2.0,
+  "crank_hub_B flange vs coxa_boss_L (x gap)": 2.0,
+  "crank_shaft flange vs coxa_boss_R (x gap)": 2.0,
   "knee_pulley vs knee_cheek_R (x gap)": 2.0,
   "rope_femur_A vs drum_knee": 10.58,
   "rope_femur_A vs hub_mid": 9.12,
   "rope_knee_A vs hub_top": 15.14,
   "rope_knee_A vs floor_plate": 23.28,
-  "rope_knee_B vs hub_bot": 21.47,
+  "rope_knee_B vs hub_bot": 24.99,
   "rope_link_ext vs femur_beam": 42.5,
   "rope_link_int vs tibia_tube (stance)": 42.5,
   "femur_sector_A vs hub_top (stance)": 57.33,

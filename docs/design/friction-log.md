@@ -139,3 +139,33 @@
   render for the page is now `scripts/render_layer.py` (pcbnew object model, matplotlib, a
   palette PNG). `hw-documentation` should name the one raster route the environment build
   guarantees, and `review-artifact` should downscale rather than refuse.
+
+## 2026-09-03 — round 14b (leg assembly: ROM sweep, keys, BOM, note)
+
+* The capstan concept (`analysis/capstan.py`, round 8) puts the drum on the vertical yaw axis
+  and the sector on the horizontal femur pivot, and the leg CAD (`cad/leg/leg.py`) declared
+  "zero fleet angle" because the runs stay in the planes x = ±r_drum. Nobody checked the other
+  component: the runs leave the drums at 5–53° to the drum's plane of rotation, and the wrapped
+  band plus its walk does not fit the femur drum. Six rounds of costing sat on a rope drive
+  that cannot be wound. `hw-verification` should carry a cable-drive pre-CAD checklist (fleet
+  angle in *both* planes at each drum, band + walk vs groove, D/d, termination) and `hw-review`
+  should ask "in which plane does each rope leave each pulley" before a transmission is costed.
+* `cad/leg/leg.json` was committed from an older `leg.py` than the one beside it (femur shaft
+  487 g in the JSON, 337 g from the code; `hub_bot` too), so the 15.72 kg the loads note quoted
+  was never reproducible. Same failure as round 13's `rotor_field.json`. Generated JSON should
+  carry the generator's git hash and `hw-verification` should re-run generators and diff.
+* The clearance sweep as written in `leg.py` (compound-to-compound OCCT distances over 245 poses)
+  was never run because it would take over an hour, and its minimum would have been a designed
+  2 mm axial gap at every pose. A moving-group sweep needs an x-extent filter for parts that
+  only rotate about parallel axes, bounding-box prefiltering with the closest pair named, and
+  conservative proxies for parts with many faces (a pulley with holes costs 3 s per distance).
+  The `build123d` skill (`build123d://skill/modeling`) should document that recipe; the
+  `compare` tool measures one fit, not a sweep.
+* `analysis/leg_loads.py` (round 14) checked a 20 mm key on a 10 mm plate and used h/2 for the
+  hub seat depth instead of the DIN 6885 t2; two keys came out at SF 0.9 and one at 0.23 in hub
+  bearing without the script flagging that the hub was aluminium. `hw-verification` should list
+  "key length ≤ hub length, bearing checked on the softer member, DIN seat depths" as a check.
+* Two agents were interrupted (container restart, API rate limit) with no note of what was
+  finished and what was not; the third had to infer it from `leg_loads.json` saying "sweep not
+  run". `hw-planning` should ask for a `docs/design/<chunk>-state.md` checkpoint (done / missing /
+  known wrong) whenever a chunk spans sessions.

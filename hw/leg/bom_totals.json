@@ -1,0 +1,13 @@
+{
+ "one_leg_20": 2211.69,
+ "one_leg_100": 1452.86,
+ "six_legs_20": 13270.14,
+ "six_legs_100": 8717.16,
+ "units_share_20": 1241.15,
+ "units_share_100": 837.48,
+ "leg_specific_20": 970.54,
+ "leg_specific_100": 615.38,
+ "lines": 49,
+ "verified_lines": 0,
+ "partly_verified_lines": 9
+}
