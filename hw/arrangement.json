@@ -1,0 +1,216 @@
+{
+ "generated_by": "analysis/arrangement.py",
+ "units": "mm, kg, deg unless stated",
+ "sources": {
+  "actuator_can": "cad/actuator/frameless{,-yaw}.json (the built unit)",
+  "actuator_electrical": "hw/stator/frameless_motor.json (round 14b, analysis/frameless_motor.py)",
+  "leg": "cad/leg/leg.json (round 14 leg CAD)",
+  "body_and_mass": "analysis/hexapod_model.py",
+  "battery_electronics_envelopes": "concepts/hexapod_skeleton.py"
+ },
+ "actuator": {
+  "femur_knee": {
+   "motor_od": 160.0,
+   "motor_len": 25.0,
+   "can_od": 172.0,
+   "can_height": 49.7,
+   "mass_kg": 4.0901,
+   "torque_joint_Nm": 259.253322064227,
+   "ratio": 25.0
+  },
+  "yaw": {
+   "motor_od": 130.0,
+   "motor_len": 20.0,
+   "can_od": 142.0,
+   "can_height": 49.7,
+   "mass_kg": 2.7158,
+   "torque_joint_Nm": 157.00022745739284,
+   "ratio": 30.0
+  },
+  "as_quoted_in_08_9_17": {
+   "can_od": 172.0,
+   "can_height": 37.0,
+   "mass_kg": 2.839077871879625,
+   "yaw_can_od": 142.0,
+   "yaw_can_height": 32.0,
+   "yaw_mass_kg": 2.460222684974337,
+   "delta_height_mm": 12.700000000000003,
+   "delta_mass_kg": 1.2510221281203746,
+   "note": "the section sketch's motor + 6 mm of case each way; it omits the reducer's own axial stack, which the CAD includes"
+  },
+  "housing_allowance_mm": {
+   "radial": 6.0,
+   "axial_each_end": 6.0,
+   "note": "from the half-section in analysis/frameless_motor.py; the same file's sweep comment assumes a \u00d8192 can, 20 mm larger"
+  }
+ },
+ "body": {
+  "slab_length": 900.0,
+  "slab_width": 390.0,
+  "slab_height": 220.0,
+  "yaw_axis_spacing": 240.0,
+  "hip_x": [
+   330.0,
+   0.0,
+   -330.0
+  ],
+  "slab_edge_from_yaw_axis": 75.0,
+  "floor_plate_thickness": 6.0,
+  "hip_pod_depth": 96.0,
+  "coxa_plate_bottom": -142.0
+ },
+ "stance": {
+  "name": "sprawl, tibia vertical",
+  "femur_deg": 45.0,
+  "knee_deg": 45.0,
+  "tau_deg": 270.0,
+  "leg_plane_yaw_deg": [
+   30.0,
+   0.0,
+   -30.0
+  ],
+  "yaw_window_deg": 95.0
+ },
+ "overall": {
+  "length_over_feet": 986.7766952966367,
+  "width_over_feet": 893.5533905932735,
+  "length_over_cans": 1115.8181578647234,
+  "width_over_cans": 1065.553390593274,
+  "length_overall": 1115.8181578647234,
+  "width_overall": 1065.553390593274,
+  "widest_point_is_the_knee_cans": true,
+  "longest_point_is_the_knee_cans": true,
+  "height_to_deck": 643.2233047033632,
+  "height_over_knee_cans": 586.0,
+  "height_overall": 643.2233047033632,
+  "hip_height": 323.22330470336317,
+  "floor_plate_height": 423.22330470336317,
+  "ground_clearance": 281.22330470336317,
+  "stance_width": 893.5533905932735,
+  "stance_length": 986.7766952966367,
+  "foot_circle_radius": 326.7766952966368,
+  "human_reference_height": 1829.0
+ },
+ "leg_envelope": {
+  "links": {
+   "coxa": 150.0,
+   "femur": 250.0,
+   "tibia": 500.0
+  },
+  "coxa_drop": 100.0,
+  "femur_window_deg": [
+   -60.0,
+   85.0
+  ],
+  "knee_window_deg": [
+   15.0,
+   145.0
+  ],
+  "tau_window_deg": [
+   200.0,
+   330.0
+  ],
+  "femur_up_limit_by_yaw_deg": {
+   "-90": 5.7,
+   "-45": 37.4,
+   "+0": 75.1,
+   "+45": 37.4,
+   "+90": 5.7
+  },
+  "neutral_foot_radius": 326.7766952966368,
+  "max_reach": 831.7176525489391,
+  "max_reach_pose_deg": {
+   "femur": 5.595238095238088,
+   "tau": 329.9761904761905
+  },
+  "reach_on_ground_line": [
+   -123.26785673734975,
+   793.7297996241182
+  ],
+  "step_up_above_ground": 321.6745350497339,
+  "reach_below_ground": 391.3803952886193,
+  "folded_pose_deg": {
+   "femur": 75.1,
+   "knee": 15.0,
+   "tau": 270.1
+  },
+  "folded_foot_radius": 215.15586247162352,
+  "folded_envelope": [
+   215.15586247162352,
+   499.99923845664387
+  ]
+ },
+ "packing": {
+  "slab_area_mm2": 351000.0,
+  "yaw_cans_area_mm2": 95020.61140047688,
+  "battery_electronics_area_mm2": 72800.0,
+  "free_area_mm2": 183179.3885995231,
+  "free_fraction": 0.5218785999986414,
+  "twelve_fk_cans_area_mm2": 278822.6311914013,
+  "area_shortfall_factor": 1.522128844970537,
+  "fk_cans_placed_one_level": 0,
+  "fk_cans_wanted": 12,
+  "fits_one_level": false,
+  "yaw_can_edge_margin": 4.0,
+  "yaw_can_overhang_if_shared_fk_unit": 11.0,
+  "three_can_coaxial_stack_height": 165.10000000000002,
+  "clearance_between_cans": 3.0
+ },
+ "mass": {
+  "unit_femur_knee": 4.0901,
+  "unit_yaw": 2.7158,
+  "all_units": 65.376,
+  "unit_femur_knee_in_9_17": 2.839077871879625,
+  "unit_yaw_in_9_17": 2.460222684974337,
+  "all_units_in_9_17": 48.83027057240153,
+  "fixed_non_actuator": 29.180000000000007,
+  "robot_closure_14b": 80.28340169383327,
+  "robot_with_sized_yaw": 94.55600000000001,
+  "robot_with_leg_cad_structure_estimate": 119.0288,
+  "leg_structure_cad": 8.0007,
+  "leg_capstan_transmission_deleted": 3.0719000000000003,
+  "leg_structure_estimate_after_delete": 5.2787999999999995,
+  "leg_total_round14_cad": 16.1207,
+  "budget_leg_structure_each": 1.2,
+  "mission_payload": 8.0,
+  "rider_stretch": 100.0,
+  "margins_at_closure_mass": {
+   "femur": 1.2780587431968435,
+   "knee": 1.209695696440208,
+   "yaw": 3.8000016090012223
+  },
+  "margins_at_leg_cad_mass": {
+   "yaw": 1.2934575983888323,
+   "femur": 0.8620342595102017,
+   "knee": 0.8159242597137047
+  }
+ },
+ "energy": {
+  "walking_power_W_at_1ms": 907.5801706165045,
+  "pack_wh": 907.5801706165045,
+  "pack_kg": 5.338706885979438,
+  "walking_power_W_at_leg_cad_mass": 1287.672528,
+  "pack_wh_at_leg_cad_mass": 1287.672528,
+  "pack_kg_at_leg_cad_mass": 7.574544282352941,
+  "packs": 2,
+  "endurance_h": 2.0,
+  "battery_envelope_mm": [
+   140.0,
+   200.0,
+   110.0
+  ],
+  "electronics_envelope_mm": [
+   120.0,
+   140.0,
+   60.0
+  ]
+ },
+ "gaps": [
+  "The built unit is \u00d8172 \u00d7 49.7 and 4.09 kg against the \u00d8172 \u00d7 37, 2.84 kg that 08 \u00a79.17 costed: 12.7 mm taller and 1.25 kg heavier a unit, 16.5 kg over eighteen.",
+  "Twelve \u00d8172 femur/knee cans do not fit inboard in the 900 \u00d7 390 slab on one level: 0 placed of 12, and the area alone is short by 1.5\u00d7.",
+  "Round 14b deletes the capstan, so the femur and knee reductions have to sit on their own joints; the drawings show them there, and no CAD exists for that.",
+  "A \u00d8172 can on the femur pivot leaves 14 mm to the floor plate and is not in the round-14 ROM sweep, which already limits the femur to 75\u00b0 at yaw 0 against the 85\u00b0 window.",
+  "Mass: the 14b closure stands at 80.3 kg on 2.84 kg units and 1.2 kg of leg structure per leg; the CAD says 4.09 kg and 5.3 kg, which puts the robot near 119 kg and the joint margins at femur 0.86 / knee 0.82 / yaw 1.29 \u2014 it does not close.",
+  "The can diameter itself is soft: \u00d8172 from the half-section, \u00d8192 from the sweep's own comment."
+ ]
+}

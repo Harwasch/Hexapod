@@ -159,6 +159,7 @@ C_PEAK = {d: float(sz.DOF_PEAK[d]) / hm.MASS.robot for d in ("yaw", "femur", "kn
 M_FIXED = hm.MASS.robot - hm.MASS.actuators            # 29.2 kg: body, legs, batteries, electronics, margin
 SWING = dict(sz.DOF_SWING)
 V_BUS = 48.0
+RING_WALL, PIN_CLEAR = 4.0, 2.5      # mm, ring wall and pin clearance inside the bore (cycloid.py's convention)
 SUSTAINED_W = 300.0                                   # the robot's whole thermal budget (docs 08 s6)
 ETA_CYC, ETA_CAP = 0.90, 0.97
 
@@ -167,21 +168,49 @@ ETA_CYC, ETA_CAP = 0.90, 0.97
 # inside the can.  The bore has to clear the cycloid's pin ring (r 46 -> D 92)
 # when the motor sits concentric with the reducer instead of stacked above it.
 OD_MAX, BORE_MIN_CONCENTRIC = 170.0, 100.0
-M_REDUCER, M_HOUSING, M_DRUM = 1.25, 0.55, 0.30       # kg, from the CAD mass table (cost_search.py)
+M_DRUM = 0.30                                         # kg, the capstan drum, when there is one
+
+# Round 14c.  The first pass took the reducer at 1.25 kg and the housing at
+# 0.55 kg from the CAD mass table of the Ø192 can with a Ø100 bore -- and then
+# moved the cycloid's pin circle from r 43.5 to r 59.3 and changed the can.
+# Both masses scale with that, so the numbers were wrong: cad/actuator/frameless.py
+# builds the unit at 4.09 kg against the 2.84 kg assumed.  The mass model below
+# is anchored on that CAD point and scales, so the sweep is honest at every size:
+#   reducer + bearings + rotor carrier ~ the disc area, r_pin^2
+#   housing                            ~ the can's surface, OD x height
+#   height                             = the reducer's own axial stack + the motor
+CAD = j_cad = None
+_p = os.path.join(ROOT, "cad", "actuator", "frameless.json")
+if os.path.exists(_p):
+    CAD = json.load(open(_p))
+CAD_R_PIN, CAD_OD, CAD_H = 59.3, 172.0, 49.7
+CAD_ROT = (CAD["mass_by_group_g"]["reducer"] + CAD["mass_by_group_g"]["bearings"] + CAD["mass_by_group_g"]["rotor"]) / 1e3 if CAD else 2.054
+CAD_HOUSE = CAD["mass_by_group_g"]["housing"] / 1e3 if CAD else 0.997
+H_REDUCER = CAD_H - 25.0                              # mm of axial stack the reducer needs whatever the motor is
 
 
-def unit(m_motor, capstan):
-    """Unit mass: the frameless kit replaces the outrunner AND its own case and
-    bearings -- the rotor runs on the cycloid's eccentric shaft, in the can we
-    already have, so nothing is added for a motor housing."""
-    return m_motor + M_REDUCER + M_HOUSING + (M_DRUM if capstan else 0.0)
+def can(od_motor_mm, len_motor_mm):
+    """Housing outside diameter and unit height for a motor of this size."""
+    return od_motor_mm + 12.0, len_motor_mm + H_REDUCER
 
 
-def closure(m, ratio_fk, ratio_yaw, capstan):
+def unit(m_motor, capstan, r_pin_mm=CAD_R_PIN, od_motor_mm=160.0, len_motor_mm=25.0):
+    """Unit mass from the CAD point, scaled. The frameless kit still saves its own
+    case and bearings -- the rotor runs on the cycloid's eccentric shaft -- but the
+    reducer and the can are this design's, not the Ø192 design's."""
+    od_can, h_can = can(od_motor_mm, len_motor_mm)
+    m_rot = CAD_ROT * (r_pin_mm / CAD_R_PIN) ** 2
+    m_house = CAD_HOUSE * (od_can / CAD_OD) * (h_can / CAD_H)
+    return m_motor + m_rot + m_house + (M_DRUM if capstan else 0.0)
+
+
+def closure(m, ratio_fk, ratio_yaw, capstan, m_fixed=None):
     """Fixed point: robot mass carries 12 femur/knee units and 6 yaw units."""
     eta_fk = ETA_CYC * (ETA_CAP if capstan else 1.0)
-    m_fk, m_yaw = unit(m["mass_kg"], capstan), unit(m["mass_kg"], False)
-    m_robot = M_FIXED + 12 * m_fk + 6 * m_yaw
+    r_pin = max(20.0, m["bore_mm"] / 2 - RING_WALL - PIN_CLEAR)
+    kw = dict(r_pin_mm=r_pin, od_motor_mm=m["od_mm"], len_motor_mm=m["len_mm"])
+    m_fk, m_yaw = unit(m["mass_kg"], capstan, **kw), unit(m["mass_kg"], False, **kw)
+    m_robot = (M_FIXED if m_fixed is None else m_fixed) + 12 * m_fk + 6 * m_yaw
     t_fk = m["T_cont"] * ratio_fk * eta_fk
     t_yaw = m["T_cont"] * ratio_yaw * ETA_CYC
     need = {d: C[d] * m_robot for d in C}
@@ -195,6 +224,7 @@ def closure(m, ratio_fk, ratio_yaw, capstan):
     kt_max_yaw = 1.5 * math.sqrt(2) * (V_BUS / math.sqrt(3)) / (rpm_yaw * 2 * math.pi / 60) if rpm_yaw else float("inf")
     return dict(m_fk=m_fk, m_yaw=m_yaw, m_robot=m_robot, T_joint_fk=t_fk, T_joint_yaw=t_yaw, need=need,
                 margin=margin, closes=min(margin.values()) >= 1.0, rpm_fk=rpm_fk, rpm_yaw=rpm_yaw,
+                can_od_mm=can(m["od_mm"], m["len_mm"])[0], can_h_mm=can(m["od_mm"], m["len_mm"])[1],
                 kt_max_rms_yaw=kt_max_yaw, I_yaw=m["T_cont"] / kt_max_yaw,
                 T_at_body_budget=m["T_cont"] * math.sqrt(min(1.0, (SUSTAINED_W / 18) / m["P_cu"])),
                 robot_supported=min(t_fk / C["femur"], t_fk / C["knee"], t_yaw / C["yaw"]),
@@ -208,7 +238,6 @@ def closure(m, ratio_fk, ratio_yaw, capstan):
 # the cycloid goes, so the pin circle moves out from r 43.5 (in the Ø100 bore of
 # the PCB stator) to whatever the new bore allows, and both the pin force and the
 # eccentric-bearing load fall with the radius.
-RING_WALL, PIN_CLEAR = 4.0, 2.5        # mm, ring wall and pin clearance inside the bore (cycloid.py's own convention)
 HK2512_C0R, HK3012_C0R = 16300.0, 17300.0     # N, static radial ratings from the filed datasheets
 
 
@@ -263,6 +292,17 @@ def rank(r):
 
 
 PICK = sorted(robust, key=rank)[0] if robust else (sorted(closing, key=rank)[0] if closing else None)
+# Round 14c.  Once the unit mass is taken from the CAD the sweep would re-pick a
+# slightly different size, but the CAD, the general-arrangement drawings and the
+# reducer analysis are all of the Ø160 x 25 / 25-lobe design.  Reporting a
+# different motor than the one that has been drawn would be worse than useless,
+# and the re-pick is moot anyway until the leg mass is known (see the ladder
+# below).  So pin the reported design to the built one when its CAD exists.
+if CAD:
+    _want = (CAD["motor"]["od_mm"], CAD["motor"]["length_mm"], CAD["reducer"]["lobes"])
+    _match = [r for r in rows if (r["motor"]["od_mm"], r["motor"]["len_mm"], LOBES[r["ratio_name"]]) == _want and not r["capstan"]]
+    if _match:
+        PICK = _match[0]
 
 # ------------------------------------------------- the yaw motor, sized on its own
 YAW = None
@@ -280,6 +320,81 @@ if PICK:
                 break
         if YAW:
             break
+
+# ------------------------------------------------------------- the mass ladder
+# Round 14c.  Three of the numbers behind the closure were assumptions standing
+# in for measurements, and two have since been measured.  This is what the
+# margin does as each is replaced -- it is the honest state of the design.
+LEG_STRUCT_MODEL = hm.MASS.legs / 6            # kg per leg, what hexapod_model has always carried
+LEG_STRUCT_CAD = None
+_lp = os.path.join(ROOT, "cad", "leg", "leg.json")
+if os.path.exists(_lp):
+    LEG_STRUCT_CAD = json.load(open(_lp)).get("leg_structure_g", 0) / 1e3
+
+
+def margin_at(m, ratio_fk, ratio_yaw, capstan, m_unit_fk, m_unit_yaw, leg_struct_kg):
+    """Worst joint margin with a stated unit mass and a stated per-leg structure."""
+    m_fixed = M_FIXED - hm.MASS.legs + 6 * leg_struct_kg
+    m_robot = m_fixed + 12 * m_unit_fk + 6 * m_unit_yaw
+    eta_fk = ETA_CYC * (ETA_CAP if capstan else 1.0)
+    t_fk = m["T_cont"] * ratio_fk * eta_fk
+    t_yaw = m["T_cont"] * ratio_yaw * ETA_CYC
+    marg = {"femur": t_fk / (C["femur"] * m_robot), "knee": t_fk / (C["knee"] * m_robot),
+            "yaw": t_yaw / (C["yaw"] * m_robot)}
+    return m_robot, marg
+
+
+LADDER = []
+if PICK:
+    m, rfk, ryw, cap = PICK["motor"], PICK["ratio_fk"], PICK["ratio_yaw"], PICK["capstan"]
+    m_cad = (CAD["total_g"] / 1e3) if CAD else None
+    steps = [("as published in §9.17: reducer and housing borrowed from the Ø192 design",
+              2.839, 2.839, LEG_STRUCT_MODEL, "assumed"),
+             ("with the unit as actually built in CAD", m_cad, (m_cad - 0.4) if m_cad else None, LEG_STRUCT_MODEL, "measured unit"),
+             ("and with the leg structure the round-14 leg CAD measured", m_cad, (m_cad - 0.4) if m_cad else None, LEG_STRUCT_CAD, "measured leg")]
+    for label, u_fk, u_yaw, ls, kind in steps:
+        if u_fk is None or ls is None:
+            continue
+        mr, mg = margin_at(m, rfk, ryw, cap, u_fk, u_yaw, ls)
+        LADDER.append(dict(label=label, kind=kind, m_unit_fk=u_fk, leg_struct_kg=ls, m_robot=mr,
+                           margin=mg, worst=min(mg.values()), closes=min(mg.values()) >= 1.0))
+    # and the break-even: how heavy may a leg's structure be before the design stops closing?
+    if m_cad:
+        lo, hi = 0.0, 30.0
+        for _ in range(60):
+            mid = 0.5 * (lo + hi)
+            _, mg = margin_at(m, rfk, ryw, cap, m_cad, m_cad - 0.4, mid)
+            if min(mg.values()) >= 1.0:
+                lo = mid
+            else:
+                hi = mid
+        LEG_STRUCT_BREAKEVEN = lo
+    else:
+        LEG_STRUCT_BREAKEVEN = None
+
+# ---------------- what would close, on the leg structure we have measured
+# The constructive question. Re-sweep with the CAD-anchored unit mass AND the
+# leg structure the round-14 leg CAD actually weighed, and see what size of
+# frameless motor closes -- if any does inside the can.
+CLOSERS = []
+if CAD and LEG_STRUCT_CAD:
+    m_fixed_measured = M_FIXED - hm.MASS.legs + 6 * LEG_STRUCT_CAD
+    for od in ODS:
+        for L in LENS:
+            mm_ = motor(od, L)
+            if mm_["bore_mm"] < BORE_MIN_CONCENTRIC:
+                continue
+            for name, r_fk, r_yaw, cap in RATIOS:
+                if cap:
+                    continue                      # the capstan is gone in this family
+                c = closure(mm_, r_fk, r_yaw, cap, m_fixed=m_fixed_measured)
+                rd = reducer(mm_, r_fk, cap, c["m_robot"], LOBES[name])
+                if min(c["margin"].values()) >= 1 / MARGIN_MIN and rd["hertz_ok"] and rd["hk2512_static_margin"] >= ECC_MARGIN_MIN:
+                    CLOSERS.append(dict(od_mm=od, len_mm=L, lobes=LOBES[name], ratio=r_fk, T_cont=mm_["T_cont"],
+                                        m_unit=c["m_fk"], m_robot=c["m_robot"], worst=min(c["margin"].values()),
+                                        can_od=c["can_od_mm"], can_h=c["can_h_mm"], P_cu=mm_["P_cu"],
+                                        ecc_margin=rd["hk2512_static_margin"], pitch=rd["pitch_mm"]))
+    CLOSERS.sort(key=lambda r: (r["lobes"], r["m_robot"], r["od_mm"]))
 
 # --------------------------------------------- the body's own thermal budget
 # 18 units at their continuous rating is not the load the body sees.  With three
@@ -340,6 +455,9 @@ out = dict(datasheet=DS, checks=CHECKS, inferred=dict(rho_bracket=[RHO_LO, RHO_H
                        for name, r_fk, r_yaw, cap in RATIOS},
            stock_motor=motor(DS["od_mm"], DS["len_mm"]),
            pick=PICK, yaw=YAW, body=BODY, breakeven_motor_price_usd=BREAKEVEN, unit_8318_usd=UNIT_8318,
+           closers_on_measured_leg=CLOSERS[:12], n_closers=len(CLOSERS), mass_ladder=LADDER, leg_struct=dict(model_kg=LEG_STRUCT_MODEL, cad_kg=LEG_STRUCT_CAD,
+                                               breakeven_kg=LEG_STRUCT_BREAKEVEN if PICK else None),
+           cad_unit_kg=(CAD["total_g"] / 1e3) if CAD else None,
            ecc_margin_min=ECC_MARGIN_MIN, driver_limit=(dict(
                I_max=I_DRIVER_MAX, T_motor=I_DRIVER_MAX * PICK["kt_max_rms_at_speed"],
                T_joint=I_DRIVER_MAX * PICK["kt_max_rms_at_speed"] * PICK["ratio_fk"] * ETA_CYC * (ETA_CAP if PICK["capstan"] else 1.0),
@@ -463,6 +581,41 @@ if PICK:
     ax.grid(axis="y", alpha=0.3); ax.set_ylim(0, 1080)
     fig.savefig(os.path.join(FIG, "frameless-unit.png"), dpi=110)
 
+# ---- third figure: the mass ladder, which is the real state of the design ----
+if PICK and LADDER:
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5.2), gridspec_kw=dict(width_ratios=(1.05, 1.0)))
+    ax = axes[0]
+    y = np.arange(len(LADDER))[::-1]
+    cols = ["#0f9b8e" if L["closes"] else "#b03a2e" for L in LADDER]
+    ax.barh(y, [L["worst"] for L in LADDER], color=cols, height=0.5)
+    ax.axvline(1.0, color="#222", lw=1.6)
+    ax.text(1.02, len(LADDER) - 0.35, "1.00 — closes", fontsize=8.5)
+    for yy, L in zip(y, LADDER):
+        ax.text(0.02, yy + 0.34, L["label"], fontsize=8.5, va="bottom")
+        ax.text(L["worst"] + 0.02, yy, f"{L['worst']:.2f}   robot {L['m_robot']:.0f} kg", va="center", fontsize=8.5)
+    ax.set_yticks([]); ax.set_xlim(0, 1.62); ax.set_ylim(-0.6, len(LADDER) - 0.05)
+    ax.set_xlabel("worst joint margin"); ax.grid(axis="x", alpha=0.3)
+    ax.set_title("What the margin does as assumptions are replaced by measurements", fontsize=10)
+
+    ax = axes[1]
+    ls = np.linspace(0, 10, 120)
+    m_cad = CAD["total_g"] / 1e3
+    worst = [min(margin_at(PICK["motor"], PICK["ratio_fk"], PICK["ratio_yaw"], PICK["capstan"], m_cad, m_cad - 0.4, x)[1].values()) for x in ls]
+    ax.plot(ls, worst, color="#0f9b8e", lw=2.2)
+    ax.axhline(1.0, color="#222", lw=1.4)
+    ax.fill_between(ls, 0, worst, where=np.array(worst) >= 1, color="#0f9b8e", alpha=0.12)
+    for x, lab, col in ((LEG_STRUCT_MODEL, f"what the mass budget has always\ncarried: {LEG_STRUCT_MODEL:.1f} kg a leg", "#999"),
+                        (LEG_STRUCT_BREAKEVEN, f"break-even: {LEG_STRUCT_BREAKEVEN:.1f} kg", "#2a78d6"),
+                        (LEG_STRUCT_CAD, f"what the only leg we have\nbuilt weighs: {LEG_STRUCT_CAD:.1f} kg", "#b03a2e")):
+        ax.axvline(x, color=col, ls="--", lw=1.2)
+        ax.annotate(lab, (x, 1.45 if x == LEG_STRUCT_BREAKEVEN else 1.62), (4, 0), textcoords="offset points",
+                    fontsize=8, color=col, va="top")
+    ax.set_xlabel("structure and transmission mass of one leg (kg), actuators excluded")
+    ax.set_ylabel("worst joint margin"); ax.set_ylim(0, 1.75); ax.set_xlim(0, 10); ax.grid(alpha=0.3)
+    ax.set_title("The whole design now turns on one number nobody has designed to:\nhow heavy a leg is allowed to be", fontsize=10)
+    fig.tight_layout()
+    fig.savefig(os.path.join(FIG, "frameless-mass-ladder.png"), dpi=110)
+
 if __name__ == "__main__":
     print(f"{DS['part']}: datasheet checks")
     print(f"  Kt from Ke      {CHECKS['kt_from_ke']*1e3:7.2f} mN·m/A vs {DS['kt_per_A_peak']*1e3:.1f} quoted   ({CHECKS['kt_err']*100:+.1f} %)")
@@ -513,4 +666,18 @@ if __name__ == "__main__":
         print(f"  peak is driver-limited, not motor-limited: {I_DRIVER_MAX:.0f} A gives {dl['T_motor']:.1f} N·m at the motor -> "
               f"{dl['T_joint']:.0f} N·m at the joint against {dl['T_joint_needed']:.0f} needed (margin {dl['T_joint']/dl['T_joint_needed']:.2f}); "
               f"the motor itself could make {PICK['motor']['T_peak']:.0f} N·m, so the drive must current-limit to protect the reducer")
+        print("  MASS LADDER — what the margin does as assumptions are replaced by measurements:")
+        for L in LADDER:
+            print(f"    {L['label'][:66]:66s} unit {L['m_unit_fk']:.2f} kg, leg struct {L['leg_struct_kg']:.1f} kg -> "
+                  f"robot {L['m_robot']:5.1f} kg, worst margin {L['worst']:.2f}  {'closes' if L['closes'] else '*** DOES NOT CLOSE ***'}")
+        if LEG_STRUCT_BREAKEVEN is not None:
+            print(f"    the design stops closing once a leg's structure passes {LEG_STRUCT_BREAKEVEN:.1f} kg "
+                  f"(the model carries {LEG_STRUCT_MODEL:.1f}, the round-14 leg CAD measured {LEG_STRUCT_CAD:.1f})")
+        if CLOSERS:
+            print(f"  ON THE LEG WE MEASURED ({LEG_STRUCT_CAD:.1f} kg of structure a leg), {len(CLOSERS)} sizes still close. The smallest, by lobe count then mass:")
+            for c in CLOSERS[:4]:
+                print(f"    Ø{c['od_mm']:.0f} x {c['len_mm']:.0f} mm, {c['lobes']}-lobe {c['ratio']:.0f}:1 -> {c['T_cont']:5.2f} N·m, unit {c['m_unit']:.2f} kg, "
+                      f"robot {c['m_robot']:5.1f} kg, margin {c['worst']:.2f}, can Ø{c['can_od']:.0f} x {c['can_h']:.0f} mm, {c['P_cu']:.0f} W copper")
+        elif CAD:
+            print(f"  ON THE LEG WE MEASURED: nothing inside the Ø{OD_MAX:.0f} limit closes. The leg has to get lighter.")
         print(f"  price: the datasheet has none. The frameless unit beats the $ {UNIT_8318:.0f} 8318 unit while the kit costs under $ {BREAKEVEN:.0f}")

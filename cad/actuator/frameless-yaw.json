@@ -1,0 +1,297 @@
+{
+ "variant": "yaw",
+ "source": "hw/stator/frameless_motor.json ['yaw']; analysis/cycloid.py; docs/design/08-actuator-design.md \u00a79.17",
+ "modelled_vs_assumed": {
+  "modelled": [
+   "housing (floor plate, wall tube, bearing carrier, pin cage, cover)",
+   "reducer (cycloid discs from the corrected profile, ring pins, output pins, flange)",
+   "eccentric shaft with its journals",
+   "rotor carrier",
+   "bearing envelopes"
+  ],
+  "assumed": [
+   "frameless kit internal geometry: no teeth, slots, coils or magnet blocks \u2014 the datasheet gives none, so the stator is one plain annulus and the rotor one plain ring",
+   "INNER ROTOR (the datasheet does not say; chosen so the loss-producing stator conducts straight into the housing wall)",
+   "the 14.2 mm radial build and the 1039 g / 660 g active mass are analysis/frameless_motor.py's inference from the datasheet mass, not measured",
+   "6905 and 6802 masses are modelled steel rings \u00d7 0.8 (no datasheet filed)"
+  ]
+ },
+ "motor": {
+  "od_mm": 130.0,
+  "length_mm": 20.0,
+  "bore_mm": 101.6034309985339,
+  "airgap_dia_mm": 115.80171549926695,
+  "radial_build_mm": 14.198,
+  "mechanical_airgap_mm": 0.5,
+  "stator_radii_mm": [
+   58.151,
+   65.0
+  ],
+  "rotor_radii_mm": [
+   50.802,
+   57.651
+  ],
+  "active_mass_g": 660.2,
+  "T_cont_Nm": 5.815,
+  "T_peak_Nm": 18.353
+ },
+ "reducer": {
+  "lobes": 30,
+  "ring_pins": 31,
+  "ring_pin_dia_mm": 6.0,
+  "pin_circle_radius_mm": 44.302,
+  "pitch_mm": 8.979,
+  "eccentricity_mm": 1.1433,
+  "discs": 2,
+  "disc_thickness_mm": 8.0,
+  "disc_pitch_mm": 12.0,
+  "output_pins": 8,
+  "output_pin_dia_mm": 10.0,
+  "output_pin_circle_mm": 27,
+  "disc_root_r_mm": 40.158,
+  "disc_tip_r_mm": 42.445,
+  "disc_swept_r_mm": 43.588,
+  "T_cont_Nm": 91.1,
+  "T_peak_Nm": 97.1
+ },
+ "envelope": {
+  "od_mm": 142.0,
+  "bore_mm": 101.6034309985339,
+  "height_mm": 49.7,
+  "bbox_mm": [
+   42.0,
+   42.0,
+   45.7
+  ],
+  "height_claimed_in_9_17_mm": 32.0,
+  "height_note": "\u00a79.17 quotes 32 mm for this unit, which is the motor stack plus 6 mm of case each end. It does not include the reducer's own axial stack: the output crossed roller (13), the output flange (4), two 8 mm discs on the 12 mm HK2512 cup pitch (24), and the rotor carrier plus cover (10.5). The modelled unit is 49.7 mm."
+ },
+ "axial_stack_mm": {
+  "mounting/output face": 0.0,
+  "floor plate": [
+   0.0,
+   6.0
+  ],
+  "output crossed roller RB5013": [
+   0.0,
+   13
+  ],
+  "6905 shaft bearing": [
+   4.0,
+   13
+  ],
+  "output flange plate": [
+   13,
+   17.0
+  ],
+  "bearing carrier": [
+   6.0,
+   15.0
+  ],
+  "pin cage / ring pins": [
+   15.0,
+   39.2
+  ],
+  "HK2512 cups": [
+   [
+    15.2,
+    27.2
+   ],
+   [
+    27.2,
+    39.2
+   ]
+  ],
+  "cycloid discs": [
+   [
+    17.2,
+    25.2
+   ],
+   [
+    29.2,
+    37.2
+   ]
+  ],
+  "output pins": [
+   13,
+   38.0
+  ],
+  "stator annulus": [
+   19.2,
+   39.2
+  ],
+  "rotor ring": [
+   19.2,
+   39.2
+  ],
+  "rotor carrier skirt": [
+   19.2,
+   39.7
+  ],
+  "rotor carrier disc": [
+   39.7,
+   44.2
+  ],
+  "wall tube": [
+   6.0,
+   44.7
+  ],
+  "cover plate": [
+   44.7,
+   46.7
+  ],
+  "6802 / cover boss (top of unit)": [
+   44.7,
+   49.7
+  ]
+ },
+ "mass_g": {
+  "floor_plate": 172.2,
+  "wall_tube": 256.5,
+  "bearing_carrier": 57.4,
+  "pin_cage": 152.3,
+  "cover": 84.2,
+  "stator_annulus": 350.3,
+  "rotor_ring": 309.9,
+  "rotor_carrier": 122.1,
+  "shaft": 161.9,
+  "cycloid_discs": 341.9,
+  "ring_pins": 166.5,
+  "output_flange": 48.1,
+  "output_pins": 123.3,
+  "output_bearing": 270.0,
+  "eccentric_bearings": 40.0,
+  "shaft_bearings": 59.2
+ },
+ "mass_by_group_g": {
+  "housing": 722.5,
+  "stator": 350.3,
+  "magnets": 309.9,
+  "rotor": 284.0,
+  "reducer": 679.8,
+  "bearings": 369.2
+ },
+ "total_g": 2715.8,
+ "mass_assumed_in_closure_kg": 2.46,
+ "mass_delta_g": 255.5,
+ "mass_note": "\u00a79.17 costed the unit at 2.46 kg = 0.660 kg of active motor + 1.25 kg reducer + 0.55 kg housing (analysis/frameless_motor.py M_REDUCER / M_HOUSING, themselves the CAD mass table of the \u00d8100-bore / \u00d8192 design in cost_search.py). Neither fixed number survives this design: the cycloid pin circle moves from r 43.5 out to r 44.3 so the two discs alone weigh 342 g, and the housing is a \u00d8142 can. This CAD gives 2.72 kg, +256 g.",
+ "mass_reducer_g": 1049.1,
+ "mass_housing_g": 722.5,
+ "checks": {
+  "cycloid_mesh_min_gap_mm": 3.0,
+  "cycloid_mesh_ok": true,
+  "note_cycloid_profile": "analysis/cycloid.py::profile() offsets the epitrochoid OUTWARD, which makes a disc larger than its own pin circle (it cannot mesh, and the discs in cad/actuator/actuator.py interfere with the pin cage by ~3 mm). This model offsets INWARD; the mesh gap above equals the pin radius exactly.",
+  "radial_budget_mm": {
+   "motor_bore_radius": 50.802,
+   "ring_pin_circle": 44.302,
+   "ring_pin_outer_surface": 47.302,
+   "cage_bore (must clear the disc lobe tips)": 43.888,
+   "disc_swept_outer_radius": 43.588,
+   "disc_to_cage_bore_clearance": 0.3,
+   "cage_outer": 48.502,
+   "steel_behind_each_ring_pin": 1.2,
+   "pin_groove_depth (of \u00d86)": 3.413,
+   "pin_groove_fraction_of_diameter": 0.569,
+   "cage_to_rotor_skirt_clearance": 0.6,
+   "rotor_carrier_skirt_thickness": 1.7,
+   "spare_to_motor_bore": 0.0
+  },
+  "airgap_mm": 0.5,
+  "disc_root_to_output_hole_web_mm": 5.872,
+  "disc_root_to_lightening_hole_web_mm": 2.5,
+  "disc_bore_to_lightening_hole_web_mm": "no inner lightening ring: no room between the needle cup and the output holes",
+  "flange_plate_to_disc_clearance_mm": 0.2,
+  "flange_plate_bore_to_needle_cup_clearance_mm": 0.5,
+  "flange_plate_to_bearing_carrier_clearance_mm": 5.0,
+  "rotor_carrier_to_cage_top_clearance_mm": 0.5,
+  "cover_to_rotor_carrier_clearance_mm": 0.5,
+  "output_bearing": {
+   "fitted": "RB5013",
+   "d_D_B": [
+    50,
+    80,
+    13
+   ],
+   "dp_mm": 64.0,
+   "C0_kN": 20.9,
+   "peak_joint_moment_Nm": 97.1,
+   "P0_from_moment_N": 3034.0,
+   "static_safety_factor_fs": 6.89,
+   "source": "THK 382-5E p.19, docs/reference/thk-cross-roller-ring-382-5E.pdf; P0 = 2M/dp with Fr = Fa = 0, fs = C0/P0 (THK p.6)",
+   "alternates_fs": {
+    "RB5013": 6.89,
+    "RB6013": 9.26,
+    "RB7013": 11.98,
+    "RB8016": 21.25
+   },
+   "fs_target": 2.5,
+   "fs_limits_THK": "1-2 normal load, 2-3 impact load (THK 382-5E p.6)",
+   "note": "The BOM's RB5013 was picked in round 8, when the capstan carried the joint moment and the bearing saw rope pull. With the capstan deleted the output bearing carries the whole joint moment: the RB5013 then gives fs 6.89, which is adequate, and it is kept."
+  },
+  "eccentric_bearing": {
+   "fitted": "HK2512",
+   "F_ecc_peak_per_disc_N": 2511.0,
+   "C0r_N": 16300.0,
+   "static_margin": 6.49,
+   "source": "NTN sheet, docs/reference/ntn-hk2512.pdf"
+  },
+  "cycloid_loads": {
+   "ring_pin_peak_N_per_disc": 141.0,
+   "hertz_peak_MPa": 377.0,
+   "hertz_cont_MPa": 365.0,
+   "hertz_allowable_MPa": 1400.0,
+   "output_pin_peak_N_per_disc_at_r27": 899.0,
+   "output_pin_peak_N_per_disc_at_cycloid_py_r26": 934.0,
+   "note": "analysis/cycloid.py fixes the output-pin circle at r 26, sized for the \u00d8100 PCB-stator bore. This bore is \u00d8101.6, so the circle moves out to r 27 and the peak output-pin force falls 4%."
+  },
+  "solid_interferences": [],
+  "solid_interference_pairs_skipped": [
+   "bearing_carrier+output_bearing",
+   "bearing_carrier+pin_cage",
+   "cover+shaft_bearings",
+   "cycloid_discs+eccentric_bearings",
+   "cycloid_discs+output_pins",
+   "cycloid_discs+ring_pins",
+   "floor_plate+output_bearing",
+   "floor_plate+wall_tube",
+   "output_flange+output_bearing",
+   "output_flange+output_pins",
+   "output_flange+shaft_bearings",
+   "pin_cage+ring_pins",
+   "rotor_carrier+rotor_ring",
+   "rotor_carrier+shaft",
+   "shaft+eccentric_bearings",
+   "shaft+shaft_bearings",
+   "wall_tube+cover"
+  ]
+ },
+ "densities_g_per_mm3": {
+  "aluminium_6061": 0.0027,
+  "steel": 0.00785,
+  "stator_effective": 0.006611,
+  "rotor_ring_effective": 0.006639,
+  "inference_rho_eff": 0.006391
+ },
+ "files": {
+  "step": "build/cad/frameless-yaw/actuator-frameless-yaw.step",
+  "stl": [
+   "build/cad/frameless-yaw/housing.stl",
+   "build/cad/frameless-yaw/stator.stl",
+   "build/cad/frameless-yaw/magnets.stl",
+   "build/cad/frameless-yaw/rotor.stl",
+   "build/cad/frameless-yaw/reducer.stl",
+   "build/cad/frameless-yaw/bearings.stl",
+   "build/cad/frameless-yaw/housing-cut.stl",
+   "build/cad/frameless-yaw/stator-cut.stl",
+   "build/cad/frameless-yaw/magnets-cut.stl",
+   "build/cad/frameless-yaw/rotor-cut.stl",
+   "build/cad/frameless-yaw/reducer-cut.stl",
+   "build/cad/frameless-yaw/bearings-cut.stl"
+  ],
+  "renders": [
+   "docs/design/actuator/frameless-cad-yaw-section.png",
+   "docs/design/actuator/frameless-cad-yaw-iso.png",
+   "docs/design/actuator/frameless-cad-yaw-exploded.png"
+  ]
+ }
+}

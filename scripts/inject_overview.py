@@ -71,20 +71,24 @@ def tile(k, v, sub=""):
     return f'<div class="ov-tile"><span class="ov-k">{k}</span><span class="ov-v">{v}</span><span class="ov-s">{sub}</span></div>'
 
 
-leg_kg = (LEG.get("mass", {}) or {}).get("leg_total_g", LEGC.get("leg_total_g"))
-leg_kg = leg_kg / 1000 if leg_kg else None
-robot_kg = pick["m_robot"] if pick else None
+# The tiles must show the CORRECTED state, not the optimistic pick: the last
+# rung of the mass ladder is the one with every measured number in it.
+ladder = (FM.get("mass_ladder") or []) if FM else []
+last = ladder[-1] if ladder else None
+env = FCAD.get("envelope", {})
+robot_kg = last["m_robot"] if last else (pick["m_robot"] if pick else None)
+worst = last["worst"] if last else (min(pick["margin"].values()) if pick else None)
 tiles = "".join([
-    tile("Robot mass", f'{num(robot_kg, "{:.0f}")} kg', "at the design's own fixed point"),
-    tile("Legs", "6 × 3 joints", "18 actuators, all in the body"),
-    tile("Body", f'{num(ARR.get("body_length_mm"), "{:.0f}") if ARR.get("body_length_mm") else "900"} × '
-                 f'{num(ARR.get("body_width_mm"), "{:.0f}") if ARR.get("body_width_mm") else "—"} mm', "slab, 220 mm deep"),
+    tile("Robot mass", f'{num(robot_kg, "{:.0f}")} kg', "fixed point, on the measured unit and leg"),
+    tile("Legs", "6 × 3 joints", "18 actuators — see the open question on where they sit"),
+    tile("Body", f'{num((ARR.get("body") or {}).get("slab_length") or 900)} × {num((ARR.get("body") or {}).get("slab_width") or 390)} mm',
+         f'slab, {num((ARR.get("body") or {}).get("slab_height") or 220)} mm deep'),
     tile("Reach", "150 + 250 + 500 mm", "coxa, femur, tibia"),
-    tile("Actuator", f'Ø{num(FCAD.get("od_mm") or 172)} × {num(FCAD.get("height_mm") or (mot.get("len_mm", 25) + 12))} mm',
-         f'{num(FCAD.get("total_g", 0) / 1000 if FCAD.get("total_g") else pick["m_fk"] if pick else None, "{:.2f}")} kg each'),
+    tile("Actuator", f'Ø{num(env.get("od_mm") or 172)} × {num(env.get("height_mm") or 50)} mm',
+         f'{num((FCAD.get("total_g") or 0) / 1000 or None, "{:.2f}")} kg each, as built in CAD'),
     tile("Motor", f'{num(mot.get("T_cont"), "{:.1f}")} N·m', f'Ø{num(mot.get("od_mm"))} × {num(mot.get("len_mm"))} frameless, {num(mot.get("mass_kg", 0)*1000)} g'),
     tile("Joint torque", f'{num(pick["T_joint_fk"] if pick else None)} N·m', f'through a {num(red.get("lobes"))}-lobe cycloid, {num(pick["ratio_fk"] if pick else None)}:1'),
-    tile("Closure", f'{num(min(pick["margin"].values()) if pick else None, "{:.2f}")}×', "worst joint margin; ≥ 1 closes"),
+    tile("Closure", f'{num(worst, "{:.2f}")}×', "worst joint margin — below 1, it does not close"),
 ])
 
 # ------------------------------------------------------------ where it stands
@@ -95,15 +99,20 @@ DECIDED = [
     ("Yaw swing lowered to 6.4 rad/s to suit the 48 V bus", "signed, round 6"),
     ("2 oz JLCPCB boards; push the unit cost further", "signed, round 8"),
 ]
+_bk = (FM.get("leg_struct") or {}).get("breakeven_kg") if FM else None
+_cadleg = (FM.get("leg_struct") or {}).get("cad_kg") if FM else None
 OPEN = [
-    ("Motor family", "The Wheemo frameless kit, scaled to Ø160 × 25, is the first option that closes the "
-                     "requirement and deletes the capstan. It needs a price: it undercuts the $423 outrunner unit "
-                     f"only below ${num(FM.get('breakeven_motor_price_usd') if FM else None)} a kit."),
-    ("The winding temperature behind the datasheet's 96.7 mΩ", "If that is a cold value, every torque here falls 15 %. "
-                                                               "The design was given a 1.18 margin to survive it, but the number should be asked for."),
-    ("The leg is 16 kg against the 9 kg assumed", "On the outrunner units the robot does not close at 119 kg. The frameless "
-                                                  "unit changes the actuator, not the leg structure; the leg has to be rebuilt on it."),
-    ("The continuous load case", "30° slope at dyn 1.5 all day is still the largest single driver of motor size."),
+    ("How heavy a leg is allowed to be — the number everything now turns on",
+     f"With the actuator as actually built ({num((FM.get('cad_unit_kg') or 0), '{:.2f}')} kg), the design stops closing once a leg's "
+     f"structure passes {num(_bk, '{:.1f}')} kg. The budget has always carried 1.2 kg, which was a round-1 estimate; the only leg "
+     f"anyone has built weighs {num(_cadleg, '{:.1f}')} kg. Until a leg is designed for this actuator and weighed, no margin here can be trusted."),
+    ("Deleting the capstan moved the motors out of the body",
+     "The capstan was the only way a motor in the body drove a joint out on the leg. Without it the femur and knee units sit on "
+     "their own joints — which breaks the founding premise, and makes the robot wider across its knee cans than across its feet."),
+    ("Motor family", "The Wheemo frameless kit is the best motor found for this joint and it still needs a price: it undercuts the "
+                     f"$423 outrunner unit only below ${num(FM.get('breakeven_motor_price_usd') if FM else None)} a kit."),
+    ("The winding temperature behind the datasheet's 96.7 mΩ", "If that is a cold value, every torque falls 15 %. "
+                                                               "A 1.18 design margin covers it, but the number should be asked for."),
 ]
 decided = "".join(f'<li><span class="ov-ok">✓</span><span>{html.escape(a)}<em>{html.escape(b)}</em></span></li>' for a, b in DECIDED)
 opened = "".join(f'<li><span class="ov-q">?</span><span><strong>{html.escape(a)}</strong><em>{html.escape(b)}</em></span></li>' for a, b in OPEN)
@@ -136,6 +145,9 @@ ACTUATOR = [
      "<strong>Why the capstan can go.</strong> Deleting it puts four times the torque on the cycloid; moving the pin circle out "
      "into the motor's bore takes it back off."),
 ]
+ladder_fig = img("docs/design/actuator/frameless-mass-ladder.png", "The mass ladder",
+             "<strong>The real state of the design.</strong> What the closure margin does as each assumed number is replaced "
+             "by a measured one, and the leg mass the whole thing now turns on.")
 spatial_figs = "".join(img(p, a, c) for p, a, c in SPATIAL)
 act_figs = "".join(img(p, a, c) for p, a, c in ACTUATOR)
 if not spatial_figs:
@@ -146,13 +158,22 @@ if not spatial_figs:
 overview = f"""
 <section class="panel" role="tabpanel" id="p-overview" aria-labelledby="t-overview">
 <div class="phase-head"><div><span class="eyebrow">Start here</span>
-<h2>The machine, at a glance</h2></div><span class="pill t-wait">1 decision open</span></div>
+<h2>The machine, at a glance</h2></div><span class="pill t-stop">Does not close as drawn</span></div>
 <p class="summary">A large-dog-sized outdoor hexapod with all eighteen motors in the body and power carried out to
 the joints. This tab is the orientation: how big it is, what it weighs, how it is put together and where the
 design stands. Every other tab is the working detail behind one stage. <strong>Tap any drawing to open it
 full-screen and zoom.</strong></p>
 
 <div class="ov-tiles">{tiles}</div>
+
+<div class="ov-alert"><h4>Read this first — the design does not close</h4><p>The actuator study costed the unit at
+2.84 kg using a reducer and housing carried over from an earlier, smaller design. Built in CAD it is
+<strong>{num((FM.get('cad_unit_kg') or 0), '{:.2f}')} kg</strong>. Re-solved on that the worst joint margin is
+<strong>{num(FM['mass_ladder'][1]['worst'] if FM and len(FM.get('mass_ladder',[]))>1 else None, '{:.2f}')}</strong>, and with the structure
+mass of the only leg anyone has actually built it is <strong>{num(FM['mass_ladder'][2]['worst'] if FM and len(FM.get('mass_ladder',[]))>2 else None, '{:.2f}')}</strong>.
+A bigger motor does not rescue it: nothing inside the Ø170 the housing allows closes on that leg. <strong>The leg has to get
+lighter before any motor choice can be validated.</strong> The motor work stands; the closure does not. §9.18 has the correction.</p></div>
+{ladder_fig}
 
 <h3 class="ov-h">The machine</h3>
 <div class="ov-grid">{spatial_figs}</div>
@@ -191,6 +212,9 @@ CSS = """
 .ov-fig img{display:block;width:100%;height:auto}
 .ov-fig figcaption{font-size:13px;color:var(--ink-2);line-height:1.45;padding-top:7px}
 .ov-note{font-size:12px;color:var(--muted);margin:3px 0 0}
+.ov-alert{border:1px solid var(--stop);border-left:4px solid var(--stop);background:var(--sunk);padding:12px 15px;margin:0 0 22px}
+.ov-alert h4{margin:0 0 5px;font-size:13px;color:var(--stop)}
+.ov-alert p{margin:0;font-size:13.5px;line-height:1.5}
 .ov-empty{font-size:13.5px;color:var(--muted);border:1px dashed var(--rule);padding:14px;border-radius:3px}
 .ov-status{display:grid;grid-template-columns:1fr 1fr;gap:26px;margin-top:14px}
 .ov-status h4{font-size:13px;margin:0 0 8px}

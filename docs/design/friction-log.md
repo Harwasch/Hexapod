@@ -169,3 +169,63 @@
   finished and what was not; the third had to infer it from `leg_loads.json` saying "sweep not
   run". `hw-planning` should ask for a `docs/design/<chunk>-state.md` checkpoint (done / missing /
   known wrong) whenever a chunk spans sessions.
+
+## 2026-09-03 — round 14c (general arrangement)
+
+* The actuator can had three different sizes live at once: `analysis/frameless_motor.py`'s
+  half-section draws motor + 6 mm (Ø172 × 37), the same file's sweep comment sizes the motor
+  against a Ø192 can carried over from the PCB unit, and `cad/actuator/frameless.json` — written
+  in the same session — measures Ø172 × 49.7. The GA had to pick one before it could dimension
+  anything, and picked the CAD. A study that fixes an envelope should write that envelope to its
+  own JSON as a named field, not leave it to be re-derived from a plotting call; `hw-verification`
+  should check that every "the unit is X × Y" in a design note resolves to one machine-readable
+  number.
+* `hexapod_model.Actuator` still reads `cad/actuator/femur.json` (the round-6 PCB unit,
+  Ø192 × 54, 5.33 kg), so `BODY.slab_width(ACT)` and everything drawn by `analysis/drawing.py`
+  is two architectures out of date while reading as current. A model that auto-loads "the CAD"
+  needs the variant in its filename or a `current` pointer; `hw-documentation` should say that a
+  superseded generated file is deleted or renamed, not left where a loader will find it.
+* There is no model that says where an actuator is *mounted*. Link lengths, joint windows and
+  can sizes all exist, but the position of each of the eighteen units is implicit in prose across
+  06, 08 and 09, and the round-14b decision to delete the capstan silently orphaned twelve of
+  them. `hw-block-diagram` (or a mechanical sibling) should require a placement table — unit,
+  frame, origin, axis — before a mass budget is quoted, so that "the units do not fit" is caught
+  at the architecture gate rather than by the first person who draws the machine.
+
+## 2026-09-03 — round 14b (frameless actuator CAD)
+
+* `analysis/cycloid.py::profile()` offsets the epitrochoid **outward** by the pin radius, so the
+  "disc" it returns is bigger than its own ring-pin circle (radii 59.6–64.1 mm on an R 59.3 pin
+  circle) and cannot mesh; the discs in `cad/actuator/actuator.py` therefore intersect the pin
+  cage by ~3 mm and every disc mass in `cad/actuator/*.json` is high. The sign was found only by
+  writing a meshing check — rotate the disc through one input revolution and measure the minimum
+  distance from each pin centre to the profile, which must equal the pin radius exactly.
+  `hw-verification` should list "a generated profile is proved by a meshing/contact check, not by
+  eye" alongside the DRC and clearance checks, and any skill that ships a gear/cam profile helper
+  should ship that check with it.
+* `analysis/frameless_motor.py` models the unit mass as `motor + M_REDUCER(1.25) + M_HOUSING(0.55)`,
+  two constants lifted from the CAD table of a *different* architecture (Ø100 bore, Ø192 can). Both
+  scale hard with this design — the cycloid pin circle moves from r 43.5 to r 59.3, so the two discs
+  alone weigh 822 g — and the unit came out 4.09 kg against the 2.84 kg the closure assumed, which
+  moves the robot from 80 kg to 95 kg and the knee margin from 1.21 to 1.03. A study that solves a
+  mass fixed point should mark constants carried over from another architecture as such and refuse
+  to close (or flag) when the new geometry moves them; `hw-verification` should require the CAD mass
+  to be fed back into the closure before a margin is quoted.
+* "37 mm tall" in §9.17 is `motor length + 12`, a plotting expression in the same file, and it was
+  quoted in prose as if it were an envelope. The reducer's own axial stack — 13 mm of crossed roller,
+  4 mm of flange, 24 mm of two discs on the HK2512 cup pitch, 10.5 mm of rotor carrier and cover —
+  is 51 mm of it, and the modelled unit is 49.7 mm. Same failure mode as the Ø172/Ø192 confusion
+  logged under round 14c: an envelope quoted in prose that no machine-readable field backs.
+  `hw-documentation` should require every dimension in a design note to name the JSON field it came
+  from.
+* The `build123d` MCP `render_view` was unreliable in this environment, so the renders reuse the
+  hand-rolled numpy z-buffer rasteriser in `cad/actuator/actuator.py`. That rasteriser has no way to
+  place a label on a real 3D point, which is what makes an exploded or cutaway view readable, so a
+  projector had to be written twice. The `build123d` skill should ship a small "raster + project"
+  helper (orthographic camera, z-buffer, and a `project(point) -> pixel` closure) rather than leaving
+  every project to re-derive it; and `render_view`'s failure mode should be named in
+  `build123d://skill/modeling` so the next session does not spend a loop discovering it.
+* Fitting a render needs the *silhouette* extent, not the bounding box: every part here is a body of
+  revolution, and using bbox corners over-estimates the width by up to √2 and shrinks the object to
+  60 % of the frame. Worked around with an exact radius/z extent in `auto_fit()`. Worth a line in the
+  `build123d` skill.

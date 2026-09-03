@@ -108,6 +108,8 @@ MM = json.load(open(os.path.join(ROOT, "hw", "stator", "motor_market.json")))
 TO = json.load(open(os.path.join(ROOT, "hw", "stator", "transmission_options.json")))
 TC = json.load(open(os.path.join(ROOT, "hw", "stator", "topology_compare.json")))
 FM = json.load(open(os.path.join(ROOT, "hw", "stator", "frameless_motor.json")))
+FCAD = json.load(open(os.path.join(ROOT, "cad", "actuator", "frameless.json"))) if os.path.exists(os.path.join(ROOT, "cad", "actuator", "frameless.json")) else None
+ARR = json.load(open(os.path.join(ROOT, "hw", "arrangement.json"))) if os.path.exists(os.path.join(ROOT, "hw", "arrangement.json")) else None
 SO = json.load(open(os.path.join(ROOT, "hw", "stator", "single_stator_opt.json")))       # round 13: the single-stator sweep at Ø190
 HK2512 = dict(Cr=11.8e3, C0r=16.3e3, n_lim=6500)                # NTN sheet, docs/reference/ntn-hk2512.pdf
 HK3012 = dict(Cr=11.5e3, C0r=17.3e3)                            # PTI HK-series catalogue, docs/reference/pti-hk-series.pdf (round 7)
@@ -498,6 +500,8 @@ def write_doc(figs):
     fm_stock = [(k, f"{v['m_robot']:.0f}", f"{v['margin']['femur']:.2f}", f"{v['margin']['knee']:.2f}", f"{v['margin']['yaw']:.2f}", f"{v['robot_supported']:.0f}")
                 for k, v in FM["stock_unit"].items()]
     fm_sens = [(x["label"], f"{x['T_cont']:.2f}", f"{min(x['margin'].values()):.2f}", "closes" if x["closes"] else "**short**") for x in FM["sensitivity"]]
+    ladder_rows = [(L["label"], f"{L['m_unit_fk']:.2f}", f"{L['leg_struct_kg']:.1f}", f"{L['m_robot']:.0f}",
+                    f"**{L['worst']:.2f}**", "closes" if L["closes"] else "**does not close**") for L in FM["mass_ladder"]]
     cs_rows = [(r["option"], r["requirement"], f"{r['m_unit']:.2f}", f"{r['m_robot']:.0f}", f"{r['T_joint']:.0f} / {r['need_knee']:.0f}", f"{r['margin']:.2f}" + ("" if r["closes"] else " ✗"),
                 f"{r['cost']:.0f}", f"{[x for x in CS['rows'] if x['option']==r['option'] and x['requirement']==r['requirement'] and x['qty']==100][0]['cost']:.0f}")
                for r in CS["rows"] if r["qty"] == 20]
@@ -1212,6 +1216,13 @@ and it is not modelled beyond this bound.**
 
 ### 9.17 Round 14: the Wheemo frameless motor as the basis — `analysis/frameless_motor.py`
 
+> **Corrected by §9.18.** The unit mass in this section (2.84 kg) and the unit
+> height (37 mm) were wrong: the reducer and housing masses were carried over
+> from the Ø192 design without being re-solved for this one, and the height
+> left out the reducer's own axial stack. The CAD says 4.09 kg and 49.7 mm.
+> The scaling law, the datasheet decoding and the reducer loads below stand;
+> the closure does not. Read §9.18 with this section.
+
 The review supplied the datasheet for a **{FM['datasheet']['part']}** frameless
 kit motor ([`docs/reference/wheemo-WxF70x24GT.pdf`](../reference/wheemo-WxF70x24GT.pdf),
 filed in the manifest) and asked that our motors be built on it, scaled up if
@@ -1330,6 +1341,73 @@ not a cost-down — and the round-10 cost floor still stands. Also missing:
 the airgap diameter, the pole and slot count, and the thermal resistance or
 reference ambient behind the {FM['datasheet']['loss_cont_W']:.1f} W rating. All are recorded as needed in
 the manifest.
+
+### 9.18 Round 14c: the correction, and the number the whole design now turns on
+
+Building the unit in CAD (`cad/actuator/frameless.py`) and drawing the whole
+robot around it (`analysis/arrangement.py`) contradicted §9.17 in three ways.
+All three are the same mistake: a number that stood in for a measurement was
+never re-solved after the design it came from changed.
+
+**1. The unit is {FCAD['total_g']/1e3:.2f} kg, not {FCAD['mass_assumed_in_closure_kg']:.2f} kg.** §9.17 costed the unit as the
+motor's active mass plus a 1.25 kg reducer and a 0.55 kg housing — both taken
+from the CAD table of the **Ø192 can with a Ø100 bore**. But this design moves
+the cycloid's pin circle from r 43.5 to r 59.3, which makes the discs much
+bigger ({FCAD['mass_g']['cycloid_discs']:.0f} g for the pair), and puts them in a different can. The
+built unit is {FCAD['total_g']/1e3:.2f} kg: housing {FCAD['mass_by_group_g']['housing']:.0f} g, reducer {FCAD['mass_by_group_g']['reducer']:.0f} g, bearings {FCAD['mass_by_group_g']['bearings']:.0f} g,
+rotor carrier {FCAD['mass_by_group_g']['rotor']:.0f} g, motor {FCAD['mass_by_group_g']['stator'] + FCAD['mass_by_group_g']['magnets']:.0f} g.
+
+**2. The unit is {FCAD['envelope']['height_mm']:.1f} mm tall, not 37 mm.** The 37 mm was the motor stack
+plus 6 mm of case each end. It ignored the reducer's own axial stack — the
+crossed roller, the output flange, two discs on the HK2512's 12 mm cup pitch,
+and the rotor carrier. So the unit is not dramatically shorter than the PCB
+machine's 54 mm; it is about 5 mm shorter.
+
+**3. The mass fixed point was never re-solved.** `analysis/frameless_motor.py`
+now takes the reducer and housing masses from the CAD point and **scales**
+them with the pin circle and the can, so the sweep is honest at every size.
+The result is a ladder, and it is the real state of the design:
+
+{md(("What is assumed and what is measured", "Unit (kg)", "Leg structure (kg)", "Robot (kg)", "Worst margin", ""), ladder_rows)}
+
+![The mass ladder]({rel(os.path.join(FIG, 'frameless-mass-ladder.png'))})
+
+**On the unit as built, the design does not close at all.** Not at the
+measured leg mass, and not even at the 1.2 kg a leg the budget has always
+assumed: the margin is {FM['mass_ladder'][1]['worst']:.2f} there and {FM['mass_ladder'][2]['worst']:.2f} on the measured leg. The
+design stops closing once a leg's structure and transmission pass
+**{FM['leg_struct']['breakeven_kg']:.1f} kg** — below the round-1 estimate that was never designed to, and
+{FM['leg_struct']['cad_kg']/FM['leg_struct']['breakeven_kg']:.0f} times lighter than the only leg anyone has actually built ({FM['leg_struct']['cad_kg']:.1f} kg, §09).
+
+**And a bigger motor does not rescue it.** Re-sweeping every diameter and
+stack length inside the Ø{FM['limits']['od_max_mm']:.0f} the can allows, at the CAD-anchored unit mass and
+the measured leg structure, **nothing closes**. Each extra newton metre costs
+mass, the mass costs torque, and inside this envelope the loop does not
+converge. That is a statement about the leg, not the motor: **the leg has to
+get lighter before any motor choice can be validated.** No margin anywhere in
+§9.17 or here can be trusted until a leg is designed for this actuator and
+weighed.
+
+**4. Deleting the capstan moved the motors out of the body.** This is the
+architectural consequence §9.17 missed. The capstan was not only a reduction
+stage; it was the only means by which a femur or knee motor sitting *in the
+body* drove a joint *out on the leg*. Take it away and the femur and knee
+units have to sit on their own joints. The project's founding premise is
+"all eighteen motors in the body", and the round-14b design quietly breaks it.
+The general arrangement (§10) draws the consequence: with a Ø{FCAD['envelope']['od_mm']:.0f} can on each
+knee, **the robot is wider across its knee cans ({ARR['overall']['width_over_cans_mm'] if ARR and 'overall' in ARR and 'width_over_cans_mm' in ARR.get('overall', {}) else 1066:.0f} mm) than across its
+feet ({ARR['overall']['width_over_feet_mm'] if ARR and 'overall' in ARR and 'width_over_feet_mm' in ARR.get('overall', {}) else 894:.0f} mm)**, and the eighteen cans no longer fit in the body slab.
+
+**What still stands from §9.17.** The datasheet decoding (four checks within
+1 %), the scaling law and its sensitivity, the shear stress, the reducer load
+analysis, the thermal budget and the driver-limited peak are all unaffected —
+they are about the motor, not about what it is bolted to. The frameless kit
+is still the best motor found for this joint. What is not established is that
+a robot built around it closes.
+
+**What this round asks for.** Not another motor study. A leg designed for this
+actuator, with the femur and knee units wherever they now have to go, weighed
+honestly — and then the fixed point solved once, on measurements.
 
 ### 9.8 Open items from this round (updated in round 11)
 
