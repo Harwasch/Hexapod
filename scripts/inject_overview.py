@@ -145,6 +145,8 @@ ACTUATOR = [
      "<strong>Why the capstan can go.</strong> Deleting it puts four times the torque on the cycloid; moving the pin circle out "
      "into the motor's bore takes it back off."),
 ]
+marsupial_fig = img("docs/design/platform/marsupial-scale.png", "The hexapod and the carrier-plus-scout pair, to scale",
+             "<strong>What round 17 proposes instead.</strong> The 190 kg hexapod on the left; on the right the two machines that replace it — a tracked carrier that never leaves firm ground and a 22 kg quadruped scout, drawn to the same scale with a 1.8 m person for reference.")
 ladder_fig = img("docs/design/actuator/frameless-mass-ladder.png", "The mass ladder",
              "<strong>The real state of the design.</strong> What the closure margin does as each assumed number is replaced "
              "by a measured one, and the leg mass the whole thing now turns on.")
@@ -170,8 +172,15 @@ full-screen and zoom.</strong></p>
 <p>Round 15 tested the founding assumption against eight topologies on this project's own energy numbers.
 On the stated missions the hexapod uses about <strong>five times the energy per kilometre</strong>, twice the machine
 mass and nine times the actuators, to buy the last 18 % of terrain — and it <strong>cannot finish a working day on
-any of the four missions</strong>, while a tracked platform finishes all four. See the <a href="#" data-goto="platform">Platform
-topology</a> tab. Everything below describes the hexapod as it stands.</p></div>
+any of the four missions</strong>, while a tracked platform finishes all four. Round 16 then showed the hexapod is not
+even the gentle option: at <strong>220 kPa</strong> under three 60 mm feet it is four times a person's footfall, and the
+damage tracks do comes from skid steering, which an articulated pivot removes. Round 17 stops compromising and
+<strong>splits the brief across two machines</strong>: a tracked carrier that stays on firm ground, carrying a
+<strong>22 kg legged scout</strong> that is launched to do the delicate work. The pair is 109 kg against 190,
+1224 Wh a day against 4444, and 9 kPa against 220 — and the scout needs about a <strong>tenth the joint
+torque</strong>, which is off-the-shelf. See the <a href="#" data-goto="platform">Platform topology</a> tab.
+Everything below describes the hexapod as it stands.</p></div>
+{marsupial_fig}
 <div class="ov-alert"><h4>And the hexapod as drawn does not close</h4><p>The actuator study costed the unit at
 2.84 kg using a reducer and housing carried over from an earlier, smaller design. Built in CAD it is
 <strong>{num((FM.get('cad_unit_kg') or 0), '{:.2f}')} kg</strong>. Re-solved on that the worst joint margin is

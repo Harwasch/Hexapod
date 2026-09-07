@@ -8,20 +8,21 @@
 # `review-artifact --check` before you publish it.
 title: Hexapod
 subtitle: >-
-  Round 15 challenges the founding assumption. The brief is a rugged
-  multipurpose outdoor platform for long-duration, long-distance missions that
-  navigate and manipulate -- cutting plants, surveying, inspecting, treating
-  invasive species -- and nothing in it asks for legs. Tested against eight
-  topologies on the project's own energy numbers, the hexapod uses ~5x the
-  energy per km, twice the mass and nine times the actuators to buy the last
-  18 % of terrain, and cannot finish a working day on any of the four missions.
-  A tracked platform with flippers wins on every axis the brief names. Start on
-  the Platform topology tab.
+  Rounds 15-17 challenge the founding assumption. The brief -- a rugged
+  multipurpose outdoor platform covering distance AND touching sensitive ground
+  lightly -- puts two requirements on one machine, and they fight. The hexapod
+  cannot finish a working day on any of the four missions, and at 220 kPa under
+  its feet it is not even the gentle option. The resolution is not a compromise
+  machine but two machines: a tracked carrier that never leaves firm ground,
+  carrying a 22 kg legged scout that does the delicate work. That pair is 109 kg
+  against 190, 1224 Wh a day against 4444, and 9 kPa against 220 -- and the
+  scout needs a TENTH the joint torque, which is off-the-shelf. Start on the
+  Platform topology tab.
 
 phases:
   - id: platform
     title: Platform topology
-    eyebrow: Stage 0 · the assumption nobody tested, and the ground it works on
+    eyebrow: Stage 0 · the assumption nobody tested, the ground it works on, and the two machines that replace it
     after: vision
     images:
       - docs/design/platform/topology-energy.png
@@ -29,6 +30,8 @@ phases:
       - docs/design/platform/topology-matrix.png
       - docs/design/platform/hybrid-ground-impact.png
       - docs/design/platform/hybrid-tradeoff.png
+      - docs/design/platform/marsupial-scale.png
+      - docs/design/platform/marsupial-system.png
     captions:
       docs/design/platform/topology-energy.png: >-
         The founding assumption, tested. Left: cost of transport by topology.
@@ -71,7 +74,26 @@ phases:
         with a 22 kg legged scout sits closest to that corner, because it
         splits the two conflicting requirements between two machines instead of
         compromising on one.
-    docs: [docs/design/11-platform-topology.md, docs/design/12-hybrid-mobility.md]
+      docs/design/platform/marsupial-scale.png: >-
+        Round 17, the two machines drawn to the same scale in millimetres, with
+        a 1.8 m person for reference. Left: the 190 kg hexapod this project has
+        been designing, 0.75 m of leg and eighteen 4.4 kg actuators. Right: the
+        pair that replaces it -- a tracked carrier that never leaves firm
+        ground, and a 22 kg quadruped scout with 0.43 m of leg that rides on it
+        and is launched to do the delicate work. Look at: the scout is small
+        enough for one person to lift into a vehicle, which is where its 22 kg
+        came from -- it is the assumption everything else in round 17 hangs on.
+      docs/design/platform/marsupial-system.png: >-
+        What the split does to the numbers. Joint torque goes as mass x leg
+        length, so a scout at a seventh the mass and half the leg needs about a
+        TENTH the joint torque: knee 41 N.m against the hexapod's 392. That
+        needs 7:1 to 17:1 from a $50 off-the-shelf motor, against the 25:1 to
+        100:1 the hexapod needed. Look at: the standing-power curve. Held on
+        its motors the scout burns 78 W doing nothing, more than it uses
+        walking; a ~100 g holding brake per pitch joint makes that zero and
+        takes endurance from 1.9 h to 3.1 h. That brake is the single biggest
+        decision on the scout.
+    docs: [docs/design/11-platform-topology.md, docs/design/12-hybrid-mobility.md, docs/design/13-marsupial-system.md]
 
   - id: geometry
     title: Drawings

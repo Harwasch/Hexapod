@@ -1,0 +1,891 @@
+{
+ "scout": {
+  "mass_kg": 22.0,
+  "legs": 4,
+  "femur_mm": 170.0,
+  "tibia_mm": 260.0,
+  "coxa_mm": 90.0,
+  "foot_dia_mm": 110.0,
+  "stride_m": 0.4,
+  "speed_ms": 0.6,
+  "tool_kg": 3.0,
+  "tool_W": 40.0,
+  "compute_W": 25.0,
+  "pack_kg": 1.6,
+  "leg_m": 0.43
+ },
+ "scout_torque": {
+  "yaw": {
+   "cont": 15.5519502668104,
+   "peak": 16.57886019821972
+  },
+  "femur": {
+   "cont": 38.533333171345774,
+   "peak": 69.90708205279736
+  },
+  "knee": {
+   "cont": 40.71095194359866,
+   "peak": 85.39875055729777
+  }
+ },
+ "hexapod_torque": {
+  "yaw": {
+   "cont": 149.9040493893903,
+   "peak": 159.8023550317996
+  },
+  "femur": {
+   "cont": 371.4198270799852,
+   "peak": 673.8289732751275
+  },
+  "knee": {
+   "cont": 392.40972650653543,
+   "peak": 823.151971406022
+  }
+ },
+ "torque_ratio": {
+  "yaw": 9.63892288861689,
+  "femur": 9.63892288861689,
+  "knee": 9.638922888616891
+ },
+ "scout_ratio": {
+  "yaw": 6.574427384685673,
+  "femur": 16.28957117780635,
+  "knee": 17.210137167543223
+ },
+ "best_ots_motor": {
+  "name": "8318 100KV (HL Q9XL / Alibaba class)",
+  "kv": 100,
+  "R": 0.055,
+  "mass": 0.65,
+  "d": 92,
+  "h": 40,
+  "price1": 65,
+  "price20": 50,
+  "src": "https://www.himodel.com/electric/HL_Q9XL_8318_100KV_8-14S_Outrunner_Brushless_Motor.html",
+  "flags": "R and mass from the listing; price est from GBP 49 and Alibaba",
+  "Kt": 0.0954929658551372,
+  "Km": 0.3324638331263955,
+  "R_th": 1.2,
+  "P_allow": 62.5,
+  "I_cont": 27.524094128159014,
+  "T_cont": 2.628357380773871,
+  "n_noload": 4800.0,
+  "ratio": "100:1",
+  "motors_per_unit": 1,
+  "fits": true,
+  "T_per_usd": 0.05256714761547742,
+  "T_per_kg": 4.043626739652109,
+  "unit_motor_cost": 50,
+  "unit_motor_mass": 0.65
+ },
+ "carrier": {
+  "base_kg": 55.0,
+  "track_w_mm": 150.0,
+  "track_l_mm": 600.0,
+  "drive_act": 3,
+  "cot": 0.21,
+  "steering": "articulated centre pivot: no skid shear",
+  "speed_ms": 1.2,
+  "tool_W": 900.0,
+  "compute_W": 60.0
+ },
+ "tasks": [
+  {
+   "task": "Transit between work sites",
+   "carrier": 4,
+   "scout": 1,
+   "why": "the carrier is 5x more efficient per km and carries everything"
+  },
+  {
+   "task": "Broad survey along a route",
+   "carrier": 4,
+   "scout": 2,
+   "why": "sensor mast on the carrier covers ground faster"
+  },
+  {
+   "task": "Cutting woody vegetation",
+   "carrier": 4,
+   "scout": 0,
+   "why": "needs ~900 W at the tool and a base to react against; a 22 kg machine cannot"
+  },
+  {
+   "task": "Moving cut material",
+   "carrier": 4,
+   "scout": 0,
+   "why": "payload. The carrier takes ~50 % of its mass; the scout takes 3 kg"
+  },
+  {
+   "task": "Close inspection in tight or broken ground",
+   "carrier": 1,
+   "scout": 4,
+   "why": "the scout goes where a 1.1 m tracked machine cannot"
+  },
+  {
+   "task": "Spot-treating invasive plants on sensitive ground",
+   "carrier": 0,
+   "scout": 4,
+   "why": "this is the whole reason the scout exists"
+  },
+  {
+   "task": "Sampling and placing sensors",
+   "carrier": 1,
+   "scout": 4,
+   "why": "precision placement, light touch"
+  },
+  {
+   "task": "Working wet or fragile ground",
+   "carrier": 0,
+   "scout": 4,
+   "why": "the carrier stays on the firm route"
+  },
+  {
+   "task": "Power, comms relay and recharge",
+   "carrier": 4,
+   "scout": 0,
+   "why": "the carrier is the mothership: battery, uplink, shelter"
+  }
+ ],
+ "motor": {
+  "name": "8318 100KV (HL Q9XL / Alibaba class)",
+  "T_cont": 2.628357380773871,
+  "Kt": 0.0954929658551372,
+  "R": 0.055,
+  "I_cont": 27.524094128159014,
+  "mass": 0.65,
+  "price": 50,
+  "P_cu_cont": 124.99999999999999
+ },
+ "standing_vs_ratio": [
+  {
+   "ratio": 8.0,
+   "W": 1096.7557626610778
+  },
+  {
+   "ratio": 10.0,
+   "W": 701.92368810309
+  },
+  {
+   "ratio": 12.0,
+   "W": 487.4470056271458
+  },
+  {
+   "ratio": 14.0,
+   "W": 358.12433066484186
+  },
+  {
+   "ratio": 16.0,
+   "W": 274.18894066526946
+  },
+  {
+   "ratio": 18.0,
+   "W": 216.6431136120648
+  },
+  {
+   "ratio": 20.0,
+   "W": 175.4809220257725
+  },
+  {
+   "ratio": 22.0,
+   "W": 145.02555539320042
+  },
+  {
+   "ratio": 24.0,
+   "W": 121.86175140678645
+  },
+  {
+   "ratio": 26.0,
+   "W": 103.83486510400738
+  },
+  {
+   "ratio": 28.0,
+   "W": 89.53108266621047
+  },
+  {
+   "ratio": 30.0,
+   "W": 77.99152090034332
+  },
+  {
+   "ratio": 32.0,
+   "W": 68.54723516631736
+  },
+  {
+   "ratio": 34.0,
+   "W": 60.720042223450676
+  },
+  {
+   "ratio": 36.0,
+   "W": 54.1607784030162
+  },
+  {
+   "ratio": 38.0,
+   "W": 48.6096736913497
+  },
+  {
+   "ratio": 40.0,
+   "W": 43.87023050644312
+  },
+  {
+   "ratio": 42.0,
+   "W": 39.79159229609353
+  },
+  {
+   "ratio": 44.0,
+   "W": 36.256388848300105
+  },
+  {
+   "ratio": 46.0,
+   "W": 33.17219698029726
+  },
+  {
+   "ratio": 48.0,
+   "W": 30.465437851696613
+  },
+  {
+   "ratio": 50.0,
+   "W": 28.0769475241236
+  },
+  {
+   "ratio": 52.0,
+   "W": 25.958716276001844
+  },
+  {
+   "ratio": 54.0,
+   "W": 24.0714570680072
+  },
+  {
+   "ratio": 56.0,
+   "W": 22.382770666552616
+  },
+  {
+   "ratio": 58.0,
+   "W": 20.865745781899225
+  },
+  {
+   "ratio": 60.0,
+   "W": 19.49788022508583
+  },
+  {
+   "ratio": 62.0,
+   "W": 18.260241625990886
+  },
+  {
+   "ratio": 64.0,
+   "W": 17.13680879157934
+  },
+  {
+   "ratio": 66.0,
+   "W": 16.11395059924449
+  },
+  {
+   "ratio": 68.0,
+   "W": 15.180010555862669
+  },
+  {
+   "ratio": 70.0,
+   "W": 14.324973226593672
+  },
+  {
+   "ratio": 72.0,
+   "W": 13.54019460075405
+  },
+  {
+   "ratio": 74.0,
+   "W": 12.818182763022092
+  },
+  {
+   "ratio": 76.0,
+   "W": 12.152418422837425
+  },
+  {
+   "ratio": 78.0,
+   "W": 11.537207233778599
+  },
+  {
+   "ratio": 80.0,
+   "W": 10.96755762661078
+  }
+ ],
+ "ratio_pick": 30.0,
+ "brake": {
+  "kind": "a small holding brake or a non-backdrivable stage on each pitch joint",
+  "mass_kg_per_joint": 0.1,
+  "standing_W": 0.0,
+  "why": "the scout is stopped for 70 % of its mission; this is the same reason a tracked platform beat the hexapod in round 15"
+ },
+ "envelope": {
+  "pack_kg": 1.6,
+  "wh": 272.0,
+  "mass_kg": 26.6,
+  "p_walk": 116.43872025723475,
+  "p_stand": 0.0,
+  "p_avg": 87.93161607717043,
+  "hours": 3.0933128735094293,
+  "radius_m": 1002.2333710170552,
+  "dwell_frac": 0.7,
+  "ratio": 30.0,
+  "braked": true
+ },
+ "envelope_unbraked": {
+  "pack_kg": 1.6,
+  "wh": 272.0,
+  "mass_kg": 26.6,
+  "p_walk": 116.43872025723475,
+  "p_stand": 77.99152090034332,
+  "p_avg": 142.52568070741074,
+  "hours": 1.9084280015359865,
+  "radius_m": 618.3306724976597,
+  "dwell_frac": 0.7,
+  "ratio": 30.0,
+  "braked": false
+ },
+ "envelope_sweep": [
+  {
+   "pack_kg": 0.6,
+   "wh": 102.0,
+   "mass_kg": 25.6,
+   "p_walk": 112.06132475884245,
+   "p_stand": 0.0,
+   "p_avg": 86.61839742765274,
+   "hours": 1.1775789327572657,
+   "radius_m": 381.5355742133541,
+   "dwell_frac": 0.7,
+   "ratio": 30.0,
+   "braked": true
+  },
+  {
+   "pack_kg": 0.7384615384615385,
+   "wh": 125.53846153846155,
+   "mass_kg": 25.73846153846154,
+   "p_walk": 112.66742567400445,
+   "p_stand": 0.0,
+   "p_avg": 86.80022770220134,
+   "hours": 1.4462918457906047,
+   "radius_m": 468.59855803615596,
+   "dwell_frac": 0.7,
+   "ratio": 30.0,
+   "braked": true
+  },
+  {
+   "pack_kg": 0.8769230769230769,
+   "wh": 149.07692307692307,
+   "mass_kg": 25.876923076923077,
+   "p_walk": 113.27352658916647,
+   "p_stand": 0.0,
+   "p_avg": 86.98205797674994,
+   "hours": 1.7138813054615345,
+   "radius_m": 555.2975429695372,
+   "dwell_frac": 0.7,
+   "ratio": 30.0,
+   "braked": true
+  },
+  {
+   "pack_kg": 1.0153846153846153,
+   "wh": 172.6153846153846,
+   "mass_kg": 26.015384615384615,
+   "p_walk": 113.87962750432847,
+   "p_stand": 0.0,
+   "p_avg": 87.16388825129854,
+   "hours": 1.9803543425888075,
+   "radius_m": 641.6348069987737,
+   "dwell_frac": 0.7,
+   "ratio": 30.0,
+   "braked": true
+  },
+  {
+   "pack_kg": 1.1538461538461537,
+   "wh": 196.15384615384613,
+   "mass_kg": 26.153846153846153,
+   "p_walk": 114.48572841949048,
+   "p_stand": 0.0,
+   "p_avg": 87.34571852584716,
+   "hours": 2.2457179294460863,
+   "radius_m": 727.612609140532,
+   "dwell_frac": 0.7,
+   "ratio": 30.0,
+   "braked": true
+  },
+  {
+   "pack_kg": 1.2923076923076922,
+   "wh": 219.69230769230768,
+   "mass_kg": 26.29230769230769,
+   "p_walk": 115.0918293346525,
+   "p_stand": 0.0,
+   "p_avg": 87.52754880039576,
+   "hours": 2.509978980370056,
+   "radius_m": 813.2331896398982,
+   "dwell_frac": 0.7,
+   "ratio": 30.0,
+   "braked": true
+  },
+  {
+   "pack_kg": 1.4307692307692308,
+   "wh": 243.23076923076923,
+   "mass_kg": 26.43076923076923,
+   "p_walk": 115.69793024981448,
+   "p_stand": 0.0,
+   "p_avg": 87.70937907494435,
+   "hours": 2.7731443523609682,
+   "radius_m": 898.4987701649537,
+   "dwell_frac": 0.7,
+   "ratio": 30.0,
+   "braked": true
+  },
+  {
+   "pack_kg": 1.5692307692307694,
+   "wh": 266.76923076923083,
+   "mass_kg": 26.56923076923077,
+   "p_walk": 116.30403116497652,
+   "p_stand": 0.0,
+   "p_avg": 87.89120934949295,
+   "hours": 3.0352208456757324,
+   "radius_m": 983.4115539989374,
+   "dwell_frac": 0.7,
+   "ratio": 30.0,
+   "braked": true
+  },
+  {
+   "pack_kg": 1.7076923076923078,
+   "wh": 290.3076923076923,
+   "mass_kg": 26.70769230769231,
+   "p_walk": 116.91013208013852,
+   "p_stand": 0.0,
+   "p_avg": 88.07303962404156,
+   "hours": 3.2962152044136577,
+   "radius_m": 1067.9737262300252,
+   "dwell_frac": 0.7,
+   "ratio": 30.0,
+   "braked": true
+  },
+  {
+   "pack_kg": 1.8461538461538463,
+   "wh": 313.84615384615387,
+   "mass_kg": 26.846153846153847,
+   "p_walk": 117.51623299530053,
+   "p_stand": 0.0,
+   "p_avg": 88.25486989859016,
+   "hours": 3.5561341170949645,
+   "radius_m": 1152.1874539387686,
+   "dwell_frac": 0.7,
+   "ratio": 30.0,
+   "braked": true
+  },
+  {
+   "pack_kg": 1.9846153846153847,
+   "wh": 337.3846153846154,
+   "mass_kg": 26.984615384615385,
+   "p_walk": 118.12233391046252,
+   "p_stand": 0.0,
+   "p_avg": 88.43670017313876,
+   "hours": 3.814984217232142,
+   "radius_m": 1236.0548863832141,
+   "dwell_frac": 0.7,
+   "ratio": 30.0,
+   "braked": true
+  },
+  {
+   "pack_kg": 2.123076923076923,
+   "wh": 360.9230769230769,
+   "mass_kg": 27.123076923076923,
+   "p_walk": 118.72843482562453,
+   "p_stand": 0.0,
+   "p_avg": 88.61853044768736,
+   "hours": 4.072772083894286,
+   "radius_m": 1319.5781551817488,
+   "dwell_frac": 0.7,
+   "ratio": 30.0,
+   "braked": true
+  },
+  {
+   "pack_kg": 2.2615384615384615,
+   "wh": 384.46153846153845,
+   "mass_kg": 27.26153846153846,
+   "p_walk": 119.33453574078654,
+   "p_stand": 0.0,
+   "p_avg": 88.80036072223596,
+   "hours": 4.3295042422645,
+   "radius_m": 1402.7593744936983,
+   "dwell_frac": 0.7,
+   "ratio": 30.0,
+   "braked": true
+  },
+  {
+   "pack_kg": 2.4,
+   "wh": 408.0,
+   "mass_kg": 27.4,
+   "p_walk": 119.94063665594855,
+   "p_stand": 0.0,
+   "p_avg": 88.98219099678457,
+   "hours": 4.5851871641904545,
+   "radius_m": 1485.6006411977075,
+   "dwell_frac": 0.7,
+   "ratio": 30.0,
+   "braked": true
+  },
+  {
+   "pack_kg": 2.5384615384615388,
+   "wh": 431.5384615384616,
+   "mass_kg": 27.53846153846154,
+   "p_walk": 120.54673757111055,
+   "p_stand": 0.0,
+   "p_avg": 89.16402127133318,
+   "hours": 4.839827268728222,
+   "radius_m": 1568.1040350679443,
+   "dwell_frac": 0.7,
+   "ratio": 30.0,
+   "braked": true
+  },
+  {
+   "pack_kg": 2.676923076923077,
+   "wh": 455.0769230769231,
+   "mass_kg": 27.676923076923078,
+   "p_walk": 121.15283848627257,
+   "p_stand": 0.0,
+   "p_avg": 89.34585154588177,
+   "hours": 5.093430922679465,
+   "radius_m": 1650.2716189481469,
+   "dwell_frac": 0.7,
+   "ratio": 30.0,
+   "braked": true
+  },
+  {
+   "pack_kg": 2.8153846153846156,
+   "wh": 478.61538461538464,
+   "mass_kg": 27.815384615384616,
+   "p_walk": 121.75893940143459,
+   "p_stand": 0.0,
+   "p_avg": 89.52768182043039,
+   "hours": 5.346004441122072,
+   "radius_m": 1732.1054389235517,
+   "dwell_frac": 0.7,
+   "ratio": 30.0,
+   "braked": true
+  },
+  {
+   "pack_kg": 2.953846153846154,
+   "wh": 502.1538461538462,
+   "mass_kg": 27.953846153846154,
+   "p_walk": 122.36504031659659,
+   "p_stand": 0.0,
+   "p_avg": 89.70951209497899,
+   "hours": 5.5975540879343555,
+   "radius_m": 1813.6075244907315,
+   "dwell_frac": 0.7,
+   "ratio": 30.0,
+   "braked": true
+  },
+  {
+   "pack_kg": 3.0923076923076924,
+   "wh": 525.6923076923077,
+   "mass_kg": 28.092307692307692,
+   "p_walk": 122.97114123175861,
+   "p_stand": 0.0,
+   "p_avg": 89.89134236952759,
+   "hours": 5.848086076312873,
+   "radius_m": 1894.779888725371,
+   "dwell_frac": 0.7,
+   "ratio": 30.0,
+   "braked": true
+  },
+  {
+   "pack_kg": 3.230769230769231,
+   "wh": 549.2307692307693,
+   "mass_kg": 28.23076923076923,
+   "p_walk": 123.57724214692058,
+   "p_stand": 0.0,
+   "p_avg": 90.07317264407618,
+   "hours": 6.097606569283983,
+   "radius_m": 1975.624528448011,
+   "dwell_frac": 0.7,
+   "ratio": 30.0,
+   "braked": true
+  },
+  {
+   "pack_kg": 3.3692307692307693,
+   "wh": 572.7692307692307,
+   "mass_kg": 28.369230769230768,
+   "p_walk": 124.1833430620826,
+   "p_stand": 0.0,
+   "p_avg": 90.2550029186248,
+   "hours": 6.346121680209214,
+   "radius_m": 2056.1434243877857,
+   "dwell_frac": 0.7,
+   "ratio": 30.0,
+   "braked": true
+  },
+  {
+   "pack_kg": 3.507692307692308,
+   "wh": 596.3076923076924,
+   "mass_kg": 28.50769230769231,
+   "p_walk": 124.78944397724462,
+   "p_stand": 0.0,
+   "p_avg": 90.43683319317338,
+   "hours": 6.593637473284553,
+   "radius_m": 2136.338541344195,
+   "dwell_frac": 0.7,
+   "ratio": 30.0,
+   "braked": true
+  },
+  {
+   "pack_kg": 3.6461538461538465,
+   "wh": 619.8461538461539,
+   "mass_kg": 28.646153846153847,
+   "p_walk": 125.39554489240663,
+   "p_stand": 0.0,
+   "p_avg": 90.618663467722,
+   "hours": 6.840159964033685,
+   "radius_m": 2216.211828346914,
+   "dwell_frac": 0.7,
+   "ratio": 30.0,
+   "braked": true
+  },
+  {
+   "pack_kg": 3.784615384615385,
+   "wh": 643.3846153846155,
+   "mass_kg": 28.784615384615385,
+   "p_walk": 126.00164580756862,
+   "p_stand": 0.0,
+   "p_avg": 90.80049374227059,
+   "hours": 7.085695119795356,
+   "radius_m": 2295.765218813696,
+   "dwell_frac": 0.7,
+   "ratio": 30.0,
+   "braked": true
+  },
+  {
+   "pack_kg": 3.9230769230769234,
+   "wh": 666.923076923077,
+   "mass_kg": 28.923076923076923,
+   "p_walk": 126.60774672273064,
+   "p_stand": 0.0,
+   "p_avg": 90.9823240168192,
+   "hours": 7.330248860204846,
+   "radius_m": 2375.0006307063704,
+   "dwell_frac": 0.7,
+   "ratio": 30.0,
+   "braked": true
+  },
+  {
+   "pack_kg": 4.061538461538461,
+   "wh": 690.4615384615385,
+   "mass_kg": 29.06153846153846,
+   "p_walk": 127.21384763789266,
+   "p_stand": 0.0,
+   "p_avg": 91.1641542913678,
+   "hours": 7.573827057669719,
+   "radius_m": 2453.9199666849895,
+   "dwell_frac": 0.7,
+   "ratio": 30.0,
+   "braked": true
+  },
+  {
+   "pack_kg": 4.2,
+   "wh": 714.0,
+   "mass_kg": 29.2,
+   "p_walk": 127.81994855305466,
+   "p_stand": 0.0,
+   "p_avg": 91.34598456591641,
+   "hours": 7.816435537839856,
+   "radius_m": 2532.5251142601132,
+   "dwell_frac": 0.7,
+   "ratio": 30.0,
+   "braked": true
+  },
+  {
+   "pack_kg": 4.338461538461538,
+   "wh": 737.5384615384614,
+   "mass_kg": 29.338461538461537,
+   "p_walk": 128.42604946821666,
+   "p_stand": 0.0,
+   "p_avg": 91.527814840465,
+   "hours": 8.058080080071914,
+   "radius_m": 2610.8179459433004,
+   "dwell_frac": 0.7,
+   "ratio": 30.0,
+   "braked": true
+  },
+  {
+   "pack_kg": 4.476923076923077,
+   "wh": 761.0769230769231,
+   "mass_kg": 29.47692307692308,
+   "p_walk": 129.03215038337868,
+   "p_stand": 0.0,
+   "p_avg": 91.70964511501361,
+   "hours": 8.298766417888238,
+   "radius_m": 2688.8003193957893,
+   "dwell_frac": 0.7,
+   "ratio": 30.0,
+   "braked": true
+  },
+  {
+   "pack_kg": 4.615384615384615,
+   "wh": 784.6153846153845,
+   "mass_kg": 29.615384615384613,
+   "p_walk": 129.63825129854067,
+   "p_stand": 0.0,
+   "p_avg": 91.8914753895622,
+   "hours": 8.538500239430345,
+   "radius_m": 2766.474077575432,
+   "dwell_frac": 0.7,
+   "ratio": 30.0,
+   "braked": true
+  },
+  {
+   "pack_kg": 4.753846153846154,
+   "wh": 808.1538461538462,
+   "mass_kg": 29.753846153846155,
+   "p_walk": 130.2443522137027,
+   "p_stand": 0.0,
+   "p_avg": 92.07330566411082,
+   "hours": 8.777287187907014,
+   "radius_m": 2843.841048881872,
+   "dwell_frac": 0.7,
+   "ratio": 30.0,
+   "braked": true
+  },
+  {
+   "pack_kg": 4.892307692307692,
+   "wh": 831.6923076923076,
+   "mass_kg": 29.892307692307693,
+   "p_walk": 130.85045312886473,
+   "p_stand": 0.0,
+   "p_avg": 92.25513593865944,
+   "hours": 9.01513286203709,
+   "radius_m": 2920.903047300018,
+   "dwell_frac": 0.7,
+   "ratio": 30.0,
+   "braked": true
+  },
+  {
+   "pack_kg": 5.030769230769231,
+   "wh": 855.2307692307692,
+   "mass_kg": 30.03076923076923,
+   "p_walk": 131.45655404402672,
+   "p_stand": 0.0,
+   "p_avg": 92.43696621320802,
+   "hours": 9.25204281648707,
+   "radius_m": 2997.6618725418107,
+   "dwell_frac": 0.7,
+   "ratio": 30.0,
+   "braked": true
+  },
+  {
+   "pack_kg": 5.1692307692307695,
+   "wh": 878.7692307692308,
+   "mass_kg": 30.16923076923077,
+   "p_walk": 132.0626549591887,
+   "p_stand": 0.0,
+   "p_avg": 92.61879648775661,
+   "hours": 9.488022562303499,
+   "radius_m": 3074.1193101863337,
+   "dwell_frac": 0.7,
+   "ratio": 30.0,
+   "braked": true
+  },
+  {
+   "pack_kg": 5.3076923076923075,
+   "wh": 902.3076923076923,
+   "mass_kg": 30.307692307692307,
+   "p_walk": 132.66875587435072,
+   "p_stand": 0.0,
+   "p_avg": 92.80062676230523,
+   "hours": 9.723077567340326,
+   "radius_m": 3150.2771318182663,
+   "dwell_frac": 0.7,
+   "ratio": 30.0,
+   "braked": true
+  },
+  {
+   "pack_kg": 5.446153846153846,
+   "wh": 925.8461538461539,
+   "mass_kg": 30.446153846153848,
+   "p_walk": 133.27485678951274,
+   "p_stand": 0.0,
+   "p_avg": 92.98245703685383,
+   "hours": 9.95721325668123,
+   "radius_m": 3226.137095164719,
+   "dwell_frac": 0.7,
+   "ratio": 30.0,
+   "braked": true
+  },
+  {
+   "pack_kg": 5.584615384615384,
+   "wh": 949.3846153846154,
+   "mass_kg": 30.584615384615383,
+   "p_walk": 133.88095770467473,
+   "p_stand": 0.0,
+   "p_avg": 93.16428731140243,
+   "hours": 10.190435013056979,
+   "radius_m": 3301.7009442304616,
+   "dwell_frac": 0.7,
+   "ratio": 30.0,
+   "braked": true
+  },
+  {
+   "pack_kg": 5.723076923076923,
+   "wh": 972.9230769230769,
+   "mass_kg": 30.723076923076924,
+   "p_walk": 134.48705861983674,
+   "p_stand": 0.0,
+   "p_avg": 93.34611758595102,
+   "hours": 10.422748177257946,
+   "radius_m": 3376.970409431575,
+   "dwell_frac": 0.7,
+   "ratio": 30.0,
+   "braked": true
+  },
+  {
+   "pack_kg": 5.861538461538461,
+   "wh": 996.4615384615383,
+   "mass_kg": 30.861538461538462,
+   "p_walk": 135.09315953499876,
+   "p_stand": 0.0,
+   "p_avg": 93.52794786049964,
+   "hours": 10.654158048541781,
+   "radius_m": 3451.9472077275373,
+   "dwell_frac": 0.7,
+   "ratio": 30.0,
+   "braked": true
+  },
+  {
+   "pack_kg": 6.0,
+   "wh": 1020.0,
+   "mass_kg": 31.0,
+   "p_walk": 135.69926045016078,
+   "p_stand": 0.0,
+   "p_avg": 93.70977813504824,
+   "hours": 10.884669885036377,
+   "radius_m": 3526.6330427517864,
+   "dwell_frac": 0.7,
+   "ratio": 30.0,
+   "braked": true
+  }
+ ],
+ "day": {
+  "sorties": 6,
+  "hours_per_sortie": 3.0933128735094293,
+  "leash_m": 1002.2333710170552,
+  "reachable_m2_per_sortie": 3155641.007644459,
+  "reachable_ha_per_day": 1893.3846045866753,
+  "scout_energy_day_wh": 1632.0,
+  "recharges": 5,
+  "caveat": "reachable, not worked: the treatment rate per plant is unmeasured"
+ },
+ "pair_from_hybrid_study": {
+  "key": "marsupial",
+  "name": "Tracked carrier + a 22 kg legged scout",
+  "kind": "two machines",
+  "drive_act": 14,
+  "terrain": 0.96,
+  "note": "the carrier never enters the sensitive ground; the scout does the work there",
+  "cot": 0.22,
+  "pressure_kPa": 8.946349263915994,
+  "disturbed_m2_per_m": 0.09503317777109124,
+  "disturbed_m2_per_day": 570.1990666265475,
+  "shear": "none: feet are placed and lifted",
+  "feasible": true,
+  "m_total": 109.20217561343502,
+  "m_batt": 7.2021756134350206,
+  "wh": 1224.2108089231615
+ },
+ "hex_leg_m": 0.75
+}
