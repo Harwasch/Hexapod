@@ -1,28 +1,39 @@
-# Review — Platform topology and ground impact: which damage mechanism actually matters?
+# Review — Round 17: two machines — a tracked carrier that carries a 22 kg legged scout
 
 `platform` · requested 2026-09-07 · branch `claude/hexapod-robot-design-mt516g`
 
+The review converged on splitting the brief across two platforms. Sized on this project's own numbers, the pair is 109 kg against the hexapod's 190, 1224 Wh a day against 4444, and 9 kPa on sensitive ground against 220. The scout's joint torques are about a tenth of the hexapod's (knee 41 N.m against 392), which needs 7:1 to 17:1 from a $50 off-the-shelf motor rather than the 25:1 to 100:1 the hexapod needed. A ~100 g holding brake per pitch joint takes standing power from 78 W to zero and endurance from 1.9 h to 3.1 h. Fourteen rounds of actuator design were aimed at a machine this architecture does not contain: the method survives, the parts do not.
+
 ## What you are agreeing to
 
-**hybrid-ground-impact.png**
+**marsupial-scale.png**
 
-![hybrid-ground-impact.png](../design/platform/hybrid-ground-impact.png)
+![marsupial-scale.png](../design/platform/marsupial-scale.png)
 
-**hybrid-tradeoff.png**
+**marsupial-system.png**
 
-![hybrid-tradeoff.png](../design/platform/hybrid-tradeoff.png)
+![marsupial-system.png](../design/platform/marsupial-system.png)
 
 | File | Opens in |
 |---|---|
-| [docs/design/11-platform-topology.md](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/docs/design/11-platform-topology.md) | renders on GitHub |
-| [docs/design/12-hybrid-mobility.md](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/docs/design/12-hybrid-mobility.md) | renders on GitHub |
+| [docs/design/13-marsupial-system.md](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/docs/design/13-marsupial-system.md) | renders on GitHub |
+
+## For context
+
+Sources and working files. Not part of the agreement — these change as work goes on, and changing them does not invalidate your sign-off.
+
+| File | Opens in |
+|---|---|
+| [analysis/marsupial.py](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/analysis/marsupial.py) | plain text on GitHub |
+| [hw/marsupial.json](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/hw/marsupial.json) | plain text on GitHub |
 
 ## What we need decided
 
-1. Which damage mechanism actually matters on your ground? Compaction and rutting (tracks are already the best at 5 kPa; the hexapod is the WORST at 220 kPa), crushing the vegetation itself (only a legged contact wins, by 10x), or shear that tears turf (caused by skid steering, and removable with an articulated pivot)? This one answer picks the platform and I cannot compute it.
-2. Is there a clean transit route to each work site? If yes, the strongest option is a tracked carrier with a 22 kg legged scout: 109 kg, 1224 Wh/day, and only 9 kPa on the sensitive ground. It resolves the conflict instead of compromising, because the carrier never enters the sensitive zone and the scout never carries a day's transit battery.
-3. If it has to be one machine, wheel-on-leg with a deployable foot is the answer to your question as asked: it rolls for transit and locks the wheels to walk on a broad pad where the ground is sensitive. It costs 149 kg and 1483 Wh against the carrier-plus-scout's 109 kg and 1224 Wh, for a harder controls problem and 16 drive actuators. Worth it, or is two machines acceptable?
-4. Foot area has never been deliberately chosen. Whatever ends up walking, 140 mm compliant feet cost about 300 g a leg and drop contact pressure five-fold (220 to 41 kPa) at the cost of touching more ground. Should gentleness on contact be a written requirement with a number, rather than an aspiration?
+1. Do you accept the split into two machines, or must one machine still do both?
+2. The scout's 22 kg is the number everything else follows from, and it was picked because it is roughly what one person can lift into a vehicle. Is that the right anchor, or should the scout be sized by the task it has to do?
+3. A holding brake or non-backdrivable stage on each pitch joint takes standing power from 78 W to 0 W and endurance from 1.9 h to 3.1 h, for about 100 g a joint. Should that be a written requirement on the scout?
+4. The docking interface — launch, recover, latch, recharge, with the scout coming back muddy and misaligned — is the hardest unbuilt mechanism in this system and has no precedent in the repo. Design that next, or design the scout's leg and actuator first?
+5. The Wheemo frameless unit and the 25-lobe cycloid were sized for 390 N.m at the knee; the scout needs 41. Do we retire that unit, or keep it alive for the carrier's cutting arm, which has never been sized?
 
 ## Decision
 
