@@ -166,7 +166,13 @@ full-screen and zoom.</strong></p>
 
 <div class="ov-tiles">{tiles}</div>
 
-<div class="ov-alert"><h4>Read this first — the design does not close</h4><p>The actuator study costed the unit at
+<div class="ov-alert"><h4>Read this first — the platform assumption did not survive testing</h4>
+<p>Round 15 tested the founding assumption against eight topologies on this project's own energy numbers.
+On the stated missions the hexapod uses about <strong>five times the energy per kilometre</strong>, twice the machine
+mass and nine times the actuators, to buy the last 18 % of terrain — and it <strong>cannot finish a working day on
+any of the four missions</strong>, while a tracked platform finishes all four. See the <a href="#" data-goto="platform">Platform
+topology</a> tab. Everything below describes the hexapod as it stands.</p></div>
+<div class="ov-alert"><h4>And the hexapod as drawn does not close</h4><p>The actuator study costed the unit at
 2.84 kg using a reducer and housing carried over from an earlier, smaller design. Built in CAD it is
 <strong>{num((FM.get('cad_unit_kg') or 0), '{:.2f}')} kg</strong>. Re-solved on that the worst joint margin is
 <strong>{num(FM['mass_ladder'][1]['worst'] if FM and len(FM.get('mass_ladder',[]))>1 else None, '{:.2f}')}</strong>, and with the structure

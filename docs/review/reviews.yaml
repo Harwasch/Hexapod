@@ -1070,4 +1070,56 @@ reviews:
     - docs/design/actuator/frameless-unit.png
     - docs/reference/wheemo-WxF70x24GT.pdf
   decided_commit: e4963a5
+- id: platform
+  title: 'Platform topology: is a walking hexapod the right machine for these missions?'
+  stage: platform
+  questions:
+  - 'The study says no: on the stated missions a tracked platform with flippers beats the
+    hexapod on energy (5x), mass (2x), payload fraction, base stiffness for cutting, actuator
+    count (6 vs 18) and cost, and the hexapod cannot finish a working day on any of the four
+    missions. Do you accept that finding and change platform, or is there a mission constraint
+    I have not been told about that makes legs necessary?'
+  - 'Everything turns on the terrain: legs buy the last 18 percent of a mixed route. What
+    ground does this robot actually have to cross? If more than about a fifth of the route
+    is impassable to tracks, the answer flips.'
+  - Is the gentlest possible ground contact a real requirement (conservation work on fragile
+    ground, root zones, wetland margins)? That is the one argument for legs that survives
+    the energy numbers, and it is not on the task list you gave me.
+  - For coverage work like invasive species, is one large machine the right unit at all, or
+    eight small tracked ones? The swarm column is the least explored and the most different
+    from what has been built.
+  artifacts:
+  - path: docs/design/11-platform-topology.md
+    sha256: 36d16a37d84c484b
+  - path: docs/design/platform/topology-energy.png
+    sha256: 2efa2562add115fa
+  - path: docs/design/platform/topology-matrix.png
+    sha256: 16a3660b854a3d0a
+  requested: '2026-09-07'
+  requested_commit: 1c04bca
+  status: requested
+  packet: docs/review/platform.md
+  history:
+  - 'on': '2026-09-07'
+    action: requested
+    commit: 1c04bca
+    questions:
+    - 'The study says no: on the stated missions a tracked platform with flippers beats the
+      hexapod on energy (5x), mass (2x), payload fraction, base stiffness for cutting, actuator
+      count (6 vs 18) and cost, and the hexapod cannot finish a working day on any of the
+      four missions. Do you accept that finding and change platform, or is there a mission
+      constraint I have not been told about that makes legs necessary?'
+    - 'Everything turns on the terrain: legs buy the last 18 percent of a mixed route. What
+      ground does this robot actually have to cross? If more than about a fifth of the route
+      is impassable to tracks, the answer flips.'
+    - Is the gentlest possible ground contact a real requirement (conservation work on fragile
+      ground, root zones, wetland margins)? That is the one argument for legs that survives
+      the energy numbers, and it is not on the task list you gave me.
+    - For coverage work like invasive species, is one large machine the right unit at all,
+      or eight small tracked ones? The swarm column is the least explored and the most different
+      from what has been built.
+    added:
+    - docs/design/11-platform-topology.md
+    - docs/design/platform/topology-energy.png
+    - docs/design/platform/topology-matrix.png
 artifact_url: https://claude.ai/code/artifact/c27a8924-af18-4d17-bd9b-0fcb41e685e3

@@ -8,15 +8,50 @@
 # `review-artifact --check` before you publish it.
 title: Hexapod
 subtitle: >-
-  A large-dog-sized outdoor hexapod with all eighteen motors in the body.
-  Round 14b: the Wheemo frameless kit motor adopted as the basis for the
-  actuator and scaled to Ø160 x 25 mm (11.5 N.m continuous), which closes the
-  requirement at an 80 kg robot and deletes the capstan stage entirely -- the
-  stage the leg study had just found could not be wound. Round 14 built that
-  full leg on the outrunner units, in CAD, with loads, range of motion and a
-  BOM; it weighs 16 kg against the 9 kg assumed and does not close at 119 kg.
+  Round 15 challenges the founding assumption. The brief is a rugged
+  multipurpose outdoor platform for long-duration, long-distance missions that
+  navigate and manipulate -- cutting plants, surveying, inspecting, treating
+  invasive species -- and nothing in it asks for legs. Tested against eight
+  topologies on the project's own energy numbers, the hexapod uses ~5x the
+  energy per km, twice the mass and nine times the actuators to buy the last
+  18 % of terrain, and cannot finish a working day on any of the four missions.
+  A tracked platform with flippers wins on every axis the brief names. Start on
+  the Platform topology tab.
 
 phases:
+  - id: platform
+    title: Platform topology
+    eyebrow: Stage 0 · the assumption nobody tested
+    after: vision
+    images:
+      - docs/design/platform/topology-energy.png
+      - docs/design/platform/topology-missions.png
+      - docs/design/platform/topology-matrix.png
+    captions:
+      docs/design/platform/topology-energy.png: >-
+        The founding assumption, tested. Left: cost of transport by topology.
+        The hexapod figure is this project's own gait model (908 W at 1 m/s and
+        124 kg, CoT 0.74); the wheeled and tracked figures are built from
+        rolling resistance and driveline efficiency. Right: what the 8 kg of
+        battery this design already carries actually buys on each mission.
+        Look at: the hexapod does not reach a working day on any mission, and
+        the tracked platform reaches one on all four.
+      docs/design/platform/topology-missions.png: >-
+        Left: where the energy goes on invasive-species control, a mission that
+        is 70 % standing still. A legged robot pays 136 W to hold a stance —
+        computed from the actuator study's own torque — and nothing on wheels
+        pays anything. Right: what terrain capability costs. Look at: the last
+        18 % of terrain reach costs twice the machine mass and five times the
+        energy, on every mission, forever.
+      docs/design/platform/topology-matrix.png: >-
+        The whole trade across eight topologies. The first four columns are
+        computed from the energy model; the last five are stated judgements
+        written down so they can be argued with. Look at: the hexapod is worst
+        or near-worst on every column except terrain reach and ground
+        disturbance, and a tracked platform with flippers scores 3 or 4 on
+        everything.
+    docs: [docs/design/11-platform-topology.md]
+
   - id: geometry
     title: Drawings
     eyebrow: Stage 1 · dimensioned geometry
