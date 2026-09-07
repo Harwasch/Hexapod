@@ -1,27 +1,28 @@
-# Review — Platform topology: is a walking hexapod the right machine for these missions?
+# Review — Platform topology and ground impact: which damage mechanism actually matters?
 
 `platform` · requested 2026-09-07 · branch `claude/hexapod-robot-design-mt516g`
 
 ## What you are agreeing to
 
-**topology-energy.png**
+**hybrid-ground-impact.png**
 
-![topology-energy.png](../design/platform/topology-energy.png)
+![hybrid-ground-impact.png](../design/platform/hybrid-ground-impact.png)
 
-**topology-matrix.png**
+**hybrid-tradeoff.png**
 
-![topology-matrix.png](../design/platform/topology-matrix.png)
+![hybrid-tradeoff.png](../design/platform/hybrid-tradeoff.png)
 
 | File | Opens in |
 |---|---|
 | [docs/design/11-platform-topology.md](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/docs/design/11-platform-topology.md) | renders on GitHub |
+| [docs/design/12-hybrid-mobility.md](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/docs/design/12-hybrid-mobility.md) | renders on GitHub |
 
 ## What we need decided
 
-1. The study says no: on the stated missions a tracked platform with flippers beats the hexapod on energy (5x), mass (2x), payload fraction, base stiffness for cutting, actuator count (6 vs 18) and cost, and the hexapod cannot finish a working day on any of the four missions. Do you accept that finding and change platform, or is there a mission constraint I have not been told about that makes legs necessary?
-2. Everything turns on the terrain: legs buy the last 18 percent of a mixed route. What ground does this robot actually have to cross? If more than about a fifth of the route is impassable to tracks, the answer flips.
-3. Is the gentlest possible ground contact a real requirement (conservation work on fragile ground, root zones, wetland margins)? That is the one argument for legs that survives the energy numbers, and it is not on the task list you gave me.
-4. For coverage work like invasive species, is one large machine the right unit at all, or eight small tracked ones? The swarm column is the least explored and the most different from what has been built.
+1. Which damage mechanism actually matters on your ground? Compaction and rutting (tracks are already the best at 5 kPa; the hexapod is the WORST at 220 kPa), crushing the vegetation itself (only a legged contact wins, by 10x), or shear that tears turf (caused by skid steering, and removable with an articulated pivot)? This one answer picks the platform and I cannot compute it.
+2. Is there a clean transit route to each work site? If yes, the strongest option is a tracked carrier with a 22 kg legged scout: 109 kg, 1224 Wh/day, and only 9 kPa on the sensitive ground. It resolves the conflict instead of compromising, because the carrier never enters the sensitive zone and the scout never carries a day's transit battery.
+3. If it has to be one machine, wheel-on-leg with a deployable foot is the answer to your question as asked: it rolls for transit and locks the wheels to walk on a broad pad where the ground is sensitive. It costs 149 kg and 1483 Wh against the carrier-plus-scout's 109 kg and 1224 Wh, for a harder controls problem and 16 drive actuators. Worth it, or is two machines acceptable?
+4. Foot area has never been deliberately chosen. Whatever ends up walking, 140 mm compliant feet cost about 300 g a leg and drop contact pressure five-fold (220 to 41 kPa) at the cost of touching more ground. Should gentleness on contact be a written requirement with a number, rather than an aspiration?
 
 ## Decision
 

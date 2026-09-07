@@ -21,12 +21,14 @@ subtitle: >-
 phases:
   - id: platform
     title: Platform topology
-    eyebrow: Stage 0 · the assumption nobody tested
+    eyebrow: Stage 0 · the assumption nobody tested, and the ground it works on
     after: vision
     images:
       - docs/design/platform/topology-energy.png
       - docs/design/platform/topology-missions.png
       - docs/design/platform/topology-matrix.png
+      - docs/design/platform/hybrid-ground-impact.png
+      - docs/design/platform/hybrid-tradeoff.png
     captions:
       docs/design/platform/topology-energy.png: >-
         The founding assumption, tested. Left: cost of transport by topology.
@@ -50,7 +52,26 @@ phases:
         or near-worst on every column except terrain reach and ground
         disturbance, and a tracked platform with flippers scores 3 or 4 on
         everything.
-    docs: [docs/design/11-platform-topology.md]
+      docs/design/platform/hybrid-ground-impact.png: >-
+        Round 16, answering the review's worry that tracks damage the ground.
+        "Gentle" is three properties and they point in opposite directions.
+        Left: contact pressure, what compacts soil — tracks are the best at
+        5 kPa and the hexapod as designed is the WORST at 220 kPa, four times a
+        person's footfall, because a third of the robot lands on three 60 mm
+        feet. Middle: ground actually touched, what crushes vegetation — here
+        legs win by ten times. Right: shear, what tears turf. Look at: the
+        damage the review is worried about comes from skid steering, not from
+        the track, and an articulated centre pivot removes it for one actuator.
+      docs/design/platform/hybrid-tradeoff.png: >-
+        Left: what each option costs to run. Carrying two locomotion systems —
+        a tracked chassis with stowed legs — is the worst answer at 195 kg and
+        1566 Wh, heavier than the hexapod, because the legs must lift the
+        tracks too. Right: the real trade, gentleness against energy;
+        bottom-left is the corner worth being in. Look at: a tracked carrier
+        with a 22 kg legged scout sits closest to that corner, because it
+        splits the two conflicting requirements between two machines instead of
+        compromising on one.
+    docs: [docs/design/11-platform-topology.md, docs/design/12-hybrid-mobility.md]
 
   - id: geometry
     title: Drawings
