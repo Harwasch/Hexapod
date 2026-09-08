@@ -229,3 +229,23 @@
   revolution, and using bbox corners over-estimates the width by up to √2 and shrinks the object to
   60 % of the frame. Worked around with an exact radius/z extent in `auto_fit()`. Worth a line in the
   `build123d` skill.
+* Round 18, continuous cable drive. Two modelling errors made and caught inside one session, both the
+  same shape: a friction drive was specified in the wrong direction. The first pass solved the wrap
+  angle by pinning the tight side at the rope's allowable tension, which is backwards — a belt or rope
+  drive is specified by choosing the wrap and then computing the pretension needed, because low
+  friction shows up as a permanent bearing load, not as a broken rope. The second was treating rope
+  diameter and pulley diameter as independent when D/d couples them, so a "valid" design came out at
+  D/d 6.4 against a stated minimum of 8. `hw-simulation` (or a new mechanisms note) should carry the
+  Euler-Eytelwein sizing direction and the D/d coupling as a worked pattern; both are standard and
+  both were re-derived wrongly first.
+* Round 18. `marlowropes.com` serves an interstitial CAPTCHA (HTTP 202, sgcaptcha redirect) to this
+  VM, so the bend-over-sheave life data behind the whole rope-life conclusion could not be fetched —
+  only a search-index summary of it. Recorded as `blocked` in the manifest and the conclusion restated
+  as a dimensionless ratio that does not depend on it. `hw-documentation` should say explicitly that a
+  search-result summary is NOT a source, and give the pattern used here: quarantine the unfetched
+  number, state the conclusion without it, and use it only to size the gap.
+* Round 18 found a hole in round 8's own work: nobody ever computed the bend-fatigue life of the leg
+  capstan's rope, and it turns out to be cycled as hard per kilometre as a drivetrain would be. A
+  transmission element that flexes was accepted on strength and stiffness alone. `hw-verification`
+  should list bend/flex life as a required check for any rope, belt, chain or flexure, alongside the
+  static safety factor.

@@ -4,6 +4,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 PY=/opt/hw-py/bin/python
+$PY scripts/quantise_figures.py
 review-artifact --check
 review-artifact
 $PY scripts/export_models.py

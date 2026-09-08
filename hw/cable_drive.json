@@ -1,0 +1,728 @@
+{
+ "carrier": {
+  "m_pair_kg": 109.20217561343502,
+  "v_ms": 1.2,
+  "cot": 0.21,
+  "r_sprocket_m": 0.08,
+  "grade_deg": 30.0,
+  "n_drive": 2,
+  "T_sprocket_cont": 8.9986960792495,
+  "T_sprocket_peak": 30.424162934605448,
+  "sprocket_rev_per_s": 2.38732414637843,
+  "sprocket_rev_per_km": 1989.4367886486916,
+  "k_min_for_grade": 11.575352407231478,
+  "motor": "8318 100KV (HL Q9XL / Alibaba class)",
+  "motor_T_cont": 2.628357380773871,
+  "motor_n_noload": 4800.0,
+  "motor_rpm_at_vee_ratio": 2864.7889756541153
+ },
+ "rope": {
+  "leg_rope_d_mm": 5.0,
+  "mu_aluminium": 0.085,
+  "mu_vee": 0.27506577808748217,
+  "sf": 5.0,
+  "d_over_d_min": 8.0,
+  "mu_note": "unconfirmed; swept 0.05-0.25 in the figure. See docs/reference/manifest.yaml"
+ },
+ "geometry": {
+  "r_driven_m": 0.12,
+  "centre_m": 0.3,
+  "theta_plain_rad": 3.141592653589793
+ },
+ "architectures": {
+  "A_terminated": {
+   "name": "Terminated capstan, as designed",
+   "continuous": false,
+   "output_rev": 0.15,
+   "travel_m": 0.07539822368615504,
+   "note": "3 working wraps at 20:1 is 0.15 output revolutions: the wheel turns 54\u00b0 and stops. Termination is the whole problem."
+  },
+  "B_round_loop": {
+   "name": "Endless spliced loop, round groove",
+   "continuous": true,
+   "wrap_rad": 3.141592653589793,
+   "F_tangential": 253.5346911217121,
+   "T_tight_N": 1081.8448833680984,
+   "T_slack_N": 828.3101922463864,
+   "pretension_N": 955.0775378072424,
+   "shaft_load_N": 1910.1550756144848,
+   "rope_d_mm": 2.5,
+   "mbl_N": 7300.0,
+   "sf": 6.747732611419275,
+   "r_drive_m": 0.01,
+   "ratio": 12.0,
+   "D_over_d": 8.0,
+   "bends_per_km": 2859.289589435237,
+   "loop_m": 1.0492116682006163,
+   "note": "Works on a half wrap, but Dyneema's low friction on metal means the shafts carry a large pretension whenever the machine is switched on, load or no load, and the thick rope that tension needs forces a bigger drive pulley, which spends the ratio."
+  },
+  "C_vee_loop": {
+   "name": "Endless loop in a 36\u00b0 wedge groove",
+   "continuous": true,
+   "wrap_rad": 3.141592653589793,
+   "mu_effective": 0.27506577808748217,
+   "F_tangential": 253.5346911217121,
+   "T_tight_N": 438.1954532214714,
+   "T_slack_N": 184.66076209975927,
+   "pretension_N": 311.42810766061535,
+   "shaft_load_N": 622.8562153212307,
+   "rope_d_mm": 1.5,
+   "mbl_N": 2628.0,
+   "sf": 5.997323752859125,
+   "r_drive_m": 0.006,
+   "ratio": 20.0,
+   "D_over_d": 8.0,
+   "bends_per_km": 2885.430735812857,
+   "loop_m": 1.0397061217811099,
+   "creep_heat_W": 4.563624440190816,
+   "rope_T_critical_C": 80.0,
+   "note": "The wedge multiplies effective friction by 1/sin(beta/2). That cuts the shaft load 3.1x AND lets a thinner rope carry it, which lets a smaller pulley drive it, which raises the ratio from 12:1 to 20:1. This is the elevator traction sheave, which has done exactly this job for a century."
+  },
+  "D_toothed_belt": {
+   "name": "Toothed belt (Gates 8MGT)",
+   "continuous": true,
+   "r_drive_m": 0.028,
+   "ratio": 6.545454545454546,
+   "stages_for_target": 2,
+   "bends_per_km": 3403.8818960249046,
+   "note": "Positive, no slip, no creep, and its tension member is cord: a toothed belt IS a cable drive that solved termination by moulding teeth on it and embedding the cord in elastomer, which is also what protects it. Capped at 6.5:1 per stage by the smallest stock sprocket."
+  },
+  "E_clutch_pair": {
+   "name": "Two terminated capstans + one-way clutches",
+   "continuous": true,
+   "stroke_output_rev": 0.15,
+   "strokes_per_km": 13262.911924324611,
+   "note": "Keeps the termination, so it keeps no-slip and zero backlash, and the output turns forever. But every stroke is a full load reversal in the rope, the output torque pulses at the stroke rate, and reversing needs switchable clutches. Most parts, most failure modes."
+  }
+ },
+ "walking_joint": {
+  "gait_cycles_per_km": 1250.0,
+  "bends_per_km": 2500.0,
+  "D_over_d": 12.0,
+  "note": "analysis/capstan.py's rope in the femur/knee joint, walking at 1 m/s on a 0.4 m stride"
+ },
+ "life": {
+  "life_km_carrier": 2000.0,
+  "life_km_scout_legs": 721.6080271322797,
+  "known_band": [
+   1000.0,
+   10000.0
+  ],
+  "optimism_factor": 100.0,
+  "km_per_rope_carrier": [
+   0.34656870726037,
+   3.4656870726036995
+  ],
+  "km_per_rope_carrier_optimistic": [
+   34.656870726037,
+   346.56870726037
+  ],
+  "km_per_rope_joint": [
+   0.4,
+   4.0
+  ],
+  "caveat": "The 10^3-10^4 band is order-of-magnitude, from a source this VM could not open, measured on large offshore ropes near their working load. It sizes the gap; it does not close it. Even 100x optimistic for a lightly loaded 1.5 mm braid, the rope is a scheduled replacement item. This number has to be measured on the actual rope, groove and load before anything is built."
+ },
+ "sweep": [
+  {
+   "r_drive_mm": 5.0,
+   "ratio": 24.0,
+   "D_over_d": 6.666666666666667,
+   "bends_per_km": 2891.990719650515
+  },
+  {
+   "r_drive_mm": 5.555555555555555,
+   "ratio": 21.599999999999998,
+   "D_over_d": 7.407407407407407,
+   "bends_per_km": 2888.3450824966167
+  },
+  {
+   "r_drive_mm": 6.111111111111112,
+   "ratio": 19.636363636363633,
+   "D_over_d": 8.148148148148149,
+   "bends_per_km": 2884.7024507063134
+  },
+  {
+   "r_drive_mm": 6.666666666666666,
+   "ratio": 18.0,
+   "D_over_d": 8.888888888888888,
+   "bends_per_km": 2881.062841357171
+  },
+  {
+   "r_drive_mm": 7.222222222222222,
+   "ratio": 16.615384615384617,
+   "D_over_d": 9.62962962962963,
+   "bends_per_km": 2877.4262713394323
+  },
+  {
+   "r_drive_mm": 7.777777777777778,
+   "ratio": 15.428571428571429,
+   "D_over_d": 10.37037037037037,
+   "bends_per_km": 2873.7927573573497
+  },
+  {
+   "r_drive_mm": 8.333333333333334,
+   "ratio": 14.4,
+   "D_over_d": 11.111111111111112,
+   "bends_per_km": 2870.1623159305195
+  },
+  {
+   "r_drive_mm": 8.88888888888889,
+   "ratio": 13.5,
+   "D_over_d": 11.851851851851853,
+   "bends_per_km": 2866.5349633951937
+  },
+  {
+   "r_drive_mm": 9.444444444444445,
+   "ratio": 12.705882352941176,
+   "D_over_d": 12.592592592592593,
+   "bends_per_km": 2862.9107159056002
+  },
+  {
+   "r_drive_mm": 10.0,
+   "ratio": 12.0,
+   "D_over_d": 13.333333333333334,
+   "bends_per_km": 2859.289589435237
+  },
+  {
+   "r_drive_mm": 10.555555555555555,
+   "ratio": 11.368421052631579,
+   "D_over_d": 14.074074074074074,
+   "bends_per_km": 2855.671599778173
+  },
+  {
+   "r_drive_mm": 11.11111111111111,
+   "ratio": 10.799999999999999,
+   "D_over_d": 14.814814814814815,
+   "bends_per_km": 2852.056762550332
+  },
+  {
+   "r_drive_mm": 11.666666666666666,
+   "ratio": 10.285714285714286,
+   "D_over_d": 15.555555555555555,
+   "bends_per_km": 2848.4450931907704
+  },
+  {
+   "r_drive_mm": 12.222222222222221,
+   "ratio": 9.818181818181818,
+   "D_over_d": 16.296296296296294,
+   "bends_per_km": 2844.8366069629487
+  },
+  {
+   "r_drive_mm": 12.777777777777777,
+   "ratio": 9.391304347826088,
+   "D_over_d": 17.037037037037035,
+   "bends_per_km": 2841.2313189559904
+  },
+  {
+   "r_drive_mm": 13.333333333333332,
+   "ratio": 9.0,
+   "D_over_d": 17.777777777777775,
+   "bends_per_km": 2837.6292440859397
+  },
+  {
+   "r_drive_mm": 13.888888888888888,
+   "ratio": 8.64,
+   "D_over_d": 18.518518518518515,
+   "bends_per_km": 2834.030397097005
+  },
+  {
+   "r_drive_mm": 14.444444444444445,
+   "ratio": 8.307692307692308,
+   "D_over_d": 19.25925925925926,
+   "bends_per_km": 2830.4347925627985
+  },
+  {
+   "r_drive_mm": 15.0,
+   "ratio": 8.0,
+   "D_over_d": 20.0,
+   "bends_per_km": 2826.842444887565
+  },
+  {
+   "r_drive_mm": 15.555555555555555,
+   "ratio": 7.714285714285714,
+   "D_over_d": 20.74074074074074,
+   "bends_per_km": 2823.2533683074034
+  },
+  {
+   "r_drive_mm": 16.11111111111111,
+   "ratio": 7.448275862068965,
+   "D_over_d": 21.48148148148148,
+   "bends_per_km": 2819.6675768914843
+  },
+  {
+   "r_drive_mm": 16.666666666666668,
+   "ratio": 7.2,
+   "D_over_d": 22.222222222222225,
+   "bends_per_km": 2816.0850845432537
+  },
+  {
+   "r_drive_mm": 17.22222222222222,
+   "ratio": 6.967741935483871,
+   "D_over_d": 22.962962962962962,
+   "bends_per_km": 2812.505905001634
+  },
+  {
+   "r_drive_mm": 17.77777777777778,
+   "ratio": 6.75,
+   "D_over_d": 23.703703703703706,
+   "bends_per_km": 2808.9300518422156
+  },
+  {
+   "r_drive_mm": 18.333333333333332,
+   "ratio": 6.545454545454545,
+   "D_over_d": 24.444444444444443,
+   "bends_per_km": 2805.357538478441
+  },
+  {
+   "r_drive_mm": 18.88888888888889,
+   "ratio": 6.352941176470588,
+   "D_over_d": 25.185185185185187,
+   "bends_per_km": 2801.7883781627775
+  },
+  {
+   "r_drive_mm": 19.444444444444446,
+   "ratio": 6.171428571428571,
+   "D_over_d": 25.925925925925927,
+   "bends_per_km": 2798.222583987893
+  },
+  {
+   "r_drive_mm": 20.0,
+   "ratio": 6.0,
+   "D_over_d": 26.666666666666668,
+   "bends_per_km": 2794.6601688878122
+  },
+  {
+   "r_drive_mm": 20.555555555555557,
+   "ratio": 5.837837837837838,
+   "D_over_d": 27.40740740740741,
+   "bends_per_km": 2791.1011456390747
+  },
+  {
+   "r_drive_mm": 21.11111111111111,
+   "ratio": 5.684210526315789,
+   "D_over_d": 28.14814814814815,
+   "bends_per_km": 2787.5455268618757
+  },
+  {
+   "r_drive_mm": 21.666666666666668,
+   "ratio": 5.538461538461538,
+   "D_over_d": 28.88888888888889,
+   "bends_per_km": 2783.9933250212134
+  },
+  {
+   "r_drive_mm": 22.22222222222222,
+   "ratio": 5.3999999999999995,
+   "D_over_d": 29.62962962962963,
+   "bends_per_km": 2780.444552428018
+  },
+  {
+   "r_drive_mm": 22.77777777777778,
+   "ratio": 5.268292682926829,
+   "D_over_d": 30.37037037037037,
+   "bends_per_km": 2776.899221240275
+  },
+  {
+   "r_drive_mm": 23.333333333333336,
+   "ratio": 5.142857142857142,
+   "D_over_d": 31.111111111111114,
+   "bends_per_km": 2773.357343464144
+  },
+  {
+   "r_drive_mm": 23.88888888888889,
+   "ratio": 5.0232558139534875,
+   "D_over_d": 31.85185185185185,
+   "bends_per_km": 2769.8189309550735
+  },
+  {
+   "r_drive_mm": 24.444444444444446,
+   "ratio": 4.909090909090908,
+   "D_over_d": 32.592592592592595,
+   "bends_per_km": 2766.2839954189003
+  },
+  {
+   "r_drive_mm": 25.0,
+   "ratio": 4.8,
+   "D_over_d": 33.333333333333336,
+   "bends_per_km": 2762.7525484129487
+  },
+  {
+   "r_drive_mm": 25.555555555555557,
+   "ratio": 4.695652173913043,
+   "D_over_d": 34.074074074074076,
+   "bends_per_km": 2759.224601347118
+  },
+  {
+   "r_drive_mm": 26.111111111111114,
+   "ratio": 4.595744680851063,
+   "D_over_d": 34.81481481481482,
+   "bends_per_km": 2755.7001654849705
+  },
+  {
+   "r_drive_mm": 26.666666666666668,
+   "ratio": 4.499999999999999,
+   "D_over_d": 35.55555555555556,
+   "bends_per_km": 2752.179251944801
+  },
+  {
+   "r_drive_mm": 27.222222222222225,
+   "ratio": 4.408163265306122,
+   "D_over_d": 36.2962962962963,
+   "bends_per_km": 2748.6618717007113
+  },
+  {
+   "r_drive_mm": 27.77777777777778,
+   "ratio": 4.319999999999999,
+   "D_over_d": 37.03703703703704,
+   "bends_per_km": 2745.1480355836707
+  },
+  {
+   "r_drive_mm": 28.333333333333336,
+   "ratio": 4.235294117647058,
+   "D_over_d": 37.77777777777778,
+   "bends_per_km": 2741.637754282573
+  },
+  {
+   "r_drive_mm": 28.88888888888889,
+   "ratio": 4.153846153846153,
+   "D_over_d": 38.51851851851852,
+   "bends_per_km": 2738.1310383452824
+  },
+  {
+   "r_drive_mm": 29.444444444444446,
+   "ratio": 4.075471698113207,
+   "D_over_d": 39.25925925925926,
+   "bends_per_km": 2734.6278981796786
+  },
+  {
+   "r_drive_mm": 30.000000000000004,
+   "ratio": 3.9999999999999996,
+   "D_over_d": 40.00000000000001,
+   "bends_per_km": 2731.128344054693
+  },
+  {
+   "r_drive_mm": 30.555555555555557,
+   "ratio": 3.927272727272727,
+   "D_over_d": 40.74074074074074,
+   "bends_per_km": 2727.632386101335
+  },
+  {
+   "r_drive_mm": 31.111111111111114,
+   "ratio": 3.8571428571428568,
+   "D_over_d": 41.48148148148149,
+   "bends_per_km": 2724.140034313719
+  },
+  {
+   "r_drive_mm": 31.66666666666666,
+   "ratio": 3.7894736842105265,
+   "D_over_d": 42.222222222222214,
+   "bends_per_km": 2720.651298550073
+  },
+  {
+   "r_drive_mm": 32.22222222222222,
+   "ratio": 3.7241379310344827,
+   "D_over_d": 42.96296296296296,
+   "bends_per_km": 2717.1661885337585
+  },
+  {
+   "r_drive_mm": 32.77777777777777,
+   "ratio": 3.661016949152543,
+   "D_over_d": 43.703703703703695,
+   "bends_per_km": 2713.684713854263
+  },
+  {
+   "r_drive_mm": 33.333333333333336,
+   "ratio": 3.6,
+   "D_over_d": 44.44444444444445,
+   "bends_per_km": 2710.206883968205
+  },
+  {
+   "r_drive_mm": 33.888888888888886,
+   "ratio": 3.5409836065573774,
+   "D_over_d": 45.18518518518518,
+   "bends_per_km": 2706.732708200321
+  },
+  {
+   "r_drive_mm": 34.44444444444444,
+   "ratio": 3.4838709677419355,
+   "D_over_d": 45.925925925925924,
+   "bends_per_km": 2703.2621957444494
+  },
+  {
+   "r_drive_mm": 34.99999999999999,
+   "ratio": 3.428571428571429,
+   "D_over_d": 46.66666666666666,
+   "bends_per_km": 2699.7953556645075
+  },
+  {
+   "r_drive_mm": 35.55555555555556,
+   "ratio": 3.375,
+   "D_over_d": 47.40740740740741,
+   "bends_per_km": 2696.332196895466
+  },
+  {
+   "r_drive_mm": 36.11111111111111,
+   "ratio": 3.3230769230769233,
+   "D_over_d": 48.148148148148145,
+   "bends_per_km": 2692.8727282443124
+  },
+  {
+   "r_drive_mm": 36.666666666666664,
+   "ratio": 3.2727272727272725,
+   "D_over_d": 48.888888888888886,
+   "bends_per_km": 2689.4169583910098
+  },
+  {
+   "r_drive_mm": 37.22222222222222,
+   "ratio": 3.2238805970149254,
+   "D_over_d": 49.629629629629626,
+   "bends_per_km": 2685.96489588945
+  },
+  {
+   "r_drive_mm": 37.77777777777778,
+   "ratio": 3.176470588235294,
+   "D_over_d": 50.370370370370374,
+   "bends_per_km": 2682.516549168403
+  },
+  {
+   "r_drive_mm": 38.33333333333333,
+   "ratio": 3.130434782608696,
+   "D_over_d": 51.11111111111111,
+   "bends_per_km": 2679.071926532455
+  },
+  {
+   "r_drive_mm": 38.88888888888889,
+   "ratio": 3.0857142857142854,
+   "D_over_d": 51.851851851851855,
+   "bends_per_km": 2675.6310361629435
+  },
+  {
+   "r_drive_mm": 39.44444444444444,
+   "ratio": 3.0422535211267605,
+   "D_over_d": 52.59259259259259,
+   "bends_per_km": 2672.193886118888
+  },
+  {
+   "r_drive_mm": 40.0,
+   "ratio": 3.0,
+   "D_over_d": 53.333333333333336,
+   "bends_per_km": 2668.760484337911
+  },
+  {
+   "r_drive_mm": 40.55555555555555,
+   "ratio": 2.9589041095890414,
+   "D_over_d": 54.07407407407407,
+   "bends_per_km": 2665.3308386371564
+  },
+  {
+   "r_drive_mm": 41.11111111111111,
+   "ratio": 2.9189189189189193,
+   "D_over_d": 54.81481481481481,
+   "bends_per_km": 2661.9049567142
+  },
+  {
+   "r_drive_mm": 41.666666666666664,
+   "ratio": 2.88,
+   "D_over_d": 55.55555555555555,
+   "bends_per_km": 2658.482846147955
+  },
+  {
+   "r_drive_mm": 42.222222222222214,
+   "ratio": 2.842105263157895,
+   "D_over_d": 56.29629629629628,
+   "bends_per_km": 2655.0645143995707
+  },
+  {
+   "r_drive_mm": 42.77777777777778,
+   "ratio": 2.8051948051948052,
+   "D_over_d": 57.03703703703704,
+   "bends_per_km": 2651.6499688133276
+  },
+  {
+   "r_drive_mm": 43.33333333333333,
+   "ratio": 2.7692307692307696,
+   "D_over_d": 57.77777777777777,
+   "bends_per_km": 2648.239216617524
+  },
+  {
+   "r_drive_mm": 43.888888888888886,
+   "ratio": 2.7341772151898733,
+   "D_over_d": 58.51851851851851,
+   "bends_per_km": 2644.832264925359
+  },
+  {
+   "r_drive_mm": 44.444444444444436,
+   "ratio": 2.7,
+   "D_over_d": 59.259259259259245,
+   "bends_per_km": 2641.429120735809
+  },
+  {
+   "r_drive_mm": 45.0,
+   "ratio": 2.6666666666666665,
+   "D_over_d": 60.0,
+   "bends_per_km": 2638.029790934498
+  },
+  {
+   "r_drive_mm": 45.55555555555555,
+   "ratio": 2.6341463414634148,
+   "D_over_d": 60.74074074074073,
+   "bends_per_km": 2634.634282294564
+  },
+  {
+   "r_drive_mm": 46.11111111111111,
+   "ratio": 2.602409638554217,
+   "D_over_d": 61.481481481481474,
+   "bends_per_km": 2631.242601477517
+  },
+  {
+   "r_drive_mm": 46.666666666666664,
+   "ratio": 2.5714285714285716,
+   "D_over_d": 62.22222222222222,
+   "bends_per_km": 2627.854755034095
+  },
+  {
+   "r_drive_mm": 47.22222222222222,
+   "ratio": 2.541176470588235,
+   "D_over_d": 62.96296296296296,
+   "bends_per_km": 2624.470749405112
+  },
+  {
+   "r_drive_mm": 47.77777777777777,
+   "ratio": 2.511627906976744,
+   "D_over_d": 63.703703703703695,
+   "bends_per_km": 2621.090590922301
+  },
+  {
+   "r_drive_mm": 48.333333333333336,
+   "ratio": 2.4827586206896552,
+   "D_over_d": 64.44444444444444,
+   "bends_per_km": 2617.7142858091506
+  },
+  {
+   "r_drive_mm": 48.888888888888886,
+   "ratio": 2.4545454545454546,
+   "D_over_d": 65.18518518518518,
+   "bends_per_km": 2614.3418401817403
+  },
+  {
+   "r_drive_mm": 49.44444444444444,
+   "ratio": 2.4269662921348316,
+   "D_over_d": 65.92592592592592,
+   "bends_per_km": 2610.9732600495627
+  },
+  {
+   "r_drive_mm": 49.99999999999999,
+   "ratio": 2.4,
+   "D_over_d": 66.66666666666666,
+   "bends_per_km": 2607.608551316351
+  },
+  {
+   "r_drive_mm": 50.55555555555556,
+   "ratio": 2.3736263736263736,
+   "D_over_d": 67.4074074074074,
+   "bends_per_km": 2604.2477197808907
+  },
+  {
+   "r_drive_mm": 51.11111111111111,
+   "ratio": 2.347826086956522,
+   "D_over_d": 68.14814814814814,
+   "bends_per_km": 2600.8907711378324
+  },
+  {
+   "r_drive_mm": 51.666666666666664,
+   "ratio": 2.32258064516129,
+   "D_over_d": 68.88888888888889,
+   "bends_per_km": 2597.5377109784954
+  },
+  {
+   "r_drive_mm": 52.22222222222222,
+   "ratio": 2.297872340425532,
+   "D_over_d": 69.62962962962963,
+   "bends_per_km": 2594.188544791672
+  },
+  {
+   "r_drive_mm": 52.77777777777778,
+   "ratio": 2.2736842105263158,
+   "D_over_d": 70.37037037037037,
+   "bends_per_km": 2590.8432779644195
+  },
+  {
+   "r_drive_mm": 53.33333333333333,
+   "ratio": 2.25,
+   "D_over_d": 71.1111111111111,
+   "bends_per_km": 2587.5019157828506
+  },
+  {
+   "r_drive_mm": 53.888888888888886,
+   "ratio": 2.2268041237113403,
+   "D_over_d": 71.85185185185185,
+   "bends_per_km": 2584.164463432921
+  },
+  {
+   "r_drive_mm": 54.44444444444444,
+   "ratio": 2.2040816326530615,
+   "D_over_d": 72.5925925925926,
+   "bends_per_km": 2580.830926001204
+  },
+  {
+   "r_drive_mm": 55.0,
+   "ratio": 2.1818181818181817,
+   "D_over_d": 73.33333333333333,
+   "bends_per_km": 2577.501308475671
+  },
+  {
+   "r_drive_mm": 55.55555555555555,
+   "ratio": 2.16,
+   "D_over_d": 74.07407407407406,
+   "bends_per_km": 2574.1756157464583
+  },
+  {
+   "r_drive_mm": 56.111111111111114,
+   "ratio": 2.1386138613861387,
+   "D_over_d": 74.81481481481482,
+   "bends_per_km": 2570.8538526066313
+  },
+  {
+   "r_drive_mm": 56.666666666666664,
+   "ratio": 2.1176470588235294,
+   "D_over_d": 75.55555555555556,
+   "bends_per_km": 2567.5360237529458
+  },
+  {
+   "r_drive_mm": 57.22222222222222,
+   "ratio": 2.0970873786407767,
+   "D_over_d": 76.29629629629629,
+   "bends_per_km": 2564.2221337866004
+  },
+  {
+   "r_drive_mm": 57.77777777777778,
+   "ratio": 2.076923076923077,
+   "D_over_d": 77.03703703703704,
+   "bends_per_km": 2560.9121872139885
+  },
+  {
+   "r_drive_mm": 58.33333333333333,
+   "ratio": 2.0571428571428574,
+   "D_over_d": 77.77777777777777,
+   "bends_per_km": 2557.6061884474425
+  },
+  {
+   "r_drive_mm": 58.888888888888886,
+   "ratio": 2.0377358490566038,
+   "D_over_d": 78.51851851851852,
+   "bends_per_km": 2554.3041418059734
+  },
+  {
+   "r_drive_mm": 59.444444444444436,
+   "ratio": 2.018691588785047,
+   "D_over_d": 79.25925925925925,
+   "bends_per_km": 2551.006051516006
+  },
+  {
+   "r_drive_mm": 60.0,
+   "ratio": 2.0,
+   "D_over_d": 80.0,
+   "bends_per_km": 2547.7119217121094
+  }
+ ]
+}

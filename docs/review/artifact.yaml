@@ -32,6 +32,8 @@ phases:
       - docs/design/platform/hybrid-tradeoff.png
       - docs/design/platform/marsupial-scale.png
       - docs/design/platform/marsupial-system.png
+      - docs/design/platform/cable-drive-architectures.png
+      - docs/design/platform/cable-drive-tradeoff.png
     captions:
       docs/design/platform/topology-energy.png: >-
         The founding assumption, tested. Left: cost of transport by topology.
@@ -93,7 +95,31 @@ phases:
         walking; a ~100 g holding brake per pitch joint makes that zero and
         takes endurance from 1.9 h to 3.1 h. That brake is the single biggest
         decision on the scout.
-    docs: [docs/design/11-platform-topology.md, docs/design/12-hybrid-mobility.md, docs/design/13-marsupial-system.md]
+      docs/design/platform/cable-drive-architectures.png: >-
+        Round 18, answering the review's question: a joint capstan needs the
+        cable anchored at both ends, so can a cable drive turn a wheel? Five
+        ways, all sized on the carrier's own drive sprocket (9 N.m level,
+        30 N.m on a 30 degree slope). A is what we have and it turns the wheel
+        54 degrees before it stops. B splices the rope into an endless loop --
+        that works, but Dyneema's very low friction on metal means the shafts
+        carry 1910 N of pretension whenever the machine is switched on. Look
+        at C: putting the same loop in a 36 degree wedge groove raises
+        effective friction to 0.28, which cuts the shaft load to 623 N AND
+        lets a 1.5 mm rope carry it instead of 2.5 mm, which lets a Ø12 pulley
+        drive it, which gives 20:1 in ONE stage. Rope size and pulley size are
+        one decision, not two. That is the elevator traction sheave.
+      docs/design/platform/cable-drive-tradeoff.png: >-
+        What it costs. Left: the rope's whole advantage is the small drive
+        pulley -- 20:1 in one stage where a toothed belt stops at 6.5:1 and
+        needs two shafts to get there. Middle and right: the price is that the
+        rope becomes a wear item. Every element is bent 2885 times per
+        kilometre driven, and published bend-over-sheave life for bare fibre
+        braid would put a rope at 0.3 to 3.5 km -- 35 to 350 km even if that
+        figure is a hundred times pessimistic here, against the ~2000 km of
+        transit a season. Look at the third bar: the walking leg's capstan
+        rope is cycled just as hard, 2500 bends per km, and ITS life was never
+        computed either. That is a hole in round 8, not a new objection.
+    docs: [docs/design/11-platform-topology.md, docs/design/12-hybrid-mobility.md, docs/design/13-marsupial-system.md, docs/design/14-continuous-cable-drive.md]
 
   - id: geometry
     title: Drawings

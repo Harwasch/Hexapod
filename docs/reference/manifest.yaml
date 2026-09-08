@@ -75,6 +75,37 @@ documents:
 
 # Example of a fetched document:
 #
+- id: gates-powergrip-gt3
+  title: PowerGrip GT3 Belt Drives Drive Design Manual
+  part: 8MGT / 5MGT / 14MGT synchronous belts and sprockets
+  publisher: Gates Corporation
+  revision: US, January 2014
+  url: https://www.gatesaustralia.com.au/~/media/files/gates-au/industrial/catalogues/powergrip-gt3-design-manual-us-january-2014.pdf
+  local: docs/reference/gates-powergrip-gt3-design-manual.pdf
+  retrieved: 2026-09-08
+  needed_by: []
+  notes: Smallest stock 8 mm-pitch sprocket is P22-8MGT, 22 grooves, pitch diameter 2.206 in = 56.0 mm (8mm Pitch PowerGrip Sprocket Specifications table). Stock range runs to P144-8MGT, so one toothed-belt stage tops out near 6.5:1. The positive-drive comparator in analysis/cable_drive_continuous.py.
+
+- id: marlow-hmpe-tech-talk-5
+  title: "HMPE Tech Talk 5: working loads, D:d ratios, inspection, shelf life"
+  publisher: Marlow Ropes
+  revision: unknown
+  url: https://www.marlowropes.com/news/hmpe-tech-talk-5-working-loads-dd-rations-inspection-shelf-life/
+  local: null
+  blocked: marlowropes.com serves an interstitial CAPTCHA (HTTP 202, sgcaptcha redirect) to this VM; curl and WebFetch both return the challenge page, not the article. A human should open it and paste the numbers.
+  needed_by: []
+  notes: The bend-over-sheave scaling rules used in analysis/cable_drive_continuous.py -- D:d >= 8 recommended for Dyneema, doubling D:d roughly triples life, a 35 percent load increase roughly halves it, reported fatigue lives in the 10^3 to 10^4 cycle band -- come from the search-index summary of this page, NOT from the page itself. Treated as order-of-magnitude only; every conclusion that uses them is also reported as a dimensionless ratio that does not depend on them.
+
+- id: uhmwpe-friction-on-metal
+  title: Coefficient of friction, UHMWPE (Dyneema) rope on metal drums
+  publisher: Practical Sailor (capstan-equation article) and general UHMWPE material data
+  revision: unknown
+  url: https://www.practical-sailor.com/subscriber-only/unwrapping-the-revealing-capstan-equation
+  local: null
+  blocked: subscriber-only. Values used (Dyneema on an aluminium drum mu about 0.085; UHMWPE on steel mu_s 0.15-0.20, mu_k 0.12-0.20) come from the search-index summary, not a fetched primary source.
+  needed_by: []
+  notes: Because the value is unconfirmed, analysis/cable_drive_continuous.py sweeps mu from 0.05 to 0.25 and reports the wrap angle as a function of mu rather than trusting one number.
+
 # - id: mcp1700-datasheet
 #   title: MCP1700 Low Quiescent Current LDO
 #   part: MCP1700T-3302E/TT
