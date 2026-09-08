@@ -1,10 +1,18 @@
-# Review — Round 17: two machines — a tracked carrier that carries a 22 kg legged scout
+# Review — Rounds 17-18: the two-machine split, and whether a rope can drive a wheel
 
-`platform` · requested 2026-09-07 · branch `claude/hexapod-robot-design-mt516g`
+`platform` · requested 2026-09-08 · branch `claude/hexapod-robot-design-mt516g`
 
-The review converged on splitting the brief across two platforms. Sized on this project's own numbers, the pair is 109 kg against the hexapod's 190, 1224 Wh a day against 4444, and 9 kPa on sensitive ground against 220. The scout's joint torques are about a tenth of the hexapod's (knee 41 N.m against 392), which needs 7:1 to 17:1 from a $50 off-the-shelf motor rather than the 25:1 to 100:1 the hexapod needed. A ~100 g holding brake per pitch joint takes standing power from 78 W to zero and endurance from 1.9 h to 3.1 h. Fourteen rounds of actuator design were aimed at a machine this architecture does not contain: the method survives, the parts do not.
+Round 17 sized the carrier-plus-scout pair: 109 kg against the hexapod's 190, 1224 Wh a day against 4444, 9 kPa on sensitive ground against 220, and scout joint torques about a tenth of the hexapod's. Round 18 answers the question that came back on it -- a joint capstan needs the rope anchored at both ends, so can a cable drive turn a wheel? Yes: termination buys no-slip and zero backlash and a wheel needs neither. A 36 degree wedge groove raises effective friction to 0.28, which cuts shaft pretension from 1910 to 623 N, lets a 1.5 mm rope carry it, lets a Ø12 pulley drive it, and gives 20:1 in one stage where a toothed belt stops at 6.5:1. The cost is that the rope becomes a wear item at 2885 bend cycles per km -- and the same sum says the walking leg's rope, accepted in round 8, is cycled just as hard and its life was never computed.
 
 ## What you are agreeing to
+
+**cable-drive-architectures.png**
+
+![cable-drive-architectures.png](../design/platform/cable-drive-architectures.png)
+
+**cable-drive-tradeoff.png**
+
+![cable-drive-tradeoff.png](../design/platform/cable-drive-tradeoff.png)
 
 **marsupial-scale.png**
 
@@ -17,6 +25,7 @@ The review converged on splitting the brief across two platforms. Sized on this 
 | File | Opens in |
 |---|---|
 | [docs/design/13-marsupial-system.md](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/docs/design/13-marsupial-system.md) | renders on GitHub |
+| [docs/design/14-continuous-cable-drive.md](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/docs/design/14-continuous-cable-drive.md) | renders on GitHub |
 
 ## For context
 
@@ -24,16 +33,16 @@ Sources and working files. Not part of the agreement — these change as work go
 
 | File | Opens in |
 |---|---|
+| [analysis/cable_drive_continuous.py](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/analysis/cable_drive_continuous.py) | plain text on GitHub |
 | [analysis/marsupial.py](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/analysis/marsupial.py) | plain text on GitHub |
-| [hw/marsupial.json](https://github.com/Harwasch/Hexapod/blob/claude/hexapod-robot-design-mt516g/hw/marsupial.json) | plain text on GitHub |
 
 ## What we need decided
 
-1. Do you accept the split into two machines, or must one machine still do both?
-2. The scout's 22 kg is the number everything else follows from, and it was picked because it is roughly what one person can lift into a vehicle. Is that the right anchor, or should the scout be sized by the task it has to do?
-3. A holding brake or non-backdrivable stage on each pitch joint takes standing power from 78 W to 0 W and endurance from 1.9 h to 3.1 h, for about 100 g a joint. Should that be a written requirement on the scout?
-4. The docking interface — launch, recover, latch, recharge, with the scout coming back muddy and misaligned — is the hardest unbuilt mechanism in this system and has no precedent in the repo. Design that next, or design the scout's leg and actuator first?
-5. The Wheemo frameless unit and the 25-lobe cycloid were sized for 390 N.m at the knee; the scout needs 41. Do we retire that unit, or keep it alive for the carrier's cutting arm, which has never been sized?
+1. Still open from round 17: do you accept the split into two machines, or must one machine still do both?
+2. Still open from round 17: the scout's 22 kg is the number everything follows from, and it was picked as roughly what one person can lift into a vehicle. Right anchor, or should the scout be sized by its task?
+3. On the drivetrain: is a rope you replace on a schedule acceptable, the way a track or a chain is? If yes the wedge-groove loop gives 20:1 in one stage from a sealed hull. If no, it is a two-stage toothed belt and the question is closed.
+4. Round 8's capstan rope has the same bend-cycle exposure and its life was never computed. Should I go back and put a number on it, or is the marsupial split about to retire that actuator anyway?
+5. Nobody has ever written down a gradeability requirement. I assumed 30 degrees for the carrier and it sets the peak drive torque. What should it actually be?
 
 ## Decision
 
