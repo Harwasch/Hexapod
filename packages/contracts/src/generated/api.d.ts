@@ -283,7 +283,7 @@ export interface components {
              * Defaultvisible
              * @default false
              */
-            defaultVisible: boolean;
+            defaultVisible?: boolean;
             /** Footprint */
             footprint?: (components["schemas"]["Polygon"] | components["schemas"]["MultiPolygon"]) | null;
             license?: components["schemas"]["LicenseMetadata"] | null;
@@ -311,7 +311,7 @@ export interface components {
              * Defaultvisible
              * @default false
              */
-            defaultVisible: boolean;
+            defaultVisible?: boolean;
             /** Footprint */
             footprint?: (components["schemas"]["Polygon"] | components["schemas"]["MultiPolygon"]) | null;
             license?: components["schemas"]["LicenseMetadata"] | null;
@@ -442,7 +442,7 @@ export interface components {
              * @description Degrees
              * @default 0
              */
-            heading: number;
+            heading?: number;
             /**
              * Height
              * @description Ellipsoidal height in metres
@@ -452,7 +452,7 @@ export interface components {
              * Isdefault
              * @default false
              */
-            isDefault: boolean;
+            isDefault?: boolean;
             /** Latitude */
             latitude: number;
             /** Longitude */
@@ -464,13 +464,13 @@ export interface components {
              * @description Degrees
              * @default -30
              */
-            pitch: number;
+            pitch?: number;
             /**
              * Roll
              * @description Degrees
              * @default 0
              */
-            roll: number;
+            roll?: number;
         };
         /** CameraBookmarkRead */
         CameraBookmarkRead: {
@@ -544,12 +544,12 @@ export interface components {
              * Requestvertexnormals
              * @default true
              */
-            requestVertexNormals: boolean;
+            requestVertexNormals?: boolean;
             /**
              * Requestwatermask
              * @default false
              */
-            requestWaterMask: boolean;
+            requestWaterMask?: boolean;
             /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
@@ -584,7 +584,7 @@ export interface components {
              * Clamptoground
              * @default true
              */
-            clampToGround: boolean;
+            clampToGround?: boolean;
             /** Fill */
             fill?: string | null;
             /** Stroke */
@@ -669,7 +669,7 @@ export interface components {
              * Registerassets
              * @default true
              */
-            registerAssets: boolean;
+            registerAssets?: boolean;
         };
         /** IonStatus */
         IonStatus: {
@@ -695,7 +695,7 @@ export interface components {
              * Defaultvisible
              * @default false
              */
-            defaultVisible: boolean;
+            defaultVisible?: boolean;
             /** Description */
             description?: string | null;
             legend?: components["schemas"]["LegendMetadata"] | null;
@@ -812,7 +812,7 @@ export interface components {
              * Requiresattribution
              * @default true
              */
-            requiresAttribution: boolean;
+            requiresAttribution?: boolean;
             /** Spdxid */
             spdxId?: string | null;
             /** Url */
@@ -837,12 +837,12 @@ export interface components {
              * Maxzoom
              * @default 14
              */
-            maxZoom: number;
+            maxZoom?: number;
             /**
              * Minzoom
              * @default 0
              */
-            minZoom: number;
+            minZoom?: number;
             /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
@@ -857,12 +857,12 @@ export interface components {
              * Attenuation
              * @default true
              */
-            attenuation: boolean;
+            attenuation?: boolean;
             /**
              * Eyedomelighting
              * @default true
              */
-            eyeDomeLighting: boolean;
+            eyeDomeLighting?: boolean;
             /** Maximumattenuation */
             maximumAttenuation?: number | null;
         };
@@ -909,15 +909,21 @@ export interface components {
         /** RenderConfig */
         RenderConfig: {
             /**
+             * Clipfootprint
+             * @default catalog
+             * @enum {string}
+             */
+            clipFootprint?: "catalog" | "tileset";
+            /**
              * Clipsworld
              * @default true
              */
-            clipsWorld: boolean;
+            clipsWorld?: boolean;
             /**
              * Heightoffsetm
              * @default 0
              */
-            heightOffsetM: number;
+            heightOffsetM?: number;
             /** Maximumscreenspaceerror */
             maximumScreenSpaceError?: number | null;
             pointCloudShading?: components["schemas"]["PointCloudShading"] | null;
@@ -939,7 +945,7 @@ export interface components {
              * Opacity
              * @default 1
              */
-            opacity: number;
+            opacity?: number;
         };
         /**
          * Representation
@@ -1098,7 +1104,7 @@ export interface components {
              * @default item
              * @enum {string}
              */
-            kind: "item" | "collection" | "catalog";
+            kind?: "item" | "collection" | "catalog";
             /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
@@ -1168,7 +1174,7 @@ export interface components {
              * Format
              * @default image/png
              */
-            format: string;
+            format?: string;
             /** Layer */
             layer: string;
             /** Maximumlevel */
@@ -1177,7 +1183,7 @@ export interface components {
              * Style
              * @default default
              */
-            style: string;
+            style?: string;
             /** Tilematrixsetid */
             tileMatrixSetId: string;
             /**
@@ -1199,14 +1205,14 @@ export interface components {
              * Minimumlevel
              * @default 0
              */
-            minimumLevel: number;
+            minimumLevel?: number;
             /** Subdomains */
             subdomains?: string[] | null;
             /**
              * Tilewidth
              * @default 256
              */
-            tileWidth: number;
+            tileWidth?: number;
             /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}

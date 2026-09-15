@@ -1,0 +1,222 @@
+import { expect, mockApi, test } from "./fixtures";
+
+test.describe("boot", () => {
+  test("app boots, viewer initializes and onboarding shows", async ({ app }) => {
+    await expect(app.getByTestId("onboarding")).toBeVisible();
+    await expect(app.getByRole("heading", { name: "Explore the living world" })).toBeVisible();
+    await expect(app.getByTestId("status-bar")).toContainText("Planet");
+    const errors: string[] = [];
+    app.on("pageerror", (e) => errors.push(e.message));
+    await app.waitForTimeout(500);
+    expect(errors).toEqual([]);
+  });
+
+  test("API failure does not crash the viewer", async ({ page }) => {
+    await mockApi(page, { apiDown: true });
+    await page.goto("/");
+    await expect(page.locator("canvas").first()).toBeVisible();
+    await expect(page.getByTestId("notice-api-offline")).toBeVisible();
+    await page.getByTestId("tool-sites").click();
+    await expect(page.getByTestId("site-card-cesium-splat-demo")).toBeVisible();
+    await expect(page.getByText("Built-in demo (API offline)")).toBeVisible();
+  });
+});
+
+test.describe("catalog", () => {
+  test("site catalog loads and fly-to-site works", async ({ app }) => {
+    await app.getByTestId("onboarding-explore").click();
+    await app.getByTestId("tool-sites").click();
+    await expect(app.getByTestId("sites-panel")).toBeVisible();
+    const card = app.getByTestId("site-card-cesium-splat-demo");
+    await expect(card).toContainText("Cesium Gaussian splat demo");
+    await expect(card).toContainText("Splat");
+    await card.click();
+    await expect(app.getByTestId("status-bar")).toContainText("Cesium Gaussian splat demo", {
+      timeout: 30_000,
+    });
+    await expect(app.getByTestId("representation-switcher")).toBeVisible({ timeout: 30_000 });
+    await expect(app.getByTestId("status-bar")).not.toContainText("Planet");
+  });
+
+  test("representation switch keeps the camera", async ({ app }) => {
+    await app.getByTestId("onboarding-demo").click();
+    const switcher = app.getByTestId("representation-switcher");
+    await expect(switcher).toBeVisible({ timeout: 30_000 });
+    await expect(app.getByTestId("status-bar")).toContainText("Splat");
+    const readCamera = () =>
+      app.evaluate(() => {
+        interface Handle {
+          viewer: {
+            camera: {
+              positionWC: { x: number; y: number; z: number };
+              heading: number;
+              pitch: number;
+            };
+          };
+        }
+        const camera = (window as unknown as { __twin?: Handle }).__twin?.viewer.camera;
+        if (!camera) throw new Error("scene handle missing");
+        return {
+          x: camera.positionWC.x,
+          y: camera.positionWC.y,
+          z: camera.positionWC.z,
+          heading: camera.heading,
+          pitch: camera.pitch,
+        };
+      });
+    // Wait for the arrival flight to settle before sampling the pose.
+    await expect
+      .poll(
+        async () => {
+          const a = await readCamera();
+          await app.waitForTimeout(600);
+          const b = await readCamera();
+          return Math.abs(a.x - b.x) + Math.abs(a.y - b.y) + Math.abs(a.z - b.z);
+        },
+        { timeout: 30_000 },
+      )
+      .toBeLessThan(0.01);
+    const before = await readCamera();
+    await switcher.getByRole("radio", { name: /Mesh/ }).click();
+    await expect(app.getByTestId("status-bar")).toContainText("Mesh");
+    await app.waitForTimeout(800);
+    expect(await readCamera()).toEqual(before);
+    await expect(switcher.getByRole("radio", { name: /Points/ })).toBeDisabled();
+  });
+
+  test("layer toggle updates runtime state and About sheet shows provenance", async ({ app }) => {
+    await app.getByTestId("tool-layers").click();
+    await expect(app.getByTestId("layers-panel")).toBeVisible();
+    await app.getByTestId("layers-filter").fill("world");
+    const card = app.getByTestId("layer-card-esa-worldcover-2021");
+    await expect(card).toBeVisible();
+    await expect(app.getByTestId("layer-card-openstreetmap")).toHaveCount(0);
+    await card.getByRole("switch").click();
+    await expect(card.getByRole("switch")).toHaveAttribute("aria-checked", "true", {
+      timeout: 20_000,
+    });
+    await expect(card).toContainText("Opacity", { timeout: 20_000 });
+    await card.getByRole("button", { name: /About ESA WorldCover/ }).click();
+    const about = app.getByTestId("layer-about");
+    await expect(about).toBeVisible();
+    await expect(about).toContainText("CC BY 4.0");
+    await expect(about).toContainText("© ESA WorldCover project 2021");
+    await expect(about).toContainText("Tree cover");
+  });
+});
+
+test.describe("interaction", () => {
+  test("clicking the world opens the inspector", async ({ app }) => {
+    await app.getByTestId("onboarding-explore").click();
+    await app.waitForTimeout(3500);
+    await app.mouse.click(720, 450);
+    await expect(app.getByTestId("inspector")).toBeVisible({ timeout: 15_000 });
+    await expect(app.getByTestId("inspector-position")).toContainText("°");
+    await app.keyboard.press("Escape");
+    await expect(app.getByTestId("inspector")).toHaveCount(0);
+  });
+
+  test("measurement tool can be entered and exited", async ({ app }) => {
+    await app.getByTestId("tool-measure").click();
+    await expect(app.getByTestId("measure-panel")).toBeVisible();
+    await app.getByTestId("measure-distance").click();
+    await expect(app.getByTestId("measure-active")).toContainText("Two clicks");
+    await app.keyboard.press("Escape");
+    await expect(app.getByTestId("measure-active")).toHaveCount(0);
+    await app.getByTestId("measure-area").click();
+    await expect(app.getByTestId("measure-active")).toBeVisible();
+    await app.getByTestId("measure-area").click();
+    await expect(app.getByTestId("measure-active")).toHaveCount(0);
+  });
+
+  test("command palette and keyboard shortcuts drive the UI", async ({ app }) => {
+    await app.keyboard.press("Control+k");
+    const palette = app.getByTestId("command-palette");
+    await expect(palette).toBeVisible();
+    await app.getByTestId("palette-input").fill("settings");
+    await app.keyboard.press("Enter");
+    await expect(app.getByTestId("settings-sheet")).toBeVisible();
+    await expect(app.getByRole("radiogroup", { name: "Quality preset" })).toBeVisible();
+    await app.keyboard.press("Escape");
+    await expect(app.getByTestId("settings-sheet")).toHaveCount(0);
+    await app.keyboard.press("l");
+    await expect(app.getByTestId("layers-panel")).toBeVisible();
+    await app.keyboard.press("Escape");
+    await expect(app.getByTestId("layers-panel")).toHaveCount(0);
+  });
+
+  test("major UI is keyboard accessible", async ({ app }) => {
+    await app.getByTestId("onboarding-explore").click();
+    await app.getByTestId("search-input").focus();
+    await app.keyboard.press("Tab");
+    await expect(app.getByTestId("tool-layers")).toBeFocused();
+    await app.keyboard.press("Enter");
+    await expect(app.getByTestId("layers-panel")).toBeVisible();
+    await app.keyboard.press("Tab");
+    await expect(app.getByTestId("tool-sites")).toBeFocused();
+    const rail = app.getByRole("toolbar", { name: "Tools" });
+    await expect(rail.getByRole("button")).toHaveCount(8);
+    for (const button of await rail.getByRole("button").all()) {
+      expect(await button.getAttribute("aria-label")).toBeTruthy();
+    }
+  });
+});
+
+test.describe("add data", () => {
+  test("validates input before submitting and persists a site", async ({ page }) => {
+    let created: unknown = null;
+    await mockApi(page, { onCreateSite: (body) => (created = body) });
+    await page.addInitScript(() =>
+      window.localStorage.setItem(
+        "twin.settings.v1",
+        JSON.stringify({ state: { onboardingDismissed: true }, version: 1 }),
+      ),
+    );
+    await page.goto("/");
+    await expect(page.getByTestId("status-bar")).toContainText("Alt");
+    await page.getByTestId("tool-add-data").click();
+    const sheet = page.getByTestId("add-data");
+    await expect(sheet).toBeVisible();
+    await page.getByTestId("site-submit").click();
+    await expect(sheet.getByText("Give it a name")).toBeVisible();
+    await expect(sheet.getByText("Paste or upload a GeoJSON Polygon footprint.")).toBeVisible();
+    await expect(sheet.getByText(/numeric Cesium ion asset ID/)).toBeVisible();
+    expect(created).toBeNull();
+
+    await page.getByTestId("site-name-input").fill("Orchard block A");
+    await page.getByTestId("asset-id-input").fill("12abc");
+    await page.getByTestId("footprint-input").fill('{"type":"Point","coordinates":[0,0]}');
+    await page.getByTestId("site-submit").click();
+    await expect(sheet.getByText("Footprint must be a Polygon or MultiPolygon")).toBeVisible();
+    expect(created).toBeNull();
+
+    await page.getByTestId("asset-id-input").fill("4547222");
+    await page
+      .getByTestId("footprint-input")
+      .fill(
+        '{"type":"Polygon","coordinates":[[[-122.14,47.64],[-122.13,47.64],[-122.13,47.65],[-122.14,47.65],[-122.14,47.64]]]}',
+      );
+    await expect(sheet.getByText(/Area/)).toBeVisible();
+    await page.getByTestId("site-submit").click();
+    await expect(sheet).toHaveCount(0);
+    expect(created).toMatchObject({
+      name: "Orchard block A",
+      assets: [
+        { representation: "gaussian-splat", source: { type: "cesium-ion", assetId: 4547222 } },
+      ],
+    });
+    await expect(page.getByText("Orchard block A added")).toBeVisible();
+  });
+
+  test("layer form rejects bad URL templates", async ({ app }) => {
+    await app.getByTestId("tool-add-data").click();
+    await app.getByTestId("add-tab-imagery").click();
+    await app.getByTestId("layer-name").fill("My tiles");
+    await app.getByTestId("layer-url").fill("https://tiles.example.com/{z}/{x}.png");
+    await app.getByTestId("layer-submit").click();
+    await expect(app.getByText("The template must contain {y}.")).toBeVisible();
+    await app.getByTestId("layer-url").fill("javascript:alert(1)");
+    await app.getByTestId("layer-submit").click();
+    await expect(app.getByText("Only http(s) URLs are supported.")).toBeVisible();
+  });
+});

@@ -27,7 +27,7 @@ export default tseslint.config(
     languageOptions: {
       parserOptions: {
         projectService: {
-          allowDefaultProject: ["*.config.ts", "*/*/*.config.ts"],
+          allowDefaultProject: ["*.config.ts", "packages/*/*.config.ts"],
         },
         tsconfigRootDir: import.meta.dirname,
       },
@@ -55,6 +55,21 @@ export default tseslint.config(
       ...reactHooks.configs.recommended.rules,
       ...jsxA11y.flatConfigs.recommended.rules,
       "react-refresh/only-export-components": ["warn", { allowConstantExport: true }],
+    },
+  },
+  {
+    files: [
+      "apps/web/e2e/**/*.ts",
+      "apps/web/playwright.config.ts",
+      "apps/web/vite.config.ts",
+      "apps/web/vitest.config.ts",
+    ],
+    languageOptions: {
+      parserOptions: {
+        projectService: false,
+        project: ["./apps/web/tsconfig.node.json"],
+        tsconfigRootDir: import.meta.dirname,
+      },
     },
   },
   {

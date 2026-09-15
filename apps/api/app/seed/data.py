@@ -13,7 +13,14 @@ from datetime import UTC, datetime
 from app.models.enums import LayerCategory, Representation
 from app.schemas.asset import AssetBase, CesiumIonSource, RenderConfig
 from app.schemas.bookmark import CameraBookmarkCreate
-from app.schemas.common import Attribution, BoundingBox, LicenseMetadata, Provenance, TemporalExtent
+from app.schemas.common import (
+    Attribution,
+    BoundingBox,
+    GeoPosition,
+    LicenseMetadata,
+    Provenance,
+    TemporalExtent,
+)
 from app.schemas.geojson import Polygon
 from app.schemas.layer import (
     ArcGisMapServerSource,
@@ -36,6 +43,19 @@ DEMO_CENTER_LON = -122.13810992689156
 DEMO_CENTER_LAT = 47.644519699638366
 DEMO_CENTER_HEIGHT = 120.0
 DEMO_RADIUS_M = 60.0
+# Horizontal extent of the tileset's root oriented bounding box (read from the streamed
+# tileset in CesiumJS 1.145): ~1.7 km x 2.8 km around Redmond, WA.
+DEMO_BOUNDARY = Polygon(
+    coordinates=[
+        [
+            [-122.143272, 47.635222],
+            [-122.120532, 47.635222],
+            [-122.120526, 47.660476],
+            [-122.143272, 47.660476],
+            [-122.143272, 47.635222],
+        ]
+    ]
+)
 
 WORLD = BoundingBox(west=-180, south=-90, east=180, north=90)
 CONUS = BoundingBox(west=-125, south=24, east=-66, north=50)
@@ -95,8 +115,10 @@ DEMO_SITE = SiteCreate(
         "Cesium for the '3D Tiles Gaussian splats with LOD' Sandcastle. It demonstrates a "
         "reality model embedded in the global world."
     ),
-    boundary=circle_polygon(DEMO_CENTER_LON, DEMO_CENTER_LAT, DEMO_RADIUS_M),
-    centroid=None,
+    boundary=DEMO_BOUNDARY,
+    centroid=GeoPosition(
+        longitude=DEMO_CENTER_LON, latitude=DEMO_CENTER_LAT, height=DEMO_CENTER_HEIGHT
+    ),
     metadata={
         "quality": {"resolutionDescription": "Sub-decimetre splat detail (visual)"},
         "origin": "cesium-sandcastle",
@@ -113,14 +135,16 @@ DEMO_SITE = SiteCreate(
             name="Gaussian splat (LOD)",
             representation=Representation.GAUSSIAN_SPLAT,
             source=CesiumIonSource(asset_id=DEMO_SPLAT_ASSET_ID),
-            footprint=circle_polygon(DEMO_CENTER_LON, DEMO_CENTER_LAT, DEMO_RADIUS_M),
+            footprint=DEMO_BOUNDARY,
             attribution=[CESIUM_ATTRIBUTION],
             provenance=Provenance(
                 source_organization="Cesium GS, Inc.",
                 source_url="https://sandcastle.cesium.com/?id=3d-tiles-gaussian-splats-with-lod",
                 notes="Sample asset referenced by the official CesiumJS Sandcastle.",
             ),
-            render_config=RenderConfig(maximum_screen_space_error=16, clips_world=True),
+            render_config=RenderConfig(
+                maximum_screen_space_error=16, clips_world=True, clip_footprint="tileset"
+            ),
             default_visible=True,
         )
     ],

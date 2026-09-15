@@ -1,52 +1,106 @@
-# <project name>
+# Hexapod monorepo
 
-A hardware project built with the [MakeHardware](https://github.com/Harwasch/MakeHardware)
-workflow. Replace this paragraph with one sentence about what the thing is.
+This repository holds several parts of one project. The **Living World** digital twin — a
+continuously zoomable, time-aware 3D world built on CesiumJS — lives in `apps/` and
+`packages/`. Hardware design, simulation and other subsystems live alongside it in their
+own directories.
 
-<!-- PLAN:BEGIN -->
-<!-- PLAN:END -->
-
-## Getting started
-
-This repo was created from the MakeHardware project template, so
-`.claude/settings.json` is already correct. In the **first** session, run:
-
-```
-/hw-new-project
-```
-
-That scaffolds `plan.yaml`, `requirements/`, `hw/`, `cad/`, `concepts/`,
-`sim/`, `docs/`, `strictdoc.toml` and a project `CLAUDE.md` from the plugin's
-current templates, then runs `hw-doctor` and `imagegen --list` so you know what
-the toolchain can actually do before you plan around it.
-
-Then start the vision interview:
-
-```
-Use hw-vision. I want to build <one sentence>.
+```text
+/
+├── apps/
+│   ├── web/        React + Vite + CesiumJS viewer (Liquid-Glass UI)
+│   └── api/        FastAPI + PostGIS catalog (sites, assets, layers, bookmarks)
+├── packages/
+│   ├── contracts/  OpenAPI document + generated TypeScript types
+│   ├── geo/        Framework-free geospatial helpers (units, footprints, scale)
+│   ├── ui/         Glass design system (tokens + accessible primitives)
+│   └── config/     Shared TypeScript configuration
+├── infra/          docker compose (PostGIS, MinIO), API Dockerfile
+├── docs/           Architecture, Cesium notes, data model, deployment, decisions
+└── .github/        CI (lint, typecheck, tests, build, audit)
 ```
 
-## The commands you will use
+## What it does
+
+One continuous CesiumJS globe, one camera. Earth → region → site → a high-resolution
+reality model (Gaussian splat, mesh or point cloud) → centimetre detail. The coarse world is
+clipped away under each local model, so nothing z-fights. Open datasets (terrain, imagery,
+land cover, hydrography, buildings) are composable layers with provenance, license and
+attribution. Sites, assets and layers persist in PostGIS.
+
+A public demo site (Cesium's Gaussian-splat sample, ion asset 4547222) works out of the box
+using the evaluation token bundled with CesiumJS.
+
+## Quickstart (clean machine)
+
+Prerequisites: Node 22+, [pnpm](https://pnpm.io) 10, Python 3.12, [uv](https://docs.astral.sh/uv/),
+Docker (for PostGIS/MinIO). The lockfiles pin everything else.
 
 ```bash
-hw-doctor                 # what the toolchain can actually do right now
-/hw-status                # plan progress, what is ready to start, requirements coverage
-plan-render               # refresh docs/plan.svg and the block above
-block-diagram             # refresh the architecture diagram and power budget
-block-diagram --check     # architecture gate; exit 1 on an over-budget rail
-req-trace --gate          # traceability gate; exit 1 while gaps remain
+git clone <this repository> && cd Hexapod
+cp .env.example .env                      # fill in tokens later; nothing is required to boot
+docker compose -f infra/docker-compose.yml up -d   # PostGIS on :5432, MinIO on :9000/:9001
+pnpm install
+cd apps/api && uv sync && uv run alembic upgrade head && uv run python -m app.seed && cd ../..
+pnpm dev:api                              # http://localhost:8000/api/v1/docs  (terminal 1)
+pnpm dev                                  # http://localhost:5173              (terminal 2)
 ```
 
-## Before you start: the environment
+Open <http://localhost:5173>, click **View high-resolution demo**.
 
-The plugin's skills are useless without the toolchain behind them. This repo
-needs a Claude Code cloud environment built from
-[MakeHardware's `env/`](https://github.com/Harwasch/MakeHardware/tree/HEAD/env) —
-network access **Full**, the environment variables file, and the setup script.
+Without Docker: any PostgreSQL 16 with the PostGIS extension works; point `DATABASE_URL`
+and `TEST_DATABASE_URL` at it. Without the API at all, the web app still boots with the
+built-in demo site and labels itself "Catalog API offline".
 
-The setup script is not optional. `.claude/settings.json` declares the plugin
-but does not install it: in a cloud session a repo-declared marketplace is
-ignored for an untrusted folder, so the setup script installs the plugin at
-user scope. Without it you get a repo with no skills in it.
+### Environment variables
 
-See [docs/01-environment.md](https://github.com/Harwasch/MakeHardware/blob/HEAD/docs/01-environment.md).
+See [`.env.example`](.env.example) for every variable with comments. The important ones:
+
+| Variable                       | Where | Purpose                                                                                 |
+| ------------------------------ | ----- | --------------------------------------------------------------------------------------- |
+| `VITE_CESIUM_ION_ACCESS_TOKEN` | web   | Browser token (`assets:read`, `geocode`). Empty → CesiumJS evaluation token (dev only). |
+| `VITE_DEFAULT_*_ASSET_ID`      | web   | Your own splat / mesh / point-cloud ion assets for the built-in site (any subset).      |
+| `VITE_ENABLE_PHOTOREALISTIC`   | web   | Feature flag for Google Photorealistic 3D Tiles (visual context only).                  |
+| `DATABASE_URL`                 | api   | PostgreSQL + PostGIS connection.                                                        |
+| `API_CORS_ORIGINS`             | api   | Allowed browser origins.                                                                |
+| `OBJECT_STORAGE_*`             | api   | Optional S3/MinIO for site thumbnails.                                                  |
+| `CESIUM_ION_SERVER_TOKEN`      | api   | Server-side ion token to monitor reconstruction jobs. Never exposed to the browser.     |
+
+`VITE_` variables are public and inlined into the bundle. Server secrets never carry that prefix.
+
+## Everyday commands
+
+```bash
+pnpm dev / pnpm dev:api        # dev servers
+pnpm lint && pnpm typecheck    # ESLint (strict, type-aware) + tsc for every package
+pnpm test                      # Vitest: packages/geo, packages/ui, apps/web
+pnpm e2e                       # Playwright (needs Chromium: pnpm --filter @twin/web exec playwright install chromium)
+pnpm build                     # production bundle in apps/web/dist
+pnpm contracts:generate        # regenerate TS types after changing API schemas
+cd apps/api && uv run pytest   # backend tests (needs TEST_DATABASE_URL)
+cd apps/api && uv run ruff check . && uv run mypy .
+```
+
+After changing a Pydantic schema: `uv run python -m app.scripts.export_openapi ../../packages/contracts/openapi.json`
+then `pnpm contracts:generate`. CI fails if the committed contract is stale.
+
+## Keyboard
+
+`⌘K`/`Ctrl+K` command palette · `/` search · `L` layers · `S` sites · `M` measure · `C` compare ·
+`B` bookmarks · `N` reset north · `T` top-down · `H` Earth · `G` explore mode · `,` settings ·
+`D` developer panel (dev builds) · `Esc` closes.
+
+## Documentation
+
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — why CesiumJS, 3D Tiles, PostGIS; the seams for STAC/S3/COPC/robotics
+- [docs/CESIUM.md](docs/CESIUM.md) — scene manager, clipping, LOD/adaptive quality, tokens, current API notes
+- [docs/DATA_MODEL.md](docs/DATA_MODEL.md) — sites, assets, layers, bookmarks, provenance
+- [docs/ADDING_DATA.md](docs/ADDING_DATA.md) — every supported input, validation rules, ion reconstruction
+- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — Vercel-style static web, containerised API, managed PostGIS
+- [docs/DECISIONS/](docs/DECISIONS/) — architecture decision records
+- [docs/ENGINEERING_REPORT.md](docs/ENGINEERING_REPORT.md) — what was built, limitations, next steps
+
+## Hardware subsystems
+
+The MakeHardware workflow used by the hardware parts of this repository is documented in
+[docs/HARDWARE.md](docs/HARDWARE.md).

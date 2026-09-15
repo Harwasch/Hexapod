@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter
 
 from app.api.v1 import assets, ion, layers, sites, system
 from app.schemas.common import Problem
 
-ERROR_RESPONSES = {
+ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
     404: {"model": Problem, "description": "Not found"},
     409: {"model": Problem, "description": "Conflict"},
     422: {"model": Problem, "description": "Validation error"},

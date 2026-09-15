@@ -80,7 +80,10 @@ jobs:
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run mypy .
-      - run: uv run pip-audit --strict || uv run python -m pip_audit --strict
+      - name: Dependency audit
+        run: |
+          uv export --frozen --no-emit-project --no-dev --format requirements-txt -o /tmp/requirements.txt
+          uv run pip-audit --strict --disable-pip -r /tmp/requirements.txt
       - name: Create test database
         run: |
           PGPASSWORD=twin psql -h localhost -U twin -d twin -c "CREATE DATABASE twin_test;"

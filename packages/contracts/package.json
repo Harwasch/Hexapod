@@ -11,8 +11,8 @@
     "./openapi.json": "./openapi.json"
   },
   "scripts": {
-    "generate": "openapi-typescript ./openapi.json -o ./src/generated/api.d.ts --alphabetize --root-types",
-    "check": "openapi-typescript ./openapi.json -o ./src/generated/api.check.d.ts --alphabetize --root-types && node ./scripts/check.mjs",
+    "generate": "openapi-typescript ./openapi.json -o ./src/generated/api.d.ts --alphabetize --root-types --default-non-nullable=false",
+    "check": "openapi-typescript ./openapi.json -o ./src/generated/api.check.d.ts --alphabetize --root-types --default-non-nullable=false && node ./scripts/check.mjs",
     "typecheck": "tsc -p tsconfig.json",
     "test": "echo 'contracts: no runtime tests'"
   },

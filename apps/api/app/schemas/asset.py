@@ -47,11 +47,18 @@ class PointCloudShading(CamelModel):
     maximum_attenuation: float | None = Field(default=None, gt=0)
 
 
+ClipFootprint = Literal["catalog", "tileset"]
+
+
 class RenderConfig(CamelModel):
     maximum_screen_space_error: float | None = Field(default=None, gt=0, le=512)
     point_cloud_shading: PointCloudShading | None = None
     # When true, the asset's footprint clips the globe/terrain and the global 3D world.
     clips_world: bool = True
+    # "catalog": clip with the stored footprint/boundary; "tileset": derive the clip
+    # polygon from the loaded tileset's root bounding volume (robust for assets whose
+    # exact extent is only known once streamed).
+    clip_footprint: ClipFootprint = "catalog"
     height_offset_m: float = 0.0
 
 

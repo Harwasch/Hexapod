@@ -2317,6 +2317,15 @@
       "RenderConfig": {
         "additionalProperties": false,
         "properties": {
+          "clipFootprint": {
+            "default": "catalog",
+            "enum": [
+              "catalog",
+              "tileset"
+            ],
+            "title": "Clipfootprint",
+            "type": "string"
+          },
           "clipsWorld": {
             "default": true,
             "title": "Clipsworld",
