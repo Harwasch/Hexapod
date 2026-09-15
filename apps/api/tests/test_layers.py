@@ -113,3 +113,21 @@ def test_stac_and_wms_sources_round_trip(client: TestClient) -> None:
     assert client.post("/api/v1/layers", json=wms).json()["source"]["parameters"] == {
         "transparent": "true"
     }
+
+
+def test_seed_refreshes_bookmarks_of_seeded_sites(client: TestClient, db: Session) -> None:
+    seed(db)
+    demo = next(s for s in client.get("/api/v1/sites").json() if s["slug"] == "cesium-splat-demo")
+    detail = client.get(f"/api/v1/sites/{demo['id']}").json()
+    original = detail["cameraBookmarks"][0]
+    # Simulate an older seed by tilting the stored bookmark towards the horizon.
+    from app.models import CameraBookmark
+
+    stored = db.get(CameraBookmark, original["id"])
+    assert stored is not None
+    stored.pitch = -25.0
+    db.commit()
+    assert seed(db) == {"sites": 0, "layers": 0}
+    refreshed = client.get(f"/api/v1/sites/{demo['id']}").json()["cameraBookmarks"]
+    assert len(refreshed) == 1
+    assert refreshed[0]["pitch"] == original["pitch"] == -45.0

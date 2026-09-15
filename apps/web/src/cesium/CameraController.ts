@@ -52,6 +52,10 @@ const POSE_SETTLE_DELAYS_MS = [600, 2000];
 const IDLE_POSE_REFRESH_MS = 3000;
 /** Below this bounding radius a fly-to may arrive closer than the site floor of 30 m. */
 const OBJECT_ARRIVAL_RADIUS_M = 30;
+/** Arrival tilt for fly-tos: mostly looking at the ground, still showing facades. */
+const DEFAULT_ARRIVAL_PITCH = -45;
+/** A flight that arcs at least this far above both of its ends looks straight down at the top. */
+const LOOK_DOWN_CLIMB_M = 150;
 
 const scratchPick = new Cartesian3();
 const scratchDirection = new Cartesian3();
@@ -327,19 +331,32 @@ export class CameraController {
   flyTo(longitude: number, latitude: number, height: number, options: FlyOptions = {}): void {
     const pose = this.pose();
     const heading = options.heading ?? pose.heading;
-    const pitch = options.pitch ?? -45;
+    const pitch = options.pitch ?? DEFAULT_ARRIVAL_PITCH;
+    const destination = Cartesian3.fromDegrees(longitude, latitude, height);
     this.viewer.camera.flyTo({
-      destination: Cartesian3.fromDegrees(longitude, latitude, height),
+      destination,
       orientation: {
         heading: CesiumMath.toRadians(heading),
         pitch: CesiumMath.toRadians(pitch),
         roll: 0,
       },
-      duration:
-        options.durationS ?? this.durationFor(Cartesian3.fromDegrees(longitude, latitude, height)),
+      duration: options.durationS ?? this.durationFor(destination),
       easingFunction: EasingFunction.QUADRATIC_IN_OUT,
+      pitchAdjustHeight: this.pitchAdjustHeight(height),
       complete: options.onComplete,
     });
+  }
+
+  /**
+   * Any flight that arcs well above both of its ends points the camera straight down at the
+   * top of the arc and eases back to the arrival pitch on the way down (Cesium's
+   * pitchAdjustHeight). Without it the pitch is interpolated linearly, so a long hop spends
+   * its high part looking at the horizon. Measured against the higher end so a short hop or
+   * a plain descent keeps a steady tilt instead of nodding.
+   */
+  private pitchAdjustHeight(arrivalHeight: number): number {
+    const higherEnd = Math.max(arrivalHeight, this.viewer.camera.positionCartographic.height);
+    return Math.max(higherEnd * 1.5, higherEnd + LOOK_DOWN_CLIMB_M);
   }
 
   flyToRectangle(
@@ -353,6 +370,7 @@ export class CameraController {
       destination: Rectangle.fromDegrees(west, south, east, north),
       duration: options.durationS ?? 2.2,
       easingFunction: EasingFunction.QUADRATIC_IN_OUT,
+      pitchAdjustHeight: this.pitchAdjustHeight(this.pose().altitude),
       complete: options.onComplete,
     });
   }
@@ -365,7 +383,7 @@ export class CameraController {
     });
   }
 
-  /** Oblique approach to a sphere: the standard "arrive at a site" move. */
+  /** Steep approach to a sphere, looking down at it: the standard "arrive at a site" move. */
   flyToBoundingSphere(
     sphere: BoundingSphere,
     options: FlyOptions & { rangeMultiplier?: number } = {},
@@ -374,14 +392,14 @@ export class CameraController {
     // times its own radius so it fills the view.
     const floor = sphere.radius < OBJECT_ARRIVAL_RADIUS_M ? 0.3 : 30;
     const range = Math.max(sphere.radius * (options.rangeMultiplier ?? 3.2), floor);
+    const pitch = CesiumMath.toRadians(options.pitch ?? DEFAULT_ARRIVAL_PITCH);
+    const arrivalHeight =
+      Cartographic.fromCartesian(sphere.center).height + range * Math.sin(-pitch);
     this.viewer.camera.flyToBoundingSphere(sphere, {
-      offset: new HeadingPitchRange(
-        CesiumMath.toRadians(options.heading ?? 100),
-        CesiumMath.toRadians(options.pitch ?? -25),
-        range,
-      ),
+      offset: new HeadingPitchRange(CesiumMath.toRadians(options.heading ?? 100), pitch, range),
       duration: options.durationS ?? this.durationFor(sphere.center),
       easingFunction: EasingFunction.QUADRATIC_IN_OUT,
+      pitchAdjustHeight: this.pitchAdjustHeight(arrivalHeight),
       complete: options.onComplete,
     });
   }

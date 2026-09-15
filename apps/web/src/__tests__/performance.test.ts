@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  buildLadder,
   decideScreenSpaceError,
   splatMinimumScreenSpaceError,
   type QualitySample,
@@ -32,16 +33,34 @@ describe("decideScreenSpaceError", () => {
     ).toBe(24);
   });
 
-  it("coarsens while moving, within the preset bounds", () => {
-    const d = decideScreenSpaceError({ ...base, moving: true, fps: 20 });
-    expect(d.reason).toBe("moving");
-    expect(d.screenSpaceError).toBe(24);
-    expect(d.screenSpaceError).toBeLessThanOrEqual(QUALITY_SSE.balanced.max);
+  it("holds the tile selection while moving, whatever the frame rate", () => {
+    expect(decideScreenSpaceError({ ...base, moving: true, fps: 20 })).toEqual({
+      screenSpaceError: 16,
+      reason: "moving (tiles held)",
+    });
+    expect(decideScreenSpaceError({ ...base, moving: true, fps: 60, current: 6 })).toEqual({
+      screenSpaceError: 6,
+      reason: "moving (tiles held)",
+    });
   });
 
-  it("backs off on low frame rate and stops at the preset maximum", () => {
-    expect(decideScreenSpaceError({ ...base, fps: 20 }).screenSpaceError).toBe(19);
-    expect(decideScreenSpaceError({ ...base, fps: 20, current: 31 }).screenSpaceError).toBe(32);
+  it("never backs off on slow frames at rest (those are tiles arriving)", () => {
+    expect(decideScreenSpaceError({ ...base, fps: 20, altitude: 5000 }).screenSpaceError).toBe(16);
+    expect(decideScreenSpaceError({ ...base, fps: 20, altitude: 5000, current: 31 })).toEqual({
+      screenSpaceError: 31,
+      reason: "steady",
+    });
+  });
+
+  it("follows bounds shifted by a ladder penalty at rest", () => {
+    const bounds = { base: 22, min: 12, max: 32 };
+    expect(decideScreenSpaceError({ ...base, bounds, fps: null, altitude: 5000 })).toEqual({
+      screenSpaceError: 22,
+      reason: "idle",
+    });
+    expect(
+      decideScreenSpaceError({ ...base, bounds, fps: null, current: 13 }).screenSpaceError,
+    ).toBe(12);
   });
 
   it("memory pressure wins over a good frame rate", () => {
@@ -62,5 +81,31 @@ describe("splatMinimumScreenSpaceError", () => {
     expect(splatMinimumScreenSpaceError("performance")).toBe(12);
     expect(splatMinimumScreenSpaceError("balanced")).toBe(8);
     expect(splatMinimumScreenSpaceError("ultra")).toBe(4);
+  });
+});
+
+describe("buildLadder", () => {
+  it("cuts anti-aliasing, then resolution to a half, then tiles, never past the preset maximum", () => {
+    const steps = buildLadder("balanced");
+    expect(steps.map((s) => s.label)).toEqual([
+      "full",
+      "MSAA off",
+      "resolution 0.8",
+      "resolution 0.65",
+      "resolution 0.5",
+      "tiles +3 SSE",
+      "tiles +6 SSE",
+      "tiles +9 SSE",
+      "tiles +12 SSE",
+      "tiles +15 SSE",
+    ]);
+    const last = steps[steps.length - 1];
+    expect(QUALITY_SSE.balanced.base + (last?.ssePenalty ?? 0)).toBeLessThanOrEqual(
+      QUALITY_SSE.balanced.max,
+    );
+  });
+
+  it("has no anti-aliasing step for the performance preset, which starts without it", () => {
+    expect(buildLadder("performance")[1]?.label).toBe("resolution 0.8");
   });
 });

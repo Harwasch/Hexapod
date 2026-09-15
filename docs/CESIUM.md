@@ -70,24 +70,34 @@ the GPU, and a Gaussian splat is not re-sorted every 16 ms while nobody is touch
 | Preset      | Base SSE | Adaptive range | Resolution                | MSAA |
 | ----------- | -------- | -------------- | ------------------------- | ---- |
 | Performance | 24       | 12–48          | browser-recommended       | off  |
-| Balanced    | 16       | 6–32           | browser-recommended       | 4×   |
+| Balanced    | 16       | 6–32           | native device pixel ratio | 4×   |
 | Ultra       | 8        | 2–16           | native device pixel ratio | 4×   |
 
-Rules, highest priority first: tileset memory above 125 % of its cache budget → coarser;
-camera moving → coarser; < 28 fps → coarser; at rest within 600 m of a site (idle, or
-measured > 52 fps) → refine one step per tick towards the minimum; idle elsewhere → back to
-the preset base. Idle is "fewer than 6 frames in the last second", which in request-render
-mode means nobody is touching the view, so it is headroom by definition. Each SSE change
-calls `scene.requestRender()`; tile selection only runs inside a frame.
-Two render profiles: **rest** (native device pixels, resolution scale 1, MSAA 4×) for still
-frames, which in request-render mode are drawn once and can afford it; **motion**
-(browser-recommended resolution, adaptive scale down to 0.5, MSAA shed first) while the
-camera moves. Frame rate is only treated as evidence about motion cost while moving; slow
-frames at rest are tiles arriving. Gaussian splats never refine below SSE 12 / 8 / 4
-(performance / balanced / ultra): they are sorted on the CPU every camera change, so their
-cost grows with splat count far faster than a mesh. Tile cache budgets come from
-`navigator.deviceMemory` (256/384/512 MB + overflow). A per-asset `maximumScreenSpaceError`
-acts as a quality floor. Manual SSE in Settings › Advanced disables adaptation.
+Smoothness comes first, the way a maps app does it: nothing about the render settings
+changes during a gesture. Tile selection is frozen while the camera moves (every change of
+`maximumScreenSpaceError` pops tiles mid-drag), and slow frames at rest never coarsen
+anything (they are tiles arriving, not a stall). Rules, highest priority first: tileset
+memory above 125 % of its cache budget → coarser; moving → hold; at rest within 600 m of a
+site (idle, or measured > 52 fps) → refine one step per tick towards the minimum; idle
+elsewhere → back to the preset base. Idle is "fewer than 6 frames in the last second",
+which in request-render mode means nobody is touching the view. Each SSE change calls
+`scene.requestRender()`; tile selection only runs inside a frame.
+
+Resolution and anti-aliasing are constant for still and moving frames alike, and adapt only
+on evidence, one ladder step at a time: a frame rate under 26 fps sustained for 1.2 s _while
+moving_ drops MSAA, then resolution scale (0.8, 0.65, 0.5), and only then tile detail (+3
+SSE per step, never past the preset maximum). A step is undone only after 8 s of motion
+above 50 fps, applied while the camera rests (a resolution switch re-allocates the
+framebuffers, a visible hitch mid-gesture), and every recovery has to earn twice the smooth
+motion of the last, so a borderline machine settles instead of oscillating. Cesium divides
+screen-space error by the pixel ratio, so a resolution step never changes which tiles are
+drawn. The dev panel shows the profile (`full` or `reduced`) and the step taken. Gaussian
+splats never refine below SSE 12 / 8 / 4 (performance / balanced / ultra): they are sorted on
+the CPU every camera change, so their cost grows with splat count far faster than a mesh.
+Tile cache budgets come from `navigator.deviceMemory` (256/384/512 MB + overflow). A per-asset
+`maximumScreenSpaceError` acts as a quality floor. Manual SSE in Settings › Advanced disables
+adaptation. Mesh coverage clips (the hole cut in the globe under a photogrammetry model) are
+re-derived as tiles arrive but only swapped in at rest.
 
 While the camera moves the root element carries `data-moving`; glass panels drop their
 backdrop blur for the duration (a full-screen pass per panel otherwise) and use a flat tint.
@@ -101,7 +111,12 @@ only at rest, once per anchor every few seconds; the camera pose is throttled to
 
 `CameraController` clamps `minimumZoomDistance` to 5 cm so centimetre data can be inspected,
 keeps terrain collision on, and derives flight durations from distance (1.2–5.5 s,
-quadratic in/out). `flyToBoundingSphere` with an oblique offset is the standard arrival.
+quadratic in/out). Flights point at the ground: the arrival pitch defaults to -45° (seeded
+bookmarks use -40° to -45°), and any flight that climbs 150 m or 1.5× above its destination
+passes `pitchAdjustHeight`, so the camera looks straight down at the top of the arc and eases
+back to the arrival tilt on the way down instead of interpolating the pitch linearly and
+spending the high part staring at the horizon. `flyToBoundingSphere` with that offset is the
+standard arrival; hand-sized objects arrive at a few times their radius.
 Cesium's default double-click entity tracking is removed; double-click flies halfway to the
 clicked point instead.
 

@@ -30,21 +30,32 @@ export interface QualityDecision {
   reason: string;
 }
 
-const LOW_FPS = 28;
+const LOW_FPS = 26;
 const STEADY_FPS = 50;
 const MEMORY_PRESSURE_RATIO = 1.25;
 /** Minimum rendered frames in the last second before the frame rate is trusted. */
 const MIN_FRAMES_FOR_FPS = 6;
-const SUSTAINED_LOW_MS = 2500;
+/** Low frame rate must persist this long while moving before quality is cut. */
+const SUSTAINED_LOW_MS = 1200;
+/** Motion at a steady frame rate needed before a cut is undone; doubles after every recovery. */
+const INITIAL_RECOVERY_MS = 8000;
+const MAX_RECOVERY_MS = 60_000;
+/** A recovery (resolution back up) only happens once the camera has rested this long. */
+const REST_BEFORE_RECOVERY_MS = 1500;
 /** Below this height above ground a resting camera refines towards the preset minimum. */
 const CLOSE_UP_ALTITUDE_M = 600;
+/** Extra screen-space error per ladder step once resolution cuts are exhausted. */
+const SSE_PENALTY_STEP = 3;
 
 /**
  * Chooses the next maximum screen-space error. Pure so the policy is unit-testable.
  *
- * Priorities, highest first: memory pressure, motion, low frame rate, then refinement only
- * when there is measured headroom. An idle scene (no frames rendered) never changes quality,
- * because there is no evidence either way.
+ * Smoothness first: while the camera moves the tile selection is frozen, because every change
+ * pops tiles mid-gesture. At rest, only memory pressure coarsens (slow frames at rest are
+ * tiles arriving, not a stall) and the value walks back to the preset base, which the
+ * manager shifts upwards once its ladder has run out of resolution to cut. Refinement happens
+ * at rest, close to a site, one step per tick, so the still image sharpens without ever
+ * fighting a gesture.
  */
 export function decideScreenSpaceError(sample: QualitySample): QualityDecision {
   const { bounds, current, fps, moving, loading } = sample;
@@ -54,24 +65,13 @@ export function decideScreenSpaceError(sample: QualitySample): QualityDecision {
       reason: `memory pressure (${Math.round(sample.memoryRatio * 100)}% of budget)`,
     };
   }
-  if (moving) {
-    return {
-      screenSpaceError: Math.min(bounds.max, bounds.base + Math.max(4, bounds.base * 0.5)),
-      reason: "moving",
-    };
-  }
-  if (fps !== null && fps < LOW_FPS) {
-    return {
-      screenSpaceError: Math.min(bounds.max, current + 3),
-      reason: `low fps (${fps.toFixed(0)})`,
-    };
-  }
-  // At rest the scene only renders while tiles arrive, so an idle view is headroom by
-  // definition: walk towards the fine end one step at a time. The next drag coarsens again
-  // ("moving"), and memory pressure above caps the walk.
+  if (moving) return { screenSpaceError: current, reason: "moving (tiles held)" };
   const closeUp = sample.nearSite && sample.altitude < CLOSE_UP_ALTITUDE_M;
   if (!loading && closeUp && (fps === null || fps > STEADY_FPS + 2)) {
-    return { screenSpaceError: Math.max(bounds.min, current - 2), reason: "close-up refinement" };
+    return {
+      screenSpaceError: Math.min(bounds.max, Math.max(bounds.min, current - 2)),
+      reason: "close-up refinement",
+    };
   }
   if (fps === null) {
     return {
@@ -84,12 +84,6 @@ export function decideScreenSpaceError(sample: QualitySample): QualityDecision {
 }
 
 /**
- * Measures rendered frames and adapts quality to what the machine can actually do: 3D Tiles
- * screen-space error, canvas resolution scale, MSAA and globe detail. It only ever nudges
- * within the bounds of the chosen preset, and treats an idle scene as "no evidence" rather
- * than as a stall.
- */
-/**
  * Gaussian splats are re-sorted on the CPU every camera change, so their cost grows with splat
  * count far faster than a mesh. This is the finest screen-space error a splat may use per preset.
  */
@@ -97,9 +91,27 @@ export function splatMinimumScreenSpaceError(preset: QualityPreset): number {
   return { performance: 12, balanced: 8, ultra: 4 }[preset];
 }
 
-/** Render profile: full quality for still frames, adaptive savings while the camera moves. */
-export type RenderProfile = "rest" | "motion";
+/** "full" renders the preset as configured; "reduced" means the ladder has cut something. */
+export type RenderProfile = "full" | "reduced";
 
+interface LadderStep {
+  msaa: number;
+  scale: number;
+  /** Added to the preset's base and minimum screen-space error. */
+  ssePenalty: number;
+  label: string;
+}
+
+/**
+ * Keeps motion smooth by rendering with settings that never change during a gesture, and
+ * adapts those settings only on evidence: a frame rate that stays low while the camera
+ * moves cuts anti-aliasing, then resolution, then tile detail, one step at a time. A cut is
+ * undone only after sustained smooth motion, while the camera rests (a resolution switch
+ * re-allocates the framebuffers, which is a visible hitch mid-gesture), and each recovery
+ * has to earn twice as much smooth motion as the last so a borderline machine does not
+ * oscillate. Screen-space error is resolution independent in Cesium (it divides by the pixel
+ * ratio), so resolution steps never change which tiles are drawn.
+ */
 export class PerformanceManager {
   private readonly scene: Scene;
   private readonly frameTimestamps: number[] = [];
@@ -109,14 +121,15 @@ export class PerformanceManager {
     adaptive: true,
   };
   private currentSse: number = QUALITY_SSE.balanced.base;
-  /** Resolution scale and MSAA used while the camera moves; still frames always use 1 and 4. */
-  private motionScale = 1;
-  private motionMsaa = 4;
-  private profile: RenderProfile = "rest";
+  private ladder: LadderStep[] = [];
+  private level = 0;
   private resolutionScale = 1;
   private msaa = 4;
   private lowFpsSince: number | null = null;
-  private goodFpsSince: number | null = null;
+  private goodMotionMs = 0;
+  private recoveryMs = INITIAL_RECOVERY_MS;
+  private restSince = 0;
+  private lastEvaluateAt = 0;
   private pending = 0;
   private processing = 0;
   private moving = false;
@@ -143,19 +156,17 @@ export class PerformanceManager {
     this.webgl2 = info.webgl2;
     this.unsubscribe.push(
       this.scene.postRender.addEventListener(() => this.onFrame()),
-      // Switch profiles on real pose changes only: switching resolution resizes the drawing
-      // buffer, which Cesium's moveStart counts as a camera change, and that would ping-pong
-      // between the two profiles forever.
+      // Motion is tracked from real pose changes only (moveStart also fires on frustum and
+      // canvas size changes). Nothing about the render settings changes here: a gesture
+      // always runs with whatever the ladder settled on.
       viewer.camera.changed.addEventListener(() => {
-        if (this.moving) return;
         this.moving = true;
-        this.applyProfile("motion");
       }),
       viewer.camera.moveEnd.addEventListener(() => {
         if (!this.moving) return;
         this.moving = false;
         this.movingUntil = performance.now() + 400;
-        this.applyProfile("rest");
+        this.restSince = performance.now();
       }),
     );
     this.timer = setInterval(() => this.evaluate(), 500);
@@ -182,12 +193,17 @@ export class PerformanceManager {
     const bounds = QUALITY_SSE[inputs.preset];
     this.currentSse = inputs.manualScreenSpaceError ?? bounds.base;
     this.applySse(this.currentSse);
-    this.motionScale = 1;
-    this.motionMsaa = inputs.preset === "performance" ? 1 : 4;
     this.scene.globe.maximumScreenSpaceError = inputs.preset === "performance" ? 3 : 2;
-    this.applyProfile(this.moving ? "motion" : "rest", true);
+    // Still and moving frames share one resolution. Performance renders at the browser's
+    // recommended (CSS pixel) resolution; the others use native device pixels until the
+    // ladder proves the machine cannot keep up.
+    this.viewer.useBrowserRecommendedResolution = inputs.preset === "performance";
+    this.ladder = buildLadder(inputs.preset);
+    this.level = 0;
     this.lowFpsSince = null;
-    this.goodFpsSince = null;
+    this.goodMotionMs = 0;
+    this.recoveryMs = INITIAL_RECOVERY_MS;
+    this.applyLevel();
     this.evaluate("configured");
   }
 
@@ -209,22 +225,27 @@ export class PerformanceManager {
     return splatMinimumScreenSpaceError(this.inputs.preset);
   }
 
-  /**
-   * A still frame is rendered once, so it can afford native device pixels, full resolution
-   * scale and MSAA whatever the machine; the adaptive savings only apply while moving.
-   */
-  private applyProfile(profile: RenderProfile, force = false): void {
-    if (!force && this.profile === profile) return;
-    this.profile = profile;
-    if (profile === "rest") {
-      this.viewer.useBrowserRecommendedResolution = false;
-      this.setResolutionScale(1);
-      this.setMsaa(this.inputs.preset === "performance" ? 1 : 4);
-    } else {
-      this.viewer.useBrowserRecommendedResolution = this.inputs.preset !== "ultra";
-      this.setResolutionScale(this.motionScale);
-      this.setMsaa(this.motionMsaa);
-    }
+  get profile(): RenderProfile {
+    return this.level === 0 ? "full" : "reduced";
+  }
+
+  /** The ladder step currently applied (step 0 is the preset as configured). */
+  private get step(): LadderStep {
+    return (
+      this.ladder[this.level] ??
+      this.ladder[this.ladder.length - 1] ?? {
+        msaa: 4,
+        scale: 1,
+        ssePenalty: 0,
+        label: "full",
+      }
+    );
+  }
+
+  private applyLevel(): void {
+    const step = this.step;
+    this.setResolutionScale(step.scale);
+    this.setMsaa(step.msaa);
     this.scene.requestRender();
   }
 
@@ -290,19 +311,63 @@ export class PerformanceManager {
     this.scene.requestRender();
   }
 
+  /**
+   * The ladder: one step down after a sustained low frame rate while moving, one step up
+   * after enough smooth motion, applied at rest. Returns a reason when a step was taken.
+   */
+  private climbLadder(now: number, fps: number | null, moving: boolean): string | null {
+    const elapsed = this.lastEvaluateAt ? Math.min(1000, now - this.lastEvaluateAt) : 0;
+    if (moving && fps !== null) {
+      if (fps < LOW_FPS) {
+        this.goodMotionMs = 0;
+        this.lowFpsSince ??= now;
+        if (now - this.lowFpsSince >= SUSTAINED_LOW_MS && this.level < this.ladder.length - 1) {
+          this.level += 1;
+          this.lowFpsSince = now;
+          this.applyLevel();
+          return `low fps (${fps.toFixed(0)}) → ${this.step.label}`;
+        }
+        return null;
+      }
+      this.lowFpsSince = null;
+      if (fps > STEADY_FPS) this.goodMotionMs += elapsed;
+      return null;
+    }
+    this.lowFpsSince = null;
+    if (
+      !moving &&
+      this.level > 0 &&
+      this.goodMotionMs >= this.recoveryMs &&
+      now - this.restSince >= REST_BEFORE_RECOVERY_MS
+    ) {
+      this.level -= 1;
+      this.goodMotionMs = 0;
+      this.recoveryMs = Math.min(MAX_RECOVERY_MS, this.recoveryMs * 2);
+      this.applyLevel();
+      return `smooth motion → ${this.step.label}`;
+    }
+    return null;
+  }
+
   private evaluate(forcedReason?: string): void {
     const fps = this.fps;
     const now = performance.now();
     const moving = this.moving || now < this.movingUntil;
     const loading = this.pending > 0 || this.processing > 0;
-    const bounds = QUALITY_SSE[this.inputs.preset];
-    const base = this.inputs.manualScreenSpaceError ?? bounds.base;
+    const preset = QUALITY_SSE[this.inputs.preset];
     const memory = this.memorySource();
     const memoryRatio = memory.budget > 0 ? memory.bytes / memory.budget : 0;
-    let target = base;
+    let target = this.inputs.manualScreenSpaceError ?? preset.base;
     let reason: string;
 
     if (this.inputs.adaptive && this.inputs.manualScreenSpaceError === null) {
+      const stepReason = this.climbLadder(now, fps, moving);
+      const penalty = this.step.ssePenalty;
+      const bounds = {
+        base: Math.min(preset.max, preset.base + penalty),
+        min: Math.min(preset.max, preset.min + penalty),
+        max: preset.max,
+      };
       const decision = decideScreenSpaceError({
         bounds,
         current: this.currentSse,
@@ -314,42 +379,11 @@ export class PerformanceManager {
         memoryRatio,
       });
       target = decision.screenSpaceError;
-      reason = forcedReason ?? decision.reason;
-
-      // Frame rate is only evidence about motion cost while the camera moves; frames rendered
-      // at rest are tiles arriving, and those are allowed to be slow.
-      if (moving && fps !== null && fps < LOW_FPS - 4) {
-        this.goodFpsSince = null;
-        this.lowFpsSince ??= now;
-        if (now - this.lowFpsSince > SUSTAINED_LOW_MS) {
-          // Cheapest wins first: drop anti-aliasing, then render fewer pixels.
-          if (this.motionMsaa > 1) {
-            this.motionMsaa = 1;
-            reason = "low fps → MSAA off while moving";
-          } else {
-            this.motionScale = Math.max(0.5, this.motionScale - 0.1);
-            reason = "low fps → lower resolution while moving";
-          }
-          this.applyProfile("motion", true);
-          this.lowFpsSince = now;
-        }
-      } else if (moving && fps !== null && fps > STEADY_FPS) {
-        this.lowFpsSince = null;
-        this.goodFpsSince ??= now;
-        if (now - this.goodFpsSince > SUSTAINED_LOW_MS) {
-          if (this.motionScale < 1) this.motionScale = Math.min(1, this.motionScale + 0.1);
-          else if (this.motionMsaa === 1 && this.inputs.preset !== "performance")
-            this.motionMsaa = 4;
-          this.applyProfile("motion", true);
-          this.goodFpsSince = now;
-        }
-      } else if (!moving) {
-        this.lowFpsSince = null;
-        this.goodFpsSince = null;
-      }
+      reason = forcedReason ?? stepReason ?? decision.reason;
     } else {
       reason = forcedReason ?? (this.inputs.manualScreenSpaceError !== null ? "manual" : "fixed");
     }
+    this.lastEvaluateAt = now;
 
     if (Math.abs(target - this.currentSse) >= 0.5) {
       this.currentSse = Math.round(target * 2) / 2;
@@ -381,6 +415,22 @@ export class PerformanceManager {
     clearInterval(this.timer);
     for (const off of this.unsubscribe) off();
   }
+}
+
+/**
+ * Cheapest savings first: anti-aliasing, then resolution in three steps down to half, then
+ * coarser tiles (the only step that changes what is drawn). Exported for the unit tests.
+ */
+export function buildLadder(preset: QualityPreset): LadderStep[] {
+  const msaa = preset === "performance" ? 1 : 4;
+  const steps: LadderStep[] = [{ msaa, scale: 1, ssePenalty: 0, label: "full" }];
+  if (msaa > 1) steps.push({ msaa: 1, scale: 1, ssePenalty: 0, label: "MSAA off" });
+  for (const scale of [0.8, 0.65, 0.5])
+    steps.push({ msaa: 1, scale, ssePenalty: 0, label: `resolution ${scale}` });
+  const { base, max } = QUALITY_SSE[preset];
+  for (let penalty = SSE_PENALTY_STEP; base + penalty <= max; penalty += SSE_PENALTY_STEP)
+    steps.push({ msaa: 1, scale: 0.5, ssePenalty: penalty, label: `tiles +${penalty} SSE` });
+  return steps;
 }
 
 /** Reads the renderer through the public canvas API; Cesium already owns the context. */

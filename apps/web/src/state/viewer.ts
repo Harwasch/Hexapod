@@ -35,8 +35,8 @@ export interface PerformanceSnapshot {
   /** False while nothing is being rendered (request-render mode idles the GPU). */
   rendering: boolean;
   msaaSamples: number;
-  /** "rest" renders still frames at full quality; "motion" applies the adaptive savings. */
-  profile: "rest" | "motion";
+  /** "full" renders the preset as configured; "reduced" means the adaptive ladder cut something. */
+  profile: "full" | "reduced";
   /** Motion-only frame statistics since the last site change, for comparing datasets. */
   benchmark: { motionFps: number | null; p95FrameMs: number | null; samples: number };
 }
@@ -90,7 +90,7 @@ export const useViewer = create<ViewerState>()((set) => ({
     memoryBudgetMb: 0,
     rendering: false,
     msaaSamples: 4,
-    profile: "rest",
+    profile: "full",
     benchmark: { motionFps: null, p95FrameMs: null, samples: 0 },
   },
   worldLabel: "Open world",

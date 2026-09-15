@@ -116,9 +116,10 @@ def overview_bookmark(
 
 
 def default_bookmark_for_demo() -> CameraBookmarkCreate:
-    """Equivalent of the Sandcastle's viewBoundingSphere(heading 100°, pitch -25°, range 500 m)."""
+    """Like the Sandcastle's viewBoundingSphere (heading 100°), but steeper (pitch -45°) so the
+    arrival looks at the ground rather than the horizon."""
     return overview_bookmark(
-        "Overview", DEMO_CENTER_LON, DEMO_CENTER_LAT, DEMO_CENTER_HEIGHT, 100.0, -25.0, 500.0
+        "Overview", DEMO_CENTER_LON, DEMO_CENTER_LAT, DEMO_CENTER_HEIGHT, 100.0, -45.0, 420.0
     )
 
 
@@ -269,7 +270,7 @@ MELBOURNE_SITE = SiteCreate(
             ),
         ),
     ],
-    camera_bookmarks=[overview_bookmark("CBD", 144.9634, -37.8150, 30.0, 35.0, -35.0, 1800.0)],
+    camera_bookmarks=[overview_bookmark("CBD", 144.9634, -37.8150, 30.0, 35.0, -45.0, 1700.0)],
 )
 
 AEROMETREX_ATTRIBUTION = Attribution(
@@ -322,7 +323,7 @@ SAN_FRANCISCO_SITE = SiteCreate(
         )
     ],
     camera_bookmarks=[
-        overview_bookmark("Financial District", -122.4033, 37.7913, 20.0, 60.0, -30.0, 1400.0)
+        overview_bookmark("Financial District", -122.4033, 37.7913, 20.0, 60.0, -45.0, 1300.0)
     ],
 )
 
@@ -365,7 +366,7 @@ BOATHOUSE_SITE = SiteCreate(
             default_visible=True,
         )
     ],
-    camera_bookmarks=[overview_bookmark("Boathouse", -75.29172, 40.07269, 8.0, 210.0, -22.0, 90.0)],
+    camera_bookmarks=[overview_bookmark("Boathouse", -75.29172, 40.07269, 8.0, 210.0, -40.0, 85.0)],
 )
 
 CESIUM_SAMPLE_LICENSE = LicenseMetadata(
@@ -410,7 +411,7 @@ AGI_HQ_SITE = SiteCreate(
             default_visible=True,
         )
     ],
-    camera_bookmarks=[overview_bookmark("Campus", -75.59671, 40.0388, 95.0, 30.0, -28.0, 260.0)],
+    camera_bookmarks=[overview_bookmark("Campus", -75.59671, 40.0388, 95.0, 30.0, -45.0, 240.0)],
 )
 
 CHAPPES_ATTRIBUTION = Attribution(
@@ -461,7 +462,7 @@ CHAPPES_SITE = SiteCreate(
             default_visible=True,
         )
     ],
-    camera_bookmarks=[overview_bookmark("Church", 2.92629, 46.38847, 420.0, 200.0, -20.0, 70.0)],
+    camera_bookmarks=[overview_bookmark("Church", 2.92629, 46.38847, 420.0, 200.0, -40.0, 65.0)],
 )
 
 COMPARISON_SITES: list[SiteCreate] = [

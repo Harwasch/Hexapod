@@ -39,6 +39,10 @@ const REPRESENTATION_ORDER: Representation[] = [
 const ACTIVATE_DISTANCE_M = 40_000;
 const DEACTIVATE_DISTANCE_M = 400_000;
 const NEAR_ALTITUDE_M = 6_000;
+/** Sites smaller than this are ranked as if they were this big, so tiny objects do not win by default. */
+const MIN_SITE_RADIUS_M = 30;
+/** Object scale engages within this distance of a hand-sized model's surface. */
+const OBJECT_SCALE_REACH_M = 25;
 
 interface AssetHandle {
   asset: SiteAsset;
@@ -65,8 +69,13 @@ export class SiteManager {
   private readonly scene: Scene;
   private summaries: SiteSummary[] = [];
   private detailResolver: (id: string) => Promise<Site | null> = () => Promise.resolve(null);
-  private active: ActiveSite | null = null;
+  /** Every site currently loaded in the scene, keyed by site id. Sites can overlap (a hand-sized
+   *  object registered on top of a campus), so several stay loaded at once. */
+  private readonly loaded = new Map<string, ActiveSite>();
+  /** The site the representation switcher, clipping and the HUD refer to. */
+  private primaryId: string | null = null;
   private nearId: string | null = null;
+  private objectScale = false;
   private screenSpaceError = 16;
   private flightTarget: string | null = null;
   private readonly unsubscribe: (() => void)[] = [];
@@ -95,6 +104,10 @@ export class SiteManager {
     this.checkProximity(true);
   }
 
+  private get active(): ActiveSite | null {
+    return this.primaryId ? (this.loaded.get(this.primaryId) ?? null) : null;
+  }
+
   get activeSite(): Site | null {
     return this.active?.site ?? null;
   }
@@ -119,38 +132,69 @@ export class SiteManager {
   }
 
   /** Loads a site's assets into the scene without moving the camera. */
-  async activate(siteId: string): Promise<Site | null> {
-    if (this.active?.site.id === siteId) return this.active.site;
+  async activate(siteId: string, options: { primary?: boolean } = {}): Promise<Site | null> {
+    const makePrimary = options.primary ?? true;
+    const existing = this.loaded.get(siteId);
+    if (existing) {
+      if (makePrimary) this.setPrimary(siteId);
+      return existing.site;
+    }
     const site = await this.detailResolver(siteId);
     if (!site) return null;
-    if (this.active) this.deactivate();
+    if (this.loaded.has(siteId)) return site;
     const defaultAsset = site.assets.find((a) => a.defaultVisible) ?? site.assets[0];
     const representation = defaultAsset?.representation ?? "gaussian-splat";
-    this.active = { site, representation, temporalAssetId: null, handles: new Map() };
-    this.performance.resetBenchmark();
-    this.events.emit("site-active", site.id);
-    this.events.emit("representation", { siteId: site.id, representation });
-    await this.showRepresentation(representation);
+    const entry: ActiveSite = { site, representation, temporalAssetId: null, handles: new Map() };
+    this.loaded.set(siteId, entry);
+    if (makePrimary || !this.primaryId) this.setPrimary(siteId);
+    await this.showRepresentation(entry, representation);
     return site;
   }
 
-  deactivate(): void {
-    if (!this.active) return;
-    const { site, handles } = this.active;
-    this.camera.setObjectScale(false);
-    for (const handle of handles.values()) this.disposeHandle(handle);
-    this.clipping.setFootprint(site.id, null);
-    this.active = null;
-    this.events.emit("site-active", null);
-    this.events.emit("tilesets", []);
+  private setPrimary(siteId: string): void {
+    if (this.primaryId === siteId) return;
+    const entry = this.loaded.get(siteId);
+    if (!entry) return;
+    this.primaryId = siteId;
+    this.performance.resetBenchmark();
+    this.events.emit("site-active", siteId);
+    this.events.emit("representation", { siteId, representation: entry.representation });
+    this.events.emit("tilesets", this.activeTilesetLabels());
+  }
+
+  /** Unloads one site, or every site when no id is given. */
+  deactivate(siteId?: string): void {
+    const ids = siteId ? [siteId] : Array.from(this.loaded.keys());
+    for (const id of ids) {
+      const entry = this.loaded.get(id);
+      if (!entry) continue;
+      for (const handle of entry.handles.values()) this.disposeHandle(handle);
+      this.clipping.setFootprint(id, null);
+      this.loaded.delete(id);
+    }
+    if (this.primaryId && !this.loaded.has(this.primaryId)) {
+      this.primaryId = null;
+      const next = this.loaded.keys().next();
+      if (!next.done) this.setPrimary(next.value);
+      else this.events.emit("site-active", null);
+    }
+    if (this.loaded.size === 0) {
+      this.camera.setObjectScale(false);
+      this.objectScale = false;
+    }
+    this.events.emit("tilesets", this.activeTilesetLabels());
     this.scene.requestRender();
   }
 
   /** Flies to a site and loads it. The camera pose comes from the default bookmark or the model bounds. */
   async flyTo(siteId: string): Promise<void> {
     const summary = this.summaries.find((s) => s.id === siteId);
+    // Protected from proximity unloading from the very start: the catalog can finish loading
+    // while the site details are still being fetched, and the camera is usually far away.
+    this.flightTarget = siteId;
     const site = await this.activate(siteId);
     if (!site) {
+      this.flightTarget = null;
       this.events.emit("toast", {
         tone: "error",
         title: "Site not found",
@@ -159,7 +203,6 @@ export class SiteManager {
       return;
     }
     const bookmark = site.cameraBookmarks.find((b) => b.isDefault) ?? site.cameraBookmarks[0];
-    this.flightTarget = site.id;
     const onComplete = () => {
       this.flightTarget = null;
       this.checkProximity(true);
@@ -182,7 +225,8 @@ export class SiteManager {
 
   /** Bounding sphere of the active representation (loaded tileset) or the footprint. */
   async boundingSphere(site: Site): Promise<BoundingSphere | null> {
-    const handle = this.active?.site.id === site.id ? this.activeHandle() : null;
+    const entry = this.loaded.get(site.id);
+    const handle = entry ? this.handleFor(entry) : null;
     const tileset = handle?.tileset ?? (handle?.loading ? await handle.loading : null);
     if (tileset && handle) {
       // A clamped model moves once the terrain height is known; fly to where it will be.
@@ -202,7 +246,7 @@ export class SiteManager {
     this.active.representation = representation;
     this.active.temporalAssetId = null;
     this.events.emit("representation", { siteId: this.active.site.id, representation });
-    await this.showRepresentation(representation);
+    await this.showRepresentation(this.active, representation);
   }
 
   async setTemporalAsset(assetId: string): Promise<void> {
@@ -217,12 +261,18 @@ export class SiteManager {
         representation: asset.representation,
       });
     }
-    await this.showRepresentation(asset.representation);
+    await this.showRepresentation(this.active, asset.representation);
+  }
+
+  /** Every asset handle of every loaded site. */
+  private *handles(): IterableIterator<{ entry: ActiveSite; handle: AssetHandle }> {
+    for (const entry of this.loaded.values())
+      for (const handle of entry.handles.values()) yield { entry, handle };
   }
 
   /** Called by the debug panel. */
   setDebug(options: { boundingVolumes?: boolean; wireframe?: boolean }): void {
-    for (const handle of this.active?.handles.values() ?? []) {
+    for (const { handle } of this.handles()) {
       if (!handle.tileset) continue;
       if (options.boundingVolumes !== undefined)
         handle.tileset.debugShowBoundingVolume = options.boundingVolumes;
@@ -233,24 +283,21 @@ export class SiteManager {
 
   activeTilesetLabels(): string[] {
     const labels: string[] = [];
-    for (const handle of this.active?.handles.values() ?? []) {
-      if (handle.tileset?.show)
-        labels.push(`${this.active?.site.name ?? "site"} · ${handle.asset.name}`);
+    for (const { entry, handle } of this.handles()) {
+      if (handle.tileset?.show) labels.push(`${entry.site.name} · ${handle.asset.name}`);
     }
     return labels;
   }
 
-  private activeHandle(): AssetHandle | null {
-    if (!this.active) return null;
-    const asset = this.pickAsset(this.active.representation);
-    return asset ? (this.active.handles.get(asset.id) ?? null) : null;
+  private handleFor(entry: ActiveSite): AssetHandle | null {
+    const asset = this.pickAsset(entry, entry.representation);
+    return asset ? (entry.handles.get(asset.id) ?? null) : null;
   }
 
-  private pickAsset(representation: Representation): SiteAsset | null {
-    if (!this.active) return null;
-    const candidates = this.active.site.assets.filter((a) => a.representation === representation);
-    if (this.active.temporalAssetId) {
-      const chosen = candidates.find((a) => a.id === this.active?.temporalAssetId);
+  private pickAsset(entry: ActiveSite, representation: Representation): SiteAsset | null {
+    const candidates = entry.site.assets.filter((a) => a.representation === representation);
+    if (entry.temporalAssetId) {
+      const chosen = candidates.find((a) => a.id === entry.temporalAssetId);
       if (chosen) return chosen;
     }
     return (
@@ -260,10 +307,11 @@ export class SiteManager {
     );
   }
 
-  private async showRepresentation(representation: Representation): Promise<void> {
-    const active = this.active;
-    if (!active) return;
-    const asset = this.pickAsset(representation);
+  private async showRepresentation(
+    active: ActiveSite,
+    representation: Representation,
+  ): Promise<void> {
+    const asset = this.pickAsset(active, representation);
     for (const handle of active.handles.values()) {
       if (handle.tileset && handle.asset.id !== asset?.id) handle.tileset.show = false;
     }
@@ -275,8 +323,8 @@ export class SiteManager {
     const tileset = await this.ensureTileset(active, asset);
     if (
       !tileset ||
-      this.active !== active ||
-      this.pickAsset(active.representation)?.id !== asset.id
+      this.loaded.get(active.site.id) !== active ||
+      this.pickAsset(active, active.representation)?.id !== asset.id
     )
       return;
     tileset.show = true;
@@ -304,7 +352,7 @@ export class SiteManager {
       },
     )
       .then((tileset) => {
-        if (this.active !== active) {
+        if (this.loaded.get(active.site.id) !== active) {
           tileset.destroy();
           return null;
         }
@@ -337,8 +385,6 @@ export class SiteManager {
 
   private attachTileset(handle: AssetHandle, tileset: Cesium3DTileset, asset: SiteAsset): void {
     handle.tileset = tileset;
-    // Hand-sized models need a millimetre zoom floor and a close near plane.
-    this.camera.setObjectScale(tileset.boundingSphere.radius < OBJECT_SCALE_RADIUS_M);
     if (asset.renderConfig.clampToGround) handle.placed = this.clampToGround(tileset, asset);
     const offset = asset.renderConfig.heightOffsetM ?? 0;
     if (offset !== 0 && !asset.renderConfig.clampToGround) {
@@ -383,7 +429,7 @@ export class SiteManager {
   private memoryUsage(): { bytes: number; budget: number } {
     const { cacheBytes, maximumCacheOverflowBytes } = tileCacheBudget();
     let bytes = 0;
-    for (const handle of this.active?.handles.values() ?? []) {
+    for (const { handle } of this.handles()) {
       if (handle.tileset?.show) bytes += handle.tileset.totalMemoryUsageInBytes;
     }
     return { bytes, budget: cacheBytes + maximumCacheOverflowBytes };
@@ -450,20 +496,26 @@ export class SiteManager {
     let applied = provisional ? "" : coverageKey(footprint);
     let timer: ReturnType<typeof setTimeout> | null = null;
     // Sub-tilesets stream in over time; re-derive the coverage after each burst of tile loads
-    // and swap the clip only when it actually changed (rebuilding it is not free).
+    // and swap the clip only when it actually changed (rebuilding it is not free). Never
+    // mid-gesture: rasterising the new polygons is a visible hitch, so it waits for rest.
+    const refresh = (): void => {
+      timer = null;
+      if (this.loaded.get(active.site.id) !== active || !tileset.show) return;
+      if (this.camera.isMoving) {
+        timer = setTimeout(refresh, COVERAGE_REFRESH_MS);
+        return;
+      }
+      const coverage = coverageFromTileset(tileset);
+      if (!coverage) return;
+      const key = coverageKey(coverage);
+      if (key === applied) return;
+      applied = key;
+      this.clipping.setFootprint(active.site.id, coverage);
+      this.scene.requestRender();
+    };
     const off = tileset.tileLoad.addEventListener(() => {
       if (timer !== null) return;
-      timer = setTimeout(() => {
-        timer = null;
-        if (this.active !== active || !tileset.show) return;
-        const coverage = coverageFromTileset(tileset);
-        if (!coverage) return;
-        const key = coverageKey(coverage);
-        if (key === applied) return;
-        applied = key;
-        this.clipping.setFootprint(active.site.id, coverage);
-        this.scene.requestRender();
-      }, COVERAGE_REFRESH_MS);
+      timer = setTimeout(refresh, COVERAGE_REFRESH_MS);
     });
     handle.unsubscribe.push(() => {
       off();
@@ -473,7 +525,7 @@ export class SiteManager {
 
   private applyScreenSpaceError(sse: number): void {
     this.screenSpaceError = sse;
-    for (const handle of this.active?.handles.values() ?? []) {
+    for (const { handle } of this.handles()) {
       if (!handle.tileset) continue;
       const configured = handle.asset.renderConfig.maximumScreenSpaceError;
       // A per-asset value acts as a floor for quality (never coarser than configured), while
@@ -492,42 +544,50 @@ export class SiteManager {
     }
   }
 
-  /** Loads nearby sites automatically and unloads far ones; also tracks the "near site" for the HUD. */
+  /**
+   * Loads every site the camera is near, unloads the ones it has left, chooses which loaded
+   * site is primary (the one the switcher, clipping and HUD describe), and switches the
+   * camera to object scale beside a hand-sized model. Sites overlap: a 14 cm rock can be
+   * registered on top of a campus, and both must stay loaded while you look at either.
+   */
   private checkProximity(force = false): void {
     const now = performance.now();
     if (!force && now - this.lastProximityCheck < 400) return;
     this.lastProximityCheck = now;
     const pose = this.camera.pose();
     const here = { longitude: pose.longitude, latitude: pose.latitude };
-    let nearest: { summary: SiteSummary; distance: number } | null = null;
-    for (const summary of this.summaries) {
-      const distance = haversineDistance(here, summary.centroid);
-      if (!nearest || distance < nearest.distance) nearest = { summary, distance };
-    }
-    const active = this.active;
-    if (active) {
-      const activeSummary = this.summaries.find((s) => s.id === active.site.id);
-      const distance = activeSummary ? haversineDistance(here, activeSummary.centroid) : 0;
+    const ranked = this.summaries
+      .map((summary) => {
+        const distance = haversineDistance(here, summary.centroid);
+        const radius = Math.max(Math.sqrt(summary.areaM2 / Math.PI), MIN_SITE_RADIUS_M);
+        // Distance in units of the site's own size, so a campus 1 km away still outranks a
+        // rock 1 km away, while the rock wins once you are standing beside it.
+        return { summary, distance, radius, score: distance / radius };
+      })
+      .sort((a, b) => a.score - b.score);
+
+    for (const { summary, distance } of ranked) {
+      const entry = this.loaded.get(summary.id);
       if (
+        entry &&
         distance > DEACTIVATE_DISTANCE_M &&
         pose.altitude > DEACTIVATE_DISTANCE_M / 4 &&
-        this.flightTarget !== active.site.id
+        this.flightTarget !== summary.id
       ) {
-        log.info("unloading distant site", { site: active.site.slug });
-        this.deactivate();
+        log.info("unloading distant site", { site: entry.site.slug });
+        this.deactivate(summary.id);
+      } else if (!entry && distance < ACTIVATE_DISTANCE_M && pose.altitude < ACTIVATE_DISTANCE_M) {
+        void this.activate(summary.id, { primary: false });
       }
     }
-    if (
-      nearest &&
-      nearest.distance < ACTIVATE_DISTANCE_M &&
-      pose.altitude < ACTIVATE_DISTANCE_M &&
-      this.active?.site.id !== nearest.summary.id
-    ) {
-      void this.activate(nearest.summary.id);
-    }
-    const radius = nearest ? Math.max(Math.sqrt(nearest.summary.areaM2 / Math.PI) * 6, 400) : 0;
+
+    const best = ranked.find((r) => this.loaded.has(r.summary.id));
+    if (best && this.flightTarget === null && best.summary.id !== this.primaryId)
+      this.setPrimary(best.summary.id);
+
+    const nearest = ranked[0];
     const near =
-      nearest && nearest.distance < radius && pose.altitude < NEAR_ALTITUDE_M
+      nearest && nearest.distance < nearest.radius * 6 && pose.altitude < NEAR_ALTITUDE_M
         ? nearest.summary.id
         : null;
     if (near !== this.nearId) {
@@ -535,6 +595,26 @@ export class SiteManager {
       this.events.emit("site-near", near);
     }
     this.performance.reportContext(pose.altitude, near !== null);
+    this.updateObjectScale();
+  }
+
+  /** Object scale while the camera is within reach of a hand-sized loaded model. */
+  private updateObjectScale(): void {
+    const cameraPosition = this.viewer.camera.positionWC;
+    let near = false;
+    for (const { handle } of this.handles()) {
+      const tileset = handle.tileset;
+      if (!tileset?.show || tileset.boundingSphere.radius >= OBJECT_SCALE_RADIUS_M) continue;
+      const reach = tileset.boundingSphere.radius + OBJECT_SCALE_REACH_M;
+      if (Cartesian3.distance(cameraPosition, tileset.boundingSphere.center) < reach) {
+        near = true;
+        break;
+      }
+    }
+    if (near !== this.objectScale) {
+      this.objectScale = near;
+      this.camera.setObjectScale(near);
+    }
   }
 
   private disposeHandle(handle: AssetHandle): void {
