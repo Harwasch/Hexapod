@@ -45,7 +45,7 @@ export function OnboardingCard() {
             data-testid="onboarding"
           >
             <h2 id="onboarding-title">Explore the living world</h2>
-            <p>Zoom from the planet to detailed reality captures.</p>
+            <p>Zoom from the planet to the machines working the land.</p>
             <div className="onboarding__actions">
               <GlassButton
                 variant="glass"

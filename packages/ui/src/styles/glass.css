@@ -129,14 +129,13 @@
 }
 
 .glass-button--primary {
-  background: var(--accent);
-  border-color: transparent;
-  color: var(--text-on-accent);
-  box-shadow: 0 6px 16px rgba(10, 132, 255, 0.28);
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
+  color: var(--text-primary);
 }
 
 .glass-button--primary:hover:not(:disabled) {
-  background: var(--accent-strong);
+  background: rgba(127, 216, 192, 0.3);
 }
 
 .glass-button--ghost {
@@ -236,13 +235,13 @@
 }
 
 .glass-badge--success {
-  background: rgba(48, 209, 88, 0.16);
-  color: #1f9a43;
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 
 .glass-badge--warning {
-  background: rgba(255, 159, 10, 0.16);
-  color: #b36b00;
+  background: var(--warn-soft);
+  color: var(--warn);
 }
 
 /* ---- Segmented control --------------------------------------------------- */
@@ -290,9 +289,8 @@
 }
 
 .glass-segment__item[data-state="on"] {
-  background: var(--surface-solid);
+  background: rgba(255, 255, 255, 0.18);
   color: var(--text-primary);
-  box-shadow: var(--glass-shadow-soft);
 }
 
 .glass-segment__item:disabled {
@@ -387,6 +385,10 @@ select.glass-input {
   background: var(--accent);
 }
 
+.glass-switch__thumb {
+  background: var(--surface-solid);
+}
+
 .glass-switch:disabled {
   opacity: 0.5;
   cursor: not-allowed;
@@ -474,7 +476,7 @@ select.glass-input {
   position: fixed;
   inset: 0;
   z-index: var(--z-sheet);
-  background: rgba(15, 23, 42, 0.18);
+  background: rgba(6, 9, 5, 0.35);
   animation: glass-fade var(--motion-base) var(--ease-out);
 }
 

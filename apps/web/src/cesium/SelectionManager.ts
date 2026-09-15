@@ -25,6 +25,7 @@ import type { Selection, SelectionProperty } from "@/state/selection";
 
 import type { CameraController } from "./CameraController";
 import type { LayerManager } from "./LayerManager";
+import { ZONE_ENTITY_PREFIX } from "./MissionManager";
 import type { SiteManager } from "./SiteManager";
 import type { SceneEvents } from "./types";
 
@@ -113,6 +114,17 @@ export class SelectionManager {
       terrainHeight: null,
       at: Date.now(),
     };
+    if (
+      isEntityPick(picked) &&
+      typeof picked.id.id === "string" &&
+      picked.id.id.startsWith(ZONE_ENTITY_PREFIX)
+    ) {
+      this.events.emit("mission-select", {
+        kind: "zone",
+        id: picked.id.id.slice(ZONE_ENTITY_PREFIX.length),
+      });
+      return;
+    }
     let selection: Selection;
     if (picked instanceof Cesium3DTileFeature) {
       selection = this.selectTileFeature(picked, base);

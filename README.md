@@ -8,7 +8,7 @@ own directories.
 ```text
 /
 ├── apps/
-│   ├── web/        React + Vite + CesiumJS viewer (Liquid-Glass UI)
+│   ├── web/        React + Vite + CesiumJS mission control (dark glass UI)
 │   └── api/        FastAPI + PostGIS catalog (sites, assets, layers, bookmarks)
 ├── packages/
 │   ├── contracts/  OpenAPI document + generated TypeScript types
@@ -29,7 +29,10 @@ land cover, hydrography, buildings) are composable layers with provenance, licen
 attribution. Sites, assets and layers persist in PostGIS.
 
 A public demo site (Cesium's Gaussian-splat sample, ion asset 4547222) works out of the box
-using the evaluation token bundled with CesiumJS.
+using the evaluation token bundled with CesiumJS. On top of the world sits **mission control**
+for autonomous land-management robots: project badge, Map / Plan / Fleet views, zone and
+machine overlays, plans, fleet and treatment log, an agent activity stream and a command bar.
+The demo fleet is simulated and labeled as such (see [docs/MISSION_CONTROL.md](docs/MISSION_CONTROL.md)).
 
 ## Quickstart (clean machine)
 
@@ -88,11 +91,12 @@ then `pnpm contracts:generate`. CI fails if the committed contract is stale.
 
 `⌘K`/`Ctrl+K` command palette · `/` search · `L` layers · `S` sites · `M` measure · `C` compare ·
 `B` bookmarks · `N` reset north · `T` top-down · `H` Earth · `G` explore mode · `,` settings ·
-`D` developer panel (dev builds) · `Esc` closes.
+`1`/`2`/`3` Map / Plan / Fleet · `A` agent stream · `D` developer panel (dev builds) · `Esc` closes.
 
 ## Documentation
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — why CesiumJS, 3D Tiles, PostGIS; the seams for STAC/S3/COPC/robotics
+- [docs/MISSION_CONTROL.md](docs/MISSION_CONTROL.md) — robot mission layer: views, overlays, command bar, provider seam
 - [docs/CESIUM.md](docs/CESIUM.md) — scene manager, clipping, LOD/adaptive quality, tokens, current API notes
 - [docs/DATA_MODEL.md](docs/DATA_MODEL.md) — sites, assets, layers, bookmarks, provenance
 - [docs/ADDING_DATA.md](docs/ADDING_DATA.md) — every supported input, validation rules, ion reconstruction

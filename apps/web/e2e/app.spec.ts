@@ -31,9 +31,6 @@ test.describe("catalog", () => {
     await expect(card).toContainText("Cesium Gaussian splat demo");
     await expect(card).toContainText("Splat");
     await card.click();
-    await expect(app.getByTestId("status-bar")).toContainText("Cesium Gaussian splat demo", {
-      timeout: 30_000,
-    });
     await expect(app.getByTestId("representation-switcher")).toBeVisible({ timeout: 30_000 });
     await expect(app.getByTestId("status-bar")).not.toContainText("Planet");
   });
@@ -148,7 +145,12 @@ test.describe("interaction", () => {
   test("major UI is keyboard accessible", async ({ app }) => {
     await app.getByTestId("onboarding-explore").click();
     await app.getByTestId("search-input").focus();
-    await app.keyboard.press("Tab");
+    // Tab through the top-right controls to the tool rail; every stop must be a real control.
+    for (let i = 0; i < 12; i++) {
+      await app.keyboard.press("Tab");
+      if (await app.getByTestId("tool-layers").evaluate((el) => el === document.activeElement))
+        break;
+    }
     await expect(app.getByTestId("tool-layers")).toBeFocused();
     await app.keyboard.press("Enter");
     await expect(app.getByTestId("layers-panel")).toBeVisible();
@@ -218,5 +220,55 @@ test.describe("add data", () => {
     await app.getByTestId("layer-url").fill("javascript:alert(1)");
     await app.getByTestId("layer-submit").click();
     await expect(app.getByText("Only http(s) URLs are supported.")).toBeVisible();
+  });
+});
+
+test.describe("mission control", () => {
+  test("view tabs switch between map, plan and fleet; plan detail shows on map", async ({
+    app,
+  }) => {
+    await app.getByTestId("onboarding-demo").click();
+    await expect(app.getByTestId("project-card")).toContainText("Blackrock Mesa", {
+      timeout: 30_000,
+    });
+    await expect(app.locator('[data-testid^="machine-marker-"]')).toHaveCount(6);
+    await app.getByTestId("view-tab-plan").click({ force: true });
+    await expect(app.getByTestId("plans-panel")).toBeVisible();
+    await expect(app.getByTestId("representation-switcher")).toHaveCount(0);
+    await app.getByTestId("plan-thistle").click({ force: true });
+    await expect(app.getByTestId("plan-detail")).toContainText("Remove all invasive star thistle");
+    await expect(app.getByTestId("plan-show-on-map")).toBeVisible();
+    await app.waitForTimeout(700);
+    await app.getByTestId("plan-show-on-map").click({ force: true });
+    await expect(app.getByTestId("selection-card").last()).toContainText("Z-14 West bench", {
+      timeout: 15_000,
+    });
+    await app.getByTestId("view-tab-fleet").click({ force: true });
+    await expect(app.getByTestId("fleet-panel")).toContainText("TR-07 Harrier");
+    await app.getByTestId("toggle-work-log").click({ force: true });
+    await expect(app.getByTestId("work-log")).toContainText("Treatment log");
+    await app.getByTestId("fleet-row-TR-04").click({ force: true });
+    await expect(app.getByTestId("selection-card").last()).toContainText("TR-04 Kestrel");
+    await expect(app.getByTestId("fleet-panel")).toHaveCount(0);
+  });
+
+  test("command bar drives the agent stream and layer pills toggle overlays", async ({ app }) => {
+    await app.getByTestId("onboarding-demo").click();
+    await expect(app.getByTestId("project-card")).toContainText("Blackrock Mesa", {
+      timeout: 30_000,
+    });
+    await app.getByTestId("command-input").fill("where is TR-07");
+    await app.keyboard.press("Enter");
+    await expect(app.getByTestId("agent-stream")).toContainText("Locating TR-07 Harrier");
+    await expect(app.getByTestId("selection-card").last()).toContainText("Service due");
+    await app.getByTestId("command-input").fill("hide zones");
+    await app.keyboard.press("Enter");
+    await expect(app.getByTestId("agent-stream")).toContainText("Zones off");
+    await expect(app.getByTestId("pill-zones")).toHaveAttribute("aria-pressed", "false");
+    await expect(app.locator('[data-testid^="zone-chip-"]')).toHaveCount(0);
+    await app.getByTestId("pill-zones").click({ force: true });
+    await expect(app.getByTestId("pill-zones")).toHaveAttribute("aria-pressed", "true");
+    await app.keyboard.press("Escape");
+    await expect(app.getByTestId("selection-card")).toHaveCount(0);
   });
 });

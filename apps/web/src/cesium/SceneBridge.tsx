@@ -3,7 +3,9 @@ import { useEffect } from "react";
 import { useLayers as useLayerCatalog, useSites as useSiteCatalog } from "@/api/queries";
 import { api, unwrap } from "@/api/client";
 import { builtinDemoSite } from "@/api/fallback";
+import { DemoMissionProvider } from "@/missions/demo";
 import { useLayers } from "@/state/layers";
+import { useMission } from "@/state/mission";
 import { useMeasurements } from "@/state/measurements";
 import { useSelection } from "@/state/selection";
 import { useSettings } from "@/state/settings";
@@ -62,6 +64,10 @@ export function SceneBridge() {
         ]),
       ),
       scene.events.on("explore", (on) => useUi.getState().setExploreMode(on)),
+      scene.events.on("mission-select", ({ kind, id }) => {
+        useMission.getState().select({ kind, id });
+        scene.mission.setSelectedZone(kind === "zone" ? id : null);
+      }),
     ];
     // Events raised while the viewer was constructing happened before we subscribed.
     viewer.setStatus(scene.isDestroyed ? "error" : "ready", null);
@@ -100,6 +106,26 @@ export function SceneBridge() {
     };
     scene.sites.setCatalog(siteCatalog.data, resolver);
   }, [scene, siteCatalog.data, siteCatalog.isLoading]);
+
+  // Active site → mission project (demo provider today; a backend/ROS bridge later)
+  const activeSiteId = useSites((s) => s.activeSiteId);
+  useEffect(() => {
+    if (!scene) return;
+    const provider = new DemoMissionProvider();
+    const summary = siteCatalog.data?.find((s) => s.id === activeSiteId) ?? null;
+    const project = provider.projectForSite(activeSiteId, summary?.slug ?? null);
+    const current = useMission.getState().project;
+    if (
+      (project?.id ?? null) === (current?.id ?? null) &&
+      (project?.siteId ?? null) === (current?.siteId ?? null)
+    )
+      return;
+    useMission.getState().setProject(project);
+    scene.mission.setProject(project);
+    const layers = useMission.getState().layers;
+    scene.mission.setLayer("zones", layers.zones);
+    scene.mission.setLayer("tracks", layers.tracks);
+  }, [scene, activeSiteId, siteCatalog.data]);
 
   // Settings → scene
   const quality = useSettings((s) => s.quality);

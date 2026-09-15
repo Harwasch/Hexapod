@@ -10,7 +10,7 @@ import { api } from "@/api/client";
 import { InspectorPanel } from "@/features/inspector/InspectorPanel";
 import { LayersPanel } from "@/features/layers/LayersPanel";
 import { OnboardingCard } from "@/features/onboarding/OnboardingCard";
-import { StatusBar } from "@/features/status/StatusBar";
+import { CommandBar } from "@/features/mission/CommandBar";
 import { ToolRail } from "@/features/shell/ToolRail";
 import { useSelection } from "@/state/selection";
 import { useSettings } from "@/state/settings";
@@ -81,18 +81,19 @@ describe("InspectorPanel", () => {
   });
 });
 
-describe("StatusBar + Onboarding", () => {
+describe("CommandBar + Onboarding", () => {
   it("renders altitude in the selected unit system", () => {
+    vi.spyOn(api, "GET").mockRejectedValue(new TypeError("offline"));
     useViewer.getState().setCamera({
       ...useViewer.getState().camera,
       altitude: 1500,
       scaleBand: "city",
       metersPerPixel: 2,
     });
-    const { rerender } = render(wrap(<StatusBar />));
+    const { rerender } = render(wrap(<CommandBar />));
     expect(screen.getByTestId("status-altitude")).toHaveTextContent("1.5 km");
     useSettings.getState().set({ units: "imperial" });
-    rerender(wrap(<StatusBar />));
+    rerender(wrap(<CommandBar />));
     expect(screen.getByTestId("status-altitude")).toHaveTextContent("ft");
   });
 

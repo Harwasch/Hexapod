@@ -1,5 +1,6 @@
 @import "cesium/Build/Cesium/Widgets/widgets.css";
 @import "@twin/ui/styles.css";
+@import "./mission.css";
 
 /* ---- Base ---------------------------------------------------------------- */
 *,
@@ -14,7 +15,7 @@ body,
   height: 100%;
   margin: 0;
   overflow: hidden;
-  background: #060a16;
+  background: var(--ink);
   font-family: var(--font-sans);
   font-size: var(--text-md);
   line-height: var(--leading-normal);
@@ -59,10 +60,10 @@ a {
 
 /* Cesium's credit display becomes a small glass chip bottom-left (attribution stays visible). */
 .viewport .cesium-viewer-bottom {
-  left: var(--edge-gap);
-  bottom: var(--edge-gap);
+  left: calc(var(--edge-gap) + 20rem);
+  bottom: 5.9rem;
   right: auto;
-  max-width: min(40vw, 26rem);
+  max-width: min(32vw, 20rem);
   padding: 0.25rem 0.6rem;
   line-height: 1.25;
   border-radius: var(--glass-radius-pill);
@@ -131,6 +132,10 @@ a {
   position: absolute;
   top: var(--edge-gap);
   left: var(--edge-gap);
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  align-items: flex-start;
 }
 
 .hud-top-center {
@@ -138,7 +143,7 @@ a {
   top: var(--edge-gap);
   left: 50%;
   transform: translateX(-50%);
-  width: min(30rem, calc(100vw - 12rem));
+  width: min(26rem, calc(100vw - 46rem));
 }
 
 .hud-top-right {
@@ -146,7 +151,9 @@ a {
   top: var(--edge-gap);
   right: var(--edge-gap);
   display: flex;
-  gap: var(--space-2);
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.6rem;
 }
 
 .hud-left {
@@ -161,9 +168,9 @@ a {
 
 .hud-right {
   position: absolute;
-  top: 4.25rem;
+  top: 5.75rem;
   right: var(--edge-gap);
-  bottom: 4.25rem;
+  bottom: 6.5rem;
   width: var(--panel-width);
   max-width: calc(100vw - 2 * var(--edge-gap));
   display: flex;
@@ -180,10 +187,20 @@ a {
   margin-top: var(--space-2);
 }
 
+.hud-bottom-left {
+  position: absolute;
+  left: var(--edge-gap);
+  bottom: 6.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  align-items: flex-start;
+}
+
 .hud-bottom-center {
   position: absolute;
   left: 50%;
-  bottom: var(--edge-gap);
+  bottom: 6.5rem;
   transform: translateX(-50%);
   display: flex;
   flex-direction: column;
@@ -195,52 +212,49 @@ a {
 .hud-bottom-right {
   position: absolute;
   right: var(--edge-gap);
-  bottom: var(--edge-gap);
+  bottom: 6.5rem;
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
+  gap: 0.6rem;
   align-items: flex-end;
 }
 
-@media (max-width: 900px) {
+.hud-bottom-bar {
+  position: absolute;
+  left: var(--edge-gap);
+  right: var(--edge-gap);
+  bottom: var(--edge-gap);
+}
+
+.hud-nav {
+  position: absolute;
+  right: var(--edge-gap);
+  top: 40%;
+  transform: translateY(-50%);
+}
+
+.hud-top-right .notice {
+  max-width: 19rem;
+  font-size: var(--text-xs);
+}
+
+@media (max-width: 1180px) {
   .hud-top-center {
-    width: min(22rem, calc(100vw - 9rem));
-  }
-  .viewport .cesium-viewer-bottom {
-    max-width: 38vw;
+    display: none;
   }
 }
 
-@media (max-width: 640px) {
+@media (max-width: 760px) {
   :root {
-    --edge-gap: 0.625rem;
-  }
-  .hud-top-center {
-    top: 3.5rem;
-    left: var(--edge-gap);
-    transform: none;
-    width: calc(100vw - 2 * var(--edge-gap));
+    --edge-gap: 0.75rem;
   }
   .hud-top-right {
-    top: 6.5rem;
-    left: var(--edge-gap);
-    right: var(--edge-gap);
-    max-width: none !important;
-  }
-  .notice.notice--info {
-    display: none;
-  }
-  .viewport .cesium-viewer-bottom {
-    max-width: 55vw;
-    font-size: 9px;
-  }
-  .onboarding {
-    bottom: 8.25rem;
+    top: 4.5rem;
   }
   .hud-left {
     top: auto;
     left: 50%;
-    bottom: 7.5rem;
+    bottom: 5.5rem;
     transform: translateX(-50%);
   }
   .hud-left .tool-rail {
@@ -250,7 +264,7 @@ a {
     position: fixed;
     left: var(--edge-gap);
     right: var(--edge-gap);
-    bottom: 8rem;
+    bottom: 9rem;
     top: auto;
     width: auto;
     max-height: 50vh;
@@ -259,50 +273,28 @@ a {
     top: auto;
     left: var(--edge-gap);
     right: var(--edge-gap);
-    bottom: 8rem;
+    bottom: 9rem;
     width: auto;
     max-height: 50vh;
   }
-  .hud-bottom-center {
-    bottom: 4.25rem;
-  }
+  .hud-bottom-left,
   .hud-bottom-right {
-    right: var(--edge-gap);
-    bottom: var(--edge-gap);
+    bottom: 9rem;
+  }
+  .hud-bottom-center {
+    bottom: 5.5rem;
+  }
+  .hud-nav {
+    display: none;
   }
   .viewport .cesium-viewer-bottom {
-    bottom: 0.3rem;
-    max-width: 50vw;
+    bottom: 5.4rem;
+    max-width: 55vw;
+    font-size: 9px;
   }
-}
-
-/* ---- Brand --------------------------------------------------------------- */
-.brand {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.6rem;
-  padding: 0.4rem 0.85rem 0.4rem 0.5rem;
-}
-
-.brand__mark {
-  width: 1.5rem;
-  height: 1.5rem;
-  border-radius: 50%;
-  background: radial-gradient(circle at 35% 30%, #8ec5ff 0%, #1e6fe0 55%, #0b1a3a 100%);
-  box-shadow:
-    inset 0 0 0 1px rgba(255, 255, 255, 0.35),
-    0 2px 6px rgba(0, 0, 0, 0.25);
-}
-
-.brand__name {
-  font-size: var(--text-sm);
-  font-weight: 600;
-  letter-spacing: var(--tracking-tight);
-}
-
-.brand__tag {
-  font-size: var(--text-xs);
-  color: var(--text-tertiary);
+  .notice.notice--info {
+    display: none;
+  }
 }
 
 /* ---- Search -------------------------------------------------------------- */
@@ -323,7 +315,7 @@ a {
   border: 0;
   background: transparent;
   color: var(--text-primary);
-  font: 400 var(--text-md) / 1.4 var(--font-sans);
+  font: 400 13px / 1.4 var(--font-sans);
   outline: none;
 }
 
@@ -394,7 +386,7 @@ a {
 
 .tool-rail .glass-button--active {
   background: var(--accent-soft);
-  color: var(--accent-strong);
+  color: var(--accent);
 }
 
 .tool-rail__divider {
@@ -592,55 +584,6 @@ a {
   font-variant-numeric: tabular-nums;
 }
 
-/* ---- Status bar ---------------------------------------------------------- */
-.status {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.1rem;
-  padding: 0.25rem 0.5rem;
-  font-size: var(--text-xs);
-  color: var(--text-secondary);
-  white-space: nowrap;
-}
-
-.status__item {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  padding: 0.2rem 0.55rem;
-  border-radius: var(--glass-radius-pill);
-  font-variant-numeric: tabular-nums;
-}
-
-.status__item strong {
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.status__sep {
-  width: 1px;
-  height: 0.9rem;
-  background: var(--divider);
-}
-
-.status__dot {
-  width: 0.45rem;
-  height: 0.45rem;
-  border-radius: 50%;
-  background: var(--success);
-}
-
-.status__dot--loading {
-  background: var(--warning);
-  animation: pulse 1.2s ease-in-out infinite;
-}
-
-@keyframes pulse {
-  50% {
-    opacity: 0.4;
-  }
-}
-
 /* ---- Representation switcher --------------------------------------------- */
 .rep-switch {
   display: flex;
@@ -687,7 +630,7 @@ a {
   position: absolute;
   left: 0;
   right: 0;
-  bottom: 6.5rem;
+  bottom: 7.5rem;
   width: min(24rem, calc(100vw - 2rem));
   margin: 0 auto;
   text-align: center;
@@ -715,7 +658,7 @@ a {
 /* ---- Toasts -------------------------------------------------------------- */
 .toasts {
   position: absolute;
-  top: 4.25rem;
+  top: 5.25rem;
   left: 50%;
   transform: translateX(-50%);
   display: flex;

@@ -64,6 +64,7 @@ export class SiteManager {
   private active: ActiveSite | null = null;
   private nearId: string | null = null;
   private screenSpaceError = 16;
+  private flightTarget: string | null = null;
   private readonly unsubscribe: (() => void)[] = [];
   private lastProximityCheck = 0;
 
@@ -151,7 +152,11 @@ export class SiteManager {
       return;
     }
     const bookmark = site.cameraBookmarks.find((b) => b.isDefault) ?? site.cameraBookmarks[0];
-    const onComplete = () => this.checkProximity(true);
+    this.flightTarget = site.id;
+    const onComplete = () => {
+      this.flightTarget = null;
+      this.checkProximity(true);
+    };
     if (bookmark) {
       this.camera.flyToBookmark(bookmark, { onComplete });
       return;
@@ -395,7 +400,11 @@ export class SiteManager {
     if (active) {
       const activeSummary = this.summaries.find((s) => s.id === active.site.id);
       const distance = activeSummary ? haversineDistance(here, activeSummary.centroid) : 0;
-      if (distance > DEACTIVATE_DISTANCE_M && pose.altitude > DEACTIVATE_DISTANCE_M / 4) {
+      if (
+        distance > DEACTIVATE_DISTANCE_M &&
+        pose.altitude > DEACTIVATE_DISTANCE_M / 4 &&
+        this.flightTarget !== active.site.id
+      ) {
         log.info("unloading distant site", { site: active.site.slug });
         this.deactivate();
       }

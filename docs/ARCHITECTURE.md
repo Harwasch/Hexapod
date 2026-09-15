@@ -76,12 +76,15 @@ extensible parts (render config, resolution, license) without a migration per fi
   Zustand stores and pushing settings back. React components call managers imperatively
   (`useScene()`), never re-rendering the scene.
 - `apps/web/src/state/` — Zustand stores: settings (persisted), ui, viewer telemetry,
-  layer/site runtime, selection, measurements, toasts.
+  layer/site runtime, selection, measurements, toasts, mission (view, selection, layers).
 - `apps/web/src/api/` — `openapi-fetch` client typed from `@twin/contracts`, TanStack
   Query hooks, and a labeled built-in fallback catalog for when the API is down.
 - `apps/web/src/features/` — one directory per surface (search, layers, sites, inspector,
-  measure, compare, bookmarks, add-data, settings, palette, dev, status, nav, timeline,
-  explore, onboarding). Panels are lazy where large.
+  measure, compare, bookmarks, add-data, settings, palette, dev, nav, timeline, explore,
+  onboarding, mission). Panels are lazy where large.
+- `apps/web/src/missions/` — the mission domain (`Project`, `Machine`, `Zone`, `Plan`) and the
+  `MissionProvider` seam; `MissionManager` draws zones/tracks and projects overlay anchors.
+  See [MISSION_CONTROL.md](MISSION_CONTROL.md).
 - `packages/ui` — the glass design system; `packages/geo` — pure geospatial math;
   `packages/contracts` — the API contract.
 
@@ -114,7 +117,7 @@ kind is one Pydantic model, one enum value and one provider adapter.
 | S3 / COG / COPC / GeoParquet | `ObjectStorage` abstraction; new `provider`/`sourceType` values; a tile server (TiTiler/COPC) as an imagery/3D Tiles source |
 | Temporal captures            | `observed_at` / `valid_from` / `valid_to` on assets; `TimelineControl` already switches versions                            |
 | Semantic entities / plants   | new tables keyed to `sites` with geometry; `SelectionManager` already resolves features to catalog objects                  |
-| Robotics (ROS/MCAP)          | captures as canonical data; poses as CZML/time-dynamic entities via the existing data-source path                           |
+| Robotics (ROS/MCAP)          | a live `MissionProvider` replaces the simulated demo; poses feed `MissionManager` tracks and markers                        |
 | Simulation (Isaac/OpenUSD)   | consumes the same canonical store; the viewer stays a 3D Tiles client                                                       |
 | LLM geospatial assistant     | the command palette is the entry point; managers expose a small imperative API to drive                                     |
 | Observability vendor         | `lib/log.ts` sinks and `lib/timing.ts` spans                                                                                |

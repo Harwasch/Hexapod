@@ -10,6 +10,7 @@ import { ExploreController } from "./ExploreController";
 import { configureIonToken } from "./ion";
 import { LayerManager } from "./LayerManager";
 import { MeasurementManager } from "./MeasurementManager";
+import { MissionManager } from "./MissionManager";
 import { PerformanceManager } from "./PerformanceManager";
 import { FallbackGeocoder, IonGeocoder, NominatimGeocoder } from "./providers/geocoder";
 import { SelectionManager } from "./SelectionManager";
@@ -41,6 +42,7 @@ export class CesiumSceneManager {
   readonly sites: SiteManager;
   readonly selection: SelectionManager;
   readonly measurement: MeasurementManager;
+  readonly mission: MissionManager;
   readonly explore: ExploreController;
   readonly debug: DebugManager;
   readonly tokenState: TokenState;
@@ -103,6 +105,7 @@ export class CesiumSceneManager {
       this.sites,
     );
     this.measurement = new MeasurementManager(this.viewer, this.events);
+    this.mission = new MissionManager(this.viewer, this.events, this.camera);
     this.explore = new ExploreController(this.viewer, this.events);
     this.debug = new DebugManager(this.viewer, this.sites, (enabled) =>
       this.clipping.setEnabled(enabled),
@@ -200,6 +203,7 @@ export class CesiumSceneManager {
     this.debug.destroy();
     this.explore.destroy();
     this.measurement.destroy();
+    this.mission.destroy();
     this.selection.destroy();
     this.sites.destroy();
     this.performance.destroy();

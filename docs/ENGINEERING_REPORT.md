@@ -5,8 +5,8 @@ _Date: 2026-09-15 · Stack: CesiumJS 1.145, React 19.3, Vite 8, TypeScript 6, Fa
 ## What was built
 
 A production-grade foundation for a geospatial digital twin: one continuous CesiumJS
-world from planet to centimetre, a Liquid-Glass-inspired UI that keeps the map as the
-hero, and a PostGIS-backed catalog of sites, reality-model assets, open-data layers and
+world from planet to centimetre, a mission-control UI for autonomous land-management
+robots that keeps the map as the hero, and a PostGIS-backed catalog of sites, reality-model assets, open-data layers and
 camera bookmarks with provenance, license and attribution on every record.
 
 **World**
@@ -78,7 +78,20 @@ current delivery provider, not the data model; canonical data will live behind t
    for ion to document the photo input `sourceType`; registration and monitoring work now.
 5. Reduced-motion, reduced-transparency and high-contrast are first-class token variants.
 
+**Mission control (second iteration)**
+
+- UI rebuilt on the "Robot Land Management UI" design: dark olive glass, project badge,
+  Map / Plan / Fleet views, layer pills, machine markers and zone chips over the world,
+  selection cards, Plans and Fleet windows with a treatment log, an agent activity stream
+  and a bottom command bar with local intent parsing.
+- A simulated demo project (Blackrock Mesa, six machines, three zones, five plans) is
+  attached to the demo site and labeled as simulated; `MissionProvider` is the seam for a
+  live fleet feed. See [MISSION_CONTROL.md](MISSION_CONTROL.md).
+
 ## Known limitations
+
+- The fleet, zones, plans, agent actions and camera feeds are simulated demo data; there
+  is no robot telemetry ingestion yet.
 
 - Headless verification used SwiftShader (software GL); frame rates there are not
   representative and splat refinement is slow. The adaptive controller correctly lowered

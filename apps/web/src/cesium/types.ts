@@ -28,6 +28,7 @@ export interface SceneEvents extends Record<string, unknown> {
   world: string;
   tilesets: string[];
   explore: boolean;
+  "mission-select": { kind: "zone" | "machine"; id: string };
 }
 
 export interface GeocodeResult {

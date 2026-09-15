@@ -33,8 +33,7 @@ export function SetupNotices() {
         >
           <KeyRound className="notice__icon" size={18} aria-hidden="true" />
           <div className="glass-muted">
-            Using the CesiumJS evaluation token (rate-limited). Add{" "}
-            <code>VITE_CESIUM_ION_ACCESS_TOKEN</code> for production use.
+            Evaluation ion token · set <code>VITE_CESIUM_ION_ACCESS_TOKEN</code>
           </div>
         </GlassPanel>
       )}

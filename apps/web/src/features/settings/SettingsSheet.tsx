@@ -56,7 +56,7 @@ export function SettingsSheet() {
               value={s.theme}
               onValueChange={(theme) => s.set({ theme })}
               options={[
-                { value: "auto", label: "Auto" },
+                { value: "auto", label: "Mission dark" },
                 { value: "light", label: "Light Glass" },
                 { value: "dark", label: "Dark Glass" },
               ]}
