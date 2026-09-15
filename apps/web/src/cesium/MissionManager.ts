@@ -10,6 +10,7 @@ import {
   HeightReference,
   PolylineDashMaterialProperty,
   SceneTransforms,
+  sampleTerrainMostDetailed,
   type Scene,
   type Viewer,
 } from "cesium";
@@ -45,6 +46,31 @@ export type FrameListener = (anchors: readonly OverlayAnchor[]) => void;
  * machine/zone anchors to the screen every frame for DOM overlays that keep the
  * design's exact marker and chip styling.
  */
+const DETAILED_HEIGHT_TIMEOUT_MS = 1500;
+const MAX_TILESET_TERRAIN_GAP_M = 60;
+
+function isPlausibleHeight(height: number | undefined): height is number {
+  return height !== undefined && Number.isFinite(height) && height > -500 && height < 9000;
+}
+
+/**
+ * Picks a ground height from a tileset sample and a terrain sample. Splat tilesets report the
+ * surface of whatever gaussians are loaded, which at coarse LOD can float hundreds of metres above
+ * the ground, and terrain tiles still loading report placeholders kilometres below sea level; the
+ * tileset wins only when it agrees with the terrain to within a building's height.
+ */
+function reconcileHeights(
+  fromTileset: number | undefined,
+  fromTerrain: number | undefined,
+): number | undefined {
+  const tileset = isPlausibleHeight(fromTileset) ? fromTileset : undefined;
+  const terrain = isPlausibleHeight(fromTerrain) ? fromTerrain : undefined;
+  if (tileset !== undefined && terrain !== undefined) {
+    return Math.abs(tileset - terrain) <= MAX_TILESET_TERRAIN_GAP_M ? tileset : terrain;
+  }
+  return tileset ?? terrain;
+}
+
 export class MissionManager {
   private readonly scene: Scene;
   private project: Project | null = null;
@@ -54,6 +80,7 @@ export class MissionManager {
   private tracksVisible = true;
   private readonly listeners = new Set<FrameListener>();
   private readonly removeFrame: () => void;
+  private lastGoodHeight: number | undefined;
   private readonly heightCache = new Map<string, { height: number; at: number }>();
   private readonly scratchWindow = new Cartesian2();
   private readonly scratchNormal = new Cartesian3();
@@ -173,28 +200,29 @@ export class MissionManager {
     if (!zone) return;
     const center = centerOf(zone.footprint);
     const radius = Math.max(boundingRadiusM(zone.footprint), 80);
-    const height = this.surfaceHeight(center.longitude, center.latitude, `zone-fly-${zone.id}`);
-    this.camera.flyToBoundingSphere(
-      new BoundingSphere(Cartesian3.fromDegrees(center.longitude, center.latitude, height), radius),
-      { heading: 20, pitch: -40, rangeMultiplier: 2.6, durationS: 1.8 },
+    void this.detailedHeight(center.longitude, center.latitude, `zone-fly-${zone.id}`).then(
+      (height) => {
+        this.camera.flyToBoundingSphere(
+          new BoundingSphere(
+            Cartesian3.fromDegrees(center.longitude, center.latitude, height),
+            radius,
+          ),
+          { heading: 20, pitch: -40, rangeMultiplier: 2.6, durationS: 1.8 },
+        );
+      },
     );
   }
 
   flyToMachine(machineId: string): void {
     const machine = this.project?.machines.find((m) => m.id === machineId);
     if (!machine) return;
-    const height = this.surfaceHeight(
-      machine.position.longitude,
-      machine.position.latitude,
-      `machine-fly-${machine.id}`,
-    );
-    this.camera.flyToBoundingSphere(
-      new BoundingSphere(
-        Cartesian3.fromDegrees(machine.position.longitude, machine.position.latitude, height),
-        40,
-      ),
-      { heading: machine.headingDeg + 180, pitch: -32, rangeMultiplier: 3.5, durationS: 1.6 },
-    );
+    const { longitude, latitude } = machine.position;
+    void this.detailedHeight(longitude, latitude, `machine-fly-${machine.id}`).then((height) => {
+      this.camera.flyToBoundingSphere(
+        new BoundingSphere(Cartesian3.fromDegrees(longitude, latitude, height), 60),
+        { heading: machine.headingDeg + 180, pitch: -34, rangeMultiplier: 4, durationS: 1.6 },
+      );
+    });
   }
 
   flyToProject(): void {
@@ -203,11 +231,45 @@ export class MissionManager {
     const centers = project.zones.map((z) => centerOf(z.footprint));
     const lon = centers.reduce((a, c) => a + c.longitude, 0) / centers.length;
     const lat = centers.reduce((a, c) => a + c.latitude, 0) / centers.length;
-    const height = this.surfaceHeight(lon, lat, "project-fly");
-    this.camera.flyToBoundingSphere(
-      new BoundingSphere(Cartesian3.fromDegrees(lon, lat, height), 1100),
-      { heading: 15, pitch: -45, rangeMultiplier: 2.2, durationS: 2 },
-    );
+    void this.detailedHeight(lon, lat, "project-fly").then((height) => {
+      this.camera.flyToBoundingSphere(
+        new BoundingSphere(Cartesian3.fromDegrees(lon, lat, height), 1100),
+        { heading: 15, pitch: -45, rangeMultiplier: 2.2, durationS: 2 },
+      );
+    });
+  }
+
+  /**
+   * Height for a camera target. The synchronous estimate only knows about tiles that are already
+   * loaded, which right after a site flight can be coarse terrain tens of metres off; ask for the
+   * most detailed terrain and tileset samples, but never wait longer than a beat for them.
+   */
+  private async detailedHeight(longitude: number, latitude: number, key: string): Promise<number> {
+    const quick = this.surfaceHeight(longitude, latitude, key);
+    const timeout = new Promise<undefined>((resolve) => {
+      setTimeout(() => resolve(undefined), DETAILED_HEIGHT_TIMEOUT_MS);
+    });
+    const fromTileset = this.scene.sampleHeightSupported
+      ? this.scene
+          .sampleHeightMostDetailed([Cartographic.fromDegrees(longitude, latitude)])
+          .then((result) => result[0]?.height)
+          .catch(() => undefined)
+      : Promise.resolve(undefined);
+    const fromTerrain = sampleTerrainMostDetailed(this.viewer.terrainProvider, [
+      Cartographic.fromDegrees(longitude, latitude),
+    ])
+      .then((result) => result[0]?.height)
+      .catch(() => undefined);
+    let tilesetHeight: number | undefined;
+    let terrainHeight: number | undefined;
+    void fromTileset.then((h) => (tilesetHeight = h));
+    void fromTerrain.then((h) => (terrainHeight = h));
+    await Promise.race([Promise.all([fromTileset, fromTerrain]), timeout]);
+    const detailed = reconcileHeights(tilesetHeight, terrainHeight);
+    if (detailed === undefined) return quick;
+    this.lastGoodHeight = detailed;
+    this.heightCache.set(key, { height: detailed, at: performance.now() });
+    return detailed;
   }
 
   private surfaceHeight(longitude: number, latitude: number, key: string): number {
@@ -215,15 +277,18 @@ export class MissionManager {
     const cached = this.heightCache.get(key);
     if (cached && now - cached.at < 1500) return cached.height;
     const carto = Cartographic.fromDegrees(longitude, latitude);
-    let height: number | undefined;
+    let fromTileset: number | undefined;
     if (this.scene.sampleHeightSupported) {
       try {
-        height = this.scene.sampleHeight(carto, this.viewer.entities.values);
+        fromTileset = this.scene.sampleHeight(carto, this.viewer.entities.values);
       } catch {
-        height = undefined;
+        fromTileset = undefined;
       }
     }
-    height ??= this.scene.globe.getHeight(carto) ?? 0;
+    const fromTerrain = this.scene.globe.getHeight(carto);
+    let height = reconcileHeights(fromTileset, fromTerrain);
+    if (height === undefined) height = this.lastGoodHeight ?? 0;
+    else this.lastGoodHeight = height;
     this.heightCache.set(key, { height, at: now });
     return height;
   }

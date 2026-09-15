@@ -58,12 +58,14 @@ a {
   outline: none;
 }
 
-/* Cesium's credit display becomes a small glass chip bottom-left (attribution stays visible). */
+/* Cesium's credit display becomes a small glass chip above the command bar (attribution stays
+   visible). Viewer.resize() writes inline left/bottom/right on this element, so these win with
+   !important. */
 .viewport .cesium-viewer-bottom {
-  left: calc(var(--edge-gap) + 20rem);
-  bottom: 5.9rem;
-  right: auto;
-  max-width: min(32vw, 20rem);
+  left: calc(var(--edge-gap) + 20rem) !important;
+  bottom: 5.9rem !important;
+  right: auto !important;
+  max-width: min(30vw, 17rem);
   padding: 0.25rem 0.6rem;
   line-height: 1.25;
   border-radius: var(--glass-radius-pill);
@@ -229,7 +231,7 @@ a {
 .hud-nav {
   position: absolute;
   right: var(--edge-gap);
-  top: 40%;
+  top: 50%;
   transform: translateY(-50%);
 }
 
@@ -288,7 +290,7 @@ a {
     display: none;
   }
   .viewport .cesium-viewer-bottom {
-    bottom: 5.4rem;
+    bottom: 5.4rem !important;
     max-width: 55vw;
     font-size: 9px;
   }
