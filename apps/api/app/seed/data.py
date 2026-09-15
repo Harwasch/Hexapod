@@ -368,7 +368,109 @@ BOATHOUSE_SITE = SiteCreate(
     camera_bookmarks=[overview_bookmark("Boathouse", -75.29172, 40.07269, 8.0, 210.0, -22.0, 90.0)],
 )
 
-COMPARISON_SITES: list[SiteCreate] = [MELBOURNE_SITE, SAN_FRANCISCO_SITE, BOATHOUSE_SITE]
+CESIUM_SAMPLE_LICENSE = LicenseMetadata(
+    name="Cesium ion sample asset",
+    url="https://cesium.com/legal/terms-of-service/",
+    requires_attribution=True,
+    notes="Provided by Cesium for evaluation. Access depends on the ion token in use.",
+)
+
+AGI_HQ_BOUNDARY = rect_polygon(-75.60002, 40.0364, -75.59339, 40.04119)
+AGI_HQ_SITE = SiteCreate(
+    slug="agi-hq-drone-mesh",
+    name="AGI HQ: close-range drone mesh",
+    description=(
+        "A single office building and its grounds as a drone photogrammetry mesh (40 MB). "
+        "Small enough to load in seconds; the closest public mesh to the scale of a work site."
+    ),
+    boundary=AGI_HQ_BOUNDARY,
+    centroid=GeoPosition(longitude=-75.59671, latitude=40.0388, height=95.0),
+    metadata={
+        "comparison": True,
+        "origin": "cesium-ion-asset-depot",
+        "quality": {"resolutionDescription": "Centimetre-class drone photogrammetry mesh"},
+    },
+    attribution=[CESIUM_ATTRIBUTION],
+    license=CESIUM_SAMPLE_LICENSE,
+    assets=[
+        AssetBase(
+            name="Drone photogrammetry mesh",
+            representation=Representation.MESH,
+            source=CesiumIonSource(asset_id=40866),
+            footprint=AGI_HQ_BOUNDARY,
+            resolution=ResolutionMetadata(
+                description="Drone photogrammetry of the AGI headquarters, tiled by Cesium"
+            ),
+            attribution=[CESIUM_ATTRIBUTION],
+            provenance=Provenance(
+                source_organization="Cesium GS, Inc.",
+                notes="Cesium ion sample asset 40866 (photogrammetry OBJ tiled to 3D Tiles).",
+            ),
+            render_config=RenderConfig(clips_world=True, clip_footprint="tileset"),
+            default_visible=True,
+        )
+    ],
+    camera_bookmarks=[overview_bookmark("Campus", -75.59671, 40.0388, 95.0, 30.0, -28.0, 260.0)],
+)
+
+CHAPPES_ATTRIBUTION = Attribution(
+    text=(
+        "Chappes Church point cloud by Prof. Peter Allen, Columbia University Robotics Lab; "
+        "scanning by Alejandro Troccoli and Matei Ciocarlie"
+    ),
+    organization="Columbia University Robotics Lab",
+    url="https://www.cs.columbia.edu/robotics/",
+)
+CHAPPES_BOUNDARY = rect_polygon(2.92599, 46.38833, 2.92659, 46.38862)
+CHAPPES_SITE = SiteCreate(
+    slug="chappes-church-laser-scan",
+    name="Chappes church: terrestrial laser scan",
+    description=(
+        "A ground-based laser scan of a village church, stored at 1 cm precision (37 MB). "
+        "The closest public sample to survey-grade close-range data: compare its point "
+        "density with the aerial point cloud in Melbourne."
+    ),
+    boundary=CHAPPES_BOUNDARY,
+    centroid=GeoPosition(longitude=2.92629, latitude=46.38847, height=413.0),
+    metadata={
+        "comparison": True,
+        "origin": "cesium-ion-asset-depot",
+        "quality": {"resolutionDescription": "Terrestrial LiDAR, 1 cm coordinate precision"},
+    },
+    attribution=[CHAPPES_ATTRIBUTION, CESIUM_ATTRIBUTION],
+    license=CESIUM_SAMPLE_LICENSE,
+    assets=[
+        AssetBase(
+            name="Terrestrial laser scan (1 cm precision)",
+            representation=Representation.POINT_CLOUD,
+            source=CesiumIonSource(asset_id=16421),
+            footprint=CHAPPES_BOUNDARY,
+            resolution=ResolutionMetadata(
+                point_spacing_m=0.01,
+                description="Draco-compressed at 0.01 m precision, outliers removed, on terrain",
+            ),
+            attribution=[CHAPPES_ATTRIBUTION],
+            provenance=Provenance(
+                source_organization="Columbia University Robotics Lab via Cesium ion",
+                notes="Cesium ion sample asset 16421.",
+            ),
+            render_config=RenderConfig(
+                clips_world=False,
+                point_cloud_shading=PointCloudShading(attenuation=True, eye_dome_lighting=True),
+            ),
+            default_visible=True,
+        )
+    ],
+    camera_bookmarks=[overview_bookmark("Church", 2.92629, 46.38847, 420.0, 200.0, -20.0, 70.0)],
+)
+
+COMPARISON_SITES: list[SiteCreate] = [
+    SAN_FRANCISCO_SITE,
+    MELBOURNE_SITE,
+    AGI_HQ_SITE,
+    CHAPPES_SITE,
+    BOATHOUSE_SITE,
+]
 
 
 def _cesium_ion_license(notes: str) -> LicenseMetadata:

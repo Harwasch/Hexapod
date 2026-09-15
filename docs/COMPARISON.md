@@ -4,17 +4,27 @@ Four public sites, one app, so the look, feel and cost of each 3D format can be 
 side by side. All are Cesium ion sample assets that the CesiumJS evaluation token can
 reach; attribution and terms are stored on each catalog record and shown in the About sheet.
 
-| Site (Sites panel)                    | Format                         | Detail              | ion asset | Terms                            |
-| ------------------------------------- | ------------------------------ | ------------------- | --------- | -------------------------------- |
-| Melbourne: mesh vs point cloud        | Photogrammetry mesh            | 7.5 cm GSD, 2018    | 69380     | CC BY 4.0, City of Melbourne     |
-|                                       | LiDAR point cloud              | 25 cm, ~300 M pts   | 43978     | CC BY 4.0, City of Melbourne     |
-| San Francisco: high-resolution mesh   | Helicopter photogrammetry mesh | 2 to 5 cm + street  | 1415196   | Aerometrex, non-commercial trial |
-| Boathouse: close-range Gaussian splat | Gaussian splat                 | close range, 14 MB  | 3667783   | Cesium sample asset              |
-| Cesium Gaussian splat demo (Redmond)  | Gaussian splat with LOD        | aerial campus, 2 GB | 4547222   | Cesium sample asset              |
+| Site (Sites panel)                     | Format                         | Detail                | ion asset | Terms                            |
+| -------------------------------------- | ------------------------------ | --------------------- | --------- | -------------------------------- |
+| Melbourne: mesh vs point cloud         | Photogrammetry mesh            | 7.5 cm GSD, 2018      | 69380     | CC BY 4.0, City of Melbourne     |
+|                                        | LiDAR point cloud              | 25 cm, ~300 M pts     | 43978     | CC BY 4.0, City of Melbourne     |
+| San Francisco: high-resolution mesh    | Helicopter photogrammetry mesh | 2 to 5 cm + street    | 1415196   | Aerometrex, non-commercial trial |
+| AGI HQ: close-range drone mesh         | Drone photogrammetry mesh      | cm-class, 40 MB       | 40866     | Cesium sample asset              |
+| Chappes church: terrestrial laser scan | Ground LiDAR point cloud       | 1 cm precision, 37 MB | 16421     | Columbia Robotics Lab via Cesium |
+| Boathouse: close-range Gaussian splat  | Gaussian splat                 | close range, 14 MB    | 3667783   | Cesium sample asset              |
+| Cesium Gaussian splat demo (Redmond)   | Gaussian splat with LOD        | aerial campus, 2 GB   | 4547222   | Cesium sample asset              |
 
 Google Photorealistic 3D Tiles is available as the world layer (Settings › World, feature
 flag `VITE_ENABLE_PHOTOREALISTIC`, needs an ion token with Google access) for a global
 mesh baseline.
+
+## Resolution ceiling
+
+None of the public samples reach millimetre resolution. The finest are the Aerometrex street
+sections (about 2 cm), the Chappes scan (1 cm coordinate precision) and the Boathouse splat
+(centimetre-class). Millimetre data comes from terrestrial scanners or close-range
+photogrammetry of your own; upload it to Cesium ion (Add data › ion reconstruction) and it
+appears here like any other site.
 
 ## What to compare
 

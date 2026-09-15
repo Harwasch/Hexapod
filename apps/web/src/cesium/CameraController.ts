@@ -66,15 +66,22 @@ export class CameraController {
     controller.zoomFactor = 4;
     controller.minimumCollisionTerrainHeight = 0;
     this.unsubscribe.push(
-      camera.changed.addEventListener(() => this.reportPose()),
-      camera.moveStart.addEventListener(() => {
-        this.moving = true;
-        this.events.emit("motion", true);
+      // `camera.changed` fires only when position or orientation moved past
+      // `percentageChanged`; `moveStart` also fires when the frustum changes, which a canvas
+      // resize does. Starting motion from `changed` keeps a resolution switch from looking like
+      // a camera move (that feedback loop made the UI pulse once a second).
+      camera.changed.addEventListener(() => {
+        if (!this.moving) {
+          this.moving = true;
+          this.events.emit("motion", true);
+        }
         this.reportPose();
       }),
       camera.moveEnd.addEventListener(() => {
-        this.moving = false;
-        this.events.emit("motion", false);
+        if (this.moving) {
+          this.moving = false;
+          this.events.emit("motion", false);
+        }
         this.emitPose();
       }),
     );

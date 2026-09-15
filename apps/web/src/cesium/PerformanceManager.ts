@@ -143,11 +143,16 @@ export class PerformanceManager {
     this.webgl2 = info.webgl2;
     this.unsubscribe.push(
       this.scene.postRender.addEventListener(() => this.onFrame()),
-      viewer.camera.moveStart.addEventListener(() => {
+      // Switch profiles on real pose changes only: switching resolution resizes the drawing
+      // buffer, which Cesium's moveStart counts as a camera change, and that would ping-pong
+      // between the two profiles forever.
+      viewer.camera.changed.addEventListener(() => {
+        if (this.moving) return;
         this.moving = true;
         this.applyProfile("motion");
       }),
       viewer.camera.moveEnd.addEventListener(() => {
+        if (!this.moving) return;
         this.moving = false;
         this.movingUntil = performance.now() + 400;
         this.applyProfile("rest");
