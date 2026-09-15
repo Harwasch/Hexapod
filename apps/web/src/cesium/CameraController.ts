@@ -90,8 +90,11 @@ export class CameraController {
     const carto = camera.positionCartographic;
     const longitude = CesiumMath.toDegrees(carto.longitude);
     const latitude = CesiumMath.toDegrees(carto.latitude);
-    const surface = this.scene.globe.getHeight(carto);
-    const altitude = Math.max(0, carto.height - (surface ?? 0));
+    // Terrain tiles still loading report placeholder heights kilometres below sea level;
+    // treat those as unknown rather than turning a 700 m view into a "7 km" readout.
+    const sampled = this.scene.globe.getHeight(carto);
+    const surface = sampled !== undefined && sampled > -500 && sampled < 9000 ? sampled : 0;
+    const altitude = Math.max(0, carto.height - surface);
     const distance = this.distanceToSurfaceAtCenter() ?? altitude;
     const fovy =
       "fovy" in camera.frustum
@@ -118,6 +121,10 @@ export class CameraController {
     if (!ray) return null;
     const hit = this.scene.globe.pick(ray, this.scene);
     if (!hit) return null;
+    // A ray can land on a terrain tile that is still a placeholder kilometres below sea
+    // level; that distance would turn a 40 m view into a "97 m/px" readout.
+    const height = Cartographic.fromCartesian(hit).height;
+    if (height < -500 || height > 9000) return null;
     return Cartesian3.distance(this.viewer.camera.positionWC, hit);
   }
 

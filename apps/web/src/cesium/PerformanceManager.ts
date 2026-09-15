@@ -129,6 +129,9 @@ export class PerformanceManager {
   private memorySource: () => { bytes: number; budget: number } = () => ({ bytes: 0, budget: 1 });
   private readonly gpu: string | null;
   private readonly webgl2: boolean;
+  /** Frame intervals recorded while the camera moved, since the last reset (site change). */
+  private readonly motionFrameMs: number[] = [];
+  private lastMotionFrameAt: number | null = null;
 
   constructor(
     private readonly viewer: Viewer,
@@ -234,8 +237,37 @@ export class PerformanceManager {
   }
 
   private onFrame(): void {
-    this.frameTimestamps.push(performance.now());
+    const now = performance.now();
+    this.frameTimestamps.push(now);
     if (this.frameTimestamps.length > 240) this.frameTimestamps.shift();
+    if (this.moving) {
+      if (this.lastMotionFrameAt !== null) {
+        const dt = now - this.lastMotionFrameAt;
+        if (dt > 0 && dt < 2000) {
+          this.motionFrameMs.push(dt);
+          if (this.motionFrameMs.length > 600) this.motionFrameMs.shift();
+        }
+      }
+      this.lastMotionFrameAt = now;
+    } else {
+      this.lastMotionFrameAt = null;
+    }
+  }
+
+  /** Starts a fresh benchmark window, e.g. when another site becomes active. */
+  resetBenchmark(): void {
+    this.motionFrameMs.length = 0;
+    this.lastMotionFrameAt = null;
+  }
+
+  /** Motion-only statistics for comparing datasets: mean fps and 95th percentile frame time. */
+  get benchmark(): { motionFps: number | null; p95FrameMs: number | null; samples: number } {
+    const n = this.motionFrameMs.length;
+    if (n < 5) return { motionFps: null, p95FrameMs: null, samples: n };
+    const sorted = [...this.motionFrameMs].sort((a, b) => a - b);
+    const mean = sorted.reduce((a, b) => a + b, 0) / n;
+    const p95 = sorted[Math.min(n - 1, Math.floor(n * 0.95))] ?? mean;
+    return { motionFps: 1000 / mean, p95FrameMs: p95, samples: n };
   }
 
   private setResolutionScale(scale: number): void {
@@ -336,6 +368,7 @@ export class PerformanceManager {
       moving,
       tilesetMemoryMb: Math.round(memory.bytes / 1048576),
       memoryBudgetMb: Math.round(memory.budget / 1048576),
+      benchmark: this.benchmark,
     });
   }
 

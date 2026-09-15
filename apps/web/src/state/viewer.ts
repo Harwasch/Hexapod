@@ -37,6 +37,8 @@ export interface PerformanceSnapshot {
   msaaSamples: number;
   /** "rest" renders still frames at full quality; "motion" applies the adaptive savings. */
   profile: "rest" | "motion";
+  /** Motion-only frame statistics since the last site change, for comparing datasets. */
+  benchmark: { motionFps: number | null; p95FrameMs: number | null; samples: number };
 }
 
 interface ViewerState {
@@ -89,6 +91,7 @@ export const useViewer = create<ViewerState>()((set) => ({
     rendering: false,
     msaaSamples: 4,
     profile: "rest",
+    benchmark: { motionFps: null, p95FrameMs: null, samples: 0 },
   },
   worldLabel: "Open world",
   activeTilesets: [],

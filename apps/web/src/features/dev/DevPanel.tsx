@@ -121,6 +121,12 @@ export function DevPanel() {
         <dd>{perf.msaaSamples}×</dd>
         <dt>Profile</dt>
         <dd>{perf.profile}</dd>
+        <dt>Motion fps</dt>
+        <dd data-testid="dev-benchmark">
+          {perf.benchmark.motionFps === null
+            ? "move the camera"
+            : `${perf.benchmark.motionFps.toFixed(0)} avg · p95 ${perf.benchmark.p95FrameMs?.toFixed(0)} ms · ${perf.benchmark.samples} frames`}
+        </dd>
         <dt>Representation</dt>
         <dd>{representation ? representationLabel(representation) : "—"}</dd>
         <dt>Last API call</dt>

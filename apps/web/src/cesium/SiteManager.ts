@@ -124,6 +124,7 @@ export class SiteManager {
     const defaultAsset = site.assets.find((a) => a.defaultVisible) ?? site.assets[0];
     const representation = defaultAsset?.representation ?? "gaussian-splat";
     this.active = { site, representation, temporalAssetId: null, handles: new Map() };
+    this.performance.resetBenchmark();
     this.events.emit("site-active", site.id);
     this.events.emit("representation", { siteId: site.id, representation });
     await this.showRepresentation(representation);
@@ -381,12 +382,14 @@ export class SiteManager {
    * loaded, so until then the root box is used and the clip is re-derived on tile loads.
    */
   private applyClip(active: ActiveSite, asset: SiteAsset, tileset: Cesium3DTileset): void {
-    if (asset.renderConfig.clipsWorld && asset.representation === "gaussian-splat") {
-      // Splats are blended over the opaque globe with a depth test, so terrain does not
-      // fight them; their ground layer simply covers it. Cutting the terrain instead leaves a
-      // see-through hole wherever the capture is sparse (tile boxes include outlier splats,
-      // so no tile-derived footprint is tight). Only the global 3D tileset is cut, so
-      // buildings from OSM or Google do not poke through the model.
+    const blended =
+      asset.representation === "gaussian-splat" || asset.representation === "point-cloud";
+    if (asset.renderConfig.clipsWorld && blended) {
+      // Splats and point clouds are drawn over the opaque globe with a depth test, so terrain
+      // does not fight them; their ground layer covers it. Cutting the terrain instead leaves
+      // a see-through hole wherever the capture is sparse or between points (tile boxes
+      // include outliers, so no tile-derived footprint is tight). Only the global 3D tileset
+      // is cut, so buildings from OSM or Google do not poke through the model.
       const footprint = footprintFromTileset(tileset) ?? asset.footprint ?? active.site.boundary;
       this.clipping.setFootprint(active.site.id, footprint, { globe: false, world: true });
       return;

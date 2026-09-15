@@ -9,7 +9,7 @@ from app.seed import seed
 def test_seed_is_idempotent_and_lists_layers(client: TestClient, db: Session) -> None:
     first = seed(db)
     second = seed(db)
-    assert first["layers"] == 10 and first["sites"] == 1
+    assert first["layers"] == 10 and first["sites"] == 4  # demo + 3 comparison sites
     assert second == {"sites": 0, "layers": 0}
     layers = client.get("/api/v1/layers").json()
     assert len(layers) == 10
