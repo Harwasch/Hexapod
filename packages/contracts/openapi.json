@@ -2317,6 +2317,11 @@
       "RenderConfig": {
         "additionalProperties": false,
         "properties": {
+          "clampToGround": {
+            "default": false,
+            "title": "Clamptoground",
+            "type": "boolean"
+          },
           "clipFootprint": {
             "default": "catalog",
             "enum": [

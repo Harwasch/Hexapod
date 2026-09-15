@@ -60,6 +60,10 @@ class RenderConfig(CamelModel):
     # exact extent is only known once streamed).
     clip_footprint: ClipFootprint = "catalog"
     height_offset_m: float = 0.0
+    # When true, the viewer samples the terrain under the model once it is loaded and rests
+    # the model's lowest point on it (plus height_offset_m). Phone scans and downloaded
+    # objects rarely carry a usable ellipsoid height; this makes their placement trivial.
+    clamp_to_ground: bool = False
 
 
 class AssetBase(CamelModel):

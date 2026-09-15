@@ -909,6 +909,11 @@ export interface components {
         /** RenderConfig */
         RenderConfig: {
             /**
+             * Clamptoground
+             * @default false
+             */
+            clampToGround?: boolean;
+            /**
              * Clipfootprint
              * @default catalog
              * @enum {string}

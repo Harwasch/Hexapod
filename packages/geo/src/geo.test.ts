@@ -35,6 +35,9 @@ const square = {
 describe("units", () => {
   it("formats metric lengths across scales", () => {
     expect(formatLength(0.004)).toBe("4 mm");
+    expect(formatLength(0.000045)).toBe("0.05 mm");
+    expect(formatAltitude(0.161)).toBe("16.1 cm");
+    expect(formatAltitude(4.26)).toBe("4.3 m");
     expect(formatLength(0.253)).toBe("25.3 cm");
     expect(formatLength(12.345)).toBe("12.35 m");
     expect(formatLength(2500)).toBe("2.5 km");

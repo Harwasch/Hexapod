@@ -25,6 +25,7 @@ export function formatLength(meters: number, units: UnitSystem = "metric"): stri
     if (feet < 5280) return `${round(feet, feet < 100 ? 2 : 0)} ft`;
     return `${round(abs * MILES_PER_METER, 2)} mi`;
   }
+  if (abs < 0.001) return `${round(abs * 1000, 2)} mm`;
   if (abs < 0.01) return `${round(abs * 1000, 1)} mm`;
   if (abs < 1) return `${round(abs * 100, 1)} cm`;
   if (abs < 1000) return `${round(abs, abs < 100 ? 2 : 1)} m`;
@@ -41,6 +42,8 @@ export function formatAltitude(meters: number, units: UnitSystem = "metric"): st
   }
   if (Math.abs(meters) >= 10_000) return `${round(meters / 1000, 0)} km`;
   if (Math.abs(meters) >= 1000) return `${round(meters / 1000, 1)} km`;
+  // Below a metre the camera is inspecting an object; centimetres and millimetres matter.
+  if (Math.abs(meters) < 1) return formatLength(meters, units);
   return `${round(meters, Math.abs(meters) < 10 ? 1 : 0)} m`;
 }
 

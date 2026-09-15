@@ -1,4 +1,7 @@
 import {
+  Transforms,
+  Matrix4,
+  Ray,
   type BoundingSphere,
   Cartesian2,
   Cartesian3,
@@ -36,6 +39,25 @@ function normalizeDegrees(value: number): number {
   const wrapped = ((value % 360) + 360) % 360;
   return wrapped > 180 ? wrapped - 360 : wrapped;
 }
+/** Zoom floor and near plane for whole sites versus hand-sized objects. */
+const SITE_MIN_ZOOM_M = 0.6;
+const SITE_NEAR_M = 1.0;
+const OBJECT_MIN_ZOOM_M = 0.005;
+const OBJECT_NEAR_M = 0.01;
+/** Each wheel notch closes (or opens) this fraction of the distance to the point under it. */
+const OBJECT_ZOOM_STEP = 0.82;
+/** Radians of orbit per pixel of drag at object scale (about 0.35° per pixel). */
+const OBJECT_ORBIT_RATE = 0.006;
+const POSE_SETTLE_DELAYS_MS = [600, 2000];
+const IDLE_POSE_REFRESH_MS = 3000;
+/** Below this bounding radius a fly-to may arrive closer than the site floor of 30 m. */
+const OBJECT_ARRIVAL_RADIUS_M = 30;
+
+const scratchPick = new Cartesian3();
+const scratchDirection = new Cartesian3();
+const scratchWindow = new Cartesian2();
+const scratchRay = new Ray();
+const scratchFrame = new Matrix4();
 const scratchCenter = new Cartesian2();
 
 /** Owns every camera movement so easing, limits and pose reporting live in one place. */
@@ -45,6 +67,11 @@ export class CameraController {
   private lastPose: CameraPose | null = null;
   private readonly reportPose = throttle(() => this.emitPose(), 100);
   private moving = false;
+  private objectScale = false;
+  private readonly settleTimers = new Set<ReturnType<typeof setTimeout>>();
+  private orbitPivot: Cartesian3 | null = null;
+  private orbitLast: { x: number; y: number } | null = null;
+  private lastSurfaceHeight: number | undefined;
 
   constructor(
     private readonly viewer: Viewer,
@@ -56,8 +83,8 @@ export class CameraController {
     const controller = this.scene.screenSpaceCameraController;
     // Allow inspection at centimetre range; collision keeps us above terrain.
     // Close enough to read centimetre detail, far enough that a scroll does not pass through
-    // a splat surface that has no collision geometry.
-    controller.minimumZoomDistance = 0.6;
+    // a splat surface that has no collision geometry. Object-scale sites lower this.
+    controller.minimumZoomDistance = SITE_MIN_ZOOM_M;
     controller.maximumZoomDistance = 40_000_000;
     controller.enableCollisionDetection = true;
     controller.inertiaSpin = 0.85;
@@ -83,12 +110,132 @@ export class CameraController {
           this.events.emit("motion", false);
         }
         this.emitPose();
+        // Terrain and depth under the camera keep arriving after it stops; refresh the
+        // altitude and scale readouts once they have.
+        for (const delay of POSE_SETTLE_DELAYS_MS) {
+          const timer = setTimeout(() => {
+            this.settleTimers.delete(timer);
+            if (!this.moving) this.emitPose();
+          }, delay);
+          this.settleTimers.add(timer);
+        }
       }),
     );
   }
 
   get isMoving(): boolean {
     return this.moving;
+  }
+
+  /**
+   * Object scale: for a model a few metres across the camera must get within millimetres of
+   * its surface. The default near plane (1 m) and zoom floor (0.6 m) would clip and stop it,
+   * so both drop while such a site is active and return to their site-scale values after.
+   */
+  setObjectScale(on: boolean): void {
+    if (this.objectScale === on) return;
+    this.objectScale = on;
+    const controller = this.scene.screenSpaceCameraController;
+    controller.minimumZoomDistance = on ? OBJECT_MIN_ZOOM_M : SITE_MIN_ZOOM_M;
+    const frustum = this.viewer.camera.frustum;
+    if ("near" in frustum) frustum.near = on ? OBJECT_NEAR_M : SITE_NEAR_M;
+    // Cesium's wheel zoom is tuned for a planet: it never moves less than 20 m per notch and
+    // refuses to zoom within 1 m of the floor. Objects get a proportional zoom-to-cursor.
+    controller.enableZoom = !on;
+    // Likewise its rotation rate is tied to height above the ellipsoid, so a drag beside a
+    // rock barely turns. Objects get an orbit around the point that was clicked.
+    controller.enableRotate = !on;
+    const canvas = this.viewer.canvas;
+    if (on) {
+      canvas.addEventListener("wheel", this.onObjectWheel, { passive: false });
+      canvas.addEventListener("pointerdown", this.onOrbitStart);
+      window.addEventListener("pointermove", this.onOrbitMove);
+      window.addEventListener("pointerup", this.onOrbitEnd);
+    } else {
+      canvas.removeEventListener("wheel", this.onObjectWheel);
+      canvas.removeEventListener("pointerdown", this.onOrbitStart);
+      window.removeEventListener("pointermove", this.onOrbitMove);
+      window.removeEventListener("pointerup", this.onOrbitEnd);
+      this.orbitPivot = null;
+    }
+    this.scene.requestRender();
+  }
+
+  private readonly onOrbitStart = (event: PointerEvent): void => {
+    if (event.button !== 0) return;
+    scratchWindow.x = event.offsetX;
+    scratchWindow.y = event.offsetY;
+    const picked = this.scene.pickPositionSupported
+      ? this.scene.pickPosition(scratchWindow, new Cartesian3())
+      : undefined;
+    this.orbitPivot = picked ?? this.orbitFallbackPivot();
+    this.orbitLast = { x: event.clientX, y: event.clientY };
+  };
+
+  private readonly onOrbitMove = (event: PointerEvent): void => {
+    if (!this.orbitPivot || !this.orbitLast) return;
+    const dx = event.clientX - this.orbitLast.x;
+    const dy = event.clientY - this.orbitLast.y;
+    this.orbitLast = { x: event.clientX, y: event.clientY };
+    if (dx === 0 && dy === 0) return;
+    const camera = this.viewer.camera;
+    // Orbit in the pivot's east-north-up frame, then drop the transform again so the rest of
+    // the app keeps seeing a world-frame camera.
+    camera.lookAtTransform(
+      Transforms.eastNorthUpToFixedFrame(this.orbitPivot, undefined, scratchFrame),
+    );
+    camera.rotateLeft(dx * OBJECT_ORBIT_RATE);
+    camera.rotateUp(dy * OBJECT_ORBIT_RATE);
+    camera.lookAtTransform(Matrix4.IDENTITY);
+    this.scene.requestRender();
+  };
+
+  private readonly onOrbitEnd = (): void => {
+    this.orbitPivot = null;
+    this.orbitLast = null;
+  };
+
+  /** When the click misses the model, orbit whatever is under the crosshair or the ground. */
+  private orbitFallbackPivot(): Cartesian3 | null {
+    const canvas = this.viewer.canvas;
+    scratchWindow.x = canvas.clientWidth / 2;
+    scratchWindow.y = canvas.clientHeight / 2;
+    const picked = this.scene.pickPositionSupported
+      ? this.scene.pickPosition(scratchWindow, new Cartesian3())
+      : undefined;
+    if (picked) return picked;
+    const ray = this.viewer.camera.getPickRay(scratchWindow, scratchRay);
+    return ray ? (this.scene.globe.pick(ray, this.scene, new Cartesian3()) ?? null) : null;
+  }
+
+  /** Zoom toward the point under the cursor by a fixed fraction of the remaining distance. */
+  private readonly onObjectWheel = (event: WheelEvent): void => {
+    event.preventDefault();
+    const camera = this.viewer.camera;
+    scratchWindow.x = event.offsetX;
+    scratchWindow.y = event.offsetY;
+    let target = this.scene.pickPositionSupported
+      ? this.scene.pickPosition(scratchWindow, scratchPick)
+      : undefined;
+    if (!target) {
+      const ray = camera.getPickRay(scratchWindow, scratchRay);
+      target = ray ? this.scene.globe.pick(ray, this.scene, scratchPick) : undefined;
+    }
+    if (!target) return;
+    const toTarget = Cartesian3.subtract(target, camera.positionWC, scratchDirection);
+    const distance = Cartesian3.magnitude(toTarget);
+    if (!(distance > 0)) return;
+    const factor = event.deltaY < 0 ? OBJECT_ZOOM_STEP : 1 / OBJECT_ZOOM_STEP;
+    const next = Math.max(OBJECT_MIN_ZOOM_M, distance * factor);
+    const step = distance - next;
+    if (Math.abs(step) < 1e-5) return;
+    Cartesian3.normalize(toTarget, toTarget);
+    camera.move(toTarget, step);
+    this.scene.requestRender();
+  };
+
+  get isObjectScale(): boolean {
+    return this.objectScale;
   }
 
   /** Current pose, computed on demand. */
@@ -100,7 +247,10 @@ export class CameraController {
     // Terrain tiles still loading report placeholder heights kilometres below sea level;
     // treat those as unknown rather than turning a 700 m view into a "7 km" readout.
     const sampled = this.scene.globe.getHeight(carto);
-    const surface = sampled !== undefined && sampled > -500 && sampled < 9000 ? sampled : 0;
+    if (sampled !== undefined && sampled > -500 && sampled < 9000) this.lastSurfaceHeight = sampled;
+    // Very close to the ground the exact terrain tile may not be rendered yet; the last
+    // plausible height nearby is a far better guess than sea level.
+    const surface = this.lastSurfaceHeight ?? 0;
     const altitude = Math.max(0, carto.height - surface);
     const distance = this.distanceToSurfaceAtCenter() ?? altitude;
     const fovy =
@@ -124,6 +274,12 @@ export class CameraController {
     const canvas = this.viewer.canvas;
     scratchCenter.x = canvas.clientWidth / 2;
     scratchCenter.y = canvas.clientHeight / 2;
+    // At object scale the thing under the crosshair is the model, not the globe: read the
+    // depth buffer so the mm/px readout describes the object the user is looking at.
+    if (this.objectScale && this.scene.pickPositionSupported) {
+      const picked = this.scene.pickPosition(scratchCenter, scratchPick);
+      if (picked) return Cartesian3.distance(this.viewer.camera.positionWC, picked);
+    }
     const ray = this.viewer.camera.getPickRay(scratchCenter);
     if (!ray) return null;
     const hit = this.scene.globe.pick(ray, this.scene);
@@ -143,6 +299,16 @@ export class CameraController {
 
   get lastKnownPose(): CameraPose | null {
     return this.lastPose;
+  }
+
+  /** Terrain under a resting camera keeps refining; keep the readouts honest while idle. */
+  private readonly idleRefresh = setInterval(() => {
+    if (!this.moving && this.lastPose) this.emitPose();
+  }, IDLE_POSE_REFRESH_MS);
+
+  /** Re-reads the pose without a camera move, e.g. once a model under the camera has loaded. */
+  refreshPose(): void {
+    if (!this.moving) this.emitPose();
   }
 
   /** Instant view without animation (used for the initial Earth view). */
@@ -204,7 +370,10 @@ export class CameraController {
     sphere: BoundingSphere,
     options: FlyOptions & { rangeMultiplier?: number } = {},
   ): void {
-    const range = Math.max(sphere.radius * (options.rangeMultiplier ?? 3.2), 30);
+    // Whole sites never arrive closer than 30 m; a hand-sized object arrives at a few
+    // times its own radius so it fills the view.
+    const floor = sphere.radius < OBJECT_ARRIVAL_RADIUS_M ? 0.3 : 30;
+    const range = Math.max(sphere.radius * (options.rangeMultiplier ?? 3.2), floor);
     this.viewer.camera.flyToBoundingSphere(sphere, {
       offset: new HeadingPitchRange(
         CesiumMath.toRadians(options.heading ?? 100),
@@ -284,6 +453,9 @@ export class CameraController {
 
   destroy(): void {
     this.reportPose.cancel();
+    for (const timer of this.settleTimers) clearTimeout(timer);
+    clearInterval(this.idleRefresh);
+    this.setObjectScale(false);
     for (const off of this.unsubscribe) off();
   }
 }

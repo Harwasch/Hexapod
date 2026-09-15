@@ -26,6 +26,28 @@ sections (about 2 cm), the Chappes scan (1 cm coordinate precision) and the Boat
 photogrammetry of your own; upload it to Cesium ion (Add data › ion reconstruction) and it
 appears here like any other site.
 
+## Millimetre test object (no scanning needed)
+
+`apps/web/scripts/fetch-sample-object.mjs` downloads a CC0 photoscanned object from Poly
+Haven, packs it into a single-tile 3D Tiles tileset under `apps/web/public/samples/`
+(gitignored, served by the Vite dev server), and registers it as a site through the API.
+The viewer clamps it to the terrain, so only a longitude and latitude are needed:
+
+```bash
+cd apps/web
+node scripts/fetch-sample-object.mjs --slug rock_09 --lon -122.1385 --lat 47.645
+node scripts/fetch-sample-object.mjs --slug weed_plant_02 --lon -122.1383 --lat 47.6452 --res 8k
+```
+
+`rock_09` is a 14 cm rock with 4K textures, about 0.035 mm per texel; `weed_plant_02` is a
+2 m weed. Any Poly Haven model slug works (`https://polyhaven.com/models`). A phone scan
+exported as glTF can be dropped into the same folder layout by hand: `model.glb` plus the
+generated `tileset.json`, with the site registered through Add data.
+
+While a model smaller than 30 m in radius is active the camera's zoom floor drops from
+0.6 m to 5 mm and the near plane from 1 m to 1 cm, and a fly-to arrives at a few times the
+object's radius. The scale readout in the command bar switches to mm/px below 1 cm.
+
 ## What to compare
 
 - **Feel while dragging.** Open the Developer panel (`D`). "Motion fps" is the mean frame

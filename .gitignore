@@ -45,3 +45,6 @@ fp-info-cache
 
 # Local scratch
 /tmp/
+
+# Downloaded sample objects (fetched by apps/web/scripts/fetch-sample-object.mjs)
+apps/web/public/samples/

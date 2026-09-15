@@ -10,6 +10,7 @@ import {
   type Scene,
   type Viewer,
   type Cesium3DTile,
+  sampleTerrainMostDetailed,
 } from "cesium";
 
 import type { Footprint, Representation, Site, SiteAsset, SiteSummary } from "@twin/contracts";
@@ -43,6 +44,8 @@ interface AssetHandle {
   asset: SiteAsset;
   tileset: Cesium3DTileset | null;
   loading: Promise<Cesium3DTileset | null> | null;
+  /** Resolves once a clamp-to-ground placement has been applied (or was not requested). */
+  placed: Promise<void>;
   unsubscribe: (() => void)[];
 }
 
@@ -134,6 +137,7 @@ export class SiteManager {
   deactivate(): void {
     if (!this.active) return;
     const { site, handles } = this.active;
+    this.camera.setObjectScale(false);
     for (const handle of handles.values()) this.disposeHandle(handle);
     this.clipping.setFootprint(site.id, null);
     this.active = null;
@@ -180,7 +184,11 @@ export class SiteManager {
   async boundingSphere(site: Site): Promise<BoundingSphere | null> {
     const handle = this.active?.site.id === site.id ? this.activeHandle() : null;
     const tileset = handle?.tileset ?? (handle?.loading ? await handle.loading : null);
-    if (tileset) return tileset.boundingSphere;
+    if (tileset && handle) {
+      // A clamped model moves once the terrain height is known; fly to where it will be.
+      await handle.placed;
+      return tileset.boundingSphere;
+    }
     const center = centerOf(site.boundary);
     const radius = Math.max(boundingRadiusM(site.boundary), 20);
     return new BoundingSphere(
@@ -284,7 +292,7 @@ export class SiteManager {
     let handle = active.handles.get(asset.id);
     if (handle?.tileset) return handle.tileset;
     if (handle?.loading) return handle.loading;
-    handle = { asset, tileset: null, loading: null, unsubscribe: [] };
+    handle = { asset, tileset: null, loading: null, placed: Promise.resolve(), unsubscribe: [] };
     active.handles.set(asset.id, handle);
     this.events.emit("asset", { id: asset.id, patch: { loadState: "loading", error: null } });
     handle.loading = timed(
@@ -329,8 +337,11 @@ export class SiteManager {
 
   private attachTileset(handle: AssetHandle, tileset: Cesium3DTileset, asset: SiteAsset): void {
     handle.tileset = tileset;
+    // Hand-sized models need a millimetre zoom floor and a close near plane.
+    this.camera.setObjectScale(tileset.boundingSphere.radius < OBJECT_SCALE_RADIUS_M);
+    if (asset.renderConfig.clampToGround) handle.placed = this.clampToGround(tileset, asset);
     const offset = asset.renderConfig.heightOffsetM ?? 0;
-    if (offset !== 0) {
+    if (offset !== 0 && !asset.renderConfig.clampToGround) {
       const center = Cartographic.fromCartesian(tileset.boundingSphere.center);
       const surface = Cartesian3.fromRadians(center.longitude, center.latitude, 0);
       const lifted = Cartesian3.fromRadians(center.longitude, center.latitude, offset);
@@ -360,6 +371,8 @@ export class SiteManager {
           },
         });
       }),
+      tileset.initialTilesLoaded.addEventListener(() => this.camera.refreshPose()),
+      tileset.allTilesLoaded.addEventListener(() => this.camera.refreshPose()),
       tileset.tileFailed.addEventListener((detail: { message?: string; url?: string }) => {
         log.warn("tile failed", { asset: asset.id, message: detail.message, url: detail.url });
       }),
@@ -381,6 +394,30 @@ export class SiteManager {
    * the tiles' real coverage; that is only known once the first branching sub-tileset has
    * loaded, so until then the root box is used and the clip is re-derived on tile loads.
    */
+  /**
+   * Rests a model's lowest point on the terrain under its centre. Downloaded objects and
+   * phone scans carry no usable ellipsoid height, so the catalog stores where, and the
+   * viewer works out how high once the terrain is known.
+   */
+  private async clampToGround(tileset: Cesium3DTileset, asset: SiteAsset): Promise<void> {
+    const sphere = tileset.boundingSphere;
+    const center = Cartographic.fromCartesian(sphere.center);
+    const [sample] = await sampleTerrainMostDetailed(this.viewer.terrainProvider, [
+      Cartographic.fromRadians(center.longitude, center.latitude),
+    ]).catch(() => [undefined]);
+    const ground = sample?.height;
+    if (ground === undefined || !Number.isFinite(ground) || tileset.isDestroyed()) return;
+    // Lowest point of the root bounding box when there is one (a sphere would float a flat
+    // object by the difference between its radius and its half height).
+    const bottom = lowestHeight(tileset) ?? center.height - sphere.radius;
+    const lift = ground + (asset.renderConfig.heightOffsetM ?? 0) - bottom;
+    const from = Cartesian3.fromRadians(center.longitude, center.latitude, center.height);
+    const to = Cartesian3.fromRadians(center.longitude, center.latitude, center.height + lift);
+    tileset.modelMatrix = Matrix4.fromTranslation(Cartesian3.subtract(to, from, new Cartesian3()));
+    log.info("clamped model to ground", { asset: asset.id, ground: Math.round(ground), lift });
+    this.scene.requestRender();
+  }
+
   private applyClip(active: ActiveSite, asset: SiteAsset, tileset: Cesium3DTileset): void {
     const blended =
       asset.representation === "gaussian-splat" || asset.representation === "point-cloud";
@@ -566,6 +603,35 @@ export function coverageFromTileset(tileset: Cesium3DTileset): Footprint | null 
   return { type: "MultiPolygon", coordinates: polygons };
 }
 
+/** Ellipsoid height of the lowest corner of a tileset's root oriented bounding box. */
+function lowestHeight(tileset: Cesium3DTileset): number | undefined {
+  const inner = (tileset.root as unknown as { boundingVolume?: TileVolume }).boundingVolume
+    ?.boundingVolume;
+  const halfAxes = inner?.halfAxes;
+  if (!inner?.center || !halfAxes) return undefined;
+  let lowest = Number.POSITIVE_INFINITY;
+  const axes = [0, 1, 2].map((i) => Matrix3.getColumn(halfAxes, i, new Cartesian3()));
+  for (const sx of [-1, 1])
+    for (const sy of [-1, 1])
+      for (const sz of [-1, 1]) {
+        const corner = Cartesian3.clone(inner.center, new Cartesian3());
+        for (const [axis, sign] of [
+          [axes[0], sx],
+          [axes[1], sy],
+          [axes[2], sz],
+        ] as const) {
+          if (axis)
+            Cartesian3.add(
+              corner,
+              Cartesian3.multiplyByScalar(axis, sign, new Cartesian3()),
+              corner,
+            );
+        }
+        lowest = Math.min(lowest, Cartographic.fromCartesian(corner).height);
+      }
+  return Number.isFinite(lowest) ? lowest : undefined;
+}
+
 /** Lon/lat footprint of one tile: a region's rectangle, an oriented box's horizontal corners, or a sphere's circle. */
 export function footprintFromTile(tile: Cesium3DTile): Footprint | null {
   // `Cesium3DTile.boundingVolume` (a TileBoundingVolume) is not in the public typings but is
@@ -638,6 +704,8 @@ export function footprintFromTile(tile: Cesium3DTile): Footprint | null {
 
 /** Clipping polygons are rasterised into one texture; keep the count bounded. */
 const MAX_COVERAGE_TILES = 96;
+/** Models smaller than this radius get the millimetre zoom floor and near plane. */
+const OBJECT_SCALE_RADIUS_M = 30;
 const MAX_COVERAGE_DEPTH = 4;
 /** How many branching levels below the first split the coverage follows (4^3 boxes at most). */
 const COVERAGE_LEVELS = 3;

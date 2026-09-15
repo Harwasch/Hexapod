@@ -77,7 +77,13 @@ test.describe("catalog", () => {
     await switcher.getByRole("radio", { name: /Mesh/ }).click();
     await expect(app.getByTestId("status-bar")).toContainText("Mesh");
     await app.waitForTimeout(800);
-    expect(await readCamera()).toEqual(before);
+    // Cesium re-normalises the camera frame every frame; compare within float noise.
+    const after = await readCamera();
+    expect(Math.hypot(after.x - before.x, after.y - before.y, after.z - before.z)).toBeLessThan(
+      1e-6,
+    );
+    expect(Math.abs(after.heading - before.heading)).toBeLessThan(1e-9);
+    expect(Math.abs(after.pitch - before.pitch)).toBeLessThan(1e-9);
     await expect(switcher.getByRole("radio", { name: /Points/ })).toBeDisabled();
   });
 
