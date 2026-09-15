@@ -1,22 +1,35 @@
-# Build and simulation output — regenerate it, do not commit it.
-build/
-sim/**/*.raw
-sim/**/*.log
-*.op.raw
+# Dependencies
+node_modules/
+.pnpm-store/
 
-# Generated documentation output
-docs/_build/
-output/
+# Build output — regenerate it, do not commit it.
+dist/
+build/
+coverage/
+*.tsbuildinfo
+test-results/
+playwright-report/
+apps/web/.vite/
 
 # Secrets. .env.example is committed; .env is not.
 .env
+.env.local
+.env.*.local
 
 # Python
 __pycache__/
 *.pyc
 .venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
 
-# KiCad backups and locks
+# Hardware / simulation output (other parts of this monorepo)
+sim/**/*.raw
+sim/**/*.log
+*.op.raw
+docs/_build/
+output/
 *-backups/
 *.kicad_prl
 fp-info-cache
@@ -24,5 +37,11 @@ fp-info-cache
 *.kicad_sch-bak
 *.kicad_pcb-bak
 
-# OS
+# OS / editors
 .DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Local scratch
+/tmp/

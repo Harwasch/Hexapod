@@ -1,0 +1,4257 @@
+{
+  "components": {
+    "schemas": {
+      "ArcGisMapServerSource": {
+        "additionalProperties": false,
+        "properties": {
+          "layers": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Layers"
+          },
+          "type": {
+            "const": "arcgis-mapserver",
+            "default": "arcgis-mapserver",
+            "title": "Type",
+            "type": "string"
+          },
+          "url": {
+            "format": "uri",
+            "maxLength": 2083,
+            "minLength": 1,
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "title": "ArcGisMapServerSource",
+        "type": "object"
+      },
+      "AssetBase": {
+        "additionalProperties": false,
+        "properties": {
+          "attribution": {
+            "items": {
+              "$ref": "#/components/schemas/Attribution"
+            },
+            "title": "Attribution",
+            "type": "array"
+          },
+          "crs": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CrsMetadata"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "defaultVisible": {
+            "default": false,
+            "title": "Defaultvisible",
+            "type": "boolean"
+          },
+          "footprint": {
+            "anyOf": [
+              {
+                "discriminator": {
+                  "mapping": {
+                    "MultiPolygon": "#/components/schemas/MultiPolygon",
+                    "Polygon": "#/components/schemas/Polygon"
+                  },
+                  "propertyName": "type"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/Polygon"
+                  },
+                  {
+                    "$ref": "#/components/schemas/MultiPolygon"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Footprint"
+          },
+          "license": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LicenseMetadata"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "observedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observedat"
+          },
+          "provenance": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Provenance"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "renderConfig": {
+            "$ref": "#/components/schemas/RenderConfig"
+          },
+          "representation": {
+            "$ref": "#/components/schemas/Representation"
+          },
+          "resolution": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResolutionMetadata"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source": {
+            "discriminator": {
+              "mapping": {
+                "3d-tiles-url": "#/components/schemas/TilesUrlSource",
+                "cesium-ion": "#/components/schemas/CesiumIonSource"
+              },
+              "propertyName": "type"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CesiumIonSource"
+              },
+              {
+                "$ref": "#/components/schemas/TilesUrlSource"
+              }
+            ],
+            "title": "Source"
+          },
+          "validFrom": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Validfrom"
+          },
+          "validTo": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Validto"
+          }
+        },
+        "required": [
+          "name",
+          "representation",
+          "source"
+        ],
+        "title": "AssetBase",
+        "type": "object"
+      },
+      "AssetCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "attribution": {
+            "items": {
+              "$ref": "#/components/schemas/Attribution"
+            },
+            "title": "Attribution",
+            "type": "array"
+          },
+          "crs": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CrsMetadata"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "defaultVisible": {
+            "default": false,
+            "title": "Defaultvisible",
+            "type": "boolean"
+          },
+          "footprint": {
+            "anyOf": [
+              {
+                "discriminator": {
+                  "mapping": {
+                    "MultiPolygon": "#/components/schemas/MultiPolygon",
+                    "Polygon": "#/components/schemas/Polygon"
+                  },
+                  "propertyName": "type"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/Polygon"
+                  },
+                  {
+                    "$ref": "#/components/schemas/MultiPolygon"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Footprint"
+          },
+          "license": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LicenseMetadata"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "observedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observedat"
+          },
+          "provenance": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Provenance"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "renderConfig": {
+            "$ref": "#/components/schemas/RenderConfig"
+          },
+          "representation": {
+            "$ref": "#/components/schemas/Representation"
+          },
+          "resolution": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResolutionMetadata"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "siteId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Siteid"
+          },
+          "source": {
+            "discriminator": {
+              "mapping": {
+                "3d-tiles-url": "#/components/schemas/TilesUrlSource",
+                "cesium-ion": "#/components/schemas/CesiumIonSource"
+              },
+              "propertyName": "type"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CesiumIonSource"
+              },
+              {
+                "$ref": "#/components/schemas/TilesUrlSource"
+              }
+            ],
+            "title": "Source"
+          },
+          "validFrom": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Validfrom"
+          },
+          "validTo": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Validto"
+          }
+        },
+        "required": [
+          "name",
+          "representation",
+          "source"
+        ],
+        "title": "AssetCreate",
+        "type": "object"
+      },
+      "AssetProvider": {
+        "description": "Delivery provider for a derived, renderable asset.\n\nCesium ion is the current delivery provider; it is deliberately *not* the\ncanonical data model (see docs/ARCHITECTURE.md).",
+        "enum": [
+          "cesium-ion",
+          "3d-tiles-url"
+        ],
+        "title": "AssetProvider",
+        "type": "string"
+      },
+      "AssetRead": {
+        "additionalProperties": false,
+        "properties": {
+          "attribution": {
+            "items": {
+              "$ref": "#/components/schemas/Attribution"
+            },
+            "title": "Attribution",
+            "type": "array"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "crs": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CrsMetadata"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "defaultVisible": {
+            "default": false,
+            "title": "Defaultvisible",
+            "type": "boolean"
+          },
+          "footprint": {
+            "anyOf": [
+              {
+                "discriminator": {
+                  "mapping": {
+                    "MultiPolygon": "#/components/schemas/MultiPolygon",
+                    "Polygon": "#/components/schemas/Polygon"
+                  },
+                  "propertyName": "type"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/Polygon"
+                  },
+                  {
+                    "$ref": "#/components/schemas/MultiPolygon"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Footprint"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "license": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LicenseMetadata"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "observedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observedat"
+          },
+          "provenance": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Provenance"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "provider": {
+            "$ref": "#/components/schemas/AssetProvider"
+          },
+          "renderConfig": {
+            "$ref": "#/components/schemas/RenderConfig"
+          },
+          "representation": {
+            "$ref": "#/components/schemas/Representation"
+          },
+          "resolution": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResolutionMetadata"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "siteId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Siteid"
+          },
+          "source": {
+            "discriminator": {
+              "mapping": {
+                "3d-tiles-url": "#/components/schemas/TilesUrlSource",
+                "cesium-ion": "#/components/schemas/CesiumIonSource"
+              },
+              "propertyName": "type"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CesiumIonSource"
+              },
+              {
+                "$ref": "#/components/schemas/TilesUrlSource"
+              }
+            ],
+            "title": "Source"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "title": "Updatedat",
+            "type": "string"
+          },
+          "validFrom": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Validfrom"
+          },
+          "validTo": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Validto"
+          }
+        },
+        "required": [
+          "name",
+          "representation",
+          "source",
+          "id",
+          "siteId",
+          "provider",
+          "createdAt",
+          "updatedAt"
+        ],
+        "title": "AssetRead",
+        "type": "object"
+      },
+      "AssetUpdate": {
+        "additionalProperties": false,
+        "properties": {
+          "attribution": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/Attribution"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attribution"
+          },
+          "defaultVisible": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Defaultvisible"
+          },
+          "footprint": {
+            "anyOf": [
+              {
+                "discriminator": {
+                  "mapping": {
+                    "MultiPolygon": "#/components/schemas/MultiPolygon",
+                    "Polygon": "#/components/schemas/Polygon"
+                  },
+                  "propertyName": "type"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/Polygon"
+                  },
+                  {
+                    "$ref": "#/components/schemas/MultiPolygon"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Footprint"
+          },
+          "license": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LicenseMetadata"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "observedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observedat"
+          },
+          "renderConfig": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RenderConfig"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "resolution": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResolutionMetadata"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "validFrom": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Validfrom"
+          },
+          "validTo": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Validto"
+          }
+        },
+        "title": "AssetUpdate",
+        "type": "object"
+      },
+      "Attribution": {
+        "additionalProperties": false,
+        "description": "Credit that must remain visible while a dataset is shown.",
+        "properties": {
+          "organization": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Organization"
+          },
+          "text": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "format": "uri",
+                "maxLength": 2083,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "Attribution",
+        "type": "object"
+      },
+      "Body_upload_thumbnail_api_v1_sites__site_id__thumbnail_post": {
+        "properties": {
+          "file": {
+            "contentMediaType": "application/octet-stream",
+            "title": "File",
+            "type": "string"
+          }
+        },
+        "required": [
+          "file"
+        ],
+        "title": "Body_upload_thumbnail_api_v1_sites__site_id__thumbnail_post",
+        "type": "object"
+      },
+      "BoundingBox": {
+        "additionalProperties": false,
+        "properties": {
+          "east": {
+            "maximum": 180.0,
+            "minimum": -180.0,
+            "title": "East",
+            "type": "number"
+          },
+          "north": {
+            "maximum": 90.0,
+            "minimum": -90.0,
+            "title": "North",
+            "type": "number"
+          },
+          "south": {
+            "maximum": 90.0,
+            "minimum": -90.0,
+            "title": "South",
+            "type": "number"
+          },
+          "west": {
+            "maximum": 180.0,
+            "minimum": -180.0,
+            "title": "West",
+            "type": "number"
+          }
+        },
+        "required": [
+          "west",
+          "south",
+          "east",
+          "north"
+        ],
+        "title": "BoundingBox",
+        "type": "object"
+      },
+      "CameraBookmarkCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "heading": {
+            "default": 0.0,
+            "description": "Degrees",
+            "maximum": 360.0,
+            "minimum": -360.0,
+            "title": "Heading",
+            "type": "number"
+          },
+          "height": {
+            "description": "Ellipsoidal height in metres",
+            "title": "Height",
+            "type": "number"
+          },
+          "isDefault": {
+            "default": false,
+            "title": "Isdefault",
+            "type": "boolean"
+          },
+          "latitude": {
+            "maximum": 90.0,
+            "minimum": -90.0,
+            "title": "Latitude",
+            "type": "number"
+          },
+          "longitude": {
+            "maximum": 180.0,
+            "minimum": -180.0,
+            "title": "Longitude",
+            "type": "number"
+          },
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "pitch": {
+            "default": -30.0,
+            "description": "Degrees",
+            "maximum": 90.0,
+            "minimum": -90.0,
+            "title": "Pitch",
+            "type": "number"
+          },
+          "roll": {
+            "default": 0.0,
+            "description": "Degrees",
+            "maximum": 360.0,
+            "minimum": -360.0,
+            "title": "Roll",
+            "type": "number"
+          }
+        },
+        "required": [
+          "name",
+          "longitude",
+          "latitude",
+          "height"
+        ],
+        "title": "CameraBookmarkCreate",
+        "type": "object"
+      },
+      "CameraBookmarkRead": {
+        "additionalProperties": false,
+        "properties": {
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "heading": {
+            "default": 0.0,
+            "description": "Degrees",
+            "maximum": 360.0,
+            "minimum": -360.0,
+            "title": "Heading",
+            "type": "number"
+          },
+          "height": {
+            "description": "Ellipsoidal height in metres",
+            "title": "Height",
+            "type": "number"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "isDefault": {
+            "default": false,
+            "title": "Isdefault",
+            "type": "boolean"
+          },
+          "latitude": {
+            "maximum": 90.0,
+            "minimum": -90.0,
+            "title": "Latitude",
+            "type": "number"
+          },
+          "longitude": {
+            "maximum": 180.0,
+            "minimum": -180.0,
+            "title": "Longitude",
+            "type": "number"
+          },
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "pitch": {
+            "default": -30.0,
+            "description": "Degrees",
+            "maximum": 90.0,
+            "minimum": -90.0,
+            "title": "Pitch",
+            "type": "number"
+          },
+          "roll": {
+            "default": 0.0,
+            "description": "Degrees",
+            "maximum": 360.0,
+            "minimum": -360.0,
+            "title": "Roll",
+            "type": "number"
+          },
+          "siteId": {
+            "format": "uuid",
+            "title": "Siteid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "longitude",
+          "latitude",
+          "height",
+          "id",
+          "siteId",
+          "createdAt"
+        ],
+        "title": "CameraBookmarkRead",
+        "type": "object"
+      },
+      "CesiumIon3DTilesSource": {
+        "additionalProperties": false,
+        "properties": {
+          "assetId": {
+            "exclusiveMinimum": 0.0,
+            "title": "Assetid",
+            "type": "integer"
+          },
+          "type": {
+            "const": "cesium-ion-3d-tiles",
+            "default": "cesium-ion-3d-tiles",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "assetId"
+        ],
+        "title": "CesiumIon3DTilesSource",
+        "type": "object"
+      },
+      "CesiumIonImagerySource": {
+        "additionalProperties": false,
+        "properties": {
+          "assetId": {
+            "exclusiveMinimum": 0.0,
+            "title": "Assetid",
+            "type": "integer"
+          },
+          "type": {
+            "const": "cesium-ion-imagery",
+            "default": "cesium-ion-imagery",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "assetId"
+        ],
+        "title": "CesiumIonImagerySource",
+        "type": "object"
+      },
+      "CesiumIonSource": {
+        "additionalProperties": false,
+        "properties": {
+          "assetId": {
+            "exclusiveMinimum": 0.0,
+            "title": "Assetid",
+            "type": "integer"
+          },
+          "type": {
+            "const": "cesium-ion",
+            "default": "cesium-ion",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "assetId"
+        ],
+        "title": "CesiumIonSource",
+        "type": "object"
+      },
+      "CesiumIonTerrainSource": {
+        "additionalProperties": false,
+        "properties": {
+          "assetId": {
+            "exclusiveMinimum": 0.0,
+            "title": "Assetid",
+            "type": "integer"
+          },
+          "requestVertexNormals": {
+            "default": true,
+            "title": "Requestvertexnormals",
+            "type": "boolean"
+          },
+          "requestWaterMask": {
+            "default": false,
+            "title": "Requestwatermask",
+            "type": "boolean"
+          },
+          "type": {
+            "const": "cesium-ion-terrain",
+            "default": "cesium-ion-terrain",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "assetId"
+        ],
+        "title": "CesiumIonTerrainSource",
+        "type": "object"
+      },
+      "CrsMetadata": {
+        "additionalProperties": false,
+        "properties": {
+          "horizontal": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Horizontal"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
+          "vertical": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vertical"
+          }
+        },
+        "title": "CrsMetadata",
+        "type": "object"
+      },
+      "CzmlSource": {
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "const": "czml",
+            "default": "czml",
+            "title": "Type",
+            "type": "string"
+          },
+          "url": {
+            "format": "uri",
+            "maxLength": 2083,
+            "minLength": 1,
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "title": "CzmlSource",
+        "type": "object"
+      },
+      "GeoJsonSource": {
+        "additionalProperties": false,
+        "properties": {
+          "clampToGround": {
+            "default": true,
+            "title": "Clamptoground",
+            "type": "boolean"
+          },
+          "fill": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fill"
+          },
+          "stroke": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stroke"
+          },
+          "type": {
+            "const": "geojson",
+            "default": "geojson",
+            "title": "Type",
+            "type": "string"
+          },
+          "url": {
+            "format": "uri",
+            "maxLength": 2083,
+            "minLength": 1,
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "title": "GeoJsonSource",
+        "type": "object"
+      },
+      "GeoPosition": {
+        "additionalProperties": false,
+        "properties": {
+          "height": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Height"
+          },
+          "latitude": {
+            "maximum": 90.0,
+            "minimum": -90.0,
+            "title": "Latitude",
+            "type": "number"
+          },
+          "longitude": {
+            "maximum": 180.0,
+            "minimum": -180.0,
+            "title": "Longitude",
+            "type": "number"
+          }
+        },
+        "required": [
+          "longitude",
+          "latitude"
+        ],
+        "title": "GeoPosition",
+        "type": "object"
+      },
+      "GooglePhotorealisticSource": {
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "const": "google-photorealistic",
+            "default": "google-photorealistic",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "title": "GooglePhotorealisticSource",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "HealthStatus": {
+        "additionalProperties": false,
+        "properties": {
+          "database": {
+            "title": "Database",
+            "type": "boolean"
+          },
+          "objectStorage": {
+            "title": "Objectstorage",
+            "type": "string"
+          },
+          "objectStorageAvailable": {
+            "title": "Objectstorageavailable",
+            "type": "boolean"
+          },
+          "postgisVersion": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Postgisversion"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "database",
+          "objectStorage",
+          "objectStorageAvailable"
+        ],
+        "title": "HealthStatus",
+        "type": "object"
+      },
+      "IonAssetMetadata": {
+        "additionalProperties": false,
+        "properties": {
+          "attribution": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attribution"
+          },
+          "bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bytes"
+          },
+          "dateAdded": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dateadded"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "percentComplete": {
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Percentcomplete",
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "AWAITING_FILES",
+              "NOT_STARTED",
+              "IN_PROGRESS",
+              "COMPLETE",
+              "ERROR",
+              "DATA_ERROR"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "type",
+          "status",
+          "percentComplete"
+        ],
+        "title": "IonAssetMetadata",
+        "type": "object"
+      },
+      "IonReconstructionCapabilities": {
+        "additionalProperties": false,
+        "description": "What the backend can do with Cesium ion's reality reconstruction today.",
+        "properties": {
+          "createJobs": {
+            "title": "Createjobs",
+            "type": "boolean"
+          },
+          "createJobsReason": {
+            "title": "Createjobsreason",
+            "type": "string"
+          },
+          "monitorJobs": {
+            "title": "Monitorjobs",
+            "type": "boolean"
+          },
+          "registerAssets": {
+            "default": true,
+            "title": "Registerassets",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "monitorJobs",
+          "createJobs",
+          "createJobsReason"
+        ],
+        "title": "IonReconstructionCapabilities",
+        "type": "object"
+      },
+      "IonStatus": {
+        "additionalProperties": false,
+        "properties": {
+          "apiBase": {
+            "title": "Apibase",
+            "type": "string"
+          },
+          "configured": {
+            "title": "Configured",
+            "type": "boolean"
+          },
+          "reconstruction": {
+            "$ref": "#/components/schemas/IonReconstructionCapabilities"
+          }
+        },
+        "required": [
+          "configured",
+          "apiBase",
+          "reconstruction"
+        ],
+        "title": "IonStatus",
+        "type": "object"
+      },
+      "LayerCategory": {
+        "enum": [
+          "reality",
+          "terrain",
+          "imagery",
+          "hydrology",
+          "land-cover",
+          "ecology",
+          "infrastructure",
+          "my-data"
+        ],
+        "title": "LayerCategory",
+        "type": "string"
+      },
+      "LayerCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "attribution": {
+            "items": {
+              "$ref": "#/components/schemas/Attribution"
+            },
+            "title": "Attribution",
+            "type": "array"
+          },
+          "category": {
+            "$ref": "#/components/schemas/LayerCategory"
+          },
+          "coverage": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coverage"
+          },
+          "defaultVisible": {
+            "default": false,
+            "title": "Defaultvisible",
+            "type": "boolean"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "maxLength": 5000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "legend": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LegendMetadata"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "license": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LicenseMetadata"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "observedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observedat"
+          },
+          "provenance": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Provenance"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "render": {
+            "$ref": "#/components/schemas/RenderMetadata"
+          },
+          "resolution": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolution"
+          },
+          "slug": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Slug"
+          },
+          "source": {
+            "discriminator": {
+              "mapping": {
+                "3d-tiles-url": "#/components/schemas/TilesUrlLayerSource",
+                "arcgis-mapserver": "#/components/schemas/ArcGisMapServerSource",
+                "cesium-ion-3d-tiles": "#/components/schemas/CesiumIon3DTilesSource",
+                "cesium-ion-imagery": "#/components/schemas/CesiumIonImagerySource",
+                "cesium-ion-terrain": "#/components/schemas/CesiumIonTerrainSource",
+                "czml": "#/components/schemas/CzmlSource",
+                "geojson": "#/components/schemas/GeoJsonSource",
+                "google-photorealistic": "#/components/schemas/GooglePhotorealisticSource",
+                "mvt": "#/components/schemas/MvtSource",
+                "stac": "#/components/schemas/StacSource",
+                "wms": "#/components/schemas/WmsSource",
+                "wmts": "#/components/schemas/WmtsSource",
+                "xyz": "#/components/schemas/XyzSource"
+              },
+              "propertyName": "type"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CesiumIonTerrainSource"
+              },
+              {
+                "$ref": "#/components/schemas/CesiumIonImagerySource"
+              },
+              {
+                "$ref": "#/components/schemas/CesiumIon3DTilesSource"
+              },
+              {
+                "$ref": "#/components/schemas/GooglePhotorealisticSource"
+              },
+              {
+                "$ref": "#/components/schemas/TilesUrlLayerSource"
+              },
+              {
+                "$ref": "#/components/schemas/XyzSource"
+              },
+              {
+                "$ref": "#/components/schemas/WmtsSource"
+              },
+              {
+                "$ref": "#/components/schemas/WmsSource"
+              },
+              {
+                "$ref": "#/components/schemas/ArcGisMapServerSource"
+              },
+              {
+                "$ref": "#/components/schemas/GeoJsonSource"
+              },
+              {
+                "$ref": "#/components/schemas/CzmlSource"
+              },
+              {
+                "$ref": "#/components/schemas/MvtSource"
+              },
+              {
+                "$ref": "#/components/schemas/StacSource"
+              }
+            ],
+            "title": "Source"
+          },
+          "spatialExtent": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BoundingBox"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "temporalExtent": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TemporalExtent"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "category",
+          "source"
+        ],
+        "title": "LayerCreate",
+        "type": "object"
+      },
+      "LayerRead": {
+        "additionalProperties": false,
+        "properties": {
+          "attribution": {
+            "items": {
+              "$ref": "#/components/schemas/Attribution"
+            },
+            "title": "Attribution",
+            "type": "array"
+          },
+          "builtin": {
+            "title": "Builtin",
+            "type": "boolean"
+          },
+          "category": {
+            "$ref": "#/components/schemas/LayerCategory"
+          },
+          "coverage": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coverage"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "defaultVisible": {
+            "default": false,
+            "title": "Defaultvisible",
+            "type": "boolean"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "maxLength": 5000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "legend": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LegendMetadata"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "license": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LicenseMetadata"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "observedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observedat"
+          },
+          "provenance": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Provenance"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "render": {
+            "$ref": "#/components/schemas/RenderMetadata"
+          },
+          "resolution": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolution"
+          },
+          "slug": {
+            "title": "Slug",
+            "type": "string"
+          },
+          "source": {
+            "discriminator": {
+              "mapping": {
+                "3d-tiles-url": "#/components/schemas/TilesUrlLayerSource",
+                "arcgis-mapserver": "#/components/schemas/ArcGisMapServerSource",
+                "cesium-ion-3d-tiles": "#/components/schemas/CesiumIon3DTilesSource",
+                "cesium-ion-imagery": "#/components/schemas/CesiumIonImagerySource",
+                "cesium-ion-terrain": "#/components/schemas/CesiumIonTerrainSource",
+                "czml": "#/components/schemas/CzmlSource",
+                "geojson": "#/components/schemas/GeoJsonSource",
+                "google-photorealistic": "#/components/schemas/GooglePhotorealisticSource",
+                "mvt": "#/components/schemas/MvtSource",
+                "stac": "#/components/schemas/StacSource",
+                "wms": "#/components/schemas/WmsSource",
+                "wmts": "#/components/schemas/WmtsSource",
+                "xyz": "#/components/schemas/XyzSource"
+              },
+              "propertyName": "type"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CesiumIonTerrainSource"
+              },
+              {
+                "$ref": "#/components/schemas/CesiumIonImagerySource"
+              },
+              {
+                "$ref": "#/components/schemas/CesiumIon3DTilesSource"
+              },
+              {
+                "$ref": "#/components/schemas/GooglePhotorealisticSource"
+              },
+              {
+                "$ref": "#/components/schemas/TilesUrlLayerSource"
+              },
+              {
+                "$ref": "#/components/schemas/XyzSource"
+              },
+              {
+                "$ref": "#/components/schemas/WmtsSource"
+              },
+              {
+                "$ref": "#/components/schemas/WmsSource"
+              },
+              {
+                "$ref": "#/components/schemas/ArcGisMapServerSource"
+              },
+              {
+                "$ref": "#/components/schemas/GeoJsonSource"
+              },
+              {
+                "$ref": "#/components/schemas/CzmlSource"
+              },
+              {
+                "$ref": "#/components/schemas/MvtSource"
+              },
+              {
+                "$ref": "#/components/schemas/StacSource"
+              }
+            ],
+            "title": "Source"
+          },
+          "sourceType": {
+            "$ref": "#/components/schemas/LayerSourceType"
+          },
+          "spatialExtent": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BoundingBox"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "temporalExtent": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TemporalExtent"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "title": "Updatedat",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "category",
+          "source",
+          "id",
+          "slug",
+          "sourceType",
+          "builtin",
+          "createdAt",
+          "updatedAt"
+        ],
+        "title": "LayerRead",
+        "type": "object"
+      },
+      "LayerSourceType": {
+        "enum": [
+          "cesium-ion-terrain",
+          "cesium-ion-imagery",
+          "cesium-ion-3d-tiles",
+          "google-photorealistic",
+          "3d-tiles-url",
+          "xyz",
+          "wmts",
+          "wms",
+          "arcgis-mapserver",
+          "geojson",
+          "czml",
+          "mvt",
+          "stac"
+        ],
+        "title": "LayerSourceType",
+        "type": "string"
+      },
+      "LayerUpdate": {
+        "additionalProperties": false,
+        "properties": {
+          "attribution": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/Attribution"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attribution"
+          },
+          "category": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LayerCategory"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "defaultVisible": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Defaultvisible"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "maxLength": 5000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "license": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LicenseMetadata"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "observedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observedat"
+          },
+          "render": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RenderMetadata"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "temporalExtent": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TemporalExtent"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "LayerUpdate",
+        "type": "object"
+      },
+      "LegendEntry": {
+        "additionalProperties": false,
+        "properties": {
+          "color": {
+            "maxLength": 32,
+            "title": "Color",
+            "type": "string"
+          },
+          "label": {
+            "maxLength": 120,
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "color"
+        ],
+        "title": "LegendEntry",
+        "type": "object"
+      },
+      "LegendMetadata": {
+        "additionalProperties": false,
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/LegendEntry"
+            },
+            "title": "Entries",
+            "type": "array"
+          },
+          "imageUrl": {
+            "anyOf": [
+              {
+                "format": "uri",
+                "maxLength": 2083,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Imageurl"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "title": "LegendMetadata",
+        "type": "object"
+      },
+      "LicenseMetadata": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
+          "requiresAttribution": {
+            "default": true,
+            "title": "Requiresattribution",
+            "type": "boolean"
+          },
+          "spdxId": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spdxid"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "format": "uri",
+                "maxLength": 2083,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "LicenseMetadata",
+        "type": "object"
+      },
+      "MultiPolygon": {
+        "additionalProperties": false,
+        "properties": {
+          "coordinates": {
+            "items": {
+              "items": {
+                "items": {
+                  "items": {
+                    "type": "number"
+                  },
+                  "maxItems": 3,
+                  "minItems": 2,
+                  "type": "array"
+                },
+                "minItems": 4,
+                "type": "array"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            "minItems": 1,
+            "title": "Coordinates",
+            "type": "array"
+          },
+          "type": {
+            "const": "MultiPolygon",
+            "default": "MultiPolygon",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "coordinates"
+        ],
+        "title": "MultiPolygon",
+        "type": "object"
+      },
+      "MvtSource": {
+        "additionalProperties": false,
+        "description": "Adapter point for Mapbox Vector Tiles (CesiumJS MVTDataProvider, experimental).",
+        "properties": {
+          "maxZoom": {
+            "default": 14,
+            "maximum": 24.0,
+            "minimum": 0.0,
+            "title": "Maxzoom",
+            "type": "integer"
+          },
+          "minZoom": {
+            "default": 0,
+            "maximum": 24.0,
+            "minimum": 0.0,
+            "title": "Minzoom",
+            "type": "integer"
+          },
+          "type": {
+            "const": "mvt",
+            "default": "mvt",
+            "title": "Type",
+            "type": "string"
+          },
+          "urlTemplate": {
+            "maxLength": 2048,
+            "minLength": 8,
+            "title": "Urltemplate",
+            "type": "string"
+          }
+        },
+        "required": [
+          "urlTemplate"
+        ],
+        "title": "MvtSource",
+        "type": "object"
+      },
+      "PointCloudShading": {
+        "additionalProperties": false,
+        "properties": {
+          "attenuation": {
+            "default": true,
+            "title": "Attenuation",
+            "type": "boolean"
+          },
+          "eyeDomeLighting": {
+            "default": true,
+            "title": "Eyedomelighting",
+            "type": "boolean"
+          },
+          "maximumAttenuation": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Maximumattenuation"
+          }
+        },
+        "title": "PointCloudShading",
+        "type": "object"
+      },
+      "Polygon": {
+        "additionalProperties": false,
+        "properties": {
+          "coordinates": {
+            "items": {
+              "items": {
+                "items": {
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 2,
+                "type": "array"
+              },
+              "minItems": 4,
+              "type": "array"
+            },
+            "minItems": 1,
+            "title": "Coordinates",
+            "type": "array"
+          },
+          "type": {
+            "const": "Polygon",
+            "default": "Polygon",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "coordinates"
+        ],
+        "title": "Polygon",
+        "type": "object"
+      },
+      "Provenance": {
+        "additionalProperties": false,
+        "description": "Where a dataset came from and when.",
+        "properties": {
+          "notes": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
+          "publishedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Publishedat"
+          },
+          "sourceOrganization": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sourceorganization"
+          },
+          "sourceUrl": {
+            "anyOf": [
+              {
+                "format": "uri",
+                "maxLength": 2083,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sourceurl"
+          }
+        },
+        "title": "Provenance",
+        "type": "object"
+      },
+      "RenderConfig": {
+        "additionalProperties": false,
+        "properties": {
+          "clipsWorld": {
+            "default": true,
+            "title": "Clipsworld",
+            "type": "boolean"
+          },
+          "heightOffsetM": {
+            "default": 0.0,
+            "title": "Heightoffsetm",
+            "type": "number"
+          },
+          "maximumScreenSpaceError": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 512.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Maximumscreenspaceerror"
+          },
+          "pointCloudShading": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PointCloudShading"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "RenderConfig",
+        "type": "object"
+      },
+      "RenderMetadata": {
+        "additionalProperties": false,
+        "properties": {
+          "exclusiveGroup": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Layers sharing a group are mutually exclusive (e.g. 'terrain', 'world').",
+            "title": "Exclusivegroup"
+          },
+          "maximumAltitudeM": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Maximumaltitudem"
+          },
+          "maximumScreenSpaceError": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 512.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Maximumscreenspaceerror"
+          },
+          "minimumAltitudeM": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Minimumaltitudem"
+          },
+          "opacity": {
+            "default": 1.0,
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Opacity",
+            "type": "number"
+          }
+        },
+        "title": "RenderMetadata",
+        "type": "object"
+      },
+      "Representation": {
+        "enum": [
+          "gaussian-splat",
+          "mesh",
+          "point-cloud",
+          "terrain",
+          "imagery"
+        ],
+        "title": "Representation",
+        "type": "string"
+      },
+      "ResolutionMetadata": {
+        "additionalProperties": false,
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "maxLength": 300,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "groundSampleDistanceM": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Groundsampledistancem"
+          },
+          "pointSpacingM": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pointspacingm"
+          }
+        },
+        "title": "ResolutionMetadata",
+        "type": "object"
+      },
+      "SiteCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "assets": {
+            "items": {
+              "$ref": "#/components/schemas/AssetBase"
+            },
+            "title": "Assets",
+            "type": "array"
+          },
+          "attribution": {
+            "items": {
+              "$ref": "#/components/schemas/Attribution"
+            },
+            "title": "Attribution",
+            "type": "array"
+          },
+          "boundary": {
+            "discriminator": {
+              "mapping": {
+                "MultiPolygon": "#/components/schemas/MultiPolygon",
+                "Polygon": "#/components/schemas/Polygon"
+              },
+              "propertyName": "type"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Polygon"
+              },
+              {
+                "$ref": "#/components/schemas/MultiPolygon"
+              }
+            ],
+            "title": "Boundary"
+          },
+          "cameraBookmarks": {
+            "items": {
+              "$ref": "#/components/schemas/CameraBookmarkCreate"
+            },
+            "title": "Camerabookmarks",
+            "type": "array"
+          },
+          "centroid": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GeoPosition"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Defaults to the boundary centroid when omitted."
+          },
+          "description": {
+            "anyOf": [
+              {
+                "maxLength": 5000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "license": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LicenseMetadata"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "title": "Metadata",
+            "type": "object"
+          },
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "slug": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Slug"
+          },
+          "thumbnailUrl": {
+            "anyOf": [
+              {
+                "format": "uri",
+                "maxLength": 2083,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thumbnailurl"
+          }
+        },
+        "required": [
+          "name",
+          "boundary"
+        ],
+        "title": "SiteCreate",
+        "type": "object"
+      },
+      "SiteQuality": {
+        "additionalProperties": false,
+        "properties": {
+          "groundSampleDistanceM": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Groundsampledistancem"
+          },
+          "resolutionDescription": {
+            "anyOf": [
+              {
+                "maxLength": 300,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolutiondescription"
+          }
+        },
+        "title": "SiteQuality",
+        "type": "object"
+      },
+      "SiteRead": {
+        "additionalProperties": false,
+        "properties": {
+          "areaM2": {
+            "title": "Aream2",
+            "type": "number"
+          },
+          "assets": {
+            "items": {
+              "$ref": "#/components/schemas/AssetRead"
+            },
+            "title": "Assets",
+            "type": "array"
+          },
+          "attribution": {
+            "items": {
+              "$ref": "#/components/schemas/Attribution"
+            },
+            "title": "Attribution",
+            "type": "array"
+          },
+          "boundary": {
+            "discriminator": {
+              "mapping": {
+                "MultiPolygon": "#/components/schemas/MultiPolygon",
+                "Polygon": "#/components/schemas/Polygon"
+              },
+              "propertyName": "type"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Polygon"
+              },
+              {
+                "$ref": "#/components/schemas/MultiPolygon"
+              }
+            ],
+            "title": "Boundary"
+          },
+          "cameraBookmarks": {
+            "items": {
+              "$ref": "#/components/schemas/CameraBookmarkRead"
+            },
+            "title": "Camerabookmarks",
+            "type": "array"
+          },
+          "centroid": {
+            "$ref": "#/components/schemas/GeoPosition"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "maxLength": 5000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "license": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LicenseMetadata"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "title": "Metadata",
+            "type": "object"
+          },
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "slug": {
+            "title": "Slug",
+            "type": "string"
+          },
+          "thumbnailUrl": {
+            "anyOf": [
+              {
+                "format": "uri",
+                "maxLength": 2083,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thumbnailurl"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "title": "Updatedat",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "boundary",
+          "centroid",
+          "id",
+          "slug",
+          "areaM2",
+          "assets",
+          "cameraBookmarks",
+          "createdAt",
+          "updatedAt"
+        ],
+        "title": "SiteRead",
+        "type": "object"
+      },
+      "SiteSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "areaM2": {
+            "title": "Aream2",
+            "type": "number"
+          },
+          "centroid": {
+            "$ref": "#/components/schemas/GeoPosition"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "latestObservedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latestobservedat"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "quality": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SiteQuality"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "representations": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Representations",
+            "type": "array"
+          },
+          "slug": {
+            "title": "Slug",
+            "type": "string"
+          },
+          "thumbnailUrl": {
+            "anyOf": [
+              {
+                "format": "uri",
+                "maxLength": 2083,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thumbnailurl"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "title": "Updatedat",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "slug",
+          "name",
+          "description",
+          "centroid",
+          "areaM2",
+          "thumbnailUrl",
+          "representations",
+          "latestObservedAt",
+          "quality",
+          "createdAt",
+          "updatedAt"
+        ],
+        "title": "SiteSummary",
+        "type": "object"
+      },
+      "SiteUpdate": {
+        "additionalProperties": false,
+        "properties": {
+          "attribution": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/Attribution"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attribution"
+          },
+          "boundary": {
+            "anyOf": [
+              {
+                "discriminator": {
+                  "mapping": {
+                    "MultiPolygon": "#/components/schemas/MultiPolygon",
+                    "Polygon": "#/components/schemas/Polygon"
+                  },
+                  "propertyName": "type"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/Polygon"
+                  },
+                  {
+                    "$ref": "#/components/schemas/MultiPolygon"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Boundary"
+          },
+          "centroid": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GeoPosition"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "description": {
+            "anyOf": [
+              {
+                "maxLength": 5000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "license": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LicenseMetadata"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "metadata": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metadata"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "thumbnailUrl": {
+            "anyOf": [
+              {
+                "format": "uri",
+                "maxLength": 2083,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thumbnailurl"
+          }
+        },
+        "title": "SiteUpdate",
+        "type": "object"
+      },
+      "StacSource": {
+        "additionalProperties": false,
+        "description": "Reference to a STAC item/collection. Resolution to a renderable asset happens client-side.",
+        "properties": {
+          "assetKey": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assetkey"
+          },
+          "kind": {
+            "default": "item",
+            "enum": [
+              "item",
+              "collection",
+              "catalog"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "type": {
+            "const": "stac",
+            "default": "stac",
+            "title": "Type",
+            "type": "string"
+          },
+          "url": {
+            "format": "uri",
+            "maxLength": 2083,
+            "minLength": 1,
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "title": "StacSource",
+        "type": "object"
+      },
+      "TemporalExtent": {
+        "additionalProperties": false,
+        "properties": {
+          "end": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End"
+          },
+          "start": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start"
+          }
+        },
+        "title": "TemporalExtent",
+        "type": "object"
+      },
+      "TilesUrlLayerSource": {
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "const": "3d-tiles-url",
+            "default": "3d-tiles-url",
+            "title": "Type",
+            "type": "string"
+          },
+          "url": {
+            "format": "uri",
+            "maxLength": 2083,
+            "minLength": 1,
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "title": "TilesUrlLayerSource",
+        "type": "object"
+      },
+      "TilesUrlSource": {
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "const": "3d-tiles-url",
+            "default": "3d-tiles-url",
+            "title": "Type",
+            "type": "string"
+          },
+          "url": {
+            "format": "uri",
+            "maxLength": 2083,
+            "minLength": 1,
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "title": "TilesUrlSource",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      },
+      "WmsSource": {
+        "additionalProperties": false,
+        "properties": {
+          "layers": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Layers",
+            "type": "string"
+          },
+          "parameters": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Parameters",
+            "type": "object"
+          },
+          "type": {
+            "const": "wms",
+            "default": "wms",
+            "title": "Type",
+            "type": "string"
+          },
+          "url": {
+            "format": "uri",
+            "maxLength": 2083,
+            "minLength": 1,
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url",
+          "layers"
+        ],
+        "title": "WmsSource",
+        "type": "object"
+      },
+      "WmtsSource": {
+        "additionalProperties": false,
+        "properties": {
+          "format": {
+            "default": "image/png",
+            "maxLength": 100,
+            "title": "Format",
+            "type": "string"
+          },
+          "layer": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Layer",
+            "type": "string"
+          },
+          "maximumLevel": {
+            "anyOf": [
+              {
+                "maximum": 30.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Maximumlevel"
+          },
+          "style": {
+            "default": "default",
+            "maxLength": 200,
+            "title": "Style",
+            "type": "string"
+          },
+          "tileMatrixSetId": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Tilematrixsetid",
+            "type": "string"
+          },
+          "type": {
+            "const": "wmts",
+            "default": "wmts",
+            "title": "Type",
+            "type": "string"
+          },
+          "url": {
+            "format": "uri",
+            "maxLength": 2083,
+            "minLength": 1,
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url",
+          "layer",
+          "tileMatrixSetId"
+        ],
+        "title": "WmtsSource",
+        "type": "object"
+      },
+      "XyzSource": {
+        "additionalProperties": false,
+        "properties": {
+          "maximumLevel": {
+            "anyOf": [
+              {
+                "maximum": 30.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Maximumlevel"
+          },
+          "minimumLevel": {
+            "default": 0,
+            "maximum": 30.0,
+            "minimum": 0.0,
+            "title": "Minimumlevel",
+            "type": "integer"
+          },
+          "subdomains": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subdomains"
+          },
+          "tileWidth": {
+            "default": 256,
+            "maximum": 1024.0,
+            "minimum": 64.0,
+            "title": "Tilewidth",
+            "type": "integer"
+          },
+          "type": {
+            "const": "xyz",
+            "default": "xyz",
+            "title": "Type",
+            "type": "string"
+          },
+          "urlTemplate": {
+            "maxLength": 2048,
+            "minLength": 8,
+            "title": "Urltemplate",
+            "type": "string"
+          }
+        },
+        "required": [
+          "urlTemplate"
+        ],
+        "title": "XyzSource",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "description": "\nCatalog service for the geospatial digital twin.\n\n* **Sites** \u2014 physical places with reality captures, footprints and camera bookmarks.\n* **Assets** \u2014 derived, renderable delivery assets (3D Tiles) with provenance.\n* **Layers** \u2014 composable world layers from open data or the user's own sources.\n\nAll geometry is GeoJSON (WGS 84, RFC 7946). All timestamps are ISO 8601.\n",
+    "title": "Digital Twin API",
+    "version": "1.0.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/v1/assets": {
+      "get": {
+        "operationId": "list_assets_api_v1_assets_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "siteId",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Siteid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AssetRead"
+                  },
+                  "title": "Response List Assets Api V1 Assets Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List assets",
+        "tags": [
+          "assets"
+        ]
+      },
+      "post": {
+        "operationId": "create_asset_api_v1_assets_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssetCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssetRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Register an asset",
+        "tags": [
+          "assets"
+        ]
+      }
+    },
+    "/api/v1/assets/{asset_id}": {
+      "delete": {
+        "operationId": "delete_asset_api_v1_assets__asset_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "asset_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Asset Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete an asset",
+        "tags": [
+          "assets"
+        ]
+      },
+      "get": {
+        "operationId": "get_asset_api_v1_assets__asset_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "asset_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Asset Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssetRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get an asset",
+        "tags": [
+          "assets"
+        ]
+      },
+      "patch": {
+        "operationId": "update_asset_api_v1_assets__asset_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "asset_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Asset Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssetUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssetRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update an asset",
+        "tags": [
+          "assets"
+        ]
+      }
+    },
+    "/api/v1/health": {
+      "get": {
+        "operationId": "health_api_v1_health_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Health check",
+        "tags": [
+          "system"
+        ]
+      }
+    },
+    "/api/v1/ion/assets/{asset_id}": {
+      "get": {
+        "description": "Narrow, documented read of `GET https://api.cesium.com/v1/assets/{id}` using the server-side ion token. Used to monitor reconstruction jobs. This is not a general proxy.",
+        "operationId": "ion_asset_api_v1_ion_assets__asset_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "asset_id",
+            "required": true,
+            "schema": {
+              "title": "Asset Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IonAssetMetadata"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Read ion asset metadata / tiling status",
+        "tags": [
+          "cesium-ion"
+        ]
+      }
+    },
+    "/api/v1/ion/status": {
+      "get": {
+        "operationId": "ion_status_api_v1_ion_status_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IonStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Cesium ion integration status",
+        "tags": [
+          "cesium-ion"
+        ]
+      }
+    },
+    "/api/v1/layers": {
+      "get": {
+        "operationId": "list_layers_api_v1_layers_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/LayerRead"
+                  },
+                  "title": "Response List Layers Api V1 Layers Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List catalog layers",
+        "tags": [
+          "layers"
+        ]
+      },
+      "post": {
+        "operationId": "create_layer_api_v1_layers_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LayerCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LayerRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Add a layer",
+        "tags": [
+          "layers"
+        ]
+      }
+    },
+    "/api/v1/layers/{layer_id}": {
+      "delete": {
+        "operationId": "delete_layer_api_v1_layers__layer_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "layer_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Layer Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete a layer",
+        "tags": [
+          "layers"
+        ]
+      },
+      "get": {
+        "operationId": "get_layer_api_v1_layers__layer_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "layer_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Layer Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LayerRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get a layer",
+        "tags": [
+          "layers"
+        ]
+      },
+      "patch": {
+        "operationId": "update_layer_api_v1_layers__layer_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "layer_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Layer Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LayerUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LayerRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update a layer",
+        "tags": [
+          "layers"
+        ]
+      }
+    },
+    "/api/v1/sites": {
+      "get": {
+        "operationId": "list_sites_api_v1_sites_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SiteSummary"
+                  },
+                  "title": "Response List Sites Api V1 Sites Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List sites",
+        "tags": [
+          "sites"
+        ]
+      },
+      "post": {
+        "operationId": "create_site_api_v1_sites_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SiteCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SiteRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create a site",
+        "tags": [
+          "sites"
+        ]
+      }
+    },
+    "/api/v1/sites/by-slug/{slug}": {
+      "get": {
+        "operationId": "get_site_by_slug_api_v1_sites_by_slug__slug__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SiteRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get a site by slug",
+        "tags": [
+          "sites"
+        ]
+      }
+    },
+    "/api/v1/sites/{site_id}": {
+      "delete": {
+        "operationId": "delete_site_api_v1_sites__site_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "site_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Site Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete a site",
+        "tags": [
+          "sites"
+        ]
+      },
+      "get": {
+        "operationId": "get_site_api_v1_sites__site_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "site_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Site Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SiteRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get a site",
+        "tags": [
+          "sites"
+        ]
+      },
+      "patch": {
+        "operationId": "update_site_api_v1_sites__site_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "site_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Site Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SiteUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SiteRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update a site",
+        "tags": [
+          "sites"
+        ]
+      }
+    },
+    "/api/v1/sites/{site_id}/assets": {
+      "get": {
+        "operationId": "list_site_assets_api_v1_sites__site_id__assets_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "site_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Site Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AssetRead"
+                  },
+                  "title": "Response List Site Assets Api V1 Sites  Site Id  Assets Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List a site's assets",
+        "tags": [
+          "sites"
+        ]
+      }
+    },
+    "/api/v1/sites/{site_id}/bookmarks": {
+      "get": {
+        "operationId": "list_bookmarks_api_v1_sites__site_id__bookmarks_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "site_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Site Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/CameraBookmarkRead"
+                  },
+                  "title": "Response List Bookmarks Api V1 Sites  Site Id  Bookmarks Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List camera bookmarks",
+        "tags": [
+          "sites"
+        ]
+      },
+      "post": {
+        "operationId": "create_bookmark_api_v1_sites__site_id__bookmarks_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "site_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Site Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CameraBookmarkCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CameraBookmarkRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Save a camera bookmark",
+        "tags": [
+          "sites"
+        ]
+      }
+    },
+    "/api/v1/sites/{site_id}/bookmarks/{bookmark_id}": {
+      "delete": {
+        "operationId": "delete_bookmark_api_v1_sites__site_id__bookmarks__bookmark_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "site_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Site Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "bookmark_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Bookmark Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete a camera bookmark",
+        "tags": [
+          "sites"
+        ]
+      }
+    },
+    "/api/v1/sites/{site_id}/thumbnail": {
+      "post": {
+        "operationId": "upload_thumbnail_api_v1_sites__site_id__thumbnail_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "site_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Site Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_thumbnail_api_v1_sites__site_id__thumbnail_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SiteRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Upload a site thumbnail",
+        "tags": [
+          "sites"
+        ]
+      }
+    }
+  }
+}

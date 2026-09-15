@@ -1,0 +1,12 @@
+node_modules
+dist
+coverage
+pnpm-lock.yaml
+.venv
+apps/api
+packages/contracts/src/generated
+packages/contracts/openapi.json
+test-results
+playwright-report
+.agents
+docs/plan.svg

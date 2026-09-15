@@ -1,0 +1,93 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  web:
+    name: Web · lint, typecheck, test, build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm audit --audit-level high
+      - run: pnpm format:check
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm contracts:check
+      - run: pnpm test
+      - run: pnpm build
+        env:
+          VITE_CESIUM_ION_ACCESS_TOKEN: ""
+
+  e2e:
+    name: Web · Playwright
+    runs-on: ubuntu-latest
+    needs: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @twin/web exec playwright install --with-deps chromium
+      - run: pnpm e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: apps/web/playwright-report
+
+  api:
+    name: API · lint, typecheck, test, migrations
+    runs-on: ubuntu-latest
+    services:
+      postgis:
+        image: postgis/postgis:16-3.5
+        env:
+          POSTGRES_USER: twin
+          POSTGRES_PASSWORD: twin
+          POSTGRES_DB: twin
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U twin -d twin"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    defaults:
+      run:
+        working-directory: apps/api
+    env:
+      DATABASE_URL: postgresql+psycopg://twin:twin@localhost:5432/twin
+      TEST_DATABASE_URL: postgresql+psycopg://twin:twin@localhost:5432/twin_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --frozen
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run mypy .
+      - run: uv run pip-audit --strict || uv run python -m pip_audit --strict
+      - name: Create test database
+        run: |
+          PGPASSWORD=twin psql -h localhost -U twin -d twin -c "CREATE DATABASE twin_test;"
+          PGPASSWORD=twin psql -h localhost -U twin -d twin_test -c "CREATE EXTENSION IF NOT EXISTS postgis;"
+      - run: uv run alembic upgrade head
+      - run: uv run pytest -q
+      - name: OpenAPI contract is up to date
+        run: |
+          uv run python -m app.scripts.export_openapi ../../packages/contracts/openapi.json
+          git diff --exit-code -- ../../packages/contracts/openapi.json
