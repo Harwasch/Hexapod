@@ -12,7 +12,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "e2e": "playwright test",
-    "e2e:ui": "playwright test --ui"
+    "e2e:ui": "playwright test --ui",
+    "samples": "node scripts/fetch-sample-object.mjs --slug rock_09 --lon -122.1385 --lat 47.645 && node scripts/fetch-sample-object.mjs --slug weed_plant_02 --lon -122.13835 --lat 47.6452"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.102.8",

@@ -152,8 +152,9 @@ if (found) {
   await request(`${api}/api/v1/sites/${found.id}`, "DELETE").catch(() => undefined);
 }
 const created = await request(`${api}/api/v1/sites`, "POST", site);
+console.info(`site registered: ${created.name} (${created.id})`);
 console.info(
-  `site registered: ${created.name} (${created.id}) — open the Sites panel and fly to it`,
+  `find it: press S (Sites) and click "${created.name}", or type "fly to ${info.name.toLowerCase()}" in the command bar`,
 );
 
 // ---------------------------------------------------------------------------------------

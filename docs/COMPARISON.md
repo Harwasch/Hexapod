@@ -34,10 +34,14 @@ Haven, packs it into a single-tile 3D Tiles tileset under `apps/web/public/sampl
 The viewer clamps it to the terrain, so only a longitude and latitude are needed:
 
 ```bash
-cd apps/web
-node scripts/fetch-sample-object.mjs --slug rock_09 --lon -122.1385 --lat 47.645
-node scripts/fetch-sample-object.mjs --slug weed_plant_02 --lon -122.1383 --lat 47.6452 --res 8k
+pnpm samples          # rock_09 and weed_plant_02 next to each other on the Redmond demo site
+# or one at a time, anywhere:
+cd apps/web && node scripts/fetch-sample-object.mjs --slug potted_plant_04 --lon -122.1380 --lat 47.6448 --res 8k
 ```
+
+Finding them afterwards: press `S` for the Sites panel and click the sample, or type
+`fly to rock` / `fly to weed` in the command bar. Both sit a few metres apart, so once you
+are at one, the other is in view.
 
 `rock_09` is a 14 cm rock with 4K textures, about 0.035 mm per texel; `weed_plant_02` is a
 2 m weed. Any Poly Haven model slug works (`https://polyhaven.com/models`). A phone scan

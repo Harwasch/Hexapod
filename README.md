@@ -87,6 +87,13 @@ cd apps/api && uv run ruff check . && uv run mypy .
 After changing a Pydantic schema: `uv run python -m app.scripts.export_openapi ../../packages/contracts/openapi.json`
 then `pnpm contracts:generate`. CI fails if the committed contract is stale.
 
+## Sample objects for close-range testing
+
+`pnpm samples` (with the API and dev server running) downloads two CC0 photoscanned objects,
+a 14 cm rock and a 2 m weed, and places them on the demo site so millimetre-scale zoom can be
+tested without capturing anything. Press `S` and pick them, or type `fly to rock` in the
+command bar. See [docs/COMPARISON.md](docs/COMPARISON.md).
+
 ## Keyboard
 
 `⌘K`/`Ctrl+K` command palette · `/` search · `L` layers · `S` sites · `M` measure · `C` compare ·
