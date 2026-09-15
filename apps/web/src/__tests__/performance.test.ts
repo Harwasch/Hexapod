@@ -15,9 +15,17 @@ const base: QualitySample = {
 };
 
 describe("decideScreenSpaceError", () => {
-  it("never changes quality while the scene is idle", () => {
-    const d = decideScreenSpaceError({ ...base, fps: null, current: 20 });
-    expect(d).toEqual({ screenSpaceError: 20, reason: "idle" });
+  it("returns to the preset base when idle far from a site", () => {
+    const d = decideScreenSpaceError({ ...base, fps: null, current: 24, altitude: 5000 });
+    expect(d).toEqual({ screenSpaceError: 16, reason: "idle" });
+  });
+
+  it("refines step by step when idle close to a site, and holds while loading", () => {
+    expect(decideScreenSpaceError({ ...base, fps: null, current: 24 }).screenSpaceError).toBe(22);
+    expect(decideScreenSpaceError({ ...base, fps: null, current: 7 }).screenSpaceError).toBe(6);
+    expect(
+      decideScreenSpaceError({ ...base, fps: null, current: 24, loading: true }).screenSpaceError,
+    ).toBe(24);
   });
 
   it("coarsens while moving, within the preset bounds", () => {

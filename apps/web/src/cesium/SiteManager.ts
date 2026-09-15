@@ -395,11 +395,14 @@ export class SiteManager {
       let next = configured ? Math.min(configured, sse) : sse;
       if (handle.asset.representation === "gaussian-splat")
         next = Math.max(next, SPLAT_MIN_SCREEN_SPACE_ERROR);
+      if (handle.tileset.maximumScreenSpaceError === next) continue;
       handle.tileset.maximumScreenSpaceError = next;
       this.events.emit("asset", {
         id: handle.asset.id,
         patch: { screenSpaceError: handle.tileset.maximumScreenSpaceError },
       });
+      // Tile selection only runs during a frame; without this the new detail never loads.
+      this.scene.requestRender();
     }
   }
 

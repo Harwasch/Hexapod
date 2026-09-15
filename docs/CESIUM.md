@@ -62,11 +62,14 @@ the GPU, and a Gaussian splat is not re-sorted every 16 ms while nobody is touch
 | Ultra       | 8        | 2–16           | native device pixel ratio | 4×   |
 
 Rules, highest priority first: tileset memory above 125 % of its cache budget → coarser;
-camera moving → coarser; fewer than 6 frames in the last second → **idle, no change**;
-< 28 fps → coarser; stationary close-up above 52 fps → refine towards the minimum.
+camera moving → coarser; < 28 fps → coarser; at rest within 600 m of a site (idle, or
+measured > 52 fps) → refine one step per tick towards the minimum; idle elsewhere → back to
+the preset base. Idle is "fewer than 6 frames in the last second", which in request-render
+mode means nobody is touching the view, so it is headroom by definition. Each SSE change
+calls `scene.requestRender()`; tile selection only runs inside a frame.
 Sustained < 24 fps first turns MSAA off (FXAA on, globe SSE 3), then lowers
 `resolutionScale` in steps to 0.5; sustained > 50 fps walks both back. Gaussian splats never
-refine below SSE 12 whatever the preset: they are sorted on the CPU every camera change, so
+refine below SSE 8 whatever the preset: they are sorted on the CPU every camera change, so
 their cost grows with splat count far faster than a mesh. Tile cache budgets come from
 `navigator.deviceMemory` (256/384/512 MB + overflow). A per-asset `maximumScreenSpaceError`
 acts as a quality floor. Manual SSE in Settings › Advanced disables adaptation.

@@ -36,6 +36,8 @@ const MEMORY_PRESSURE_RATIO = 1.25;
 /** Minimum rendered frames in the last second before the frame rate is trusted. */
 const MIN_FRAMES_FOR_FPS = 6;
 const SUSTAINED_LOW_MS = 2500;
+/** Below this height above ground a resting camera refines towards the preset minimum. */
+const CLOSE_UP_ALTITUDE_M = 600;
 
 /**
  * Chooses the next maximum screen-space error. Pure so the policy is unit-testable.
@@ -58,15 +60,24 @@ export function decideScreenSpaceError(sample: QualitySample): QualityDecision {
       reason: "moving",
     };
   }
-  if (fps === null) return { screenSpaceError: current, reason: "idle" };
-  if (fps < LOW_FPS) {
+  if (fps !== null && fps < LOW_FPS) {
     return {
       screenSpaceError: Math.min(bounds.max, current + 3),
       reason: `low fps (${fps.toFixed(0)})`,
     };
   }
-  if (!loading && fps > STEADY_FPS + 2 && sample.nearSite && sample.altitude < 250) {
+  // At rest the scene only renders while tiles arrive, so an idle view is headroom by
+  // definition: walk towards the fine end one step at a time. The next drag coarsens again
+  // ("moving"), and memory pressure above caps the walk.
+  const closeUp = sample.nearSite && sample.altitude < CLOSE_UP_ALTITUDE_M;
+  if (!loading && closeUp && (fps === null || fps > STEADY_FPS + 2)) {
     return { screenSpaceError: Math.max(bounds.min, current - 2), reason: "close-up refinement" };
+  }
+  if (fps === null) {
+    return {
+      screenSpaceError: loading ? current : bounds.base,
+      reason: loading ? "loading" : "idle",
+    };
   }
   if (!loading && fps > STEADY_FPS) return { screenSpaceError: bounds.base, reason: "steady" };
   return { screenSpaceError: current, reason: loading ? "loading" : "steady" };

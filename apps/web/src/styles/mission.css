@@ -329,6 +329,9 @@
 }
 
 /* ---- Map overlays: markers and chips ----------------------------------- */
+/* `.hud > *` re-enables pointer events on direct children; the overlay layer must stay
+   transparent to the mouse or it swallows every drag meant for the globe. */
+.hud > .mc-overlays,
 .mc-overlays {
   position: absolute;
   inset: 0;
@@ -355,6 +358,7 @@
   cursor: pointer;
   --marker: var(--accent);
   --halo: rgba(127, 216, 192, 0.28);
+  pointer-events: auto;
 }
 
 .mc-marker.is-attention {

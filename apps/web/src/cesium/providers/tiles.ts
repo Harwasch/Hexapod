@@ -29,7 +29,7 @@ export function tileCacheBudget(): { cacheBytes: number; maximumCacheOverflowByt
  * Gaussian splats are sorted on the CPU every time the camera moves, so their cost scales with
  * the number of splats on screen far more steeply than a mesh does. Never refine them below this.
  */
-export const SPLAT_MIN_SCREEN_SPACE_ERROR = 12;
+export const SPLAT_MIN_SCREEN_SPACE_ERROR = 8;
 
 const COMMON: Cesium3DTileset.ConstructorOptions = {
   dynamicScreenSpaceError: true,
