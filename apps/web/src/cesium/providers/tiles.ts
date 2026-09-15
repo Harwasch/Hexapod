@@ -25,12 +25,6 @@ export function tileCacheBudget(): { cacheBytes: number; maximumCacheOverflowByt
   return { cacheBytes: 256 * MB, maximumCacheOverflowBytes: 128 * MB };
 }
 
-/**
- * Gaussian splats are sorted on the CPU every time the camera moves, so their cost scales with
- * the number of splats on screen far more steeply than a mesh does. Never refine them below this.
- */
-export const SPLAT_MIN_SCREEN_SPACE_ERROR = 8;
-
 const COMMON: Cesium3DTileset.ConstructorOptions = {
   dynamicScreenSpaceError: true,
   foveatedScreenSpaceError: true,
@@ -50,6 +44,9 @@ export async function createSiteTileset(
       asset.renderConfig.maximumScreenSpaceError ?? quality.maximumScreenSpaceError,
     show: false,
     preloadWhenHidden: true,
+    // Keeps the camera above the model surface (where Cesium can sample it) instead of only
+    // above the terrain that is clipped away underneath.
+    enableCollision: true,
   };
   if (asset.representation === "point-cloud") {
     const shading = asset.renderConfig.pointCloudShading;

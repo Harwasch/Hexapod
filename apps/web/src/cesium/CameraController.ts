@@ -55,7 +55,9 @@ export class CameraController {
     camera.percentageChanged = 0.002;
     const controller = this.scene.screenSpaceCameraController;
     // Allow inspection at centimetre range; collision keeps us above terrain.
-    controller.minimumZoomDistance = 0.05;
+    // Close enough to read centimetre detail, far enough that a scroll does not pass through
+    // a splat surface that has no collision geometry.
+    controller.minimumZoomDistance = 0.6;
     controller.maximumZoomDistance = 40_000_000;
     controller.enableCollisionDetection = true;
     controller.inertiaSpin = 0.85;
@@ -67,10 +69,12 @@ export class CameraController {
       camera.changed.addEventListener(() => this.reportPose()),
       camera.moveStart.addEventListener(() => {
         this.moving = true;
+        this.events.emit("motion", true);
         this.reportPose();
       }),
       camera.moveEnd.addEventListener(() => {
         this.moving = false;
+        this.events.emit("motion", false);
         this.emitPose();
       }),
     );

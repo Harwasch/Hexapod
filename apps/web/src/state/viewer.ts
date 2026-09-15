@@ -35,6 +35,8 @@ export interface PerformanceSnapshot {
   /** False while nothing is being rendered (request-render mode idles the GPU). */
   rendering: boolean;
   msaaSamples: number;
+  /** "rest" renders still frames at full quality; "motion" applies the adaptive savings. */
+  profile: "rest" | "motion";
 }
 
 interface ViewerState {
@@ -86,6 +88,7 @@ export const useViewer = create<ViewerState>()((set) => ({
     memoryBudgetMb: 0,
     rendering: false,
     msaaSamples: 4,
+    profile: "rest",
   },
   worldLabel: "Open world",
   activeTilesets: [],

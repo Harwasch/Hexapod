@@ -13,6 +13,13 @@ import { createLogger } from "@/lib/log";
 
 const log = createLogger("clipping");
 
+export interface ClipTargets {
+  globe: boolean;
+  world: boolean;
+}
+
+const ALL: ClipTargets = { globe: true, world: true };
+
 /**
  * Cuts holes in the coarse world (globe/terrain and the global 3D tileset)
  * where a high-resolution reality model takes over, so both never fight.
@@ -25,7 +32,7 @@ export class ClippingManager {
   private readonly globeCollection: ClippingPolygonCollection | null = null;
   private worldCollection: ClippingPolygonCollection | null = null;
   private worldTileset: Cesium3DTileset | null = null;
-  private readonly footprints = new Map<string, Footprint>();
+  private readonly footprints = new Map<string, { footprint: Footprint; targets: ClipTargets }>();
   private readonly globePolygons = new Map<string, ClippingPolygon[]>();
   private readonly worldPolygons = new Map<string, ClippingPolygon[]>();
   private enabled = true;
@@ -50,8 +57,13 @@ export class ClippingManager {
     this.syncEnabled();
   }
 
-  /** Registers (or replaces) the footprint that should clip the world for a key (site id). */
-  setFootprint(key: string, footprint: Footprint | null): void {
+  /**
+   * Registers (or replaces) the footprint that should clip the world for a key (site id).
+   * `targets` chooses what gets cut: the globe (terrain + imagery) and/or the global 3D
+   * tileset. A Gaussian splat blends over terrain without z-fighting, so it usually clips
+   * only the world tileset and keeps the ground under it.
+   */
+  setFootprint(key: string, footprint: Footprint | null, targets: ClipTargets = ALL): void {
     if (!this.supported) return;
     this.removeFrom(this.globeCollection, this.globePolygons, key);
     this.removeFrom(this.worldCollection, this.worldPolygons, key);
@@ -60,9 +72,9 @@ export class ClippingManager {
       this.syncEnabled();
       return;
     }
-    this.footprints.set(key, footprint);
-    this.addTo(this.globeCollection, this.globePolygons, key, footprint);
-    this.addTo(this.worldCollection, this.worldPolygons, key, footprint);
+    this.footprints.set(key, { footprint, targets });
+    if (targets.globe) this.addTo(this.globeCollection, this.globePolygons, key, footprint);
+    if (targets.world) this.addTo(this.worldCollection, this.worldPolygons, key, footprint);
     this.syncEnabled();
   }
 
@@ -77,8 +89,9 @@ export class ClippingManager {
       : null;
     if (tileset && this.worldCollection) {
       tileset.clippingPolygons = this.worldCollection;
-      for (const [key, footprint] of this.footprints)
-        this.addTo(this.worldCollection, this.worldPolygons, key, footprint);
+      for (const [key, entry] of this.footprints)
+        if (entry.targets.world)
+          this.addTo(this.worldCollection, this.worldPolygons, key, entry.footprint);
     }
     this.syncEnabled();
   }

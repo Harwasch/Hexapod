@@ -119,6 +119,8 @@ export function DevPanel() {
         </dd>
         <dt>MSAA</dt>
         <dd>{perf.msaaSamples}×</dd>
+        <dt>Profile</dt>
+        <dd>{perf.profile}</dd>
         <dt>Representation</dt>
         <dd>{representation ? representationLabel(representation) : "—"}</dd>
         <dt>Last API call</dt>

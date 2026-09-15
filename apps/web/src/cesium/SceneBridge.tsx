@@ -40,6 +40,9 @@ export function SceneBridge() {
       ),
       scene.events.on("token", (token) => useViewer.getState().setTokenState(token)),
       scene.events.on("camera", (pose) => viewer.setCamera(pose)),
+      scene.events.on("motion", (moving) =>
+        document.documentElement.toggleAttribute("data-moving", moving),
+      ),
       scene.events.on("performance", (perf) => viewer.setPerformance(perf)),
       scene.events.on("layer", ({ id, patch }) => layers.update(id, patch)),
       scene.events.on("asset", ({ id, patch }) => sites.updateAsset(id, patch)),

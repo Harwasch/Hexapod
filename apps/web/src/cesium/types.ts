@@ -14,6 +14,8 @@ export interface SceneEvents extends Record<string, unknown> {
   status: { status: ViewerStatus; message?: string };
   token: TokenState;
   camera: CameraPose;
+  /** True while the camera moves; the UI drops expensive blur effects for the duration. */
+  motion: boolean;
   performance: Partial<PerformanceSnapshot>;
   layer: { id: string; patch: Partial<LayerRuntime> };
   asset: { id: string; patch: Partial<AssetRuntime> };

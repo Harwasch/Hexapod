@@ -268,12 +268,12 @@ export class MeasurementManager {
   private label(text: () => string) {
     return {
       text: new CallbackProperty(text, false),
-      font: "500 13px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+      font: "600 15px 'Azeret Mono', ui-monospace, SFMono-Regular, Menlo, monospace",
       style: LabelStyle.FILL,
       fillColor: Color.WHITE,
       showBackground: true,
       backgroundColor: LABEL_BG,
-      backgroundPadding: new Cartesian2(8, 5),
+      backgroundPadding: new Cartesian2(10, 6),
       horizontalOrigin: HorizontalOrigin.CENTER,
       verticalOrigin: VerticalOrigin.BOTTOM,
       pixelOffset: new Cartesian2(0, -12),

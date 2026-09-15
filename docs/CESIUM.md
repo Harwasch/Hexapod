@@ -32,13 +32,25 @@ range 500 m)`. Loading uses the standard `Cesium3DTileset.fromIonAssetId`; Cesiu
 
 ## Embedding a site: clipping
 
-`ClippingManager` keeps one `ClippingPolygonCollection` on `scene.globe` and, when the
-photorealistic world is active, one on that tileset. Each site contributes polygons (with
-holes) derived from either its catalog footprint (`clipFootprint: "catalog"`) or the loaded
-tileset's root bounding volume (`"tileset"`: region rectangle, OBB horizontal corners, or
-sphere circle). Polygons are immutable since 1.145, so we swap them by key instead of
-mutating. Clipping requires WebGL2; without it the manager logs and degrades to no
-clipping.
+`ClippingManager` owns one `ClippingPolygonCollection` on the globe and one on the global
+3D tileset (OSM Buildings or Google Photorealistic when enabled). Polygons are immutable in
+CesiumJS ≥ 1.145, so each footprint is tracked by key and swapped, never mutated.
+
+What gets cut depends on the representation:
+
+- **Meshes and point clouds** (opaque) cut both the globe and the world tileset, so the two
+  surfaces never z-fight. With `clipFootprint: "tileset"` the footprint is the union of the
+  finest loaded tile boxes below the first branching level (`coverageFromTileset`, refreshed
+  as sub-tilesets stream in), otherwise the catalog footprint.
+- **Gaussian splats** cut only the world tileset and keep the terrain. A splat is blended
+  over the opaque globe with a depth test, so the ground layer simply covers the imagery and
+  nothing fights. Cutting the terrain was tried first and leaves a see-through hole to space
+  wherever the capture is sparse: tile bounding boxes include outlier splats, so no
+  tile-derived footprint is tight enough to avoid it.
+
+Site tilesets also set `enableCollision: true` so the camera collides with the model surface
+where Cesium can sample it, and `minimumZoomDistance` is 0.6 m so a scroll cannot pass
+through a splat surface that has no collision geometry.
 
 ## Representations and LOD
 
@@ -67,12 +79,18 @@ measured > 52 fps) → refine one step per tick towards the minimum; idle elsewh
 the preset base. Idle is "fewer than 6 frames in the last second", which in request-render
 mode means nobody is touching the view, so it is headroom by definition. Each SSE change
 calls `scene.requestRender()`; tile selection only runs inside a frame.
-Sustained < 24 fps first turns MSAA off (FXAA on, globe SSE 3), then lowers
-`resolutionScale` in steps to 0.5; sustained > 50 fps walks both back. Gaussian splats never
-refine below SSE 8 whatever the preset: they are sorted on the CPU every camera change, so
-their cost grows with splat count far faster than a mesh. Tile cache budgets come from
+Two render profiles: **rest** (native device pixels, resolution scale 1, MSAA 4×) for still
+frames, which in request-render mode are drawn once and can afford it; **motion**
+(browser-recommended resolution, adaptive scale down to 0.5, MSAA shed first) while the
+camera moves. Frame rate is only treated as evidence about motion cost while moving; slow
+frames at rest are tiles arriving. Gaussian splats never refine below SSE 12 / 8 / 4
+(performance / balanced / ultra): they are sorted on the CPU every camera change, so their
+cost grows with splat count far faster than a mesh. Tile cache budgets come from
 `navigator.deviceMemory` (256/384/512 MB + overflow). A per-asset `maximumScreenSpaceError`
 acts as a quality floor. Manual SSE in Settings › Advanced disables adaptation.
+
+While the camera moves the root element carries `data-moving`; glass panels drop their
+backdrop blur for the duration (a full-screen pass per panel otherwise) and use a flat tint.
 
 Things that are deliberately _not_ done per frame: hover picking waits until the pointer has
 rested 120 ms and never runs while the camera moves (each `scene.pick` is a render pass);

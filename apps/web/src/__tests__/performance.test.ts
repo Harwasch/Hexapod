@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { decideScreenSpaceError, type QualitySample } from "@/cesium/PerformanceManager";
+import {
+  decideScreenSpaceError,
+  splatMinimumScreenSpaceError,
+  type QualitySample,
+} from "@/cesium/PerformanceManager";
 import { QUALITY_SSE } from "@/state/settings";
 
 const base: QualitySample = {
@@ -50,5 +54,13 @@ describe("decideScreenSpaceError", () => {
     expect(decideScreenSpaceError({ ...base, fps: 58 }).screenSpaceError).toBe(14);
     expect(decideScreenSpaceError({ ...base, fps: 58, altitude: 900 }).screenSpaceError).toBe(16);
     expect(decideScreenSpaceError({ ...base, fps: 58, loading: true }).screenSpaceError).toBe(16);
+  });
+});
+
+describe("splatMinimumScreenSpaceError", () => {
+  it("lets ultra refine splats further than balanced, never below 4", () => {
+    expect(splatMinimumScreenSpaceError("performance")).toBe(12);
+    expect(splatMinimumScreenSpaceError("balanced")).toBe(8);
+    expect(splatMinimumScreenSpaceError("ultra")).toBe(4);
   });
 });

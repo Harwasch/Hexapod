@@ -9,6 +9,7 @@ import {
   type Rectangle,
   type Scene,
   type Viewer,
+  type Cesium3DTile,
 } from "cesium";
 
 import type { Footprint, Representation, Site, SiteAsset, SiteSummary } from "@twin/contracts";
@@ -22,11 +23,7 @@ import type { CameraController } from "./CameraController";
 import type { ClippingManager } from "./ClippingManager";
 import { isIonAuthError, isIonNotFound } from "./ion";
 import type { PerformanceManager } from "./PerformanceManager";
-import {
-  SPLAT_MIN_SCREEN_SPACE_ERROR,
-  createSiteTileset,
-  tileCacheBudget,
-} from "./providers/tiles";
+import { createSiteTileset, tileCacheBudget } from "./providers/tiles";
 import type { SceneEvents } from "./types";
 
 const log = createLogger("sites");
@@ -274,14 +271,7 @@ export class SiteManager {
     )
       return;
     tileset.show = true;
-    let footprint: Footprint | null = null;
-    if (asset.renderConfig.clipsWorld) {
-      footprint =
-        asset.renderConfig.clipFootprint === "tileset"
-          ? (footprintFromTileset(tileset) ?? asset.footprint ?? active.site.boundary)
-          : (asset.footprint ?? active.site.boundary);
-    }
-    this.clipping.setFootprint(active.site.id, footprint);
+    this.applyClip(active, asset, tileset);
     this.events.emit("tilesets", this.activeTilesetLabels());
     this.scene.requestRender();
   }
@@ -385,6 +375,62 @@ export class SiteManager {
     return { bytes, budget: cacheBytes + maximumCacheOverflowBytes };
   }
 
+  /**
+   * Clips the coarse world under the model. With `clipFootprint: "tileset"` the clip follows
+   * the tiles' real coverage; that is only known once the first branching sub-tileset has
+   * loaded, so until then the root box is used and the clip is re-derived on tile loads.
+   */
+  private applyClip(active: ActiveSite, asset: SiteAsset, tileset: Cesium3DTileset): void {
+    if (asset.renderConfig.clipsWorld && asset.representation === "gaussian-splat") {
+      // Splats are blended over the opaque globe with a depth test, so terrain does not
+      // fight them; their ground layer simply covers it. Cutting the terrain instead leaves a
+      // see-through hole wherever the capture is sparse (tile boxes include outlier splats,
+      // so no tile-derived footprint is tight). Only the global 3D tileset is cut, so
+      // buildings from OSM or Google do not poke through the model.
+      const footprint = footprintFromTileset(tileset) ?? asset.footprint ?? active.site.boundary;
+      this.clipping.setFootprint(active.site.id, footprint, { globe: false, world: true });
+      return;
+    }
+    let footprint: Footprint | null = null;
+    let provisional = false;
+    if (asset.renderConfig.clipsWorld) {
+      if (asset.renderConfig.clipFootprint === "tileset") {
+        const coverage = coverageFromTileset(tileset);
+        provisional = coverage === null;
+        footprint =
+          coverage ?? footprintFromTileset(tileset) ?? asset.footprint ?? active.site.boundary;
+      } else {
+        footprint = asset.footprint ?? active.site.boundary;
+      }
+    }
+    this.clipping.setFootprint(active.site.id, footprint);
+    if (asset.renderConfig.clipFootprint !== "tileset") return;
+    const handle = active.handles.get(asset.id);
+    if (!handle) return;
+    let applied = provisional ? "" : coverageKey(footprint);
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    // Sub-tilesets stream in over time; re-derive the coverage after each burst of tile loads
+    // and swap the clip only when it actually changed (rebuilding it is not free).
+    const off = tileset.tileLoad.addEventListener(() => {
+      if (timer !== null) return;
+      timer = setTimeout(() => {
+        timer = null;
+        if (this.active !== active || !tileset.show) return;
+        const coverage = coverageFromTileset(tileset);
+        if (!coverage) return;
+        const key = coverageKey(coverage);
+        if (key === applied) return;
+        applied = key;
+        this.clipping.setFootprint(active.site.id, coverage);
+        this.scene.requestRender();
+      }, COVERAGE_REFRESH_MS);
+    });
+    handle.unsubscribe.push(() => {
+      off();
+      if (timer !== null) clearTimeout(timer);
+    });
+  }
+
   private applyScreenSpaceError(sse: number): void {
     this.screenSpaceError = sse;
     for (const handle of this.active?.handles.values() ?? []) {
@@ -394,7 +440,7 @@ export class SiteManager {
       // splats have a hard floor on refinement because of their per-frame CPU sort.
       let next = configured ? Math.min(configured, sse) : sse;
       if (handle.asset.representation === "gaussian-splat")
-        next = Math.max(next, SPLAT_MIN_SCREEN_SPACE_ERROR);
+        next = Math.max(next, this.performance.splatMinimumScreenSpaceError);
       if (handle.tileset.maximumScreenSpaceError === next) continue;
       handle.tileset.maximumScreenSpaceError = next;
       this.events.emit("asset", {
@@ -474,12 +520,57 @@ export class SiteManager {
  * a region's rectangle, an oriented box's horizontal corners, or a sphere's circle.
  */
 export function footprintFromTileset(tileset: Cesium3DTileset): Footprint | null {
+  return footprintFromTile(tileset.root);
+}
+
+/**
+ * The area a tileset really covers: the union of its first-level tiles' footprints. A root
+ * bounding box is usually much larger than the capture (this demo's is an L inside a rectangle),
+ * and clipping the whole box leaves a see-through hole around the model. Sub-tileset entries
+ * carry bounding volumes as soon as the root document is parsed, so this needs no tile loads.
+ * Returns null when the root has no children, so callers fall back to the root box.
+ */
+export function coverageFromTileset(tileset: Cesium3DTileset): Footprint | null {
+  // Walk down single-child chains (a root that only wraps one external tileset) to the first
+  // level that actually branches; an unloaded chain end means "not known yet".
+  let tile: Cesium3DTile = tileset.root;
+  for (let depth = 0; depth < MAX_COVERAGE_DEPTH; depth++) {
+    const only = tile.children.length === 1 ? tile.children[0] : undefined;
+    if (!only) break;
+    tile = only;
+  }
+  if (tile.children.length < 2) return null;
+  // Then take the finest loaded level below it, a few levels deep, so the clip tightens as
+  // sub-tilesets stream in. Tiles whose children have not loaded contribute their own box.
+  const polygons: [number, number][][][] = [];
+  // External tileset references add a single-child wrapper per level; only branching counts.
+  const visit = (node: Cesium3DTile, level: number): void => {
+    if (polygons.length >= MAX_COVERAGE_TILES) return;
+    const only = node.children.length === 1 ? node.children[0] : undefined;
+    if (only) {
+      visit(only, level);
+      return;
+    }
+    if (level < COVERAGE_LEVELS && node.children.length > 1) {
+      for (const child of node.children) visit(child, level + 1);
+      return;
+    }
+    const footprint = footprintFromTile(node);
+    if (footprint?.type === "Polygon") polygons.push(footprint.coordinates as [number, number][][]);
+  };
+  visit(tile, 0);
+  if (polygons.length === 0) return null;
+  return { type: "MultiPolygon", coordinates: polygons };
+}
+
+/** Lon/lat footprint of one tile: a region's rectangle, an oriented box's horizontal corners, or a sphere's circle. */
+export function footprintFromTile(tile: Cesium3DTile): Footprint | null {
   // `Cesium3DTile.boundingVolume` (a TileBoundingVolume) is not in the public typings but is
   // stable at runtime; fall back to the public bounding sphere when it is absent.
-  const volume = (tileset.root as unknown as { boundingVolume?: TileVolume }).boundingVolume ?? {
+  const volume = (tile as unknown as { boundingVolume?: TileVolume }).boundingVolume ?? {
     boundingVolume: {
-      center: tileset.root.boundingSphere.center,
-      radius: tileset.root.boundingSphere.radius,
+      center: tile.boundingSphere.center,
+      radius: tile.boundingSphere.radius,
     },
   };
   if (volume.rectangle) {
@@ -540,6 +631,21 @@ export function footprintFromTileset(tileset: Cesium3DTileset): Footprint | null
     );
   }
   return null;
+}
+
+/** Clipping polygons are rasterised into one texture; keep the count bounded. */
+const MAX_COVERAGE_TILES = 96;
+const MAX_COVERAGE_DEPTH = 4;
+/** How many branching levels below the first split the coverage follows (4^3 boxes at most). */
+const COVERAGE_LEVELS = 3;
+const COVERAGE_REFRESH_MS = 1000;
+
+/** Cheap identity for a coverage footprint: polygon count plus the first coordinate of each. */
+function coverageKey(footprint: Footprint | null): string {
+  if (footprint?.type !== "MultiPolygon") return "";
+  return footprint.coordinates
+    .map((polygon) => polygon[0]?.[0]?.map((n) => n.toFixed(5)).join(",") ?? "-")
+    .join("|");
 }
 
 interface TileVolume {

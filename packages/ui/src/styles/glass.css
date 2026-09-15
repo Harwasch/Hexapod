@@ -7,6 +7,17 @@
   background: var(--glass-bg);
   -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
   backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+}
+
+/* While the camera moves every frame repaints the canvas under every panel, and a backdrop
+   blur then costs a full-screen pass per panel. Fall back to a flat tint for the duration. */
+:root[data-moving] .glass {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  background: var(--glass-bg-flat);
+}
+
+.glass {
   border: 1px solid var(--glass-border);
   border-radius: var(--glass-radius);
   box-shadow: var(--glass-shadow), var(--glass-inner-shadow);

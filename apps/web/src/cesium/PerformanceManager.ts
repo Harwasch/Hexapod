@@ -89,6 +89,17 @@ export function decideScreenSpaceError(sample: QualitySample): QualityDecision {
  * within the bounds of the chosen preset, and treats an idle scene as "no evidence" rather
  * than as a stall.
  */
+/**
+ * Gaussian splats are re-sorted on the CPU every camera change, so their cost grows with splat
+ * count far faster than a mesh. This is the finest screen-space error a splat may use per preset.
+ */
+export function splatMinimumScreenSpaceError(preset: QualityPreset): number {
+  return { performance: 12, balanced: 8, ultra: 4 }[preset];
+}
+
+/** Render profile: full quality for still frames, adaptive savings while the camera moves. */
+export type RenderProfile = "rest" | "motion";
+
 export class PerformanceManager {
   private readonly scene: Scene;
   private readonly frameTimestamps: number[] = [];
@@ -98,6 +109,10 @@ export class PerformanceManager {
     adaptive: true,
   };
   private currentSse: number = QUALITY_SSE.balanced.base;
+  /** Resolution scale and MSAA used while the camera moves; still frames always use 1 and 4. */
+  private motionScale = 1;
+  private motionMsaa = 4;
+  private profile: RenderProfile = "rest";
   private resolutionScale = 1;
   private msaa = 4;
   private lowFpsSince: number | null = null;
@@ -127,10 +142,12 @@ export class PerformanceManager {
       this.scene.postRender.addEventListener(() => this.onFrame()),
       viewer.camera.moveStart.addEventListener(() => {
         this.moving = true;
+        this.applyProfile("motion");
       }),
       viewer.camera.moveEnd.addEventListener(() => {
         this.moving = false;
         this.movingUntil = performance.now() + 400;
+        this.applyProfile("rest");
       }),
     );
     this.timer = setInterval(() => this.evaluate(), 500);
@@ -157,10 +174,10 @@ export class PerformanceManager {
     const bounds = QUALITY_SSE[inputs.preset];
     this.currentSse = inputs.manualScreenSpaceError ?? bounds.base;
     this.applySse(this.currentSse);
-    this.viewer.useBrowserRecommendedResolution = inputs.preset !== "ultra";
-    this.setResolutionScale(1);
-    this.setMsaa(inputs.preset === "performance" ? 1 : 4);
+    this.motionScale = 1;
+    this.motionMsaa = inputs.preset === "performance" ? 1 : 4;
     this.scene.globe.maximumScreenSpaceError = inputs.preset === "performance" ? 3 : 2;
+    this.applyProfile(this.moving ? "motion" : "rest", true);
     this.lowFpsSince = null;
     this.goodFpsSince = null;
     this.evaluate("configured");
@@ -178,6 +195,29 @@ export class PerformanceManager {
 
   get screenSpaceError(): number {
     return this.currentSse;
+  }
+
+  get splatMinimumScreenSpaceError(): number {
+    return splatMinimumScreenSpaceError(this.inputs.preset);
+  }
+
+  /**
+   * A still frame is rendered once, so it can afford native device pixels, full resolution
+   * scale and MSAA whatever the machine; the adaptive savings only apply while moving.
+   */
+  private applyProfile(profile: RenderProfile, force = false): void {
+    if (!force && this.profile === profile) return;
+    this.profile = profile;
+    if (profile === "rest") {
+      this.viewer.useBrowserRecommendedResolution = false;
+      this.setResolutionScale(1);
+      this.setMsaa(this.inputs.preset === "performance" ? 1 : 4);
+    } else {
+      this.viewer.useBrowserRecommendedResolution = this.inputs.preset !== "ultra";
+      this.setResolutionScale(this.motionScale);
+      this.setMsaa(this.motionMsaa);
+    }
+    this.scene.requestRender();
   }
 
   /** Rendered frames per second over the last second, or null when the scene is idle. */
@@ -239,35 +279,36 @@ export class PerformanceManager {
       target = decision.screenSpaceError;
       reason = forcedReason ?? decision.reason;
 
-      if (fps !== null && fps < LOW_FPS - 4) {
+      // Frame rate is only evidence about motion cost while the camera moves; frames rendered
+      // at rest are tiles arriving, and those are allowed to be slow.
+      if (moving && fps !== null && fps < LOW_FPS - 4) {
         this.goodFpsSince = null;
         this.lowFpsSince ??= now;
         if (now - this.lowFpsSince > SUSTAINED_LOW_MS) {
           // Cheapest wins first: drop anti-aliasing, then render fewer pixels.
-          if (this.msaa > 1) {
-            this.setMsaa(1);
-            this.scene.globe.maximumScreenSpaceError = 3;
-            reason = "low fps → MSAA off";
+          if (this.motionMsaa > 1) {
+            this.motionMsaa = 1;
+            reason = "low fps → MSAA off while moving";
           } else {
-            this.setResolutionScale(Math.max(0.5, this.resolutionScale - 0.1));
-            reason = "low fps → lower resolution";
+            this.motionScale = Math.max(0.5, this.motionScale - 0.1);
+            reason = "low fps → lower resolution while moving";
           }
+          this.applyProfile("motion", true);
           this.lowFpsSince = now;
         }
-      } else if (fps !== null && fps > STEADY_FPS) {
+      } else if (moving && fps !== null && fps > STEADY_FPS) {
         this.lowFpsSince = null;
         this.goodFpsSince ??= now;
         if (now - this.goodFpsSince > SUSTAINED_LOW_MS) {
-          if (this.resolutionScale < 1)
-            this.setResolutionScale(Math.min(1, this.resolutionScale + 0.1));
-          else if (this.msaa === 1 && this.inputs.preset !== "performance") {
-            this.setMsaa(4);
-            this.scene.globe.maximumScreenSpaceError = 2;
-          }
+          if (this.motionScale < 1) this.motionScale = Math.min(1, this.motionScale + 0.1);
+          else if (this.motionMsaa === 1 && this.inputs.preset !== "performance")
+            this.motionMsaa = 4;
+          this.applyProfile("motion", true);
           this.goodFpsSince = now;
         }
-      } else if (fps === null) {
+      } else if (!moving) {
         this.lowFpsSince = null;
+        this.goodFpsSince = null;
       }
     } else {
       reason = forcedReason ?? (this.inputs.manualScreenSpaceError !== null ? "manual" : "fixed");
@@ -279,6 +320,9 @@ export class PerformanceManager {
     }
 
     this.events.emit("performance", {
+      gpu: this.gpu,
+      webgl2: this.webgl2,
+      profile: this.profile,
       fps: fps === null ? 0 : Math.round(fps),
       frameTimeMs: fps === null ? 0 : Math.round((1000 / fps) * 10) / 10,
       rendering: fps !== null,
