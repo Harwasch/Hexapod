@@ -11,13 +11,32 @@ export interface TilesetQuality {
   maximumScreenSpaceError: number;
 }
 
+const MB = 1024 * 1024;
+
+/**
+ * Tile cache budget sized to the device. `navigator.deviceMemory` is coarse (and absent on
+ * Firefox/Safari) so this errs on the small side: a splat that overruns the budget gets its
+ * screen-space error raised by the PerformanceManager rather than filling the GPU.
+ */
+export function tileCacheBudget(): { cacheBytes: number; maximumCacheOverflowBytes: number } {
+  const deviceMemoryGb = (navigator as Navigator & { deviceMemory?: number }).deviceMemory ?? 4;
+  if (deviceMemoryGb >= 16) return { cacheBytes: 512 * MB, maximumCacheOverflowBytes: 256 * MB };
+  if (deviceMemoryGb >= 8) return { cacheBytes: 384 * MB, maximumCacheOverflowBytes: 192 * MB };
+  return { cacheBytes: 256 * MB, maximumCacheOverflowBytes: 128 * MB };
+}
+
+/**
+ * Gaussian splats are sorted on the CPU every time the camera moves, so their cost scales with
+ * the number of splats on screen far more steeply than a mesh does. Never refine them below this.
+ */
+export const SPLAT_MIN_SCREEN_SPACE_ERROR = 12;
+
 const COMMON: Cesium3DTileset.ConstructorOptions = {
   dynamicScreenSpaceError: true,
   foveatedScreenSpaceError: true,
   preloadFlightDestinations: true,
   skipLevelOfDetail: false,
-  cacheBytes: 768 * 1024 * 1024,
-  maximumCacheOverflowBytes: 512 * 1024 * 1024,
+  ...tileCacheBudget(),
 };
 
 /** Loads a site asset (splat, mesh or point cloud) as a 3D Tileset. */

@@ -88,6 +88,18 @@ current delivery provider, not the data model; canonical data will live behind t
   attached to the demo site and labeled as simulated; `MissionProvider` is the seam for a
   live fleet feed. See [MISSION_CONTROL.md](MISSION_CONTROL.md).
 
+**Performance pass (third iteration)**
+
+- Request-render mode: the scene draws only when something changed, so an idle splat no
+  longer re-renders and re-sorts every frame.
+- Hover picking, marker height sampling and pose reporting were all running render passes
+  or lookups on every mouse move or frame; they now run at rest, throttled.
+- The adaptive controller reads tileset memory against a device-sized cache budget, floors
+  Gaussian splats at SSE 12, and sheds MSAA before resolution. Its policy is a pure function
+  with unit tests.
+- Explore mode: scroll now moves, Shift+scroll changes speed; the HUD explains that normal
+  mouse navigation is paused while it is on.
+
 ## Known limitations
 
 - The fleet, zones, plans, agent actions and camera feeds are simulated demo data; there

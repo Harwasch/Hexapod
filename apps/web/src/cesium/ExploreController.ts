@@ -60,7 +60,8 @@ export class ExploreController {
     this.scene.screenSpaceCameraController.enableInputs = false;
     this.viewer.canvas.style.cursor = "move";
     this.lastTick = performance.now();
-    this.removeTick = this.scene.preRender.addEventListener(() => this.tick());
+    // preUpdate fires every widget tick even in request-render mode; preRender would not.
+    this.removeTick = this.scene.preUpdate.addEventListener(() => this.tick());
     window.addEventListener("keydown", this.onKeyDown, { capture: true });
     window.addEventListener("keyup", this.onKeyUp, { capture: true });
     window.addEventListener("blur", this.onBlur);
@@ -102,6 +103,7 @@ export class ExploreController {
     if (KEYS.has(key)) {
       event.preventDefault();
       this.pressed.add(key);
+      this.scene.requestRender();
     }
   };
 
@@ -142,11 +144,20 @@ export class ExploreController {
     this.lastPointer = null;
   };
 
+  /** Scroll moves along the view direction like a zoom; Shift+scroll changes the speed. */
   private readonly onWheel = (event: WheelEvent) => {
     event.preventDefault();
-    const factor = event.deltaY > 0 ? 0.85 : 1.18;
-    this.setSpeed(this.speed * factor);
-    this.events.emit("explore", true);
+    if (event.shiftKey) {
+      const factor = event.deltaY > 0 ? 0.85 : 1.18;
+      this.setSpeed(this.speed * factor);
+      this.events.emit("explore", true);
+      return;
+    }
+    const step = this.speed * 0.5 * Math.sign(-event.deltaY);
+    if (step > 0) this.viewer.camera.moveForward(step);
+    else this.viewer.camera.moveBackward(-step);
+    this.keepAboveGround();
+    this.scene.requestRender();
   };
 
   private tick(): void {
@@ -164,6 +175,7 @@ export class ExploreController {
     if (this.pressed.has("e")) camera.moveUp(step);
     if (this.pressed.has("q")) camera.moveDown(step);
     this.keepAboveGround();
+    this.scene.requestRender();
   }
 
   private keepAboveGround(): void {

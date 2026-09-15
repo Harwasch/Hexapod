@@ -82,9 +82,9 @@ export function DevPanel() {
     >
       <dl className="dev-grid">
         <dt>FPS</dt>
-        <dd data-testid="dev-fps">{perf.fps}</dd>
+        <dd data-testid="dev-fps">{perf.rendering ? perf.fps : "idle"}</dd>
         <dt>Frame</dt>
-        <dd>{perf.frameTimeMs} ms</dd>
+        <dd>{perf.rendering ? `${perf.frameTimeMs} ms` : "—"}</dd>
         <dt>Altitude</dt>
         <dd>{camera.altitude.toFixed(1)} m</dd>
         <dt>Lat / Lon</dt>
@@ -106,7 +106,9 @@ export function DevPanel() {
         <dt>Tiles processing</dt>
         <dd>{perf.tilesProcessing}</dd>
         <dt>Tileset memory</dt>
-        <dd>{memory} MB</dd>
+        <dd>
+          {memory} MB{perf.memoryBudgetMb ? ` / ${perf.memoryBudgetMb} MB` : ""}
+        </dd>
         <dt>Site SSE</dt>
         <dd>{perf.siteScreenSpaceError ?? "—"}</dd>
         <dt>Adaptive</dt>
@@ -115,6 +117,8 @@ export function DevPanel() {
         <dd>
           {perf.resolutionScale.toFixed(2)} × DPR {perf.devicePixelRatio.toFixed(2)}
         </dd>
+        <dt>MSAA</dt>
+        <dd>{perf.msaaSamples}×</dd>
         <dt>Representation</dt>
         <dd>{representation ? representationLabel(representation) : "—"}</dd>
         <dt>Last API call</dt>

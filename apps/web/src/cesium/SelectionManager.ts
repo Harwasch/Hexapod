@@ -1,5 +1,5 @@
 import {
-  type Cartesian2,
+  Cartesian2,
   Cartesian3,
   Cartographic,
   Cesium3DTileFeature,
@@ -38,6 +38,9 @@ interface PickContext {
 }
 
 /** Click-to-inspect: resolves what is under the cursor into a Selection and highlights it. */
+/** How long the pointer must rest before a hover pick runs. */
+const HOVER_REST_MS = 120;
+
 export class SelectionManager {
   private readonly scene: Scene;
   private readonly handler: ScreenSpaceEventHandler;
@@ -46,7 +49,8 @@ export class SelectionManager {
   private marker: Entity | null = null;
   private siteOutline: Entity | null = null;
   private enabled = true;
-  private hoverThrottle = 0;
+  private hoverTimer: ReturnType<typeof setTimeout> | null = null;
+  private hoverPosition = new Cartesian2();
 
   constructor(
     private readonly viewer: Viewer,
@@ -298,13 +302,21 @@ export class SelectionManager {
     }
   }
 
+  /**
+   * Hover only picks once the pointer has rested: every pick is a render pass, and on a
+   * Gaussian splat that pass is as expensive as a frame, so picking on every mouse move
+   * starves navigation. Nothing is picked while the camera is moving.
+   */
   private hover(window: Cartesian2): void {
-    const now = performance.now();
-    if (now - this.hoverThrottle < 80) return;
-    this.hoverThrottle = now;
-    const picked: unknown = this.scene.pick(window);
-    const interactive = picked instanceof Cesium3DTileFeature || isEntityPick(picked);
-    this.viewer.canvas.style.cursor = interactive ? "pointer" : "";
+    if (this.hoverTimer !== null) clearTimeout(this.hoverTimer);
+    this.hoverPosition = Cartesian2.clone(window, this.hoverPosition);
+    this.hoverTimer = setTimeout(() => {
+      this.hoverTimer = null;
+      if (!this.enabled || this.camera.isMoving) return;
+      const picked: unknown = this.scene.pick(this.hoverPosition);
+      const interactive = picked instanceof Cesium3DTileFeature || isEntityPick(picked);
+      this.viewer.canvas.style.cursor = interactive ? "pointer" : "";
+    }, HOVER_REST_MS);
   }
 
   private placeMarker(position: Cartesian3, ground: boolean): void {
@@ -406,6 +418,7 @@ export class SelectionManager {
   }
 
   destroy(): void {
+    if (this.hoverTimer !== null) clearTimeout(this.hoverTimer);
     this.unhighlight();
     this.handler.destroy();
   }

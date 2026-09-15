@@ -28,7 +28,8 @@ export function ExploreHud() {
         <Kbd>E</Kbd>
       </span>
       <span>
-        scroll · <strong>{formatLength(speed, units)}/s</strong>
+        scroll to move · <Kbd>Shift</Kbd>+scroll speed{" "}
+        <strong>{formatLength(speed, units)}/s</strong>
       </span>
       <GlassButton
         size="sm"

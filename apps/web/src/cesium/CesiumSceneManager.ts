@@ -69,7 +69,10 @@ export class CesiumSceneManager {
       scene3DOnly: true,
       shouldAnimate: true,
       baseLayer: false,
-      requestRenderMode: false,
+      // Render only when something changed (camera, tiles, entities, explicit requests).
+      // Every manager calls scene.requestRender() after it mutates the scene.
+      requestRenderMode: true,
+      maximumRenderTimeChange: Number.POSITIVE_INFINITY,
       msaaSamples: 4,
       contextOptions: { webgl: { powerPreference: "high-performance", antialias: true } },
     });
@@ -83,7 +86,8 @@ export class CesiumSceneManager {
     scene.fog.density = 0.0006;
     scene.globe.baseColor = Color.fromCssColorString("#0b1a3a");
     scene.highDynamicRange = false;
-    scene.postProcessStages.fxaa.enabled = true;
+    // MSAA is on by default; FXAA only when the PerformanceManager turns MSAA off.
+    scene.postProcessStages.fxaa.enabled = false;
     scene.screenSpaceCameraController.enableTilt = true;
 
     this.camera = new CameraController(this.viewer, this.events);

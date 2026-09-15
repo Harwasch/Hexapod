@@ -31,6 +31,10 @@ export interface PerformanceSnapshot {
   gpu: string | null;
   webgl2: boolean;
   tilesetMemoryMb: number;
+  memoryBudgetMb: number;
+  /** False while nothing is being rendered (request-render mode idles the GPU). */
+  rendering: boolean;
+  msaaSamples: number;
 }
 
 interface ViewerState {
@@ -79,6 +83,9 @@ export const useViewer = create<ViewerState>()((set) => ({
     gpu: null,
     webgl2: false,
     tilesetMemoryMb: 0,
+    memoryBudgetMb: 0,
+    rendering: false,
+    msaaSamples: 4,
   },
   worldLabel: "Open world",
   activeTilesets: [],

@@ -22,7 +22,11 @@ import type { CameraController } from "./CameraController";
 import type { ClippingManager } from "./ClippingManager";
 import { isIonAuthError, isIonNotFound } from "./ion";
 import type { PerformanceManager } from "./PerformanceManager";
-import { createSiteTileset } from "./providers/tiles";
+import {
+  SPLAT_MIN_SCREEN_SPACE_ERROR,
+  createSiteTileset,
+  tileCacheBudget,
+} from "./providers/tiles";
 import type { SceneEvents } from "./types";
 
 const log = createLogger("sites");
@@ -77,6 +81,7 @@ export class SiteManager {
   ) {
     this.scene = viewer.scene;
     this.performance.bindScreenSpaceErrorSink((sse) => this.applyScreenSpaceError(sse));
+    this.performance.bindMemorySource(() => this.memoryUsage());
     this.unsubscribe.push(
       viewer.camera.changed.addEventListener(() => this.checkProximity()),
       viewer.camera.moveEnd.addEventListener(() => this.checkProximity(true)),
@@ -370,13 +375,27 @@ export class SiteManager {
     );
   }
 
+  /** Memory held by the visible site tilesets against their configured cache budget. */
+  private memoryUsage(): { bytes: number; budget: number } {
+    const { cacheBytes, maximumCacheOverflowBytes } = tileCacheBudget();
+    let bytes = 0;
+    for (const handle of this.active?.handles.values() ?? []) {
+      if (handle.tileset?.show) bytes += handle.tileset.totalMemoryUsageInBytes;
+    }
+    return { bytes, budget: cacheBytes + maximumCacheOverflowBytes };
+  }
+
   private applyScreenSpaceError(sse: number): void {
     this.screenSpaceError = sse;
     for (const handle of this.active?.handles.values() ?? []) {
       if (!handle.tileset) continue;
       const configured = handle.asset.renderConfig.maximumScreenSpaceError;
-      // A per-asset value acts as a floor for quality (never coarser than configured).
-      handle.tileset.maximumScreenSpaceError = configured ? Math.min(configured, sse) : sse;
+      // A per-asset value acts as a floor for quality (never coarser than configured), while
+      // splats have a hard floor on refinement because of their per-frame CPU sort.
+      let next = configured ? Math.min(configured, sse) : sse;
+      if (handle.asset.representation === "gaussian-splat")
+        next = Math.max(next, SPLAT_MIN_SCREEN_SPACE_ERROR);
+      handle.tileset.maximumScreenSpaceError = next;
       this.events.emit("asset", {
         id: handle.asset.id,
         patch: { screenSpaceError: handle.tileset.maximumScreenSpaceError },

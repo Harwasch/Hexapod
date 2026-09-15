@@ -239,7 +239,8 @@ test.describe("mission control", () => {
     await expect(app.getByTestId("plan-detail")).toContainText("Remove all invasive star thistle");
     await expect(app.getByTestId("plan-show-on-map")).toBeVisible();
     await app.waitForTimeout(700);
-    await app.getByTestId("plan-show-on-map").click({ force: true });
+    // The window animates in; a positional click can land on the map mid-transition.
+    await app.getByTestId("plan-show-on-map").dispatchEvent("click");
     await expect(app.getByTestId("selection-card").last()).toContainText("Z-14 West bench", {
       timeout: 15_000,
     });

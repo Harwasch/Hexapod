@@ -48,6 +48,9 @@ export type FrameListener = (anchors: readonly OverlayAnchor[]) => void;
  */
 const DETAILED_HEIGHT_TIMEOUT_MS = 1500;
 const MAX_TILESET_TERRAIN_GAP_M = 60;
+/** Anchor heights refresh slowly while moving (terrain only) and rarely at rest (with a pick). */
+const MOVING_HEIGHT_TTL_MS = 1500;
+const RESTING_HEIGHT_TTL_MS = 4000;
 
 function isPlausibleHeight(height: number | undefined): height is number {
   return height !== undefined && Number.isFinite(height) && height > -500 && height < 9000;
@@ -272,13 +275,19 @@ export class MissionManager {
     return detailed;
   }
 
+  /**
+   * Cheap ground estimate for overlay anchors and flights. `globe.getHeight` is a CPU lookup
+   * into loaded terrain; `scene.sampleHeight` is a render pass, so it runs only when the camera
+   * is at rest and at most once per anchor per few seconds.
+   */
   private surfaceHeight(longitude: number, latitude: number, key: string): number {
     const now = performance.now();
     const cached = this.heightCache.get(key);
-    if (cached && now - cached.at < 1500) return cached.height;
+    const ttl = this.camera.isMoving ? MOVING_HEIGHT_TTL_MS : RESTING_HEIGHT_TTL_MS;
+    if (cached && now - cached.at < ttl) return cached.height;
     const carto = Cartographic.fromDegrees(longitude, latitude);
     let fromTileset: number | undefined;
-    if (this.scene.sampleHeightSupported) {
+    if (this.scene.sampleHeightSupported && !this.camera.isMoving) {
       try {
         fromTileset = this.scene.sampleHeight(carto, this.viewer.entities.values);
       } catch {

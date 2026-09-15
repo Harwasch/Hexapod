@@ -47,19 +47,34 @@ representations loaded but hidden (`preloadWhenHidden`) so switching is instant 
 camera never moves. Sites load automatically when the camera comes within ~40 km and unload
 beyond ~400 km. Point clouds get attenuation + eye-dome lighting.
 
-`PerformanceManager` samples frame time on `postRender` and every 500 ms decides a
-`maximumScreenSpaceError` within the active preset's bounds:
+The viewer runs in **request-render mode** (`requestRenderMode: true`,
+`maximumRenderTimeChange: ∞`): a frame is drawn only when the camera moves, tiles arrive, or a
+manager calls `scene.requestRender()` after mutating the scene. An idle view costs nothing on
+the GPU, and a Gaussian splat is not re-sorted every 16 ms while nobody is touching it.
 
-| Preset      | Base SSE | Adaptive range | Resolution                   |
-| ----------- | -------- | -------------- | ---------------------------- |
-| Performance | 24       | 12–48          | browser-recommended, no FXAA |
-| Balanced    | 16       | 6–32           | browser-recommended          |
-| Ultra       | 8        | 2–16           | native device pixel ratio    |
+`PerformanceManager` counts rendered frames on `postRender` and every 500 ms runs
+`decideScreenSpaceError` (pure, unit-tested) within the active preset's bounds:
 
-Rules: camera moving → coarser; sustained < 28 fps → coarser and, after 2 s below 22 fps,
-lower `resolutionScale` (min 0.66); stationary close-up above 52 fps → refine towards the
-minimum. A per-asset `maximumScreenSpaceError` acts as a quality floor. Manual SSE in
-Settings › Advanced disables adaptation.
+| Preset      | Base SSE | Adaptive range | Resolution                | MSAA |
+| ----------- | -------- | -------------- | ------------------------- | ---- |
+| Performance | 24       | 12–48          | browser-recommended       | off  |
+| Balanced    | 16       | 6–32           | browser-recommended       | 4×   |
+| Ultra       | 8        | 2–16           | native device pixel ratio | 4×   |
+
+Rules, highest priority first: tileset memory above 125 % of its cache budget → coarser;
+camera moving → coarser; fewer than 6 frames in the last second → **idle, no change**;
+< 28 fps → coarser; stationary close-up above 52 fps → refine towards the minimum.
+Sustained < 24 fps first turns MSAA off (FXAA on, globe SSE 3), then lowers
+`resolutionScale` in steps to 0.5; sustained > 50 fps walks both back. Gaussian splats never
+refine below SSE 12 whatever the preset: they are sorted on the CPU every camera change, so
+their cost grows with splat count far faster than a mesh. Tile cache budgets come from
+`navigator.deviceMemory` (256/384/512 MB + overflow). A per-asset `maximumScreenSpaceError`
+acts as a quality floor. Manual SSE in Settings › Advanced disables adaptation.
+
+Things that are deliberately _not_ done per frame: hover picking waits until the pointer has
+rested 120 ms and never runs while the camera moves (each `scene.pick` is a render pass);
+overlay anchors use `globe.getHeight` (a CPU lookup) while moving and call `sampleHeight`
+only at rest, once per anchor every few seconds; the camera pose is throttled to 10 Hz.
 
 ## Camera
 
@@ -72,8 +87,11 @@ clicked point instead.
 ## Explore mode
 
 `ExploreController` pauses `ScreenSpaceCameraController.enableInputs` and moves the same
-camera with WASD/QE (+Shift), drag-to-look and wheel-to-change-speed, keeping ≥0.3 m above
-the globe. Escape or the HUD exits. No second renderer or camera exists.
+camera with WASD/QE (+Shift), drag-to-look, wheel-to-move and Shift+wheel to change speed,
+keeping ≥0.3 m above the globe. Escape or the HUD exits. While it is on, ordinary
+drag-to-pan and scroll-to-zoom are intentionally off, which is why the HUD stays visible.
+Its tick runs on `scene.preUpdate` (raised every widget tick) rather than `preRender`, so it
+keeps working in request-render mode. No second renderer or camera exists.
 
 ## Picking and measuring
 
