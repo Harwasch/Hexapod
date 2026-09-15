@@ -32,6 +32,20 @@ const outDir = path.resolve(here, "..", "public", "samples", slug);
 const srcDir = path.join(outDir, "src");
 await mkdir(srcDir, { recursive: true });
 
+// 0. The catalog API must be running code that knows clampToGround (added Sep 2026); an API
+//    started before that change rejects the request with a 422 "Extra inputs are not permitted".
+const openapi = await json(`${api}/api/v1/openapi.json`).catch((error) => {
+  throw new Error(
+    `catalog API not reachable at ${api} (${error.message}); start it with pnpm dev:api`,
+  );
+});
+if (!JSON.stringify(openapi).includes("clampToGround")) {
+  throw new Error(
+    `the API at ${api} is running an older schema without renderConfig.clampToGround; ` +
+      "restart it (pnpm dev:api) so it picks up apps/api/app/schemas/asset.py, then re-run",
+  );
+}
+
 // 1. Manifest and metadata from the Poly Haven API (CC0 assets, attribution appreciated).
 const info = await json(`https://api.polyhaven.com/info/${slug}`);
 const files = await json(`https://api.polyhaven.com/files/${slug}`);
