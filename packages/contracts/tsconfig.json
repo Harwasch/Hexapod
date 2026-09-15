@@ -1,0 +1,4 @@
+{
+  "extends": "@twin/config/tsconfig.base.json",
+  "include": ["src"]
+}

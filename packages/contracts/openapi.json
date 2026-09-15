@@ -369,6 +369,7 @@
       },
       "AssetRead": {
         "additionalProperties": false,
+        "description": "Read model: every field is explicit (no defaults) so the OpenAPI contract marks it required.",
         "properties": {
           "attribution": {
             "items": {
@@ -393,7 +394,6 @@
             ]
           },
           "defaultVisible": {
-            "default": false,
             "title": "Defaultvisible",
             "type": "boolean"
           },
@@ -438,8 +438,6 @@
             ]
           },
           "name": {
-            "maxLength": 200,
-            "minLength": 1,
             "title": "Name",
             "type": "string"
           },
@@ -545,12 +543,23 @@
           }
         },
         "required": [
-          "name",
-          "representation",
-          "source",
           "id",
           "siteId",
           "provider",
+          "name",
+          "representation",
+          "source",
+          "footprint",
+          "observedAt",
+          "validFrom",
+          "validTo",
+          "resolution",
+          "crs",
+          "license",
+          "attribution",
+          "provenance",
+          "renderConfig",
+          "defaultVisible",
           "createdAt",
           "updatedAt"
         ],
@@ -861,15 +870,10 @@
             "type": "string"
           },
           "heading": {
-            "default": 0.0,
-            "description": "Degrees",
-            "maximum": 360.0,
-            "minimum": -360.0,
             "title": "Heading",
             "type": "number"
           },
           "height": {
-            "description": "Ellipsoidal height in metres",
             "title": "Height",
             "type": "number"
           },
@@ -879,41 +883,26 @@
             "type": "string"
           },
           "isDefault": {
-            "default": false,
             "title": "Isdefault",
             "type": "boolean"
           },
           "latitude": {
-            "maximum": 90.0,
-            "minimum": -90.0,
             "title": "Latitude",
             "type": "number"
           },
           "longitude": {
-            "maximum": 180.0,
-            "minimum": -180.0,
             "title": "Longitude",
             "type": "number"
           },
           "name": {
-            "maxLength": 200,
-            "minLength": 1,
             "title": "Name",
             "type": "string"
           },
           "pitch": {
-            "default": -30.0,
-            "description": "Degrees",
-            "maximum": 90.0,
-            "minimum": -90.0,
             "title": "Pitch",
             "type": "number"
           },
           "roll": {
-            "default": 0.0,
-            "description": "Degrees",
-            "maximum": 360.0,
-            "minimum": -360.0,
             "title": "Roll",
             "type": "number"
           },
@@ -924,12 +913,16 @@
           }
         },
         "required": [
+          "id",
+          "siteId",
           "name",
           "longitude",
           "latitude",
           "height",
-          "id",
-          "siteId",
+          "heading",
+          "pitch",
+          "roll",
+          "isDefault",
           "createdAt"
         ],
         "title": "CameraBookmarkRead",
@@ -1192,19 +1185,6 @@
           }
         },
         "title": "GooglePhotorealisticSource",
-        "type": "object"
-      },
-      "HTTPValidationError": {
-        "properties": {
-          "detail": {
-            "items": {
-              "$ref": "#/components/schemas/ValidationError"
-            },
-            "title": "Detail",
-            "type": "array"
-          }
-        },
-        "title": "HTTPValidationError",
         "type": "object"
       },
       "HealthStatus": {
@@ -1613,6 +1593,7 @@
       },
       "LayerRead": {
         "additionalProperties": false,
+        "description": "Read model: every field is explicit (no defaults) so the OpenAPI contract marks it required.",
         "properties": {
           "attribution": {
             "items": {
@@ -1631,7 +1612,6 @@
           "coverage": {
             "anyOf": [
               {
-                "maxLength": 120,
                 "type": "string"
               },
               {
@@ -1646,14 +1626,12 @@
             "type": "string"
           },
           "defaultVisible": {
-            "default": false,
             "title": "Defaultvisible",
             "type": "boolean"
           },
           "description": {
             "anyOf": [
               {
-                "maxLength": 5000,
                 "type": "string"
               },
               {
@@ -1688,8 +1666,6 @@
             ]
           },
           "name": {
-            "maxLength": 200,
-            "minLength": 1,
             "title": "Name",
             "type": "string"
           },
@@ -1721,7 +1697,6 @@
           "resolution": {
             "anyOf": [
               {
-                "maxLength": 120,
                 "type": "string"
               },
               {
@@ -1826,12 +1801,24 @@
           }
         },
         "required": [
-          "name",
-          "category",
-          "source",
           "id",
           "slug",
+          "name",
+          "description",
+          "category",
           "sourceType",
+          "source",
+          "spatialExtent",
+          "temporalExtent",
+          "observedAt",
+          "resolution",
+          "coverage",
+          "render",
+          "legend",
+          "attribution",
+          "license",
+          "provenance",
+          "defaultVisible",
           "builtin",
           "createdAt",
           "updatedAt"
@@ -2223,6 +2210,52 @@
         "title": "Polygon",
         "type": "object"
       },
+      "Problem": {
+        "additionalProperties": false,
+        "description": "RFC 9457-style error payload.",
+        "properties": {
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "errors": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Errors"
+          },
+          "status": {
+            "title": "Status",
+            "type": "integer"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "status"
+        ],
+        "title": "Problem",
+        "type": "object"
+      },
       "Provenance": {
         "additionalProperties": false,
         "description": "Where a dataset came from and when.",
@@ -2592,6 +2625,7 @@
       },
       "SiteRead": {
         "additionalProperties": false,
+        "description": "Read model: every field is explicit (no defaults) so the OpenAPI contract marks it required.",
         "properties": {
           "areaM2": {
             "title": "Aream2",
@@ -2647,7 +2681,6 @@
           "description": {
             "anyOf": [
               {
-                "maxLength": 5000,
                 "type": "string"
               },
               {
@@ -2677,8 +2710,6 @@
             "type": "object"
           },
           "name": {
-            "maxLength": 200,
-            "minLength": 1,
             "title": "Name",
             "type": "string"
           },
@@ -2707,12 +2738,17 @@
           }
         },
         "required": [
-          "name",
-          "boundary",
-          "centroid",
           "id",
           "slug",
+          "name",
+          "description",
+          "boundary",
+          "centroid",
           "areaM2",
+          "thumbnailUrl",
+          "metadata",
+          "attribution",
+          "license",
           "assets",
           "cameraBookmarks",
           "createdAt",
@@ -2780,7 +2816,7 @@
           },
           "representations": {
             "items": {
-              "type": "string"
+              "$ref": "#/components/schemas/Representation"
             },
             "title": "Representations",
             "type": "array"
@@ -3066,46 +3102,6 @@
         "title": "TilesUrlSource",
         "type": "object"
       },
-      "ValidationError": {
-        "properties": {
-          "ctx": {
-            "title": "Context",
-            "type": "object"
-          },
-          "input": {
-            "title": "Input"
-          },
-          "loc": {
-            "items": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "integer"
-                }
-              ]
-            },
-            "title": "Location",
-            "type": "array"
-          },
-          "msg": {
-            "title": "Message",
-            "type": "string"
-          },
-          "type": {
-            "title": "Error Type",
-            "type": "string"
-          }
-        },
-        "required": [
-          "loc",
-          "msg",
-          "type"
-        ],
-        "title": "ValidationError",
-        "type": "object"
-      },
       "WmsSource": {
         "additionalProperties": false,
         "properties": {
@@ -3314,15 +3310,35 @@
             },
             "description": "Successful Response"
           },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
           "422": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "Validation error"
           }
         },
         "summary": "List assets",
@@ -3353,15 +3369,35 @@
             },
             "description": "Successful Response"
           },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
           "422": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "Validation error"
           }
         },
         "summary": "Register an asset",
@@ -3389,15 +3425,35 @@
           "204": {
             "description": "Successful Response"
           },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
           "422": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "Validation error"
           }
         },
         "summary": "Delete an asset",
@@ -3430,15 +3486,35 @@
             },
             "description": "Successful Response"
           },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
           "422": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "Validation error"
           }
         },
         "summary": "Get an asset",
@@ -3481,15 +3557,35 @@
             },
             "description": "Successful Response"
           },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
           "422": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "Validation error"
           }
         },
         "summary": "Update an asset",
@@ -3511,6 +3607,36 @@
               }
             },
             "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
           }
         },
         "summary": "Health check",
@@ -3545,15 +3671,35 @@
             },
             "description": "Successful Response"
           },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
           "422": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "Validation error"
           }
         },
         "summary": "Read ion asset metadata / tiling status",
@@ -3575,6 +3721,36 @@
               }
             },
             "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
           }
         },
         "summary": "Cesium ion integration status",
@@ -3600,6 +3776,36 @@
               }
             },
             "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
           }
         },
         "summary": "List catalog layers",
@@ -3630,15 +3836,35 @@
             },
             "description": "Successful Response"
           },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
           "422": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "Validation error"
           }
         },
         "summary": "Add a layer",
@@ -3666,15 +3892,35 @@
           "204": {
             "description": "Successful Response"
           },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
           "422": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "Validation error"
           }
         },
         "summary": "Delete a layer",
@@ -3707,15 +3953,35 @@
             },
             "description": "Successful Response"
           },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
           "422": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "Validation error"
           }
         },
         "summary": "Get a layer",
@@ -3758,15 +4024,35 @@
             },
             "description": "Successful Response"
           },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
           "422": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "Validation error"
           }
         },
         "summary": "Update a layer",
@@ -3792,6 +4078,36 @@
               }
             },
             "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
           }
         },
         "summary": "List sites",
@@ -3822,15 +4138,35 @@
             },
             "description": "Successful Response"
           },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
           "422": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "Validation error"
           }
         },
         "summary": "Create a site",
@@ -3864,15 +4200,35 @@
             },
             "description": "Successful Response"
           },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
           "422": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "Validation error"
           }
         },
         "summary": "Get a site by slug",
@@ -3900,15 +4256,35 @@
           "204": {
             "description": "Successful Response"
           },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
           "422": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "Validation error"
           }
         },
         "summary": "Delete a site",
@@ -3941,15 +4317,35 @@
             },
             "description": "Successful Response"
           },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
           "422": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "Validation error"
           }
         },
         "summary": "Get a site",
@@ -3992,15 +4388,35 @@
             },
             "description": "Successful Response"
           },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
           "422": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "Validation error"
           }
         },
         "summary": "Update a site",
@@ -4039,15 +4455,35 @@
             },
             "description": "Successful Response"
           },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
           "422": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "Validation error"
           }
         },
         "summary": "List a site's assets",
@@ -4086,15 +4522,35 @@
             },
             "description": "Successful Response"
           },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
           "422": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "Validation error"
           }
         },
         "summary": "List camera bookmarks",
@@ -4137,15 +4593,35 @@
             },
             "description": "Successful Response"
           },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
           "422": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "Validation error"
           }
         },
         "summary": "Save a camera bookmark",
@@ -4183,15 +4659,35 @@
           "204": {
             "description": "Successful Response"
           },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
           "422": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "Validation error"
           }
         },
         "summary": "Delete a camera bookmark",
@@ -4236,15 +4732,35 @@
             },
             "description": "Successful Response"
           },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
           "422": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "Validation error"
           }
         },
         "summary": "Upload a site thumbnail",

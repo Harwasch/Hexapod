@@ -7,6 +7,7 @@ from typing import Any
 
 from pydantic import Field, HttpUrl, field_validator
 
+from app.models.enums import Representation
 from app.schemas.asset import AssetBase, AssetRead
 from app.schemas.base import CamelModel
 from app.schemas.bookmark import CameraBookmarkCreate, CameraBookmarkRead
@@ -66,18 +67,27 @@ class SiteSummary(CamelModel):
     centroid: GeoPosition
     area_m2: float
     thumbnail_url: HttpUrl | None
-    representations: list[str]
+    representations: list[Representation]
     latest_observed_at: datetime | None
     quality: SiteQuality | None
     created_at: datetime
     updated_at: datetime
 
 
-class SiteRead(SiteBase):
+class SiteRead(CamelModel):
+    """Read model: every field is explicit (no defaults) so the OpenAPI contract marks it required."""
+
     id: uuid.UUID
     slug: str
+    name: str
+    description: str | None
+    boundary: Footprint
     centroid: GeoPosition
     area_m2: float
+    thumbnail_url: HttpUrl | None
+    metadata: dict[str, Any]
+    attribution: list[Attribution]
+    license: LicenseMetadata | None
     assets: list[AssetRead]
     camera_bookmarks: list[CameraBookmarkRead]
     created_at: datetime

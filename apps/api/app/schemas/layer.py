@@ -212,10 +212,27 @@ class LayerUpdate(CamelModel):
     temporal_extent: TemporalExtent | None = None
 
 
-class LayerRead(LayerBase):
+class LayerRead(CamelModel):
+    """Read model: every field is explicit (no defaults) so the OpenAPI contract marks it required."""
+
     id: uuid.UUID
     slug: str
+    name: str
+    description: str | None
+    category: LayerCategory
     source_type: LayerSourceType
+    source: LayerSource
+    spatial_extent: BoundingBox | None
+    temporal_extent: TemporalExtent | None
+    observed_at: datetime | None
+    resolution: str | None
+    coverage: str | None
+    render: RenderMetadata
+    legend: LegendMetadata | None
+    attribution: list[Attribution]
+    license: LicenseMetadata | None
+    provenance: Provenance | None
+    default_visible: bool
     builtin: bool
     created_at: datetime
     updated_at: datetime

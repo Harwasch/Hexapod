@@ -95,9 +95,25 @@ class AssetUpdate(CamelModel):
     footprint: Footprint | None = None
 
 
-class AssetRead(AssetBase):
+class AssetRead(CamelModel):
+    """Read model: every field is explicit (no defaults) so the OpenAPI contract marks it required."""
+
     id: uuid.UUID
     site_id: uuid.UUID | None
     provider: AssetProvider
+    name: str
+    representation: Representation
+    source: AssetSource
+    footprint: Footprint | None
+    observed_at: datetime | None
+    valid_from: datetime | None
+    valid_to: datetime | None
+    resolution: ResolutionMetadata | None
+    crs: CrsMetadata | None
+    license: LicenseMetadata | None
+    attribution: list[Attribution]
+    provenance: Provenance | None
+    render_config: RenderConfig
+    default_visible: bool
     created_at: datetime
     updated_at: datetime

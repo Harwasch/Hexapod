@@ -1,0 +1,79 @@
+/**
+ * API contract for the digital twin.
+ *
+ * The OpenAPI document in ./openapi.json is exported from apps/api and the
+ * types in ./generated are produced from it with openapi-typescript. Never
+ * hand-edit the generated file; run `pnpm contracts:generate`.
+ */
+import type { components, paths } from "./generated/api";
+
+export type { components, paths };
+
+type Schemas = components["schemas"];
+
+export type Site = Schemas["SiteRead"];
+export type SiteSummary = Schemas["SiteSummary"];
+export type SiteCreate = Schemas["SiteCreate"];
+export type SiteUpdate = Schemas["SiteUpdate"];
+export type SiteQuality = Schemas["SiteQuality"];
+
+export type SiteAsset = Schemas["AssetRead"];
+export type AssetCreate = Schemas["AssetCreate"];
+export type AssetInput = Schemas["AssetBase"];
+export type AssetUpdate = Schemas["AssetUpdate"];
+export type AssetSource = SiteAsset["source"];
+export type CesiumIonSource = Schemas["CesiumIonSource"];
+export type TilesUrlSource = Schemas["TilesUrlSource"];
+export type RenderConfig = Schemas["RenderConfig"];
+export type ResolutionMetadata = Schemas["ResolutionMetadata"];
+
+export type Representation = Schemas["Representation"];
+export type AssetProvider = Schemas["AssetProvider"];
+
+export type Layer = Schemas["LayerRead"];
+export type LayerCreate = Schemas["LayerCreate"];
+export type LayerUpdate = Schemas["LayerUpdate"];
+export type LayerCategory = Schemas["LayerCategory"];
+export type LayerSourceType = Schemas["LayerSourceType"];
+export type LayerSource = Layer["source"];
+export type LayerRenderMetadata = Schemas["RenderMetadata"];
+export type LegendMetadata = Schemas["LegendMetadata"];
+
+export type CameraBookmark = Schemas["CameraBookmarkRead"];
+export type CameraBookmarkCreate = Schemas["CameraBookmarkCreate"];
+
+export type Attribution = Schemas["Attribution"];
+export type LicenseMetadata = Schemas["LicenseMetadata"];
+export type Provenance = Schemas["Provenance"];
+export type TemporalExtent = Schemas["TemporalExtent"];
+export type GeoPosition = Schemas["GeoPosition"];
+export type BoundingBox = Schemas["BoundingBox"];
+export type GeoJsonPolygon = Schemas["Polygon"];
+export type GeoJsonMultiPolygon = Schemas["MultiPolygon"];
+export type Footprint = GeoJsonPolygon | GeoJsonMultiPolygon;
+
+export type IonStatus = Schemas["IonStatus"];
+export type IonAssetMetadata = Schemas["IonAssetMetadata"];
+export type HealthStatus = Schemas["HealthStatus"];
+export type Problem = Schemas["Problem"];
+
+export const REPRESENTATIONS = [
+  "gaussian-splat",
+  "mesh",
+  "point-cloud",
+  "terrain",
+  "imagery",
+] as const satisfies readonly Representation[];
+
+export const LAYER_CATEGORIES = [
+  "reality",
+  "terrain",
+  "imagery",
+  "hydrology",
+  "land-cover",
+  "ecology",
+  "infrastructure",
+  "my-data",
+] as const satisfies readonly LayerCategory[];
+
+export const API_PREFIX = "/api/v1";

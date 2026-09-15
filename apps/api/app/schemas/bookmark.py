@@ -23,7 +23,15 @@ class CameraBookmarkCreate(CameraBookmarkBase):
     pass
 
 
-class CameraBookmarkRead(CameraBookmarkBase):
+class CameraBookmarkRead(CamelModel):
     id: uuid.UUID
     site_id: uuid.UUID
+    name: str
+    longitude: float
+    latitude: float
+    height: float
+    heading: float
+    pitch: float
+    roll: float
+    is_default: bool
     created_at: datetime

@@ -1,0 +1,24 @@
+{
+  "name": "@twin/contracts",
+  "version": "0.1.0",
+  "private": true,
+  "description": "API contract: OpenAPI document exported from apps/api and TypeScript types generated from it.",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./openapi.json": "./openapi.json"
+  },
+  "scripts": {
+    "generate": "openapi-typescript ./openapi.json -o ./src/generated/api.d.ts --alphabetize --root-types",
+    "check": "openapi-typescript ./openapi.json -o ./src/generated/api.check.d.ts --alphabetize --root-types && node ./scripts/check.mjs",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "echo 'contracts: no runtime tests'"
+  },
+  "devDependencies": {
+    "@twin/config": "workspace:*",
+    "openapi-typescript": "^7.13.0",
+    "typescript": "~6.0.3"
+  }
+}
