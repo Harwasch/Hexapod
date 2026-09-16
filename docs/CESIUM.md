@@ -90,8 +90,17 @@ on its own; finer tiles stay until memory pressure (125 % of budget) coarsens, s
 gesture starts from what is already loaded. Each SSE change calls `scene.requestRender()`;
 tile selection only runs inside a frame.
 
-Resolution and anti-aliasing are constant for still and moving frames alike, and adapt only
-on evidence, one ladder step at a time: a frame rate under 26 fps sustained for 1.2 s _while
+Resolution and anti-aliasing are constant during a gesture and adapt only on evidence, one
+ladder step at a time; once the camera has rested 500 ms the still frame is re-rendered at
+the preset's full resolution and anti-aliasing (nothing else renders at rest), and the next
+gesture starts by switching back, one framebuffer re-allocation. The device-pixel error
+handed to tilesets ignores the ladder's resolution scale, so that switch never changes which
+tiles are drawn. The ladder's tile floor is a motion measure: at rest the scene refines to
+the preset minimum regardless, and a gesture starts by coarsening to the floor. Every step
+is judged on the next 40 motion frames against the 40 before it: a step that did not make
+motion at least 15 % faster (a tile cut on a fill-bound machine, a resolution cut on a
+CPU-bound one) is reverted and that level is not tried again for 90 s, so a slow machine
+never ends up permanently coarse for nothing. The ladder: a frame rate under 26 fps sustained for 1.2 s _while
 moving_ drops MSAA, then resolution scale (0.8, 0.65, 0.5), and only then tile detail (+3
 SSE per step, never past the preset maximum). A step is undone only after 8 s of motion
 above 50 fps, applied while the camera rests (a resolution switch re-allocates the

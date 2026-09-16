@@ -40,6 +40,14 @@ const INITIAL_RECOVERY_MS = 8000;
 const MAX_RECOVERY_MS = 60_000;
 /** A recovery (resolution back up) only happens once the camera has rested this long. */
 const REST_BEFORE_RECOVERY_MS = 1500;
+/** Once the camera has rested this long, the still frame is re-rendered at full quality. */
+const REST_SHARPEN_MS = 500;
+/** A ladder step is judged on this many motion frames before and after it. */
+const STEP_JUDGE_FRAMES = 40;
+/** A step that did not raise the motion frame rate by this factor is reverted. */
+const STEP_MIN_GAIN = 1.15;
+/** After an ineffective step, that level is not tried again for this long. */
+const STEP_BLOCK_MS = 90_000;
 /** Idle refinement only proceeds while tileset memory is below this share of its budget. */
 const REFINE_MEMORY_RATIO = 0.7;
 /** Extra screen-space error per ladder step once resolution cuts are exhausted. */
@@ -161,6 +169,13 @@ export class PerformanceManager {
   private goodMotionMs = 0;
   private recoveryMs = INITIAL_RECOVERY_MS;
   private restSince = 0;
+  /** True while the still frame is rendered at full quality rather than the ladder's step. */
+  private sharpened = false;
+  /** Motion frame intervals since the last ladder step, to judge whether the step helped. */
+  private readonly judgeFrameMs: number[] = [];
+  private judgeBaselineMs: number | null = null;
+  private blockedAboveLevel: number | null = null;
+  private blockedUntil = 0;
   private moving = false;
   private movingUntil = 0;
   private altitude = Number.POSITIVE_INFINITY;
@@ -188,6 +203,8 @@ export class PerformanceManager {
       // always runs with whatever the ladder settled on.
       viewer.camera.changed.addEventListener(() => {
         this.moving = true;
+        // The still frame may have been sharpened; the gesture runs at the ladder's step.
+        if (this.sharpened) this.applyLevel();
       }),
       viewer.camera.moveEnd.addEventListener(() => {
         if (!this.moving) return;
@@ -215,10 +232,13 @@ export class PerformanceManager {
     apply(this.groups[group].sse, this.pixelRatio);
   }
 
-  /** Resolution scale times the device pixel ratio when rendering at native resolution. */
+  /**
+   * The device pixel ratio the preset renders at. Deliberately not multiplied by the
+   * ladder's resolution scale: a resolution cut saves fill and must not change which tiles
+   * are drawn, or every gesture start on a slow machine would pop tiles.
+   */
   get pixelRatio(): number {
-    const dpr = this.viewer.useBrowserRecommendedResolution ? 1 : window.devicePixelRatio || 1;
-    return Math.max(0.25, this.resolutionScale * dpr);
+    return this.viewer.useBrowserRecommendedResolution ? 1 : window.devicePixelRatio || 1;
   }
 
   private applySse(group: TilesetGroup): void {
@@ -314,10 +334,24 @@ export class PerformanceManager {
 
   private applyLevel(): void {
     const step = this.step;
+    this.sharpened = false;
     this.setResolutionScale(step.scale);
     this.setMsaa(step.msaa);
-    // A resolution step changes the pixel ratio, and with it the device-pixel error.
-    for (const group of GROUPS) this.applySse(group);
+    this.scene.requestRender();
+  }
+
+  /**
+   * At rest nothing renders until something changes, so the still frame can afford the
+   * preset's full resolution and anti-aliasing whatever the ladder says; the switch back
+   * happens on the first frame of the next gesture, one framebuffer re-allocation.
+   */
+  private sharpenAtRest(): void {
+    if (this.sharpened || this.level === 0) return;
+    const full = this.ladder[0];
+    if (!full) return;
+    this.sharpened = true;
+    this.setResolutionScale(full.scale);
+    this.setMsaa(full.msaa);
     this.scene.requestRender();
   }
 
@@ -353,6 +387,8 @@ export class PerformanceManager {
             this.slowMotionMs = Math.max(0, this.slowMotionMs - dt);
             if (dt < 1000 / STEADY_FPS) this.goodMotionMs += dt;
           }
+          this.judgeFrameMs.push(dt);
+          if (this.judgeFrameMs.length > STEP_JUDGE_FRAMES) this.judgeFrameMs.shift();
         }
       }
       this.lastMotionFrameAt = now;
@@ -398,7 +434,31 @@ export class PerformanceManager {
    * motion, applied at rest. Returns a reason when a step was taken.
    */
   private climbLadder(now: number, moving: boolean): string | null {
-    if (this.slowMotionMs >= SUSTAINED_LOW_MS && this.level < this.ladder.length - 1) {
+    // Judge the last step once enough motion frames have been seen since it: a cut that
+    // did not make motion faster costs quality for nothing (a tile cut on a fill-bound
+    // machine, a resolution cut on a CPU-bound one) and is taken back.
+    if (this.judgeBaselineMs !== null && this.judgeFrameMs.length >= STEP_JUDGE_FRAMES) {
+      const after = this.judgeFrameMs.reduce((a, b) => a + b, 0) / this.judgeFrameMs.length;
+      const gain = this.judgeBaselineMs / after;
+      this.judgeBaselineMs = null;
+      if (gain < STEP_MIN_GAIN && this.level > 0) {
+        this.blockedAboveLevel = this.level - 1;
+        this.blockedUntil = now + STEP_BLOCK_MS;
+        this.level -= 1;
+        this.slowMotionMs = 0;
+        this.applyLevel();
+        return `${this.ladder[this.level + 1]?.label ?? "step"} did not help → back to ${this.step.label}`;
+      }
+    }
+    const blocked =
+      this.blockedAboveLevel !== null &&
+      now < this.blockedUntil &&
+      this.level >= this.blockedAboveLevel;
+    if (this.slowMotionMs >= SUSTAINED_LOW_MS && this.level < this.ladder.length - 1 && !blocked) {
+      const frames = this.judgeFrameMs;
+      this.judgeBaselineMs =
+        frames.length >= 10 ? frames.reduce((a, b) => a + b, 0) / frames.length : null;
+      this.judgeFrameMs.length = 0;
       this.level += 1;
       this.slowMotionMs = 0;
       this.goodMotionMs = 0;
@@ -413,10 +473,12 @@ export class PerformanceManager {
     ) {
       this.level -= 1;
       this.goodMotionMs = 0;
+      this.judgeBaselineMs = null;
       this.recoveryMs = Math.min(MAX_RECOVERY_MS, this.recoveryMs * 2);
       this.applyLevel();
       return `smooth motion → ${this.step.label}`;
     }
+    if (!moving && now - this.restSince >= REST_SHARPEN_MS) this.sharpenAtRest();
     return null;
   }
 
@@ -428,7 +490,10 @@ export class PerformanceManager {
     const memory = this.memoryBytes;
     const adaptive = this.inputs.adaptive && this.inputs.manualScreenSpaceError === null;
     const stepReason = adaptive ? this.climbLadder(now, moving) : null;
-    const penalty = this.step.ssePenalty;
+    // The ladder's tile penalty is a motion measure: nothing renders at rest, so the still
+    // frame refines to the preset minimum whatever the ladder says, and a gesture starts by
+    // coarsening to the floor (a step that does not help motion is reverted above).
+    const penalty = moving ? this.step.ssePenalty : 0;
     const bounds = {
       base: Math.min(preset.max, preset.base + penalty),
       min: Math.min(preset.max, preset.min + penalty),
