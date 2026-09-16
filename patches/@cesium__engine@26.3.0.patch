@@ -1,0 +1,18 @@
+diff --git a/Source/Scene/TerrainFillMesh.js b/Source/Scene/TerrainFillMesh.js
+index c5d264395fc522ecc29717e57ff159aa4ed3cfd1..f7b22ea41aac67be450cf0e49db7d5195f64d2a4 100644
+--- a/Source/Scene/TerrainFillMesh.js
++++ b/Source/Scene/TerrainFillMesh.js
+@@ -529,6 +529,13 @@ function propagateEdge(
+     sourceMesh = sourceTile.data.mesh;
+   }
+ 
++  // A rendered tile that inverse clipping polygons cull entirely gets neither a mesh nor a
++  // fill (addDrawCommandsForTile returns before creating one); it cannot lend an edge, and
++  // an undefined mesh in a neighbour's edge list crashes createFillMesh.
++  if (!defined(sourceMesh)) {
++    return;
++  }
++
+   let edgeMeshes;
+   let edgeTiles;
+ 

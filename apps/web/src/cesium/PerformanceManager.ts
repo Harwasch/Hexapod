@@ -15,13 +15,10 @@ export interface QualityInputs {
 export interface QualitySample {
   bounds: { base: number; min: number; max: number };
   current: number;
-  /** Rendered frames per second, or null when the scene is idle (request-render mode). */
-  fps: number | null;
   moving: boolean;
+  /** Any tileset (sites or the world) still has requests pending or tiles processing. */
   loading: boolean;
-  nearSite: boolean;
-  altitude: number;
-  /** Tileset memory in use divided by its cache budget. */
+  /** Highest tileset memory in use divided by its cache budget, over all tilesets. */
   memoryRatio: number;
 }
 
@@ -43,8 +40,8 @@ const INITIAL_RECOVERY_MS = 8000;
 const MAX_RECOVERY_MS = 60_000;
 /** A recovery (resolution back up) only happens once the camera has rested this long. */
 const REST_BEFORE_RECOVERY_MS = 1500;
-/** Below this height above ground a resting camera refines towards the preset minimum. */
-const CLOSE_UP_ALTITUDE_M = 600;
+/** Idle refinement only proceeds while tileset memory is below this share of its budget. */
+const REFINE_MEMORY_RATIO = 0.7;
 /** Extra screen-space error per ladder step once resolution cuts are exhausted. */
 const SSE_PENALTY_STEP = 3;
 
@@ -52,36 +49,31 @@ const SSE_PENALTY_STEP = 3;
  * Chooses the next maximum screen-space error. Pure so the policy is unit-testable.
  *
  * Smoothness first: while the camera moves the tile selection is frozen, because every change
- * pops tiles mid-gesture. At rest, only memory pressure coarsens (slow frames at rest are
- * tiles arriving, not a stall) and the value walks back to the preset base, which the
- * manager shifts upwards once its ladder has run out of resolution to cut. Refinement happens
- * at rest, close to a site, one step per tick, so the still image sharpens without ever
- * fighting a gesture.
+ * pops tiles mid-gesture. At rest, memory pressure coarsens (the only thing that ever does,
+ * apart from the manager's ladder shifting the bounds), loading holds, and otherwise the
+ * scene uses the idle time the way a maps app does: one step finer per tick, at any height,
+ * as long as there is memory headroom. Slow frames at rest are tiles arriving, never a
+ * reason to coarsen. Nothing returns to the base on its own: finer tiles stay until memory
+ * says otherwise, so the next gesture starts from what is already loaded.
  */
 export function decideScreenSpaceError(sample: QualitySample): QualityDecision {
-  const { bounds, current, fps, moving, loading } = sample;
-  if (sample.memoryRatio > MEMORY_PRESSURE_RATIO) {
+  const { bounds, current, moving, loading, memoryRatio } = sample;
+  if (memoryRatio > MEMORY_PRESSURE_RATIO) {
     return {
       screenSpaceError: Math.min(bounds.max, current + 4),
-      reason: `memory pressure (${Math.round(sample.memoryRatio * 100)}% of budget)`,
+      reason: `memory pressure (${Math.round(memoryRatio * 100)}% of budget)`,
     };
   }
   if (moving) return { screenSpaceError: current, reason: "moving (tiles held)" };
-  const closeUp = sample.nearSite && sample.altitude < CLOSE_UP_ALTITUDE_M;
-  if (!loading && closeUp && (fps === null || fps > STEADY_FPS + 2)) {
+  if (loading) return { screenSpaceError: current, reason: "loading" };
+  if (memoryRatio >= REFINE_MEMORY_RATIO)
     return {
-      screenSpaceError: Math.min(bounds.max, Math.max(bounds.min, current - 2)),
-      reason: "close-up refinement",
+      screenSpaceError: current,
+      reason: `holding (${Math.round(memoryRatio * 100)}% of memory budget)`,
     };
-  }
-  if (fps === null) {
-    return {
-      screenSpaceError: loading ? current : bounds.base,
-      reason: loading ? "loading" : "idle",
-    };
-  }
-  if (!loading && fps > STEADY_FPS) return { screenSpaceError: bounds.base, reason: "steady" };
-  return { screenSpaceError: current, reason: loading ? "loading" : "steady" };
+  const target = Math.min(bounds.max, Math.max(bounds.min, current - 2));
+  if (target === current) return { screenSpaceError: current, reason: "at finest" };
+  return { screenSpaceError: target, reason: "idle refinement" };
 }
 
 /**
@@ -142,7 +134,8 @@ export class PerformanceManager {
   private readonly timer: ReturnType<typeof setInterval>;
   private readonly unsubscribe: (() => void)[] = [];
   private readonly sinks: ScreenSpaceErrorSink[] = [];
-  private memorySource: () => { bytes: number; budget: number } = () => ({ bytes: 0, budget: 1 });
+  private readonly memorySources: (() => { bytes: number; budget: number })[] = [];
+  private readonly loadingBySource = new Map<string, { pending: number; processing: number }>();
   private readonly gpu: string | null;
   private readonly webgl2: boolean;
   /** Frame intervals recorded while the camera moved, since the last reset (site change). */
@@ -203,9 +196,30 @@ export class PerformanceManager {
     for (const sink of this.sinks) sink(sse, ratio);
   }
 
-  /** Lets the SiteManager report how much memory the active tilesets hold versus their budget. */
-  bindMemorySource(source: () => { bytes: number; budget: number }): void {
-    this.memorySource = source;
+  /** Registers a tileset group's memory use against its cache budget (sites, the world). */
+  addMemorySource(source: () => { bytes: number; budget: number }): void {
+    this.memorySources.push(source);
+  }
+
+  /** The most loaded group's share of its budget; each tileset has its own cache. */
+  private get memoryRatio(): number {
+    let ratio = 0;
+    for (const source of this.memorySources) {
+      const { bytes, budget } = source();
+      if (budget > 0) ratio = Math.max(ratio, bytes / budget);
+    }
+    return ratio;
+  }
+
+  private get memoryBytes(): { bytes: number; budget: number } {
+    let bytes = 0;
+    let budget = 0;
+    for (const source of this.memorySources) {
+      const m = source();
+      bytes += m.bytes;
+      budget += m.budget;
+    }
+    return { bytes, budget };
   }
 
   configure(inputs: QualityInputs): void {
@@ -227,9 +241,17 @@ export class PerformanceManager {
     this.evaluate("configured");
   }
 
-  reportLoading(pending: number, processing: number): void {
-    this.pending = pending;
-    this.processing = processing;
+  /** Loading state per tileset group (sites, the world); the decision waits for all of them. */
+  reportLoading(source: string, pending: number, processing: number): void {
+    this.loadingBySource.set(source, { pending, processing });
+    let p = 0;
+    let q = 0;
+    for (const entry of this.loadingBySource.values()) {
+      p += entry.pending;
+      q += entry.processing;
+    }
+    this.pending = p;
+    this.processing = q;
   }
 
   reportContext(altitude: number, nearSite: boolean): void {
@@ -376,8 +398,8 @@ export class PerformanceManager {
     const moving = this.moving || now < this.movingUntil;
     const loading = this.pending > 0 || this.processing > 0;
     const preset = QUALITY_SSE[this.inputs.preset];
-    const memory = this.memorySource();
-    const memoryRatio = memory.budget > 0 ? memory.bytes / memory.budget : 0;
+    const memory = this.memoryBytes;
+    const memoryRatio = this.memoryRatio;
     let target = this.inputs.manualScreenSpaceError ?? preset.base;
     let reason: string;
 
@@ -392,11 +414,8 @@ export class PerformanceManager {
       const decision = decideScreenSpaceError({
         bounds,
         current: this.currentSse,
-        fps,
         moving,
         loading,
-        nearSite: this.nearSite,
-        altitude: this.altitude,
         memoryRatio,
       });
       target = decision.screenSpaceError;

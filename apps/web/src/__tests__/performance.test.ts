@@ -11,68 +11,56 @@ import { QUALITY_SSE } from "@/state/settings";
 const base: QualitySample = {
   bounds: QUALITY_SSE.balanced,
   current: 16,
-  fps: 60,
   moving: false,
   loading: false,
-  nearSite: true,
-  altitude: 120,
   memoryRatio: 0.4,
 };
 
 describe("decideScreenSpaceError", () => {
-  it("returns to the preset base when idle far from a site", () => {
-    const d = decideScreenSpaceError({ ...base, fps: null, current: 24, altitude: 5000 });
-    expect(d).toEqual({ screenSpaceError: 16, reason: "idle" });
-  });
-
-  it("refines step by step when idle close to a site, and holds while loading", () => {
-    expect(decideScreenSpaceError({ ...base, fps: null, current: 24 }).screenSpaceError).toBe(22);
-    expect(decideScreenSpaceError({ ...base, fps: null, current: 7 }).screenSpaceError).toBe(6);
-    expect(
-      decideScreenSpaceError({ ...base, fps: null, current: 24, loading: true }).screenSpaceError,
-    ).toBe(24);
-  });
-
-  it("holds the tile selection while moving, whatever the frame rate", () => {
-    expect(decideScreenSpaceError({ ...base, moving: true, fps: 20 })).toEqual({
-      screenSpaceError: 16,
-      reason: "moving (tiles held)",
+  it("refines one step per tick at rest, at any height, down to the preset minimum", () => {
+    expect(decideScreenSpaceError(base)).toEqual({
+      screenSpaceError: 14,
+      reason: "idle refinement",
     });
-    expect(decideScreenSpaceError({ ...base, moving: true, fps: 60, current: 6 })).toEqual({
+    expect(decideScreenSpaceError({ ...base, current: 7 }).screenSpaceError).toBe(6);
+    expect(decideScreenSpaceError({ ...base, current: 6 })).toEqual({
+      screenSpaceError: 6,
+      reason: "at finest",
+    });
+  });
+
+  it("holds while tiles are loading and while memory headroom is gone", () => {
+    expect(decideScreenSpaceError({ ...base, loading: true })).toEqual({
+      screenSpaceError: 16,
+      reason: "loading",
+    });
+    expect(decideScreenSpaceError({ ...base, memoryRatio: 0.9 }).screenSpaceError).toBe(16);
+    expect(decideScreenSpaceError({ ...base, memoryRatio: 0.9 }).reason).toMatch(/holding/);
+  });
+
+  it("holds the tile selection while moving, however fine it got", () => {
+    expect(decideScreenSpaceError({ ...base, moving: true, current: 6 })).toEqual({
       screenSpaceError: 6,
       reason: "moving (tiles held)",
     });
   });
 
-  it("never backs off on slow frames at rest (those are tiles arriving)", () => {
-    expect(decideScreenSpaceError({ ...base, fps: 20, altitude: 5000 }).screenSpaceError).toBe(16);
-    expect(decideScreenSpaceError({ ...base, fps: 20, altitude: 5000, current: 31 })).toEqual({
-      screenSpaceError: 31,
-      reason: "steady",
-    });
-  });
-
-  it("follows bounds shifted by a ladder penalty at rest", () => {
-    const bounds = { base: 22, min: 12, max: 32 };
-    expect(decideScreenSpaceError({ ...base, bounds, fps: null, altitude: 5000 })).toEqual({
-      screenSpaceError: 22,
-      reason: "idle",
-    });
+  it("never returns to the base on its own: only memory pressure coarsens", () => {
     expect(
-      decideScreenSpaceError({ ...base, bounds, fps: null, current: 13 }).screenSpaceError,
-    ).toBe(12);
-  });
-
-  it("memory pressure wins over a good frame rate", () => {
-    const d = decideScreenSpaceError({ ...base, fps: 60, memoryRatio: 1.5 });
-    expect(d.screenSpaceError).toBe(20);
+      decideScreenSpaceError({ ...base, current: 8, memoryRatio: 0.75 }).screenSpaceError,
+    ).toBe(8);
+    const d = decideScreenSpaceError({ ...base, current: 8, memoryRatio: 1.5 });
+    expect(d.screenSpaceError).toBe(12);
     expect(d.reason).toMatch(/memory pressure/);
+    expect(
+      decideScreenSpaceError({ ...base, current: 31, memoryRatio: 1.5 }).screenSpaceError,
+    ).toBe(32);
   });
 
-  it("refines only close to a site with measured headroom", () => {
-    expect(decideScreenSpaceError({ ...base, fps: 58 }).screenSpaceError).toBe(14);
-    expect(decideScreenSpaceError({ ...base, fps: 58, altitude: 900 }).screenSpaceError).toBe(16);
-    expect(decideScreenSpaceError({ ...base, fps: 58, loading: true }).screenSpaceError).toBe(16);
+  it("follows bounds shifted by a ladder penalty", () => {
+    const bounds = { base: 22, min: 12, max: 32 };
+    expect(decideScreenSpaceError({ ...base, bounds, current: 13 }).screenSpaceError).toBe(12);
+    expect(decideScreenSpaceError({ ...base, bounds, current: 12 }).reason).toBe("at finest");
   });
 });
 

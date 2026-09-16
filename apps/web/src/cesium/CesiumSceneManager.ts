@@ -74,6 +74,9 @@ export class CesiumSceneManager {
       // Render only when something changed (camera, tiles, entities, explicit requests).
       // Every manager calls scene.requestRender() after it mutates the scene.
       requestRenderMode: true,
+      // Render errors are logged, toasted and recovered from here; Cesium's own panel would
+      // stop the app dead on an engine hiccup.
+      showRenderLoopErrors: false,
       maximumRenderTimeChange: Number.POSITIVE_INFINITY,
       msaaSamples: 4,
       contextOptions: { webgl: { powerPreference: "high-performance", antialias: true } },
@@ -98,6 +101,7 @@ export class CesiumSceneManager {
     this.performance.addScreenSpaceErrorSink((sse, pixelRatio) =>
       this.layers.applyWorldScreenSpaceError(sse, pixelRatio),
     );
+    this.layers.bindPerformance(this.performance);
     this.sites = new SiteManager(
       this.viewer,
       this.events,

@@ -19,6 +19,7 @@ import { createLogger, describeError } from "@/lib/log";
 import { timed } from "@/lib/timing";
 
 import type { ClippingManager } from "./ClippingManager";
+import type { PerformanceManager } from "./PerformanceManager";
 import { isIonAuthError } from "./ion";
 import {
   createImageryProvider,
@@ -27,13 +28,15 @@ import {
 } from "./providers/imagery";
 import { resolveStacLayer } from "./providers/stac";
 import { createTerrain, isTerrainSource } from "./providers/terrain";
-import { createLayerTileset, is3DSource } from "./providers/tiles";
+import { createLayerTileset, is3DSource, tileCacheBudget } from "./providers/tiles";
 import { createDataSource, isVectorSource } from "./providers/vector";
 import type { SceneEvents } from "./types";
 
 const log = createLogger("layers");
 /** The world mesh renders at half the sites' screen-space error (8 CSS px on balanced). */
 const WORLD_SSE_FRACTION = 0.5;
+/** Idle refinement never asks the world mesh for finer than this many device pixels of error. */
+const WORLD_MIN_DEVICE_PX = 2;
 
 type Handle =
   | { kind: "imagery"; layer: ImageryLayer }
@@ -63,6 +66,21 @@ export class LayerManager {
   private worldTilesetId: string | null = null;
   private worldSse = 16;
   private worldPixelRatio = 1;
+  private performance: PerformanceManager | null = null;
+
+  /** Lets the world tileset report its loading and memory to the adaptive quality policy. */
+  bindPerformance(performance: PerformanceManager): void {
+    this.performance = performance;
+    performance.addMemorySource(() => {
+      const tileset = this.worldTileset;
+      if (!tileset) return { bytes: 0, budget: 1 };
+      const { cacheBytes, maximumCacheOverflowBytes } = tileCacheBudget();
+      return {
+        bytes: tileset.totalMemoryUsageInBytes,
+        budget: cacheBytes + maximumCacheOverflowBytes,
+      };
+    });
+  }
   private splitLeft: string | null = null;
   private splitRight: string | null = null;
   private generation = 0;
@@ -211,7 +229,10 @@ export class LayerManager {
     this.worldPixelRatio = pixelRatio;
     const tileset = this.worldTileset;
     if (!tileset) return;
-    const next = Math.round(((siteSse * WORLD_SSE_FRACTION) / pixelRatio) * 4) / 4;
+    const next = Math.max(
+      WORLD_MIN_DEVICE_PX,
+      Math.round(((siteSse * WORLD_SSE_FRACTION) / pixelRatio) * 4) / 4,
+    );
     if (tileset.maximumScreenSpaceError === next) return;
     tileset.maximumScreenSpaceError = next;
     this.scene.requestRender();
@@ -333,6 +354,10 @@ export class LayerManager {
         this.worldTilesetId = layer.id;
         this.clipping.setWorldTileset(created);
         this.applyWorldScreenSpaceError(this.worldSse, this.worldPixelRatio);
+        // The idle refinement waits for the world's tiles too, and its memory counts.
+        created.loadProgress.addEventListener((pending: number, processing: number) =>
+          this.performance?.reportLoading("world", pending, processing),
+        );
       }
       return { kind: "tileset", tileset: created };
     }

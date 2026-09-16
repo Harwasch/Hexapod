@@ -112,7 +112,7 @@ export class SiteManager {
     this.performance.addScreenSpaceErrorSink((sse, pixelRatio) =>
       this.applyScreenSpaceError(sse, pixelRatio),
     );
-    this.performance.bindMemorySource(() => this.memoryUsage());
+    this.performance.addMemorySource(() => this.memoryUsage());
     this.unsubscribe.push(
       viewer.camera.changed.addEventListener(() => this.checkProximity()),
       viewer.camera.moveEnd.addEventListener(() => this.checkProximity(true)),
@@ -471,7 +471,7 @@ export class SiteManager {
     });
     handle.unsubscribe.push(
       tileset.loadProgress.addEventListener((pending: number, processing: number) => {
-        this.performance.reportLoading(pending, processing);
+        this.performance.reportLoading("sites", pending, processing);
         this.events.emit("asset", {
           id: asset.id,
           patch: {

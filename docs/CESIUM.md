@@ -80,12 +80,13 @@ the GPU, and a Gaussian splat is not re-sorted every 16 ms while nobody is touch
 Smoothness comes first, the way a maps app does it: nothing about the render settings
 changes during a gesture. Tile selection is frozen while the camera moves (every change of
 `maximumScreenSpaceError` pops tiles mid-drag), and slow frames at rest never coarsen
-anything (they are tiles arriving, not a stall). Rules, highest priority first: tileset
-memory above 125 % of its cache budget → coarser; moving → hold; at rest within 600 m of a
-site (idle, or measured > 52 fps) → refine one step per tick towards the minimum; idle
-elsewhere → back to the preset base. Idle is "fewer than 6 frames in the last second",
-which in request-render mode means nobody is touching the view. Each SSE change calls
-`scene.requestRender()`; tile selection only runs inside a frame.
+anything (they are tiles arriving, not a stall). At rest the scene uses the idle time the
+way Google Maps does: once nothing is loading (sites and the world both report through
+`reportLoading`) and tileset memory is under 70 % of its budget, the error walks one step
+finer per 500 ms tick, at any height, down to the preset minimum. Nothing returns to the base
+on its own; finer tiles stay until memory pressure (125 % of budget) coarsens, so the next
+gesture starts from what is already loaded. Each SSE change calls `scene.requestRender()`;
+tile selection only runs inside a frame.
 
 Resolution and anti-aliasing are constant for still and moving frames alike, and adapt only
 on evidence, one ladder step at a time: a frame rate under 26 fps sustained for 1.2 s _while
@@ -191,6 +192,17 @@ stays loaded but hidden and no clip is applied, so from 20 km up the world is se
 instead of showing a 5 km patch of a differently lit capture with a hard edge. Clamped objects (the sample rock and plant) rest on the drawn surface
 (`scene.sampleHeightMostDetailed`, excluding themselves) when it is within 60 m of the
 terrain, so they sit on Google's ground rather than floating over or sinking into it.
+
+## Patched engine
+
+`patches/@cesium__engine@26.3.0.patch` (applied by pnpm on install) guards
+`TerrainFillMesh.propagateEdge` against a neighbour without a mesh. With inverse clipping
+polygons on the globe (the photorealistic world keeps terrain only inside site footprints),
+Cesium skips a clipped-away tile before creating its fill mesh, and a neighbour's fill then
+reads `undefined.westIndicesSouthToNorth` and stops rendering. The guard drops that edge;
+the fill falls back to the tile's height range. Cesium's own error panel is off
+(`showRenderLoopErrors: false`); render errors are logged, toasted and recovered from up to
+five times.
 
 ## API changes noted while building
 
