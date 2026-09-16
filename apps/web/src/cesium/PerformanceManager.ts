@@ -48,6 +48,9 @@ const STEP_JUDGE_FRAMES = 40;
 const STEP_MIN_GAIN = 1.15;
 /** After an ineffective step, that level is not tried again for this long. */
 const STEP_BLOCK_MS = 90_000;
+/** Per-frame main-thread budgets for texture, program and buffer uploads, moving and at rest. */
+const MOVING_UPLOAD_BUDGETS_MS: [number, number, number] = [3, 4, 6];
+const REST_UPLOAD_BUDGETS_MS: [number, number, number] = [12, 10, 30];
 /** Idle refinement only proceeds while tileset memory is below this share of its budget. */
 const REFINE_MEMORY_RATIO = 0.7;
 /** Extra screen-space error per ladder step once resolution cuts are exhausted. */
@@ -97,6 +100,17 @@ export function splatMinimumScreenSpaceError(preset: QualityPreset): number {
 
 /** "full" renders the preset as configured; "reduced" means the ladder has cut something. */
 export type RenderProfile = "full" | "reduced";
+
+/** Median main-thread cost of a moving frame, steady frames apart from tile-loading frames. */
+export interface FrameBudget {
+  updateMs: number | null;
+  renderMs: number | null;
+  commands: number | null;
+  /** Update phase while tiles were being processed: decode and upload work, not steady cost. */
+  loadingUpdateMs: number | null;
+  loadingFrames: number;
+  steadyFrames: number;
+}
 
 /** Receives the screen-space error in CSS pixels and the pixel ratio the scene renders at. */
 export type ScreenSpaceErrorSink = (sse: number, pixelRatio: number) => void;
@@ -171,6 +185,17 @@ export class PerformanceManager {
   private restSince = 0;
   /** True while the still frame is rendered at full quality rather than the ladder's step. */
   private sharpened = false;
+  /** Main-thread time of the last frame's two phases: scene update (tileset and globe
+   *  traversal, JavaScript) and render (command execution and GL submission). */
+  private phaseStart = 0;
+  private updateMs = 0;
+  private renderMs = 0;
+  private readonly motionUpdateMs: number[] = [];
+  private readonly motionRenderMs: number[] = [];
+  private readonly motionCommands: number[] = [];
+  private readonly loadingUpdateMs: number[] = [];
+  private readonly loadingRenderMs: number[] = [];
+  private readonly loadingCommands: number[] = [];
   /** Motion frame intervals since the last ladder step, to judge whether the step helped. */
   private readonly judgeFrameMs: number[] = [];
   private judgeBaselineMs: number | null = null;
@@ -197,11 +222,24 @@ export class PerformanceManager {
     this.gpu = info.renderer;
     this.webgl2 = info.webgl2;
     this.unsubscribe.push(
-      this.scene.postRender.addEventListener(() => this.onFrame()),
+      this.scene.preUpdate.addEventListener(() => {
+        this.phaseStart = performance.now();
+      }),
+      this.scene.postUpdate.addEventListener(() => {
+        this.updateMs = performance.now() - this.phaseStart;
+      }),
+      this.scene.preRender.addEventListener(() => {
+        this.phaseStart = performance.now();
+      }),
+      this.scene.postRender.addEventListener(() => {
+        this.renderMs = performance.now() - this.phaseStart;
+        this.onFrame();
+      }),
       // Motion is tracked from real pose changes only (moveStart also fires on frustum and
       // canvas size changes). Nothing about the render settings changes here: a gesture
       // always runs with whatever the ladder settled on.
       viewer.camera.changed.addEventListener(() => {
+        if (!this.moving) this.setUploadBudgets(true);
         this.moving = true;
         // The still frame may have been sharpened; the gesture runs at the ladder's step.
         if (this.sharpened) this.applyLevel();
@@ -211,6 +249,7 @@ export class PerformanceManager {
         this.moving = false;
         this.movingUntil = performance.now() + 400;
         this.restSince = performance.now();
+        this.setUploadBudgets(false);
       }),
     );
     this.timer = setInterval(() => this.evaluate(), 500);
@@ -219,6 +258,26 @@ export class PerformanceManager {
       webgl2: this.webgl2,
       devicePixelRatio: window.devicePixelRatio,
     });
+  }
+
+  /**
+   * Cesium uploads arriving textures, shader programs and buffers on the main thread inside
+   * the frame, up to a per-frame budget per kind (10, 10 and 30 ms by default). During a
+   * gesture that is most of a frame; a maps app keeps loading but never lets it stretch a
+   * frame, so the budgets shrink while the camera moves and grow back at rest, where only
+   * arriving tiles cause frames anyway. The scheduler is not public API; the fields are
+   * stable at runtime and the change is ignored when they are not there.
+   */
+  private setUploadBudgets(moving: boolean): void {
+    const scheduler = (
+      this.scene as unknown as { _jobScheduler?: { _budgets?: { _total: number }[] } }
+    )._jobScheduler;
+    const budgets = scheduler?._budgets;
+    if (!budgets || budgets.length < 3) return;
+    const [texture, program, buffer] = moving ? MOVING_UPLOAD_BUDGETS_MS : REST_UPLOAD_BUDGETS_MS;
+    if (budgets[0]) budgets[0]._total = texture;
+    if (budgets[1]) budgets[1]._total = program;
+    if (budgets[2]) budgets[2]._total = buffer;
   }
 
   /**
@@ -373,6 +432,16 @@ export class PerformanceManager {
     this.frameTimestamps.push(now);
     if (this.frameTimestamps.length > 240) this.frameTimestamps.shift();
     if (this.moving) {
+      // Frames during which tiles were being processed carry decode and upload work in the
+      // update phase; keep them apart so the steady per-frame cost of the scene is visible.
+      const loading = GROUPS.some((g) => this.groups[g].processing > 0);
+      const [updates, renders, commands] = loading
+        ? [this.loadingUpdateMs, this.loadingRenderMs, this.loadingCommands]
+        : [this.motionUpdateMs, this.motionRenderMs, this.motionCommands];
+      updates.push(this.updateMs);
+      renders.push(this.renderMs);
+      commands.push(this.commandCount());
+      for (const list of [updates, renders, commands]) if (list.length > 600) list.shift();
       if (this.lastMotionFrameAt !== null) {
         const dt = now - this.lastMotionFrameAt;
         if (dt > 0 && dt < 2000) {
@@ -400,7 +469,46 @@ export class PerformanceManager {
   /** Starts a fresh benchmark window, e.g. when another site becomes active. */
   resetBenchmark(): void {
     this.motionFrameMs.length = 0;
+    for (const list of [
+      this.motionUpdateMs,
+      this.motionRenderMs,
+      this.motionCommands,
+      this.loadingUpdateMs,
+      this.loadingRenderMs,
+      this.loadingCommands,
+    ])
+      list.length = 0;
     this.lastMotionFrameAt = null;
+  }
+
+  /** Draw commands issued in the last frame (not in the public typings, stable at runtime). */
+  private commandCount(): number {
+    const frameState = (this.scene as unknown as { frameState?: { commandList?: unknown[] } })
+      .frameState;
+    return frameState?.commandList?.length ?? 0;
+  }
+
+  /**
+   * Where a moving frame's main-thread time goes, medians over the benchmark window: the
+   * update phase is JavaScript (tileset traversal, globe quadtree), the render phase is
+   * command execution and GL submission (one call per tile, uniforms set from JavaScript).
+   * Together with the frame interval this says whether a machine is CPU-bound in Cesium's
+   * own work or waiting on the GPU.
+   */
+  get frameBudget(): FrameBudget {
+    const median = (list: number[]): number | null => {
+      if (list.length < 5) return null;
+      const sorted = [...list].sort((a, b) => a - b);
+      return sorted[sorted.length >> 1] ?? null;
+    };
+    return {
+      updateMs: median(this.motionUpdateMs),
+      renderMs: median(this.motionRenderMs),
+      commands: median(this.motionCommands),
+      loadingUpdateMs: median(this.loadingUpdateMs),
+      loadingFrames: this.loadingUpdateMs.length,
+      steadyFrames: this.motionUpdateMs.length,
+    };
   }
 
   /** Motion-only statistics for comparing datasets: mean fps and 95th percentile frame time. */
@@ -550,6 +658,7 @@ export class PerformanceManager {
       tilesetMemoryMb: Math.round(memory.bytes / 1048576),
       memoryBudgetMb: Math.round(memory.budget / 1048576),
       benchmark: this.benchmark,
+      frameBudget: this.frameBudget,
     });
   }
 

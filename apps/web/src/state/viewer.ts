@@ -40,6 +40,15 @@ export interface PerformanceSnapshot {
   profile: "full" | "reduced";
   /** Motion-only frame statistics since the last site change, for comparing datasets. */
   benchmark: { motionFps: number | null; p95FrameMs: number | null; samples: number };
+  /** Median main-thread time of a moving frame's update and render phases, and draw calls. */
+  frameBudget: {
+    updateMs: number | null;
+    renderMs: number | null;
+    commands: number | null;
+    loadingUpdateMs: number | null;
+    loadingFrames: number;
+    steadyFrames: number;
+  };
 }
 
 interface ViewerState {
@@ -94,6 +103,14 @@ export const useViewer = create<ViewerState>()((set) => ({
     msaaSamples: 4,
     profile: "full",
     benchmark: { motionFps: null, p95FrameMs: null, samples: 0 },
+    frameBudget: {
+      updateMs: null,
+      renderMs: null,
+      commands: null,
+      loadingUpdateMs: null,
+      loadingFrames: 0,
+      steadyFrames: 0,
+    },
   },
   worldLabel: "Open world",
   activeTilesets: [],

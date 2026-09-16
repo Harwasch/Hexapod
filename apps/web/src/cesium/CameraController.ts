@@ -60,6 +60,8 @@ const PLAUSIBLE_HEIGHT_M: [number, number] = [-500, 9000];
 const POSE_SETTLE_DELAYS_MS = [600, 2000];
 /** After a gesture ends, the drawn surface under the camera is checked once, this much later. */
 const FLOOR_CHECK_DELAY_MS = 250;
+/** Never sample the floor more often than this; a pause inside a drag is not a rest. */
+const FLOOR_CHECK_MIN_INTERVAL_MS = 1500;
 /** Largest correction the floor check applies; more than this is a mis-sample, not the ground. */
 const MAX_FLOOR_LIFT_M = 40;
 const IDLE_POSE_REFRESH_MS = 3000;
@@ -104,6 +106,8 @@ export class CameraController {
   private orbitPivot: Cartesian3 | null = null;
   private orbitLast: { x: number; y: number } | null = null;
   private orbitRate = { heading: ORBIT_HEADING_RATE, tilt: ORBIT_TILT_RATE };
+  private pointerHeld = false;
+  private lastFloorCheckAt = 0;
   private lastSurfaceHeight: number | undefined;
 
   constructor(
@@ -132,12 +136,18 @@ export class CameraController {
     controller.tiltEventTypes = [CameraEventType.PINCH];
     controller.zoomEventTypes = [CameraEventType.WHEEL, CameraEventType.PINCH];
     const canvas = viewer.canvas;
+    canvas.addEventListener("pointerdown", this.onPointerHeld);
+    window.addEventListener("pointerup", this.onPointerReleased);
+    window.addEventListener("pointercancel", this.onPointerReleased);
     canvas.addEventListener("pointerdown", this.onOrbitStart);
     canvas.addEventListener("contextmenu", preventDefault);
     window.addEventListener("pointermove", this.onOrbitMove);
     window.addEventListener("pointerup", this.onOrbitEnd);
     this.unsubscribe.push(
       () => {
+        canvas.removeEventListener("pointerdown", this.onPointerHeld);
+        window.removeEventListener("pointerup", this.onPointerReleased);
+        window.removeEventListener("pointercancel", this.onPointerReleased);
         canvas.removeEventListener("pointerdown", this.onOrbitStart);
         canvas.removeEventListener("contextmenu", preventDefault);
         window.removeEventListener("pointermove", this.onOrbitMove);
@@ -192,6 +202,11 @@ export class CameraController {
    */
   private keepAboveDrawnSurface(): void {
     if (!this.scene.sampleHeightSupported) return;
+    // A height sample is a pick pass plus a GPU read-back (measured as a third of a slow
+    // drag's main-thread time when it fired between the mouse events of one gesture).
+    const now = performance.now();
+    if (this.pointerHeld || now - this.lastFloorCheckAt < FLOOR_CHECK_MIN_INTERVAL_MS) return;
+    this.lastFloorCheckAt = now;
     const camera = this.viewer.camera;
     if (!Matrix4.equals(camera.transform, Matrix4.IDENTITY)) return;
     const carto = Cartographic.clone(camera.positionCartographic, scratchCarto);
@@ -248,6 +263,14 @@ export class CameraController {
    * left-drag orbits the point that was clicked, because Cesium's rotation is tuned for a
    * planet and barely turns beside a rock.
    */
+  private readonly onPointerHeld = (): void => {
+    this.pointerHeld = true;
+  };
+
+  private readonly onPointerReleased = (): void => {
+    this.pointerHeld = false;
+  };
+
   private readonly onOrbitStart = (event: PointerEvent): void => {
     if (!this.scene.screenSpaceCameraController.enableInputs) return;
     const around =

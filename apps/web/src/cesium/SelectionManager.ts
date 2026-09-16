@@ -50,6 +50,16 @@ export class SelectionManager {
   private siteOutline: Entity | null = null;
   private enabled = true;
   private hoverTimer: ReturnType<typeof setTimeout> | null = null;
+  /** A pointer button is held: the user is dragging, and every pick would stall the drag. */
+  private pointerHeld = false;
+  private readonly onPointerDown = (): void => {
+    this.pointerHeld = true;
+    if (this.hoverTimer !== null) clearTimeout(this.hoverTimer);
+    this.hoverTimer = null;
+  };
+  private readonly onPointerUp = (): void => {
+    this.pointerHeld = false;
+  };
   private hoverPosition = new Cartesian2();
 
   constructor(
@@ -75,6 +85,9 @@ export class SelectionManager {
     this.handler.setInputAction((event: ScreenSpaceEventHandler.MotionEvent) => {
       if (this.enabled) this.hover(event.endPosition);
     }, ScreenSpaceEventType.MOUSE_MOVE);
+    window.addEventListener("pointerdown", this.onPointerDown, { capture: true });
+    window.addEventListener("pointerup", this.onPointerUp, { capture: true });
+    window.addEventListener("pointercancel", this.onPointerUp, { capture: true });
   }
 
   /** Disabled while measuring or exploring so those tools own the pointer. */
@@ -308,11 +321,14 @@ export class SelectionManager {
    * starves navigation. Nothing is picked while the camera is moving.
    */
   private hover(window: Cartesian2): void {
+    if (this.pointerHeld) return;
     if (this.hoverTimer !== null) clearTimeout(this.hoverTimer);
     this.hoverPosition = Cartesian2.clone(window, this.hoverPosition);
     this.hoverTimer = setTimeout(() => {
       this.hoverTimer = null;
-      if (!this.enabled || this.camera.isMoving) return;
+      // A pick is a render pass plus a GPU read-back; never during a gesture, whether the
+      // camera is currently moving or merely paused between two mouse events of a drag.
+      if (!this.enabled || this.camera.isMoving || this.pointerHeld) return;
       const picked: unknown = this.scene.pick(this.hoverPosition);
       const interactive = picked instanceof Cesium3DTileFeature || isEntityPick(picked);
       this.viewer.canvas.style.cursor = interactive ? "pointer" : "";
@@ -418,6 +434,9 @@ export class SelectionManager {
   }
 
   destroy(): void {
+    window.removeEventListener("pointerdown", this.onPointerDown, { capture: true });
+    window.removeEventListener("pointerup", this.onPointerUp, { capture: true });
+    window.removeEventListener("pointercancel", this.onPointerUp, { capture: true });
     if (this.hoverTimer !== null) clearTimeout(this.hoverTimer);
     this.unhighlight();
     this.handler.destroy();

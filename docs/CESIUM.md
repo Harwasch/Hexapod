@@ -144,6 +144,19 @@ re-derived as tiles arrive but only swapped in at rest.
 While the camera moves the root element carries `data-moving`; glass panels drop their
 backdrop blur for the duration (a full-screen pass per panel otherwise) and use a flat tint.
 
+A CPU profile of a drag (software GL, so GL calls are inflated, but the shape holds) put
+Cesium's own JavaScript under 2 % and the main thread in three WebGL stalls instead:
+`readPixels` (a hover pick and the camera floor's `sampleHeight` both fired in the pauses
+between mouse events of one gesture; each is a render pass plus a GPU read-back, now gated
+on no pointer button being held and the floor check rate-limited), `texImage2D` (half of it
+imagery for terrain the photorealistic world clips away; the globe is now limited with
+`cartographicLimitRectangle` to the engaged outlines plus 200 m) and `getProgramParameter`
+(about twenty shader links, once, at start). Cesium's per-frame upload budgets (texture,
+program, buffer: 10/10/30 ms by default) shrink to 3/4/6 ms while the camera moves and grow
+back at rest, so loading never stretches a moving frame the way it did. The dev panel's
+"Frame CPU" row shows the median update and render phase and draw calls of moving frames,
+steady frames apart from tile-loading ones.
+
 Things that are deliberately _not_ done per frame: hover picking waits until the pointer has
 rested 120 ms and never runs while the camera moves (each `scene.pick` is a render pass);
 overlay anchors use `globe.getHeight` (a CPU lookup) while moving and call `sampleHeight`

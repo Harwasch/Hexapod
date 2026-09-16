@@ -1,5 +1,6 @@
 import {
   Cartesian3,
+  Rectangle,
   ClippingPolygon,
   ClippingPolygonCollection,
   type Cesium3DTileset,
@@ -19,6 +20,8 @@ export interface ClipTargets {
 }
 
 const ALL: ClipTargets = { globe: true, world: true };
+/** About 200 m around the engaged outlines, so the terrain under an edge is loaded before it shows. */
+const GLOBE_LIMIT_MARGIN_DEG = 0.002;
 /** A few metres of Antarctica nobody looks at, so an inverse clip always has a polygon. */
 const SENTINEL_KEY = "__sentinel";
 const SENTINEL: Footprint = {
@@ -99,6 +102,33 @@ export class ClippingManager {
     if (photorealistic)
       this.addTo(this.globeCollection, this.globePolygons, SENTINEL_KEY, SENTINEL);
     this.syncEnabled();
+  }
+
+  /** Bounding rectangle of every footprint the globe carries, with a margin; the sentinel alone otherwise. */
+  private globeLimit(): Rectangle {
+    let west = Number.POSITIVE_INFINITY;
+    let south = Number.POSITIVE_INFINITY;
+    let east = Number.NEGATIVE_INFINITY;
+    let north = Number.NEGATIVE_INFINITY;
+    for (const entry of this.footprints.values()) {
+      if (!this.globeCarries(entry.targets)) continue;
+      for (const polygon of polygonsOf(entry.footprint))
+        for (const [lon, lat] of polygon[0] ?? []) {
+          if (lon === undefined || lat === undefined) continue;
+          west = Math.min(west, lon);
+          east = Math.max(east, lon);
+          south = Math.min(south, lat);
+          north = Math.max(north, lat);
+        }
+    }
+    if (!Number.isFinite(west)) return Rectangle.fromDegrees(0, -89.99, 0.001, -89.989);
+    const margin = GLOBE_LIMIT_MARGIN_DEG;
+    return Rectangle.fromDegrees(
+      Math.max(-180, west - margin),
+      Math.max(-90, south - margin),
+      Math.min(180, east + margin),
+      Math.min(90, north + margin),
+    );
   }
 
   /** Whether a footprint with these targets belongs in the globe collection for the current world. */
@@ -195,9 +225,14 @@ export class ClippingManager {
     if (this.globeCollection) this.globeCollection.enabled = any && this.globeCollection.length > 0;
     if (this.worldCollection) this.worldCollection.enabled = any && this.worldCollection.length > 0;
     // In the photorealistic world the globe only exists inside the inverse clip, which the
-    // sentinel keeps active; the globe itself stays shown so it keeps loading.
+    // sentinel keeps active; the globe itself stays shown so it keeps loading. Its work is
+    // limited to the engaged outlines (plus a margin): loading and uploading imagery for
+    // terrain that is clipped away everywhere else cost a third of a slow drag's main thread.
     if (this.globeCollection && this.photorealistic) this.globeCollection.enabled = this.enabled;
     this.scene.globe.show = !this.photorealistic || (this.globeCollection?.enabled ?? false);
+    this.scene.globe.cartographicLimitRectangle = this.photorealistic
+      ? this.globeLimit()
+      : Rectangle.MAX_VALUE;
     this.scene.requestRender();
   }
 

@@ -129,6 +129,17 @@ export function DevPanel() {
             ? "move the camera"
             : `${perf.benchmark.motionFps.toFixed(0)} avg · p95 ${perf.benchmark.p95FrameMs?.toFixed(0)} ms · ${perf.benchmark.samples} frames`}
         </dd>
+        <dt>Frame CPU</dt>
+        <dd data-testid="dev-frame-budget">
+          {perf.frameBudget.updateMs === null
+            ? perf.frameBudget.loadingUpdateMs === null
+              ? "—"
+              : `loading: update ${perf.frameBudget.loadingUpdateMs.toFixed(1)} ms (${perf.frameBudget.loadingFrames} frames)`
+            : `update ${perf.frameBudget.updateMs.toFixed(1)} ms · render ${perf.frameBudget.renderMs?.toFixed(1)} ms · ${perf.frameBudget.commands} draws` +
+              (perf.frameBudget.loadingUpdateMs === null
+                ? ""
+                : ` · while loading ${perf.frameBudget.loadingUpdateMs.toFixed(0)} ms`)}
+        </dd>
         <dt>Representation</dt>
         <dd>{representation ? representationLabel(representation) : "—"}</dd>
         <dt>Last API call</dt>
