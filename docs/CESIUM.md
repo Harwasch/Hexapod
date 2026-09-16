@@ -109,9 +109,23 @@ only at rest, once per anchor every few seconds; the camera pose is throttled to
 
 ## Camera
 
-`CameraController` clamps `minimumZoomDistance` to 5 cm so centimetre data can be inspected,
-keeps terrain collision on, and derives flight durations from distance (1.2–5.5 s,
-quadratic in/out). Flights point at the ground: the arrival pitch defaults to -45° (seeded
+`CameraController` clamps `minimumZoomDistance` to 0.6 m (5 mm beside a hand-sized object)
+so centimetre data can be inspected, keeps terrain collision on, and derives flight durations
+from distance (1.2–5.5 s, quadratic in/out). Mouse mapping follows Google Maps: left-drag
+pans (Cesium's rotate), wheel and pinch zoom towards the cursor, and Ctrl+drag, right-drag
+and middle-drag orbit the point in the centre of the view. That orbit is implemented here
+rather than with Cesium's tilt: the pivot is the depth-buffer hit at the view centre (a
+model, a building, the ground), else the terrain, with placeholder tile heights rejected,
+and the camera turns around it in its east-north-up frame with the tilt clamped between the
+horizon and straight down. Gaussian splats write no depth, so under a splat the pivot is its
+ground. Cesium keeps pinch tilt for touch. `KeyboardNavigator` adds arrows (pan, screen-space
+speed), Shift+arrows (orbit the same pivot) and `+`/`-` (zoom towards it), ticked on
+`scene.preUpdate` while held and active only when the page body or canvas has focus.
+
+Never set `ScreenSpaceCameraController.minimumCollisionTerrainHeight` to 0: Cesium tests
+terrain collision, and picks tilt pivots on the terrain instead of the ellipsoid, only while
+the camera is _below_ that height (15 km by default). At 0 both switch off, and every tilt
+pivots on sea level, which is 100 m under Redmond and felt like translation at close range. Flights point at the ground: the arrival pitch defaults to -45° (seeded
 bookmarks use -40° to -45°), and any flight that climbs 150 m or 1.5× above its destination
 passes `pitchAdjustHeight`, so the camera looks straight down at the top of the arc and eases
 back to the arrival tilt on the way down instead of interpolating the pitch linearly and

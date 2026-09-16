@@ -94,7 +94,13 @@ a 14 cm rock and a 2 m weed, and places them on the demo site so millimetre-scal
 tested without capturing anything. Press `S` and pick them, or type `fly to rock` in the
 command bar. See [docs/COMPARISON.md](docs/COMPARISON.md).
 
-## Keyboard
+## Mouse and keyboard
+
+Google Maps conventions: left-drag pans, wheel zooms towards the cursor, **Ctrl+drag,
+right-drag or middle-drag orbit the point in the centre of the view**, and the tilt stops at
+the horizon. Arrow keys pan, `Shift`+arrows orbit the view centre (left/right turn, up/down
+tilt), `+`/`-` zoom towards it; held keys move continuously. Beside a hand-sized object a
+plain drag orbits the point you clicked.
 
 `⌘K`/`Ctrl+K` command palette · `/` search · `L` layers · `S` sites · `M` measure · `C` compare ·
 `B` bookmarks · `N` reset north · `T` top-down · `H` Earth · `G` explore mode · `,` settings ·

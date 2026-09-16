@@ -65,8 +65,6 @@ function GlobalHotkeys() {
     "d",
     () => env.devToolsEnabled && settings.set({ devToolsOpen: !settings.devToolsOpen }),
   );
-  useHotkey("=", () => scene?.camera.zoomBy(0.5));
-  useHotkey("-", () => scene?.camera.zoomBy(-1));
   useHotkey("escape", () => {
     if (ui.paletteOpen) ui.setPaletteOpen(false);
     else if (ui.measureMode) ui.setMeasureMode(null);

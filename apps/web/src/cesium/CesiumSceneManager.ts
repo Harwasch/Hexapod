@@ -7,6 +7,7 @@ import { CameraController } from "./CameraController";
 import { ClippingManager } from "./ClippingManager";
 import { DebugManager } from "./DebugManager";
 import { ExploreController } from "./ExploreController";
+import { KeyboardNavigator } from "./KeyboardNavigator";
 import { configureIonToken } from "./ion";
 import { LayerManager } from "./LayerManager";
 import { MeasurementManager } from "./MeasurementManager";
@@ -44,6 +45,7 @@ export class CesiumSceneManager {
   readonly measurement: MeasurementManager;
   readonly mission: MissionManager;
   readonly explore: ExploreController;
+  readonly keyboard: KeyboardNavigator;
   readonly debug: DebugManager;
   readonly tokenState: TokenState;
   private geocoderInstance: Geocoder;
@@ -88,7 +90,6 @@ export class CesiumSceneManager {
     scene.highDynamicRange = false;
     // MSAA is on by default; FXAA only when the PerformanceManager turns MSAA off.
     scene.postProcessStages.fxaa.enabled = false;
-    scene.screenSpaceCameraController.enableTilt = true;
 
     this.camera = new CameraController(this.viewer, this.events);
     this.clipping = new ClippingManager(scene);
@@ -111,6 +112,7 @@ export class CesiumSceneManager {
     this.measurement = new MeasurementManager(this.viewer, this.events);
     this.mission = new MissionManager(this.viewer, this.events, this.camera);
     this.explore = new ExploreController(this.viewer, this.events);
+    this.keyboard = new KeyboardNavigator(this.viewer, this.camera);
     this.debug = new DebugManager(this.viewer, this.sites, (enabled) =>
       this.clipping.setEnabled(enabled),
     );
@@ -205,6 +207,7 @@ export class CesiumSceneManager {
     this.destroyed = true;
     for (const off of this.unsubscribe) off();
     this.debug.destroy();
+    this.keyboard.destroy();
     this.explore.destroy();
     this.measurement.destroy();
     this.mission.destroy();

@@ -1,4 +1,5 @@
 import {
+  CameraEventType,
   Transforms,
   Matrix4,
   Ray,
@@ -48,6 +49,14 @@ const OBJECT_NEAR_M = 0.01;
 const OBJECT_ZOOM_STEP = 0.82;
 /** Radians of orbit per pixel of drag at object scale (about 0.35° per pixel). */
 const OBJECT_ORBIT_RATE = 0.006;
+/** Site-scale orbit: a drag across a 1440 px window turns about 260°; the same drag tilts about 90°. */
+const ORBIT_HEADING_RATE = 0.0032;
+const ORBIT_TILT_RATE = 0.0018;
+/** The orbit never tips below the horizon or past straight down. */
+const MIN_PITCH_DEG = -89.5;
+const MAX_PITCH_DEG = -1;
+/** Heights outside this band are terrain tiles still loading, not a place to pivot on. */
+const PLAUSIBLE_HEIGHT_M: [number, number] = [-500, 9000];
 const POSE_SETTLE_DELAYS_MS = [600, 2000];
 const IDLE_POSE_REFRESH_MS = 3000;
 /** Below this bounding radius a fly-to may arrive closer than the site floor of 30 m. */
@@ -61,6 +70,21 @@ const scratchPick = new Cartesian3();
 const scratchDirection = new Cartesian3();
 const scratchWindow = new Cartesian2();
 const scratchRay = new Ray();
+const scratchUp = new Cartesian3();
+const scratchForward = new Cartesian3();
+const scratchRight = new Cartesian3();
+
+function preventDefault(event: Event): void {
+  event.preventDefault();
+}
+
+/** Component of a vector perpendicular to `up`, normalised; null when it points straight up or down. */
+function horizontal(vector: Cartesian3, up: Cartesian3, result: Cartesian3): Cartesian3 | null {
+  const along = Cartesian3.dot(vector, up);
+  Cartesian3.subtract(vector, Cartesian3.multiplyByScalar(up, along, result), result);
+  if (Cartesian3.magnitude(result) < 1e-6) return null;
+  return Cartesian3.normalize(result, result);
+}
 const scratchFrame = new Matrix4();
 const scratchCenter = new Cartesian2();
 
@@ -75,6 +99,7 @@ export class CameraController {
   private readonly settleTimers = new Set<ReturnType<typeof setTimeout>>();
   private orbitPivot: Cartesian3 | null = null;
   private orbitLast: { x: number; y: number } | null = null;
+  private orbitRate = { heading: ORBIT_HEADING_RATE, tilt: ORBIT_TILT_RATE };
   private lastSurfaceHeight: number | undefined;
 
   constructor(
@@ -95,8 +120,25 @@ export class CameraController {
     controller.inertiaTranslate = 0.85;
     controller.inertiaZoom = 0.8;
     controller.zoomFactor = 4;
-    controller.minimumCollisionTerrainHeight = 0;
+    // Cesium tests terrain collision, and tilts around the terrain rather than the ellipsoid,
+    // only while the camera is *below* minimumCollisionTerrainHeight (15 km by default).
+    // Setting it to 0 would switch both off and make every tilt pivot on sea level.
+    // Tilt and orbit are handled here instead (Google Maps style, around the view centre);
+    // Cesium keeps pinch tilt for touch, wheel and pinch zoom, and left-drag pan.
+    controller.tiltEventTypes = [CameraEventType.PINCH];
+    controller.zoomEventTypes = [CameraEventType.WHEEL, CameraEventType.PINCH];
+    const canvas = viewer.canvas;
+    canvas.addEventListener("pointerdown", this.onOrbitStart);
+    canvas.addEventListener("contextmenu", preventDefault);
+    window.addEventListener("pointermove", this.onOrbitMove);
+    window.addEventListener("pointerup", this.onOrbitEnd);
     this.unsubscribe.push(
+      () => {
+        canvas.removeEventListener("pointerdown", this.onOrbitStart);
+        canvas.removeEventListener("contextmenu", preventDefault);
+        window.removeEventListener("pointermove", this.onOrbitMove);
+        window.removeEventListener("pointerup", this.onOrbitEnd);
+      },
       // `camera.changed` fires only when position or orientation moved past
       // `percentageChanged`; `moveStart` also fires when the frustum changes, which a canvas
       // resize does. Starting motion from `changed` keeps a resolution switch from looking like
@@ -150,29 +192,34 @@ export class CameraController {
     // rock barely turns. Objects get an orbit around the point that was clicked.
     controller.enableRotate = !on;
     const canvas = this.viewer.canvas;
-    if (on) {
-      canvas.addEventListener("wheel", this.onObjectWheel, { passive: false });
-      canvas.addEventListener("pointerdown", this.onOrbitStart);
-      window.addEventListener("pointermove", this.onOrbitMove);
-      window.addEventListener("pointerup", this.onOrbitEnd);
-    } else {
-      canvas.removeEventListener("wheel", this.onObjectWheel);
-      canvas.removeEventListener("pointerdown", this.onOrbitStart);
-      window.removeEventListener("pointermove", this.onOrbitMove);
-      window.removeEventListener("pointerup", this.onOrbitEnd);
-      this.orbitPivot = null;
-    }
+    if (on) canvas.addEventListener("wheel", this.onObjectWheel, { passive: false });
+    else canvas.removeEventListener("wheel", this.onObjectWheel);
     this.scene.requestRender();
   }
 
+  /**
+   * Google Maps mapping: Ctrl+drag, right-drag and middle-drag orbit the point in the middle
+   * of the view (the thing you are looking at), left-drag pans. At object scale a plain
+   * left-drag orbits the point that was clicked, because Cesium's rotation is tuned for a
+   * planet and barely turns beside a rock.
+   */
   private readonly onOrbitStart = (event: PointerEvent): void => {
-    if (event.button !== 0) return;
-    scratchWindow.x = event.offsetX;
-    scratchWindow.y = event.offsetY;
-    const picked = this.scene.pickPositionSupported
-      ? this.scene.pickPosition(scratchWindow, new Cartesian3())
-      : undefined;
-    this.orbitPivot = picked ?? this.orbitFallbackPivot();
+    if (!this.scene.screenSpaceCameraController.enableInputs) return;
+    const around =
+      event.button === 1 || event.button === 2 || (event.button === 0 && event.ctrlKey);
+    if (around) {
+      this.orbitPivot = this.pivotAtCenter();
+      this.orbitRate = this.objectScale
+        ? { heading: OBJECT_ORBIT_RATE, tilt: OBJECT_ORBIT_RATE }
+        : { heading: ORBIT_HEADING_RATE, tilt: ORBIT_TILT_RATE };
+    } else if (event.button === 0 && this.objectScale) {
+      scratchWindow.x = event.offsetX;
+      scratchWindow.y = event.offsetY;
+      this.orbitPivot = this.plausiblePick(scratchWindow) ?? this.pivotAtCenter();
+      this.orbitRate = { heading: OBJECT_ORBIT_RATE, tilt: OBJECT_ORBIT_RATE };
+    } else return;
+    if (!this.orbitPivot) return;
+    event.preventDefault();
     this.orbitLast = { x: event.clientX, y: event.clientY };
   };
 
@@ -182,16 +229,8 @@ export class CameraController {
     const dy = event.clientY - this.orbitLast.y;
     this.orbitLast = { x: event.clientX, y: event.clientY };
     if (dx === 0 && dy === 0) return;
-    const camera = this.viewer.camera;
-    // Orbit in the pivot's east-north-up frame, then drop the transform again so the rest of
-    // the app keeps seeing a world-frame camera.
-    camera.lookAtTransform(
-      Transforms.eastNorthUpToFixedFrame(this.orbitPivot, undefined, scratchFrame),
-    );
-    camera.rotateLeft(dx * OBJECT_ORBIT_RATE);
-    camera.rotateUp(dy * OBJECT_ORBIT_RATE);
-    camera.lookAtTransform(Matrix4.IDENTITY);
-    this.scene.requestRender();
+    // Dragging up tips the view towards the horizon, dragging down towards straight down.
+    this.orbit(this.orbitPivot, dx * this.orbitRate.heading, -dy * this.orbitRate.tilt);
   };
 
   private readonly onOrbitEnd = (): void => {
@@ -199,17 +238,110 @@ export class CameraController {
     this.orbitLast = null;
   };
 
-  /** When the click misses the model, orbit whatever is under the crosshair or the ground. */
-  private orbitFallbackPivot(): Cartesian3 | null {
+  /**
+   * Turns the camera around a pivot, keeping its distance: `headingRad` moves the camera to
+   * the left around it (the foreground follows a rightward drag, as in Cesium and Google
+   * Maps), `pitchDeltaRad` is added to the camera pitch (positive tips towards the horizon,
+   * negative towards straight down) and stops at both.
+   */
+  orbit(pivot: Cartesian3, headingRad: number, pitchDeltaRad: number): void {
+    const camera = this.viewer.camera;
+    const pitch = CesiumMath.toDegrees(camera.pitch);
+    const nextPitch = CesiumMath.clamp(
+      pitch + CesiumMath.toDegrees(pitchDeltaRad),
+      MIN_PITCH_DEG,
+      MAX_PITCH_DEG,
+    );
+    const allowedTilt = CesiumMath.toRadians(nextPitch - pitch);
+    if (headingRad === 0 && allowedTilt === 0) return;
+    // Orbit in the pivot's east-north-up frame, then drop the transform again so the rest of
+    // the app keeps seeing a world-frame camera.
+    camera.lookAtTransform(Transforms.eastNorthUpToFixedFrame(pivot, undefined, scratchFrame));
+    camera.rotateLeft(headingRad);
+    camera.rotateUp(allowedTilt);
+    camera.lookAtTransform(Matrix4.IDENTITY);
+    this.scene.requestRender();
+  }
+
+  /**
+   * The point the view is centred on: whatever the depth buffer has there (a model, a
+   * building, the ground), else the terrain, else a point along the view direction at the
+   * current height. Gaussian splats write no depth, so under a splat this is its ground.
+   */
+  pivotAtCenter(): Cartesian3 | null {
     const canvas = this.viewer.canvas;
     scratchWindow.x = canvas.clientWidth / 2;
     scratchWindow.y = canvas.clientHeight / 2;
-    const picked = this.scene.pickPositionSupported
-      ? this.scene.pickPosition(scratchWindow, new Cartesian3())
-      : undefined;
+    const picked = this.plausiblePick(scratchWindow);
     if (picked) return picked;
-    const ray = this.viewer.camera.getPickRay(scratchWindow, scratchRay);
-    return ray ? (this.scene.globe.pick(ray, this.scene, new Cartesian3()) ?? null) : null;
+    const camera = this.viewer.camera;
+    const ray = camera.getPickRay(scratchWindow, scratchRay);
+    if (!ray) return null;
+    const pose = this.pose();
+    const distance = pose.altitude / Math.max(Math.sin(CesiumMath.toRadians(-pose.pitch)), 0.05);
+    return Ray.getPoint(ray, Math.max(distance, 1), new Cartesian3());
+  }
+
+  /** Depth pick, then terrain pick, both rejected when they land on a placeholder tile. */
+  private plausiblePick(window: Cartesian2): Cartesian3 | null {
+    const candidates: Cartesian3[] = [];
+    if (this.scene.pickPositionSupported) {
+      const depth = this.scene.pickPosition(window, new Cartesian3());
+      if (depth) candidates.push(depth);
+    }
+    const ray = this.viewer.camera.getPickRay(window, scratchRay);
+    const ground = ray ? this.scene.globe.pick(ray, this.scene, new Cartesian3()) : undefined;
+    if (ground) candidates.push(ground);
+    const cameraPosition = this.viewer.camera.positionWC;
+    let best: Cartesian3 | null = null;
+    let bestDistance = Number.POSITIVE_INFINITY;
+    for (const candidate of candidates) {
+      const height = Cartographic.fromCartesian(candidate, undefined, scratchCarto).height;
+      if (height < PLAUSIBLE_HEIGHT_M[0] || height > PLAUSIBLE_HEIGHT_M[1]) continue;
+      const distance = Cartesian3.distance(cameraPosition, candidate);
+      if (distance < bestDistance) {
+        best = candidate;
+        bestDistance = distance;
+      }
+    }
+    return best;
+  }
+
+  /** Slides the camera parallel to the ground by a screen-space amount (pixels at the view centre). */
+  pan(dxPx: number, dyPx: number): void {
+    const camera = this.viewer.camera;
+    const pivot = this.pivotAtCenter();
+    const distance = pivot ? Cartesian3.distance(camera.positionWC, pivot) : this.pose().altitude;
+    const fovy =
+      "fovy" in camera.frustum
+        ? (camera.frustum as { fovy: number }).fovy
+        : CesiumMath.PI_OVER_THREE;
+    const metersPerPx = metersPerPixel(distance, fovy, this.viewer.canvas.clientHeight || 1);
+    const up = Cartesian3.normalize(camera.positionWC, scratchUp);
+    // Forward and right projected onto the local horizontal plane.
+    const forward =
+      horizontal(camera.directionWC, up, scratchForward) ??
+      horizontal(camera.upWC, up, scratchForward);
+    const right = horizontal(camera.rightWC, up, scratchRight);
+    if (!forward || !right) return;
+    camera.move(right, dxPx * metersPerPx);
+    camera.move(forward, -dyPx * metersPerPx);
+    this.scene.requestRender();
+  }
+
+  /** Moves toward (factor < 1) or away from (factor > 1) the view centre, keeping it centred. */
+  zoomToward(pivot: Cartesian3, factor: number): void {
+    const camera = this.viewer.camera;
+    const toPivot = Cartesian3.subtract(pivot, camera.positionWC, scratchDirection);
+    const distance = Cartesian3.magnitude(toPivot);
+    if (!(distance > 0)) return;
+    const floor = this.scene.screenSpaceCameraController.minimumZoomDistance;
+    const next = Math.max(floor, distance * factor);
+    const step = distance - next;
+    if (Math.abs(step) < 1e-6) return;
+    Cartesian3.normalize(toPivot, toPivot);
+    camera.move(toPivot, step);
+    this.scene.requestRender();
   }
 
   /** Zoom toward the point under the cursor by a fixed fraction of the remaining distance. */
