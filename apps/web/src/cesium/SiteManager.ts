@@ -77,6 +77,7 @@ export class SiteManager {
   private nearId: string | null = null;
   private objectScale = false;
   private screenSpaceError = 16;
+  private pixelRatio = 1;
   private flightTarget: string | null = null;
   private readonly unsubscribe: (() => void)[] = [];
   private lastProximityCheck = 0;
@@ -89,7 +90,9 @@ export class SiteManager {
     private readonly performance: PerformanceManager,
   ) {
     this.scene = viewer.scene;
-    this.performance.bindScreenSpaceErrorSink((sse) => this.applyScreenSpaceError(sse));
+    this.performance.addScreenSpaceErrorSink((sse, pixelRatio) =>
+      this.applyScreenSpaceError(sse, pixelRatio),
+    );
     this.performance.bindMemorySource(() => this.memoryUsage());
     this.unsubscribe.push(
       viewer.camera.changed.addEventListener(() => this.checkProximity()),
@@ -385,6 +388,7 @@ export class SiteManager {
 
   private attachTileset(handle: AssetHandle, tileset: Cesium3DTileset, asset: SiteAsset): void {
     handle.tileset = tileset;
+    this.applyScreenSpaceError(this.screenSpaceError, this.pixelRatio);
     if (asset.renderConfig.clampToGround) handle.placed = this.clampToGround(tileset, asset);
     const offset = asset.renderConfig.heightOffsetM ?? 0;
     if (offset !== 0 && !asset.renderConfig.clampToGround) {
@@ -543,8 +547,9 @@ export class SiteManager {
     });
   }
 
-  private applyScreenSpaceError(sse: number): void {
+  private applyScreenSpaceError(sse: number, pixelRatio: number): void {
     this.screenSpaceError = sse;
+    this.pixelRatio = pixelRatio;
     for (const { handle } of this.handles()) {
       if (!handle.tileset) continue;
       const configured = handle.asset.renderConfig.maximumScreenSpaceError;
@@ -553,6 +558,9 @@ export class SiteManager {
       let next = configured ? Math.min(configured, sse) : sse;
       if (handle.asset.representation === "gaussian-splat")
         next = Math.max(next, this.performance.splatMinimumScreenSpaceError);
+      // Cesium measures the error in CSS pixels; hand it device pixels so a HiDPI screen
+      // gets the detail it can show, and a resolution cut also lightens the tile load.
+      next = Math.round((next / pixelRatio) * 4) / 4;
       if (handle.tileset.maximumScreenSpaceError === next) continue;
       handle.tileset.maximumScreenSpaceError = next;
       this.events.emit("asset", {

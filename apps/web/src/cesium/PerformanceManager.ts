@@ -35,8 +35,9 @@ const STEADY_FPS = 50;
 const MEMORY_PRESSURE_RATIO = 1.25;
 /** Minimum rendered frames in the last second before the frame rate is trusted. */
 const MIN_FRAMES_FOR_FPS = 6;
-/** Low frame rate must persist this long while moving before quality is cut. */
-const SUSTAINED_LOW_MS = 1200;
+/** Slow motion frames (below LOW_FPS) must add up to this much before quality is cut; smooth
+ *  frames pay it back, so the evidence accumulates across short gestures. */
+const SUSTAINED_LOW_MS = 800;
 /** Motion at a steady frame rate needed before a cut is undone; doubles after every recovery. */
 const INITIAL_RECOVERY_MS = 8000;
 const MAX_RECOVERY_MS = 60_000;
@@ -94,6 +95,9 @@ export function splatMinimumScreenSpaceError(preset: QualityPreset): number {
 /** "full" renders the preset as configured; "reduced" means the ladder has cut something. */
 export type RenderProfile = "full" | "reduced";
 
+/** Receives the screen-space error in CSS pixels and the pixel ratio the scene renders at. */
+export type ScreenSpaceErrorSink = (sse: number, pixelRatio: number) => void;
+
 interface LadderStep {
   msaa: number;
   scale: number;
@@ -125,11 +129,10 @@ export class PerformanceManager {
   private level = 0;
   private resolutionScale = 1;
   private msaa = 4;
-  private lowFpsSince: number | null = null;
+  private slowMotionMs = 0;
   private goodMotionMs = 0;
   private recoveryMs = INITIAL_RECOVERY_MS;
   private restSince = 0;
-  private lastEvaluateAt = 0;
   private pending = 0;
   private processing = 0;
   private moving = false;
@@ -138,7 +141,7 @@ export class PerformanceManager {
   private nearSite = false;
   private readonly timer: ReturnType<typeof setInterval>;
   private readonly unsubscribe: (() => void)[] = [];
-  private applySse: (sse: number) => void = () => undefined;
+  private readonly sinks: ScreenSpaceErrorSink[] = [];
   private memorySource: () => { bytes: number; budget: number } = () => ({ bytes: 0, budget: 1 });
   private readonly gpu: string | null;
   private readonly webgl2: boolean;
@@ -177,10 +180,27 @@ export class PerformanceManager {
     });
   }
 
-  /** Called by the SiteManager so decisions reach every site tileset. */
-  bindScreenSpaceErrorSink(apply: (sse: number) => void): void {
-    this.applySse = apply;
-    apply(this.currentSse);
+  /**
+   * Registers a consumer of the current screen-space error. It receives the error in CSS
+   * pixels together with the pixel ratio the scene renders at, so consumers can divide and
+   * hand Cesium an error in device pixels: Cesium measures screen-space error in CSS pixels,
+   * which on a HiDPI screen picks tiles twice as coarse as they look, and a maps app chooses
+   * detail by the pixels you actually see.
+   */
+  addScreenSpaceErrorSink(apply: ScreenSpaceErrorSink): void {
+    this.sinks.push(apply);
+    apply(this.currentSse, this.pixelRatio);
+  }
+
+  /** Resolution scale times the device pixel ratio when rendering at native resolution. */
+  get pixelRatio(): number {
+    const dpr = this.viewer.useBrowserRecommendedResolution ? 1 : window.devicePixelRatio || 1;
+    return Math.max(0.25, this.resolutionScale * dpr);
+  }
+
+  private applySse(sse: number): void {
+    const ratio = this.pixelRatio;
+    for (const sink of this.sinks) sink(sse, ratio);
   }
 
   /** Lets the SiteManager report how much memory the active tilesets hold versus their budget. */
@@ -200,7 +220,7 @@ export class PerformanceManager {
     this.viewer.useBrowserRecommendedResolution = inputs.preset === "performance";
     this.ladder = buildLadder(inputs.preset);
     this.level = 0;
-    this.lowFpsSince = null;
+    this.slowMotionMs = 0;
     this.goodMotionMs = 0;
     this.recoveryMs = INITIAL_RECOVERY_MS;
     this.applyLevel();
@@ -246,6 +266,8 @@ export class PerformanceManager {
     const step = this.step;
     this.setResolutionScale(step.scale);
     this.setMsaa(step.msaa);
+    // A resolution step changes the pixel ratio, and with it the device-pixel error.
+    this.applySse(this.currentSse);
     this.scene.requestRender();
   }
 
@@ -272,6 +294,15 @@ export class PerformanceManager {
         if (dt > 0 && dt < 2000) {
           this.motionFrameMs.push(dt);
           if (this.motionFrameMs.length > 600) this.motionFrameMs.shift();
+          // Evidence for the ladder comes from every motion frame, so three short slow
+          // drags count as much as one long one.
+          if (dt > 1000 / LOW_FPS) {
+            this.slowMotionMs += dt;
+            this.goodMotionMs = 0;
+          } else {
+            this.slowMotionMs = Math.max(0, this.slowMotionMs - dt);
+            if (dt < 1000 / STEADY_FPS) this.goodMotionMs += dt;
+          }
         }
       }
       this.lastMotionFrameAt = now;
@@ -312,28 +343,18 @@ export class PerformanceManager {
   }
 
   /**
-   * The ladder: one step down after a sustained low frame rate while moving, one step up
-   * after enough smooth motion, applied at rest. Returns a reason when a step was taken.
+   * The ladder: one step down once slow motion frames have added up (applied at once, even
+   * mid-gesture, because a hitch beats staying slow), one step up after enough smooth
+   * motion, applied at rest. Returns a reason when a step was taken.
    */
-  private climbLadder(now: number, fps: number | null, moving: boolean): string | null {
-    const elapsed = this.lastEvaluateAt ? Math.min(1000, now - this.lastEvaluateAt) : 0;
-    if (moving && fps !== null) {
-      if (fps < LOW_FPS) {
-        this.goodMotionMs = 0;
-        this.lowFpsSince ??= now;
-        if (now - this.lowFpsSince >= SUSTAINED_LOW_MS && this.level < this.ladder.length - 1) {
-          this.level += 1;
-          this.lowFpsSince = now;
-          this.applyLevel();
-          return `low fps (${fps.toFixed(0)}) → ${this.step.label}`;
-        }
-        return null;
-      }
-      this.lowFpsSince = null;
-      if (fps > STEADY_FPS) this.goodMotionMs += elapsed;
-      return null;
+  private climbLadder(now: number, moving: boolean): string | null {
+    if (this.slowMotionMs >= SUSTAINED_LOW_MS && this.level < this.ladder.length - 1) {
+      this.level += 1;
+      this.slowMotionMs = 0;
+      this.goodMotionMs = 0;
+      this.applyLevel();
+      return `slow motion → ${this.step.label}`;
     }
-    this.lowFpsSince = null;
     if (
       !moving &&
       this.level > 0 &&
@@ -361,7 +382,7 @@ export class PerformanceManager {
     let reason: string;
 
     if (this.inputs.adaptive && this.inputs.manualScreenSpaceError === null) {
-      const stepReason = this.climbLadder(now, fps, moving);
+      const stepReason = this.climbLadder(now, moving);
       const penalty = this.step.ssePenalty;
       const bounds = {
         base: Math.min(preset.max, preset.base + penalty),
@@ -383,8 +404,6 @@ export class PerformanceManager {
     } else {
       reason = forcedReason ?? (this.inputs.manualScreenSpaceError !== null ? "manual" : "fixed");
     }
-    this.lastEvaluateAt = now;
-
     if (Math.abs(target - this.currentSse) >= 0.5) {
       this.currentSse = Math.round(target * 2) / 2;
       this.applySse(this.currentSse);

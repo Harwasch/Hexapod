@@ -44,9 +44,11 @@ export async function createSiteTileset(
       asset.renderConfig.maximumScreenSpaceError ?? quality.maximumScreenSpaceError,
     show: false,
     preloadWhenHidden: true,
-    // Keeps the camera above the model surface (where Cesium can sample it) instead of only
-    // above the terrain that is clipped away underneath.
-    enableCollision: true,
+    // Never enableCollision: Cesium then ray-casts every loaded tile's triangles on the CPU
+    // every frame to find the height under the camera (measured 130 ms per frame on the
+    // Google world, 400 ms on a drone mesh). The camera floor is kept by CameraController
+    // with one depth sample when the camera comes to rest instead.
+    enableCollision: false,
   };
   if (asset.representation === "point-cloud") {
     const shading = asset.renderConfig.pointCloudShading;
@@ -75,11 +77,12 @@ export async function createLayerTileset(layer: Layer): Promise<TilesetType | MV
     case "3d-tiles-url":
       return Cesium3DTileset.fromUrl(source.url, options);
     case "google-photorealistic":
-      // The globe is hidden while this world is shown, so the camera floor and the height
-      // readouts have to come from the mesh itself.
+      // The world tileset's detail is driven by the PerformanceManager (see LayerManager);
+      // the floor under the camera comes from a depth sample at rest, never from
+      // enableCollision (see createSiteTileset).
       return createGooglePhotorealistic3DTileset(
         { onlyUsingWithGoogleGeocoder: true },
-        { ...options, show: false, enableCollision: true },
+        { ...options, show: false, enableCollision: false },
       );
     case "mvt":
       return MVTDataProvider.fromUrl(source.urlTemplate, {

@@ -48,9 +48,13 @@ What gets cut depends on the representation:
   wherever the capture is sparse: tile bounding boxes include outlier splats, so no
   tile-derived footprint is tight enough to avoid it.
 
-Site tilesets also set `enableCollision: true` so the camera collides with the model surface
-where Cesium can sample it, and `minimumZoomDistance` is 0.6 m so a scroll cannot pass
-through a splat surface that has no collision geometry.
+Tilesets never set `enableCollision`: Cesium then ray-casts every loaded tile's triangles on
+the CPU every frame to find the height under the camera (measured 130 ms per frame on the
+Google world and 400 ms beside the AGI drone mesh). The camera floor over meshes is
+`CameraController.keepAboveDrawnSurface`: 250 ms after a gesture ends, one depth sample
+(`scene.sampleHeight`) under the camera, and a 0.35 s ease back up when the camera ended up
+below the surface plus the zoom floor. Wheel zoom already stops at the surface under the
+cursor. Terrain collision stays on for the globe (cheap, CPU heightmap).
 
 ## Representations and LOD
 
@@ -91,7 +95,15 @@ above 50 fps, applied while the camera rests (a resolution switch re-allocates t
 framebuffers, a visible hitch mid-gesture), and every recovery has to earn twice the smooth
 motion of the last, so a borderline machine settles instead of oscillating. Cesium divides
 screen-space error by the pixel ratio, so a resolution step never changes which tiles are
-drawn. The dev panel shows the profile (`full` or `reduced`) and the step taken. Gaussian
+drawn by itself, so every consumer divides the error by the pixel ratio the scene renders at
+(`PerformanceManager.addScreenSpaceErrorSink` passes both): Cesium measures screen-space
+error in CSS pixels, which on a HiDPI screen picks tiles twice as coarse as they look, while
+a maps app chooses detail by the pixels you see. A resolution cut therefore also lightens
+the tile load. The Google world renders at half the sites' error (8 CSS px on balanced;
+Google's tiles are coarse at Cesium's default 16) through the same sink, so the ladder's
+tile steps and memory pressure reach it too. Ladder evidence comes from every motion frame
+(slow frames add up, smooth frames pay them back), so three short slow drags count as much
+as one long one. The dev panel shows the profile (`full` or `reduced`) and the step taken. Gaussian
 splats never refine below SSE 12 / 8 / 4 (performance / balanced / ultra): they are sorted on
 the CPU every camera change, so their cost grows with splat count far faster than a mesh.
 Tile cache budgets come from `navigator.deviceMemory` (256/384/512 MB + overflow). A per-asset
@@ -155,8 +167,7 @@ spherical excess on lon/lat.
 ## Photorealistic world
 
 On by default (`VITE_ENABLE_PHOTOREALISTIC=false` switches it off), the Google Photorealistic
-3D Tiles catalog layer (via `createGooglePhotorealistic3DTileset`, `enableCollision` on so
-the camera floor and height readouts come from the mesh) replaces the globe surface,
+3D Tiles catalog layer (via `createGooglePhotorealistic3DTileset`) replaces the globe surface,
 receives the same site clipping, and switches the ion geocoder to Google as Google's terms
 require. It is labeled as visual context only. The globe is hidden in this world except
 under Gaussian splats and point clouds: `ClippingManager.setWorldMode` flips the globe's

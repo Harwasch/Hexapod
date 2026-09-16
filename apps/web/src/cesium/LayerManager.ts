@@ -32,6 +32,8 @@ import { createDataSource, isVectorSource } from "./providers/vector";
 import type { SceneEvents } from "./types";
 
 const log = createLogger("layers");
+/** The world mesh renders at half the sites' screen-space error (8 CSS px on balanced). */
+const WORLD_SSE_FRACTION = 0.5;
 
 type Handle =
   | { kind: "imagery"; layer: ImageryLayer }
@@ -59,6 +61,8 @@ export class LayerManager {
   private readonly entries = new Map<string, Entry>();
   private fallbackBasemap: ImageryLayer | null = null;
   private worldTilesetId: string | null = null;
+  private worldSse = 16;
+  private worldPixelRatio = 1;
   private splitLeft: string | null = null;
   private splitRight: string | null = null;
   private generation = 0;
@@ -197,6 +201,22 @@ export class LayerManager {
     return { left: this.splitLeft, right: this.splitRight };
   }
 
+  /**
+   * Detail of the global mesh follows the adaptive screen-space error, at half the site
+   * value (Google's tiles are coarse at Cesium's default of 16) and in device pixels. The
+   * ladder's tile steps and memory pressure reach it through the same sink.
+   */
+  applyWorldScreenSpaceError(siteSse: number, pixelRatio: number): void {
+    this.worldSse = siteSse;
+    this.worldPixelRatio = pixelRatio;
+    const tileset = this.worldTileset;
+    if (!tileset) return;
+    const next = Math.round(((siteSse * WORLD_SSE_FRACTION) / pixelRatio) * 4) / 4;
+    if (tileset.maximumScreenSpaceError === next) return;
+    tileset.maximumScreenSpaceError = next;
+    this.scene.requestRender();
+  }
+
   /** Google Photorealistic tileset when loaded (drives the world mode + clipping). */
   get worldTileset(): Cesium3DTileset | null {
     const id = this.worldTilesetId;
@@ -312,6 +332,7 @@ export class LayerManager {
       if (source.type === "google-photorealistic") {
         this.worldTilesetId = layer.id;
         this.clipping.setWorldTileset(created);
+        this.applyWorldScreenSpaceError(this.worldSse, this.worldPixelRatio);
       }
       return { kind: "tileset", tileset: created };
     }

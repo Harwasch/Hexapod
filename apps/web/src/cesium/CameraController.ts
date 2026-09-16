@@ -58,6 +58,10 @@ const MAX_PITCH_DEG = -1;
 /** Heights outside this band are terrain tiles still loading, not a place to pivot on. */
 const PLAUSIBLE_HEIGHT_M: [number, number] = [-500, 9000];
 const POSE_SETTLE_DELAYS_MS = [600, 2000];
+/** After a gesture ends, the drawn surface under the camera is checked once, this much later. */
+const FLOOR_CHECK_DELAY_MS = 250;
+/** Largest correction the floor check applies; more than this is a mis-sample, not the ground. */
+const MAX_FLOOR_LIFT_M = 40;
 const IDLE_POSE_REFRESH_MS = 3000;
 /** Below this bounding radius a fly-to may arrive closer than the site floor of 30 m. */
 const OBJECT_ARRIVAL_RADIUS_M = 30;
@@ -165,12 +169,53 @@ export class CameraController {
           }, delay);
           this.settleTimers.add(timer);
         }
+        const floorTimer = setTimeout(() => {
+          this.settleTimers.delete(floorTimer);
+          if (!this.moving) this.keepAboveDrawnSurface();
+        }, FLOOR_CHECK_DELAY_MS);
+        this.settleTimers.add(floorTimer);
       }),
     );
   }
 
   get isMoving(): boolean {
     return this.moving;
+  }
+
+  /**
+   * Camera floor for meshes: Cesium's own collision against 3D Tiles ray-casts every loaded
+   * tile's triangles on the CPU each frame (hundreds of milliseconds on a city mesh), so the
+   * tilesets never enable it. Instead, once the camera has come to rest, the drawn surface
+   * straight below it is read from the depth buffer (one pick pass), and a camera that ended
+   * up under it or too close is eased back up. Wheel zoom already stops at the surface under
+   * the cursor, so this only catches a pan or orbit that dipped below the ground.
+   */
+  private keepAboveDrawnSurface(): void {
+    if (!this.scene.sampleHeightSupported) return;
+    const camera = this.viewer.camera;
+    if (!Matrix4.equals(camera.transform, Matrix4.IDENTITY)) return;
+    const carto = Cartographic.clone(camera.positionCartographic, scratchCarto);
+    let surface: number | undefined;
+    try {
+      surface = this.scene.sampleHeight(carto);
+    } catch {
+      return;
+    }
+    if (surface === undefined || !Number.isFinite(surface)) return;
+    if (surface < PLAUSIBLE_HEIGHT_M[0] || surface > PLAUSIBLE_HEIGHT_M[1]) return;
+    const clearance = this.scene.screenSpaceCameraController.minimumZoomDistance;
+    const floor = surface + clearance;
+    if (carto.height >= floor) return;
+    const lift = floor - carto.height;
+    // Only ever a small correction: a big difference means the sample hit something else
+    // (a roof edge, a tree) rather than the ground the camera is over.
+    if (lift > MAX_FLOOR_LIFT_M) return;
+    camera.flyTo({
+      destination: Cartesian3.fromRadians(carto.longitude, carto.latitude, floor),
+      orientation: { heading: camera.heading, pitch: camera.pitch, roll: camera.roll },
+      duration: 0.35,
+      easingFunction: EasingFunction.QUADRATIC_OUT,
+    });
   }
 
   /**

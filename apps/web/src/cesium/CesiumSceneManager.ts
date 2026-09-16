@@ -95,6 +95,9 @@ export class CesiumSceneManager {
     this.clipping = new ClippingManager(scene);
     this.layers = new LayerManager(this.viewer, this.events, this.clipping);
     this.performance = new PerformanceManager(this.viewer, this.events);
+    this.performance.addScreenSpaceErrorSink((sse, pixelRatio) =>
+      this.layers.applyWorldScreenSpaceError(sse, pixelRatio),
+    );
     this.sites = new SiteManager(
       this.viewer,
       this.events,
