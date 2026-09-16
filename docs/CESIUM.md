@@ -73,9 +73,9 @@ the GPU, and a Gaussian splat is not re-sorted every 16 ms while nobody is touch
 
 | Preset      | Base SSE | Adaptive range | Resolution                | MSAA |
 | ----------- | -------- | -------------- | ------------------------- | ---- |
-| Performance | 24       | 12–48          | browser-recommended       | off  |
-| Balanced    | 16       | 6–32           | native device pixel ratio | 4×   |
-| Ultra       | 8        | 2–16           | native device pixel ratio | 4×   |
+| Performance | 24       | 4–48           | browser-recommended       | off  |
+| Balanced    | 16       | 2–32           | native device pixel ratio | 4×   |
+| Ultra       | 8        | 1–16           | native device pixel ratio | 4×   |
 
 Smoothness comes first, the way a maps app does it: nothing about the render settings
 changes during a gesture. Tile selection is frozen while the camera moves (every change of
@@ -83,7 +83,9 @@ changes during a gesture. Tile selection is frozen while the camera moves (every
 anything (they are tiles arriving, not a stall). At rest the scene uses the idle time the
 way Google Maps does: once nothing is loading (sites and the world both report through
 `reportLoading`) and tileset memory is under 70 % of its budget, the error walks one step
-finer per 500 ms tick, at any height, down to the preset minimum. Nothing returns to the base
+finer per 500 ms tick, at any height, down to the preset minimum (2 px on balanced: a 2 to
+5 cm survey mesh only shows its detail there, measured at 176k triangles and a Google-like
+softness at 8 px versus 416k and the real detail at 2 px). Nothing returns to the base
 on its own; finer tiles stay until memory pressure (125 % of budget) coarsens, so the next
 gesture starts from what is already loaded. Each SSE change calls `scene.requestRender()`;
 tile selection only runs inside a frame.

@@ -22,9 +22,9 @@ describe("decideScreenSpaceError", () => {
       screenSpaceError: 14,
       reason: "idle refinement",
     });
-    expect(decideScreenSpaceError({ ...base, current: 7 }).screenSpaceError).toBe(6);
-    expect(decideScreenSpaceError({ ...base, current: 6 })).toEqual({
-      screenSpaceError: 6,
+    expect(decideScreenSpaceError({ ...base, current: 3 }).screenSpaceError).toBe(2);
+    expect(decideScreenSpaceError({ ...base, current: 2 })).toEqual({
+      screenSpaceError: 2,
       reason: "at finest",
     });
   });
