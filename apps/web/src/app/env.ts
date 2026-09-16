@@ -39,7 +39,8 @@ export function readEnv(source: ImportMetaEnv = import.meta.env): AppEnv {
     defaultMeshAssetId: optionalAssetId(source.VITE_DEFAULT_MESH_ASSET_ID),
     defaultPointCloudAssetId: optionalAssetId(source.VITE_DEFAULT_POINTCLOUD_ASSET_ID),
     apiBaseUrl: optionalString(source.VITE_API_BASE_URL) ?? "",
-    photorealisticEnabled: flag(source.VITE_ENABLE_PHOTOREALISTIC),
+    // On unless switched off: the ion token in use must have access to Google's tiles.
+    photorealisticEnabled: flag(source.VITE_ENABLE_PHOTOREALISTIC, true),
     devToolsEnabled: source.DEV || flag(source.VITE_ENABLE_DEV_TOOLS),
     isDev: source.DEV,
   };

@@ -75,9 +75,11 @@ export async function createLayerTileset(layer: Layer): Promise<TilesetType | MV
     case "3d-tiles-url":
       return Cesium3DTileset.fromUrl(source.url, options);
     case "google-photorealistic":
+      // The globe is hidden while this world is shown, so the camera floor and the height
+      // readouts have to come from the mesh itself.
       return createGooglePhotorealistic3DTileset(
         { onlyUsingWithGoogleGeocoder: true },
-        { ...options, show: false },
+        { ...options, show: false, enableCollision: true },
       );
     case "mvt":
       return MVTDataProvider.fromUrl(source.urlTemplate, {

@@ -15,7 +15,7 @@ reach; attribution and terms are stored on each catalog record and shown in the 
 | Cesium Gaussian splat demo (Redmond)   | Gaussian splat with LOD        | aerial campus, 2 GB   | 4547222   | Cesium sample asset              |
 
 Google Photorealistic 3D Tiles is available as the world layer (Settings › World, feature
-flag `VITE_ENABLE_PHOTOREALISTIC`, needs an ion token with Google access) for a global
+on by default, `VITE_ENABLE_PHOTOREALISTIC=false` switches it off, needs an ion token with Google access) for a global
 mesh baseline.
 
 ## Resolution ceiling

@@ -92,7 +92,7 @@ export function LayerCard({ layer }: { layer: Layer }) {
       {runtime.error && <p className="card__error">{runtime.error}</p>}
       {worldLocked && (
         <p className="glass-subtle" style={{ margin: 0, fontSize: "var(--text-xs)" }}>
-          Enable with VITE_ENABLE_PHOTOREALISTIC=true and an ion token with access.
+          Switched off by VITE_ENABLE_PHOTOREALISTIC=false; needs an ion token with access.
         </p>
       )}
       {runtime.visible && layer.sourceType !== "cesium-ion-terrain" && (

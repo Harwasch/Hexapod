@@ -213,7 +213,7 @@ export function SettingsSheet() {
           hint={
             env.photorealisticEnabled
               ? "Photorealistic tiles are visual context only, not analytical data"
-              : "Set VITE_ENABLE_PHOTOREALISTIC=true to enable Google Photorealistic 3D Tiles"
+              : "Google Photorealistic 3D Tiles are switched off by VITE_ENABLE_PHOTOREALISTIC=false"
           }
           control={
             <GlassSegmentedControl

@@ -24,7 +24,7 @@ environment (all public):
 | ------------------------------ | ----------------------------------------------------------------------------------- |
 | `VITE_CESIUM_ION_ACCESS_TOKEN` | your token, scopes `assets:read` + `geocode`, Allowed URLs = your origin            |
 | `VITE_API_BASE_URL`            | `https://api.example.com` (absolute; the dev proxy is dev-only)                     |
-| `VITE_ENABLE_PHOTOREALISTIC`   | `true` only if your token has Google Photorealistic access and you accept the terms |
+| `VITE_ENABLE_PHOTOREALISTIC`   | on by default; `false` unless your token has Google access and you accept the terms |
 | `VITE_ENABLE_DEV_TOOLS`        | leave unset/false                                                                   |
 | `VITE_DEFAULT_*_ASSET_ID`      | optional                                                                            |
 

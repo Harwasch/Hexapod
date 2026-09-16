@@ -36,6 +36,7 @@ export class ClippingManager {
   private readonly globePolygons = new Map<string, ClippingPolygon[]>();
   private readonly worldPolygons = new Map<string, ClippingPolygon[]>();
   private enabled = true;
+  private photorealistic = false;
 
   constructor(private readonly scene: Scene) {
     this.supported = ClippingPolygonCollection.isSupported(scene);
@@ -58,6 +59,33 @@ export class ClippingManager {
   }
 
   /**
+   * Open world: the globe carries terrain and imagery everywhere and gets holes under mesh
+   * sites. Photorealistic world: the Google mesh is the ground, so the globe is hidden,
+   * except that it is kept (inverse clip) under splats and point clouds, which need an
+   * opaque floor and would otherwise show sky through their sparse patches.
+   */
+  setWorldMode(photorealistic: boolean): void {
+    if (this.photorealistic === photorealistic) return;
+    this.photorealistic = photorealistic;
+    if (!this.supported || !this.globeCollection) {
+      this.scene.globe.show = !photorealistic;
+      return;
+    }
+    for (const key of Array.from(this.globePolygons.keys()))
+      this.removeFrom(this.globeCollection, this.globePolygons, key);
+    this.globeCollection.inverse = photorealistic;
+    for (const [key, entry] of this.footprints)
+      if (this.globeCarries(entry.targets))
+        this.addTo(this.globeCollection, this.globePolygons, key, entry.footprint);
+    this.syncEnabled();
+  }
+
+  /** Whether a footprint with these targets belongs in the globe collection for the current world. */
+  private globeCarries(targets: ClipTargets): boolean {
+    return this.photorealistic ? !targets.globe : targets.globe;
+  }
+
+  /**
    * Registers (or replaces) the footprint that should clip the world for a key (site id).
    * `targets` chooses what gets cut: the globe (terrain + imagery) and/or the global 3D
    * tileset. A Gaussian splat blends over terrain without z-fighting, so it usually clips
@@ -73,7 +101,8 @@ export class ClippingManager {
       return;
     }
     this.footprints.set(key, { footprint, targets });
-    if (targets.globe) this.addTo(this.globeCollection, this.globePolygons, key, footprint);
+    if (this.globeCarries(targets))
+      this.addTo(this.globeCollection, this.globePolygons, key, footprint);
     if (targets.world) this.addTo(this.worldCollection, this.worldPolygons, key, footprint);
     this.syncEnabled();
   }
@@ -144,6 +173,8 @@ export class ClippingManager {
     const any = this.footprints.size > 0 && this.enabled;
     if (this.globeCollection) this.globeCollection.enabled = any && this.globeCollection.length > 0;
     if (this.worldCollection) this.worldCollection.enabled = any && this.worldCollection.length > 0;
+    // In the photorealistic world the globe only exists inside the inverse clip.
+    this.scene.globe.show = !this.photorealistic || (this.globeCollection?.enabled ?? false);
     this.scene.requestRender();
   }
 

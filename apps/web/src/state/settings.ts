@@ -34,7 +34,7 @@ const defaults = {
   quality: "balanced" as QualityPreset,
   manualScreenSpaceError: null,
   adaptiveQuality: true,
-  world: "open" as WorldMode,
+  world: "photorealistic" as WorldMode,
   onboardingDismissed: false,
   devToolsOpen: false,
   exploreSpeed: 4,
@@ -47,7 +47,16 @@ export const useSettings = create<SettingsState>()(
       set: (patch) => set(patch),
       reset: () => set({ ...defaults }),
     }),
-    { name: "twin.settings.v1", version: 1 },
+    {
+      name: "twin.settings.v1",
+      version: 2,
+      // v2 switched the default world to Google Photorealistic; stored v1 settings still
+      // carried the old default, so they are moved along once.
+      migrate: (persisted, version) => {
+        const state = (persisted ?? {}) as Partial<SettingsState>;
+        return version < 2 ? { ...state, world: "photorealistic" as WorldMode } : state;
+      },
+    },
   ),
 );
 

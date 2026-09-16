@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.seed import seed
@@ -131,3 +132,27 @@ def test_seed_refreshes_bookmarks_of_seeded_sites(client: TestClient, db: Sessio
     refreshed = client.get(f"/api/v1/sites/{demo['id']}").json()["cameraBookmarks"]
     assert len(refreshed) == 1
     assert refreshed[0]["pitch"] == original["pitch"] == -45.0
+
+
+def test_seed_refreshes_boundary_and_footprints_of_seeded_sites(
+    client: TestClient, db: Session
+) -> None:
+    seed(db)
+    demo = next(s for s in client.get("/api/v1/sites").json() if s["slug"] == "cesium-splat-demo")
+    wanted = client.get(f"/api/v1/sites/{demo['id']}").json()
+    small = {
+        "type": "Polygon",
+        "coordinates": [[[-122.14, 47.64], [-122.13, 47.64], [-122.13, 47.65], [-122.14, 47.64]]],
+    }
+    assert client.patch(f"/api/v1/sites/{demo['id']}", json={"boundary": small}).status_code == 200
+    from app.models import Asset
+
+    for asset in db.scalars(select(Asset).where(Asset.site_id == demo["id"])):
+        asset.footprint = None
+    db.commit()
+    assert seed(db) == {"sites": 0, "layers": 0}
+    refreshed = client.get(f"/api/v1/sites/{demo['id']}").json()
+    assert refreshed["boundary"] == wanted["boundary"]
+    assert [a["footprint"] for a in refreshed["assets"]] == [
+        a["footprint"] for a in wanted["assets"]
+    ]

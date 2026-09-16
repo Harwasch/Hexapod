@@ -451,7 +451,25 @@ export class SiteManager {
     const [sample] = await sampleTerrainMostDetailed(this.viewer.terrainProvider, [
       Cartographic.fromRadians(center.longitude, center.latitude),
     ]).catch(() => [undefined]);
-    const ground = sample?.height;
+    let ground = sample?.height;
+    // The ground that is actually drawn may be a mesh (the photorealistic world, another
+    // site's model) sitting metres from the terrain; rest on what is visible when there is
+    // something plausible there.
+    if (this.scene.sampleHeightSupported) {
+      const [drawn] = await this.scene
+        .sampleHeightMostDetailed(
+          [Cartographic.fromRadians(center.longitude, center.latitude)],
+          [tileset],
+        )
+        .catch(() => [undefined]);
+      const height = drawn?.height;
+      if (
+        height !== undefined &&
+        Number.isFinite(height) &&
+        (ground === undefined || Math.abs(height - ground) < DRAWN_GROUND_TOLERANCE_M)
+      )
+        ground = height;
+    }
     if (ground === undefined || !Number.isFinite(ground) || tileset.isDestroyed()) return;
     // Lowest point of the root bounding box when there is one (a sphere would float a flat
     // object by the difference between its radius and its half height).
@@ -472,8 +490,10 @@ export class SiteManager {
       // does not fight them; their ground layer covers it. Cutting the terrain instead leaves
       // a see-through hole wherever the capture is sparse or between points (tile boxes
       // include outliers, so no tile-derived footprint is tight). Only the global 3D tileset
-      // is cut, so buildings from OSM or Google do not poke through the model.
-      const footprint = footprintFromTileset(tileset) ?? asset.footprint ?? active.site.boundary;
+      // is cut, so buildings from OSM or Google do not poke through the model. The authored
+      // footprint comes first: a splat's root box spans every outlier splat (the demo's is
+      // 1.7 × 2.8 km around a campus) and would blank the photorealistic world for blocks.
+      const footprint = asset.footprint ?? active.site.boundary ?? footprintFromTileset(tileset);
       this.clipping.setFootprint(active.site.id, footprint, { globe: false, world: true });
       return;
     }
@@ -790,6 +810,8 @@ const MAX_COVERAGE_DEPTH = 4;
 /** How many branching levels below the first split the coverage follows (4^3 boxes at most). */
 const COVERAGE_LEVELS = 3;
 const COVERAGE_REFRESH_MS = 1000;
+/** A drawn surface further than this from the terrain is something else (a roof, a tree), not ground. */
+const DRAWN_GROUND_TOLERANCE_M = 60;
 
 /** Cheap identity for a coverage footprint: polygon count plus the first coordinate of each. */
 function coverageKey(footprint: Footprint | null): string {

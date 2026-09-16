@@ -382,7 +382,7 @@ export class LayerManager {
 
   /** Photorealistic world: the global mesh replaces the globe surface (it includes terrain). */
   private applyWorldMode(photorealistic: boolean): void {
-    this.scene.globe.show = !photorealistic;
+    this.clipping.setWorldMode(photorealistic);
     this.events.emit("world", photorealistic ? "Google Photorealistic 3D Tiles" : "Open world");
   }
 
