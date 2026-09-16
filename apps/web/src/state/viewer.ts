@@ -26,6 +26,7 @@ export interface PerformanceSnapshot {
   pendingRequests: number;
   tilesProcessing: number;
   siteScreenSpaceError: number | null;
+  worldScreenSpaceError: number | null;
   adaptiveReason: string;
   moving: boolean;
   gpu: string | null;
@@ -82,6 +83,7 @@ export const useViewer = create<ViewerState>()((set) => ({
     pendingRequests: 0,
     tilesProcessing: 0,
     siteScreenSpaceError: null,
+    worldScreenSpaceError: null,
     adaptiveReason: "idle",
     moving: false,
     gpu: null,

@@ -80,11 +80,17 @@ def _refresh(db: Session, existing: Site, wanted: SiteCreate) -> None:
     by_name = {asset.name: asset for asset in existing.assets}
     for payload in wanted.assets:
         asset = by_name.get(payload.name)
-        if asset is None or payload.footprint is None:
+        if asset is None:
             continue
-        if _rings(geometry.wkb_to_footprint(asset.footprint)) != _rings(payload.footprint):
+        if payload.footprint is not None and _rings(
+            geometry.wkb_to_footprint(asset.footprint)
+        ) != _rings(payload.footprint):
             asset.footprint = geometry.footprint_to_wkb(payload.footprint)
             changed.append(f"footprint of {payload.name}")
+        wanted_render = payload.render_config.model_dump(mode="json", by_alias=True)
+        if asset.render_config != wanted_render:
+            asset.render_config = wanted_render
+            changed.append(f"render config of {payload.name}")
     if changed:
         db.commit()
         logger.info("refreshed seeded site %s: %s", wanted.slug, ", ".join(changed))

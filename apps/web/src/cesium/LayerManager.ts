@@ -19,7 +19,7 @@ import { createLogger, describeError } from "@/lib/log";
 import { timed } from "@/lib/timing";
 
 import type { ClippingManager } from "./ClippingManager";
-import type { PerformanceManager } from "./PerformanceManager";
+import { devicePixelError, type PerformanceManager } from "./PerformanceManager";
 import { isIonAuthError } from "./ion";
 import {
   createImageryProvider,
@@ -33,10 +33,6 @@ import { createDataSource, isVectorSource } from "./providers/vector";
 import type { SceneEvents } from "./types";
 
 const log = createLogger("layers");
-/** The world mesh renders at half the sites' screen-space error (8 CSS px on balanced). */
-const WORLD_SSE_FRACTION = 0.5;
-/** Idle refinement never asks the world mesh for finer than this many device pixels of error. */
-const WORLD_MIN_DEVICE_PX = 2;
 
 type Handle =
   | { kind: "imagery"; layer: ImageryLayer }
@@ -64,6 +60,7 @@ export class LayerManager {
   private readonly entries = new Map<string, Entry>();
   private fallbackBasemap: ImageryLayer | null = null;
   private worldTilesetId: string | null = null;
+  private worldTilesetRef: Cesium3DTileset | null = null;
   private worldSse = 16;
   private worldPixelRatio = 1;
   private performance: PerformanceManager | null = null;
@@ -71,7 +68,7 @@ export class LayerManager {
   /** Lets the world tileset report its loading and memory to the adaptive quality policy. */
   bindPerformance(performance: PerformanceManager): void {
     this.performance = performance;
-    performance.addMemorySource(() => {
+    performance.addMemorySource("world", () => {
       const tileset = this.worldTileset;
       if (!tileset) return { bytes: 0, budget: 1 };
       const { cacheBytes, maximumCacheOverflowBytes } = tileCacheBudget();
@@ -220,19 +217,17 @@ export class LayerManager {
   }
 
   /**
-   * Detail of the global mesh follows the adaptive screen-space error, at half the site
-   * value (Google's tiles are coarse at Cesium's default of 16) and in device pixels. The
-   * ladder's tile steps and memory pressure reach it through the same sink.
+   * Detail of the global mesh follows the "world" group's adaptive screen-space error, in
+   * device pixels. The world is governed by the same rules and bounds as the sites, so
+   * collected data is never allowed less detail than its surroundings, but it walks on its
+   * own: its loading and its memory never hold a site back, nor the other way round.
    */
-  applyWorldScreenSpaceError(siteSse: number, pixelRatio: number): void {
-    this.worldSse = siteSse;
+  applyWorldScreenSpaceError(sse: number, pixelRatio: number): void {
+    this.worldSse = sse;
     this.worldPixelRatio = pixelRatio;
     const tileset = this.worldTileset;
     if (!tileset) return;
-    const next = Math.max(
-      WORLD_MIN_DEVICE_PX,
-      Math.round(((siteSse * WORLD_SSE_FRACTION) / pixelRatio) * 4) / 4,
-    );
+    const next = devicePixelError(sse, pixelRatio);
     if (tileset.maximumScreenSpaceError === next) return;
     tileset.maximumScreenSpaceError = next;
     this.scene.requestRender();
@@ -240,9 +235,10 @@ export class LayerManager {
 
   /** Google Photorealistic tileset when loaded (drives the world mode + clipping). */
   get worldTileset(): Cesium3DTileset | null {
-    const id = this.worldTilesetId;
-    const handle = id ? this.entries.get(id)?.handle : null;
-    return handle?.kind === "tileset" ? handle.tileset : null;
+    // A direct reference: the entry's handle is assigned only after the async load returns,
+    // and the world's screen-space error is applied the moment the tileset exists.
+    const tileset = this.worldTilesetRef;
+    return tileset && !tileset.isDestroyed() ? tileset : null;
   }
 
   activeTilesetLabels(): string[] {
@@ -352,6 +348,7 @@ export class LayerManager {
       this.scene.primitives.add(created);
       if (source.type === "google-photorealistic") {
         this.worldTilesetId = layer.id;
+        this.worldTilesetRef = created;
         this.clipping.setWorldTileset(created);
         this.applyWorldScreenSpaceError(this.worldSse, this.worldPixelRatio);
         // The idle refinement waits for the world's tiles too, and its memory counts.
@@ -455,6 +452,7 @@ export class LayerManager {
         if (this.clipping && this.worldTileset === handle.tileset) {
           this.clipping.setWorldTileset(null);
           this.worldTilesetId = null;
+          this.worldTilesetRef = null;
           this.applyWorldMode(false);
         }
         this.scene.primitives.remove(handle.tileset);

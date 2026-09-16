@@ -932,6 +932,11 @@ export interface components {
             /** Maximumscreenspaceerror */
             maximumScreenSpaceError?: number | null;
             pointCloudShading?: components["schemas"]["PointCloudShading"] | null;
+            /**
+             * Screenspaceerrorscale
+             * @default 1
+             */
+            screenSpaceErrorScale?: number;
         };
         /** RenderMetadata */
         RenderMetadata: {

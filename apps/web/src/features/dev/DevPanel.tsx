@@ -111,6 +111,8 @@ export function DevPanel() {
         </dd>
         <dt>Site SSE</dt>
         <dd>{perf.siteScreenSpaceError ?? "—"}</dd>
+        <dt>World SSE</dt>
+        <dd>{perf.worldScreenSpaceError ?? "—"}</dd>
         <dt>Adaptive</dt>
         <dd>{perf.adaptiveReason}</dd>
         <dt>Resolution scale</dt>

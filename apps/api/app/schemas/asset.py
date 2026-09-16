@@ -52,6 +52,11 @@ ClipFootprint = Literal["catalog", "tileset"]
 
 class RenderConfig(CamelModel):
     maximum_screen_space_error: float | None = Field(default=None, gt=0, le=512)
+    # Calibration of this asset's geometric errors against what its textures can show. Tilers
+    # assign geometric error from geometry alone; a survey mesh with 2 cm textures but
+    # conservative errors looks soft next to the Google world at the same screen-space error.
+    # The viewer multiplies its screen-space error by this (0.25 = four times finer).
+    screen_space_error_scale: float = Field(default=1.0, gt=0, le=4)
     point_cloud_shading: PointCloudShading | None = None
     # When true, the asset's footprint clips the globe/terrain and the global 3D world.
     clips_world: bool = True

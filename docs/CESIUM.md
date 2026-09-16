@@ -73,9 +73,9 @@ the GPU, and a Gaussian splat is not re-sorted every 16 ms while nobody is touch
 
 | Preset      | Base SSE | Adaptive range | Resolution                | MSAA |
 | ----------- | -------- | -------------- | ------------------------- | ---- |
-| Performance | 24       | 4–48           | browser-recommended       | off  |
-| Balanced    | 16       | 2–32           | native device pixel ratio | 4×   |
-| Ultra       | 8        | 1–16           | native device pixel ratio | 4×   |
+| Performance | 16       | 4–48           | browser-recommended       | off  |
+| Balanced    | 8        | 2–32           | native device pixel ratio | 4×   |
+| Ultra       | 4        | 1–16           | native device pixel ratio | 4×   |
 
 Smoothness comes first, the way a maps app does it: nothing about the render settings
 changes during a gesture. Tile selection is frozen while the camera moves (every change of
@@ -102,9 +102,16 @@ drawn by itself, so every consumer divides the error by the pixel ratio the scen
 (`PerformanceManager.addScreenSpaceErrorSink` passes both): Cesium measures screen-space
 error in CSS pixels, which on a HiDPI screen picks tiles twice as coarse as they look, while
 a maps app chooses detail by the pixels you see. A resolution cut therefore also lightens
-the tile load. The Google world renders at half the sites' error (8 CSS px on balanced;
-Google's tiles are coarse at Cesium's default 16) through the same sink, so the ladder's
-tile steps and memory pressure reach it too. Ladder evidence comes from every motion frame
+the tile load. Sites and the Google world are two tileset groups under the same rules and
+bounds (parity: collected data is never allowed less detail than its surroundings; Google's
+tiles are coarse at Cesium's default 16, hence a base of 8 on balanced), but each group
+walks on its own with its own loading state and memory budget, so the world filling its
+cache never holds a survey mesh at a coarse level. No tileset is asked for finer than 2
+device pixels, except through an asset's `screenSpaceErrorScale`: a tiler assigns geometric
+error from geometry alone, so a survey mesh with centimetre textures but conservative errors
+looks soft next to the Google world at the same error. The Aerometrex San Francisco mesh is
+seeded at 0.25 (measured 7 km up: 2 px draws 17k triangles and a grey blob, 0.5 px draws
+119k and the real detail, still a quarter of what Google draws in the same view). Ladder evidence comes from every motion frame
 (slow frames add up, smooth frames pay them back), so three short slow drags count as much
 as one long one. The dev panel shows the profile (`full` or `reduced`) and the step taken. Gaussian
 splats never refine below SSE 12 / 8 / 4 (performance / balanced / ultra): they are sorted on

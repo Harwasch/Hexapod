@@ -65,7 +65,10 @@ export const QUALITY_SSE: Record<QualityPreset, { base: number; min: number; max
   // The minimum is where idle refinement ends up; memory pressure is the governor. A 2 to
   // 5 cm mesh only shows its detail below about 2 px of error (measured: 8 px draws 176k
   // triangles and looks like the Google world, 2 px draws 416k and looks like the survey).
-  performance: { base: 24, min: 4, max: 48 },
-  balanced: { base: 16, min: 2, max: 32 },
-  ultra: { base: 8, min: 1, max: 16 },
+  // The base is what a moving camera gets, for sites and the Google world alike (parity, so
+  // collected data never looks worse than its surroundings). Google's tiles are coarse at
+  // Cesium's default of 16, hence 8 on balanced.
+  performance: { base: 16, min: 4, max: 48 },
+  balanced: { base: 8, min: 2, max: 32 },
+  ultra: { base: 4, min: 1, max: 16 },
 };

@@ -23,7 +23,7 @@ import { timed } from "@/lib/timing";
 import type { CameraController } from "./CameraController";
 import type { ClippingManager } from "./ClippingManager";
 import { isIonAuthError, isIonNotFound } from "./ion";
-import type { PerformanceManager } from "./PerformanceManager";
+import { devicePixelError, type PerformanceManager } from "./PerformanceManager";
 import { createSiteTileset, tileCacheBudget } from "./providers/tiles";
 import type { SceneEvents } from "./types";
 
@@ -109,10 +109,10 @@ export class SiteManager {
     private readonly performance: PerformanceManager,
   ) {
     this.scene = viewer.scene;
-    this.performance.addScreenSpaceErrorSink((sse, pixelRatio) =>
+    this.performance.addScreenSpaceErrorSink("sites", (sse, pixelRatio) =>
       this.applyScreenSpaceError(sse, pixelRatio),
     );
-    this.performance.addMemorySource(() => this.memoryUsage());
+    this.performance.addMemorySource("sites", () => this.memoryUsage());
     this.unsubscribe.push(
       viewer.camera.changed.addEventListener(() => this.checkProximity()),
       viewer.camera.moveEnd.addEventListener(() => this.checkProximity(true)),
@@ -620,8 +620,12 @@ export class SiteManager {
       if (handle.asset.representation === "gaussian-splat")
         next = Math.max(next, this.performance.splatMinimumScreenSpaceError);
       // Cesium measures the error in CSS pixels; hand it device pixels so a HiDPI screen
-      // gets the detail it can show, and a resolution cut also lightens the tile load.
-      next = Math.round((next / pixelRatio) * 4) / 4;
+      // gets the detail it can show, and a resolution cut also lightens the tile load. The
+      // asset's calibration comes last: a tiler's geometric errors say nothing about texture
+      // sharpness, and a survey mesh may need a finer error than the world to look as sharp.
+      next =
+        devicePixelError(next, pixelRatio) * (handle.asset.renderConfig.screenSpaceErrorScale ?? 1);
+      next = Math.round(next * 16) / 16;
       if (handle.tileset.maximumScreenSpaceError === next) continue;
       handle.tileset.maximumScreenSpaceError = next;
       this.events.emit("asset", {

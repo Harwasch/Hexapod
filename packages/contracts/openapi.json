@@ -2363,6 +2363,13 @@
                 "type": "null"
               }
             ]
+          },
+          "screenSpaceErrorScale": {
+            "default": 1.0,
+            "exclusiveMinimum": 0.0,
+            "maximum": 4.0,
+            "title": "Screenspaceerrorscale",
+            "type": "number"
           }
         },
         "title": "RenderConfig",

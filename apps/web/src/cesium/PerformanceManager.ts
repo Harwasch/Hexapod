@@ -90,6 +90,36 @@ export type RenderProfile = "full" | "reduced";
 /** Receives the screen-space error in CSS pixels and the pixel ratio the scene renders at. */
 export type ScreenSpaceErrorSink = (sse: number, pixelRatio: number) => void;
 
+/**
+ * Tileset groups are governed separately: each has its own error walk, loading state and
+ * memory budget, so the Google world filling its cache never stops a survey mesh from
+ * refining, and both are held to the same rules so collected data is never allowed less
+ * detail than its surroundings.
+ */
+export type TilesetGroup = "sites" | "world";
+const GROUPS: TilesetGroup[] = ["sites", "world"];
+
+/** No tileset is ever asked for finer than this many device pixels of error. */
+export const MIN_DEVICE_PX = 2;
+
+/** Cesium measures screen-space error in CSS pixels; hand it device pixels, quantised. */
+export function devicePixelError(sse: number, pixelRatio: number): number {
+  return Math.max(MIN_DEVICE_PX, Math.round((sse / pixelRatio) * 4) / 4);
+}
+
+interface GroupState {
+  sse: number;
+  pending: number;
+  processing: number;
+  reason: string;
+  readonly sinks: ScreenSpaceErrorSink[];
+  readonly memorySources: (() => { bytes: number; budget: number })[];
+}
+
+function newGroup(sse: number): GroupState {
+  return { sse, pending: 0, processing: 0, reason: "idle", sinks: [], memorySources: [] };
+}
+
 interface LadderStep {
   msaa: number;
   scale: number;
@@ -116,7 +146,10 @@ export class PerformanceManager {
     manualScreenSpaceError: null,
     adaptive: true,
   };
-  private currentSse: number = QUALITY_SSE.balanced.base;
+  private readonly groups: Record<TilesetGroup, GroupState> = {
+    sites: newGroup(QUALITY_SSE.balanced.base),
+    world: newGroup(QUALITY_SSE.balanced.base),
+  };
   private ladder: LadderStep[] = [];
   private level = 0;
   private resolutionScale = 1;
@@ -125,17 +158,12 @@ export class PerformanceManager {
   private goodMotionMs = 0;
   private recoveryMs = INITIAL_RECOVERY_MS;
   private restSince = 0;
-  private pending = 0;
-  private processing = 0;
   private moving = false;
   private movingUntil = 0;
   private altitude = Number.POSITIVE_INFINITY;
   private nearSite = false;
   private readonly timer: ReturnType<typeof setInterval>;
   private readonly unsubscribe: (() => void)[] = [];
-  private readonly sinks: ScreenSpaceErrorSink[] = [];
-  private readonly memorySources: (() => { bytes: number; budget: number })[] = [];
-  private readonly loadingBySource = new Map<string, { pending: number; processing: number }>();
   private readonly gpu: string | null;
   private readonly webgl2: boolean;
   /** Frame intervals recorded while the camera moved, since the last reset (site change). */
@@ -174,15 +202,14 @@ export class PerformanceManager {
   }
 
   /**
-   * Registers a consumer of the current screen-space error. It receives the error in CSS
-   * pixels together with the pixel ratio the scene renders at, so consumers can divide and
-   * hand Cesium an error in device pixels: Cesium measures screen-space error in CSS pixels,
-   * which on a HiDPI screen picks tiles twice as coarse as they look, and a maps app chooses
-   * detail by the pixels you actually see.
+   * Registers a consumer of a group's current screen-space error. It receives the error in
+   * CSS pixels together with the pixel ratio the scene renders at, so consumers can hand
+   * Cesium an error in device pixels (`devicePixelError`): Cesium measures screen-space error
+   * in CSS pixels, which on a HiDPI screen picks tiles twice as coarse as they look.
    */
-  addScreenSpaceErrorSink(apply: ScreenSpaceErrorSink): void {
-    this.sinks.push(apply);
-    apply(this.currentSse, this.pixelRatio);
+  addScreenSpaceErrorSink(group: TilesetGroup, apply: ScreenSpaceErrorSink): void {
+    this.groups[group].sinks.push(apply);
+    apply(this.groups[group].sse, this.pixelRatio);
   }
 
   /** Resolution scale times the device pixel ratio when rendering at native resolution. */
@@ -191,20 +218,21 @@ export class PerformanceManager {
     return Math.max(0.25, this.resolutionScale * dpr);
   }
 
-  private applySse(sse: number): void {
+  private applySse(group: TilesetGroup): void {
     const ratio = this.pixelRatio;
-    for (const sink of this.sinks) sink(sse, ratio);
+    const state = this.groups[group];
+    for (const sink of state.sinks) sink(state.sse, ratio);
   }
 
-  /** Registers a tileset group's memory use against its cache budget (sites, the world). */
-  addMemorySource(source: () => { bytes: number; budget: number }): void {
-    this.memorySources.push(source);
+  /** Registers a group's memory use against its cache budget. */
+  addMemorySource(group: TilesetGroup, source: () => { bytes: number; budget: number }): void {
+    this.groups[group].memorySources.push(source);
   }
 
-  /** The most loaded group's share of its budget; each tileset has its own cache. */
-  private get memoryRatio(): number {
+  /** A group's most loaded tileset's share of its budget; each tileset has its own cache. */
+  private memoryRatio(group: TilesetGroup): number {
     let ratio = 0;
-    for (const source of this.memorySources) {
+    for (const source of this.groups[group].memorySources) {
       const { bytes, budget } = source();
       if (budget > 0) ratio = Math.max(ratio, bytes / budget);
     }
@@ -214,19 +242,22 @@ export class PerformanceManager {
   private get memoryBytes(): { bytes: number; budget: number } {
     let bytes = 0;
     let budget = 0;
-    for (const source of this.memorySources) {
-      const m = source();
-      bytes += m.bytes;
-      budget += m.budget;
-    }
+    for (const group of GROUPS)
+      for (const source of this.groups[group].memorySources) {
+        const m = source();
+        bytes += m.bytes;
+        budget += m.budget;
+      }
     return { bytes, budget };
   }
 
   configure(inputs: QualityInputs): void {
     this.inputs = inputs;
     const bounds = QUALITY_SSE[inputs.preset];
-    this.currentSse = inputs.manualScreenSpaceError ?? bounds.base;
-    this.applySse(this.currentSse);
+    for (const group of GROUPS) {
+      this.groups[group].sse = inputs.manualScreenSpaceError ?? bounds.base;
+      this.applySse(group);
+    }
     this.scene.globe.maximumScreenSpaceError = inputs.preset === "performance" ? 3 : 2;
     // Still and moving frames share one resolution. Performance renders at the browser's
     // recommended (CSS pixel) resolution; the others use native device pixels until the
@@ -241,17 +272,10 @@ export class PerformanceManager {
     this.evaluate("configured");
   }
 
-  /** Loading state per tileset group (sites, the world); the decision waits for all of them. */
-  reportLoading(source: string, pending: number, processing: number): void {
-    this.loadingBySource.set(source, { pending, processing });
-    let p = 0;
-    let q = 0;
-    for (const entry of this.loadingBySource.values()) {
-      p += entry.pending;
-      q += entry.processing;
-    }
-    this.pending = p;
-    this.processing = q;
+  /** Loading state per tileset group; a group's walk waits only for its own tiles. */
+  reportLoading(group: TilesetGroup, pending: number, processing: number): void {
+    this.groups[group].pending = pending;
+    this.groups[group].processing = processing;
   }
 
   reportContext(altitude: number, nearSite: boolean): void {
@@ -259,8 +283,9 @@ export class PerformanceManager {
     this.nearSite = nearSite;
   }
 
+  /** The sites' current screen-space error in CSS pixels. */
   get screenSpaceError(): number {
-    return this.currentSse;
+    return this.groups.sites.sse;
   }
 
   get splatMinimumScreenSpaceError(): number {
@@ -289,7 +314,7 @@ export class PerformanceManager {
     this.setResolutionScale(step.scale);
     this.setMsaa(step.msaa);
     // A resolution step changes the pixel ratio, and with it the device-pixel error.
-    this.applySse(this.currentSse);
+    for (const group of GROUPS) this.applySse(group);
     this.scene.requestRender();
   }
 
@@ -396,38 +421,48 @@ export class PerformanceManager {
     const fps = this.fps;
     const now = performance.now();
     const moving = this.moving || now < this.movingUntil;
-    const loading = this.pending > 0 || this.processing > 0;
     const preset = QUALITY_SSE[this.inputs.preset];
     const memory = this.memoryBytes;
-    const memoryRatio = this.memoryRatio;
-    let target = this.inputs.manualScreenSpaceError ?? preset.base;
-    let reason: string;
+    const adaptive = this.inputs.adaptive && this.inputs.manualScreenSpaceError === null;
+    const stepReason = adaptive ? this.climbLadder(now, moving) : null;
+    const penalty = this.step.ssePenalty;
+    const bounds = {
+      base: Math.min(preset.max, preset.base + penalty),
+      min: Math.min(preset.max, preset.min + penalty),
+      max: preset.max,
+    };
 
-    if (this.inputs.adaptive && this.inputs.manualScreenSpaceError === null) {
-      const stepReason = this.climbLadder(now, moving);
-      const penalty = this.step.ssePenalty;
-      const bounds = {
-        base: Math.min(preset.max, preset.base + penalty),
-        min: Math.min(preset.max, preset.min + penalty),
-        max: preset.max,
-      };
-      const decision = decideScreenSpaceError({
-        bounds,
-        current: this.currentSse,
-        moving,
-        loading,
-        memoryRatio,
-      });
-      target = decision.screenSpaceError;
-      reason = forcedReason ?? stepReason ?? decision.reason;
-    } else {
-      reason = forcedReason ?? (this.inputs.manualScreenSpaceError !== null ? "manual" : "fixed");
-    }
-    if (Math.abs(target - this.currentSse) >= 0.5) {
-      this.currentSse = Math.round(target * 2) / 2;
-      this.applySse(this.currentSse);
+    let pending = 0;
+    let processing = 0;
+    for (const group of GROUPS) {
+      const state = this.groups[group];
+      pending += state.pending;
+      processing += state.processing;
+      let target = this.inputs.manualScreenSpaceError ?? preset.base;
+      if (adaptive) {
+        const decision = decideScreenSpaceError({
+          bounds,
+          current: state.sse,
+          moving,
+          loading: state.pending > 0 || state.processing > 0,
+          memoryRatio: this.memoryRatio(group),
+        });
+        target = decision.screenSpaceError;
+        state.reason = forcedReason ?? stepReason ?? decision.reason;
+      } else {
+        state.reason =
+          forcedReason ?? (this.inputs.manualScreenSpaceError !== null ? "manual" : "fixed");
+      }
+      if (Math.abs(target - state.sse) >= 0.5) {
+        state.sse = Math.round(target * 2) / 2;
+        this.applySse(group);
+      }
     }
 
+    const reason =
+      this.groups.sites.reason === this.groups.world.reason
+        ? this.groups.sites.reason
+        : `sites: ${this.groups.sites.reason} · world: ${this.groups.world.reason}`;
     this.events.emit("performance", {
       gpu: this.gpu,
       webgl2: this.webgl2,
@@ -438,9 +473,10 @@ export class PerformanceManager {
       resolutionScale: this.resolutionScale,
       msaaSamples: this.msaa,
       devicePixelRatio: window.devicePixelRatio,
-      pendingRequests: this.pending,
-      tilesProcessing: this.processing,
-      siteScreenSpaceError: this.currentSse,
+      pendingRequests: pending,
+      tilesProcessing: processing,
+      siteScreenSpaceError: this.groups.sites.sse,
+      worldScreenSpaceError: this.groups.world.sse,
       adaptiveReason: reason,
       moving,
       tilesetMemoryMb: Math.round(memory.bytes / 1048576),

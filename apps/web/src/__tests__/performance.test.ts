@@ -75,18 +75,15 @@ describe("splatMinimumScreenSpaceError", () => {
 describe("buildLadder", () => {
   it("cuts anti-aliasing, then resolution to a half, then tiles, never past the preset maximum", () => {
     const steps = buildLadder("balanced");
-    expect(steps.map((s) => s.label)).toEqual([
+    expect(steps.slice(0, 6).map((s) => s.label)).toEqual([
       "full",
       "MSAA off",
       "resolution 0.8",
       "resolution 0.65",
       "resolution 0.5",
       "tiles +3 SSE",
-      "tiles +6 SSE",
-      "tiles +9 SSE",
-      "tiles +12 SSE",
-      "tiles +15 SSE",
     ]);
+    expect(steps.every((s, i) => i < 5 || s.ssePenalty === (i - 4) * 3)).toBe(true);
     const last = steps[steps.length - 1];
     expect(QUALITY_SSE.balanced.base + (last?.ssePenalty ?? 0)).toBeLessThanOrEqual(
       QUALITY_SSE.balanced.max,

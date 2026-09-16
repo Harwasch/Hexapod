@@ -156,3 +156,20 @@ def test_seed_refreshes_boundary_and_footprints_of_seeded_sites(
     assert [a["footprint"] for a in refreshed["assets"]] == [
         a["footprint"] for a in wanted["assets"]
     ]
+
+
+def test_seed_refreshes_render_config_of_seeded_assets(client: TestClient, db: Session) -> None:
+    seed(db)
+    sf = next(
+        s for s in client.get("/api/v1/sites").json() if s["slug"].startswith("san-francisco")
+    )
+    from app.models import Asset
+
+    asset = db.scalars(select(Asset).where(Asset.site_id == sf["id"])).first()
+    assert asset is not None
+    assert asset.render_config["screenSpaceErrorScale"] == 0.25
+    asset.render_config = {**asset.render_config, "screenSpaceErrorScale": 1.0}
+    db.commit()
+    assert seed(db) == {"sites": 0, "layers": 0}
+    detail = client.get(f"/api/v1/sites/{sf['id']}").json()
+    assert detail["assets"][0]["renderConfig"]["screenSpaceErrorScale"] == 0.25
