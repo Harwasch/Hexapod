@@ -503,14 +503,14 @@ export class SiteManager {
     }
     let footprint: Footprint | null = null;
     let provisional = false;
+    const authored = asset.footprint ?? active.site.boundary;
     if (asset.renderConfig.clipsWorld) {
       if (asset.renderConfig.clipFootprint === "tileset") {
-        const coverage = coverageFromTileset(tileset);
+        const coverage = tighter(coverageFromTileset(tileset), authored);
         provisional = coverage === null;
-        footprint =
-          coverage ?? footprintFromTileset(tileset) ?? asset.footprint ?? active.site.boundary;
+        footprint = coverage ?? authored;
       } else {
-        footprint = asset.footprint ?? active.site.boundary;
+        footprint = authored;
       }
     }
     this.clipping.setFootprint(active.site.id, footprint);
@@ -529,7 +529,7 @@ export class SiteManager {
         timer = setTimeout(refresh, COVERAGE_REFRESH_MS);
         return;
       }
-      const coverage = coverageFromTileset(tileset);
+      const coverage = tighter(coverageFromTileset(tileset), authored);
       if (!coverage) return;
       const key = coverageKey(coverage);
       if (key === applied) return;
@@ -703,12 +703,51 @@ export function coverageFromTileset(tileset: Cesium3DTileset): Footprint | null 
       for (const child of node.children) visit(child, level + 1);
       return;
     }
+    // Spheres are never tight (a coarse tile's sphere reaches far past its content and,
+    // cut out of the world, shows as a black circle of sky); only boxes and regions count.
+    if (!hasTightVolume(node)) return;
     const footprint = footprintFromTile(node);
     if (footprint?.type === "Polygon") polygons.push(footprint.coordinates as [number, number][][]);
   };
   visit(tile, 0);
   if (polygons.length === 0) return null;
   return { type: "MultiPolygon", coordinates: polygons };
+}
+
+/** Whether a tile's bounding volume is a region or an oriented box (a sphere is never tight). */
+function hasTightVolume(tile: Cesium3DTile): boolean {
+  const volume = (tile as unknown as { boundingVolume?: TileVolume }).boundingVolume;
+  return Boolean(volume?.rectangle ?? volume?.boundingVolume?.halfAxes);
+}
+
+/**
+ * The tile-derived coverage is only used while it is at least as tight as the authored
+ * footprint: before the fine tiles have loaded, coarse tiles' volumes reach well past the
+ * data, and cutting the world along them leaves holes around the model.
+ */
+export function tighter(coverage: Footprint | null, authored: Footprint | null): Footprint | null {
+  if (!coverage) return null;
+  if (!authored) return coverage;
+  return bboxArea(coverage) <= bboxArea(authored) * COVERAGE_SLACK ? coverage : null;
+}
+
+/** Bounding-box area of a footprint in square degrees (only ever compared at one latitude). */
+function bboxArea(footprint: Footprint): number {
+  let west = Number.POSITIVE_INFINITY;
+  let south = Number.POSITIVE_INFINITY;
+  let east = Number.NEGATIVE_INFINITY;
+  let north = Number.NEGATIVE_INFINITY;
+  const polygons = footprint.type === "Polygon" ? [footprint.coordinates] : footprint.coordinates;
+  for (const polygon of polygons)
+    for (const point of polygon[0] ?? []) {
+      const [lon, lat] = point;
+      if (lon === undefined || lat === undefined) continue;
+      west = Math.min(west, lon);
+      east = Math.max(east, lon);
+      south = Math.min(south, lat);
+      north = Math.max(north, lat);
+    }
+  return Number.isFinite(west) ? Math.max(0, east - west) * Math.max(0, north - south) : 0;
 }
 
 /** Ellipsoid height of the lowest corner of a tileset's root oriented bounding box. */
@@ -818,6 +857,8 @@ const MAX_COVERAGE_DEPTH = 4;
 /** How many branching levels below the first split the coverage follows (4^3 boxes at most). */
 const COVERAGE_LEVELS = 3;
 const COVERAGE_REFRESH_MS = 1000;
+/** Tile coverage may exceed the authored footprint's bounding box by this factor and still be used. */
+const COVERAGE_SLACK = 1.15;
 /** A drawn surface further than this from the terrain is something else (a roof, a tree), not ground. */
 const DRAWN_GROUND_TOLERANCE_M = 60;
 

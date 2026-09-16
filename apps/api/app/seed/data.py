@@ -331,7 +331,9 @@ AEROMETREX_ATTRIBUTION = Attribution(
     organization="Aerometrex",
     url="https://aerometrex.com/models/",
 )
-SAN_FRANCISCO_BOUNDARY = rect_polygon(-122.44818, 37.75791, -122.35837, 37.82462)
+# Extent of the Aerometrex mesh itself (measured from a top-down render, 50 m margin); the
+# tiles use bounding spheres, so the viewer cannot derive a tight outline from them.
+SAN_FRANCISCO_BOUNDARY = rect_polygon(-122.4344, 37.7655, -122.3828, 37.8113)
 SAN_FRANCISCO_SITE = SiteCreate(
     slug="san-francisco-aerometrex-mesh",
     name="San Francisco: high-resolution mesh",

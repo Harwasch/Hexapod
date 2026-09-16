@@ -170,14 +170,18 @@ On by default (`VITE_ENABLE_PHOTOREALISTIC=false` switches it off), the Google P
 3D Tiles catalog layer (via `createGooglePhotorealistic3DTileset`) replaces the globe surface,
 receives the same site clipping, and switches the ion geocoder to Google as Google's terms
 require. It is labeled as visual context only. The globe is hidden in this world except
-under Gaussian splats and point clouds: `ClippingManager.setWorldMode` flips the globe's
-clipping collection to `inverse` and fills it with those sites' footprints, so terrain and
-imagery stay as an opaque floor under a splat's sparse patches while the Google mesh is cut
-away there (its buildings would otherwise poke through the splat's). Mesh sites cut only the
-Google mesh. The world clip under a splat uses the authored footprint first: a splat's root
-box spans every outlier splat (the Redmond demo's is 1.7 × 2.8 km) and would blank the
-photorealistic world for blocks; the demo boundary is the outline traced from a top-down
-render of the splat. Clamped objects (the sample rock and plant) rest on the drawn surface
+inside site footprints: `ClippingManager.setWorldMode` flips the globe's clipping collection
+to `inverse` and fills it with every site's footprint, so terrain and imagery stay as an
+opaque floor under a splat's sparse patches and in the gap between a mesh and its footprint
+(a hole in the Google mesh otherwise shows sky), while the Google mesh is cut away there (its
+buildings would otherwise poke through the site's). The world clip under a splat uses the
+authored footprint first: a splat's root box spans every outlier splat (the Redmond demo's is
+1.7 × 2.8 km) and would blank the photorealistic world for blocks; the demo boundary is the
+outline traced from a top-down render of the splat. Mesh sites with `clipFootprint:
+"tileset"` use the tiles' coverage only from box or region volumes and only while it is no
+larger than the authored footprint (`tighter`): coarse tiles' spheres reach far past the
+data, and cut out of the world they showed as a ring of black circles around the San
+Francisco mesh. Seeded boundaries of sphere-based meshes are measured from a render. Clamped objects (the sample rock and plant) rest on the drawn surface
 (`scene.sampleHeightMostDetailed`, excluding themselves) when it is within 60 m of the
 terrain, so they sit on Google's ground rather than floating over or sinking into it.
 

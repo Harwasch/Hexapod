@@ -61,8 +61,9 @@ export class ClippingManager {
   /**
    * Open world: the globe carries terrain and imagery everywhere and gets holes under mesh
    * sites. Photorealistic world: the Google mesh is the ground, so the globe is hidden,
-   * except that it is kept (inverse clip) under splats and point clouds, which need an
-   * opaque floor and would otherwise show sky through their sparse patches.
+   * except that it is kept (inverse clip) inside every site footprint: splats and point
+   * clouds need an opaque floor under their sparse patches, and a mesh never fills its
+   * footprint exactly, so without terrain the gap between mesh and footprint shows sky.
    */
   setWorldMode(photorealistic: boolean): void {
     if (this.photorealistic === photorealistic) return;
@@ -82,7 +83,7 @@ export class ClippingManager {
 
   /** Whether a footprint with these targets belongs in the globe collection for the current world. */
   private globeCarries(targets: ClipTargets): boolean {
-    return this.photorealistic ? !targets.globe : targets.globe;
+    return this.photorealistic ? targets.world : targets.globe;
   }
 
   /**
