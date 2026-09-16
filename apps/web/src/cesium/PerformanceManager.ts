@@ -64,6 +64,9 @@ export function decideScreenSpaceError(sample: QualitySample): QualityDecision {
       reason: `memory pressure (${Math.round(memoryRatio * 100)}% of budget)`,
     };
   }
+  // A ladder step that raised the floor coarsens at once, moving or not: the step exists
+  // because frames are slow, and the expensive tileset must feel it, not only the cheap one.
+  if (current < bounds.min) return { screenSpaceError: bounds.min, reason: "ladder floor" };
   if (moving) return { screenSpaceError: current, reason: "moving (tiles held)" };
   if (loading) return { screenSpaceError: current, reason: "loading" };
   if (memoryRatio >= REFINE_MEMORY_RATIO)

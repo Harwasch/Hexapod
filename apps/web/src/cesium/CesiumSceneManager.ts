@@ -1,4 +1,4 @@
-import { Color, Viewer, type Scene } from "cesium";
+import { Color, Viewer, type Scene, RequestScheduler } from "cesium";
 
 import { Emitter } from "@/lib/emitter";
 import { createLogger, describeError } from "@/lib/log";
@@ -93,6 +93,12 @@ export class CesiumSceneManager {
     scene.highDynamicRange = false;
     // MSAA is on by default; FXAA only when the PerformanceManager turns MSAA off.
     scene.postProcessStages.fxaa.enabled = false;
+
+    // Terrain, imagery and ion-hosted site meshes share one host; with a deep mesh streaming,
+    // its requests would otherwise crowd out the terrain under it for as long as it loads.
+    const perServer = RequestScheduler.requestsByServer as Record<string, number>;
+    perServer["assets.ion.cesium.com:443"] = 36;
+    perServer["tile.googleapis.com:443"] = 24;
 
     this.camera = new CameraController(this.viewer, this.events);
     this.clipping = new ClippingManager(scene);

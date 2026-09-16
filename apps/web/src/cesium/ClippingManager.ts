@@ -19,6 +19,19 @@ export interface ClipTargets {
 }
 
 const ALL: ClipTargets = { globe: true, world: true };
+/** A few metres of Antarctica nobody looks at, so an inverse clip always has a polygon. */
+const SENTINEL_KEY = "__sentinel";
+const SENTINEL: Footprint = {
+  type: "Polygon",
+  coordinates: [
+    [
+      [0, -89.99],
+      [0.001, -89.99],
+      [0.0005, -89.989],
+      [0, -89.99],
+    ],
+  ],
+};
 
 /**
  * Cuts holes in the coarse world (globe/terrain and the global 3D tileset)
@@ -78,6 +91,13 @@ export class ClippingManager {
     for (const [key, entry] of this.footprints)
       if (this.globeCarries(entry.targets))
         this.addTo(this.globeCollection, this.globePolygons, key, entry.footprint);
+    // In the photorealistic world the globe is never hidden, only clipped away: a hidden
+    // globe stops loading, and the terrain and imagery inside a site's outline would then
+    // start from level 0 the moment the site engages, showing a dark band for seconds while
+    // they compete with the world's requests. A sentinel polygon at the pole keeps the
+    // inverse clip active (and every tile culled) when no site is engaged.
+    if (photorealistic)
+      this.addTo(this.globeCollection, this.globePolygons, SENTINEL_KEY, SENTINEL);
     this.syncEnabled();
   }
 
@@ -174,7 +194,9 @@ export class ClippingManager {
     const any = this.footprints.size > 0 && this.enabled;
     if (this.globeCollection) this.globeCollection.enabled = any && this.globeCollection.length > 0;
     if (this.worldCollection) this.worldCollection.enabled = any && this.worldCollection.length > 0;
-    // In the photorealistic world the globe only exists inside the inverse clip.
+    // In the photorealistic world the globe only exists inside the inverse clip, which the
+    // sentinel keeps active; the globe itself stays shown so it keeps loading.
+    if (this.globeCollection && this.photorealistic) this.globeCollection.enabled = this.enabled;
     this.scene.globe.show = !this.photorealistic || (this.globeCollection?.enabled ?? false);
     this.scene.requestRender();
   }

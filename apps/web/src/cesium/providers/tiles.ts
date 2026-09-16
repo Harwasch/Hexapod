@@ -44,6 +44,11 @@ export async function createSiteTileset(
       asset.renderConfig.maximumScreenSpaceError ?? quality.maximumScreenSpaceError,
     show: false,
     preloadWhenHidden: true,
+    // Load the level the view needs instead of every level on the way (measured on the SF
+    // mesh 160 m up: 265k triangles in the time it took 145k without). The near, deep part of
+    // a pitched view is what waits longest otherwise. Splats and point clouds keep the
+    // ordinary traversal.
+    skipLevelOfDetail: asset.representation === "mesh",
     // Never enableCollision: Cesium then ray-casts every loaded tile's triangles on the CPU
     // every frame to find the height under the camera (measured 130 ms per frame on the
     // Google world, 400 ms on a drone mesh). The camera floor is kept by CameraController
@@ -82,7 +87,7 @@ export async function createLayerTileset(layer: Layer): Promise<TilesetType | MV
       // enableCollision (see createSiteTileset).
       return createGooglePhotorealistic3DTileset(
         { onlyUsingWithGoogleGeocoder: true },
-        { ...options, show: false, enableCollision: false },
+        { ...options, show: false, enableCollision: false, skipLevelOfDetail: true },
       );
     case "mvt":
       return MVTDataProvider.fromUrl(source.urlTemplate, {

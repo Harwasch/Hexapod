@@ -98,7 +98,12 @@ above 50 fps, applied while the camera rests (a resolution switch re-allocates t
 framebuffers, a visible hitch mid-gesture), and every recovery has to earn twice the smooth
 motion of the last, so a borderline machine settles instead of oscillating. Cesium divides
 screen-space error by the pixel ratio, so a resolution step never changes which tiles are
-drawn by itself, so every consumer divides the error by the pixel ratio the scene renders at
+drawn by itself. A ladder step that raises the error floor coarsens every group at once, so
+the expensive Google world feels it and not only a cheap survey mesh. Mesh tilesets (sites
+and the world) use `skipLevelOfDetail`: the level a view needs loads directly instead of
+every level on the way, which is what made the near, deep part of a pitched view wait
+longest (measured 265k versus 145k triangles in the same time). Every consumer divides the
+error by the pixel ratio the scene renders at
 (`PerformanceManager.addScreenSpaceErrorSink` passes both): Cesium measures screen-space
 error in CSS pixels, which on a HiDPI screen picks tiles twice as coarse as they look, while
 a maps app chooses detail by the pixels you see. A resolution cut therefore also lightens
@@ -184,14 +189,21 @@ inside site footprints: `ClippingManager.setWorldMode` flips the globe's clippin
 to `inverse` and fills it with every site's footprint, so terrain and imagery stay as an
 opaque floor under a splat's sparse patches and in the gap between a mesh and its footprint
 (a hole in the Google mesh otherwise shows sky), while the Google mesh is cut away there (its
-buildings would otherwise poke through the site's). The world clip under a splat uses the
+buildings would otherwise poke through the site's). The globe is never hidden in that world,
+only clipped away everywhere (a sentinel polygon at the pole keeps the inverse clip active),
+so terrain and imagery keep loading under the Google mesh and are already sharp when a site
+engages; a hidden globe would start from level 0 and show a dark band for seconds. The world clip under a splat uses the
 authored footprint first: a splat's root box spans every outlier splat (the Redmond demo's is
 1.7 × 2.8 km) and would blank the photorealistic world for blocks; the demo boundary is the
 outline traced from a top-down render of the splat. Mesh sites with `clipFootprint:
 "tileset"` use the tiles' coverage only from box or region volumes and only while it is no
 larger than the authored footprint (`tighter`): coarse tiles' spheres reach far past the
 data, and cut out of the world they showed as a ring of black circles around the San
-Francisco mesh. Seeded boundaries of sphere-based meshes are measured from a render.
+Francisco mesh. Seeded boundaries of sphere-based meshes are measured from a render and
+inset about 20 m inside the content edge, so the Google mesh overlaps the survey's ragged
+edge rather than leaving a band of coarse terrain imagery between the two. Terrain, imagery
+and ion-hosted meshes share one host, so its request concurrency is raised (36) to keep a
+streaming mesh from crowding out the terrain under it.
 
 A site's model only takes over from the world once the camera is close enough for its
 detail to matter: below 2.5 footprint radii of altitude and within 3 radii horizontally

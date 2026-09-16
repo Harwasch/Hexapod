@@ -57,10 +57,19 @@ describe("decideScreenSpaceError", () => {
     ).toBe(32);
   });
 
-  it("follows bounds shifted by a ladder penalty", () => {
+  it("follows bounds shifted by a ladder penalty, coarsening at once when the floor rose", () => {
     const bounds = { base: 22, min: 12, max: 32 };
     expect(decideScreenSpaceError({ ...base, bounds, current: 13 }).screenSpaceError).toBe(12);
     expect(decideScreenSpaceError({ ...base, bounds, current: 12 }).reason).toBe("at finest");
+    for (const sample of [
+      { ...base, bounds, current: 4, moving: true },
+      { ...base, bounds, current: 4, loading: true },
+      { ...base, bounds, current: 4, memoryRatio: 0.9 },
+    ])
+      expect(decideScreenSpaceError(sample)).toEqual({
+        screenSpaceError: 12,
+        reason: "ladder floor",
+      });
   });
 });
 
