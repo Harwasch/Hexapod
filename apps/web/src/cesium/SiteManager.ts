@@ -43,6 +43,14 @@ const NEAR_ALTITUDE_M = 6_000;
 const MIN_SITE_RADIUS_M = 30;
 /** Object scale engages within this distance of a hand-sized model's surface. */
 const OBJECT_SCALE_REACH_M = 25;
+/**
+ * A site's model takes over from the world below this many footprint radii of altitude and
+ * within this many radii horizontally; it hands back further out (hysteresis).
+ */
+const ENGAGE_ALTITUDE_RADII = 2.5;
+const DISENGAGE_ALTITUDE_RADII = 3.5;
+const ENGAGE_DISTANCE_RADII = 3;
+const DISENGAGE_DISTANCE_RADII = 4.5;
 
 interface AssetHandle {
   asset: SiteAsset;
@@ -51,6 +59,8 @@ interface AssetHandle {
   /** Resolves once a clamp-to-ground placement has been applied (or was not requested). */
   placed: Promise<void>;
   unsubscribe: (() => void)[];
+  /** The tile-coverage clip refresh is registered once per tileset. */
+  coverageWatched?: boolean;
 }
 
 interface ActiveSite {
@@ -58,6 +68,15 @@ interface ActiveSite {
   representation: Representation;
   temporalAssetId: string | null;
   handles: Map<string, AssetHandle>;
+  /** Radius of the authored footprint (at least MIN_SITE_RADIUS_M), the yardstick for engagement. */
+  radius: number;
+  /**
+   * Engaged: the camera is close enough that the model's detail matters, so the model is
+   * drawn and takes over from the world. Further out the model stays loaded but hidden and
+   * the world is left seamless: from 20 km up a 5 km patch of another capture, with a hard
+   * edge, is a blemish rather than information.
+   */
+  engaged: boolean;
 }
 
 /**
@@ -147,7 +166,15 @@ export class SiteManager {
     if (this.loaded.has(siteId)) return site;
     const defaultAsset = site.assets.find((a) => a.defaultVisible) ?? site.assets[0];
     const representation = defaultAsset?.representation ?? "gaussian-splat";
-    const entry: ActiveSite = { site, representation, temporalAssetId: null, handles: new Map() };
+    const entry: ActiveSite = {
+      site,
+      representation,
+      temporalAssetId: null,
+      handles: new Map(),
+      radius: Math.max(boundingRadiusM(site.boundary), MIN_SITE_RADIUS_M),
+      engaged: false,
+    };
+    entry.engaged = this.shouldEngage(entry, false);
     this.loaded.set(siteId, entry);
     if (makePrimary || !this.primaryId) this.setPrimary(siteId);
     await this.showRepresentation(entry, representation);
@@ -330,8 +357,41 @@ export class SiteManager {
       this.pickAsset(active, active.representation)?.id !== asset.id
     )
       return;
-    tileset.show = true;
-    this.applyClip(active, asset, tileset);
+    tileset.show = active.engaged;
+    if (active.engaged) this.applyClip(active, asset, tileset);
+    else this.clipping.setFootprint(active.site.id, null);
+    this.events.emit("tilesets", this.activeTilesetLabels());
+    this.scene.requestRender();
+  }
+
+  /**
+   * Whether the camera is close enough to a site for its model to take over from the world,
+   * with hysteresis so the hand-over does not flicker at the threshold. A flight target is
+   * always engaged, so the model is there on arrival.
+   */
+  private shouldEngage(entry: ActiveSite, current: boolean): boolean {
+    if (this.flightTarget === entry.site.id) return true;
+    const pose = this.camera.pose();
+    const center = centerOf(entry.site.boundary);
+    const distance = haversineDistance(
+      { longitude: pose.longitude, latitude: pose.latitude },
+      center,
+    );
+    const altitudeRadii = current ? DISENGAGE_ALTITUDE_RADII : ENGAGE_ALTITUDE_RADII;
+    const distanceRadii = current ? DISENGAGE_DISTANCE_RADII : ENGAGE_DISTANCE_RADII;
+    return pose.altitude < entry.radius * altitudeRadii && distance < entry.radius * distanceRadii;
+  }
+
+  private setEngaged(entry: ActiveSite, engaged: boolean): void {
+    if (entry.engaged === engaged) return;
+    entry.engaged = engaged;
+    const handle = this.handleFor(entry);
+    const tileset = handle?.tileset;
+    if (!handle || !tileset) return;
+    tileset.show = engaged;
+    if (engaged) this.applyClip(entry, handle.asset, tileset);
+    else this.clipping.setFootprint(entry.site.id, null);
+    log.info(engaged ? "site engaged" : "site disengaged", { site: entry.site.slug });
     this.events.emit("tilesets", this.activeTilesetLabels());
     this.scene.requestRender();
   }
@@ -516,7 +576,8 @@ export class SiteManager {
     this.clipping.setFootprint(active.site.id, footprint);
     if (asset.renderConfig.clipFootprint !== "tileset") return;
     const handle = active.handles.get(asset.id);
-    if (!handle) return;
+    if (!handle || handle.coverageWatched) return;
+    handle.coverageWatched = true;
     let applied = provisional ? "" : coverageKey(footprint);
     let timer: ReturnType<typeof setTimeout> | null = null;
     // Sub-tilesets stream in over time; re-derive the coverage after each burst of tile loads
@@ -608,6 +669,9 @@ export class SiteManager {
         void this.activate(summary.id, { primary: false });
       }
     }
+
+    for (const entry of this.loaded.values())
+      this.setEngaged(entry, this.shouldEngage(entry, entry.engaged));
 
     const best = ranked.find((r) => this.loaded.has(r.summary.id));
     if (best && this.flightTarget === null && best.summary.id !== this.primaryId)

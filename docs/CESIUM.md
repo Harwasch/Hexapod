@@ -181,7 +181,14 @@ outline traced from a top-down render of the splat. Mesh sites with `clipFootpri
 "tileset"` use the tiles' coverage only from box or region volumes and only while it is no
 larger than the authored footprint (`tighter`): coarse tiles' spheres reach far past the
 data, and cut out of the world they showed as a ring of black circles around the San
-Francisco mesh. Seeded boundaries of sphere-based meshes are measured from a render. Clamped objects (the sample rock and plant) rest on the drawn surface
+Francisco mesh. Seeded boundaries of sphere-based meshes are measured from a render.
+
+A site's model only takes over from the world once the camera is close enough for its
+detail to matter: below 2.5 footprint radii of altitude and within 3 radii horizontally
+(`SiteManager.shouldEngage`, handing back at 3.5 and 4.5 so the threshold does not flicker; a
+flight target is always engaged so the model is there on arrival). Further out the model
+stays loaded but hidden and no clip is applied, so from 20 km up the world is seamless
+instead of showing a 5 km patch of a differently lit capture with a hard edge. Clamped objects (the sample rock and plant) rest on the drawn surface
 (`scene.sampleHeightMostDetailed`, excluding themselves) when it is within 60 m of the
 terrain, so they sit on Google's ground rather than floating over or sinking into it.
 
