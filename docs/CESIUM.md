@@ -125,7 +125,13 @@ device pixels, except through an asset's `screenSpaceErrorScale`: a tiler assign
 error from geometry alone, so a survey mesh with centimetre textures but conservative errors
 looks soft next to the Google world at the same error. The Aerometrex San Francisco mesh is
 seeded at 0.25 (measured 7 km up: 2 px draws 17k triangles and a grey blob, 0.5 px draws
-119k and the real detail, still a quarter of what Google draws in the same view). Ladder evidence comes from every motion frame
+119k and the real detail, still a quarter of what Google draws in the same view). The factor
+is a distance measure (`calibrationFor`): it fades from the asset's value at 8 m per pixel
+to 1 at 0.5 m per pixel, because up close the finest levels already carry textures many
+times finer than a screen pixel and asking for 0.5 px there fetches several times the data
+for no visible gain (317 m up: 2 px settles sharp at 217 tiles, 0.5 px never settled). It
+is re-applied only at rest, when the view scale has moved about 35 %, so it never pops
+tiles mid-gesture. Ladder evidence comes from every motion frame
 (slow frames add up, smooth frames pay them back), so three short slow drags count as much
 as one long one. The dev panel shows the profile (`full` or `reduced`) and the step taken. Gaussian
 splats never refine below SSE 12 / 8 / 4 (performance / balanced / ultra): they are sorted on

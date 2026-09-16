@@ -97,6 +97,9 @@ export class SiteManager {
   private objectScale = false;
   private screenSpaceError = 16;
   private pixelRatio = 1;
+  /** Ground metres per pixel at the view centre when the errors were last applied. */
+  private metersPerPixel = Number.POSITIVE_INFINITY;
+  private appliedMetersPerPixel = Number.POSITIVE_INFINITY;
   private flightTarget: string | null = null;
   private readonly unsubscribe: (() => void)[] = [];
   private lastProximityCheck = 0;
@@ -113,9 +116,11 @@ export class SiteManager {
       this.applyScreenSpaceError(sse, pixelRatio),
     );
     this.performance.addMemorySource("sites", () => this.memoryUsage());
+    const calibrationTimer = setInterval(() => this.refreshCalibration(), CALIBRATION_TICK_MS);
     this.unsubscribe.push(
       viewer.camera.changed.addEventListener(() => this.checkProximity()),
       viewer.camera.moveEnd.addEventListener(() => this.checkProximity(true)),
+      () => clearInterval(calibrationTimer),
     );
   }
 
@@ -611,6 +616,8 @@ export class SiteManager {
   private applyScreenSpaceError(sse: number, pixelRatio: number): void {
     this.screenSpaceError = sse;
     this.pixelRatio = pixelRatio;
+    this.metersPerPixel = this.camera.pose().metersPerPixel;
+    this.appliedMetersPerPixel = this.metersPerPixel;
     for (const { handle } of this.handles()) {
       if (!handle.tileset) continue;
       const configured = handle.asset.renderConfig.maximumScreenSpaceError;
@@ -624,7 +631,8 @@ export class SiteManager {
       // asset's calibration comes last: a tiler's geometric errors say nothing about texture
       // sharpness, and a survey mesh may need a finer error than the world to look as sharp.
       next =
-        devicePixelError(next, pixelRatio) * (handle.asset.renderConfig.screenSpaceErrorScale ?? 1);
+        devicePixelError(next, pixelRatio) *
+        calibrationFor(handle.asset.renderConfig.screenSpaceErrorScale ?? 1, this.metersPerPixel);
       next = Math.round(next * 16) / 16;
       if (handle.tileset.maximumScreenSpaceError === next) continue;
       handle.tileset.maximumScreenSpaceError = next;
@@ -692,6 +700,22 @@ export class SiteManager {
     }
     this.performance.reportContext(pose.altitude, near !== null);
     this.updateObjectScale();
+    this.refreshCalibration();
+  }
+
+  /**
+   * The calibration taper depends on the view scale; re-apply it once the camera rests
+   * (never mid-gesture, a changed error pops tiles) and the scale moved a good step. Also
+   * ticked on a timer: in request-render mode a programmatic move may not be followed by a
+   * frame, so moveEnd alone is not a reliable trigger.
+   */
+  private refreshCalibration(): void {
+    if (this.camera.isMoving || this.loaded.size === 0) return;
+    const metersPerPixel = this.camera.pose().metersPerPixel;
+    if (!Number.isFinite(metersPerPixel)) return;
+    const moved = Math.abs(Math.log(metersPerPixel / this.appliedMetersPerPixel));
+    if (moved > CALIBRATION_STEP || !Number.isFinite(moved))
+      this.applyScreenSpaceError(this.screenSpaceError, this.pixelRatio);
   }
 
   /** Object scale while the camera is within reach of a hand-sized loaded model. */
@@ -916,6 +940,29 @@ export function footprintFromTile(tile: Cesium3DTile): Footprint | null {
   }
   return null;
 }
+
+/**
+ * An asset's screen-space error calibration is a distance measure. A tiler assigns geometric
+ * error from geometry, so at kilometres a survey mesh's coarse levels look softer than their
+ * error says and need the full factor (the SF mesh: 0.5 px draws its detail 7 km up where
+ * 2 px draws a grey blob); up close the finest levels already carry textures many times
+ * finer than a screen pixel, and asking for 0.5 px there fetches several times the data for
+ * no visible gain (measured 317 m up: 2 px settles sharp at 217 tiles, 0.5 px never settled).
+ * The factor therefore fades from the asset's value at 8 m per pixel to 1 at 0.5 m per pixel.
+ */
+export function calibrationFor(scale: number, metersPerPixel: number): number {
+  if (scale === 1 || !Number.isFinite(metersPerPixel)) return scale === 1 ? 1 : scale;
+  const t =
+    (Math.log(metersPerPixel) - Math.log(CALIBRATION_NEAR_MPP)) /
+    (Math.log(CALIBRATION_FAR_MPP) - Math.log(CALIBRATION_NEAR_MPP));
+  const clamped = Math.min(1, Math.max(0, t));
+  return 1 + (scale - 1) * clamped;
+}
+const CALIBRATION_NEAR_MPP = 0.5;
+const CALIBRATION_FAR_MPP = 8;
+/** Re-apply the taper when the view scale moved by this much in log space (about 35 %). */
+const CALIBRATION_STEP = 0.3;
+const CALIBRATION_TICK_MS = 1000;
 
 /** Clipping polygons are rasterised into one texture; keep the count bounded. */
 const MAX_COVERAGE_TILES = 96;
