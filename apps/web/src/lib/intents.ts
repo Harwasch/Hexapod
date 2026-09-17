@@ -11,8 +11,10 @@ export interface IntentContext {
   selectMachine: (id: string) => string | null;
   selectZone: (id: string) => string | null;
   openPlan: (query: string | null) => string;
-  /** Opens the plan composer and, with a goal, starts drafting. */
-  draftPlan: (goal: string | null) => string;
+  /** Plans from a goal: finds the ground, drafts, shows the card. */
+  draftPlan: (goal: string | null) => Promise<string> | string;
+  /** With a draft open, plain text is a change to it; null when no draft is open. */
+  refinePlan: (text: string) => string | null;
   setView: (view: "map" | "plan" | "fleet") => string;
   startMeasure: (mode: "distance" | "area" | "height" | "elevation" | "point") => string;
   camera: (action: "north" | "top-down" | "home" | "explore") => string;
@@ -33,6 +35,8 @@ export async function runIntent(input: string, ctx: IntentContext): Promise<stri
     const goal = (draft[1] ?? draft[2] ?? "").trim();
     return ctx.draftPlan(goal ? text.slice(text.length - goal.length) : null);
   }
+  // Work in the imperative is a plan: "mow the orchard by Friday", "3D scan this field".
+  if (isWorkRequest(lower)) return ctx.draftPlan(text);
 
   const machine = /\b(tr-\d{2})\b/i.exec(text)?.[1]?.toUpperCase();
   if (machine && /\b(select|show|find|locate|where|go to|fly to)\b/.test(lower))
@@ -79,6 +83,9 @@ export async function runIntent(input: string, ctx: IntentContext): Promise<stri
     if (result) return result;
   }
 
+  const refined = ctx.refinePlan(text);
+  if (refined) return refined;
+
   const fly =
     /^(?:fly|go|take me|jump|navigate)\s+(?:to|towards)?\s*(.+)$/.exec(lower) ??
     /^(?:where is|find)\s+(.+)$/.exec(lower);
@@ -86,4 +93,12 @@ export async function runIntent(input: string, ctx: IntentContext): Promise<stri
   const site = ctx.flyToSite(place);
   if (site) return site;
   return ctx.flyToPlace(place);
+}
+
+const WORK_VERBS =
+  "mow|cut|clear|spray|treat|seed|reseed|drill|till|remove|survey|inspect|scan|photograph|capture|monitor|patrol|weed|harvest|fertili[sz]e|irrigate|mulch|map";
+
+/** "mow …", "3D scan …", "please survey …": the sentence starts with work to do. */
+export function isWorkRequest(lower: string): boolean {
+  return new RegExp(`^(?:please\\s+)?(?:(?:3d|3-d)\\s+)?(?:${WORK_VERBS})\\b`).test(lower);
 }

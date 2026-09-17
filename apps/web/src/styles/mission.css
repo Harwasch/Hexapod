@@ -692,6 +692,7 @@
 }
 
 /* ---- Windows (Plan / Fleet) ------------------------------------------- */
+.hud > .mc-window-wrap,
 .mc-window-wrap {
   position: absolute;
   top: 5.75rem;
@@ -699,6 +700,12 @@
   right: calc(var(--edge-gap) + 27.5rem);
   width: 37.5rem;
   max-width: calc(100vw - 2 * var(--edge-gap));
+  /* A compact window leaves the rest of its slot to the map underneath. */
+  pointer-events: none;
+}
+
+.mc-window-wrap > * {
+  pointer-events: auto;
 }
 
 .mc-window-wrap--wide {
@@ -711,6 +718,11 @@
   height: 100%;
   border-radius: 24px;
   overflow: hidden;
+}
+
+.mc-window--compact {
+  height: auto;
+  max-height: 100%;
 }
 
 .mc-window__head {
@@ -1898,4 +1910,108 @@
 .mc-tag.is-hover {
   background: rgba(157, 184, 240, 0.22);
   border-color: rgba(157, 184, 240, 0.6);
+}
+
+/* Plan card: prompts, ground row, assumption chips. */
+.mc-prompt {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.9rem 1rem;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.mc-prompt--live {
+  background: linear-gradient(180deg, rgba(127, 216, 192, 0.12), rgba(127, 216, 192, 0.03));
+  border-color: rgba(127, 216, 192, 0.32);
+}
+
+.mc-prompt__icon {
+  color: var(--accent);
+}
+
+.mc-prompt__title {
+  font: 600 15px/1.3 var(--font-sans);
+  color: var(--text-primary);
+}
+
+.mc-prompt p {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.mc-actions--start {
+  justify-content: flex-start;
+}
+
+.mc-ground {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.mc-ground__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.mc-ground__name {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font: 600 13px var(--font-sans);
+  color: var(--text-primary);
+}
+
+.mc-ground__note {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+.mc-assume {
+  border-style: solid;
+}
+
+.mc-assume::after {
+  content: "▾";
+  font-size: 9px;
+  opacity: 0.7;
+}
+
+.mc-assume__panel {
+  display: grid;
+  gap: 0.4rem;
+  margin-top: 0.5rem;
+  padding: 0.6rem 0.75rem;
+  border-radius: 12px;
+  background: rgba(127, 216, 192, 0.08);
+  border: 1px solid rgba(127, 216, 192, 0.3);
+}
+
+.mc-details summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.mc-details summary::-webkit-details-marker {
+  display: none;
+}
+
+.mc-details summary::after {
+  content: " ▸";
+  opacity: 0.7;
+}
+
+.mc-details[open] summary::after {
+  content: " ▾";
+}
+
+.mc-review__hint {
+  margin: 0;
+  font-size: 11.5px;
+  text-align: center;
 }

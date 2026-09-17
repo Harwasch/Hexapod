@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
-from app.api.deps import PlannerDep
-from app.schemas.agent import PlanDraft, PlanDraftRequest, PlannerStatus
+from app.api.deps import OutlinerDep, PlannerDep
+from app.schemas.agent import Outline, OutlineRequest, PlanDraft, PlanDraftRequest, PlannerStatus
 from app.services.planner import PlannerError
 
 router = APIRouter(prefix="/agent", tags=["agent"])
@@ -27,5 +27,27 @@ def planner_status(planner: PlannerDep) -> PlannerStatus:
 def plan_draft(body: PlanDraftRequest, planner: PlannerDep) -> PlanDraft:
     try:
         return planner.draft(body)
+    except PlannerError as exc:
+        raise HTTPException(exc.status_code, str(exc)) from exc
+
+
+@router.post(
+    "/outline",
+    response_model=Outline,
+    summary="Outline the ground feature under a clicked point",
+    description=(
+        "Takes one image of the map view with the clicked point marked and returns the outline "
+        "of the field, pond or lot around it in normalized image coordinates. Needs the API to "
+        "be configured with a key; there is no rule-based fallback for looking at imagery."
+    ),
+    responses={503: {"description": "No planning model is configured"}},
+)
+def outline(body: OutlineRequest, outliner: OutlinerDep) -> Outline:
+    if outliner is None:
+        raise HTTPException(
+            503, "Outlining from imagery needs the API configured with ANTHROPIC_API_KEY."
+        )
+    try:
+        return outliner.outline(body)
     except PlannerError as exc:
         raise HTTPException(exc.status_code, str(exc)) from exc

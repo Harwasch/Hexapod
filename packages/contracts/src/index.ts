@@ -90,3 +90,5 @@ export type PlanRecordStatus = PlanRecord["status"];
 export type PlanRevisionRecord = Schemas["PlanRevisionRead"];
 export type PlanClarification = Schemas["Clarification"];
 export type PlanAnswerValue = string | number | boolean;
+export type GroundOutline = Schemas["Outline"];
+export type OutlineRequest = Schemas["OutlineRequest"];

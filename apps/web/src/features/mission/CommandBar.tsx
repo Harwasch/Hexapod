@@ -1,10 +1,14 @@
 import { Sparkles } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { formatAltitude, formatResolution, SCALE_BAND_LABELS } from "@twin/geo";
 import { GlassPanel, GlassTooltip } from "@twin/ui";
 
-import { useLayers as useLayerCatalog, useSites as useSiteCatalog } from "@/api/queries";
+import {
+  useLayers as useLayerCatalog,
+  usePlannerStatus,
+  useSites as useSiteCatalog,
+} from "@/api/queries";
 import { useScene } from "@/cesium/SceneContext";
 import { runIntent } from "@/lib/intents";
 import { describeError } from "@/lib/log";
@@ -18,6 +22,7 @@ import { useUi } from "@/state/ui";
 import { useViewer } from "@/state/viewer";
 
 import { startPlanDraft } from "./planDrafting";
+import { planFromText } from "./planFlow";
 import { useMissionActions } from "./useMissionActions";
 
 /** Bottom command bar: "Ask or instruct the agent" plus live camera readouts (design: COMMAND BAR). */
@@ -32,6 +37,22 @@ export function CommandBar() {
   const setStreamOpen = useMission((s) => s.setStreamOpen);
   const setPaletteOpen = useUi((s) => s.setPaletteOpen);
   const { selectMachine, selectZone } = useMissionActions();
+  // The planner's status tells the agent whether it can look at imagery.
+  const planner = usePlannerStatus();
+  const setPlannerConfigured = useMission((s) => s.setPlannerConfigured);
+  useEffect(() => {
+    setPlannerConfigured(planner.data?.provider === "claude");
+  }, [planner.data?.provider, setPlannerConfigured]);
+  // Cards can put words in the bar ("twin:bar"); the bar takes focus with them.
+  const inputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    const onSay = (event: Event) => {
+      setText((event as CustomEvent<string | undefined>).detail ?? "");
+      inputRef.current?.focus();
+    };
+    window.addEventListener("twin:bar", onSay);
+    return () => window.removeEventListener("twin:bar", onSay);
+  }, []);
 
   const camera = useViewer((s) => s.camera);
   const worldLabel = useViewer((s) => s.worldLabel);
@@ -131,15 +152,18 @@ export function CommandBar() {
         },
         draftPlan: (goal) => {
           const state = useMission.getState();
-          if (!state.project)
-            return "Load a project with zones and machines first, then I can plan.";
+          if (!state.project) return "The world is still starting; try again in a moment.";
           if (!goal) {
-            state.openComposer();
-            return "Tell me the goal in the plan window and I'll draft it.";
+            if (!state.composer) state.openComposer();
+            return "Tell me what to do and where, in one sentence.";
           }
-          state.openComposer({ goal });
-          void startPlanDraft(goal);
-          return "Drafting the plan — it will appear in the Plans window for your review.";
+          return planFromText(goal, scene);
+        },
+        refinePlan: (change) => {
+          const composer = useMission.getState().composer;
+          if (!composer?.draft) return null;
+          void startPlanDraft(composer.goal, { zoneIds: composer.zoneIds, refinement: change });
+          return "Redrafting with that.";
         },
         setView: (view) => {
           useMission.getState().setView(view);
@@ -186,10 +210,11 @@ export function CommandBar() {
         }}
       >
         <input
+          ref={inputRef}
           className="mc-bar__input"
           value={text}
           onChange={(e) => setText(e.target.value)}
-          placeholder="Ask or instruct the agent — “plan: mow Z-14 this week”, “where is TR-07”, “fly to Yosemite”"
+          placeholder="Tell the agent what to do — “3D scan this field”, “mow Z-14 this week”, “fly to Yosemite”"
           aria-label="Ask or instruct the agent"
           disabled={busy}
           data-testid="command-input"

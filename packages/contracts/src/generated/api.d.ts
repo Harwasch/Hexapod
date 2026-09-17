@@ -4,6 +4,26 @@
  */
 
 export interface paths {
+    "/api/v1/agent/outline": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Outline the ground feature under a clicked point
+         * @description Takes one image of the map view with the clicked point marked and returns the outline of the field, pond or lot around it in normalized image coordinates. Needs the API to be configured with a key; there is no rule-based fallback for looking at imagery.
+         */
+        post: operations["outline_api_v1_agent_outline_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/agent/plan-draft": {
         parameters: {
             query?: never;
@@ -1000,6 +1020,58 @@ export interface components {
             /** Urltemplate */
             urlTemplate: string;
         };
+        /** Outline */
+        Outline: {
+            /** Confidence */
+            confidence: number;
+            /** Label */
+            label: string;
+            /**
+             * Note
+             * @default
+             */
+            note?: string;
+            /** Points */
+            points: components["schemas"]["OutlinePoint"][];
+            /**
+             * Source
+             * @default claude
+             * @constant
+             */
+            source?: "claude";
+        };
+        /**
+         * OutlinePoint
+         * @description A polygon vertex in normalized image coordinates: x right, y down, both 0..1.
+         */
+        OutlinePoint: {
+            /** X */
+            x: number;
+            /** Y */
+            y: number;
+        };
+        /**
+         * OutlineRequest
+         * @description One view of the map with a marked point; the model outlines the feature under it.
+         */
+        OutlineRequest: {
+            /** Height */
+            height: number;
+            /**
+             * Hint
+             * @description The operator's goal, for context
+             * @default
+             */
+            hint?: string;
+            /**
+             * Image
+             * @description JPEG or PNG, base64
+             */
+            image: string;
+            point: components["schemas"]["OutlinePoint"];
+            /** Width */
+            width: number;
+        };
         /**
          * PlanArea
          * @description A zone drawn in the console for this plan (the fleet backend owns the other zones).
@@ -1883,6 +1955,9 @@ export type SchemaLegendMetadata = components['schemas']['LegendMetadata'];
 export type SchemaLicenseMetadata = components['schemas']['LicenseMetadata'];
 export type SchemaMultiPolygon = components['schemas']['MultiPolygon'];
 export type SchemaMvtSource = components['schemas']['MvtSource'];
+export type SchemaOutline = components['schemas']['Outline'];
+export type SchemaOutlinePoint = components['schemas']['OutlinePoint'];
+export type SchemaOutlineRequest = components['schemas']['OutlineRequest'];
 export type SchemaPlanArea = components['schemas']['PlanArea'];
 export type SchemaPlanCreate = components['schemas']['PlanCreate'];
 export type SchemaPlanDraft = components['schemas']['PlanDraft'];
@@ -1921,6 +1996,64 @@ export type SchemaWmtsSource = components['schemas']['WmtsSource'];
 export type SchemaXyzSource = components['schemas']['XyzSource'];
 export type $defs = Record<string, never>;
 export interface operations {
+    outline_api_v1_agent_outline_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OutlineRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Outline"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No planning model is configured */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     plan_draft_api_v1_agent_plan_draft_post: {
         parameters: {
             query?: never;

@@ -94,7 +94,7 @@ describe("plan drafting", () => {
 
   it("describes a draft for the agent stream", () => {
     expect(describeDraft(draft)).toContain("2 steps");
-    expect(describeDraft({ ...draft, questions: ["Which zones?"] })).toContain("1 question");
+    expect(describeDraft(draft)).toContain("tell me what to change");
   });
 
   it("keeps approved plans with the project and survives a project reload", () => {

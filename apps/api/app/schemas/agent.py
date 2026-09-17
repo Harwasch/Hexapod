@@ -169,3 +169,28 @@ class PlannerStatus(CamelModel):
     configured: bool
     provider: PlannerSource
     model: str | None
+
+
+class OutlinePoint(CamelModel):
+    """A polygon vertex in normalized image coordinates: x right, y down, both 0..1."""
+
+    x: float = Field(ge=0, le=1)
+    y: float = Field(ge=0, le=1)
+
+
+class OutlineRequest(CamelModel):
+    """One view of the map with a marked point; the model outlines the feature under it."""
+
+    image: str = Field(min_length=64, max_length=4_000_000, description="JPEG or PNG, base64")
+    width: int = Field(ge=64, le=4096)
+    height: int = Field(ge=64, le=4096)
+    point: OutlinePoint
+    hint: str = Field(default="", max_length=300, description="The operator's goal, for context")
+
+
+class Outline(CamelModel):
+    points: list[OutlinePoint]
+    label: str = Field(max_length=80)
+    confidence: float = Field(ge=0, le=1)
+    note: str = Field(default="", max_length=300)
+    source: Literal["claude"] = "claude"

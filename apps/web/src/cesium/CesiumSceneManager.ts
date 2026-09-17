@@ -1,4 +1,13 @@
-import { Color, Viewer, type Scene, RequestScheduler } from "cesium";
+import {
+  Cartesian2,
+  type Cartesian3,
+  Cartographic,
+  Color,
+  Math as CesiumMath,
+  RequestScheduler,
+  type Scene,
+  Viewer,
+} from "cesium";
 
 import { Emitter } from "@/lib/emitter";
 import { createLogger, describeError } from "@/lib/log";
@@ -52,6 +61,8 @@ export class CesiumSceneManager {
   readonly tokenState: TokenState;
   private geocoderInstance: Geocoder;
   private destroyed = false;
+  private interactionMode: "select" | "measure" | "explore" = "select";
+  private pickingGround = false;
   private renderRecoveries = 0;
   private readonly unsubscribe: (() => void)[] = [];
 
@@ -128,6 +139,14 @@ export class CesiumSceneManager {
     this.measurement = new MeasurementManager(this.viewer, this.events);
     this.mission = new MissionManager(this.viewer, this.events, this.camera);
     this.areas = new AreaEditor(this.viewer, this.events);
+    // While the map waits for "the ground you mean", selection keeps its hands off the click.
+    this.unsubscribe.push(
+      this.events.on("ground-pick-mode", (on) => {
+        this.pickingGround = on;
+        this.selection.setEnabled(this.interactionMode === "select" && !on);
+        if (on) this.viewer.canvas.style.cursor = "crosshair";
+      }),
+    );
     this.explore = new ExploreController(this.viewer, this.events);
     this.keyboard = new KeyboardNavigator(this.viewer, this.camera);
     this.debug = new DebugManager(this.viewer, this.sites, (enabled) =>
@@ -208,9 +227,60 @@ export class CesiumSceneManager {
     );
   }
 
+  /**
+   * A picture of the view, at most `maxWidth` wide, as a JPEG data URL. Read inside the
+   * next frame's postRender so the drawing buffer is still intact.
+   */
+  snapshot(maxWidth = 1024): Promise<{ image: string; width: number; height: number } | null> {
+    return new Promise((resolve) => {
+      const scene = this.scene;
+      const remove = scene.postRender.addEventListener(() => {
+        remove();
+        try {
+          const source = this.viewer.canvas;
+          const scale = Math.min(1, maxWidth / source.width);
+          const width = Math.max(1, Math.round(source.width * scale));
+          const height = Math.max(1, Math.round(source.height * scale));
+          const target = document.createElement("canvas");
+          target.width = width;
+          target.height = height;
+          const context = target.getContext("2d");
+          if (!context) {
+            resolve(null);
+            return;
+          }
+          context.drawImage(source, 0, 0, width, height);
+          resolve({ image: target.toDataURL("image/jpeg", 0.85), width, height });
+        } catch {
+          resolve(null);
+        }
+      });
+      scene.requestRender();
+    });
+  }
+
+  /** The ground under a canvas pixel, in degrees, or null for sky. */
+  groundAt(x: number, y: number): { longitude: number; latitude: number } | null {
+    const window = new Cartesian2(x, y);
+    let position: Cartesian3 | undefined;
+    if (this.scene.pickPositionSupported) position = this.scene.pickPosition(window);
+    if (!position) {
+      const ray = this.viewer.camera.getPickRay(window);
+      position = ray ? this.scene.globe.pick(ray, this.scene) : undefined;
+    }
+    position ??= this.viewer.camera.pickEllipsoid(window, this.scene.globe.ellipsoid);
+    if (!position) return null;
+    const carto = Cartographic.fromCartesian(position);
+    return {
+      longitude: CesiumMath.toDegrees(carto.longitude),
+      latitude: CesiumMath.toDegrees(carto.latitude),
+    };
+  }
+
   /** Measuring and exploring take over the pointer; selection yields. */
   setInteractionMode(mode: "select" | "measure" | "explore"): void {
-    this.selection.setEnabled(mode === "select");
+    this.interactionMode = mode;
+    this.selection.setEnabled(mode === "select" && !this.pickingGround);
     if (mode !== "measure") this.measurement.stop();
     if (mode !== "explore") this.explore.exit();
   }

@@ -29,12 +29,14 @@ export async function startPlanDraft(
     machineIds?: string[];
     refinement?: string;
     answers?: Record<string, PlanAnswerValue>;
+    /** The ground changed under the same goal: keep the last draft to say what moved. */
+    reshaped?: boolean;
   } = {},
 ): Promise<void> {
   const state = useMission.getState();
   const project = state.project;
   if (!project) {
-    state.appendLog("agent", "Load a project with zones and machines first, then I can plan.");
+    state.appendLog("agent", "The world is still starting; try again in a moment.");
     state.setStreamOpen(true);
     return;
   }
@@ -61,7 +63,7 @@ export async function startPlanDraft(
     status: "drafting",
     error: null,
   });
-  useMission.getState().appendLog("you", options.refinement ?? text);
+  // The bar logs what the operator said; a chip or a dragged corner is not words.
   try {
     const request = buildDraftRequest(project, {
       goal: text,
@@ -77,10 +79,16 @@ export async function startPlanDraft(
     planningDrafted(Boolean(options.refinement));
     // The chips stay the operator's pre-selection; the draft carries its own scope. The
     // previous draft is kept so the review can say what the redraft changed.
+    const asked = { ...(useMission.getState().composer?.asked ?? {}) };
+    for (const c of draft.clarifications ?? []) asked[c.id] = c;
     useMission.getState().updateComposer({
       status: "ready",
       draft,
-      previousDraft: options.refinement || options.answers ? (composer?.draft ?? null) : null,
+      asked,
+      previousDraft:
+        options.refinement || options.answers || options.reshaped
+          ? (composer?.draft ?? null)
+          : null,
     });
     useMission.getState().appendLog("agent", describeDraft(draft));
   } catch (error) {

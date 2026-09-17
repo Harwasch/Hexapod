@@ -13,7 +13,7 @@ import { useScene } from "@/cesium/SceneContext";
 import { planFromRecord, zonesFromRecord } from "@/missions/planDraft";
 import { planProgress, replanRefinement } from "@/missions/progress";
 
-import { PlanComposer } from "./PlanComposer";
+import { PlanCard } from "./PlanCard";
 import { PlanSchedule } from "./PlanSchedule";
 import { plansInvalidate, setPlanStatus } from "./planDrafting";
 import { useMissionActions } from "./useMissionActions";
@@ -29,6 +29,13 @@ export function PlansPanel() {
   const setAddDataOpen = useUi((s) => s.setAddDataOpen);
   const plan = project?.plans.find((p) => p.id === planId) ?? null;
   const open = view === "plan";
+  // While the agent waits for a click the window shrinks out of the map's way.
+  const compact =
+    composer !== null &&
+    !composer.draft &&
+    (composer.status === "idle" ||
+      composer.status === "awaiting-ground" ||
+      composer.status === "locating");
   // Persisted plans: the API is the source of truth whenever it answers.
   const remote = usePlans(project?.id ?? null);
   const setRemotePlans = useMission((s) => s.setRemotePlans);
@@ -66,7 +73,7 @@ export function PlansPanel() {
         >
           <GlassPanel
             strong
-            className="mc-window"
+            className={`mc-window ${compact ? "mc-window--compact" : ""}`}
             role="region"
             aria-label="Plans"
             data-testid="plans-panel"
@@ -93,7 +100,7 @@ export function PlansPanel() {
                 </div>
               </div>
             )}
-            {project && composer && <PlanComposer project={project} />}
+            {project && composer && <PlanCard project={project} />}
             {project && !composer && !plan && (
               <>
                 <div className="mc-window__head">
@@ -108,7 +115,10 @@ export function PlansPanel() {
                   <button
                     type="button"
                     className="mc-btn mc-btn--accent"
-                    onClick={() => openComposer()}
+                    onClick={() => {
+                      openComposer();
+                      window.dispatchEvent(new CustomEvent("twin:bar", { detail: "" }));
+                    }}
                     data-testid="plan-new"
                   >
                     + New plan

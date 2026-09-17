@@ -264,11 +264,7 @@ export function describeDraft(draft: PlanDraft): string {
     `${draft.machineIds.length} machine${draft.machineIds.length === 1 ? "" : "s"}`,
     `${Math.round(draft.estimates.acres)} acres`,
   ];
-  const asks = draft.questions.length + (draft.clarifications?.length ?? 0);
-  const tail = asks
-    ? ` I have ${asks} question${asks === 1 ? "" : "s"} before you approve.`
-    : " Review it in the Plans window.";
-  return `${parts.join(" · ")}.${tail}`;
+  return `${parts.join(" · ")}. Approve it, drag the outline, or tell me what to change.`;
 }
 
 /** Zones in step order (a zone appears once, at its first step) with the machines assigned. */

@@ -163,3 +163,24 @@ export function flattenRing(ring: Position[]): number[] {
   }
   return out;
 }
+
+/** True when the point lies inside the outer ring of any polygon (even-odd rule). */
+export function footprintContains(footprint: Footprint, point: LonLat): boolean {
+  for (const ring of outerRings(footprint)) {
+    let inside = false;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      const a = ring[i];
+      const b = ring[j];
+      if (!a || !b) continue;
+      const [ax, ay] = a;
+      const [bx, by] = b;
+      if (ax === undefined || ay === undefined || bx === undefined || by === undefined) continue;
+      const crosses =
+        ay > point.latitude !== by > point.latitude &&
+        point.longitude < ((bx - ax) * (point.latitude - ay)) / (by - ay) + ax;
+      if (crosses) inside = !inside;
+    }
+    if (inside) return true;
+  }
+  return false;
+}

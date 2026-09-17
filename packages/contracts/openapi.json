@@ -2310,6 +2310,115 @@
         "title": "MvtSource",
         "type": "object"
       },
+      "Outline": {
+        "additionalProperties": false,
+        "properties": {
+          "confidence": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Confidence",
+            "type": "number"
+          },
+          "label": {
+            "maxLength": 80,
+            "title": "Label",
+            "type": "string"
+          },
+          "note": {
+            "default": "",
+            "maxLength": 300,
+            "title": "Note",
+            "type": "string"
+          },
+          "points": {
+            "items": {
+              "$ref": "#/components/schemas/OutlinePoint"
+            },
+            "title": "Points",
+            "type": "array"
+          },
+          "source": {
+            "const": "claude",
+            "default": "claude",
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "points",
+          "label",
+          "confidence"
+        ],
+        "title": "Outline",
+        "type": "object"
+      },
+      "OutlinePoint": {
+        "additionalProperties": false,
+        "description": "A polygon vertex in normalized image coordinates: x right, y down, both 0..1.",
+        "properties": {
+          "x": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "X",
+            "type": "number"
+          },
+          "y": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Y",
+            "type": "number"
+          }
+        },
+        "required": [
+          "x",
+          "y"
+        ],
+        "title": "OutlinePoint",
+        "type": "object"
+      },
+      "OutlineRequest": {
+        "additionalProperties": false,
+        "description": "One view of the map with a marked point; the model outlines the feature under it.",
+        "properties": {
+          "height": {
+            "maximum": 4096.0,
+            "minimum": 64.0,
+            "title": "Height",
+            "type": "integer"
+          },
+          "hint": {
+            "default": "",
+            "description": "The operator's goal, for context",
+            "maxLength": 300,
+            "title": "Hint",
+            "type": "string"
+          },
+          "image": {
+            "description": "JPEG or PNG, base64",
+            "maxLength": 4000000,
+            "minLength": 64,
+            "title": "Image",
+            "type": "string"
+          },
+          "point": {
+            "$ref": "#/components/schemas/OutlinePoint"
+          },
+          "width": {
+            "maximum": 4096.0,
+            "minimum": 64.0,
+            "title": "Width",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "image",
+          "width",
+          "height",
+          "point"
+        ],
+        "title": "OutlineRequest",
+        "type": "object"
+      },
       "PlanArea": {
         "additionalProperties": false,
         "description": "A zone drawn in the console for this plan (the fleet backend owns the other zones).",
@@ -4742,6 +4851,71 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/v1/agent/outline": {
+      "post": {
+        "description": "Takes one image of the map view with the clicked point marked and returns the outline of the field, pond or lot around it in normalized image coordinates. Needs the API to be configured with a key; there is no rule-based fallback for looking at imagery.",
+        "operationId": "outline_api_v1_agent_outline_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OutlineRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Outline"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          },
+          "503": {
+            "description": "No planning model is configured"
+          }
+        },
+        "summary": "Outline the ground feature under a clicked point",
+        "tags": [
+          "agent"
+        ]
+      }
+    },
     "/api/v1/agent/plan-draft": {
       "post": {
         "description": "Turns an operator goal plus the project's zones, machines and existing plans into a structured plan draft for review. Drafted by Claude when the API is configured with a key, by a rule-based planner otherwise; the `source` field says which.",

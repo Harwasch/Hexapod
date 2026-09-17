@@ -1,10 +1,11 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
-import type { PlanAnswerValue, PlanDraft } from "@twin/contracts";
+import type { PlanAnswerValue, PlanClarification, PlanDraft } from "@twin/contracts";
 
 import { planningOpened } from "@/lib/planningMetrics";
 import { isAreaZone } from "@/missions/areas";
+import type { GroundSource } from "@/missions/ground";
 import type { Plan, Project, Zone } from "@/missions/types";
 
 export type MissionView = "map" | "plan" | "fleet";
@@ -25,12 +26,16 @@ export interface PlanComposerState {
   machineIds: string[];
   /** When editing an approved plan, the id the approved draft replaces. */
   replacePlanId: string | null;
-  status: "idle" | "drafting" | "ready" | "error";
+  status: "idle" | "awaiting-ground" | "locating" | "drafting" | "ready" | "error";
+  /** How the ground in `zoneIds` was found, for the card to say. */
+  ground: { source: GroundSource; note: string } | null;
   draft: PlanDraft | null;
   /** The draft before the last redraft, so the review can say what changed. */
   previousDraft: PlanDraft | null;
   /** Answers to the agent's clarifications; sent with every redraft. */
   answers: Record<string, PlanAnswerValue>;
+  /** Every clarification a draft has carried, by id, so an answered one stays a chip. */
+  asked: Record<string, PlanClarification>;
   error: string | null;
 }
 
@@ -54,6 +59,9 @@ interface MissionState {
   layers: { zones: boolean; tracks: boolean; vegetation: boolean };
   log: AgentLogEntry[];
   composer: PlanComposerState | null;
+  /** True when the API drafts with Claude (so the agent can look at imagery too). */
+  plannerConfigured: boolean;
+  setPlannerConfigured: (configured: boolean) => void;
   /** Plans approved in the console, per project id. Kept in the browser until a fleet backend persists them. */
   approvedPlans: Record<string, Plan[]>;
   /** Areas drawn in the console, per project id; the plans that cover them carry them too. */
@@ -154,14 +162,18 @@ export const useMission = create<MissionState>()(
             machineIds: seed.machineIds ?? [],
             replacePlanId: seed.replacePlanId ?? null,
             status: "idle",
+            ground: null,
             draft: null,
             previousDraft: null,
             answers: {},
+            asked: {},
             error: null,
           },
         });
       },
       closeComposer: () => set({ composer: null }),
+      plannerConfigured: false,
+      setPlannerConfigured: (plannerConfigured) => set({ plannerConfigured }),
       updateComposer: (patch) =>
         set((s) => (s.composer ? { composer: { ...s.composer, ...patch } } : {})),
       approvePlan: (plan) => {

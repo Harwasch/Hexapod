@@ -13,6 +13,7 @@ function ctx(overrides: Partial<IntentContext> = {}): IntentContext {
     selectZone: vi.fn((id: string) => (id === "Z-14" ? "Zone Z-14." : null)),
     openPlan: vi.fn((q: string | null) => `plan ${q ?? "list"}`),
     draftPlan: vi.fn((goal: string | null) => `draft ${goal ?? "empty"}`),
+    refinePlan: vi.fn(() => null),
     setView: vi.fn((v: string) => `view ${v}`),
     startMeasure: vi.fn((m: string) => `measure ${m}`),
     camera: vi.fn((a: string) => `camera ${a}`),
@@ -57,5 +58,19 @@ describe("runIntent", () => {
     expect(await runIntent("new plan", ctx())).toBe("draft empty");
     expect(await runIntent("create a mission plan for Z-21", ctx())).toBe("draft Z-21");
     expect(await runIntent("open the plan for thistle", ctx())).toBe("plan thistle");
+  });
+
+  it("takes work in the imperative as a plan and plain text as a change to an open draft", async () => {
+    expect(await runIntent("Mow the orchard by Friday with two mowers", ctx())).toBe(
+      "draft Mow the orchard by Friday with two mowers",
+    );
+    expect(await runIntent("3D scan this field into a splat", ctx())).toBe(
+      "draft 3D scan this field into a splat",
+    );
+    const open = ctx({ refinePlan: vi.fn((t: string) => `refine ${t}`) });
+    expect(await runIntent("use two drones", open)).toBe("refine use two drones");
+    // Other intents still win over a refinement.
+    expect(await runIntent("where is TR-07", open)).toBe("Locating TR-07.");
+    expect(await runIntent("fly to Yosemite", ctx())).toBe("Flying to yosemite.");
   });
 });

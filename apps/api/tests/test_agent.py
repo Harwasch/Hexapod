@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 from datetime import date
 from itertools import pairwise
 from typing import Any
@@ -343,3 +344,66 @@ def test_rules_planner_plans_a_3d_scan_with_capture_and_reconstruction() -> None
     assert survey.steps[0].title == "Survey plan"
     assert not any("Treat" in s.title for s in survey.steps)
     assert survey.steps[-1].title == "Review and report"
+
+
+def test_outliner_clamps_points_and_labels_source() -> None:
+    from app.schemas.agent import OutlinePoint, OutlineRequest
+    from app.services.vision import ModelOutline, Outliner
+
+    parsed = ModelOutline(
+        points=[
+            {"x": -0.1, "y": 0.2},
+            {"x": 0.6, "y": 0.2},
+            {"x": 0.6, "y": 1.4},
+            {"x": 0.1, "y": 0.8},
+        ],
+        label="  orchard block ",
+        confidence=1.7,
+        note="Followed the fence lines.",
+    )
+
+    class FakeMessages:
+        def parse(self, **kwargs: Any) -> Any:
+            assert kwargs["output_format"] is ModelOutline
+            content = kwargs["messages"][0]["content"]
+            assert (
+                content[0]["type"] == "image" and content[0]["source"]["media_type"] == "image/png"
+            )
+            assert "x=0.500" in content[1]["text"]
+            return type("R", (), {"stop_reason": "end_turn", "parsed_output": parsed})()
+
+    class FakeClient:
+        messages = FakeMessages()
+
+    png = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"0" * 80).decode()
+    outline = Outliner(
+        Settings(anthropic_api_key="k", anthropic_model="m"),
+        client=FakeClient(),  # type: ignore[arg-type]
+    ).outline(
+        OutlineRequest(
+            image=f"data:image/png;base64,{png}",
+            width=800,
+            height=600,
+            point=OutlinePoint(x=0.5, y=0.5),
+            hint="scan the orchard",
+        )
+    )
+    assert outline.source == "claude" and outline.label == "orchard block"
+    assert outline.confidence == 1.0
+    assert [(p.x, p.y) for p in outline.points] == [(0, 0.2), (0.6, 0.2), (0.6, 1), (0.1, 0.8)]
+
+
+def test_outline_endpoint_says_when_no_model_is_configured(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    from app.config import get_settings
+    from app.main import create_app
+
+    get_settings.cache_clear()
+    client = TestClient(create_app())
+    png = base64.b64encode(b"\x89PNG" + b"0" * 80).decode()
+    response = client.post(
+        "/api/v1/agent/outline",
+        json={"image": png, "width": 100, "height": 100, "point": {"x": 0.5, "y": 0.5}},
+    )
+    assert response.status_code == 503
+    assert "ANTHROPIC_API_KEY" in response.json()["detail"]

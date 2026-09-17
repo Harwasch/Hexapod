@@ -64,18 +64,23 @@ into a zone (`missions/areas.ts`, ids `A-01…`). Drawn areas are kept in the br
 on the plans that cover them (`areas` on the plan record), so a plan opened on another device
 brings its ground with it. The world redraws zones whenever the store's project changes.
 
-**The agent asks, one question at a time.** A draft carries `clarifications`: questions whose
-answers change the plan materially, each with a `kind` (`choice`, `range`, `area`), options or
-a min/max/step, a default and a one-line `why`. The console shows them as a stepper under the
-draft's numbers: a choice is a row of chips and tapping one moves on, a range is a slider with
-Next, Back and Skip step through the set, and the last answer (or skipping past the end)
-redrafts with everything answered so far. Answers travel on the request (`answers`) and show
-as chips that can be cleared to ask again. The rules planner asks about a drawn area,
-deadline, cadence and detail (surveys), passes (treatments), crew size, and for a 3D scan the
-output (mesh, splat, point cloud, orthomosaic), ground sample distance, nadir or oblique
-views, and ground control; it applies the answers (effort factor, deadline risk, wanted
-machines, capture rate). The Claude planner gets the same shape and never re-asks an answered
-question.
+**Planning from the bar.** The bar at the bottom is the one place to talk. A sentence of work
+("3D scan this field into a splat", "mow the orchard by Friday with two mowers", or the older
+"plan: …") is a plan request (`lib/intents.ts`, `isWorkRequest`). The flow
+(`features/mission/planFlow.ts`) finds the ground first: zones named in the goal; else, when
+the goal names a kind of ground ("the lake") and is not pointing ("this field"), the mapped
+feature of that kind nearest the view centre (OpenStreetMap); else, on a site with its own
+zones, the planner picks; else the agent asks for one click on the map. The click resolves
+(`missions/ground.ts`) in order: the smallest OpenStreetMap area containing the point
+(`is_in`), then, when the API has a key, a picture of the view with the click marked goes to
+`POST /api/v1/agent/outline` and Claude traces the field, pond or lot around it (normalized
+image coordinates, projected back onto the ground pixel by pixel), and last a rough 14-acre
+square labelled as the guess it is. The agent then drafts with defaults and the card
+(`PlanCard.tsx`) shows the result: the ground (its corners on the map, dragging redrafts), the
+numbers, what it assumed as chips (each clarification's default; tapping one shows the
+alternatives and redrafts), the schedule and steps, risks, and Approve. Plain words in the
+bar while a draft is open are a change to it ("two drones", "finish by Friday"). The camera
+frames the ground at an angle when the draft lands.
 
 **Task families.** The rules planner reads the goal as a treatment (mow, clear, spray…), a
 survey (inspect, map, photograph) or a 3D scan (scan, photogrammetry, splat, mesh, lidar) and
@@ -85,22 +90,20 @@ pass; a survey gets a survey plan, a survey per zone and a review; a scan gets a
 detail level, reconstruction (compute, not machine time) and registration and QA. The Claude
 prompt carries the same rule. `apps/api/evals/planner_cases.json` has a case per family.
 
-**Finding and shaping the ground.** A view rectangle is a guess. Every area (`A-01`…) can be
-adjusted on the map: the area's outline gets white corner handles to drag, translucent
-midpoint handles that pull a new corner out of an edge, an amber centre handle that moves the
-whole area, and right-click removes a corner; camera inputs pause while a handle is held
-(`cesium/AreaEditor.ts`). A new area opens in that state, the Move button on its chip
-re-opens it, Esc or Done closes it, and a reshaped area marks an existing draft stale with a
-one-click redraft. A view area also keeps its size slider and 3×3 position grid. "Find on the
-map" fetches candidate outlines from OpenStreetMap for the ground in view (water and
-shoreline, fields, woodland and scrub, parks; `missions/osm.ts`, Overpass API, ©
-OpenStreetMap contributors, attribution kept on the zone), draws them dashed in blue on the
-map, and a click on the map or in the list adopts one, corners ready to drag. The goal
-suggests the kind ("lake coastline" → water). When OpenStreetMap is unreachable the finder
-says so and the drawn or view area still works. Areas stored with the plans join the project
-when the plans load, but an area shaped in this browser (a view origin or a dragged
-outline) is never replaced by the stored copy, and new area ids skip the ids the stored
-plans already use.
+**Shaping the ground.** Every area (`A-01`…) is editable on the map while its card is open:
+white corner handles drag, translucent midpoint handles pull a new corner out of an edge, an
+amber centre handle moves the whole area, right-click removes a corner, Esc ends editing;
+camera inputs pause while a handle is held (`cesium/AreaEditor.ts`). "Draw" traces a new
+outline corner by corner; "Pick again" waits for another click. Outlines from OpenStreetMap
+carry © OpenStreetMap contributors (ODbL) on the zone. Areas stored with the plans join the
+project when the plans load, but an area shaped in this browser is never replaced by the
+stored copy, and new area ids skip the ids the stored plans already use.
+
+**When the card says "Rule-based planner".** The API did not see `ANTHROPIC_API_KEY`. It
+reads the root `.env` and the process environment. On Windows, a variable set with `setx` or
+System settings reaches only terminals opened afterwards: close the terminal running
+`pnpm dev:api`, open a new one, start it again, then check
+`curl http://localhost:8000/api/v1/agent/status` says `"provider":"claude"`.
 
 **Persistence.** Approving writes the plan to the API (`POST /api/v1/plans`; revising is
 `PUT` and keeps every approved revision in history; lifecycle is `PATCH …/status`). Plans are

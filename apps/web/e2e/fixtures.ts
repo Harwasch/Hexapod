@@ -231,28 +231,50 @@ export async function mockApi(page: Page, options: MockOptions = {}): Promise<vo
   // Plans approved during a test live here so list, revise and status round-trip.
   const mockPlans: Record<string, unknown>[] = [];
   // OpenStreetMap feature lookup for "find on the map": one closed water way in any view.
-  await page.route("https://overpass-api.de/**", (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify({
-        elements: [
+  await page.route("https://overpass-api.de/**", (route) => {
+    // "What contains this point" gets a field around the point; a bbox query gets the lake.
+    const data = decodeURIComponent(route.request().postData() ?? "");
+    const isIn = /is_in\(([-\d.]+),([-\d.]+)\)/.exec(data);
+    const elements = isIn
+      ? [
+          {
+            type: "way",
+            id: 7,
+            tags: { name: "Test Field", landuse: "farmland" },
+            geometry: (() => {
+              const lat = Number(isIn[1]);
+              const lon = Number(isIn[2]);
+              const d = 0.003;
+              return [
+                { lat: lat - d, lon: lon - d },
+                { lat: lat - d, lon: lon + d },
+                { lat: lat + d, lon: lon + d },
+                { lat: lat + d, lon: lon - d },
+                { lat: lat - d, lon: lon - d },
+              ];
+            })(),
+          },
+        ]
+      : [
           {
             type: "way",
             id: 4242,
             tags: { name: "Test Lake", natural: "water" },
             geometry: [
-              { lat: 47.644, lon: -122.139 },
-              { lat: 47.644, lon: -122.13 },
-              { lat: 47.65, lon: -122.13 },
-              { lat: 47.65, lon: -122.139 },
-              { lat: 47.644, lon: -122.139 },
+              { lat: 36.597, lon: -119.905 },
+              { lat: 36.597, lon: -119.895 },
+              { lat: 36.603, lon: -119.895 },
+              { lat: 36.603, lon: -119.905 },
+              { lat: 36.597, lon: -119.905 },
             ],
           },
-        ],
-      }),
-    }),
-  );
+        ];
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ elements }),
+    });
+  });
   await page.route("**/api/v1/**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());

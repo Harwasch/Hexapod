@@ -282,33 +282,30 @@ test.describe("mission control", () => {
     await expect(app.getByTestId("fleet-panel")).toHaveCount(0);
   });
 
-  test("the agent drafts a plan from a goal and the operator approves it", async ({ app }) => {
+  test("the agent drafts a plan from a sentence in the bar and the operator approves it", async ({
+    app,
+  }) => {
     await app.getByTestId("onboarding-demo").click();
     await expect(app.getByTestId("project-card")).toContainText("Blackrock Mesa", {
       timeout: 30_000,
     });
     // The demo agent has simulated threads running, so its card shows; an idle one never says so.
     await expect(app.getByText("Agent idle")).toHaveCount(0);
-    await app.getByTestId("view-tab-plan").click({ force: true });
-    await app.getByTestId("plan-new").dispatchEvent("click");
-    await expect(app.getByTestId("plan-composer")).toBeVisible();
-    await app.getByTestId("compose-zone-Z-21").dispatchEvent("click");
-    await app.getByTestId("plan-goal").fill("Mow Z-21 weekly with one mower");
-    await app.getByTestId("plan-draft-submit").dispatchEvent("click");
+    await app.getByTestId("command-input").fill("Mow Z-21 weekly with one mower");
+    await app.getByTestId("command-input").press("Enter");
+    await expect(app.getByTestId("plan-card")).toBeVisible({ timeout: 15_000 });
     await expect(app.getByTestId("plan-review")).toBeVisible({ timeout: 30_000 });
-    await expect(app.getByTestId("plan-review")).toContainText(
-      /Drafted by Claude|Rule-based draft/,
-    );
+    await expect(app.getByTestId("plan-source")).toContainText(/Claude|Rule-based/);
     await expect(app.getByTestId("plan-review")).toContainText("Z-21");
-    await expect(app.getByTestId("plan-review")).toContainText("ASSUMPTIONS");
     await expect(app.getByTestId("plan-schedule")).toBeVisible();
     await expect(app.getByTestId("agent-stream")).toContainText("Drafted");
     // The draft is drawn on the map: coverage passes for Z-21, a step marker, no route (one zone).
     await expect
       .poll(() => planEntityIds(app))
       .toEqual(["mission:plan:passes:Z-21", "mission:plan:step:Z-21"]);
-    await app.getByTestId("plan-refine").fill("use TR-12 as well");
-    await app.getByText("Redraft").dispatchEvent("click");
+    // Plain words in the bar change the open draft.
+    await app.getByTestId("command-input").fill("use TR-12 as well");
+    await app.getByTestId("command-input").press("Enter");
     await expect(app.getByTestId("plan-changes")).toContainText("Added machine TR-12", {
       timeout: 15_000,
     });
@@ -320,9 +317,9 @@ test.describe("mission control", () => {
     await expect(app.getByTestId("plan-detail")).toContainText("Dispatched");
     // Revising keeps the plan's identity and lifecycle and adds a revision to its history.
     await app.getByText("Revise with agent").dispatchEvent("click");
-    await expect(app.getByTestId("plan-composer")).toBeVisible();
-    await app.getByTestId("plan-goal").fill("Mow Z-21 weekly with two mowers");
-    await app.getByTestId("plan-draft-submit").dispatchEvent("click");
+    await expect(app.getByTestId("plan-card")).toBeVisible();
+    await app.getByTestId("command-input").fill("Mow Z-21 weekly with two mowers");
+    await app.getByTestId("command-input").press("Enter");
     await expect(app.getByTestId("plan-review")).toBeVisible({ timeout: 30_000 });
     await app.getByTestId("plan-approve").dispatchEvent("click");
     await expect(app.getByTestId("plan-detail")).toContainText("rev 2", { timeout: 15_000 });
@@ -332,9 +329,11 @@ test.describe("mission control", () => {
     await expect(app.getByTestId("plans-panel")).not.toContainText("with one mower");
   });
 
-  test("a plan can be made anywhere from the current view, with no site", async ({ app }) => {
+  test("a plan can be made anywhere: click the ground, the agent outlines it and drafts", async ({
+    app,
+  }) => {
     await app.getByTestId("onboarding-explore").click({ force: true });
-    // Somewhere with no site, close enough that a view area is not clamped to its maximum.
+    // Somewhere with no site, close enough that the ground under a click is real.
     await app.evaluate(() => {
       const twin = (
         window as unknown as {
@@ -351,47 +350,29 @@ test.describe("mission control", () => {
     });
     await app.getByTestId("view-tab-plan").click({ force: true });
     await expect(app.getByTestId("plans-panel")).toContainText("Anywhere", { timeout: 15_000 });
-    await app.getByTestId("plan-new").dispatchEvent("click");
-    await expect(app.getByTestId("plan-composer")).toContainText("No zones here yet");
-    await app.getByTestId("area-from-view").dispatchEvent("click");
-    await expect(app.getByTestId("compose-zone-A-01")).toHaveAttribute("aria-pressed", "true");
-    await expect(app.getByTestId("compose-zone-A-01")).toContainText("View area 01");
-    // The view area is adjustable in place: a bigger share of the view means more acres.
-    const acresOf = async () =>
-      Number(
-        /([\d,]+) ac/
-          .exec((await app.getByTestId("compose-zone-A-01").textContent()) ?? "")?.[1]
-          ?.replace(",", ""),
-      );
-    const before = await acresOf();
-    await app.getByTestId("viewarea-A-01-size").fill("1");
-    await expect.poll(acresOf).toBeGreaterThan(before * 3);
-    await app.getByTestId("plan-goal").fill("Mow this area this week");
-    await app.getByTestId("plan-draft-submit").dispatchEvent("click");
-    await expect(app.getByTestId("plan-review")).toBeVisible({ timeout: 30_000 });
-    await expect(app.getByTestId("plan-review")).toContainText("A-01");
-    await expect.poll(() => planEntityIds(app)).toContain("mission:plan:passes:A-01");
-    // The agent asks one question at a time: a slider, then chips; the last answer redrafts.
-    await expect(app.getByTestId("clarify-progress")).toHaveText("1 of 2");
-    await expect(app.getByTestId("clarify-deadline-range")).toBeVisible();
-    await app.getByTestId("clarify-deadline-range").fill("21");
-    await app.getByTestId("clarify-next").dispatchEvent("click");
-    await expect(app.getByTestId("clarify-progress")).toHaveText("2 of 2");
-    await app.getByTestId("clarify-passes-two").dispatchEvent("click");
-    await expect(app.getByTestId("answered-deadline")).toContainText("21", { timeout: 15_000 });
-    await expect(app.getByTestId("answered-passes")).toContainText("two");
-    await expect(app.getByTestId("clarify-deadline")).toHaveCount(0);
-    await expect(app.getByTestId("plan-changes")).toContainText("Machine-hours 147 → 294");
-    // The agent can find the ground on the map: a mapped lake is drawn as a candidate first,
-    // then becomes an area with its corners on the map once adopted.
-    await app.getByTestId("find-water").dispatchEvent("click");
-    await expect.poll(() => entityIds(app)).toContain("area-candidate:osm-w4242");
-    await app.getByTestId("osm-osm-w4242").dispatchEvent("click");
-    await expect(app.getByTestId("compose-zone-A-02")).toContainText("Test Lake");
-    await expect(app.getByTestId("area-editing")).toContainText("A-02 on the map");
+    await app.getByTestId("command-input").fill("3D scan this field into a splat");
+    await app.getByTestId("command-input").press("Enter");
+    await expect(app.getByTestId("plan-awaiting-ground")).toBeVisible({ timeout: 15_000 });
+    await expect(app.getByTestId("agent-stream")).toContainText("Click the ground");
+    // One click on the map: the mapped field under it becomes the ground, corners on the map.
+    const canvas = app.locator("canvas").first();
+    const box = await canvas.boundingBox();
+    if (!box) throw new Error("no canvas");
+    await app.mouse.click(box.x + box.width * 0.3, box.y + box.height * 0.6);
+    await expect(app.getByTestId("plan-ground")).toContainText("Test Field", { timeout: 20_000 });
+    await expect(app.getByTestId("plan-ground")).toContainText("OpenStreetMap");
     await expect.poll(() => entityIds(app)).toContain("area-edit:vertex:0");
-    await expect.poll(() => entityIds(app)).not.toContain("area-candidate:osm-w4242");
-    // A reshaped area marks the draft stale.
+    await expect(app.getByTestId("plan-review")).toBeVisible({ timeout: 30_000 });
+    await expect.poll(() => planEntityIds(app)).toContain("mission:plan:passes:A-01");
+    // What the agent assumed is a row of chips; tapping one changes the plan.
+    await expect(app.getByTestId("assume-deadline")).toContainText("14 days");
+    await app.getByTestId("assume-passes").dispatchEvent("click");
+    await app.getByTestId("assume-passes-two").dispatchEvent("click");
+    await expect(app.getByTestId("plan-changes")).toContainText("Machine-hours 147 → 294", {
+      timeout: 15_000,
+    });
+    await expect(app.getByTestId("assume-passes")).toContainText("Two passes");
+    // A dragged corner redrafts for the new outline.
     await app.evaluate(() => {
       const twin = (
         window as unknown as {
@@ -399,7 +380,7 @@ test.describe("mission control", () => {
         }
       ).__twin;
       twin?.events.emit("area-edit", {
-        zoneId: "A-02",
+        zoneId: "A-01",
         footprint: {
           type: "Polygon",
           coordinates: [
@@ -414,12 +395,11 @@ test.describe("mission control", () => {
         },
       });
     });
-    await expect(app.getByTestId("plan-stale-area")).toBeVisible();
-    await app.getByTestId("area-edit-done").dispatchEvent("click");
-    await expect.poll(() => entityIds(app)).not.toContain("area-edit:vertex:0");
+    await expect(app.getByTestId("plan-drafting")).toBeVisible({ timeout: 5_000 });
+    await expect(app.getByTestId("plan-review")).toBeVisible({ timeout: 30_000 });
     await app.getByTestId("plan-approve").dispatchEvent("click");
-    await expect(app.getByTestId("plan-detail")).toContainText("Mow this area this week");
-    await expect(app.getByTestId("plan-detail")).toContainText("A-01 View area 01");
+    await expect(app.getByTestId("plan-detail")).toContainText("3D scan this field into a splat");
+    await expect(app.getByTestId("plan-detail")).toContainText("A-01 Test Field");
   });
 
   test("command bar drives the agent stream and layer pills toggle overlays", async ({ app }) => {

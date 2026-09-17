@@ -38,6 +38,8 @@ export interface SceneEvents extends Record<string, unknown> {
   /** Esc while editing an area. */
   "area-edit-end": string;
   "area-candidate-hover": string | null;
+  /** True while the next map click is being waited for as the ground of a plan. */
+  "ground-pick-mode": boolean;
   "area-candidate-pick": string;
 }
 

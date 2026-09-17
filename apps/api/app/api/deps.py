@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.services.ion import IonClient
 from app.services.planner import Planner, build_planner
+from app.services.vision import Outliner, build_outliner
 from app.storage import ObjectStorage, get_storage
 
 
@@ -24,7 +25,12 @@ def _planner() -> Planner:
     return build_planner()
 
 
+def _outliner() -> Outliner | None:
+    return build_outliner()
+
+
 DbSession = Annotated[Session, Depends(_db)]
 Ion = Annotated[IonClient, Depends(_ion)]
 PlannerDep = Annotated[Planner, Depends(_planner)]
+OutlinerDep = Annotated[Outliner | None, Depends(_outliner)]
 Storage = Annotated[ObjectStorage, Depends(get_storage)]

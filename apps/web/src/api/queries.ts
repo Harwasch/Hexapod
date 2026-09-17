@@ -3,17 +3,19 @@ import { useMutation, useQuery, useQueryClient, type UseQueryResult } from "@tan
 import type {
   AssetCreate,
   CameraBookmarkCreate,
+  GroundOutline,
   HealthStatus,
   IonStatus,
   Layer,
   LayerCreate,
+  OutlineRequest,
   PlanDraft,
   PlanDraftRequest,
-  PlannerStatus,
   PlanRecord,
   PlanRecordCreate,
   PlanRecordRevise,
   PlanRecordStatus,
+  PlannerStatus,
   Site,
   SiteCreate,
   SiteSummary,
@@ -111,6 +113,11 @@ export function usePlannerStatus() {
 /** Asks the mission planner for a structured plan draft. */
 export function draftPlan(body: PlanDraftRequest): Promise<PlanDraft> {
   return unwrap<PlanDraft>(api.POST("/api/v1/agent/plan-draft", { body }));
+}
+
+/** The model outlines the feature under a clicked point in a picture of the view. */
+export function outlineGround(body: OutlineRequest): Promise<GroundOutline> {
+  return unwrap<GroundOutline>(api.POST("/api/v1/agent/outline", { body }));
 }
 
 /** A project's persisted plans; `builtin` when the API is offline (the browser store then holds them). */

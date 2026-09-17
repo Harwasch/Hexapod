@@ -77,6 +77,7 @@ export class AreaEditor {
   private hovered: string | null = null;
   private readonly candidates = new Map<string, Entity[]>();
   private candidateHover: string | null = null;
+  private pick: (() => void) | null = null;
   private readonly onKey = (event: KeyboardEvent) => {
     if (event.key === "Escape" && this.zoneId) this.events.emit("area-edit-end", this.zoneId);
   };
@@ -90,6 +91,48 @@ export class AreaEditor {
 
   get editing(): string | null {
     return this.zoneId;
+  }
+
+  /**
+   * "Click the ground you mean": the next click on the map resolves with the ground under it
+   * and its place in the view (normalized); Esc or a second call resolves null.
+   */
+  pickGround(): Promise<{ longitude: number; latitude: number; x: number; y: number } | null> {
+    this.cancelPick();
+    return new Promise((resolve) => {
+      const canvas = this.viewer.canvas;
+      const handler = new ScreenSpaceEventHandler(canvas);
+      const finish = (result: Awaited<ReturnType<AreaEditor["pickGround"]>>) => {
+        handler.destroy();
+        window.removeEventListener("keydown", onKey);
+        canvas.style.cursor = "";
+        this.pick = null;
+        this.events.emit("ground-pick-mode", false);
+        resolve(result);
+      };
+      const onKey = (event: KeyboardEvent) => {
+        if (event.key === "Escape") finish(null);
+      };
+      handler.setInputAction((e: ScreenSpaceEventHandler.PositionedEvent) => {
+        const ground = this.ground(e.position);
+        if (!ground) return;
+        finish({
+          longitude: ground.longitude,
+          latitude: ground.latitude,
+          x: e.position.x / canvas.clientWidth,
+          y: e.position.y / canvas.clientHeight,
+        });
+      }, ScreenSpaceEventType.LEFT_CLICK);
+      window.addEventListener("keydown", onKey);
+      canvas.style.cursor = "crosshair";
+      this.pick = () => finish(null);
+      this.events.emit("ground-pick-mode", true);
+    });
+  }
+
+  /** Leaves pick mode, resolving the pending pick with null. */
+  cancelPick(): void {
+    this.pick?.();
   }
 
   /** Starts editing `zoneId` with `footprint`'s outer ring, or stops when null. */
@@ -365,6 +408,8 @@ export class AreaEditor {
       const ray = this.viewer.camera.getPickRay(window);
       position = ray ? this.scene.globe.pick(ray, this.scene) : undefined;
     }
+    // No terrain loaded yet: the bare ellipsoid still says where the click is.
+    position ??= this.viewer.camera.pickEllipsoid(window, this.scene.globe.ellipsoid);
     if (!position) return null;
     const carto = Cartographic.fromCartesian(position);
     return {
@@ -476,6 +521,7 @@ export class AreaEditor {
   }
 
   destroy(): void {
+    this.cancelPick();
     this.stopEditing();
     this.showCandidates([]);
     this.handler?.destroy();

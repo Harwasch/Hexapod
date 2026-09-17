@@ -5,7 +5,7 @@
  */
 
 import type { Footprint } from "@twin/contracts";
-import { footprintAreaM2, toAcres } from "@twin/geo";
+import { footprintAreaM2, footprintContains, toAcres } from "@twin/geo";
 
 import { zoneFromFootprint } from "./areas";
 import type { Zone } from "./types";
@@ -132,12 +132,31 @@ function assembleRings(ways: [number, number][][]): [number, number][][] {
   return rings;
 }
 
+/** A readable kind for an unnamed feature: the finder's kind label, or the tag that made it an area. */
+function kindLabel(kind: string, tags: Record<string, string> | undefined): string {
+  if (kind in OSM_KINDS) return OSM_KINDS[kind as OsmAreaKind].label;
+  const value = tags?.landuse ?? tags?.natural ?? tags?.leisure ?? tags?.amenity ?? tags?.water;
+  return value ? value.replace(/_/g, " ") : kind;
+}
+
 function label(tags: Record<string, string> | undefined, fallback: string): string {
   return tags?.name ?? tags?.["name:en"] ?? fallback;
 }
 
+/** Every mapped area kind at once, for "what is under this point". */
+const ANY_AREA_SELECTORS = ["[landuse]", "[natural]", "[leisure]", "[amenity]", "[water]"];
+
+/** Areas that contain a point, most specific first once parsed (smallest last). */
+export function containingQuery(point: { longitude: number; latitude: number }): string {
+  const parts = ANY_AREA_SELECTORS.flatMap((sel) => [
+    `way(pivot.a)${sel};`,
+    `relation(pivot.a)${sel};`,
+  ]);
+  return `[out:json][timeout:25];is_in(${point.latitude},${point.longitude})->.a;(${parts.join("")});out geom 20;`;
+}
+
 /** Candidate polygons from an Overpass reply, largest first, tiny slivers dropped. */
-export function parseOverpass(response: OverpassResponse, kind: OsmAreaKind): OsmCandidate[] {
+export function parseOverpass(response: OverpassResponse, kind: string): OsmCandidate[] {
   const out: OsmCandidate[] = [];
   for (const el of response.elements) {
     if (el.type === "way") {
@@ -147,7 +166,7 @@ export function parseOverpass(response: OverpassResponse, kind: OsmAreaKind): Os
       const footprint: Footprint = { type: "Polygon", coordinates: [ring] };
       out.push({
         id: `osm-w${way.id}`,
-        name: label(way.tags, OSM_KINDS[kind].label),
+        name: label(way.tags, kindLabel(kind, way.tags)),
         footprint,
         acres: toAcres(footprintAreaM2(footprint)),
       });
@@ -166,7 +185,7 @@ export function parseOverpass(response: OverpassResponse, kind: OsmAreaKind): Os
           : { type: "MultiPolygon", coordinates: rings.map((r) => [r]) };
       out.push({
         id: `osm-r${rel.id}`,
-        name: label(rel.tags, OSM_KINDS[kind].label),
+        name: label(rel.tags, kindLabel(kind, rel.tags)),
         footprint,
         acres: toAcres(footprintAreaM2(footprint)),
       });
@@ -191,6 +210,25 @@ export async function fetchOsmAreas(
   });
   if (!response.ok) throw new Error(`OpenStreetMap lookup failed (${response.status})`);
   return parseOverpass((await response.json()) as OverpassResponse, kind);
+}
+
+/** The mapped area under a point: the smallest one that contains it, or null. */
+export async function fetchOsmContaining(
+  point: { longitude: number; latitude: number },
+  maxAcres = 5000,
+  signal?: AbortSignal,
+): Promise<OsmCandidate | null> {
+  const response = await fetch(OVERPASS_URL, {
+    method: "POST",
+    body: new URLSearchParams({ data: containingQuery(point) }),
+    signal: signal ?? null,
+  });
+  if (!response.ok) throw new Error(`OpenStreetMap lookup failed (${response.status})`);
+  const candidates = parseOverpass((await response.json()) as OverpassResponse, "area");
+  const inside = candidates.filter(
+    (c) => c.acres <= maxAcres && footprintContains(c.footprint, point),
+  );
+  return inside.at(-1) ?? null;
 }
 
 export function zoneFromCandidate(id: string, candidate: OsmCandidate): Zone {
