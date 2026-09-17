@@ -8,6 +8,7 @@ from app.models.enums import (
     Representation,
 )
 from app.models.layer import Layer
+from app.models.plan import Plan, PlanRevision
 from app.models.site import Site
 
 __all__ = [
@@ -18,6 +19,8 @@ __all__ = [
     "Layer",
     "LayerCategory",
     "LayerSourceType",
+    "Plan",
+    "PlanRevision",
     "Representation",
     "Site",
 ]

@@ -69,6 +69,8 @@ interface MissionState {
   approvePlan: (plan: Plan) => void;
   updatePlan: (planId: string, patch: Partial<Plan>) => void;
   removePlan: (planId: string) => void;
+  /** Plans the API holds for a project replace the persisted ones; local-only plans stay. */
+  setRemotePlans: (projectId: string, plans: Plan[]) => void;
 }
 
 let logCounter = 0;
@@ -172,6 +174,16 @@ export const useMission = create<MissionState>()(
           };
         });
       },
+      setRemotePlans: (projectId, plans) =>
+        set((s) => {
+          const local = (s.approvedPlans[projectId] ?? []).filter((p) => !p.persisted);
+          const approvedPlans = { ...s.approvedPlans, [projectId]: [...plans, ...local] };
+          const project = s.project;
+          if (project?.id !== projectId) return { approvedPlans };
+          // Provider plans carry no goal; everything else came from the console and is rebuilt.
+          const base = { ...project, plans: project.plans.filter((p) => p.goal === undefined) };
+          return { approvedPlans, project: withApproved(base, approvedPlans) };
+        }),
       removePlan: (planId) => {
         const project = get().project;
         if (!project) return;

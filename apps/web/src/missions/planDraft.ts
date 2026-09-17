@@ -3,7 +3,15 @@
  * Pure functions so the flow is unit-tested without a scene.
  */
 
-import type { PlanCadence, PlanDraft, PlanDraftRequest, PlanStep } from "@twin/contracts";
+import type {
+  PlanCadence,
+  PlanDraft,
+  PlanDraftRequest,
+  PlanRecord,
+  PlanRecordCreate,
+  PlanRecordStatus,
+  PlanStep,
+} from "@twin/contracts";
 
 import type { Plan, PlanOverlay, Project } from "./types";
 
@@ -132,6 +140,90 @@ export function planFromDraft(
     assumptions: draft.assumptions ?? [],
     goal: options.goal,
     source: { kind: draft.source, model: draft.model ?? null },
+    startDate: draft.startDate,
+  };
+}
+
+/** The API body for approving a draft (create) or a revision (same shape plus a note). */
+export function recordBodyFromDraft(
+  draft: PlanDraft,
+  goal: string,
+  projectId: string,
+  siteId: string | null,
+): PlanRecordCreate {
+  return {
+    projectId,
+    siteId,
+    title: draft.title.trim() || "New plan",
+    objective: draft.objective,
+    goal,
+    cadence: draft.cadence,
+    startDate: draft.startDate,
+    endDate: draft.endDate ?? null,
+    zoneIds: draft.zoneIds,
+    machineIds: draft.machineIds,
+    steps: draft.steps ?? [],
+    estimates: draft.estimates,
+    assumptions: draft.assumptions ?? [],
+    risks: draft.risks,
+    questions: draft.questions,
+    source: draft.source,
+    model: draft.model ?? null,
+  };
+}
+
+const STATUS_PRESENTATION: Record<
+  PlanRecordStatus,
+  { status: Plan["status"]; state: string; action: string }
+> = {
+  scheduled: { status: "idle", state: "Scheduled", action: "Dispatch to fleet" },
+  dispatched: { status: "run", state: "Dispatched", action: "Pause plan" },
+  paused: { status: "idle", state: "Paused", action: "Resume" },
+  done: { status: "ok", state: "Done", action: "Archive" },
+  cancelled: { status: "idle", state: "Cancelled", action: "Reopen" },
+};
+
+/** How a lifecycle status reads in the console. */
+export function presentStatus(status: PlanRecordStatus): {
+  status: Plan["status"];
+  state: string;
+  action: string;
+} {
+  return STATUS_PRESENTATION[status];
+}
+
+/** A persisted plan as the console's record, with the lifecycle state the API holds. */
+export function planFromRecord(record: PlanRecord, project: Project): Plan {
+  const draft: PlanDraft = {
+    title: record.title,
+    objective: record.objective,
+    zoneIds: record.zoneIds,
+    machineIds: record.machineIds,
+    cadence: record.cadence,
+    startDate: record.startDate,
+    endDate: record.endDate,
+    estimates: record.estimates,
+    steps: record.steps,
+    assumptions: record.assumptions,
+    risks: record.risks,
+    questions: record.questions,
+    source: record.source,
+    model: record.model,
+    note: "",
+  };
+  const plan = planFromDraft(draft, project, { id: record.id, goal: record.goal });
+  const presentation = presentStatus(record.status);
+  return {
+    ...plan,
+    ...presentation,
+    revision: record.revision,
+    revisions: record.revisions.map((r) => ({
+      revision: r.revision,
+      note: r.note,
+      createdAt: r.createdAt,
+      title: r.title,
+    })),
+    persisted: true,
   };
 }
 

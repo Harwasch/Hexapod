@@ -9,6 +9,9 @@ import {
   diffDrafts,
   overlayFor,
   planFromDraft,
+  planFromRecord,
+  presentStatus,
+  recordBodyFromDraft,
   scheduleLanes,
 } from "@/missions/planDraft";
 import { useMission } from "@/state/mission";
@@ -165,5 +168,71 @@ describe("plan drafting", () => {
     expect(changes).toContain("Duration 7 d → 3 d.");
     expect(changes).toContain("Steps 2 → 1.");
     expect(diffDrafts(draft, draft)).toEqual([]);
+  });
+
+  it("round-trips a draft through the API record shape", () => {
+    const body = recordBodyFromDraft(draft, "Mow Z-14", "blackrock-mesa", null);
+    expect(body.projectId).toBe("blackrock-mesa");
+    expect(body.steps).toHaveLength(2);
+    expect(body.source).toBe("rules");
+    const record = {
+      ...body,
+      id: "8b4b7f3e-0d9e-4a1e-9c6d-1f2a3b4c5d6e",
+      siteId: null,
+      status: "dispatched" as const,
+      revision: 2,
+      revisions: [
+        {
+          revision: 1,
+          note: "Approved",
+          createdAt: "2026-09-17T00:00:00Z",
+          title: "Mow Z-14",
+          machineIds: ["TR-04"],
+          zoneIds: ["Z-14"],
+          estimates: draft.estimates,
+        },
+        {
+          revision: 2,
+          note: "Revised: skip nothing",
+          createdAt: "2026-09-18T00:00:00Z",
+          title: "Mow Z-14",
+          machineIds: ["TR-04"],
+          zoneIds: ["Z-14"],
+          estimates: draft.estimates,
+        },
+      ],
+      createdAt: "2026-09-17T00:00:00Z",
+      updatedAt: "2026-09-18T00:00:00Z",
+    };
+    const plan = planFromRecord(record, project);
+    expect(plan.id).toBe(record.id);
+    expect(plan.persisted).toBe(true);
+    expect(plan.status).toBe("run");
+    expect(plan.state).toBe("Dispatched");
+    expect(plan.revision).toBe(2);
+    expect(plan.revisions?.map((r) => r.note)).toEqual(["Approved", "Revised: skip nothing"]);
+    expect(plan.steps).toHaveLength(2);
+    expect(presentStatus("paused").action).toBe("Resume");
+  });
+
+  it("merges remote plans with local-only ones and drops stale console plans", () => {
+    const store = useMission.getState();
+    store.setProject(project);
+    const local = planFromDraft(draft, project, { goal: "local", id: "plan-local" });
+    store.approvePlan(local);
+    const stale = planFromDraft(draft, project, { goal: "stale", id: "plan-stale" });
+    store.approvePlan({ ...stale, persisted: true });
+    const remote = {
+      ...planFromDraft(draft, project, { goal: "remote", id: "plan-remote" }),
+      persisted: true,
+    };
+    store.setRemotePlans(project.id, [remote]);
+    const ids = useMission.getState().project?.plans.map((p) => p.id) ?? [];
+    expect(ids).toContain("plan-remote");
+    expect(ids).toContain("plan-local");
+    expect(ids).not.toContain("plan-stale");
+    expect(ids).toContain("thistle");
+    store.removePlan("plan-local");
+    store.setRemotePlans(project.id, []);
   });
 });

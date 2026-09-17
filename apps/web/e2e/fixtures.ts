@@ -228,6 +228,8 @@ export interface MockOptions {
 }
 
 export async function mockApi(page: Page, options: MockOptions = {}): Promise<void> {
+  // Plans approved during a test live here so list, revise and status round-trip.
+  const mockPlans: Record<string, unknown>[] = [];
   await page.route("**/api/v1/**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -301,6 +303,73 @@ export async function mockApi(page: Page, options: MockOptions = {}): Promise<vo
           createJobsReason: "sourceType for photo inputs is not documented",
         },
       });
+    if (path === "/api/v1/plans" && request.method() === "GET") return json(mockPlans);
+    if (path === "/api/v1/plans" && request.method() === "POST") {
+      const body = request.postDataJSON() as Record<string, unknown>;
+      const now = new Date().toISOString();
+      const record = {
+        ...body,
+        id: `plan-${mockPlans.length + 1}`,
+        status: "scheduled",
+        revision: 1,
+        revisions: [
+          {
+            revision: 1,
+            note: "Approved",
+            createdAt: now,
+            title: body.title,
+            machineIds: body.machineIds,
+            zoneIds: body.zoneIds,
+            estimates: body.estimates,
+          },
+        ],
+        createdAt: now,
+        updatedAt: now,
+      };
+      mockPlans.push(record);
+      return json(record, 201);
+    }
+    const planMatch = /^\/api\/v1\/plans\/([^/]+)(\/status)?$/.exec(path);
+    if (planMatch) {
+      const index = mockPlans.findIndex((p) => p.id === planMatch[1]);
+      if (index < 0) return json({ title: "Not found", status: 404 }, 404);
+      const current = mockPlans[index] as Record<string, unknown> & {
+        revision: number;
+        revisions: unknown[];
+      };
+      if (planMatch[2] && request.method() === "PATCH") {
+        const { status } = request.postDataJSON() as { status: string };
+        mockPlans[index] = { ...current, status };
+        return json(mockPlans[index]);
+      }
+      if (request.method() === "PUT") {
+        const body = request.postDataJSON() as Record<string, unknown> & { note?: string };
+        const revision = current.revision + 1;
+        mockPlans[index] = {
+          ...current,
+          ...body,
+          revision,
+          revisions: [
+            ...current.revisions,
+            {
+              revision,
+              note: body.note ?? "Revised",
+              createdAt: new Date().toISOString(),
+              title: body.title,
+              machineIds: body.machineIds,
+              zoneIds: body.zoneIds,
+              estimates: body.estimates,
+            },
+          ],
+        };
+        return json(mockPlans[index]);
+      }
+      if (request.method() === "DELETE") {
+        mockPlans.splice(index, 1);
+        return route.fulfill({ status: 204 });
+      }
+      return json(current);
+    }
     if (path === "/api/v1/agent/status")
       return json({ configured: false, provider: "rules", model: null });
     if (path === "/api/v1/agent/plan-draft" && request.method() === "POST") {

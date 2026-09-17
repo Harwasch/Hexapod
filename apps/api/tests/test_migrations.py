@@ -11,7 +11,7 @@ def test_migrations_round_trip(alembic_config: Config, engine: Engine) -> None:
     assert not inspect(engine).has_table("sites")
     command.upgrade(alembic_config, "head")
     inspector = inspect(engine)
-    for table in ("sites", "assets", "layers", "camera_bookmarks"):
+    for table in ("sites", "assets", "layers", "camera_bookmarks", "plans", "plan_revisions"):
         assert inspector.has_table(table)
     index_names = {index["name"] for index in inspector.get_indexes("sites")}
     assert "idx_sites_boundary" in index_names

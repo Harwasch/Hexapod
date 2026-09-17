@@ -8,10 +8,13 @@ import type { Plan } from "@/missions/types";
 import { useMission } from "@/state/mission";
 import { useUi } from "@/state/ui";
 
+import { usePlans } from "@/api/queries";
 import { useScene } from "@/cesium/SceneContext";
+import { planFromRecord } from "@/missions/planDraft";
 
 import { PlanComposer } from "./PlanComposer";
 import { PlanSchedule } from "./PlanSchedule";
+import { plansInvalidate, setPlanStatus } from "./planDrafting";
 import { useMissionActions } from "./useMissionActions";
 
 /** Plans list and plan detail window (design: Plan view). */
@@ -25,6 +28,26 @@ export function PlansPanel() {
   const setAddDataOpen = useUi((s) => s.setAddDataOpen);
   const plan = project?.plans.find((p) => p.id === planId) ?? null;
   const open = view === "plan";
+  // Persisted plans: the API is the source of truth whenever it answers.
+  const remote = usePlans(project?.id ?? null);
+  const setRemotePlans = useMission((s) => s.setRemotePlans);
+  const refetch = remote.refetch;
+  useEffect(() => {
+    plansInvalidate.current = () => void refetch();
+    return () => {
+      plansInvalidate.current = null;
+    };
+  }, [refetch]);
+  const remoteData = remote.builtin || remote.isLoading ? null : remote.data;
+  useEffect(() => {
+    // The store looks the project up itself; only a change of project or of records matters.
+    const current = useMission.getState().project;
+    if (!current || !remoteData) return;
+    setRemotePlans(
+      current.id,
+      remoteData.map((record) => planFromRecord(record, current)),
+    );
+  }, [project?.id, remoteData, setRemotePlans]);
   return (
     <AnimatePresence>
       {open && (
@@ -137,7 +160,6 @@ function PlanDetail({ plan, onBack }: { plan: Plan; onBack: () => void }) {
   const appendLog = useMission((s) => s.appendLog);
   const setStreamOpen = useMission((s) => s.setStreamOpen);
   const openComposer = useMission((s) => s.openComposer);
-  const updatePlan = useMission((s) => s.updatePlan);
   const scene = useScene();
   const colorFor = (id: string) => scene?.mission.machineColor(id).toCssColorString() ?? "#7fd8c0";
   const owned = plan.goal !== undefined;
@@ -157,16 +179,14 @@ function PlanDetail({ plan, onBack }: { plan: Plan; onBack: () => void }) {
     return () => clearPlanOverlay();
   }, [scene, plan.id, plan.zoneIds, plan.steps, plan.machineIds, clearPlanOverlay]);
   const lifecycle = () => {
-    if (plan.status === "run") {
-      updatePlan(plan.id, { status: "idle", state: "Paused", action: "Resume" });
-      appendLog("agent", `“${plan.title}” paused. The fleet finishes its current pass and holds.`);
-    } else {
-      updatePlan(plan.id, { status: "run", state: "Dispatched", action: "Pause plan" });
-      appendLog(
-        "agent",
-        `“${plan.title}” dispatched to the fleet${useMission.getState().project?.simulated ? " (simulated: the robot bridge will pick this up here)" : ""}.`,
-      );
-    }
+    const next = plan.status === "run" ? "paused" : "dispatched";
+    void setPlanStatus(plan, next);
+    appendLog(
+      "agent",
+      next === "paused"
+        ? `“${plan.title}” paused. The fleet finishes its current pass and holds.`
+        : `“${plan.title}” dispatched to the fleet${useMission.getState().project?.simulated ? " (simulated: the robot bridge will pick this up here)" : ""}.`,
+    );
     setStreamOpen(true);
   };
   return (
@@ -278,6 +298,22 @@ function PlanDetail({ plan, onBack }: { plan: Plan; onBack: () => void }) {
                 </li>
               ))}
             </ol>
+          </section>
+        )}
+        {plan.revisions && plan.revisions.length > 0 && (
+          <section data-testid="plan-history">
+            <span className="mc-eyebrow">HISTORY</span>
+            <ul className="mc-list mc-list--plain">
+              {[...plan.revisions].reverse().map((r) => (
+                <li key={r.revision}>
+                  <span className="mc-mono">rev {r.revision}</span> · {r.note} ·{" "}
+                  {new Date(r.createdAt).toLocaleDateString(undefined, {
+                    month: "short",
+                    day: "numeric",
+                  })}
+                </li>
+              ))}
+            </ul>
           </section>
         )}
         {plan.assumptions && plan.assumptions.length > 0 && (

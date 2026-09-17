@@ -79,6 +79,11 @@ export interface Plan {
   assumptions?: string[];
   goal?: string;
   source?: { kind: "claude" | "rules"; model: string | null };
+  /** Set for plans the API holds; local-only plans (API offline) have none. */
+  revision?: number;
+  revisions?: { revision: number; note: string; createdAt: string; title: string }[];
+  persisted?: boolean;
+  startDate?: string;
 }
 
 /** What the map draws for a plan or draft: zones in step order with the machines assigned. */

@@ -10,6 +10,10 @@ import type {
   PlanDraft,
   PlanDraftRequest,
   PlannerStatus,
+  PlanRecord,
+  PlanRecordCreate,
+  PlanRecordRevise,
+  PlanRecordStatus,
   Site,
   SiteCreate,
   SiteSummary,
@@ -32,6 +36,7 @@ export interface CatalogResult<T> {
   builtin: boolean;
   isLoading: boolean;
   error: unknown;
+  refetch: () => Promise<unknown>;
 }
 
 function withFallback<T>(query: UseQueryResult<T>, fallback: () => T): CatalogResult<T> {
@@ -41,6 +46,7 @@ function withFallback<T>(query: UseQueryResult<T>, fallback: () => T): CatalogRe
     builtin: offline,
     isLoading: query.isPending,
     error: query.isError && !offline ? query.error : null,
+    refetch: query.refetch,
   };
 }
 
@@ -100,6 +106,39 @@ export function usePlannerStatus() {
 export function draftPlan(body: PlanDraftRequest): Promise<PlanDraft> {
   return unwrap<PlanDraft>(api.POST("/api/v1/agent/plan-draft", { body }));
 }
+
+/** A project's persisted plans; `builtin` when the API is offline (the browser store then holds them). */
+export function usePlans(projectId: string | null): CatalogResult<PlanRecord[]> {
+  const query = useQuery({
+    queryKey: ["plans", projectId],
+    queryFn: () =>
+      unwrap<PlanRecord[]>(
+        api.GET("/api/v1/plans", { params: { query: { projectId: projectId ?? "" } } }),
+      ),
+    enabled: projectId !== null,
+    staleTime: 15_000,
+  });
+  return withFallback(query, () => []);
+}
+
+export const plansApi = {
+  create: (body: PlanRecordCreate) => unwrap<PlanRecord>(api.POST("/api/v1/plans", { body })),
+  revise: (planId: string, body: PlanRecordRevise) =>
+    unwrap<PlanRecord>(
+      api.PUT("/api/v1/plans/{plan_id}", { params: { path: { plan_id: planId } }, body }),
+    ),
+  setStatus: (planId: string, status: PlanRecordStatus) =>
+    unwrap<PlanRecord>(
+      api.PATCH("/api/v1/plans/{plan_id}/status", {
+        params: { path: { plan_id: planId } },
+        body: { status },
+      }),
+    ),
+  remove: (planId: string) =>
+    unwrap<unknown>(
+      api.DELETE("/api/v1/plans/{plan_id}", { params: { path: { plan_id: planId } } }),
+    ),
+};
 
 export function useIonStatus() {
   return useQuery({

@@ -5,12 +5,12 @@ import type { PlanDraft } from "@twin/contracts";
 
 import { usePlannerStatus } from "@/api/queries";
 import { useScene } from "@/cesium/SceneContext";
-import { diffDrafts, idLabel, overlayFor, planFromDraft } from "@/missions/planDraft";
+import { diffDrafts, idLabel, overlayFor } from "@/missions/planDraft";
 import type { Project } from "@/missions/types";
 import { useMission } from "@/state/mission";
 
 import { PlanSchedule } from "./PlanSchedule";
-import { startPlanDraft } from "./planDrafting";
+import { approveDraft, startPlanDraft } from "./planDrafting";
 import { useMissionActions } from "./useMissionActions";
 
 const EXAMPLES = [
@@ -171,8 +171,6 @@ function DraftReview({
 }) {
   const composer = useMission((s) => s.composer);
   const update = useMission((s) => s.updateComposer);
-  const approve = useMission((s) => s.approvePlan);
-  const appendLog = useMission((s) => s.appendLog);
   const scene = useScene();
   const { showPlanOnMap, clearPlanOverlay } = useMissionActions();
   const [refinement, setRefinement] = useState("");
@@ -208,13 +206,13 @@ function DraftReview({
       refinement: text,
     });
   };
+  const [approving, setApproving] = useState(false);
   const onApprove = () => {
-    const plan = planFromDraft({ ...draft, title: draft.title.trim() || "New plan" }, project, {
-      goal,
-      ...(composer?.replacePlanId ? { id: composer.replacePlanId } : {}),
-    });
-    approve(plan);
-    appendLog("agent", `“${plan.title}” is approved and scheduled. ${plan.facts[2]?.v ?? ""}`);
+    if (approving) return;
+    setApproving(true);
+    void approveDraft({ ...draft, title: draft.title.trim() || "New plan" }, goal).finally(() =>
+      setApproving(false),
+    );
   };
   return (
     <section className="mc-review" data-testid="plan-review" aria-label="Plan draft">
@@ -357,10 +355,10 @@ function DraftReview({
           type="button"
           className="mc-btn mc-btn--accent"
           onClick={onApprove}
-          disabled={draft.zoneIds.length === 0}
+          disabled={draft.zoneIds.length === 0 || approving}
           data-testid="plan-approve"
         >
-          Approve plan
+          {approving ? "Saving…" : "Approve plan"}
         </button>
       </div>
     </section>

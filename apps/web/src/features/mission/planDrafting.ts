@@ -1,7 +1,21 @@
-import { draftPlan } from "@/api/queries";
+import type { PlanDraft, PlanRecordStatus } from "@twin/contracts";
+
+import { isOffline } from "@/api/client";
+import { draftPlan, plansApi } from "@/api/queries";
 import { describeError } from "@/lib/log";
-import { buildDraftRequest, describeDraft } from "@/missions/planDraft";
+import {
+  buildDraftRequest,
+  describeDraft,
+  planFromDraft,
+  planFromRecord,
+  presentStatus,
+  recordBodyFromDraft,
+} from "@/missions/planDraft";
+import type { Plan } from "@/missions/types";
 import { useMission } from "@/state/mission";
+
+/** Invalidated after every write so an open Plans window refetches. */
+export const plansInvalidate: { current: (() => void) | null } = { current: null };
 
 /**
  * Runs one drafting round: opens the composer (or reuses it), asks the planner, and narrates
@@ -60,4 +74,65 @@ export async function startPlanDraft(
     useMission.getState().updateComposer({ status: "error", error: message });
     useMission.getState().appendLog("agent", `I couldn't draft that: ${message}`);
   }
+}
+
+/**
+ * Approves a reviewed draft: the API stores it (a new plan, or a new revision of the plan
+ * being revised) and the console shows the stored record. When the API is offline the plan
+ * is kept in this browser and says so.
+ */
+export async function approveDraft(draft: PlanDraft, goal: string): Promise<Plan | null> {
+  const state = useMission.getState();
+  const project = state.project;
+  if (!project) return null;
+  const replaceId = state.composer?.replacePlanId ?? null;
+  const existing = replaceId ? project.plans.find((p) => p.id === replaceId) : undefined;
+  const body = recordBodyFromDraft(draft, goal, project.id, project.siteId);
+  let plan: Plan;
+  try {
+    const record = existing?.persisted
+      ? await plansApi.revise(existing.id, { ...body, note: `Revised: ${goal.slice(0, 120)}` })
+      : await plansApi.create(body);
+    plan = planFromRecord(record, project);
+    plansInvalidate.current?.();
+  } catch (error) {
+    if (!isOffline(error)) {
+      useMission.getState().appendLog("agent", `I couldn't save the plan: ${describeError(error)}`);
+      useMission.getState().setStreamOpen(true);
+      return null;
+    }
+    plan = planFromDraft(draft, project, { goal, ...(replaceId ? { id: replaceId } : {}) });
+    plan.agentNote = `${plan.agentNote} Saved in this browser only: the API is offline.`;
+  }
+  useMission.getState().approvePlan(plan);
+  useMission
+    .getState()
+    .appendLog(
+      "agent",
+      `“${plan.title}” is approved and scheduled${plan.persisted ? ` (revision ${plan.revision ?? 1})` : ""}. ${plan.facts[2]?.v ?? ""}`,
+    );
+  return plan;
+}
+
+/** Lifecycle changes go to the API first; the console mirrors the stored state. */
+export async function setPlanStatus(plan: Plan, status: PlanRecordStatus): Promise<void> {
+  const presentation = presentStatus(status);
+  if (plan.persisted) {
+    try {
+      const record = await plansApi.setStatus(plan.id, status);
+      const project = useMission.getState().project;
+      if (project) useMission.getState().updatePlan(plan.id, planFromRecord(record, project));
+      plansInvalidate.current?.();
+      return;
+    } catch (error) {
+      if (!isOffline(error)) {
+        useMission
+          .getState()
+          .appendLog("agent", `I couldn't update the plan: ${describeError(error)}`);
+        useMission.getState().setStreamOpen(true);
+        return;
+      }
+    }
+  }
+  useMission.getState().updatePlan(plan.id, presentation);
 }

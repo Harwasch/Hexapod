@@ -15,7 +15,7 @@ from app.config import get_settings
 from app.main import create_app
 
 TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL") or get_settings().test_database_url
-TABLES = ("camera_bookmarks", "assets", "layers", "sites")
+TABLES = ("plan_revisions", "plans", "camera_bookmarks", "assets", "layers", "sites")
 
 
 @pytest.fixture(scope="session")

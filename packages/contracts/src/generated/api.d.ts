@@ -169,6 +169,60 @@ export interface paths {
         patch: operations["update_layer_api_v1_layers__layer_id__patch"];
         trace?: never;
     };
+    "/api/v1/plans": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List a project's plans */
+        get: operations["list_plans_api_v1_plans_get"];
+        put?: never;
+        /** Approve a plan */
+        post: operations["create_plan_api_v1_plans_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/plans/{plan_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a plan with its history */
+        get: operations["get_plan_api_v1_plans__plan_id__get"];
+        /** Approve a new revision */
+        put: operations["revise_plan_api_v1_plans__plan_id__put"];
+        post?: never;
+        /** Delete a plan */
+        delete: operations["delete_plan_api_v1_plans__plan_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/plans/{plan_id}/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Change lifecycle state */
+        patch: operations["set_status_api_v1_plans__plan_id__status_patch"];
+        trace?: never;
+    };
     "/api/v1/sites": {
         parameters: {
             query?: never;
@@ -888,6 +942,53 @@ export interface components {
             /** Urltemplate */
             urlTemplate: string;
         };
+        /** PlanCreate */
+        PlanCreate: {
+            /** Assumptions */
+            assumptions?: string[];
+            /**
+             * Cadence
+             * @default once
+             * @enum {string}
+             */
+            cadence?: "once" | "daily" | "weekly" | "monthly" | "seasonal";
+            /** Enddate */
+            endDate?: string | null;
+            estimates: components["schemas"]["PlanEstimates"];
+            /** Goal */
+            goal: string;
+            /** Machineids */
+            machineIds?: string[];
+            /** Model */
+            model?: string | null;
+            /** Objective */
+            objective: string;
+            /** Projectid */
+            projectId: string;
+            /** Questions */
+            questions?: string[];
+            /** Risks */
+            risks?: string[];
+            /** Siteid */
+            siteId?: string | null;
+            /**
+             * Source
+             * @default rules
+             * @enum {string}
+             */
+            source?: "claude" | "rules";
+            /**
+             * Startdate
+             * Format: date
+             */
+            startDate: string;
+            /** Steps */
+            steps?: components["schemas"]["PlanStep"][];
+            /** Title */
+            title: string;
+            /** Zoneids */
+            zoneIds?: string[];
+        };
         /**
          * PlanDraft
          * @description Read model: every field is explicit (no defaults) so the contract marks it required.
@@ -1080,6 +1181,156 @@ export interface components {
              * @default false
              */
             treated?: boolean;
+        };
+        /**
+         * PlanRead
+         * @description Read model: every field explicit so the contract marks it required.
+         */
+        PlanRead: {
+            /** Assumptions */
+            assumptions: string[];
+            /**
+             * Cadence
+             * @enum {string}
+             */
+            cadence: "once" | "daily" | "weekly" | "monthly" | "seasonal";
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /** Enddate */
+            endDate: string | null;
+            estimates: components["schemas"]["PlanEstimates"];
+            /** Goal */
+            goal: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Machineids */
+            machineIds: string[];
+            /** Model */
+            model: string | null;
+            /** Objective */
+            objective: string;
+            /** Projectid */
+            projectId: string;
+            /** Questions */
+            questions: string[];
+            /** Revision */
+            revision: number;
+            /** Revisions */
+            revisions: components["schemas"]["PlanRevisionRead"][];
+            /** Risks */
+            risks: string[];
+            /** Siteid */
+            siteId: string | null;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "claude" | "rules";
+            /**
+             * Startdate
+             * Format: date
+             */
+            startDate: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "scheduled" | "dispatched" | "paused" | "done" | "cancelled";
+            /** Steps */
+            steps: components["schemas"]["PlanStep"][];
+            /** Title */
+            title: string;
+            /**
+             * Updatedat
+             * Format: date-time
+             */
+            updatedAt: string;
+            /** Zoneids */
+            zoneIds: string[];
+        };
+        /**
+         * PlanRevise
+         * @description A new approved revision of an existing plan; the previous one is kept in history.
+         */
+        PlanRevise: {
+            /** Assumptions */
+            assumptions?: string[];
+            /**
+             * Cadence
+             * @default once
+             * @enum {string}
+             */
+            cadence?: "once" | "daily" | "weekly" | "monthly" | "seasonal";
+            /** Enddate */
+            endDate?: string | null;
+            estimates: components["schemas"]["PlanEstimates"];
+            /** Goal */
+            goal: string;
+            /** Machineids */
+            machineIds?: string[];
+            /** Model */
+            model?: string | null;
+            /**
+             * Note
+             * @default
+             */
+            note?: string;
+            /** Objective */
+            objective: string;
+            /** Questions */
+            questions?: string[];
+            /** Risks */
+            risks?: string[];
+            /**
+             * Source
+             * @default rules
+             * @enum {string}
+             */
+            source?: "claude" | "rules";
+            /**
+             * Startdate
+             * Format: date
+             */
+            startDate: string;
+            /** Steps */
+            steps?: components["schemas"]["PlanStep"][];
+            /** Title */
+            title: string;
+            /** Zoneids */
+            zoneIds?: string[];
+        };
+        /** PlanRevisionRead */
+        PlanRevisionRead: {
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            estimates: components["schemas"]["PlanEstimates"];
+            /** Machineids */
+            machineIds: string[];
+            /** Note */
+            note: string;
+            /** Revision */
+            revision: number;
+            /** Title */
+            title: string;
+            /** Zoneids */
+            zoneIds: string[];
+        };
+        /** PlanStatusUpdate */
+        PlanStatusUpdate: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "scheduled" | "dispatched" | "paused" | "done" | "cancelled";
         };
         /**
          * PlanStep
@@ -1522,6 +1773,7 @@ export type SchemaLegendMetadata = components['schemas']['LegendMetadata'];
 export type SchemaLicenseMetadata = components['schemas']['LicenseMetadata'];
 export type SchemaMultiPolygon = components['schemas']['MultiPolygon'];
 export type SchemaMvtSource = components['schemas']['MvtSource'];
+export type SchemaPlanCreate = components['schemas']['PlanCreate'];
 export type SchemaPlanDraft = components['schemas']['PlanDraft'];
 export type SchemaPlanDraftBody = components['schemas']['PlanDraftBody'];
 export type SchemaPlanDraftRequest = components['schemas']['PlanDraftRequest'];
@@ -1530,6 +1782,10 @@ export type SchemaPlannerExistingPlan = components['schemas']['PlannerExistingPl
 export type SchemaPlannerMachine = components['schemas']['PlannerMachine'];
 export type SchemaPlannerStatus = components['schemas']['PlannerStatus'];
 export type SchemaPlannerZone = components['schemas']['PlannerZone'];
+export type SchemaPlanRead = components['schemas']['PlanRead'];
+export type SchemaPlanRevise = components['schemas']['PlanRevise'];
+export type SchemaPlanRevisionRead = components['schemas']['PlanRevisionRead'];
+export type SchemaPlanStatusUpdate = components['schemas']['PlanStatusUpdate'];
 export type SchemaPlanStep = components['schemas']['PlanStep'];
 export type SchemaPointCloudShading = components['schemas']['PointCloudShading'];
 export type SchemaPolygon = components['schemas']['Polygon'];
@@ -2259,6 +2515,308 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LayerRead"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    list_plans_api_v1_plans_get: {
+        parameters: {
+            query: {
+                projectId: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanRead"][];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    create_plan_api_v1_plans_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PlanCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanRead"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    get_plan_api_v1_plans__plan_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                plan_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanRead"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    revise_plan_api_v1_plans__plan_id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                plan_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PlanRevise"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanRead"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    delete_plan_api_v1_plans__plan_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                plan_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    set_status_api_v1_plans__plan_id__status_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                plan_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PlanStatusUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanRead"];
                 };
             };
             /** @description Not found */
