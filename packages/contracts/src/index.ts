@@ -88,3 +88,5 @@ export type PlanRecordCreate = Schemas["PlanCreate"];
 export type PlanRecordRevise = Schemas["PlanRevise"];
 export type PlanRecordStatus = PlanRecord["status"];
 export type PlanRevisionRecord = Schemas["PlanRevisionRead"];
+export type PlanClarification = Schemas["Clarification"];
+export type PlanAnswerValue = string | number | boolean;

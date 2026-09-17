@@ -50,6 +50,7 @@ const draft: PlanDraft = {
   assumptions: ["1.5 acres per machine-hour"],
   risks: ["TR-04 is at 22% battery."],
   questions: [],
+  clarifications: [],
   source: "rules",
   model: null,
   note: "Rule-based draft",
@@ -203,6 +204,17 @@ describe("plan drafting", () => {
       ],
       createdAt: "2026-09-17T00:00:00Z",
       updatedAt: "2026-09-18T00:00:00Z",
+      areas: body.areas ?? [],
+      zoneIds: body.zoneIds ?? [],
+      machineIds: body.machineIds ?? [],
+      steps: body.steps ?? [],
+      assumptions: body.assumptions ?? [],
+      risks: body.risks ?? [],
+      questions: body.questions ?? [],
+      cadence: body.cadence ?? ("once" as const),
+      source: body.source ?? ("rules" as const),
+      model: body.model ?? null,
+      endDate: body.endDate ?? null,
     };
     const plan = planFromRecord(record, project);
     expect(plan.id).toBe(record.id);

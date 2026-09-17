@@ -325,6 +325,21 @@ test.describe("mission control", () => {
 
   test("a plan can be made anywhere from the current view, with no site", async ({ app }) => {
     await app.getByTestId("onboarding-explore").click({ force: true });
+    // Somewhere with no site, close enough that a view area is not clamped to its maximum.
+    await app.evaluate(() => {
+      const twin = (
+        window as unknown as {
+          __twin?: {
+            camera: {
+              cancelFlight: () => void;
+              setView: (lon: number, lat: number, h: number, hd: number, p: number) => void;
+            };
+          };
+        }
+      ).__twin;
+      twin?.camera.cancelFlight();
+      twin?.camera.setView(-119.9, 36.6, 1500, 0, -60);
+    });
     await app.getByTestId("view-tab-plan").click({ force: true });
     await expect(app.getByTestId("plans-panel")).toContainText("Anywhere", { timeout: 15_000 });
     await app.getByTestId("plan-new").dispatchEvent("click");
@@ -332,11 +347,33 @@ test.describe("mission control", () => {
     await app.getByTestId("area-from-view").dispatchEvent("click");
     await expect(app.getByTestId("compose-zone-A-01")).toHaveAttribute("aria-pressed", "true");
     await expect(app.getByTestId("compose-zone-A-01")).toContainText("View area 01");
+    // The view area is adjustable in place: a bigger share of the view means more acres.
+    const acresOf = async () =>
+      Number(
+        /([\d,]+) ac/
+          .exec((await app.getByTestId("compose-zone-A-01").textContent()) ?? "")?.[1]
+          ?.replace(",", ""),
+      );
+    const before = await acresOf();
+    await app.getByTestId("viewarea-A-01-size").fill("1");
+    await expect.poll(acresOf).toBeGreaterThan(before * 3);
     await app.getByTestId("plan-goal").fill("Mow this area this week");
     await app.getByTestId("plan-draft-submit").dispatchEvent("click");
     await expect(app.getByTestId("plan-review")).toBeVisible({ timeout: 30_000 });
     await expect(app.getByTestId("plan-review")).toContainText("A-01");
     await expect.poll(() => planEntityIds(app)).toContain("mission:plan:passes:A-01");
+    // The agent asks with a slider and chips; applying the answers redrafts without them.
+    await expect(app.getByTestId("clarify-deadline-range")).toBeVisible();
+    await app.getByTestId("clarify-deadline-range").fill("21");
+    await app.getByTestId("clarify-passes-two").dispatchEvent("click");
+    await app.getByTestId("clarify-apply").dispatchEvent("click");
+    await expect(app.getByTestId("answered-deadline")).toContainText("21", { timeout: 15_000 });
+    await expect(app.getByTestId("clarify-deadline")).toHaveCount(0);
+    await expect(app.getByTestId("plan-changes")).toContainText("Machine-hours 147 → 294");
+    // The agent can find the ground on the map: a mapped lake becomes an area.
+    await app.getByTestId("find-water").dispatchEvent("click");
+    await app.getByTestId("osm-osm-w4242").dispatchEvent("click");
+    await expect(app.getByTestId("compose-zone-A-02")).toContainText("Test Lake");
     await app.getByTestId("plan-approve").dispatchEvent("click");
     await expect(app.getByTestId("plan-detail")).toContainText("Mow this area this week");
     await expect(app.getByTestId("plan-detail")).toContainText("A-01 View area 01");

@@ -4,6 +4,7 @@ from datetime import date
 from itertools import pairwise
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.config import Settings
@@ -124,6 +125,20 @@ def test_claude_planner_filters_unknown_ids_and_labels_source() -> None:
         assumptions=["1.2 acres/hour"],
         risks=[],
         questions=[],
+        clarifications=[
+            {
+                "id": "deadline",
+                "question": "When?",
+                "kind": "range",
+                "options": [],
+                "min": 1,
+                "max": 30,
+                "step": 1,
+                "unit": "days",
+                "default": "7",
+                "why": "Sets the end date.",
+            }
+        ],
     )
     settings = Settings(ANTHROPIC_API_KEY="k", ANTHROPIC_MODEL="claude-opus-5", _env_file=None)
     client = _FakeClient(parsed)
@@ -132,6 +147,12 @@ def test_claude_planner_filters_unknown_ids_and_labels_source() -> None:
     assert draft.zone_ids == ["Z-14"] and draft.machine_ids == ["TR-04"]
     assert draft.steps[0].machine_ids == ["TR-04"] and draft.steps[0].zone_id is None
     assert draft.steps[0].days == 7 and draft.assumptions == ["1.2 acres/hour"]
+    assert draft.clarifications[0].id == "deadline" and draft.clarifications[0].kind == "range"
+    answered = ClaudePlanner(settings, client=client).draft(  # type: ignore[arg-type]
+        request("Clear the thistle", answers={"deadline": 7})
+    )
+    assert answered.clarifications == [], "an answered clarification is not asked again"
+    assert "deadline" in client.messages.calls[-1]["messages"][0]["content"]
     call = client.messages.calls[0]
     assert call["model"] == "claude-opus-5" and "Z-14" in call["messages"][0]["content"]
 
@@ -237,3 +258,47 @@ def test_rules_planner_uses_learned_rates_and_avoids_booked_machines() -> None:
     )
     assert named.machine_ids == ["TR-04"], "an operator's choice stands"
     assert any("already booked" in r for r in named.risks)
+
+
+def test_rules_planner_asks_structured_questions_and_applies_answers() -> None:
+    first = RulesPlanner().draft(request("Survey the north fence"))
+    ids = [c.id for c in first.clarifications]
+    assert "deadline" in ids and "resolution" in ids and "cadence" in ids
+    deadline = next(c for c in first.clarifications if c.id == "deadline")
+    assert deadline.kind == "range" and deadline.unit == "days" and deadline.default == 14
+    assert all(c.kind != "area" for c in first.clarifications), "no drawn area in scope"
+
+    answered = RulesPlanner().draft(
+        request(
+            "Survey the north fence",
+            answers={"deadline": 3, "resolution": "2", "cadence": "monthly", "crew": "3"},
+        )
+    )
+    assert [c.id for c in answered.clarifications] == []
+    assert answered.cadence == "monthly" and answered.end_date is None
+    assert answered.estimates.machine_hours == pytest.approx(
+        first.estimates.machine_hours * 2, abs=0.2
+    )
+    assert len(answered.machine_ids) == 3
+
+    tight = RulesPlanner().draft(
+        request("Mow Z-14 and Z-21", answers={"deadline": 2, "passes": "two"})
+    )
+    assert any("do not fit the 2-day deadline" in r for r in tight.risks)
+    assert tight.estimates.machine_hours == pytest.approx(
+        RulesPlanner()
+        .draft(request("Mow Z-14 and Z-21", answers={"deadline": 2}))
+        .estimates.machine_hours
+        * 2,
+        abs=0.2,
+    )
+
+    drawn = RulesPlanner().draft(
+        request(
+            "Survey the lake shore",
+            zones=[PlannerZone(id="A-01", name="View area 01", acres=500, task="Treatment")],
+            preferred_zone_ids=["A-01"],
+        )
+    )
+    area = next(c for c in drawn.clarifications if c.id == "area")
+    assert area.kind == "area" and [o.value for o in area.options][:2] == ["keep", "water"]

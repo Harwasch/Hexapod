@@ -1,4 +1,4 @@
-import type { PlanDraft, PlanRecordStatus } from "@twin/contracts";
+import type { PlanAnswerValue, PlanDraft, PlanRecordStatus } from "@twin/contracts";
 
 import { isOffline } from "@/api/client";
 import { draftPlan, plansApi } from "@/api/queries";
@@ -24,7 +24,12 @@ export const plansInvalidate: { current: (() => void) | null } = { current: null
  */
 export async function startPlanDraft(
   goal: string,
-  options: { zoneIds?: string[]; machineIds?: string[]; refinement?: string } = {},
+  options: {
+    zoneIds?: string[];
+    machineIds?: string[];
+    refinement?: string;
+    answers?: Record<string, PlanAnswerValue>;
+  } = {},
 ): Promise<void> {
   const state = useMission.getState();
   const project = state.project;
@@ -47,10 +52,12 @@ export async function startPlanDraft(
   const composer = useMission.getState().composer;
   const zoneIds = options.zoneIds ?? composer?.zoneIds ?? [];
   const machineIds = options.machineIds ?? composer?.machineIds ?? [];
+  const answers = { ...(composer?.answers ?? {}), ...(options.answers ?? {}) };
   useMission.getState().updateComposer({
     goal: text,
     zoneIds,
     machineIds,
+    answers,
     status: "drafting",
     error: null,
   });
@@ -61,6 +68,7 @@ export async function startPlanDraft(
       zoneIds,
       machineIds,
       replacePlanId: composer?.replacePlanId ?? null,
+      answers,
       ...(options.refinement ? { refinement: options.refinement } : {}),
       previous: options.refinement ? (composer?.draft ?? null) : null,
     });
@@ -72,7 +80,7 @@ export async function startPlanDraft(
     useMission.getState().updateComposer({
       status: "ready",
       draft,
-      previousDraft: options.refinement ? (composer?.draft ?? null) : null,
+      previousDraft: options.refinement || options.answers ? (composer?.draft ?? null) : null,
     });
     useMission.getState().appendLog("agent", describeDraft(draft));
   } catch (error) {

@@ -41,6 +41,7 @@ const base: PlanDraft = {
   assumptions: [],
   risks: [],
   questions: [],
+  clarifications: [],
   source: "rules",
   model: null,
   note: "",

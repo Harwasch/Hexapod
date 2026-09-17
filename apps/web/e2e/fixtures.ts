@@ -230,6 +230,29 @@ export interface MockOptions {
 export async function mockApi(page: Page, options: MockOptions = {}): Promise<void> {
   // Plans approved during a test live here so list, revise and status round-trip.
   const mockPlans: Record<string, unknown>[] = [];
+  // OpenStreetMap feature lookup for "find on the map": one closed water way in any view.
+  await page.route("https://overpass-api.de/**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        elements: [
+          {
+            type: "way",
+            id: 4242,
+            tags: { name: "Test Lake", natural: "water" },
+            geometry: [
+              { lat: 47.644, lon: -122.139 },
+              { lat: 47.644, lon: -122.13 },
+              { lat: 47.65, lon: -122.13 },
+              { lat: 47.65, lon: -122.139 },
+              { lat: 47.644, lon: -122.139 },
+            ],
+          },
+        ],
+      }),
+    }),
+  );
   await page.route("**/api/v1/**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -381,7 +404,47 @@ export async function mockApi(page: Page, options: MockOptions = {}): Promise<vo
         refinement?: string;
         preferredZoneIds?: string[];
         preferredMachineIds?: string[];
+        answers?: Record<string, string | number | boolean>;
       };
+      const answers = body.answers ?? {};
+      const clarifications = [
+        ...("deadline" in answers
+          ? []
+          : [
+              {
+                id: "deadline",
+                question: "When should this be done?",
+                kind: "range",
+                options: [],
+                min: 1,
+                max: 90,
+                step: 1,
+                unit: "days",
+                default: 14,
+                why: "Sets the end date.",
+              },
+            ]),
+        ...("passes" in answers
+          ? []
+          : [
+              {
+                id: "passes",
+                question: "One pass, or a follow-up pass?",
+                kind: "choice",
+                options: [
+                  { value: "one", label: "Single pass" },
+                  { value: "two", label: "Two passes" },
+                ],
+                min: null,
+                max: null,
+                step: null,
+                unit: null,
+                default: "one",
+                why: "A second pass doubles the machine-hours.",
+              },
+            ]),
+      ];
+      const hours = answers.passes === "two" ? 294 : 147;
       const zoneIds = body.preferredZoneIds?.length
         ? body.preferredZoneIds
         : ((body as { zones?: { id: string }[] }).zones ?? []).some((z) => z.id === "Z-14")
@@ -398,7 +461,7 @@ export async function mockApi(page: Page, options: MockOptions = {}): Promise<vo
         cadence: /weekly/i.test(body.goal) ? "weekly" : "once",
         startDate: "2026-09-17",
         endDate: /weekly/i.test(body.goal) ? null : "2026-09-24",
-        estimates: { acres: 220, machineHours: 147, calendarDays: 7 },
+        estimates: { acres: 220, machineHours: hours, calendarDays: 7 },
         steps: [
           {
             title: "Survey pass",
@@ -420,6 +483,7 @@ export async function mockApi(page: Page, options: MockOptions = {}): Promise<vo
           },
         ],
         assumptions: ["1.5 acres per machine-hour (mock)"],
+        clarifications,
         risks: [],
         questions: [],
         source: "rules",

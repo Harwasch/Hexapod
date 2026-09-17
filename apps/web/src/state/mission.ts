@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
-import type { PlanDraft } from "@twin/contracts";
+import type { PlanAnswerValue, PlanDraft } from "@twin/contracts";
 
 import { planningOpened } from "@/lib/planningMetrics";
 import { isAreaZone } from "@/missions/areas";
@@ -29,6 +29,8 @@ export interface PlanComposerState {
   draft: PlanDraft | null;
   /** The draft before the last redraft, so the review can say what changed. */
   previousDraft: PlanDraft | null;
+  /** Answers to the agent's clarifications; sent with every redraft. */
+  answers: Record<string, PlanAnswerValue>;
   error: string | null;
 }
 
@@ -154,6 +156,7 @@ export const useMission = create<MissionState>()(
             status: "idle",
             draft: null,
             previousDraft: null,
+            answers: {},
             error: null,
           },
         });
@@ -233,11 +236,16 @@ export const useMission = create<MissionState>()(
         }),
       mergeAreas: (projectId, zones) =>
         set((s) => {
-          if (zones.length === 0) return {};
-          const ids = new Set(zones.map((z) => z.id));
+          // An area shaped here (it carries its view origin) is never clobbered by the stored
+          // copy that a plans refetch brings back; stored areas fill in the rest.
+          const local = s.areas[projectId] ?? [];
+          const shaped = new Set(local.filter((z) => z.view).map((z) => z.id));
+          const incoming = zones.filter((z) => !shaped.has(z.id));
+          if (incoming.length === 0) return {};
+          const ids = new Set(incoming.map((z) => z.id));
           const areas = {
             ...s.areas,
-            [projectId]: [...(s.areas[projectId] ?? []).filter((z) => !ids.has(z.id)), ...zones],
+            [projectId]: [...local.filter((z) => !ids.has(z.id)), ...incoming],
           };
           const project = s.project;
           return {

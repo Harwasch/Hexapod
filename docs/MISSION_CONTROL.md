@@ -64,6 +64,26 @@ into a zone (`missions/areas.ts`, ids `A-01…`). Drawn areas are kept in the br
 on the plans that cover them (`areas` on the plan record), so a plan opened on another device
 brings its ground with it. The world redraws zones whenever the store's project changes.
 
+**The agent asks, the operator taps.** A draft carries `clarifications`: questions whose
+answers change the plan materially, each answered with a structured control rather than
+prose. A `choice` is a row of chips (passes, detail level, crew size, cadence), a `range` is a
+slider (deadline in days), an `area` choice hands off to the map (keep the drawn ground, find
+water, fields or woodland in view, or draw). Answers travel back as `answers` on the next
+draft, the agent stops asking what is answered and applies it (a 2 cm survey takes twice the
+hours of 5 cm, a second pass doubles them, a deadline the crew cannot make becomes a risk),
+and answered items show as removable chips. The rules planner asks at most four; Claude is
+asked for at most three.
+
+**Finding the ground.** A view rectangle is a guess. A view area can be resized (share of the
+view) and moved (3×3 grid) in place, and "Find on the map" fetches candidate outlines from
+OpenStreetMap for the ground in view (water and shoreline, fields, woodland and scrub, parks;
+`missions/osm.ts`, Overpass API, © OpenStreetMap contributors, attribution kept on the
+zone). The goal suggests the kind ("lake coastline" → water). When OpenStreetMap is
+unreachable the finder says so and the drawn or view area still works. Areas stored with
+the plans join the project when the plans load, but an area shaped in this browser (it
+carries its view origin) is never replaced by the stored copy, and new area ids skip the
+ids the stored plans already use.
+
 **Persistence.** Approving writes the plan to the API (`POST /api/v1/plans`; revising is
 `PUT` and keeps every approved revision in history; lifecycle is `PATCH …/status`). Plans are
 keyed by the mission project id and optionally linked to a catalog site. The console shows

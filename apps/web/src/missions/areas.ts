@@ -9,7 +9,7 @@ import { centerOf, destination, footprintAreaM2, toAcres, type LonLat } from "@t
 
 import type { Measurement } from "@/state/measurements";
 
-import type { Zone } from "./types";
+import type { ViewAreaOrigin, Zone } from "./types";
 
 export const AREA_PREFIX = "A-";
 
@@ -74,13 +74,36 @@ export function viewFootprint(
   center: LonLat,
   metersPerPixel: number,
   viewport: { width: number; height: number },
+  fraction = 0.5,
+  offset: { dx: number; dy: number } = { dx: 0, dy: 0 },
 ): Footprint {
   const clamp = (m: number) => Math.min(5000, Math.max(60, m));
-  return rectangleFootprint(
-    center,
-    clamp(metersPerPixel * viewport.width * 0.25),
-    clamp(metersPerPixel * viewport.height * 0.25),
+  const halfW = clamp(metersPerPixel * viewport.width * fraction * 0.5);
+  const halfH = clamp(metersPerPixel * viewport.height * fraction * 0.5);
+  // Screen-right is east and screen-up is north for a north-up view; a heading would rotate
+  // this, which the view rectangle ignores (it is a starting point, not a survey).
+  const shifted = destination(
+    destination(center, 90, metersPerPixel * viewport.width * offset.dx),
+    0,
+    -metersPerPixel * viewport.height * offset.dy,
   );
+  return rectangleFootprint(shifted, halfW, halfH);
+}
+
+/** A zone from the view with the origin kept, so its size and position can be adjusted later. */
+export function viewAreaZone(id: string, name: string, origin: ViewAreaOrigin): Zone {
+  const zone = zoneFromFootprint(
+    id,
+    name,
+    viewFootprint(
+      origin.center,
+      origin.metersPerPixel,
+      { width: origin.width, height: origin.height },
+      origin.fraction,
+      { dx: origin.dx, dy: origin.dy },
+    ),
+  );
+  return { ...zone, view: origin, note: "Made from the view; adjust its size and position." };
 }
 
 /** A finished area measurement as a zone. */

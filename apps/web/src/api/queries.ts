@@ -79,7 +79,13 @@ export function useSite(id: string | null): CatalogResult<Site | null> {
     ...RETRY,
   });
   if (id?.startsWith("builtin-")) {
-    return { data: builtinDemoSite(), builtin: true, isLoading: false, error: null };
+    return {
+      data: builtinDemoSite(),
+      builtin: true,
+      isLoading: false,
+      error: null,
+      refetch: () => Promise.resolve(null),
+    };
   }
   const result = withFallback(query, () => (id ? builtinDemoSite() : null));
   return { ...result, data: id ? result.data : null };

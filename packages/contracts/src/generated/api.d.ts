@@ -665,6 +665,46 @@ export interface components {
              */
             type: "cesium-ion-terrain";
         };
+        /**
+         * Clarification
+         * @description A question the planner asks with a structured answer: a choice (chips), a range
+         *     (slider) or an area choice (how the ground is picked). Never free text.
+         */
+        Clarification: {
+            /** Default */
+            default?: string | number | boolean | null;
+            /** Id */
+            id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "choice" | "range" | "area";
+            /** Max */
+            max?: number | null;
+            /** Min */
+            min?: number | null;
+            /** Options */
+            options?: components["schemas"]["ClarificationOption"][];
+            /** Question */
+            question: string;
+            /** Step */
+            step?: number | null;
+            /** Unit */
+            unit?: string | null;
+            /**
+             * Why
+             * @default
+             */
+            why?: string;
+        };
+        /** ClarificationOption */
+        ClarificationOption: {
+            /** Label */
+            label: string;
+            /** Value */
+            value: string;
+        };
         /** CrsMetadata */
         CrsMetadata: {
             /** Horizontal */
@@ -1033,6 +1073,8 @@ export interface components {
              * @enum {string}
              */
             cadence: "once" | "daily" | "weekly" | "monthly" | "seasonal";
+            /** Clarifications */
+            clarifications: components["schemas"]["Clarification"][];
             /** Enddate */
             endDate: string | null;
             estimates: components["schemas"]["PlanEstimates"];
@@ -1078,6 +1120,8 @@ export interface components {
              * @enum {string}
              */
             cadence?: "once" | "daily" | "weekly" | "monthly" | "seasonal";
+            /** Clarifications */
+            clarifications?: components["schemas"]["Clarification"][];
             /** Enddate */
             endDate?: string | null;
             estimates: components["schemas"]["PlanEstimates"];
@@ -1103,6 +1147,10 @@ export interface components {
         };
         /** PlanDraftRequest */
         PlanDraftRequest: {
+            /** Answers */
+            answers?: {
+                [key: string]: string | number | boolean;
+            };
             /** Existingplans */
             existingPlans?: components["schemas"]["PlannerExistingPlan"][];
             /** Goal */
@@ -1814,6 +1862,8 @@ export type SchemaCesiumIon3DTilesSource = components['schemas']['CesiumIon3DTil
 export type SchemaCesiumIonImagerySource = components['schemas']['CesiumIonImagerySource'];
 export type SchemaCesiumIonSource = components['schemas']['CesiumIonSource'];
 export type SchemaCesiumIonTerrainSource = components['schemas']['CesiumIonTerrainSource'];
+export type SchemaClarification = components['schemas']['Clarification'];
+export type SchemaClarificationOption = components['schemas']['ClarificationOption'];
 export type SchemaCrsMetadata = components['schemas']['CrsMetadata'];
 export type SchemaCzmlSource = components['schemas']['CzmlSource'];
 export type SchemaGeoJsonSource = components['schemas']['GeoJsonSource'];

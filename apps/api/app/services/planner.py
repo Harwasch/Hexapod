@@ -23,7 +23,10 @@ from pydantic import BaseModel, Field
 
 from app.config import Settings, get_settings
 from app.schemas.agent import (
+    AnswerValue,
     Cadence,
+    Clarification,
+    ClarificationOption,
     PlanDraft,
     PlanDraftBody,
     PlanDraftRequest,
@@ -163,6 +166,39 @@ def _busy_machines(request: PlanDraftRequest, start: date, end: date) -> dict[st
     return busy
 
 
+def _answer_number(answers: dict[str, AnswerValue], key: str) -> float | None:
+    value = answers.get(key)
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int | float):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return None
+    return None
+
+
+def _answer_text(answers: dict[str, AnswerValue], key: str) -> str | None:
+    value = answers.get(key)
+    return value if isinstance(value, str) else None
+
+
+SURVEY_WORDS = ("survey", "inspect", "map", "scan", "photograph", "image")
+TREATMENT_WORDS = ("mow", "cut", "clear", "spray", "treat", "drill", "seed", "till", "remove")
+DEADLINE_WORDS = r"\b(by|before|until|within|deadline|this week|this month|today|tomorrow)\b"
+
+
+def _is_survey(text: str) -> bool:
+    lower = text.lower()
+    return any(w in lower for w in SURVEY_WORDS) and not any(w in lower for w in TREATMENT_WORDS)
+
+
+def _choice(value: str, label: str) -> ClarificationOption:
+    return ClarificationOption(value=value, label=label)
+
+
 def _title(goal: str) -> str:
     text = re.sub(r"\s+", " ", goal.strip()).rstrip(".!")
     text = text[0].upper() + text[1:] if text else "New plan"
@@ -179,6 +215,7 @@ class RulesPlanner:
 
     def draft(self, request: PlanDraftRequest) -> PlanDraft:
         text = request.goal if not request.refinement else f"{request.goal}\n{request.refinement}"
+        answers = request.answers
         zone_ids = self._zones(request, text)
         machine_ids = self._machines(request, text)
         cadence = (
@@ -186,15 +223,30 @@ class RulesPlanner:
             if request.refinement and _cadence(request.refinement) != "once"
             else _cadence(text)
         )
+        cadence_answer = _answer_text(answers, "cadence")
+        if cadence_answer in {"once", "daily", "weekly", "monthly", "seasonal"}:
+            cadence = cadence_answer  # type: ignore[assignment]
+        survey = _is_survey(text)
+        # Answers that scale the work: survey detail and treatment passes.
+        effort = 1.0
+        resolution = _answer_text(answers, "resolution")
+        if survey and resolution in {"2", "5", "10"}:
+            effort *= {"2": 2.0, "5": 1.0, "10": 0.5}[resolution]
+        passes = _answer_text(answers, "passes")
+        if not survey and passes == "two":
+            effort *= 2.0
         today = _today(request)
         zone_by_id = {z.id: z for z in request.zones}
         rate_by_zone = {z: _rate_for(zone_by_id[z].task, request) for z in zone_ids}
         acres = sum(z.acres for z in request.zones if z.id in zone_ids)
         machine_count = max(1, len(machine_ids))
-        hours = sum(
-            zone_by_id[z].acres / rate_by_zone[z].acres_per_hour
-            for z in zone_ids
-            if zone_by_id[z].acres
+        hours = (
+            sum(
+                zone_by_id[z].acres / rate_by_zone[z].acres_per_hour
+                for z in zone_ids
+                if zone_by_id[z].acres
+            )
+            * effort
         )
         days = max(1, math.ceil(hours / (machine_count * RULES_HOURS_PER_DAY))) if hours else 1
         steps = [
@@ -221,7 +273,9 @@ class RulesPlanner:
             crew = [m for j, m in enumerate(machine_ids) if j % max(1, len(zone_ids)) == index]
             if not crew and machine_ids:
                 crew = [machine_ids[index % machine_count]]
-            zone_hours = zone.acres / rate_by_zone[zone_id].acres_per_hour if zone.acres else 0.0
+            zone_hours = (
+                zone.acres / rate_by_zone[zone_id].acres_per_hour * effort if zone.acres else 0.0
+            )
             zone_days = (
                 max(1, math.ceil(zone_hours / (max(1, len(crew)) * RULES_HOURS_PER_DAY)))
                 if zone_hours
@@ -284,9 +338,18 @@ class RulesPlanner:
             questions.append("Which zones should this plan cover? None matched the goal.")
         if not machine_ids:
             questions.append("No machines are assigned to this project yet.")
-        if cadence == "once" and not re.search(r"\b(by|before|until|within)\b", text.lower()):
-            questions.append("Is there a deadline? None was given, so the plan starts now.")
         ongoing = cadence != "once"
+        # A deadline answer caps the schedule: when the work needs longer, say so as a risk.
+        deadline_days = _answer_number(answers, "deadline")
+        if deadline_days is not None and not ongoing and days > deadline_days:
+            needed = math.ceil(hours / (deadline_days * RULES_HOURS_PER_DAY)) if hours else 1
+            risks.append(
+                f"{days} days of work do not fit the {int(deadline_days)}-day deadline: it needs "
+                f"about {needed} machines, or a later date."
+            )
+        clarifications = self._clarifications(
+            request, text, zone_ids, machine_ids, cadence, survey, answers
+        )
         return PlanDraft(
             title=_title(request.goal),
             objective=request.goal.strip(),
@@ -306,10 +369,128 @@ class RulesPlanner:
             ],
             risks=risks,
             questions=questions,
+            clarifications=clarifications,
             source="rules",
             model=None,
             note="Rule-based draft: no model is configured (set ANTHROPIC_API_KEY).",
         )
+
+    @staticmethod
+    def _clarifications(
+        request: PlanDraftRequest,
+        text: str,
+        zone_ids: list[str],
+        machine_ids: list[str],
+        cadence: str,
+        survey: bool,
+        answers: dict[str, AnswerValue],
+    ) -> list[Clarification]:
+        """What the agent asks before approval, each answered with a chip or a slider; a
+        question is dropped once its answer arrives or the goal already settles it."""
+        out: list[Clarification] = []
+        lower = text.lower()
+        drawn = [z for z in zone_ids if z.startswith("A-")]
+        if drawn and "area" not in answers:
+            out.append(
+                Clarification(
+                    id="area",
+                    question=f"Is {drawn[0]} the right ground, or should I find it for you?",
+                    kind="area",
+                    options=[
+                        _choice("keep", "Keep as drawn"),
+                        _choice("water", "Water and shoreline in view"),
+                        _choice("farmland", "Fields in view"),
+                        _choice("wood", "Woodland and scrub in view"),
+                        _choice("draw", "I'll draw it"),
+                    ],
+                    default="keep",
+                    why="A view rectangle is a guess at the ground; features from the map fit it.",
+                )
+            )
+        if cadence == "once" and "deadline" not in answers and not re.search(DEADLINE_WORDS, lower):
+            out.append(
+                Clarification(
+                    id="deadline",
+                    question="When should this be done?",
+                    kind="range",
+                    min=1,
+                    max=90,
+                    step=1,
+                    unit="days",
+                    default=14,
+                    why="Sets the end date and shows whether the crew can make it.",
+                )
+            )
+        if (
+            cadence == "once"
+            and "cadence" not in answers
+            and not re.search(r"\b(once|one-off|single)\b", lower)
+            and survey
+        ):
+            out.append(
+                Clarification(
+                    id="cadence",
+                    question="Repeat this?",
+                    kind="choice",
+                    options=[
+                        _choice("once", "Once"),
+                        _choice("weekly", "Weekly"),
+                        _choice("monthly", "Monthly"),
+                    ],
+                    default="once",
+                    why="Surveys are often recurring; a recurring plan has no end date.",
+                )
+            )
+        if survey and "resolution" not in answers:
+            out.append(
+                Clarification(
+                    id="resolution",
+                    question="How much detail?",
+                    kind="choice",
+                    options=[
+                        _choice("2", "2 cm per pixel"),
+                        _choice("5", "5 cm per pixel"),
+                        _choice("10", "10 cm per pixel"),
+                    ],
+                    default="5",
+                    why="Finer detail flies lower and slower: 2 cm takes twice the hours of 5 cm.",
+                )
+            )
+        if not survey and zone_ids and "passes" not in answers:
+            out.append(
+                Clarification(
+                    id="passes",
+                    question="One pass, or a follow-up pass?",
+                    kind="choice",
+                    options=[_choice("one", "Single pass"), _choice("two", "Two passes")],
+                    default="one",
+                    why="A second pass doubles the machine-hours and catches regrowth.",
+                )
+            )
+        nouns = "machines?|mowers?|robots?|tractors?|units?|drones?"
+        if (
+            len(request.machines) > 1
+            and "crew" not in answers
+            and _requested_count(text, nouns) is None
+            and not _mentioned(text, [(m.id, m.name) for m in request.machines])
+        ):
+            idle = sum(1 for m in request.machines if m.status == "idle")
+            out.append(
+                Clarification(
+                    id="crew",
+                    question="How many machines?",
+                    kind="choice",
+                    options=[
+                        _choice("1", "1"),
+                        _choice("2", "2"),
+                        _choice("3", "3"),
+                        _choice("all", f"All idle ({idle})"),
+                    ],
+                    default=str(min(2, len(machine_ids)) or 1),
+                    why="More machines finish sooner; each needs its own zone or a split.",
+                )
+            )
+        return out[:4]
 
     @staticmethod
     def _zones(request: PlanDraftRequest, text: str) -> list[str]:
@@ -337,6 +518,11 @@ class RulesPlanner:
         nouns = "machines?|mowers?|robots?|tractors?|units?|drones?"
         # A count in the refinement ("use three machines") overrides one in the goal.
         wanted = _requested_count(request.refinement or "", nouns) or _requested_count(text, nouns)
+        crew = _answer_text(request.answers, "crew")
+        if crew == "all":
+            wanted = len(request.machines)
+        elif crew and crew.isdigit():
+            wanted = int(crew)
         chosen = list(dict.fromkeys([*request.preferred_machine_ids, *mentioned]))
         chosen = [
             m
@@ -381,6 +567,28 @@ class ModelPlanDraft(BaseModel):
     )
     risks: list[str]
     questions: list[str]
+    clarifications: list[ModelClarification] = Field(
+        description="At most 3 questions whose answers change the plan materially, each "
+        "answered with a choice or a slider, never free text. Omit any the answers already cover."
+    )
+
+
+class ModelClarificationOption(BaseModel):
+    value: str
+    label: str
+
+
+class ModelClarification(BaseModel):
+    id: str = Field(description="Short stable key, e.g. deadline, crew, resolution")
+    question: str
+    kind: Literal["choice", "range"]
+    options: list[ModelClarificationOption] = Field(description="For choice: 2-6 options")
+    min: float | None = Field(description="For range")
+    max: float | None = Field(description="For range")
+    step: float | None = Field(description="For range")
+    unit: str | None = Field(description="For range, e.g. days")
+    default: str | None = Field(description="The option value or number you would pick")
+    why: str = Field(description="One sentence on why the answer matters")
 
 
 class ModelPlanStep(BaseModel):
@@ -393,6 +601,7 @@ class ModelPlanStep(BaseModel):
     days: int = Field(description="Duration in whole days, at least 1")
 
 
+ModelClarification.model_rebuild()
 ModelPlanDraft.model_rebuild()
 
 SYSTEM_PROMPT = """You are the mission planner for a fleet of autonomous land-management \
@@ -411,6 +620,9 @@ list every rate and window you assumed under assumptions. Schedule each step wit
 (offset from the plan start) and days (duration) so the steps form a timeline per machine; two \
 steps that share a machine must not overlap. Ask a question only when the goal cannot be \
 planned without the answer; otherwise make the reasonable choice and note it under risks. \
+Put questions whose answer changes the plan materially (deadline, detail level, passes, crew \
+size, cadence) in clarifications as structured choices or ranges, at most three, and never ask \
+one the operator's answers already cover; apply every answer you are given. \
 Dates are ISO (YYYY-MM-DD); end_date is null when the plan repeats on a cadence."""
 
 
@@ -436,6 +648,10 @@ class ClaudePlanner:
         if request.refinement:
             parts.append(
                 f"The operator reviewed the previous draft and asks: {request.refinement.strip()}"
+            )
+        if request.answers:
+            parts.append(
+                f"Operator answers to your clarifications (JSON): {json.dumps(request.answers)}"
             )
         try:
             response = self._client.messages.parse(
@@ -496,6 +712,22 @@ class ClaudePlanner:
             assumptions=parsed.assumptions,
             risks=parsed.risks,
             questions=parsed.questions,
+            clarifications=[
+                Clarification(
+                    id=c.id,
+                    question=c.question,
+                    kind=c.kind,
+                    options=[ClarificationOption(value=o.value, label=o.label) for o in c.options],
+                    min=c.min,
+                    max=c.max,
+                    step=c.step,
+                    unit=c.unit,
+                    default=c.default,
+                    why=c.why,
+                )
+                for c in parsed.clarifications
+                if c.id not in request.answers
+            ][:3],
         )
         return PlanDraft(
             **body.model_dump(),

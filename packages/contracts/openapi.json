@@ -1051,6 +1051,139 @@
         "title": "CesiumIonTerrainSource",
         "type": "object"
       },
+      "Clarification": {
+        "additionalProperties": false,
+        "description": "A question the planner asks with a structured answer: a choice (chips), a range\n(slider) or an area choice (how the ground is picked). Never free text.",
+        "properties": {
+          "default": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default"
+          },
+          "id": {
+            "maxLength": 40,
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "choice",
+              "range",
+              "area"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "max": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max"
+          },
+          "min": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min"
+          },
+          "options": {
+            "items": {
+              "$ref": "#/components/schemas/ClarificationOption"
+            },
+            "maxItems": 8,
+            "title": "Options",
+            "type": "array"
+          },
+          "question": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Question",
+            "type": "string"
+          },
+          "step": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Step"
+          },
+          "unit": {
+            "anyOf": [
+              {
+                "maxLength": 20,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unit"
+          },
+          "why": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Why",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "question",
+          "kind"
+        ],
+        "title": "Clarification",
+        "type": "object"
+      },
+      "ClarificationOption": {
+        "additionalProperties": false,
+        "properties": {
+          "label": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          },
+          "value": {
+            "maxLength": 40,
+            "minLength": 1,
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "value",
+          "label"
+        ],
+        "title": "ClarificationOption",
+        "type": "object"
+      },
       "CrsMetadata": {
         "additionalProperties": false,
         "properties": {
@@ -2395,6 +2528,13 @@
             "title": "Cadence",
             "type": "string"
           },
+          "clarifications": {
+            "items": {
+              "$ref": "#/components/schemas/Clarification"
+            },
+            "title": "Clarifications",
+            "type": "array"
+          },
           "endDate": {
             "anyOf": [
               {
@@ -2495,6 +2635,7 @@
           "assumptions",
           "risks",
           "questions",
+          "clarifications",
           "source",
           "model",
           "note"
@@ -2524,6 +2665,13 @@
             ],
             "title": "Cadence",
             "type": "string"
+          },
+          "clarifications": {
+            "items": {
+              "$ref": "#/components/schemas/Clarification"
+            },
+            "title": "Clarifications",
+            "type": "array"
           },
           "endDate": {
             "anyOf": [
@@ -2605,6 +2753,23 @@
       "PlanDraftRequest": {
         "additionalProperties": false,
         "properties": {
+          "answers": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ]
+            },
+            "title": "Answers",
+            "type": "object"
+          },
           "existingPlans": {
             "items": {
               "$ref": "#/components/schemas/PlannerExistingPlan"

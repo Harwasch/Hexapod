@@ -1426,9 +1426,17 @@
 }
 
 /* ---- Plan composer (goal → draft → review) ----------------------------- */
+.mc-composer {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
 .mc-composer__body {
   display: grid;
   gap: 1.1rem;
+  align-content: start;
 }
 
 .mc-composer__goal {
@@ -1660,4 +1668,80 @@
 .mc-spinner.is-static {
   animation: none;
   border-top-color: rgba(157, 184, 240, 0.5);
+}
+
+/* ---- Agent clarifications and area helpers ------------------------------ */
+.mc-clarify {
+  display: grid;
+  gap: 0.8rem;
+  margin-top: 0.5rem;
+}
+
+.mc-clarify__question {
+  font: 600 12.5px var(--font-sans);
+}
+
+.mc-clarify__why {
+  font: 400 11.5px/1.4 var(--font-sans);
+  color: var(--text-secondary);
+  margin-top: 0.1rem;
+}
+
+.mc-clarify__range {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 0.4rem;
+}
+
+.mc-clarify__range input[type="range"] {
+  flex: 1;
+  accent-color: var(--accent);
+}
+
+.mc-clarify__value {
+  font-size: 11px;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.mc-viewarea {
+  display: grid;
+  gap: 0.4rem;
+  margin-top: 0.6rem;
+  padding: 0.6rem 0.7rem;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.mc-grid9 {
+  display: grid;
+  grid-template-columns: repeat(3, 18px);
+  gap: 3px;
+}
+
+.mc-grid9__cell {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.06);
+  cursor: pointer;
+}
+
+.mc-grid9__cell.is-on {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.mc-grid9__cell:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.mc-finder {
+  display: grid;
+  gap: 0.3rem;
+  margin-top: 0.6rem;
 }

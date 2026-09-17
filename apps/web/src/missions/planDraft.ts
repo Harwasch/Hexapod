@@ -26,6 +26,7 @@ export interface DraftSeed {
   previous?: PlanDraft | null;
   /** The plan being revised, left out of the booked windows sent to the planner. */
   replacePlanId?: string | null;
+  answers?: Record<string, string | number | boolean>;
 }
 
 const CADENCE_LABEL: Record<PlanCadence, string> = {
@@ -76,6 +77,7 @@ export function buildDraftRequest(project: Project, seed: DraftSeed): PlanDraftR
     today: new Date().toISOString().slice(0, 10),
   };
   if (seed.refinement) request.refinement = seed.refinement;
+  if (seed.answers && Object.keys(seed.answers).length) request.answers = seed.answers;
   if (seed.previous) {
     const { source: _source, model: _model, note: _note, ...body } = seed.previous;
     request.previousDraft = body;
@@ -233,6 +235,7 @@ export function planFromRecord(record: PlanRecord, project: Project): Plan {
     assumptions: record.assumptions,
     risks: record.risks,
     questions: record.questions,
+    clarifications: [],
     source: record.source,
     model: record.model,
     note: "",
@@ -261,8 +264,9 @@ export function describeDraft(draft: PlanDraft): string {
     `${draft.machineIds.length} machine${draft.machineIds.length === 1 ? "" : "s"}`,
     `${Math.round(draft.estimates.acres)} acres`,
   ];
-  const tail = draft.questions.length
-    ? ` I have ${draft.questions.length} question${draft.questions.length === 1 ? "" : "s"} before you approve.`
+  const asks = draft.questions.length + (draft.clarifications?.length ?? 0);
+  const tail = asks
+    ? ` I have ${asks} question${asks === 1 ? "" : "s"} before you approve.`
     : " Review it in the Plans window.";
   return `${parts.join(" · ")}.${tail}`;
 }

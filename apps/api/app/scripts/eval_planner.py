@@ -33,6 +33,8 @@ def request_for(context: dict[str, Any], case: dict[str, Any]) -> PlanDraftReque
     payload = {**context, "goal": case["goal"]}
     if case.get("refinement"):
         payload["refinement"] = case["refinement"]
+    if case.get("answers"):
+        payload["answers"] = case["answers"]
     return PlanDraftRequest.model_validate(payload)
 
 
@@ -77,6 +79,11 @@ def check(draft: PlanDraft, expect: dict[str, Any]) -> list[str]:
         failed.append(f"questions={len(draft.questions)}")
     if "min_questions" in expect and len(draft.questions) < expect["min_questions"]:
         failed.append(f"questions={len(draft.questions)}")
+    asked = {c.id for c in draft.clarifications}
+    if "clarification_ids" in expect and not set(expect["clarification_ids"]) <= asked:
+        failed.append(f"clarification_ids={sorted(asked)}")
+    if "clarification_ids_absent" in expect and set(expect["clarification_ids_absent"]) & asked:
+        failed.append(f"clarification_ids_absent={sorted(asked)}")
     if "risks_mention" in expect and not any(expect["risks_mention"] in r for r in draft.risks):
         failed.append("risks_mention")
     if "assumptions_mention" in expect and not any(

@@ -8,6 +8,7 @@ import {
   isAreaZone,
   nextAreaId,
   rectangleFootprint,
+  viewAreaZone,
   viewFootprint,
   zoneFromFootprint,
 } from "@/missions/areas";
@@ -120,6 +121,7 @@ describe("drawn areas", () => {
         assumptions: [],
         risks: [],
         questions: [],
+        clarifications: [],
         source: "rules",
         model: null,
         note: "",
@@ -140,6 +142,16 @@ describe("drawn areas", () => {
       createdAt: "",
       updatedAt: "",
       areas: body.areas ?? [],
+      zoneIds: body.zoneIds ?? [],
+      machineIds: body.machineIds ?? [],
+      steps: body.steps ?? [],
+      assumptions: body.assumptions ?? [],
+      risks: body.risks ?? [],
+      questions: body.questions ?? [],
+      cadence: body.cadence ?? ("once" as const),
+      source: body.source ?? ("rules" as const),
+      model: body.model ?? null,
+      endDate: body.endDate ?? null,
     };
     expect(zonesFromRecord(record).map((z) => z.name)).toEqual(["View area 01"]);
     store.removeArea("anywhere", "A-01");
@@ -152,5 +164,37 @@ describe("drawn areas", () => {
     expect(ids[0]).toBe("Z-14");
     expect(ids.at(-1)).toBe("A-01");
     store.removeArea(demo.id, "A-01");
+  });
+
+  it("keeps a locally shaped view area when the stored copy comes back from the plans", () => {
+    const store = useMission.getState();
+    const project = anywhereProject();
+    store.setProject(project);
+    const origin = {
+      center: { longitude: -119.9, latitude: 36.6 },
+      metersPerPixel: 1,
+      width: 1000,
+      height: 600,
+      fraction: 0.5,
+      dx: 0,
+      dy: 0,
+    };
+    store.addArea(project.id, viewAreaZone("A-01", "View area 01", origin));
+    const stored = zoneFromFootprint(
+      "A-01",
+      "View area 01",
+      rectangleFootprint(origin.center, 20, 20),
+    );
+    const other = zoneFromFootprint(
+      "A-02",
+      "View area 02",
+      rectangleFootprint(origin.center, 20, 20),
+    );
+    store.mergeAreas(project.id, [stored, other]);
+    const zones = useMission.getState().project?.zones ?? [];
+    expect(zones.find((z) => z.id === "A-01")?.view?.fraction).toBe(0.5);
+    expect(zones.map((z) => z.id)).toEqual(["A-01", "A-02"]);
+    store.removeArea(project.id, "A-01");
+    store.removeArea(project.id, "A-02");
   });
 });

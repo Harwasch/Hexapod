@@ -59,6 +59,32 @@ class PlannerRate(CamelModel):
     machine_ids: list[str] = Field(default_factory=list)
 
 
+ClarificationKind = Literal["choice", "range", "area"]
+AnswerValue = str | float | bool
+
+
+class ClarificationOption(CamelModel):
+    value: str = Field(min_length=1, max_length=40)
+    label: str = Field(min_length=1, max_length=80)
+
+
+class Clarification(CamelModel):
+    """A question the planner asks with a structured answer: a choice (chips), a range
+    (slider) or an area choice (how the ground is picked). Never free text."""
+
+    id: str = Field(min_length=1, max_length=40)
+    question: str = Field(min_length=1, max_length=200)
+    kind: ClarificationKind
+    options: list[ClarificationOption] = Field(default_factory=list, max_length=8)
+    min: float | None = None
+    max: float | None = None
+    step: float | None = None
+    unit: str | None = Field(default=None, max_length=20)
+    default: AnswerValue | None = None
+    # Why the answer matters, shown under the question.
+    why: str = Field(default="", max_length=200)
+
+
 class PlanStep(CamelModel):
     """Every field explicit (no defaults) so the contract marks them required on read."""
 
@@ -94,6 +120,7 @@ class PlanDraftBody(CamelModel):
     assumptions: list[str] = Field(default_factory=list)
     risks: list[str] = Field(default_factory=list)
     questions: list[str] = Field(default_factory=list)
+    clarifications: list[Clarification] = Field(default_factory=list)
 
 
 class PlanDraftRequest(CamelModel):
@@ -110,6 +137,8 @@ class PlanDraftRequest(CamelModel):
     preferred_machine_ids: list[str] = Field(default_factory=list)
     # A follow-up instruction on a previous draft ("use three machines", "skip Z-21").
     refinement: str | None = Field(default=None, max_length=2000)
+    # Answers to the planner's clarifications, by clarification id.
+    answers: dict[str, AnswerValue] = Field(default_factory=dict)
     previous_draft: PlanDraftBody | None = None
     today: date | None = None
 
@@ -129,6 +158,7 @@ class PlanDraft(CamelModel):
     assumptions: list[str]
     risks: list[str]
     questions: list[str]
+    clarifications: list[Clarification]
     source: PlannerSource
     model: str | None
     # Shown next to the draft: who drafted it and what it assumed.

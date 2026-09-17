@@ -47,6 +47,22 @@ export interface Zone {
   note: string;
   /** Where the label chip anchors. */
   anchor: LonLat;
+  /** Set on areas made from the view, so their size and position can be adjusted live. */
+  view?: ViewAreaOrigin;
+  /** Where a drawn area's outline came from, shown as attribution. */
+  attribution?: string;
+}
+
+export interface ViewAreaOrigin {
+  center: LonLat;
+  metersPerPixel: number;
+  width: number;
+  height: number;
+  /** Fraction of the viewport the area spans, 0.2–1. */
+  fraction: number;
+  /** Offset of the area centre from the view centre, in fractions of the view (−0.5…0.5). */
+  dx: number;
+  dy: number;
 }
 
 export interface PlanFact {

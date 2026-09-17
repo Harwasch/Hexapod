@@ -1,26 +1,29 @@
 import { ArrowLeft, PenLine, Scan, Sparkles, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
-import type { PlanDraft } from "@twin/contracts";
+import type { PlanAnswerValue, PlanDraft } from "@twin/contracts";
 
-import { usePlannerStatus } from "@/api/queries";
+import { usePlannerStatus, usePlans } from "@/api/queries";
 import { useScene } from "@/cesium/SceneContext";
 import { planningEdited } from "@/lib/planningMetrics";
-import {
-  areaFromMeasurement,
-  isAreaZone,
-  nextAreaId,
-  viewFootprint,
-  zoneFromFootprint,
-} from "@/missions/areas";
+import { areaFromMeasurement, isAreaZone, nextAreaId, viewAreaZone } from "@/missions/areas";
 import { describeConflict, planConflicts } from "@/missions/conflicts";
+import {
+  OSM_KINDS,
+  fetchOsmAreas,
+  kindForGoal,
+  zoneFromCandidate,
+  type OsmAreaKind,
+  type OsmCandidate,
+} from "@/missions/osm";
 import { diffDrafts, idLabel, overlayFor } from "@/missions/planDraft";
-import type { Project } from "@/missions/types";
+import type { Project, ViewAreaOrigin, Zone } from "@/missions/types";
 import { useMeasurements } from "@/state/measurements";
 import { useMission } from "@/state/mission";
 import { useUi } from "@/state/ui";
 import { useViewer } from "@/state/viewer";
 
+import { AnsweredChips, Clarifications } from "./Clarifications";
 import { PlanSchedule } from "./PlanSchedule";
 import { approveDraft, startPlanDraft } from "./planDrafting";
 import { useMissionActions } from "./useMissionActions";
@@ -39,6 +42,14 @@ export function PlanComposer({ project }: { project: Project }) {
   const addArea = useMission((s) => s.addArea);
   const removeArea = useMission((s) => s.removeArea);
   const planner = usePlannerStatus();
+  // Ids of areas already stored with this project's plans, so a new area never reuses one
+  // before the stored plans have joined the project.
+  const storedPlans = usePlans(project.id);
+  const storedAreaIds = (storedPlans.data ?? []).flatMap((record) =>
+    record.areas.map((area) => ({ id: area.id })),
+  );
+  const freshAreaId = () =>
+    nextAreaId([...(useMission.getState().project?.zones ?? []), ...storedAreaIds]);
   const scene = useScene();
   const metersPerPixel = useViewer((s) => s.camera.metersPerPixel);
   const measureMode = useUi((s) => s.measureMode);
@@ -46,7 +57,7 @@ export function PlanComposer({ project }: { project: Project }) {
   // Drawing an area borrows the measurement tool's polygon drawing; the finished polygon
   // becomes a zone and the measurement is discarded. The subscription lives in a ref so no
   // state is set from inside an effect.
-  const drawing = useRef<{ since: number; stop: () => void } | null>(null);
+  const drawing = useRef<{ stop: () => void } | null>(null);
   const [armed, setArmed] = useState(false);
   const areaCount = project.zones.filter(isAreaZone).length;
   const isDrawing = measureMode === "area" && armed;
@@ -68,11 +79,12 @@ export function PlanComposer({ project }: { project: Project }) {
       setMeasureMode(null);
       return;
     }
-    const since = Date.now();
+    // Only a measurement finished after arming counts, so an older area is never adopted.
+    const known = new Set(useMeasurements.getState().items.map((m) => m.id));
     const unsubscribeMeasurements = useMeasurements.subscribe((state) => {
-      const done = state.items.find((m) => m.mode === "area" && m.complete && m.createdAt >= since);
+      const done = state.items.find((m) => m.mode === "area" && m.complete && !known.has(m.id));
       if (!done) return;
-      const id = nextAreaId(useMission.getState().project?.zones ?? []);
+      const id = freshAreaId();
       const zone = areaFromMeasurement(done, id, `Drawn area ${id.slice(2)}`);
       stopDrawing();
       useMeasurements.getState().remove(done.id);
@@ -85,7 +97,6 @@ export function PlanComposer({ project }: { project: Project }) {
       if (state.measureMode !== "area") stopDrawing();
     });
     drawing.current = {
-      since,
       stop: () => {
         unsubscribeMeasurements();
         unsubscribeMode();
@@ -97,14 +108,77 @@ export function PlanComposer({ project }: { project: Project }) {
   const useView = () => {
     const center = scene?.camera.viewCenter();
     if (!center) return;
-    const id = nextAreaId(project.zones);
+    const id = freshAreaId();
     adoptArea(
-      zoneFromFootprint(
-        id,
-        `View area ${id.slice(2)}`,
-        viewFootprint(center, metersPerPixel, { width: center.width, height: center.height }),
-      ),
+      viewAreaZone(id, `View area ${id.slice(2)}`, {
+        center: { longitude: center.longitude, latitude: center.latitude },
+        metersPerPixel,
+        width: center.width,
+        height: center.height,
+        fraction: 0.5,
+        dx: 0,
+        dy: 0,
+      }),
     );
+  };
+  /** Re-shapes a view area in place; the map follows the store. */
+  const adjustView = (zone: Zone, patch: Partial<ViewAreaOrigin>) => {
+    if (!zone.view) return;
+    addArea(project.id, viewAreaZone(zone.id, zone.name, { ...zone.view, ...patch }));
+  };
+  // Candidate areas from OpenStreetMap for the ground in view, by kind; the goal suggests one.
+  const [osm, setOsm] = useState<{
+    kind: OsmAreaKind | null;
+    status: "idle" | "loading" | "ready" | "error";
+    candidates: OsmCandidate[];
+    error: string | null;
+  }>({ kind: null, status: "idle", candidates: [], error: null });
+  const suggestedKind = kindForGoal(composer?.goal ?? "");
+  const findAreas = (kind: OsmAreaKind) => {
+    const center = scene?.camera.viewCenter();
+    if (!center) return;
+    const whole = viewAreaZone("A-00", "view", {
+      center: { longitude: center.longitude, latitude: center.latitude },
+      metersPerPixel,
+      width: center.width,
+      height: center.height,
+      fraction: 1,
+      dx: 0,
+      dy: 0,
+    });
+    const ring = whole.footprint.type === "Polygon" ? whole.footprint.coordinates[0] : undefined;
+    const lons = (ring ?? []).map((c) => c[0] ?? 0);
+    const lats = (ring ?? []).map((c) => c[1] ?? 0);
+    const bbox = {
+      west: Math.min(...lons),
+      east: Math.max(...lons),
+      south: Math.min(...lats),
+      north: Math.max(...lats),
+    };
+    setOsm({ kind, status: "loading", candidates: [], error: null });
+    fetchOsmAreas(bbox, kind)
+      .then((candidates) =>
+        setOsm({
+          kind,
+          status: "ready",
+          candidates,
+          error: candidates.length
+            ? null
+            : `No ${OSM_KINDS[kind].label.toLowerCase()} mapped in this view.`,
+        }),
+      )
+      .catch((error: unknown) =>
+        setOsm({
+          kind,
+          status: "error",
+          candidates: [],
+          error: `Couldn't reach OpenStreetMap: ${error instanceof Error ? error.message : String(error)}`,
+        }),
+      );
+  };
+  const adoptCandidate = (candidate: OsmCandidate) => {
+    const id = freshAreaId();
+    adoptArea(zoneFromCandidate(id, candidate));
   };
 
   // The goal field takes focus when the composer opens (the operator came here to type).
@@ -266,6 +340,104 @@ export function PlanComposer({ project }: { project: Project }) {
                   Drawn areas are saved with the plans that cover them.
                 </p>
               )}
+              {project.zones
+                .filter((z) => z.view && composer.zoneIds.includes(z.id))
+                .map((zone) => (
+                  <div key={zone.id} className="mc-viewarea" data-testid={`viewarea-${zone.id}`}>
+                    <span className="mc-eyebrow">ADJUST {zone.id}</span>
+                    <label className="mc-clarify__range">
+                      <span className="mc-muted" style={{ fontSize: "11.5px" }}>
+                        Size
+                      </span>
+                      <input
+                        type="range"
+                        min={0.2}
+                        max={1}
+                        step={0.05}
+                        value={zone.view?.fraction ?? 0.5}
+                        onChange={(e) => adjustView(zone, { fraction: Number(e.target.value) })}
+                        aria-label={`Size of ${zone.id} as a share of the view`}
+                        disabled={drafting}
+                        data-testid={`viewarea-${zone.id}-size`}
+                      />
+                      <span className="mc-mono mc-clarify__value">
+                        {Math.round((zone.view?.fraction ?? 0.5) * 100)}% ·{" "}
+                        {zone.acres.toLocaleString()} ac
+                      </span>
+                    </label>
+                    <div className="mc-grid9" role="group" aria-label={`Position of ${zone.id}`}>
+                      {[-1, 0, 1].flatMap((dy) =>
+                        [-1, 0, 1].map((dx) => {
+                          const on =
+                            Math.round((zone.view?.dx ?? 0) * 4) === dx &&
+                            Math.round((zone.view?.dy ?? 0) * 4) === dy;
+                          return (
+                            <button
+                              key={`${dx}${dy}`}
+                              type="button"
+                              className={`mc-grid9__cell ${on ? "is-on" : ""}`}
+                              aria-pressed={on}
+                              aria-label={`Move ${zone.id} ${dy < 0 ? "up" : dy > 0 ? "down" : ""} ${dx < 0 ? "left" : dx > 0 ? "right" : ""}`.trim()}
+                              onClick={() => adjustView(zone, { dx: dx * 0.25, dy: dy * 0.25 })}
+                              disabled={drafting}
+                              data-testid={`viewarea-${zone.id}-${dx}-${dy}`}
+                            />
+                          );
+                        }),
+                      )}
+                    </div>
+                  </div>
+                ))}
+              <div className="mc-finder">
+                <span className="mc-eyebrow">FIND ON THE MAP</span>
+                <div className="mc-tags">
+                  {(Object.keys(OSM_KINDS) as OsmAreaKind[]).map((kind) => (
+                    <button
+                      key={kind}
+                      type="button"
+                      className={`mc-tag ${osm.kind === kind ? "is-on" : ""}`}
+                      onClick={() => findAreas(kind)}
+                      disabled={drafting || !scene || osm.status === "loading"}
+                      data-testid={`find-${kind}`}
+                    >
+                      {OSM_KINDS[kind].label}
+                      {suggestedKind === kind ? " · suggested" : ""}
+                    </button>
+                  ))}
+                </div>
+                {osm.status === "loading" && (
+                  <p className="mc-muted" style={{ fontSize: "12px" }}>
+                    Looking up {osm.kind ? OSM_KINDS[osm.kind].label.toLowerCase() : "features"} in
+                    view…
+                  </p>
+                )}
+                {osm.error && (
+                  <p className="mc-muted" style={{ fontSize: "12px" }} role="status">
+                    {osm.error}
+                  </p>
+                )}
+                {osm.candidates.length > 0 && (
+                  <div className="mc-tags" data-testid="osm-candidates">
+                    {osm.candidates.map((c) => (
+                      <button
+                        key={c.id}
+                        type="button"
+                        className="mc-tag mc-tag--ghost"
+                        onClick={() => adoptCandidate(c)}
+                        disabled={drafting}
+                        data-testid={`osm-${c.id}`}
+                      >
+                        + {c.name} · {Math.round(c.acres).toLocaleString()} ac
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {osm.candidates.length > 0 && (
+                  <p className="mc-muted" style={{ fontSize: "11px" }}>
+                    Outlines © OpenStreetMap contributors (ODbL)
+                  </p>
+                )}
+              </div>
             </div>
             <div>
               <span className="mc-eyebrow">MACHINES</span>
@@ -311,7 +483,16 @@ export function PlanComposer({ project }: { project: Project }) {
           </div>
         )}
         {composer.draft && composer.status !== "drafting" && (
-          <DraftReview draft={composer.draft} project={project} goal={composer.goal} />
+          <DraftReview
+            draft={composer.draft}
+            project={project}
+            goal={composer.goal}
+            onArea={(value) => {
+              if (value === "draw") startDrawing();
+              else if (value === "water" || value === "farmland" || value === "wood")
+                findAreas(value);
+            }}
+          />
         )}
       </div>
     </div>
@@ -322,16 +503,32 @@ function DraftReview({
   draft,
   project,
   goal,
+  onArea,
 }: {
   draft: PlanDraft;
   project: Project;
   goal: string;
+  onArea: (value: string) => void;
 }) {
   const composer = useMission((s) => s.composer);
   const update = useMission((s) => s.updateComposer);
   const scene = useScene();
   const { showPlanOnMap, clearPlanOverlay } = useMissionActions();
   const [refinement, setRefinement] = useState("");
+  // Answers picked but not yet sent; "Apply" redrafts with them.
+  const [pending, setPending] = useState<Record<string, PlanAnswerValue>>({});
+  const clarifications = draft.clarifications ?? [];
+  const labels = Object.fromEntries(clarifications.map((c) => [c.id, c.question]));
+  const applyAnswers = () => {
+    if (Object.keys(pending).length === 0) return;
+    const answers = pending;
+    setPending({});
+    void startPlanDraft(goal, {
+      zoneIds: composer?.zoneIds ?? draft.zoneIds,
+      machineIds: composer?.machineIds ?? draft.machineIds,
+      answers,
+    });
+  };
   const changes = composer?.previousDraft ? diffDrafts(composer.previousDraft, draft) : [];
   const conflicts = planConflicts(
     {
@@ -502,9 +699,44 @@ function DraftReview({
           </ul>
         </section>
       )}
+      {(clarifications.length > 0 || Object.keys(composer?.answers ?? {}).length > 0) && (
+        <section>
+          <div className="mc-row mc-row--between">
+            <span className="mc-eyebrow">THE AGENT ASKS</span>
+            {Object.keys(pending).length > 0 && (
+              <button
+                type="button"
+                className="mc-btn mc-btn--sm mc-btn--accent"
+                onClick={applyAnswers}
+                data-testid="clarify-apply"
+              >
+                Apply {Object.keys(pending).length} answer
+                {Object.keys(pending).length === 1 ? "" : "s"}
+              </button>
+            )}
+          </div>
+          <Clarifications
+            items={clarifications}
+            answers={pending}
+            onAnswer={(id, value) => setPending((prev) => ({ ...prev, [id]: value }))}
+            onArea={onArea}
+          />
+          <AnsweredChips
+            answers={composer?.answers ?? {}}
+            labels={labels}
+            onClear={(id) =>
+              update({
+                answers: Object.fromEntries(
+                  Object.entries(composer?.answers ?? {}).filter(([key]) => key !== id),
+                ),
+              })
+            }
+          />
+        </section>
+      )}
       {draft.questions.length > 0 && (
         <section>
-          <span className="mc-eyebrow">THE AGENT ASKS</span>
+          <span className="mc-eyebrow">ALSO WORTH KNOWING</span>
           <ul className="mc-list">
             {draft.questions.map((q) => (
               <li key={q} className="mc-note mc-note--agent">
