@@ -3,6 +3,7 @@ import type { PlanDraft, PlanRecordStatus } from "@twin/contracts";
 import { isOffline } from "@/api/client";
 import { draftPlan, plansApi } from "@/api/queries";
 import { describeError } from "@/lib/log";
+import { planningApproved, planningDrafted, planningOpened } from "@/lib/planningMetrics";
 import {
   buildDraftRequest,
   describeDraft,
@@ -39,7 +40,10 @@ export async function startPlanDraft(
     return;
   }
   const existing = state.composer;
-  if (!existing) state.openComposer({ goal: text, ...options });
+  if (!existing) {
+    state.openComposer({ goal: text, ...options });
+    planningOpened();
+  }
   const composer = useMission.getState().composer;
   const zoneIds = options.zoneIds ?? composer?.zoneIds ?? [];
   const machineIds = options.machineIds ?? composer?.machineIds ?? [];
@@ -62,6 +66,7 @@ export async function startPlanDraft(
     });
     const draft = await draftPlan(request);
     if (!useMission.getState().composer) return; // closed while drafting
+    planningDrafted(Boolean(options.refinement));
     // The chips stay the operator's pre-selection; the draft carries its own scope. The
     // previous draft is kept so the review can say what the redraft changed.
     useMission.getState().updateComposer({
@@ -91,8 +96,10 @@ export async function approveDraft(draft: PlanDraft, goal: string): Promise<Plan
   const body = recordBodyFromDraft(draft, goal, project.id, project.siteId);
   let plan: Plan;
   try {
+    // A revision carries the plan body only: identity (project, site) never changes.
+    const { projectId: _projectId, siteId: _siteId, ...revision } = body;
     const record = existing?.persisted
-      ? await plansApi.revise(existing.id, { ...body, note: `Revised: ${goal.slice(0, 120)}` })
+      ? await plansApi.revise(existing.id, { ...revision, note: `Revised: ${goal.slice(0, 120)}` })
       : await plansApi.create(body);
     plan = planFromRecord(record, project);
     plansInvalidate.current?.();
@@ -106,6 +113,7 @@ export async function approveDraft(draft: PlanDraft, goal: string): Promise<Plan
     plan.agentNote = `${plan.agentNote} Saved in this browser only: the API is offline.`;
   }
   useMission.getState().approvePlan(plan);
+  planningApproved();
   useMission
     .getState()
     .appendLog(
@@ -115,9 +123,11 @@ export async function approveDraft(draft: PlanDraft, goal: string): Promise<Plan
   return plan;
 }
 
-/** Lifecycle changes go to the API first; the console mirrors the stored state. */
+/** Lifecycle changes show at once and go to the API; the stored state replaces them when it lands. */
 export async function setPlanStatus(plan: Plan, status: PlanRecordStatus): Promise<void> {
   const presentation = presentStatus(status);
+  // The console reflects the change at once; the stored record replaces it when it lands.
+  useMission.getState().updatePlan(plan.id, presentation);
   if (plan.persisted) {
     try {
       const record = await plansApi.setStatus(plan.id, status);
@@ -127,13 +137,17 @@ export async function setPlanStatus(plan: Plan, status: PlanRecordStatus): Promi
       return;
     } catch (error) {
       if (!isOffline(error)) {
+        // Roll the optimistic change back to what the console showed before.
+        useMission.getState().updatePlan(plan.id, {
+          status: plan.status,
+          state: plan.state,
+          action: plan.action,
+        });
         useMission
           .getState()
           .appendLog("agent", `I couldn't update the plan: ${describeError(error)}`);
         useMission.getState().setStreamOpen(true);
-        return;
       }
     }
   }
-  useMission.getState().updatePlan(plan.id, presentation);
 }

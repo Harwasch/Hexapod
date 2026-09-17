@@ -5,6 +5,7 @@ import type { PlanDraft } from "@twin/contracts";
 
 import { usePlannerStatus } from "@/api/queries";
 import { useScene } from "@/cesium/SceneContext";
+import { planningEdited } from "@/lib/planningMetrics";
 import { describeConflict, planConflicts } from "@/missions/conflicts";
 import { diffDrafts, idLabel, overlayFor } from "@/missions/planDraft";
 import type { Project } from "@/missions/types";
@@ -26,6 +27,11 @@ export function PlanComposer({ project }: { project: Project }) {
   const update = useMission((s) => s.updateComposer);
   const close = useMission((s) => s.closeComposer);
   const planner = usePlannerStatus();
+  // The goal field takes focus when the composer opens (the operator came here to type).
+  const goalRef = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    goalRef.current?.focus();
+  }, []);
   if (!composer) return null;
   const drafting = composer.status === "drafting";
   const toggle = (key: "zoneIds" | "machineIds", id: string) => {
@@ -40,7 +46,16 @@ export function PlanComposer({ project }: { project: Project }) {
     });
   };
   return (
-    <div className="mc-composer" data-testid="plan-composer">
+    <div className="mc-composer" data-testid="plan-composer" aria-busy={drafting}>
+      <p className="sr-only" aria-live="polite">
+        {composer.status === "drafting"
+          ? "Drafting the plan"
+          : composer.status === "ready"
+            ? "Draft ready for review"
+            : composer.status === "error"
+              ? "Drafting failed"
+              : ""}
+      </p>
       <div className="mc-window__head mc-window__head--column">
         <button type="button" className="mc-link" onClick={close}>
           <ArrowLeft size={12} aria-hidden="true" /> All plans
@@ -73,6 +88,7 @@ export function PlanComposer({ project }: { project: Project }) {
             id="plan-goal"
             className="mc-textarea"
             rows={3}
+            ref={goalRef}
             value={composer.goal}
             placeholder="What should the fleet achieve? Name zones, machines and a deadline if you have them."
             onChange={(e) => update({ goal: e.target.value })}
@@ -238,14 +254,20 @@ function DraftReview({
         className="mc-input mc-review__title"
         value={draft.title}
         aria-label="Plan title"
-        onChange={(e) => update({ draft: { ...draft, title: e.target.value } })}
+        onChange={(e) => {
+          planningEdited();
+          update({ draft: { ...draft, title: e.target.value } });
+        }}
       />
       <textarea
         className="mc-textarea"
         rows={3}
         value={draft.objective}
         aria-label="Objective"
-        onChange={(e) => update({ draft: { ...draft, objective: e.target.value } })}
+        onChange={(e) => {
+          planningEdited();
+          update({ draft: { ...draft, objective: e.target.value } });
+        }}
       />
       <div className="mc-stats mc-stats--tight">
         <div className="mc-stat">

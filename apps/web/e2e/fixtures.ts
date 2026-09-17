@@ -344,6 +344,9 @@ export async function mockApi(page: Page, options: MockOptions = {}): Promise<vo
       }
       if (request.method() === "PUT") {
         const body = request.postDataJSON() as Record<string, unknown> & { note?: string };
+        // The API forbids unknown fields; a revision never carries identity.
+        if ("projectId" in body || "siteId" in body)
+          return json({ title: "Validation error", status: 422 }, 422);
         const revision = current.revision + 1;
         mockPlans[index] = {
           ...current,

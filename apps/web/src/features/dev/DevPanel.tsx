@@ -5,6 +5,7 @@ import { Divider, GlassSwitch } from "@twin/ui";
 import { useScene } from "@/cesium/SceneContext";
 import type { DebugFlags } from "@/cesium/DebugManager";
 import { representationLabel } from "@/lib/format";
+import { planningSummary } from "@/lib/planningMetrics";
 import { recentSpans, onSpan } from "@/lib/timing";
 import { useSettings } from "@/state/settings";
 import { useSites } from "@/state/sites";
@@ -66,6 +67,8 @@ export function DevPanel() {
     () => onSpan((span) => span.name === "api" && setApiMs(Math.round(span.durationMs))),
     [],
   );
+  const [planning, setPlanning] = useState(() => planningSummary());
+  useEffect(() => onSpan((span) => span.name === "planning" && setPlanning(planningSummary())), []);
   const setFlag = (patch: Partial<DebugFlags>) => {
     if (!scene) return;
     setFlags(scene.debug.set(patch));
@@ -144,6 +147,12 @@ export function DevPanel() {
         <dd>{representation ? representationLabel(representation) : "—"}</dd>
         <dt>Last API call</dt>
         <dd>{apiMs === null ? "—" : `${apiMs} ms`}</dd>
+        <dt>Planning</dt>
+        <dd data-testid="dev-planning">
+          {planning.plans === 0
+            ? "no plans approved this session"
+            : `${planning.plans} approved · median ${Math.round((planning.medianToApproveMs ?? 0) / 1000)} s to approve · ${planning.medianRedrafts ?? 0} redrafts · ${planning.approvedUneditedPct ?? 0}% unedited`}
+        </dd>
         <dt>WebGL 2</dt>
         <dd>{perf.webgl2 ? "yes" : "no"}</dd>
         <dt>GPU</dt>

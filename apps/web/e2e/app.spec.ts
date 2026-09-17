@@ -309,8 +309,18 @@ test.describe("mission control", () => {
     await expect(app.getByTestId("plan-detail")).toContainText("STEPS");
     await app.getByTestId("plan-lifecycle").dispatchEvent("click");
     await expect(app.getByTestId("plan-detail")).toContainText("Dispatched");
+    // Revising keeps the plan's identity and lifecycle and adds a revision to its history.
+    await app.getByText("Revise with agent").dispatchEvent("click");
+    await expect(app.getByTestId("plan-composer")).toBeVisible();
+    await app.getByTestId("plan-goal").fill("Mow Z-21 weekly with two mowers");
+    await app.getByTestId("plan-draft-submit").dispatchEvent("click");
+    await expect(app.getByTestId("plan-review")).toBeVisible({ timeout: 30_000 });
+    await app.getByTestId("plan-approve").dispatchEvent("click");
+    await expect(app.getByTestId("plan-detail")).toContainText("rev 2", { timeout: 15_000 });
+    await expect(app.getByTestId("plan-detail")).toContainText("Dispatched");
     await app.getByText("All plans").dispatchEvent("click");
-    await expect(app.getByTestId("plans-panel")).toContainText("Mow Z-21 weekly with one mower");
+    await expect(app.getByTestId("plans-panel")).toContainText("Mow Z-21 weekly with two mowers");
+    await expect(app.getByTestId("plans-panel")).not.toContainText("with one mower");
   });
 
   test("command bar drives the agent stream and layer pills toggle overlays", async ({ app }) => {

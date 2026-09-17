@@ -56,10 +56,29 @@ A plan is a mission for the fleet, and the agent drafts it. The flow is goal →
    (Claude + model, or rule-based). "Revise with agent" reopens the composer with the plan's
    goal and replaces it on approval.
 
-Approved plans live in the browser (`twin.mission.v1`, per project) until a fleet backend
-persists them; the `MissionProvider` seam is unchanged. `apps/web/src/missions/planDraft.ts`
-converts between the API draft and the console's `Plan`; `apps/api/app/services/planner.py`
-holds both planners behind one `Planner` protocol and is covered by `tests/test_agent.py`.
+**Persistence.** Approving writes the plan to the API (`POST /api/v1/plans`; revising is
+`PUT` and keeps every approved revision in history; lifecycle is `PATCH …/status`). Plans are
+keyed by the mission project id and optionally linked to a catalog site. The console shows
+the stored record; when the API is offline the plan is kept in the browser
+(`twin.mission.v1`) and says so, and persisted plans replace stale console plans on the next
+fetch. The `MissionProvider` seam is unchanged.
+
+**Conflicts, rates, progress.** Before approval the review lists conflicts with other
+active plans (a machine booked on overlapping days, a zone another plan still covers; pure
+functions in `missions/conflicts.ts`). The planner request carries the same booked windows
+plus rates learned from the work log per task family (`missions/rates.ts`), so the rules
+planner prefers free machines and estimates from what the fleet actually did, saying so in
+the assumptions. A dispatched plan's detail shows progress from the work log against where
+the schedule expects it today (`missions/progress.ts`) and offers "Replan from here", which
+reopens the composer with the drift written into the goal.
+
+**Quality.** `apps/web/src/missions/planDraft.ts` converts between the API draft and the
+console's `Plan`; `apps/api/app/services/planner.py` holds both planners behind one `Planner`
+protocol (`tests/test_agent.py`). `apps/api/evals/planner_cases.json` is the planner
+evaluation set: `uv run python -m app.scripts.eval_planner` runs it against the rules planner
+(a test) and against Claude when a key is set. The dev panel's "Planning" row reports the
+session's time-to-approve, redrafts and unedited approvals. `docs/PLANNING.md` is the
+product record.
 
 ## Data flow
 

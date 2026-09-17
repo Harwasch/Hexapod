@@ -101,5 +101,19 @@ the window. See `docs/MISSION_CONTROL.md`.
 
 ## 6. Review
 
-Filled in at the end of the workflow: what the metrics read in the sandbox, what was cut,
-what the next cycle takes.
+**What the sandbox reads.** Rule-based drafts return in milliseconds; the scripted goal →
+draft → approve round trip runs in about 20 s including app boot; the e2e plan test approves
+a revised draft and dispatches it. The dev panel's "Planning" row reports per-session medians
+(time to approve, redrafts, unedited approvals) for pilots; the human numbers are unmeasured
+until a pilot runs.
+
+**What was cut, and why.** Streaming drafts (structured-output streaming needs partial JSON
+handling the review would have to tolerate; not worth it while drafts take seconds). Weather
+and daylight windows (needs a forecast source and a policy for who owns it). Drawing new
+zones inside the composer (zones are the fleet backend's objects today). Refusal fallback on
+the Claude call (mission goals are benign; add when a decline is ever seen).
+
+**What the next cycle takes.** A pilot with a real fleet backend behind `MissionProvider`
+(machines, zones, work log from telemetry) so learned rates and progress read real numbers;
+the Claude eval run with a key as a merge gate; per-plan progress from telemetry rather than
+the work log; conflict checks on the API side once several consoles write plans.

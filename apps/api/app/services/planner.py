@@ -216,8 +216,11 @@ class RulesPlanner:
         crew_free_day = dict.fromkeys(machine_ids, 1)
         for index, zone_id in enumerate(zone_ids):
             zone = zone_by_id[zone_id]
-            crew = machine_ids if len(zone_ids) == 1 else [machine_ids[index % machine_count]]
-            crew = [m for m in crew if m]
+            # Machines are spread over the zones round-robin, so three mowers on two zones put
+            # two on the bigger first zone rather than leaving one idle.
+            crew = [m for j, m in enumerate(machine_ids) if j % max(1, len(zone_ids)) == index]
+            if not crew and machine_ids:
+                crew = [machine_ids[index % machine_count]]
             zone_hours = zone.acres / rate_by_zone[zone_id].acres_per_hour if zone.acres else 0.0
             zone_days = (
                 max(1, math.ceil(zone_hours / (max(1, len(crew)) * RULES_HOURS_PER_DAY)))

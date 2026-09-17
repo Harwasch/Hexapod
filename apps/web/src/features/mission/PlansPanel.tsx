@@ -11,6 +11,7 @@ import { useUi } from "@/state/ui";
 import { usePlans } from "@/api/queries";
 import { useScene } from "@/cesium/SceneContext";
 import { planFromRecord } from "@/missions/planDraft";
+import { planProgress, replanRefinement } from "@/missions/progress";
 
 import { PlanComposer } from "./PlanComposer";
 import { PlanSchedule } from "./PlanSchedule";
@@ -163,6 +164,8 @@ function PlanDetail({ plan, onBack }: { plan: Plan; onBack: () => void }) {
   const scene = useScene();
   const colorFor = (id: string) => scene?.mission.machineColor(id).toCssColorString() ?? "#7fd8c0";
   const owned = plan.goal !== undefined;
+  const project = useMission((s) => s.project);
+  const progress = owned && project ? planProgress(plan, project.workLog, new Date()) : null;
   // An open plan is drawn on the map for as long as its detail is open.
   useEffect(() => {
     scene?.mission.showPlan(
@@ -221,17 +224,57 @@ function PlanDetail({ plan, onBack }: { plan: Plan; onBack: () => void }) {
         <section>
           <div className="mc-row mc-row--between">
             <span className="mc-eyebrow">PROGRESS</span>
-            <span className={`mc-mono mc-tone--${plan.status}`}>{plan.progressLabel}</span>
+            <span
+              className={`mc-mono ${progress ? `mc-tone--${progress.tone === "warn" ? "warn" : plan.status}` : `mc-tone--${plan.status}`}`}
+              data-testid="plan-progress-label"
+            >
+              {progress
+                ? `${progress.actualPct}% · ${Math.round(progress.acresDone)} of ${Math.round(progress.acresTotal)} acres · ${progress.label}`
+                : plan.progressLabel}
+            </span>
           </div>
           <div
-            className={`mc-progress mc-progress--${plan.status}`}
+            className={`mc-progress mc-progress--${progress?.tone === "warn" ? "warn" : plan.status}`}
             role="progressbar"
-            aria-valuenow={plan.progressPct}
+            aria-valuenow={progress ? progress.actualPct : plan.progressPct}
             aria-valuemin={0}
             aria-valuemax={100}
           >
-            <div className="mc-progress__bar" style={{ width: `${plan.progressPct}%` }} />
+            <div
+              className="mc-progress__bar"
+              style={{ width: `${progress ? progress.actualPct : plan.progressPct}%` }}
+            />
+            {progress && progress.expectedPct > 0 && (
+              <div
+                className="mc-timeline__today"
+                style={{ left: `${progress.expectedPct}%` }}
+                title={`Schedule expects ${progress.expectedPct}% today`}
+              />
+            )}
           </div>
+          {progress && progress.driftDays > 0 && (
+            <div className="mc-note mc-note--warn" style={{ marginTop: "0.5rem" }}>
+              <span>
+                {progress.label}. The fleet logged {Math.round(progress.acresDone)} acres against{" "}
+                {Math.round(progress.acresTotal)} planned.
+              </span>
+              <button
+                type="button"
+                className="mc-btn mc-btn--sm"
+                onClick={() =>
+                  openComposer({
+                    goal: `${plan.goal ?? plan.objective} — ${replanRefinement(progress, new Date())}`,
+                    zoneIds: plan.zoneIds,
+                    machineIds: plan.machineIds ?? [],
+                    replacePlanId: plan.id,
+                  })
+                }
+                data-testid="plan-replan"
+              >
+                Replan from here
+              </button>
+            </div>
+          )}
         </section>
         <section>
           <div className="mc-row mc-row--between">
@@ -274,13 +317,7 @@ function PlanDetail({ plan, onBack }: { plan: Plan; onBack: () => void }) {
         {plan.steps && plan.steps.length > 0 && (
           <section>
             <span className="mc-eyebrow">SCHEDULE</span>
-            <PlanSchedule
-              steps={plan.steps}
-              startDate={
-                plan.steps.length ? (plan.facts.find((f) => f.k === "Starts")?.v ?? "") : ""
-              }
-              colorFor={colorFor}
-            />
+            <PlanSchedule steps={plan.steps} startDate={plan.startDate ?? ""} colorFor={colorFor} />
           </section>
         )}
         {plan.steps && plan.steps.length > 0 && (

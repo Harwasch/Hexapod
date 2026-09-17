@@ -3,6 +3,7 @@ import { persist } from "zustand/middleware";
 
 import type { PlanDraft } from "@twin/contracts";
 
+import { planningOpened } from "@/lib/planningMetrics";
 import type { Plan, Project } from "@/missions/types";
 
 export type MissionView = "map" | "plan" | "fleet";
@@ -120,7 +121,8 @@ export const useMission = create<MissionState>()(
         set((s) => ({
           log: [...s.log.slice(-49), { id: `log-${++logCounter}`, at: Date.now(), role, text }],
         })),
-      openComposer: (seed = {}) =>
+      openComposer: (seed = {}) => {
+        planningOpened();
         set({
           view: "plan",
           planId: null,
@@ -135,7 +137,8 @@ export const useMission = create<MissionState>()(
             previousDraft: null,
             error: null,
           },
-        }),
+        });
+      },
       closeComposer: () => set({ composer: null }),
       updateComposer: (patch) =>
         set((s) => (s.composer ? { composer: { ...s.composer, ...patch } } : {})),

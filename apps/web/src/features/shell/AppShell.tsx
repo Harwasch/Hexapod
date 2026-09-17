@@ -70,6 +70,7 @@ function GlobalHotkeys() {
     else if (ui.measureMode) ui.setMeasureMode(null);
     else if (mission.projectsOpen) mission.setProjectsOpen(false);
     else if (mission.feedsOpen) mission.setFeedsOpen(false);
+    else if (mission.composer && mission.composer.status !== "drafting") mission.closeComposer();
     else if (mission.selection) {
       mission.select(null);
       scene?.mission.setSelectedZone(null);

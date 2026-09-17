@@ -1,0 +1,52 @@
+{
+  "context": {
+    "projectName": "Blackrock Mesa",
+    "today": "2026-09-17",
+    "zones": [
+      {"id": "Z-14", "name": "Z-14 West bench", "acres": 310, "task": "Mow thistle", "progressPct": 58, "treated": false},
+      {"id": "Z-21", "name": "Z-21 North fence", "acres": 220, "task": "Mow thistle", "progressPct": 0, "treated": false},
+      {"id": "Z-08", "name": "Z-08 Draw", "acres": 90, "task": "Survey sweep", "progressPct": 100, "treated": true}
+    ],
+    "machines": [
+      {"id": "TR-04", "name": "TR-04 Kestrel", "status": "idle", "batteryPct": 88},
+      {"id": "TR-12", "name": "TR-12 Merlin", "status": "working", "batteryPct": 64},
+      {"id": "TR-07", "name": "TR-07 Harrier", "status": "attention", "batteryPct": 22},
+      {"id": "TR-18", "name": "TR-18 Shrike", "status": "idle", "batteryPct": 95},
+      {"id": "TR-11", "name": "TR-11 Vireo", "status": "idle", "batteryPct": 70},
+      {"id": "TR-15", "name": "TR-15 Towhee", "status": "idle", "batteryPct": 60}
+    ],
+    "existingPlans": [
+      {"id": "corridor", "title": "Inspect pipeline corridor", "zoneIds": ["Z-08"], "status": "dispatched",
+       "busy": [{"machineId": "TR-18", "startDate": "2026-09-17", "endDate": "2026-09-30"}]}
+    ],
+    "rates": [
+      {"task": "Mow pass 2", "acresPerMachineHour": 11.0, "samples": 6, "machineIds": ["TR-04", "TR-12"]}
+    ]
+  },
+  "cases": [
+    {"id": "named-zones-count", "goal": "Clear the star thistle from Z-14 and Z-21 with two mowers before seed set",
+     "expect": {"zone_ids": ["Z-14", "Z-21"], "machine_count": 2, "cadence": "once", "end_date_null": false, "max_questions": 0}},
+    {"id": "single-zone-named-machine", "goal": "Mow Z-21 with TR-04 by Friday",
+     "expect": {"zone_ids": ["Z-21"], "machine_ids": ["TR-04"], "max_questions": 0}},
+    {"id": "recurring", "goal": "Inspect the north fence monthly",
+     "expect": {"cadence": "monthly", "end_date_null": true}},
+    {"id": "weekly-one-machine", "goal": "Mow Z-21 weekly with one mower",
+     "expect": {"zone_ids": ["Z-21"], "machine_count": 1, "cadence": "weekly"}},
+    {"id": "default-untreated", "goal": "Get the thistle under control this month",
+     "expect": {"zone_ids_subset": ["Z-14", "Z-21"], "min_zones": 1}},
+    {"id": "exclusion", "goal": "Treat every open zone except Z-21 with three machines",
+     "expect": {"zone_ids": ["Z-14"], "machine_count": 3}},
+    {"id": "attention-risk", "goal": "Mow Z-14 with TR-07",
+     "expect": {"machine_ids": ["TR-07"], "risks_mention": "attention"}},
+    {"id": "booked-avoided", "goal": "Mow Z-14 with one mower",
+     "expect": {"machine_count": 1, "machine_ids_exclude": ["TR-18"]}},
+    {"id": "learned-rate", "goal": "Mow Z-21 with two mowers",
+     "expect": {"assumptions_mention": "learned from", "max_machine_hours": 30}},
+    {"id": "no-deadline-question", "goal": "Mow Z-14",
+     "expect": {"min_questions": 1}},
+    {"id": "refinement-count", "goal": "Mow Z-14 and Z-21 with two mowers", "refinement": "use three machines",
+     "expect": {"machine_count": 3}},
+    {"id": "refinement-skip", "goal": "Mow Z-14 and Z-21 with two mowers", "refinement": "skip Z-21",
+     "expect": {"zone_ids": ["Z-14"]}}
+  ]
+}
