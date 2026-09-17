@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  baseResolutionScale,
   buildLadder,
   decideScreenSpaceError,
   splatMinimumScreenSpaceError,
@@ -82,24 +83,34 @@ describe("splatMinimumScreenSpaceError", () => {
 });
 
 describe("buildLadder", () => {
-  it("cuts anti-aliasing, then resolution to a half, then tiles, never past the preset maximum", () => {
+  it("cuts resolution to a half, then tiles, never past the preset maximum", () => {
     const steps = buildLadder("balanced");
-    expect(steps.slice(0, 6).map((s) => s.label)).toEqual([
+    expect(steps.slice(0, 5).map((s) => s.label)).toEqual([
       "full",
-      "MSAA off",
       "resolution 0.8",
       "resolution 0.65",
       "resolution 0.5",
       "tiles +3 SSE",
     ]);
-    expect(steps.every((s, i) => i < 5 || s.ssePenalty === (i - 4) * 3)).toBe(true);
+    expect(steps.every((s, i) => i < 4 || s.ssePenalty === (i - 3) * 3)).toBe(true);
+    expect(steps[0]?.msaa).toBe(2);
+    expect(buildLadder("ultra")[0]?.msaa).toBe(4);
     const last = steps[steps.length - 1];
     expect(QUALITY_SSE.balanced.base + (last?.ssePenalty ?? 0)).toBeLessThanOrEqual(
       QUALITY_SSE.balanced.max,
     );
   });
 
-  it("has no anti-aliasing step for the performance preset, which starts without it", () => {
+  it("has no anti-aliasing for the performance preset", () => {
+    expect(buildLadder("performance")[0]?.msaa).toBe(1);
     expect(buildLadder("performance")[1]?.label).toBe("resolution 0.8");
+  });
+
+  it("caps balanced at 1.5 device pixels per CSS pixel; ultra keeps them all", () => {
+    expect(baseResolutionScale("balanced", 1)).toBe(1);
+    expect(baseResolutionScale("balanced", 2)).toBe(0.75);
+    expect(baseResolutionScale("balanced", 3)).toBe(0.5);
+    expect(baseResolutionScale("ultra", 2)).toBe(1);
+    expect(baseResolutionScale("performance", 2)).toBe(1);
   });
 });

@@ -7,7 +7,7 @@ Sandcastle sources. Everything below was verified against that version.
 ## Viewer setup
 
 `CesiumSceneManager` creates one `Viewer` with every stock widget disabled, `scene3DOnly`,
-`baseLayer: false` (imagery is a catalog layer), MSAA 4×, FXAA, `depthTestAgainstTerrain`
+`baseLayer: false` (imagery is a catalog layer), MSAA off until the still frame is sharpened, `depthTestAgainstTerrain`
 and a WebGL2 context. The credit display is restyled into a glass chip but never hidden;
 provider credits (including the ion evaluation-token notice) stay visible.
 
@@ -71,11 +71,19 @@ the GPU, and a Gaussian splat is not re-sorted every 16 ms while nobody is touch
 `PerformanceManager` counts rendered frames on `postRender` and every 500 ms runs
 `decideScreenSpaceError` (pure, unit-tested) within the active preset's bounds:
 
-| Preset      | Base SSE | Adaptive range | Resolution                | MSAA |
-| ----------- | -------- | -------------- | ------------------------- | ---- |
-| Performance | 16       | 4–48           | browser-recommended       | off  |
-| Balanced    | 8        | 2–32           | native device pixel ratio | 4×   |
-| Ultra       | 4        | 1–16           | native device pixel ratio | 4×   |
+| Preset      | Base SSE | Adaptive range | Resolution                              | MSAA at rest |
+| ----------- | -------- | -------------- | --------------------------------------- | ------------ |
+| Performance | 16       | 4–48           | browser-recommended (CSS pixels)        | off (FXAA)   |
+| Balanced    | 8        | 2–32           | at most 1.5 device pixels per CSS pixel | 2×           |
+| Ultra       | 4        | 1–16           | native device pixel ratio               | 4×           |
+
+Motion never renders with MSAA at any preset or ladder step: a 2× display already draws
+four times the pixels of a 1× one, and multisampling on top is where an integrated GPU loses
+the frame. The still frame is sharpened (the preset's MSAA, full base resolution) 500 ms
+after the camera rests, but only once tiles have stopped arriving (or after 3 s regardless):
+every arriving tile re-renders the still frame, and rendering each of those at full quality
+made the seconds after a move feel sluggish. Balanced caps the effective pixel ratio at 1.5
+(`baseResolutionScale`, pure and tested); ultra keeps every device pixel.
 
 Smoothness comes first, the way a maps app does it: nothing about the render settings
 changes during a gesture. Tile selection is frozen while the camera moves (every change of
@@ -101,8 +109,8 @@ is judged on the next 40 motion frames against the 40 before it: a step that did
 motion at least 15 % faster (a tile cut on a fill-bound machine, a resolution cut on a
 CPU-bound one) is reverted and that level is not tried again for 90 s, so a slow machine
 never ends up permanently coarse for nothing. The ladder: a frame rate under 26 fps sustained for 1.2 s _while
-moving_ drops MSAA, then resolution scale (0.8, 0.65, 0.5), and only then tile detail (+3
-SSE per step, never past the preset maximum). A step is undone only after 8 s of motion
+moving_ drops resolution scale (0.8, 0.65, 0.5, on top of the preset's base scale), and only
+then tile detail (+3 SSE per step, never past the preset maximum). A step is undone only after 8 s of motion
 above 50 fps, applied while the camera rests (a resolution switch re-allocates the
 framebuffers, a visible hitch mid-gesture), and every recovery has to earn twice the smooth
 motion of the last, so a borderline machine settles instead of oscillating. Cesium divides
@@ -142,7 +150,10 @@ adaptation. Mesh coverage clips (the hole cut in the globe under a photogrammetr
 re-derived as tiles arrive but only swapped in at rest.
 
 While the camera moves the root element carries `data-moving`; glass panels drop their
-backdrop blur for the duration (a full-screen pass per panel otherwise) and use a flat tint.
+backdrop blur for the duration (a full-screen pass per panel otherwise) and use a flat tint,
+and the HUD's continuous animations (agent blink, marker pulse, spinners) pause. At rest the
+blur is 24 px (it was 40: a blur costs radius² per canvas repaint under the panel, and every
+arriving tile is a repaint), and the agent stream's spinner only spins while something runs.
 
 A CPU profile of a drag (software GL, so GL calls are inflated, but the shape holds) put
 Cesium's own JavaScript under 2 % and the main thread in three WebGL stalls instead:
@@ -161,6 +172,15 @@ Things that are deliberately _not_ done per frame: hover picking waits until the
 rested 120 ms and never runs while the camera moves (each `scene.pick` is a render pass);
 overlay anchors use `globe.getHeight` (a CPU lookup) while moving and call `sampleHeight`
 only at rest, once per anchor every few seconds; the camera pose is throttled to 10 Hz.
+
+## Judging performance
+
+Judge smoothness on a production build, not the dev server: `pnpm build && pnpm preview`
+serves the bundle on http://localhost:4173 with `/api` proxied to the local API. The dev
+server serves Cesium as thousands of unbundled modules and runs React in development mode
+with StrictMode's double effects; both add per-frame and per-interaction overhead that the
+built app does not have. The dev panel (key `d`) shows the ladder step, resolution scale,
+MSAA, frame CPU and the planning metrics.
 
 ## Camera
 

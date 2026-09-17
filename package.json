@@ -7,6 +7,7 @@
   },
   "scripts": {
     "dev": "pnpm --filter @twin/web dev",
+    "preview": "pnpm --filter @twin/web preview",
     "dev:api": "cd apps/api && uv run uvicorn app.main:app --reload --port 8000",
     "samples": "pnpm --filter @twin/web samples",
     "build": "pnpm -r --filter './packages/**' --filter './apps/web' build",

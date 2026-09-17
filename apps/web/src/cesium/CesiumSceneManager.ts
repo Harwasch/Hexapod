@@ -78,7 +78,8 @@ export class CesiumSceneManager {
       // stop the app dead on an engine hiccup.
       showRenderLoopErrors: false,
       maximumRenderTimeChange: Number.POSITIVE_INFINITY,
-      msaaSamples: 4,
+      // Motion never uses MSAA; the PerformanceManager raises it for the still frame.
+      msaaSamples: 1,
       contextOptions: { webgl: { powerPreference: "high-performance", antialias: true } },
     });
     this.scene = this.viewer.scene;

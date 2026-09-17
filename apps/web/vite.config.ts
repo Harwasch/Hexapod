@@ -77,9 +77,15 @@ export default defineConfig({
       "/api": { target: "http://localhost:8000", changeOrigin: true },
     },
   },
+  // `pnpm preview` serves the production build against the local API: the real way to
+  // judge performance (dev mode serves Cesium as thousands of unbundled modules and runs
+  // React in development mode).
   preview: {
     port: 4173,
     strictPort: true,
+    proxy: {
+      "/api": { target: "http://localhost:8000", changeOrigin: true },
+    },
   },
   build: {
     target: "es2022",

@@ -1647,3 +1647,17 @@
   border-top-left-radius: 0;
   border-bottom-left-radius: 0;
 }
+
+/* Continuous animations keep the compositor busy; while the camera moves every frame is
+   spoken for, so they pause, and a spinner with nothing running does not spin at all. */
+:root[data-moving] .mc-blink i,
+:root[data-moving] .mc-marker__pulse,
+:root[data-moving] .mc-spinner,
+:root[data-moving] .mc-dot--pulse {
+  animation-play-state: paused;
+}
+
+.mc-spinner.is-static {
+  animation: none;
+  border-top-color: rgba(157, 184, 240, 0.5);
+}

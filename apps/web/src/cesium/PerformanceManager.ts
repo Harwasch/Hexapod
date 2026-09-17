@@ -50,7 +50,29 @@ const STEP_MIN_GAIN = 1.15;
 const STEP_BLOCK_MS = 90_000;
 /** Per-frame main-thread budgets for texture, program and buffer uploads, moving and at rest. */
 const MOVING_UPLOAD_BUDGETS_MS: [number, number, number] = [3, 4, 6];
-const REST_UPLOAD_BUDGETS_MS: [number, number, number] = [12, 10, 30];
+// Rest frames load faster than moving ones but stay short enough that a click lands quickly.
+const REST_UPLOAD_BUDGETS_MS: [number, number, number] = [8, 8, 16];
+/** The still frame is sharpened once loading settles, or after this long regardless. */
+const REST_SHARPEN_MAX_WAIT_MS = 3000;
+/** Balanced renders at most this many device pixels per CSS pixel; ultra uses them all. */
+const BALANCED_MAX_PIXEL_RATIO = 1.5;
+
+/** Anti-aliasing for the still frame; motion always renders without MSAA. */
+export function restMsaaFor(preset: QualityPreset): number {
+  return preset === "performance" ? 1 : preset === "balanced" ? 2 : 4;
+}
+
+/**
+ * Base resolution scale for a preset on a screen with `devicePixelRatio`: a 2× display
+ * renders four times the pixels of a 1× one, which is where most of a frame goes on an
+ * integrated GPU. Balanced caps the effective ratio; ultra keeps every device pixel;
+ * performance renders at CSS pixels through `useBrowserRecommendedResolution`.
+ */
+export function baseResolutionScale(preset: QualityPreset, devicePixelRatio: number): number {
+  if (preset !== "balanced") return 1;
+  const ratio = Math.max(1, devicePixelRatio || 1);
+  return Math.min(1, BALANCED_MAX_PIXEL_RATIO / ratio);
+}
 /** Idle refinement only proceeds while tileset memory is below this share of its budget. */
 const REFINE_MEMORY_RATIO = 0.7;
 /** Extra screen-space error per ladder step once resolution cuts are exhausted. */
@@ -178,6 +200,7 @@ export class PerformanceManager {
   private ladder: LadderStep[] = [];
   private level = 0;
   private resolutionScale = 1;
+  private baseScale = 1;
   private msaa = 4;
   private slowMotionMs = 0;
   private goodMotionMs = 0;
@@ -345,6 +368,7 @@ export class PerformanceManager {
     // recommended (CSS pixel) resolution; the others use native device pixels until the
     // ladder proves the machine cannot keep up.
     this.viewer.useBrowserRecommendedResolution = inputs.preset === "performance";
+    this.baseScale = baseResolutionScale(inputs.preset, window.devicePixelRatio || 1);
     this.ladder = buildLadder(inputs.preset);
     this.level = 0;
     this.slowMotionMs = 0;
@@ -394,9 +418,15 @@ export class PerformanceManager {
   private applyLevel(): void {
     const step = this.step;
     this.sharpened = false;
-    this.setResolutionScale(step.scale);
-    this.setMsaa(step.msaa);
+    this.setResolutionScale(step.scale * this.baseScale);
+    // Motion never pays for MSAA: the still frame gets it back once it settles.
+    this.setMsaa(1);
     this.scene.requestRender();
+  }
+
+  /** Tiles still arriving: each one re-renders the still frame, so it stays at motion cost. */
+  private get loading(): boolean {
+    return GROUPS.some((g) => this.groups[g].processing > 0 || this.groups[g].pending > 0);
   }
 
   /**
@@ -404,12 +434,15 @@ export class PerformanceManager {
    * preset's full resolution and anti-aliasing whatever the ladder says; the switch back
    * happens on the first frame of the next gesture, one framebuffer re-allocation.
    */
-  private sharpenAtRest(): void {
-    if (this.sharpened || this.level === 0) return;
+  private sharpenAtRest(now: number): void {
+    if (this.sharpened) return;
+    // While tiles arrive every one of them re-renders the frame; sharpening then would
+    // make each of those renders a full-quality one and the settle feel sluggish.
+    if (this.loading && now - this.restSince < REST_SHARPEN_MAX_WAIT_MS) return;
     const full = this.ladder[0];
     if (!full) return;
     this.sharpened = true;
-    this.setResolutionScale(full.scale);
+    this.setResolutionScale(full.scale * this.baseScale);
     this.setMsaa(full.msaa);
     this.scene.requestRender();
   }
@@ -586,7 +619,7 @@ export class PerformanceManager {
       this.applyLevel();
       return `smooth motion → ${this.step.label}`;
     }
-    if (!moving && now - this.restSince >= REST_SHARPEN_MS) this.sharpenAtRest();
+    if (!moving && now - this.restSince >= REST_SHARPEN_MS) this.sharpenAtRest(now);
     return null;
   }
 
@@ -673,9 +706,10 @@ export class PerformanceManager {
  * coarser tiles (the only step that changes what is drawn). Exported for the unit tests.
  */
 export function buildLadder(preset: QualityPreset): LadderStep[] {
-  const msaa = preset === "performance" ? 1 : 4;
-  const steps: LadderStep[] = [{ msaa, scale: 1, ssePenalty: 0, label: "full" }];
-  if (msaa > 1) steps.push({ msaa: 1, scale: 1, ssePenalty: 0, label: "MSAA off" });
+  // `msaa` is the still frame's anti-aliasing; motion frames never use MSAA at any step.
+  const steps: LadderStep[] = [
+    { msaa: restMsaaFor(preset), scale: 1, ssePenalty: 0, label: "full" },
+  ];
   for (const scale of [0.8, 0.65, 0.5])
     steps.push({ msaa: 1, scale, ssePenalty: 0, label: `resolution ${scale}` });
   const { base, max } = QUALITY_SSE[preset];

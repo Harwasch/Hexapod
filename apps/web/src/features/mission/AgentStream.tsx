@@ -66,7 +66,7 @@ export function AgentStream() {
         aria-controls="agent-stream-panel"
         data-testid="agent-stream-toggle"
       >
-        <span className="mc-spinner" aria-hidden="true" />
+        <span className={`mc-spinner ${running > 0 ? "" : "is-static"}`} aria-hidden="true" />
         <span className="mc-stream__headline">{headline}</span>
         {running > 0 && <Blink />}
         {open ? (
