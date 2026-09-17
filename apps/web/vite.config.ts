@@ -1,13 +1,14 @@
-import { createReadStream, existsSync, statSync } from "node:fs";
-import { extname, join, normalize } from "node:path";
+import { cpSync, createReadStream, existsSync, statSync } from "node:fs";
+import { extname, isAbsolute, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import react from "@vitejs/plugin-react";
 import { defineConfig, type Plugin } from "vite";
-import { viteStaticCopy } from "vite-plugin-static-copy";
 
 const cesiumSource = fileURLToPath(new URL("./node_modules/cesium/Build/Cesium", import.meta.url));
 const CESIUM_BASE_URL = "/cesium/";
+/** CesiumJS's static build directories the app loads at runtime through CESIUM_BASE_URL. */
+const CESIUM_STATIC_DIRS = ["Workers", "ThirdParty", "Assets", "Widgets"];
 
 const MIME: Record<string, string> = {
   ".js": "text/javascript",
@@ -52,18 +53,34 @@ function cesiumDevAssets(): Plugin {
   };
 }
 
+/**
+ * Copies CesiumJS's static build directories into the bundle. A plain recursive copy: a
+ * glob-based copy needs forward slashes on Windows and, with this layout, lands nested
+ * files under the package path instead of `cesium/<dir>/…`.
+ */
+function cesiumBuildAssets(): Plugin {
+  let outDir = "dist";
+  return {
+    name: "cesium-build-assets",
+    apply: "build",
+    configResolved(config) {
+      outDir = isAbsolute(config.build.outDir)
+        ? config.build.outDir
+        : resolve(config.root, config.build.outDir);
+    },
+    closeBundle() {
+      for (const dir of CESIUM_STATIC_DIRS) {
+        const from = join(cesiumSource, dir);
+        if (!existsSync(from)) throw new Error(`CesiumJS build assets not found: ${from}`);
+        cpSync(from, join(outDir, "cesium", dir), { recursive: true, dereference: true });
+      }
+    },
+  };
+}
+
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [
-    react(),
-    cesiumDevAssets(),
-    viteStaticCopy({
-      targets: ["Workers", "ThirdParty", "Assets", "Widgets"].map((dir) => ({
-        src: `${cesiumSource}/${dir}/*`,
-        dest: `cesium/${dir}`,
-      })),
-    }),
-  ],
+  plugins: [react(), cesiumDevAssets(), cesiumBuildAssets()],
   define: {
     CESIUM_BASE_URL: JSON.stringify(CESIUM_BASE_URL),
   },
