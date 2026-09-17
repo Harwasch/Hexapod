@@ -23,6 +23,7 @@ import type { Emitter } from "@/lib/emitter";
 import { createLogger } from "@/lib/log";
 import type { Selection, SelectionProperty } from "@/state/selection";
 
+import { AREA_CANDIDATE_PREFIX, AREA_HANDLE_PREFIX } from "./AreaEditor";
 import type { CameraController } from "./CameraController";
 import type { LayerManager } from "./LayerManager";
 import { ZONE_ENTITY_PREFIX } from "./MissionManager";
@@ -116,6 +117,14 @@ export class SelectionManager {
 
   private select(window: Cartesian2): void {
     const picked: unknown = this.scene.pick(window);
+    // Area handles and candidate outlines belong to the area editor, not to selection.
+    if (
+      isEntityPick(picked) &&
+      typeof picked.id.id === "string" &&
+      (picked.id.id.startsWith(AREA_HANDLE_PREFIX) ||
+        picked.id.id.startsWith(AREA_CANDIDATE_PREFIX))
+    )
+      return;
     const context = this.pickPosition(window, picked);
     if (!context) {
       this.clear();

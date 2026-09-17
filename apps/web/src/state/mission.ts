@@ -239,7 +239,7 @@ export const useMission = create<MissionState>()(
           // An area shaped here (it carries its view origin) is never clobbered by the stored
           // copy that a plans refetch brings back; stored areas fill in the rest.
           const local = s.areas[projectId] ?? [];
-          const shaped = new Set(local.filter((z) => z.view).map((z) => z.id));
+          const shaped = new Set(local.filter((z) => z.view ?? z.shaped).map((z) => z.id));
           const incoming = zones.filter((z) => !shaped.has(z.id));
           if (incoming.length === 0) return {};
           const ids = new Set(incoming.map((z) => z.id));

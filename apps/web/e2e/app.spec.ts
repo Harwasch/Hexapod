@@ -3,6 +3,15 @@ import type { Page } from "@playwright/test";
 import { expect, mockApi, test } from "./fixtures";
 
 /** Ids of the plan overlay entities the map is drawing (passes, step markers, route). */
+function entityIds(app: Page): Promise<string[]> {
+  return app.evaluate(() => {
+    const twin = (
+      window as unknown as { __twin?: { viewer: { entities: { values: { id: string }[] } } } }
+    ).__twin;
+    return (twin?.viewer.entities.values ?? []).map((entity) => entity.id).sort();
+  });
+}
+
 function planEntityIds(app: Page): Promise<string[]> {
   return app.evaluate(() => {
     const twin = (
@@ -362,18 +371,52 @@ test.describe("mission control", () => {
     await expect(app.getByTestId("plan-review")).toBeVisible({ timeout: 30_000 });
     await expect(app.getByTestId("plan-review")).toContainText("A-01");
     await expect.poll(() => planEntityIds(app)).toContain("mission:plan:passes:A-01");
-    // The agent asks with a slider and chips; applying the answers redrafts without them.
+    // The agent asks one question at a time: a slider, then chips; the last answer redrafts.
+    await expect(app.getByTestId("clarify-progress")).toHaveText("1 of 2");
     await expect(app.getByTestId("clarify-deadline-range")).toBeVisible();
     await app.getByTestId("clarify-deadline-range").fill("21");
+    await app.getByTestId("clarify-next").dispatchEvent("click");
+    await expect(app.getByTestId("clarify-progress")).toHaveText("2 of 2");
     await app.getByTestId("clarify-passes-two").dispatchEvent("click");
-    await app.getByTestId("clarify-apply").dispatchEvent("click");
     await expect(app.getByTestId("answered-deadline")).toContainText("21", { timeout: 15_000 });
+    await expect(app.getByTestId("answered-passes")).toContainText("two");
     await expect(app.getByTestId("clarify-deadline")).toHaveCount(0);
     await expect(app.getByTestId("plan-changes")).toContainText("Machine-hours 147 → 294");
-    // The agent can find the ground on the map: a mapped lake becomes an area.
+    // The agent can find the ground on the map: a mapped lake is drawn as a candidate first,
+    // then becomes an area with its corners on the map once adopted.
     await app.getByTestId("find-water").dispatchEvent("click");
+    await expect.poll(() => entityIds(app)).toContain("area-candidate:osm-w4242");
     await app.getByTestId("osm-osm-w4242").dispatchEvent("click");
     await expect(app.getByTestId("compose-zone-A-02")).toContainText("Test Lake");
+    await expect(app.getByTestId("area-editing")).toContainText("A-02 on the map");
+    await expect.poll(() => entityIds(app)).toContain("area-edit:vertex:0");
+    await expect.poll(() => entityIds(app)).not.toContain("area-candidate:osm-w4242");
+    // A reshaped area marks the draft stale.
+    await app.evaluate(() => {
+      const twin = (
+        window as unknown as {
+          __twin?: { events: { emit: (name: string, payload: unknown) => void } };
+        }
+      ).__twin;
+      twin?.events.emit("area-edit", {
+        zoneId: "A-02",
+        footprint: {
+          type: "Polygon",
+          coordinates: [
+            [
+              [-119.91, 36.59],
+              [-119.89, 36.59],
+              [-119.89, 36.61],
+              [-119.91, 36.61],
+              [-119.91, 36.59],
+            ],
+          ],
+        },
+      });
+    });
+    await expect(app.getByTestId("plan-stale-area")).toBeVisible();
+    await app.getByTestId("area-edit-done").dispatchEvent("click");
+    await expect.poll(() => entityIds(app)).not.toContain("area-edit:vertex:0");
     await app.getByTestId("plan-approve").dispatchEvent("click");
     await expect(app.getByTestId("plan-detail")).toContainText("Mow this area this week");
     await expect(app.getByTestId("plan-detail")).toContainText("A-01 View area 01");

@@ -1745,3 +1745,157 @@
   gap: 0.3rem;
   margin-top: 0.6rem;
 }
+
+/* One question at a time from the agent. */
+.mc-stepper {
+  display: grid;
+  gap: 0.55rem;
+  padding: 0.75rem 0.85rem 0.7rem;
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(127, 216, 192, 0.1), rgba(127, 216, 192, 0.03));
+  border: 1px solid rgba(127, 216, 192, 0.28);
+  overflow: hidden;
+}
+
+.mc-stepper__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+}
+
+.mc-stepper__dots {
+  display: inline-flex;
+  gap: 5px;
+}
+
+.mc-stepper__dots i {
+  width: 18px;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.16);
+  transition: background var(--motion-fast) var(--ease-out);
+}
+
+.mc-stepper__dots i.is-done {
+  background: var(--accent);
+  opacity: 0.6;
+}
+
+.mc-stepper__dots i.is-on {
+  background: var(--accent);
+}
+
+/* Each question slides in; a CSS animation so it never waits on the render loop. */
+.mc-stepper__card {
+  animation: mc-slide-in 0.2s var(--ease-out) both;
+}
+
+@keyframes mc-slide-in {
+  from {
+    opacity: 0;
+    transform: translateX(14px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mc-stepper__card {
+    animation: none;
+  }
+}
+
+.mc-stepper__question {
+  font: 600 14px/1.35 var(--font-sans);
+  color: var(--text-primary);
+}
+
+.mc-stepper__choices {
+  margin-top: 0.55rem;
+}
+
+.mc-stepper__choices .mc-tag {
+  padding: 0.5rem 0.8rem;
+  font-size: 12px;
+}
+
+.mc-stepper__range {
+  display: grid;
+  gap: 0.5rem;
+  margin-top: 0.4rem;
+}
+
+.mc-stepper__range .mc-btn {
+  justify-self: start;
+}
+
+.mc-stepper__nav {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.mc-stepper__nav .mc-link:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* Editing an area on the map. */
+.mc-edit-hint {
+  display: grid;
+  gap: 0.35rem;
+  margin-top: 0.5rem;
+  padding: 0.55rem 0.7rem;
+  border-radius: 12px;
+  background: rgba(127, 216, 192, 0.08);
+  border: 1px solid rgba(127, 216, 192, 0.3);
+  font: 400 11.5px/1.45 var(--font-sans);
+  color: var(--text-secondary);
+}
+
+.mc-edit-hint__row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.mc-edit-hint__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.9rem;
+}
+
+.mc-edit-hint__legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.mc-edit-hint__legend i {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  border: 2px solid #7fd8c0;
+  background: #fff;
+}
+
+.mc-edit-hint__legend i.is-mid {
+  background: rgba(127, 216, 192, 0.55);
+  border-color: rgba(127, 216, 192, 0.8);
+}
+
+.mc-edit-hint__legend i.is-move {
+  background: #f0b254;
+  border-color: rgba(10, 14, 9, 0.7);
+}
+
+.mc-tag.is-hover {
+  background: rgba(157, 184, 240, 0.22);
+  border-color: rgba(157, 184, 240, 0.6);
+}

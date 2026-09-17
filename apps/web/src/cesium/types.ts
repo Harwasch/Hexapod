@@ -1,4 +1,4 @@
-import type { Attribution, Representation } from "@twin/contracts";
+import type { Attribution, Footprint, Representation } from "@twin/contracts";
 
 import type { AssetRuntime } from "@/state/sites";
 import type { LayerRuntime, LoadState } from "@/state/layers";
@@ -31,6 +31,14 @@ export interface SceneEvents extends Record<string, unknown> {
   tilesets: string[];
   explore: boolean;
   "mission-select": { kind: "zone" | "machine"; id: string };
+  /** The operator reshaped an area on the map; the store takes the new outline. */
+  "area-edit": { zoneId: string; footprint: Footprint };
+  /** True while a handle is held (the camera is paused for the duration). */
+  "area-edit-drag": boolean;
+  /** Esc while editing an area. */
+  "area-edit-end": string;
+  "area-candidate-hover": string | null;
+  "area-candidate-pick": string;
 }
 
 export interface GeocodeResult {

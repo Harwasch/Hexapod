@@ -51,6 +51,8 @@ export interface Zone {
   view?: ViewAreaOrigin;
   /** Where a drawn area's outline came from, shown as attribution. */
   attribution?: string;
+  /** Reshaped in this browser (dragged on the map); a stored copy never replaces it. */
+  shaped?: boolean;
 }
 
 export interface ViewAreaOrigin {

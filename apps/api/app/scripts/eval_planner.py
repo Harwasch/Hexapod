@@ -95,6 +95,15 @@ def check(draft: PlanDraft, expect: dict[str, Any]) -> list[str]:
         and draft.estimates.machine_hours > expect["max_machine_hours"]
     ):
         failed.append(f"machine_hours={draft.estimates.machine_hours}")
+    titles = [s.title for s in draft.steps]
+    if "step_titles_contain" in expect and not all(
+        any(want in t for t in titles) for want in expect["step_titles_contain"]
+    ):
+        failed.append(f"step_titles_contain={titles}")
+    if "step_titles_absent" in expect and any(
+        bad in t for t in titles for bad in expect["step_titles_absent"]
+    ):
+        failed.append(f"step_titles_absent={titles}")
     if draft.zone_ids and not draft.steps:
         failed.append("no_steps")
     if bad := overlaps(draft):

@@ -1,4 +1,4 @@
-import { ArrowLeft, PenLine, Scan, Sparkles, X } from "lucide-react";
+import { ArrowLeft, Move, PenLine, Scan, Sparkles, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import type { PlanAnswerValue, PlanDraft } from "@twin/contracts";
@@ -23,7 +23,7 @@ import { useMission } from "@/state/mission";
 import { useUi } from "@/state/ui";
 import { useViewer } from "@/state/viewer";
 
-import { AnsweredChips, Clarifications } from "./Clarifications";
+import { AnsweredChips, ClarificationStepper } from "./Clarifications";
 import { PlanSchedule } from "./PlanSchedule";
 import { approveDraft, startPlanDraft } from "./planDrafting";
 import { useMissionActions } from "./useMissionActions";
@@ -61,11 +61,18 @@ export function PlanComposer({ project }: { project: Project }) {
   const [armed, setArmed] = useState(false);
   const areaCount = project.zones.filter(isAreaZone).length;
   const isDrawing = measureMode === "area" && armed;
+  // The area whose corners are on the map right now; a new area starts out editable.
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [hoverCandidate, setHoverCandidate] = useState<string | null>(null);
+  // Set when an area changes after a draft exists, so the review says the draft is stale.
+  const [areaChanged, setAreaChanged] = useState(false);
   const adoptArea = (zone: (typeof project.zones)[number]) => {
     addArea(project.id, zone);
     const current = useMission.getState().composer;
     if (current && !current.zoneIds.includes(zone.id))
       update({ zoneIds: [...current.zoneIds, zone.id] });
+    setEditingId(zone.id);
+    if (current?.draft) setAreaChanged(true);
   };
   const stopDrawing = () => {
     drawing.current?.stop();
@@ -179,7 +186,51 @@ export function PlanComposer({ project }: { project: Project }) {
   const adoptCandidate = (candidate: OsmCandidate) => {
     const id = freshAreaId();
     adoptArea(zoneFromCandidate(id, candidate));
+    setOsm((prev) => ({
+      ...prev,
+      candidates: prev.candidates.filter((c) => c.id !== candidate.id),
+    }));
   };
+  // The map shows the handles of the area being edited and follows the store's outline.
+  const editingZone = project.zones.find((z) => z.id === editingId) ?? null;
+  const editingFootprint = editingZone?.footprint;
+  useEffect(() => {
+    if (!scene) return;
+    if (!editingId || !editingFootprint) {
+      scene.areas.edit(null);
+      return;
+    }
+    if (scene.areas.editing === editingId) scene.areas.update(editingFootprint);
+    else scene.areas.edit(editingId, editingFootprint);
+  }, [scene, editingId, editingFootprint]);
+  // Candidate outlines the finder proposed are on the map too, clickable.
+  const candidates = osm.candidates;
+  useEffect(() => {
+    scene?.areas.showCandidates(candidates);
+  }, [scene, candidates]);
+  useEffect(() => {
+    if (!scene) return;
+    const offs = [
+      scene.events.on("area-edit-end", () => setEditingId(null)),
+      scene.events.on("area-candidate-hover", (id) => setHoverCandidate(id)),
+      scene.events.on("area-candidate-pick", (id) => {
+        const candidate = candidates.find((c) => c.id === id);
+        if (candidate) adoptCandidate(candidate);
+      }),
+      scene.events.on("area-edit", () => {
+        if (useMission.getState().composer?.draft) setAreaChanged(true);
+      }),
+    ];
+    return () => offs.forEach((off) => off());
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- adoptCandidate closes over fresh state each render
+  }, [scene, candidates]);
+  useEffect(
+    () => () => {
+      scene?.areas.edit(null);
+      scene?.areas.showCandidates([]);
+    },
+    [scene],
+  );
 
   // The goal field takes focus when the composer opens (the operator came here to type).
   const goalRef = useRef<HTMLTextAreaElement>(null);
@@ -194,6 +245,7 @@ export function PlanComposer({ project }: { project: Project }) {
   };
   const submit = () => {
     if (drafting) return;
+    setAreaChanged(false);
     void startPlanDraft(composer.goal, {
       zoneIds: composer.zoneIds,
       machineIds: composer.machineIds,
@@ -321,11 +373,26 @@ export function PlanComposer({ project }: { project: Project }) {
                     {isAreaZone(zone) && (
                       <button
                         type="button"
+                        className={`mc-tag mc-tag--icon ${editingId === zone.id ? "is-on" : ""}`}
+                        aria-label={`Adjust ${zone.id} on the map`}
+                        aria-pressed={editingId === zone.id}
+                        title="Drag its corners on the map"
+                        onClick={() => setEditingId(editingId === zone.id ? null : zone.id)}
+                        disabled={drafting}
+                        data-testid={`area-edit-${zone.id}`}
+                      >
+                        <Move size={11} aria-hidden="true" />
+                      </button>
+                    )}
+                    {isAreaZone(zone) && (
+                      <button
+                        type="button"
                         className="mc-tag mc-tag--icon"
                         aria-label={`Remove ${zone.id}`}
                         onClick={() => {
                           removeArea(project.id, zone.id);
                           update({ zoneIds: composer.zoneIds.filter((z) => z !== zone.id) });
+                          if (editingId === zone.id) setEditingId(null);
                         }}
                         disabled={drafting}
                       >
@@ -335,7 +402,36 @@ export function PlanComposer({ project }: { project: Project }) {
                   </span>
                 ))}
               </div>
-              {areaCount > 0 && (
+              {editingZone && (
+                <div className="mc-edit-hint" data-testid="area-editing">
+                  <div className="mc-edit-hint__row">
+                    <span>
+                      {editingZone.id} on the map · {editingZone.acres.toLocaleString()} ac
+                    </span>
+                    <button
+                      type="button"
+                      className="mc-btn mc-btn--sm"
+                      onClick={() => setEditingId(null)}
+                      data-testid="area-edit-done"
+                    >
+                      Done
+                    </button>
+                  </div>
+                  <div className="mc-edit-hint__legend">
+                    <span>
+                      <i /> drag a corner
+                    </span>
+                    <span>
+                      <i className="is-mid" /> pull an edge to add one
+                    </span>
+                    <span>
+                      <i className="is-move" /> move it
+                    </span>
+                    <span>right-click a corner to remove it · Esc when done</span>
+                  </div>
+                </div>
+              )}
+              {areaCount > 0 && !editingZone && (
                 <p className="mc-muted" style={{ fontSize: "11.5px", marginTop: "0.3rem" }}>
                   Drawn areas are saved with the plans that cover them.
                 </p>
@@ -417,13 +513,21 @@ export function PlanComposer({ project }: { project: Project }) {
                   </p>
                 )}
                 {osm.candidates.length > 0 && (
+                  <p className="mc-muted" style={{ fontSize: "11.5px" }}>
+                    {osm.candidates.length} outline{osm.candidates.length === 1 ? "" : "s"} on the
+                    map in blue. Click one there, or pick it here, then drag its corners.
+                  </p>
+                )}
+                {osm.candidates.length > 0 && (
                   <div className="mc-tags" data-testid="osm-candidates">
                     {osm.candidates.map((c) => (
                       <button
                         key={c.id}
                         type="button"
-                        className="mc-tag mc-tag--ghost"
+                        className={`mc-tag mc-tag--ghost ${hoverCandidate === c.id ? "is-hover" : ""}`}
                         onClick={() => adoptCandidate(c)}
+                        onMouseEnter={() => scene?.areas.highlightCandidate(c.id)}
+                        onMouseLeave={() => scene?.areas.highlightCandidate(null)}
                         disabled={drafting}
                         data-testid={`osm-${c.id}`}
                       >
@@ -487,8 +591,11 @@ export function PlanComposer({ project }: { project: Project }) {
             draft={composer.draft}
             project={project}
             goal={composer.goal}
+            areaChanged={areaChanged}
+            onRedraft={submit}
             onArea={(value) => {
               if (value === "draw") startDrawing();
+              else if (value === "edit") setEditingId(composer.draft?.zoneIds[0] ?? null);
               else if (value === "water" || value === "farmland" || value === "wood")
                 findAreas(value);
             }}
@@ -503,11 +610,15 @@ function DraftReview({
   draft,
   project,
   goal,
+  areaChanged,
+  onRedraft,
   onArea,
 }: {
   draft: PlanDraft;
   project: Project;
   goal: string;
+  areaChanged: boolean;
+  onRedraft: () => void;
   onArea: (value: string) => void;
 }) {
   const composer = useMission((s) => s.composer);
@@ -519,10 +630,16 @@ function DraftReview({
   const [pending, setPending] = useState<Record<string, PlanAnswerValue>>({});
   const clarifications = draft.clarifications ?? [];
   const labels = Object.fromEntries(clarifications.map((c) => [c.id, c.question]));
-  const applyAnswers = () => {
-    if (Object.keys(pending).length === 0) return;
-    const answers = pending;
+  // Questions skipped past the end stay hidden until asked for again.
+  const [dismissed, setDismissed] = useState(false);
+  const stepperKey = clarifications.map((c) => c.id).join("|");
+  const completeRound = (extra: Record<string, PlanAnswerValue>) => {
+    const answers = { ...pending, ...extra };
     setPending({});
+    if (Object.keys(answers).length === 0) {
+      setDismissed(true);
+      return;
+    }
     void startPlanDraft(goal, {
       zoneIds: composer?.zoneIds ?? draft.zoneIds,
       machineIds: composer?.machineIds ?? draft.machineIds,
@@ -571,6 +688,11 @@ function DraftReview({
       refinement: text,
     });
   };
+  // A fresh draft scrolls into view: its numbers and the agent's first question lead.
+  const reviewRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    reviewRef.current?.scrollIntoView({ block: "start", behavior: "smooth" });
+  }, [draft]);
   const [approving, setApproving] = useState(false);
   const onApprove = () => {
     if (approving) return;
@@ -580,7 +702,12 @@ function DraftReview({
     );
   };
   return (
-    <section className="mc-review" data-testid="plan-review" aria-label="Plan draft">
+    <section
+      className="mc-review"
+      data-testid="plan-review"
+      aria-label="Plan draft"
+      ref={reviewRef}
+    >
       <div className="mc-source">
         <span
           className={`mc-dot mc-dot--glow ${draft.source === "claude" ? "mc-dot--run" : "mc-dot--neutral"}`}
@@ -631,6 +758,56 @@ function DraftReview({
           {draft.endDate ? ` → ${draft.endDate}` : " → ongoing"}
         </span>
       </div>
+      {areaChanged && (
+        <div
+          className="mc-note mc-note--agent mc-row mc-row--between"
+          data-testid="plan-stale-area"
+        >
+          <span>An area changed after this draft.</span>
+          <button type="button" className="mc-btn mc-btn--sm mc-btn--accent" onClick={onRedraft}>
+            Redraft with the new outline
+          </button>
+        </div>
+      )}
+      {(clarifications.length > 0 || Object.keys(composer?.answers ?? {}).length > 0) && (
+        <section>
+          <div className="mc-row mc-row--between">
+            <span className="mc-eyebrow">THE AGENT ASKS</span>
+            {dismissed && clarifications.length > 0 && (
+              <button
+                type="button"
+                className="mc-link"
+                onClick={() => setDismissed(false)}
+                data-testid="clarify-reopen"
+              >
+                Show {clarifications.length} question{clarifications.length === 1 ? "" : "s"}
+              </button>
+            )}
+          </div>
+          {!dismissed && (
+            <ClarificationStepper
+              key={stepperKey}
+              items={clarifications}
+              answers={pending}
+              onAnswer={(id, value) => setPending((prev) => ({ ...prev, [id]: value }))}
+              onArea={onArea}
+              onComplete={completeRound}
+              disabled={composer?.status === "drafting"}
+            />
+          )}
+          <AnsweredChips
+            answers={composer?.answers ?? {}}
+            labels={labels}
+            onClear={(id) =>
+              update({
+                answers: Object.fromEntries(
+                  Object.entries(composer?.answers ?? {}).filter(([key]) => key !== id),
+                ),
+              })
+            }
+          />
+        </section>
+      )}
       {changes.length > 0 && (
         <section data-testid="plan-changes">
           <span className="mc-eyebrow">WHAT CHANGED</span>
@@ -697,41 +874,6 @@ function DraftReview({
               </li>
             ))}
           </ul>
-        </section>
-      )}
-      {(clarifications.length > 0 || Object.keys(composer?.answers ?? {}).length > 0) && (
-        <section>
-          <div className="mc-row mc-row--between">
-            <span className="mc-eyebrow">THE AGENT ASKS</span>
-            {Object.keys(pending).length > 0 && (
-              <button
-                type="button"
-                className="mc-btn mc-btn--sm mc-btn--accent"
-                onClick={applyAnswers}
-                data-testid="clarify-apply"
-              >
-                Apply {Object.keys(pending).length} answer
-                {Object.keys(pending).length === 1 ? "" : "s"}
-              </button>
-            )}
-          </div>
-          <Clarifications
-            items={clarifications}
-            answers={pending}
-            onAnswer={(id, value) => setPending((prev) => ({ ...prev, [id]: value }))}
-            onArea={onArea}
-          />
-          <AnsweredChips
-            answers={composer?.answers ?? {}}
-            labels={labels}
-            onClear={(id) =>
-              update({
-                answers: Object.fromEntries(
-                  Object.entries(composer?.answers ?? {}).filter(([key]) => key !== id),
-                ),
-              })
-            }
-          />
         </section>
       )}
       {draft.questions.length > 0 && (

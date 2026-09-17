@@ -301,4 +301,45 @@ def test_rules_planner_asks_structured_questions_and_applies_answers() -> None:
         )
     )
     area = next(c for c in drawn.clarifications if c.id == "area")
-    assert area.kind == "area" and [o.value for o in area.options][:2] == ["keep", "water"]
+    assert area.kind == "area" and [o.value for o in area.options][:2] == ["keep", "edit"]
+
+
+def test_rules_planner_plans_a_3d_scan_with_capture_and_reconstruction() -> None:
+    field = PlannerZone(id="A-01", name="View area 01", acres=120, task="Treatment")
+    scan = RulesPlanner().draft(
+        request("3D scan this field for a splat", zones=[field], preferred_zone_ids=["A-01"])
+    )
+    titles = [s.title for s in scan.steps]
+    assert titles == [
+        "Capture plan",
+        "Capture A-01 View area 01",
+        "Reconstruction",
+        "Register and QA",
+    ]
+    assert not any("Treat" in t for t in titles)
+    assert scan.steps[2].machine_ids == [], "reconstruction is compute, not machine time"
+    assert any("capture" in a.lower() for a in scan.assumptions)
+    ids = [c.id for c in scan.clarifications]
+    assert ids[:4] == ["area", "output", "resolution", "views"] and "gcp" in ids
+    # 120 acres at 20 ac/h with obliques (x2) = 12 machine-hours.
+    assert scan.estimates.machine_hours == pytest.approx(12, abs=0.2)
+
+    fine = RulesPlanner().draft(
+        request(
+            "3D scan this field for a splat",
+            zones=[field],
+            preferred_zone_ids=["A-01"],
+            answers={"resolution": "1", "views": "nadir", "gcp": "yes", "output": "splat"},
+        )
+    )
+    assert [s.title for s in fine.steps][:2] == ["Capture plan", "Ground control"]
+    assert "gaussian splat" in fine.steps[-2].detail
+    assert "markers" in fine.steps[-1].detail
+    # 120 acres at 6 ac/h nadir only = 20 machine-hours.
+    assert fine.estimates.machine_hours == pytest.approx(20, abs=0.2)
+    assert not any(c.id in {"resolution", "views", "gcp", "output"} for c in fine.clarifications)
+
+    survey = RulesPlanner().draft(request("Inspect the north fence for erosion"))
+    assert survey.steps[0].title == "Survey plan"
+    assert not any("Treat" in s.title for s in survey.steps)
+    assert survey.steps[-1].title == "Review and report"

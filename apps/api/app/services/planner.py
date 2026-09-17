@@ -186,13 +186,53 @@ def _answer_text(answers: dict[str, AnswerValue], key: str) -> str | None:
 
 
 SURVEY_WORDS = ("survey", "inspect", "map", "scan", "photograph", "image")
+SCAN_WORDS = (
+    "3d scan",
+    "3-d scan",
+    "scan",
+    "photogrammetry",
+    "splat",
+    "gaussian",
+    "lidar",
+    "point cloud",
+    "mesh",
+    "3d model",
+    "reconstruct",
+    "digital twin",
+)
 TREATMENT_WORDS = ("mow", "cut", "clear", "spray", "treat", "drill", "seed", "till", "remove")
 DEADLINE_WORDS = r"\b(by|before|until|within|deadline|this week|this month|today|tomorrow)\b"
 
+TaskKind = Literal["scan", "survey", "treat"]
+
+# Capture rate for a 3D scan, acres per machine-hour, by ground sample distance (cm per
+# pixel): finer detail flies lower with more overlap, so it covers less ground per hour.
+SCAN_ACRES_PER_HOUR = {"1": 6.0, "2": 20.0, "5": 50.0}
+# Rough flight height for that detail with a 24 MP mapping camera, metres above ground.
+SCAN_HEIGHT_M = {"1": 35, "2": 70, "5": 175}
+SCAN_OUTPUTS = {
+    "mesh": "textured mesh",
+    "splat": "gaussian splat",
+    "pointcloud": "point cloud",
+    "ortho": "orthomosaic and elevation model",
+}
+
+
+def _task_kind(text: str) -> TaskKind:
+    """What the goal is: a 3D scan (capture and reconstruct), a survey (look and report) or a
+    treatment (do something to the ground)."""
+    lower = text.lower()
+    if any(w in lower for w in TREATMENT_WORDS):
+        return "treat"
+    if any(w in lower for w in SCAN_WORDS):
+        return "scan"
+    if any(w in lower for w in SURVEY_WORDS):
+        return "survey"
+    return "treat"
+
 
 def _is_survey(text: str) -> bool:
-    lower = text.lower()
-    return any(w in lower for w in SURVEY_WORDS) and not any(w in lower for w in TREATMENT_WORDS)
+    return _task_kind(text) != "treat"
 
 
 def _choice(value: str, label: str) -> ClarificationOption:
@@ -226,18 +266,31 @@ class RulesPlanner:
         cadence_answer = _answer_text(answers, "cadence")
         if cadence_answer in {"once", "daily", "weekly", "monthly", "seasonal"}:
             cadence = cadence_answer  # type: ignore[assignment]
-        survey = _is_survey(text)
-        # Answers that scale the work: survey detail and treatment passes.
+        kind = _task_kind(text)
+        # Answers that scale the work: survey detail, scan detail and views, treatment passes.
         effort = 1.0
         resolution = _answer_text(answers, "resolution")
-        if survey and resolution in {"2", "5", "10"}:
+        if kind == "survey" and resolution in {"2", "5", "10"}:
             effort *= {"2": 2.0, "5": 1.0, "10": 0.5}[resolution]
         passes = _answer_text(answers, "passes")
-        if not survey and passes == "two":
+        if kind == "treat" and passes == "two":
+            effort *= 2.0
+        gsd = resolution if kind == "scan" and resolution in SCAN_ACRES_PER_HOUR else "2"
+        views = _answer_text(answers, "views") or "oblique"
+        if kind == "scan" and views == "oblique":
             effort *= 2.0
         today = _today(request)
         zone_by_id = {z.id: z for z in request.zones}
-        rate_by_zone = {z: _rate_for(zone_by_id[z].task, request) for z in zone_ids}
+        if kind == "scan":
+            scan_rate = Rate(
+                SCAN_ACRES_PER_HOUR[gsd],
+                f"Capture: {SCAN_ACRES_PER_HOUR[gsd]:g} acres per machine-hour at {gsd} cm per "
+                f"pixel from about {SCAN_HEIGHT_M[gsd]} m, 80/70 % overlap"
+                + ("; oblique passes double the flying." if views == "oblique" else "."),
+            )
+            rate_by_zone = dict.fromkeys(zone_ids, scan_rate)
+        else:
+            rate_by_zone = {z: _rate_for(zone_by_id[z].task, request) for z in zone_ids}
         acres = sum(z.acres for z in request.zones if z.id in zone_ids)
         machine_count = max(1, len(machine_ids))
         hours = (
@@ -249,11 +302,40 @@ class RulesPlanner:
             * effort
         )
         days = max(1, math.ceil(hours / (machine_count * RULES_HOURS_PER_DAY))) if hours else 1
+        output = _answer_text(answers, "output") or "mesh"
+        output_name = SCAN_OUTPUTS.get(output, SCAN_OUTPUTS["mesh"])
+        gcp = _answer_text(answers, "gcp") == "yes"
+        zone_names = ", ".join(_label(zone_by_id[z].id, zone_by_id[z].name) for z in zone_ids)
+        if kind == "scan":
+            first_detail = (
+                f"Lay out flight lines over {zone_names or 'the area'} at about "
+                f"{SCAN_HEIGHT_M[gsd]} m above ground for {gsd} cm per pixel with 80 % forward "
+                "and 70 % side overlap"
+                + (
+                    ", plus oblique passes at 45° from four headings so walls and canopy "
+                    "reconstruct."
+                    if views == "oblique"
+                    else "."
+                )
+                + " Check airspace, light and wind for the capture days."
+            )
+            first_title = "Capture plan"
+        elif kind == "survey":
+            first_title = "Survey plan"
+            first_detail = (
+                f"Lay out the survey lines over {zone_names or 'the area'} and confirm access, "
+                "airspace and the detail level before flying."
+            )
+        else:
+            first_title = "Survey pass"
+            first_detail = (
+                "Fly or drive the boundary of every zone in scope and confirm access, "
+                "obstacles and current cover before treatment starts."
+            )
         steps = [
             PlanStep(
-                title="Survey pass",
-                detail="Fly or drive the boundary of every zone in scope and confirm access, "
-                "obstacles and current cover before treatment starts.",
+                title=first_title,
+                detail=first_detail,
                 machine_ids=machine_ids[:1],
                 zone_id=zone_ids[0] if zone_ids else None,
                 when=f"Day 1 · {today.isoformat()}",
@@ -261,6 +343,20 @@ class RulesPlanner:
                 days=1,
             )
         ]
+        if kind == "scan" and gcp:
+            steps.append(
+                PlanStep(
+                    title="Ground control",
+                    detail="Place at least five ground control markers around each area and log "
+                    "their positions, so the model registers to the map to within a few "
+                    "centimetres.",
+                    machine_ids=[],
+                    zone_id=zone_ids[0] if zone_ids else None,
+                    when="Day 1",
+                    start_day=0,
+                    days=1,
+                )
+            )
         # Zones run in parallel, one crew each, from day 2; a crew's zone takes as many days
         # as its acreage needs at the assumed rate, and a crew with two zones does them in turn.
         last_day = 1
@@ -286,12 +382,24 @@ class RulesPlanner:
                 crew_free_day[m] = start_day + zone_days
             last_day = max(last_day, start_day + zone_days)
             span = f"Day {start_day + 1}" + (f"-{start_day + zone_days}" if zone_days > 1 else "")
+            hours_note = f" ({zone_hours:.0f} machine-hours)." if zone_hours else "."
+            if kind == "scan":
+                title = f"Capture {_label(zone.id, zone.name)}"
+                detail = (
+                    f"Fly the lines over {zone.acres:g} acres at {gsd} cm per pixel"
+                    + (" with obliques" if views == "oblique" else "")
+                    + hours_note
+                )
+            elif kind == "survey":
+                title = f"Survey {_label(zone.id, zone.name)}"
+                detail = f"Survey across {zone.acres:g} acres" + hours_note
+            else:
+                title = f"Treat {_label(zone.id, zone.name)}"
+                detail = (zone.task or "Treatment") + f" across {zone.acres:g} acres" + hours_note
             steps.append(
                 PlanStep(
-                    title=f"Treat {_label(zone.id, zone.name)}",
-                    detail=(zone.task or "Treatment")
-                    + f" across {zone.acres:g} acres"
-                    + (f" ({zone_hours:.0f} machine-hours)." if zone_hours else "."),
+                    title=title,
+                    detail=detail,
                     machine_ids=crew,
                     zone_id=zone.id,
                     when=span,
@@ -299,18 +407,62 @@ class RulesPlanner:
                     days=zone_days,
                 )
             )
-        steps.append(
-            PlanStep(
-                title="Verification pass",
-                detail="Capture imagery over the treated zones and log residual cover against "
-                "the target.",
-                machine_ids=machine_ids[:1],
-                zone_id=None,
-                when=f"Day {last_day + 1}",
-                start_day=last_day,
-                days=1,
+        if kind == "scan":
+            processing_days = max(1, math.ceil(hours / RULES_HOURS_PER_DAY)) if hours else 1
+            steps.append(
+                PlanStep(
+                    title="Reconstruction",
+                    detail=f"Process the imagery into a {output_name}: about "
+                    f"{max(1, round(hours * 3)):g} h of compute on a workstation or in the cloud, "
+                    "not machine time.",
+                    machine_ids=[],
+                    zone_id=None,
+                    when=f"Day {last_day + 1}"
+                    + (f"-{last_day + processing_days}" if processing_days > 1 else ""),
+                    start_day=last_day,
+                    days=processing_days,
+                )
             )
-        )
+            steps.append(
+                PlanStep(
+                    title="Register and QA",
+                    detail="Align the model to the map"
+                    + (" on the ground control markers" if gcp else " on the GPS tags")
+                    + ", check for holes and drift against the previous scan, and publish it "
+                    "as a site representation.",
+                    machine_ids=[],
+                    zone_id=None,
+                    when=f"Day {last_day + processing_days + 1}",
+                    start_day=last_day + processing_days,
+                    days=1,
+                )
+            )
+            last_day += processing_days
+        elif kind == "survey":
+            steps.append(
+                PlanStep(
+                    title="Review and report",
+                    detail="Review the imagery, flag findings and log them against each zone.",
+                    machine_ids=[],
+                    zone_id=None,
+                    when=f"Day {last_day + 1}",
+                    start_day=last_day,
+                    days=1,
+                )
+            )
+        else:
+            steps.append(
+                PlanStep(
+                    title="Verification pass",
+                    detail="Capture imagery over the treated zones and log residual cover "
+                    "against the target.",
+                    machine_ids=machine_ids[:1],
+                    zone_id=None,
+                    when=f"Day {last_day + 1}",
+                    start_day=last_day,
+                    days=1,
+                )
+            )
         days = max(days, last_day + 1)
         risks: list[str] = []
         end = today + timedelta(days=days)
@@ -348,8 +500,22 @@ class RulesPlanner:
                 f"about {needed} machines, or a later date."
             )
         clarifications = self._clarifications(
-            request, text, zone_ids, machine_ids, cadence, survey, answers
+            request, text, zone_ids, machine_ids, cadence, kind, answers
         )
+        assumptions = [
+            *dict.fromkeys(rate.note for rate in rate_by_zone.values()),
+            f"{RULES_HOURS_PER_DAY} working hours per machine per day, no weather days.",
+        ]
+        if kind == "scan":
+            assumptions.append(
+                "Only capture counts as machine time; reconstruction runs on a workstation or "
+                "in the cloud."
+            )
+            assumptions.append("Clear, even light and wind under 10 m/s on capture days.")
+        else:
+            assumptions.append(
+                "Zones run in parallel, one crew each; a crew with two zones does them in turn."
+            )
         return PlanDraft(
             title=_title(request.goal),
             objective=request.goal.strip(),
@@ -362,11 +528,7 @@ class RulesPlanner:
                 acres=round(acres, 1), machine_hours=round(hours, 1), calendar_days=days
             ),
             steps=steps,
-            assumptions=[
-                *dict.fromkeys(rate.note for rate in rate_by_zone.values()),
-                f"{RULES_HOURS_PER_DAY} working hours per machine per day, no weather days.",
-                "Zones run in parallel, one crew each; a crew with two zones does them in turn.",
-            ],
+            assumptions=assumptions,
             risks=risks,
             questions=questions,
             clarifications=clarifications,
@@ -382,13 +544,15 @@ class RulesPlanner:
         zone_ids: list[str],
         machine_ids: list[str],
         cadence: str,
-        survey: bool,
+        kind: TaskKind,
         answers: dict[str, AnswerValue],
     ) -> list[Clarification]:
         """What the agent asks before approval, each answered with a chip or a slider; a
-        question is dropped once its answer arrives or the goal already settles it."""
+        question is dropped once its answer arrives or the goal already settles it. The
+        console asks them one at a time, in this order."""
         out: list[Clarification] = []
         lower = text.lower()
+        survey = kind != "treat"
         drawn = [z for z in zone_ids if z.startswith("A-")]
         if drawn and "area" not in answers:
             out.append(
@@ -398,6 +562,7 @@ class RulesPlanner:
                     kind="area",
                     options=[
                         _choice("keep", "Keep as drawn"),
+                        _choice("edit", "Adjust its corners on the map"),
                         _choice("water", "Water and shoreline in view"),
                         _choice("farmland", "Fields in view"),
                         _choice("wood", "Woodland and scrub in view"),
@@ -425,7 +590,7 @@ class RulesPlanner:
             cadence == "once"
             and "cadence" not in answers
             and not re.search(r"\b(once|one-off|single)\b", lower)
-            and survey
+            and kind == "survey"
         ):
             out.append(
                 Clarification(
@@ -441,7 +606,68 @@ class RulesPlanner:
                     why="Surveys are often recurring; a recurring plan has no end date.",
                 )
             )
-        if survey and "resolution" not in answers:
+        if kind == "scan" and "output" not in answers:
+            out.append(
+                Clarification(
+                    id="output",
+                    question="What should the scan produce?",
+                    kind="choice",
+                    options=[
+                        _choice("mesh", "Textured mesh"),
+                        _choice("splat", "Gaussian splat"),
+                        _choice("pointcloud", "Point cloud"),
+                        _choice("ortho", "Orthomosaic and elevation"),
+                    ],
+                    default="mesh",
+                    why="Meshes and splats need oblique views; an orthomosaic flies nadir only.",
+                )
+            )
+        if kind == "scan" and "resolution" not in answers:
+            out.append(
+                Clarification(
+                    id="resolution",
+                    question="How fine should the scan be?",
+                    kind="choice",
+                    options=[
+                        _choice("1", "1 cm per pixel"),
+                        _choice("2", "2 cm per pixel"),
+                        _choice("5", "5 cm per pixel"),
+                    ],
+                    default="2",
+                    why="1 cm flies at about 35 m and takes three times the hours of 2 cm.",
+                )
+            )
+        if kind == "scan" and "views" not in answers:
+            out.append(
+                Clarification(
+                    id="views",
+                    question="Straight down only, or full 3D?",
+                    kind="choice",
+                    options=[
+                        _choice("nadir", "Nadir only (flat terrain, maps)"),
+                        _choice("oblique", "Nadir + obliques (full 3D)"),
+                    ],
+                    default="oblique",
+                    why="Obliques double the flying but are what makes walls, trees and slopes "
+                    "reconstruct.",
+                )
+            )
+        if kind == "scan" and "gcp" not in answers:
+            out.append(
+                Clarification(
+                    id="gcp",
+                    question="Ground control markers?",
+                    kind="choice",
+                    options=[
+                        _choice("yes", "Yes, place markers"),
+                        _choice("no", "No, GPS tags only"),
+                    ],
+                    default="no",
+                    why="Markers register the model to a few centimetres; GPS tags alone drift a "
+                    "metre or two.",
+                )
+            )
+        if kind == "survey" and "resolution" not in answers:
             out.append(
                 Clarification(
                     id="resolution",
@@ -490,7 +716,11 @@ class RulesPlanner:
                     why="More machines finish sooner; each needs its own zone or a split.",
                 )
             )
-        return out[:4]
+        if kind == "scan":
+            # What the scan is for comes before when it is due.
+            order = ["area", "output", "resolution", "views", "gcp", "deadline", "crew"]
+            out.sort(key=lambda c: order.index(c.id) if c.id in order else len(order))
+        return out[:6]
 
     @staticmethod
     def _zones(request: PlanDraftRequest, text: str) -> list[str]:
@@ -613,10 +843,14 @@ machines the operator named or pre-selected. Prefer idle machines over working o
 schedule a machine another plan already books in the same days (existingPlans.busy) unless \
 the operator named it, and never schedule a machine that needs attention without listing that \
 as a risk. Use the learned rates (rates, per task family) for estimates when one matches the \
-zone's task; otherwise state the rate you assumed. Keep steps concrete \
-and ordered: a survey pass, treatment per zone with the machines assigned, and a verification \
-pass. Give estimates from the zone acreage and a realistic treatment rate for the task, and \
-list every rate and window you assumed under assumptions. Schedule each step with start_day \
+zone's task; otherwise state the rate you assumed. Keep steps concrete, ordered and true \
+to the kind of work: for a treatment (mow, clear, spray) a survey pass, treatment per zone \
+with the machines assigned, and a verification pass; for a survey or inspection a survey \
+plan, a survey per zone and a review; for a 3D scan or capture (photogrammetry, splat, \
+mesh, lidar) a capture plan (height, overlap, obliques), optional ground control, a capture \
+per zone, reconstruction (compute, not machine time) and registration and QA. Never write \
+"treat" steps for a scan or survey. Give estimates from the zone acreage and a realistic \
+rate for the task, and list every rate and window you assumed under assumptions. Schedule each step with start_day \
 (offset from the plan start) and days (duration) so the steps form a timeline per machine; two \
 steps that share a machine must not overlap. Ask a question only when the goal cannot be \
 planned without the answer; otherwise make the reasonable choice and note it under risks. \

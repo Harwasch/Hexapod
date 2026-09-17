@@ -3,6 +3,7 @@ import { Color, Viewer, type Scene, RequestScheduler } from "cesium";
 import { Emitter } from "@/lib/emitter";
 import { createLogger, describeError } from "@/lib/log";
 
+import { AreaEditor } from "./AreaEditor";
 import { CameraController } from "./CameraController";
 import { ClippingManager } from "./ClippingManager";
 import { DebugManager } from "./DebugManager";
@@ -44,6 +45,7 @@ export class CesiumSceneManager {
   readonly selection: SelectionManager;
   readonly measurement: MeasurementManager;
   readonly mission: MissionManager;
+  readonly areas: AreaEditor;
   readonly explore: ExploreController;
   readonly keyboard: KeyboardNavigator;
   readonly debug: DebugManager;
@@ -125,6 +127,7 @@ export class CesiumSceneManager {
     );
     this.measurement = new MeasurementManager(this.viewer, this.events);
     this.mission = new MissionManager(this.viewer, this.events, this.camera);
+    this.areas = new AreaEditor(this.viewer, this.events);
     this.explore = new ExploreController(this.viewer, this.events);
     this.keyboard = new KeyboardNavigator(this.viewer, this.camera);
     this.debug = new DebugManager(this.viewer, this.sites, (enabled) =>
@@ -225,6 +228,7 @@ export class CesiumSceneManager {
     this.explore.destroy();
     this.measurement.destroy();
     this.mission.destroy();
+    this.areas.destroy();
     this.selection.destroy();
     this.sites.destroy();
     this.performance.destroy();

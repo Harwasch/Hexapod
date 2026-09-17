@@ -45,6 +45,13 @@ export function zoneFromFootprint(id: string, name: string, footprint: Footprint
   };
 }
 
+/** The zone with a new outline from the map: same id, name and provenance, fresh acres. */
+export function reshapedZone(zone: Zone, footprint: Footprint): Zone {
+  const { view: _view, ...rest } = zone;
+  const fresh = zoneFromFootprint(zone.id, zone.name, footprint);
+  return { ...rest, ...fresh, note: zone.note, attribution: zone.attribution, shaped: true };
+}
+
 /** An axis-aligned rectangle around a point, in metres each way. */
 export function rectangleFootprint(
   center: LonLat,
