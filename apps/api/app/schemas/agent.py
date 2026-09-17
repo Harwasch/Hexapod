@@ -34,10 +34,29 @@ class PlannerZone(CamelModel):
     note: str = Field(default="", max_length=500)
 
 
+class BusyWindow(CamelModel):
+    """Days a machine is already booked by another plan (inclusive start, exclusive end)."""
+
+    machine_id: str = Field(min_length=1, max_length=40)
+    start_date: date
+    end_date: date
+
+
 class PlannerExistingPlan(CamelModel):
     id: str = Field(min_length=1, max_length=80)
     title: str = Field(min_length=1, max_length=200)
     zone_ids: list[str] = Field(default_factory=list)
+    status: str = Field(default="scheduled", max_length=20)
+    busy: list[BusyWindow] = Field(default_factory=list, max_length=500)
+
+
+class PlannerRate(CamelModel):
+    """A treatment rate learned from the work log, per task family."""
+
+    task: str = Field(min_length=1, max_length=80)
+    acres_per_machine_hour: float = Field(gt=0)
+    samples: int = Field(ge=1)
+    machine_ids: list[str] = Field(default_factory=list)
 
 
 class PlanStep(CamelModel):
@@ -84,6 +103,8 @@ class PlanDraftRequest(CamelModel):
     machines: list[PlannerMachine] = Field(default_factory=list, max_length=200)
     zones: list[PlannerZone] = Field(default_factory=list, max_length=500)
     existing_plans: list[PlannerExistingPlan] = Field(default_factory=list, max_length=200)
+    # Rates learned from the work log; the planner prefers them over its defaults.
+    rates: list[PlannerRate] = Field(default_factory=list, max_length=100)
     # Operator pre-selections from the console (a selected zone, machines ticked in Fleet).
     preferred_zone_ids: list[str] = Field(default_factory=list)
     preferred_machine_ids: list[str] = Field(default_factory=list)

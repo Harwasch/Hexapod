@@ -5,6 +5,7 @@ import type { PlanDraft } from "@twin/contracts";
 
 import { usePlannerStatus } from "@/api/queries";
 import { useScene } from "@/cesium/SceneContext";
+import { describeConflict, planConflicts } from "@/missions/conflicts";
 import { diffDrafts, idLabel, overlayFor } from "@/missions/planDraft";
 import type { Project } from "@/missions/types";
 import { useMission } from "@/state/mission";
@@ -175,6 +176,16 @@ function DraftReview({
   const { showPlanOnMap, clearPlanOverlay } = useMissionActions();
   const [refinement, setRefinement] = useState("");
   const changes = composer?.previousDraft ? diffDrafts(composer.previousDraft, draft) : [];
+  const conflicts = planConflicts(
+    {
+      id: composer?.replacePlanId ?? undefined,
+      startDate: draft.startDate,
+      zoneIds: draft.zoneIds,
+      machineIds: draft.machineIds,
+      steps: draft.steps ?? [],
+    },
+    project.plans,
+  );
   // The draft is on the map as soon as it exists: zones, passes and route, in machine colours.
   // The camera fits the zones when the set of zones changes; a redraft that only moves
   // machines redraws in place.
@@ -304,6 +315,18 @@ function DraftReview({
           </ul>
         </section>
       )}
+      {conflicts.length > 0 && (
+        <section data-testid="plan-conflicts">
+          <span className="mc-eyebrow">CONFLICTS WITH OTHER PLANS</span>
+          <ul className="mc-list">
+            {conflicts.map((c) => (
+              <li key={`${c.kind}-${c.id}-${c.planId}`} className="mc-note mc-note--warn">
+                {describeConflict(c)}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
       {draft.risks.length > 0 && (
         <section>
           <span className="mc-eyebrow">RISKS</span>
@@ -358,7 +381,7 @@ function DraftReview({
           disabled={draft.zoneIds.length === 0 || approving}
           data-testid="plan-approve"
         >
-          {approving ? "Saving…" : "Approve plan"}
+          {approving ? "Saving…" : conflicts.length ? "Approve despite conflicts" : "Approve plan"}
         </button>
       </div>
     </section>

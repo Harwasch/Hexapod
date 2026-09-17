@@ -16,7 +16,7 @@ import json
 import math
 import re
 from datetime import date, timedelta
-from typing import Literal, Protocol
+from typing import Literal, NamedTuple, Protocol
 
 import anthropic
 from pydantic import BaseModel, Field
@@ -123,6 +123,46 @@ def _label(identifier: str, name: str) -> str:
     return name if name.startswith(identifier) else f"{identifier} {name}"
 
 
+def _task_family(task: str) -> str:
+    """ "Mow pass 2" and "Mow thistle" share the family "mow"."""
+    words = re.findall(r"[a-z]+", task.lower())
+    return words[0] if words else ""
+
+
+class Rate(NamedTuple):
+    acres_per_hour: float
+    note: str
+
+
+def _rate_for(task: str, request: PlanDraftRequest) -> Rate:
+    family = _task_family(task)
+    for rate in request.rates:
+        if _task_family(rate.task) == family and family:
+            who = f" ({', '.join(rate.machine_ids[:3])})" if rate.machine_ids else ""
+            return Rate(
+                rate.acres_per_machine_hour,
+                f"{family.capitalize()}: {rate.acres_per_machine_hour:.1f} acres per machine-hour, "
+                f"learned from {rate.samples} logged run{'s' if rate.samples != 1 else ''}{who}.",
+            )
+    return Rate(
+        RULES_ACRES_PER_MACHINE_HOUR,
+        f"{family.capitalize() or 'Treatment'}: {RULES_ACRES_PER_MACHINE_HOUR:g} acres per "
+        "machine-hour assumed (no logged runs for this task yet).",
+    )
+
+
+def _busy_machines(request: PlanDraftRequest, start: date, end: date) -> dict[str, str]:
+    """Machines another plan books inside [start, end) → the title that books them."""
+    busy: dict[str, str] = {}
+    for plan in request.existing_plans:
+        if plan.status in {"done", "cancelled"}:
+            continue
+        for window in plan.busy:
+            if window.start_date < end and start < window.end_date:
+                busy.setdefault(window.machine_id, plan.title)
+    return busy
+
+
 def _title(goal: str) -> str:
     text = re.sub(r"\s+", " ", goal.strip()).rstrip(".!")
     text = text[0].upper() + text[1:] if text else "New plan"
@@ -147,11 +187,16 @@ class RulesPlanner:
             else _cadence(text)
         )
         today = _today(request)
+        zone_by_id = {z.id: z for z in request.zones}
+        rate_by_zone = {z: _rate_for(zone_by_id[z].task, request) for z in zone_ids}
         acres = sum(z.acres for z in request.zones if z.id in zone_ids)
         machine_count = max(1, len(machine_ids))
-        hours = acres / RULES_ACRES_PER_MACHINE_HOUR if acres else 0.0
+        hours = sum(
+            zone_by_id[z].acres / rate_by_zone[z].acres_per_hour
+            for z in zone_ids
+            if zone_by_id[z].acres
+        )
         days = max(1, math.ceil(hours / (machine_count * RULES_HOURS_PER_DAY))) if hours else 1
-        zone_by_id = {z.id: z for z in request.zones}
         steps = [
             PlanStep(
                 title="Survey pass",
@@ -173,7 +218,7 @@ class RulesPlanner:
             zone = zone_by_id[zone_id]
             crew = machine_ids if len(zone_ids) == 1 else [machine_ids[index % machine_count]]
             crew = [m for m in crew if m]
-            zone_hours = zone.acres / RULES_ACRES_PER_MACHINE_HOUR if zone.acres else 0.0
+            zone_hours = zone.acres / rate_by_zone[zone_id].acres_per_hour if zone.acres else 0.0
             zone_days = (
                 max(1, math.ceil(zone_hours / (max(1, len(crew)) * RULES_HOURS_PER_DAY)))
                 if zone_hours
@@ -189,11 +234,7 @@ class RulesPlanner:
                     title=f"Treat {_label(zone.id, zone.name)}",
                     detail=(zone.task or "Treatment")
                     + f" across {zone.acres:g} acres"
-                    + (
-                        f" ({zone_hours:.0f} machine-hours at the assumed rate)."
-                        if zone_hours
-                        else "."
-                    ),
+                    + (f" ({zone_hours:.0f} machine-hours)." if zone_hours else "."),
                     machine_ids=crew,
                     zone_id=zone.id,
                     when=span,
@@ -215,6 +256,13 @@ class RulesPlanner:
         )
         days = max(days, last_day + 1)
         risks: list[str] = []
+        end = today + timedelta(days=days)
+        busy = _busy_machines(request, today, end)
+        for machine_id in machine_ids:
+            if machine_id in busy:
+                risks.append(
+                    f"{machine_id} is already booked by “{busy[machine_id]}” in this window."
+                )
         for machine in request.machines:
             if machine.id in machine_ids and machine.battery_pct < 30:
                 risks.append(
@@ -249,8 +297,7 @@ class RulesPlanner:
             ),
             steps=steps,
             assumptions=[
-                f"Treatment rate {RULES_ACRES_PER_MACHINE_HOUR:g} acres per machine-hour "
-                "(a mid-size mower on brush).",
+                *dict.fromkeys(rate.note for rate in rate_by_zone.values()),
                 f"{RULES_HOURS_PER_DAY} working hours per machine per day, no weather days.",
                 "Zones run in parallel, one crew each; a crew with two zones does them in turn.",
             ],
@@ -297,7 +344,13 @@ class RulesPlanner:
             return chosen
         wanted = wanted or min(2, len(request.machines))
         order = {"idle": 0, "working": 1, "attention": 2}
-        ranked = sorted(request.machines, key=lambda m: (order.get(m.status, 1), -m.battery_pct))
+        today = _today(request)
+        # A rough window: nothing is scheduled yet, so "busy in the next two weeks" is the test.
+        booked = _busy_machines(request, today, today + timedelta(days=14))
+        ranked = sorted(
+            request.machines,
+            key=lambda m: (m.id in booked, order.get(m.status, 1), -m.battery_pct),
+        )
         for machine in ranked:
             if len(chosen) >= wanted:
                 break
@@ -344,8 +397,11 @@ robots. The operator states a goal; you turn it into one concrete plan for the m
 zones of the project you are given.
 
 Use only zone ids and machine ids that exist in the project context. Prefer the zones and \
-machines the operator named or pre-selected. Prefer idle machines over working ones and never \
-schedule a machine that needs attention without listing that as a risk. Keep steps concrete \
+machines the operator named or pre-selected. Prefer idle machines over working ones, never \
+schedule a machine another plan already books in the same days (existingPlans.busy) unless \
+the operator named it, and never schedule a machine that needs attention without listing that \
+as a risk. Use the learned rates (rates, per task family) for estimates when one matches the \
+zone's task; otherwise state the rate you assumed. Keep steps concrete \
 and ordered: a survey pass, treatment per zone with the machines assigned, and a verification \
 pass. Give estimates from the zone acreage and a realistic treatment rate for the task, and \
 list every rate and window you assumed under assumptions. Schedule each step with start_day \

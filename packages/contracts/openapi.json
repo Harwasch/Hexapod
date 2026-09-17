@@ -796,6 +796,35 @@
         "title": "BoundingBox",
         "type": "object"
       },
+      "BusyWindow": {
+        "additionalProperties": false,
+        "description": "Days a machine is already booked by another plan (inclusive start, exclusive end).",
+        "properties": {
+          "endDate": {
+            "format": "date",
+            "title": "Enddate",
+            "type": "string"
+          },
+          "machineId": {
+            "maxLength": 40,
+            "minLength": 1,
+            "title": "Machineid",
+            "type": "string"
+          },
+          "startDate": {
+            "format": "date",
+            "title": "Startdate",
+            "type": "string"
+          }
+        },
+        "required": [
+          "machineId",
+          "startDate",
+          "endDate"
+        ],
+        "title": "BusyWindow",
+        "type": "object"
+      },
       "CameraBookmarkCreate": {
         "additionalProperties": false,
         "properties": {
@@ -2577,6 +2606,14 @@
             "title": "Projectname",
             "type": "string"
           },
+          "rates": {
+            "items": {
+              "$ref": "#/components/schemas/PlannerRate"
+            },
+            "maxItems": 100,
+            "title": "Rates",
+            "type": "array"
+          },
           "refinement": {
             "anyOf": [
               {
@@ -3114,10 +3151,24 @@
       "PlannerExistingPlan": {
         "additionalProperties": false,
         "properties": {
+          "busy": {
+            "items": {
+              "$ref": "#/components/schemas/BusyWindow"
+            },
+            "maxItems": 500,
+            "title": "Busy",
+            "type": "array"
+          },
           "id": {
             "maxLength": 80,
             "minLength": 1,
             "title": "Id",
+            "type": "string"
+          },
+          "status": {
+            "default": "scheduled",
+            "maxLength": 20,
+            "title": "Status",
             "type": "string"
           },
           "title": {
@@ -3187,6 +3238,42 @@
           "name"
         ],
         "title": "PlannerMachine",
+        "type": "object"
+      },
+      "PlannerRate": {
+        "additionalProperties": false,
+        "description": "A treatment rate learned from the work log, per task family.",
+        "properties": {
+          "acresPerMachineHour": {
+            "exclusiveMinimum": 0.0,
+            "title": "Acrespermachinehour",
+            "type": "number"
+          },
+          "machineIds": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Machineids",
+            "type": "array"
+          },
+          "samples": {
+            "minimum": 1.0,
+            "title": "Samples",
+            "type": "integer"
+          },
+          "task": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Task",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task",
+          "acresPerMachineHour",
+          "samples"
+        ],
+        "title": "PlannerRate",
         "type": "object"
       },
       "PlannerStatus": {

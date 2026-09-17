@@ -526,6 +526,24 @@ export interface components {
             /** West */
             west: number;
         };
+        /**
+         * BusyWindow
+         * @description Days a machine is already booked by another plan (inclusive start, exclusive end).
+         */
+        BusyWindow: {
+            /**
+             * Enddate
+             * Format: date
+             */
+            endDate: string;
+            /** Machineid */
+            machineId: string;
+            /**
+             * Startdate
+             * Format: date
+             */
+            startDate: string;
+        };
         /** CameraBookmarkCreate */
         CameraBookmarkCreate: {
             /**
@@ -1084,6 +1102,8 @@ export interface components {
             previousDraft?: components["schemas"]["PlanDraftBody"] | null;
             /** Projectname */
             projectName: string;
+            /** Rates */
+            rates?: components["schemas"]["PlannerRate"][];
             /** Refinement */
             refinement?: string | null;
             /** Sitename */
@@ -1104,8 +1124,15 @@ export interface components {
         };
         /** PlannerExistingPlan */
         PlannerExistingPlan: {
+            /** Busy */
+            busy?: components["schemas"]["BusyWindow"][];
             /** Id */
             id: string;
+            /**
+             * Status
+             * @default scheduled
+             */
+            status?: string;
             /** Title */
             title: string;
             /** Zoneids */
@@ -1137,6 +1164,20 @@ export interface components {
              * @default
              */
             task?: string;
+        };
+        /**
+         * PlannerRate
+         * @description A treatment rate learned from the work log, per task family.
+         */
+        PlannerRate: {
+            /** Acrespermachinehour */
+            acresPerMachineHour: number;
+            /** Machineids */
+            machineIds?: string[];
+            /** Samples */
+            samples: number;
+            /** Task */
+            task: string;
         };
         /** PlannerStatus */
         PlannerStatus: {
@@ -1748,6 +1789,7 @@ export type SchemaAssetUpdate = components['schemas']['AssetUpdate'];
 export type SchemaAttribution = components['schemas']['Attribution'];
 export type SchemaBodyUploadThumbnailApiV1SitesSiteIdThumbnailPost = components['schemas']['Body_upload_thumbnail_api_v1_sites__site_id__thumbnail_post'];
 export type SchemaBoundingBox = components['schemas']['BoundingBox'];
+export type SchemaBusyWindow = components['schemas']['BusyWindow'];
 export type SchemaCameraBookmarkCreate = components['schemas']['CameraBookmarkCreate'];
 export type SchemaCameraBookmarkRead = components['schemas']['CameraBookmarkRead'];
 export type SchemaCesiumIon3DTilesSource = components['schemas']['CesiumIon3DTilesSource'];
@@ -1780,6 +1822,7 @@ export type SchemaPlanDraftRequest = components['schemas']['PlanDraftRequest'];
 export type SchemaPlanEstimates = components['schemas']['PlanEstimates'];
 export type SchemaPlannerExistingPlan = components['schemas']['PlannerExistingPlan'];
 export type SchemaPlannerMachine = components['schemas']['PlannerMachine'];
+export type SchemaPlannerRate = components['schemas']['PlannerRate'];
 export type SchemaPlannerStatus = components['schemas']['PlannerStatus'];
 export type SchemaPlannerZone = components['schemas']['PlannerZone'];
 export type SchemaPlanRead = components['schemas']['PlanRead'];

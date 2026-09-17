@@ -56,6 +56,7 @@ export async function startPlanDraft(
       goal: text,
       zoneIds,
       machineIds,
+      replacePlanId: composer?.replacePlanId ?? null,
       ...(options.refinement ? { refinement: options.refinement } : {}),
       previous: options.refinement ? (composer?.draft ?? null) : null,
     });

@@ -181,3 +181,59 @@ def test_rules_planner_sequences_one_crew_over_two_zones() -> None:
     first, second = draft.steps[1], draft.steps[2]
     assert second.start_day == first.start_day + first.days
     assert draft.steps[-1].start_day == second.start_day + second.days
+
+
+def test_rules_planner_uses_learned_rates_and_avoids_booked_machines() -> None:
+    from app.schemas.agent import BusyWindow, PlannerExistingPlan, PlannerRate
+
+    draft = RulesPlanner().draft(
+        request(
+            "Mow Z-21 with one mower",
+            rates=[
+                PlannerRate(
+                    task="Mow pass 2", acres_per_machine_hour=11.0, samples=6, machine_ids=["TR-04"]
+                )
+            ],
+            existing_plans=[
+                PlannerExistingPlan(
+                    id="p1",
+                    title="Corridor sweep",
+                    zone_ids=["Z-08"],
+                    status="dispatched",
+                    busy=[
+                        BusyWindow(
+                            machine_id="TR-04",
+                            start_date=date(2026, 9, 17),
+                            end_date=date(2026, 9, 30),
+                        )
+                    ],
+                )
+            ],
+        )
+    )
+    # 220 acres at 11 acres/hour = 20 machine-hours, not 147 at the default rate.
+    assert draft.estimates.machine_hours == 20
+    assert any("learned from 6 logged runs" in a for a in draft.assumptions)
+    # TR-04 is idle but booked; TR-12 (working, free) is chosen instead.
+    assert draft.machine_ids == ["TR-12"]
+    named = RulesPlanner().draft(
+        request(
+            "Mow Z-21 with TR-04",
+            existing_plans=[
+                PlannerExistingPlan(
+                    id="p1",
+                    title="Corridor sweep",
+                    status="scheduled",
+                    busy=[
+                        BusyWindow(
+                            machine_id="TR-04",
+                            start_date=date(2026, 9, 17),
+                            end_date=date(2026, 9, 30),
+                        )
+                    ],
+                )
+            ],
+        )
+    )
+    assert named.machine_ids == ["TR-04"], "an operator's choice stands"
+    assert any("already booked" in r for r in named.risks)

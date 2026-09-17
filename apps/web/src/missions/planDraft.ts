@@ -13,6 +13,8 @@ import type {
   PlanStep,
 } from "@twin/contracts";
 
+import { bookedWindows } from "./conflicts";
+import { learnedRates } from "./rates";
 import type { Plan, PlanOverlay, Project } from "./types";
 
 export interface DraftSeed {
@@ -21,6 +23,8 @@ export interface DraftSeed {
   machineIds?: string[];
   refinement?: string;
   previous?: PlanDraft | null;
+  /** The plan being revised, left out of the booked windows sent to the planner. */
+  replacePlanId?: string | null;
 }
 
 const CADENCE_LABEL: Record<PlanCadence, string> = {
@@ -53,7 +57,19 @@ export function buildDraftRequest(project: Project, seed: DraftSeed): PlanDraftR
       treated: z.treated,
       note: z.note,
     })),
-    existingPlans: project.plans.map((p) => ({ id: p.id, title: p.title, zoneIds: p.zoneIds })),
+    existingPlans: project.plans
+      .filter((p) => p.id !== seed.replacePlanId)
+      .map((p) => {
+        const booked = bookedWindows([p]).find((b) => b.plan.id === p.id);
+        return {
+          id: p.id,
+          title: p.title,
+          zoneIds: p.zoneIds,
+          status: p.state === "Done" ? "done" : p.state === "Cancelled" ? "cancelled" : "scheduled",
+          busy: booked?.busy ?? [],
+        };
+      }),
+    rates: learnedRates(project.workLog),
     preferredZoneIds: seed.zoneIds ?? [],
     preferredMachineIds: seed.machineIds ?? [],
     today: new Date().toISOString().slice(0, 10),
