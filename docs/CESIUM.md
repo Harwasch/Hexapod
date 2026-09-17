@@ -172,8 +172,12 @@ and middle-drag orbit the point in the centre of the view. That orbit is impleme
 rather than with Cesium's tilt: the pivot is the depth-buffer hit at the view centre (a
 model, a building, the ground), else the terrain, with placeholder tile heights rejected,
 and the camera turns around it in its east-north-up frame with the tilt clamped between the
-horizon and straight down. Gaussian splats write no depth, so under a splat the pivot is its
-ground. Cesium keeps pinch tilt for touch. `KeyboardNavigator` adds arrows (pan, screen-space
+horizon and straight down. The turn is about the frame's up axis (`constrainedAxis =
+UNIT_Z` for the duration), not the camera's own up: turning a pitched camera about its own
+up rolls the view a little on every drag, which is what tilted the horizon. As a backstop,
+`levelHorizon` zeroes any roll above 0.03° on every `camera.changed`, so the horizon stays
+level whatever the gesture, as in Google Maps. Gaussian splats write no depth, so under a
+splat the pivot is its ground. Cesium keeps pinch tilt for touch. `KeyboardNavigator` adds arrows (pan, screen-space
 speed), Shift+arrows (orbit the same pivot) and `+`/`-` (zoom towards it), ticked on
 `scene.preUpdate` while held and active only when the page body or canvas has focus.
 

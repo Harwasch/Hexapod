@@ -4,6 +4,43 @@
  */
 
 export interface paths {
+    "/api/v1/agent/plan-draft": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Draft a mission plan from a goal
+         * @description Turns an operator goal plus the project's zones, machines and existing plans into a structured plan draft for review. Drafted by Claude when the API is configured with a key, by a rule-based planner otherwise; the `source` field says which.
+         */
+        post: operations["plan_draft_api_v1_agent_plan_draft_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agent/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Mission planner status */
+        get: operations["planner_status_api_v1_agent_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/assets": {
         parameters: {
             query?: never;
@@ -851,6 +888,211 @@ export interface components {
             /** Urltemplate */
             urlTemplate: string;
         };
+        /**
+         * PlanDraft
+         * @description Read model: every field is explicit (no defaults) so the contract marks it required.
+         */
+        PlanDraft: {
+            /**
+             * Cadence
+             * @enum {string}
+             */
+            cadence: "once" | "daily" | "weekly" | "monthly" | "seasonal";
+            /** Enddate */
+            endDate: string | null;
+            estimates: components["schemas"]["PlanEstimates"];
+            /** Machineids */
+            machineIds: string[];
+            /** Model */
+            model: string | null;
+            /** Note */
+            note: string;
+            /** Objective */
+            objective: string;
+            /** Questions */
+            questions: string[];
+            /** Risks */
+            risks: string[];
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "claude" | "rules";
+            /**
+             * Startdate
+             * Format: date
+             */
+            startDate: string;
+            /** Steps */
+            steps: components["schemas"]["PlanStep"][];
+            /** Title */
+            title: string;
+            /** Zoneids */
+            zoneIds: string[];
+        };
+        /**
+         * PlanDraftBody
+         * @description The plan itself, as drafted: what the operator reviews, edits and approves.
+         */
+        PlanDraftBody: {
+            /**
+             * Cadence
+             * @default once
+             * @enum {string}
+             */
+            cadence?: "once" | "daily" | "weekly" | "monthly" | "seasonal";
+            /** Enddate */
+            endDate?: string | null;
+            estimates: components["schemas"]["PlanEstimates"];
+            /** Machineids */
+            machineIds?: string[];
+            /** Objective */
+            objective: string;
+            /** Questions */
+            questions?: string[];
+            /** Risks */
+            risks?: string[];
+            /**
+             * Startdate
+             * Format: date
+             */
+            startDate: string;
+            /** Steps */
+            steps?: components["schemas"]["PlanStep"][];
+            /** Title */
+            title: string;
+            /** Zoneids */
+            zoneIds?: string[];
+        };
+        /** PlanDraftRequest */
+        PlanDraftRequest: {
+            /** Existingplans */
+            existingPlans?: components["schemas"]["PlannerExistingPlan"][];
+            /** Goal */
+            goal: string;
+            /** Machines */
+            machines?: components["schemas"]["PlannerMachine"][];
+            /** Preferredmachineids */
+            preferredMachineIds?: string[];
+            /** Preferredzoneids */
+            preferredZoneIds?: string[];
+            previousDraft?: components["schemas"]["PlanDraftBody"] | null;
+            /** Projectname */
+            projectName: string;
+            /** Refinement */
+            refinement?: string | null;
+            /** Sitename */
+            siteName?: string | null;
+            /** Today */
+            today?: string | null;
+            /** Zones */
+            zones?: components["schemas"]["PlannerZone"][];
+        };
+        /** PlanEstimates */
+        PlanEstimates: {
+            /** Acres */
+            acres: number;
+            /** Calendardays */
+            calendarDays: number;
+            /** Machinehours */
+            machineHours: number;
+        };
+        /** PlannerExistingPlan */
+        PlannerExistingPlan: {
+            /** Id */
+            id: string;
+            /** Title */
+            title: string;
+            /** Zoneids */
+            zoneIds?: string[];
+        };
+        /** PlannerMachine */
+        PlannerMachine: {
+            /**
+             * Batterypct
+             * @default 100
+             */
+            batteryPct?: number;
+            /** Id */
+            id: string;
+            /**
+             * Model
+             * @default
+             */
+            model?: string;
+            /** Name */
+            name: string;
+            /**
+             * Status
+             * @default idle
+             */
+            status?: string;
+            /**
+             * Task
+             * @default
+             */
+            task?: string;
+        };
+        /** PlannerStatus */
+        PlannerStatus: {
+            /** Configured */
+            configured: boolean;
+            /** Model */
+            model: string | null;
+            /**
+             * Provider
+             * @enum {string}
+             */
+            provider: "claude" | "rules";
+        };
+        /** PlannerZone */
+        PlannerZone: {
+            /**
+             * Acres
+             * @default 0
+             */
+            acres?: number;
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /**
+             * Note
+             * @default
+             */
+            note?: string;
+            /**
+             * Progresspct
+             * @default 0
+             */
+            progressPct?: number;
+            /**
+             * Task
+             * @default
+             */
+            task?: string;
+            /**
+             * Treated
+             * @default false
+             */
+            treated?: boolean;
+        };
+        /**
+         * PlanStep
+         * @description Every field explicit (no defaults) so the contract marks them required on read.
+         */
+        PlanStep: {
+            /** Detail */
+            detail: string;
+            /** Machineids */
+            machineIds: string[];
+            /** Title */
+            title: string;
+            /** When */
+            when: string;
+            /** Zoneid */
+            zoneId: string | null;
+        };
         /** PointCloudShading */
         PointCloudShading: {
             /**
@@ -1272,6 +1514,15 @@ export type SchemaLegendMetadata = components['schemas']['LegendMetadata'];
 export type SchemaLicenseMetadata = components['schemas']['LicenseMetadata'];
 export type SchemaMultiPolygon = components['schemas']['MultiPolygon'];
 export type SchemaMvtSource = components['schemas']['MvtSource'];
+export type SchemaPlanDraft = components['schemas']['PlanDraft'];
+export type SchemaPlanDraftBody = components['schemas']['PlanDraftBody'];
+export type SchemaPlanDraftRequest = components['schemas']['PlanDraftRequest'];
+export type SchemaPlanEstimates = components['schemas']['PlanEstimates'];
+export type SchemaPlannerExistingPlan = components['schemas']['PlannerExistingPlan'];
+export type SchemaPlannerMachine = components['schemas']['PlannerMachine'];
+export type SchemaPlannerStatus = components['schemas']['PlannerStatus'];
+export type SchemaPlannerZone = components['schemas']['PlannerZone'];
+export type SchemaPlanStep = components['schemas']['PlanStep'];
 export type SchemaPointCloudShading = components['schemas']['PointCloudShading'];
 export type SchemaPolygon = components['schemas']['Polygon'];
 export type SchemaProblem = components['schemas']['Problem'];
@@ -1294,6 +1545,104 @@ export type SchemaWmtsSource = components['schemas']['WmtsSource'];
 export type SchemaXyzSource = components['schemas']['XyzSource'];
 export type $defs = Record<string, never>;
 export interface operations {
+    plan_draft_api_v1_agent_plan_draft_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PlanDraftRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanDraft"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    planner_status_api_v1_agent_status_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlannerStatus"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     list_assets_api_v1_assets_get: {
         parameters: {
             query?: {

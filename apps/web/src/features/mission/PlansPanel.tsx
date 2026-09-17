@@ -7,6 +7,7 @@ import type { Plan } from "@/missions/types";
 import { useMission } from "@/state/mission";
 import { useUi } from "@/state/ui";
 
+import { PlanComposer } from "./PlanComposer";
 import { useMissionActions } from "./useMissionActions";
 
 /** Plans list and plan detail window (design: Plan view). */
@@ -15,6 +16,8 @@ export function PlansPanel() {
   const view = useMission((s) => s.view);
   const planId = useMission((s) => s.planId);
   const openPlan = useMission((s) => s.openPlan);
+  const composer = useMission((s) => s.composer);
+  const openComposer = useMission((s) => s.openComposer);
   const setAddDataOpen = useUi((s) => s.setAddDataOpen);
   const plan = project?.plans.find((p) => p.id === planId) ?? null;
   const open = view === "plan";
@@ -51,7 +54,8 @@ export function PlansPanel() {
                 </button>
               </div>
             )}
-            {project && !plan && (
+            {project && composer && <PlanComposer project={project} />}
+            {project && !composer && !plan && (
               <>
                 <div className="mc-window__head">
                   <div>
@@ -65,15 +69,8 @@ export function PlansPanel() {
                   <button
                     type="button"
                     className="mc-btn mc-btn--accent"
-                    onClick={() => {
-                      useMission
-                        .getState()
-                        .appendLog(
-                          "agent",
-                          "New plans are authored in the plan editor, which is next on the roadmap. Describe the goal in the command bar and I'll draft it.",
-                        );
-                      useMission.getState().setStreamOpen(true);
-                    }}
+                    onClick={() => openComposer()}
+                    data-testid="plan-new"
                   >
                     + New plan
                   </button>
@@ -121,7 +118,9 @@ export function PlansPanel() {
                 </div>
               </>
             )}
-            {project && plan && <PlanDetail plan={plan} onBack={() => openPlan(null)} />}
+            {project && !composer && plan && (
+              <PlanDetail plan={plan} onBack={() => openPlan(null)} />
+            )}
           </GlassPanel>
         </motion.div>
       )}
@@ -133,6 +132,7 @@ function PlanDetail({ plan, onBack }: { plan: Plan; onBack: () => void }) {
   const { showPlanOnMap } = useMissionActions();
   const appendLog = useMission((s) => s.appendLog);
   const setStreamOpen = useMission((s) => s.setStreamOpen);
+  const openComposer = useMission((s) => s.openComposer);
   return (
     <div className="mc-plan-detail" data-testid="plan-detail">
       <div className="mc-window__head mc-window__head--column">
@@ -215,6 +215,23 @@ function PlanDetail({ plan, onBack }: { plan: Plan; onBack: () => void }) {
             ))}
           </dl>
         </section>
+        {plan.steps && plan.steps.length > 0 && (
+          <section>
+            <span className="mc-eyebrow">STEPS</span>
+            <ol className="mc-steps">
+              {plan.steps.map((step, i) => (
+                <li key={`${i}-${step.title}`} className="mc-step">
+                  <div className="mc-step__title">{step.title}</div>
+                  <div className="mc-step__meta mc-mono">
+                    {[step.when, step.zoneId, step.machineIds.join(" ")]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  </div>
+                </li>
+              ))}
+            </ol>
+          </section>
+        )}
         <div className="mc-agent-note">
           <span className="mc-dot mc-dot--glow mc-dot--run" aria-hidden="true" />
           <span>{plan.agentNote}</span>
@@ -224,14 +241,25 @@ function PlanDetail({ plan, onBack }: { plan: Plan; onBack: () => void }) {
             type="button"
             className="mc-btn"
             onClick={() => {
+              if (plan.goal !== undefined) {
+                openComposer({
+                  goal: plan.goal,
+                  zoneIds: plan.zoneIds,
+                  machineIds: plan.machineIds ?? [],
+                  replacePlanId: plan.id,
+                });
+                return;
+              }
+              // Provider plans are owned by the fleet backend; a revision starts from their objective.
+              openComposer({ goal: plan.objective, zoneIds: plan.zoneIds, replacePlanId: plan.id });
               appendLog(
                 "agent",
-                `Plan editing for “${plan.title}” opens here once plans are persisted; for now tell me the change in the command bar.`,
+                `Revising “${plan.title}”: adjust the goal and I'll draft the new version for your approval.`,
               );
               setStreamOpen(true);
             }}
           >
-            Edit plan
+            Revise with agent
           </button>
           <button
             type="button"

@@ -259,6 +259,33 @@ test.describe("mission control", () => {
     await expect(app.getByTestId("fleet-panel")).toHaveCount(0);
   });
 
+  test("the agent drafts a plan from a goal and the operator approves it", async ({ app }) => {
+    await app.getByTestId("onboarding-demo").click();
+    await expect(app.getByTestId("project-card")).toContainText("Blackrock Mesa", {
+      timeout: 30_000,
+    });
+    // The demo agent has simulated threads running, so its card shows; an idle one never says so.
+    await expect(app.getByText("Agent idle")).toHaveCount(0);
+    await app.getByTestId("view-tab-plan").click({ force: true });
+    await app.getByTestId("plan-new").dispatchEvent("click");
+    await expect(app.getByTestId("plan-composer")).toBeVisible();
+    await app.getByTestId("compose-zone-Z-21").dispatchEvent("click");
+    await app.getByTestId("plan-goal").fill("Mow Z-21 weekly with one mower");
+    await app.getByTestId("plan-draft-submit").dispatchEvent("click");
+    await expect(app.getByTestId("plan-review")).toBeVisible({ timeout: 30_000 });
+    await expect(app.getByTestId("plan-review")).toContainText(
+      /Drafted by Claude|Rule-based draft/,
+    );
+    await expect(app.getByTestId("plan-review")).toContainText("Z-21");
+    await expect(app.getByTestId("agent-stream")).toContainText("Drafted");
+    await app.getByTestId("plan-approve").dispatchEvent("click");
+    await expect(app.getByTestId("plan-detail")).toContainText("Mow Z-21 weekly with one mower");
+    await expect(app.getByTestId("plan-detail")).toContainText("Scheduled");
+    await expect(app.getByTestId("plan-detail")).toContainText("STEPS");
+    await app.getByText("All plans").dispatchEvent("click");
+    await expect(app.getByTestId("plans-panel")).toContainText("Mow Z-21 weekly with one mower");
+  });
+
   test("command bar drives the agent stream and layer pills toggle overlays", async ({ app }) => {
     await app.getByTestId("onboarding-demo").click();
     await expect(app.getByTestId("project-card")).toContainText("Blackrock Mesa", {

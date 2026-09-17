@@ -8,17 +8,30 @@ export function AgentStream() {
   const open = useMission((s) => s.streamOpen);
   const setOpen = useMission((s) => s.setStreamOpen);
   const log = useMission((s) => s.log);
-  const headline = project?.agent.headline ?? "Agent idle";
+  const drafting = useMission((s) => s.composer?.status === "drafting");
   const actions = project?.agent.actions ?? [];
-  const running = actions.filter((a) => a.status === "run").length + (project ? 0 : 0);
+  const running = actions.filter((a) => a.status === "run").length + (drafting ? 1 : 0);
+  // An idle agent has no card: the stream appears when something runs, when a command was
+  // answered, or when the operator opens it (key `a`).
+  if (!project || (running === 0 && log.length === 0 && !open)) return null;
+  const headline = drafting ? "Drafting a plan…" : project.agent.headline;
   return (
     <div className={`mc-stream ${open ? "is-open" : ""}`} data-testid="agent-stream">
       <div className="glass mc-stream__panel" aria-hidden={!open} id="agent-stream-panel">
         <div className="mc-stream__head">
-          <span className="mc-stream__title">{project?.agent.summary ?? "Nothing running"}</span>
+          <span className="mc-stream__title">
+            {drafting ? "Planning with the agent" : project.agent.summary}
+          </span>
           <span className="mc-eyebrow">{running} THREADS</span>
         </div>
         <ul className="mc-stream__list" aria-label="Agent actions">
+          {drafting && (
+            <li className="mc-stream__item is-run">
+              <span className="mc-dot mc-stream__dot" aria-hidden="true" />
+              <span className="mc-stream__text">Drafting the plan from your goal</span>
+              <Blink />
+            </li>
+          )}
           {actions.map((action, i) => (
             <li
               key={action.id}
@@ -40,12 +53,10 @@ export function AgentStream() {
             </li>
           ))}
         </ul>
-        {project && (
-          <div className="mc-stream__foot">
-            {project.agent.footer}
-            {project.simulated ? " · simulated activity" : ""}
-          </div>
-        )}
+        <div className="mc-stream__foot">
+          {project.agent.footer}
+          {project.simulated ? " · simulated activity" : ""}
+        </div>
       </div>
       <button
         type="button"
@@ -57,7 +68,7 @@ export function AgentStream() {
       >
         <span className="mc-spinner" aria-hidden="true" />
         <span className="mc-stream__headline">{headline}</span>
-        {project && <Blink />}
+        {running > 0 && <Blink />}
         {open ? (
           <ChevronDown size={13} aria-hidden="true" />
         ) : (

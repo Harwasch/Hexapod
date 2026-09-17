@@ -7,6 +7,9 @@ import type {
   IonStatus,
   Layer,
   LayerCreate,
+  PlanDraft,
+  PlanDraftRequest,
+  PlannerStatus,
   Site,
   SiteCreate,
   SiteSummary,
@@ -83,6 +86,19 @@ export function useLayers(): CatalogResult<Layer[]> {
     ...RETRY,
   });
   return withFallback(query, builtinLayers);
+}
+
+export function usePlannerStatus() {
+  return useQuery({
+    queryKey: ["planner-status"],
+    queryFn: () => unwrap<PlannerStatus>(api.GET("/api/v1/agent/status")),
+    staleTime: 5 * 60_000,
+  });
+}
+
+/** Asks the mission planner for a structured plan draft. */
+export function draftPlan(body: PlanDraftRequest): Promise<PlanDraft> {
+  return unwrap<PlanDraft>(api.POST("/api/v1/agent/plan-draft", { body }));
 }
 
 export function useIonStatus() {

@@ -17,6 +17,7 @@ import { useSites } from "@/state/sites";
 import { useUi } from "@/state/ui";
 import { useViewer } from "@/state/viewer";
 
+import { startPlanDraft } from "./planDrafting";
 import { useMissionActions } from "./useMissionActions";
 
 /** Bottom command bar: "Ask or instruct the agent" plus live camera readouts (design: COMMAND BAR). */
@@ -128,6 +129,18 @@ export function CommandBar() {
           state.openPlan(plan?.id ?? null);
           return plan ? `Opening “${plan.title}”.` : "Showing plans.";
         },
+        draftPlan: (goal) => {
+          const state = useMission.getState();
+          if (!state.project)
+            return "Load a project with zones and machines first, then I can plan.";
+          if (!goal) {
+            state.openComposer();
+            return "Tell me the goal in the plan window and I'll draft it.";
+          }
+          state.openComposer({ goal });
+          void startPlanDraft(goal);
+          return "Drafting the plan — it will appear in the Plans window for your review.";
+        },
         setView: (view) => {
           useMission.getState().setView(view);
           return `Showing ${view}.`;
@@ -176,7 +189,7 @@ export function CommandBar() {
           className="mc-bar__input"
           value={text}
           onChange={(e) => setText(e.target.value)}
-          placeholder="Ask or instruct the agent — “fly to Yosemite”, “show vegetation”, “where is TR-07”"
+          placeholder="Ask or instruct the agent — “plan: mow Z-14 this week”, “where is TR-07”, “fly to Yosemite”"
           aria-label="Ask or instruct the agent"
           disabled={busy}
           data-testid="command-input"

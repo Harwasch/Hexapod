@@ -2148,6 +2148,569 @@
         "title": "MvtSource",
         "type": "object"
       },
+      "PlanDraft": {
+        "additionalProperties": false,
+        "description": "Read model: every field is explicit (no defaults) so the contract marks it required.",
+        "properties": {
+          "cadence": {
+            "enum": [
+              "once",
+              "daily",
+              "weekly",
+              "monthly",
+              "seasonal"
+            ],
+            "title": "Cadence",
+            "type": "string"
+          },
+          "endDate": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enddate"
+          },
+          "estimates": {
+            "$ref": "#/components/schemas/PlanEstimates"
+          },
+          "machineIds": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Machineids",
+            "type": "array"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "note": {
+            "title": "Note",
+            "type": "string"
+          },
+          "objective": {
+            "title": "Objective",
+            "type": "string"
+          },
+          "questions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Questions",
+            "type": "array"
+          },
+          "risks": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Risks",
+            "type": "array"
+          },
+          "source": {
+            "enum": [
+              "claude",
+              "rules"
+            ],
+            "title": "Source",
+            "type": "string"
+          },
+          "startDate": {
+            "format": "date",
+            "title": "Startdate",
+            "type": "string"
+          },
+          "steps": {
+            "items": {
+              "$ref": "#/components/schemas/PlanStep"
+            },
+            "title": "Steps",
+            "type": "array"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "zoneIds": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Zoneids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "title",
+          "objective",
+          "zoneIds",
+          "machineIds",
+          "cadence",
+          "startDate",
+          "endDate",
+          "estimates",
+          "steps",
+          "risks",
+          "questions",
+          "source",
+          "model",
+          "note"
+        ],
+        "title": "PlanDraft",
+        "type": "object"
+      },
+      "PlanDraftBody": {
+        "additionalProperties": false,
+        "description": "The plan itself, as drafted: what the operator reviews, edits and approves.",
+        "properties": {
+          "cadence": {
+            "default": "once",
+            "enum": [
+              "once",
+              "daily",
+              "weekly",
+              "monthly",
+              "seasonal"
+            ],
+            "title": "Cadence",
+            "type": "string"
+          },
+          "endDate": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enddate"
+          },
+          "estimates": {
+            "$ref": "#/components/schemas/PlanEstimates"
+          },
+          "machineIds": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Machineids",
+            "type": "array"
+          },
+          "objective": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Objective",
+            "type": "string"
+          },
+          "questions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Questions",
+            "type": "array"
+          },
+          "risks": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Risks",
+            "type": "array"
+          },
+          "startDate": {
+            "format": "date",
+            "title": "Startdate",
+            "type": "string"
+          },
+          "steps": {
+            "items": {
+              "$ref": "#/components/schemas/PlanStep"
+            },
+            "title": "Steps",
+            "type": "array"
+          },
+          "title": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          },
+          "zoneIds": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Zoneids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "title",
+          "objective",
+          "startDate",
+          "estimates"
+        ],
+        "title": "PlanDraftBody",
+        "type": "object"
+      },
+      "PlanDraftRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "existingPlans": {
+            "items": {
+              "$ref": "#/components/schemas/PlannerExistingPlan"
+            },
+            "maxItems": 200,
+            "title": "Existingplans",
+            "type": "array"
+          },
+          "goal": {
+            "maxLength": 2000,
+            "minLength": 3,
+            "title": "Goal",
+            "type": "string"
+          },
+          "machines": {
+            "items": {
+              "$ref": "#/components/schemas/PlannerMachine"
+            },
+            "maxItems": 200,
+            "title": "Machines",
+            "type": "array"
+          },
+          "preferredMachineIds": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Preferredmachineids",
+            "type": "array"
+          },
+          "preferredZoneIds": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Preferredzoneids",
+            "type": "array"
+          },
+          "previousDraft": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PlanDraftBody"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "projectName": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Projectname",
+            "type": "string"
+          },
+          "refinement": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refinement"
+          },
+          "siteName": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sitename"
+          },
+          "today": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Today"
+          },
+          "zones": {
+            "items": {
+              "$ref": "#/components/schemas/PlannerZone"
+            },
+            "maxItems": 500,
+            "title": "Zones",
+            "type": "array"
+          }
+        },
+        "required": [
+          "goal",
+          "projectName"
+        ],
+        "title": "PlanDraftRequest",
+        "type": "object"
+      },
+      "PlanEstimates": {
+        "additionalProperties": false,
+        "properties": {
+          "acres": {
+            "minimum": 0.0,
+            "title": "Acres",
+            "type": "number"
+          },
+          "calendarDays": {
+            "minimum": 0.0,
+            "title": "Calendardays",
+            "type": "integer"
+          },
+          "machineHours": {
+            "minimum": 0.0,
+            "title": "Machinehours",
+            "type": "number"
+          }
+        },
+        "required": [
+          "acres",
+          "machineHours",
+          "calendarDays"
+        ],
+        "title": "PlanEstimates",
+        "type": "object"
+      },
+      "PlanStep": {
+        "additionalProperties": false,
+        "description": "Every field explicit (no defaults) so the contract marks them required on read.",
+        "properties": {
+          "detail": {
+            "maxLength": 1000,
+            "title": "Detail",
+            "type": "string"
+          },
+          "machineIds": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Machineids",
+            "type": "array"
+          },
+          "title": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          },
+          "when": {
+            "maxLength": 120,
+            "title": "When",
+            "type": "string"
+          },
+          "zoneId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Zoneid"
+          }
+        },
+        "required": [
+          "title",
+          "detail",
+          "machineIds",
+          "zoneId",
+          "when"
+        ],
+        "title": "PlanStep",
+        "type": "object"
+      },
+      "PlannerExistingPlan": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          },
+          "zoneIds": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Zoneids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "title"
+        ],
+        "title": "PlannerExistingPlan",
+        "type": "object"
+      },
+      "PlannerMachine": {
+        "additionalProperties": false,
+        "properties": {
+          "batteryPct": {
+            "default": 100,
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Batterypct",
+            "type": "integer"
+          },
+          "id": {
+            "maxLength": 40,
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "model": {
+            "default": "",
+            "maxLength": 120,
+            "title": "Model",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "status": {
+            "default": "idle",
+            "maxLength": 40,
+            "title": "Status",
+            "type": "string"
+          },
+          "task": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Task",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "title": "PlannerMachine",
+        "type": "object"
+      },
+      "PlannerStatus": {
+        "additionalProperties": false,
+        "properties": {
+          "configured": {
+            "title": "Configured",
+            "type": "boolean"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "provider": {
+            "enum": [
+              "claude",
+              "rules"
+            ],
+            "title": "Provider",
+            "type": "string"
+          }
+        },
+        "required": [
+          "configured",
+          "provider",
+          "model"
+        ],
+        "title": "PlannerStatus",
+        "type": "object"
+      },
+      "PlannerZone": {
+        "additionalProperties": false,
+        "properties": {
+          "acres": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Acres",
+            "type": "number"
+          },
+          "id": {
+            "maxLength": 40,
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "note": {
+            "default": "",
+            "maxLength": 500,
+            "title": "Note",
+            "type": "string"
+          },
+          "progressPct": {
+            "default": 0,
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Progresspct",
+            "type": "integer"
+          },
+          "task": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Task",
+            "type": "string"
+          },
+          "treated": {
+            "default": false,
+            "title": "Treated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "title": "PlannerZone",
+        "type": "object"
+      },
       "PointCloudShading": {
         "additionalProperties": false,
         "properties": {
@@ -3294,6 +3857,119 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/v1/agent/plan-draft": {
+      "post": {
+        "description": "Turns an operator goal plus the project's zones, machines and existing plans into a structured plan draft for review. Drafted by Claude when the API is configured with a key, by a rule-based planner otherwise; the `source` field says which.",
+        "operationId": "plan_draft_api_v1_agent_plan_draft_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlanDraftRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanDraft"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "summary": "Draft a mission plan from a goal",
+        "tags": [
+          "agent"
+        ]
+      }
+    },
+    "/api/v1/agent/status": {
+      "get": {
+        "operationId": "planner_status_api_v1_agent_status_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlannerStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "summary": "Mission planner status",
+        "tags": [
+          "agent"
+        ]
+      }
+    },
     "/api/v1/assets": {
       "get": {
         "operationId": "list_assets_api_v1_assets_get",

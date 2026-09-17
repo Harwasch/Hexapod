@@ -5,7 +5,7 @@
  * provider; the `MissionProvider` seam is where a backend / ROS bridge plugs in.
  */
 
-import type { Footprint } from "@twin/contracts";
+import type { Footprint, PlanStep } from "@twin/contracts";
 
 export type MachineStatus = "working" | "attention" | "idle";
 export type PlanStatus = "ok" | "run" | "warn" | "idle";
@@ -73,6 +73,11 @@ export interface Plan {
   todayPct: number;
   ongoing: boolean;
   zoneIds: string[];
+  /** Plans drafted in the console carry their steps, scope and origin; demo plans do not. */
+  machineIds?: string[];
+  steps?: PlanStep[];
+  goal?: string;
+  source?: { kind: "claude" | "rules"; model: string | null };
 }
 
 export interface AgentAction {

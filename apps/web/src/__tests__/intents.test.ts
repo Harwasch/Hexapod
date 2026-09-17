@@ -12,6 +12,7 @@ function ctx(overrides: Partial<IntentContext> = {}): IntentContext {
     selectMachine: vi.fn((id: string) => (id === "TR-07" ? "Locating TR-07." : null)),
     selectZone: vi.fn((id: string) => (id === "Z-14" ? "Zone Z-14." : null)),
     openPlan: vi.fn((q: string | null) => `plan ${q ?? "list"}`),
+    draftPlan: vi.fn((goal: string | null) => `draft ${goal ?? "empty"}`),
     setView: vi.fn((v: string) => `view ${v}`),
     startMeasure: vi.fn((m: string) => `measure ${m}`),
     camera: vi.fn((a: string) => `camera ${a}`),
@@ -46,5 +47,15 @@ describe("runIntent", () => {
     expect(await runIntent("fly to the demo site", c)).toBe("Flying to demo.");
     expect(await runIntent("fly to Yosemite", c)).toBe("Flying to yosemite.");
     expect(await runIntent("   ", c)).toContain("Say where");
+  });
+
+  it("routes plan drafting before plan lookup", async () => {
+    expect(await runIntent("plan: Mow Z-14 this week", ctx())).toBe("draft Mow Z-14 this week");
+    expect(await runIntent("draft a plan to clear the thistle", ctx())).toBe(
+      "draft clear the thistle",
+    );
+    expect(await runIntent("new plan", ctx())).toBe("draft empty");
+    expect(await runIntent("create a mission plan for Z-21", ctx())).toBe("draft Z-21");
+    expect(await runIntent("open the plan for thistle", ctx())).toBe("plan thistle");
   });
 });

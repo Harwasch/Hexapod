@@ -11,6 +11,8 @@ export interface IntentContext {
   selectMachine: (id: string) => string | null;
   selectZone: (id: string) => string | null;
   openPlan: (query: string | null) => string;
+  /** Opens the plan composer and, with a goal, starts drafting. */
+  draftPlan: (goal: string | null) => string;
   setView: (view: "map" | "plan" | "fleet") => string;
   startMeasure: (mode: "distance" | "area" | "height" | "elevation" | "point") => string;
   camera: (action: "north" | "top-down" | "home" | "explore") => string;
@@ -21,6 +23,16 @@ export async function runIntent(input: string, ctx: IntentContext): Promise<stri
   const text = input.trim();
   const lower = text.toLowerCase();
   if (!text) return "Say where to go or what to do.";
+
+  // Planning first: a goal may name zones and machines that the lookups below would grab.
+  const draft =
+    /^(?:(?:draft|create|make|write|start|new|plan)\s+(?:me\s+)?(?:a\s+)?(?:new\s+)?(?:mission\s+)?(?:plan|mission)\b(?:\s+(?:to|for|that|:))?\s*(.*)|plan:\s*(.*))$/.exec(
+      lower,
+    );
+  if (draft) {
+    const goal = (draft[1] ?? draft[2] ?? "").trim();
+    return ctx.draftPlan(goal ? text.slice(text.length - goal.length) : null);
+  }
 
   const machine = /\b(tr-\d{2})\b/i.exec(text)?.[1]?.toUpperCase();
   if (machine && /\b(select|show|find|locate|where|go to|fly to)\b/.test(lower))

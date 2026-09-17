@@ -301,6 +301,42 @@ export async function mockApi(page: Page, options: MockOptions = {}): Promise<vo
           createJobsReason: "sourceType for photo inputs is not documented",
         },
       });
+    if (path === "/api/v1/agent/status")
+      return json({ configured: false, provider: "rules", model: null });
+    if (path === "/api/v1/agent/plan-draft" && request.method() === "POST") {
+      const body = request.postDataJSON() as {
+        goal: string;
+        preferredZoneIds?: string[];
+        preferredMachineIds?: string[];
+      };
+      const zoneIds = body.preferredZoneIds?.length ? body.preferredZoneIds : ["Z-14"];
+      const machineIds = body.preferredMachineIds?.length ? body.preferredMachineIds : ["TR-04"];
+      return json({
+        title: body.goal,
+        objective: body.goal,
+        zoneIds,
+        machineIds,
+        cadence: /weekly/i.test(body.goal) ? "weekly" : "once",
+        startDate: "2026-09-17",
+        endDate: /weekly/i.test(body.goal) ? null : "2026-09-24",
+        estimates: { acres: 220, machineHours: 147, calendarDays: 7 },
+        steps: [
+          { title: "Survey pass", detail: "", machineIds, zoneId: zoneIds[0], when: "Day 1" },
+          {
+            title: `Treat ${zoneIds[0]}`,
+            detail: "Mow",
+            machineIds,
+            zoneId: zoneIds[0],
+            when: "Day 2",
+          },
+        ],
+        risks: [],
+        questions: [],
+        source: "rules",
+        model: null,
+        note: "Rule-based draft: no model is configured (mock).",
+      });
+    }
     return json({ title: "Not found", status: 404 }, 404);
   });
   // Keep the globe offline-friendly: block the heavy external tile traffic so runs are deterministic.

@@ -70,6 +70,21 @@ export function FleetPanel() {
                   </div>
                   <button
                     type="button"
+                    className="mc-btn mc-btn--accent"
+                    onClick={() =>
+                      useMission.getState().openComposer({
+                        machineIds:
+                          selection?.kind === "machine"
+                            ? [selection.id]
+                            : project.machines.filter((m) => m.status === "idle").map((m) => m.id),
+                      })
+                    }
+                    data-testid="fleet-plan-mission"
+                  >
+                    Plan a mission
+                  </button>
+                  <button
+                    type="button"
                     className="mc-btn"
                     onClick={() => {
                       useMission

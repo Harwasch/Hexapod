@@ -42,6 +42,11 @@ class Settings(BaseSettings):
     cesium_ion_server_token: str | None = None
     cesium_ion_api_base: str = "https://api.cesium.com"
 
+    # Mission planning agent. With a key the plan drafter calls Claude through the official
+    # SDK; without one it falls back to a rule-based drafter and says so in every draft.
+    anthropic_api_key: str | None = None
+    anthropic_model: str = "claude-opus-5"
+
     api_host: str = "0.0.0.0"  # noqa: S104 - container default, documented in DEPLOYMENT.md
     api_port: int = 8000
 

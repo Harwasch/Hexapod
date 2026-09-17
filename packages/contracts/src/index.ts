@@ -77,3 +77,9 @@ export const LAYER_CATEGORIES = [
 ] as const satisfies readonly LayerCategory[];
 
 export const API_PREFIX = "/api/v1";
+
+export type PlannerStatus = Schemas["PlannerStatus"];
+export type PlanDraftRequest = Schemas["PlanDraftRequest"];
+export type PlanDraft = Schemas["PlanDraft"];
+export type PlanStep = Schemas["PlanStep"];
+export type PlanCadence = PlanDraft["cadence"];

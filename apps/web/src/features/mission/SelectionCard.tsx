@@ -133,10 +133,13 @@ export function SelectionCard() {
                     className="mc-btn"
                     onClick={() => {
                       const plan = project?.plans.find((p) => p.zoneIds.includes(zone.id));
-                      openPlan(plan?.id ?? null);
+                      if (plan) openPlan(plan.id);
+                      else useMission.getState().openComposer({ zoneIds: [zone.id] });
                     }}
                   >
-                    Open plan
+                    {project?.plans.some((p) => p.zoneIds.includes(zone.id))
+                      ? "Open plan"
+                      : "Plan here"}
                   </button>
                   <button
                     type="button"

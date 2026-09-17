@@ -62,6 +62,8 @@ const POSE_SETTLE_DELAYS_MS = [600, 2000];
 const FLOOR_CHECK_DELAY_MS = 250;
 /** Never sample the floor more often than this; a pause inside a drag is not a rest. */
 const FLOOR_CHECK_MIN_INTERVAL_MS = 1500;
+/** Roll below this (about 0.03°) is float noise; above it the horizon is visibly tilted. */
+const ROLL_TOLERANCE_RAD = 0.0005;
 /** Largest correction the floor check applies; more than this is a mis-sample, not the ground. */
 const MAX_FLOOR_LIFT_M = 40;
 const IDLE_POSE_REFRESH_MS = 3000;
@@ -162,6 +164,7 @@ export class CameraController {
           this.moving = true;
           this.events.emit("motion", true);
         }
+        this.levelHorizon();
         this.reportPose();
       }),
       camera.moveEnd.addEventListener(() => {
@@ -190,6 +193,19 @@ export class CameraController {
 
   get isMoving(): boolean {
     return this.moving;
+  }
+
+  /**
+   * Google Maps never rolls the view: the horizon stays level whatever the gesture. Any
+   * roll that crept in (touch tilt, inertia, an orbit near straight down) is removed here.
+   */
+  levelHorizon(): void {
+    const camera = this.viewer.camera;
+    if (!Matrix4.equals(camera.transform, Matrix4.IDENTITY)) return;
+    // Cesium reports roll in [0, 2π): a hair of negative roll reads as nearly a full turn.
+    const roll = camera.roll > Math.PI ? camera.roll - CesiumMath.TWO_PI : camera.roll;
+    if (Math.abs(roll) < ROLL_TOLERANCE_RAD) return;
+    camera.setView({ orientation: { heading: camera.heading, pitch: camera.pitch, roll: 0 } });
   }
 
   /**
@@ -324,10 +340,16 @@ export class CameraController {
     if (headingRad === 0 && allowedTilt === 0) return;
     // Orbit in the pivot's east-north-up frame, then drop the transform again so the rest of
     // the app keeps seeing a world-frame camera.
+    // Turning around the frame's up axis (not the camera's own up) is what keeps the horizon
+    // level: rotating around a pitched camera's up vector rolls the view a little every drag.
     camera.lookAtTransform(Transforms.eastNorthUpToFixedFrame(pivot, undefined, scratchFrame));
+    const previousAxis = camera.constrainedAxis;
+    camera.constrainedAxis = Cartesian3.UNIT_Z;
     camera.rotateLeft(headingRad);
     camera.rotateUp(allowedTilt);
+    camera.constrainedAxis = previousAxis;
     camera.lookAtTransform(Matrix4.IDENTITY);
+    this.levelHorizon();
     this.scene.requestRender();
   }
 

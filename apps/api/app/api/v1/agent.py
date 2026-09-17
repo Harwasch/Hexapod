@@ -1,0 +1,31 @@
+from __future__ import annotations
+
+from fastapi import APIRouter, HTTPException
+
+from app.api.deps import PlannerDep
+from app.schemas.agent import PlanDraft, PlanDraftRequest, PlannerStatus
+from app.services.planner import PlannerError
+
+router = APIRouter(prefix="/agent", tags=["agent"])
+
+
+@router.get("/status", response_model=PlannerStatus, summary="Mission planner status")
+def planner_status(planner: PlannerDep) -> PlannerStatus:
+    return planner.status()
+
+
+@router.post(
+    "/plan-draft",
+    response_model=PlanDraft,
+    summary="Draft a mission plan from a goal",
+    description=(
+        "Turns an operator goal plus the project's zones, machines and existing plans into a "
+        "structured plan draft for review. Drafted by Claude when the API is configured with "
+        "a key, by a rule-based planner otherwise; the `source` field says which."
+    ),
+)
+def plan_draft(body: PlanDraftRequest, planner: PlannerDep) -> PlanDraft:
+    try:
+        return planner.draft(body)
+    except PlannerError as exc:
+        raise HTTPException(exc.status_code, str(exc)) from exc

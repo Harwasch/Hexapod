@@ -1,0 +1,323 @@
+import { ArrowLeft, Sparkles } from "lucide-react";
+import { useState } from "react";
+
+import type { PlanDraft } from "@twin/contracts";
+
+import { usePlannerStatus } from "@/api/queries";
+import { idLabel, planFromDraft } from "@/missions/planDraft";
+import type { Project } from "@/missions/types";
+import { useMission } from "@/state/mission";
+
+import { startPlanDraft } from "./planDrafting";
+import { useMissionActions } from "./useMissionActions";
+
+const EXAMPLES = [
+  "Clear the star thistle from Z-14 and Z-21 with two mowers before seed set",
+  "Inspect the pipeline corridor monthly and flag erosion",
+  "Cut fire breaks along the north fence this week",
+];
+
+/** Goal → draft → review → approve. The agent drafts; the operator decides. */
+export function PlanComposer({ project }: { project: Project }) {
+  const composer = useMission((s) => s.composer);
+  const update = useMission((s) => s.updateComposer);
+  const close = useMission((s) => s.closeComposer);
+  const planner = usePlannerStatus();
+  if (!composer) return null;
+  const drafting = composer.status === "drafting";
+  const toggle = (key: "zoneIds" | "machineIds", id: string) => {
+    const list = composer[key];
+    update({ [key]: list.includes(id) ? list.filter((x) => x !== id) : [...list, id] });
+  };
+  const submit = () => {
+    if (drafting) return;
+    void startPlanDraft(composer.goal, {
+      zoneIds: composer.zoneIds,
+      machineIds: composer.machineIds,
+    });
+  };
+  return (
+    <div className="mc-composer" data-testid="plan-composer">
+      <div className="mc-window__head mc-window__head--column">
+        <button type="button" className="mc-link" onClick={close}>
+          <ArrowLeft size={12} aria-hidden="true" /> All plans
+        </button>
+        <div className="mc-row mc-row--between">
+          <div>
+            <div className="mc-window__title">
+              {composer.replacePlanId ? "Revise plan" : "New plan"}
+            </div>
+            <div className="mc-window__sub">
+              {planner.data?.provider === "claude"
+                ? `Drafted by Claude · ${planner.data.model ?? ""}`
+                : "Rule-based drafts · set ANTHROPIC_API_KEY on the API for Claude"}
+            </div>
+          </div>
+        </div>
+      </div>
+      <div className="mc-window__body mc-composer__body">
+        <form
+          className="mc-composer__goal"
+          onSubmit={(e) => {
+            e.preventDefault();
+            submit();
+          }}
+        >
+          <label className="mc-eyebrow" htmlFor="plan-goal">
+            GOAL
+          </label>
+          <textarea
+            id="plan-goal"
+            className="mc-textarea"
+            rows={3}
+            value={composer.goal}
+            placeholder="What should the fleet achieve? Name zones, machines and a deadline if you have them."
+            onChange={(e) => update({ goal: e.target.value })}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) submit();
+            }}
+            disabled={drafting}
+            data-testid="plan-goal"
+          />
+          {composer.status === "idle" && (
+            <div className="mc-tags" aria-label="Examples">
+              {EXAMPLES.map((example) => (
+                <button
+                  key={example}
+                  type="button"
+                  className="mc-tag mc-tag--ghost"
+                  onClick={() => update({ goal: example })}
+                >
+                  {example}
+                </button>
+              ))}
+            </div>
+          )}
+          <div className="mc-composer__scope">
+            <div>
+              <span className="mc-eyebrow">ZONES</span>
+              <div className="mc-tags">
+                {project.zones.map((zone) => (
+                  <button
+                    key={zone.id}
+                    type="button"
+                    className={`mc-tag ${composer.zoneIds.includes(zone.id) ? "is-on" : ""}`}
+                    aria-pressed={composer.zoneIds.includes(zone.id)}
+                    onClick={() => toggle("zoneIds", zone.id)}
+                    disabled={drafting}
+                    data-testid={`compose-zone-${zone.id}`}
+                  >
+                    <span className={`mc-dot mc-dot--${zone.tone}`} aria-hidden="true" />
+                    {idLabel(zone.id, zone.name)}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <span className="mc-eyebrow">MACHINES</span>
+              <div className="mc-tags">
+                {project.machines.map((machine) => (
+                  <button
+                    key={machine.id}
+                    type="button"
+                    className={`mc-tag ${composer.machineIds.includes(machine.id) ? "is-on" : ""}`}
+                    aria-pressed={composer.machineIds.includes(machine.id)}
+                    onClick={() => toggle("machineIds", machine.id)}
+                    disabled={drafting}
+                    data-testid={`compose-machine-${machine.id}`}
+                  >
+                    <span className={`mc-dot mc-dot--${machine.status}`} aria-hidden="true" />
+                    {machine.id}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+          <div className="mc-actions">
+            <button
+              type="submit"
+              className="mc-btn mc-btn--accent"
+              disabled={drafting || composer.goal.trim().length < 3}
+              data-testid="plan-draft-submit"
+            >
+              <Sparkles size={13} aria-hidden="true" />{" "}
+              {drafting ? "Drafting…" : composer.draft ? "Draft again" : "Draft with the agent"}
+            </button>
+          </div>
+        </form>
+        {composer.status === "error" && (
+          <div className="mc-note mc-note--warn" role="alert">
+            {composer.error}
+          </div>
+        )}
+        {composer.draft && composer.status !== "drafting" && (
+          <DraftReview draft={composer.draft} project={project} goal={composer.goal} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function DraftReview({
+  draft,
+  project,
+  goal,
+}: {
+  draft: PlanDraft;
+  project: Project;
+  goal: string;
+}) {
+  const composer = useMission((s) => s.composer);
+  const update = useMission((s) => s.updateComposer);
+  const approve = useMission((s) => s.approvePlan);
+  const appendLog = useMission((s) => s.appendLog);
+  const { showPlanOnMap } = useMissionActions();
+  const [refinement, setRefinement] = useState("");
+  const zoneName = (id: string | null | undefined) =>
+    id ? (project.zones.find((z) => z.id === id)?.name ?? id) : null;
+  const refine = () => {
+    const text = refinement.trim();
+    if (!text) return;
+    setRefinement("");
+    void startPlanDraft(goal, {
+      zoneIds: composer?.zoneIds ?? draft.zoneIds,
+      machineIds: composer?.machineIds ?? draft.machineIds,
+      refinement: text,
+    });
+  };
+  const onApprove = () => {
+    const plan = planFromDraft({ ...draft, title: draft.title.trim() || "New plan" }, project, {
+      goal,
+      ...(composer?.replacePlanId ? { id: composer.replacePlanId } : {}),
+    });
+    approve(plan);
+    appendLog("agent", `“${plan.title}” is approved and scheduled. ${plan.facts[2]?.v ?? ""}`);
+  };
+  return (
+    <section className="mc-review" data-testid="plan-review" aria-label="Plan draft">
+      <div className="mc-source">
+        <span
+          className={`mc-dot mc-dot--glow ${draft.source === "claude" ? "mc-dot--run" : "mc-dot--neutral"}`}
+          aria-hidden="true"
+        />
+        <span>{draft.note}</span>
+      </div>
+      <input
+        className="mc-input mc-review__title"
+        value={draft.title}
+        aria-label="Plan title"
+        onChange={(e) => update({ draft: { ...draft, title: e.target.value } })}
+      />
+      <textarea
+        className="mc-textarea"
+        rows={3}
+        value={draft.objective}
+        aria-label="Objective"
+        onChange={(e) => update({ draft: { ...draft, objective: e.target.value } })}
+      />
+      <div className="mc-stats mc-stats--tight">
+        <div className="mc-stat">
+          <div className="mc-stat__value">{Math.round(draft.estimates.acres)}</div>
+          <div className="mc-stat__label">Acres</div>
+        </div>
+        <div className="mc-stat">
+          <div className="mc-stat__value">{Math.round(draft.estimates.machineHours)} h</div>
+          <div className="mc-stat__label">Machine-hours</div>
+        </div>
+        <div className="mc-stat">
+          <div className="mc-stat__value">
+            {draft.cadence === "once" ? `${draft.estimates.calendarDays} d` : draft.cadence}
+          </div>
+          <div className="mc-stat__label">{draft.cadence === "once" ? "Duration" : "Cadence"}</div>
+        </div>
+      </div>
+      <div className="mc-review__scope mc-mono">
+        <span>{draft.zoneIds.join(", ") || "no zones"}</span>
+        <span>{draft.machineIds.join(", ") || "no machines"}</span>
+        <span>
+          {draft.startDate}
+          {draft.endDate ? ` → ${draft.endDate}` : " → ongoing"}
+        </span>
+      </div>
+      <section>
+        <span className="mc-eyebrow">STEPS</span>
+        <ol className="mc-steps">
+          {(draft.steps ?? []).map((step, i) => (
+            <li key={`${i}-${step.title}`} className="mc-step">
+              <div className="mc-step__title">{step.title}</div>
+              <div className="mc-step__meta mc-mono">
+                {[step.when, zoneName(step.zoneId), step.machineIds.join(" ")]
+                  .filter(Boolean)
+                  .join(" · ")}
+              </div>
+              {step.detail && <div className="mc-step__detail">{step.detail}</div>}
+            </li>
+          ))}
+        </ol>
+      </section>
+      {draft.risks.length > 0 && (
+        <section>
+          <span className="mc-eyebrow">RISKS</span>
+          <ul className="mc-list">
+            {draft.risks.map((risk) => (
+              <li key={risk} className="mc-note mc-note--warn">
+                {risk}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+      {draft.questions.length > 0 && (
+        <section>
+          <span className="mc-eyebrow">THE AGENT ASKS</span>
+          <ul className="mc-list">
+            {draft.questions.map((q) => (
+              <li key={q} className="mc-note mc-note--agent">
+                {q}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+      <form
+        className="mc-refine"
+        onSubmit={(e) => {
+          e.preventDefault();
+          refine();
+        }}
+      >
+        <input
+          className="mc-input"
+          value={refinement}
+          placeholder="Answer or adjust — “use three machines”, “skip Z-21”, “finish by October”"
+          aria-label="Refine the draft"
+          onChange={(e) => setRefinement(e.target.value)}
+          data-testid="plan-refine"
+        />
+        <button type="submit" className="mc-btn mc-btn--sm" disabled={!refinement.trim()}>
+          Redraft
+        </button>
+      </form>
+      <div className="mc-actions">
+        <button
+          type="button"
+          className="mc-btn"
+          onClick={() =>
+            showPlanOnMap(planFromDraft(draft, project, { goal, id: "draft-preview" }))
+          }
+        >
+          Show on map
+        </button>
+        <button
+          type="button"
+          className="mc-btn mc-btn--accent"
+          onClick={onApprove}
+          disabled={draft.zoneIds.length === 0}
+          data-testid="plan-approve"
+        >
+          Approve plan
+        </button>
+      </div>
+    </section>
+  );
+}
