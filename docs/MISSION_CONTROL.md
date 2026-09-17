@@ -93,7 +93,10 @@ catalog site ──▶ SceneBridge ──▶ MissionProvider.projectForSite() �
 
 `apps/web/src/missions/types.ts` defines `Project`, `Machine`, `Zone`, `Plan`, `AgentAction`,
 `WorkLogRow` and `Feed`. `MissionProvider` is the only seam: it returns a `Project` for a site
-or `null`.
+or `null`. A site without mission data still gets a project (`missions/siteProject.ts`: the
+site boundary as its one zone, no machines, plans from the API) so planning works for every
+catalog site. The project follows the last site visited: the engaged site goes null when the
+camera leaves it, the project does not.
 
 ## Demo data is simulated
 

@@ -1,9 +1,10 @@
 import { useEffect } from "react";
 
-import { useLayers as useLayerCatalog, useSites as useSiteCatalog } from "@/api/queries";
+import { useLayers as useLayerCatalog, useSite, useSites as useSiteCatalog } from "@/api/queries";
 import { api, unwrap } from "@/api/client";
 import { builtinDemoSite } from "@/api/fallback";
 import { DemoMissionProvider } from "@/missions/demo";
+import { siteProject } from "@/missions/siteProject";
 import { useLayers } from "@/state/layers";
 import { useMission } from "@/state/mission";
 import { useMeasurements } from "@/state/measurements";
@@ -110,14 +111,23 @@ export function SceneBridge() {
     scene.sites.setCatalog(siteCatalog.data, resolver);
   }, [scene, siteCatalog.data, siteCatalog.isLoading]);
 
-  // Active site → mission project (demo provider today; a backend/ROS bridge later)
+  // Active site → mission project: the demo provider for the demo site, otherwise a project
+  // built from the catalog site itself (boundary as the one zone, no machines yet) so
+  // planning works for every site; a backend/ROS bridge replaces this per site later.
   const activeSiteId = useSites((s) => s.activeSiteId);
+  const activeSite = useSite(activeSiteId);
   useEffect(() => {
     if (!scene) return;
     const provider = new DemoMissionProvider();
     const summary = siteCatalog.data?.find((s) => s.id === activeSiteId) ?? null;
-    const project = provider.projectForSite(activeSiteId, summary?.slug ?? null);
+    const site = activeSite.data?.id === activeSiteId ? activeSite.data : null;
+    const project =
+      provider.projectForSite(activeSiteId, summary?.slug ?? null) ??
+      (site ? siteProject(site) : null);
     const current = useMission.getState().project;
+    // The active site is the *engaged* one and goes null when the camera leaves it; the
+    // mission project follows the last site visited so plans stay put while flying around.
+    if (!activeSiteId || (!project && activeSiteId)) return;
     if (
       (project?.id ?? null) === (current?.id ?? null) &&
       (project?.siteId ?? null) === (current?.siteId ?? null)
@@ -128,7 +138,7 @@ export function SceneBridge() {
     const layers = useMission.getState().layers;
     scene.mission.setLayer("zones", layers.zones);
     scene.mission.setLayer("tracks", layers.tracks);
-  }, [scene, activeSiteId, siteCatalog.data]);
+  }, [scene, activeSiteId, siteCatalog.data, activeSite.data]);
 
   // Settings → scene
   const quality = useSettings((s) => s.quality);

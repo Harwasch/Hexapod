@@ -134,6 +134,12 @@ export function PlanComposer({ project }: { project: Project }) {
             </div>
             <div>
               <span className="mc-eyebrow">MACHINES</span>
+              {project.machines.length === 0 && (
+                <p className="mc-muted" style={{ fontSize: "12px", marginTop: "0.35rem" }}>
+                  No machines are registered for this site yet. The agent drafts the work and
+                  schedule; assignments come once a robot bridge registers the fleet.
+                </p>
+              )}
               <div className="mc-tags">
                 {project.machines.map((machine) => (
                   <button

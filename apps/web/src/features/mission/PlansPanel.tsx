@@ -71,15 +71,22 @@ export function PlansPanel() {
               <div className="mc-window__empty">
                 <div className="mc-window__title">Plans</div>
                 <p className="mc-muted">
-                  No project is loaded. Fly to a site with mission data, or add one.
+                  Plans belong to a site. Fly to one and the agent can plan its work; add a site if
+                  the catalog is empty.
                 </p>
-                <button
-                  type="button"
-                  className="mc-btn mc-btn--accent"
-                  onClick={() => setAddDataOpen(true)}
-                >
-                  Add a site
-                </button>
+                <div className="mc-actions">
+                  <button
+                    type="button"
+                    className="mc-btn mc-btn--accent"
+                    onClick={() => useMission.getState().setProjectsOpen(true)}
+                    data-testid="plans-pick-site"
+                  >
+                    Pick a site
+                  </button>
+                  <button type="button" className="mc-btn" onClick={() => setAddDataOpen(true)}>
+                    Add a site
+                  </button>
+                </div>
               </div>
             )}
             {project && composer && <PlanComposer project={project} />}
