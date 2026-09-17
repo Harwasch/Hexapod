@@ -3,7 +3,14 @@ import { describe, expect, it } from "vitest";
 import type { PlanDraft } from "@twin/contracts";
 
 import { DemoMissionProvider } from "@/missions/demo";
-import { buildDraftRequest, describeDraft, planFromDraft } from "@/missions/planDraft";
+import {
+  buildDraftRequest,
+  describeDraft,
+  diffDrafts,
+  overlayFor,
+  planFromDraft,
+  scheduleLanes,
+} from "@/missions/planDraft";
 import { useMission } from "@/state/mission";
 
 const project = new DemoMissionProvider().projectForSite("builtin-demo", null)!;
@@ -18,9 +25,26 @@ const draft: PlanDraft = {
   endDate: "2026-09-24",
   estimates: { acres: 310, machineHours: 206, calendarDays: 7 },
   steps: [
-    { title: "Survey pass", detail: "", machineIds: ["TR-04"], zoneId: "Z-14", when: "Day 1" },
-    { title: "Treat Z-14", detail: "Mow", machineIds: ["TR-04"], zoneId: "Z-14", when: "Day 2" },
+    {
+      title: "Survey pass",
+      detail: "",
+      machineIds: ["TR-04"],
+      zoneId: "Z-14",
+      when: "Day 1",
+      startDay: 0,
+      days: 1,
+    },
+    {
+      title: "Treat Z-14",
+      detail: "Mow",
+      machineIds: ["TR-04"],
+      zoneId: "Z-14",
+      when: "Day 2",
+      startDay: 1,
+      days: 6,
+    },
   ],
+  assumptions: ["1.5 acres per machine-hour"],
   risks: ["TR-04 is at 22% battery."],
   questions: [],
   source: "rules",
@@ -93,5 +117,53 @@ describe("plan drafting", () => {
     );
     store.removePlan("plan-test");
     expect(useMission.getState().project?.plans.some((p) => p.id === "plan-test")).toBe(false);
+  });
+
+  it("builds the map overlay in step order and lanes per machine", () => {
+    const overlay = overlayFor({
+      zoneIds: ["Z-21", "Z-14"],
+      machineIds: ["TR-12"],
+      steps: [
+        ...draft.steps,
+        {
+          title: "Treat Z-21",
+          detail: "",
+          machineIds: ["TR-12"],
+          zoneId: "Z-21",
+          when: "",
+          startDay: 1,
+          days: 3,
+        },
+      ],
+    });
+    expect(overlay.zones).toEqual([
+      { zoneId: "Z-14", machineIds: ["TR-04"] },
+      { zoneId: "Z-21", machineIds: ["TR-12"] },
+    ]);
+    const { lanes, totalDays } = scheduleLanes(draft.steps);
+    expect(lanes).toHaveLength(1);
+    expect(lanes[0]?.bars.map((b) => b.startDay)).toEqual([0, 1]);
+    expect(totalDays).toBe(7);
+    expect(scheduleLanes([{ ...draft.steps[0]!, machineIds: [] }]).lanes[0]?.machineId).toBe(
+      "Fleet",
+    );
+  });
+
+  it("describes what a redraft changed", () => {
+    const next: PlanDraft = {
+      ...draft,
+      machineIds: ["TR-04", "TR-12"],
+      zoneIds: ["Z-21"],
+      estimates: { acres: 220, machineHours: 100, calendarDays: 3 },
+      steps: draft.steps.slice(0, 1),
+    };
+    const changes = diffDrafts(draft, next);
+    expect(changes).toContain("Added zone Z-21.");
+    expect(changes).toContain("Dropped zone Z-14.");
+    expect(changes).toContain("Added machine TR-12.");
+    expect(changes).toContain("Machine-hours 206 → 100.");
+    expect(changes).toContain("Duration 7 d → 3 d.");
+    expect(changes).toContain("Steps 2 → 1.");
+    expect(diffDrafts(draft, draft)).toEqual([]);
   });
 });

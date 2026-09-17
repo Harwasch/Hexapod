@@ -76,8 +76,14 @@ export interface Plan {
   /** Plans drafted in the console carry their steps, scope and origin; demo plans do not. */
   machineIds?: string[];
   steps?: PlanStep[];
+  assumptions?: string[];
   goal?: string;
   source?: { kind: "claude" | "rules"; model: string | null };
+}
+
+/** What the map draws for a plan or draft: zones in step order with the machines assigned. */
+export interface PlanOverlay {
+  zones: { zoneId: string; machineIds: string[] }[];
 }
 
 export interface AgentAction {

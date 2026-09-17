@@ -893,6 +893,8 @@ export interface components {
          * @description Read model: every field is explicit (no defaults) so the contract marks it required.
          */
         PlanDraft: {
+            /** Assumptions */
+            assumptions: string[];
             /**
              * Cadence
              * @enum {string}
@@ -935,6 +937,8 @@ export interface components {
          * @description The plan itself, as drafted: what the operator reviews, edits and approves.
          */
         PlanDraftBody: {
+            /** Assumptions */
+            assumptions?: string[];
             /**
              * Cadence
              * @default once
@@ -1082,10 +1086,14 @@ export interface components {
          * @description Every field explicit (no defaults) so the contract marks them required on read.
          */
         PlanStep: {
+            /** Days */
+            days: number;
             /** Detail */
             detail: string;
             /** Machineids */
             machineIds: string[];
+            /** Startday */
+            startDay: number;
             /** Title */
             title: string;
             /** When */

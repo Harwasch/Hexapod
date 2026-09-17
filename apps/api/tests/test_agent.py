@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
+from itertools import pairwise
 from typing import Any
 
 from fastapi.testclient import TestClient
@@ -116,8 +117,11 @@ def test_claude_planner_filters_unknown_ids_and_labels_source() -> None:
                 "machine_ids": ["TR-04", "TR-00"],
                 "zone_id": "Z-99",
                 "when": "Day 1",
+                "start_day": 0,
+                "days": 7,
             }
         ],
+        assumptions=["1.2 acres/hour"],
         risks=[],
         questions=[],
     )
@@ -127,6 +131,7 @@ def test_claude_planner_filters_unknown_ids_and_labels_source() -> None:
     assert draft.source == "claude" and draft.model == "claude-opus-5"
     assert draft.zone_ids == ["Z-14"] and draft.machine_ids == ["TR-04"]
     assert draft.steps[0].machine_ids == ["TR-04"] and draft.steps[0].zone_id is None
+    assert draft.steps[0].days == 7 and draft.assumptions == ["1.2 acres/hour"]
     call = client.messages.calls[0]
     assert call["model"] == "claude-opus-5" and "Z-14" in call["messages"][0]["content"]
 
@@ -146,3 +151,33 @@ def test_plan_draft_endpoint(client: TestClient) -> None:
     assert draft["zoneIds"] == ["Z-21"] if draft["source"] == "rules" else True
     assert client.get("/api/v1/agent/status").json()["provider"] in {"rules", "claude"}
     assert client.post("/api/v1/agent/plan-draft", json={"goal": "x"}).status_code == 422
+
+
+def test_rules_planner_refinement_overrides_count_and_exclusions() -> None:
+    zones = [*ZONES, PlannerZone(id="Z-08", name="Draw", acres=90, task="Survey", progress_pct=10)]
+    draft = RulesPlanner().draft(
+        request(
+            "Clear Z-14 and Z-21 with two mowers, then survey Z-08",
+            zones=zones,
+            refinement="use three machines and skip Z-08",
+        )
+    )
+    assert draft.zone_ids == ["Z-14", "Z-21"]
+    assert len(draft.machine_ids) == 3
+    # A crew with two zones does them one after the other, never in parallel.
+    by_machine: dict[str, list[tuple[int, int]]] = {}
+    for step in draft.steps[1:-1]:
+        for m in step.machine_ids:
+            by_machine.setdefault(m, []).append((step.start_day, step.start_day + step.days))
+    for spans in by_machine.values():
+        spans.sort()
+        for (_, end), (start, _) in pairwise(spans):
+            assert start >= end
+
+
+def test_rules_planner_sequences_one_crew_over_two_zones() -> None:
+    draft = RulesPlanner().draft(request("Mow Z-14 and Z-21 with TR-04"))
+    assert draft.machine_ids == ["TR-04"]
+    first, second = draft.steps[1], draft.steps[2]
+    assert second.start_day == first.start_day + first.days
+    assert draft.steps[-1].start_day == second.start_day + second.days

@@ -48,6 +48,9 @@ class PlanStep(CamelModel):
     machine_ids: list[str]
     zone_id: str | None
     when: str = Field(max_length=120)
+    # Schedule: offset from the plan start in days and duration in days (>= 1 for a real step).
+    start_day: int = Field(ge=0)
+    days: int = Field(ge=0)
 
 
 class PlanEstimates(CamelModel):
@@ -68,6 +71,8 @@ class PlanDraftBody(CamelModel):
     end_date: date | None = None
     estimates: PlanEstimates
     steps: list[PlanStep] = Field(default_factory=list)
+    # What the estimate rests on (rates, hours per day, weather windows); shown with the numbers.
+    assumptions: list[str] = Field(default_factory=list)
     risks: list[str] = Field(default_factory=list)
     questions: list[str] = Field(default_factory=list)
 
@@ -100,6 +105,7 @@ class PlanDraft(CamelModel):
     end_date: date | None
     estimates: PlanEstimates
     steps: list[PlanStep]
+    assumptions: list[str]
     risks: list[str]
     questions: list[str]
     source: PlannerSource

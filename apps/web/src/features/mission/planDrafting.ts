@@ -47,8 +47,13 @@ export async function startPlanDraft(
     });
     const draft = await draftPlan(request);
     if (!useMission.getState().composer) return; // closed while drafting
-    // The chips stay the operator's pre-selection; the draft carries its own scope.
-    useMission.getState().updateComposer({ status: "ready", draft });
+    // The chips stay the operator's pre-selection; the draft carries its own scope. The
+    // previous draft is kept so the review can say what the redraft changed.
+    useMission.getState().updateComposer({
+      status: "ready",
+      draft,
+      previousDraft: options.refinement ? (composer?.draft ?? null) : null,
+    });
     useMission.getState().appendLog("agent", describeDraft(draft));
   } catch (error) {
     const message = describeError(error);

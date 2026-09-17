@@ -3,9 +3,9 @@
  * Pure functions so the flow is unit-tested without a scene.
  */
 
-import type { PlanCadence, PlanDraft, PlanDraftRequest } from "@twin/contracts";
+import type { PlanCadence, PlanDraft, PlanDraftRequest, PlanStep } from "@twin/contracts";
 
-import type { Plan, Project } from "./types";
+import type { Plan, PlanOverlay, Project } from "./types";
 
 export interface DraftSeed {
   goal: string;
@@ -129,6 +129,7 @@ export function planFromDraft(
     zoneIds: [...draft.zoneIds],
     machineIds: [...draft.machineIds],
     steps: draft.steps ?? [],
+    assumptions: draft.assumptions ?? [],
     goal: options.goal,
     source: { kind: draft.source, model: draft.model ?? null },
   };
@@ -146,4 +147,80 @@ export function describeDraft(draft: PlanDraft): string {
     ? ` I have ${draft.questions.length} question${draft.questions.length === 1 ? "" : "s"} before you approve.`
     : " Review it in the Plans window.";
   return `${parts.join(" · ")}.${tail}`;
+}
+
+/** Zones in step order (a zone appears once, at its first step) with the machines assigned. */
+export function overlayFor(scope: {
+  zoneIds: string[];
+  machineIds?: string[];
+  steps?: PlanStep[];
+}): PlanOverlay {
+  const zones: PlanOverlay["zones"] = [];
+  for (const step of scope.steps ?? []) {
+    if (!step.zoneId || zones.some((z) => z.zoneId === step.zoneId)) continue;
+    zones.push({ zoneId: step.zoneId, machineIds: step.machineIds });
+  }
+  for (const zoneId of scope.zoneIds) {
+    if (!zones.some((z) => z.zoneId === zoneId))
+      zones.push({ zoneId, machineIds: scope.machineIds ?? [] });
+  }
+  return { zones };
+}
+
+export interface ScheduleLane {
+  machineId: string;
+  bars: { title: string; startDay: number; days: number; zoneId: string | null }[];
+}
+
+/** One lane per machine with its steps as bars; unassigned steps land in a "Fleet" lane. */
+export function scheduleLanes(steps: PlanStep[]): { lanes: ScheduleLane[]; totalDays: number } {
+  const lanes = new Map<string, ScheduleLane>();
+  let totalDays = 1;
+  for (const step of steps) {
+    const days = Math.max(Number.isFinite(step.days) ? step.days : 1, 1);
+    const startDay = Number.isFinite(step.startDay) ? Math.max(step.startDay, 0) : 0;
+    totalDays = Math.max(totalDays, startDay + days);
+    const owners = step.machineIds.length ? step.machineIds : ["Fleet"];
+    for (const machineId of owners) {
+      const lane = lanes.get(machineId) ?? { machineId, bars: [] };
+      lane.bars.push({
+        title: step.title,
+        startDay: step.startDay,
+        days,
+        zoneId: step.zoneId ?? null,
+      });
+      lanes.set(machineId, lane);
+    }
+  }
+  return { lanes: [...lanes.values()], totalDays };
+}
+
+function listDiff(before: string[], after: string[], noun: string): string[] {
+  const added = after.filter((x) => !before.includes(x));
+  const removed = before.filter((x) => !after.includes(x));
+  const out: string[] = [];
+  if (added.length) out.push(`Added ${noun} ${added.join(", ")}.`);
+  if (removed.length) out.push(`Dropped ${noun} ${removed.join(", ")}.`);
+  return out;
+}
+
+/** Plain sentences describing what a redraft changed; empty when nothing material moved. */
+export function diffDrafts(before: PlanDraft, after: PlanDraft): string[] {
+  const out = [
+    ...listDiff(before.zoneIds, after.zoneIds, "zone"),
+    ...listDiff(before.machineIds, after.machineIds, "machine"),
+  ];
+  if (before.cadence !== after.cadence) out.push(`Cadence ${before.cadence} → ${after.cadence}.`);
+  if (before.endDate !== after.endDate)
+    out.push(`Ends ${before.endDate ?? "ongoing"} → ${after.endDate ?? "ongoing"}.`);
+  const b = before.estimates;
+  const a = after.estimates;
+  if (Math.round(b.machineHours) !== Math.round(a.machineHours))
+    out.push(`Machine-hours ${Math.round(b.machineHours)} → ${Math.round(a.machineHours)}.`);
+  if (b.calendarDays !== a.calendarDays)
+    out.push(`Duration ${b.calendarDays} d → ${a.calendarDays} d.`);
+  const stepsBefore = (before.steps ?? []).length;
+  const stepsAfter = (after.steps ?? []).length;
+  if (stepsBefore !== stepsAfter) out.push(`Steps ${stepsBefore} → ${stepsAfter}.`);
+  return out;
 }

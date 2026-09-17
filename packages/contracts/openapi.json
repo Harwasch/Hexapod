@@ -2152,6 +2152,13 @@
         "additionalProperties": false,
         "description": "Read model: every field is explicit (no defaults) so the contract marks it required.",
         "properties": {
+          "assumptions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Assumptions",
+            "type": "array"
+          },
           "cadence": {
             "enum": [
               "once",
@@ -2260,6 +2267,7 @@
           "endDate",
           "estimates",
           "steps",
+          "assumptions",
           "risks",
           "questions",
           "source",
@@ -2273,6 +2281,13 @@
         "additionalProperties": false,
         "description": "The plan itself, as drafted: what the operator reviews, edits and approves.",
         "properties": {
+          "assumptions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Assumptions",
+            "type": "array"
+          },
           "cadence": {
             "default": "once",
             "enum": [
@@ -2500,6 +2515,11 @@
         "additionalProperties": false,
         "description": "Every field explicit (no defaults) so the contract marks them required on read.",
         "properties": {
+          "days": {
+            "minimum": 0.0,
+            "title": "Days",
+            "type": "integer"
+          },
           "detail": {
             "maxLength": 1000,
             "title": "Detail",
@@ -2511,6 +2531,11 @@
             },
             "title": "Machineids",
             "type": "array"
+          },
+          "startDay": {
+            "minimum": 0.0,
+            "title": "Startday",
+            "type": "integer"
           },
           "title": {
             "maxLength": 200,
@@ -2540,7 +2565,9 @@
           "detail",
           "machineIds",
           "zoneId",
-          "when"
+          "when",
+          "startDay",
+          "days"
         ],
         "title": "PlanStep",
         "type": "object"

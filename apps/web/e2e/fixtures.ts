@@ -306,11 +306,14 @@ export async function mockApi(page: Page, options: MockOptions = {}): Promise<vo
     if (path === "/api/v1/agent/plan-draft" && request.method() === "POST") {
       const body = request.postDataJSON() as {
         goal: string;
+        refinement?: string;
         preferredZoneIds?: string[];
         preferredMachineIds?: string[];
       };
       const zoneIds = body.preferredZoneIds?.length ? body.preferredZoneIds : ["Z-14"];
       const machineIds = body.preferredMachineIds?.length ? body.preferredMachineIds : ["TR-04"];
+      for (const id of body.refinement?.match(/TR-\d{2}/g) ?? [])
+        if (!machineIds.includes(id)) machineIds.push(id);
       return json({
         title: body.goal,
         objective: body.goal,
@@ -321,15 +324,26 @@ export async function mockApi(page: Page, options: MockOptions = {}): Promise<vo
         endDate: /weekly/i.test(body.goal) ? null : "2026-09-24",
         estimates: { acres: 220, machineHours: 147, calendarDays: 7 },
         steps: [
-          { title: "Survey pass", detail: "", machineIds, zoneId: zoneIds[0], when: "Day 1" },
+          {
+            title: "Survey pass",
+            detail: "",
+            machineIds,
+            zoneId: zoneIds[0],
+            when: "Day 1",
+            startDay: 0,
+            days: 1,
+          },
           {
             title: `Treat ${zoneIds[0]}`,
             detail: "Mow",
             machineIds,
             zoneId: zoneIds[0],
-            when: "Day 2",
+            when: "Day 2-6",
+            startDay: 1,
+            days: 5,
           },
         ],
+        assumptions: ["1.5 acres per machine-hour (mock)"],
         risks: [],
         questions: [],
         source: "rules",

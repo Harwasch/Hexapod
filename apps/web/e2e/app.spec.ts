@@ -1,4 +1,19 @@
+import type { Page } from "@playwright/test";
+
 import { expect, mockApi, test } from "./fixtures";
+
+/** Ids of the plan overlay entities the map is drawing (passes, step markers, route). */
+function planEntityIds(app: Page): Promise<string[]> {
+  return app.evaluate(() => {
+    const twin = (
+      window as unknown as { __twin?: { viewer: { entities: { values: { id: string }[] } } } }
+    ).__twin;
+    return (twin?.viewer.entities.values ?? [])
+      .map((entity) => entity.id)
+      .filter((id) => id.startsWith("mission:plan:"))
+      .sort();
+  });
+}
 
 test.describe("boot", () => {
   test("app boots, viewer initializes and onboarding shows", async ({ app }) => {
@@ -247,9 +262,8 @@ test.describe("mission control", () => {
     await app.waitForTimeout(700);
     // The window animates in; a positional click can land on the map mid-transition.
     await app.getByTestId("plan-show-on-map").dispatchEvent("click");
-    await expect(app.getByTestId("selection-card").last()).toContainText("Z-14 West bench", {
-      timeout: 15_000,
-    });
+    // The plan window stays open; the plan's zones are drawn on the map with passes and markers.
+    await expect.poll(async () => (await planEntityIds(app)).length).toBeGreaterThanOrEqual(4);
     await app.getByTestId("view-tab-fleet").click({ force: true });
     await expect(app.getByTestId("fleet-panel")).toContainText("TR-07 Harrier");
     await app.getByTestId("toggle-work-log").click({ force: true });
@@ -277,11 +291,24 @@ test.describe("mission control", () => {
       /Drafted by Claude|Rule-based draft/,
     );
     await expect(app.getByTestId("plan-review")).toContainText("Z-21");
+    await expect(app.getByTestId("plan-review")).toContainText("ASSUMPTIONS");
+    await expect(app.getByTestId("plan-schedule")).toBeVisible();
     await expect(app.getByTestId("agent-stream")).toContainText("Drafted");
+    // The draft is drawn on the map: coverage passes for Z-21, a step marker, no route (one zone).
+    await expect
+      .poll(() => planEntityIds(app))
+      .toEqual(["mission:plan:passes:Z-21", "mission:plan:step:Z-21"]);
+    await app.getByTestId("plan-refine").fill("use TR-12 as well");
+    await app.getByText("Redraft").dispatchEvent("click");
+    await expect(app.getByTestId("plan-changes")).toContainText("Added machine TR-12", {
+      timeout: 15_000,
+    });
     await app.getByTestId("plan-approve").dispatchEvent("click");
     await expect(app.getByTestId("plan-detail")).toContainText("Mow Z-21 weekly with one mower");
     await expect(app.getByTestId("plan-detail")).toContainText("Scheduled");
     await expect(app.getByTestId("plan-detail")).toContainText("STEPS");
+    await app.getByTestId("plan-lifecycle").dispatchEvent("click");
+    await expect(app.getByTestId("plan-detail")).toContainText("Dispatched");
     await app.getByText("All plans").dispatchEvent("click");
     await expect(app.getByTestId("plans-panel")).toContainText("Mow Z-21 weekly with one mower");
   });

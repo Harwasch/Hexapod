@@ -1595,3 +1595,38 @@
 .mc-refine .mc-btn {
   white-space: nowrap;
 }
+
+.mc-list--plain {
+  padding-left: 1.1rem;
+  list-style: disc;
+  font: 400 12px/1.45 var(--font-sans);
+  color: var(--text-secondary);
+}
+
+.mc-schedule {
+  width: 100%;
+  height: auto;
+  margin-top: 0.5rem;
+  display: block;
+}
+
+.mc-schedule__grid {
+  stroke: rgba(255, 255, 255, 0.12);
+  stroke-width: 1;
+}
+
+.mc-schedule__tick {
+  font: 500 9.5px var(--font-mono);
+  fill: var(--text-tertiary);
+}
+
+.mc-schedule__lane {
+  font: 600 10.5px var(--font-mono);
+  fill: var(--text-secondary);
+}
+
+.mc-schedule__bar-label {
+  font: 600 10px var(--font-mono);
+  fill: #0a0e09;
+  pointer-events: none;
+}

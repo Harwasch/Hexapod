@@ -1,7 +1,8 @@
 import { useCallback } from "react";
 
 import { useScene } from "@/cesium/SceneContext";
-import type { Machine, Plan } from "@/missions/types";
+import { overlayFor } from "@/missions/planDraft";
+import type { Machine, Plan, PlanOverlay } from "@/missions/types";
 import { useMission } from "@/state/mission";
 
 /** Imperative mission actions shared by markers, cards, tables and the command bar. */
@@ -43,21 +44,24 @@ export function useMissionActions() {
     state.setStreamOpen(true);
   }, []);
 
+  /** Draws the plan's zones, passes and route; the window stays open so the map and the plan read together. */
   const showPlanOnMap = useCallback(
-    (plan: Plan) => {
+    (plan: Pick<Plan, "zoneIds" | "machineIds" | "steps">) => {
       const state = useMission.getState();
-      state.setView("map");
-      const first = plan.zoneIds[0];
-      if (first) {
-        state.select({ kind: "zone", id: first });
-        scene?.mission.setSelectedZone(first);
-        scene?.mission.flyToZone(first);
-      } else {
-        scene?.mission.flyToProject();
-      }
+      state.select(null);
+      const overlay: PlanOverlay = overlayFor({
+        zoneIds: plan.zoneIds,
+        machineIds: plan.machineIds ?? [],
+        steps: plan.steps ?? [],
+      });
+      scene?.mission.showPlan(overlay);
+      if (plan.zoneIds.length) scene?.mission.flyToZones(plan.zoneIds);
+      else scene?.mission.flyToProject();
     },
     [scene],
   );
+
+  const clearPlanOverlay = useCallback(() => scene?.mission.showPlan(null), [scene]);
 
   const flyToProject = useCallback(() => scene?.mission.flyToProject(), [scene]);
 
@@ -67,6 +71,7 @@ export function useMissionActions() {
     clearSelection,
     runMachineAction,
     showPlanOnMap,
+    clearPlanOverlay,
     flyToProject,
   };
 }

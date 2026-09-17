@@ -94,6 +94,22 @@ def _requested_count(text: str, nouns: str) -> int | None:
     return int(token) if token.isdigit() else NUMBER_WORDS[token]
 
 
+EXCLUDE_WORDS = r"skip|without|drop|remove|exclude|except|not|no|leave out|leave"
+
+
+def _excluded(text: str, candidates: list[tuple[str, str]]) -> list[str]:
+    """Ids named right after an exclusion word ("skip Z-21", "without TR-07, TR-12")."""
+    lower = text.lower()
+    out: list[str] = []
+    for match in re.finditer(
+        rf"\b(?:{EXCLUDE_WORDS})\b((?:\s+(?:and\s+|,\s*)?[\w-]+){{1,4}})", lower
+    ):
+        for identifier in _mentioned(match.group(1), candidates):
+            if identifier not in out:
+                out.append(identifier)
+    return out
+
+
 def _cadence(text: str) -> Cadence:
     lower = text.lower()
     for cadence, words in CADENCE_WORDS.items():
@@ -125,7 +141,11 @@ class RulesPlanner:
         text = request.goal if not request.refinement else f"{request.goal}\n{request.refinement}"
         zone_ids = self._zones(request, text)
         machine_ids = self._machines(request, text)
-        cadence = _cadence(text)
+        cadence = (
+            _cadence(request.refinement or "")
+            if request.refinement and _cadence(request.refinement) != "once"
+            else _cadence(text)
+        )
         today = _today(request)
         acres = sum(z.acres for z in request.zones if z.id in zone_ids)
         machine_count = max(1, len(machine_ids))
@@ -140,12 +160,30 @@ class RulesPlanner:
                 machine_ids=machine_ids[:1],
                 zone_id=zone_ids[0] if zone_ids else None,
                 when=f"Day 1 · {today.isoformat()}",
+                start_day=0,
+                days=1,
             )
         ]
+        # Zones run in parallel, one crew each, from day 2; a crew's zone takes as many days
+        # as its acreage needs at the assumed rate, and a crew with two zones does them in turn.
+        last_day = 1
+        # Each crew starts its next zone the day after it finishes the previous one.
+        crew_free_day = dict.fromkeys(machine_ids, 1)
         for index, zone_id in enumerate(zone_ids):
             zone = zone_by_id[zone_id]
             crew = machine_ids if len(zone_ids) == 1 else [machine_ids[index % machine_count]]
+            crew = [m for m in crew if m]
             zone_hours = zone.acres / RULES_ACRES_PER_MACHINE_HOUR if zone.acres else 0.0
+            zone_days = (
+                max(1, math.ceil(zone_hours / (max(1, len(crew)) * RULES_HOURS_PER_DAY)))
+                if zone_hours
+                else 1
+            )
+            start_day = max([crew_free_day.get(m, 1) for m in crew] or [1])
+            for m in crew:
+                crew_free_day[m] = start_day + zone_days
+            last_day = max(last_day, start_day + zone_days)
+            span = f"Day {start_day + 1}" + (f"-{start_day + zone_days}" if zone_days > 1 else "")
             steps.append(
                 PlanStep(
                     title=f"Treat {_label(zone.id, zone.name)}",
@@ -156,9 +194,11 @@ class RulesPlanner:
                         if zone_hours
                         else "."
                     ),
-                    machine_ids=[m for m in crew if m],
+                    machine_ids=crew,
                     zone_id=zone.id,
-                    when=f"Day {min(days, index + 2)}",
+                    when=span,
+                    start_day=start_day,
+                    days=zone_days,
                 )
             )
         steps.append(
@@ -168,9 +208,12 @@ class RulesPlanner:
                 "the target.",
                 machine_ids=machine_ids[:1],
                 zone_id=None,
-                when=f"Day {days + 1}",
+                when=f"Day {last_day + 1}",
+                start_day=last_day,
+                days=1,
             )
         )
+        days = max(days, last_day + 1)
         risks: list[str] = []
         for machine in request.machines:
             if machine.id in machine_ids and machine.battery_pct < 30:
@@ -205,39 +248,62 @@ class RulesPlanner:
                 acres=round(acres, 1), machine_hours=round(hours, 1), calendar_days=days
             ),
             steps=steps,
+            assumptions=[
+                f"Treatment rate {RULES_ACRES_PER_MACHINE_HOUR:g} acres per machine-hour "
+                "(a mid-size mower on brush).",
+                f"{RULES_HOURS_PER_DAY} working hours per machine per day, no weather days.",
+                "Zones run in parallel, one crew each; a crew with two zones does them in turn.",
+            ],
             risks=risks,
             questions=questions,
             source="rules",
             model=None,
-            note=(
-                "Rule-based draft: no model is configured (set ANTHROPIC_API_KEY). Estimates "
-                f"assume {RULES_ACRES_PER_MACHINE_HOUR:g} acres per machine-hour and "
-                f"{RULES_HOURS_PER_DAY}-hour days."
-            ),
+            note="Rule-based draft: no model is configured (set ANTHROPIC_API_KEY).",
         )
 
     @staticmethod
     def _zones(request: PlanDraftRequest, text: str) -> list[str]:
-        mentioned = _mentioned(text, [(z.id, z.name) for z in request.zones])
+        candidates = [(z.id, z.name) for z in request.zones]
+        excluded = _excluded(text, candidates)
+        mentioned = [z for z in _mentioned(text, candidates) if z not in excluded]
         chosen = list(dict.fromkeys([*request.preferred_zone_ids, *mentioned]))
-        chosen = [z for z in chosen if any(zone.id == z for zone in request.zones)]
+        chosen = [
+            z for z in chosen if z not in excluded and any(zone.id == z for zone in request.zones)
+        ]
         if not chosen:
-            pending = [z.id for z in request.zones if not z.treated and z.progress_pct < 100]
+            pending = [
+                z.id
+                for z in request.zones
+                if not z.treated and z.progress_pct < 100 and z.id not in excluded
+            ]
             chosen = pending[:RULES_MAX_ZONES]
         return chosen
 
     @staticmethod
     def _machines(request: PlanDraftRequest, text: str) -> list[str]:
-        mentioned = _mentioned(text, [(m.id, m.name) for m in request.machines])
+        candidates = [(m.id, m.name) for m in request.machines]
+        excluded = _excluded(text, candidates)
+        mentioned = [m for m in _mentioned(text, candidates) if m not in excluded]
+        nouns = "machines?|mowers?|robots?|tractors?|units?|drones?"
+        # A count in the refinement ("use three machines") overrides one in the goal.
+        wanted = _requested_count(request.refinement or "", nouns) or _requested_count(text, nouns)
         chosen = list(dict.fromkeys([*request.preferred_machine_ids, *mentioned]))
-        chosen = [m for m in chosen if any(machine.id == m for machine in request.machines)]
-        if chosen:
+        chosen = [
+            m
+            for m in chosen
+            if m not in excluded and any(machine.id == m for machine in request.machines)
+        ]
+        if chosen and (wanted is None or len(chosen) >= wanted):
             return chosen
-        wanted = _requested_count(text, "machines?|mowers?|robots?|tractors?|units?|drones?")
         wanted = wanted or min(2, len(request.machines))
         order = {"idle": 0, "working": 1, "attention": 2}
         ranked = sorted(request.machines, key=lambda m: (order.get(m.status, 1), -m.battery_pct))
-        return [m.id for m in ranked[:wanted]]
+        for machine in ranked:
+            if len(chosen) >= wanted:
+                break
+            if machine.id not in chosen and machine.id not in excluded:
+                chosen.append(machine.id)
+        return chosen
 
 
 class ModelPlanDraft(BaseModel):
@@ -254,6 +320,9 @@ class ModelPlanDraft(BaseModel):
     estimated_machine_hours: float
     estimated_calendar_days: int
     steps: list[ModelPlanStep]
+    assumptions: list[str] = Field(
+        description="What the estimate rests on: rates, hours per day, weather, access"
+    )
     risks: list[str]
     questions: list[str]
 
@@ -263,7 +332,9 @@ class ModelPlanStep(BaseModel):
     detail: str
     machine_ids: list[str]
     zone_id: str | None
-    when: str
+    when: str = Field(description="Short human label, e.g. 'Day 2-4' or 'Thu 06:00'")
+    start_day: int = Field(description="Offset from the plan start in whole days, 0 = first day")
+    days: int = Field(description="Duration in whole days, at least 1")
 
 
 ModelPlanDraft.model_rebuild()
@@ -277,9 +348,11 @@ machines the operator named or pre-selected. Prefer idle machines over working o
 schedule a machine that needs attention without listing that as a risk. Keep steps concrete \
 and ordered: a survey pass, treatment per zone with the machines assigned, and a verification \
 pass. Give estimates from the zone acreage and a realistic treatment rate for the task, and \
-say what rate you assumed in the objective. Ask a question only when the goal cannot be planned \
-without the answer; otherwise make the reasonable choice and note it under risks. Dates are \
-ISO (YYYY-MM-DD); end_date is null when the plan repeats on a cadence."""
+list every rate and window you assumed under assumptions. Schedule each step with start_day \
+(offset from the plan start) and days (duration) so the steps form a timeline per machine; two \
+steps that share a machine must not overlap. Ask a question only when the goal cannot be \
+planned without the answer; otherwise make the reasonable choice and note it under risks. \
+Dates are ISO (YYYY-MM-DD); end_date is null when the plan repeats on a cadence."""
 
 
 class ClaudePlanner:
@@ -356,9 +429,12 @@ class ClaudePlanner:
                     machine_ids=[m for m in step.machine_ids if m in machine_ids],
                     zone_id=step.zone_id if step.zone_id in zone_ids else None,
                     when=step.when,
+                    start_day=max(0, step.start_day),
+                    days=max(0, step.days),
                 )
                 for step in parsed.steps
             ],
+            assumptions=parsed.assumptions,
             risks=parsed.risks,
             questions=parsed.questions,
         )

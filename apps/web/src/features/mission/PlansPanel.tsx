@@ -1,5 +1,6 @@
 import { ArrowLeft } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
+import { useEffect } from "react";
 
 import { GlassPanel } from "@twin/ui";
 
@@ -7,7 +8,10 @@ import type { Plan } from "@/missions/types";
 import { useMission } from "@/state/mission";
 import { useUi } from "@/state/ui";
 
+import { useScene } from "@/cesium/SceneContext";
+
 import { PlanComposer } from "./PlanComposer";
+import { PlanSchedule } from "./PlanSchedule";
 import { useMissionActions } from "./useMissionActions";
 
 /** Plans list and plan detail window (design: Plan view). */
@@ -129,10 +133,42 @@ export function PlansPanel() {
 }
 
 function PlanDetail({ plan, onBack }: { plan: Plan; onBack: () => void }) {
-  const { showPlanOnMap } = useMissionActions();
+  const { showPlanOnMap, clearPlanOverlay } = useMissionActions();
   const appendLog = useMission((s) => s.appendLog);
   const setStreamOpen = useMission((s) => s.setStreamOpen);
   const openComposer = useMission((s) => s.openComposer);
+  const updatePlan = useMission((s) => s.updatePlan);
+  const scene = useScene();
+  const colorFor = (id: string) => scene?.mission.machineColor(id).toCssColorString() ?? "#7fd8c0";
+  const owned = plan.goal !== undefined;
+  // An open plan is drawn on the map for as long as its detail is open.
+  useEffect(() => {
+    scene?.mission.showPlan(
+      plan.zoneIds.length
+        ? {
+            zones: plan.zoneIds.map((zoneId) => ({
+              zoneId,
+              machineIds:
+                plan.steps?.find((s) => s.zoneId === zoneId)?.machineIds ?? plan.machineIds ?? [],
+            })),
+          }
+        : null,
+    );
+    return () => clearPlanOverlay();
+  }, [scene, plan.id, plan.zoneIds, plan.steps, plan.machineIds, clearPlanOverlay]);
+  const lifecycle = () => {
+    if (plan.status === "run") {
+      updatePlan(plan.id, { status: "idle", state: "Paused", action: "Resume" });
+      appendLog("agent", `“${plan.title}” paused. The fleet finishes its current pass and holds.`);
+    } else {
+      updatePlan(plan.id, { status: "run", state: "Dispatched", action: "Pause plan" });
+      appendLog(
+        "agent",
+        `“${plan.title}” dispatched to the fleet${useMission.getState().project?.simulated ? " (simulated: the robot bridge will pick this up here)" : ""}.`,
+      );
+    }
+    setStreamOpen(true);
+  };
   return (
     <div className="mc-plan-detail" data-testid="plan-detail">
       <div className="mc-window__head mc-window__head--column">
@@ -217,6 +253,18 @@ function PlanDetail({ plan, onBack }: { plan: Plan; onBack: () => void }) {
         </section>
         {plan.steps && plan.steps.length > 0 && (
           <section>
+            <span className="mc-eyebrow">SCHEDULE</span>
+            <PlanSchedule
+              steps={plan.steps}
+              startDate={
+                plan.steps.length ? (plan.facts.find((f) => f.k === "Starts")?.v ?? "") : ""
+              }
+              colorFor={colorFor}
+            />
+          </section>
+        )}
+        {plan.steps && plan.steps.length > 0 && (
+          <section>
             <span className="mc-eyebrow">STEPS</span>
             <ol className="mc-steps">
               {plan.steps.map((step, i) => (
@@ -230,6 +278,16 @@ function PlanDetail({ plan, onBack }: { plan: Plan; onBack: () => void }) {
                 </li>
               ))}
             </ol>
+          </section>
+        )}
+        {plan.assumptions && plan.assumptions.length > 0 && (
+          <section>
+            <span className="mc-eyebrow">ASSUMPTIONS</span>
+            <ul className="mc-list mc-list--plain">
+              {plan.assumptions.map((a) => (
+                <li key={a}>{a}</li>
+              ))}
+            </ul>
           </section>
         )}
         <div className="mc-agent-note">
@@ -261,24 +319,39 @@ function PlanDetail({ plan, onBack }: { plan: Plan; onBack: () => void }) {
           >
             Revise with agent
           </button>
+          {owned ? (
+            <button
+              type="button"
+              className={`mc-btn ${plan.status === "run" ? "" : "mc-btn--accent"}`}
+              onClick={lifecycle}
+              data-testid="plan-lifecycle"
+            >
+              {plan.status === "run"
+                ? "Pause plan"
+                : plan.state === "Paused"
+                  ? "Resume"
+                  : "Dispatch to fleet"}
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="mc-btn"
+              onClick={() => {
+                appendLog("you", `${plan.action}: ${plan.title}`);
+                appendLog("agent", `${plan.action} acknowledged for “${plan.title}” (simulated).`);
+                setStreamOpen(true);
+              }}
+            >
+              {plan.action}
+            </button>
+          )}
           <button
             type="button"
-            className="mc-btn"
-            onClick={() => {
-              appendLog("you", `${plan.action}: ${plan.title}`);
-              appendLog("agent", `${plan.action} acknowledged for “${plan.title}” (simulated).`);
-              setStreamOpen(true);
-            }}
-          >
-            {plan.action}
-          </button>
-          <button
-            type="button"
-            className="mc-btn mc-btn--accent"
+            className={`mc-btn ${owned ? "" : "mc-btn--accent"}`}
             onClick={() => showPlanOnMap(plan)}
             data-testid="plan-show-on-map"
           >
-            Show on map
+            Fit on map
           </button>
         </div>
       </div>

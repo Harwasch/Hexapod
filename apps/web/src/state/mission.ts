@@ -25,6 +25,8 @@ export interface PlanComposerState {
   replacePlanId: string | null;
   status: "idle" | "drafting" | "ready" | "error";
   draft: PlanDraft | null;
+  /** The draft before the last redraft, so the review can say what changed. */
+  previousDraft: PlanDraft | null;
   error: string | null;
 }
 
@@ -65,6 +67,7 @@ interface MissionState {
   closeComposer: () => void;
   updateComposer: (patch: Partial<PlanComposerState>) => void;
   approvePlan: (plan: Plan) => void;
+  updatePlan: (planId: string, patch: Partial<Plan>) => void;
   removePlan: (planId: string) => void;
 }
 
@@ -127,6 +130,7 @@ export const useMission = create<MissionState>()(
             replacePlanId: seed.replacePlanId ?? null,
             status: "idle",
             draft: null,
+            previousDraft: null,
             error: null,
           },
         }),
@@ -148,6 +152,23 @@ export const useMission = create<MissionState>()(
             composer: null,
             planId: plan.id,
             view: "plan",
+          };
+        });
+      },
+      updatePlan: (planId, patch) => {
+        const project = get().project;
+        if (!project) return;
+        set((s) => {
+          const approved = (s.approvedPlans[project.id] ?? []).map((p) =>
+            p.id === planId ? { ...p, ...patch } : p,
+          );
+          const approvedPlans = { ...s.approvedPlans, [project.id]: approved };
+          return {
+            approvedPlans,
+            project: {
+              ...project,
+              plans: project.plans.map((p) => (p.id === planId ? { ...p, ...patch } : p)),
+            },
           };
         });
       },

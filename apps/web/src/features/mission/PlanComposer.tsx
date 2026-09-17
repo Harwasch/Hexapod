@@ -1,13 +1,15 @@
 import { ArrowLeft, Sparkles } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import type { PlanDraft } from "@twin/contracts";
 
 import { usePlannerStatus } from "@/api/queries";
-import { idLabel, planFromDraft } from "@/missions/planDraft";
+import { useScene } from "@/cesium/SceneContext";
+import { diffDrafts, idLabel, overlayFor, planFromDraft } from "@/missions/planDraft";
 import type { Project } from "@/missions/types";
 import { useMission } from "@/state/mission";
 
+import { PlanSchedule } from "./PlanSchedule";
 import { startPlanDraft } from "./planDrafting";
 import { useMissionActions } from "./useMissionActions";
 
@@ -171,8 +173,29 @@ function DraftReview({
   const update = useMission((s) => s.updateComposer);
   const approve = useMission((s) => s.approvePlan);
   const appendLog = useMission((s) => s.appendLog);
-  const { showPlanOnMap } = useMissionActions();
+  const scene = useScene();
+  const { showPlanOnMap, clearPlanOverlay } = useMissionActions();
   const [refinement, setRefinement] = useState("");
+  const changes = composer?.previousDraft ? diffDrafts(composer.previousDraft, draft) : [];
+  // The draft is on the map as soon as it exists: zones, passes and route, in machine colours.
+  // The camera fits the zones when the set of zones changes; a redraft that only moves
+  // machines redraws in place.
+  const zoneKey = draft.zoneIds.join(",");
+  const overlayKey = `${zoneKey}|${(draft.steps ?? []).map((s) => `${s.zoneId}:${s.machineIds.join("+")}`).join(";")}`;
+  const flownFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (flownFor.current === zoneKey) {
+      scene?.mission.showPlan(
+        overlayFor({ zoneIds: draft.zoneIds, machineIds: draft.machineIds, steps: draft.steps }),
+      );
+    } else {
+      flownFor.current = zoneKey;
+      showPlanOnMap(draft);
+    }
+    return () => clearPlanOverlay();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- redraw only when the scope changes
+  }, [overlayKey, showPlanOnMap, clearPlanOverlay]);
+  const colorFor = (id: string) => scene?.mission.machineColor(id).toCssColorString() ?? "#7fd8c0";
   const zoneName = (id: string | null | undefined) =>
     id ? (project.zones.find((z) => z.id === id)?.name ?? id) : null;
   const refine = () => {
@@ -239,6 +262,24 @@ function DraftReview({
           {draft.endDate ? ` → ${draft.endDate}` : " → ongoing"}
         </span>
       </div>
+      {changes.length > 0 && (
+        <section data-testid="plan-changes">
+          <span className="mc-eyebrow">WHAT CHANGED</span>
+          <ul className="mc-list">
+            {changes.map((change) => (
+              <li key={change} className="mc-note mc-note--agent">
+                {change}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+      {(draft.steps ?? []).length > 0 && (
+        <section>
+          <span className="mc-eyebrow">SCHEDULE</span>
+          <PlanSchedule steps={draft.steps ?? []} startDate={draft.startDate} colorFor={colorFor} />
+        </section>
+      )}
       <section>
         <span className="mc-eyebrow">STEPS</span>
         <ol className="mc-steps">
@@ -255,6 +296,16 @@ function DraftReview({
           ))}
         </ol>
       </section>
+      {(draft.assumptions ?? []).length > 0 && (
+        <section>
+          <span className="mc-eyebrow">ASSUMPTIONS BEHIND THE ESTIMATE</span>
+          <ul className="mc-list mc-list--plain">
+            {(draft.assumptions ?? []).map((a) => (
+              <li key={a}>{a}</li>
+            ))}
+          </ul>
+        </section>
+      )}
       {draft.risks.length > 0 && (
         <section>
           <span className="mc-eyebrow">RISKS</span>
@@ -299,14 +350,8 @@ function DraftReview({
         </button>
       </form>
       <div className="mc-actions">
-        <button
-          type="button"
-          className="mc-btn"
-          onClick={() =>
-            showPlanOnMap(planFromDraft(draft, project, { goal, id: "draft-preview" }))
-          }
-        >
-          Show on map
+        <button type="button" className="mc-btn" onClick={() => showPlanOnMap(draft)}>
+          Fit on map
         </button>
         <button
           type="button"

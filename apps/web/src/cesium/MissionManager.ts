@@ -15,15 +15,32 @@ import {
   type Viewer,
 } from "cesium";
 
-import { boundingRadiusM, centerOf, flattenRing, outerRings } from "@twin/geo";
+import {
+  boundingRadiusM,
+  centerOf,
+  coveragePath,
+  destination,
+  flattenRing,
+  outerRings,
+} from "@twin/geo";
 
 import type { Emitter } from "@/lib/emitter";
-import type { Machine, Project, Zone } from "@/missions/types";
+import type { Machine, PlanOverlay, Project, Zone } from "@/missions/types";
 
 import type { CameraController } from "./CameraController";
 import type { SceneEvents } from "./types";
 
 export const ZONE_ENTITY_PREFIX = "mission:zone:";
+export const PLAN_ENTITY_PREFIX = "mission:plan:";
+/** Working width assumed for the coverage preview (a mid-size mower deck). */
+export const PREVIEW_SWATH_M = 6;
+/** The preview never draws more passes than this per zone; the spacing widens instead. */
+export const PREVIEW_MAX_PASSES = 28;
+/** One colour per machine so passes read as "who drives where". */
+const MACHINE_PALETTE = ["#7fd8c0", "#f0b254", "#9db8f0", "#e79ac8", "#c6e07a", "#c3a6f0"].map(
+  (css) => Color.fromCssColorString(css),
+);
+const ROUTE_COLOR = Color.fromCssColorString("#9db8f0");
 
 const TONE: Record<Zone["tone"], Color> = {
   teal: Color.fromCssColorString("#7fd8c0"),
@@ -81,6 +98,7 @@ export class MissionManager {
   private readonly trackEntities: Entity[] = [];
   private zonesVisible = true;
   private tracksVisible = true;
+  private readonly planEntities: Entity[] = [];
   private readonly listeners = new Set<FrameListener>();
   private readonly removeFrame: () => void;
   private lastGoodHeight: number | undefined;
@@ -191,6 +209,131 @@ export class MissionManager {
           : new PolylineDashMaterialProperty({ color: TONE[zone.tone], dashLength: 14 });
     }
     this.scene.requestRender();
+  }
+
+  /** Colour used for a machine's passes, stable for the project. */
+  machineColor(machineId: string): Color {
+    const index = this.project?.machines.findIndex((m) => m.id === machineId) ?? -1;
+    return MACHINE_PALETTE[(index < 0 ? 0 : index) % MACHINE_PALETTE.length] ?? ROUTE_COLOR;
+  }
+
+  /**
+   * Draws a plan on the world: every zone in scope with its coverage passes in the colour of
+   * the machine assigned, a numbered marker per step, and the route between zones in step
+   * order. `null` clears it. The passes are a preview (see PREVIEW_SWATH_M).
+   */
+  showPlan(overlay: PlanOverlay | null): void {
+    for (const entity of this.planEntities) this.viewer.entities.remove(entity);
+    this.planEntities.length = 0;
+    this.setSelectedZone(null);
+    const project = this.project;
+    if (!overlay || !project) {
+      this.scene.requestRender();
+      return;
+    }
+    const centers: Cartesian3[] = [];
+    overlay.zones.forEach((item, index) => {
+      const zone = project.zones.find((z) => z.id === item.zoneId);
+      const ring = zone ? outerRings(zone.footprint)[0] : undefined;
+      if (!zone || !ring) return;
+      const color = this.machineColor(item.machineIds[0] ?? "");
+      const path = coveragePath(ring, { swathM: PREVIEW_SWATH_M, maxPasses: PREVIEW_MAX_PASSES });
+      if (path.positions.length >= 2) {
+        this.planEntities.push(
+          this.viewer.entities.add({
+            id: `${PLAN_ENTITY_PREFIX}passes:${zone.id}`,
+            polyline: {
+              positions: Cartesian3.fromDegreesArray(
+                path.positions.flatMap((p) => [p.longitude, p.latitude]),
+              ),
+              width: 1.6,
+              material: color.withAlpha(0.8),
+              clampToGround: true,
+            },
+          }),
+        );
+      }
+      const outline = this.zoneEntities.find((e) => e.id === `${ZONE_ENTITY_PREFIX}${zone.id}`);
+      if (outline?.polyline) {
+        outline.polyline.width = new ConstantProperty(3.2);
+        outline.polyline.material = new ColorMaterialProperty(color);
+      }
+      const center = centerOf(zone.footprint);
+      const position = Cartesian3.fromDegrees(center.longitude, center.latitude);
+      centers.push(position);
+      this.planEntities.push(
+        this.viewer.entities.add({
+          id: `${PLAN_ENTITY_PREFIX}step:${zone.id}`,
+          position,
+          label: {
+            text: `${index + 1}`,
+            font: "600 13px Azeret Mono, monospace",
+            fillColor: Color.fromCssColorString("#0a0e09"),
+            showBackground: true,
+            backgroundColor: color,
+            backgroundPadding: new Cartesian2(7, 4),
+            heightReference: HeightReference.CLAMP_TO_GROUND,
+            disableDepthTestDistance: Number.POSITIVE_INFINITY,
+          },
+        }),
+      );
+    });
+    if (centers.length >= 2) {
+      this.planEntities.push(
+        this.viewer.entities.add({
+          id: `${PLAN_ENTITY_PREFIX}route`,
+          polyline: {
+            positions: centers,
+            width: 2.4,
+            material: new PolylineDashMaterialProperty({ color: ROUTE_COLOR, dashLength: 18 }),
+            clampToGround: true,
+          },
+        }),
+      );
+    }
+    this.scene.requestRender();
+  }
+
+  /**
+   * Flies to fit every listed zone. The plan window covers the right of the screen, so the
+   * framed centre is pushed towards screen-right by `sideOffset` radii and the zones land in
+   * the open part of the view.
+   */
+  flyToZones(zoneIds: string[], sideOffset = 0.75): void {
+    const zones = (this.project?.zones ?? []).filter((z) => zoneIds.includes(z.id));
+    if (zones.length === 0) return;
+    const centers = zones.map((z) => centerOf(z.footprint));
+    let lon = centers.reduce((a, c) => a + c.longitude, 0) / centers.length;
+    let lat = centers.reduce((a, c) => a + c.latitude, 0) / centers.length;
+    const mid = Cartesian3.fromDegrees(lon, lat);
+    let radius = 120;
+    for (const zone of zones) {
+      const c = centerOf(zone.footprint);
+      radius = Math.max(
+        radius,
+        Cartesian3.distance(mid, Cartesian3.fromDegrees(c.longitude, c.latitude)) +
+          boundingRadiusM(zone.footprint),
+      );
+    }
+    const heading = 20;
+    // Screen-right on the ground for a camera at `heading`: east cos(h), north -sin(h).
+    const h = (heading * Math.PI) / 180;
+    const shift = destination(
+      { longitude: lon, latitude: lat },
+      (Math.atan2(Math.cos(h), -Math.sin(h)) * 180) / Math.PI,
+      radius * sideOffset,
+    );
+    lon = shift.longitude;
+    lat = shift.latitude;
+    void this.detailedHeight(lon, lat, "plan-fly").then((height) => {
+      this.camera.flyToBoundingSphere(
+        new BoundingSphere(
+          Cartesian3.fromDegrees(lon, lat, height),
+          radius * (1 + sideOffset * 0.4),
+        ),
+        { heading, pitch: -42, rangeMultiplier: 2.2, durationS: 1.8 },
+      );
+    });
   }
 
   onFrame(listener: FrameListener): () => void {
@@ -339,10 +482,11 @@ export class MissionManager {
   }
 
   private clearEntities(): void {
-    for (const entity of [...this.zoneEntities, ...this.trackEntities])
+    for (const entity of [...this.zoneEntities, ...this.trackEntities, ...this.planEntities])
       this.viewer.entities.remove(entity);
     this.zoneEntities.length = 0;
     this.trackEntities.length = 0;
+    this.planEntities.length = 0;
   }
 
   destroy(): void {
