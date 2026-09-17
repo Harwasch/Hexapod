@@ -93,7 +93,7 @@ export async function approveDraft(draft: PlanDraft, goal: string): Promise<Plan
   if (!project) return null;
   const replaceId = state.composer?.replacePlanId ?? null;
   const existing = replaceId ? project.plans.find((p) => p.id === replaceId) : undefined;
-  const body = recordBodyFromDraft(draft, goal, project.id, project.siteId);
+  const body = recordBodyFromDraft(draft, goal, project.id, project.siteId, project.zones);
   let plan: Plan;
   try {
     // A revision carries the plan body only: identity (project, site) never changes.

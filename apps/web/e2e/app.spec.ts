@@ -323,6 +323,25 @@ test.describe("mission control", () => {
     await expect(app.getByTestId("plans-panel")).not.toContainText("with one mower");
   });
 
+  test("a plan can be made anywhere from the current view, with no site", async ({ app }) => {
+    await app.getByTestId("onboarding-explore").click({ force: true });
+    await app.getByTestId("view-tab-plan").click({ force: true });
+    await expect(app.getByTestId("plans-panel")).toContainText("Anywhere", { timeout: 15_000 });
+    await app.getByTestId("plan-new").dispatchEvent("click");
+    await expect(app.getByTestId("plan-composer")).toContainText("No zones here yet");
+    await app.getByTestId("area-from-view").dispatchEvent("click");
+    await expect(app.getByTestId("compose-zone-A-01")).toHaveAttribute("aria-pressed", "true");
+    await expect(app.getByTestId("compose-zone-A-01")).toContainText("View area 01");
+    await app.getByTestId("plan-goal").fill("Mow this area this week");
+    await app.getByTestId("plan-draft-submit").dispatchEvent("click");
+    await expect(app.getByTestId("plan-review")).toBeVisible({ timeout: 30_000 });
+    await expect(app.getByTestId("plan-review")).toContainText("A-01");
+    await expect.poll(() => planEntityIds(app)).toContain("mission:plan:passes:A-01");
+    await app.getByTestId("plan-approve").dispatchEvent("click");
+    await expect(app.getByTestId("plan-detail")).toContainText("Mow this area this week");
+    await expect(app.getByTestId("plan-detail")).toContainText("A-01 View area 01");
+  });
+
   test("command bar drives the agent stream and layer pills toggle overlays", async ({ app }) => {
     await app.getByTestId("onboarding-demo").click();
     await expect(app.getByTestId("project-card")).toContainText("Blackrock Mesa", {

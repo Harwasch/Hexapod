@@ -23,6 +23,7 @@ def _body_columns(body: PlanBody) -> dict[str, object]:
     """Column values: dates as dates, JSON columns in the wire (camelCase) shape."""
     data: dict[str, object] = body.model_dump(mode="json", include=set(PlanBody.model_fields))
     data["steps"] = [step.model_dump(mode="json", by_alias=True) for step in body.steps]
+    data["areas"] = [area.model_dump(mode="json", by_alias=True) for area in body.areas]
     data["estimates"] = body.estimates.model_dump(mode="json", by_alias=True)
     data["start_date"] = body.start_date
     data["end_date"] = body.end_date
@@ -57,6 +58,7 @@ def _snapshot(plan: Plan) -> dict[str, object]:
         "endDate": plan.end_date.isoformat() if plan.end_date else None,
         "zoneIds": plan.zone_ids,
         "machineIds": plan.machine_ids,
+        "areas": plan.areas,
         "steps": plan.steps,
         "estimates": plan.estimates,
         "assumptions": plan.assumptions,
@@ -127,6 +129,7 @@ def plan_to_read(plan: Plan) -> PlanRead:
         end_date=plan.end_date,
         zone_ids=plan.zone_ids,
         machine_ids=plan.machine_ids,
+        areas=plan.areas,
         steps=plan.steps,
         estimates=plan.estimates,
         assumptions=plan.assumptions,

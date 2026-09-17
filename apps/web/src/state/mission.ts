@@ -4,7 +4,8 @@ import { persist } from "zustand/middleware";
 import type { PlanDraft } from "@twin/contracts";
 
 import { planningOpened } from "@/lib/planningMetrics";
-import type { Plan, Project } from "@/missions/types";
+import { isAreaZone } from "@/missions/areas";
+import type { Plan, Project, Zone } from "@/missions/types";
 
 export type MissionView = "map" | "plan" | "fleet";
 export type MissionSelection =
@@ -53,6 +54,8 @@ interface MissionState {
   composer: PlanComposerState | null;
   /** Plans approved in the console, per project id. Kept in the browser until a fleet backend persists them. */
   approvedPlans: Record<string, Plan[]>;
+  /** Areas drawn in the console, per project id; the plans that cover them carry them too. */
+  areas: Record<string, Zone[]>;
   setProject: (project: Project | null) => void;
   setView: (view: MissionView) => void;
   select: (selection: MissionSelection) => void;
@@ -72,17 +75,32 @@ interface MissionState {
   removePlan: (planId: string) => void;
   /** Plans the API holds for a project replace the persisted ones; local-only plans stay. */
   setRemotePlans: (projectId: string, plans: Plan[]) => void;
+  addArea: (projectId: string, zone: Zone) => void;
+  removeArea: (projectId: string, zoneId: string) => void;
+  /** Areas that arrived with persisted plans join the drawn ones (same id: the stored one wins). */
+  mergeAreas: (projectId: string, zones: Zone[]) => void;
 }
 
 let logCounter = 0;
 
-/** Demo/provider plans first, then the console's approved plans (replacing any with the same id). */
-function withApproved(project: Project | null, approved: Record<string, Plan[]>): Project | null {
+/**
+ * Provider plans and zones first, then the console's: approved plans (replacing any with the
+ * same id) and drawn areas (after the provider's zones).
+ */
+function compose(
+  project: Project | null,
+  approved: Record<string, Plan[]>,
+  areas: Record<string, Zone[]>,
+): Project | null {
   if (!project) return null;
   const extra = approved[project.id] ?? [];
-  if (extra.length === 0) return project;
   const replaced = new Set(extra.map((p) => p.id));
-  return { ...project, plans: [...project.plans.filter((p) => !replaced.has(p.id)), ...extra] };
+  const drawn = areas[project.id] ?? [];
+  return {
+    ...project,
+    plans: [...project.plans.filter((p) => !replaced.has(p.id)), ...extra],
+    zones: [...project.zones.filter((z) => !isAreaZone(z)), ...drawn],
+  };
 }
 
 export const useMission = create<MissionState>()(
@@ -101,9 +119,10 @@ export const useMission = create<MissionState>()(
       log: [],
       composer: null,
       approvedPlans: {},
+      areas: {},
       setProject: (project) =>
         set((s) => ({
-          project: withApproved(project, s.approvedPlans),
+          project: compose(project, s.approvedPlans, s.areas),
           selection: null,
           planId: null,
           composer: null,
@@ -150,9 +169,10 @@ export const useMission = create<MissionState>()(
           const approvedPlans = { ...s.approvedPlans, [project.id]: [...current, plan] };
           return {
             approvedPlans,
-            project: withApproved(
+            project: compose(
               { ...project, plans: project.plans.filter((p) => p.id !== plan.id) },
               approvedPlans,
+              s.areas,
             ),
             composer: null,
             planId: plan.id,
@@ -185,7 +205,45 @@ export const useMission = create<MissionState>()(
           if (project?.id !== projectId) return { approvedPlans };
           // Provider plans carry no goal; everything else came from the console and is rebuilt.
           const base = { ...project, plans: project.plans.filter((p) => p.goal === undefined) };
-          return { approvedPlans, project: withApproved(base, approvedPlans) };
+          return { approvedPlans, project: compose(base, approvedPlans, s.areas) };
+        }),
+      addArea: (projectId, zone) =>
+        set((s) => {
+          const areas = {
+            ...s.areas,
+            [projectId]: [...(s.areas[projectId] ?? []).filter((z) => z.id !== zone.id), zone],
+          };
+          const project = s.project;
+          return {
+            areas,
+            project: project?.id === projectId ? compose(project, s.approvedPlans, areas) : project,
+          };
+        }),
+      removeArea: (projectId, zoneId) =>
+        set((s) => {
+          const areas = {
+            ...s.areas,
+            [projectId]: (s.areas[projectId] ?? []).filter((z) => z.id !== zoneId),
+          };
+          const project = s.project;
+          return {
+            areas,
+            project: project?.id === projectId ? compose(project, s.approvedPlans, areas) : project,
+          };
+        }),
+      mergeAreas: (projectId, zones) =>
+        set((s) => {
+          if (zones.length === 0) return {};
+          const ids = new Set(zones.map((z) => z.id));
+          const areas = {
+            ...s.areas,
+            [projectId]: [...(s.areas[projectId] ?? []).filter((z) => !ids.has(z.id)), ...zones],
+          };
+          const project = s.project;
+          return {
+            areas,
+            project: project?.id === projectId ? compose(project, s.approvedPlans, areas) : project,
+          };
         }),
       removePlan: (planId) => {
         const project = get().project;
@@ -206,7 +264,7 @@ export const useMission = create<MissionState>()(
     {
       name: "twin.mission.v1",
       version: 1,
-      partialize: (s) => ({ approvedPlans: s.approvedPlans }),
+      partialize: (s) => ({ approvedPlans: s.approvedPlans, areas: s.areas }),
     },
   ),
 );

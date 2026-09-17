@@ -960,8 +960,22 @@ export interface components {
             /** Urltemplate */
             urlTemplate: string;
         };
+        /**
+         * PlanArea
+         * @description A zone drawn in the console for this plan (the fleet backend owns the other zones).
+         */
+        PlanArea: {
+            /** Footprint */
+            footprint: components["schemas"]["Polygon"] | components["schemas"]["MultiPolygon"];
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+        };
         /** PlanCreate */
         PlanCreate: {
+            /** Areas */
+            areas?: components["schemas"]["PlanArea"][];
             /** Assumptions */
             assumptions?: string[];
             /**
@@ -1228,6 +1242,8 @@ export interface components {
          * @description Read model: every field explicit so the contract marks it required.
          */
         PlanRead: {
+            /** Areas */
+            areas: components["schemas"]["PlanArea"][];
             /** Assumptions */
             assumptions: string[];
             /**
@@ -1300,6 +1316,8 @@ export interface components {
          * @description A new approved revision of an existing plan; the previous one is kept in history.
          */
         PlanRevise: {
+            /** Areas */
+            areas?: components["schemas"]["PlanArea"][];
             /** Assumptions */
             assumptions?: string[];
             /**
@@ -1815,6 +1833,7 @@ export type SchemaLegendMetadata = components['schemas']['LegendMetadata'];
 export type SchemaLicenseMetadata = components['schemas']['LicenseMetadata'];
 export type SchemaMultiPolygon = components['schemas']['MultiPolygon'];
 export type SchemaMvtSource = components['schemas']['MvtSource'];
+export type SchemaPlanArea = components['schemas']['PlanArea'];
 export type SchemaPlanCreate = components['schemas']['PlanCreate'];
 export type SchemaPlanDraft = components['schemas']['PlanDraft'];
 export type SchemaPlanDraftBody = components['schemas']['PlanDraftBody'];

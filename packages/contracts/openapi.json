@@ -2177,9 +2177,60 @@
         "title": "MvtSource",
         "type": "object"
       },
+      "PlanArea": {
+        "additionalProperties": false,
+        "description": "A zone drawn in the console for this plan (the fleet backend owns the other zones).",
+        "properties": {
+          "footprint": {
+            "discriminator": {
+              "mapping": {
+                "MultiPolygon": "#/components/schemas/MultiPolygon",
+                "Polygon": "#/components/schemas/Polygon"
+              },
+              "propertyName": "type"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Polygon"
+              },
+              {
+                "$ref": "#/components/schemas/MultiPolygon"
+              }
+            ],
+            "title": "Footprint"
+          },
+          "id": {
+            "maxLength": 40,
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "footprint"
+        ],
+        "title": "PlanArea",
+        "type": "object"
+      },
       "PlanCreate": {
         "additionalProperties": false,
         "properties": {
+          "areas": {
+            "items": {
+              "$ref": "#/components/schemas/PlanArea"
+            },
+            "maxItems": 50,
+            "title": "Areas",
+            "type": "array"
+          },
           "assumptions": {
             "items": {
               "type": "string"
@@ -2697,6 +2748,13 @@
         "additionalProperties": false,
         "description": "Read model: every field explicit so the contract marks it required.",
         "properties": {
+          "areas": {
+            "items": {
+              "$ref": "#/components/schemas/PlanArea"
+            },
+            "title": "Areas",
+            "type": "array"
+          },
           "assumptions": {
             "items": {
               "type": "string"
@@ -2868,6 +2926,7 @@
           "endDate",
           "zoneIds",
           "machineIds",
+          "areas",
           "steps",
           "estimates",
           "assumptions",
@@ -2887,6 +2946,14 @@
         "additionalProperties": false,
         "description": "A new approved revision of an existing plan; the previous one is kept in history.",
         "properties": {
+          "areas": {
+            "items": {
+              "$ref": "#/components/schemas/PlanArea"
+            },
+            "maxItems": 50,
+            "title": "Areas",
+            "type": "array"
+          },
           "assumptions": {
             "items": {
               "type": "string"

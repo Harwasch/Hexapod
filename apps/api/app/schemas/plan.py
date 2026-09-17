@@ -10,8 +10,17 @@ from pydantic import Field
 
 from app.schemas.agent import Cadence, PlanEstimates, PlannerSource, PlanStep
 from app.schemas.base import CamelModel
+from app.schemas.geojson import Footprint
 
 PlanStatus = Literal["scheduled", "dispatched", "paused", "done", "cancelled"]
+
+
+class PlanArea(CamelModel):
+    """A zone drawn in the console for this plan (the fleet backend owns the other zones)."""
+
+    id: str = Field(min_length=1, max_length=40)
+    name: str = Field(min_length=1, max_length=120)
+    footprint: Footprint
 
 
 class PlanBody(CamelModel):
@@ -25,6 +34,8 @@ class PlanBody(CamelModel):
     end_date: date | None = None
     zone_ids: list[str] = Field(default_factory=list)
     machine_ids: list[str] = Field(default_factory=list)
+    # Areas drawn in the console that this plan covers; zone_ids may reference them.
+    areas: list[PlanArea] = Field(default_factory=list, max_length=50)
     steps: list[PlanStep] = Field(default_factory=list)
     estimates: PlanEstimates
     assumptions: list[str] = Field(default_factory=list)
@@ -74,6 +85,7 @@ class PlanRead(CamelModel):
     end_date: date | None
     zone_ids: list[str]
     machine_ids: list[str]
+    areas: list[PlanArea]
     steps: list[PlanStep]
     estimates: PlanEstimates
     assumptions: list[str]

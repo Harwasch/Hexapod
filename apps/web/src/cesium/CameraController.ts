@@ -358,6 +358,19 @@ export class CameraController {
    * building, the ground), else the terrain, else a point along the view direction at the
    * current height. Gaussian splats write no depth, so under a splat this is its ground.
    */
+  /** The ground point in the middle of the view as lon/lat degrees, with the viewport size. */
+  viewCenter(): { longitude: number; latitude: number; width: number; height: number } | null {
+    const pivot = this.pivotAtCenter();
+    if (!pivot) return null;
+    const carto = Cartographic.fromCartesian(pivot, undefined, scratchCarto);
+    return {
+      longitude: CesiumMath.toDegrees(carto.longitude),
+      latitude: CesiumMath.toDegrees(carto.latitude),
+      width: this.viewer.canvas.clientWidth,
+      height: this.viewer.canvas.clientHeight,
+    };
+  }
+
   pivotAtCenter(): Cartesian3 | null {
     const canvas = this.viewer.canvas;
     scratchWindow.x = canvas.clientWidth / 2;

@@ -1,4 +1,4 @@
-import { ArrowLeft, Sparkles } from "lucide-react";
+import { ArrowLeft, PenLine, Scan, Sparkles, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import type { PlanDraft } from "@twin/contracts";
@@ -6,10 +6,20 @@ import type { PlanDraft } from "@twin/contracts";
 import { usePlannerStatus } from "@/api/queries";
 import { useScene } from "@/cesium/SceneContext";
 import { planningEdited } from "@/lib/planningMetrics";
+import {
+  areaFromMeasurement,
+  isAreaZone,
+  nextAreaId,
+  viewFootprint,
+  zoneFromFootprint,
+} from "@/missions/areas";
 import { describeConflict, planConflicts } from "@/missions/conflicts";
 import { diffDrafts, idLabel, overlayFor } from "@/missions/planDraft";
 import type { Project } from "@/missions/types";
+import { useMeasurements } from "@/state/measurements";
 import { useMission } from "@/state/mission";
+import { useUi } from "@/state/ui";
+import { useViewer } from "@/state/viewer";
 
 import { PlanSchedule } from "./PlanSchedule";
 import { approveDraft, startPlanDraft } from "./planDrafting";
@@ -26,7 +36,77 @@ export function PlanComposer({ project }: { project: Project }) {
   const composer = useMission((s) => s.composer);
   const update = useMission((s) => s.updateComposer);
   const close = useMission((s) => s.closeComposer);
+  const addArea = useMission((s) => s.addArea);
+  const removeArea = useMission((s) => s.removeArea);
   const planner = usePlannerStatus();
+  const scene = useScene();
+  const metersPerPixel = useViewer((s) => s.camera.metersPerPixel);
+  const measureMode = useUi((s) => s.measureMode);
+  const setMeasureMode = useUi((s) => s.setMeasureMode);
+  // Drawing an area borrows the measurement tool's polygon drawing; the finished polygon
+  // becomes a zone and the measurement is discarded. The subscription lives in a ref so no
+  // state is set from inside an effect.
+  const drawing = useRef<{ since: number; stop: () => void } | null>(null);
+  const [armed, setArmed] = useState(false);
+  const areaCount = project.zones.filter(isAreaZone).length;
+  const isDrawing = measureMode === "area" && armed;
+  const adoptArea = (zone: (typeof project.zones)[number]) => {
+    addArea(project.id, zone);
+    const current = useMission.getState().composer;
+    if (current && !current.zoneIds.includes(zone.id))
+      update({ zoneIds: [...current.zoneIds, zone.id] });
+  };
+  const stopDrawing = () => {
+    drawing.current?.stop();
+    drawing.current = null;
+    setArmed(false);
+  };
+  useEffect(() => stopDrawing, []);
+  const startDrawing = () => {
+    if (drawing.current) {
+      stopDrawing();
+      setMeasureMode(null);
+      return;
+    }
+    const since = Date.now();
+    const unsubscribeMeasurements = useMeasurements.subscribe((state) => {
+      const done = state.items.find((m) => m.mode === "area" && m.complete && m.createdAt >= since);
+      if (!done) return;
+      const id = nextAreaId(useMission.getState().project?.zones ?? []);
+      const zone = areaFromMeasurement(done, id, `Drawn area ${id.slice(2)}`);
+      stopDrawing();
+      useMeasurements.getState().remove(done.id);
+      scene?.measurement.remove(done.id);
+      setMeasureMode(null);
+      if (zone) adoptArea(zone);
+    });
+    // Esc (or another tool) leaving area mode ends the drawing.
+    const unsubscribeMode = useUi.subscribe((state) => {
+      if (state.measureMode !== "area") stopDrawing();
+    });
+    drawing.current = {
+      since,
+      stop: () => {
+        unsubscribeMeasurements();
+        unsubscribeMode();
+      },
+    };
+    setArmed(true);
+    setMeasureMode("area");
+  };
+  const useView = () => {
+    const center = scene?.camera.viewCenter();
+    if (!center) return;
+    const id = nextAreaId(project.zones);
+    adoptArea(
+      zoneFromFootprint(
+        id,
+        `View area ${id.slice(2)}`,
+        viewFootprint(center, metersPerPixel, { width: center.width, height: center.height }),
+      ),
+    );
+  };
+
   // The goal field takes focus when the composer opens (the operator came here to type).
   const goalRef = useRef<HTMLTextAreaElement>(null);
   useEffect(() => {
@@ -114,23 +194,78 @@ export function PlanComposer({ project }: { project: Project }) {
           )}
           <div className="mc-composer__scope">
             <div>
-              <span className="mc-eyebrow">ZONES</span>
+              <div className="mc-row mc-row--between">
+                <span className="mc-eyebrow">WHERE</span>
+                <span className="mc-row" style={{ gap: "0.35rem" }}>
+                  <button
+                    type="button"
+                    className="mc-btn mc-btn--sm"
+                    onClick={useView}
+                    disabled={drafting || !scene}
+                    title="Make an area from the ground the view is looking at"
+                    data-testid="area-from-view"
+                  >
+                    <Scan size={12} aria-hidden="true" /> Use current view
+                  </button>
+                  <button
+                    type="button"
+                    className={`mc-btn mc-btn--sm ${isDrawing ? "is-on" : ""}`}
+                    onClick={startDrawing}
+                    disabled={drafting || !scene}
+                    aria-pressed={isDrawing}
+                    title="Click corners on the map; double-click to finish"
+                    data-testid="area-draw"
+                  >
+                    <PenLine size={12} aria-hidden="true" />{" "}
+                    {isDrawing ? "Drawing… (Esc to cancel)" : "Draw area"}
+                  </button>
+                </span>
+              </div>
+              {project.zones.length === 0 && (
+                <p className="mc-muted" style={{ fontSize: "12px", marginTop: "0.35rem" }}>
+                  No zones here yet. Use the current view or draw an area on the map; plans can be
+                  made anywhere.
+                </p>
+              )}
               <div className="mc-tags">
                 {project.zones.map((zone) => (
-                  <button
-                    key={zone.id}
-                    type="button"
-                    className={`mc-tag ${composer.zoneIds.includes(zone.id) ? "is-on" : ""}`}
-                    aria-pressed={composer.zoneIds.includes(zone.id)}
-                    onClick={() => toggle("zoneIds", zone.id)}
-                    disabled={drafting}
-                    data-testid={`compose-zone-${zone.id}`}
-                  >
-                    <span className={`mc-dot mc-dot--${zone.tone}`} aria-hidden="true" />
-                    {idLabel(zone.id, zone.name)}
-                  </button>
+                  <span key={zone.id} className="mc-tag-group">
+                    <button
+                      type="button"
+                      className={`mc-tag ${composer.zoneIds.includes(zone.id) ? "is-on" : ""}`}
+                      aria-pressed={composer.zoneIds.includes(zone.id)}
+                      onClick={() => toggle("zoneIds", zone.id)}
+                      disabled={drafting}
+                      data-testid={`compose-zone-${zone.id}`}
+                    >
+                      <span className={`mc-dot mc-dot--${zone.tone}`} aria-hidden="true" />
+                      {idLabel(zone.id, zone.name)}
+                      {isAreaZone(zone) && (
+                        <span className="mc-muted"> · {zone.acres.toLocaleString()} ac</span>
+                      )}
+                    </button>
+                    {isAreaZone(zone) && (
+                      <button
+                        type="button"
+                        className="mc-tag mc-tag--icon"
+                        aria-label={`Remove ${zone.id}`}
+                        onClick={() => {
+                          removeArea(project.id, zone.id);
+                          update({ zoneIds: composer.zoneIds.filter((z) => z !== zone.id) });
+                        }}
+                        disabled={drafting}
+                      >
+                        <X size={11} aria-hidden="true" />
+                      </button>
+                    )}
+                  </span>
                 ))}
               </div>
+              {areaCount > 0 && (
+                <p className="mc-muted" style={{ fontSize: "11.5px", marginTop: "0.3rem" }}>
+                  Drawn areas are saved with the plans that cover them.
+                </p>
+              )}
             </div>
             <div>
               <span className="mc-eyebrow">MACHINES</span>

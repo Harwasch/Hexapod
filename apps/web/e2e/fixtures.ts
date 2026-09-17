@@ -382,7 +382,11 @@ export async function mockApi(page: Page, options: MockOptions = {}): Promise<vo
         preferredZoneIds?: string[];
         preferredMachineIds?: string[];
       };
-      const zoneIds = body.preferredZoneIds?.length ? body.preferredZoneIds : ["Z-14"];
+      const zoneIds = body.preferredZoneIds?.length
+        ? body.preferredZoneIds
+        : ((body as { zones?: { id: string }[] }).zones ?? []).some((z) => z.id === "Z-14")
+          ? ["Z-14"]
+          : ((body as { zones?: { id: string }[] }).zones ?? []).slice(0, 1).map((z) => z.id);
       const machineIds = body.preferredMachineIds?.length ? body.preferredMachineIds : ["TR-04"];
       for (const id of body.refinement?.match(/TR-\d{2}/g) ?? [])
         if (!machineIds.includes(id)) machineIds.push(id);

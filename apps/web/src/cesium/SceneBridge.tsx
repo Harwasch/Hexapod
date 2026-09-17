@@ -3,6 +3,7 @@ import { useEffect } from "react";
 import { useLayers as useLayerCatalog, useSite, useSites as useSiteCatalog } from "@/api/queries";
 import { api, unwrap } from "@/api/client";
 import { builtinDemoSite } from "@/api/fallback";
+import { anywhereProject } from "@/missions/anywhere";
 import { DemoMissionProvider } from "@/missions/demo";
 import { siteProject } from "@/missions/siteProject";
 import { useLayers } from "@/state/layers";
@@ -127,6 +128,11 @@ export function SceneBridge() {
     const current = useMission.getState().project;
     // The active site is the *engaged* one and goes null when the camera leaves it; the
     // mission project follows the last site visited so plans stay put while flying around.
+    // With no site ever visited, plans are made "anywhere" from drawn areas.
+    if (!activeSiteId && !current) {
+      useMission.getState().setProject(anywhereProject());
+      return;
+    }
     if (!activeSiteId || (!project && activeSiteId)) return;
     if (
       (project?.id ?? null) === (current?.id ?? null) &&
@@ -134,11 +140,17 @@ export function SceneBridge() {
     )
       return;
     useMission.getState().setProject(project);
-    scene.mission.setProject(project);
+  }, [scene, activeSiteId, siteCatalog.data, activeSite.data]);
+
+  // The world draws whatever the store composes (provider zones plus drawn areas, plans).
+  const missionProject = useMission((s) => s.project);
+  useEffect(() => {
+    if (!scene) return;
+    scene.mission.setProject(missionProject);
     const layers = useMission.getState().layers;
     scene.mission.setLayer("zones", layers.zones);
     scene.mission.setLayer("tracks", layers.tracks);
-  }, [scene, activeSiteId, siteCatalog.data, activeSite.data]);
+  }, [scene, missionProject]);
 
   // Settings → scene
   const quality = useSettings((s) => s.quality);

@@ -10,7 +10,7 @@ import { useUi } from "@/state/ui";
 
 import { usePlans } from "@/api/queries";
 import { useScene } from "@/cesium/SceneContext";
-import { planFromRecord } from "@/missions/planDraft";
+import { planFromRecord, zonesFromRecord } from "@/missions/planDraft";
 import { planProgress, replanRefinement } from "@/missions/progress";
 
 import { PlanComposer } from "./PlanComposer";
@@ -44,9 +44,13 @@ export function PlansPanel() {
     // The store looks the project up itself; only a change of project or of records matters.
     const current = useMission.getState().project;
     if (!current || !remoteData) return;
+    // Areas stored with the plans join the project's zones first, so the plans' acres and
+    // overlays resolve against them.
+    useMission.getState().mergeAreas(current.id, remoteData.flatMap(zonesFromRecord));
+    const composed = useMission.getState().project ?? current;
     setRemotePlans(
       current.id,
-      remoteData.map((record) => planFromRecord(record, current)),
+      remoteData.map((record) => planFromRecord(record, composed)),
     );
   }, [project?.id, remoteData, setRemotePlans]);
   return (

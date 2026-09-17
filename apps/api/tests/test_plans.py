@@ -10,8 +10,20 @@ BODY = {
     "cadence": "weekly",
     "startDate": "2026-09-17",
     "endDate": None,
-    "zoneIds": ["Z-21"],
+    "zoneIds": ["Z-21", "A-01"],
     "machineIds": ["TR-04"],
+    "areas": [
+        {
+            "id": "A-01",
+            "name": "Drawn strip",
+            "footprint": {
+                "type": "Polygon",
+                "coordinates": [
+                    [[-122.14, 47.64], [-122.13, 47.64], [-122.13, 47.65], [-122.14, 47.64]]
+                ],
+            },
+        }
+    ],
     "steps": [
         {
             "title": "Survey",
@@ -39,6 +51,7 @@ def test_plan_lifecycle_and_revisions(client: TestClient) -> None:
     assert plan["status"] == "scheduled" and plan["revision"] == 1
     assert plan["revisions"][0]["note"] == "Approved"
     assert plan["steps"][0]["startDay"] == 0
+    assert plan["areas"][0]["id"] == "A-01" and plan["areas"][0]["footprint"]["type"] == "Polygon"
 
     listed = client.get("/api/v1/plans", params={"projectId": "blackrock-mesa"}).json()
     assert [p["id"] for p in listed] == [plan["id"]]
@@ -62,7 +75,8 @@ def test_plan_lifecycle_and_revisions(client: TestClient) -> None:
     assert body["status"] == "dispatched", "a revision keeps the lifecycle state"
     assert [r["revision"] for r in body["revisions"]] == [1, 2]
     assert (
-        body["revisions"][0]["zoneIds"] == ["Z-21"] and body["revisions"][1]["note"] == "Added Z-14"
+        body["revisions"][0]["zoneIds"] == ["Z-21", "A-01"]
+        and body["revisions"][1]["note"] == "Added Z-14"
     )
 
     assert client.delete(f"/api/v1/plans/{plan['id']}").status_code == 204

@@ -37,6 +37,7 @@ class Plan(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     zone_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
     machine_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+    areas: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False, default=list)
     steps: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False, default=list)
     estimates: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
     assumptions: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)

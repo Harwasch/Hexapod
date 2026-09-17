@@ -99,6 +99,7 @@ export class MissionManager {
   private zonesVisible = true;
   private tracksVisible = true;
   private readonly planEntities: Entity[] = [];
+  private overlay: PlanOverlay | null = null;
   private readonly listeners = new Set<FrameListener>();
   private readonly removeFrame: () => void;
   private lastGoodHeight: number | undefined;
@@ -123,10 +124,13 @@ export class MissionManager {
   }
 
   setProject(project: Project | null): void {
+    const overlay = this.overlay;
     this.clearEntities();
     this.project = project;
     this.heightCache.clear();
     if (!project) return;
+    // Zones may have been added or removed; the plan overlay is redrawn at the end.
+    if (overlay) queueMicrotask(() => this.project === project && this.showPlan(overlay));
     for (const zone of project.zones) {
       const ring = outerRings(zone.footprint)[0];
       if (!ring) continue;
@@ -223,6 +227,7 @@ export class MissionManager {
    * order. `null` clears it. The passes are a preview (see PREVIEW_SWATH_M).
    */
   showPlan(overlay: PlanOverlay | null): void {
+    this.overlay = overlay;
     for (const entity of this.planEntities) this.viewer.entities.remove(entity);
     this.planEntities.length = 0;
     this.setSelectedZone(null);
@@ -487,6 +492,7 @@ export class MissionManager {
     this.zoneEntities.length = 0;
     this.trackEntities.length = 0;
     this.planEntities.length = 0;
+    // Zone outlines are rebuilt from scratch, so the highlight state is gone with them.
   }
 
   destroy(): void {

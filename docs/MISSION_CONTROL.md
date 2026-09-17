@@ -56,6 +56,14 @@ A plan is a mission for the fleet, and the agent drafts it. The flow is goal →
    (Claude + model, or rule-based). "Revise with agent" reopens the composer with the plan's
    goal and replaces it on approval.
 
+**Anywhere.** Plans do not need a site or a fleet. With no site visited the project is
+"Anywhere" (`missions/anywhere.ts`); on any project the composer's WHERE row makes zones on
+the spot: "Use current view" takes half the viewport around the view centre (60 m to 5 km each
+way), "Draw area" borrows the measurement tool's polygon drawing and turns the finished polygon
+into a zone (`missions/areas.ts`, ids `A-01…`). Drawn areas are kept in the browser and stored
+on the plans that cover them (`areas` on the plan record), so a plan opened on another device
+brings its ground with it. The world redraws zones whenever the store's project changes.
+
 **Persistence.** Approving writes the plan to the API (`POST /api/v1/plans`; revising is
 `PUT` and keeps every approved revision in history; lifecycle is `PATCH …/status`). Plans are
 keyed by the mission project id and optionally linked to a catalog site. The console shows

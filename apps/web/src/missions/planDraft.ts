@@ -13,9 +13,10 @@ import type {
   PlanStep,
 } from "@twin/contracts";
 
+import { isAreaZone, zoneFromFootprint } from "./areas";
 import { bookedWindows } from "./conflicts";
 import { learnedRates } from "./rates";
-import type { Plan, PlanOverlay, Project } from "./types";
+import type { Plan, PlanOverlay, Project, Zone } from "./types";
 
 export interface DraftSeed {
   goal: string;
@@ -166,10 +167,14 @@ export function recordBodyFromDraft(
   goal: string,
   projectId: string,
   siteId: string | null,
+  zones: readonly Zone[] = [],
 ): PlanRecordCreate {
   return {
     projectId,
     siteId,
+    areas: zones
+      .filter((z) => isAreaZone(z) && draft.zoneIds.includes(z.id))
+      .map((z) => ({ id: z.id, name: z.name, footprint: z.footprint })),
     title: draft.title.trim() || "New plan",
     objective: draft.objective,
     goal,
@@ -206,6 +211,11 @@ export function presentStatus(status: PlanRecordStatus): {
   action: string;
 } {
   return STATUS_PRESENTATION[status];
+}
+
+/** The drawn areas a stored plan carries, as zones. */
+export function zonesFromRecord(record: PlanRecord): Zone[] {
+  return record.areas.map((a) => zoneFromFootprint(a.id, a.name, a.footprint));
 }
 
 /** A persisted plan as the console's record, with the lifecycle state the API holds. */
