@@ -124,8 +124,8 @@
      "representation": "mesh",
      "name": "Textured mesh (ODM)",
      "path": "mesh/tileset.json",
-     "ground_sample_distance_m": 0.0197,
-     "description": "about 2.0 cm per pixel, estimated from the cameras' EXIF",
+     "ground_sample_distance_m": 0.0189,
+     "description": "about 1.9 cm per pixel, estimated from the cameras' EXIF",
      "maximum_screen_space_error": 2,
      "default": true
     },
@@ -141,9 +141,148 @@
      "representation": "gaussian-splat",
      "name": "Gaussian splat (OpenSplat)",
      "path": "splat/tileset.json",
-     "ground_sample_distance_m": 0.0197,
-     "description": "16,105 gaussians, 1,500 training steps",
+     "ground_sample_distance_m": 0.0189,
+     "description": "15,982 gaussians, 3,000 training steps",
      "maximum_screen_space_error": 2
+    }
+   ]
+  },
+  {
+   "slug": "sheffield-park",
+   "name": "Sheffield Park, Florida",
+   "description": "Suburban park flown with a DJI Phantom 3 at low altitude; an ODM sample dataset.",
+   "boundary": [
+    [
+     -82.6977295,
+     28.03892
+    ],
+    [
+     -82.6977149,
+     28.0388591
+    ],
+    [
+     -82.6977142,
+     28.038857
+    ],
+    [
+     -82.6976065,
+     28.0386384
+    ],
+    [
+     -82.6975806,
+     28.0386061
+    ],
+    [
+     -82.6973362,
+     28.038421
+    ],
+    [
+     -82.6972817,
+     28.0384152
+    ],
+    [
+     -82.6966661,
+     28.0383705
+    ],
+    [
+     -82.6960294,
+     28.0383886
+    ],
+    [
+     -82.6959538,
+     28.0383915
+    ],
+    [
+     -82.6958573,
+     28.038418
+    ],
+    [
+     -82.6955477,
+     28.0387816
+    ],
+    [
+     -82.6955443,
+     28.0387906
+    ],
+    [
+     -82.6955437,
+     28.0388029
+    ],
+    [
+     -82.6955643,
+     28.0390423
+    ],
+    [
+     -82.6955904,
+     28.0391859
+    ],
+    [
+     -82.6956138,
+     28.0392385
+    ],
+    [
+     -82.6956303,
+     28.0392712
+    ],
+    [
+     -82.6959817,
+     28.0398969
+    ],
+    [
+     -82.6962726,
+     28.0399023
+    ],
+    [
+     -82.6968827,
+     28.0399119
+    ],
+    [
+     -82.6971519,
+     28.0399156
+    ],
+    [
+     -82.6971954,
+     28.0399147
+    ],
+    [
+     -82.6975319,
+     28.0397306
+    ],
+    [
+     -82.6977295,
+     28.03892
+    ]
+   ],
+   "center": [
+    -82.6966501,
+    28.0390936,
+    10.8
+   ],
+   "attribution": "Piero Toffanin / OpenDroneMap",
+   "attribution_url": "https://github.com/pierotofy/drone_dataset_sheffield_park_3",
+   "license_name": "BSD-2-Clause",
+   "license_url": "https://opensource.org/licenses/BSD-2-Clause",
+   "source_url": "https://hub.dronedb.app/r/odm/sheffield-park-3",
+   "captured": "2016",
+   "pipeline": "OpenDroneMap (mesh, point cloud)",
+   "images": 32,
+   "assets": [
+    {
+     "representation": "mesh",
+     "name": "Textured mesh (ODM)",
+     "path": "mesh/tileset.json",
+     "ground_sample_distance_m": 0.0272,
+     "description": "about 2.7 cm per pixel, estimated from the cameras' EXIF",
+     "maximum_screen_space_error": 2,
+     "default": true
+    },
+    {
+     "representation": "point-cloud",
+     "name": "Point cloud (ODM)",
+     "path": "pointcloud/tileset.json",
+     "point_spacing_m": 0.193,
+     "description": "1,000,000 points, about 19 cm apart",
+     "maximum_screen_space_error": 4
     }
    ]
   }
