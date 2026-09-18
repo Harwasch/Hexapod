@@ -79,24 +79,35 @@ the GPU, and a Gaussian splat is not re-sorted every 16 ms while nobody is touch
 
 Motion never renders with MSAA at any preset or ladder step: a 2× display already draws
 four times the pixels of a 1× one, and multisampling on top is where an integrated GPU loses
-the frame. The still frame is sharpened (the preset's MSAA, full base resolution) 500 ms
+the frame. The still frame is sharpened (the preset's MSAA, every device pixel) 500 ms
 after the camera rests, but only once tiles have stopped arriving (or after 3 s regardless):
 every arriving tile re-renders the still frame, and rendering each of those at full quality
 made the seconds after a move feel sluggish. Balanced caps the effective pixel ratio at 1.5
-(`baseResolutionScale`, pure and tested); ultra keeps every device pixel.
+_while moving_ (`baseResolutionScale`, pure and tested) and renders the still frame at the
+full device ratio like ultra, since nothing else renders at rest; the cap is what kept a 2×
+display looking softer than Google Maps once the camera stopped.
 
 Smoothness comes first, the way a maps app does it: nothing about the render settings
 changes during a gesture. Tile selection is frozen while the camera moves (every change of
 `maximumScreenSpaceError` pops tiles mid-drag), and slow frames at rest never coarsen
 anything (they are tiles arriving, not a stall). At rest the scene uses the idle time the
 way Google Maps does: once nothing is loading (sites and the world both report through
-`reportLoading`) and tileset memory is under 70 % of its budget, the error walks one step
-finer per 500 ms tick, at any height, down to the preset minimum (2 px on balanced: a 2 to
-5 cm survey mesh only shows its detail there, measured at 176k triangles and a Google-like
-softness at 8 px versus 416k and the real detail at 2 px). Nothing returns to the base
+`reportLoading`) and tileset memory is under 70 % of its budget, the error goes straight to
+the preset minimum on the next 500 ms tick, at any height (2 px on balanced: a 2 to 5 cm
+survey mesh only shows its detail there, measured at 176k triangles and a Google-like
+softness at 8 px versus 416k and the real detail at 2 px). It used to walk one step per
+tick; the intermediate levels were each requested, decoded and dropped on the way down. Nothing returns to the base
 on its own; finer tiles stay until memory pressure (125 % of budget) coarsens, so the next
 gesture starts from what is already loaded. Each SSE change calls `scene.requestRender()`;
 tile selection only runs inside a frame.
+
+A light colour grade (`colorGrade.ts`: saturation 1.18, contrast 1.08 around mid grey) runs
+as the last post-process stage on balanced and ultra. The world's tiles are unlit textures
+drawn as-is, which reads flatter than Google Maps, whose renderer adds a tone curve on
+output. The Photorealistic 3D Tiles API also serves suburbs coarser than Google's own apps
+draw them (measured at a Los Altos Hills house: leaf tiles at 2 m geometric error with
+256×256 textures on 50 m tiles, about 10 to 20 cm per texel, against roughly 3 to 5 cm in
+Google Maps), which no renderer setting can recover.
 
 Resolution and anti-aliasing are constant during a gesture and adapt only on evidence, one
 ladder step at a time; once the camera has rested 500 ms the still frame is re-rendered at

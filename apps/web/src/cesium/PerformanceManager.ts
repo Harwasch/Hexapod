@@ -1,7 +1,9 @@
-import type { Scene, Viewer } from "cesium";
+import type { PostProcessStage, Scene, Viewer } from "cesium";
 
 import type { Emitter } from "@/lib/emitter";
 import { QUALITY_SSE, type QualityPreset } from "@/state/settings";
+
+import { createColorGradeStage } from "./colorGrade";
 
 import type { SceneEvents } from "./types";
 
@@ -84,8 +86,8 @@ const SSE_PENALTY_STEP = 3;
  * Smoothness first: while the camera moves the tile selection is frozen, because every change
  * pops tiles mid-gesture. At rest, memory pressure coarsens (the only thing that ever does,
  * apart from the manager's ladder shifting the bounds), loading holds, and otherwise the
- * scene uses the idle time the way a maps app does: one step finer per tick, at any height,
- * as long as there is memory headroom. Slow frames at rest are tiles arriving, never a
+ * scene uses the idle time the way a maps app does: straight to the finest level, at any
+ * height, as long as there is memory headroom. Slow frames at rest are tiles arriving, never a
  * reason to coarsen. Nothing returns to the base on its own: finer tiles stay until memory
  * says otherwise, so the next gesture starts from what is already loaded.
  */
@@ -107,7 +109,9 @@ export function decideScreenSpaceError(sample: QualitySample): QualityDecision {
       screenSpaceError: current,
       reason: `holding (${Math.round(memoryRatio * 100)}% of memory budget)`,
     };
-  const target = Math.min(bounds.max, Math.max(bounds.min, current - 2));
+  // Straight to the finest level, the way a maps app streams once the camera stops: the
+  // intermediate levels would each be requested, decoded and thrown away on the way down.
+  const target = Math.min(bounds.max, bounds.min);
   if (target === current) return { screenSpaceError: current, reason: "at finest" };
   return { screenSpaceError: target, reason: "idle refinement" };
 }
@@ -229,6 +233,7 @@ export class PerformanceManager {
   private altitude = Number.POSITIVE_INFINITY;
   private nearSite = false;
   private readonly timer: ReturnType<typeof setInterval>;
+  private readonly colorGrade: PostProcessStage;
   private readonly unsubscribe: (() => void)[] = [];
   private readonly gpu: string | null;
   private readonly webgl2: boolean;
@@ -275,6 +280,8 @@ export class PerformanceManager {
         this.setUploadBudgets(false);
       }),
     );
+    this.colorGrade = createColorGradeStage();
+    this.scene.postProcessStages.add(this.colorGrade);
     this.timer = setInterval(() => this.evaluate(), 500);
     this.events.emit("performance", {
       gpu: this.gpu,
@@ -359,6 +366,8 @@ export class PerformanceManager {
   configure(inputs: QualityInputs): void {
     this.inputs = inputs;
     const bounds = QUALITY_SSE[inputs.preset];
+    // The colour grade is one cheap full-screen pass; performance skips it with the rest.
+    this.colorGrade.enabled = inputs.preset !== "performance";
     for (const group of GROUPS) {
       this.groups[group].sse = inputs.manualScreenSpaceError ?? bounds.base;
       this.applySse(group);
@@ -430,9 +439,10 @@ export class PerformanceManager {
   }
 
   /**
-   * At rest nothing renders until something changes, so the still frame can afford the
-   * preset's full resolution and anti-aliasing whatever the ladder says; the switch back
-   * happens on the first frame of the next gesture, one framebuffer re-allocation.
+   * At rest nothing renders until something changes, so the still frame can afford every
+   * device pixel and the preset's anti-aliasing whatever the ladder or the preset's motion
+   * scale says; the switch back happens on the first frame of the next gesture, one
+   * framebuffer re-allocation.
    */
   private sharpenAtRest(now: number): void {
     if (this.sharpened) return;
@@ -442,7 +452,7 @@ export class PerformanceManager {
     const full = this.ladder[0];
     if (!full) return;
     this.sharpened = true;
-    this.setResolutionScale(full.scale * this.baseScale);
+    this.setResolutionScale(full.scale);
     this.setMsaa(full.msaa);
     this.scene.requestRender();
   }
@@ -697,6 +707,7 @@ export class PerformanceManager {
 
   destroy(): void {
     clearInterval(this.timer);
+    if (!this.scene.isDestroyed()) this.scene.postProcessStages.remove(this.colorGrade);
     for (const off of this.unsubscribe) off();
   }
 }

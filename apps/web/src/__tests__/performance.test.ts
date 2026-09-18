@@ -18,9 +18,9 @@ const base: QualitySample = {
 };
 
 describe("decideScreenSpaceError", () => {
-  it("refines one step per tick at rest, at any height, down to the preset minimum", () => {
+  it("refines straight to the preset minimum at rest, at any height", () => {
     expect(decideScreenSpaceError(base)).toEqual({
-      screenSpaceError: 14,
+      screenSpaceError: 2,
       reason: "idle refinement",
     });
     expect(decideScreenSpaceError({ ...base, current: 3 }).screenSpaceError).toBe(2);
