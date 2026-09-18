@@ -1,0 +1,14 @@
+[project]
+name = "twin-captures"
+version = "0.1.0"
+description = "Turns drone photogrammetry outputs (ODM, OpenSplat) into 3D Tiles the console serves."
+requires-python = ">=3.11"
+dependencies = [
+  "numpy>=1.26",
+  "pillow>=10",
+  "laspy[lazrs]>=2.5",
+  "pyproj>=3.6",
+]
+
+[tool.ruff]
+line-length = 100

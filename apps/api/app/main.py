@@ -5,14 +5,16 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 
 from fastapi import FastAPI, Request, Response, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.api.v1.router import api_v1
-from app.config import Settings, get_settings
+from app.config import REPO_ROOT, Settings, get_settings
 from app.schemas.common import Problem
 from app.services.errors import ConflictError, NotFoundError
 from app.services.urls import UrlValidationError
@@ -102,6 +104,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return _problem(status.HTTP_422_UNPROCESSABLE_CONTENT, "Validation error", None, errors)
 
     app.include_router(api_v1)
+    # Processed captures kept on disk (data/tiles/<site>/<representation>/tileset.json) are
+    # served as static 3D Tiles under the API prefix, so the web app's /api proxy covers them.
+    tiles_dir = Path(settings.tiles_dir)
+    if not tiles_dir.is_absolute():
+        tiles_dir = REPO_ROOT / tiles_dir
+    if tiles_dir.is_dir():
+        app.mount("/api/v1/tiles", StaticFiles(directory=str(tiles_dir)), name="tiles")
     return app
 
 

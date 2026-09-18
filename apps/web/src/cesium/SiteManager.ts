@@ -384,7 +384,16 @@ export class SiteManager {
     );
     const altitudeRadii = current ? DISENGAGE_ALTITUDE_RADII : ENGAGE_ALTITUDE_RADII;
     const distanceRadii = current ? DISENGAGE_DISTANCE_RADII : ENGAGE_DISTANCE_RADII;
-    return pose.altitude < entry.radius * altitudeRadii && distance < entry.radius * distanceRadii;
+    // Height above the site's own ground when the catalog knows it. The pose's altitude is
+    // above whatever surface the globe can report, which right after a long flight, or with
+    // the globe hidden under the photorealistic world, can be sea level: a model 190 m below
+    // the camera then reads as 350 m away and hands back to the world on arrival.
+    const ground = entry.site.centroid.height;
+    const altitude =
+      ground !== undefined && ground !== null && Number.isFinite(ground)
+        ? Math.max(0, pose.height - ground)
+        : pose.altitude;
+    return altitude < entry.radius * altitudeRadii && distance < entry.radius * distanceRadii;
   }
 
   private setEngaged(entry: ActiveSite, engaged: boolean): void {

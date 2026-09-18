@@ -47,6 +47,12 @@ class Settings(BaseSettings):
     anthropic_api_key: str | None = None
     anthropic_model: str = "claude-opus-5"
 
+    # Local 3D Tiles served by the API at /api/v1/tiles (processed captures kept in the repo
+    # or produced by a pipeline on this machine). Relative paths are from the repo root.
+    tiles_dir: str = "data/tiles"
+    # The URL the browser reaches the API at, for seeding absolute tileset URLs.
+    public_api_base: str = "http://localhost:8000"
+
     api_host: str = "0.0.0.0"  # noqa: S104 - container default, documented in DEPLOYMENT.md
     api_port: int = 8000
 

@@ -7,10 +7,12 @@ import logging
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.models import Layer, Site
 from app.schemas.bookmark import CameraBookmarkCreate
 from app.schemas.geojson import MultiPolygon, Polygon
 from app.schemas.site import SiteCreate
+from app.seed.captures import capture_sites
 from app.seed.data import COMPARISON_SITES, DEMO_SITE, LAYERS
 from app.services import geometry
 from app.services import layers as layer_service
@@ -23,7 +25,7 @@ def seed(db: Session) -> dict[str, int]:
     """Creates the seeded sites and layers once, and keeps the seeded sites' camera
     bookmarks in step with the code (they are tuning, not user data)."""
     created = {"sites": 0, "layers": 0}
-    for site in [DEMO_SITE, *COMPARISON_SITES]:
+    for site in [DEMO_SITE, *COMPARISON_SITES, *capture_sites(get_settings())]:
         existing = db.scalar(select(Site).where(Site.slug == site.slug))
         if existing is None:
             site_service.create_site(db, site)
