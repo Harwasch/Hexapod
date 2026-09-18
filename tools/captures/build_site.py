@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import shutil
 from pathlib import Path
 from statistics import median
@@ -148,21 +149,50 @@ def boundary_from_cloud(laz: Path, vertices: int = 24) -> tuple[list[list[float]
     return ring, center
 
 
+def camera_heights(project: Path) -> list[float]:
+    """Camera centre heights from OpenSfM's topocentric reconstruction (same frame as the LAZ
+    when the reference altitude is 0): centre = -R^T t for each shot's angle-axis rotation."""
+    path = project / "opensfm" / "reconstruction.topocentric.json"
+    if not path.is_file():
+        return []
+    heights: list[float] = []
+    for reconstruction in json.loads(path.read_text(encoding="utf-8")):
+        for shot in reconstruction.get("shots", {}).values():
+            axis = np.asarray(shot["rotation"], dtype=float)
+            angle = float(np.linalg.norm(axis))
+            if angle < 1e-12:
+                rotation = np.eye(3)
+            else:
+                k = axis / angle
+                cross = np.array([[0, -k[2], k[1]], [k[2], 0, -k[0]], [-k[1], k[0], 0]])
+                rotation = (
+                    np.eye(3) + math.sin(angle) * cross + (1 - math.cos(angle)) * cross @ cross
+                )
+            centre = -rotation.T @ np.asarray(shot["translation"], dtype=float)
+            heights.append(float(centre[2]))
+    return heights
+
+
 def estimate_gsd(project: Path, ground_height: float) -> float | None:
-    """Ground sample distance from the cameras' EXIF: height above the model's ground over
-    the focal length in pixels. An estimate; the report ODM would write is more careful."""
+    """Ground sample distance: the cameras' median height above the model's ground (from the
+    reconstruction, not EXIF, whose altitudes are often relative or wrong) over the focal
+    length in pixels. An estimate; ODM's report is more careful."""
     images = project / "images.json"
     if not images.is_file():
         return None
     rows = json.loads(images.read_text(encoding="utf-8"))
-    values = []
-    for row in rows:
-        altitude, width, ratio = row.get("altitude"), row.get("width"), row.get("focal_ratio")
-        if altitude and width and ratio:
-            above = altitude - ground_height
-            if above > 5:
-                values.append(above / (ratio * width))
-    return round(median(values), 4) if values else None
+    focal_px = [
+        row["focal_ratio"] * row["width"]
+        for row in rows
+        if row.get("focal_ratio") and row.get("width")
+    ]
+    heights = camera_heights(project)
+    if not focal_px or not heights:
+        return None
+    above = median(heights) - ground_height
+    if above < 5:
+        return None
+    return round(above / median(focal_px), 4)
 
 
 def upsert_manifest(tiles_dir: Path, entry: dict) -> None:
@@ -240,7 +270,7 @@ def main() -> None:
 
     ring, center = boundary_from_cloud(laz)
     ground = float(report["pointcloud"]["ground_z_min_m"])
-    gsd = args.gsd if args.gsd is not None else estimate_gsd(project, ground)
+    gsd = args.gsd if args.gsd is not None else estimate_gsd(project, ground - args.height_offset)
     images = len(list((project / "images").iterdir())) if (project / "images").is_dir() else None
     gsd_text = (
         f"about {gsd * 100:.1f} cm per pixel, estimated from the cameras' EXIF" if gsd else None
