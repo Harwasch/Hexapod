@@ -66,9 +66,9 @@ cd apps/api && uv run python -m app.seed
 
 `data/tiles/captures.json` is the source of truth for the seeded sites: boundary (convex hull
 of the point cloud), centre, attribution and license, source URL, capture date, image count,
-and per-asset quality. Ground sample distance is *estimated* from the cameras' EXIF (height
-above the model's ground over the focal length in pixels) and labelled as such; the point
-spacing is measured from the cloud.
+and per-asset quality. Ground sample distance is *estimated* from the reconstructed camera
+heights above the model's ground over the focal length in pixels (EXIF altitudes are often
+relative to take-off) and labelled as such; the point spacing is measured from the cloud.
 
 ## Honest limits
 
