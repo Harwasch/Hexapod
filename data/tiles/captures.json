@@ -285,6 +285,117 @@
      "maximum_screen_space_error": 4
     }
    ]
+  },
+  {
+   "slug": "mygla",
+   "name": "Tokarzonka reservoir, Istebna",
+   "description": "Retention reservoir in the Silesian Beskids flown with a DJI Phantom 3 in winter; a partial, hilly reconstruction where a single height offset fits less well.",
+   "boundary": [
+    [
+     18.8726791,
+     49.5935843
+    ],
+    [
+     18.8728902,
+     49.5933553
+    ],
+    [
+     18.8728931,
+     49.5933521
+    ],
+    [
+     18.8731515,
+     49.5933586
+    ],
+    [
+     18.8731813,
+     49.5933595
+    ],
+    [
+     18.8733456,
+     49.5934383
+    ],
+    [
+     18.873346,
+     49.5934388
+    ],
+    [
+     18.8736577,
+     49.593932
+    ],
+    [
+     18.8736882,
+     49.5940199
+    ],
+    [
+     18.8737058,
+     49.5940725
+    ],
+    [
+     18.8737003,
+     49.5942209
+    ],
+    [
+     18.8735849,
+     49.5942983
+    ],
+    [
+     18.8730923,
+     49.594291
+    ],
+    [
+     18.873075,
+     49.5942903
+    ],
+    [
+     18.8729955,
+     49.594283
+    ],
+    [
+     18.8729946,
+     49.5942825
+    ],
+    [
+     18.872982,
+     49.594269
+    ],
+    [
+     18.8726791,
+     49.5935843
+    ]
+   ],
+   "center": [
+    18.8733134,
+    49.5939973,
+    786.4
+   ],
+   "attribution": "Tomasz Nycz",
+   "attribution_url": "https://hub.dronedb.app/r/odm/mygla",
+   "license_name": "CC-BY-3.0",
+   "license_url": "https://creativecommons.org/licenses/by/3.0/",
+   "source_url": "https://hub.dronedb.app/r/odm/mygla",
+   "captured": null,
+   "pipeline": "OpenDroneMap (mesh, point cloud)",
+   "images": 29,
+   "assets": [
+    {
+     "representation": "mesh",
+     "name": "Textured mesh (ODM)",
+     "path": "mesh/tileset.json",
+     "ground_sample_distance_m": 0.014,
+     "description": "about 1.4 cm per pixel, estimated from the camera heights",
+     "maximum_screen_space_error": 2,
+     "default": true
+    },
+    {
+     "representation": "point-cloud",
+     "name": "Point cloud (ODM)",
+     "path": "pointcloud/tileset.json",
+     "point_spacing_m": 0.097,
+     "description": "1,000,000 points, about 10 cm apart",
+     "maximum_screen_space_error": 4
+    }
+   ]
   }
  ]
 }

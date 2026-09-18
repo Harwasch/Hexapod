@@ -117,6 +117,14 @@ def boundary_from_cloud(laz: Path, vertices: int = 24) -> tuple[list[list[float]
 
     cloud = laspy.read(str(laz))
     x, y = np.asarray(cloud.x), np.asarray(cloud.y)
+    # Only cells the reconstruction actually filled count: a few stray points on a far tree
+    # line would otherwise drag the hull (and the world clipping) over ground the model lacks.
+    cell = 4.0
+    ix = np.floor((x - x.min()) / cell).astype(np.int64)
+    iy = np.floor((y - y.min()) / cell).astype(np.int64)
+    _keys, inverse, counts = np.unique(ix * 1_000_000 + iy, return_inverse=True, return_counts=True)
+    dense = counts[inverse] >= max(20, int(np.percentile(counts, 40)))
+    x, y = x[dense], y[dense]
     rng = np.random.default_rng(1)
     pick = rng.choice(x.size, min(x.size, 200_000), replace=False)
     transformer = Transformer.from_crs(
