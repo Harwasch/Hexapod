@@ -17,6 +17,7 @@ from app.seed.data import COMPARISON_SITES, DEMO_SITE, LAYERS
 from app.services import geometry
 from app.services import layers as layer_service
 from app.services import sites as site_service
+from app.services.assets import build_asset
 
 logger = logging.getLogger("twin.seed")
 
@@ -79,11 +80,39 @@ def _refresh(db: Session, existing: Site, wanted: SiteCreate) -> None:
         existing.centroid = geometry.position_to_wkb(centroid)
         existing.centroid_height = centroid.height
         changed.append("boundary")
+    # A capture site is rebuilt whole by tools/captures: its manifest is the source of truth
+    # for assets, quality and provenance, so new representations and updated numbers land.
+    rebuilt = wanted.metadata.get("origin") == "capture-pipeline"
+    if rebuilt:
+        if existing.metadata_ != wanted.metadata:
+            existing.metadata_ = dict(wanted.metadata)
+            changed.append("metadata")
+        if existing.description != wanted.description:
+            existing.description = wanted.description
+            changed.append("description")
+        if wanted.centroid is not None and existing.centroid_height != wanted.centroid.height:
+            existing.centroid = geometry.position_to_wkb(wanted.centroid)
+            existing.centroid_height = wanted.centroid.height
+            changed.append("centroid")
     by_name = {asset.name: asset for asset in existing.assets}
     for payload in wanted.assets:
         asset = by_name.get(payload.name)
         if asset is None:
+            if rebuilt:
+                existing.assets.append(build_asset(payload, site_id=existing.id))
+                changed.append(f"added {payload.name}")
             continue
+        if rebuilt:
+            resolution = (
+                payload.resolution.model_dump(mode="json", by_alias=True)
+                if payload.resolution
+                else None
+            )
+            source = payload.source.model_dump(mode="json", by_alias=True)
+            if asset.resolution != resolution or asset.source != source:
+                asset.resolution = resolution
+                asset.source = source
+                changed.append(f"quality of {payload.name}")
         if payload.footprint is not None and _rings(
             geometry.wkb_to_footprint(asset.footprint)
         ) != _rings(payload.footprint):

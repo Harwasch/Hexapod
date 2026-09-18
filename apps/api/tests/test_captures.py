@@ -5,9 +5,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from sqlalchemy.orm import Session
+
 from app.config import Settings
 from app.schemas.asset import TilesUrlSource
+from app.seed import _refresh as refresh_site
 from app.seed.captures import capture_sites, load_manifest
+from app.services import sites as site_service
 
 MANIFEST = {
     "captures": [
@@ -80,3 +84,28 @@ def test_manifest_becomes_a_site_served_by_the_api(tmp_path: Path) -> None:
 
 def test_missing_manifest_seeds_nothing(tmp_path: Path) -> None:
     assert capture_sites(Settings(tiles_dir=str(tmp_path))) == []
+
+
+def test_rebuilt_capture_refreshes_the_seeded_site(tmp_path: Path, db: Session) -> None:
+    settings = settings_for(tmp_path)
+    [first] = capture_sites(settings)
+    first.assets = first.assets[:1]
+    created = site_service.create_site(db, first)
+    assert len(created.assets) == 1
+
+    grown = json.loads(json.dumps(MANIFEST))
+    grown["captures"][0]["assets"][0]["ground_sample_distance_m"] = 0.027
+    grown["captures"][0]["images"] = 32
+    (tmp_path / "captures.json").write_text(json.dumps(grown), encoding="utf-8")
+    [wanted] = capture_sites(settings)
+    refresh_site(db, created, wanted)
+
+    db.refresh(created)
+    assert [a.representation.value for a in created.assets] == [
+        "mesh",
+        "point-cloud",
+        "gaussian-splat",
+    ]
+    assert created.assets[0].resolution is not None
+    assert created.assets[0].resolution["groundSampleDistanceM"] == 0.027
+    assert created.metadata_["images"] == 32
