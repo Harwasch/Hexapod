@@ -225,7 +225,7 @@ def main() -> None:
     parser.add_argument("--splat-iterations", type=int)
     parser.add_argument("--height-offset", type=float, default=0.0)
     parser.add_argument(
-        "--gsd", type=float, help="metres per pixel; estimated from EXIF when omitted"
+        "--gsd", type=float, help="metres per pixel; estimated from the camera heights when omitted"
     )
     parser.add_argument("--max-edge", type=int, default=2048)
     parser.add_argument("--quality", type=int, default=85)
@@ -273,7 +273,7 @@ def main() -> None:
     gsd = args.gsd if args.gsd is not None else estimate_gsd(project, ground - args.height_offset)
     images = len(list((project / "images").iterdir())) if (project / "images").is_dir() else None
     gsd_text = (
-        f"about {gsd * 100:.1f} cm per pixel, estimated from the cameras' EXIF" if gsd else None
+        f"about {gsd * 100:.1f} cm per pixel, estimated from the camera heights" if gsd else None
     )
     spacing = report["pointcloud"]["spacing_m"]
     assets = [

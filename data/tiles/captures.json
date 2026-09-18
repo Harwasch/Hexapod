@@ -125,7 +125,7 @@
      "name": "Textured mesh (ODM)",
      "path": "mesh/tileset.json",
      "ground_sample_distance_m": 0.0189,
-     "description": "about 1.9 cm per pixel, estimated from the cameras' EXIF",
+     "description": "about 1.9 cm per pixel, estimated from the camera heights",
      "maximum_screen_space_error": 2,
      "default": true
     },
@@ -272,7 +272,7 @@
      "name": "Textured mesh (ODM)",
      "path": "mesh/tileset.json",
      "ground_sample_distance_m": 0.0272,
-     "description": "about 2.7 cm per pixel, estimated from the cameras' EXIF",
+     "description": "about 2.7 cm per pixel, estimated from the camera heights",
      "maximum_screen_space_error": 2,
      "default": true
     },
