@@ -1,0 +1,151 @@
+{
+ "captures": [
+  {
+   "slug": "brighton-beach",
+   "name": "Brighton Beach, Duluth",
+   "description": "Lake Superior shoreline park flown with a DJI Phantom 3; a small ODM sample dataset.",
+   "boundary": [
+    [
+     -91.9948655,
+     46.8427616
+    ],
+    [
+     -91.9948652,
+     46.8427606
+    ],
+    [
+     -91.9947845,
+     46.8425708
+    ],
+    [
+     -91.9946362,
+     46.8424187
+    ],
+    [
+     -91.9941661,
+     46.8421009
+    ],
+    [
+     -91.9938233,
+     46.8420947
+    ],
+    [
+     -91.9937039,
+     46.8421069
+    ],
+    [
+     -91.9937012,
+     46.8421078
+    ],
+    [
+     -91.9936502,
+     46.8421421
+    ],
+    [
+     -91.993628,
+     46.8421579
+    ],
+    [
+     -91.9934083,
+     46.8423187
+    ],
+    [
+     -91.9930801,
+     46.8425636
+    ],
+    [
+     -91.9930775,
+     46.8425656
+    ],
+    [
+     -91.9930757,
+     46.8425682
+    ],
+    [
+     -91.993205,
+     46.842785
+    ],
+    [
+     -91.9934143,
+     46.8429114
+    ],
+    [
+     -91.9934191,
+     46.8429141
+    ],
+    [
+     -91.9938067,
+     46.8431298
+    ],
+    [
+     -91.9938503,
+     46.8431481
+    ],
+    [
+     -91.9940927,
+     46.8432169
+    ],
+    [
+     -91.9941999,
+     46.8432298
+    ],
+    [
+     -91.9942028,
+     46.84323
+    ],
+    [
+     -91.9943207,
+     46.8431834
+    ],
+    [
+     -91.9947701,
+     46.8428928
+    ],
+    [
+     -91.9948655,
+     46.8427616
+    ]
+   ],
+   "center": [
+    -91.9939249,
+    46.8425791,
+    152.6
+   ],
+   "attribution": "Piero Toffanin / OpenDroneMap",
+   "attribution_url": "https://github.com/pierotofy/drone_dataset_brighton_beach",
+   "license_name": "BSD-2-Clause",
+   "license_url": "https://opensource.org/licenses/BSD-2-Clause",
+   "source_url": "https://hub.dronedb.app/r/odm/brighton-beach",
+   "captured": "2016",
+   "pipeline": "OpenDroneMap (mesh, point cloud) and OpenSplat (gaussian splat)",
+   "images": 18,
+   "assets": [
+    {
+     "representation": "mesh",
+     "name": "Textured mesh (ODM)",
+     "path": "mesh/tileset.json",
+     "ground_sample_distance_m": 0.0197,
+     "description": "about 2.0 cm per pixel, estimated from the cameras' EXIF",
+     "maximum_screen_space_error": 2,
+     "default": true
+    },
+    {
+     "representation": "point-cloud",
+     "name": "Point cloud (ODM)",
+     "path": "pointcloud/tileset.json",
+     "point_spacing_m": 0.132,
+     "description": "1,000,000 points, about 13 cm apart",
+     "maximum_screen_space_error": 4
+    },
+    {
+     "representation": "gaussian-splat",
+     "name": "Gaussian splat (OpenSplat)",
+     "path": "splat/tileset.json",
+     "ground_sample_distance_m": 0.0197,
+     "description": "16,105 gaussians, 1,500 training steps",
+     "maximum_screen_space_error": 2
+    }
+   ]
+  }
+ ]
+}
