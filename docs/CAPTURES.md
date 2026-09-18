@@ -29,7 +29,10 @@ docker run --rm -v /path/to/<dataset>:/datasets/code opendronemap/odm --project-
 
 # 2. OpenSplat on ODM's OpenSfM reconstruction (image paths inside opensfm/ are /datasets/code/...).
 ln -s /path/to/<dataset> /datasets/code
-opensplat /path/to/<dataset>/opensfm -n 3000 --downscale-factor 4 --sh-degree 0 -o /path/to/<dataset>/splat.ply
+# OpenSplat only densifies until half the run by default and every 500 steps, which leaves a
+# short CPU run with a few thousand gaussians; refine more often and for longer.
+opensplat /path/to/<dataset>/opensfm -n 3000 --downscale-factor 4 --sh-degree 0 \
+  --refine-every 100 --densify-from 500 --densify-until 2500 -o /path/to/<dataset>/splat.ply
 
 # 3. Height offset: EXIF altitudes are not on the WGS84 ellipsoid. Sample the model's ground,
 #    sample the console's terrain at the same points (browser console: Cesium.sampleTerrainMostDetailed),
