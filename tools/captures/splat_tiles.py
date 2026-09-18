@@ -111,7 +111,8 @@ def pack_spz(
         + scales.reshape(-1).tobytes()
         + rotations.reshape(-1).tobytes()
     )
-    return gzip.compress(raw, compresslevel=6)
+    # mtime pinned so the same splat packs to the same bytes (git sees no change).
+    return gzip.compress(raw, compresslevel=6, mtime=0)
 
 
 def build_glb(count: int, pmin: list[float], pmax: list[float], spz: bytes) -> bytes:
