@@ -4,13 +4,17 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.seed import seed
+from app.seed.captures import capture_sites
 
 
 def test_seed_is_idempotent_and_lists_layers(client: TestClient, db: Session) -> None:
     first = seed(db)
     second = seed(db)
-    assert first["layers"] == 10 and first["sites"] == 6  # demo + 5 comparison sites
+    # demo + 5 comparison sites + one per capture in data/tiles/captures.json
+    captures = len(capture_sites(get_settings()))
+    assert first["layers"] == 10 and first["sites"] == 6 + captures
     assert second == {"sites": 0, "layers": 0}
     layers = client.get("/api/v1/layers").json()
     assert len(layers) == 10
