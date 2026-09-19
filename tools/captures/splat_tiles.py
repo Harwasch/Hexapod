@@ -192,7 +192,10 @@ def convert(
     data = read_ply(ply)
     xyz = np.stack([data["x"], data["y"], data["z"]], axis=1)
     opacity = sigmoid(data["opacity"])
-    keep = opacity >= opacity_min
+    # A trainer can leave a few NaN gaussians behind; one of them poisons every statistic.
+    finite = np.isfinite(xyz).all(axis=1) & np.isfinite(opacity)
+    xyz = np.where(finite[:, None], xyz, 0.0)
+    keep = finite & (opacity >= opacity_min)
     # Outliers far from the bulk (sky floaters) are dropped by a robust radius.
     center = np.median(xyz[keep], axis=0)
     radius = np.linalg.norm(xyz[keep] - center, axis=1)
