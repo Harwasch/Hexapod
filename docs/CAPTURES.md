@@ -78,3 +78,33 @@ relative to take-off) and labelled as such; the point spacing is measured from t
   below the terrain at the edges.
 - Tile data lives in the repository for the test run. Real sites belong in object storage or
   Cesium ion, registered by URL as `docs/ADDING_DATA.md` describes.
+
+## The test run
+
+Three public DroneDB datasets, all DJI Phantom 3, processed on a 4-core CPU sandbox (no GPU).
+
+| Site | Photos | Mesh | Point cloud | Splat | GSD (est.) | Height offset |
+| --- | ---: | --- | --- | --- | ---: | ---: |
+| Brighton Beach, Duluth | 18 | 12 tiles, 22 MB | 1.0 M pts, 8.7 MB | 126k gaussians, 2.1 MB | 1.9 cm/px | −2.1 m |
+| Sheffield Park, Florida | 32 | 12 tiles, 27 MB | 1.0 M pts, 8.7 MB | 120k gaussians, 2.0 MB | 2.7 cm/px | +36.7 m |
+| Tokarzonka reservoir, Istebna | 29 | 3 tiles, 19 MB | 1.0 M pts, 8.7 MB | 57k gaussians, 0.9 MB | 1.4 cm/px | +111 m |
+
+Timings: ODM 17–45 min per site (dense matching and meshing dominate), OpenSplat 3,000
+steps 20–90 min depending on how many other jobs shared the cores, packaging under two
+minutes per site.
+
+What the run showed:
+
+- **Meshes and point clouds are the useful outputs.** Both sit on the photorealistic world
+  within a metre or two at all three sites once the height offset is applied, and the
+  textured mesh is far sharper than the 3D world underneath it (2–3 cm/px against 10–20 cm).
+- **CPU splats are proof of format, not of quality.** At quarter resolution and 3,000 steps
+  they are blurry compared with the mesh from the same photos; a GPU run at full resolution
+  with spherical harmonics is the real comparison, and that is a training-cost question,
+  not a viewer one.
+- **Georeferencing is the fragile step.** Two of three datasets had EXIF altitudes that were
+  relative or wrong (0.4 m above take-off, 111 m off in the mountains), so the offset step
+  is not optional. A tilted or partial reconstruction (Tokarzonka, flown in winter over a
+  narrow dam) still lands where it should, but one number cannot fix its slope.
+- **Sizes fit a repository for a test.** 30–40 MB a site with 2048 px JPEG textures, a
+  million points and a splat; the raw ODM output was 150–190 MB a site.
