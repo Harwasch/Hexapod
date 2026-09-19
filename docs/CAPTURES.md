@@ -66,7 +66,7 @@ cd apps/api && uv run python -m app.seed
 
 `data/tiles/captures.json` is the source of truth for the seeded sites: boundary (convex hull
 of the point cloud), centre, attribution and license, source URL, capture date, image count,
-and per-asset quality. Ground sample distance is *estimated* from the reconstructed camera
+and per-asset quality. Ground sample distance is _estimated_ from the reconstructed camera
 heights above the model's ground over the focal length in pixels (EXIF altitudes are often
 relative to take-off) and labelled as such; the point spacing is measured from the cloud.
 
@@ -83,11 +83,11 @@ relative to take-off) and labelled as such; the point spacing is measured from t
 
 Three public DroneDB datasets, all DJI Phantom 3, processed on a 4-core CPU sandbox (no GPU).
 
-| Site | Photos | Mesh | Point cloud | Splat | GSD (est.) | Height offset |
-| --- | ---: | --- | --- | --- | ---: | ---: |
-| Brighton Beach, Duluth | 18 | 12 tiles, 22 MB | 1.0 M pts, 8.7 MB | 126k gaussians, 2.1 MB | 1.9 cm/px | −2.1 m |
-| Sheffield Park, Florida | 32 | 12 tiles, 27 MB | 1.0 M pts, 8.7 MB | 120k gaussians, 2.0 MB | 2.7 cm/px | +36.7 m |
-| Tokarzonka reservoir, Istebna | 29 | 3 tiles, 19 MB | 1.0 M pts, 8.7 MB | 57k gaussians, 0.9 MB | 1.4 cm/px | +111 m |
+| Site                          | Photos | Mesh            | Point cloud       | Splat                  | GSD (est.) | Height offset |
+| ----------------------------- | -----: | --------------- | ----------------- | ---------------------- | ---------: | ------------: |
+| Brighton Beach, Duluth        |     18 | 12 tiles, 22 MB | 1.0 M pts, 8.7 MB | 126k gaussians, 2.1 MB |  1.9 cm/px |        −2.1 m |
+| Sheffield Park, Florida       |     32 | 12 tiles, 27 MB | 1.0 M pts, 8.7 MB | 120k gaussians, 2.0 MB |  2.7 cm/px |       +36.7 m |
+| Tokarzonka reservoir, Istebna |     29 | 3 tiles, 19 MB  | 1.0 M pts, 8.7 MB | 57k gaussians, 0.9 MB  |  1.4 cm/px |        +111 m |
 
 Timings: ODM 17–45 min per site (dense matching and meshing dominate), OpenSplat 3,000
 steps 20–90 min depending on how many other jobs shared the cores, packaging under two

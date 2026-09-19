@@ -10,3 +10,5 @@ test-results
 playwright-report
 .agents
 docs/plan.svg
+# Generated tile data (tools/captures)
+data/tiles
