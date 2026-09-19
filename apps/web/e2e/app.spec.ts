@@ -372,7 +372,8 @@ test.describe("mission control", () => {
       timeout: 15_000,
     });
     await expect(app.getByTestId("assume-passes")).toContainText("Two passes");
-    // A dragged corner redrafts for the new outline.
+    // A dragged corner redrafts for the new outline: the ground row's acreage changes.
+    const groundBefore = await app.getByTestId("plan-ground").textContent();
     await app.evaluate(() => {
       const twin = (
         window as unknown as {
@@ -395,7 +396,10 @@ test.describe("mission control", () => {
         },
       });
     });
-    await expect(app.getByTestId("plan-drafting")).toBeVisible({ timeout: 5_000 });
+    // The drafting state can pass within a frame on a fast mock, so assert the outcome.
+    await expect(app.getByTestId("plan-ground")).not.toHaveText(groundBefore ?? "", {
+      timeout: 30_000,
+    });
     await expect(app.getByTestId("plan-review")).toBeVisible({ timeout: 30_000 });
     await app.getByTestId("plan-approve").dispatchEvent("click");
     await expect(app.getByTestId("plan-detail")).toContainText("3D scan this field into a splat");
