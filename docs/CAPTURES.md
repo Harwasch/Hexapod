@@ -62,6 +62,39 @@ cd apps/api && uv run python -m app.seed
   `KHR_gaussian_splatting` extensions Cesium 1.145 loads, floaters and near-transparent
   gaussians dropped, and the same frame and offset applied (`splat_tiles.py`).
 
+## The synthetic tree
+
+`synthetic_tree.py` is the odd one out: it invents a capture rather than converting one. The
+Living Survey deformer assigns each splat to the nearest node of a skeleton rig, and on a real
+capture there is nothing to score that assignment against — nobody knows which splat _should_
+belong to which branch. So the tool builds a tree whose answer is known by construction and
+writes the answer down.
+
+```bash
+cd tools/captures
+uv run python synthetic_tree.py ../../data/tiles/synthetic-tree --splats 2000        # committed
+uv run python synthetic_tree.py ../../data/tiles/synthetic-tree-large --splats 50000 # gitignored
+```
+
+Each run writes `source/splat.ply` (the 3DGS layout `splat_tiles.py` reads), `source/rig.json`
+(the `MotionRig` schema in `packages/world/src/rig.ts`), `source/labels.json` (the true node
+index per splat, in PLY order), `source/positions.f32`, and a single-tile `splat/tileset.json`
+built by `splat_tiles.convert` — so the app and Playwright can load the tree from disk with no
+API. Both sizes share one 33-node skeleton; only the splat density differs.
+
+Two properties the rest of the sprint leans on:
+
+- **Byte-reproducible.** Seeded RNG, positions snapped to SPZ's 1/4096 m grid before anything
+  is written (which also makes the decoded splats bit-identical to the PLY floats), and
+  `pack_spz` already pins `gzip mtime=0`. The committed fixture is checked against a fresh run
+  in CI, so it cannot go stale.
+- **The checksum is a cross-language contract.** `rig.canonicalChecksum` is FNV-1a over the
+  raw position bytes, computed by `checksum_positions` here and `checksumPositions` in
+  `@twin/world`; the deformer refuses to move anything when the two disagree. Both sides read
+  `source/checksum_vectors.json`, so a divergence fails CI instead of quietly freezing the
+  tree. Note that `-0.0` and `+0.0` have different bytes: positions are normalised to `+0.0`
+  because SPZ's integer round trip would otherwise change the digest without changing a value.
+
 ## What the manifest records
 
 `data/tiles/captures.json` is the source of truth for the seeded sites: boundary (convex hull

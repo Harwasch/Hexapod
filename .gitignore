@@ -48,3 +48,8 @@ fp-info-cache
 
 # Downloaded sample objects (fetched by apps/web/scripts/fetch-sample-object.mjs)
 apps/web/public/samples/
+
+# The large synthetic tree (~50k splats, ~4 MB). Regenerate it, do not commit it:
+#   cd tools/captures && uv run python synthetic_tree.py \
+#     ../../data/tiles/synthetic-tree-large --splats 50000
+data/tiles/synthetic-tree-large/

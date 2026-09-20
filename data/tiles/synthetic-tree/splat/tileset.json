@@ -1,0 +1,62 @@
+{
+ "asset": {
+  "version": "1.1"
+ },
+ "geometricError": 4.0,
+ "extensionsUsed": [
+  "3DTILES_content_gltf"
+ ],
+ "extensions": {
+  "3DTILES_content_gltf": {
+   "extensionsUsed": [
+    "KHR_gaussian_splatting",
+    "KHR_gaussian_splatting_compression_spz_2"
+   ],
+   "extensionsRequired": [
+    "KHR_gaussian_splatting",
+    "KHR_gaussian_splatting_compression_spz_2"
+   ]
+  }
+ },
+ "root": {
+  "transform": [
+   0.991886900677955,
+   0.12712346857870324,
+   0.0,
+   0.0,
+   -0.059757045430001515,
+   0.4662571848292513,
+   0.8826286496123826,
+   0.0,
+   0.112202815405663,
+   -0.8754677957135949,
+   0.47007091686619146,
+   0.0,
+   716174.8198441175,
+   -5587988.042970852,
+   2980310.87893276,
+   1.0
+  ],
+  "boundingVolume": {
+   "box": [
+    0.020751953125,
+    -0.0413818359375,
+    3.8084716796875,
+    4.616943359375,
+    0,
+    0,
+    0,
+    4.5860595703125,
+    0,
+    0,
+    0,
+    4.8040771484375
+   ]
+  },
+  "geometricError": 0.5,
+  "refine": "ADD",
+  "content": {
+   "uri": "splat.glb"
+  }
+ }
+}

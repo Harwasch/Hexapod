@@ -51,6 +51,27 @@ jobs:
           name: playwright-report
           path: apps/web/playwright-report
 
+  captures:
+    name: Captures · lint, test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tools/captures
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --frozen
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      # Covers the synthetic tree fixture: reproducible bytes, and a canonical-position
+      # checksum that must agree with checksumPositions in @twin/world (asserted from the
+      # TypeScript side by packages/world/src/fixture.test.ts, under the web job).
+      - run: uv run pytest -q
+      - name: Committed fixture is up to date
+        run: git diff --exit-code -- ../../data/tiles/synthetic-tree
+
   api:
     name: API · lint, typecheck, test, migrations
     runs-on: ubuntu-latest

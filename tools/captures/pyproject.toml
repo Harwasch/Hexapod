@@ -10,5 +10,20 @@ dependencies = [
   "pyproj>=3.6",
 ]
 
+[dependency-groups]
+dev = [
+  "pytest>=8.4",
+  "ruff>=0.13",
+]
+
+[tool.uv]
+# Scripts run from this directory; there is nothing to build or install.
+package = false
+
 [tool.ruff]
 line-length = 100
+
+[tool.pytest.ini_options]
+# The scripts import each other by bare module name (build_site.py already does).
+pythonpath = ["."]
+testpaths = ["tests"]
