@@ -20,6 +20,7 @@
     "@twin/contracts": "workspace:*",
     "@twin/geo": "workspace:*",
     "@twin/ui": "workspace:*",
+    "@twin/world": "workspace:*",
     "cesium": "^1.145.0",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
