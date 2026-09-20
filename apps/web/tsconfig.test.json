@@ -1,0 +1,10 @@
+{
+  // The unit tests, as the Node program they actually are. Same app sources and same strictness
+  // as `tsconfig.json`, plus Node's types for reading fixtures from `data/tiles/`.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["vite/client", "vitest/globals", "@testing-library/jest-dom", "node"]
+  },
+  "include": ["src", "vitest.setup.ts"],
+  "exclude": []
+}

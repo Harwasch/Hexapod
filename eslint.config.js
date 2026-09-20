@@ -77,6 +77,22 @@ export default tseslint.config(
     ...tseslint.configs.disableTypeChecked,
   },
   {
+    // The web app's tests are excluded from its browser tsconfig (Node types must not reach the
+    // bundle), so they are linted against the tsconfig that does include them.
+    files: [
+      "apps/web/src/**/*.test.{ts,tsx}",
+      "apps/web/src/__tests__/**/*.ts",
+      "apps/web/vitest.setup.ts",
+    ],
+    languageOptions: {
+      parserOptions: {
+        projectService: false,
+        project: ["./apps/web/tsconfig.test.json"],
+        tsconfigRootDir: import.meta.dirname,
+      },
+    },
+  },
+  {
     files: ["**/*.test.{ts,tsx}", "**/e2e/**", "**/vitest.setup.ts"],
     rules: { "@typescript-eslint/no-non-null-assertion": "off" },
   },
