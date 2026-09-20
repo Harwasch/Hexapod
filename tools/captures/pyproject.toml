@@ -8,6 +8,8 @@ dependencies = [
   "pillow>=10",
   "laspy[lazrs]>=2.5",
   "pyproj>=3.6",
+  # KD-tree and connected components for skeleton.py's connectivity clustering.
+  "scipy>=1.11",
 ]
 
 [dependency-groups]
