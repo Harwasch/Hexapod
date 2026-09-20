@@ -63,6 +63,23 @@ interface AssetHandle {
   coverageWatched?: boolean;
 }
 
+/**
+ * A read-only view of one loaded asset, for callers that need to reach the tileset without
+ * being handed the mutable `AssetHandle` it lives in. Plain data plus the tileset itself.
+ */
+export interface LoadedSiteAsset {
+  readonly siteId: string;
+  readonly siteSlug: string;
+  readonly assetId: string;
+  readonly assetName: string;
+  readonly representation: Representation;
+  /** Where the tileset was fetched from, or null for an ion-hosted asset. */
+  readonly sourceUrl: string | null;
+  /** Whether the site is engaged, so the tileset is actually drawn. */
+  readonly shown: boolean;
+  readonly tileset: Cesium3DTileset;
+}
+
 interface ActiveSite {
   site: Site;
   representation: Representation;
@@ -147,6 +164,46 @@ export class SiteManager {
     if (!this.active) return [];
     const present = new Set(this.active.site.assets.map((a) => a.representation));
     return REPRESENTATION_ORDER.filter((r) => present.has(r));
+  }
+
+  /**
+   * The loaded tileset for one site's representation, or null while it is absent or loading.
+   *
+   * Read-only on purpose. Tilesets live in private `AssetHandle`s and nothing outside this
+   * class may keep one or change it; the Living Survey needs to *read* one to deform its splat
+   * texture, and this is the whole of that need.
+   */
+  tilesetFor(siteId: string, representation: Representation): Cesium3DTileset | null {
+    const entry = this.loaded.get(siteId);
+    if (!entry) return null;
+    const asset = this.pickAsset(entry, representation);
+    return asset ? (entry.handles.get(asset.id)?.tileset ?? null) : null;
+  }
+
+  /**
+   * Every asset with a tileset in the scene right now, as flat read-only views.
+   *
+   * The Living Survey reconciles against this list rather than tracking `asset` events one by
+   * one: a list that is always the truth cannot drift out of step with the scene, and a site
+   * dropped by `checkProximity` disappears from it in the same turn its tileset is destroyed.
+   */
+  loadedAssets(): LoadedSiteAsset[] {
+    const views: LoadedSiteAsset[] = [];
+    for (const { entry, handle } of this.handles()) {
+      const tileset = handle.tileset;
+      if (!tileset) continue;
+      views.push({
+        siteId: entry.site.id,
+        siteSlug: entry.site.slug,
+        assetId: handle.asset.id,
+        assetName: handle.asset.name,
+        representation: handle.asset.representation,
+        sourceUrl: handle.asset.source.type === "3d-tiles-url" ? handle.asset.source.url : null,
+        shown: tileset.show,
+        tileset,
+      });
+    }
+    return views;
   }
 
   /** Temporal versions of the active representation, newest first. */

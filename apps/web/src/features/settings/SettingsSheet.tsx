@@ -1,6 +1,7 @@
 import { Divider, GlassSegmentedControl, GlassSheet, GlassSlider, GlassSwitch } from "@twin/ui";
 
 import { env } from "@/app/env";
+import { DEFAULT_WIND_STRENGTH, useLiving } from "@/state/living";
 import { QUALITY_SSE, useSettings } from "@/state/settings";
 import { useUi } from "@/state/ui";
 
@@ -25,6 +26,91 @@ function Row({
       </div>
       {control}
     </div>
+  );
+}
+
+/**
+ * The wind control.
+ *
+ * Two things it is careful never to say. **Strength is not a speed** — it is a dimensionless
+ * 0..1 scale (`WindStrength` in `@twin/world`), and printing "m/s" would claim the sway
+ * amplitude had been validated against a real tree at that speed, which it has not. And
+ * **bearing is downwind**, the direction the wind blows *towards*, which is the opposite of the
+ * meteorological convention; an inverted bearing is invisible in a screenshot, so the label says
+ * which one it is.
+ */
+function WindSection() {
+  const wind = useLiving((s) => s.wind);
+  const status = useLiving((s) => s.status);
+  const setWind = useLiving((s) => s.setWind);
+  const reducedMotion = useSettings((s) => s.reducedMotion);
+  const site = status.sites.find((s) => s.phase === "ready");
+  const on = wind.strength > 0;
+  return (
+    <section aria-labelledby="settings-living">
+      <p className="glass-eyebrow" id="settings-living">
+        Living survey
+      </p>
+      <Row
+        id="wind-label"
+        label="Simulated wind"
+        hint={
+          reducedMotion
+            ? "Held calm by reduced motion"
+            : "Modelled motion on measured geometry; the survey itself never changes"
+        }
+        control={
+          <GlassSwitch
+            aria-labelledby="wind-label"
+            checked={on}
+            disabled={reducedMotion}
+            onCheckedChange={(next) => setWind({ strength: next ? DEFAULT_WIND_STRENGTH : 0 })}
+          />
+        }
+      />
+      {on && !reducedMotion && (
+        <>
+          <Row
+            id="wind-strength-label"
+            label="Strength"
+            hint={
+              site
+                ? `${wind.strength.toFixed(2)} of 1 — arbitrary scale, not a wind speed. Moves ${site.siteSlug} by up to ${site.maxDisplacementM.toFixed(2)} m (${site.sortStaleness.toFixed(0)} splat radii of draw-order staleness)`
+                : `${wind.strength.toFixed(2)} of 1 — an arbitrary scale, not a wind speed`
+            }
+            control={
+              <div style={{ width: "9rem" }}>
+                <GlassSlider
+                  aria-label="Wind strength"
+                  value={wind.strength}
+                  min={0.01}
+                  max={1}
+                  step={0.01}
+                  onValueChange={(strength) => setWind({ strength })}
+                />
+              </div>
+            }
+          />
+          <Row
+            id="wind-bearing-label"
+            label="Blowing towards"
+            hint={`${Math.round(wind.bearingDeg)}° from north (downwind, not the direction it comes from)`}
+            control={
+              <div style={{ width: "9rem" }}>
+                <GlassSlider
+                  aria-label="Wind bearing"
+                  value={wind.bearingDeg}
+                  min={0}
+                  max={359}
+                  step={1}
+                  onValueChange={(bearingDeg) => setWind({ bearingDeg })}
+                />
+              </div>
+            }
+          />
+        </>
+      )}
+    </section>
   );
 }
 
@@ -232,6 +318,8 @@ export function SettingsSheet() {
           }
         />
       </section>
+      <Divider />
+      <WindSection />
     </GlassSheet>
   );
 }

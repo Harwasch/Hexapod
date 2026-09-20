@@ -8,6 +8,7 @@ import { reshapedZone } from "@/missions/areas";
 import { DemoMissionProvider } from "@/missions/demo";
 import { siteProject } from "@/missions/siteProject";
 import { useLayers } from "@/state/layers";
+import { useLiving } from "@/state/living";
 import { useMission } from "@/state/mission";
 import { useMeasurements } from "@/state/measurements";
 import { useSelection } from "@/state/selection";
@@ -18,6 +19,7 @@ import { useUi } from "@/state/ui";
 import { useViewer } from "@/state/viewer";
 
 import type { Site } from "@twin/contracts";
+import { WIND_CALM } from "@twin/world";
 
 import { useScene } from "./SceneContext";
 
@@ -62,6 +64,7 @@ export function SceneBridge() {
       scene.events.on("measurement", (m) => useMeasurements.getState().upsert(m)),
       scene.events.on("measurement-mode", () => useUi.getState().setMeasureMode(null)),
       scene.events.on("toast", (toast) => useToasts.getState().push(toast)),
+      scene.events.on("living", (status) => useLiving.getState().setStatus(status)),
       scene.events.on("world", (label) => viewer.setWorldLabel(label)),
       scene.events.on("tilesets", () =>
         viewer.setActiveTilesets([
@@ -167,6 +170,7 @@ export function SceneBridge() {
   const units = useSettings((s) => s.units);
   const world = useSettings((s) => s.world);
   const exploreSpeed = useSettings((s) => s.exploreSpeed);
+  const reducedMotion = useSettings((s) => s.reducedMotion);
 
   useEffect(() => {
     scene?.performance.configure({ preset: quality, manualScreenSpaceError: manualSse, adaptive });
@@ -175,6 +179,13 @@ export function SceneBridge() {
   useEffect(() => {
     scene?.measurement.setUnits(units);
   }, [scene, units]);
+
+  // Wind → scene. Reduced motion wins outright: it forces the scene calm while leaving the
+  // person's chosen wind in the store, so turning the preference back off restores it.
+  const wind = useLiving((s) => s.wind);
+  useEffect(() => {
+    scene?.living.setWind(reducedMotion ? WIND_CALM : wind);
+  }, [scene, wind, reducedMotion]);
 
   useEffect(() => {
     scene?.explore.setSpeed(exploreSpeed);

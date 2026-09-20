@@ -20,12 +20,14 @@ import { ExploreController } from "./ExploreController";
 import { KeyboardNavigator } from "./KeyboardNavigator";
 import { configureIonToken } from "./ion";
 import { LayerManager } from "./LayerManager";
+import { LivingSurveyManager } from "./LivingSurveyManager";
 import { MeasurementManager } from "./MeasurementManager";
 import { MissionManager } from "./MissionManager";
 import { PerformanceManager } from "./PerformanceManager";
 import { FallbackGeocoder, IonGeocoder, NominatimGeocoder } from "./providers/geocoder";
 import { SelectionManager } from "./SelectionManager";
 import { SiteManager } from "./SiteManager";
+import { installSplatTextureInterception } from "./splatCapture";
 import type { Geocoder, SceneEvents } from "./types";
 import type { TokenState } from "@/state/viewer";
 
@@ -51,6 +53,7 @@ export class CesiumSceneManager {
   readonly layers: LayerManager;
   readonly performance: PerformanceManager;
   readonly sites: SiteManager;
+  readonly living: LivingSurveyManager;
   readonly selection: SelectionManager;
   readonly measurement: MeasurementManager;
   readonly mission: MissionManager;
@@ -97,6 +100,11 @@ export class CesiumSceneManager {
     });
     this.scene = this.viewer.scene;
     const scene = this.scene;
+    // Before any tileset can load. The interception only sees `generateFromAttributes` calls
+    // made after it is in place, and a splat whose texture was packed first leaves the deformer
+    // reporting `no-capture` until that tileset next rebuilds. Idempotent; returns its own
+    // uninstaller, which `destroy()` runs with the rest.
+    this.unsubscribe.push(installSplatTextureInterception());
     scene.globe.depthTestAgainstTerrain = true;
     scene.globe.enableLighting = false;
     scene.globe.showGroundAtmosphere = true;
@@ -129,6 +137,7 @@ export class CesiumSceneManager {
       this.clipping,
       this.performance,
     );
+    this.living = new LivingSurveyManager(this.viewer, this.events, this.sites, this.performance);
     this.selection = new SelectionManager(
       this.viewer,
       this.events,
@@ -230,12 +239,19 @@ export class CesiumSceneManager {
   /**
    * A picture of the view, at most `maxWidth` wide, as a JPEG data URL. Read inside the
    * next frame's postRender so the drawing buffer is still intact.
+   *
+   * A Living Survey site is pinned at its measured pose for the captured frame, so the picture
+   * shows what was surveyed rather than what was simulated — a photograph of a swaying tree
+   * carries no label saying the sway was modelled. The deformer needs no special path for it:
+   * applying the rig at zero wind restores the exact measured bytes in one frame.
    */
   snapshot(maxWidth = 1024): Promise<{ image: string; width: number; height: number } | null> {
     return new Promise((resolve) => {
       const scene = this.scene;
+      const release = this.living.holdMeasuredPose();
       const remove = scene.postRender.addEventListener(() => {
         remove();
+        release();
         try {
           const source = this.viewer.canvas;
           const scale = Math.min(1, maxWidth / source.width);
@@ -300,6 +316,7 @@ export class CesiumSceneManager {
     this.mission.destroy();
     this.areas.destroy();
     this.selection.destroy();
+    this.living.destroy();
     this.sites.destroy();
     this.performance.destroy();
     this.layers.destroy();

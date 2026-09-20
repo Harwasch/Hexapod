@@ -37,6 +37,10 @@ class CaptureAsset(BaseModel):
     description: str | None = None
     maximum_screen_space_error: float | None = None
     screen_space_error_scale: float = 1.0
+    # A capture whose own ellipsoid height is not trustworthy (a procedural fixture, a phone
+    # scan) rests on whatever ground the viewer has instead.
+    clamp_to_ground: bool = False
+    height_offset_m: float = 0.0
     default: bool = False
 
 
@@ -106,6 +110,8 @@ def site_from_capture(capture: Capture, settings: Settings) -> SiteCreate:
                     screen_space_error_scale=item.screen_space_error_scale,
                     clips_world=True,
                     clip_footprint="catalog",
+                    clamp_to_ground=item.clamp_to_ground,
+                    height_offset_m=item.height_offset_m,
                 ),
                 default_visible=item.default,
             )

@@ -9,9 +9,11 @@ import { GlassTooltipProvider } from "@twin/ui";
 import { api } from "@/api/client";
 import { InspectorPanel } from "@/features/inspector/InspectorPanel";
 import { LayersPanel } from "@/features/layers/LayersPanel";
+import { SettingsSheet } from "@/features/settings/SettingsSheet";
 import { OnboardingCard } from "@/features/onboarding/OnboardingCard";
 import { CommandBar } from "@/features/mission/CommandBar";
 import { ToolRail } from "@/features/shell/ToolRail";
+import { DEFAULT_WIND_STRENGTH, useLiving } from "@/state/living";
 import { useSelection } from "@/state/selection";
 import { useSettings } from "@/state/settings";
 import { useUi } from "@/state/ui";
@@ -30,6 +32,7 @@ beforeEach(() => {
   useUi.setState({ activePanel: null, inspectorOpen: false });
   useSelection.setState({ selection: null });
   useSettings.getState().reset();
+  useLiving.getState().reset();
 });
 
 describe("ToolRail + panels", () => {
@@ -106,5 +109,43 @@ describe("CommandBar + Onboarding", () => {
     await waitFor(() => expect(screen.queryByTestId("onboarding")).not.toBeInTheDocument());
     expect(useSettings.getState().onboardingDismissed).toBe(true);
     vi.restoreAllMocks();
+  });
+});
+
+describe("SettingsSheet: the wind control", () => {
+  it("starts calm, opens at the default strength, and never calls the wind a speed", async () => {
+    useUi.setState({ settingsOpen: true });
+    render(wrap(<SettingsSheet />));
+
+    const wind = screen.getByRole("switch", { name: "Simulated wind" });
+    expect(wind).toHaveAttribute("aria-checked", "false");
+    expect(screen.queryByRole("slider", { name: "Wind strength" })).not.toBeInTheDocument();
+
+    await userEvent.click(wind);
+    expect(useLiving.getState().wind.strength).toBe(DEFAULT_WIND_STRENGTH);
+    expect(await screen.findByRole("slider", { name: "Wind strength" })).toBeInTheDocument();
+
+    // The two claims this control must never make: that the scale is a wind speed, and that
+    // the bearing says where the wind comes from.
+    const living = screen.getByRole("region", { name: "Living survey" });
+    expect(living).toHaveTextContent("not a wind speed");
+    expect(living).toHaveTextContent("Blowing towards");
+    expect(living).not.toHaveTextContent(/wind from/i);
+    // "Explore speed" elsewhere in the sheet is a real m/s; nothing in this section may be.
+    expect(living.textContent).not.toMatch(/m\/s/);
+  });
+
+  it("is held calm, and disabled, while reduced motion is on", () => {
+    useSettings.getState().set({ reducedMotion: true });
+    useLiving.getState().setWind({ strength: DEFAULT_WIND_STRENGTH });
+    useUi.setState({ settingsOpen: true });
+    render(wrap(<SettingsSheet />));
+
+    const wind = screen.getByRole("switch", { name: "Simulated wind" });
+    expect(wind).toBeDisabled();
+    expect(screen.getByTestId("settings-sheet")).toHaveTextContent("Held calm by reduced motion");
+    // The person's choice is kept; only the scene is forced calm (by SceneBridge).
+    expect(useLiving.getState().wind.strength).toBe(DEFAULT_WIND_STRENGTH);
+    expect(screen.queryByRole("slider", { name: "Wind strength" })).not.toBeInTheDocument();
   });
 });

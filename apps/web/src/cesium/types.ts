@@ -2,6 +2,7 @@ import type { Attribution, Footprint, Representation } from "@twin/contracts";
 
 import type { AssetRuntime } from "@/state/sites";
 import type { LayerRuntime, LoadState } from "@/state/layers";
+import type { LivingSurveyStatus } from "@/state/living";
 import type { Measurement } from "@/state/measurements";
 import type { Selection } from "@/state/selection";
 import type { ToastTone } from "@/state/toasts";
@@ -40,6 +41,11 @@ export interface SceneEvents extends Record<string, unknown> {
   "area-candidate-hover": string | null;
   /** True while the next map click is being waited for as the ground of a plan. */
   "ground-pick-mode": boolean;
+  /**
+   * The Living Survey's whole state: the wind the scene is running and what every rigged site
+   * is doing with it. Published on change, never per frame.
+   */
+  living: LivingSurveyStatus;
   "area-candidate-pick": string;
 }
 
