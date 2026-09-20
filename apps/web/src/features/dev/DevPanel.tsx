@@ -7,6 +7,7 @@ import type { DebugFlags } from "@/cesium/DebugManager";
 import { representationLabel } from "@/lib/format";
 import { planningSummary } from "@/lib/planningMetrics";
 import { recentSpans, onSpan } from "@/lib/timing";
+import { REFERENCE_GAUSSIAN_SCALE_M, useLiving } from "@/state/living";
 import { useSettings } from "@/state/settings";
 import { useSites } from "@/state/sites";
 import { useViewer } from "@/state/viewer";
@@ -34,6 +35,41 @@ function Flag({
   );
 }
 
+/**
+ * The Living Survey line, and the one number in this app that needs its yardstick printed
+ * beside it.
+ *
+ * `sortStaleness` is `maxDisplacement / medianGaussianScale`, and the median it divides by is
+ * {@link REFERENCE_GAUSSIAN_SCALE_M} — a real drone capture's median, held as a fixed reference
+ * because nothing decodes the displayed tileset's own scales out of the packed splat buffer.
+ * For the synthetic fixture the true median is 10.7 cm, so the figure below overstates its
+ * staleness about fivefold. Stated in splat radii with no yardstick it would read as a measured
+ * property of what is on screen, which is why it lives here, spelled out, rather than in the
+ * settings sheet a viewer reads.
+ *
+ * It is here at all because S6 needs it: the sort artifact cannot be judged under SwiftShader,
+ * and whoever looks at the real tree on real hardware needs the predicted number in front of
+ * them while they look.
+ */
+function livingLine(
+  sites: readonly {
+    siteSlug: string;
+    phase: string;
+    maxDisplacementM: number;
+    sortStaleness: number;
+  }[],
+): string {
+  if (sites.length === 0) return "no rigged site loaded";
+  const reference = `${(REFERENCE_GAUSSIAN_SCALE_M * 100).toFixed(0)} cm reference gaussian`;
+  return sites
+    .map((site) =>
+      site.phase === "ready"
+        ? `${site.siteSlug}: up to ${site.maxDisplacementM.toFixed(2)} m · ${site.sortStaleness.toFixed(1)} splat radii of draw-order staleness against a ${reference}, not this tileset's own median`
+        : `${site.siteSlug}: ${site.phase}`,
+    )
+    .join(" · ");
+}
+
 /** Developer panel: FPS, camera, tilesets, requests, SSE, debug volumes, GPU. */
 export function DevPanel() {
   const scene = useScene();
@@ -41,6 +77,7 @@ export function DevPanel() {
   const set = useSettings((s) => s.set);
   const camera = useViewer((s) => s.camera);
   const perf = useViewer((s) => s.performance);
+  const living = useLiving((s) => s.status);
   const tilesets = useViewer((s) => s.activeTilesets);
   const activeSiteId = useSites((s) => s.activeSiteId);
   const representation = useSites((s) =>
@@ -91,6 +128,10 @@ export function DevPanel() {
         <dt>Animating</dt>
         <dd data-testid="dev-animating">
           {perf.animating ? "yes — FPS is the animation rate" : "no"}
+        </dd>
+        <dt>Living survey</dt>
+        <dd data-testid="dev-living" style={{ overflowWrap: "anywhere" }}>
+          {livingLine(living.sites)}
         </dd>
         <dt>Altitude</dt>
         <dd>{camera.altitude.toFixed(1)} m</dd>

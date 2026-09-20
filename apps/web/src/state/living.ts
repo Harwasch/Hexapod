@@ -42,7 +42,19 @@ import type { DeformerPhase, DeformerReason } from "@/cesium/SplatDeformer";
  */
 export const DEFAULT_WIND_STRENGTH = 0.12;
 
-/** The median gaussian extent the staleness figures above are quoted against, metres. */
+/**
+ * The median gaussian extent the staleness figures above are quoted against, metres.
+ *
+ * A **reference** yardstick — a real drone capture's median — and not the median of whichever
+ * tileset is on screen. Deriving that would mean decoding scales out of the packed splat buffer,
+ * which nothing does today; the fixture's own median, measured over `data/tiles/synthetic-tree`,
+ * is 10.7 cm, so `sortStaleness` overstates the fixture's staleness about fivefold.
+ *
+ * That makes the ratio engineering intuition, not a measurement of what is displayed. Anything
+ * in the UI that prints it must print this yardstick beside it — the developer panel does, and
+ * it is the only place that shows it. A figure in "splat radii" with no stated denominator
+ * reads as measured and is not.
+ */
 export const REFERENCE_GAUSSIAN_SCALE_M = 0.02;
 
 /** What one deformed site is doing. Mirrors `DeformerStatus`, minus what only the GPU cares about. */
@@ -56,7 +68,8 @@ export interface LivingSiteStatus {
   /**
    * True while the GPU holds displaced positions rather than the measured ones. Changes only on
    * transitions — the first frame of a gust and the frame that restores the measurement — so it
-   * is safe to mirror into React and is what an S5 badge hangs off.
+   * is safe to mirror into React and is what site-scoped UI hangs off. The ambient badge uses
+   * {@link LivingSurveyStatus.animating} instead, so it cannot blink between two uploads.
    */
   readonly displaced: boolean;
   /** What the rig says it was built from. Carried into the provenance UI. */
@@ -71,7 +84,14 @@ export interface LivingSiteStatus {
 export interface LivingSurveyStatus {
   /** The wind the scene is actually running — 0 whenever reduced motion is on. */
   readonly wind: WindSettings;
-  /** True while at least one site holds displaced positions rather than its measured ones. */
+  /**
+   * True while the wind is blowing and at least one rig is attached and ready.
+   *
+   * Derived from wind × attachment, **not** from the last frame's `displaced` flags, so it does
+   * not flicker between uploads and does not drop out during a `holdMeasuredPose()` snapshot.
+   * This is what the ambient "Simulated motion" badge hangs off, and the reason the badge can
+   * be trusted to be on screen for as long as the motion is.
+   */
   readonly animating: boolean;
   readonly sites: readonly LivingSiteStatus[];
 }

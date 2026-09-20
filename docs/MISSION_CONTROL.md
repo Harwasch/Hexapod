@@ -18,6 +18,13 @@ that layer and the seam where real fleet data plugs in.
 
 - **Project badge** (`features/mission/ProjectCard`) names the active site's project; its menu
   lists catalog sites and opens Add Data.
+- **Simulated motion badge** (`features/living/SimulatedBadge`) sits directly under it whenever
+  the Living Survey is animating, in the same corner and the same voice the project badge uses
+  for a simulated fleet. It has to be ambient: Gaussian splats never write depth and are
+  invisible to picking, so a swaying tree cannot be clicked and the label cannot hang off a
+  selection. It claims only that the _motion_ is modelled and that the geometry under it is
+  never written to; whether that geometry is a measured capture, and at what resolution, is
+  stated per site in the Inspector ("Measured and simulated").
 - **View tabs** (`ViewTabs`) switch `map` / `plan` / `fleet`. Keys `1` `2` `3`.
 - **Layer pills** (`LayerPills`) toggle imagery, vegetation, zones and tracks.
 - **Markers and chips** (`MissionOverlays`) are DOM elements positioned every frame from

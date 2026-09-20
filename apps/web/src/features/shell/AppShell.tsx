@@ -17,6 +17,7 @@ import { ExploreHud } from "../explore/ExploreHud";
 import { InspectorPanel } from "../inspector/InspectorPanel";
 import { LayerAboutSheet } from "../layers/LayerAboutSheet";
 import { LayersPanel } from "../layers/LayersPanel";
+import { SimulatedBadge } from "../living/SimulatedBadge";
 import { MeasurePanel } from "../measure/MeasurePanel";
 import { AgentStream } from "../mission/AgentStream";
 import { CommandBar } from "../mission/CommandBar";
@@ -110,6 +111,11 @@ export function AppShell() {
         <div className="hud-top-left">
           <ErrorBoundary inline label="Project">
             <ProjectCard />
+          </ErrorBoundary>
+          {/* Under the project badge on purpose: the same corner already distinguishes
+              simulated demo data from real, and this is the same distinction. */}
+          <ErrorBoundary inline label="Simulated motion">
+            <SimulatedBadge />
           </ErrorBoundary>
         </div>
         <div className="hud-top-center">

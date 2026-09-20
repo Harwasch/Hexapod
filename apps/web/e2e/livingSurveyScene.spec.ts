@@ -23,7 +23,9 @@
  * whole sprint is about: the splat sorter runs asynchronously off canonical positions the
  * deformer never touches, so two frames at the same scene time can differ in draw order alone.
  * Byte-exactness of the restoring write is asserted where it is actually decidable — over the
- * uploaded words, in `src/__tests__/livingSurvey.test.ts`.
+ * uploaded words, in `src/__tests__/livingSurvey.test.ts`. The snapshot assertion below broke
+ * that rule when this file was written and was flaky because of it; it now asserts the pose
+ * through the deformer's own flag instead of through pixels.
  */
 
 import { readFileSync } from "node:fs";
@@ -90,6 +92,14 @@ async function openHarness(page: Page): Promise<void> {
   await page.route(/https:\/\/(api|assets|tile)\.cesium\.com\/.*/, (route) => route.abort());
   await page.goto("/__living-scene");
 }
+
+interface SnapshotProbe {
+  hash: string;
+  displacedDuringCapture: boolean;
+}
+
+/** The harness's digest of the empty string — what a `snapshot()` that returned null hashes to. */
+const NO_IMAGE = "0:811c9dc5";
 
 interface Counts {
   ticks: number;
@@ -176,13 +186,28 @@ test.describe("Living Survey: the scene", () => {
     expect(stillGusting.livingRequests - gusting.livingRequests).toBeGreaterThanOrEqual(5);
 
     // A snapshot is of the survey, not of the simulation. The live frames at these two scene
-    // times differ (asserted above); their snapshots must not, because `snapshot()` pins both at
-    // the same measured pose — same wind, same camera, same render settings, so the only thing
-    // that could differ is where the splats are.
+    // times differ (asserted above); the pictures `snapshot()` takes at the same two times are
+    // both of a tree standing at its measured pose, because `holdMeasuredPose` pins it for the
+    // captured frame.
+    //
+    // That is asserted on the deformer's own flag, read from inside the captured frame, and
+    // **not** by comparing the two pictures. Comparing them was this test's first form and it
+    // failed about one run in three, on this machine, from the artifact this whole file warns
+    // about at the top: the splat sorter runs asynchronously off canonical positions the
+    // deformer never touches, so two frames holding identical positions can still be drawn in
+    // different orders and differ pixel for pixel. Draw order is not a function of the pose, so
+    // pixel equality was never a decidable statement about the pose. The flag is — and the
+    // failure that actually matters, a snapshot catching the tree mid-gust, sets it.
     await call(page, "setTime", 4);
-    const heldA = await call<string>(page, "snapshotHash");
+    const heldA = await call<SnapshotProbe>(page, "snapshotProbe");
     await call(page, "setTime", 9);
-    expect(await call<string>(page, "snapshotHash")).toBe(heldA);
+    const heldB = await call<SnapshotProbe>(page, "snapshotProbe");
+    expect(heldA.displacedDuringCapture).toBe(false);
+    expect(heldB.displacedDuringCapture).toBe(false);
+    // …and there really was a picture: the flag above would read "not displaced" just as
+    // happily if `snapshot()` had failed and returned nothing at all.
+    expect(heldA.hash).not.toBe(NO_IMAGE);
+    expect(heldB.hash).not.toBe(NO_IMAGE);
     // And the hold is a photograph, not a change in the weather.
     expect((await call<Status>(page, "status")).wind.strength).toBe(wind.strength);
 

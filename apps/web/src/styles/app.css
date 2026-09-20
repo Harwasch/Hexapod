@@ -943,6 +943,42 @@ a {
   background: var(--control-bg);
 }
 
+/* ---- Living Survey: the Simulated badge ---------------------------------- */
+/* Sits under the project badge, which is 19.25rem wide; matching it keeps the top-left
+   column one shape rather than two. Amber marks it, but every word of the meaning is text. */
+.living-badge {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+  width: 19.25rem;
+  max-width: calc(100vw - 2 * var(--edge-gap));
+  padding: 0.55rem 0.7rem;
+  border-left: 3px solid var(--warn);
+  /* Ambient, not interactive: it must never take a click meant for the world behind it. */
+  pointer-events: none;
+}
+
+.living-badge__icon {
+  color: var(--warn);
+  flex: 0 0 auto;
+  margin-top: 0.15rem;
+}
+
+.living-badge__title {
+  display: block;
+  font: 600 12px var(--font-sans);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--warn);
+}
+
+.living-badge__body {
+  display: block;
+  margin-top: 0.15rem;
+  font: 400 11.5px/1.35 var(--font-sans);
+  color: var(--text-secondary);
+}
+
 /* ---- Fatal / boot -------------------------------------------------------- */
 .fatal {
   position: absolute;

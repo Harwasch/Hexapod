@@ -132,6 +132,45 @@ test.describe("catalog", () => {
   });
 });
 
+/**
+ * Publishes a Living Survey status from the scene, exactly as `LivingSurveyManager` does.
+ *
+ * The badge hangs off the `living` scene event, mirrored into the store by `SceneBridge`, and
+ * this drives that real path end to end — the app's own emitter, its own subscription, its own
+ * render. What it does not do is deform a tileset: making the manager publish `animating: true`
+ * for real needs a rigged splat site loaded, which under SwiftShader is a two-minute test.
+ * That half is covered where it belongs, in `livingSurveyScene.spec.ts`, which asserts the
+ * scene sets `animating` from wind × attachment and clears it at calm. Between the two, the
+ * chain from a moving tree to a visible badge is covered without either test pretending to do
+ * the other's job.
+ */
+async function publishLiving(app: Page, animating: boolean): Promise<void> {
+  await app.evaluate((moving) => {
+    const twin = (
+      window as unknown as { __twin?: { events: { emit: (name: string, value: unknown) => void } } }
+    ).__twin;
+    twin?.events.emit("living", {
+      wind: { strength: moving ? 0.12 : 0, bearingDeg: 250 },
+      animating: moving,
+      sites: [
+        {
+          // The mocked catalog's demo site, standing in for a rigged one: the badge resolves
+          // the name it shows from the catalog by id, and that is part of what is asserted.
+          siteId: "11111111-1111-4111-8111-111111111111",
+          siteSlug: "cesium-splat-demo",
+          assetId: "22222222-2222-4222-8222-222222222222",
+          phase: "ready",
+          numSplats: 2000,
+          displaced: moving,
+          rigSourceNote: "synthetic tree, 6.0 m, 33 nodes (tools/captures/synthetic_tree.py)",
+          maxDisplacementM: moving ? 0.195 : 0,
+          sortStaleness: moving ? 9.7 : 0,
+        },
+      ],
+    });
+  }, animating);
+}
+
 test.describe("interaction", () => {
   test("clicking the world opens the inspector", async ({ app }) => {
     await app.getByTestId("onboarding-explore").click();
@@ -191,6 +230,31 @@ test.describe("interaction", () => {
     for (const button of await rail.getByRole("button").all()) {
       expect(await button.getAttribute("aria-label")).toBeTruthy();
     }
+  });
+});
+
+test.describe("living survey", () => {
+  test("the Simulated badge is on screen exactly while the motion is", async ({ app }) => {
+    await app.getByTestId("onboarding-explore").click();
+    const badge = app.getByTestId("simulated-badge");
+    // Nothing is moving, so nothing is claimed.
+    await expect(badge).toHaveCount(0);
+
+    await publishLiving(app, true);
+    await expect(badge).toBeVisible();
+    await expect(badge).toContainText("Simulated motion");
+    await expect(badge).toContainText("Modelled wind");
+    // The name the site is known by, so a viewer can tell which thing on screen is modelled.
+    await expect(badge).toContainText("Cesium Gaussian splat demo");
+    // Announced rather than merely coloured: the amber says nothing to a screen reader.
+    await expect(badge).toHaveAttribute("role", "status");
+    // The claims it must never make.
+    await expect(badge).not.toContainText("m/s");
+    await expect(badge).not.toContainText("wind from");
+    await expect(badge).not.toContainText("measured");
+
+    await publishLiving(app, false);
+    await expect(badge).toHaveCount(0);
   });
 });
 

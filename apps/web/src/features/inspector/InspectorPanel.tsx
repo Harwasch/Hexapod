@@ -6,6 +6,8 @@ import { GlassBadge, GlassButton, GlassTooltip } from "@twin/ui";
 import { useLayers as useLayerCatalog, useSite } from "@/api/queries";
 import { useScene } from "@/cesium/SceneContext";
 import { formatDate } from "@/lib/format";
+import { geometryProvenance } from "@/lib/provenance";
+import { useLiving } from "@/state/living";
 import { useSelection } from "@/state/selection";
 import { useSettings } from "@/state/settings";
 import { useSites } from "@/state/sites";
@@ -20,6 +22,19 @@ const KIND_LABEL = {
   "tile-feature": "3D feature",
 } as const;
 
+/**
+ * What the Living Survey is doing to the selected site, in one sentence.
+ *
+ * Only ever describes the motion. Whether the geometry under it was measured is a separate
+ * question with a separate answer (`geometryProvenance`), and conflating the two is the mistake
+ * this whole section exists to prevent.
+ */
+function motionState(ready: boolean, animating: boolean): string {
+  if (!ready) return "The motion rig is still attaching, so nothing is moving yet.";
+  if (!animating) return "Wind is off, so it stands exactly as it was loaded.";
+  return "Modelled wind is moving it now. The loaded geometry is never written to — at calm it returns to exactly the positions above.";
+}
+
 /** Right-side context inspector; hidden until something is selected. */
 export function InspectorPanel() {
   const scene = useScene();
@@ -28,12 +43,29 @@ export function InspectorPanel() {
   const setInspectorOpen = useUi((s) => s.setInspectorOpen);
   const setAboutLayerId = useUi((s) => s.setAboutLayerId);
   const units = useSettings((s) => s.units);
+  const living = useLiving((s) => s.status);
   const layers = useLayerCatalog();
   const activeSiteId = useSites((s) => s.activeSiteId);
   const site = useSite(selection?.siteId ?? activeSiteId).data;
   const layer = selection?.layerId
     ? layers.data?.find((l) => l.id === selection.layerId)
     : undefined;
+  // A site is "living" when the scene has a motion rig attached to one of its assets. The
+  // provenance below is quoted for *that* asset, so the resolution shown belongs to the
+  // representation actually being deformed.
+  //
+  // It falls back to the active site — the same fallback the panel already makes for `site` —
+  // for a reason particular to this feature: Gaussian splats are invisible to picking, so a
+  // click on a swaying tree lands on the terrain behind it and produces a `ground` selection
+  // with no `siteId` at all. Without the fallback the one panel that can state the
+  // Observed/Simulated split would be unreachable for exactly the sites that need it. The
+  // section names the site it is talking about so it can never be read as describing the
+  // clicked point.
+  const livingSiteId = selection?.siteId ?? activeSiteId;
+  const livingSite = livingSiteId
+    ? living.sites.find((entry) => entry.siteId === livingSiteId)
+    : undefined;
+  const geometry = livingSite ? geometryProvenance(site, livingSite.assetId, units) : null;
   const attribution = selection?.attribution?.length
     ? selection.attribution
     : (layer?.attribution ?? (selection?.kind === "site" ? site?.attribution : undefined));
@@ -78,6 +110,9 @@ export function InspectorPanel() {
           <div className="glass-row" style={{ flexWrap: "wrap" }}>
             <GlassBadge tone="accent">{KIND_LABEL[selection.kind]}</GlassBadge>
             {selection.sourceLabel && <GlassBadge>{selection.sourceLabel}</GlassBadge>}
+            {livingSite && living.animating && (
+              <GlassBadge tone="warning">Simulated motion</GlassBadge>
+            )}
           </div>
           <dl className="dl">
             <dt>Position</dt>
@@ -119,6 +154,34 @@ export function InspectorPanel() {
               </>
             )}
           </dl>
+          {livingSite && geometry && (
+            <section
+              aria-label={`Measured and simulated${site ? `: ${site.name}` : ""}`}
+              data-testid="inspector-living"
+            >
+              <p className="glass-eyebrow">Measured and simulated{site ? ` · ${site.name}` : ""}</p>
+              <dl className="dl" style={{ marginTop: "0.3rem", fontSize: "var(--text-xs)" }}>
+                <dt>Geometry</dt>
+                <dd data-testid="inspector-geometry">
+                  {geometry.summary}
+                  {geometry.note && (
+                    <>
+                      <br />
+                      <span className="glass-subtle">{geometry.note}</span>
+                    </>
+                  )}
+                </dd>
+                <dt>Motion</dt>
+                <dd data-testid="inspector-motion">
+                  Simulated · {livingSite.rigSourceNote}
+                  <br />
+                  <span className="glass-subtle">
+                    {motionState(livingSite.phase === "ready", living.animating)}
+                  </span>
+                </dd>
+              </dl>
+            </section>
+          )}
           {attribution && attribution.length > 0 && (
             <section aria-label="Attribution">
               <p className="glass-eyebrow">Attribution</p>

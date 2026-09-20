@@ -32,12 +32,25 @@ function Row({
 /**
  * The wind control.
  *
- * Two things it is careful never to say. **Strength is not a speed** — it is a dimensionless
+ * Three things it is careful never to say. **Strength is not a speed** — it is a dimensionless
  * 0..1 scale (`WindStrength` in `@twin/world`), and printing "m/s" would claim the sway
  * amplitude had been validated against a real tree at that speed, which it has not. And
  * **bearing is downwind**, the direction the wind blows *towards*, which is the opposite of the
  * meteorological convention; an inverted bearing is invisible in a screenshot, so the label says
- * which one it is.
+ * which one it is. And **the geometry is not described as measured**: every rigged site today is
+ * a procedural fixture, so this section says only what is true of all of them — that the motion
+ * is modelled and the geometry under it is never written to. Which geometry is a measured
+ * capture, and at what resolution, is the Inspector's job, because only the Inspector has that
+ * site's catalog metadata in front of it.
+ *
+ * A fourth thing it used to say and no longer does: the sort-staleness figure in splat radii.
+ * `sortStaleness` divides by `REFERENCE_GAUSSIAN_SCALE_M`, a *reference* median taken from a
+ * real drone capture — not the median of whatever tileset is on screen, which nothing decodes
+ * today. On the only site that can currently move, the synthetic fixture, the real median is
+ * 10.7 cm and the printed figure was five times too alarming. "Radii" reads as a measurement of
+ * the thing in front of you, so quoting it here made a modelled ratio look surveyed. The
+ * displacement in metres is a property of this rig at this wind and is kept; the ratio moved to
+ * the developer panel, where it is printed with the yardstick it actually used.
  */
 function WindSection() {
   const wind = useLiving((s) => s.wind);
@@ -57,7 +70,7 @@ function WindSection() {
         hint={
           reducedMotion
             ? "Held calm by reduced motion"
-            : "Modelled motion on measured geometry; the survey itself never changes"
+            : "Modelled motion; the data underneath is never altered"
         }
         control={
           <GlassSwitch
@@ -75,7 +88,7 @@ function WindSection() {
             label="Strength"
             hint={
               site
-                ? `${wind.strength.toFixed(2)} of 1 — arbitrary scale, not a wind speed. Moves ${site.siteSlug} by up to ${site.maxDisplacementM.toFixed(2)} m (${site.sortStaleness.toFixed(0)} splat radii of draw-order staleness)`
+                ? `${wind.strength.toFixed(2)} of 1 — an arbitrary scale, not a wind speed. Moves ${site.siteSlug} by up to ${site.maxDisplacementM.toFixed(2)} m`
                 : `${wind.strength.toFixed(2)} of 1 — an arbitrary scale, not a wind speed`
             }
             control={

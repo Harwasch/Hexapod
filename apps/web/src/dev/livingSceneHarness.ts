@@ -71,8 +71,17 @@ export interface LivingSceneHarness {
    * hold the measured pose, so this is what the survey actually looks like right now.
    */
   grabFrameHash(): Promise<string>;
-  /** A digest of `CesiumSceneManager.snapshot()`, which does hold the measured pose. */
-  snapshotHash(): Promise<string>;
+  /**
+   * `CesiumSceneManager.snapshot()`, with a witness.
+   *
+   * The digest of the picture, plus whether any deformer still held displaced positions in the
+   * frame the picture was taken from. The flag is the assertable half: pixels cannot settle
+   * this, because the splat sorter runs asynchronously off canonical positions the deformer
+   * never touches, so two frames standing at *identical* positions can still be drawn in
+   * different orders. The flag is read from inside that frame and answers exactly what
+   * `holdMeasuredPose` promises.
+   */
+  snapshotProbe(): Promise<{ hash: string; displacedDuringCapture: boolean }>;
   /** Live listener counts, so `destroy()` can be shown to have released them. */
   probe(): { preUpdate: number };
   destroyLiving(): void;
@@ -315,9 +324,21 @@ export async function startLivingSceneHarness(
         gl.requestRender();
       });
     },
-    async snapshotHash(): Promise<string> {
-      const result = await scene.snapshot(640);
-      return digest(result?.image ?? "");
+    async snapshotProbe(): Promise<{ hash: string; displacedDuringCapture: boolean }> {
+      // Registered before `snapshot()` registers its own, so it runs first — while the hold is
+      // still in force and before `release()`. `displaced` reports what the deformer wrote in
+      // this frame's preUpdate, which is the frame the canvas is about to be read from.
+      let displacedDuringCapture = true;
+      const remove = gl.postRender.addEventListener(() => {
+        remove();
+        displacedDuringCapture = scene.living.status.sites.some((site) => site.displaced);
+      });
+      try {
+        const result = await scene.snapshot(640);
+        return { hash: digest(result?.image ?? ""), displacedDuringCapture };
+      } finally {
+        remove();
+      }
     },
     probe() {
       return { preUpdate: gl.preUpdate.numberOfListeners };
