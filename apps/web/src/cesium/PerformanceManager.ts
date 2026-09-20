@@ -124,6 +124,85 @@ export function splatMinimumScreenSpaceError(preset: QualityPreset): number {
   return { performance: 12, balanced: 8, ultra: 4 }[preset];
 }
 
+/**
+ * What a rendered frame is evidence of. `motion` is a frame the camera asked for, `animation`
+ * one a continuous animation (the living-survey deformer) asked for with the camera still, and
+ * `none` a frame nothing is driving — a tile arriving into an idle scene.
+ */
+export type FrameEvidence = "none" | "motion" | "animation";
+
+/**
+ * A moving camera wins: a gesture during an animation is still a gesture, and its frames are
+ * the ones responsiveness is judged on.
+ */
+export function frameEvidence(sample: { moving: boolean; animating: boolean }): FrameEvidence {
+  if (sample.moving) return "motion";
+  return sample.animating ? "animation" : "none";
+}
+
+/**
+ * How much of the ladder's evidence a frame contributes. The judgement here — animated frames
+ * count against quality but never for it — is deliberate and asymmetric:
+ *
+ * The ladder exists to keep the scene at a rate the eye accepts, and until now only a gesture
+ * could produce frames, so "moving" and "frames are being produced continuously" were the same
+ * thing. An animation breaks that: the deformer's per-tick cost (displace, then upload a
+ * texture region on the main thread) lands on every frame with a still camera, and a ladder
+ * that only looked at motion would be blind to it and never step down however slow the scene
+ * got. So animated frames do supply slow evidence, and a smooth animated frame pays that debt
+ * back the way a smooth motion frame does — otherwise one hitch a minute would ratchet quality
+ * down for good.
+ *
+ * They do not supply `recovery` (the credit that undoes a cut) and they are not `judged`
+ * (the before/after sample that decides whether a step helped). Both of those compare frame
+ * rates across time, and an animated frame and a motion frame measure different work: the
+ * animation can be smooth on a machine that cannot pan, and a step judged on motion frames
+ * before and animation frames after would report a gain or loss that is only the workload
+ * changing. Recovery also raises cost, and raising cost on the strength of frames that are
+ * cheap precisely because nothing is being asked of the machine is how an oscillation starts.
+ * The asymmetry is conservative in the right direction: an animating scene can coarsen, and
+ * earns its quality back on the next gesture.
+ */
+export interface FrameWeight {
+  /** Feeds the slow/good accounting that steps the ladder down. */
+  ladder: boolean;
+  /** Feeds `goodMotionMs`, the credit that steps the ladder back up. */
+  recovery: boolean;
+  /** Feeds the benchmark, the frame budget and the step's before/after sample. */
+  judged: boolean;
+}
+
+export function frameWeight(evidence: FrameEvidence): FrameWeight {
+  switch (evidence) {
+    case "motion":
+      return { ladder: true, recovery: true, judged: true };
+    case "animation":
+      return { ladder: true, recovery: false, judged: false };
+    case "none":
+      return { ladder: false, recovery: false, judged: false };
+  }
+}
+
+/**
+ * Whether the still frame may be re-rendered at full resolution and the preset's MSAA. An
+ * animating scene is not at rest in the sense this means — "nothing renders until something
+ * changes" is what made the sharpened frame free, and an animation renders every tick — so
+ * sharpening while animating would run every animated frame in the most expensive
+ * configuration the machine offers, forever.
+ */
+export function shouldSharpenAtRest(sample: {
+  moving: boolean;
+  animating: boolean;
+  restedMs: number;
+  loading: boolean;
+}): boolean {
+  if (sample.moving || sample.animating) return false;
+  if (sample.restedMs < REST_SHARPEN_MS) return false;
+  // While tiles arrive every one of them re-renders the frame; sharpening then would make
+  // each of those renders a full-quality one and the settle feel sluggish.
+  return !sample.loading || sample.restedMs >= REST_SHARPEN_MAX_WAIT_MS;
+}
+
 /** "full" renders the preset as configured; "reduced" means the ladder has cut something. */
 export type RenderProfile = "full" | "reduced";
 
@@ -230,6 +309,8 @@ export class PerformanceManager {
   private blockedUntil = 0;
   private moving = false;
   private movingUntil = 0;
+  /** True while something other than the camera renders every tick (the splat deformer). */
+  private animating = false;
   private altitude = Number.POSITIVE_INFINITY;
   private nearSite = false;
   private readonly timer: ReturnType<typeof setInterval>;
@@ -239,7 +320,8 @@ export class PerformanceManager {
   private readonly webgl2: boolean;
   /** Frame intervals recorded while the camera moved, since the last reset (site change). */
   private readonly motionFrameMs: number[] = [];
-  private lastMotionFrameAt: number | null = null;
+  /** Timestamp of the last frame that carried evidence (motion or animation), for its interval. */
+  private lastEvidenceFrameAt: number | null = null;
 
   constructor(
     private readonly viewer: Viewer,
@@ -393,6 +475,19 @@ export class PerformanceManager {
     this.groups[group].processing = processing;
   }
 
+  /**
+   * Tells the manager that something other than the camera is rendering every tick, so that a
+   * still camera no longer means a still scene. Call it with `true` before the first animated
+   * frame and `false` once the animation stops; `false` is the default and leaves every
+   * decision exactly as it was before animation existed. Turning it on drops a sharpened still
+   * frame back to the ladder's step at once, the way the first frame of a gesture does.
+   */
+  setAnimating(animating: boolean): void {
+    if (this.animating === animating) return;
+    this.animating = animating;
+    if (animating && this.sharpened) this.applyLevel();
+  }
+
   reportContext(altitude: number, nearSite: boolean): void {
     this.altitude = altitude;
     this.nearSite = nearSite;
@@ -442,13 +537,10 @@ export class PerformanceManager {
    * At rest nothing renders until something changes, so the still frame can afford every
    * device pixel and the preset's anti-aliasing whatever the ladder or the preset's motion
    * scale says; the switch back happens on the first frame of the next gesture, one
-   * framebuffer re-allocation.
+   * framebuffer re-allocation. `shouldSharpenAtRest` decides when that is true.
    */
-  private sharpenAtRest(now: number): void {
+  private sharpenAtRest(): void {
     if (this.sharpened) return;
-    // While tiles arrive every one of them re-renders the frame; sharpening then would
-    // make each of those renders a full-quality one and the settle feel sluggish.
-    if (this.loading && now - this.restSince < REST_SHARPEN_MAX_WAIT_MS) return;
     const full = this.ladder[0];
     if (!full) return;
     this.sharpened = true;
@@ -457,7 +549,11 @@ export class PerformanceManager {
     this.scene.requestRender();
   }
 
-  /** Rendered frames per second over the last second, or null when the scene is idle. */
+  /**
+   * Rendered frames per second over the last second, or null when the scene is idle. While
+   * `animating` this is the rate the animation is running at, not how responsive the scene is
+   * to a gesture — which is why the snapshot carries `animating` beside it.
+   */
   get fps(): number | null {
     const now = performance.now();
     const cutoff = now - 1000;
@@ -474,7 +570,12 @@ export class PerformanceManager {
     const now = performance.now();
     this.frameTimestamps.push(now);
     if (this.frameTimestamps.length > 240) this.frameTimestamps.shift();
-    if (this.moving) {
+    const weight = frameWeight(frameEvidence({ moving: this.moving, animating: this.animating }));
+    if (!weight.ladder) {
+      this.lastEvidenceFrameAt = null;
+      return;
+    }
+    if (weight.judged) {
       // Frames during which tiles were being processed carry decode and upload work in the
       // update phase; keep them apart so the steady per-frame cost of the scene is visible.
       const loading = GROUPS.some((g) => this.groups[g].processing > 0);
@@ -485,27 +586,28 @@ export class PerformanceManager {
       renders.push(this.renderMs);
       commands.push(this.commandCount());
       for (const list of [updates, renders, commands]) if (list.length > 600) list.shift();
-      if (this.lastMotionFrameAt !== null) {
-        const dt = now - this.lastMotionFrameAt;
-        if (dt > 0 && dt < 2000) {
-          this.motionFrameMs.push(dt);
-          if (this.motionFrameMs.length > 600) this.motionFrameMs.shift();
-          // Evidence for the ladder comes from every motion frame, so three short slow
-          // drags count as much as one long one.
-          if (dt > 1000 / LOW_FPS) {
-            this.slowMotionMs += dt;
-            this.goodMotionMs = 0;
-          } else {
-            this.slowMotionMs = Math.max(0, this.slowMotionMs - dt);
-            if (dt < 1000 / STEADY_FPS) this.goodMotionMs += dt;
-          }
-          this.judgeFrameMs.push(dt);
-          if (this.judgeFrameMs.length > STEP_JUDGE_FRAMES) this.judgeFrameMs.shift();
-        }
-      }
-      this.lastMotionFrameAt = now;
+    }
+    const last = this.lastEvidenceFrameAt;
+    this.lastEvidenceFrameAt = now;
+    if (last === null) return;
+    const dt = now - last;
+    if (!(dt > 0 && dt < 2000)) return;
+    if (weight.judged) {
+      this.motionFrameMs.push(dt);
+      if (this.motionFrameMs.length > 600) this.motionFrameMs.shift();
+    }
+    // Evidence for the ladder comes from every frame that carries any, so three short
+    // slow drags count as much as one long one.
+    if (dt > 1000 / LOW_FPS) {
+      this.slowMotionMs += dt;
+      this.goodMotionMs = 0;
     } else {
-      this.lastMotionFrameAt = null;
+      this.slowMotionMs = Math.max(0, this.slowMotionMs - dt);
+      if (weight.recovery && dt < 1000 / STEADY_FPS) this.goodMotionMs += dt;
+    }
+    if (weight.judged) {
+      this.judgeFrameMs.push(dt);
+      if (this.judgeFrameMs.length > STEP_JUDGE_FRAMES) this.judgeFrameMs.shift();
     }
   }
 
@@ -521,7 +623,7 @@ export class PerformanceManager {
       this.loadingCommands,
     ])
       list.length = 0;
-    this.lastMotionFrameAt = null;
+    this.lastEvidenceFrameAt = null;
   }
 
   /** Draw commands issued in the last frame (not in the public typings, stable at runtime). */
@@ -629,7 +731,15 @@ export class PerformanceManager {
       this.applyLevel();
       return `smooth motion → ${this.step.label}`;
     }
-    if (!moving && now - this.restSince >= REST_SHARPEN_MS) this.sharpenAtRest(now);
+    if (
+      shouldSharpenAtRest({
+        moving,
+        animating: this.animating,
+        restedMs: now - this.restSince,
+        loading: this.loading,
+      })
+    )
+      this.sharpenAtRest();
     return null;
   }
 
@@ -698,6 +808,7 @@ export class PerformanceManager {
       worldScreenSpaceError: this.groups.world.sse,
       adaptiveReason: reason,
       moving,
+      animating: this.animating,
       tilesetMemoryMb: Math.round(memory.bytes / 1048576),
       memoryBudgetMb: Math.round(memory.budget / 1048576),
       benchmark: this.benchmark,

@@ -29,6 +29,9 @@ export interface PerformanceSnapshot {
   worldScreenSpaceError: number | null;
   adaptiveReason: string;
   moving: boolean;
+  /** True while something other than the camera renders every tick, so `fps` is the rate that
+   *  animation is running at rather than how responsive the scene is to a gesture. */
+  animating: boolean;
   gpu: string | null;
   webgl2: boolean;
   tilesetMemoryMb: number;
@@ -95,6 +98,7 @@ export const useViewer = create<ViewerState>()((set) => ({
     worldScreenSpaceError: null,
     adaptiveReason: "idle",
     moving: false,
+    animating: false,
     gpu: null,
     webgl2: false,
     tilesetMemoryMb: 0,

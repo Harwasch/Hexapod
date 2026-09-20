@@ -88,6 +88,10 @@ export function DevPanel() {
         <dd data-testid="dev-fps">{perf.rendering ? perf.fps : "idle"}</dd>
         <dt>Frame</dt>
         <dd>{perf.rendering ? `${perf.frameTimeMs} ms` : "—"}</dd>
+        <dt>Animating</dt>
+        <dd data-testid="dev-animating">
+          {perf.animating ? "yes — FPS is the animation rate" : "no"}
+        </dd>
         <dt>Altitude</dt>
         <dd>{camera.altitude.toFixed(1)} m</dd>
         <dt>Lat / Lon</dt>
