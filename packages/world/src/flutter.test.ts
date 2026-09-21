@@ -16,6 +16,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  applyFlutter,
   assignSplatsToNodes,
   deform,
   deformPositions,
@@ -328,6 +329,44 @@ describe("the bound is a bound", () => {
 
   it("scales the amplitude linearly in FLUTTER_SCALE_M, so the constant means what it says", () => {
     expect(maxFlutterAmplitude(rig, GALE)).toBeLessThan(FLUTTER_SCALE_M);
+  });
+});
+
+describe("the batch pass and the readable one agree", () => {
+  it("gives every splat exactly what splatFlutter gives it", () => {
+    // `applyFlutter` is the loop the runtime actually runs — the per-node coefficients hoisted
+    // out, `hash32` written out because a cross-module call per splat was most of its cost, and
+    // the whole thing kept in one module so the JIT can hold it in registers. `splatFlutter` is
+    // the same arithmetic written to be read. Nothing keeps them equal except this test.
+    const field = flutterField(rig, 17.5, BREEZE);
+    const count = 500;
+    const assignment = new Uint16Array(count);
+    for (let i = 0; i < count; i += 1) assignment[i] = (i * 7) % rig.nodes.length;
+    const target = new Float32Array(count * 3);
+    applyFlutter(target, assignment, field, count);
+    for (let i = 0; i < count; i += 1) {
+      const expected = splatFlutter(i, assignment[i] ?? 0, field);
+      for (let k = 0; k < 3; k += 1) {
+        expect(target[i * 3 + k]).toBe(Math.fround(expected[k] ?? 0));
+      }
+    }
+  });
+
+  it("adds to what is already there rather than replacing it", () => {
+    const field = flutterField(rig, 3, BREEZE);
+    const assignment = new Uint16Array([LEAF, LEAF]);
+    const target = new Float32Array([1, 2, 3, -1, -2, -3]);
+    applyFlutter(target, assignment, field, 2);
+    expect(target[0]).not.toBe(1);
+    expect(Math.abs((target[0] ?? 0) - 1)).toBeLessThan(0.02);
+  });
+
+  it("does nothing at all for a still field", () => {
+    const target = new Float32Array([1, 2, 3, -0, 0, 5]);
+    const before = [...target];
+    applyFlutter(target, new Uint16Array([LEAF, LEAF]), FLUTTER_STILL, 2);
+    expect([...target]).toEqual(before);
+    expect(Object.is(target[3], -0)).toBe(true);
   });
 });
 

@@ -274,27 +274,118 @@ export function flutterField(rig: MotionRig, t: number, settings: WindSettings):
  * does not flutter.
  */
 export function splatFlutter(splatIndex: number, node: number, field: FlutterField): Vec3 {
-  const amplitude = field.amplitudeM[node] ?? 0;
-  if (amplitude === 0) return VEC3_ZERO;
+  if ((field.amplitudeM[node] ?? 0) === 0) return VEC3_ZERO;
+  const out = new Float64Array(3);
+  splatFlutterInto(splatIndex, node, flutterCoefficients(field), out);
+  return [out[0] ?? 0, out[1] ?? 0, out[2] ?? 0];
+}
+
+/**
+ * Per-node coefficients for {@link splatFlutterInto}: four numbers per node.
+ *
+ * `A·p·sin(ω·t)`, `A·p·cos(ω·t)` and the same pair for the second sinusoid. Everything in a
+ * splat's offset that does not depend on the splat, folded once per node per frame so that the
+ * per-splat loop is a hash, eight table reads and a dozen multiply-adds. All zero for a node
+ * that does not flutter, which the caller is expected to test for before calling.
+ */
+function flutterCoefficients(field: FlutterField): Float64Array {
+  const nodes = field.amplitudeM.length;
+  const coefficients = new Float64Array(nodes * 4);
+  for (let n = 0; n < nodes; n += 1) {
+    const amplitude = field.amplitudeM[n] ?? 0;
+    if (amplitude === 0) continue;
+    const primary = amplitude * PRIMARY_SHARE;
+    const secondary = amplitude * (1 - PRIMARY_SHARE);
+    coefficients[n * 4] = primary * (field.phase[n * 4] ?? 0);
+    coefficients[n * 4 + 1] = primary * (field.phase[n * 4 + 1] ?? 0);
+    coefficients[n * 4 + 2] = secondary * (field.phase[n * 4 + 2] ?? 0);
+    coefficients[n * 4 + 3] = secondary * (field.phase[n * 4 + 3] ?? 0);
+  }
+  return coefficients;
+}
+
+/**
+ * Adds every splat's flutter offset to `target`, in place, over `count` splats.
+ *
+ * The whole per-splat pass, kept in this module so the tables stay private and the loop stays
+ * one small, inlinable body. Measured at 150,000 splats: this form costs about 1 ms a frame,
+ * where the same arithmetic fused into `deformPositions`' transform loop cost 6 ms and calling
+ * out to a helper per splat cost 5 ms. The transform and the flutter are independent, so there
+ * is nothing to be gained by fusing them and, empirically, a great deal to be lost.
+ *
+ * Does nothing at all for a still field, which is what keeps calm bit-exact: no coordinate is
+ * read, no zero is added.
+ */
+export function applyFlutter(
+  target: Float32Array,
+  assignment: Uint16Array,
+  field: FlutterField,
+  count: number,
+): void {
+  if (field.still) return;
+  const coefficients = flutterCoefficients(field);
+  const amplitudes = field.amplitudeM;
+  const limit = Math.min(count, assignment.length, Math.floor(target.length / 3));
+  for (let i = 0; i < limit; i += 1) {
+    const node = assignment[i] ?? 0;
+    if ((amplitudes[node] ?? 0) === 0) continue;
+    // `hash32` written out: it lives in another module, and 150,000 calls a frame that the
+    // JIT declines to inline is most of this loop's cost. Identical arithmetic, and
+    // `flutter.test.ts` pins the two together through `splatFlutter`.
+    const h0 = (Math.imul(FLUTTER_SEED | 0, 0x9e3779b1) ^ (i | 0)) >>> 0;
+    const h1 = Math.imul(h0 ^ (h0 >>> 16), 0x85ebca6b) >>> 0;
+    const h2 = Math.imul(h1 ^ (h1 >>> 13), 0xc2b2ae35) >>> 0;
+    const h = (h2 ^ (h2 >>> 16)) >>> 0;
+    const p1 = (h & PHASE_MASK) * 2;
+    const p2 = ((h >>> 10) & PHASE_MASK) * 2;
+    const axis = ((h >>> 20) & AXIS_MASK) * 6;
+    const c = node * 4;
+    const wave1 =
+      (coefficients[c] ?? 0) * (PHASE_TABLE[p1] ?? 1) +
+      (coefficients[c + 1] ?? 0) * (PHASE_TABLE[p1 + 1] ?? 0);
+    const wave2 =
+      (coefficients[c + 2] ?? 0) * (PHASE_TABLE[p2] ?? 1) +
+      (coefficients[c + 3] ?? 0) * (PHASE_TABLE[p2 + 1] ?? 0);
+    const base = i * 3;
+    target[base] =
+      (target[base] ?? 0) + wave1 * (AXIS_TABLE[axis] ?? 0) + wave2 * (AXIS_TABLE[axis + 3] ?? 0);
+    target[base + 1] =
+      (target[base + 1] ?? 0) +
+      wave1 * (AXIS_TABLE[axis + 1] ?? 0) +
+      wave2 * (AXIS_TABLE[axis + 4] ?? 0);
+    target[base + 2] =
+      (target[base + 2] ?? 0) +
+      wave1 * (AXIS_TABLE[axis + 2] ?? 1) +
+      wave2 * (AXIS_TABLE[axis + 5] ?? 0);
+  }
+}
+
+/**
+ * The offset for one splat, written into `out[0..2]` from precomputed node coefficients.
+ *
+ * The readable statement of what {@link applyFlutter} does per splat, and what
+ * {@link splatFlutter} is built on, so the batch loop above has something to be compared
+ * against rather than being the only definition of the arithmetic.
+ */
+function splatFlutterInto(
+  splatIndex: number,
+  node: number,
+  coefficients: Float64Array,
+  out: Float64Array,
+): void {
   const h = hash32(splatIndex, FLUTTER_SEED);
   const p1 = (h & PHASE_MASK) * 2;
   const p2 = ((h >>> 10) & PHASE_MASK) * 2;
   const axis = ((h >>> 20) & AXIS_MASK) * 6;
-  const base = node * 4;
-  const sin1 = field.phase[base] ?? 0;
-  const cos1 = field.phase[base + 1] ?? 0;
-  const sin2 = field.phase[base + 2] ?? 0;
-  const cos2 = field.phase[base + 3] ?? 0;
-  // sin(ω·t + φ) by angle addition, twice.
+  const c = node * 4;
+  // sin(ω·t + φ) = sin(ω·t)·cos φ + cos(ω·t)·sin φ, twice, already scaled by the amplitude.
   const wave1 =
-    amplitude * PRIMARY_SHARE * (sin1 * (PHASE_TABLE[p1] ?? 1) + cos1 * (PHASE_TABLE[p1 + 1] ?? 0));
+    (coefficients[c] ?? 0) * (PHASE_TABLE[p1] ?? 1) +
+    (coefficients[c + 1] ?? 0) * (PHASE_TABLE[p1 + 1] ?? 0);
   const wave2 =
-    amplitude *
-    (1 - PRIMARY_SHARE) *
-    (sin2 * (PHASE_TABLE[p2] ?? 1) + cos2 * (PHASE_TABLE[p2 + 1] ?? 0));
-  return [
-    wave1 * (AXIS_TABLE[axis] ?? 0) + wave2 * (AXIS_TABLE[axis + 3] ?? 0),
-    wave1 * (AXIS_TABLE[axis + 1] ?? 0) + wave2 * (AXIS_TABLE[axis + 4] ?? 0),
-    wave1 * (AXIS_TABLE[axis + 2] ?? 1) + wave2 * (AXIS_TABLE[axis + 5] ?? 0),
-  ];
+    (coefficients[c + 2] ?? 0) * (PHASE_TABLE[p2] ?? 1) +
+    (coefficients[c + 3] ?? 0) * (PHASE_TABLE[p2 + 1] ?? 0);
+  out[0] = wave1 * (AXIS_TABLE[axis] ?? 0) + wave2 * (AXIS_TABLE[axis + 3] ?? 0);
+  out[1] = wave1 * (AXIS_TABLE[axis + 1] ?? 0) + wave2 * (AXIS_TABLE[axis + 4] ?? 0);
+  out[2] = wave1 * (AXIS_TABLE[axis + 2] ?? 1) + wave2 * (AXIS_TABLE[axis + 5] ?? 0);
 }

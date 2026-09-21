@@ -119,6 +119,63 @@ describe("assignSplatsToNodes", () => {
     expect(canopyReach).toBeGreaterThan(1.5 * trunkReach);
   });
 
+  it("agrees with the double loop it replaced, splat for splat", () => {
+    // The slab walk is an optimisation, and the only thing that makes it safe is that it is
+    // exactly equivalent: it skips a node only when the separation along the sorted axis alone
+    // already exceeds the best distance found, which cannot hide a nearer node. This is that
+    // claim, checked against a transcription of the original O(N·K) form — including its
+    // tie-breaking, which is what keeps the result independent of splat order.
+    const brute = (positions: Float32Array, from: MotionRig): Uint16Array => {
+      const count = Math.floor(positions.length / 3);
+      const out = new Uint16Array(count);
+      for (let i = 0; i < count; i += 1) {
+        const px = positions[i * 3] ?? Number.NaN;
+        const py = positions[i * 3 + 1] ?? Number.NaN;
+        const pz = positions[i * 3 + 2] ?? Number.NaN;
+        if (!Number.isFinite(px) || !Number.isFinite(py) || !Number.isFinite(pz)) {
+          out[i] = UNASSIGNED_NODE;
+          continue;
+        }
+        let best = 0;
+        let bestDistance = Number.POSITIVE_INFINITY;
+        from.nodes.forEach((node, n) => {
+          const d =
+            (px - node.position[0]) ** 2 +
+            (py - node.position[1]) ** 2 +
+            (pz - node.position[2]) ** 2;
+          if (d < bestDistance) {
+            bestDistance = d;
+            best = n;
+          }
+        });
+        out[i] = best;
+      }
+      return out;
+    };
+
+    // A cloud that covers the tree and the empty air around it, so the walk is exercised where
+    // the nearest node is close and where it is far.
+    const count = 4000;
+    const positions = new Float32Array(count * 3);
+    for (let i = 0; i < count; i += 1) {
+      positions[i * 3] = ((hash32(i, 101) / 0x1_0000_0000) * 2 - 1) * 4;
+      positions[i * 3 + 1] = ((hash32(i, 202) / 0x1_0000_0000) * 2 - 1) * 4;
+      positions[i * 3 + 2] = (hash32(i, 303) / 0x1_0000_0000) * 8 - 1;
+    }
+    expect([...assignSplatsToNodes(positions, rig)]).toEqual([...brute(positions, rig)]);
+
+    // And on a rig that is widest in x rather than tallest in z, where the walk sorts along a
+    // different axis — the case a rig out of `skeleton.py` could easily present.
+    const lying: MotionRig = {
+      ...rig,
+      nodes: rig.nodes.map((node) => ({
+        ...node,
+        position: [node.position[2] * 3, node.position[0], node.position[1]] as const,
+      })),
+    };
+    expect([...assignSplatsToNodes(positions, lying)]).toEqual([...brute(positions, lying)]);
+  });
+
   it("is independent of the order the splats arrive in", () => {
     const positions = new Float32Array(3000);
     for (let i = 0; i < 1000; i += 1) {
