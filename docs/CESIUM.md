@@ -66,7 +66,9 @@ beyond ~400 km. Point clouds get attenuation + eye-dome lighting.
 The viewer runs in **request-render mode** (`requestRenderMode: true`,
 `maximumRenderTimeChange: ∞`): a frame is drawn only when the camera moves, tiles arrive, or a
 manager calls `scene.requestRender()` after mutating the scene. An idle view costs nothing on
-the GPU, and a Gaussian splat is not re-sorted every 16 ms while nobody is touching it.
+the GPU, and a Gaussian splat is not re-sorted every 16 ms while nobody is touching it. The one
+manager that renders continuously is `LivingSurveyManager`, and only while wind is non-zero: at
+calm it writes nothing and asks for nothing, so an idle survey is as idle as it ever was.
 
 `PerformanceManager` counts rendered frames on `postRender` and every 500 ms runs
 `decideScreenSpaceError` (pure, unit-tested) within the active preset's bounds:
@@ -80,7 +82,8 @@ the GPU, and a Gaussian splat is not re-sorted every 16 ms while nobody is touch
 Motion never renders with MSAA at any preset or ladder step: a 2× display already draws
 four times the pixels of a 1× one, and multisampling on top is where an integrated GPU loses
 the frame. The still frame is sharpened (the preset's MSAA, every device pixel) 500 ms
-after the camera rests, but only once tiles have stopped arriving (or after 3 s regardless):
+after the camera rests, but only once tiles have stopped arriving (or after 3 s regardless)
+and only while nothing is animating (`setAnimating`, below):
 every arriving tile re-renders the still frame, and rendering each of those at full quality
 made the seconds after a move feel sluggish. Balanced caps the effective pixel ratio at 1.5
 _while moving_ (`baseResolutionScale`, pure and tested) and renders the still frame at the
@@ -90,7 +93,13 @@ display looking softer than Google Maps once the camera stopped.
 Smoothness comes first, the way a maps app does it: nothing about the render settings
 changes during a gesture. Tile selection is frozen while the camera moves (every change of
 `maximumScreenSpaceError` pops tiles mid-drag), and slow frames at rest never coarsen
-anything (they are tiles arriving, not a stall). At rest the scene uses the idle time the
+anything (they are tiles arriving, not a stall) — unless something is animating, which is a
+still camera rendering continuously and is the one case where a slow frame at rest is a real
+cost. `PerformanceManager.setAnimating(true)` (the Living Survey turns it on with the wind)
+suppresses the sharpened still frame and lets animated frames step the ladder down, but never
+up: they supply no recovery credit and are never the before/after sample that judges a step,
+because an animation can be smooth on a machine that cannot pan. `animating` rides in the
+performance snapshot so the dev panel's frame rate is not read as responsiveness. At rest the scene uses the idle time the
 way Google Maps does: once nothing is loading (sites and the world both report through
 `reportLoading`) and tileset memory is under 70 % of its budget, the error goes straight to
 the preset minimum on the next 500 ms tick, at any height (2 px on balanced: a 2 to 5 cm
@@ -277,6 +286,35 @@ instead of showing a 5 km patch of a differently lit capture with a hard edge. C
 (`scene.sampleHeightMostDetailed`, excluding themselves) when it is within 60 m of the
 terrain, so they sit on Google's ground rather than floating over or sinking into it.
 
+## Gaussian splats, and moving them
+
+Splats are a separate subsystem from everything else Cesium draws, and the differences matter
+before anything is built on them (all verified against 1.145):
+
+- **`tileset.customShader` does not reach splat content.** `Scene/GaussianSplatPrimitive.js`
+  bypasses the Model pipeline entirely — its own render resources, its own
+  `PrimitiveGaussianSplatVS/FS`, its own DrawCommand, no `customShader` reference anywhere.
+- **Splat attributes live in one RGBA32UI texture**, two adjacent texels per splat: an even
+  column holding the position as raw float32 bits, the odd column beside it holding packed
+  covariance halves and an RGBA8 colour. `_splatRowMask`/`_splatRowShift` on the primitive give
+  the addressing, and they depend on the device's maximum texture size (8192 under SwiftShader
+  here, 16384 on a typical desktop GPU).
+- **Splats write no depth and are skipped on the pick pass**, so `scene.pick`,
+  `scene.pickPosition` and `scene.sampleHeight` never see them (measured: `undefined` with the
+  globe hidden). A splat cannot be selected, measured against, or used as a camera floor.
+- **The sorter reads `primitive._positions`**, a separate `Float32Array`, not the texture.
+- **Snapshots aggregate over selected tiles**, so splat indices are stable only while tile
+  selection is. `_snapshot.generation` is a monotonic rebuild counter, and a rebuild happens more
+  often than "tile selection changed" — `SiteManager.clampToGround` sets `modelMatrix` after an
+  asynchronous terrain sample, so even a single-tile site rebuilds seconds after load with every
+  baked position changed.
+
+The Living Survey rewrites the position lanes of that texture every tick so a measured tree can
+sway without its canonical positions ever being touched, using the buffer the engine itself packed
+(no engine fork, no `gl.readPixels` on the steady-state path). The internals it depends on are
+declared in one file, `cesium/splatInternals.ts`. See [LIVING_SURVEY.md](LIVING_SURVEY.md) and
+[ADR 0006](DECISIONS/0006-splat-texture-rewrite.md).
+
 ## Patched engine
 
 `patches/@cesium__engine@26.3.0.patch` (applied by pnpm on install) guards
@@ -296,3 +334,8 @@ five times.
   it defensively and falls back to `boundingSphere`.
 - CesiumJS 1.144 added composable camera `Controller`s; the explore mode here is a
   minimal purpose-built controller and can migrate to that framework later.
+- Nothing in the Gaussian splat subsystem is declared in `Cesium.d.ts` (a grep for
+  `GaussianSplatPrimitive`, `GaussianSplatTextureGenerator` or
+  `Cesium3DTileset.gaussianSplatPrimitive` finds nothing), and `GaussianSplatTextureGenerator`
+  is exported from the barrel without appearing in the typings. The subsystem has about twenty
+  changelog entries across recent releases, so treat every use of it as version-pinned.

@@ -13,6 +13,7 @@ own directories.
 ├── packages/
 │   ├── contracts/  OpenAPI document + generated TypeScript types
 │   ├── geo/        Framework-free geospatial helpers (units, footprints, scale)
+│   ├── world/      Living Survey motion model (rigs, wind, deformation) — no Cesium
 │   ├── ui/         Glass design system (tokens + accessible primitives)
 │   └── config/     Shared TypeScript configuration
 ├── infra/          docker compose (PostGIS, MinIO), API Dockerfile
@@ -33,6 +34,12 @@ using the evaluation token bundled with CesiumJS. On top of the world sits **mis
 for autonomous land-management robots: project badge, Map / Plan / Fleet views, zone and
 machine overlays, plans, fleet and treatment log, an agent activity stream and a command bar.
 The demo fleet is simulated and labeled as such (see [docs/MISSION_CONTROL.md](docs/MISSION_CONTROL.md)).
+
+A **Living Survey** prototype makes one tree sway under a wind setting without its measurement
+ever changing: the deformer recomputes every frame from an immutable copy of the canonical splat
+positions, so calm restores the measured bytes exactly, and the motion is labelled Simulated
+wherever it shows. Today the only tree that moves is a procedural fixture — see
+[docs/LIVING_SURVEY.md](docs/LIVING_SURVEY.md) for what it proves and what it does not.
 
 ## Quickstart (clean machine)
 
@@ -76,7 +83,7 @@ See [`.env.example`](.env.example) for every variable with comments. The importa
 ```bash
 pnpm dev / pnpm dev:api        # dev servers
 pnpm lint && pnpm typecheck    # ESLint (strict, type-aware) + tsc for every package
-pnpm test                      # Vitest: packages/geo, packages/ui, apps/web
+pnpm test                      # Vitest: packages/geo, packages/ui, packages/world, apps/web
 pnpm e2e                       # Playwright (needs Chromium: pnpm --filter @twin/web exec playwright install chromium)
 pnpm build                     # production bundle in apps/web/dist
 pnpm contracts:generate        # regenerate TS types after changing API schemas
@@ -111,7 +118,8 @@ plain drag orbits the point you clicked.
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — why CesiumJS, 3D Tiles, PostGIS; the seams for STAC/S3/COPC/robotics
 - [docs/COMPARISON.md](docs/COMPARISON.md) — mesh vs point cloud vs Gaussian splat comparison sites and how to benchmark them
 - [docs/MISSION_CONTROL.md](docs/MISSION_CONTROL.md) — robot mission layer: views, overlays, command bar, provider seam
-- [docs/CESIUM.md](docs/CESIUM.md) — scene manager, clipping, LOD/adaptive quality, tokens, current API notes
+- [docs/CESIUM.md](docs/CESIUM.md) — scene manager, clipping, LOD/adaptive quality, splat internals, tokens, current API notes
+- [docs/LIVING_SURVEY.md](docs/LIVING_SURVEY.md) — simulated motion over measured geometry: the mechanism, what is measured vs simulated, and the limits
 - [docs/DATA_MODEL.md](docs/DATA_MODEL.md) — sites, assets, layers, bookmarks, provenance
 - [docs/ADDING_DATA.md](docs/ADDING_DATA.md) — every supported input, validation rules, ion reconstruction
 - [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — Vercel-style static web, containerised API, managed PostGIS

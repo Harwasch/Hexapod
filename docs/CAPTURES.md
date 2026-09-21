@@ -150,7 +150,8 @@ density.
 
 Stiffness is interpolated from the same constants `syntheticTreeRig()` uses. It is a plausible
 gradient — thicker and lower bends less — and it is **not** calibrated against how any real
-tree moves. That is why the runtime labels the motion Simulated.
+tree moves. That is why the runtime labels the motion Simulated. What the runtime then does with
+a rig, and what it refuses to do, is in [LIVING_SURVEY.md](LIVING_SURVEY.md).
 
 ## The real tree: what was tried, and what it would take
 

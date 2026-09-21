@@ -47,10 +47,12 @@ camera bookmarks with provenance, license and attribution on every record.
 
 - Strict TypeScript everywhere, type-aware ESLint with no `any`, Prettier; Ruff + mypy
   strict on the API; OpenAPI-generated frontend types with a drift check in CI.
-- Tests: 34 backend (CRUD, GeoJSON validation, spatial persistence, relationships,
-  invalid data, migrations round-trip), 37 unit (geo, ui, web), 11 Playwright flows
-  (boot, viewer init, catalog, fly-to, representation switch, layer toggle, inspector,
-  add-data validation, measurement, palette/shortcuts, keyboard access, API failure).
+- Tests: 56 backend (CRUD, GeoJSON validation, spatial persistence, relationships,
+  invalid data, migrations round-trip, captures manifest), 303 unit (geo, ui, world, web),
+  37 capture-tool tests (`tools/captures`, with the committed fixture re-generated and
+  diffed in CI), 18 Playwright flows (boot, viewer init, catalog, fly-to, representation
+  switch, layer toggle, inspector, add-data validation, measurement, palette/shortcuts,
+  keyboard access, API failure, and two Living Survey flows against a real Cesium scene).
 - Error handling: per-asset/layer `idle → loading → ready → error` states, toasts, React
   error boundaries, WebGL context-loss notice, render-loop recovery, ion token setup
   notice, labeled built-in fallback catalog when the API is down.
@@ -61,7 +63,8 @@ camera bookmarks with provenance, license and attribution on every record.
 
 React owns application state (Zustand) and catalog state (TanStack Query); a single
 `CesiumSceneManager` owns rendering through focused managers (Camera, Layers, Sites,
-Selection, Measurement, Clipping, Performance, Explore, Debug) that emit typed events; one
+Selection, Measurement, Clipping, Performance, Explore, LivingSurvey, Debug) that emit typed
+events; one
 `SceneBridge` mirrors those events into stores and pushes settings back. FastAPI + PostGIS
 hold the catalog with GeoJSON validated structurally and topologically. Cesium ion is the
 current delivery provider, not the data model; canonical data will live behind the
@@ -100,10 +103,37 @@ current delivery provider, not the data model; canonical data will live behind t
 - Explore mode: scroll now moves, Shift+scroll changes speed; the HUD explains that normal
   mouse navigation is paused while it is on.
 
+**Living Survey (fourth iteration)**
+
+- A measured Gaussian splat tileset can sway under a wind setting while its canonical positions
+  are never mutated: every tick recomputes `displaced = f(canonical, t, wind)` from an immutable
+  copy and rewrites the position lanes of the splat attribute texture, so error cannot accumulate
+  and calm restores the measured bytes exactly (`bakeResidualM` measured 0 against the real
+  engine; a 1000-frame test asserts byte-identity on the canonical arrays).
+- The mechanism is a runtime interception of `GaussianSplatTextureGenerator.generateFromAttributes`
+  — no engine fork, no per-frame `gl.readPixels`. `CustomShader` does not reach splat content in
+  1.145 (ADR 0006).
+- `packages/world` (`@twin/world`) holds the pure motion model: skeleton rig, seeded gust noise,
+  `deform`, nearest-node assignment and the metrics that bound displacement and sort staleness.
+  `tools/captures/synthetic_tree.py` generates a procedural tree with ground-truth labels;
+  `tools/captures/skeleton.py` infers a rig from geometry and is scored against that truth.
+- Motion is labelled: an ambient **Simulated motion** badge whenever anything is displaced, and an
+  Inspector that states Geometry (Observed, with the capture's provenance) apart from Motion
+  (Simulated, with the rig's source note). Wind defaults to 0, is never persisted, and is forced
+  calm under reduced motion. `PerformanceManager.setAnimating` keeps a still camera from meaning a
+  still scene. See [LIVING_SURVEY.md](LIVING_SURVEY.md).
+
 ## Known limitations
 
 - The fleet, zones, plans, agent actions and camera feeds are simulated demo data; there
   is no robot telemetry ingestion yet.
+- The Living Survey has never touched a real scan. The only tree that moves is the procedural
+  `data/tiles/synthetic-tree` fixture; `skeleton.py` is scored only against that fixture's own
+  ground truth (ARI 0.672 against a 0.847 ceiling), and wind `strength` is a dimensionless
+  0..1 scale, not m/s — no stiffness value is calibrated against a real tree. It is restricted
+  to single-tile splat tilesets and refuses anything else. The splat sorter reads canonical
+  positions, so draw order goes stale relative to displaced geometry; whether that reads as
+  wrong, and how much a frame really costs, both need a human eye on real hardware.
 
 - Headless verification used SwiftShader (software GL); frame rates there are not
   representative and splat refinement is slow. The adaptive controller correctly lowered
@@ -136,7 +166,12 @@ upgrade head && uv run python -m app.seed`, then `pnpm dev:api` and `pnpm dev`.
    change-detection comparison (swipe already works).
 4. **Semantic entities**: `plants`/`objects` tables with geometry; extend selection and
    the inspector to them.
-5. **Self-hosted tiling**: a 3D Tiles/COPC/COG tile service so Cesium ion becomes optional.
-6. **LLM assistant**: expose the manager API (fly, toggle, measure, filter) as tools behind
+5. **A real tree in the Living Survey**: acquire the single-tree capture named in
+   [CAPTURES.md](CAPTURES.md#the-real-tree-what-was-tried-and-what-it-would-take), run
+   `skeleton.py` on it, and judge the sway on hardware with a GPU — the three open questions are
+   whether the motion reads as _that_ tree, the real per-frame cost, and where the sort-staleness
+   threshold actually sits.
+6. **Self-hosted tiling**: a 3D Tiles/COPC/COG tile service so Cesium ion becomes optional.
+7. **LLM assistant**: expose the manager API (fly, toggle, measure, filter) as tools behind
    the command palette.
-7. **Auth and multi-tenant catalog**; per-site sharing; audit trail on catalog edits.
+8. **Auth and multi-tenant catalog**; per-site sharing; audit trail on catalog edits.

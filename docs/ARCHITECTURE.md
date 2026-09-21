@@ -11,7 +11,7 @@ the catalog; Cesium ion (today) delivers heavy 3D assets straight to the browser
 │      │ calls managers            ▲ events (camera, load, perf)  │
 │  CesiumSceneManager ─ Camera · Layers · Sites · Selection ·      │
 │                        Measurement · Clipping · Performance ·    │
-│                        Explore · Debug                           │
+│                        Explore · LivingSurvey · Debug            │
 │      │ streams tiles                                             │
 └──────┼──────────────────────────────────────────────────────────┘
        │                       ┌─────────── FastAPI ───────────┐
@@ -60,6 +60,12 @@ but have no surfaces to measure against. Measurements pick against terrain and m
 content (`scene.pickPosition`), and the UI labels the splat representation as a visual
 model. Analytical questions belong to point clouds, meshes, DEMs and semantic entities.
 
+That is also what makes the Living Survey's simulated motion safe: a splat writes no depth
+and is skipped on the pick pass, so nothing measurable can be read off a swaying tree in the
+first place. The measurement itself is protected by mechanism rather than by care — the
+deformer recomputes each frame from an immutable canonical copy and never reads back, so
+calm restores the measured bytes exactly. See [LIVING_SURVEY.md](LIVING_SURVEY.md).
+
 ## Why PostGIS stores semantic and spatial metadata
 
 Sites, assets and layers are small, relational and spatial (footprints, extents, centroids)
@@ -76,17 +82,20 @@ extensible parts (render config, resolution, license) without a migration per fi
   Zustand stores and pushing settings back. React components call managers imperatively
   (`useScene()`), never re-rendering the scene.
 - `apps/web/src/state/` — Zustand stores: settings (persisted), ui, viewer telemetry,
-  layer/site runtime, selection, measurements, toasts, mission (view, selection, layers).
+  layer/site runtime, selection, measurements, toasts, mission (view, selection, layers),
+  living (wind and deformer status; deliberately not persisted).
 - `apps/web/src/api/` — `openapi-fetch` client typed from `@twin/contracts`, TanStack
   Query hooks, and a labeled built-in fallback catalog for when the API is down.
 - `apps/web/src/features/` — one directory per surface (search, layers, sites, inspector,
   measure, compare, bookmarks, add-data, settings, palette, dev, nav, timeline, explore,
-  onboarding, mission). Panels are lazy where large.
+  onboarding, mission, living). Panels are lazy where large.
 - `apps/web/src/missions/` — the mission domain (`Project`, `Machine`, `Zone`, `Plan`) and the
   `MissionProvider` seam; `MissionManager` draws zones/tracks and projects overlay anchors.
   See [MISSION_CONTROL.md](MISSION_CONTROL.md).
 - `packages/ui` — the glass design system; `packages/geo` — pure geospatial math;
-  `packages/contracts` — the API contract.
+  `packages/world` — the pure motion model behind the Living Survey (skeleton rigs, seeded
+  gust noise, deformation, nearest-node assignment, displacement and staleness bounds; no
+  Cesium, no DOM); `packages/contracts` — the API contract.
 
 ## Layer provider architecture
 
@@ -111,13 +120,14 @@ kind is one Pydantic model, one enum value and one provider adapter.
 
 ## Seams for what comes next
 
-| Future capability            | Where it plugs in                                                                                                           |
-| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| STAC catalogs                | `stac` layer source + client resolver; a backend STAC crawler can populate layers                                           |
-| S3 / COG / COPC / GeoParquet | `ObjectStorage` abstraction; new `provider`/`sourceType` values; a tile server (TiTiler/COPC) as an imagery/3D Tiles source |
-| Temporal captures            | `observed_at` / `valid_from` / `valid_to` on assets; `TimelineControl` already switches versions                            |
-| Semantic entities / plants   | new tables keyed to `sites` with geometry; `SelectionManager` already resolves features to catalog objects                  |
-| Robotics (ROS/MCAP)          | a live `MissionProvider` replaces the simulated demo; poses feed `MissionManager` tracks and markers                        |
-| Simulation (Isaac/OpenUSD)   | consumes the same canonical store; the viewer stays a 3D Tiles client                                                       |
-| LLM geospatial assistant     | the command palette is the entry point; managers expose a small imperative API to drive                                     |
-| Observability vendor         | `lib/log.ts` sinks and `lib/timing.ts` spans                                                                                |
+| Future capability             | Where it plugs in                                                                                                                          |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| STAC catalogs                 | `stac` layer source + client resolver; a backend STAC crawler can populate layers                                                          |
+| S3 / COG / COPC / GeoParquet  | `ObjectStorage` abstraction; new `provider`/`sourceType` values; a tile server (TiTiler/COPC) as an imagery/3D Tiles source                |
+| Temporal captures             | `observed_at` / `valid_from` / `valid_to` on assets; `TimelineControl` already switches versions                                           |
+| Semantic entities / plants    | new tables keyed to `sites` with geometry; `SelectionManager` already resolves features to catalog objects                                 |
+| Robotics (ROS/MCAP)           | a live `MissionProvider` replaces the simulated demo; poses feed `MissionManager` tracks and markers                                       |
+| A living world (wind, growth) | `packages/world` holds the motion model; `LivingSurveyManager` drives it and `SplatDeformer` writes it; rigs are declared in `LIVING_RIGS` |
+| Simulation (Isaac/OpenUSD)    | consumes the same canonical store; the viewer stays a 3D Tiles client                                                                      |
+| LLM geospatial assistant      | the command palette is the entry point; managers expose a small imperative API to drive                                                    |
+| Observability vendor          | `lib/log.ts` sinks and `lib/timing.ts` spans                                                                                               |
