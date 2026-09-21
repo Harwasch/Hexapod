@@ -44,14 +44,15 @@ export const WIND_CALM: WindSettings = { strength: 0, bearingDeg: 0 };
  *
  * | strength | worst-case displacement | staleness |
  * | --- | --- | --- |
- * | 0.02 | 3.7 cm | 1.8 radii |
- * | 0.1 | 18.4 cm | 9.2 radii |
- * | 0.5 | 90.1 cm | 45.1 radii |
- * | 1 | 1.69 m | 84.6 radii |
+ * | 0.02 | 3.8 cm | 1.9 radii |
+ * | 0.1 | 18.9 cm | 9.5 radii |
+ * | 0.5 | 91.8 cm | 45.9 radii |
+ * | 1 | 1.71 m | 85.6 radii |
  *
  * `SORT_STALENESS_NOTICEABLE` is 1, and it is a *hypothesis*. 0.1 is inside the largest
- * strength whose staleness bound stays within one decade of that hypothesis (0.108), which is
- * the honest width of our ignorance, rounded to a number a person can read.
+ * strength whose staleness bound stays within one decade of that hypothesis (0.106), which is
+ * the honest width of our ignorance, rounded to a number a person can read. The displacement
+ * is the **per-splat** bound: a leaf splat carries its node's excursion plus its own flutter.
  *
  * **The constant moved from 0.12 to 0.1 and the budget it buys did not.** The rig it is derived
  * from changed underneath it: 33 nodes became 214, every limb went from 5–15× too thick to
@@ -60,13 +61,18 @@ export const WIND_CALM: WindSettings = { strength: 0, bearingDeg: 0 };
  * between this number and the artifact it is guarding against; holding the constant fixed would
  * have spent nearly twice the draw-order budget without anyone deciding to.
  *
- * Three things keep the bound pessimistic, and none is an argument for going higher. It is a
- * proven maximum over the outermost leaf's whole ancestor chain with the gust at its extreme and
- * every forcing sinusoid peaking at once — and that chain is now 13 joints deep rather than 4,
- * so the bound sits about **3.6×** the displacement actually seen over a minute (5.1 cm), where
- * the 33-node rig's sat at 2.5×. And the fixture's own gaussians are coarser than the yardstick
- * (5.0 cm median measured over `data/tiles/synthetic-tree`, down from 10.7 cm), where the same
- * strength is 3.7 radii rather than 9.2.
+ * Two things keep the bound pessimistic, and neither is an argument for going higher. It is a
+ * proven maximum over the outermost leaf's whole ancestor chain, with the gust at its extreme,
+ * every forcing sinusoid peaking at once and the flutter at its own peak on top — so it sits
+ * about **2.5×** the worst splat excursion actually seen over a minute (7.7 cm). And the
+ * fixture's own gaussians are coarser than the yardstick (4.8 cm median measured over
+ * `data/tiles/synthetic-tree`, down from 10.7 cm), where the same strength is 3.9 bound radii
+ * and 1.6 measured ones.
+ *
+ * The looseness now grows with the rig's *depth*: the chain is 13 joints where it was 4, and a
+ * 500-node rig would be penalised again for being deeper without moving more. If that becomes
+ * the binding constraint the answer is a sampled peak printed beside the proven one, not a
+ * weaker bound.
  */
 export const DEFAULT_WIND_STRENGTH: WindStrength = 0.1;
 

@@ -488,8 +488,8 @@ is the fixed thing, not the number it produces.
   _inequality_.
 - **The staleness yardstick is a reference, not this tileset.** `REFERENCE_GAUSSIAN_SCALE_M` is 2 cm,
   the median gaussian extent of a real drone capture. It is not the median of whichever tileset is on
-  screen; the fixture's own median is 5.0 cm, so the printed figure overstates the fixture's
-  staleness about 2.5-fold. Deriving the true one means decoding scale lanes out of the packed splat
+  screen; the fixture's own median is 4.8 cm, so the printed figure overstates the fixture's
+  staleness about 2.4-fold. Deriving the true one means decoding scale lanes out of the packed splat
   buffer, which nothing does today. The rule this imposes: **anywhere the ratio is printed, the
   yardstick is printed beside it.** The developer panel does, and it is the only place that shows
   it. A figure in "splat radii" with no stated denominator reads as measured and is not.
@@ -607,10 +607,26 @@ Worth writing down, because the fixture is tidy in ways a real extraction will n
   enough to resolve them.** `--max-nodes` is 200 now; on a sparse or noisy cloud the pruning will
   stop well short, and the crown will be coarser than this fixture's. Nothing breaks, but the
   shimmer moves up a level — fewer, larger clusters flutter as units.
-- **Radii out of `skeleton.py` are inferred from local point density, not measured**, and every
-  frequency and every flutter amplitude reads them. A rig whose radii are systematically wrong will
-  have systematically wrong frequencies, and there is no cross-check: on the fixture the radii are
-  known by construction and the model was calibrated against them.
+- **`skeleton.py` does not measure the quantity `radius` now means, and this was checked rather
+  than worried about.** Its `_rms_radius` is the horizontal spread of a cluster's _points_, which
+  for a leaf cluster is the extent of the foliage and not the cross-section of the twig holding it
+  up. `modes.ts` and `flutter.ts` both read `radius` as a woody cross-section. On the old fixture,
+  where a branch really was 12 cm across and its foliage blob 30 cm, the two were within a factor
+  of three and nothing noticed. Running the extractor on the fixture _now_ — true radii 8.8 mm to
+  15 cm, extracted 2.7 cm to 45 cm — the model still runs, produces no NaN, and bounds at 16.2 cm
+  and 8.1 radii with a tip moving 1.11 mm per frame. What it loses is everything this sprint was
+  about: the **median node lands on the 30 Hz clamp** instead of near 8 Hz, so the crown rides
+  quasi-statically again, and **9 of 189 nodes flutter** instead of 180, because almost every
+  extracted node is above the thickness at which flutter dies. A real capture will be worse. The
+  fix is an estimator for a woody radius — plausibly the spread of a cluster's densest core rather
+  than of all its points — and it is deliberately not written here, because calibrating a new
+  estimator against the one tree whose answer is known is exactly how the frequency scale came to
+  be fitted to a fence post.
+- **A zero-length segment is now a silent no-op.** Because a joint's bend is a curvature times its
+  own segment length, a node sitting on top of its parent contributes nothing at all. The extracted
+  rig has some (minimum segment 0.000 m). That is arguably right — a limb of no length has no bend
+  — but under the previous rule such a node bent as much as any other, so the behaviour changed
+  without anything failing.
 - **A capture with foliage but no visible twigs** — which is most drone captures of a tree in leaf —
   gives an extractor no thin members to find, so every node will be thick, every node will be slow,
   and the crown will ride rigid again. That is the same failure this sprint fixed in the fixture,

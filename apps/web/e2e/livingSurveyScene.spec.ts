@@ -151,7 +151,7 @@ test.describe("Living Survey: the scene", () => {
     expect(ready.sites).toHaveLength(1);
     expect(ready.sites[0]?.phase).toBe("ready");
     expect(ready.sites[0]?.reason).toBeUndefined();
-    expect(ready.sites[0]?.numSplats).toBe(2000);
+    expect(ready.sites[0]?.numSplats).toBe(12000);
     expect(ready.sites[0]?.siteSlug).toBe("synthetic-tree");
     expect(ready.captures).toBeGreaterThan(0);
     // Wind starts at 0 and the first thing anyone sees is the measurement.

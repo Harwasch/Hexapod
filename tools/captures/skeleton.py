@@ -198,7 +198,27 @@ def band_of(z: np.ndarray, ground: float, band_height: float, bands: int) -> np.
 
 
 def _rms_radius(points: np.ndarray, centre: np.ndarray) -> float:
-    """Horizontal RMS spread about the centroid: the radius of a cylinder shell of these points."""
+    """Horizontal RMS spread about the centroid: the radius of a cylinder shell of these points.
+
+    **This is not the same quantity as ``SkeletonNode.radius`` in packages/world/src/rig.ts**,
+    and the difference now matters. That field means the *woody cross-section* of the limb, and
+    ``@twin/world`` reads it for natural frequency (``omega ~ radius / length^2``), for damping
+    and for whether a node's splats flutter at all. This function measures the spread of the
+    *points*, which for a leaf cluster is the extent of the foliage rather than the twig holding
+    it up.
+
+    On the old fixture, where a branch really was 12 cm across and its foliage blob 30 cm, the
+    two were within a factor of three and nothing noticed. On the fixture now the true radii run
+    8.8 mm to 15 cm and these come out 2.7 cm to 45 cm, and the consequence is measurable: the
+    median extracted node lands on the motion model's 30 Hz clamp instead of near 8 Hz, so the
+    crown rides quasi-statically, and 9 of 189 nodes flutter instead of 180.
+
+    Fixing it means estimating a woody radius from the cloud — plausibly the RMS spread of the
+    *densest core* of a cluster rather than of all its points, or a fitted cylinder through the
+    bark shell — and it is not done here because there is no real capture to validate it
+    against, and calibrating a new estimator on the one tree whose answer is known is how the
+    frequency scale came to be fitted to a fence post in the first place.
+    """
     offset = points[:, :2] - centre[:2]
     return float(np.sqrt(np.mean(np.einsum("ij,ij->i", offset, offset))))
 

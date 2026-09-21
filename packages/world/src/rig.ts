@@ -37,7 +37,25 @@ export interface SkeletonNode {
   readonly parent: number;
   /** Rest position in the rig's local ENU frame: `[east, north, up]` metres, +Z up. */
   readonly position: Vec3;
-  /** Approximate cross-sectional radius at this joint, metres. Descriptive; not used by `deform`. */
+  /**
+   * Approximate **woody** cross-sectional radius at this joint, metres.
+   *
+   * No longer merely descriptive. `modes.ts` reads it for natural frequency (`ω ∝ radius /
+   * length²`) and damping, and `flutter.ts` reads it to decide how hard a node's splats
+   * shimmer and whether they shimmer at all. A rig whose radii are wrong will have
+   * systematically wrong frequencies, and nothing downstream can tell.
+   *
+   * **`skeleton.py` does not currently measure this quantity.** Its `_rms_radius` is the
+   * horizontal RMS spread of a cluster's *points* about their centroid, which for a leaf
+   * cluster is the extent of the foliage and not the cross-section of the twig holding it up.
+   * On the fixture this replaced, where a branch really was 12 cm across and its foliage blob
+   * 30 cm, the two were within a factor of three and the difference did not show. On the
+   * fixture now, the true radii run 8.8 mm to 15 cm and the extracted ones 2.7 cm to 45 cm —
+   * and the consequence is visible: run the extractor on this tree and the median node comes
+   * out at the 30 Hz clamp instead of near 8 Hz, and 9 of 189 nodes flutter instead of 180.
+   * A real capture will be worse, not better. See docs/LIVING_SURVEY.md, "What would break on
+   * a rig that is not this one".
+   */
   readonly radius: number;
   /** Dimensionless resistance to bending, `> 0`. Higher bends less; bend angle scales as `1/stiffness`. */
   readonly stiffness: number;

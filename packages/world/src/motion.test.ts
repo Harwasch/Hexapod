@@ -205,10 +205,11 @@ describe("frequency content", () => {
 
   it("does not simply sit at one frequency: it has a spectrum", () => {
     // Two well-separated bands both carry real power, which is what distinguishes a tree from a
-    // metronome. The sway band dominates — 47 % of the tip's alternating power sits in
-    // 0.5–1.5 Hz, where the 1.33 Hz trunk rings — while 3.5–8 Hz carries 12 % as branch tremor
-    // riding on that swing. On the fixture this replaced, that upper band held 4.5 %, because
-    // its branches were 24 cm thick and rang at 7–10 Hz where there was no forcing at all.
+    // metronome. The sway band dominates — 65 % of the tip's alternating power sits in
+    // 0.5–1.5 Hz, where the 1.33 Hz trunk rings — while 3.5–8 Hz carries 11 % as branch tremor
+    // riding on that swing. That upper band is what the fixture's proportions bought: with
+    // branches 24 cm thick it had nothing there to excite, because they rang at 7–10 Hz where
+    // the forcing stopped at 6.
     expect(bandFraction(downwindTrack, 0.5, 1.5)).toBeGreaterThan(0.3);
     expect(bandFraction(downwindTrack, 3.5, 8)).toBeGreaterThan(0.06);
     // And the slow gust envelope, which is all the old model had, is now the minority partner.

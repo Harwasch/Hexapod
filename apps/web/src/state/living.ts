@@ -30,7 +30,7 @@ export { DEFAULT_WIND_STRENGTH };
  * A **reference** yardstick — a real drone capture's median — and not the median of whichever
  * tileset is on screen. Deriving that would mean decoding scales out of the packed splat buffer,
  * which nothing does today; the fixture's own median, measured over `data/tiles/synthetic-tree`,
- * is 10.7 cm, so `sortStaleness` overstates the fixture's staleness about fivefold.
+ * is 4.8 cm, so `sortStaleness` overstates the fixture's staleness about 2.4-fold.
  *
  * That makes the ratio engineering intuition, not a measurement of what is displayed. Anything
  * in the UI that prints it must print this yardstick beside it — the developer panel does, and
