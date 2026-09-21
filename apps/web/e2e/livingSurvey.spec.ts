@@ -108,9 +108,9 @@ test.describe("Living Survey: the synthetic tree deforms", () => {
     // over the un-baked positions — the gap S2 left open, closed against a real tiled capture.
     expect(ready.phase).toBe("ready");
     expect(ready.reason).toBeUndefined();
-    expect(ready.numSplats).toBe(2000);
+    expect(ready.numSplats).toBe(12000);
     expect(ready.captures).toBeGreaterThan(0);
-    expect(ready.observedChecksum).toBe("fnv1a32:2000:e272f8b5");
+    expect(ready.observedChecksum).toBe("fnv1a32:12000:8b008bc0");
     expect(ready.geodeticAlignment).toBeGreaterThan(1 - 1e-6);
     // Zero means our re-bake reproduces the engine's baked positions exactly, so wind → 0
     // restores the measured pose byte for byte rather than approximately.
@@ -137,8 +137,8 @@ test.describe("Living Survey: the synthetic tree deforms", () => {
     expect(blown.status.phase).toBe("ready");
     expect(blown.status.displaced).toBe(true);
     expect(blown.status.uploads).toBeGreaterThanOrEqual(6);
-    // One row of 8192 texels for a 2000-splat tree: 32,768 words, 128 KB per frame.
-    expect(blown.status.lastUploadRows).toBe(1);
+    // Three rows of 8192 texels for a 12,000-splat tree: 98,304 words, 384 KB per frame.
+    expect(blown.status.lastUploadRows).toBe(3);
     expect(blown.displacement).toBeGreaterThan(0.1);
 
     await page.screenshot({

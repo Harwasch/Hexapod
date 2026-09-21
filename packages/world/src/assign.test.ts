@@ -29,16 +29,28 @@ function shuffledOrder(count: number, seed: number): number[] {
   return order;
 }
 
-/** Splats hugging the trunk, from the base to the top of the bole. */
+/**
+ * Splats hugging the trunk, from the base to the top of the bole.
+ *
+ * The bole's extent is read off the rig rather than hard-coded: it is 70 % of the tree's height
+ * now that the crown is four generations deep, and a splat above it genuinely does belong to a
+ * branch. The radius likewise follows the rig's own taper, because the trunk is a 28 cm limb
+ * and not the 70 cm post the first fixture gave it.
+ */
+const TRUNK_TOP_M = Math.max(
+  ...rig.nodes.filter((n) => n.band === "trunk").map((n) => n.position[2]),
+);
+const TRUNK_BASE_RADIUS_M = rig.nodes[0]?.radius ?? 0.14;
+
 function trunkSplats(count: number): Float32Array {
   const out = new Float32Array(count * 3);
   for (let i = 0; i < count; i += 1) {
     const f = i / (count - 1);
     const angle = i * 2.399963;
-    const radius = 0.3 * (1 - 0.6 * f);
+    const radius = TRUNK_BASE_RADIUS_M * (1 - 0.6 * f);
     out[i * 3] = Math.cos(angle) * radius;
     out[i * 3 + 1] = Math.sin(angle) * radius;
-    out[i * 3 + 2] = f * 5.4;
+    out[i * 3 + 2] = f * TRUNK_TOP_M;
   }
   return out;
 }
@@ -131,21 +143,21 @@ describe("assignSplatsToNodes", () => {
   });
 
   it("breaks ties towards the lower node index, so ties are order-free too", () => {
-    const a = rig.nodes[6];
-    const b = rig.nodes[9];
-    expect(a).toBeDefined();
-    expect(b).toBeDefined();
-    if (!a || !b) return;
-    const midpoint = new Float32Array([
-      (a.position[0] + b.position[0]) / 2,
-      (a.position[1] + b.position[1]) / 2,
-      (a.position[2] + b.position[2]) / 2,
-    ]);
+    // Two nodes placed symmetrically about the origin, so the midpoint is *exactly* equidistant
+    // in float32 rather than nearly so. Taken off the fixture rig the tie was an accident of
+    // whichever two nodes happened to be picked, and it stopped being one when the rig changed.
+    const template = rig.nodes[0];
+    expect(template).toBeDefined();
+    if (!template) return;
     const twoNodes: MotionRig = {
       ...rig,
-      nodes: [rig.nodes[0] ?? a, a, b].map((n, i) => ({ ...n, parent: i === 0 ? -1 : 0 })),
+      nodes: [
+        { ...template, id: "root", parent: -1, position: [0, 0, -4] },
+        { ...template, id: "west", parent: 0, position: [-1, 0, 1] },
+        { ...template, id: "east", parent: 0, position: [1, 0, 1] },
+      ],
     };
-    expect(assignSplatsToNodes(midpoint, twoNodes)[0]).toBe(1);
+    expect(assignSplatsToNodes(new Float32Array([0, 0, 1]), twoNodes)[0]).toBe(1);
   });
 
   it("parks non-finite splats on the root, which never moves", () => {

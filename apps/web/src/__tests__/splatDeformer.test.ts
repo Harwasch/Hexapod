@@ -34,6 +34,7 @@ import {
   FakeSplatPrimitive,
   FakeSplatTexture,
   FakeSplatTileset,
+  FIXTURE_SPLATS,
   fixtureRig,
   multiplyMat4,
   packedBufferFor,
@@ -90,7 +91,7 @@ describe("attaching", () => {
     const status = deformer.apply(transformsAt(1));
     expect(status.phase).toBe("ready");
     expect(status.reason).toBeUndefined();
-    expect(status.numSplats).toBe(2000);
+    expect(status.numSplats).toBe(FIXTURE_SPLATS);
     expect(status.observedChecksum).toBe(fixtureRig.canonicalChecksum);
     expect(status.geodeticAlignment).toBeGreaterThan(1 - 1e-9);
     // The engine's own baked bytes, reproduced term for term by our transcription of
@@ -104,8 +105,8 @@ describe("attaching", () => {
   it("assigns every splat to a rig node", () => {
     const { deformer } = harness();
     deformer.apply(transformsAt(1));
-    expect(deformer.assignment?.length).toBe(2000);
-    expect(deformer.canonicalPositions?.length).toBe(6000);
+    expect(deformer.assignment?.length).toBe(FIXTURE_SPLATS);
+    expect(deformer.canonicalPositions?.length).toBe(FIXTURE_SPLATS * 3);
   });
 
   it("no-ops without a primitive, a snapshot, a texture or a capture", () => {
@@ -157,7 +158,7 @@ describe("addressing follows the primitive, not an assumed texture size", () => 
   it.each([12, 13])("rowShift %i", (rowShift) => {
     const { deformer, primitive } = harness({ rowShift });
     deformer.apply(transformsAt(1));
-    const layout = splatTextureLayout(2000, (1 << rowShift) - 1, rowShift);
+    const layout = splatTextureLayout(FIXTURE_SPLATS, (1 << rowShift) - 1, rowShift);
     const upload = primitive.texture.uploads[0];
     expect(upload?.width).toBe(layout.width);
     expect(upload?.yOffset).toBe(0);
@@ -172,7 +173,7 @@ describe("what reaches the GPU", () => {
     const transforms = transformsAt(3.25);
     deformer.apply(transforms);
 
-    const layout = splatTextureLayout(2000, 4095, 12);
+    const layout = splatTextureLayout(FIXTURE_SPLATS, 4095, 12);
     const expected = deformPositions(
       canonicalPositions,
       deformer.assignment ?? new Uint16Array(0),
@@ -186,7 +187,7 @@ describe("what reaches the GPU", () => {
     if (upload === undefined) return;
 
     let moved = 0;
-    for (let i = 0; i < 2000; i += 1) {
+    for (let i = 0; i < FIXTURE_SPLATS; i += 1) {
       const offset = positionWordOffset(i, layout);
       for (let c = 0; c < 3; c += 1) {
         const value = bitsToFloat32(upload.words[offset + c] ?? 0);
@@ -202,7 +203,7 @@ describe("what reaches the GPU", () => {
       expect(upload.words[offset + 3]).toBe(0xdeadbeef);
     }
     expect(moved).toBeGreaterThan(1000);
-    expect(expected.length).toBe(6000);
+    expect(expected.length).toBe(FIXTURE_SPLATS * 3);
   });
 
   it("uploads nothing at all while every node is at rest", () => {
@@ -221,9 +222,9 @@ describe("what reaches the GPU", () => {
     deformer.apply(deform(fixtureRig, 3, STILL));
     expect(deformer.status.displaced).toBe(false);
 
-    const layout = splatTextureLayout(2000, 4095, 12);
+    const layout = splatTextureLayout(FIXTURE_SPLATS, 4095, 12);
     const upload = primitive.texture.uploads.at(-1);
-    for (let i = 0; i < 2000 * 3; i += 1) {
+    for (let i = 0; i < FIXTURE_SPLATS * 3; i += 1) {
       const splat = Math.floor(i / 3);
       const word = positionWordOffset(splat, layout) + (i % 3);
       // Bit-identical, not close: "returns to exactly its measured pose" with no epsilon.
@@ -236,15 +237,20 @@ describe("what reaches the GPU", () => {
   });
 
   it("uploads one row band per frame while the wind blows", () => {
+    // The fixture is 12,000 splats and the fake reports rowShift 12, so it occupies three rows
+    // of 4,096 splats. The band is contiguous and starts at the top because every row holds
+    // moving splats — that is a property of this tree, not of the range arithmetic, which
+    // `splatTexels.test.ts` covers on its own.
     const { deformer, primitive } = harness();
+    const rows = Math.ceil(FIXTURE_SPLATS / 4096);
     for (let frame = 0; frame < 5; frame += 1) deformer.apply(transformsAt(frame / 60));
     expect(primitive.texture.copyFrom).toHaveBeenCalledTimes(5);
     for (const upload of primitive.texture.uploads) {
       expect(upload.yOffset).toBe(0);
       expect(upload.xOffset).toBe(0);
-      expect(upload.height).toBe(1);
+      expect(upload.height).toBe(rows);
     }
-    expect(deformer.status.lastUploadWords).toBe(8192 * 4);
+    expect(deformer.status.lastUploadWords).toBe(8192 * 4 * rows);
   });
 });
 
@@ -273,7 +279,7 @@ describe("snapshot rebuilds re-derive from the new base", () => {
     expect(status.bakeResidualM).toBe(0);
     // Re-derived, not re-applied: the rest pose is the *new* baked geometry.
     deformer.apply(deform(fixtureRig, 3, STILL));
-    const layout = splatTextureLayout(2000, 4095, 12);
+    const layout = splatTextureLayout(FIXTURE_SPLATS, 4095, 12);
     const upload = primitive.texture.uploads.at(-1);
     for (let i = 0; i < 30; i += 1) {
       const word = positionWordOffset(Math.floor(i / 3), layout) + (i % 3);
@@ -440,7 +446,7 @@ describe("the measured geometry is never written to", () => {
 
     // And after all that, zero wind still lands on the engine's exact bytes.
     deformer.apply(deform(fixtureRig, 1000, STILL));
-    const layout = splatTextureLayout(2000, 4095, 12);
+    const layout = splatTextureLayout(FIXTURE_SPLATS, 4095, 12);
     const upload = primitive.texture.uploads.at(-1);
     for (let i = 0; i < baked.length; i += 1) {
       const word = positionWordOffset(Math.floor(i / 3), layout) + (i % 3);

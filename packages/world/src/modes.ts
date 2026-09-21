@@ -33,20 +33,25 @@ function unitHash(value: number, seed: number): number {
 // The forcing: band-limited turbulence as a fixed sum of sinusoids.
 // ---------------------------------------------------------------------------------------------
 
-/** Sinusoids summed to make the turbulent forcing. Seven is enough to sound aperiodic. */
-export const TURBULENCE_MODE_COUNT = 7;
+/** Sinusoids summed to make the turbulent forcing. Nine is enough to sound aperiodic. */
+export const TURBULENCE_MODE_COUNT = 9;
 
 /**
  * The forcing band, hertz.
  *
  * The bottom is 0.4 Hz because below that the response is a lean rather than a sway, and that
  * part of the load is already carried by the steady term in `deform` — the slow gust envelope in
- * `wind.ts` modulates it. The top is 6 Hz because above it there is little energy a member as
- * large as a branch can feel, and because nothing in a tree-sized rig has a natural frequency
- * that high without being a twig that simply follows its parent.
+ * `wind.ts` modulates it.
+ *
+ * The top was 6 Hz, on the reasoning that nothing in a tree-sized rig rings faster without being
+ * a twig that simply follows its parent. That reasoning was about the *old fixture*, whose
+ * twigs were 8 cm across. A 0.5 m twig with a physical 9 mm radius rings near 20 Hz, and half
+ * the nodes of the current rig sit above 8 Hz, so a forcing that stopped at 6 Hz had nothing to
+ * offer the crown at all. 10 Hz is still short of a real twig's band; per-splat flutter covers
+ * the rest, at an amplitude a node-level term could not afford.
  */
 const FORCING_MIN_HZ = 0.4;
-const FORCING_MAX_HZ = 6;
+const FORCING_MAX_HZ = 10;
 
 /**
  * Amplitude falloff exponent: component `k`'s amplitude goes as `f_k^(-SPECTRAL_EXPONENT)`.
@@ -115,15 +120,33 @@ function buildTurbulenceModes(): readonly TurbulenceMode[] {
  * prismatic beam. So the scale is fitted to the observed band, and this comment is the
  * derivation: **the exponents are physics, the constant is calibration.** Nothing here is
  * traceable to a biomechanical measurement of any particular species.
+ *
+ * It was 220, and 220 was fitted against a fixture whose trunk was 70 cm across — a slenderness
+ * of 2, a fence post. `r / L²` for a post is several times what it is for a tree, so the
+ * constant that cancelled it was several times too small, and every *other* member of the rig
+ * inherited the error. With the fixture's proportions fixed, 450 is what puts a 6 m trunk at
+ * 1.33 Hz. The recalibration is a consequence of the fixture, not an independent tuning pass:
+ * the fixture was the confound.
  */
-const FREQ_SCALE_HZ = 220;
+const FREQ_SCALE_HZ = 450;
 
 /** Natural frequency is clamped into this band, so a degenerate rig cannot produce nonsense. */
 const MIN_NODE_HZ = 0.25;
-const MAX_NODE_HZ = 12;
+const MAX_NODE_HZ = 30;
 
 /** Shortest cantilever length used, metres. Keeps `radius / length²` finite for a stub node. */
 const MIN_LENGTH_M = 0.15;
+
+/**
+ * Longest segment a single joint may be credited with, metres.
+ *
+ * `segmentM` turns a joint into a curvature, so a rig that puts one joint at the bottom of a
+ * 20 m trunk and the next at the top would otherwise claim twenty times the bend of a rig that
+ * sampled it every metre. A cap is not a physical statement; it is a guard against a rig whose
+ * sampling is too coarse to describe the limb it is standing for, and `skeleton.py` on a real
+ * capture will produce some.
+ */
+const MAX_SEGMENT_M = 2;
 
 /** Damping ratio: thin members shed energy to the air far faster than a trunk does. */
 const ZETA_MIN = 0.05;
@@ -161,6 +184,19 @@ export interface NodeMode {
   readonly zeta: number;
   /** Cantilever length this node's frequency was derived from, metres. Diagnostic. */
   readonly lengthM: number;
+  /**
+   * Distance from this node to its parent, metres. The length of limb this joint stands for.
+   *
+   * `deform` multiplies its bend angle by this, which is what makes the model invariant to how
+   * finely a rig samples a limb: a joint is a *curvature* (radians per metre) rather than a
+   * bend, so two joints half a metre apart bend the same total amount as one joint a metre
+   * apart. Without it, subdividing the trunk from 8 nodes to 10 made the tree measurably
+   * floppier — the worst-case displacement bound rose 48 % for a tree of exactly the same
+   * shape. That matters far more for `skeleton.py` than for this fixture: an extracted rig has
+   * whatever node spacing the extractor happened to produce, uneven along a single limb, and
+   * under the old rule its stiffness would have been an artifact of its sampling.
+   */
+  readonly segmentM: number;
   /** Per-forcing-mode amplitude gain `A_k · H(ω_k)`. */
   readonly gains: readonly number[];
   /** Per-forcing-mode total phase: forcing phase, transfer lag and convection delay. */
@@ -240,11 +276,35 @@ export function nodeZeta(radiusM: number): number {
  * carries are measurable on any rig; "this is a branch" is an opinion.
  */
 export function nodeModes(rig: MotionRig): NodeMode[] {
+  const cached = MODE_CACHE.get(rig);
+  if (cached !== undefined) return cached;
+  const computed = computeNodeModes(rig);
+  MODE_CACHE.set(rig, computed);
+  return computed;
+}
+
+/**
+ * Memoised per rig object.
+ *
+ * `deform` is called once per frame and computes the modes it needs, and at 212 nodes × 9
+ * forcing components that is ~1,900 `atan2`/`sqrt` pairs and 212 allocations every 16 ms — for
+ * a value that cannot change, because a `MotionRig` is immutable by contract and every field
+ * `computeNodeModes` reads is `readonly`. A `WeakMap` keyed by the rig keeps the function pure
+ * (same input, same output, no observable state) while making the repeat call free, and lets
+ * the entry go when the rig does.
+ *
+ * It is keyed by object identity, not by content: two structurally equal rigs compute
+ * separately and agree, which is what the round-trip determinism test asserts.
+ */
+const MODE_CACHE = new WeakMap<MotionRig, NodeMode[]>();
+
+function computeNodeModes(rig: MotionRig): NodeMode[] {
   const reach = tipReaches(rig);
   return rig.nodes.map((node, index) => {
     const parent = node.parent >= 0 ? rig.nodes[node.parent] : undefined;
     const segment = parent === undefined ? 0 : distance(node.position, parent.position);
     const lengthM = Math.max(reach[index] ?? 0, segment, MIN_LENGTH_M);
+    const segmentM = Math.min(Math.max(segment, 0), MAX_SEGMENT_M);
     const omega = 2 * Math.PI * nodeNaturalHz(node.radius, lengthM);
     const zeta = nodeZeta(node.radius);
     const idHash = hashString(node.id);
@@ -264,6 +324,7 @@ export function nodeModes(rig: MotionRig): NodeMode[] {
       omega,
       zeta,
       lengthM,
+      segmentM,
       gains,
       phases,
       response,

@@ -150,8 +150,8 @@ describe("the frame assertion", () => {
     // correct capture — and the synthetic tree's crown makes its cloud almost isotropic. This
     // pins the reason the frame check is on the transform, not on the points.
     const up = treeUprightness(canonical);
-    expect(up.verticalExtentM).toBeGreaterThan(7);
-    expect(up.horizontalExtentM).toBeGreaterThan(7);
+    expect(up.verticalExtentM).toBeGreaterThan(6);
+    expect(up.horizontalExtentM).toBeGreaterThan(5);
   });
 });
 

@@ -257,86 +257,289 @@ export function positionsMatchChecksum(rig: MotionRig, positions: Float32Array):
 /** Golden angle, radians: spreads branch azimuths without any two lining up. */
 const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
 
+/**
+ * The fixture tree's proportions. Mirrors the constants of the same names in
+ * `tools/captures/synthetic_tree.py`, which generates the splats these nodes own.
+ *
+ * The numbers that matter are the radii, and they are not free. The first version of this
+ * fixture gave a 1.15 m branch a 12 cm radius — a slenderness (length ÷ diameter) of 4.8, where
+ * a real branch is 20–60 and a real twig 50–200. Every limb was 5–15× too thick. Since a
+ * cantilever's fundamental goes as `radius / length²`, those branches came out ~10× too stiff,
+ * landed above the forcing band, and rode rigid: the trunk did all of the visible work and the
+ * crown, where a tree's shimmer actually comes from, did none. The motion model was behaving
+ * correctly on a tree made of fence posts.
+ */
+/** The trunk ends at this fraction of the tree's height; the crown carries the rest. */
+const TRUNK_TOP_FRACTION = 0.7;
+/**
+ * Radius of a terminal twig node, metres. Every other radius follows from it by da Vinci's
+ * rule, so this one number sets the whole tree's thickness.
+ *
+ * One honest deviation, and it is a consequence of sampling rather than of taste: a real 6 m
+ * tree carries thousands of twigs, this rig carries ~100, and `r_trunk = r_twig·√tips` means
+ * the two ends cannot both be realistic at this node count. The tip radius is chosen so the
+ * *trunk* lands where a real trunk is — slenderness ~15, fundamental ~0.5 Hz — and the twigs
+ * come out near slenderness 40 rather than a real twig's 50–200. What the motion model reads is
+ * the frequency, and that lands in the right band at every level.
+ */
+const TWIG_RADIUS_M = 0.0088;
+/** Radius growth per segment towards a limb's base, on top of da Vinci's rule: limbs taper. */
+const TRUNK_TAPER = 1.03;
+const LIMB_TAPER = 1.06;
+/** Tree height the limb lengths below are quoted at, metres; they scale with `heightM`. */
+const HEIGHT_REFERENCE_M = 6;
+/** Primary branch length at the lowest whorl and at the highest, metres at that height. */
+const PRIMARY_LENGTH_M: readonly [number, number] = [1.6, 0.95];
+/** Primary branch elevation above horizontal at the lowest and highest whorl, radians. */
+const PRIMARY_ELEVATION_RAD: readonly [number, number] = [0.45, 0.82];
+const SECONDARY_LENGTH_FRACTION = 0.56;
+const TWIG_LENGTH_FRACTION = 0.85;
+/** Elevation each generation adds to its parent's. Small, and negative at the twigs: elevation
+ * accumulates down the chain, and generous gains put the tips past vertical. */
+const SECONDARY_ELEVATION_GAIN_RAD = 0.1;
+const TWIG_ELEVATION_GAIN_RAD = -0.05;
+/** Half-width of the fan a limb's children spread through, in azimuth and in elevation. */
+const CHILD_SPREAD_RAD = 1.15;
+const CHILD_ELEVATION_SPREAD_RAD = 0.4;
+/** Elevation a limb gains along its own length: limbs curve up rather than running straight. */
+const LIMB_CURL_RAD = 0.16;
+/** Stiffness runs between these, linearly in radius ÷ trunk-base radius. Invented. */
+const STIFFNESS_MIN = 1;
+const STIFFNESS_MAX = 8;
+/**
+ * Deterministic wobble on limb lengths and elevations, so no two limbs of a whorl are
+ * congruent.
+ *
+ * Without it the three primaries of a whorl have the same length and the same elevation, hence
+ * the same natural frequency, and differ only in a hashed phase — which is not enough to stop
+ * them moving as a unit (sibling correlation measured 0.88). Real trees do not carry congruent
+ * branches. The multipliers are irrational, so the sequence never repeats over any limb count,
+ * and it is an integer sequence rather than a random draw: the rig has no seed.
+ */
+const LIMB_LENGTH_JITTER = 0.22;
+const LIMB_ELEVATION_JITTER = 0.12;
+const LENGTH_PHASE = 0.618033988749895;
+const ELEVATION_PHASE = 0.7548776662466927;
+
+/** A deterministic value in `[-1, 1)` from an integer. */
+function wobble(index: number, phase: number): number {
+  return 2 * (((index + 1) * phase) % 1) - 1;
+}
+
+/** A node under construction: everything but the radius, which is computed from the tips inward. */
+interface DraftNode {
+  id: string;
+  parent: number;
+  position: Vec3;
+  band: SkeletonBand;
+}
+
+/**
+ * Positions of a chain of `segments` nodes walking out from `start`.
+ *
+ * The elevation rises by `curl` over the whole chain, so a limb arcs upward instead of being a
+ * straight spoke.
+ */
+function limbChain(
+  start: Vec3,
+  azimuth: number,
+  elevation: number,
+  length: number,
+  segments: number,
+  curl: number,
+): Vec3[] {
+  const out: Vec3[] = [];
+  let x = start[0];
+  let y = start[1];
+  let z = start[2];
+  const step = length / segments;
+  for (let j = 0; j < segments; j += 1) {
+    const el = elevation + (curl * (j + 1)) / segments;
+    const horizontal = Math.cos(el) * step;
+    x += horizontal * Math.cos(azimuth);
+    y += horizontal * Math.sin(azimuth);
+    z += Math.sin(el) * step;
+    out.push([x, y, z]);
+  }
+  return out;
+}
+
+/** Where child `index` of `count` sits in its parent's fan, in `[-1, 1]`. */
+function childFan(index: number, count: number): number {
+  return (2 * index + 1) / count - 1;
+}
+
+/**
+ * Radii from the tips inward: a node's cross-section is the sum of its children's.
+ *
+ * Da Vinci's rule, applied exactly, plus a per-segment taper so a chain of single-child nodes
+ * is not a constant-radius tube.
+ */
+function daVinciRadii(nodes: readonly DraftNode[]): number[] {
+  const children: number[][] = nodes.map(() => []);
+  nodes.forEach((node, index) => {
+    if (node.parent >= 0) children[node.parent]?.push(index);
+  });
+  const radii = new Array<number>(nodes.length).fill(0);
+  for (let index = nodes.length - 1; index >= 0; index -= 1) {
+    const kids = children[index] ?? [];
+    if (kids.length === 0) {
+      radii[index] = TWIG_RADIUS_M;
+      continue;
+    }
+    let area = 0;
+    for (const kid of kids) area += (radii[kid] ?? 0) ** 2;
+    radii[index] = Math.sqrt(area) * (nodes[index]?.band === "trunk" ? TRUNK_TAPER : LIMB_TAPER);
+  }
+  return radii;
+}
+
 export interface SyntheticTreeOptions {
-  /** Height of the trunk, metres. Default 6. */
+  /** Height of the tree, metres; the trunk itself reaches 70 % of it. Default 6. */
   readonly heightM?: number;
-  /** Trunk joints including the root. Default 6. */
+  /** Trunk joints including the root. Default 10. */
   readonly trunkSegments?: number;
-  /** Trunk joints that carry branches, counted from the top. Default 3. */
+  /** Trunk joints that carry branches, counted from the top. Default 4. */
   readonly whorls?: number;
-  /** Branches per whorl. Default 3. */
+  /** Primary branches per whorl. Default 3. */
   readonly branchesPerWhorl?: number;
+  /** Secondary limbs per primary. Default 3. */
+  readonly secondariesPerBranch?: number;
+  /** Twigs (leaf-band tips) per secondary. Default 3. */
+  readonly twigsPerSecondary?: number;
   readonly canonicalChecksum?: string;
 }
 
 /**
- * A deterministic synthetic tree rig: 33 nodes by default, root at the origin, trunk along +Z.
+ * A deterministic synthetic tree rig: 214 nodes by default, root at the origin, trunk along +Z.
  *
  * This is the fixture the runtime is developed against — the one input where the correct
  * grouping is known exactly. No randomness: the same options always give the same rig.
+ *
+ * Four generations — trunk, primary, secondary, twig — rather than the three of the 33-node
+ * version, because nine leaf clusters cannot rustle. 108 of them can, and each is an
+ * independent oscillator with its own natural frequency, bending plane and gust delay.
  */
 export function syntheticTreeRig(options: SyntheticTreeOptions = {}): MotionRig {
   const heightM = options.heightM ?? 6;
-  const trunkSegments = Math.max(2, Math.floor(options.trunkSegments ?? 6));
-  const whorls = Math.max(1, Math.floor(options.whorls ?? 3));
+  const trunkSegments = Math.max(2, Math.floor(options.trunkSegments ?? 10));
+  const whorls = Math.max(1, Math.floor(options.whorls ?? 4));
   const branchesPerWhorl = Math.max(1, Math.floor(options.branchesPerWhorl ?? 3));
-  const nodes: SkeletonNode[] = [];
-  const trunkIndices: number[] = [];
+  const secondariesPerBranch = Math.max(1, Math.floor(options.secondariesPerBranch ?? 3));
+  const twigsPerSecondary = Math.max(1, Math.floor(options.twigsPerSecondary ?? 3));
+  const trunkTopM = TRUNK_TOP_FRACTION * heightM;
 
+  const draft: DraftNode[] = [];
+  const trunkIndices: number[] = [];
   for (let i = 0; i < trunkSegments; i += 1) {
     const f = i / (trunkSegments - 1);
-    trunkIndices.push(nodes.length);
-    nodes.push({
+    trunkIndices.push(draft.length);
+    draft.push({
       id: `trunk-${i}`,
       parent: i === 0 ? -1 : (trunkIndices[i - 1] ?? -1),
-      position: [0, 0, f * heightM],
-      radius: 0.35 - 0.23 * f,
-      stiffness: 8 - 2 * f,
+      position: [0, 0, f * trunkTopM],
       band: "trunk",
     });
   }
 
-  let branchOrdinal = 0;
+  let ordinal = 0;
   for (let w = 0; w < whorls; w += 1) {
     const trunkIndex = trunkIndices[trunkSegments - 1 - w];
-    const anchor = trunkIndex === undefined ? undefined : nodes[trunkIndex];
+    const anchor = trunkIndex === undefined ? undefined : draft[trunkIndex];
     if (trunkIndex === undefined || anchor === undefined) continue;
+    // `w` counts down from the apex, so `f` is 0 at the top of the crown and 1 at its skirt:
+    // long, shallow branches at the bottom and short, steep ones at the top.
+    const f = whorls === 1 ? 1 : w / (whorls - 1);
+    const scale = heightM / HEIGHT_REFERENCE_M;
+    const whorlLen =
+      (PRIMARY_LENGTH_M[1] + (PRIMARY_LENGTH_M[0] - PRIMARY_LENGTH_M[1]) * f) * scale;
+    const whorlEl =
+      PRIMARY_ELEVATION_RAD[1] + (PRIMARY_ELEVATION_RAD[0] - PRIMARY_ELEVATION_RAD[1]) * f;
     for (let b = 0; b < branchesPerWhorl; b += 1) {
-      const azimuth = GOLDEN_ANGLE * branchOrdinal;
-      const east = Math.cos(azimuth);
-      const north = Math.sin(azimuth);
-      const base = anchor.position;
-      const primaryIndex = nodes.length;
-      nodes.push({
-        id: `branch-${branchOrdinal}-0`,
-        parent: trunkIndex,
-        position: [base[0] + east * 1.1, base[1] + north * 1.1, base[2] + 0.35],
-        radius: 0.12,
-        stiffness: 3.2,
-        band: "branch",
-      });
-      const secondaryIndex = nodes.length;
-      const primary = nodes[primaryIndex]?.position ?? base;
-      nodes.push({
-        id: `branch-${branchOrdinal}-1`,
-        parent: primaryIndex,
-        position: [primary[0] + east * 0.9, primary[1] + north * 0.9, primary[2] + 0.3],
-        radius: 0.07,
-        stiffness: 2,
-        band: "branch",
-      });
-      const secondary = nodes[secondaryIndex]?.position ?? primary;
-      nodes.push({
-        id: `leaf-${branchOrdinal}`,
-        parent: secondaryIndex,
-        position: [secondary[0] + east * 0.6, secondary[1] + north * 0.6, secondary[2] + 0.25],
-        radius: 0.04,
-        stiffness: 1,
-        band: "leaf",
-      });
-      branchOrdinal += 1;
+      const azimuth = GOLDEN_ANGLE * ordinal;
+      const primaryLen = whorlLen * (1 + LIMB_LENGTH_JITTER * wobble(ordinal, LENGTH_PHASE));
+      const primaryEl = whorlEl + LIMB_ELEVATION_JITTER * wobble(ordinal, ELEVATION_PHASE);
+      const first = draft.length;
+      limbChain(anchor.position, azimuth, primaryEl, primaryLen, 2, LIMB_CURL_RAD).forEach(
+        (position, j) => {
+          draft.push({
+            id: `branch-${ordinal}-${j}`,
+            parent: j === 0 ? trunkIndex : first + j - 1,
+            position,
+            band: "branch",
+          });
+        },
+      );
+      const primaryTip = first + 1;
+      const secondaryLen = primaryLen * SECONDARY_LENGTH_FRACTION;
+      const secondaryEl = primaryEl + LIMB_CURL_RAD + SECONDARY_ELEVATION_GAIN_RAD;
+      for (let s = 0; s < secondariesPerBranch; s += 1) {
+        const fan = childFan(s, secondariesPerBranch);
+        const wobbleIndex = ordinal * 7 + s;
+        const secondaryLenS =
+          secondaryLen * (1 + LIMB_LENGTH_JITTER * wobble(wobbleIndex, LENGTH_PHASE));
+        const secondaryAz = azimuth + CHILD_SPREAD_RAD * fan;
+        const secondaryElS =
+          secondaryEl +
+          CHILD_ELEVATION_SPREAD_RAD * fan +
+          LIMB_ELEVATION_JITTER * wobble(wobbleIndex, ELEVATION_PHASE);
+        const start = draft[primaryTip]?.position ?? anchor.position;
+        const base = draft.length;
+        limbChain(start, secondaryAz, secondaryElS, secondaryLenS, 2, LIMB_CURL_RAD).forEach(
+          (position, j) => {
+            draft.push({
+              id: `twig-${ordinal}-${s}-${j}`,
+              parent: j === 0 ? primaryTip : base + j - 1,
+              position,
+              band: "branch",
+            });
+          },
+        );
+        const secondaryTip = base + 1;
+        const twigLen = secondaryLenS * TWIG_LENGTH_FRACTION;
+        const twigEl = secondaryElS + LIMB_CURL_RAD + TWIG_ELEVATION_GAIN_RAD;
+        for (let k = 0; k < twigsPerSecondary; k += 1) {
+          const twigFan = childFan(k, twigsPerSecondary);
+          const twigIndex = ordinal * 13 + s * 3 + k;
+          const tip = limbChain(
+            draft[secondaryTip]?.position ?? start,
+            secondaryAz + CHILD_SPREAD_RAD * twigFan,
+            twigEl +
+              CHILD_ELEVATION_SPREAD_RAD * twigFan +
+              LIMB_ELEVATION_JITTER * wobble(twigIndex, ELEVATION_PHASE),
+            twigLen * (1 + LIMB_LENGTH_JITTER * wobble(twigIndex, LENGTH_PHASE)),
+            1,
+            LIMB_CURL_RAD,
+          )[0];
+          draft.push({
+            id: `leaf-${ordinal}-${s}-${k}`,
+            parent: secondaryTip,
+            position: tip ?? start,
+            band: "leaf",
+          });
+        }
+      }
+      ordinal += 1;
     }
   }
+
+  const radii = daVinciRadii(draft);
+  const rootRadius = radii[0] ?? TWIG_RADIUS_M;
+  // Linear in thickness between the twigs and the trunk base, so the thinnest node in the rig
+  // is exactly STIFFNESS_MIN whatever the tree's absolute scale.
+  const span = Math.max(rootRadius - TWIG_RADIUS_M, 1e-9);
+  const nodes: SkeletonNode[] = draft.map((node, index) => {
+    const radius = radii[index] ?? TWIG_RADIUS_M;
+    return {
+      id: node.id,
+      parent: node.parent,
+      position: node.position,
+      radius,
+      stiffness:
+        STIFFNESS_MIN + (STIFFNESS_MAX - STIFFNESS_MIN) * ((radius - TWIG_RADIUS_M) / span),
+      band: node.band,
+    };
+  });
 
   return assertValidRig({
     nodes,

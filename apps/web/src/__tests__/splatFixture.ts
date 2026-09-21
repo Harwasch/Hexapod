@@ -38,6 +38,15 @@ export const canonicalPositions = new Float32Array(
 
 export const fixtureRig: MotionRig = parseRig(readFileSync(fixturePath("source/rig.json"), "utf8"));
 
+/**
+ * How many splats the committed fixture holds, read off the fixture rather than written down.
+ *
+ * It has been 2,000 and is now 12,000, and the tests that care about row arithmetic care about
+ * the *number*, not about any particular value of it: at 4,096 splats to a row the tree spans
+ * three rows where it used to span one.
+ */
+export const FIXTURE_SPLATS = canonicalPositions.length / 3;
+
 const tilesetJson = JSON.parse(readFileSync(fixturePath("splat/tileset.json"), "utf8")) as {
   root: { transform: number[]; boundingVolume: { box: number[] } };
 };

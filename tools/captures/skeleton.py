@@ -37,7 +37,7 @@ Run it against the synthetic tree, where ground truth exists, to see what it is 
 Usage:
     python skeleton.py capture.ply out_dir --lat 28.04 --lon -82.70
         [--cylinder EAST NORTH RADIUS] [--box XMIN YMIN ZMIN XMAX YMAX ZMAX]
-        [--z-range LO HI] [--bands 24] [--link-factor 4.5] [--max-nodes 36]
+        [--z-range LO HI] [--bands 24] [--link-factor 4.5] [--max-nodes 200]
         [--labels labels.json --truth-rig rig.json]
 
 It writes ``<out_dir>/source/splat.ply`` (the isolated tree, positions pre-snapped to the SPZ
@@ -399,7 +399,7 @@ def extract_skeleton(
     link_factor: float = 4.5,
     link_radius: float | None = None,
     min_cluster_points: int = 8,
-    max_nodes: int = 36,
+    max_nodes: int = 200,
 ) -> list[dict]:
     """The skeleton as an ordered node list: position, radius, band, parent, member indices.
 
@@ -601,7 +601,7 @@ def extract(
     link_factor: float = 4.5,
     link_radius: float | None = None,
     min_cluster_points: int = 8,
-    max_nodes: int = 36,
+    max_nodes: int = 200,
     geometric_error: float = 0.5,
     source_note: str | None = None,
     tile: bool = True,
@@ -766,7 +766,7 @@ def main() -> None:
         "--link-radius", type=float, default=None, help="override --link-factor, in metres"
     )
     parser.add_argument("--min-cluster-points", type=int, default=8)
-    parser.add_argument("--max-nodes", type=int, default=36)
+    parser.add_argument("--max-nodes", type=int, default=200)
     parser.add_argument("--geometric-error", type=float, default=0.5)
     parser.add_argument("--source-note", type=str, default=None)
     parser.add_argument("--no-tile", action="store_true", help="skip splat_tiles.convert")

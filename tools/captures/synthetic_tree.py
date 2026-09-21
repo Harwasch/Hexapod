@@ -23,11 +23,11 @@ Output is byte-reproducible: the RNG is seeded, positions are snapped to the SPZ
 grid before anything is written, and ``splat_tiles.pack_spz`` already pins ``gzip mtime=0``.
 Two runs with the same arguments produce identical files.
 
-The rig mirrors ``syntheticTreeRig()`` in packages/world/src/rig.ts node for node, so the two
-sizes below share one 33-node skeleton and differ only in splat density.
+The rig mirrors ``syntheticTreeRig()`` in packages/world/src/rig.ts node for node, so any two
+sizes share one 212-node skeleton and differ only in splat density.
 
 Usage:
-    python synthetic_tree.py ../../data/tiles/synthetic-tree --splats 2000
+    python synthetic_tree.py ../../data/tiles/synthetic-tree --splats 12000
         [--seed 7] [--lat 28.0389] [--lon -82.6966] [--height 0] [--height-m 6]
 """
 
@@ -47,13 +47,40 @@ from splat_tiles import SH_C0, SPZ_FRACTIONAL_BITS
 # GOLDEN_ANGLE in packages/world/src/rig.ts.
 GOLDEN_ANGLE = math.pi * (3 - math.sqrt(5))
 
-#: Fraction of the splat budget spent on bark (trunk and branch cylinders); the rest is foliage.
-WOOD_FRACTION = 0.32
-#: Of the foliage budget, the share that goes to tip clusters rather than inner canopy.
-TIP_FRACTION = 0.72
+#: Fraction of the splat budget spent on bark (trunk and limb cylinders); the rest is foliage.
+WOOD_FRACTION = 0.34
+#: Of the foliage budget, the share that goes to tip tufts rather than inner canopy.
+TIP_FRACTION = 0.78
 
 BARK_RGB = (0.34, 0.235, 0.155)
 FOLIAGE_RGB = (0.185, 0.415, 0.145)
+
+#: Bark splats spiral along a limb rather than scattering: turns of the spiral over one segment,
+#: how far the azimuth is jittered off it, and how much the surface radius ripples with azimuth.
+BARK_TURNS = 2.5
+BARK_THETA_JITTER = 1.6
+BARK_RIPPLE = 0.12
+#: Angular width of a bark splat, as a multiple of the local radius. Above ~1 the spiral closes.
+BARK_GIRTH_SPAN = 1.25
+
+#: The leaf sleeve runs from this fraction of the twig's length to this one — starting clear of
+#: the fork, so the splats near the parent still belong to the parent, and running past the tip.
+FOLIAGE_START = 0.50
+FOLIAGE_END = 1.18
+#: Exponent on the along-twig coordinate. Below 1 the leaves crowd towards the tip.
+FOLIAGE_TAPER = 0.75
+#: A sleeve is squashed in Z, the way a sprig of foliage hangs.
+FOLIAGE_FLATTEN = 0.72
+#: Leaf-disc size as a fraction of the sleeve's girth. Small: the tuft must have visible grain.
+FOLIAGE_LEAF_MIN = 0.22
+FOLIAGE_LEAF_SPAN = 0.20
+#: Smallest share of the bark budget any one limb gets, as a multiple of an equal split. Pure
+#: surface-area weighting starves a 9 mm twig; a limb drawn with three splats is a dotted line.
+BARK_MIN_SHARE = 0.55
+
+#: Sleeve girth as a fraction of the limb's own length, at a twig and on the inner canopy.
+TIP_FOLIAGE_GIRTH = 0.26
+INNER_FOLIAGE_GIRTH = 0.24
 
 #: Splat positions are snapped to this grid so the PLY floats survive SPZ encoding unchanged.
 POSITION_QUANTUM = 1.0 / (1 << SPZ_FRACTIONAL_BITS)
@@ -79,26 +106,155 @@ PLY_PROPERTIES = (
 
 # --------------------------------------------------------------------------------------- rig
 
+#: The trunk ends at this fraction of the tree's overall height; the crown carries the rest.
+TRUNK_TOP_FRACTION = 0.7
+
+#: Radius of a terminal twig node, metres. Every other radius follows from it by da Vinci's
+#: rule, so this one number sets the whole tree's thickness. 8.8 mm over a ~0.7 m twig is a
+#: slenderness near 40; it also fixes the trunk at ~0.15 m radius, a slenderness near 14.
+TWIG_RADIUS_M = 0.0088
+
+#: Radius growth per segment walking *towards* a limb's base, on top of da Vinci's rule. A real
+#: limb tapers along its length and not only at its forks; without this a chain of single-child
+#: nodes would be a constant-radius tube.
+TRUNK_TAPER = 1.03
+LIMB_TAPER = 1.06
+
+#: Tree height the limb lengths below are quoted at, metres; they scale with ``height_m``.
+HEIGHT_REFERENCE_M = 6.0
+#: Length of a primary branch at the lowest whorl and at the highest, metres at that height.
+PRIMARY_LENGTH_M = (1.6, 0.95)
+#: Elevation of a primary branch above horizontal at the lowest and highest whorl, radians.
+PRIMARY_ELEVATION_RAD = (0.45, 0.82)
+#: A secondary is this fraction of its primary's length; a twig this fraction of its secondary's.
+SECONDARY_LENGTH_FRACTION = 0.56
+TWIG_LENGTH_FRACTION = 0.85
+#: Elevation each generation adds to its parent's, radians. Small, and negative at the twigs:
+#: elevation accumulates down the chain, and four generations of generous gains put the tips
+#: past vertical, where the three twigs of one fork end up 2 cm apart and nearest-node
+#: assignment can no longer tell them apart.
+SECONDARY_ELEVATION_GAIN_RAD = 0.10
+TWIG_ELEVATION_GAIN_RAD = -0.05
+#: Half-width of the fan a limb's children are spread through, in azimuth and in elevation.
+CHILD_SPREAD_RAD = 1.15
+CHILD_ELEVATION_SPREAD_RAD = 0.40
+#: Elevation a limb gains along its own length: limbs curve up rather than running straight.
+LIMB_CURL_RAD = 0.16
+
+#: Stiffness runs between these, linearly in radius/trunk-base-radius. Invented, like the old
+#: constants it replaces: "thicker bends less" is the only claim it makes.
+STIFFNESS_MIN = 1.0
+STIFFNESS_MAX = 8.0
+
+
+#: Deterministic wobble applied to limb lengths and elevations so no two limbs of a whorl are
+#: identical. Without it the three primaries of a whorl have the same length and the same
+#: elevation, hence the same natural frequency, and they differ only in a hashed phase — which
+#: is not enough to stop them moving as a unit. Real trees do not have congruent branches.
+#: The multipliers are irrational, so the sequence never repeats over any limb count.
+LIMB_LENGTH_JITTER = 0.22
+LIMB_ELEVATION_JITTER = 0.12
+LENGTH_PHASE = 0.618033988749895
+ELEVATION_PHASE = 0.7548776662466927
+
+
+def _wobble(index: int, phase: float) -> float:
+    """A deterministic value in ``[-1, 1)`` from an integer. No RNG: the rig has no seed."""
+    return 2.0 * (((index + 1) * phase) % 1.0) - 1.0
+
+
+def _limb_chain(
+    start: tuple[float, float, float],
+    azimuth: float,
+    elevation: float,
+    length: float,
+    segments: int,
+    curl: float,
+) -> list[tuple[float, float, float]]:
+    """Positions of a chain of ``segments`` nodes walking out from ``start``.
+
+    The elevation rises by ``curl`` over the whole chain, so a limb arcs upward instead of
+    being a straight spoke. Pure arithmetic in the same order as the TypeScript twin.
+    """
+    out: list[tuple[float, float, float]] = []
+    x, y, z = start
+    step = length / segments
+    for j in range(segments):
+        el = elevation + curl * (j + 1) / segments
+        horizontal = math.cos(el) * step
+        x += horizontal * math.cos(azimuth)
+        y += horizontal * math.sin(azimuth)
+        z += math.sin(el) * step
+        out.append((x, y, z))
+    return out
+
+
+def _child_fan(index: int, count: int) -> float:
+    """Where child ``index`` of ``count`` sits in its parent's fan, in ``[-1, 1]``."""
+    return (2 * index + 1) / count - 1
+
+
+def _da_vinci_radii(nodes: list[dict]) -> list[float]:
+    """Radii from the tips inward: a node's cross-section is the sum of its children's.
+
+    This is da Vinci's rule, applied exactly. It is what makes the fixture's proportions
+    physical rather than decorative: the old fixture gave a 1.15 m branch a 12 cm radius — a
+    slenderness of 4.8 where a real branch is 20–60 — so ``radius / length²`` correctly called
+    it stiff, put it at 7–10 Hz outside the forcing band, and the whole crown rode rigid while
+    the trunk did all the visible work.
+
+    One honest deviation, and it is a consequence of sampling: a real 6 m tree carries thousands
+    of twigs, this rig carries ~100, and `r_trunk = r_twig · √(tips)` means the two cannot both
+    be realistic at this node count. The tip radius is therefore chosen so the *trunk* lands
+    where a real trunk is (slenderness ~14, fundamental ~0.5 Hz) and the twigs come out around
+    slenderness 40 rather than the 50–200 of a real twig. Frequencies, which are what the motion
+    model reads, land in the right band at every level.
+    """
+    children: list[list[int]] = [[] for _ in nodes]
+    for index, node in enumerate(nodes):
+        if node["parent"] >= 0:
+            children[node["parent"]].append(index)
+    radii = [0.0] * len(nodes)
+    for index in range(len(nodes) - 1, -1, -1):
+        kids = children[index]
+        if not kids:
+            radii[index] = TWIG_RADIUS_M
+            continue
+        area = 0.0
+        for kid in kids:
+            area += radii[kid] ** 2
+        taper = TRUNK_TAPER if nodes[index]["band"] == "trunk" else LIMB_TAPER
+        radii[index] = math.sqrt(area) * taper
+    return radii
+
 
 def synthetic_tree_rig(
     height_m: float = 6.0,
-    trunk_segments: int = 6,
-    whorls: int = 3,
+    trunk_segments: int = 10,
+    whorls: int = 4,
     branches_per_whorl: int = 3,
+    secondaries_per_branch: int = 3,
+    twigs_per_secondary: int = 3,
     canonical_checksum: str = "fnv1a32:0:00000000",
 ) -> dict:
-    """The same 33-node skeleton ``syntheticTreeRig()`` builds in packages/world/src/rig.ts.
+    """The same 214-node skeleton ``syntheticTreeRig()`` builds in packages/world/src/rig.ts.
 
     Kept deliberately in lockstep with the TypeScript: a test in ``@twin/world`` parses the
     emitted rig.json and compares it node for node with its own generator, so a change to
     either side that is not mirrored fails CI rather than quietly producing two different trees.
+
+    Four generations — trunk, primary, secondary, twig — because nine leaf clusters cannot
+    rustle. 108 of them can.
     """
     trunk_segments = max(2, int(trunk_segments))
     whorls = max(1, int(whorls))
     branches_per_whorl = max(1, int(branches_per_whorl))
+    secondaries_per_branch = max(1, int(secondaries_per_branch))
+    twigs_per_secondary = max(1, int(twigs_per_secondary))
+    trunk_top_m = TRUNK_TOP_FRACTION * height_m
+
     nodes: list[dict] = []
     trunk_indices: list[int] = []
-
     for i in range(trunk_segments):
         f = i / (trunk_segments - 1)
         trunk_indices.append(len(nodes))
@@ -106,73 +262,125 @@ def synthetic_tree_rig(
             {
                 "id": f"trunk-{i}",
                 "parent": -1 if i == 0 else trunk_indices[i - 1],
-                "position": [0.0, 0.0, f * height_m],
-                "radius": 0.35 - 0.23 * f,
-                "stiffness": 8 - 2 * f,
+                "position": [0.0, 0.0, f * trunk_top_m],
                 "band": "trunk",
             }
         )
 
-    branch_ordinal = 0
+    ordinal = 0
     for w in range(whorls):
         trunk_index = trunk_indices[trunk_segments - 1 - w]
-        base = nodes[trunk_index]["position"]
+        base = tuple(nodes[trunk_index]["position"])
+        # w counts down from the apex, so f is 0 at the top of the crown and 1 at its skirt:
+        # long, shallow branches at the bottom and short, steep ones at the top.
+        f = 1.0 if whorls == 1 else w / (whorls - 1)
+        scale = height_m / HEIGHT_REFERENCE_M
+        whorl_len = (PRIMARY_LENGTH_M[1] + (PRIMARY_LENGTH_M[0] - PRIMARY_LENGTH_M[1]) * f) * scale
+        whorl_el = (
+            PRIMARY_ELEVATION_RAD[1] + (PRIMARY_ELEVATION_RAD[0] - PRIMARY_ELEVATION_RAD[1]) * f
+        )
         for _ in range(branches_per_whorl):
-            azimuth = GOLDEN_ANGLE * branch_ordinal
-            east = math.cos(azimuth)
-            north = math.sin(azimuth)
-            primary_index = len(nodes)
-            nodes.append(
-                {
-                    "id": f"branch-{branch_ordinal}-0",
-                    "parent": trunk_index,
-                    "position": [base[0] + east * 1.1, base[1] + north * 1.1, base[2] + 0.35],
-                    "radius": 0.12,
-                    "stiffness": 3.2,
-                    "band": "branch",
-                }
-            )
-            secondary_index = len(nodes)
-            primary = nodes[primary_index]["position"]
-            nodes.append(
-                {
-                    "id": f"branch-{branch_ordinal}-1",
-                    "parent": primary_index,
-                    "position": [
-                        primary[0] + east * 0.9,
-                        primary[1] + north * 0.9,
-                        primary[2] + 0.3,
-                    ],
-                    "radius": 0.07,
-                    "stiffness": 2,
-                    "band": "branch",
-                }
-            )
-            secondary = nodes[secondary_index]["position"]
-            nodes.append(
-                {
-                    "id": f"leaf-{branch_ordinal}",
-                    "parent": secondary_index,
-                    "position": [
-                        secondary[0] + east * 0.6,
-                        secondary[1] + north * 0.6,
-                        secondary[2] + 0.25,
-                    ],
-                    "radius": 0.04,
-                    "stiffness": 1,
-                    "band": "leaf",
-                }
-            )
-            branch_ordinal += 1
+            azimuth = GOLDEN_ANGLE * ordinal
+            primary_len = whorl_len * (1.0 + LIMB_LENGTH_JITTER * _wobble(ordinal, LENGTH_PHASE))
+            primary_el = whorl_el + LIMB_ELEVATION_JITTER * _wobble(ordinal, ELEVATION_PHASE)
+            first = len(nodes)
+            for j, point in enumerate(
+                _limb_chain(base, azimuth, primary_el, primary_len, 2, LIMB_CURL_RAD)
+            ):
+                nodes.append(
+                    {
+                        "id": f"branch-{ordinal}-{j}",
+                        "parent": trunk_index if j == 0 else first + j - 1,
+                        "position": list(point),
+                        "band": "branch",
+                    }
+                )
+            primary_tip = first + 1
+            secondary_len = primary_len * SECONDARY_LENGTH_FRACTION
+            secondary_el = primary_el + LIMB_CURL_RAD + SECONDARY_ELEVATION_GAIN_RAD
+            for s in range(secondaries_per_branch):
+                fan = _child_fan(s, secondaries_per_branch)
+                wobble_index = ordinal * 7 + s
+                secondary_len_s = secondary_len * (
+                    1.0 + LIMB_LENGTH_JITTER * _wobble(wobble_index, LENGTH_PHASE)
+                )
+                secondary_az = azimuth + CHILD_SPREAD_RAD * fan
+                secondary_el_s = (
+                    secondary_el
+                    + CHILD_ELEVATION_SPREAD_RAD * fan
+                    + LIMB_ELEVATION_JITTER * _wobble(wobble_index, ELEVATION_PHASE)
+                )
+                start = tuple(nodes[primary_tip]["position"])
+                base_index = len(nodes)
+                for j, point in enumerate(
+                    _limb_chain(
+                        start, secondary_az, secondary_el_s, secondary_len_s, 2, LIMB_CURL_RAD
+                    )
+                ):
+                    nodes.append(
+                        {
+                            "id": f"twig-{ordinal}-{s}-{j}",
+                            "parent": primary_tip if j == 0 else base_index + j - 1,
+                            "position": list(point),
+                            "band": "branch",
+                        }
+                    )
+                secondary_tip = base_index + 1
+                twig_len = secondary_len_s * TWIG_LENGTH_FRACTION
+                twig_el = secondary_el_s + LIMB_CURL_RAD + TWIG_ELEVATION_GAIN_RAD
+                for k in range(twigs_per_secondary):
+                    twig_fan = _child_fan(k, twigs_per_secondary)
+                    twig_index = ordinal * 13 + s * 3 + k
+                    point = _limb_chain(
+                        tuple(nodes[secondary_tip]["position"]),
+                        secondary_az + CHILD_SPREAD_RAD * twig_fan,
+                        twig_el
+                        + CHILD_ELEVATION_SPREAD_RAD * twig_fan
+                        + LIMB_ELEVATION_JITTER * _wobble(twig_index, ELEVATION_PHASE),
+                        twig_len * (1.0 + LIMB_LENGTH_JITTER * _wobble(twig_index, LENGTH_PHASE)),
+                        1,
+                        LIMB_CURL_RAD,
+                    )[0]
+                    nodes.append(
+                        {
+                            "id": f"leaf-{ordinal}-{s}-{k}",
+                            "parent": secondary_tip,
+                            "position": list(point),
+                            "band": "leaf",
+                        }
+                    )
+            ordinal += 1
 
+    radii = _da_vinci_radii(nodes)
+    root_radius = radii[0] if radii else TWIG_RADIUS_M
+    # Linear in thickness between the twigs and the trunk base, so the thinnest node in the rig
+    # is exactly STIFFNESS_MIN whatever the tree's absolute scale.
+    span = max(root_radius - TWIG_RADIUS_M, 1e-9)
+    for node, radius in zip(nodes, radii, strict=True):
+        node["radius"] = radius
+        node["stiffness"] = STIFFNESS_MIN + (STIFFNESS_MAX - STIFFNESS_MIN) * (
+            (radius - TWIG_RADIUS_M) / span
+        )
+
+    ordered = [
+        {
+            "id": node["id"],
+            "parent": node["parent"],
+            "position": node["position"],
+            "radius": node["radius"],
+            "stiffness": node["stiffness"],
+            "band": node["band"],
+        }
+        for node in nodes
+    ]
     return {
         # Key order matches serializeRig() in packages/world/src/rig.ts.
         "units": "meters",
         "canonicalChecksum": canonical_checksum,
         "sourceNote": (
-            f"synthetic tree, {height_m} m, {len(nodes)} nodes (tools/captures/synthetic_tree.py)"
+            f"synthetic tree, {height_m} m, {len(ordered)} nodes (tools/captures/synthetic_tree.py)"
         ),
-        "nodes": nodes,
+        "nodes": ordered,
     }
 
 
@@ -327,19 +535,25 @@ def _bark_splats(
 
     Ground truth is the nearer endpoint, which is also what nearest-node assignment recovers
     for a splat on the axis — the radial offset is what makes the two disagree at all.
+
+    The splats are stratified along the limb rather than scattered uniformly, so a 9 mm twig
+    reads as a continuous stick at ten splats instead of a dotted line, and the surface radius
+    carries a low-order azimuthal ripple so a limb is not a machined tube.
     """
     if count <= 0:
         return
     axis, tangent, normal = _orthonormal_frame(p1 - p0)
     length = float(np.linalg.norm(p1 - p0))
-    t = rng.random(count)
-    radius = (r0 + (r1 - r0) * t) * (0.82 + 0.18 * rng.random(count))
-    theta = rng.random(count) * (2.0 * math.pi)
+    # Stratified: one splat per equal slice of the limb, jittered inside its own slice.
+    t = (np.arange(count) + rng.random(count)) / count
+    theta = t * (2.0 * math.pi * BARK_TURNS) + rng.random(count) * BARK_THETA_JITTER
+    ripple = 1.0 + BARK_RIPPLE * np.cos(theta * 3.0 + t * 7.0)
+    radius = (r0 + (r1 - r0) * t) * ripple * (0.9 + 0.2 * rng.random(count))
     centre = p0[None, :] + np.outer(t, p1 - p0)
     offset = np.outer(radius * np.cos(theta), tangent) + np.outer(radius * np.sin(theta), normal)
     position = centre + offset
 
-    # Bark splats lie flat on the trunk: long along the axis, thin along the surface normal.
+    # Bark splats lie flat on the limb: long along the axis, thin along the surface normal.
     surface = offset / np.maximum(np.linalg.norm(offset, axis=1, keepdims=True), 1e-9)
     along = np.broadcast_to(axis, (count, 3))
     across = np.cross(surface, along)
@@ -347,17 +561,24 @@ def _bark_splats(
     for i in range(count):
         quats[i] = _matrix_to_quat_wxyz((along[i], _unit(across[i]), surface[i]))
 
-    span = max(length / max(count / 6.0, 1.0), 0.02)
+    # Long enough along the limb to close the gaps between consecutive slices, and wide enough
+    # around it to close the gaps between turns of the spiral.
+    span = length / count
+    girth = np.maximum(radius, 0.004)
     scale = np.stack(
         [
-            np.full(count, span * 1.6),
-            np.maximum(radius, 0.01) * 0.55,
-            np.full(count, 0.010),
+            np.full(count, max(span * 1.15, 0.012)),
+            girth * BARK_GIRTH_SPAN,
+            girth * 0.35,
         ],
         axis=1,
-    ) * (0.8 + 0.4 * rng.random((count, 3)))
+    ) * (0.85 + 0.3 * rng.random((count, 3)))
 
-    shade = 0.78 + 0.44 * rng.random((count, 1))
+    # Darker in the crevices the ripple makes, lighter on the ridges: enough shading for the
+    # eye to read a round limb rather than a flat stripe.
+    shade = (0.72 + 0.42 * rng.random((count, 1))) * (
+        1.0 + 0.22 * np.cos(theta * 3.0 + t * 7.0)[:, None]
+    )
     rgb = np.clip(np.asarray(BARK_RGB)[None, :] * shade, 0.0, 1.0)
 
     node = np.where(t < 0.5, node0, node1).astype(np.int32)
@@ -367,33 +588,61 @@ def _bark_splats(
 def _foliage_splats(
     rng: np.random.Generator,
     out: _Splats,
-    centre: np.ndarray,
-    direction: np.ndarray,
-    extent: float,
+    anchor: np.ndarray,
+    tip: np.ndarray,
+    spread: float,
     count: int,
     node: int,
     height_m: float,
 ) -> None:
-    """One roughly ellipsoidal leaf cluster, flattened in Z the way real canopies are."""
+    """Leaves along one twig: a tapered sleeve about the twig's own axis, not a ball at its end.
+
+    The old fixture spent its whole foliage budget on eighteen large ellipsoids of randomly
+    oriented splats centred past the tip of a limb, which is why it read as green fog attached
+    to a post, and why — once the rig was dense enough for tufts to touch — nearest-node
+    assignment could no longer tell one tuft from its neighbour.
+
+    A sleeve fixes both. Leaves grow *along* a twig, so the splats are distributed over the
+    twig's length with a bulge past its tip, which is where they are genuinely nearest to their
+    own node; and each splat is a flat disc whose normal points out of the sleeve, so the
+    silhouette has leaf-sized grain instead of being a smooth gaussian gradient.
+    """
     if count <= 0:
         return
-    sigma = np.array([extent, extent, extent * 0.72])
-    offset = np.clip(rng.standard_normal((count, 3)), -2.1, 2.1) * sigma
-    position = centre[None, :] + offset + direction[None, :] * (extent * 0.28)
+    axis, tangent, normal = _orthonormal_frame(tip - anchor)
+    length = float(np.linalg.norm(tip - anchor))
+    # Along the twig, weighted towards the tip, running a little past it.
+    t = FOLIAGE_START + (FOLIAGE_END - FOLIAGE_START) * np.power(rng.random(count), FOLIAGE_TAPER)
+    # Girth swells to the tip and falls away past it, so the sleeve ends in a tuft.
+    girth = spread * np.sin(
+        np.clip((t - FOLIAGE_START) / (FOLIAGE_END - FOLIAGE_START), 0, 1) * math.pi * 0.9 + 0.25
+    )
+    theta = rng.random(count) * (2.0 * math.pi)
+    radial = girth * np.sqrt(rng.random(count))
+    offset = np.outer(radial * np.cos(theta), tangent) + np.outer(radial * np.sin(theta), normal)
+    offset[:, 2] *= FOLIAGE_FLATTEN
+    position = anchor[None, :] + np.outer(t * length, axis) + offset
 
     # Sunlit at the top of the canopy, darker underneath — enough to read as a tree.
-    lit = 0.72 + 0.5 * np.clip(position[:, 2:3] / max(height_m, 1e-6), 0.0, 1.4)
-    tint = 0.85 + 0.3 * rng.random((count, 3))
+    lit = 0.66 + 0.56 * np.clip(position[:, 2:3] / max(height_m, 1e-6), 0.0, 1.4)
+    # Hue wander as well as brightness: a canopy is not one colour with a gain on it.
+    tint = 0.84 + 0.32 * rng.random((count, 3))
     rgb = np.clip(np.asarray(FOLIAGE_RGB)[None, :] * lit * tint, 0.0, 1.0)
 
-    leaf = extent * (0.16 + 0.12 * rng.random((count, 1)))
-    scale = leaf * np.array([1.0, 0.85, 0.42])[None, :] * (0.75 + 0.5 * rng.random((count, 3)))
+    # Flat discs facing out of the sleeve: two broad axes spanning it, one thin along the normal.
+    facing = offset / np.maximum(np.linalg.norm(offset, axis=1, keepdims=True), 1e-9)
+    leaf = spread * (FOLIAGE_LEAF_MIN + FOLIAGE_LEAF_SPAN * rng.random((count, 1)))
+    quats = np.empty((count, 4))
+    for i in range(count):
+        e0, e1, e2 = _orthonormal_frame(facing[i])
+        quats[i] = _matrix_to_quat_wxyz((e1, e2, e0))
+    scale = leaf * np.array([1.0, 0.7, 0.16])[None, :] * (0.7 + 0.6 * rng.random((count, 3)))
     out.add(
         position,
         rgb,
         1.4 + 0.8 * rng.random(count),
         np.log(np.maximum(scale, 1e-4)),
-        _random_quats_wxyz(rng, count),
+        quats,
         np.full(count, node, dtype=np.int32),
     )
 
@@ -422,21 +671,29 @@ def generate_splats(rig: dict, splats: int, seed: int, height_m: float) -> dict[
         (node["parent"], i) for i, node in enumerate(nodes) if node["parent"] >= 0 and i > 0
     ]
     leaves = [i for i, band in enumerate(bands) if band == "leaf"]
-    inner = [i for i, node in enumerate(nodes) if node["band"] == "branch" and node["parent"] > 0]
+    # Inner canopy hangs where the leaf-bearing limbs fork, which is a topological fact about
+    # any rig rather than a property of this generator's naming. A rig from skeleton.py, whose
+    # bands are inferred and whose ids mean nothing, picks out the same nodes.
+    has_leaf_child = {node["parent"] for i, node in enumerate(nodes) if bands[i] == "leaf"}
+    inner = [i for i in sorted(has_leaf_child) if i >= 0 and bands[i] != "leaf"]
 
     wood_total = round(splats * WOOD_FRACTION)
     foliage_total = splats - wood_total
     tip_total = round(foliage_total * TIP_FRACTION)
     inner_total = foliage_total - tip_total
 
-    # Bark budget follows surface area, so the trunk is not out-sampled by nine thin twigs.
+    # Bark budget follows surface area with a floor under it: area alone would spend almost
+    # everything on the trunk now that a twig is 9 mm rather than 8 cm across, and a limb drawn
+    # with three splats is a dotted line. The floor is the price of a slender tree.
     areas = np.asarray(
         [
             float(np.linalg.norm(positions[c] - positions[p])) * (radii[p] + radii[c])
             for p, c in wood_edges
         ]
     )
-    wood_counts = _allocate(areas, wood_total)
+    weights = areas / max(float(areas.sum()), 1e-12)
+    weights = np.maximum(weights, BARK_MIN_SHARE / max(len(wood_edges), 1))
+    wood_counts = _allocate(weights, wood_total)
     tip_counts = _allocate(np.ones(len(leaves)), tip_total)
     inner_counts = _allocate(np.ones(len(inner)), inner_total)
 
@@ -455,24 +712,26 @@ def generate_splats(rig: dict, splats: int, seed: int, height_m: float) -> dict[
         )
     for leaf, count in zip(leaves, tip_counts, strict=True):
         parent = nodes[leaf]["parent"]
+        segment = float(np.linalg.norm(positions[leaf] - positions[parent]))
         _foliage_splats(
             rng,
             out,
+            positions[parent],
             positions[leaf],
-            _unit(positions[leaf] - positions[parent]),
-            0.44,
+            segment * TIP_FOLIAGE_GIRTH,
             int(count),
             leaf,
             height_m,
         )
     for branch, count in zip(inner, inner_counts, strict=True):
         parent = nodes[branch]["parent"]
+        segment = float(np.linalg.norm(positions[branch] - positions[parent]))
         _foliage_splats(
             rng,
             out,
+            positions[parent],
             positions[branch],
-            _unit(positions[branch] - positions[parent]),
-            0.3,
+            segment * INNER_FOLIAGE_GIRTH,
             int(count),
             branch,
             height_m,
@@ -600,7 +859,7 @@ def generate(
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("out_dir", type=Path)
-    parser.add_argument("--splats", type=int, default=2000)
+    parser.add_argument("--splats", type=int, default=12000)
     parser.add_argument("--seed", type=int, default=7)
     # Somewhere in the Sheffield Park capture, so the tree can be flown to beside real data.
     parser.add_argument("--lat", type=float, default=28.0389)

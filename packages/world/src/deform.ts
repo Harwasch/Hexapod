@@ -62,8 +62,13 @@ export const BEND_GAIN = 0.31;
  * Deliberately the smaller of the two. A steady lean is the part of wind loading a person reads
  * as "bent", not as "moving"; it is kept because a tree in a breeze genuinely does sit off its
  * rest pose, and dropped to a minority because the eye has to be given something to watch.
+ *
+ * It fell from 0.4 to 0.3 when the fixture gained a real crown. The lean is proportional to the
+ * wind magnitude, whose envelope turns over in five to fifteen seconds, so every unit of it
+ * lands below 0.4 Hz; with 0.4 the tip's slow band came back up to 50 % of its alternating
+ * power — half the motion was drift again. At 0.3 it is 38 %.
  */
-export const MEAN_LOAD = 0.4;
+export const MEAN_LOAD = 0.3;
 
 /** Share carried by the turbulent, oscillating load. The two shares sum to 1 by construction. */
 export const TURBULENT_LOAD = 1 - MEAN_LOAD;
@@ -85,14 +90,21 @@ function angleBudget(node: SkeletonNode): { mean: number; oscillation: number } 
   return { mean: limit * MEAN_SHARE, oscillation: limit * (1 - MEAN_SHARE) };
 }
 
-/** Unlimited steady lean, radians: the quasi-static part of the load. */
-function rawLean(node: SkeletonNode, windMagnitude: number): number {
-  return (BEND_GAIN * MEAN_LOAD * windMagnitude) / node.stiffness;
+/**
+ * Unlimited steady lean, radians: the quasi-static part of the load.
+ *
+ * The bend is a **curvature times a length**, not a bend: `mode.segmentM` is how much limb this
+ * joint stands for. That is what makes the model invariant to how finely a rig samples a limb —
+ * see `NodeMode.segmentM` — and it is the difference between a stiffness that describes the
+ * tree and one that describes the extractor's node spacing.
+ */
+function rawLean(node: SkeletonNode, mode: NodeMode, windMagnitude: number): number {
+  return (BEND_GAIN * MEAN_LOAD * windMagnitude * mode.segmentM) / node.stiffness;
 }
 
 /** Unlimited oscillation, radians, at the given dimensionless turbulent load. */
-function rawSway(node: SkeletonNode, windMagnitude: number, load: number): number {
-  return (BEND_GAIN * TURBULENT_LOAD * windMagnitude * load) / node.stiffness;
+function rawSway(node: SkeletonNode, mode: NodeMode, windMagnitude: number, load: number): number {
+  return (BEND_GAIN * TURBULENT_LOAD * windMagnitude * load * mode.segmentM) / node.stiffness;
 }
 
 /**
@@ -107,8 +119,8 @@ export function maxNodeAngle(node: SkeletonNode, mode: NodeMode, settings: WindS
   const windMagnitude = maxWindMagnitude(settings.strength);
   const budget = angleBudget(node);
   return (
-    softLimit(rawLean(node, windMagnitude), budget.mean) +
-    softLimit(rawSway(node, windMagnitude, mode.response), budget.oscillation)
+    softLimit(rawLean(node, mode, windMagnitude), budget.mean) +
+    softLimit(rawSway(node, mode, windMagnitude, mode.response), budget.oscillation)
   );
 }
 
@@ -129,9 +141,12 @@ export function maxNodeAngleRate(
 ): number {
   const slope = maxWindSlope(settings.strength);
   const magnitudeBound = maxWindMagnitude(settings.strength);
-  const leanRate = (BEND_GAIN * MEAN_LOAD * slope) / node.stiffness;
+  const leanRate = (BEND_GAIN * MEAN_LOAD * slope * mode.segmentM) / node.stiffness;
   const swayRate =
-    (BEND_GAIN * TURBULENT_LOAD * (slope * mode.response + magnitudeBound * mode.responseRate)) /
+    (BEND_GAIN *
+      TURBULENT_LOAD *
+      mode.segmentM *
+      (slope * mode.response + magnitudeBound * mode.responseRate)) /
     node.stiffness;
   return leanRate + swayRate;
 }
@@ -196,9 +211,9 @@ export function deform(rig: MotionRig, t: number, settings: WindSettings): NodeT
     }
     const parent = transforms[node.parent] ?? IDENTITY_TRANSFORM;
     const budget = angleBudget(node);
-    const lean = softLimit(rawLean(node, windMagnitude), budget.mean);
+    const lean = softLimit(rawLean(node, mode, windMagnitude), budget.mean);
     const sway = softLimit(
-      rawSway(node, windMagnitude, turbulentLoad(mode, time)),
+      rawSway(node, mode, windMagnitude, turbulentLoad(mode, time)),
       budget.oscillation,
     );
     // Two rotations, not one: the lean is downwind for every node, the sway is in the node's own

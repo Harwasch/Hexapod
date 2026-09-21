@@ -82,7 +82,7 @@ describe("checksumPositions agrees with tools/captures/synthetic_tree.py", () =>
     expect(negativeZero?.checksum).not.toBe(zero?.checksum);
   });
 
-  it("matches Python on the fixture's own 2000 positions", () => {
+  it("matches Python on the fixture's own 12,000 positions", () => {
     expect(checksumPositions(positions)).toBe(rig.canonicalChecksum);
     expect(positionsMatchChecksum(rig, positions)).toBe(true);
   });
@@ -98,7 +98,7 @@ describe("the fixture rig", () => {
   it("parses and validates against the schema this package defines", () => {
     expect(validateRig(rig)).toEqual([]);
     expect(rig.units).toBe("meters");
-    expect(rig.canonicalChecksum).toMatch(/^fnv1a32:2000:[0-9a-f]{8}$/);
+    expect(rig.canonicalChecksum).toMatch(/^fnv1a32:12000:[0-9a-f]{8}$/);
   });
 
   it("is the same skeleton syntheticTreeRig() builds", () => {

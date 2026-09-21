@@ -19,11 +19,67 @@ import {
 const rig = syntheticTreeRig();
 
 describe("syntheticTreeRig", () => {
-  it("is a skeleton of a few dozen nodes, not an index list", () => {
-    expect(rig.nodes.length).toBe(33);
-    expect(rig.nodes.length).toBeGreaterThanOrEqual(20);
-    expect(rig.nodes.length).toBeLessThanOrEqual(60);
+  it("is a skeleton of a couple of hundred nodes, not an index list", () => {
+    expect(rig.nodes.length).toBe(214);
+    // Still a skeleton and not one node per splat: 214 nodes against 12,000 splats. The count
+    // went up from 33 because nine leaf clusters cannot rustle — there are 108 now.
+    expect(rig.nodes.length).toBeGreaterThanOrEqual(150);
+    expect(rig.nodes.length).toBeLessThanOrEqual(300);
+    expect(rig.nodes.filter((n) => n.band === "leaf").length).toBe(108);
     expect(validateRig(rig)).toEqual([]);
+  });
+
+  it("gives every limb a physically plausible slenderness", () => {
+    // Length ÷ diameter, the number the first fixture got wrong by 5–15×: it gave a 1.15 m
+    // branch a 12 cm radius, so `radius / length²` correctly called it stiff, put it outside
+    // the forcing band, and left the crown riding rigid while the trunk did all the work.
+    const slenderness = (index: number): number => {
+      const node = rig.nodes[index];
+      const parent = node === undefined ? undefined : rig.nodes[node.parent];
+      if (node === undefined || parent === undefined) return Number.NaN;
+      const dz = node.position[2] - parent.position[2];
+      const dx = node.position[0] - parent.position[0];
+      const dy = node.position[1] - parent.position[1];
+      return Math.hypot(dx, dy, dz) / (2 * node.radius);
+    };
+    const worst = new Map<string, number>();
+    rig.nodes.forEach((node, i) => {
+      if (node.parent < 0) return;
+      worst.set(node.band, Math.min(worst.get(node.band) ?? Infinity, slenderness(i)));
+    });
+    // Per segment rather than per limb, so these are lower than the whole-limb figures quoted
+    // in the docs (trunk 15, branch 24, twig 41). The point is the floor, not the exact value:
+    // the fixture this replaced scored 2.0, 4.8 and 8.1 on the same measure.
+    expect(worst.get("trunk") ?? 0).toBeGreaterThan(1.5);
+    expect(worst.get("branch") ?? 0).toBeGreaterThan(5);
+    expect(worst.get("leaf") ?? 0).toBeGreaterThan(15);
+  });
+
+  it("obeys da Vinci's rule: a node's cross-section is the sum of its children's", () => {
+    // Exactly, up to the per-segment taper. This is what ties the twig radius to the trunk
+    // radius, and it is why the two cannot both be realistic at 214 nodes — a real tree carries
+    // thousands of twigs, not a hundred. See TWIG_RADIUS_M.
+    const childArea = new Array<number>(rig.nodes.length).fill(0);
+    rig.nodes.forEach((node) => {
+      if (node.parent >= 0)
+        childArea[node.parent] = (childArea[node.parent] ?? 0) + node.radius ** 2;
+    });
+    let checked = 0;
+    rig.nodes.forEach((node, i) => {
+      const area = childArea[i] ?? 0;
+      if (area === 0) return;
+      const ratio = node.radius / Math.sqrt(area);
+      // The taper constants are 1.03 (trunk) and 1.06 (limb).
+      expect(ratio).toBeGreaterThan(1.02);
+      expect(ratio).toBeLessThan(1.07);
+      checked += 1;
+    });
+    expect(checked).toBeGreaterThan(100);
+    // And the trunk really is thicker than a twig by the square root of the tips it carries.
+    const tips = rig.nodes.filter((n) => n.band === "leaf").length;
+    expect((rig.nodes[0]?.radius ?? 0) / (rig.nodes.at(-1)?.radius ?? 1)).toBeGreaterThan(
+      Math.sqrt(tips) * 0.8,
+    );
   });
 
   it("is deterministic: the same options give an identical rig", () => {
@@ -59,8 +115,11 @@ describe("syntheticTreeRig", () => {
       trunkSegments: 8,
       whorls: 2,
       branchesPerWhorl: 4,
+      secondariesPerBranch: 2,
+      twigsPerSecondary: 2,
     });
-    expect(tall.nodes.length).toBe(8 + 2 * 4 * 3);
+    // trunk + primaries(2 nodes) + secondaries(2 nodes each) + twigs, per primary limb.
+    expect(tall.nodes.length).toBe(8 + 2 * 4 * (2 + 2 * (2 + 2)));
     expect(Math.max(...tall.nodes.map((n) => n.position[2]))).toBeGreaterThan(12);
   });
 });
@@ -168,7 +227,8 @@ describe("tree walking", () => {
 
   it("measures height above the trunk base", () => {
     expect(heightAboveRoot(rig, 0)).toBe(0);
-    expect(heightAboveRoot(rig, 5)).toBeCloseTo(6, 10);
+    // Node 9 is the top of the bole, at 70 % of the tree's 6 m; the crown carries the rest.
+    expect(heightAboveRoot(rig, 9)).toBeCloseTo(4.2, 10);
   });
 });
 

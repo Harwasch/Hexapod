@@ -30,6 +30,7 @@ import {
   FakeSplatPrimitive,
   FakeSplatTileset,
   fixtureRig,
+  FIXTURE_SPLATS,
   packedBufferFor,
 } from "./splatFixture";
 
@@ -171,7 +172,7 @@ describe("attaching", () => {
     const status = harness.manager.status;
     expect(status.sites).toHaveLength(1);
     expect(status.sites[0]?.phase).toBe("ready");
-    expect(status.sites[0]?.numSplats).toBe(2000);
+    expect(status.sites[0]?.numSplats).toBe(FIXTURE_SPLATS);
     expect(status.sites[0]?.rigSourceNote).toBe(fixtureRig.sourceNote);
     harness.manager.destroy();
   });
@@ -292,7 +293,7 @@ describe("consecutive frames are different frames", () => {
     // frame at the default wind moves the tip about 1.6 mm, which is many float32 ulps
     // everywhere the tree is not pinned to the ground.
     const positionWords = 3 * (harness.manager.status.sites[0]?.numSplats ?? 0);
-    expect(positionWords).toBe(6000);
+    expect(positionWords).toBe(FIXTURE_SPLATS * 3);
     expect(differing).toBeGreaterThan(0.8 * positionWords);
     expect(differing).toBeLessThanOrEqual(positionWords);
     harness.manager.destroy();

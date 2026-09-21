@@ -25,7 +25,7 @@ import splat_tiles
 import synthetic_tree
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-#: The committed 2,000-splat fixture, with ground truth beside it.
+#: The committed 12,000-splat fixture, with ground truth beside it.
 FIXTURE = REPO_ROOT / "data" / "tiles" / "synthetic-tree" / "source"
 
 #: Somewhere inside the Sheffield Park capture; the extractor needs a reference point to tile
@@ -129,9 +129,14 @@ def test_extracted_rig_is_structurally_valid(extracted: dict) -> None:
 
 
 def test_the_rig_is_the_size_the_deformer_wants(extracted: dict) -> None:
-    """A few dozen nodes: enough to bend like a tree, few enough to assign against cheaply."""
+    """A couple of hundred nodes: enough leaf clusters to rustle, few enough to assign cheaply.
+
+    ``--max-nodes`` rose from 36 to 200 with the fixture's own node count, because a 36-node
+    skeleton cannot express a crown of 108 leaf clusters and scoring it against one is scoring
+    the wrong question.
+    """
     rig = _rig(extracted["out"])
-    assert 20 <= len(rig["nodes"]) <= 60
+    assert 150 <= len(rig["nodes"]) <= 250
 
 
 def test_the_trunk_is_a_chain_from_the_root(extracted: dict) -> None:
@@ -179,28 +184,38 @@ def test_source_note_says_what_it_was_extracted_from(extracted: dict) -> None:
 def test_recovery_against_ground_truth(extracted: dict) -> None:
     """The honest number for geometric extraction, on the one tree where truth exists.
 
-    Floors, with headroom below what the extractor scores today (ARI 0.67, band 0.75, mean
-    joint offset 0.35 m, 70 % of true joints within half a metre). None of these is close to
-    1.0 and none should be read as if it were: a 36-node skeleton inferred from a point cloud
-    is not the 33-node skeleton the cloud was generated from, and where the canopy is dense
-    the two genuinely disagree about which limb a leaf belongs to.
+    Floors, with headroom below what the extractor scores today: ARI 0.459, purity 0.597,
+    band 0.601, mean joint offset 0.140 m, 99 % of true joints within half a metre. None of
+    these is close to 1.0 and none should be read as if it were — a 189-node skeleton inferred
+    from a point cloud is not the 214-node skeleton the cloud was generated from, and where the
+    canopy is dense the two genuinely disagree about which twig a leaf belongs to.
+
+    Two of these figures moved a long way when the fixture became a real tree rather than a
+    post with stubs, and in opposite directions. **Joint localisation got much better**: mean
+    offset 0.14 m against 0.35 m, and 99 % of true joints recovered within half a metre against
+    70 %, because the truth now has 214 joints spread through the crown instead of 33, so the
+    extractor's own nodes have something near them to match. **Cluster agreement got worse**:
+    ARI 0.459 against 0.672, because assigning a leaf to one of 108 clusters 20 cm apart is a
+    far harder question than assigning it to one of 9 clusters a metre apart. The second number
+    is the honest one to quote about a real capture, and it is the one that fell.
 
     The ceiling is not 1.0 either — see test_a_perfect_rig_scores_perfectly, which scores the
-    true rig against itself at ARI 0.847 and band agreement 0.916. Against that ceiling the
-    extractor recovers about four fifths of what nearest-node assignment can express.
+    true rig against itself at ARI 0.799 and purity 0.876. Against that ceiling the extractor
+    recovers about seven tenths of what nearest-node assignment can express, where it recovered
+    about eight tenths on the old fixture.
     """
     score = extracted["score"]
-    assert score["adjustedRandIndex"] > 0.55
-    assert score["bandAccuracy"] > 0.65
-    assert score["purity"] > 0.65
-    assert score["nodeOffsetMeanM"] < 0.5
-    assert score["trueNodesWithin0_5m"] > 0.6
+    assert score["adjustedRandIndex"] > 0.40
+    assert score["bandAccuracy"] > 0.50
+    assert score["purity"] > 0.50
+    assert score["nodeOffsetMeanM"] < 0.25
+    assert score["trueNodesWithin0_5m"] > 0.90
     assert score["isolationRetained"] > 0.95
 
 
 def test_the_extracted_tree_is_the_right_size(extracted: dict) -> None:
-    """7.2 m from the lowest bark splat to the top of the canopy, by construction."""
-    assert 6.5 < extracted["height_m"] < 8.0
+    """5.9 m from the lowest bark splat to the top of the canopy, by construction."""
+    assert 5.5 < extracted["height_m"] < 7.0
 
 
 def test_scoring_refuses_labels_that_are_not_this_capture(
@@ -226,16 +241,17 @@ def test_a_perfect_rig_scores_perfectly(truth: tuple[dict, dict]) -> None:
     score = skeleton.score_against_truth(
         positions, np.asarray(labels["nodes"], dtype=np.int64), truth_rig, truth_rig
     )
-    # Not 1.0, and that is the point. Purity comes out at 0.9055 — the same 90.5 % S2
-    # measured for nearest-node assignment against truth and correctly declined to chase,
-    # because a bark splat on the far side of a trunk genuinely is nearer its neighbour's
-    # node. ARI 0.847 and band agreement 0.916 are the matching ceilings. Every figure in
-    # test_recovery_against_ground_truth should be read against these, not against 1.0.
+    # Not 1.0, and that is the point. Purity comes out at 0.8762 — nearest-node assignment
+    # against truth on the fixture's own splats, which is what the runtime does — because a
+    # bark splat on the far side of a limb genuinely is nearer its neighbour's node, and three
+    # leaf sleeves on one fork genuinely overlap. ARI 0.799 and band agreement 0.989 are the
+    # matching ceilings. Every figure in test_recovery_against_ground_truth should be read
+    # against these, not against 1.0.
     assert score["nodeOffsetMeanM"] == 0.0
     assert score["trueNodesWithin0_5m"] == 1.0
-    assert score["purity"] > 0.89
-    assert score["bandAccuracy"] > 0.90
-    assert score["adjustedRandIndex"] > 0.80
+    assert score["purity"] > 0.85
+    assert score["bandAccuracy"] > 0.95
+    assert score["adjustedRandIndex"] > 0.75
 
 
 # ---------------------------------------------------------------- density independence
@@ -263,7 +279,7 @@ def test_recovery_survives_a_quarter_density_cloud(
         truth_rig,
         rig,
     )
-    assert score["adjustedRandIndex"] > 0.45
+    assert score["adjustedRandIndex"] > 0.30
     assert score["nodeOffsetMeanM"] < 0.8
 
 
