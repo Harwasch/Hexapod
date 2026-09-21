@@ -9,12 +9,21 @@ Sandcastle sources. Everything below was verified against that version.
 `CesiumSceneManager` creates one `Viewer` with every stock widget disabled, `scene3DOnly`,
 `baseLayer: false` (imagery is a catalog layer), MSAA off until the still frame is sharpened, `depthTestAgainstTerrain`
 and a WebGL2 context. The credit display is restyled into a glass chip but never hidden;
-provider credits (including the ion evaluation-token notice) stay visible.
+provider credits stay visible, and the chip's **Data attribution** link opens CesiumJS's
+dialog with the full list. That dialog is hosted on `<body>` (`creditViewport`) so it can sit
+on the sheet layer instead of inside `.viewport`, which is pinned below the HUD.
+
+One thing does not belong in the chip: when the bundled evaluation token is in use, CesiumJS
+adds a paragraph of setup advice as an _on-screen_ credit, which inflates the chip into a slab
+over the globe. `cesium/ion.ts` flips that one credit (and ArcGIS's equivalent) to
+`showOnScreen: false`, moving it into the Data attribution dialog. It is advice, not
+attribution; the app states the same thing in Setup notices, where it can be dismissed.
 
 ## Tokens
 
 - `VITE_CESIUM_ION_ACCESS_TOKEN` empty → CesiumJS's built-in evaluation token is used.
-  It is rate-limited and intended for development; the UI shows a notice.
+  It is rate-limited and intended for development; the UI shows a notice, dismissible once
+  read (`ionTokenNoticeDismissed` in the persisted settings).
 - Create your own token at <https://ion.cesium.com/tokens> with only `assets:read` and
   `geocode`, and restrict _Allowed URLs_ to your origins.
 - Authorization failures from ion (401/403) mark the token invalid in the UI with the

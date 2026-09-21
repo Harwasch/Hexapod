@@ -265,6 +265,81 @@ test.describe("interaction", () => {
   });
 });
 
+test.describe("the HUD over the map", () => {
+  test("the project switcher's menu opens over the tool rail, not under it", async ({ app }) => {
+    await app.getByTestId("onboarding-explore").click();
+    const rail = app.getByRole("toolbar", { name: "Tools" });
+    await expect(rail).toBeVisible();
+    await app.getByTestId("project-card").getByRole("button").first().click();
+    const menu = app.getByRole("menu", { name: "Projects" });
+    await expect(menu).toBeVisible();
+
+    // The menu drops down the left edge, past the vertically centred rail. Hit-test the
+    // overlap rather than reading z-index: what matters is which element takes the click.
+    const owner = await app.evaluate(() => {
+      const menu = document.querySelector(".mc-project__menu");
+      const railRect = document.querySelector(".tool-rail")?.getBoundingClientRect();
+      if (!menu || !railRect) return "missing";
+      const menuRect = menu.getBoundingClientRect();
+      const left = Math.max(menuRect.left, railRect.left);
+      const right = Math.min(menuRect.right, railRect.right);
+      const top = Math.max(menuRect.top, railRect.top);
+      const bottom = Math.min(menuRect.bottom, railRect.bottom);
+      // The menu has to be long enough to reach the rail for there to be anything to test.
+      if (right - left < 2 || bottom - top < 2) return "no-overlap";
+      const hit = document.elementFromPoint((left + right) / 2, (top + bottom) / 2);
+      if (!hit) return "nothing";
+      // Anything but the menu on top — the rail, or the region wrapping it — is the bug.
+      return menu.contains(hit) ? "menu" : `${hit.tagName.toLowerCase()}.${hit.className}`;
+    });
+    expect(owner).toBe("menu");
+  });
+
+  test("attribution stays on screen, and the setup advice is not what is on it", async ({
+    app,
+  }) => {
+    await app.getByTestId("onboarding-explore").click();
+    // Cesium ion's terms and Google Photorealistic 3D Tiles' terms both require the credit
+    // to remain visible. It is a chip above the command bar; it is never removed or hidden.
+    const credits = app.locator(".viewport .cesium-viewer-bottom");
+    await expect(credits).toBeVisible();
+    await expect(credits.locator(".cesium-credit-logoContainer img")).toBeVisible();
+
+    // What must NOT be on screen is CesiumJS's default-token setup advice, which is a
+    // paragraph and inflates the chip into a slab over the globe.
+    await expect(credits).not.toContainText("default ion access token");
+    const box = await credits.boundingBox();
+    expect(box?.height ?? 0).toBeLessThan(48);
+
+    // It is demoted, not deleted: the "Data attribution" dialog still carries it, and the
+    // dialog itself is reachable — it is hosted on <body>, over the HUD, not under it.
+    const expand = credits.getByRole("button", { name: "Data attribution" });
+    await expect(expand).toBeVisible();
+    await expand.click();
+    const dialog = app.getByRole("dialog", { name: "Data attribution" });
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toContainText("default ion access token");
+    await app.getByRole("button", { name: "Close data attribution" }).click();
+    await expect(dialog).toBeHidden();
+  });
+
+  // Raw `page`, not the `app` fixture: that fixture seeds `twin.settings.v1` on every
+  // navigation, which would wipe the dismissal this test reloads to check.
+  test("the evaluation-token notice can be dismissed and stays dismissed", async ({ page }) => {
+    await mockApi(page);
+    await page.goto("/");
+    await expect(page.getByTestId("cesium-viewport")).toBeVisible();
+    const notice = page.getByTestId("notice-default-token");
+    await expect(notice).toBeVisible();
+    await page.getByTestId("notice-default-token-dismiss").click();
+    await expect(notice).toHaveCount(0);
+    await page.reload();
+    await expect(page.getByTestId("cesium-viewport")).toBeVisible();
+    await expect(page.getByTestId("status-bar")).toContainText("Alt");
+    await expect(page.getByTestId("notice-default-token")).toHaveCount(0);
+  });
+});
+
 test.describe("living survey", () => {
   test("the Simulated badge is on screen exactly while the motion is", async ({ app }) => {
     await app.getByTestId("onboarding-explore").click();

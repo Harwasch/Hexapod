@@ -13,6 +13,7 @@ import { SimulatedBadge } from "@/features/living/SimulatedBadge";
 import { LayersPanel } from "@/features/layers/LayersPanel";
 import { SettingsSheet } from "@/features/settings/SettingsSheet";
 import { OnboardingCard } from "@/features/onboarding/OnboardingCard";
+import { SetupNotices } from "@/features/notices/SetupNotices";
 import { CommandBar } from "@/features/mission/CommandBar";
 import { ToolRail } from "@/features/shell/ToolRail";
 import {
@@ -144,6 +145,50 @@ describe("CommandBar + Onboarding", () => {
     await userEvent.click(screen.getByTestId("onboarding-explore"));
     await waitFor(() => expect(screen.queryByTestId("onboarding")).not.toBeInTheDocument());
     expect(useSettings.getState().onboardingDismissed).toBe(true);
+    vi.restoreAllMocks();
+  });
+});
+
+describe("SetupNotices", () => {
+  it("lets the evaluation-token hint be dismissed for good, and keeps a rejected token loud", async () => {
+    vi.spyOn(api, "GET").mockRejectedValue(new TypeError("offline"));
+    useViewer.getState().setTokenState("default");
+    const { unmount } = render(wrap(<SetupNotices />));
+    expect(await screen.findByTestId("notice-default-token")).toBeInTheDocument();
+
+    // A real, labelled, keyboard-reachable control — not a click handler on a div.
+    const dismiss = screen.getByRole("button", {
+      name: "Dismiss the evaluation ion token notice",
+    });
+    dismiss.focus();
+    await userEvent.keyboard("{Enter}");
+    await waitFor(() =>
+      expect(screen.queryByTestId("notice-default-token")).not.toBeInTheDocument(),
+    );
+    expect(useSettings.getState().ionTokenNoticeDismissed).toBe(true);
+    // It survives a reload because it rides the same persisted settings as `onboardingDismissed`.
+    await waitFor(() =>
+      expect(
+        JSON.parse(window.localStorage.getItem("twin.settings.v1") ?? "{}") as {
+          state?: { ionTokenNoticeDismissed?: boolean };
+        },
+      ).toMatchObject({ state: { ionTokenNoticeDismissed: true } }),
+    );
+
+    // Dismissed means dismissed: the setting is persisted, so a later mount stays quiet.
+    unmount();
+    const remount = render(wrap(<SetupNotices />));
+    await waitFor(() =>
+      expect(screen.queryByTestId("notice-default-token")).not.toBeInTheDocument(),
+    );
+    remount.unmount();
+
+    // A rejected token is a fault, not a setup note: it is never dismissible.
+    useViewer.getState().setTokenState("invalid");
+    render(wrap(<SetupNotices />));
+    expect(await screen.findByTestId("notice-token")).toBeInTheDocument();
+    expect(screen.queryByTestId("notice-default-token-dismiss")).not.toBeInTheDocument();
+    useViewer.getState().setTokenState("unknown");
     vi.restoreAllMocks();
   });
 });

@@ -95,6 +95,12 @@
   --edge-gap: 1.5rem;
   --z-map: 0;
   --z-ui: 10;
+  /* HUD regions that open a transient overlay (a switcher menu, a results list) sit here.
+     The HUD's regions are absolutely positioned siblings with no z-index of their own, so
+     they paint in DOM order and a menu opened from an earlier region disappears behind a
+     later one — the tool rail, in practice. This is the layer that says "still HUD, but
+     drawn over the rest of it"; it stays below overlays, sheets and toasts. */
+  --z-hud-popover: 15;
   --z-overlay: 20;
   --z-sheet: 30;
   --z-toast: 40;

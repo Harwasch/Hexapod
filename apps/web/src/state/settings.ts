@@ -19,6 +19,9 @@ export interface SettingsState {
   adaptiveQuality: boolean;
   world: WorldMode;
   onboardingDismissed: boolean;
+  /** The evaluation-ion-token hint is a setup note for whoever deploys this, not an
+      operator's concern; once they have read it, it stays gone. */
+  ionTokenNoticeDismissed: boolean;
   devToolsOpen: boolean;
   exploreSpeed: number;
   set: (patch: Partial<Omit<SettingsState, "set" | "reset">>) => void;
@@ -36,6 +39,7 @@ const defaults = {
   adaptiveQuality: true,
   world: "photorealistic" as WorldMode,
   onboardingDismissed: false,
+  ionTokenNoticeDismissed: false,
   devToolsOpen: false,
   exploreSpeed: 4,
 };

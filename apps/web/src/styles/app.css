@@ -59,7 +59,10 @@ a {
 }
 
 /* Cesium's credit display becomes a small glass chip above the command bar (attribution stays
-   visible). Viewer.resize() writes inline left/bottom/right on this element, so these win with
+   visible — the chip carries the provider credits and the "Data attribution" link to the rest).
+   It stays a chip because the one thing that ever bloated it, CesiumJS's default-token setup
+   advice, is demoted into that dialog in `cesium/ion.ts` rather than clipped here.
+   Viewer.resize() writes inline left/bottom/right on this element, so these win with
    !important. */
 .viewport .cesium-viewer-bottom {
   left: calc(var(--edge-gap) + 20rem) !important;
@@ -98,17 +101,47 @@ a {
   padding-left: 0.4rem;
 }
 
-.viewport .cesium-credit-lightbox {
-  background: rgba(15, 23, 42, 0.5);
-}
-
-.viewport .cesium-credit-lightbox > div {
-  background: var(--surface-solid);
-  color: var(--text-primary);
-  border-radius: var(--glass-radius);
-}
-
 .viewport .cesium-widget-credits a {
+  color: var(--accent-strong);
+}
+
+/* The "Data attribution" dialog. Cesium builds it in JS and `creditViewport: document.body`
+   (CesiumSceneManager) hosts it outside `#root`, so it is styled unscoped and placed on the
+   sheet layer — the same layer as the app's own dialogs. Everything the providers' terms ask
+   to be reachable is listed inside it, including CesiumJS's own default-token advice.
+   CreditDisplay appends its stylesheet to <head> at construction, after this file, so these
+   rules are written through `body >` to outrank it on specificity rather than order. */
+body > .cesium-credit-lightbox-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-sheet);
+  background: rgba(6, 9, 5, 0.45);
+  -webkit-backdrop-filter: blur(3px);
+  backdrop-filter: blur(3px);
+}
+
+body > .cesium-credit-lightbox-overlay > .cesium-credit-lightbox {
+  max-width: min(32rem, calc(100vw - 2 * var(--edge-gap)));
+  background: var(--glass-bg-flat);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  border: 1px solid var(--glass-border);
+  border-radius: var(--glass-radius);
+  box-shadow: var(--glass-shadow);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+}
+
+body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-title {
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+body > .cesium-credit-lightbox-overlay a,
+body > .cesium-credit-lightbox-overlay a:visited,
+body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-close {
   color: var(--accent-strong);
 }
 
@@ -130,10 +163,15 @@ a {
   pointer-events: auto;
 }
 
+/* The project switcher's menu and the search results list drop out of these two regions and
+   over the rest of the HUD. Both are absolutely positioned siblings of the tool rail inside
+   `.hud`, which is the stacking context they all share, so ordering them here is enough — the
+   menu does not need a portal. Without this they paint in DOM order and land under the rail. */
 .hud-top-left {
   position: absolute;
   top: var(--edge-gap);
   left: var(--edge-gap);
+  z-index: var(--z-hud-popover);
   display: flex;
   flex-direction: column;
   gap: 0.6rem;
@@ -145,6 +183,7 @@ a {
   top: var(--edge-gap);
   left: 50%;
   transform: translateX(-50%);
+  z-index: var(--z-hud-popover);
   width: min(26rem, calc(100vw - 46rem));
 }
 
@@ -941,6 +980,32 @@ a {
   padding: 0.05em 0.35em;
   border-radius: 4px;
   background: var(--control-bg);
+}
+
+/* The notice stack hangs below the view tabs and layer pills and can reach the camera
+   controls and the inspector, both later in the HUD, which would otherwise paint over it and
+   swallow clicks meant for the dismiss button. Only the notices are raised — the tabs and
+   pills above them keep sitting under the inspector, where they belong. */
+.setup-notices {
+  position: relative;
+  z-index: var(--z-hud-popover);
+}
+
+/* An informational notice is a setup note, not a warning: no amber, and it makes room for
+   the control that dismisses it. */
+.notice--info .notice__icon {
+  color: var(--text-tertiary);
+}
+
+.notice--dismissible {
+  align-items: center;
+  padding-right: 0.3rem;
+}
+
+.notice__dismiss {
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: var(--text-tertiary);
 }
 
 /* ---- Living Survey: the Simulated badge ---------------------------------- */

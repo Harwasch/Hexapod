@@ -97,6 +97,12 @@ export class CesiumSceneManager {
       // Motion never uses MSAA; the PerformanceManager raises it for the still frame.
       msaaSamples: 1,
       contextOptions: { webgl: { powerPreference: "high-performance", antialias: true } },
+      // The "Data attribution" dialog is modal and belongs over the whole app, but Cesium
+      // would hang it inside the widget — which lives in `.viewport`, a stacking context
+      // pinned at `--z-map`, so the HUD would paint over the dialog and swallow its clicks.
+      // Hosting it on <body> takes it out of that context; `app.css` then puts it on the
+      // sheet layer and dresses it in the glass material.
+      creditViewport: document.body,
     });
     this.scene = this.viewer.scene;
     const scene = this.scene;
