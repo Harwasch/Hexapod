@@ -25,7 +25,7 @@ import {
   type Scene,
 } from "cesium";
 
-import { deform, parseRig, type MotionRig, type WindSettings } from "@twin/world";
+import { deform, flutterField, parseRig, type MotionRig, type WindSettings } from "@twin/world";
 
 import { SplatDeformer, type DeformerStatus } from "@/cesium/SplatDeformer";
 import { installSplatTextureInterception } from "@/cesium/splatCapture";
@@ -102,7 +102,7 @@ export async function startLivingSurveyHarness(
   const deformer = new SplatDeformer({ tileset: internals, rig });
 
   async function step(t: number, wind: WindSettings): Promise<DeformerStatus> {
-    const status = deformer.apply(deform(rig, t, wind));
+    const status = deformer.apply(deform(rig, t, wind), flutterField(rig, t, wind));
     await nextFrame(scene);
     return status;
   }
@@ -110,7 +110,7 @@ export async function startLivingSurveyHarness(
   return {
     step,
     applyOnly(t: number, wind: WindSettings): DeformerStatus {
-      return deformer.apply(deform(rig, t, wind));
+      return deformer.apply(deform(rig, t, wind), flutterField(rig, t, wind));
     },
     async waitUntilReady(timeoutMs: number): Promise<DeformerStatus> {
       const deadline = Date.now() + timeoutMs;

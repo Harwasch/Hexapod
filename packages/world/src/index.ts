@@ -1,5 +1,6 @@
 export * from "./assign";
 export * from "./deform";
+export * from "./flutter";
 export * from "./metrics";
 export * from "./modes";
 export * from "./noise";

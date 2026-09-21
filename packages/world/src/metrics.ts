@@ -7,6 +7,7 @@
  */
 
 import { maxNodeAngle, maxNodeAngleRate } from "./deform";
+import { maxFlutterAmplitude, maxFlutterSpeed } from "./flutter";
 import { nodeModes } from "./modes";
 import { ancestorsOf, type MotionRig } from "./rig";
 import { distance } from "./vec";
@@ -35,13 +36,25 @@ export function maxNodeDisplacements(rig: MotionRig, settings: WindSettings): nu
   });
 }
 
-/** The largest displacement any node can reach at this wind, metres. */
+/**
+ * The largest displacement any **splat** can reach at this wind, metres.
+ *
+ * Deliberately not the same quantity as the maximum of `maxNodeDisplacements`. Nodes do not
+ * flutter; splats do, and a leaf splat carries its node's whole displacement plus its own
+ * flutter offset, whose magnitude is bounded exactly by that node's amplitude
+ * (`maxFlutterAmplitude`). This is the figure `sortStaleness` divides, because staleness is a
+ * fact about how far a *splat* has moved from the position its sort key was taken at.
+ *
+ * The two terms are added rather than combined in quadrature: they are independent, so their
+ * extremes can and eventually do align, and a bound that assumed otherwise would not be one.
+ */
 export function maxDisplacement(rig: MotionRig, settings: WindSettings): number {
+  const flutter = maxFlutterAmplitude(rig, settings);
   let worst = 0;
   for (const bound of maxNodeDisplacements(rig, settings)) {
     if (bound > worst) worst = bound;
   }
-  return worst;
+  return worst + flutter;
 }
 
 /** Worst-case speed of each node, metres per second. Same construction as the displacement bound. */
@@ -59,13 +72,19 @@ export function maxNodeSpeeds(rig: MotionRig, settings: WindSettings): number[] 
   });
 }
 
-/** The largest speed any node can reach at this wind, metres per second. */
+/**
+ * The largest speed any **splat** can reach at this wind, metres per second.
+ *
+ * As with `maxDisplacement`, the node bound plus the flutter bound: a leaf splat is carried by
+ * its node and shimmers on top of it, and the two can peak together.
+ */
 export function maxDeformSpeed(rig: MotionRig, settings: WindSettings): number {
+  const flutter = maxFlutterSpeed(rig, settings);
   let worst = 0;
   for (const bound of maxNodeSpeeds(rig, settings)) {
     if (bound > worst) worst = bound;
   }
-  return worst;
+  return worst + flutter;
 }
 
 /**
@@ -94,7 +113,7 @@ export function medianGaussianScale(scales: Float32Array, componentsPerSplat = 3
 
 /**
  * How far the draw order can have gone stale, in splat radii: `maxDisplacement /
- * medianGaussianScale`.
+ * medianGaussianScale`, where `maxDisplacement` is the per-splat bound and so includes flutter.
  *
  * Below 1 a splat has not moved its own width and the sort key it was given is still broadly
  * right. Well above 1 the painter's order no longer matches the geometry and blending artifacts

@@ -29,6 +29,7 @@ import { JulianDate, type Viewer } from "cesium";
 
 import {
   deform,
+  flutterField,
   maxDisplacement,
   parseRig,
   sortStaleness,
@@ -331,7 +332,13 @@ export class LivingSurveyManager {
     let phaseChanged = false;
     for (const entry of this.#entries.values()) {
       const before = entry.status;
-      const status = entry.deformer.apply(deform(entry.rig, t, wind));
+      // Two terms, computed once per rig per frame: where every node is, and how hard every
+      // node's splats are shimmering. `flutterField` is a pure function of the same `(rig, t,
+      // wind)`, so the frame stays reproducible from the clock alone.
+      const status = entry.deformer.apply(
+        deform(entry.rig, t, wind),
+        flutterField(entry.rig, t, wind),
+      );
       entry.status = status;
       if (status.displaced) displaced = true;
       if (

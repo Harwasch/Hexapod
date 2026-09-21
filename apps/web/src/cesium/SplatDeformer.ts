@@ -34,6 +34,8 @@ import {
   assignSplatsToNodes,
   checksumPositions,
   deformPositions,
+  FLUTTER_STILL,
+  type FlutterField,
   type MotionRig,
   type NodeTransform,
 } from "@twin/world";
@@ -227,12 +229,15 @@ export class SplatDeformer {
    * exception takes the whole viewer down, and every failure here has a correct do-nothing
    * answer.
    */
-  apply(transforms: readonly NodeTransform[]): DeformerStatus {
+  apply(
+    transforms: readonly NodeTransform[],
+    flutter: FlutterField = FLUTTER_STILL,
+  ): DeformerStatus {
     if (this.#phase === "refused" || this.#phase === "detached") return this.status;
     try {
       const attachment = this.#syncAttachment();
       if (attachment === undefined) return this.status;
-      this.#write(attachment, transforms);
+      this.#write(attachment, transforms, flutter);
     } catch (error) {
       // A refusal is a decision; an unexpected throw is a bug, and it must not take the scene
       // with it. Both end in "this tileset does not deform".
@@ -429,8 +434,12 @@ export class SplatDeformer {
     };
   }
 
-  #write(attachment: Attachment, transforms: readonly NodeTransform[]): void {
-    const moving = markMovingNodes(attachment.nodeMoves, transforms);
+  #write(
+    attachment: Attachment,
+    transforms: readonly NodeTransform[],
+    flutter: FlutterField,
+  ): void {
+    const moving = markMovingNodes(attachment.nodeMoves, transforms, flutter);
 
     // Nothing moves and nothing is displaced: an idle scene stays idle.
     if (!moving && !this.#displaced) return;
@@ -440,6 +449,7 @@ export class SplatDeformer {
       attachment.assignment,
       transforms,
       attachment.displacedLocal,
+      flutter,
     );
     resolveBakedPositions(
       attachment.displacedLocal,
@@ -487,28 +497,38 @@ export class SplatDeformer {
 }
 
 /**
- * Flags the nodes whose transform is not the rest transform, and says whether any is.
+ * Flags the nodes whose splats are not at rest, and says whether any are.
  *
  * Exact comparison, not a tolerance: `deform` returns bit-exact identity at zero wind by
  * construction (`quatFromAxisAngle` returns the identity quaternion by value at angle 0), so
  * "nothing is moving" is a fact about the numbers rather than a judgement about them.
+ *
+ * A node counts as moving when its transform is not the rest transform **or** it has a non-zero
+ * flutter amplitude. The second half matters because `resolveBakedPositions` copies the
+ * canonical bytes for any splat whose node is flagged still — so a node that fluttered while
+ * flagged still would have its shimmer silently thrown away between the deform and the upload.
+ * The root's transform is identity at every wind, and the root is the base of the bole, so on a
+ * rig whose trunk is thick enough not to flutter this changes nothing; on one where a thin node
+ * happens to be the root, it is the difference between shimmering and not.
  */
 export function markMovingNodes(
   nodeMoves: Uint8Array,
   transforms: readonly NodeTransform[],
+  flutter: FlutterField = FLUTTER_STILL,
 ): boolean {
   let moving = false;
   for (let n = 0; n < nodeMoves.length; n += 1) {
     const transform = transforms[n];
     const rest =
-      transform === undefined ||
-      (transform.rotation[0] === 0 &&
-        transform.rotation[1] === 0 &&
-        transform.rotation[2] === 0 &&
-        transform.rotation[3] === 1 &&
-        transform.translation[0] === 0 &&
-        transform.translation[1] === 0 &&
-        transform.translation[2] === 0);
+      (transform === undefined ||
+        (transform.rotation[0] === 0 &&
+          transform.rotation[1] === 0 &&
+          transform.rotation[2] === 0 &&
+          transform.rotation[3] === 1 &&
+          transform.translation[0] === 0 &&
+          transform.translation[1] === 0 &&
+          transform.translation[2] === 0)) &&
+      (flutter.still || (flutter.amplitudeM[n] ?? 0) === 0);
     nodeMoves[n] = rest ? 0 : 1;
     if (!rest) moving = true;
   }

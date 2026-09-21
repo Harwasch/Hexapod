@@ -18,6 +18,7 @@
  * — sort staleness is driven by amplitude, not by speed — and the change is in *frequency*.
  */
 
+import { splatFlutter, type FlutterField } from "./flutter";
 import { nodeModes, turbulentLoad, type NodeMode } from "./modes";
 import { nodeAngleLimit, type MotionRig, type SkeletonNode } from "./rig";
 import {
@@ -262,19 +263,36 @@ export function deformPositions(
   assignment: Uint16Array,
   transforms: readonly NodeTransform[],
   out?: Float32Array,
+  flutter?: FlutterField,
 ): Float32Array {
   if (out === positions)
     throw new Error("deformPositions: canonical positions must not be the output");
   const count = Math.min(Math.floor(positions.length / 3), assignment.length);
   const target = out ?? new Float32Array(positions.length);
+  // Hoisted, and checked for `still` rather than for presence: at calm there is no flutter at
+  // all, and the inner loop must not so much as add a zero — `-0 + 0` is `+0`, and the restore
+  // path's byte-identity guarantee is over bytes.
+  const fluttering = flutter !== undefined && !flutter.still;
   for (let i = 0; i < count; i += 1) {
     const base = i * 3;
-    const transform = transforms[assignment[i] ?? 0] ?? IDENTITY_TRANSFORM;
+    const node = assignment[i] ?? 0;
+    const transform = transforms[node] ?? IDENTITY_TRANSFORM;
     const moved = applyTransform(transform, [
       positions[base] ?? 0,
       positions[base + 1] ?? 0,
       positions[base + 2] ?? 0,
     ]);
+    if (fluttering) {
+      const offset = splatFlutter(i, node, flutter);
+      // `splatFlutter` returns the shared zero tuple for a node that does not flutter, and
+      // `VEC3_ZERO[0]` is `+0`, so this is still a no-op on the bytes for a trunk splat.
+      if (offset !== VEC3_ZERO) {
+        target[base] = moved[0] + offset[0];
+        target[base + 1] = moved[1] + offset[1];
+        target[base + 2] = moved[2] + offset[2];
+        continue;
+      }
+    }
     target[base] = moved[0];
     target[base + 1] = moved[1];
     target[base + 2] = moved[2];
