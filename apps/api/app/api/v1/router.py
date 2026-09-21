@@ -4,10 +4,13 @@ from typing import Any
 
 from fastapi import APIRouter
 
-from app.api.v1 import agent, assets, ion, layers, plans, sites, system
+from app.api.v1 import agent, assets, captures, ion, jobs, layers, plans, sites, system
 from app.schemas.common import Problem
 
 ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
+    # 401 is documented API-wide rather than per route: it is the shared write token's
+    # answer on every mutating endpoint, and a read never raises it.
+    401: {"model": Problem, "description": "Missing or wrong write token"},
     404: {"model": Problem, "description": "Not found"},
     409: {"model": Problem, "description": "Conflict"},
     422: {"model": Problem, "description": "Validation error"},
@@ -21,3 +24,5 @@ api_v1.include_router(layers.router)
 api_v1.include_router(ion.router)
 api_v1.include_router(agent.router)
 api_v1.include_router(plans.router)
+api_v1.include_router(captures.router)
+api_v1.include_router(jobs.router)

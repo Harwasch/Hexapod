@@ -44,6 +44,13 @@ class Settings(BaseSettings):
     object_storage_region: str = "us-east-1"
     object_storage_public_url: str | None = None
 
+    # The single shared write token (the plan's `API_WRITE_TOKEN`). Unset means this
+    # deployment is open for writes, which is how a fresh checkout runs with no
+    # configuration at all -- the same way `object_storage_configured` degrades. That is
+    # only tolerable outside production, so `create_app` refuses to start when
+    # `is_production` and this is empty; see app/main.py.
+    api_write_token: str | None = None
+
     cesium_ion_server_token: str | None = None
     cesium_ion_api_base: str = "https://api.cesium.com"
 

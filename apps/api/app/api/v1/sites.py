@@ -5,7 +5,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, File, HTTPException, UploadFile, status
 
-from app.api.deps import DbSession, Storage
+from app.api.deps import DbSession, RequireWriteToken, Storage
 from app.schemas.asset import AssetRead
 from app.schemas.bookmark import CameraBookmarkCreate, CameraBookmarkRead
 from app.schemas.site import SiteCreate, SiteRead, SiteSummary, SiteUpdate
@@ -26,7 +26,11 @@ def list_sites(db: DbSession) -> list[SiteSummary]:
 
 
 @router.post(
-    "", response_model=SiteRead, status_code=status.HTTP_201_CREATED, summary="Create a site"
+    "",
+    response_model=SiteRead,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[RequireWriteToken],
+    summary="Create a site",
 )
 def create_site(payload: SiteCreate, db: DbSession) -> SiteRead:
     site = site_service.create_site(db, payload)
@@ -43,12 +47,22 @@ def get_site(site_id: uuid.UUID, db: DbSession) -> SiteRead:
     return site_service.site_to_read(db, site_service.get_site(db, site_id))
 
 
-@router.patch("/{site_id}", response_model=SiteRead, summary="Update a site")
+@router.patch(
+    "/{site_id}",
+    response_model=SiteRead,
+    dependencies=[RequireWriteToken],
+    summary="Update a site",
+)
 def update_site(site_id: uuid.UUID, payload: SiteUpdate, db: DbSession) -> SiteRead:
     return site_service.site_to_read(db, site_service.update_site(db, site_id, payload))
 
 
-@router.delete("/{site_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Delete a site")
+@router.delete(
+    "/{site_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[RequireWriteToken],
+    summary="Delete a site",
+)
 def delete_site(site_id: uuid.UUID, db: DbSession) -> None:
     site_service.delete_site(db, site_id)
 
@@ -72,6 +86,7 @@ def list_bookmarks(site_id: uuid.UUID, db: DbSession) -> list[CameraBookmarkRead
     "/{site_id}/bookmarks",
     response_model=CameraBookmarkRead,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[RequireWriteToken],
     summary="Save a camera bookmark",
 )
 def create_bookmark(
@@ -83,13 +98,19 @@ def create_bookmark(
 @router.delete(
     "/{site_id}/bookmarks/{bookmark_id}",
     status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[RequireWriteToken],
     summary="Delete a camera bookmark",
 )
 def delete_bookmark(site_id: uuid.UUID, bookmark_id: uuid.UUID, db: DbSession) -> None:
     bookmark_service.delete_bookmark(db, site_id, bookmark_id)
 
 
-@router.post("/{site_id}/thumbnail", response_model=SiteRead, summary="Upload a site thumbnail")
+@router.post(
+    "/{site_id}/thumbnail",
+    response_model=SiteRead,
+    dependencies=[RequireWriteToken],
+    summary="Upload a site thumbnail",
+)
 async def upload_thumbnail(
     site_id: uuid.UUID, db: DbSession, storage: Storage, file: Annotated[UploadFile, File()]
 ) -> SiteRead:

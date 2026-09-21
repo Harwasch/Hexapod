@@ -49,12 +49,18 @@ Required environment:
 | `DATABASE_URL`             | `postgresql+psycopg://user:pass@host:5432/db` with PostGIS enabled   |
 | `API_CORS_ORIGINS`         | comma-separated browser origins (exact scheme + host)                |
 | `APP_ENV=production`       | tightens URL validation (`ALLOW_PRIVATE_URLS=false` recommended)     |
+| `API_WRITE_TOKEN`          | **required in production**: the shared token every write must carry  |
 | `ALLOW_PRIVATE_URLS=false` | reject loopback/private dataset hosts                                |
 | `OBJECT_STORAGE_*`         | endpoint, bucket, keys, region, public URL. See Object storage below |
 | `CESIUM_ION_SERVER_TOKEN`  | optional; `assets:read` for job monitoring. Never a `VITE_` variable |
 
 Put the API behind TLS (platform load balancer). It exposes `/api/v1/health` for probes and
 `/api/v1/docs` for OpenAPI; disable docs at the edge if you prefer.
+
+Reads are open so the world stays viewable; every mutating endpoint requires
+`Authorization: Bearer $API_WRITE_TOKEN`, and the worker uses the same token. With no token
+set writes are open, which is how a local checkout runs — so the API refuses to start when
+`APP_ENV=production` and `API_WRITE_TOKEN` is empty rather than serving open writes.
 
 ## Object storage and CORS
 

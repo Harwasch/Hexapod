@@ -73,6 +73,7 @@ See [`.env.example`](.env.example) for every variable with comments. The importa
 | `VITE_ENABLE_PHOTOREALISTIC`   | web   | Google Photorealistic 3D Tiles world, on by default; `false` switches it off.           |
 | `DATABASE_URL`                 | api   | PostgreSQL + PostGIS connection.                                                        |
 | `API_CORS_ORIGINS`             | api   | Allowed browser origins.                                                                |
+| `API_WRITE_TOKEN`              | api   | Shared token for every write (`Authorization: Bearer …`). Reads stay open.              |
 | `OBJECT_STORAGE_*`             | api   | Optional S3/MinIO for site thumbnails.                                                  |
 | `CESIUM_ION_SERVER_TOKEN`      | api   | Server-side ion token to monitor reconstruction jobs. Never exposed to the browser.     |
 

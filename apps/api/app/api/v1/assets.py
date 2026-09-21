@@ -5,7 +5,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Query, status
 
-from app.api.deps import DbSession
+from app.api.deps import DbSession, RequireWriteToken
 from app.schemas.asset import AssetCreate, AssetRead, AssetUpdate
 from app.services import assets as asset_service
 
@@ -20,7 +20,11 @@ def list_assets(
 
 
 @router.post(
-    "", response_model=AssetRead, status_code=status.HTTP_201_CREATED, summary="Register an asset"
+    "",
+    response_model=AssetRead,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[RequireWriteToken],
+    summary="Register an asset",
 )
 def create_asset(payload: AssetCreate, db: DbSession) -> AssetRead:
     return asset_service.asset_to_read(asset_service.create_asset(db, payload))
@@ -31,11 +35,21 @@ def get_asset(asset_id: uuid.UUID, db: DbSession) -> AssetRead:
     return asset_service.asset_to_read(asset_service.get_asset(db, asset_id))
 
 
-@router.patch("/{asset_id}", response_model=AssetRead, summary="Update an asset")
+@router.patch(
+    "/{asset_id}",
+    response_model=AssetRead,
+    dependencies=[RequireWriteToken],
+    summary="Update an asset",
+)
 def update_asset(asset_id: uuid.UUID, payload: AssetUpdate, db: DbSession) -> AssetRead:
     return asset_service.asset_to_read(asset_service.update_asset(db, asset_id, payload))
 
 
-@router.delete("/{asset_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Delete an asset")
+@router.delete(
+    "/{asset_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[RequireWriteToken],
+    summary="Delete an asset",
+)
 def delete_asset(asset_id: uuid.UUID, db: DbSession) -> None:
     asset_service.delete_asset(db, asset_id)

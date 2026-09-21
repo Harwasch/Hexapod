@@ -4,7 +4,7 @@ import uuid
 
 from fastapi import APIRouter, Query, Response, status
 
-from app.api.deps import DbSession
+from app.api.deps import DbSession, RequireWriteToken
 from app.schemas.plan import PlanCreate, PlanRead, PlanRevise, PlanStatusUpdate
 from app.services import plans as plan_service
 
@@ -19,7 +19,11 @@ def list_plans(
 
 
 @router.post(
-    "", response_model=PlanRead, status_code=status.HTTP_201_CREATED, summary="Approve a plan"
+    "",
+    response_model=PlanRead,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[RequireWriteToken],
+    summary="Approve a plan",
 )
 def create_plan(payload: PlanCreate, db: DbSession) -> PlanRead:
     return plan_service.plan_to_read(plan_service.create_plan(db, payload))
@@ -30,17 +34,32 @@ def get_plan(plan_id: uuid.UUID, db: DbSession) -> PlanRead:
     return plan_service.plan_to_read(plan_service.get_plan(db, plan_id))
 
 
-@router.put("/{plan_id}", response_model=PlanRead, summary="Approve a new revision")
+@router.put(
+    "/{plan_id}",
+    response_model=PlanRead,
+    dependencies=[RequireWriteToken],
+    summary="Approve a new revision",
+)
 def revise_plan(plan_id: uuid.UUID, payload: PlanRevise, db: DbSession) -> PlanRead:
     return plan_service.plan_to_read(plan_service.revise_plan(db, plan_id, payload))
 
 
-@router.patch("/{plan_id}/status", response_model=PlanRead, summary="Change lifecycle state")
+@router.patch(
+    "/{plan_id}/status",
+    response_model=PlanRead,
+    dependencies=[RequireWriteToken],
+    summary="Change lifecycle state",
+)
 def set_status(plan_id: uuid.UUID, payload: PlanStatusUpdate, db: DbSession) -> PlanRead:
     return plan_service.plan_to_read(plan_service.set_status(db, plan_id, payload.status))
 
 
-@router.delete("/{plan_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Delete a plan")
+@router.delete(
+    "/{plan_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[RequireWriteToken],
+    summary="Delete a plan",
+)
 def delete_plan(plan_id: uuid.UUID, db: DbSession) -> Response:
     plan_service.delete_plan(db, plan_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

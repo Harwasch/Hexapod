@@ -98,6 +98,129 @@ export interface paths {
         patch: operations["update_asset_api_v1_assets__asset_id__patch"];
         trace?: never;
     };
+    "/api/v1/captures": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List captures, newest first */
+        get: operations["list_captures_api_v1_captures_get"];
+        put?: never;
+        /** Create a capture */
+        post: operations["create_capture_api_v1_captures_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/captures/{capture_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a capture, its files and its jobs */
+        get: operations["get_capture_api_v1_captures__capture_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/captures/{capture_id}/files": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Register a file and begin its upload */
+        post: operations["register_file_api_v1_captures__capture_id__files_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/captures/{capture_id}/files/{file_id}/abort": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Abort a file's multipart upload */
+        post: operations["abort_file_api_v1_captures__capture_id__files__file_id__abort_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/captures/{capture_id}/files/{file_id}/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Complete a file's multipart upload */
+        post: operations["complete_file_api_v1_captures__capture_id__files__file_id__complete_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/captures/{capture_id}/files/{file_id}/parts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Presign the next window of parts */
+        post: operations["presign_parts_api_v1_captures__capture_id__files__file_id__parts_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/captures/{capture_id}/process": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Queue a pipeline run over a capture
+         * @description Inserts a `not-started` job and returns it. Nothing runs here: the worker claims the row with a lease and executes the recipe.
+         */
+        post: operations["process_capture_api_v1_captures__capture_id__process_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/health": {
         parameters: {
             query?: never;
@@ -146,6 +269,57 @@ export interface paths {
         get: operations["ion_status_api_v1_ion_status_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/jobs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List jobs, newest first */
+        get: operations["list_jobs_api_v1_jobs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/jobs/{job_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a job with its steps */
+        get: operations["get_job_api_v1_jobs__job_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/jobs/{job_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Cancel a job */
+        post: operations["cancel_job_api_v1_jobs__job_id__cancel_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -384,6 +558,49 @@ export interface components {
              * Format: uri
              */
             url: string;
+        };
+        /**
+         * ArtifactKind
+         * @description What a stage produced. Step logs and checkpoints are not artifacts: they are
+         *     ``job_steps.log_key`` and ``job_steps.checkpoint_key``.
+         * @enum {string}
+         */
+        ArtifactKind: "frames" | "poses" | "masks" | "splat" | "deformation-field" | "mesh" | "point-cloud" | "3d-tiles" | "thumbnail" | "ground-samples" | "manifest" | "clip";
+        /**
+         * ArtifactRead
+         * @description Read model: every field is explicit (no defaults) so the OpenAPI contract marks it
+         *     required.
+         */
+        ArtifactRead: {
+            /** Bytes */
+            bytes: number | null;
+            /** Checksum */
+            checksum: string | null;
+            /** Contenttype */
+            contentType: string | null;
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Jobstepid
+             * Format: uuid
+             */
+            jobStepId: string;
+            kind: components["schemas"]["ArtifactKind"];
+            /** Storagekey */
+            storageKey: string;
+            /**
+             * Updatedat
+             * Format: date-time
+             */
+            updatedAt: string;
         };
         /** AssetBase */
         AssetBase: {
@@ -635,6 +852,254 @@ export interface components {
              */
             siteId: string;
         };
+        /** CaptureCreate */
+        CaptureCreate: {
+            /** Attribution */
+            attribution?: components["schemas"]["Attribution"][];
+            /** Capturedat */
+            capturedAt?: string | null;
+            /** Description */
+            description?: string | null;
+            /** Device */
+            device?: string | null;
+            kind: components["schemas"]["CaptureKind"];
+            license?: components["schemas"]["LicenseMetadata"] | null;
+            /** Metadata */
+            metadata?: {
+                [key: string]: unknown;
+            };
+            /** Name */
+            name: string;
+            provenance?: components["schemas"]["Provenance"] | null;
+            /** Sensor */
+            sensor?: string | null;
+            /** Slug */
+            slug?: string | null;
+            temporalExtent?: components["schemas"]["TemporalExtent"] | null;
+        };
+        /**
+         * CaptureDetail
+         * @description One capture with everything hanging off it: its files and every run over it.
+         */
+        CaptureDetail: {
+            /** Attribution */
+            attribution: components["schemas"]["Attribution"][];
+            /** Capturedat */
+            capturedAt: string | null;
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /** Description */
+            description: string | null;
+            /** Device */
+            device: string | null;
+            /** Files */
+            files: components["schemas"]["CaptureFileRead"][];
+            georefMethod: components["schemas"]["GeorefMethod"] | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Jobs */
+            jobs: components["schemas"]["JobRead"][];
+            kind: components["schemas"]["CaptureKind"];
+            license: components["schemas"]["LicenseMetadata"] | null;
+            /** Metadata */
+            metadata: {
+                [key: string]: unknown;
+            };
+            /** Name */
+            name: string;
+            provenance: components["schemas"]["Provenance"] | null;
+            scaleSource: components["schemas"]["ScaleSource"] | null;
+            /** Sensor */
+            sensor: string | null;
+            /** Siteid */
+            siteId: string | null;
+            /** Slug */
+            slug: string;
+            status: components["schemas"]["CaptureStatus"];
+            temporalExtent: components["schemas"]["TemporalExtent"] | null;
+            /** Uncertaintym */
+            uncertaintyM: number | null;
+            /**
+             * Updatedat
+             * Format: date-time
+             */
+            updatedAt: string;
+        };
+        /**
+         * CaptureFileComplete
+         * @description Finish the multipart upload. Parts may arrive in any order; they are sorted.
+         */
+        CaptureFileComplete: {
+            /** Checksum */
+            checksum?: string | null;
+            /** Parts */
+            parts: components["schemas"]["CaptureFilePart"][];
+        };
+        /** CaptureFileCreate */
+        CaptureFileCreate: {
+            /** Bytes */
+            bytes?: number | null;
+            /** Contenttype */
+            contentType?: string | null;
+            /** Filename */
+            filename: string;
+        };
+        /**
+         * CaptureFilePart
+         * @description A part the client has finished uploading, as S3 reported it.
+         */
+        CaptureFilePart: {
+            /** Etag */
+            etag: string;
+            /** Partnumber */
+            partNumber: number;
+        };
+        /**
+         * CaptureFilePartsRequest
+         * @description Ask for the window of parts starting at `firstPartNumber`.
+         *
+         *     `count` is clamped to the server's window size; asking for 1536 parts does not get
+         *     you 1536 parts.
+         */
+        CaptureFilePartsRequest: {
+            /** Count */
+            count?: number | null;
+            /**
+             * Firstpartnumber
+             * @default 1
+             */
+            firstPartNumber?: number;
+        };
+        /**
+         * CaptureFileRead
+         * @description Read model: every field is explicit (no defaults) so the OpenAPI contract marks it
+         *     required.
+         */
+        CaptureFileRead: {
+            /** Bytes */
+            bytes: number | null;
+            /**
+             * Captureid
+             * Format: uuid
+             */
+            captureId: string;
+            /** Checksum */
+            checksum: string | null;
+            /** Contenttype */
+            contentType: string | null;
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /** Filename */
+            filename: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Partscompleted */
+            partsCompleted: number;
+            /** Partstotal */
+            partsTotal: number | null;
+            status: components["schemas"]["UploadStatus"];
+            /** Storagekey */
+            storageKey: string;
+            /**
+             * Updatedat
+             * Format: date-time
+             */
+            updatedAt: string;
+            /** Uploadid */
+            uploadId: string | null;
+        };
+        /**
+         * CaptureFileUpload
+         * @description The registered row plus the first window of presigned parts.
+         */
+        CaptureFileUpload: {
+            file: components["schemas"]["CaptureFileRead"];
+            upload: components["schemas"]["UploadWindow"];
+        };
+        /**
+         * CaptureKind
+         * @description What was uploaded, which decides the lane a capture runs down.
+         *
+         *     ``gaussian-splat`` and ``point-cloud`` deliberately repeat the identifiers
+         *     :class:`Representation` already fixed in the contract: the same thing should not
+         *     be spelled two ways depending on which table it is named in.
+         * @enum {string}
+         */
+        CaptureKind: "video" | "images" | "gaussian-splat" | "point-cloud";
+        /** CaptureRead */
+        CaptureRead: {
+            /** Attribution */
+            attribution: components["schemas"]["Attribution"][];
+            /** Capturedat */
+            capturedAt: string | null;
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /** Description */
+            description: string | null;
+            /** Device */
+            device: string | null;
+            /** Files */
+            files: components["schemas"]["CaptureFileRead"][];
+            georefMethod: components["schemas"]["GeorefMethod"] | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            kind: components["schemas"]["CaptureKind"];
+            license: components["schemas"]["LicenseMetadata"] | null;
+            /** Metadata */
+            metadata: {
+                [key: string]: unknown;
+            };
+            /** Name */
+            name: string;
+            provenance: components["schemas"]["Provenance"] | null;
+            scaleSource: components["schemas"]["ScaleSource"] | null;
+            /** Sensor */
+            sensor: string | null;
+            /** Siteid */
+            siteId: string | null;
+            /** Slug */
+            slug: string;
+            status: components["schemas"]["CaptureStatus"];
+            temporalExtent: components["schemas"]["TemporalExtent"] | null;
+            /** Uncertaintym */
+            uncertaintyM: number | null;
+            /**
+             * Updatedat
+             * Format: date-time
+             */
+            updatedAt: string;
+        };
+        /**
+         * CaptureStatus
+         * @description Lifecycle of an upload session.
+         *
+         *     Deliberately the vocabulary Cesium ion already exposes through
+         *     ``app.schemas.ion.IonAssetStatus`` (``AWAITING_FILES | NOT_STARTED | IN_PROGRESS |
+         *     COMPLETE | ERROR``), in this module's kebab-case spelling: a capture waiting for its
+         *     bytes, uploaded but unprocessed, processing, done or failed are the same five states
+         *     ion means by those words. ion's ``DATA_ERROR`` is not repeated — it is a distinction
+         *     about ion's own tiler, and here the error message carries that detail.
+         * @enum {string}
+         */
+        CaptureStatus: "awaiting-files" | "not-started" | "in-progress" | "complete" | "error";
         /** CesiumIon3DTilesSource */
         CesiumIon3DTilesSource: {
             /** Assetid */
@@ -778,6 +1243,12 @@ export interface components {
             /** Longitude */
             longitude: number;
         };
+        /**
+         * GeorefMethod
+         * @description How a reconstruction was placed on the globe.
+         * @enum {string}
+         */
+        GeorefMethod: "exif-gps" | "arkit" | "manual" | "none";
         /** GooglePhotorealisticSource */
         GooglePhotorealisticSource: {
             /**
@@ -847,6 +1318,123 @@ export interface components {
             /** Configured */
             configured: boolean;
             reconstruction: components["schemas"]["IonReconstructionCapabilities"];
+        };
+        /**
+         * JobCreate
+         * @description Launch a run. `recipeVersion` is resolved from the recipe registry rather than
+         *     supplied, so a caller cannot claim a run used a version that does not exist.
+         */
+        JobCreate: {
+            /** Params */
+            params?: {
+                [key: string]: unknown;
+            };
+            /** Provider */
+            provider?: string | null;
+            /** Recipe */
+            recipe: string;
+            /** Tier */
+            tier?: string | null;
+        };
+        /** JobRead */
+        JobRead: {
+            /**
+             * Captureid
+             * Format: uuid
+             */
+            captureId: string;
+            /** Claimedat */
+            claimedAt: string | null;
+            /** Claimedby */
+            claimedBy: string | null;
+            /** Costusd */
+            costUsd: string | null;
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /** Durations */
+            durationS: number | null;
+            /** Error */
+            error: string | null;
+            /** Finishedat */
+            finishedAt: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Leaseexpiresat */
+            leaseExpiresAt: string | null;
+            /** Params */
+            params: {
+                [key: string]: unknown;
+            };
+            /** Provider */
+            provider: string | null;
+            /** Recipe */
+            recipe: string;
+            /** Recipeversion */
+            recipeVersion: string;
+            status: components["schemas"]["RunStatus"];
+            /** Steps */
+            steps: components["schemas"]["JobStepRead"][];
+            /** Tier */
+            tier: string | null;
+            /**
+             * Updatedat
+             * Format: date-time
+             */
+            updatedAt: string;
+        };
+        /** JobStepRead */
+        JobStepRead: {
+            /** Artifacts */
+            artifacts: components["schemas"]["ArtifactRead"][];
+            /** Attempt */
+            attempt: number;
+            /** Checkpointkey */
+            checkpointKey: string | null;
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /** Finishedat */
+            finishedAt: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Impl */
+            impl: string;
+            /**
+             * Jobid
+             * Format: uuid
+             */
+            jobId: string;
+            /** Logkey */
+            logKey: string | null;
+            /** Metrics */
+            metrics: {
+                [key: string]: unknown;
+            };
+            /** Ordinal */
+            ordinal: number;
+            /** Preemptedat */
+            preemptedAt: string | null;
+            /** Stageid */
+            stageId: string;
+            /** Startedat */
+            startedAt: string | null;
+            status: components["schemas"]["RunStatus"];
+            /**
+             * Updatedat
+             * Format: date-time
+             */
+            updatedAt: string;
         };
         /**
          * LayerCategory
@@ -1557,6 +2145,20 @@ export interface components {
             type: "Polygon";
         };
         /**
+         * PresignedPart
+         * @description One part of a multipart upload, and the URL to PUT it to.
+         *
+         *     The uploader must read the `ETag` response header off that PUT and send it back to
+         *     `.../complete` — which needs `ExposeHeaders: ["ETag"]` in the bucket's CORS rule
+         *     (infra/cors/upload.json), or the header is invisible to JavaScript.
+         */
+        PresignedPart: {
+            /** Partnumber */
+            partNumber: number;
+            /** Url */
+            url: string;
+        };
+        /**
          * Problem
          * @description RFC 9457-style error payload.
          */
@@ -1651,6 +2253,29 @@ export interface components {
             /** Pointspacingm */
             pointSpacingM?: number | null;
         };
+        /**
+         * RunStatus
+         * @description Lifecycle of a job and of each of its steps — one vocabulary, because a step's
+         *     states and a run's states are the same states.
+         *
+         *     Again ion's words, plus ``cancelled``: a run stopped on purpose is not an error, and
+         *     ion's asset lifecycle has nothing to say about it because ion has no cancel. There is
+         *     deliberately no ``preempted`` member — a preempted step goes back to ``in-progress``
+         *     on the next attempt, and ``job_steps.preempted_at`` and ``attempt`` record that it
+         *     happened without inventing a state the step is never resting in.
+         * @enum {string}
+         */
+        RunStatus: "not-started" | "in-progress" | "complete" | "error" | "cancelled";
+        /**
+         * ScaleSource
+         * @description Where metric scale came from.
+         *
+         *     ``unresolved`` is a first-class answer, not a missing value: COLMAP alone recovers
+         *     geometry up to scale, and a measurement taken off an unresolved reconstruction is
+         *     meaningless rather than merely imprecise.
+         * @enum {string}
+         */
+        ScaleSource: "arkit" | "exif-gps" | "manual" | "unresolved";
         /** SiteCreate */
         SiteCreate: {
             /** Assets */
@@ -1839,6 +2464,43 @@ export interface components {
              */
             url: string;
         };
+        /**
+         * UploadStatus
+         * @description Lifecycle of one uploaded source object (an S3 multipart upload).
+         *
+         *     Same words as :class:`CaptureStatus` where they mean the same thing; ``aborted`` is
+         *     the one addition, because ``abort_multipart`` is a real outcome that is neither an
+         *     error nor a completion.
+         * @enum {string}
+         */
+        UploadStatus: "not-started" | "in-progress" | "complete" | "error" | "aborted";
+        /**
+         * UploadWindow
+         * @description A bounded run of presigned part URLs, not the whole upload.
+         *
+         *     A 12 GB video at 8 MiB parts is 1536 parts, about 590 KB of URLs if they were all
+         *     presigned at once (A0's sizing), and they would start expiring long before the
+         *     upload reached them. So the client uploads this window, then asks
+         *     `POST /captures/{id}/files/{fileId}/parts` for the next one starting at
+         *     `nextPartNumber`. Resuming an interrupted upload is the same call with the first
+         *     part number the client has not confirmed.
+         */
+        UploadWindow: {
+            /** Expiresin */
+            expiresIn: number;
+            /** Nextpartnumber */
+            nextPartNumber: number | null;
+            /** Parts */
+            parts: components["schemas"]["PresignedPart"][];
+            /** Partsize */
+            partSize: number;
+            /** Partstotal */
+            partsTotal: number | null;
+            /** Storagekey */
+            storageKey: string;
+            /** Uploadid */
+            uploadId: string;
+        };
         /** WmsSource */
         WmsSource: {
             /** Layers */
@@ -1919,6 +2581,8 @@ export interface components {
     pathItems: never;
 }
 export type SchemaArcGisMapServerSource = components['schemas']['ArcGisMapServerSource'];
+export type SchemaArtifactKind = components['schemas']['ArtifactKind'];
+export type SchemaArtifactRead = components['schemas']['ArtifactRead'];
 export type SchemaAssetBase = components['schemas']['AssetBase'];
 export type SchemaAssetCreate = components['schemas']['AssetCreate'];
 export type SchemaAssetProvider = components['schemas']['AssetProvider'];
@@ -1930,6 +2594,17 @@ export type SchemaBoundingBox = components['schemas']['BoundingBox'];
 export type SchemaBusyWindow = components['schemas']['BusyWindow'];
 export type SchemaCameraBookmarkCreate = components['schemas']['CameraBookmarkCreate'];
 export type SchemaCameraBookmarkRead = components['schemas']['CameraBookmarkRead'];
+export type SchemaCaptureCreate = components['schemas']['CaptureCreate'];
+export type SchemaCaptureDetail = components['schemas']['CaptureDetail'];
+export type SchemaCaptureFileComplete = components['schemas']['CaptureFileComplete'];
+export type SchemaCaptureFileCreate = components['schemas']['CaptureFileCreate'];
+export type SchemaCaptureFilePart = components['schemas']['CaptureFilePart'];
+export type SchemaCaptureFilePartsRequest = components['schemas']['CaptureFilePartsRequest'];
+export type SchemaCaptureFileRead = components['schemas']['CaptureFileRead'];
+export type SchemaCaptureFileUpload = components['schemas']['CaptureFileUpload'];
+export type SchemaCaptureKind = components['schemas']['CaptureKind'];
+export type SchemaCaptureRead = components['schemas']['CaptureRead'];
+export type SchemaCaptureStatus = components['schemas']['CaptureStatus'];
 export type SchemaCesiumIon3DTilesSource = components['schemas']['CesiumIon3DTilesSource'];
 export type SchemaCesiumIonImagerySource = components['schemas']['CesiumIonImagerySource'];
 export type SchemaCesiumIonSource = components['schemas']['CesiumIonSource'];
@@ -1940,11 +2615,15 @@ export type SchemaCrsMetadata = components['schemas']['CrsMetadata'];
 export type SchemaCzmlSource = components['schemas']['CzmlSource'];
 export type SchemaGeoJsonSource = components['schemas']['GeoJsonSource'];
 export type SchemaGeoPosition = components['schemas']['GeoPosition'];
+export type SchemaGeorefMethod = components['schemas']['GeorefMethod'];
 export type SchemaGooglePhotorealisticSource = components['schemas']['GooglePhotorealisticSource'];
 export type SchemaHealthStatus = components['schemas']['HealthStatus'];
 export type SchemaIonAssetMetadata = components['schemas']['IonAssetMetadata'];
 export type SchemaIonReconstructionCapabilities = components['schemas']['IonReconstructionCapabilities'];
 export type SchemaIonStatus = components['schemas']['IonStatus'];
+export type SchemaJobCreate = components['schemas']['JobCreate'];
+export type SchemaJobRead = components['schemas']['JobRead'];
+export type SchemaJobStepRead = components['schemas']['JobStepRead'];
 export type SchemaLayerCategory = components['schemas']['LayerCategory'];
 export type SchemaLayerCreate = components['schemas']['LayerCreate'];
 export type SchemaLayerRead = components['schemas']['LayerRead'];
@@ -1976,12 +2655,15 @@ export type SchemaPlanStatusUpdate = components['schemas']['PlanStatusUpdate'];
 export type SchemaPlanStep = components['schemas']['PlanStep'];
 export type SchemaPointCloudShading = components['schemas']['PointCloudShading'];
 export type SchemaPolygon = components['schemas']['Polygon'];
+export type SchemaPresignedPart = components['schemas']['PresignedPart'];
 export type SchemaProblem = components['schemas']['Problem'];
 export type SchemaProvenance = components['schemas']['Provenance'];
 export type SchemaRenderConfig = components['schemas']['RenderConfig'];
 export type SchemaRenderMetadata = components['schemas']['RenderMetadata'];
 export type SchemaRepresentation = components['schemas']['Representation'];
 export type SchemaResolutionMetadata = components['schemas']['ResolutionMetadata'];
+export type SchemaRunStatus = components['schemas']['RunStatus'];
+export type SchemaScaleSource = components['schemas']['ScaleSource'];
 export type SchemaSiteCreate = components['schemas']['SiteCreate'];
 export type SchemaSiteQuality = components['schemas']['SiteQuality'];
 export type SchemaSiteRead = components['schemas']['SiteRead'];
@@ -1991,6 +2673,8 @@ export type SchemaStacSource = components['schemas']['StacSource'];
 export type SchemaTemporalExtent = components['schemas']['TemporalExtent'];
 export type SchemaTilesUrlLayerSource = components['schemas']['TilesUrlLayerSource'];
 export type SchemaTilesUrlSource = components['schemas']['TilesUrlSource'];
+export type SchemaUploadStatus = components['schemas']['UploadStatus'];
+export type SchemaUploadWindow = components['schemas']['UploadWindow'];
 export type SchemaWmsSource = components['schemas']['WmsSource'];
 export type SchemaWmtsSource = components['schemas']['WmtsSource'];
 export type SchemaXyzSource = components['schemas']['XyzSource'];
@@ -2016,6 +2700,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Outline"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             /** @description Not found */
@@ -2076,6 +2769,15 @@ export interface operations {
                     "application/json": components["schemas"]["PlanDraft"];
                 };
             };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
             /** @description Not found */
             404: {
                 headers: {
@@ -2121,6 +2823,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PlannerStatus"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             /** @description Not found */
@@ -2170,6 +2881,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AssetRead"][];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             /** @description Not found */
@@ -2223,6 +2943,15 @@ export interface operations {
                     "application/json": components["schemas"]["AssetRead"];
                 };
             };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
             /** @description Not found */
             404: {
                 headers: {
@@ -2272,6 +3001,15 @@ export interface operations {
                     "application/json": components["schemas"]["AssetRead"];
                 };
             };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
             /** @description Not found */
             404: {
                 headers: {
@@ -2318,6 +3056,15 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
             };
             /** @description Not found */
             404: {
@@ -2372,6 +3119,537 @@ export interface operations {
                     "application/json": components["schemas"]["AssetRead"];
                 };
             };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    list_captures_api_v1_captures_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CaptureRead"][];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    create_capture_api_v1_captures_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CaptureCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CaptureRead"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    get_capture_api_v1_captures__capture_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                capture_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CaptureDetail"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    register_file_api_v1_captures__capture_id__files_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                capture_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CaptureFileCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CaptureFileUpload"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Object storage is not configured */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    abort_file_api_v1_captures__capture_id__files__file_id__abort_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                capture_id: string;
+                file_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CaptureFileRead"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Object storage is not configured */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    complete_file_api_v1_captures__capture_id__files__file_id__complete_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                capture_id: string;
+                file_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CaptureFileComplete"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CaptureFileRead"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Object storage is not configured */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    presign_parts_api_v1_captures__capture_id__files__file_id__parts_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                capture_id: string;
+                file_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CaptureFilePartsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UploadWindow"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Object storage is not configured */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    process_capture_api_v1_captures__capture_id__process_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                capture_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["JobCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobRead"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
             /** @description Not found */
             404: {
                 headers: {
@@ -2417,6 +3695,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HealthStatus"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             /** @description Not found */
@@ -2468,6 +3755,15 @@ export interface operations {
                     "application/json": components["schemas"]["IonAssetMetadata"];
                 };
             };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
             /** @description Not found */
             404: {
                 headers: {
@@ -2515,6 +3811,192 @@ export interface operations {
                     "application/json": components["schemas"]["IonStatus"];
                 };
             };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    list_jobs_api_v1_jobs_get: {
+        parameters: {
+            query?: {
+                captureId?: string | null;
+                limit?: number;
+                offset?: number;
+                status?: components["schemas"]["RunStatus"] | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobRead"][];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    get_job_api_v1_jobs__job_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobRead"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    cancel_job_api_v1_jobs__job_id__cancel_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobRead"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
             /** @description Not found */
             404: {
                 headers: {
@@ -2560,6 +4042,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LayerRead"][];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             /** @description Not found */
@@ -2613,6 +4104,15 @@ export interface operations {
                     "application/json": components["schemas"]["LayerRead"];
                 };
             };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
             /** @description Not found */
             404: {
                 headers: {
@@ -2662,6 +4162,15 @@ export interface operations {
                     "application/json": components["schemas"]["LayerRead"];
                 };
             };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
             /** @description Not found */
             404: {
                 headers: {
@@ -2708,6 +4217,15 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
             };
             /** @description Not found */
             404: {
@@ -2762,6 +4280,15 @@ export interface operations {
                     "application/json": components["schemas"]["LayerRead"];
                 };
             };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
             /** @description Not found */
             404: {
                 headers: {
@@ -2809,6 +4336,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PlanRead"][];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             /** @description Not found */
@@ -2862,6 +4398,15 @@ export interface operations {
                     "application/json": components["schemas"]["PlanRead"];
                 };
             };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
             /** @description Not found */
             404: {
                 headers: {
@@ -2909,6 +4454,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PlanRead"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             /** @description Not found */
@@ -2964,6 +4518,15 @@ export interface operations {
                     "application/json": components["schemas"]["PlanRead"];
                 };
             };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
             /** @description Not found */
             404: {
                 headers: {
@@ -3010,6 +4573,15 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
             };
             /** @description Not found */
             404: {
@@ -3064,6 +4636,15 @@ export interface operations {
                     "application/json": components["schemas"]["PlanRead"];
                 };
             };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
             /** @description Not found */
             404: {
                 headers: {
@@ -3109,6 +4690,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SiteSummary"][];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             /** @description Not found */
@@ -3162,6 +4752,15 @@ export interface operations {
                     "application/json": components["schemas"]["SiteRead"];
                 };
             };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
             /** @description Not found */
             404: {
                 headers: {
@@ -3211,6 +4810,15 @@ export interface operations {
                     "application/json": components["schemas"]["SiteRead"];
                 };
             };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
             /** @description Not found */
             404: {
                 headers: {
@@ -3257,6 +4865,15 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
             };
             /** @description Not found */
             404: {
@@ -3311,6 +4928,15 @@ export interface operations {
                     "application/json": components["schemas"]["SiteRead"];
                 };
             };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
             /** @description Not found */
             404: {
                 headers: {
@@ -3360,6 +4986,15 @@ export interface operations {
                     "application/json": components["schemas"]["AssetRead"][];
                 };
             };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
             /** @description Not found */
             404: {
                 headers: {
@@ -3407,6 +5042,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CameraBookmarkRead"][];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             /** @description Not found */
@@ -3462,6 +5106,15 @@ export interface operations {
                     "application/json": components["schemas"]["CameraBookmarkRead"];
                 };
             };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
             /** @description Not found */
             404: {
                 headers: {
@@ -3509,6 +5162,15 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
             };
             /** @description Not found */
             404: {
@@ -3563,6 +5225,15 @@ export interface operations {
                     "application/json": components["schemas"]["SiteRead"];
                 };
             };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
             /** @description Not found */
             404: {
                 headers: {
@@ -3610,6 +5281,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SiteRead"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             /** @description Not found */

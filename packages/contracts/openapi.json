@@ -36,6 +36,104 @@
         "title": "ArcGisMapServerSource",
         "type": "object"
       },
+      "ArtifactKind": {
+        "description": "What a stage produced. Step logs and checkpoints are not artifacts: they are\n``job_steps.log_key`` and ``job_steps.checkpoint_key``.",
+        "enum": [
+          "frames",
+          "poses",
+          "masks",
+          "splat",
+          "deformation-field",
+          "mesh",
+          "point-cloud",
+          "3d-tiles",
+          "thumbnail",
+          "ground-samples",
+          "manifest",
+          "clip"
+        ],
+        "title": "ArtifactKind",
+        "type": "string"
+      },
+      "ArtifactRead": {
+        "additionalProperties": false,
+        "description": "Read model: every field is explicit (no defaults) so the OpenAPI contract marks it\nrequired.",
+        "properties": {
+          "bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bytes"
+          },
+          "checksum": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Checksum"
+          },
+          "contentType": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contenttype"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "jobStepId": {
+            "format": "uuid",
+            "title": "Jobstepid",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ArtifactKind"
+          },
+          "storageKey": {
+            "title": "Storagekey",
+            "type": "string"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "title": "Updatedat",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "jobStepId",
+          "kind",
+          "storageKey",
+          "bytes",
+          "checksum",
+          "contentType",
+          "createdAt",
+          "updatedAt"
+        ],
+        "title": "ArtifactRead",
+        "type": "object"
+      },
       "AssetBase": {
         "additionalProperties": false,
         "properties": {
@@ -957,6 +1055,803 @@
         "title": "CameraBookmarkRead",
         "type": "object"
       },
+      "CaptureCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "attribution": {
+            "items": {
+              "$ref": "#/components/schemas/Attribution"
+            },
+            "title": "Attribution",
+            "type": "array"
+          },
+          "capturedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Capturedat"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "maxLength": 5000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "device": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/CaptureKind"
+          },
+          "license": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LicenseMetadata"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "title": "Metadata",
+            "type": "object"
+          },
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "provenance": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Provenance"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sensor": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sensor"
+          },
+          "slug": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Slug"
+          },
+          "temporalExtent": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TemporalExtent"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "kind"
+        ],
+        "title": "CaptureCreate",
+        "type": "object"
+      },
+      "CaptureDetail": {
+        "additionalProperties": false,
+        "description": "One capture with everything hanging off it: its files and every run over it.",
+        "properties": {
+          "attribution": {
+            "items": {
+              "$ref": "#/components/schemas/Attribution"
+            },
+            "title": "Attribution",
+            "type": "array"
+          },
+          "capturedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Capturedat"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "device": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device"
+          },
+          "files": {
+            "items": {
+              "$ref": "#/components/schemas/CaptureFileRead"
+            },
+            "title": "Files",
+            "type": "array"
+          },
+          "georefMethod": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GeorefMethod"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "jobs": {
+            "items": {
+              "$ref": "#/components/schemas/JobRead"
+            },
+            "title": "Jobs",
+            "type": "array"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/CaptureKind"
+          },
+          "license": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LicenseMetadata"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "title": "Metadata",
+            "type": "object"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "provenance": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Provenance"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "scaleSource": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ScaleSource"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sensor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sensor"
+          },
+          "siteId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Siteid"
+          },
+          "slug": {
+            "title": "Slug",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/CaptureStatus"
+          },
+          "temporalExtent": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TemporalExtent"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "uncertaintyM": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Uncertaintym"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "title": "Updatedat",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "slug",
+          "name",
+          "description",
+          "status",
+          "kind",
+          "device",
+          "sensor",
+          "capturedAt",
+          "temporalExtent",
+          "georefMethod",
+          "scaleSource",
+          "uncertaintyM",
+          "metadata",
+          "attribution",
+          "license",
+          "provenance",
+          "siteId",
+          "files",
+          "createdAt",
+          "updatedAt",
+          "jobs"
+        ],
+        "title": "CaptureDetail",
+        "type": "object"
+      },
+      "CaptureFileComplete": {
+        "additionalProperties": false,
+        "description": "Finish the multipart upload. Parts may arrive in any order; they are sorted.",
+        "properties": {
+          "checksum": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Checksum"
+          },
+          "parts": {
+            "items": {
+              "$ref": "#/components/schemas/CaptureFilePart"
+            },
+            "minItems": 1,
+            "title": "Parts",
+            "type": "array"
+          }
+        },
+        "required": [
+          "parts"
+        ],
+        "title": "CaptureFileComplete",
+        "type": "object"
+      },
+      "CaptureFileCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "bytes": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bytes"
+          },
+          "contentType": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contenttype"
+          },
+          "filename": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Filename",
+            "type": "string"
+          }
+        },
+        "required": [
+          "filename"
+        ],
+        "title": "CaptureFileCreate",
+        "type": "object"
+      },
+      "CaptureFilePart": {
+        "additionalProperties": false,
+        "description": "A part the client has finished uploading, as S3 reported it.",
+        "properties": {
+          "etag": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Etag",
+            "type": "string"
+          },
+          "partNumber": {
+            "minimum": 1.0,
+            "title": "Partnumber",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "partNumber",
+          "etag"
+        ],
+        "title": "CaptureFilePart",
+        "type": "object"
+      },
+      "CaptureFilePartsRequest": {
+        "additionalProperties": false,
+        "description": "Ask for the window of parts starting at `firstPartNumber`.\n\n`count` is clamped to the server's window size; asking for 1536 parts does not get\nyou 1536 parts.",
+        "properties": {
+          "count": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Count"
+          },
+          "firstPartNumber": {
+            "default": 1,
+            "minimum": 1.0,
+            "title": "Firstpartnumber",
+            "type": "integer"
+          }
+        },
+        "title": "CaptureFilePartsRequest",
+        "type": "object"
+      },
+      "CaptureFileRead": {
+        "additionalProperties": false,
+        "description": "Read model: every field is explicit (no defaults) so the OpenAPI contract marks it\nrequired.",
+        "properties": {
+          "bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bytes"
+          },
+          "captureId": {
+            "format": "uuid",
+            "title": "Captureid",
+            "type": "string"
+          },
+          "checksum": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Checksum"
+          },
+          "contentType": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contenttype"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "filename": {
+            "title": "Filename",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "partsCompleted": {
+            "title": "Partscompleted",
+            "type": "integer"
+          },
+          "partsTotal": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Partstotal"
+          },
+          "status": {
+            "$ref": "#/components/schemas/UploadStatus"
+          },
+          "storageKey": {
+            "title": "Storagekey",
+            "type": "string"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "title": "Updatedat",
+            "type": "string"
+          },
+          "uploadId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Uploadid"
+          }
+        },
+        "required": [
+          "id",
+          "captureId",
+          "filename",
+          "contentType",
+          "bytes",
+          "checksum",
+          "storageKey",
+          "status",
+          "uploadId",
+          "partsTotal",
+          "partsCompleted",
+          "createdAt",
+          "updatedAt"
+        ],
+        "title": "CaptureFileRead",
+        "type": "object"
+      },
+      "CaptureFileUpload": {
+        "additionalProperties": false,
+        "description": "The registered row plus the first window of presigned parts.",
+        "properties": {
+          "file": {
+            "$ref": "#/components/schemas/CaptureFileRead"
+          },
+          "upload": {
+            "$ref": "#/components/schemas/UploadWindow"
+          }
+        },
+        "required": [
+          "file",
+          "upload"
+        ],
+        "title": "CaptureFileUpload",
+        "type": "object"
+      },
+      "CaptureKind": {
+        "description": "What was uploaded, which decides the lane a capture runs down.\n\n``gaussian-splat`` and ``point-cloud`` deliberately repeat the identifiers\n:class:`Representation` already fixed in the contract: the same thing should not\nbe spelled two ways depending on which table it is named in.",
+        "enum": [
+          "video",
+          "images",
+          "gaussian-splat",
+          "point-cloud"
+        ],
+        "title": "CaptureKind",
+        "type": "string"
+      },
+      "CaptureRead": {
+        "additionalProperties": false,
+        "properties": {
+          "attribution": {
+            "items": {
+              "$ref": "#/components/schemas/Attribution"
+            },
+            "title": "Attribution",
+            "type": "array"
+          },
+          "capturedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Capturedat"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "device": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device"
+          },
+          "files": {
+            "items": {
+              "$ref": "#/components/schemas/CaptureFileRead"
+            },
+            "title": "Files",
+            "type": "array"
+          },
+          "georefMethod": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GeorefMethod"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/CaptureKind"
+          },
+          "license": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LicenseMetadata"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "title": "Metadata",
+            "type": "object"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "provenance": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Provenance"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "scaleSource": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ScaleSource"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sensor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sensor"
+          },
+          "siteId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Siteid"
+          },
+          "slug": {
+            "title": "Slug",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/CaptureStatus"
+          },
+          "temporalExtent": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TemporalExtent"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "uncertaintyM": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Uncertaintym"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "title": "Updatedat",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "slug",
+          "name",
+          "description",
+          "status",
+          "kind",
+          "device",
+          "sensor",
+          "capturedAt",
+          "temporalExtent",
+          "georefMethod",
+          "scaleSource",
+          "uncertaintyM",
+          "metadata",
+          "attribution",
+          "license",
+          "provenance",
+          "siteId",
+          "files",
+          "createdAt",
+          "updatedAt"
+        ],
+        "title": "CaptureRead",
+        "type": "object"
+      },
+      "CaptureStatus": {
+        "description": "Lifecycle of an upload session.\n\nDeliberately the vocabulary Cesium ion already exposes through\n``app.schemas.ion.IonAssetStatus`` (``AWAITING_FILES | NOT_STARTED | IN_PROGRESS |\nCOMPLETE | ERROR``), in this module's kebab-case spelling: a capture waiting for its\nbytes, uploaded but unprocessed, processing, done or failed are the same five states\nion means by those words. ion's ``DATA_ERROR`` is not repeated \u2014 it is a distinction\nabout ion's own tiler, and here the error message carries that detail.",
+        "enum": [
+          "awaiting-files",
+          "not-started",
+          "in-progress",
+          "complete",
+          "error"
+        ],
+        "title": "CaptureStatus",
+        "type": "string"
+      },
       "CesiumIon3DTilesSource": {
         "additionalProperties": false,
         "properties": {
@@ -1336,6 +2231,17 @@
         "title": "GeoPosition",
         "type": "object"
       },
+      "GeorefMethod": {
+        "description": "How a reconstruction was placed on the globe.",
+        "enum": [
+          "exif-gps",
+          "arkit",
+          "manual",
+          "none"
+        ],
+        "title": "GeorefMethod",
+        "type": "string"
+      },
       "GooglePhotorealisticSource": {
         "additionalProperties": false,
         "properties": {
@@ -1529,6 +2435,359 @@
           "reconstruction"
         ],
         "title": "IonStatus",
+        "type": "object"
+      },
+      "JobCreate": {
+        "additionalProperties": false,
+        "description": "Launch a run. `recipeVersion` is resolved from the recipe registry rather than\nsupplied, so a caller cannot claim a run used a version that does not exist.",
+        "properties": {
+          "params": {
+            "additionalProperties": true,
+            "title": "Params",
+            "type": "object"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "maxLength": 40,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider"
+          },
+          "recipe": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Recipe",
+            "type": "string"
+          },
+          "tier": {
+            "anyOf": [
+              {
+                "maxLength": 40,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tier"
+          }
+        },
+        "required": [
+          "recipe"
+        ],
+        "title": "JobCreate",
+        "type": "object"
+      },
+      "JobRead": {
+        "additionalProperties": false,
+        "properties": {
+          "captureId": {
+            "format": "uuid",
+            "title": "Captureid",
+            "type": "string"
+          },
+          "claimedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Claimedat"
+          },
+          "claimedBy": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Claimedby"
+          },
+          "costUsd": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Costusd"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "durationS": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Durations"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "finishedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finishedat"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "leaseExpiresAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Leaseexpiresat"
+          },
+          "params": {
+            "additionalProperties": true,
+            "title": "Params",
+            "type": "object"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider"
+          },
+          "recipe": {
+            "title": "Recipe",
+            "type": "string"
+          },
+          "recipeVersion": {
+            "title": "Recipeversion",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/RunStatus"
+          },
+          "steps": {
+            "items": {
+              "$ref": "#/components/schemas/JobStepRead"
+            },
+            "title": "Steps",
+            "type": "array"
+          },
+          "tier": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tier"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "title": "Updatedat",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "captureId",
+          "recipe",
+          "recipeVersion",
+          "params",
+          "status",
+          "provider",
+          "tier",
+          "finishedAt",
+          "durationS",
+          "costUsd",
+          "error",
+          "claimedBy",
+          "claimedAt",
+          "leaseExpiresAt",
+          "steps",
+          "createdAt",
+          "updatedAt"
+        ],
+        "title": "JobRead",
+        "type": "object"
+      },
+      "JobStepRead": {
+        "additionalProperties": false,
+        "properties": {
+          "artifacts": {
+            "items": {
+              "$ref": "#/components/schemas/ArtifactRead"
+            },
+            "title": "Artifacts",
+            "type": "array"
+          },
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "checkpointKey": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Checkpointkey"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "finishedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finishedat"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "impl": {
+            "title": "Impl",
+            "type": "string"
+          },
+          "jobId": {
+            "format": "uuid",
+            "title": "Jobid",
+            "type": "string"
+          },
+          "logKey": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Logkey"
+          },
+          "metrics": {
+            "additionalProperties": true,
+            "title": "Metrics",
+            "type": "object"
+          },
+          "ordinal": {
+            "title": "Ordinal",
+            "type": "integer"
+          },
+          "preemptedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preemptedat"
+          },
+          "stageId": {
+            "title": "Stageid",
+            "type": "string"
+          },
+          "startedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Startedat"
+          },
+          "status": {
+            "$ref": "#/components/schemas/RunStatus"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "title": "Updatedat",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "jobId",
+          "stageId",
+          "ordinal",
+          "impl",
+          "status",
+          "startedAt",
+          "finishedAt",
+          "metrics",
+          "logKey",
+          "attempt",
+          "checkpointKey",
+          "preemptedAt",
+          "artifacts",
+          "createdAt",
+          "updatedAt"
+        ],
+        "title": "JobStepRead",
         "type": "object"
       },
       "LayerCategory": {
@@ -3767,6 +5026,26 @@
         "title": "Polygon",
         "type": "object"
       },
+      "PresignedPart": {
+        "additionalProperties": false,
+        "description": "One part of a multipart upload, and the URL to PUT it to.\n\nThe uploader must read the `ETag` response header off that PUT and send it back to\n`.../complete` \u2014 which needs `ExposeHeaders: [\"ETag\"]` in the bucket's CORS rule\n(infra/cors/upload.json), or the header is invisible to JavaScript.",
+        "properties": {
+          "partNumber": {
+            "title": "Partnumber",
+            "type": "integer"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "partNumber",
+          "url"
+        ],
+        "title": "PresignedPart",
+        "type": "object"
+      },
       "Problem": {
         "additionalProperties": false,
         "description": "RFC 9457-style error payload.",
@@ -4049,6 +5328,29 @@
         },
         "title": "ResolutionMetadata",
         "type": "object"
+      },
+      "RunStatus": {
+        "description": "Lifecycle of a job and of each of its steps \u2014 one vocabulary, because a step's\nstates and a run's states are the same states.\n\nAgain ion's words, plus ``cancelled``: a run stopped on purpose is not an error, and\nion's asset lifecycle has nothing to say about it because ion has no cancel. There is\ndeliberately no ``preempted`` member \u2014 a preempted step goes back to ``in-progress``\non the next attempt, and ``job_steps.preempted_at`` and ``attempt`` record that it\nhappened without inventing a state the step is never resting in.",
+        "enum": [
+          "not-started",
+          "in-progress",
+          "complete",
+          "error",
+          "cancelled"
+        ],
+        "title": "RunStatus",
+        "type": "string"
+      },
+      "ScaleSource": {
+        "description": "Where metric scale came from.\n\n``unresolved`` is a first-class answer, not a missing value: COLMAP alone recovers\ngeometry up to scale, and a measurement taken off an unresolved reconstruction is\nmeaningless rather than merely imprecise.",
+        "enum": [
+          "arkit",
+          "exif-gps",
+          "manual",
+          "unresolved"
+        ],
+        "title": "ScaleSource",
+        "type": "string"
       },
       "SiteCreate": {
         "additionalProperties": false,
@@ -4680,6 +5982,80 @@
         "title": "TilesUrlSource",
         "type": "object"
       },
+      "UploadStatus": {
+        "description": "Lifecycle of one uploaded source object (an S3 multipart upload).\n\nSame words as :class:`CaptureStatus` where they mean the same thing; ``aborted`` is\nthe one addition, because ``abort_multipart`` is a real outcome that is neither an\nerror nor a completion.",
+        "enum": [
+          "not-started",
+          "in-progress",
+          "complete",
+          "error",
+          "aborted"
+        ],
+        "title": "UploadStatus",
+        "type": "string"
+      },
+      "UploadWindow": {
+        "additionalProperties": false,
+        "description": "A bounded run of presigned part URLs, not the whole upload.\n\nA 12 GB video at 8 MiB parts is 1536 parts, about 590 KB of URLs if they were all\npresigned at once (A0's sizing), and they would start expiring long before the\nupload reached them. So the client uploads this window, then asks\n`POST /captures/{id}/files/{fileId}/parts` for the next one starting at\n`nextPartNumber`. Resuming an interrupted upload is the same call with the first\npart number the client has not confirmed.",
+        "properties": {
+          "expiresIn": {
+            "title": "Expiresin",
+            "type": "integer"
+          },
+          "nextPartNumber": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nextpartnumber"
+          },
+          "partSize": {
+            "title": "Partsize",
+            "type": "integer"
+          },
+          "parts": {
+            "items": {
+              "$ref": "#/components/schemas/PresignedPart"
+            },
+            "title": "Parts",
+            "type": "array"
+          },
+          "partsTotal": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Partstotal"
+          },
+          "storageKey": {
+            "title": "Storagekey",
+            "type": "string"
+          },
+          "uploadId": {
+            "title": "Uploadid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "uploadId",
+          "storageKey",
+          "partSize",
+          "partsTotal",
+          "parts",
+          "expiresIn",
+          "nextPartNumber"
+        ],
+        "title": "UploadWindow",
+        "type": "object"
+      },
       "WmsSource": {
         "additionalProperties": false,
         "properties": {
@@ -4842,10 +6218,17 @@
         "title": "XyzSource",
         "type": "object"
       }
+    },
+    "securitySchemes": {
+      "writeToken": {
+        "description": "The shared write token (`API_WRITE_TOKEN`), as `Authorization: Bearer <token>`.",
+        "scheme": "bearer",
+        "type": "http"
+      }
     }
   },
   "info": {
-    "description": "\nCatalog service for the geospatial digital twin.\n\n* **Sites** \u2014 physical places with reality captures, footprints and camera bookmarks.\n* **Assets** \u2014 derived, renderable delivery assets (3D Tiles) with provenance.\n* **Layers** \u2014 composable world layers from open data or the user's own sources.\n\nAll geometry is GeoJSON (WGS 84, RFC 7946). All timestamps are ISO 8601.\n",
+    "description": "\nCatalog service for the geospatial digital twin.\n\n* **Sites** \u2014 physical places with reality captures, footprints and camera bookmarks.\n* **Assets** \u2014 derived, renderable delivery assets (3D Tiles) with provenance.\n* **Layers** \u2014 composable world layers from open data or the user's own sources.\n* **Captures** \u2014 uploads in progress: source files go browser \u2192 object storage over\n  presigned multipart URLs, never through this API.\n* **Jobs** \u2014 pipeline runs over a capture, queued here and executed by a worker.\n\nAll geometry is GeoJSON (WGS 84, RFC 7946). All timestamps are ISO 8601.\n\nReads are open. Every mutating endpoint requires the shared write token as\n`Authorization: Bearer <API_WRITE_TOKEN>`, unless the deployment has no token\nconfigured \u2014 which production refuses to start without.\n",
     "title": "Digital Twin API",
     "version": "1.0.0"
   },
@@ -4875,6 +6258,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
           },
           "404": {
             "content": {
@@ -4910,6 +6303,11 @@
             "description": "No planning model is configured"
           }
         },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
         "summary": "Outline the ground feature under a clicked point",
         "tags": [
           "agent"
@@ -4940,6 +6338,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
           },
           "404": {
             "content": {
@@ -4972,6 +6380,11 @@
             "description": "Validation error"
           }
         },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
         "summary": "Draft a mission plan from a goal",
         "tags": [
           "agent"
@@ -4991,6 +6404,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
           },
           "404": {
             "content": {
@@ -5066,6 +6489,16 @@
             },
             "description": "Successful Response"
           },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
           "404": {
             "content": {
               "application/json": {
@@ -5125,6 +6558,16 @@
             },
             "description": "Successful Response"
           },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
           "404": {
             "content": {
               "application/json": {
@@ -5156,6 +6599,11 @@
             "description": "Validation error"
           }
         },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
         "summary": "Register an asset",
         "tags": [
           "assets"
@@ -5181,6 +6629,16 @@
           "204": {
             "description": "Successful Response"
           },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
           "404": {
             "content": {
               "application/json": {
@@ -5212,6 +6670,11 @@
             "description": "Validation error"
           }
         },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
         "summary": "Delete an asset",
         "tags": [
           "assets"
@@ -5241,6 +6704,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
           },
           "404": {
             "content": {
@@ -5313,6 +6786,16 @@
             },
             "description": "Successful Response"
           },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
           "404": {
             "content": {
               "application/json": {
@@ -5344,9 +6827,752 @@
             "description": "Validation error"
           }
         },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
         "summary": "Update an asset",
         "tags": [
           "assets"
+        ]
+      }
+    },
+    "/api/v1/captures": {
+      "get": {
+        "operationId": "list_captures_api_v1_captures_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/CaptureRead"
+                  },
+                  "title": "Response List Captures Api V1 Captures Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "summary": "List captures, newest first",
+        "tags": [
+          "captures"
+        ]
+      },
+      "post": {
+        "operationId": "create_capture_api_v1_captures_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CaptureCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CaptureRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Create a capture",
+        "tags": [
+          "captures"
+        ]
+      }
+    },
+    "/api/v1/captures/{capture_id}": {
+      "get": {
+        "operationId": "get_capture_api_v1_captures__capture_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "capture_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Capture Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CaptureDetail"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "summary": "Get a capture, its files and its jobs",
+        "tags": [
+          "captures"
+        ]
+      }
+    },
+    "/api/v1/captures/{capture_id}/files": {
+      "post": {
+        "operationId": "register_file_api_v1_captures__capture_id__files_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "capture_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Capture Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CaptureFileCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CaptureFileUpload"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Object storage is not configured"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Register a file and begin its upload",
+        "tags": [
+          "captures"
+        ]
+      }
+    },
+    "/api/v1/captures/{capture_id}/files/{file_id}/abort": {
+      "post": {
+        "operationId": "abort_file_api_v1_captures__capture_id__files__file_id__abort_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "capture_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Capture Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "file_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "File Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CaptureFileRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Object storage is not configured"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Abort a file's multipart upload",
+        "tags": [
+          "captures"
+        ]
+      }
+    },
+    "/api/v1/captures/{capture_id}/files/{file_id}/complete": {
+      "post": {
+        "operationId": "complete_file_api_v1_captures__capture_id__files__file_id__complete_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "capture_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Capture Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "file_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "File Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CaptureFileComplete"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CaptureFileRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Object storage is not configured"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Complete a file's multipart upload",
+        "tags": [
+          "captures"
+        ]
+      }
+    },
+    "/api/v1/captures/{capture_id}/files/{file_id}/parts": {
+      "post": {
+        "operationId": "presign_parts_api_v1_captures__capture_id__files__file_id__parts_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "capture_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Capture Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "file_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "File Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CaptureFilePartsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadWindow"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Object storage is not configured"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Presign the next window of parts",
+        "tags": [
+          "captures"
+        ]
+      }
+    },
+    "/api/v1/captures/{capture_id}/process": {
+      "post": {
+        "description": "Inserts a `not-started` job and returns it. Nothing runs here: the worker claims the row with a lease and executes the recipe.",
+        "operationId": "process_capture_api_v1_captures__capture_id__process_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "capture_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Capture Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JobCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Queue a pipeline run over a capture",
+        "tags": [
+          "captures"
         ]
       }
     },
@@ -5363,6 +7589,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
           },
           "404": {
             "content": {
@@ -5427,6 +7663,16 @@
             },
             "description": "Successful Response"
           },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
           "404": {
             "content": {
               "application/json": {
@@ -5478,6 +7724,16 @@
             },
             "description": "Successful Response"
           },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
           "404": {
             "content": {
               "application/json": {
@@ -5515,6 +7771,280 @@
         ]
       }
     },
+    "/api/v1/jobs": {
+      "get": {
+        "operationId": "list_jobs_api_v1_jobs_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "captureId",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Captureid"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/RunStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/JobRead"
+                  },
+                  "title": "Response List Jobs Api V1 Jobs Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "summary": "List jobs, newest first",
+        "tags": [
+          "jobs"
+        ]
+      }
+    },
+    "/api/v1/jobs/{job_id}": {
+      "get": {
+        "operationId": "get_job_api_v1_jobs__job_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "summary": "Get a job with its steps",
+        "tags": [
+          "jobs"
+        ]
+      }
+    },
+    "/api/v1/jobs/{job_id}/cancel": {
+      "post": {
+        "operationId": "cancel_job_api_v1_jobs__job_id__cancel_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Cancel a job",
+        "tags": [
+          "jobs"
+        ]
+      }
+    },
     "/api/v1/layers": {
       "get": {
         "operationId": "list_layers_api_v1_layers_get",
@@ -5532,6 +8062,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
           },
           "404": {
             "content": {
@@ -5592,6 +8132,16 @@
             },
             "description": "Successful Response"
           },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
           "404": {
             "content": {
               "application/json": {
@@ -5623,6 +8173,11 @@
             "description": "Validation error"
           }
         },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
         "summary": "Add a layer",
         "tags": [
           "layers"
@@ -5648,6 +8203,16 @@
           "204": {
             "description": "Successful Response"
           },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
           "404": {
             "content": {
               "application/json": {
@@ -5679,6 +8244,11 @@
             "description": "Validation error"
           }
         },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
         "summary": "Delete a layer",
         "tags": [
           "layers"
@@ -5708,6 +8278,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
           },
           "404": {
             "content": {
@@ -5780,6 +8360,16 @@
             },
             "description": "Successful Response"
           },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
           "404": {
             "content": {
               "application/json": {
@@ -5811,6 +8401,11 @@
             "description": "Validation error"
           }
         },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
         "summary": "Update a layer",
         "tags": [
           "layers"
@@ -5847,6 +8442,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
           },
           "404": {
             "content": {
@@ -5907,6 +8512,16 @@
             },
             "description": "Successful Response"
           },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
           "404": {
             "content": {
               "application/json": {
@@ -5938,6 +8553,11 @@
             "description": "Validation error"
           }
         },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
         "summary": "Approve a plan",
         "tags": [
           "plans"
@@ -5963,6 +8583,16 @@
           "204": {
             "description": "Successful Response"
           },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
           "404": {
             "content": {
               "application/json": {
@@ -5994,6 +8624,11 @@
             "description": "Validation error"
           }
         },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
         "summary": "Delete a plan",
         "tags": [
           "plans"
@@ -6023,6 +8658,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
           },
           "404": {
             "content": {
@@ -6095,6 +8740,16 @@
             },
             "description": "Successful Response"
           },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
           "404": {
             "content": {
               "application/json": {
@@ -6126,6 +8781,11 @@
             "description": "Validation error"
           }
         },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
         "summary": "Approve a new revision",
         "tags": [
           "plans"
@@ -6168,6 +8828,16 @@
             },
             "description": "Successful Response"
           },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
           "404": {
             "content": {
               "application/json": {
@@ -6199,6 +8869,11 @@
             "description": "Validation error"
           }
         },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
         "summary": "Change lifecycle state",
         "tags": [
           "plans"
@@ -6222,6 +8897,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
           },
           "404": {
             "content": {
@@ -6282,6 +8967,16 @@
             },
             "description": "Successful Response"
           },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
           "404": {
             "content": {
               "application/json": {
@@ -6313,6 +9008,11 @@
             "description": "Validation error"
           }
         },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
         "summary": "Create a site",
         "tags": [
           "sites"
@@ -6343,6 +9043,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
           },
           "404": {
             "content": {
@@ -6400,6 +9110,16 @@
           "204": {
             "description": "Successful Response"
           },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
           "404": {
             "content": {
               "application/json": {
@@ -6431,6 +9151,11 @@
             "description": "Validation error"
           }
         },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
         "summary": "Delete a site",
         "tags": [
           "sites"
@@ -6460,6 +9185,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
           },
           "404": {
             "content": {
@@ -6532,6 +9267,16 @@
             },
             "description": "Successful Response"
           },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
           "404": {
             "content": {
               "application/json": {
@@ -6563,6 +9308,11 @@
             "description": "Validation error"
           }
         },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
         "summary": "Update a site",
         "tags": [
           "sites"
@@ -6598,6 +9348,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
           },
           "404": {
             "content": {
@@ -6665,6 +9425,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
           },
           "404": {
             "content": {
@@ -6737,6 +9507,16 @@
             },
             "description": "Successful Response"
           },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
           "404": {
             "content": {
               "application/json": {
@@ -6768,6 +9548,11 @@
             "description": "Validation error"
           }
         },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
         "summary": "Save a camera bookmark",
         "tags": [
           "sites"
@@ -6803,6 +9588,16 @@
           "204": {
             "description": "Successful Response"
           },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
           "404": {
             "content": {
               "application/json": {
@@ -6834,6 +9629,11 @@
             "description": "Validation error"
           }
         },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
         "summary": "Delete a camera bookmark",
         "tags": [
           "sites"
@@ -6876,6 +9676,16 @@
             },
             "description": "Successful Response"
           },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
           "404": {
             "content": {
               "application/json": {
@@ -6907,6 +9717,11 @@
             "description": "Validation error"
           }
         },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
         "summary": "Upload a site thumbnail",
         "tags": [
           "sites"

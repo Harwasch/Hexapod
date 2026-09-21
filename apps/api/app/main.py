@@ -16,8 +16,9 @@ from fastapi.staticfiles import StaticFiles
 from app.api.v1.router import api_v1
 from app.config import REPO_ROOT, Settings, get_settings
 from app.schemas.common import Problem
-from app.services.errors import ConflictError, NotFoundError
+from app.services.errors import ConflictError, NotFoundError, UnauthorizedError
 from app.services.urls import UrlValidationError
+from app.storage import StorageUnavailableError
 
 logger = logging.getLogger("twin.api")
 
@@ -27,8 +28,15 @@ Catalog service for the geospatial digital twin.
 * **Sites** — physical places with reality captures, footprints and camera bookmarks.
 * **Assets** — derived, renderable delivery assets (3D Tiles) with provenance.
 * **Layers** — composable world layers from open data or the user's own sources.
+* **Captures** — uploads in progress: source files go browser → object storage over
+  presigned multipart URLs, never through this API.
+* **Jobs** — pipeline runs over a capture, queued here and executed by a worker.
 
 All geometry is GeoJSON (WGS 84, RFC 7946). All timestamps are ISO 8601.
+
+Reads are open. Every mutating endpoint requires the shared write token as
+`Authorization: Bearer <API_WRITE_TOKEN>`, unless the deployment has no token
+configured — which production refuses to start without.
 """
 
 
@@ -47,6 +55,14 @@ def _problem(
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
+    # Fail at startup, not at the first unauthenticated POST. An unset API_WRITE_TOKEN
+    # means "writes are open", which is how a fresh checkout and the test suite run with
+    # no configuration; this line is what stops that convenience reaching production.
+    if settings.is_production and not settings.api_write_token:
+        raise RuntimeError(
+            "API_WRITE_TOKEN must be set when APP_ENV=production: refusing to start an "
+            "internet-facing API whose writes are open."
+        )
     app = FastAPI(
         title=settings.app_name,
         version="1.0.0",
@@ -61,7 +77,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_origins=settings.api_cors_origins,
         allow_credentials=False,
         allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-        allow_headers=["Content-Type", "Accept"],
+        # Authorization carries the write token, so the preflight has to allow it or
+        # every browser write fails before it is sent.
+        allow_headers=["Content-Type", "Accept", "Authorization"],
         max_age=600,
     )
 
@@ -87,6 +105,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def conflict_handler(_: Request, exc: ConflictError) -> JSONResponse:
         return _problem(status.HTTP_409_CONFLICT, "Conflict", str(exc))
 
+    @app.exception_handler(UnauthorizedError)
+    async def unauthorized_handler(_: Request, exc: UnauthorizedError) -> JSONResponse:
+        response = _problem(status.HTTP_401_UNAUTHORIZED, "Unauthorized", str(exc))
+        # RFC 9110 requires this on a 401, and it tells a client which scheme to use.
+        response.headers["WWW-Authenticate"] = "Bearer"
+        return response
+
+    @app.exception_handler(StorageUnavailableError)
+    async def storage_handler(_: Request, exc: StorageUnavailableError) -> JSONResponse:
+        return _problem(status.HTTP_503_SERVICE_UNAVAILABLE, "Object storage unavailable", str(exc))
+
     @app.exception_handler(UrlValidationError)
     async def url_handler(_: Request, exc: UrlValidationError) -> JSONResponse:
         return _problem(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid URL", str(exc))
@@ -103,6 +132,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         ]
         return _problem(status.HTTP_422_UNPROCESSABLE_CONTENT, "Validation error", None, errors)
 
+    # Read by app.api.deps._settings, so a test app built with explicit settings is
+    # governed by them rather than by the process-wide lru_cached environment.
+    app.state.settings = settings
     app.include_router(api_v1)
     # Processed captures kept on disk (data/tiles/<site>/<representation>/tileset.json) are
     # served as static 3D Tiles under the API prefix, so the web app's /api proxy covers them.

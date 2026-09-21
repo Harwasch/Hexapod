@@ -10,3 +10,11 @@ class NotFoundError(Exception):
 
 class ConflictError(Exception):
     pass
+
+
+class UnauthorizedError(Exception):
+    """A write was attempted without the shared write token.
+
+    Only raised when a token is configured: an unset `API_WRITE_TOKEN` leaves writes
+    open, and `create_app` refuses to start in production without one.
+    """

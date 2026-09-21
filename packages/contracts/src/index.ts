@@ -92,3 +92,30 @@ export type PlanClarification = Schemas["Clarification"];
 export type PlanAnswerValue = string | number | boolean;
 export type GroundOutline = Schemas["Outline"];
 export type OutlineRequest = Schemas["OutlineRequest"];
+
+/** Captures: an upload session and the source files it is made of. */
+export type Capture = Schemas["CaptureRead"];
+export type CaptureDetail = Schemas["CaptureDetail"];
+export type CaptureCreate = Schemas["CaptureCreate"];
+export type CaptureKind = Schemas["CaptureKind"];
+export type CaptureStatus = Schemas["CaptureStatus"];
+export type CaptureFile = Schemas["CaptureFileRead"];
+export type CaptureFileCreate = Schemas["CaptureFileCreate"];
+export type CaptureFileComplete = Schemas["CaptureFileComplete"];
+export type UploadStatus = Schemas["UploadStatus"];
+/** One bounded run of presigned part URLs — never the whole upload. */
+export type UploadWindow = Schemas["UploadWindow"];
+export type PresignedPart = Schemas["PresignedPart"];
+export type UploadedPart = Schemas["CaptureFilePart"];
+export type CaptureFileUpload = Schemas["CaptureFileUpload"];
+export type UploadPartsRequest = Schemas["CaptureFilePartsRequest"];
+
+/** Jobs: one pipeline run over a capture, queued by the API and run by a worker. */
+export type Job = Schemas["JobRead"];
+export type JobCreate = Schemas["JobCreate"];
+export type JobStep = Schemas["JobStepRead"];
+export type JobArtifact = Schemas["ArtifactRead"];
+export type ArtifactKind = Schemas["ArtifactKind"];
+export type RunStatus = Schemas["RunStatus"];
+export type GeorefMethod = Schemas["GeorefMethod"];
+export type ScaleSource = Schemas["ScaleSource"];

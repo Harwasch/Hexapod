@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
-from app.api.deps import OutlinerDep, PlannerDep
+from app.api.deps import OutlinerDep, PlannerDep, RequireWriteToken
 from app.schemas.agent import Outline, OutlineRequest, PlanDraft, PlanDraftRequest, PlannerStatus
 from app.services.planner import PlannerError
 
@@ -14,8 +14,12 @@ def planner_status(planner: PlannerDep) -> PlannerStatus:
     return planner.status()
 
 
+# Gated even though it mutates nothing: an unauthenticated caller can spend the
+# account's Anthropic credits, and the write token guards anything that costs money
+# or changes state, not just rows.
 @router.post(
     "/plan-draft",
+    dependencies=[RequireWriteToken],
     response_model=PlanDraft,
     summary="Draft a mission plan from a goal",
     description=(
@@ -31,8 +35,10 @@ def plan_draft(body: PlanDraftRequest, planner: PlannerDep) -> PlanDraft:
         raise HTTPException(exc.status_code, str(exc)) from exc
 
 
+# Gated for the same reason as /plan-draft: it calls a vision model on every request.
 @router.post(
     "/outline",
+    dependencies=[RequireWriteToken],
     response_model=Outline,
     summary="Outline the ground feature under a clicked point",
     description=(
