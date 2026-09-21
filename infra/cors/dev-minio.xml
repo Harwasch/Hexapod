@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The dev MinIO bucket plays both roles (uploads and tile reads), so this is
+  upload.json's rule and tiles.json's rule in one document: a bucket has exactly
+  one CORS configuration, and setting it replaces whatever was there.
+
+  It is XML because `mc cors set ALIAS/BUCKET FILE` takes XML, while `aws s3api
+  put-bucket-cors`, boto3's put_bucket_cors and Cloudflare R2 take the JSON
+  form. Keep this in sync with the two .json files; the api test suite
+  (tests/test_cors_rules.py) fails if they drift apart.
+-->
+<CORSConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+  <CORSRule>
+    <ID>browser-multipart-upload</ID>
+    <AllowedOrigin>https://twin.example.com</AllowedOrigin>
+    <AllowedOrigin>http://localhost:5173</AllowedOrigin>
+    <AllowedOrigin>http://127.0.0.1:5173</AllowedOrigin>
+    <AllowedMethod>PUT</AllowedMethod>
+    <AllowedMethod>GET</AllowedMethod>
+    <AllowedMethod>HEAD</AllowedMethod>
+    <AllowedHeader>*</AllowedHeader>
+    <ExposeHeader>ETag</ExposeHeader>
+    <MaxAgeSeconds>3600</MaxAgeSeconds>
+  </CORSRule>
+  <CORSRule>
+    <ID>cesium-tiles-read</ID>
+    <AllowedOrigin>https://twin.example.com</AllowedOrigin>
+    <AllowedOrigin>http://localhost:5173</AllowedOrigin>
+    <AllowedOrigin>http://127.0.0.1:5173</AllowedOrigin>
+    <AllowedMethod>GET</AllowedMethod>
+    <AllowedMethod>HEAD</AllowedMethod>
+    <AllowedHeader>*</AllowedHeader>
+    <ExposeHeader>ETag</ExposeHeader>
+    <ExposeHeader>Content-Length</ExposeHeader>
+    <ExposeHeader>Content-Range</ExposeHeader>
+    <ExposeHeader>Accept-Ranges</ExposeHeader>
+    <MaxAgeSeconds>86400</MaxAgeSeconds>
+  </CORSRule>
+</CORSConfiguration>

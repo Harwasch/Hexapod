@@ -4,7 +4,7 @@
 Web       static bundle (Vercel / Netlify / S3+CloudFront / any static host)
 API       container (Fly.io, Cloud Run, ECS, Railway…) built from infra/api.Dockerfile
 Database  managed PostgreSQL with PostGIS (Neon, Supabase, RDS, Cloud SQL…)
-Assets    Cesium ion (today); S3-compatible object storage for canonical data later
+Assets    Cesium ion (today); S3-compatible object storage (MinIO in dev, R2 in prod)
 ```
 
 The frontend never serves large 3D assets; the browser streams them from Cesium ion or the
@@ -50,11 +50,109 @@ Required environment:
 | `API_CORS_ORIGINS`         | comma-separated browser origins (exact scheme + host)                |
 | `APP_ENV=production`       | tightens URL validation (`ALLOW_PRIVATE_URLS=false` recommended)     |
 | `ALLOW_PRIVATE_URLS=false` | reject loopback/private dataset hosts                                |
-| `OBJECT_STORAGE_*`         | optional; enables thumbnail uploads                                  |
+| `OBJECT_STORAGE_*`         | endpoint, bucket, keys, region, public URL. See Object storage below |
 | `CESIUM_ION_SERVER_TOKEN`  | optional; `assets:read` for job monitoring. Never a `VITE_` variable |
 
 Put the API behind TLS (platform load balancer). It exposes `/api/v1/health` for probes and
 `/api/v1/docs` for OpenAPI; disable docs at the edge if you prefer.
+
+## Object storage and CORS
+
+Large assets never transit the API: the browser PUTs to presigned S3 multipart
+URLs and CesiumJS reads tiles straight from the bucket. Both are cross-origin, so
+the bucket's CORS configuration is part of the deployment, not an afterthought.
+
+The rules live in `infra/cors/`:
+
+| File            | Role                                                  |
+| --------------- | ----------------------------------------------------- |
+| `upload.json`   | browser PUTs to presigned URLs                        |
+| `tiles.json`    | CesiumJS reading `tileset.json` and `.glb`            |
+| `dev-minio.xml` | both rules in one document, for the single dev bucket |
+
+Replace `https://twin.example.com` in `AllowedOrigins` with your real origin
+before applying. A bucket has exactly **one** CORS configuration and setting it
+replaces what was there, so a bucket in both roles gets a single document
+containing both rules.
+
+`ExposeHeaders: ["ETag"]` in the upload rule is load-bearing. Without it the
+browser reads `etag === null` from each part's response and a multipart upload
+can never be completed. `apps/api/tests/test_cors_rules.py` fails if it is
+dropped, or if the XML and JSON documents drift apart.
+
+### MinIO
+
+`pnpm infra:up` applies `dev-minio.xml` automatically via the `minio-init`
+one-shot. To apply it by hand, or to a MinIO you run elsewhere:
+
+```bash
+mc alias set local http://localhost:9000 twin twin-secret
+mc cors set local/twin-assets infra/cors/dev-minio.xml   # mc takes XML, not JSON
+```
+
+If your `mc` predates the `cors` subcommand (added in 2024), use the S3 API
+instead -- it is the same call the AWS CLI makes:
+
+```bash
+python - <<'PY'
+import boto3, json
+boto3.client(
+    "s3",
+    endpoint_url="http://localhost:9000",
+    aws_access_key_id="twin",
+    aws_secret_access_key="twin-secret",
+    region_name="us-east-1",
+).put_bucket_cors(
+    Bucket="twin-assets",
+    CORSConfiguration={"CORSRules": json.load(open("infra/cors/upload.json"))["CORSRules"]},
+)
+PY
+```
+
+### Cloudflare R2
+
+R2 is S3-compatible, so the JSON documents apply with the AWS CLI against the
+account's S3 API endpoint:
+
+```bash
+aws s3api put-bucket-cors \
+  --endpoint-url "https://<account-id>.r2.cloudflarestorage.com" \
+  --bucket twin-assets \
+  --cors-configuration file://infra/cors/upload.json
+
+aws s3api put-bucket-cors \
+  --endpoint-url "https://<account-id>.r2.cloudflarestorage.com" \
+  --bucket twin-tiles \
+  --cors-configuration file://infra/cors/tiles.json
+```
+
+Two R2 specifics to confirm at deploy time, both of which apply to `presign` as
+much as to CORS:
+
+- **Presigning happens on the S3 API domain; public reads come from the custom
+  domain.** That is why `OBJECT_STORAGE_ENDPOINT_URL` and
+  `OBJECT_STORAGE_PUBLIC_URL` are separate settings.
+- **R2 wants `region="auto"`.** Set `OBJECT_STORAGE_REGION=auto`.
+
+> **Unverified, and deliberately flagged as such.** It has been reported that R2
+> rejects a narrow `AllowedHeaders: ["content-type"]` rule and requires `["*"]`.
+> We could not confirm this: `developers.cloudflare.com` is unreachable from the
+> environment these rules were written in. The rules therefore use `["*"]`, which
+> works either way. What _is_ established is that the narrow form is shape-valid
+> to botocore, so nothing in CI or in the test suite would catch R2 rejecting it
+> -- it would first fail at deploy. **Confirm the accepted form against the real
+> R2 API before trusting either shape**, and correct this note.
+
+### Presigned URLs are SigV4, explicitly
+
+`S3Storage` passes `signature_version="s3v4"` explicitly. This is not redundant:
+with the default, botocore's `_default_s3_presign_to_sigv2` makes
+`generate_presigned_url` emit **SigV2** for every region except `auto`, while
+`client.meta.config.signature_version` still reports `s3v4`. MinIO in dev
+(`us-east-1`) would have presigned SigV2 while R2 in production (`auto`)
+presigned SigV4 -- a dev/prod split no configuration inspection can see. The
+tests assert on the emitted URL string for that reason, and CI runs them against
+a real MinIO.
 
 ## Database
 
