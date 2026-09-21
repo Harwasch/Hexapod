@@ -1,0 +1,21 @@
+name: CI
+
+# This file exists on main only so GitHub registers the workflow and makes
+# workflow_dispatch available. The real CI definition -- lint, typecheck,
+# tests, Playwright, the API job with its PostGIS and MinIO services -- lives
+# on the development branch, and dispatching against a ref runs THAT ref's
+# copy of this file, not this one.
+#
+# It carries no push trigger on purpose: main is currently a stub with none of
+# the project's files, so a run started from here could only fail. When the
+# development branch merges, that merge replaces this file with the real one.
+on:
+  workflow_dispatch:
+
+jobs:
+  placeholder:
+    name: Placeholder (the real jobs live on the development branch)
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "Dispatch this workflow against a development branch to run the real CI."
