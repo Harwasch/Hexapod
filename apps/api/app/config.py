@@ -20,6 +20,11 @@ class Settings(BaseSettings):
         env_file=(REPO_ROOT / ".env", Path(".env")),
         env_file_encoding="utf-8",
         extra="ignore",
+        # Without this, pydantic-settings JSON-decodes complex fields (list[str]) inside the
+        # dotenv source, before any validator runs -- so the comma-separated
+        # API_CORS_ORIGINS that .env.example documents raises SettingsError and nothing can
+        # import. `_split_origins` below is what is meant to parse it.
+        enable_decoding=False,
     )
 
     app_name: str = "Digital Twin API"

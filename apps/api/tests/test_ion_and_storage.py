@@ -74,7 +74,13 @@ def test_storage_factory() -> None:
 
 
 def test_thumbnail_upload_without_storage_is_503(client: TestClient) -> None:
+    from app.storage import NullStorage, get_storage
     from tests.conftest import site_payload
+
+    # Assert the unconfigured case explicitly rather than relying on OBJECT_STORAGE_* being
+    # absent from the ambient environment: a developer who followed the README has a .env
+    # that configures storage, and this test would then fail on a connection error instead.
+    client.app.dependency_overrides[get_storage] = NullStorage  # type: ignore[attr-defined]
 
     site = client.post("/api/v1/sites", json=site_payload()).json()
     response = client.post(
@@ -85,6 +91,7 @@ def test_thumbnail_upload_without_storage_is_503(client: TestClient) -> None:
         f"/api/v1/sites/{site['id']}/thumbnail", files={"file": ("t.txt", b"hi", "text/plain")}
     )
     assert bad_type.status_code == 415
+    client.app.dependency_overrides.pop(get_storage, None)  # type: ignore[attr-defined]
 
 
 def test_url_validation() -> None:
