@@ -4,6 +4,11 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Lets CI be run on demand against a feature branch. Without it the only
+  # triggers are main and pull requests, so work on a branch with no PR open
+  # cannot be verified by CI at all -- which matters here because some checks
+  # (the MinIO service in the api job) can only run on a runner.
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
