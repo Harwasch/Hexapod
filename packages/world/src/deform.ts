@@ -37,7 +37,13 @@ import {
   type Quat,
   type Vec3,
 } from "./vec";
-import { maxWindMagnitude, maxWindSlope, wind as sampleWind, type WindSettings } from "./wind";
+import {
+  gustDelaySeconds,
+  maxWindMagnitude,
+  maxWindSlope,
+  windAt,
+  type WindSettings,
+} from "./wind";
 
 /**
  * A node's rest-to-displaced transform: `displaced = rotation ⊗ p + translation`, with `p` a
@@ -193,12 +199,6 @@ function swayAxis(downwind: Vec3, mode: NodeMode): Vec3 {
  * array is fresh each call — nothing is cached between frames, and nothing is integrated.
  */
 export function deform(rig: MotionRig, t: number, settings: WindSettings): NodeTransform[] {
-  const gust = sampleWind(settings.strength, settings.bearingDeg, t);
-  const windMagnitude = magnitude(gust);
-  // Rotating about `up × downwind` tips a vertical node towards the wind. An axis swap here
-  // sways the tree sideways into the ground, which is why the direction test exists.
-  const downwind = downwindOf(gust, [0, 1, 0]);
-  const leanAxis = normalize(cross(VEC3_UP, downwind), [1, 0, 0]);
   const time = Number.isFinite(t) ? t : 0;
   const modes = nodeModes(rig);
   const transforms: NodeTransform[] = [];
@@ -210,11 +210,24 @@ export function deform(rig: MotionRig, t: number, settings: WindSettings): NodeT
       transforms.push(IDENTITY_TRANSFORM);
       continue;
     }
+    // The wind is a field, not a vector. Each node sees the gust that reached *its* position:
+    // retarded by how long the disturbance took to travel there, and offset across the wind so
+    // that limbs abreast of one another are not in lockstep either. Every bound over `wind`
+    // survives, because shifting a bounded function's argument cannot leave its range.
+    const delay = gustDelaySeconds(settings.bearingDeg, node.position);
+    const gust = windAt(settings.strength, settings.bearingDeg, time, node.position);
+    const windMagnitude = magnitude(gust);
+    // Rotating about `up × downwind` tips a vertical node towards the wind. An axis swap here
+    // sways the tree sideways into the ground, which is why the direction test exists.
+    const downwind = downwindOf(gust, [0, 1, 0]);
+    const leanAxis = normalize(cross(VEC3_UP, downwind), [1, 0, 0]);
     const parent = transforms[node.parent] ?? IDENTITY_TRANSFORM;
     const budget = angleBudget(node);
     const lean = softLimit(rawLean(node, mode, windMagnitude), budget.mean);
     const sway = softLimit(
-      rawSway(node, mode, windMagnitude, turbulentLoad(mode, time)),
+      // The same retardation applied to the turbulent forcing: a gust's *fast* content arrives
+      // late for the same reason its envelope does.
+      rawSway(node, mode, windMagnitude, turbulentLoad(mode, time - delay)),
       budget.oscillation,
     );
     // Two rotations, not one: the lean is downwind for every node, the sway is in the node's own

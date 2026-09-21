@@ -166,12 +166,8 @@ const AZIMUTH_SPREAD_RAD = 0.7;
 /** Out-of-plane tilt of the bending axis, as a fraction of the in-plane axis. Adds torsion. */
 const TWIST_SPREAD = 0.35;
 
-/** Longest convection delay across the crown, seconds: an eddy does not arrive everywhere at once. */
-const GUST_LAG_S = 0.9;
-
 const AZIMUTH_SEED = 0x5eed_a21f;
 const TWIST_SEED = 0x5eed_7715;
-const LAG_SEED = 0x5eed_1a60;
 
 /**
  * Everything the deformation needs to know about one node's own dynamics. A pure function of the
@@ -199,7 +195,15 @@ export interface NodeMode {
   readonly segmentM: number;
   /** Per-forcing-mode amplitude gain `A_k · H(ω_k)`. */
   readonly gains: readonly number[];
-  /** Per-forcing-mode total phase: forcing phase, transfer lag and convection delay. */
+  /**
+   * Per-forcing-mode total phase: the forcing's own phase plus this node's transfer lag.
+   *
+   * It used to carry a third term, `ω_k·τ` with `τ` hashed from the node's id — a stand-in for
+   * the fact that an eddy does not reach the whole crown at once. That stand-in is gone: the
+   * delay is a real one now, computed from where the node actually is (`gustDelaySeconds`) and
+   * applied by `deform` as a shift of the *time* it evaluates the load at. A hashed lag made
+   * neighbours differ; a travelling wave makes a gust cross the crown.
+   */
   readonly phases: readonly number[];
   /** `Σ_k A_k·H(ω_k)`: the exact worst case of the oscillating term. */
   readonly response: number;
@@ -308,7 +312,6 @@ function computeNodeModes(rig: MotionRig): NodeMode[] {
     const omega = 2 * Math.PI * nodeNaturalHz(node.radius, lengthM);
     const zeta = nodeZeta(node.radius);
     const idHash = hashString(node.id);
-    const lag = unitHash(idHash, LAG_SEED) * GUST_LAG_S;
     const gains: number[] = [];
     const phases: number[] = [];
     let response = 0;
@@ -316,7 +319,7 @@ function computeNodeModes(rig: MotionRig): NodeMode[] {
     for (const mode of TURBULENCE_MODES) {
       const gain = mode.amplitude * responseGain(mode.omega, omega, zeta);
       gains.push(gain);
-      phases.push(mode.phase + responseLag(mode.omega, omega, zeta) + mode.omega * lag);
+      phases.push(mode.phase + responseLag(mode.omega, omega, zeta));
       response += gain;
       responseRate += gain * mode.omega;
     }

@@ -45,7 +45,7 @@ import { hash32 } from "./noise";
 import { nodeModes, nodeNaturalFrequencyHz } from "./modes";
 import { type MotionRig } from "./rig";
 import { clamp, softLimit, VEC3_ZERO, type Vec3 } from "./vec";
-import { maxWindMagnitude, wind as sampleWind, type WindSettings } from "./wind";
+import { gustDelaySeconds, maxWindMagnitude, windAt, type WindSettings } from "./wind";
 
 /**
  * Largest flutter amplitude, metres, at a node of zero radius and saturating wind.
@@ -234,13 +234,11 @@ export function maxFlutterSpeed(rig: MotionRig, settings: WindSettings): number 
  */
 export function flutterField(rig: MotionRig, t: number, settings: WindSettings): FlutterField {
   const time = Number.isFinite(t) ? t : 0;
-  const gust = sampleWind(settings.strength, settings.bearingDeg, time);
-  const windMagnitude = Math.hypot(gust[0], gust[1], gust[2]);
-  const windTerm = softLimit(windMagnitude, FLUTTER_WIND_SATURATION);
   const count = rig.nodes.length;
   const amplitudeM = new Float64Array(count);
   const phase = new Float64Array(count * 4);
-  if (windTerm === 0) return { amplitudeM, phase, still: true };
+  // Nothing can flutter at calm, whatever the positions: `wind` returns exactly `[0, 0, 0]`.
+  if (maxWindMagnitude(settings.strength) === 0) return { amplitudeM, phase, still: true };
 
   const modes = nodeModes(rig);
   let still = true;
@@ -248,13 +246,20 @@ export function flutterField(rig: MotionRig, t: number, settings: WindSettings):
     const node = rig.nodes[n];
     const mode = modes[n];
     if (node === undefined || mode === undefined) continue;
-    const amplitude = FLUTTER_SCALE_M * flutterShape(node.radius) * windTerm;
+    const shape = flutterShape(node.radius);
+    if (shape === 0) continue;
+    // The gust that reached *this* node, so the shimmer ebbs and swells as a gust crosses the
+    // crown rather than everywhere at once.
+    const delay = gustDelaySeconds(settings.bearingDeg, node.position);
+    const gust = windAt(settings.strength, settings.bearingDeg, time, node.position);
+    const windTerm = softLimit(Math.hypot(gust[0], gust[1], gust[2]), FLUTTER_WIND_SATURATION);
+    const amplitude = FLUTTER_SCALE_M * shape * windTerm;
     if (amplitude === 0) continue;
     amplitudeM[n] = amplitude;
     still = false;
     const omega = 2 * Math.PI * nodeFlutterHz(nodeNaturalFrequencyHz(mode));
-    const primary = omega * time;
-    const secondary = omega * SECONDARY_RATIO * time;
+    const primary = omega * (time - delay);
+    const secondary = omega * SECONDARY_RATIO * (time - delay);
     phase[n * 4] = Math.sin(primary);
     phase[n * 4 + 1] = Math.cos(primary);
     phase[n * 4 + 2] = Math.sin(secondary);

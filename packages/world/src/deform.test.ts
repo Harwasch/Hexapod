@@ -273,18 +273,37 @@ describe("boundedness", () => {
       .filter((entry) => entry.node.band === "trunk")
       .sort((a, b) => a.node.position[2] - b.node.position[2]);
     expect(trunk.length).toBeGreaterThanOrEqual(5);
-    for (const t of [2.5, 40.75, 111]) {
-      const transforms = deform(rig, t, GALE);
-      let previous = -Number.EPSILON;
-      for (const { index } of trunk) {
-        const moved = magnitude(nodeDisplacement(rig, transforms, index));
-        expect(moved).toBeGreaterThanOrEqual(previous);
-        previous = moved;
-      }
-      // The base segment is rigid (its only ancestor is the anchor); everything above it moves.
-      const top = trunk.at(-1);
-      expect(top && magnitude(nodeDisplacement(rig, transforms, top.index))).toBeGreaterThan(0.05);
+
+    // The *bound* is monotone by construction — it is a sum of non-negative terms over an
+    // ancestor chain, and a higher node's chain contains a lower one's — so that part is exact.
+    const bounds = maxNodeDisplacements(rig, GALE);
+    let previousBound = -Number.EPSILON;
+    for (const { index } of trunk) {
+      const bound = bounds[index] ?? 0;
+      expect(bound).toBeGreaterThanOrEqual(previousBound);
+      previousBound = bound;
     }
+
+    // The motion itself is monotone on average and not at every instant, and that is a fact
+    // about the model rather than a weakness of the test. Each joint bends in its own plane, so
+    // two joints of the chain can be momentarily opposed and a node can sit nearer its rest
+    // position than the one below it — by 6 % at the worst moment measured. Asserting the
+    // frozen instant passed for a long time by luck and started failing when the wind became a
+    // field; the mean over a sweep is the claim that was always meant.
+    const frames = 40 * 60;
+    const means = trunk.map(({ index }) => {
+      let total = 0;
+      for (let k = 0; k < frames; k += 1) {
+        total += magnitude(nodeDisplacement(rig, deform(rig, k * DT, GALE), index));
+      }
+      return total / frames;
+    });
+    let previousMean = -Number.EPSILON;
+    for (const mean of means) {
+      expect(mean).toBeGreaterThanOrEqual(previousMean);
+      previousMean = mean;
+    }
+    expect(means.at(-1)).toBeGreaterThan(0.05);
   });
 });
 

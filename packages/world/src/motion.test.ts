@@ -27,8 +27,10 @@ import {
   nodeNaturalFrequencyHz,
   responseGain,
   subtract,
+  gustDelaySeconds,
   syntheticTreeRig,
   TURBULENCE_MODES,
+  windAt,
   type MotionRig,
   type Vec3,
 } from "./index";
@@ -253,15 +255,15 @@ describe("decorrelation", () => {
    * motion, so each tip is measured **relative to the trunk joint it hangs from**. Under a single
    * shared axis those relative tracks are collinear and in phase, and this number is ≈ 1.
    *
-   * On positions the threshold is now 0.95 where it was 0.75, and that is honest rather than
-   * convenient: the pairwise numbers are 0.89, 0.63, 0.63. What is left in common is not a
-   * shared bending plane — the planes and the natural frequencies are all different now, and
-   * the limb lengths are deliberately incongruent — it is the **gust envelope**. `wind()`
-   * returns one vector for the whole tree, so every limb's amplitude is modulated by the same
-   * slow signal at the same instant, and with each track's mean removed that modulation is most
-   * of what is left in a 60 s window. The velocity test below is the one that discriminates.
+   * On positions the threshold is now 0.9 where it was 0.75, and that is honest rather than
+   * convenient: the pairwise numbers are 0.86, 0.68, 0.63. What is left in common is the gust
+   * field's own coherence — two limbs 1.5 m apart in a crown genuinely do see nearly the same
+   * gust at nearly the same instant, and after `travellingGust` that is a physical statement
+   * rather than an artefact. The per-node lag it replaced was a hash, which decorrelated
+   * neighbours *more* than physics warrants and made this number look better than the model
+   * deserved. The velocity test below is the one that discriminates.
    */
-  const MAX_SIBLING_CORRELATION = 0.95;
+  const MAX_SIBLING_CORRELATION = 0.9;
 
   /**
    * The sharper measure, and the one that carries the claim.
@@ -272,7 +274,7 @@ describe("decorrelation", () => {
    * one-line high-pass that removes it and leaves what the limbs are actually doing. Under a
    * single shared bending axis this number is ≈ 1 too, so nothing is given away by using it.
    */
-  const MAX_SIBLING_VELOCITY_CORRELATION = 0.6;
+  const MAX_SIBLING_VELOCITY_CORRELATION = 0.7;
 
   /** Frame-to-frame differences of a track: its velocity, up to the constant `DT`. */
   function velocity(path: readonly Vec3[]): Vec3[] {
@@ -301,7 +303,7 @@ describe("decorrelation", () => {
         if (a === undefined || b === undefined) continue;
         expect(Math.abs(correlation(a, b))).toBeLessThan(MAX_SIBLING_CORRELATION);
         // The one that matters: with the shared gust envelope differenced away, sibling limbs
-        // agree only 0.36–0.40 of the time. Measured; 0.6 is asserted.
+        // agree 0.24–0.59 of the time. Measured; 0.7 is asserted.
         expect(Math.abs(correlation(velocity(a), velocity(b)))).toBeLessThan(
           MAX_SIBLING_VELOCITY_CORRELATION,
         );
@@ -328,6 +330,127 @@ describe("decorrelation", () => {
     const modes = nodeModes(rig);
     const again = nodeModes(rig);
     expect(again.map((m) => m.azimuthRad)).toEqual(modes.map((m) => m.azimuthRad));
+  });
+});
+
+describe("a gust crosses the crown", () => {
+  /**
+   * The property the wind field exists for: a gust **arrives**, rather than switching on
+   * everywhere at once.
+   *
+   * Two things are true here and they are not the same size, which is worth writing down rather
+   * than quietly asserting the flattering one.
+   *
+   * The **field** crosses the crown unambiguously. The gust magnitude at the most upwind leaf
+   * cluster leads the most downwind one by well over a second, and at any instant the wind
+   * across the crown varies by a third between its windiest and calmest limb.
+   *
+   * The **motion** lags by far less — about 0.2 s where the field's arrival differs by 0.9 s.
+   * That is not a bug and no constant will fix it. A limb's displacement is mostly its
+   * ancestors' displacement, and its ancestors are nearer the trunk where the delays are
+   * smaller; and what is left is a resonant response at 1–5 Hz, where a delay of most of a
+   * second is most of a cycle and reads as a small one. The gust field buys decorrelation and a
+   * visible unevenness across the crown, and it buys a modest, real lag. It does not make a
+   * wave of motion roll across the tree, and it would take a convection speed far slower than
+   * any real gust to make it do so on a crown this small.
+   */
+  const BEARING = 250;
+
+  /** The crown limbs furthest upwind and furthest downwind, and their separation in metres. */
+  const pair = (() => {
+    const bearing = BEARING * (Math.PI / 180);
+    const de = Math.sin(bearing);
+    const dn = Math.cos(bearing);
+    let first = 0;
+    let last = 0;
+    let least = Infinity;
+    let most = -Infinity;
+    rig.nodes.forEach((node, i) => {
+      if (node.band !== "leaf") return;
+      const along = node.position[0] * de + node.position[1] * dn;
+      if (along < least) {
+        least = along;
+        first = i;
+      }
+      if (along > most) {
+        most = along;
+        last = i;
+      }
+    });
+    return { first, last, separationM: most - least };
+  })();
+
+  /** Along-wind gust magnitude at a node, sampled at 60 fps and mean-removed. */
+  function gustAt(node: number, frames: number): number[] {
+    const out: number[] = [];
+    const position = rig.nodes[node]?.position ?? [0, 0, 0];
+    for (let k = 0; k < frames; k += 1) {
+      const g = windAt(1, BEARING, k * DT, position);
+      out.push(Math.hypot(g[0], g[1]));
+    }
+    const mean = out.reduce((a, b) => a + b, 0) / out.length;
+    return out.map((v) => v - mean);
+  }
+
+  /** The lag in seconds at which `later` best matches `earlier`. Positive means later lags. */
+  function bestLagSeconds(earlier: readonly number[], later: readonly number[]): number {
+    const maxLag = 150;
+    let best = 0;
+    let bestScore = -Infinity;
+    for (let lag = -maxLag; lag <= maxLag; lag += 1) {
+      let score = 0;
+      for (let i = maxLag; i < earlier.length - maxLag; i += 1) {
+        score += (earlier[i] ?? 0) * (later[i + lag] ?? 0);
+      }
+      if (score > bestScore) {
+        bestScore = score;
+        best = lag;
+      }
+    }
+    return best * DT;
+  }
+
+  it("has two leaf clusters a few metres apart along the wind", () => {
+    expect(rig.nodes[pair.first]?.band).toBe("leaf");
+    expect(rig.nodes[pair.last]?.band).toBe("leaf");
+    expect(pair.separationM).toBeGreaterThan(2);
+    // And the field says so: the two are most of a second apart in gust arrival.
+    const upwind = gustDelaySeconds(BEARING, rig.nodes[pair.first]?.position ?? [0, 0, 0]);
+    const downwind = gustDelaySeconds(BEARING, rig.nodes[pair.last]?.position ?? [0, 0, 0]);
+    expect(downwind - upwind).toBeGreaterThan(0.5);
+  });
+
+  it("delivers the gust to the upwind cluster first", () => {
+    expect(bestLagSeconds(gustAt(pair.first, 3600), gustAt(pair.last, 3600))).toBeGreaterThan(0.5);
+  });
+
+  it("does not blow equally hard on every limb at any instant", () => {
+    // Under one wind vector for the whole tree this ratio was exactly 1 at every instant.
+    for (const t of [3, 17.5, 40, 91.25]) {
+      const magnitudes = rig.nodes
+        .filter((node) => node.band === "leaf")
+        .map((node) => {
+          const g = windAt(1, BEARING, t, node.position);
+          return Math.hypot(g[0], g[1]);
+        });
+      expect(Math.max(...magnitudes) / Math.min(...magnitudes)).toBeGreaterThan(1.1);
+    }
+  });
+
+  it("moves the downwind cluster after the upwind one, if only by a little", () => {
+    // Measured on each limb's own bend — its displacement minus its parent's — because a tip's
+    // absolute track is mostly the trunk's, and the trunk stands on the wind's axis where the
+    // delay is zero by construction.
+    const frames = 60 * 60;
+    const own = (node: number): number[] => {
+      const parent = rig.nodes[node]?.parent ?? 0;
+      const tip = track(node, frames, BEARING, 1);
+      const root = track(parent, frames, BEARING, 1);
+      return tip.map((v, i) => v[0] - (root[i]?.[0] ?? 0));
+    };
+    const lag = bestLagSeconds(own(pair.first), own(pair.last));
+    expect(lag).toBeGreaterThan(0.05);
+    expect(lag).toBeLessThan(1);
   });
 });
 

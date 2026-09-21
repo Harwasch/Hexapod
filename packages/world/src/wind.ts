@@ -118,6 +118,99 @@ export function maxWindSlope(strength: WindStrength): number {
 /** {@link maxWindSlope} at full strength. */
 export const WIND_MAX_SLOPE = FBM_MAX_SLOPE * (WIND_GUST * GUST_RATE + WIND_CROSS * CROSS_RATE);
 
+/**
+ * Speed at which a gust travels downwind across the scene, metres per second.
+ *
+ * This is what turns one wind vector into a *field*. A gust is a travelling disturbance: it
+ * reaches the upwind side of a crown before the downwind side, and on a 5 m crown at 7 m/s that
+ * is about 0.7 seconds — slow enough to watch cross, fast enough not to read as two trees.
+ *
+ * It is deliberately **not** derived from `strength`. Gusts convect at roughly the mean wind
+ * speed, so physically it should scale; `strength` is dimensionless and explicitly not a speed,
+ * so scaling a metres-per-second constant by it would be inventing a wind speed and hiding it
+ * in an exponent. A fixed convection speed is the honest version of the same idea.
+ */
+const GUST_CONVECTION_SPEED_MPS = 2.5;
+
+/**
+ * Cross-wind distance over which a gust decorrelates, metres.
+ *
+ * Without it the field is a plane wave: every point at the same downwind distance moves in
+ * lockstep, which for a tree means the crown still arrives as one sheet, only a tilted one. A
+ * lateral offset into the same noise lattice — scaled so that `GUST_COHERENCE_M` across the
+ * wind is as different as a second of time — gives an eddy a finite width without needing
+ * two-dimensional noise. Seven metres is a little wider than the fixture's crown, so a gust
+ * covers it unevenly rather than shredding it.
+ */
+const GUST_COHERENCE_M = 3;
+
+/**
+ * Effective speed at which a gust's *phase* advances across the wind, metres per second.
+ *
+ * A gust front is not a flat wall perpendicular to the mean wind, and its phase varies across
+ * it as well as along it. Without this term the field is a plane wave: two limbs abreast of
+ * each other see the identical gust at the identical instant, and on a crown that is as wide as
+ * it is deep that leaves half the pairs of limbs in lockstep. Larger than the convection speed,
+ * because a gust stays coherent further across the wind than it takes to travel its own length.
+ */
+const GUST_LATERAL_SPEED_MPS = 4;
+
+/**
+ * How long a gust takes to reach `position` from the rig's origin, seconds.
+ *
+ * Negative upwind of the origin, which is correct: the upwind side of a crown is hit first. A
+ * pure function of the bearing and the position — no time, no strength, no state.
+ */
+export function gustDelaySeconds(bearingDeg: number, position: Vec3): number {
+  const bearing = (Number.isFinite(bearingDeg) ? bearingDeg : 0) * DEG_TO_RAD;
+  const sin = Math.sin(bearing);
+  const cos = Math.cos(bearing);
+  const downwind = position[0] * sin + position[1] * cos;
+  // Cross-wind unit vector, 90 degrees clockwise from downwind.
+  const across = position[0] * cos - position[1] * sin;
+  return downwind / GUST_CONVECTION_SPEED_MPS + across / GUST_LATERAL_SPEED_MPS;
+}
+
+/** How far across the wind `position` lies, in units of {@link GUST_COHERENCE_M}. */
+function gustLateral(bearingDeg: number, position: Vec3): number {
+  const bearing = (Number.isFinite(bearingDeg) ? bearingDeg : 0) * DEG_TO_RAD;
+  // Cross-wind unit vector, 90 degrees clockwise from downwind.
+  const across = position[0] * Math.cos(bearing) - position[1] * Math.sin(bearing);
+  return across / GUST_COHERENCE_M;
+}
+
+/**
+ * The gust vector at `position` and time `t`: {@link wind} as a travelling field.
+ *
+ * `windAt(s, b, t, [0, 0, 0])` is exactly `wind(s, b, t)`, bit for bit, so the origin — the
+ * rig's root, which never moves anyway — is unchanged and every bound proved about `wind`
+ * carries over unaltered. Two things vary with position:
+ *
+ * - **a retarded time**, `t − gustDelaySeconds(...)`, dominated by `(x·downwind) /
+ *   GUST_CONVECTION_SPEED_MPS`, so the same gust arrives later the further downwind a limb
+ *   sits, and tilted by a cross-wind term so the front is not a flat wall; and
+ * - **a lateral offset** into the noise lattice, so limbs abreast of each other across the wind
+ *   are not in lockstep either.
+ *
+ * Neither changes the *range* of the field, which is what keeps `maxWindMagnitude` and
+ * `maxWindSlope` valid: a shift of the argument cannot take a bounded function outside its
+ * bound, and the time derivative is unchanged because `d(t − τ)/dt = 1`.
+ */
+export function windAt(
+  strength: WindStrength,
+  bearingDeg: number,
+  t: number,
+  position: Vec3,
+): Vec3 {
+  const time = Number.isFinite(t) ? t : 0;
+  return sampleWind(
+    strength,
+    bearingDeg,
+    time - gustDelaySeconds(bearingDeg, position),
+    gustLateral(bearingDeg, position),
+  );
+}
+
 /** `-0` compares unequal to `0` under `Object.is`; rest-state assertions must be exact. */
 function unsignZero(value: number): number {
   return value === 0 ? 0 : value;
@@ -132,10 +225,16 @@ function unsignZero(value: number): number {
  * `strength === 0` returns exactly `[0, 0, 0]`.
  */
 export function wind(strength: WindStrength, bearingDeg: number, t: number): Vec3 {
+  return sampleWind(strength, bearingDeg, t, 0);
+}
+
+/** {@link wind}, with an extra offset into the noise lattice. See {@link windAt}. */
+function sampleWind(strength: WindStrength, bearingDeg: number, t: number, lateral: number): Vec3 {
   const s = Number.isFinite(strength) ? clamp(strength, 0, 1) : 0;
   const time = Number.isFinite(t) ? t : 0;
-  const along = s * (WIND_BASE + WIND_GUST * fbm1d(time * GUST_RATE, GUST_SEED));
-  const across = s * WIND_CROSS * fbm1d(time * CROSS_RATE + CROSS_OFFSET, CROSS_SEED);
+  const offset = Number.isFinite(lateral) ? lateral : 0;
+  const along = s * (WIND_BASE + WIND_GUST * fbm1d(time * GUST_RATE + offset, GUST_SEED));
+  const across = s * WIND_CROSS * fbm1d(time * CROSS_RATE + CROSS_OFFSET + offset, CROSS_SEED);
   const bearing = (Number.isFinite(bearingDeg) ? bearingDeg : 0) * DEG_TO_RAD;
   // Downwind unit vector: bearing is clockwise from north, so east is sin and north is cos.
   const downEast = Math.sin(bearing);
