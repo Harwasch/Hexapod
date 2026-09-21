@@ -13,6 +13,35 @@ Read this page for the mechanism and its limits. The numbers below were all meas
 measurement was taken under software GL (SwiftShader), it says so, because those numbers are not
 representative of a machine with a GPU.
 
+### What this proves, and what it does not
+
+The rest of this page is long, and the mechanism travels further than the caveats when it is
+quoted. So both halves, up front:
+
+**Proven, by measurement or by construction:**
+
+- The canonical positions are never written to. A 1000-frame test asserts byte-identity on the
+  engine's array, the fixture, the deformer's own copy and the cached bake matrix.
+- Calm restores the measured pose **exactly**, not approximately — `bakeResidualM` measured 0
+  against the real engine, so there is no epsilon anywhere in that claim.
+- A splat tileset's positions can be rewritten every frame from outside the engine, with no fork
+  and no readback, and the write lands in the frame it was made in.
+- Motion cannot contaminate a measurement, by mechanism rather than by care.
+- Idle stays idle: at calm the scene requests zero renders.
+
+**Not proven, and not provable from here:**
+
+- **That any of this works on a real scan.** The only tree that moves is invented. The skeleton
+  extractor has been scored against ground truth but has never seen a capture.
+- **That the sway reads as _that_ tree** rather than as generic foliage motion — the thing the
+  Living Survey actually claims. No test here can answer it.
+- **That the stale draw order is acceptable at a usable wind strength.** The threshold constant is
+  a hypothesis, and `DEFAULT_WIND_STRENGTH` was derived from it rather than from observation.
+- **What any of it costs on a GPU.** Every frame-rate figure here is software rasterisation.
+
+The first three need a person, a real capture and real hardware. Until then this is a mechanism
+that works on a tree nobody surveyed.
+
 ## Measured, simulated, fixture
 
 The whole feature turns on a viewer never confusing these three, so they are named first.
