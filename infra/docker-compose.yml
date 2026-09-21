@@ -22,7 +22,12 @@ services:
       retries: 10
 
   minio:
-    image: minio/minio:latest
+    # quay.io, not Docker Hub: MinIO deleted the minio/minio and minio/mc
+    # repositories from Docker Hub on 2026-09-11 (the community edition was
+    # archived in February), so an anonymous pull now fails with "repository
+    # does not exist". The same images and tags are still published on MinIO's
+    # own registry.
+    image: quay.io/minio/minio:latest
     container_name: twin-minio
     command: server /data --console-address ":9001"
     environment:
@@ -50,7 +55,7 @@ services:
   # older pinned mc would otherwise fail the whole one-shot silently-ish, and a
   # dev who sees the message can apply the rule by hand.
   minio-init:
-    image: minio/mc:latest
+    image: quay.io/minio/mc:latest
     depends_on:
       minio:
         condition: service_healthy

@@ -114,20 +114,23 @@ jobs:
       # has nowhere to put a command -- `options:` maps to `docker create`
       # flags, which come before the image name. Health-check and teardown are
       # the same as a service container's; only the declaration differs.
+      # quay.io, not Docker Hub: MinIO deleted minio/minio from Docker Hub on
+      # 2026-09-11, so `docker run minio/minio` fails with "repository does not
+      # exist". Same image and tag, MinIO's own registry.
       - name: Start MinIO
         run: |
           docker run -d --name minio \
             -p 9000:9000 \
             -e MINIO_ROOT_USER=twin \
             -e MINIO_ROOT_PASSWORD=twin-secret \
-            minio/minio:latest server /data
+            quay.io/minio/minio:latest server /data
           for _ in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null; then
               echo "MinIO is live"; exit 0
             fi
             sleep 2
           done
-          echo "MinIO did not become healthy"; docker logs minio; exit 1
+          echo "MinIO did not become healthy"; docker logs minio || true; exit 1
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
@@ -149,9 +152,11 @@ jobs:
         run: |
           uv run python -m app.scripts.export_openapi ../../packages/contracts/openapi.json
           git diff --exit-code -- ../../packages/contracts/openapi.json
+      # `|| true` on both: if MinIO never started, these diagnostics would
+      # otherwise fail too and bury the real error under two spurious ones.
       - name: MinIO logs
         if: failure()
-        run: docker logs minio
+        run: docker logs minio || true
       - name: Stop MinIO
         if: always()
-        run: docker rm -f minio
+        run: docker rm -f minio || true
