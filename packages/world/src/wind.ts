@@ -33,7 +33,50 @@ export interface WindSettings {
 /** Calm: the canonical, measured pose. The default everywhere. */
 export const WIND_CALM: WindSettings = { strength: 0, bearingDeg: 0 };
 
-/** Steady component of the gust, as a fraction of full strength. */
+/**
+ * Strength the wind control lands on when someone turns wind on — **not** the value the app
+ * starts at, which is always 0.
+ *
+ * Chosen from the sort-staleness bound, not from a screenshot. The splat sorter reads canonical
+ * positions the deformer never touches, so a displaced splat carries a draw-order key that is
+ * stale by `maxDisplacement / medianGaussianScale` splat radii (`sortStaleness` in `metrics`).
+ * Against the ~2 cm median gaussian of a real drone capture and the 6 m synthetic tree's rig:
+ *
+ * | strength | worst-case displacement | staleness |
+ * | --- | --- | --- |
+ * | 0.02 | 3.3 cm | 1.6 radii |
+ * | 0.12 | 19.7 cm | 9.8 radii |
+ * | 0.5 | 79.4 cm | 39.7 radii |
+ * | 1 | 1.45 m | 72.5 radii |
+ *
+ * `SORT_STALENESS_NOTICEABLE` is 1, and it is a *hypothesis*. 0.12 is the largest strength whose
+ * staleness bound stays inside one decade of that hypothesis, which is the honest width of our
+ * ignorance.
+ *
+ * **The resonant-mode rewrite left every figure in that table where it was**, deliberately and
+ * to within 1 % — the old quasi-static model bounded 19.5 cm at this strength and this one
+ * bounds 19.7 cm. Staleness is driven by *amplitude*, so holding amplitude fixed and moving the
+ * energy from 0.1 Hz to about 1 Hz bought an order of magnitude of visible motion at no cost in
+ * draw-order artifact. Raising amplitude instead would have made the known open risk worse.
+ *
+ * Two things keep the bound pessimistic, and neither is an argument for going higher: it is a
+ * proven maximum over the outermost leaf's whole ancestor chain with the gust at its extreme and
+ * every forcing sinusoid peaking at once, and the fixture's own gaussians are coarser (10.7 cm
+ * median measured over `data/tiles/synthetic-tree`), where the same strength is only 1.8 radii.
+ */
+export const DEFAULT_WIND_STRENGTH: WindStrength = 0.12;
+
+/**
+ * Steady component of the gust, as a fraction of full strength.
+ *
+ * Seventy per cent of this field is a constant, which is a great deal — and it used to be the
+ * first reason the tree looked static, because the whole deformation was proportional to this
+ * magnitude and nothing else. It is no longer, and the number can stay. `deform` now spends this
+ * field on the **steady lean** alone, a minority share of each node's angular budget; what the
+ * eye watches is the resonant response in `modes.ts`, which has its own frequencies. A field that
+ * is mostly steady is the right description of mean wind. It was the wrong thing to hang all of
+ * the motion on.
+ */
 const WIND_BASE = 0.7;
 /** Gusting component, modulated by noise in `[-1, 1]`, so along-wind is always in `[0.4, 1]`. */
 const WIND_GUST = 0.3;

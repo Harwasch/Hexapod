@@ -9,41 +9,23 @@
 
 import { create } from "zustand";
 
-import { WIND_CALM, type WindSettings } from "@twin/world";
+import { DEFAULT_WIND_STRENGTH, WIND_CALM, type WindSettings } from "@twin/world";
 
 import type { DeformerPhase, DeformerReason } from "@/cesium/SplatDeformer";
 
 /**
- * Default strength the wind control lands on when someone turns wind on — **not** the value the
- * app starts at, which is always 0.
+ * Re-exported from `@twin/world`, where it is derived.
  *
- * Chosen from the sort-staleness bound, not from a screenshot. The splat sorter reads canonical
- * positions we never touch, so a displaced splat carries a draw-order key that is stale by
- * `maxDisplacement / medianGaussianScale` splat radii (`sortStaleness` in `@twin/world`).
- * Against the ~2 cm median gaussian of a real drone capture and the 6 m synthetic tree's rig:
- *
- * | strength | worst-case displacement | staleness |
- * | --- | --- | --- |
- * | 0.02 | 3.3 cm | 1.6 radii |
- * | 0.12 | 19.5 cm | 9.7 radii |
- * | 0.5 | 78.9 cm | 39.4 radii |
- * | 1 | 1.45 m | 72.6 radii |
- *
- * `SORT_STALENESS_NOTICEABLE` is 1, and it is a *hypothesis* — headless GL here is SwiftShader,
- * so where the threshold really sits needs a human eye on real hardware. 0.12 is the largest
- * strength whose staleness bound stays inside one decade of that hypothesis, which is the
- * honest width of our ignorance. It is also legible as motion: 19.5 cm is 3.2 % of the tree's
- * height in one glance, where 0.02 (3 cm) would be indistinguishable from the feature being off.
- *
- * Two things keep that bound pessimistic, and neither is an argument for going higher: it is a
- * proven maximum over the outermost leaf's whole ancestor chain with every noise term
- * simultaneously extreme, and the fixture's own gaussians are coarser (10.7 cm median measured
- * over `data/tiles/synthetic-tree`), where the same strength is only 1.8 radii.
+ * The strength the wind control lands on when someone turns wind on is a property of the motion
+ * model, not of this store: it is read off the model's own sort-staleness bound. The derivation,
+ * and the table it comes from, live beside that bound in `wind.ts`. This store only decides that
+ * the app starts at 0 and never persists it.
  */
-export const DEFAULT_WIND_STRENGTH = 0.12;
+export { DEFAULT_WIND_STRENGTH };
 
 /**
- * The median gaussian extent the staleness figures above are quoted against, metres.
+ * The median gaussian extent the staleness figures are quoted against, metres — the denominator
+ * of the table beside `DEFAULT_WIND_STRENGTH` in `@twin/world`.
  *
  * A **reference** yardstick — a real drone capture's median — and not the median of whichever
  * tileset is on screen. Deriving that would mean decoding scales out of the packed splat buffer,

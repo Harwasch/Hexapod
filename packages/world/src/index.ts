@@ -1,6 +1,7 @@
 export * from "./assign";
 export * from "./deform";
 export * from "./metrics";
+export * from "./modes";
 export * from "./noise";
 export * from "./rig";
 export * from "./vec";

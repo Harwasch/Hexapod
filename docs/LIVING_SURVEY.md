@@ -201,6 +201,12 @@ failure it writes nothing, ever, and reports which: `no-primitive`, `no-snapshot
 `viewer.clock.currentTime` against a fixed epoch — so the same clock value always produces the same
 frame, on any machine.
 
+Because the frame is a pure function of that clock, a clock that has stopped and a motion model with
+no motion in it produce the identical symptom — a tree that bends once and then sits there — and the
+two were confused once already. Two guards now keep them apart: `LivingSurveyManager` logs a warning
+when scene time repeats for two seconds of ticks while wind is on, and an e2e test asserts that the
+real viewer's clock advances under `requestRenderMode`. It does; the model was the culprit.
+
 `scene.requestRender()` is called only while some deformer holds displaced positions, plus the one
 frame that restores the measurement. At calm the deformer writes nothing at all, because
 `markMovingNodes` compares against the identity transform _exactly_ and `@twin/world` guarantees
@@ -231,12 +237,97 @@ animating scene can coarsen and earns its quality back on the next gesture. `ani
 in the performance snapshot so the developer panel's `fps` is not read as something it is not. With
 `setAnimating(false)` — the default — every prior test passes unmodified.
 
+## How the tree moves: a sum of damped resonant modes
+
+The first version of this model was **quasi-static**. It computed where a tree would come to
+_rest_ under a steady wind: a bend proportional to the gust magnitude, every node about one shared
+axis, modulated by a slow noise term. Measured on the synthetic tree at the default wind, its
+highest tip moved **0.149 mm per frame** — 0.02 px on a 6 m tree filling 800 px — and its wind
+vector went from 0.084 at `t = 0` to 0.086 five seconds later. It was a correct load model and it
+was not motion. A human on a GPU reported exactly what the arithmetic says: the tree bends, and
+then it is a photograph.
+
+Three things were structurally wrong, and none of them was a tuning problem:
+
+1. **70 % of the wind was a constant** (`WIND_BASE`), so the tree snapped to a steady bend and the
+   remaining 30 % gusted at 0.22 noise-units per second — a five-to-fifteen-second cycle.
+2. **Every node shared one bending axis**, `up × downwind`, computed once for the whole rig. Nodes
+   differed only in amplitude, so the crown could only ever move as a single flat sheet.
+3. **Nothing had a natural frequency.** There was no restoring force, no damping, no oscillator.
+   The model had essentially no energy above 1 Hz, where a real 6 m tree rings at 0.5–1.5 Hz, its
+   branches at 1–3 Hz and its leaf clusters at 5–20 Hz.
+
+What replaced it, in `packages/world/src/modes.ts` and `deform.ts`:
+
+**The forcing is band-limited turbulence**, written as a fixed sum of seven sinusoids between
+0.4 Hz and 6 Hz, with amplitudes falling as `f^-1/2` — the Kolmogorov family, flattened, because over this narrow a
+band the textbook `f^-5/6` put the tip's dominant response near 0.5 Hz — and phases drawn once from
+a hash. The
+amplitudes sum to exactly 1, which is what keeps every bound below closed-form.
+
+**Every node is a damped oscillator** and gets the analytic steady-state response to that forcing:
+
+```
+θ_i(t) = lean_i(t) + Σ_k A_k · H_i(ω_k) · sin(ω_k·t + φ_k + ψ_i(ω_k) + ω_k·τ_i)
+H_i(ω) = 1 / √((1 − (ω/ω_i)²)² + (2·ζ_i·ω/ω_i)²)
+ψ_i(ω) = −atan2(2·ζ_i·ω/ω_i, 1 − (ω/ω_i)²)
+```
+
+A node amplifies what lands near its own `ω_i` and ignores the rest, so the trunk picks up the slow
+energy and a twig picks up the fast, without anything being told which is which. `τ_i` is a
+per-node convection delay: an eddy does not reach the whole crown at once.
+
+**`ω_i` comes from geometry, never from the band label.** A cantilever's fundamental goes as
+`radius / length²`, and `length` here is the path from the node to the furthest tip it carries —
+both measurable on any rig, where "this is a branch" is an opinion that `skeleton.py` will be
+guessing at in the field. The exponents are beam theory; the scale constant is calibration, and
+says so in the code: green wood taken literally would put a 6 m trunk near 6 Hz, where real trees
+that size are measured at 0.5–1.5 Hz. Damping `ζ` runs 0.05–0.15 from thickness — trees are lightly
+damped, which is what makes them ring.
+
+**Each node sways in its own plane.** Mostly downwind, swung by a per-node azimuth of up to ±0.7 rad
+and tilted out of horizontal by a per-node twist, both hashed from the node's id. The _steady lean_
+stays exactly downwind for every node, because that is what steady drag is; only the oscillation
+gets a plane of its own. That split is what stops the crown being a sheet while keeping a branch
+from acquiring a permanent sideways set.
+
+**The steady lean is now the minority partner**: 40 % of the load, and 35 % of each node's angular
+budget. It is kept because a tree in a breeze genuinely does sit off its rest pose. It no longer
+decides what the eye sees.
+
+### What that bought, and what it cost
+
+| at `DEFAULT_WIND_STRENGTH = 0.12`, highest tip | quasi-static | resonant modes |
+| ---------------------------------------------- | ------------ | -------------- |
+| movement per frame, mean                       | 0.21 mm      | **1.6 mm**     |
+| movement per frame, peak                       | 0.69 mm      | **4.7 mm**     |
+| peak speed                                     | 0.04 m/s     | **0.28 m/s**   |
+| dominant frequency                             | 0.3 Hz       | **1.1 Hz**     |
+| alternating energy in 0.5–3 Hz                 | ~0           | **64 %**       |
+| peak displacement                              | 10.9 cm      | 7.8 cm         |
+| worst-case displacement **bound**              | 19.5 cm      | **19.7 cm**    |
+| sort staleness at the 2 cm reference gaussian  | 9.7 radii    | **9.8 radii**  |
+
+The last two rows are the point. Sort staleness is driven by _amplitude_, not by speed, and
+`DEFAULT_WIND_STRENGTH` was derived from the staleness bound — so the model was tuned to land the
+bound where it already was, to within 1 %, and the whole gain was taken in frequency. Cranking
+amplitude instead would have made the known draw-order artifact worse for the same apparent motion.
+`0.12` therefore still holds, on the same derivation, with the same table.
+
+On a 6 m tree filling 800 px (133 px/m) that is 0.21 px per frame on average against 0.03 before,
+and about 10 px of sweep over a half swing. `packages/world/src/motion.test.ts` asserts all four
+properties — visibility with its viewing assumption written out, band energy in 0.5–3 Hz, sibling
+limbs decorrelated, and a node responding at its own frequency rather than the wind's — because
+every test that existed before proved _safety_, and the bounds tests passed precisely because the
+motion was too small to see.
+
 ## Wind is a scale, not a speed
 
 `strength` is dimensionless, `0..1`, where 1 is the strongest gust this model produces. It is
 deliberately not metres per second: calling it m/s would assert that the sway amplitude had been
 validated against a real tree at that speed. It has not been, and no biomechanical source backs the
-stiffness values. Every surface that prints it says "an arbitrary scale, not a wind speed".
+stiffness values or the frequency scale. Every surface that prints it says "an arbitrary scale, not
+a wind speed".
 
 `bearingDeg` is **downwind** — the direction the wind blows _towards_ — which is the opposite of the
 meteorological convention. An inverted bearing is invisible in a screenshot, so the control's hint
@@ -246,11 +337,11 @@ Wind starts at 0 in every session and is never persisted (`state/settings.ts` is
 store): the first thing a person sees is the measurement, and motion is opted into again each time.
 `settings.reducedMotion` forces calm and disables the control.
 
-Turning wind on lands on `DEFAULT_WIND_STRENGTH = 0.12`, chosen from the sort-staleness bound rather
-than from a screenshot. On the synthetic tree's rig that is a worst-case displacement of 19.5 cm —
-3.2 % of the tree's height, legible as motion at a glance — and 9.7 reference splat radii of
-draw-order staleness, which is the largest strength whose staleness stays inside one decade of the
-`SORT_STALENESS_NOTICEABLE = 1` hypothesis. That hypothesis is not a measurement; see below.
+Turning wind on lands on `DEFAULT_WIND_STRENGTH = 0.12`, which lives in `@twin/world` beside the
+bound it is derived from and is re-exported by `state/living.ts`. On the synthetic tree's rig that
+is a worst-case displacement of 19.7 cm and 9.8 reference splat radii of draw-order staleness, the
+largest strength whose staleness stays inside one decade of the `SORT_STALENESS_NOTICEABLE = 1`
+hypothesis. That hypothesis is not a measurement; see below.
 
 ## Limits
 
@@ -285,6 +376,24 @@ draw-order staleness, which is the largest strength whose staleness stays inside
   its neighbour's node. Read the first column against the second, not against perfection.
 - **Stiffness is invented.** A plausible gradient — thicker and lower bends less — interpolated from
   the synthetic generator's constants. Nothing about it is calibrated.
+- **So is the frequency scale.** `radius / length²` is beam theory; the constant that turns it into
+  hertz was fitted so a 6 m trunk lands near 1 Hz, which is where real trees that size are measured.
+  No species, no modulus, no measurement of any particular tree. The same goes for the damping
+  ratios and for the shape of the turbulence spectrum: a `f^-1/2` amplitude falloff is in the right
+  family for a wind spectrum and is not one.
+- **The bound is looser than it was, in a way that flatters nothing.** `maxNodeAngle` is now the sum
+  of a saturated steady lean and a saturated oscillation, and the oscillation's worst case assumes
+  all seven forcing sinusoids peak at once. The forcing frequencies are mutually irrational, so by
+  Weyl's theorem that alignment does occur eventually and the bound is attained in the limit — it is
+  a true supremum, not a pessimistic guess — but it sits about 2.5× the displacement actually seen
+  over a minute, where the old model's sat at 1.8×. The consequence is that `DEFAULT_WIND_STRENGTH`
+  buys less typical amplitude for the same staleness budget than it used to. That was the trade
+  taken on purpose.
+- **The fixture's branches are stubs.** `syntheticTreeRig` gives a 1.6 m branch a 12 cm radius, so
+  `radius / length²` correctly calls it stiff and puts it at 7–10 Hz, where there is little forcing.
+  On this fixture the trunk carries almost all of the visible sway. A real rig with slender branches
+  would put more of the motion at branch level, which is where a tree's shimmer actually comes from —
+  so the fixture, again, is the weakest part of the demonstration rather than the model.
 - **Rigs are an explicit table.** `LIVING_RIGS` in `apps/web/src/cesium/livingRigs.ts` names which
   capture slugs have a rig. Probing for `source/rig.json` would mean a 404 per site per load, and
   would make "this site can move" a property of a missing file rather than a decision someone made.
@@ -302,7 +411,10 @@ the pipeline runs end to end and nothing more.
 
 1. **Does the sway read as _that_ tree?** The whole premise is motion that stays specific to the
    measured object rather than becoming a generic game-engine sway. That is a judgement made with
-   eyes, at wind 0 → 0.12 → 1, and it has not been made.
+   eyes, at wind 0 → 0.12 → 1, and it has not been made. The first attempt at it failed for a
+   reason no test caught — the motion was 0.02 px per frame — and the numbers now say it should be
+   about ten times that and at ten times the rate. Whether _visible_ has become _convincing_ is
+   still a question for a person.
 2. **What does a frame actually cost?** 128 KB per frame for the fixture is arithmetic; the real
    numbers are the upload, the re-sort it does not trigger, and whether the ladder's new
    `setAnimating` behaviour keeps a mid-range laptop smooth with wind on.
@@ -317,18 +429,18 @@ in the field.
 
 ## Where the code is
 
-| Piece                                                  | What it holds                                                                |
-| ------------------------------------------------------ | ---------------------------------------------------------------------------- |
-| `packages/world` (`@twin/world`)                       | the pure motion model: rig, seeded gust noise, `deform`, assignment, metrics |
-| `tools/captures/synthetic_tree.py`                     | the procedural tree and its ground-truth labels                              |
-| `tools/captures/skeleton.py`                           | skeleton extraction from a 3DGS PLY, scored against that truth               |
-| `apps/web/src/cesium/splatCapture.ts`                  | the interception that captures the packed buffer                             |
-| `apps/web/src/cesium/splatInternals.ts`                | every CesiumJS internal this depends on, declared once, versioned            |
-| `apps/web/src/cesium/splatTexels.ts`, `splatFrames.ts` | pure texel addressing and frame arithmetic                                   |
-| `apps/web/src/cesium/SplatDeformer.ts`                 | attach, validate, refuse, write                                              |
-| `apps/web/src/cesium/LivingSurveyManager.ts`           | wind, the tick, attach/detach as sites load                                  |
-| `apps/web/src/state/living.ts`                         | wind state and status, and the constants above                               |
-| `apps/web/src/features/living/SimulatedBadge.tsx`      | the ambient label                                                            |
+| Piece                                                  | What it holds                                                             |
+| ------------------------------------------------------ | ------------------------------------------------------------------------- |
+| `packages/world` (`@twin/world`)                       | the pure motion model: rig, gust noise, resonant modes, `deform`, metrics |
+| `tools/captures/synthetic_tree.py`                     | the procedural tree and its ground-truth labels                           |
+| `tools/captures/skeleton.py`                           | skeleton extraction from a 3DGS PLY, scored against that truth            |
+| `apps/web/src/cesium/splatCapture.ts`                  | the interception that captures the packed buffer                          |
+| `apps/web/src/cesium/splatInternals.ts`                | every CesiumJS internal this depends on, declared once, versioned         |
+| `apps/web/src/cesium/splatTexels.ts`, `splatFrames.ts` | pure texel addressing and frame arithmetic                                |
+| `apps/web/src/cesium/SplatDeformer.ts`                 | attach, validate, refuse, write                                           |
+| `apps/web/src/cesium/LivingSurveyManager.ts`           | wind, the tick, attach/detach as sites load                               |
+| `apps/web/src/state/living.ts`                         | wind state and status, and the staleness yardstick                        |
+| `apps/web/src/features/living/SimulatedBadge.tsx`      | the ambient label                                                         |
 
 Rig authoring and scoring are documented in [CAPTURES.md](CAPTURES.md#the-synthetic-tree); the
 mechanism decision is [ADR 0006](DECISIONS/0006-splat-texture-rewrite.md).

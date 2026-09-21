@@ -35,6 +35,38 @@ test.describe("boot", () => {
     expect(errors).toEqual([]);
   });
 
+  test("the scene clock advances, so a pure function of it is not a frozen frame", async ({
+    app,
+  }) => {
+    // The Living Survey computes every frame as a pure function of `viewer.clock.currentTime`.
+    // That is what makes it reproducible, and it also means a stopped clock and a motion model
+    // with no motion in it are indistinguishable on screen — a tree that bends once and sits
+    // there. The model was the culprit once; this pins the other candidate so the two can never
+    // be confused again. `requestRenderMode` is on, so the question is real: the clock must tick
+    // even on the frames the scene declines to draw.
+    const readClock = () =>
+      app.evaluate(() => {
+        const twin = (
+          window as unknown as {
+            __twin?: {
+              viewer: { clock: { currentTime: { dayNumber: number; secondsOfDay: number } } };
+            };
+          }
+        ).__twin;
+        const time = twin?.viewer.clock.currentTime;
+        if (!time) throw new Error("scene handle missing");
+        return time.dayNumber * 86400 + time.secondsOfDay;
+      });
+    const first = await readClock();
+    await app.waitForTimeout(1000);
+    const second = await readClock();
+    // Roughly a second of scene time for a second of wall time, with wide tolerance: headless
+    // GL here is SwiftShader and frames are slow, so the clock is checked for advancing rather
+    // than for keeping time.
+    expect(second - first).toBeGreaterThan(0.2);
+    expect(second - first).toBeLessThan(30);
+  });
+
   test("API failure does not crash the viewer", async ({ page }) => {
     await mockApi(page, { apiDown: true });
     await page.goto("/");

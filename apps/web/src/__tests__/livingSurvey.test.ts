@@ -257,6 +257,88 @@ describe("idle stays idle", () => {
   });
 });
 
+describe("consecutive frames are different frames", () => {
+  /**
+   * The guard that keeps two indistinguishable failures apart.
+   *
+   * A tree that bends once and then sits there has exactly two possible causes: a motion model
+   * with no motion in it, or a `viewer.clock.currentTime` that has stopped. They look identical
+   * on screen and they were confused once already. This asserts the manager's half — one frame
+   * of scene time apart, the words that reach the GPU are different words — so a regression in
+   * the model can never again be mistaken for a frozen clock, or the reverse.
+   */
+  const FRAME = 1 / 60;
+
+  it("uploads different splat positions one frame apart at the default wind", async () => {
+    const harness = await attached();
+    harness.manager.setWind({ strength: DEFAULT_WIND_STRENGTH, bearingDeg: 250 });
+    harness.tick(10);
+    harness.tick(10 + FRAME);
+    const uploads = harness.primitive.texture.uploads;
+    expect(uploads.length).toBeGreaterThanOrEqual(2);
+    const before = uploads.at(-2);
+    const after = uploads.at(-1);
+    expect(before).toBeDefined();
+    expect(after).toBeDefined();
+    if (!before || !after) return;
+    expect(after.words.length).toBe(before.words.length);
+    let differing = 0;
+    for (let i = 0; i < before.words.length; i += 1) {
+      if (before.words[i] !== after.words[i]) differing += 1;
+    }
+    // Not "some bit somewhere moved": nearly the whole tree has to have moved. Of the words in
+    // an upload only three per splat are position — the rest are covariance and colour, which
+    // the deformer never touches — so the count to measure against is `3 · numSplats`, and one
+    // frame at the default wind moves the tip about 1.6 mm, which is many float32 ulps
+    // everywhere the tree is not pinned to the ground.
+    const positionWords = 3 * (harness.manager.status.sites[0]?.numSplats ?? 0);
+    expect(positionWords).toBe(6000);
+    expect(differing).toBeGreaterThan(0.8 * positionWords);
+    expect(differing).toBeLessThanOrEqual(positionWords);
+    harness.manager.destroy();
+  });
+
+  it("uploads identical positions when the clock does not advance", async () => {
+    // The other explanation's signature, pinned so the two can be told apart from the outside.
+    // `deform` is a pure function of scene time, so a stopped clock gives the same frame for
+    // ever — which is correct behaviour for a stopped clock and a bug in whatever stopped it.
+    const harness = await attached();
+    harness.manager.setWind({ strength: DEFAULT_WIND_STRENGTH, bearingDeg: 250 });
+    harness.tick(10);
+    harness.tick(10);
+    const uploads = harness.primitive.texture.uploads;
+    const before = uploads.at(-2);
+    const after = uploads.at(-1);
+    expect(before).toBeDefined();
+    expect(after).toBeDefined();
+    if (!before || !after) return;
+    expect([...after.words]).toEqual([...before.words]);
+    harness.manager.destroy();
+  });
+
+  it("keeps moving over a whole second of frames, not just the first two", async () => {
+    // A model whose only time-varying term is a 0.22-units-per-second gust envelope passes the
+    // two-frame test and still reads as static. Sixty frames is a second of wall time, which is
+    // the span a person judges "is this moving?" over.
+    const harness = await attached();
+    harness.manager.setWind({ strength: DEFAULT_WIND_STRENGTH, bearingDeg: 250 });
+    const uploads = harness.primitive.texture.uploads;
+    const start = uploads.length;
+    for (let frame = 0; frame <= 60; frame += 1) harness.tick(20 + frame * FRAME);
+    const frames = uploads.slice(start);
+    expect(frames.length).toBe(61);
+    let changed = 0;
+    for (let i = 1; i < frames.length; i += 1) {
+      const a = frames[i - 1];
+      const b = frames[i];
+      if (!a || !b) continue;
+      if (a.words.some((word, index) => word !== b.words[index])) changed += 1;
+    }
+    expect(changed).toBe(frames.length - 1);
+    harness.manager.destroy();
+  });
+});
+
 describe("telling the performance ladder what is going on", () => {
   it("switches animation on with the wind and off with everything that ends it", async () => {
     const harness = await attached();

@@ -7,6 +7,7 @@
  */
 
 import { maxNodeAngle, maxNodeAngleRate } from "./deform";
+import { nodeModes } from "./modes";
 import { ancestorsOf, type MotionRig } from "./rig";
 import { distance } from "./vec";
 import { type WindSettings } from "./wind";
@@ -20,13 +21,15 @@ import { type WindSettings } from "./wind";
  * ancestor chain bounds the total. Monotone in strength by construction, because every `θ` is.
  */
 export function maxNodeDisplacements(rig: MotionRig, settings: WindSettings): number[] {
+  const modes = nodeModes(rig);
   return rig.nodes.map((node, index) => {
     let bound = 0;
     for (const ancestor of ancestorsOf(rig, index)) {
       const joint = rig.nodes[ancestor];
+      const mode = modes[ancestor];
       // The root is the anchor and never rotates, so it contributes nothing.
-      if (joint === undefined || joint.parent < 0) continue;
-      bound += maxNodeAngle(joint, settings) * distance(node.position, joint.position);
+      if (joint === undefined || mode === undefined || joint.parent < 0) continue;
+      bound += maxNodeAngle(joint, mode, settings) * distance(node.position, joint.position);
     }
     return bound;
   });
@@ -43,12 +46,14 @@ export function maxDisplacement(rig: MotionRig, settings: WindSettings): number 
 
 /** Worst-case speed of each node, metres per second. Same construction as the displacement bound. */
 export function maxNodeSpeeds(rig: MotionRig, settings: WindSettings): number[] {
+  const modes = nodeModes(rig);
   return rig.nodes.map((node, index) => {
     let bound = 0;
     for (const ancestor of ancestorsOf(rig, index)) {
       const joint = rig.nodes[ancestor];
-      if (joint === undefined || joint.parent < 0) continue;
-      bound += maxNodeAngleRate(joint, settings) * distance(node.position, joint.position);
+      const mode = modes[ancestor];
+      if (joint === undefined || mode === undefined || joint.parent < 0) continue;
+      bound += maxNodeAngleRate(joint, mode, settings) * distance(node.position, joint.position);
     }
     return bound;
   });

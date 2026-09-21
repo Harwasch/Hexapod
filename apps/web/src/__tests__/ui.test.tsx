@@ -52,8 +52,8 @@ function livingStatus(
     numSplats: 2000,
     displaced: animating,
     rigSourceNote: RIG_NOTE,
-    maxDisplacementM: 0.195,
-    sortStaleness: 9.7,
+    maxDisplacementM: 0.197,
+    sortStaleness: 9.8,
     ...over,
   };
   return {
@@ -197,7 +197,7 @@ describe("DevPanel: the one place sort staleness is printed", () => {
     render(wrap(<DevPanel />));
 
     const line = screen.getByTestId("dev-living");
-    expect(line).toHaveTextContent("9.7 splat radii");
+    expect(line).toHaveTextContent("9.8 splat radii");
     // Without this clause the number reads as a measurement of the splats on screen. The
     // denominator is a fixed reference from a different capture; the fixture's own median is
     // five times coarser, so the figure is pessimistic by about that factor.

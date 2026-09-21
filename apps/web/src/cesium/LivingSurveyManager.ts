@@ -70,6 +70,17 @@ export function sceneSeconds(currentTime: JulianDate): number {
 }
 
 /**
+ * Consecutive ticks at an unchanged scene time that mean the clock has stopped, not that the
+ * wind is calm.
+ *
+ * Two seconds at 60 Hz. The guard exists because a frozen `viewer.clock.currentTime` and a
+ * motion model with no motion in it look *identical* on screen — a tree that bends once and then
+ * sits there — and the two were confused once already. The model was the culprit; this makes
+ * the other candidate say so out loud rather than leaving it to be guessed at again.
+ */
+const STALLED_CLOCK_TICKS = 120;
+
+/**
  * Why a refusal is permanent, in words a person can act on. Only `refused` phases appear here:
  * the `waiting` reasons (`no-primitive`, `no-snapshot`, `no-texture`, `no-bake-transform`,
  * `no-capture`) are the ordinary first few frames after a tile loads and must never toast.
@@ -120,6 +131,12 @@ export class LivingSurveyManager {
   #removeTick: (() => void) | null = null;
   /** Whether the previous tick left anything displaced — the restore frame needs one render. */
   #wasDisplaced = false;
+  /** Scene time at the previous tick, for {@link STALLED_CLOCK_TICKS}. */
+  #lastSceneSeconds: number | null = null;
+  /** Consecutive ticks whose scene time was identical to the one before. */
+  #stalledTicks = 0;
+  /** The stall has been reported once; it is a standing condition, not a per-frame event. */
+  #reportedStall = false;
   #published: LivingSurveyStatus | null = null;
   #destroyed = false;
 
@@ -241,6 +258,9 @@ export class LivingSurveyManager {
     this.#declined.clear();
     this.#holds = 0;
     this.#wasDisplaced = false;
+    this.#lastSceneSeconds = null;
+    this.#stalledTicks = 0;
+    this.#reportedStall = false;
     this.#performance.setAnimating(false);
   }
 
@@ -306,6 +326,7 @@ export class LivingSurveyManager {
     if (this.#destroyed || this.#entries.size === 0) return;
     const wind = this.#holds > 0 ? WIND_CALM : this.#wind;
     const t = sceneSeconds(this.#viewer.clock.currentTime);
+    this.#checkClock(t, wind.strength > 0);
     let displaced = false;
     let phaseChanged = false;
     for (const entry of this.#entries.values()) {
@@ -328,6 +349,38 @@ export class LivingSurveyManager {
     // is not per-frame work even though it is reached from a per-frame listener.
     if (phaseChanged) this.#settlePhases();
   };
+
+  /**
+   * Notices a scene clock that has stopped advancing while wind is on.
+   *
+   * `deform` is a pure function of `t`, so a clock that does not move produces the same
+   * transforms for ever and the tree freezes mid-bend — which is exactly what a motion model
+   * with no frequency content in it also looks like. Distinguishing them by eye is impossible,
+   * and this is the cheapest thing that can tell them apart. One warning per stall, not one per
+   * frame; a calm scene is exempt, since nothing is expected to move there anyway.
+   */
+  #checkClock(t: number, animating: boolean): void {
+    if (!animating) {
+      this.#lastSceneSeconds = t;
+      this.#stalledTicks = 0;
+      this.#reportedStall = false;
+      return;
+    }
+    if (this.#lastSceneSeconds === t) {
+      this.#stalledTicks += 1;
+      if (this.#stalledTicks >= STALLED_CLOCK_TICKS && !this.#reportedStall) {
+        this.#reportedStall = true;
+        log.warn("scene clock has stopped; the survey is frozen mid-bend, not becalmed", {
+          sceneSeconds: t,
+          ticks: this.#stalledTicks,
+        });
+      }
+      return;
+    }
+    this.#lastSceneSeconds = t;
+    this.#stalledTicks = 0;
+    this.#reportedStall = false;
+  }
 
   /** Retires anything that refused, toasts why, and republishes. */
   #settlePhases(): void {

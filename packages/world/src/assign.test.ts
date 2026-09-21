@@ -74,22 +74,37 @@ describe("assignSplatsToNodes", () => {
     expect([...bandsOf(assignment, rig)]).toEqual(["trunk"]);
 
     // And the consequence that actually matters: the motion they get is trunk motion.
-    const transforms = deform(rig, 14.75, { strength: 1, bearingDeg: 90 });
+    const gale = { strength: 1, bearingDeg: 90 };
+    const transforms = deform(rig, 14.75, gale);
     const trunkCap = Math.max(
       ...rig.nodes.map((node, i) =>
         node.band === "trunk" ? magnitude(nodeDisplacement(rig, transforms, i)) : 0,
       ),
     );
-    const canopyMax = Math.max(
-      ...rig.nodes.map((node, i) =>
-        node.band === "leaf" ? magnitude(nodeDisplacement(rig, transforms, i)) : 0,
-      ),
-    );
-    // The canopy moves further than any trunk node can; a trunk splat must stay under the trunk cap.
-    expect(canopyMax).toBeGreaterThan(2 * trunkCap);
     for (const index of assignment) {
       expect(magnitude(nodeDisplacement(rig, transforms, index))).toBeLessThanOrEqual(trunkCap);
     }
+
+    // And the canopy reaches half again as far as any trunk node does. Two numbers moved here
+    // and both for the same reason. It is measured as a reach over a sweep rather than at one
+    // instant, because nodes now ring at their own frequencies and which of them happens to be
+    // near its extreme at a frozen `t` is a coincidence. And the factor is 1.5 where it was 2:
+    // a chain of nodes that all bent in phase about one shared axis summed its contributions
+    // coherently, which is precisely the defect that made the crown move as a single sheet. Out
+    // of phase they partly cancel, so the canopy's lead over the trunk is smaller and the
+    // motion is a tree rather than a plate. The separation the test exists to prove — a trunk
+    // splat never receives canopy motion — is the assertion above, and it is unchanged.
+    let trunkReach = 0;
+    let canopyReach = 0;
+    for (let k = 0; k <= 20 * 60; k += 1) {
+      const posed = deform(rig, k / 60, gale);
+      rig.nodes.forEach((node, i) => {
+        const moved = magnitude(nodeDisplacement(rig, posed, i));
+        if (node.band === "trunk") trunkReach = Math.max(trunkReach, moved);
+        if (node.band === "leaf") canopyReach = Math.max(canopyReach, moved);
+      });
+    }
+    expect(canopyReach).toBeGreaterThan(1.5 * trunkReach);
   });
 
   it("is independent of the order the splats arrive in", () => {

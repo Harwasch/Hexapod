@@ -15,6 +15,7 @@ import {
   maxNodeDisplacements,
   nodeAngleLimit,
   nodeDisplacement,
+  nodeModes,
   normalize,
   parseRig,
   quatAngle,
@@ -28,6 +29,7 @@ import {
   VEC3_ZERO,
   wind,
   type MotionRig,
+  type NodeTransform,
   type WindSettings,
 } from "./index";
 
@@ -187,15 +189,21 @@ describe("per-node angular limits", () => {
 
   it("saturates smoothly: the cap is approached but never reached", () => {
     const strong = { strength: 1, bearingDeg: 0 };
-    for (const node of rig.nodes) {
-      if (node.parent < 0) continue;
-      expect(maxNodeAngle(node, strong)).toBeLessThan(nodeAngleLimit(node));
-    }
+    const modes = nodeModes(rig);
+    rig.nodes.forEach((node, i) => {
+      if (node.parent < 0) return;
+      const mode = modes[i];
+      expect(mode).toBeDefined();
+      if (!mode) return;
+      expect(maxNodeAngle(node, mode, strong)).toBeLessThan(nodeAngleLimit(node));
+    });
     const leaf = rig.nodes.at(-1);
+    const leafMode = modes.at(-1);
     expect(leaf).toBeDefined();
-    if (!leaf) return;
+    expect(leafMode).toBeDefined();
+    if (!leaf || !leafMode) return;
     // A leaf at full strength is genuinely on its limiter, not merely under the cap by luck.
-    expect(maxNodeAngle(leaf, strong)).toBeGreaterThan(0.7 * nodeAngleLimit(leaf));
+    expect(maxNodeAngle(leaf, leafMode, strong)).toBeGreaterThan(0.7 * nodeAngleLimit(leaf));
   });
 
   it("honours a per-node override, which binds that node's descendants", () => {
@@ -309,8 +317,12 @@ describe("continuity", () => {
     const node = rig.nodes.length - 1;
     const at = (t: number) => nodeDisplacement(rig, deform(rig, t, GALE), node);
     const speedAt = (h: number) => magnitude(subtract(at(30 + h), at(30))) / h;
-    const coarse = speedAt(1 / 60);
-    const fine = speedAt(1 / 6000);
+    // The steps are two decades apart and both far below a frame. A frame is no longer a small
+    // step for this model: the fastest forcing component turns over a tenth of a cycle in 1/60 s,
+    // so a difference quotient taken across a whole frame measures the chord, not the tangent.
+    // Differentiability is a statement about the limit, and this is the limit taken properly.
+    const coarse = speedAt(1 / 6000);
+    const fine = speedAt(1 / 600000);
     expect(Math.abs(coarse - fine)).toBeLessThan(0.2 * Math.max(fine, 1e-6));
   });
 });
@@ -333,18 +345,65 @@ describe("direction", () => {
     }
   });
 
-  it("bends every node in one plane: no displacement along the rotation axis", () => {
-    // Every local rotation shares the axis `up x downwind`, so the whole composition is a single
-    // rotation about it and no node may drift sideways out of the bending plane. A node that did
-    // would mean an axis had been mixed up somewhere in the chain.
+  it("gives every node its own bending plane: the crown is not one flat sheet", () => {
+    // This is the exact inverse of the assertion it replaces, and the inversion is deliberate.
+    //
+    // The old test read: "bends every node in one plane: no displacement along the rotation
+    // axis", and it passed, because every local rotation shared the single axis
+    // `up x downwind` computed once for the whole rig. That is not a safety property. It is a
+    // statement that the tree differs from a rigid plate only in amplitude, which is why no
+    // amount of tuning could have made the old model read as a tree, and the test that proved
+    // it was proving the defect.
+    //
+    // What is asserted instead: a real fraction of the motion lies along that old shared axis.
+    // Each node now sways about its own plane — mostly downwind, swung and twisted by its own
+    // azimuth — while the steady lean stays exactly downwind for everyone, which is what steady
+    // drag is. The measured fraction is about 0.13 of the RMS displacement; 0.05 is asserted, a
+    // margin below it, and the old model would have scored exactly 0.
+    let acrossPlane = 0;
+    let total = 0;
     for (let k = 0; k <= SWEEP_FRAMES; k += 29) {
       const t = k * DT;
       const axis = normalize(cross(VEC3_UP, wind(GALE.strength, GALE.bearingDeg, t)), [1, 0, 0]);
       const transforms = deform(rig, t, GALE);
       for (let i = 0; i < rig.nodes.length; i += 1) {
-        expect(Math.abs(dot(nodeDisplacement(rig, transforms, i), axis))).toBeLessThan(1e-12);
+        const moved = nodeDisplacement(rig, transforms, i);
+        const along = dot(moved, axis);
+        acrossPlane += along * along;
+        total += dot(moved, moved);
       }
     }
+    expect(total).toBeGreaterThan(0);
+    expect(Math.sqrt(acrossPlane / total)).toBeGreaterThan(0.05);
+  });
+
+  it("keeps the steady lean exactly downwind, whatever plane a node sways in", () => {
+    // The per-node planes are given to the oscillation only. Averaged over a long sweep the
+    // oscillation cancels and what is left is the lean, which must be downwind for every node —
+    // a branch does not acquire a permanent sideways set because of how it happens to shake.
+    const { down, across } = frame(GALE.bearingDeg);
+    const posed: NodeTransform[][] = [];
+    for (let k = 0; k <= SWEEP_FRAMES; k += 1) posed.push(deform(rig, k * DT, GALE));
+    let checked = 0;
+    rig.nodes.forEach((node, i) => {
+      let along = 0;
+      let sideways = 0;
+      let travelled = 0;
+      for (const transforms of posed) {
+        const d = nodeDisplacement(rig, transforms, i);
+        along += d[0] * down[0] + d[1] * down[1];
+        sideways += d[0] * across[0] + d[1] * across[1];
+        travelled += magnitude(d);
+      }
+      // The root and the first trunk joint rotate about themselves with no rotating ancestor,
+      // so they are fixed by construction and have no direction to speak of.
+      if (travelled === 0) return;
+      const n = posed.length;
+      expect(along / n).toBeGreaterThan(0);
+      expect(Math.abs(sideways / n)).toBeLessThan(0.25 * (along / n));
+      checked += 1;
+    });
+    expect(checked).toBeGreaterThan(rig.nodes.length - 4);
   });
 
   it("rotates with the bearing rather than ignoring it", () => {
