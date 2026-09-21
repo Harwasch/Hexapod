@@ -72,7 +72,7 @@ writes the answer down.
 
 ```bash
 cd tools/captures
-uv run python synthetic_tree.py ../../data/tiles/synthetic-tree --splats 2000        # committed
+uv run python synthetic_tree.py ../../data/tiles/synthetic-tree --splats 12000       # committed
 uv run python synthetic_tree.py ../../data/tiles/synthetic-tree-large --splats 50000 # gitignored
 ```
 
@@ -80,7 +80,7 @@ Each run writes `source/splat.ply` (the 3DGS layout `splat_tiles.py` reads), `so
 (the `MotionRig` schema in `packages/world/src/rig.ts`), `source/labels.json` (the true node
 index per splat, in PLY order), `source/positions.f32`, and a single-tile `splat/tileset.json`
 built by `splat_tiles.convert` — so the app and Playwright can load the tree from disk with no
-API. Both sizes share one 33-node skeleton; only the splat density differs.
+API. Both sizes share one 214-node skeleton; only the splat density differs.
 
 Two properties the rest of the sprint leans on:
 
@@ -128,18 +128,27 @@ uv run python skeleton.py ../../data/tiles/synthetic-tree/source/splat.ply /tmp/
 
 | metric                                                               | extracted | ceiling |
 | -------------------------------------------------------------------- | --------: | ------: |
-| adjusted Rand index (do splats that belong together stay together)   |     0.672 |   0.847 |
-| band agreement (trunk / branch / leaf, which is what sets stiffness) |     0.752 |   0.916 |
-| cluster purity                                                       |     0.745 |   0.906 |
-| mean distance from a true joint to the nearest recovered one         |    0.35 m |     0 m |
-| true joints recovered within 0.5 m                                   |      70 % |   100 % |
+| adjusted Rand index (do splats that belong together stay together)   |     0.459 |   0.799 |
+| band agreement (trunk / branch / leaf, which is what sets stiffness) |     0.601 |   0.989 |
+| cluster purity                                                       |     0.597 |   0.876 |
+| mean distance from a true joint to the nearest recovered one         |    0.14 m |     0 m |
+| true joints recovered within 0.5 m                                   |      99 % |   100 % |
 
 The ceiling column is the same scoring run with the _true_ rig substituted for the extracted
-one, and it is not 1.0. Nearest-node assignment loses about a tenth of the splats even given a
-perfect skeleton — the 90.5 % S2 measured and correctly declined to chase, because a bark
-splat on the far side of a trunk genuinely is nearer its neighbour's node. Read the extracted
-column against that ceiling, not against perfection: it recovers roughly four fifths of what
-nearest-node assignment can express, with a 36-node skeleton against the true 33.
+one, and it is not 1.0. Nearest-node assignment loses an eighth of the splats even given a
+perfect skeleton, because a bark splat on the far side of a limb genuinely is nearer its
+neighbour's node and three leaf sleeves on one fork genuinely overlap. Read the extracted
+column against that ceiling, not against perfection: it recovers roughly seven tenths of what
+nearest-node assignment can express, with a 189-node skeleton against the true 214.
+
+**Two of these figures moved a long way in S9, in opposite directions**, when the fixture
+stopped being a post with stubs and became a tree with 108 leaf clusters. Joint localisation
+got much better — 0.14 m against 0.35 m, and 99 % of true joints within half a metre against
+70 % — because the truth now has joints spread through the crown for the extractor's own nodes
+to land near. Cluster agreement got worse — ARI 0.459 against 0.672 — because assigning a leaf
+to one of 108 clusters 20 cm apart is a far harder question than assigning it to one of nine a
+metre apart. The second is the honest number to quote about a real capture, and it is the one
+that fell. `--max-nodes` rose from 36 to 200 to match.
 
 Every radius in the extractor is a multiple of the cloud's own median nearest-neighbour
 distance rather than a fixed number of metres. Fixed thresholds scored well on the
@@ -211,7 +220,7 @@ not survive contact with the numbers. Decoding the committed splat tiles gives a
 nearest-neighbour spacing of 0.16 m (Tokarzonka), 0.29 m (Brighton Beach) and 0.51 m
 (Sheffield Park), over sites 160–220 m across. The densest 3 m-radius column anywhere in the
 leafiest of them, Sheffield Park, holds **737 splats** — and most of that is ground. The
-synthetic fixture puts 2,000 splats on one 7 m tree, and its large sibling 50,000.
+synthetic fixture puts 12,000 splats on one 6.3 m tree, and its large sibling 50,000.
 
 A few hundred splats cannot carry branch structure, so the extractor would return a skeleton
 of the noise. These are site captures at 1.4–2.7 cm GSD flown at altitude; a tree needs a
