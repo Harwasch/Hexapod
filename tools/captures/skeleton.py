@@ -633,10 +633,14 @@ def extract(
         raise SystemExit("the bounding region contains no splats after isolation")
 
     positions = _snap(xyz[keep])
+    # Resolved here rather than inside extract_skeleton so the report can state it: on a real
+    # capture the link radius is the number to reach for first when a rig comes out wrong.
+    spacing = neighbour_spacing(positions.astype(np.float64))
+    if link_radius is None:
+        link_radius = max(link_factor * spacing, 1e-4)
     nodes = extract_skeleton(
         positions.astype(np.float64),
         bands=bands,
-        link_factor=link_factor,
         link_radius=link_radius,
         min_cluster_points=min_cluster_points,
         max_nodes=max_nodes,
@@ -686,6 +690,8 @@ def extract(
             for band in ("trunk", "branch", "leaf")
         },
         "height_m": round(float(positions[:, 2].max() - positions[:, 2].min()), 3),
+        "spacing_m": round(spacing, 4),
+        "link_radius_m": round(float(link_radius), 4),
         "canonicalChecksum": rig["canonicalChecksum"],
         "out_dir": str(out_dir),
     }

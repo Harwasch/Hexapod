@@ -95,6 +95,186 @@ Two properties the rest of the sprint leans on:
   tree. Note that `-0.0` and `+0.0` have different bytes: positions are normalised to `+0.0`
   because SPZ's integer round trip would otherwise change the digest without changing a value.
 
+## Extracting a rig from a real capture
+
+`skeleton.py` is the other half: given a 3DGS PLY of a real scene and a bounding region that
+contains one tree, it isolates that tree and infers a skeleton from geometry alone, by height
+banding plus connectivity clustering. A band cutting a tree crosses the trunk once and each
+limb once, so the connected components _within_ a band are the separate limbs at that height;
+each component becomes a node, parented to the node in a lower band whose points come nearest
+to its own.
+
+```bash
+cd tools/captures
+uv run python skeleton.py capture.ply ../../data/tiles/<slug> \
+    --lat 44.944565 --lon -93.425903 \
+    --cylinder 0 0 8          # keep splats within 8 m of the local origin
+```
+
+It writes the isolated `source/splat.ply`, `source/rig.json` and a single-tile `splat/`
+tileset. Positions are snapped to SPZ's 1/4096 m grid before the PLY is written, so a real
+capture's arbitrary coordinates still satisfy the checksum contract the deformer refuses on.
+The rig's `sourceNote` names the file it came from and appears verbatim in the Inspector.
+
+**What it is worth, measured.** Run it on the synthetic tree — the one input where the answer
+is known — and it scores itself:
+
+```bash
+uv run python skeleton.py ../../data/tiles/synthetic-tree/source/splat.ply /tmp/rig \
+    --lat 28.0389 --lon -82.6966 \
+    --labels ../../data/tiles/synthetic-tree/source/labels.json \
+    --truth-rig ../../data/tiles/synthetic-tree/source/rig.json
+```
+
+| metric                                                               | extracted | ceiling |
+| -------------------------------------------------------------------- | --------: | ------: |
+| adjusted Rand index (do splats that belong together stay together)   |     0.672 |   0.847 |
+| band agreement (trunk / branch / leaf, which is what sets stiffness) |     0.752 |   0.916 |
+| cluster purity                                                       |     0.745 |   0.906 |
+| mean distance from a true joint to the nearest recovered one         |    0.35 m |     0 m |
+| true joints recovered within 0.5 m                                   |      70 % |   100 % |
+
+The ceiling column is the same scoring run with the _true_ rig substituted for the extracted
+one, and it is not 1.0. Nearest-node assignment loses about a tenth of the splats even given a
+perfect skeleton — the 90.5 % S2 measured and correctly declined to chase, because a bark
+splat on the far side of a trunk genuinely is nearer its neighbour's node. Read the extracted
+column against that ceiling, not against perfection: it recovers roughly four fifths of what
+nearest-node assignment can express, with a 36-node skeleton against the true 33.
+
+Every radius in the extractor is a multiple of the cloud's own median nearest-neighbour
+distance rather than a fixed number of metres. Fixed thresholds scored well on the
+2,000-splat fixture they were tuned against and welded the whole canopy into a single blob on
+the 50,000-splat one; density-relative radii score within 0.01 ARI of each other across that
+25x change, which is the property that matters when the next input is a real scan of unknown
+density.
+
+Stiffness is interpolated from the same constants `syntheticTreeRig()` uses. It is a plausible
+gradient — thicker and lower bends less — and it is **not** calibrated against how any real
+tree moves. That is why the runtime labels the motion Simulated.
+
+## The real tree: what was tried, and what it would take
+
+S6 set out to put a real scanned tree in the app. **It did not land, and the reason is
+network egress, not the pipeline.** The record is here so the next attempt starts from it.
+
+### The capture that should be used
+
+**[Single Tree — High-Density Photogrammetry Dataset](https://github.com/Matt1Up/tree-photogrammetry-dataset)**,
+Matthew Guertin, 2020. One mature deciduous tree in Minnetonka, Minnesota
+(44.944565 N, 93.425903 W), flown with a DJI Mavic 2 Pro on 18 and 20 July 2020 in still air —
+812 photos, 15.1 GB, of which 807 align. The low and mid tiers are hover passes at 0.5 m and
+1.7 m with the gimbal angled up, which is what makes the trunk and the canopy underside
+resolve rather than smear.
+
+**Licence: CC BY 4.0**, verified three ways before anything else was attempted — the full
+licence text in the repository's `LICENSE`, `license: CC-BY-4.0` in `CITATION.cff`, and
+`license: cc-by-4.0` in the Hugging Face dataset card front matter. Attribution is to Matthew
+Guertin (<https://mattguertin.com>).
+
+It suits this pipeline better than the alternatives below because **the solved camera poses
+ship with it in COLMAP format** (`poses/colmap/cameras.txt`, `images.txt`, and a 1.2 M-point
+RGB tie-point cloud), so there is no structure-from-motion run to pay for first.
+
+### What actually happened
+
+The documentation, manifests and camera poses are on GitHub and were cloned here without
+trouble. **The 15.1 GB of imagery, the 58 MB `points3D.txt` and the 80 MB `tiepoints.ply` are
+on Hugging Face, and `huggingface.co` is a hard policy denial at this session's egress gateway**
+— `CONNECT` is answered `403`, which the proxy documentation says to report rather than route
+around. The same is true of every research data host that was tried: `zenodo.org`,
+`figshare.com`, `data.goettingen-research-online.de` (BioDiv-3DTrees), `osf.io`,
+`data.mendeley.com`, `dataverse.harvard.edu`, `opentopography.org`, `data.cyverse.org` (Open
+Forest Observatory), `hub.dronedb.app` and `community.opendronemap.org`. What _was_ reachable:
+`raw.githubusercontent.com`, `git clone` against `github.com`, and the Google Cloud Storage
+JSON API. GitHub release assets and `codeload.github.com` were `403`; the GitHub search API is
+scoped to this session's own repositories, so no discovery through it.
+
+The Hugging Face MCP connector reaches the dataset and can read the PLY header — it is ASCII,
+1,206,765 vertices with RGB — but relaying 80 MB of point data through tool results and back
+out to disk is not a transfer mechanism, so that path was abandoned rather than half-run.
+
+### Alternatives checked, and why each was rejected
+
+| candidate                                                                         | reachable       | licence                                          | why not                                                                                                                                                                |
+| --------------------------------------------------------------------------------- | --------------- | ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| BioDiv-3DTrees (4,952 single-tree clouds, QSMs **and graph topology**)            | no — host `403` | not verifiable from here                         | The QSM graphs would have been a ready-made skeleton, better than geometric extraction. Worth another attempt from a network that can reach Göttingen Research Online. |
+| [AdTree](https://github.com/tudelft3d/AdTree) `data/tree1,7,13,33.xyz`            | yes, cloned     | GPL-3.0 on the repository, data licence unstated | Copyleft, not permissive; and 7k–15k points with no colour. A grey stick figure would be a poor scan passing as a survey.                                              |
+| Mip-NeRF 360 `treehill` / `stump` (`storage.googleapis.com/gresearch/refraw360/`) | yes, 1.5–1.9 GB | **no licence terms published**                   | Unlicensed is not permissive. Scene-scale rather than single-tree, and would still need GPU training.                                                                  |
+| Committed splat assets in 3DGS viewer repositories                                | yes             | —                                                | There are none; they all fetch their demo scenes from INRIA or Hugging Face, both blocked, and the INRIA pre-trained models are research-use-only regardless.          |
+
+### Why the captures already here cannot stand in
+
+The obvious shortcut — pick a tree out of Sheffield Park or Brighton Beach and rig that — does
+not survive contact with the numbers. Decoding the committed splat tiles gives a median
+nearest-neighbour spacing of 0.16 m (Tokarzonka), 0.29 m (Brighton Beach) and 0.51 m
+(Sheffield Park), over sites 160–220 m across. The densest 3 m-radius column anywhere in the
+leafiest of them, Sheffield Park, holds **737 splats** — and most of that is ground. The
+synthetic fixture puts 2,000 splats on one 7 m tree, and its large sibling 50,000.
+
+A few hundred splats cannot carry branch structure, so the extractor would return a skeleton
+of the noise. These are site captures at 1.4–2.7 cm GSD flown at altitude; a tree needs a
+capture flown _for_ the tree, which is exactly what the Minnetonka set is.
+
+### The recipe to finish it on a GPU
+
+Reconstruction here is CPU-only, and `docs/CAPTURES.md` already concludes that CPU splats are
+proof of format, not of quality — 20–90 minutes per run at quarter resolution for a result
+that is blurry next to the mesh from the same photos. A tree like this one, whose thin
+structure is already near the resolution limit, is the worst possible subject for that. So
+nothing blurry was shipped. On a machine with a GPU and unrestricted egress:
+
+```bash
+# 1. Images and poses. ~15.7 GB; --group The_Tree alone is 659 images and enough for the
+#    crown, but the low and mid tiers are what make the trunk resolve.
+pip install -U huggingface_hub
+hf download Matt1up/tree-minnetonka-photogrammetry --repo-type dataset --local-dir tree
+git clone https://github.com/Matt1Up/tree-photogrammetry-dataset tree-docs
+
+# 2. Arrange as 3DGS expects. cameras.txt and images.txt come from the git repo,
+#    points3D.txt from the Hugging Face colmap/ folder.
+mkdir -p tree/sparse/0
+cp tree-docs/poses/colmap/cameras.txt tree-docs/poses/colmap/images.txt tree/sparse/0/
+cp tree/colmap/points3D.txt tree/sparse/0/
+
+# 3. Downsample to ~1600 px wide. Nothing trains at 5464 px.
+mogrify -path tree/images_1600 -resize 1600x tree/images/*.jpg
+
+# 4. Train. 30k steps with spherical harmonics is the real comparison, not the 3,000-step
+#    CPU run the test-run sites used.
+python train.py -s tree -i images_1600 -m tree/output --iterations 30000
+#    Drop the four suspect cameras first (poses/suspect_cameras.txt) — four wrong intrinsics
+#    out of 807 put floaters in the scene.
+
+# 5. Isolate the tree and build its rig. The scene frame has no verified scale (the dataset
+#    says so explicitly), so measure the trunk in the cloud and scale to metres before this
+#    step — the rig is in metres and the motion model assumes it.
+cd tools/captures
+uv run python skeleton.py tree/output/point_cloud/iteration_30000/point_cloud.ply \
+    ../../data/tiles/minnetonka-tree \
+    --lat 44.944565 --lon -93.425903 --height <ellipsoidal height> \
+    --cylinder <east> <north> <radius>
+
+# 6. Wire it up.
+#    - add "minnetonka-tree": "../source/rig.json" to LIVING_RIGS in
+#      apps/web/src/cesium/livingRigs.ts (an explicit table, deliberately not a probe)
+#    - add the entry to data/tiles/captures.json, carrying "captured": "2020-07-20" and the
+#      splat asset's ground_sample_distance_m — without both the Inspector reads
+#      "No capture date or resolution recorded", which would undersell a real scan
+#    - attribution "Matthew Guertin", license_name "CC-BY-4.0",
+#      license_url https://creativecommons.org/licenses/by/4.0/,
+#      source_url https://github.com/Matt1Up/tree-photogrammetry-dataset
+#    - the description must say it is a photogrammetric reconstruction of a real tree and
+#      that the motion is simulated
+#    - if the tileset is large, gitignore it with the regeneration command beside it, the
+#      way data/tiles/synthetic-tree-large already is
+cd ../.. && cd apps/api && uv run pytest && uv run python -m app.seed
+```
+
+Two things to check when it renders, neither of which this machine can settle: that the splat
+tileset is **single-tile** (the deformer refuses anything else, by design), and that the sway
+still reads as _that_ tree rather than a generic sway — headless GL here is SwiftShader, and
+the stale draw order the sorter cannot see needs a human eye on real hardware.
+
 ## What the manifest records
 
 `data/tiles/captures.json` is the source of truth for the seeded sites: boundary (convex hull
@@ -111,6 +291,10 @@ relative to take-off) and labelled as such; the point spacing is measured from t
   below the terrain at the edges.
 - Tile data lives in the repository for the test run. Real sites belong in object storage or
   Cesium ion, registered by URL as `docs/ADDING_DATA.md` describes.
+- **The only tree that moves in the app is the synthetic one.** The skeleton extractor has been
+  scored against ground truth but has never been run on a real capture, because none could be
+  reached from here — see "The real tree" above for the licence checks, the blocked hosts and
+  the command to finish it.
 
 ## The test run
 
