@@ -611,21 +611,28 @@ Worth writing down, because the fixture is tidy in ways a real extraction will n
   enough to resolve them.** `--max-nodes` is 200 now; on a sparse or noisy cloud the pruning will
   stop well short, and the crown will be coarser than this fixture's. Nothing breaks, but the
   shimmer moves up a level — fewer, larger clusters flutter as units.
-- **`skeleton.py` does not measure the quantity `radius` now means, and this was checked rather
-  than worried about.** Its `_rms_radius` is the horizontal spread of a cluster's _points_, which
+- **`skeleton.py` measures the quantity `radius` means, but reports a bound for most of the
+  crown.** It used to return `_rms_radius`, the horizontal spread of a cluster's _points_, which
   for a leaf cluster is the extent of the foliage and not the cross-section of the twig holding it
-  up. `modes.ts` and `flutter.ts` both read `radius` as a woody cross-section. On the old fixture,
-  where a branch really was 12 cm across and its foliage blob 30 cm, the two were within a factor
-  of three and nothing noticed. Running the extractor on the fixture _now_ — true radii 8.8 mm to
-  15 cm, extracted 2.7 cm to 45 cm — the model still runs, produces no NaN, and bounds at 16.2 cm
-  and 8.1 radii with a tip moving 1.11 mm per frame. What it loses is everything this sprint was
-  about: the **median node lands on the 30 Hz clamp** instead of near 8 Hz, so the crown rides
-  quasi-statically again, and **9 of 189 nodes flutter** instead of 180, because almost every
-  extracted node is above the thickness at which flutter dies. A real capture will be worse. The
-  fix is an estimator for a woody radius — plausibly the spread of a cluster's densest core rather
-  than of all its points — and it is deliberately not written here, because calibrating a new
-  estimator against the one tree whose answer is known is exactly how the frequency scale came to
-  be fitted to a fence post.
+  up — on the fixture, true radii 8.8 mm to 15 cm against extracted 2.7 cm to 45 cm, the **median
+  node on the 30 Hz clamp** and **9 of 189 nodes fluttering** instead of 180. `woody_radius`
+  replaces it: a splat sits on the surface it represents and never inside it, so a limb is a
+  hollow shell whose cross-section is a dense ring, while foliage is a diffuse halo about the same
+  axis. Project a cluster across its limb, keep the ring, take its RMS radius. On the fixture the
+  median recovered/true ratio is 1.18 against 5.56, and the crown comes out at a median 15.2 Hz
+  with 75 nodes on the clamp and 164 fluttering — against 11.2 Hz, 58 and 173 for the same
+  skeleton carrying the _true_ radii, which is the ceiling a 189-node skeleton of this tree can
+  reach.
+  **What it does not do is measure every node.** A cross-section with no ring in it — pure
+  foliage, or several twigs a band welded into one cluster — is refused, and the node is given the
+  cloud's resolution limit, `3 · spacing / 2π`, about half the point spacing. That is 130 of the
+  fixture's 189 nodes, and a similar share on every tree tried. For those nodes the rig carries a
+  bound that scales with **the capture's point density, not with the tree**. It is the right order
+  of magnitude, which is all that was wrong before, and it is not a measurement. The estimator was
+  checked across seven generated trees of different height, thickness, branching, foliage and
+  density with no constant moved between them (median ratios 0.68–1.48, and two deliberate
+  failures at the resolution limit); it has never been run on a real capture, because there is not
+  one in this repository.
 - **A zero-length segment is now a silent no-op.** Because a joint's bend is a curvature times its
   own segment length, a node sitting on top of its parent contributes nothing at all. The extracted
   rig has some (minimum segment 0.000 m). That is arguably right — a limb of no length has no bend

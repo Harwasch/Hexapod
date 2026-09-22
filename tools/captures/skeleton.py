@@ -27,6 +27,12 @@ interpolated from the same uncalibrated constants ``syntheticTreeRig()`` uses �
 gradient, not a measurement. Nothing here is validated against how a real tree of this species
 actually moves, and the runtime labels the resulting motion Simulated for exactly that reason.
 
+Node **radius** is different from stiffness in kind and worth knowing about before reading a rig:
+``woody_radius`` measures it from the cloud where the cloud carries it, and reports the cloud's own
+resolution limit where it does not — which on the synthetic fixture is most of the crown. See that
+function; the report ``extract`` returns prints the limit beside the median radius so the two can
+be compared on any capture.
+
 Run it against the synthetic tree, where ground truth exists, to see what it is worth::
 
     uv run python skeleton.py ../../data/tiles/synthetic-tree/source/splat.ply /tmp/out \\
@@ -77,7 +83,7 @@ FORK_SHARE = 0.15
 
 # ------------------------------------------------------- constants of the radius estimator
 #
-# Four numbers, all dimensionless, none fitted to a tree. What each is worth, and how much the
+# Five numbers, all dimensionless, none fitted to a tree. What each is worth, and how much the
 # answer moves when it is changed, is measured in ``tests/test_skeleton.py``.
 
 #: Points that must fall round a circle before a cloud can show it as a ring rather than a blob.
@@ -90,13 +96,18 @@ RING_POINTS = 3
 #: a shell, large enough that the count is not one or two points of noise.
 SHELL_NEIGHBOURS = 4
 
-#: Share of the peak areal density at which a point still counts as part of the shell.
-SHELL_DENSITY_SHARE = 0.8
+#: How much denser than a featureless cross-section a shell must be before it counts as one.
+#: The comparison is against ``n / d_max**2``, the areal density this cluster would have if its
+#: points were spread evenly over the disc they occupy — so it is a ratio of two densities
+#: measured on the same points, with no length in it and nothing to carry over from one tree.
+#: A diffuse halo sits at 1 by definition; a bark shell is several times it.
+SHELL_CONTRAST = 1.5
 
-#: Largest relative scatter — standard deviation over mean of the transverse distances — that a
-#: single limb's cross-section may show. Bark is not machined: a real limb is out of round by
-#: some tens of per cent, and a reconstruction adds more. Beyond this the points are not one
-#: cross-section, and the estimator reports the resolution limit instead of averaging them.
+#: Smallest share of a cluster's points that may make up its shell. Without it the luckiest
+#: window of a purely random halo — five points that happen to land at the same distance — is a
+#: perfectly round "cross-section" of whatever radius chance put them at.
+SHELL_MIN_SHARE = 0.05
+
 SHELL_ROUNDNESS = 0.3
 
 
@@ -234,7 +245,7 @@ def foliage_extent(points: np.ndarray, centre: np.ndarray) -> float:
     return float(np.sqrt(np.mean(np.einsum("ij,ij->i", offset, offset))))
 
 
-def _areal_density(distance: np.ndarray, neighbours: int) -> np.ndarray:
+def _areal_density(distance: np.ndarray, neighbours: int, finest: float) -> np.ndarray:
     """Points per unit area of the cross-section, at each point's own transverse distance.
 
     A cross-section is a two-dimensional thing, so density has to be counted per unit *area*:
@@ -245,7 +256,11 @@ def _areal_density(distance: np.ndarray, neighbours: int) -> np.ndarray:
     The window is ``neighbours`` points either side in the radial ordering rather than a fixed
     width in metres, so it narrows where the points are packed and widens where they are not —
     which is what lets one function measure a 15 cm bole and a 1 cm twig without being told
-    which it is looking at.
+    which it is looking at. It is never allowed narrower than ``finest``, because a cloud cannot
+    resolve radial structure finer than its own point spacing and a window that tries to will
+    divide by an area of almost nothing: a smooth limb, whose bark points all sit at very nearly
+    one distance, would otherwise produce a handful of enormous densities and a "shell" of three
+    points. That is not a hypothetical — it is what a clean cylinder does.
     """
     order = np.argsort(distance)
     sorted_distance = distance[order]
@@ -253,16 +268,18 @@ def _areal_density(distance: np.ndarray, neighbours: int) -> np.ndarray:
     index = np.arange(count)
     low = np.clip(index - neighbours, 0, count - 1)
     high = np.clip(index + neighbours, 0, count - 1)
-    # Area of the annulus the window spans, up to a factor of pi that cancels in every ratio.
-    span = sorted_distance[high] ** 2 - sorted_distance[low] ** 2
-    usable = span > 0
+    half = np.maximum((sorted_distance[high] - sorted_distance[low]) / 2.0, finest / 2.0)
+    inner = np.maximum(sorted_distance - half, 0.0)
+    outer = sorted_distance + half
+    # Points actually inside the widened window, not just the 2*neighbours+1 that defined it.
+    inside = np.searchsorted(sorted_distance, outer, side="right") - np.searchsorted(
+        sorted_distance, inner, side="left"
+    )
+    # Area of the annulus, up to a factor of pi that cancels in every ratio this feeds.
+    area = outer**2 - inner**2
     lam = np.zeros(count, dtype=np.float64)
-    if not usable.any():
-        return lam
-    lam[usable] = (high - low)[usable] / span[usable]
-    # A window of coincident distances has zero area and infinite density; treat it as the
-    # densest thing present rather than letting it dominate by being a division by zero.
-    lam[~usable] = lam.max()
+    usable = area > 0
+    lam[usable] = inside[usable] / area[usable]
     out = np.zeros(count, dtype=np.float64)
     out[order] = lam
     return out
@@ -292,33 +309,53 @@ def woody_radius(points: np.ndarray, centre: np.ndarray, axis: np.ndarray, spaci
     fact about splats specifically: a splat sits on the surface it represents, never inside it,
     so a limb is a hollow shell and its cross-section is a thin ring of high areal density,
     while foliage is a diffuse halo of low, roughly uniform areal density around the same axis.
-    So: project the cluster onto the plane across its limb, find the densest annulus by area,
-    and take the RMS distance of the points in it. For a clean shell that is exactly the shell's
-    radius; for a twig inside a halo it is the twig.
+    So: project the cluster onto the plane across its limb, keep the points whose areal density
+    beats a featureless disc of the same points by ``SHELL_CONTRAST``, and take their RMS
+    distance from the axis. For a clean shell that is the shell's radius; for a twig inside a
+    halo it is the twig, because the halo never beats its own average.
 
-    **What it refuses to guess.** Two checks stand between the measurement and the rig:
+    ``axis`` is the limb direction — parent to node, from the skeleton graph. It matters: a
+    band slicing a leaning branch gives a cluster whose *horizontal* spread is the branch's run
+    through the band, which is the second way the old estimator was wrong.
 
-    * *Roundness.* If the points selected as the shell scatter by more than
-      ``SHELL_ROUNDNESS`` of their own mean distance, they are not one limb's cross-section —
-      they are haze, or several limbs a band happened to weld into one cluster. There is no
-      single radius to report and the estimator says so rather than averaging them.
-    * *Resolution.* A ring can only be read as a ring if a few points fall round it, so a limb
-      thinner than ``RING_POINTS`` point spacings of circumference is below what this cloud can
-      resolve: ``r_min = RING_POINTS * spacing / (2 * pi)``, about half the point spacing. The
-      result is clamped there, and a cluster that fails the roundness check is reported *at*
-      that limit — an upper bound on an unresolved limb, not a measurement of one.
+    **What it refuses to guess, and how often it refuses.** Three checks stand between the
+    measurement and the rig, and a cluster that fails any of them is reported at the resolution
+    limit below rather than measured:
 
-    ``axis`` is the limb direction (parent to node, from the skeleton graph). It matters: a
-    band slicing a leaning branch gives a cluster whose horizontal spread is the branch's
-    *length* through the band, which is what made the old estimator wrong twice over.
+    * *Contrast.* A shell has to be denser than the cross-section it sits in. A cluster of pure
+      foliage is not denser than itself, and has no woody radius to give.
+    * *Support.* The shell has to be at least ``SHELL_MIN_SHARE`` of the cluster. Five points of
+      a random halo that happen to land at one distance make a perfectly round ring of whatever
+      radius chance chose.
+    * *Roundness.* The shell has to scatter by less than ``SHELL_ROUNDNESS`` of its own mean
+      distance. Beyond that it is not one limb's cross-section — it is haze, or several limbs a
+      band welded into one cluster, and there is no single radius for them.
+
+    The resolution limit is geometry, not a fudge: a ring can only be read as a ring if a few
+    points fall round it, so a limb whose circumference is shorter than ``RING_POINTS`` point
+    spacings cannot be resolved by this cloud at all. That is
+    ``r_min = RING_POINTS * spacing / (2 * pi)``, about half the point spacing. Every result is
+    clamped there, and a refused cluster is reported *at* it.
+
+    **Be clear about what that means.** On the committed fixture 130 of 189 nodes are refused
+    and carry the limit rather than a measurement, and the proportion is similar on every tree
+    tried — the crown of a splat capture is mostly foliage, and its twigs are mostly thinner
+    than the cloud can see. For those nodes this function is reporting a **bound that scales
+    with the capture's point spacing, not with the tree**. It is the right order of magnitude,
+    which is all that was wrong before, and it is not a measurement.
 
     **Accuracy, measured.** Against the synthetic tree's known radii, node by node, the median
-    ratio of recovered to true radius is 1.29 on the committed fixture and stays between 0.74
-    and 1.51 across five more trees of different height, thickness, branching and splat
-    density — with two exceptions, both honest ones, recorded in
-    ``test_the_estimator_generalises_across_trees``. Individual nodes are far looser than the
-    median: about seven in ten land within a factor of two. A rig node that stands for half a
-    dozen twigs has no single woody radius to recover, and that is most of the residual.
+    ratio of recovered to true radius is 1.18 on the committed fixture (the old estimator: 5.56)
+    and runs 0.68 to 1.48 across five more trees of different height, thickness, branching,
+    foliage and splat density, with no constant moved between them. Two further trees fail, both
+    at the resolution limit and both recorded in ``test_the_estimator_generalises_across_trees``.
+    Individual nodes are much looser than the median: 56 % to 82 % land within a factor of two.
+    A rig node that stands for half a dozen twigs has no single woody radius to recover, and
+    that is most of what is left.
+
+    **No real tree has been through this.** There is none in the repository. Every number above
+    is from a tree this repository generated, and a photogrammetric capture of a real canopy —
+    with holes, floaters, and bark that was never reconstructed at all — may behave differently.
     """
     if points.shape[0] == 0:
         return 0.0
@@ -331,11 +368,12 @@ def woody_radius(points: np.ndarray, centre: np.ndarray, axis: np.ndarray, spaci
     if distance.size <= 2 * SHELL_NEIGHBOURS + 1:
         # Too few points to estimate a density profile from; the spread is all there is.
         return max(float(np.sqrt(np.mean(distance**2))), resolution)
-    lam = _areal_density(distance, SHELL_NEIGHBOURS)
-    if lam.max() <= 0.0:
+    lam = _areal_density(distance, SHELL_NEIGHBOURS, resolution)
+    if lam.max() <= 0.0 or distance.max() <= 0.0:
         return max(float(np.sqrt(np.mean(distance**2))), resolution)
-    shell = distance[lam >= SHELL_DENSITY_SHARE * lam.max()]
-    if shell.size < 3 or shell.mean() <= 0.0:
+    flat = distance.size / max(float(distance.max()) ** 2, 1e-12)
+    shell = distance[lam >= SHELL_CONTRAST * flat]
+    if shell.size < max(3, SHELL_MIN_SHARE * distance.size) or shell.mean() <= 0.0:
         return resolution
     if float(shell.std()) > SHELL_ROUNDNESS * float(shell.mean()):
         return resolution  # not a cross-section: haze, or several limbs in one cluster
