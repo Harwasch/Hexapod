@@ -58,6 +58,7 @@ jobs:
       catalog_url: ${{ steps.summary.outputs.catalog_url }}
       public_url: ${{ steps.summary.outputs.public_url }}
       bucket: ${{ steps.summary.outputs.bucket }}
+      public_bucket: ${{ steps.summary.outputs.public_bucket }}
     steps:
       - uses: actions/checkout@v4
 
@@ -131,6 +132,14 @@ jobs:
               "VOLUME_SIZE_GB": size,
               "PAGES_PROJECT": pages["name"],
               "BUCKET": setting("R2_BUCKET", "twin-assets"),
+              # The only bucket the world can read. Separate because R2's public access
+              # is per bucket and not per prefix, so publishing tiles out of the bucket
+              # that also holds every raw upload publishes the uploads too. Defaults to
+              # the private bucket's name with -public on the end rather than to a fixed
+              # string, so two deployments in one account do not collide.
+              "PUBLIC_BUCKET": setting(
+                  "R2_PUBLIC_BUCKET", setting("R2_BUCKET", "twin-assets") + "-public"
+              ),
               "NEON_PROJECT_NAME": setting("NEON_PROJECT_NAME", "hexapod-twin"),
               # Neon's name for the region Fly calls iad. Override it with the
               # NEON_REGION_ID variable if fly.toml's primary_region is not iad.
@@ -305,41 +314,56 @@ jobs:
 
           api GET "$cf/r2/buckets"
           ok || die "Cloudflare rejected the R2 bucket list (HTTP $STATUS). CLOUDFLARE_API_TOKEN needs 'Workers R2 Storage: Edit' on this account, and CLOUDFLARE_ACCOUNT_ID must be the account the bucket lives in."
-          # Documented as .result.buckets; accepting a bare .result array as well costs one
-          # jq alternative and saves a run that fails on a shape difference.
-          found="$(printf '%s' "$BODY" | jq -r --arg b "$BUCKET" \
-            'first((.result.buckets // .result // [])[]? | select(.name == $b) | .name) // empty')"
+          buckets="$BODY"
 
-          if [ -n "$found" ]; then
-            echo "R2 bucket '$BUCKET' exists."
-          elif [ "$DRY_RUN" = "true" ]; then
-            echo "would create R2 bucket '$BUCKET'"
-          else
-            api POST "$cf/r2/buckets" "$(jq -n --arg n "$BUCKET" '{name: $n}')"
-            if ok; then
-              echo "created R2 bucket '$BUCKET'."
-            elif printf '%s' "$BODY" | jq -e '[.errors[]?.message] | join(" ") | test("already exists"; "i")' >/dev/null 2>&1; then
-              # Another run of this workflow, or a bucket someone made by hand between the
-              # list above and this call. Either way the desired state holds.
-              echo "R2 reports '$BUCKET' already exists; nothing to create."
+          # Two buckets, and the difference between them is the whole point: only the
+          # second is ever made public, because R2 exposes a bucket and not a prefix.
+          ensure_bucket() {
+            local name="$1"
+            # Documented as .result.buckets; accepting a bare .result array as well costs
+            # one jq alternative and saves a run that fails on a shape difference.
+            local found
+            found="$(printf '%s' "$buckets" | jq -r --arg b "$name" \
+              'first((.result.buckets // .result // [])[]? | select(.name == $b) | .name) // empty')"
+            if [ -n "$found" ]; then
+              echo "R2 bucket '$name' exists."
+            elif [ "$DRY_RUN" = "true" ]; then
+              echo "would create R2 bucket '$name'"
             else
-              die "creating R2 bucket '$BUCKET' failed."
+              api POST "$cf/r2/buckets" "$(jq -n --arg n "$name" '{name: $n}')"
+              if ok; then
+                echo "created R2 bucket '$name'."
+              elif printf '%s' "$BODY" | jq -e '[.errors[]?.message] | join(" ") | test("already exists"; "i")' >/dev/null 2>&1; then
+                # Another run of this workflow, or a bucket someone made by hand between
+                # the list above and this call. Either way the desired state holds.
+                echo "R2 reports '$name' already exists; nothing to create."
+              else
+                die "creating R2 bucket '$name' failed."
+              fi
             fi
-          fi
+          }
 
+          [ "$BUCKET" != "$PUBLIC_BUCKET" ] || die "R2_BUCKET and R2_PUBLIC_BUCKET are both '$BUCKET'. They must differ: the second is made world-readable and the first holds every raw upload."
+          ensure_bucket "$BUCKET"
+          ensure_bucket "$PUBLIC_BUCKET"
+
+          # Public access goes on $PUBLIC_BUCKET and never on $BUCKET. r2.dev is a
+          # development convenience either way: Cloudflare documents it as rate-limited
+          # and "intended for non-production traffic", so a real deployment sets
+          # R2_PUBLIC_URL to a custom domain on the public bucket.
           if [ -n "${R2_PUBLIC_URL:-}" ]; then
             public="${R2_PUBLIC_URL%/}"
             echo "using the R2_PUBLIC_URL variable: $public (the managed r2.dev URL is left untouched)"
           elif [ "$DRY_RUN" = "true" ]; then
-            echo "would enable the managed r2.dev public URL on '$BUCKET'"
+            echo "would enable the managed r2.dev public URL on '$PUBLIC_BUCKET'"
             public="https://example.invalid"
           else
-            api GET "$cf/r2/buckets/$BUCKET/domains/managed"
+            api GET "$cf/r2/buckets/$PUBLIC_BUCKET/domains/managed"
             enabled="$(printf '%s' "$BODY" | jq -r '.result.enabled // false')"
             domain="$(printf '%s' "$BODY" | jq -r '.result.domain // empty')"
             if [ "$enabled" != "true" ] || [ -z "$domain" ]; then
-              api PUT "$cf/r2/buckets/$BUCKET/domains/managed" '{"enabled": true}'
-              ok || die "could not enable the managed public (r2.dev) URL on '$BUCKET'. Enable it by hand under R2 -> $BUCKET -> Settings -> Public access, or connect a custom domain and set the R2_PUBLIC_URL repository variable, then re-run."
+              api PUT "$cf/r2/buckets/$PUBLIC_BUCKET/domains/managed" '{"enabled": true}'
+              ok || die "could not enable the managed public (r2.dev) URL on '$PUBLIC_BUCKET'. Enable it by hand under R2 -> $PUBLIC_BUCKET -> Settings -> Public access, or connect a custom domain and set the R2_PUBLIC_URL repository variable, then re-run."
               domain="$(printf '%s' "$BODY" | jq -r '.result.domain // empty')"
             fi
             [ -n "$domain" ] || die "R2 reports the public URL enabled but named no domain."
@@ -418,7 +442,10 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
         run: |
           set -euo pipefail
-          infra/cors/apply-r2.sh "$CLOUDFLARE_ACCOUNT_ID" "$BUCKET" "$WEB_BASE"
+          # One role each, so one document each -- production.json's combined rules exist
+          # for a bucket that has to do both, which after the split neither does.
+          infra/cors/apply-r2.sh "$CLOUDFLARE_ACCOUNT_ID" "$BUCKET" "$WEB_BASE" -- upload.json
+          infra/cors/apply-r2.sh "$CLOUDFLARE_ACCOUNT_ID" "$PUBLIC_BUCKET" "$WEB_BASE" -- tiles.json
 
       # ---- Fly.io -----------------------------------------------------------------
       - name: Install flyctl
@@ -531,6 +558,7 @@ jobs:
             "PUBLIC_WEB_BASE=$WEB_BASE" \
             "OBJECT_STORAGE_ENDPOINT_URL=$endpoint" \
             "OBJECT_STORAGE_BUCKET=$BUCKET" \
+            "OBJECT_STORAGE_PUBLIC_BUCKET=$PUBLIC_BUCKET" \
             "OBJECT_STORAGE_ACCESS_KEY=$R2_ACCESS_KEY_ID" \
             "OBJECT_STORAGE_SECRET_KEY=$R2_SECRET_ACCESS_KEY" \
             "OBJECT_STORAGE_PUBLIC_URL=$PUBLIC_URL" \
@@ -551,6 +579,7 @@ jobs:
             echo "public_url=$PUBLIC_URL"
             echo "catalog_url=$catalog"
             echo "bucket=$BUCKET"
+            echo "public_bucket=$PUBLIC_BUCKET"
           } >> "$GITHUB_OUTPUT"
           # Nothing secret below. The endpoint URL is deliberately absent: it contains the
           # Cloudflare account id, which is a repository secret.
@@ -561,7 +590,8 @@ jobs:
             echo "| ---- | ----- |"
             echo "| API | \`$api_base\` |"
             echo "| Web | \`$WEB_BASE\` |"
-            echo "| Bucket | \`$BUCKET\`, public at \`$PUBLIC_URL\` |"
+            echo "| Bucket | \`$BUCKET\` (private: uploads and run outputs) |"
+            echo "| Public bucket | \`$PUBLIC_BUCKET\`, served at \`$PUBLIC_URL\` |"
             echo "| Offline catalog | \`$catalog\` |"
             echo "| Fly volume | \`$VOLUME_NAME\`, ${VOLUME_SIZE_GB} GB in \`$FLY_REGION\` |"
             echo
@@ -654,6 +684,7 @@ jobs:
           API_WRITE_TOKEN: ${{ secrets.API_WRITE_TOKEN }}
           OBJECT_STORAGE_ENDPOINT_URL: https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
           OBJECT_STORAGE_BUCKET: ${{ needs.infra.outputs.bucket }}
+          OBJECT_STORAGE_PUBLIC_BUCKET: ${{ needs.infra.outputs.public_bucket }}
           OBJECT_STORAGE_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY_ID }}
           OBJECT_STORAGE_SECRET_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           OBJECT_STORAGE_REGION: auto
@@ -668,6 +699,7 @@ jobs:
           API_WRITE_TOKEN: ${{ secrets.API_WRITE_TOKEN }}
           OBJECT_STORAGE_ENDPOINT_URL: https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
           OBJECT_STORAGE_BUCKET: ${{ needs.infra.outputs.bucket }}
+          OBJECT_STORAGE_PUBLIC_BUCKET: ${{ needs.infra.outputs.public_bucket }}
           OBJECT_STORAGE_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY_ID }}
           OBJECT_STORAGE_SECRET_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           OBJECT_STORAGE_REGION: auto

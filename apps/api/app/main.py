@@ -79,6 +79,33 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "/api/v1/tiles static mount, which production disables and this image does "
             "not carry -- so every tileset URL would 404."
         )
+    # The third refusal, and the one with the widest blast radius. Enabling public access
+    # on an R2 bucket exposes the whole bucket -- Cloudflare's own words are that it
+    # "allows users to expose the contents of their R2 buckets directly to the Internet",
+    # with no prefix scoping, and a custom domain behaves identically. This API keeps raw
+    # uploads under `captures/` and every run's frames, logs and checkpoints under
+    # `runs/`, so a single bucket with a public URL on it publishes all of that along with
+    # the tiles it meant to publish. There is no symptom: the globe works perfectly, and
+    # the exposure is visible only to somebody who already has a key. Set
+    # OBJECT_STORAGE_PUBLIC_BUCKET to a second bucket and only the objects `register`
+    # copies into it are reachable; see app/worker/publish.py.
+    if settings.is_production and settings.object_storage_configured:
+        if not settings.publish_bucket_configured:
+            raise RuntimeError(
+                "APP_ENV=production with one bucket in both roles: set "
+                "OBJECT_STORAGE_PUBLIC_BUCKET to a bucket other than "
+                f"{settings.object_storage_bucket!r}. Making tiles readable means making "
+                "the bucket readable -- R2 has no per-prefix public access -- and this "
+                "bucket also holds every raw upload under captures/ and every run's "
+                "frames, logs and checkpoints under runs/."
+            )
+        if not settings.object_storage_public_url:
+            raise RuntimeError(
+                "APP_ENV=production has OBJECT_STORAGE_PUBLIC_BUCKET but no "
+                "OBJECT_STORAGE_PUBLIC_URL. Published tiles would be addressed against "
+                "the S3 API endpoint, which is not the public hostname and is not a CDN; "
+                "set the custom domain the public bucket is served on."
+            )
     app = FastAPI(
         title=settings.app_name,
         version="1.0.0",

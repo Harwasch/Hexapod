@@ -42,8 +42,8 @@ from app.schemas.site import SiteCreate
 from app.services import sites as site_service
 from app.services.slugs import slugify
 from app.storage import ObjectStorage
-from app.storage.null import StorageUnavailableError
-from app.worker.outputs import artifact_key
+from app.worker.outputs import artifact_key, stage_prefix
+from app.worker.publish import Publisher, PublishError
 
 #: Half-width of the fallback footprint, in metres, around the placed coordinate.
 #:
@@ -241,19 +241,27 @@ def _widen(low: float, high: float) -> tuple[float, float]:
     return (middle - MIN_HALF_EXTENT_M, middle + MIN_HALF_EXTENT_M)
 
 
-def _public_url(
-    storage: ObjectStorage, job_id: uuid.UUID, stage_id: str, key_suffix: str
+def _publish_tileset(publish: Publisher, job_id: uuid.UUID, stage_id: str) -> str | None:
+    """The packaged tileset, copied to where a browser can read it.
+
+    The whole `splat/` directory goes, not just `tileset.json`: the root file names the
+    tiles and a site whose tiles are missing renders as nothing at all.
+    """
+    prefix = f"{stage_prefix(job_id, stage_id)}/splat"
+    return publish.publish_tree(prefix, f"{prefix}/tileset.json")
+
+
+def _publish_object(
+    publish: Publisher, job_id: uuid.UUID, stage_id: str, key_suffix: str
 ) -> str | None:
-    try:
-        return storage.public_url(f"{artifact_key(job_id, stage_id, key_suffix)}")
-    except StorageUnavailableError:
-        return None
+    return publish.publish_object(artifact_key(job_id, stage_id, key_suffix))
 
 
 def register(
     db: Session,
     storage: ObjectStorage,
     *,
+    publish: Publisher | None = None,
     capture: Capture,
     job_id: uuid.UUID,
     registration: Registration,
@@ -266,18 +274,31 @@ def register(
     stub runner with no bucket configured produces no tileset to point a viewer at, and
     saying so is better than a site with a dead asset on it.
     """
-    url = (
-        _public_url(storage, job_id, tiles_stage_id, "splat/tileset.json")
-        if tiles_stage_id is not None
-        else None
-    )
+    # With no publisher the private bucket is also the public one, which is the
+    # single-bucket behaviour every caller had before the split; see app/worker/publish.py.
+    publisher = publish or Publisher(private=storage, public=storage)
+    try:
+        url = (
+            _publish_tileset(publisher, job_id, tiles_stage_id)
+            if tiles_stage_id is not None
+            else None
+        )
+    except PublishError:
+        # The run succeeded and its outputs are safely in the private bucket; only the
+        # copy to the public one failed. A site pointed at half a tileset looks like a
+        # working site until somebody opens it, so there is no site instead.
+        url = None
     # The plan's note on `thumbnail.jpg` was "the sites list -- the endpoint exists
     # already and nothing calls it". A8's thumbnail stage is what calls it.
-    thumbnail = (
-        _public_url(storage, job_id, thumbnail_stage_id, registration.thumbnail)
-        if thumbnail_stage_id is not None and registration.thumbnail
-        else None
-    )
+    try:
+        thumbnail = (
+            _publish_object(publisher, job_id, thumbnail_stage_id, registration.thumbnail)
+            if thumbnail_stage_id is not None and registration.thumbnail
+            else None
+        )
+    except PublishError:
+        # A missing thumbnail is a cosmetic loss, not a reason to withhold the site.
+        thumbnail = None
     if capture.site_id is None:
         assets: list[AssetBase] = []
         if url is not None:

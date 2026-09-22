@@ -41,6 +41,8 @@ def no_tiles_source(**overrides: object) -> Settings:
         "object_storage_bucket": None,
         "object_storage_access_key": None,
         "object_storage_secret_key": None,
+        "object_storage_public_bucket": None,
+        "object_storage_public_url": None,
         "tiles_base_url": None,
     }
     return Settings(**{**unset, **overrides})  # type: ignore[arg-type]
@@ -223,17 +225,56 @@ def test_the_message_names_every_setting_that_would_fix_it() -> None:
         assert setting in message
 
 
+def bucket_production(**overrides: object) -> Settings:
+    """Storage configured, TILES_BASE_URL deliberately absent, production unless told."""
+    configured: dict[str, object] = {
+        "APP_ENV": "production",
+        "api_write_token": TOKEN,
+        "object_storage_endpoint_url": "https://s3.example.com",
+        "object_storage_bucket": "twin-assets",
+        "object_storage_access_key": "key",
+        "object_storage_secret_key": "secret",
+    }
+    return no_tiles_source(**{**configured, **overrides})
+
+
 def test_a_bucket_is_enough_on_its_own() -> None:
     """TILES_BASE_URL is for a CDN in front of the bucket, not a second requirement."""
-    settings = no_tiles_source(
-        APP_ENV="production",
-        api_write_token=TOKEN,
-        object_storage_endpoint_url="https://s3.example.com",
-        object_storage_bucket="twin-assets",
-        object_storage_access_key="key",
-        object_storage_secret_key="secret",
+    settings = bucket_production(
+        object_storage_public_bucket="twin-public",
+        object_storage_public_url="https://tiles.example.com",
     )
     assert create_app(settings) is not None
+
+
+def test_production_refuses_one_bucket_in_both_roles() -> None:
+    """The refusal this exists for: serving tiles out of the upload bucket.
+
+    Making an R2 bucket readable makes the whole bucket readable -- there is no
+    per-prefix public access, and a custom domain behaves the same. This bucket also
+    holds every raw upload under `captures/` and every run's frames, logs and checkpoints
+    under `runs/`, so the deployment that looks like it is publishing tiles is publishing
+    all of that. Nothing about it looks wrong from outside: the globe works.
+    """
+    with pytest.raises(RuntimeError, match="OBJECT_STORAGE_PUBLIC_BUCKET"):
+        create_app(bucket_production())
+
+
+def test_a_public_bucket_equal_to_the_private_one_is_not_a_split() -> None:
+    """Setting it to the same name satisfies the letter and none of the point."""
+    with pytest.raises(RuntimeError, match="OBJECT_STORAGE_PUBLIC_BUCKET"):
+        create_app(bucket_production(object_storage_public_bucket="twin-assets"))
+
+
+def test_production_refuses_a_public_bucket_with_no_public_url() -> None:
+    """Without it the tiles are addressed at the S3 API endpoint, which is not the CDN."""
+    with pytest.raises(RuntimeError, match="OBJECT_STORAGE_PUBLIC_URL"):
+        create_app(bucket_production(object_storage_public_bucket="twin-public"))
+
+
+def test_development_with_one_bucket_still_starts() -> None:
+    """The guard is production-only: the MinIO dev loop has one bucket and must work."""
+    assert create_app(bucket_production(APP_ENV="development")) is not None
 
 
 def test_development_with_nothing_configured_still_starts() -> None:

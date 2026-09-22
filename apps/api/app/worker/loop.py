@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.config import Settings, get_settings
 from app.db import get_session_factory
 from app.storage import ObjectStorage, build_storage
+from app.storage.factory import build_publish_storage
 from app.worker.claim import claim_next
 from app.worker.config import WorkerConfig
 from app.worker.runner import JobSupervisor, Terminal
@@ -26,10 +27,12 @@ class Worker:
         session_factory: sessionmaker[Session],
         storage: ObjectStorage,
         config: WorkerConfig,
+        publish_storage: ObjectStorage | None = None,
     ) -> None:
         self._sessions = session_factory
         self._storage = storage
         self._config = config
+        self._publish_storage = publish_storage
 
     @staticmethod
     def from_settings(settings: Settings | None = None) -> Worker:
@@ -38,6 +41,7 @@ class Worker:
             session_factory=get_session_factory(resolved.database_url),
             storage=build_storage(resolved),
             config=WorkerConfig.from_settings(resolved),
+            publish_storage=build_publish_storage(resolved),
         )
 
     @property
@@ -58,7 +62,9 @@ class Worker:
         job_id = self.claim()
         if job_id is None:
             return None
-        return JobSupervisor(self._sessions, self._storage, self._config).run(job_id, stop=stop)
+        return JobSupervisor(
+            self._sessions, self._storage, self._config, self._publish_storage
+        ).run(job_id, stop=stop)
 
     def run_forever(
         self, *, max_jobs: int | None = None, stop: threading.Event | None = None

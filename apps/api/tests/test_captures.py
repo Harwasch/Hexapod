@@ -66,6 +66,9 @@ CAPTURE: dict[str, Any] = {
 }
 
 BUCKET = "twin-assets"
+PUBLIC_BUCKET = "twin-public"
+#: The custom domain the public bucket is served on, which is what a browser fetches.
+PUBLIC_URL = "https://tiles.example.com"
 
 
 #: Storage left unconfigured unless a test asks for it. The repository's own .env points at
@@ -77,6 +80,7 @@ NO_STORAGE: dict[str, object] = {
     "object_storage_access_key": None,
     "object_storage_secret_key": None,
     "object_storage_public_url": None,
+    "object_storage_public_bucket": None,
     "tiles_base_url": None,
 }
 
@@ -106,8 +110,16 @@ def bucket_settings(tmp_path: Path, **overrides: object) -> Settings:
 
 
 def production_settings(tmp_path: Path, **overrides: object) -> Settings:
+    """A production configuration that would actually start.
+
+    The public bucket and its URL are part of that, not decoration: `create_app` refuses
+    a production deployment serving tiles out of the bucket that also holds every raw
+    upload, because R2's public access has no prefix scoping. See app/worker/publish.py.
+    """
     return bucket_settings(
         tmp_path,
+        object_storage_public_bucket=PUBLIC_BUCKET,
+        object_storage_public_url=PUBLIC_URL,
         # APP_ENV, not `environment`: the field is aliased and pydantic-settings takes the
         # alias on init, so `environment="production"` is silently dropped by extra="ignore".
         APP_ENV="production",
@@ -189,8 +201,10 @@ def test_production_never_reads_the_checkout_even_when_there_is_one(tmp_path: Pa
     the failure this step exists to remove rather than to move around.
     """
     settings = production_settings(tmp_path)
-    assert tiles_base_url(settings, SLUG) == f"https://s3.example.com/twin-assets/sites/{SLUG}/"
-    assert tiles_base_url(settings, "mygla") == "https://s3.example.com/twin-assets/sites/mygla/"
+    # The public bucket's custom domain, not the S3 API endpoint the private bucket is
+    # reached on. Those are two different hosts on R2 and only one of them is for browsers.
+    assert tiles_base_url(settings, SLUG) == f"{PUBLIC_URL}/sites/{SLUG}/"
+    assert tiles_base_url(settings, "mygla") == f"{PUBLIC_URL}/sites/mygla/"
 
 
 def test_an_explicit_base_wins_over_both(tmp_path: Path) -> None:
@@ -235,9 +249,7 @@ def test_a_production_capture_is_seeded_pointing_at_the_bucket(tmp_path: Path) -
     """
     site = next(s for s in capture_sites(production_settings(tmp_path)) if s.slug == "test-field")
     urls = [str(a.source.url) for a in site.assets if isinstance(a.source, TilesUrlSource)]
-    assert urls and all(
-        url.startswith("https://s3.example.com/twin-assets/sites/test-field/") for url in urls
-    )
+    assert urls and all(url.startswith(f"{PUBLIC_URL}/sites/test-field/") for url in urls)
     assert not any("/api/v1/tiles/" in url for url in urls)
 
 
@@ -252,7 +264,7 @@ def test_every_archived_capture_resolves_in_production(tmp_path: Path) -> None:
         if isinstance(a.source, TilesUrlSource)
     ]
     assert len(urls) == 10
-    assert all(url.startswith("https://s3.example.com/twin-assets/sites/") for url in urls)
+    assert all(url.startswith(f"{PUBLIC_URL}/sites/") for url in urls)
 
 
 def test_an_unreadable_site_document_is_skipped_not_fatal(tmp_path: Path) -> None:
@@ -373,7 +385,7 @@ def test_the_published_catalog_is_what_the_console_falls_back_to(
     rigs = [asset["renderConfig"]["rigUrl"] for asset in published["assets"]]
     assert rigs == [None, None, "../source/rig.json"]
     # And it points at the bucket, which is what makes it reachable while the API is not.
-    assert published["assets"][0]["source"]["url"].startswith("https://s3.example.com/")
+    assert published["assets"][0]["source"]["url"].startswith(f"{PUBLIC_URL}/")
 
 
 # --- the container layout ---------------------------------------------------------

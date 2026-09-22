@@ -1,18 +1,21 @@
 #!/usr/bin/env bash
-# Apply the production CORS document to the R2 bucket, with the real origin substituted.
+# Apply a CORS document to an R2 bucket, with the real origin substituted.
 #
 #   AWS_ACCESS_KEY_ID=...  AWS_SECRET_ACCESS_KEY=... \
-#     infra/cors/apply-r2.sh <account-id> <bucket> <origin> [<origin>...]
+#     infra/cors/apply-r2.sh <account-id> <bucket> <origin> [<origin>...] [-- <document>]
 #
-# e.g. infra/cors/apply-r2.sh a1b2c3 twin-assets https://twin.example.com
+# e.g. infra/cors/apply-r2.sh a1b2c3 twin-assets https://twin.example.com -- upload.json
 #
 # ONE bucket, ONE document. R2 (like S3) keeps a single CORS configuration per bucket and
-# `put-bucket-cors` replaces it wholesale. This deployment's bucket is in both roles --
-# the browser PUTs capture sources to presigned URLs under `captures/`, and CesiumJS
-# reads published tiles under `sites/` -- because the API has one OBJECT_STORAGE_BUCKET
-# setting and both paths use it. So both rules go in one document: production.json.
-# Applying upload.json and then tiles.json to the same bucket would leave only the
-# second, and multipart upload would stop being completable the moment you did it.
+# `put-bucket-cors` replaces it wholesale, so a bucket in two roles needs its two rules
+# combined into one document -- which is what production.json is, and what a one-bucket
+# deployment still applies.
+#
+# A split deployment does not need the compromise. The private bucket takes upload.json
+# (browser PUTs to presigned URLs under `captures/`) and the public bucket takes
+# tiles.json (CesiumJS reading `tileset.json` and `.glb`), because after the split those
+# really are two buckets with one role each. The default is still production.json, so a
+# caller that has one bucket gets the combined document without asking for it.
 #
 # UNVERIFIED, and this is the script that will find out. Two claims below have never met
 # the real R2 API:
@@ -38,6 +41,24 @@ account_id="$1"
 bucket="$2"
 shift 2
 
+# Origins up to `--`; the document after it. Origins are variadic, so the separator is
+# what keeps a document from being mistaken for one more origin.
+origins=()
+document="production.json"
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--" ]; then
+    shift
+    [ "$#" -eq 1 ] || { echo "expected exactly one document after --" >&2; exit 2; }
+    document="$1"
+    shift
+  else
+    origins+=("$1")
+    shift
+  fi
+done
+[ "${#origins[@]}" -gt 0 ] || { echo "no origins given" >&2; exit 2; }
+set -- "${origins[@]}"
+
 here="$(cd "$(dirname "$0")" && pwd)"
 endpoint="https://${account_id}.r2.cloudflarestorage.com"
 rendered="$(mktemp)"
@@ -45,7 +66,7 @@ trap 'rm -f "$rendered"' EXIT
 
 # The committed document carries a placeholder origin. Swapping it here keeps the origin
 # out of git and keeps the rules in it.
-python3 - "$here/production.json" "$rendered" "$@" <<'PY'
+python3 - "$here/$document" "$rendered" "$@" <<'PY'
 import json
 import sys
 
@@ -54,7 +75,7 @@ document = json.load(open(source))
 for rule in document["CORSRules"]:
     rule["AllowedOrigins"] = origins
 json.dump(document, open(destination, "w"), indent=2)
-print(f"applying {len(document['CORSRules'])} rules for {origins}")
+print(f"applying {len(document['CORSRules'])} rules from {source} for {origins}")
 PY
 
 # R2 wants region "auto"; a real region name makes botocore sign for a host that is not

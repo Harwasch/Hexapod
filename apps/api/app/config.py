@@ -64,6 +64,11 @@ class Settings(BaseSettings):
     object_storage_secret_key: str | None = None
     object_storage_region: str = "us-east-1"
     object_storage_public_url: str | None = None
+    # The second bucket: the only one the world can read. Unset means one bucket in both
+    # roles, which is how a fresh checkout and the dev MinIO loop run -- and which
+    # `create_app` refuses in production, because enabling R2's public access exposes a
+    # whole bucket and this one would hold every raw upload. See app/worker/publish.py.
+    object_storage_public_bucket: str | None = None
 
     # The single shared write token (the plan's `API_WRITE_TOKEN`). Unset means this
     # deployment is open for writes, which is how a fresh checkout runs with no
@@ -201,6 +206,14 @@ class Settings(BaseSettings):
         worse than one that shows up as a deploy that would not go out.
         """
         return bool(self.tiles_base_url) or self.object_storage_configured
+
+    @property
+    def publish_bucket_configured(self) -> bool:
+        """True where published tiles go somewhere other than the upload bucket."""
+        return bool(
+            self.object_storage_public_bucket
+            and self.object_storage_public_bucket != self.object_storage_bucket
+        )
 
     @property
     def object_storage_configured(self) -> bool:

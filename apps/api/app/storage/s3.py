@@ -64,6 +64,10 @@ class S3Storage:
     def available(self) -> bool:
         return True
 
+    @property
+    def bucket(self) -> str:
+        return self._bucket
+
     # --- reads -------------------------------------------------------------
 
     def put_object(self, key: str, data: bytes, content_type: str) -> StoredObject:
@@ -129,6 +133,17 @@ class S3Storage:
 
     def delete_object(self, key: str) -> None:
         self._client.delete_object(Bucket=self._bucket, Key=key)
+
+    def copy_object(self, source_bucket: str, source_key: str, key: str) -> StoredObject:
+        self._client.copy_object(
+            Bucket=self._bucket,
+            Key=key,
+            CopySource={"Bucket": source_bucket, "Key": source_key},
+        )
+        copied = self.head_object(key)
+        if copied is None:  # pragma: no cover - a copy that succeeded and then vanished
+            raise RuntimeError(f"copied {source_bucket}/{source_key} to {key}, and it is not there")
+        return copied
 
     def public_url(self, key: str) -> str:
         if self._public_base_url:

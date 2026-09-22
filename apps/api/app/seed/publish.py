@@ -42,7 +42,7 @@ from app.db import get_session_factory
 from app.seed.captures import STORAGE_PREFIX, capture_descriptions, tiles_root
 from app.services import sites as site_service
 from app.storage import ObjectStorage
-from app.storage.factory import build_storage
+from app.storage.factory import build_public_storage
 
 logger = logging.getLogger("twin.seed.publish")
 
@@ -151,7 +151,7 @@ def _main(argv: list[str] | None = None) -> int:
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     settings = get_settings()
-    storage = build_storage(settings)
+    storage = build_public_storage(settings)
     if not storage.available:
         parser.error(
             "object storage is not configured: set OBJECT_STORAGE_* in .env (see .env.example). "

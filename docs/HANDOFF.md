@@ -92,7 +92,11 @@ rebuild-from-scratch path rather than the primary one.
 
 ## 5. Two decisions left open, deliberately
 
-**(a) The bucket split — settle this before deploying anything.**
+**(a) The bucket split — settled: B, and built.** The facts below were re-checked
+against Cloudflare's own documentation on 2026-09-22 and all hold. The application now
+takes `OBJECT_STORAGE_PUBLIC_BUCKET`, publishes only the tileset and the thumbnail into
+it, and refuses to start in production without it. What follows is kept as the reasoning,
+not as an open question.
 
 Enabling R2's public URL makes the **whole bucket** world-readable, and this API uses one
 bucket: raw uploads land under `captures/` and pipeline outputs under `runs/`. Deploying as

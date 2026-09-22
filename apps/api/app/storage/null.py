@@ -25,6 +25,12 @@ class NullStorage:
     def available(self) -> bool:
         return False
 
+    @property
+    def bucket(self) -> str:
+        """There is no bucket. Empty rather than raising: `Publisher` asks this while
+        deciding whether it has anywhere to publish to, which must not be an error."""
+        return ""
+
     def put_object(self, key: str, data: bytes, content_type: str) -> StoredObject:
         raise StorageUnavailableError(_UNAVAILABLE)
 
@@ -44,6 +50,9 @@ class NullStorage:
         raise StorageUnavailableError(_UNAVAILABLE)
 
     def delete_object(self, key: str) -> None:
+        raise StorageUnavailableError(_UNAVAILABLE)
+
+    def copy_object(self, source_bucket: str, source_key: str, key: str) -> StoredObject:
         raise StorageUnavailableError(_UNAVAILABLE)
 
     def public_url(self, key: str) -> str:

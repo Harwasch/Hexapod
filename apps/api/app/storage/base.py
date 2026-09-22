@@ -87,6 +87,16 @@ class ObjectStorage(Protocol):
     @property
     def available(self) -> bool: ...
 
+    @property
+    def bucket(self) -> str:
+        """The bucket these keys live in.
+
+        Exposed because publishing copies an object from one bucket to another and the
+        copy has to name its source. Nothing else in the API asks which bucket it is
+        talking to, and nothing else should: keys stay opaque.
+        """
+        ...
+
     def put_object(self, key: str, data: bytes, content_type: str) -> StoredObject: ...
 
     def get_object(self, key: str) -> bytes: ...
@@ -102,6 +112,16 @@ class ObjectStorage(Protocol):
     ) -> ObjectPage: ...
 
     def delete_object(self, key: str) -> None: ...
+
+    def copy_object(self, source_bucket: str, source_key: str, key: str) -> StoredObject:
+        """Copy an object into this storage from another bucket, server side.
+
+        The bytes never come back to this process, which is the entire point: a packaged
+        tileset is hundreds of megabytes and `get_object` returns them all at once. Both
+        buckets are reached with the same credentials and the same endpoint, which is
+        what makes one `CopyObject` legal across them.
+        """
+        ...
 
     def public_url(self, key: str) -> str: ...
 

@@ -73,6 +73,7 @@ from app.worker.pipeline_bridge import (
     plan_recipe,
     run_cost,
 )
+from app.worker.publish import Publisher
 
 log = logging.getLogger("app.worker")
 
@@ -123,11 +124,15 @@ class JobSupervisor:
         session_factory: sessionmaker[Session],
         storage: ObjectStorage,
         config: WorkerConfig,
+        publish_storage: ObjectStorage | None = None,
     ) -> None:
         self._sessions = session_factory
         self._storage = storage
         self._config = config
         self._id = config.worker_id
+        # Optional, and defaulting to `storage`, so a caller that has one bucket keeps
+        # the behaviour it had: `Publisher` treats same-bucket as nothing to publish.
+        self._publish = Publisher(private=storage, public=publish_storage or storage)
 
     # --- the outer loop: attempts ------------------------------------------------
 
@@ -408,6 +413,7 @@ class JobSupervisor:
             registration.register(
                 db,
                 self._storage,
+                publish=self._publish,
                 capture=capture,
                 job_id=job.id,
                 registration=document,

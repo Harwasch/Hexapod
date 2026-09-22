@@ -45,7 +45,7 @@ from app.schemas.bookmark import CameraBookmarkCreate
 from app.schemas.common import Attribution, GeoPosition, LicenseMetadata, Provenance
 from app.schemas.geojson import Polygon
 from app.schemas.site import SiteCreate
-from app.storage.factory import build_storage
+from app.storage.factory import build_public_storage
 
 logger = logging.getLogger("twin.seed.captures")
 
@@ -134,7 +134,8 @@ def tiles_base_url(settings: Settings, slug: str) -> str:
     local = f"{settings.public_api_base.rstrip('/')}/api/v1/tiles/{slug}/"
     if not settings.is_production and (tiles_root(settings) / slug).is_dir():
         return local
-    storage = build_storage(settings)
+    # The public bucket where there are two: `sites/` is what a browser fetches.
+    storage = build_public_storage(settings)
     if storage.available:
         return storage.public_url(f"{STORAGE_PREFIX}/{slug}/")
     if settings.is_production:

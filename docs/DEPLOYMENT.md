@@ -129,25 +129,26 @@ Everything account-specific — including things that are not strictly secret, l
 domain names — goes through `fly secrets set`, so nothing about your deployment is
 committed.
 
-| Secret                                                    | Notes                                                                   |
-| --------------------------------------------------------- | ----------------------------------------------------------------------- |
-| `DATABASE_URL`                                            | `postgresql+psycopg://…` with PostGIS enabled                           |
-| `API_WRITE_TOKEN`                                         | **required**: the shared token every write must carry                   |
-| `API_HANDOFF_SECRET`                                      | signing key for phone-handoff tokens; set it explicitly once >1 process |
-| `API_CORS_ORIGINS`                                        | your Pages origin, exact scheme + host, comma-separated                 |
-| `OBJECT_STORAGE_ENDPOINT_URL`                             | `https://<account-id>.r2.cloudflarestorage.com` (the S3 API domain)     |
-| `OBJECT_STORAGE_BUCKET`                                   | one bucket; uploads under `captures/`, published tiles under `sites/`   |
-| `OBJECT_STORAGE_ACCESS_KEY` / `OBJECT_STORAGE_SECRET_KEY` | the R2 API token's pair                                                 |
-| `OBJECT_STORAGE_PUBLIC_URL`                               | the bucket's **public** base — its custom domain, not the S3 API domain |
-| `TILES_BASE_URL`                                          | optional: a CDN prefix in front of the published tiles                  |
-| `PUBLIC_API_BASE`                                         | the API's own public origin, used when seeding absolute tileset URLs    |
-| `PUBLIC_WEB_BASE`                                         | the web origin, for the handoff URL a QR code encodes                   |
-| `CESIUM_ION_SERVER_TOKEN`                                 | optional; `assets:read` for job monitoring. Never a `VITE_` variable    |
-| `ANTHROPIC_API_KEY`                                       | optional; without it the plan drafter is rule-based and says so         |
+| Secret                                                    | Notes                                                                        |
+| --------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `DATABASE_URL`                                            | `postgresql+psycopg://…` with PostGIS enabled                                |
+| `API_WRITE_TOKEN`                                         | **required**: the shared token every write must carry                        |
+| `API_HANDOFF_SECRET`                                      | signing key for phone-handoff tokens; set it explicitly once >1 process      |
+| `API_CORS_ORIGINS`                                        | your Pages origin, exact scheme + host, comma-separated                      |
+| `OBJECT_STORAGE_ENDPOINT_URL`                             | `https://<account-id>.r2.cloudflarestorage.com` (the S3 API domain)          |
+| `OBJECT_STORAGE_BUCKET`                                   | the **private** bucket: uploads under `captures/`, run outputs under `runs/` |
+| `OBJECT_STORAGE_PUBLIC_BUCKET`                            | **required in production**: the only bucket the world can read               |
+| `OBJECT_STORAGE_ACCESS_KEY` / `OBJECT_STORAGE_SECRET_KEY` | the R2 API token's pair                                                      |
+| `OBJECT_STORAGE_PUBLIC_URL`                               | the **public bucket's** base — its custom domain, not the S3 API domain      |
+| `TILES_BASE_URL`                                          | optional: a CDN prefix in front of the published tiles                       |
+| `PUBLIC_API_BASE`                                         | the API's own public origin, used when seeding absolute tileset URLs         |
+| `PUBLIC_WEB_BASE`                                         | the web origin, for the handoff URL a QR code encodes                        |
+| `CESIUM_ION_SERVER_TOKEN`                                 | optional; `assets:read` for job monitoring. Never a `VITE_` variable         |
+| `ANTHROPIC_API_KEY`                                       | optional; without it the plan drafter is rule-based and says so              |
 
 ### Production refuses to start when it cannot do its job
 
-Two startup guards, both in `app/main.py`, both deliberate:
+Three startup guards, all in `app/main.py`, all deliberate:
 
 1. **No `API_WRITE_TOKEN`.** An unset token means writes are open, which is how a fresh
    checkout runs. `APP_ENV=production` plus an empty token raises at startup rather than
@@ -167,6 +168,11 @@ Two startup guards, both in `app/main.py`, both deliberate:
 
    A bucket alone is enough; `TILES_BASE_URL` is for putting a CDN in front of it, not a
    second requirement.
+
+3. **One bucket in both roles.** Production with storage configured and no
+   `OBJECT_STORAGE_PUBLIC_BUCKET` raises. This is the guard with the widest blast radius
+   and the quietest failure: a deployment that gets it wrong works perfectly. See
+   **Two buckets, one key scheme** below for why.
 
 On Fly a failed guard means the machine exits, the health check never passes and
 `fly deploy` rolls back with the old version still serving. The failure is at deploy time,
@@ -216,30 +222,69 @@ Large assets never transit the API: the browser PUTs to presigned S3 multipart U
 CesiumJS reads tiles straight from the bucket. Both are cross-origin, so the bucket's CORS
 configuration is part of the deployment, not an afterthought.
 
-**One bucket, in both roles.** The API has a single `OBJECT_STORAGE_BUCKET`: uploads land
-under `captures/`, published tiles under `sites/`. A bucket has exactly **one** CORS
-configuration and setting it replaces what was there, so applying `upload.json` and then
-`tiles.json` to that bucket would leave only the second — and browser multipart uploads
-would stop being completable the moment you did it. Production gets one combined document:
+### Two buckets, one key scheme
 
-| File                         | Role                                                      |
-| ---------------------------- | --------------------------------------------------------- |
-| `infra/cors/upload.json`     | browser PUTs to presigned URLs                            |
-| `infra/cors/tiles.json`      | CesiumJS reading `tileset.json` and `.glb`                |
-| `infra/cors/production.json` | **both**, for the single production bucket                |
-| `infra/cors/dev-minio.xml`   | both rules in one XML document, for the single dev bucket |
+**Making an R2 bucket readable makes the whole bucket readable.** Cloudflare's public
+bucket feature "allows users to expose the contents of their R2 buckets directly to the
+Internet"; there is no per-prefix scoping, and a custom domain has the identical property.
+Run with one bucket and a public URL on it and every raw capture anyone uploads is
+world-readable, along with every run's frames, logs and checkpoints. Keys carry UUIDs so
+they are not enumerable _through the bucket_, but they are not secret: they are in the
+database, in the Outputs view, and in the URLs the console renders. Nothing about the
+deployment looks wrong — the globe works.
+
+So production runs two buckets and one key scheme. A published object keeps the key it
+already had; only the bucket differs.
+
+| Bucket                         | Holds                                                                                                                    | Public |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------ | ------ |
+| `OBJECT_STORAGE_BUCKET`        | `captures/` (raw uploads) and `runs/` (frames, poses, logs, checkpoints, artifacts)                                      | no     |
+| `OBJECT_STORAGE_PUBLIC_BUCKET` | what a run publishes (the packaged tileset, the thumbnail) and what `app.seed.publish` writes (`sites/`, `catalog.json`) | yes    |
+
+Two paths put things in the public bucket, and they differ for a reason.
+`app/seed/publish.py` writes `sites/` and `catalog.json` **straight there**, because those
+exist only to be fetched by a browser and never hold anything else.
+`app/worker/publish.py` **copies** a finished run's tileset and thumbnail across with a
+server-side `CopyObject`, because a run produces those into the private bucket alongside
+things that must stay there. A copy, not a move: the private bucket keeps the originals,
+which are what the artifacts table and reconciliation read.
+
+One consequence worth stating plainly: **reconciliation does not see the public bucket.**
+`app/services/reconcile.py` walks `captures/` and `runs/` in the private bucket, so a
+published copy whose original is deleted stays served until something removes it too.
+That is a known gap, not an oversight.
+
+`r2.dev` is not the answer for the public bucket either. Cloudflare documents it as
+rate-limited and "intended for non-production traffic", so connect a custom domain and
+put it in `OBJECT_STORAGE_PUBLIC_URL`.
+
+**CORS: one document per bucket.** A bucket has exactly **one** CORS configuration and
+setting it replaces what was there, which is why a bucket in two roles needs its two rules
+combined. After the split each bucket has one role and takes one document:
+
+| File                         | Role                                                                        |
+| ---------------------------- | --------------------------------------------------------------------------- |
+| `infra/cors/upload.json`     | the **private** bucket: browser PUTs to presigned URLs                      |
+| `infra/cors/tiles.json`      | the **public** bucket: CesiumJS reading `tileset.json` and `.glb`           |
+| `infra/cors/production.json` | both rules in one document, for a deployment that still has a single bucket |
+| `infra/cors/dev-minio.xml`   | both rules in one XML document, for the single dev bucket                   |
 
 `ExposeHeaders: ["ETag"]` in the upload rule is load-bearing. Without it the browser reads
 `etag === null` from each part's response and a multipart upload can never be completed.
 `apps/api/tests/test_cors_rules.py` fails if it is dropped, if the XML and JSON documents
 drift apart, or if `production.json` stops matching the two rules it combines.
 
-Apply it:
+Apply it — once per bucket, naming the document after a `--`:
 
 ```bash
 AWS_ACCESS_KEY_ID=…  AWS_SECRET_ACCESS_KEY=… \
-  infra/cors/apply-r2.sh <account-id> twin-assets https://twin.example.com
+  infra/cors/apply-r2.sh <account-id> twin-assets https://twin.example.com -- upload.json
+AWS_ACCESS_KEY_ID=…  AWS_SECRET_ACCESS_KEY=… \
+  infra/cors/apply-r2.sh <account-id> twin-public https://twin.example.com -- tiles.json
 ```
+
+With one bucket, omit the `--` and it applies `production.json`, which is both rules
+combined. `provision.yml` runs the two-bucket form.
 
 The script substitutes your real origin into the committed placeholder (so the origin never
 has to be committed), applies the document with `aws s3api put-bucket-cors` against
@@ -708,6 +753,14 @@ Undersold on purpose, because none of it has been deployed:
   | `flyctl apps create` / `volumes create --yes` / `secrets set --stage` | moderate. `--stage` and `--yes` are documented flags but were not run, and flyctl's `--json` field casing has changed across versions, which is why the jq accepts either                                                                                                                                                  |
   | `aws s3api put-bucket-cors` against R2                                | unchanged from C1: still the first thing that will meet the real R2 API                                                                                                                                                                                                                                                    |
 
+- **The bucket split is code and documentation, not a deployed fact.** The exposure it
+  removes is verified — Cloudflare's public-bucket page was read on 2026-09-22 and says a
+  public bucket exposes "the contents of their R2 buckets", with no prefix scoping, and
+  documents `r2.dev` as rate-limited and "intended for non-production traffic". What is
+  unverified is the other side: no R2 account has two buckets, no `CopyObject` has crossed
+  between them, and `provision.yml`'s two-bucket path has run exactly as often as its
+  one-bucket path did, which is never. `apps/api/tests/test_publish_bucket.py` proves the
+  split against moto, which is layout and not authorisation.
 - **The four-step handover is a claim, not a measurement.** Nobody has followed it. The step
   count is honest about what the workflow attempts, not about what it achieves.
 - **Cloudflare Containers.** The claims in ADR 0007 about GA, sleep-on-idle and the Durable
