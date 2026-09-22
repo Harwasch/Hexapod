@@ -253,6 +253,30 @@ That check moves the adapter from _guessed_ to _read_. It does not move it to _v
 and the table above is unchanged on purpose: running it needs an account and a token this
 repository does not have, so `ModalAdapter` stays **unproven**.
 
+### The remote half
+
+A provider's container fetches its own bytes, which is the one thing `SubprocessAdapter`
+cannot show you — a local process is filled from the outside. `remote.py` is that sequence
+performed from the inside: fetch the inputs and any checkpoint a previous attempt left, run
+the stage while a syncer copies `checkpoint/` out on an interval, upload `out/` on success,
+and hand back what the stage reported.
+
+It takes a `Transfer` and a directory and imports no provider SDK, which is the whole point
+— `tests/test_remote.py` drives every one of those steps here, against `LocalTransfer`. The
+Modal-shaped part is as small as it can be: `infra/modal/app.py` is an image, a GPU, a
+secret and one call, deploying a `run_stage_<tier>` per tier because Modal fixes a
+function's GPU at decoration time.
+
+```bash
+uv run --project tools/pipeline --with modal modal deploy infra/modal/app.py
+```
+
+CI builds that App on every run, which is a real check of everything the decorators take —
+it caught two path bugs the day it was written. It is not a check of the `gpu=` string: an
+App with a nonsense GPU name builds perfectly well and is refused only server-side. And a
+**training** stage will not run on it until `TRAINING_PACKAGES` is filled with a CUDA,
+torch and gsplat triple somebody has actually built; it is empty rather than guessed.
+
 `Placement` decides which adapter an attempt goes to, from the preemptions recorded in
 `stages/<id>/attempts.json`. After `preemptions_before_fallback` of them the stage moves
 to the next provider, and the last one may not itself be interruptible — otherwise a

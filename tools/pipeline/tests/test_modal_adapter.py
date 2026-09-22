@@ -108,8 +108,23 @@ def adapter_over(call: FakeCall) -> tuple[ModalAdapter, RemoteHandle, FakeFuncti
     """A submitted stage, with the Modal lookup replaced by a fake."""
     function = FakeFunction(call)
     adapter = ModalAdapter("twin")
-    adapter._function = lambda: function  # type: ignore[method-assign]
+    adapter._function = lambda tier: function  # type: ignore[method-assign]
     return adapter, adapter.submit(request()), function
+
+
+def test_the_function_looked_up_is_the_one_for_the_request_s_tier() -> None:
+    """One deployed function per tier, because Modal fixes a function's GPU at
+    decoration time. `infra/modal/app.py` registers exactly these names."""
+    asked: list[str] = []
+
+    def lookup(tier: str) -> FakeFunction:
+        asked.append(f"run_stage_{tier}")
+        return FakeFunction(FakeCall())
+
+    adapter = ModalAdapter("twin")
+    adapter._function = lookup  # type: ignore[method-assign]
+    adapter.submit(request())
+    assert asked == ["run_stage_l4"]
 
 
 def test_submit_sends_the_request_dict_and_keeps_the_call_id() -> None:

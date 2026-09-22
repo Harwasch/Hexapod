@@ -167,6 +167,29 @@ jobs:
       # runner has no GPU, which is the whole point: if this job needs one, the stub has
       # stopped doing its job.
       - run: uv run pytest -q
+      # The Modal app's decorators run on the machine that types `modal deploy`, not in
+      # the container, so building the App locally is a real check of everything they
+      # take -- and it is the only check this repository can make of a file that has
+      # never been deployed. It caught two path bugs the day it was written: the tier
+      # table imported from the mount point instead of the checkout, and a relative
+      # `add_local_dir` that depended on the working directory.
+      #
+      # `--with modal` rather than a dependency, so the assertion in the api job below
+      # -- that ModalAdapter imports in a venv with no `modal` at all -- still means
+      # something. What this cannot check is the `gpu=` string: an App with a nonsense
+      # GPU name builds perfectly well and is refused only server-side.
+      - name: The Modal app builds (it has still never been deployed)
+        run: |
+          uv run --with modal python - <<'PY'
+          import importlib.util
+          spec = importlib.util.spec_from_file_location("app", "../../infra/modal/app.py")
+          module = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+          names = sorted(module.FUNCTIONS)
+          print("registered:", names)
+          assert names, "no per-tier function was registered"
+          assert names == sorted(module.TIERS), f"{names} does not match {module.TIERS}"
+          PY
 
   api:
     name: API · lint, typecheck, test, migrations

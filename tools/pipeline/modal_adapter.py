@@ -66,10 +66,11 @@ Still genuinely unverified, because only a real run can settle them:
   being retried invisibly until it succeeds or the function times out. The source says
   the status means preemption; nobody here has watched a box get reclaimed.
 * Whether `logs.fetch()` on a large call is fast enough to sit inside a poll loop.
-* The remote half. `submit` assumes a deployed Modal function that takes a `StageRequest`
-  dict, fetches the inputs and checkpoint from object storage itself, runs `run_stage`,
-  syncs `checkpoint/` on an interval, and uploads `out/`. **That function is not in this
-  repository.** `SubprocessAdapter` is the worked example of what it has to do.
+* The remote half, which now exists: `infra/modal/app.py` deploys one `run_stage_<tier>`
+  per tier, and its body is `tools/pipeline/remote.py` -- ordinary code, driven over a
+  `Transfer` by `tests/test_remote.py`. What is unverified is the wrapper around it: the
+  image, the `gpu=` string and the secret. That the App builds locally is all anybody
+  here has checked, and a nonsense GPU name builds locally too.
 
 `providers.py` is the source of the price, and for Modal it has one surveyed figure: an
 A100 hour. An L4 or A10 run therefore records the seconds it was billed and no cost,
@@ -177,7 +178,7 @@ class ModalAdapter:
     def __init__(
         self,
         app_name: str,
-        function_name: str = "run_stage",
+        function_name: str = "run_stage",  # a prefix; see `_function`
         *,
         rates: Mapping[str, Rate] | None = None,
         timeout_s: float = 6 * 3600.0,
@@ -209,7 +210,7 @@ class ModalAdapter:
         reconstructs it in a later process, which is what makes a handle outlive the
         supervisor that created it.
         """
-        function = self._function()
+        function = self._function(request.tier)
         call = function.spawn(request.to_dict())
         handle = RemoteHandle(id=str(call.object_id), provider=self.name, tier=request.tier)
         self._calls[handle.id] = _Call(request=request, call=call, started_at=time.monotonic())
@@ -269,7 +270,15 @@ class ModalAdapter:
 
     # --- helpers ------------------------------------------------------------------
 
-    def _function(self) -> Any:
+    def _function(self, tier: str) -> Any:
+        """The deployed function for one tier, as `run_stage_<tier>`.
+
+        One function per tier, because Modal fixes a function's GPU at decoration time
+        and a single deployed `run_stage` therefore cannot serve an L4 request and an
+        A100 one. `infra/modal/app.py` registers them under exactly these names, from
+        the same `GPU_NAMES` table above, so a tier this adapter can ask for is a tier
+        that was deployed.
+        """
         try:
             import modal  # optional, and absent everywhere this actually runs
         except ImportError as error:  # pragma: no cover - modal is not a dependency here
@@ -280,7 +289,9 @@ class ModalAdapter:
                 "in the deployment that actually uses Modal"
             ) from error
         return modal.Function.from_name(
-            self._app_name, self._function_name, environment_name=self._environment_name
+            self._app_name,
+            f"{self._function_name}_{tier}",
+            environment_name=self._environment_name,
         )
 
     @staticmethod
