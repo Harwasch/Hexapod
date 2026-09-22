@@ -20,15 +20,21 @@ from __future__ import annotations
 import functools
 import hashlib
 import json
+import shutil
 import struct
+import sys
 import tomllib
 from pathlib import Path
 from typing import Any, NoReturn
 
 import numpy as np
 import PIL
+import PIL.Image
 
 import gaussians
+import sfm
+import training
+import video
 from artifacts import ArtifactDecl
 from captures_bridge import CAPTURES_DIR, splat_tiles_convert
 from contracts import MetricValue, StageContext, StageOutcome
@@ -55,8 +61,14 @@ POSES = ArtifactDecl(
     "poses",
     kind="dir",
     content_type="inode/directory",
-    summary="camera intrinsics and extrinsics for the frames",
-    stub_members=("cameras.bin", "images.bin", "points3d.bin"),
+    summary="a COLMAP sparse model -- intrinsics, extrinsics, points -- plus poses.json",
+    # A COLMAP sparse model as COLMAP writes it, which is what gsplat, OpenSplat and
+    # nerfstudio all read, beside a JSON summary of it for anything that would rather not
+    # parse a binary model. `points3D.bin` is deliberately absent from this list although
+    # every real run writes it: artifact names are lowercase by `validate_artifact_name`,
+    # so the only spelling this field could carry is one no run ever produces. B2 changed
+    # this from A6's ("cameras.bin", "images.bin", "points3d.bin") for that reason.
+    stub_members=("cameras.bin", "images.bin", "poses.json"),
 )
 MASKS = ArtifactDecl(
     "masks",
@@ -197,6 +209,10 @@ def ingest_splat(ctx: StageContext) -> StageOutcome:
     )
 
 
+#: `select:` values this stage accepts. There is deliberately no threshold among them.
+SELECT_MODES: tuple[str, ...] = ("sharpness", "all")
+
+
 @stage_impl(
     "ffmpeg_frames",
     consumes=("upload",),
@@ -204,9 +220,125 @@ def ingest_splat(ctx: StageContext) -> StageOutcome:
     summary="Lane 2: video or image folder to a frame set, top-K by sharpness",
 )
 def ffmpeg_frames(ctx: StageContext) -> StageOutcome:
-    # A0 #6: imageio-ffmpeg's static binary, not a system ffmpeg (ubuntu-latest has none),
-    # and no ffprobe -- metadata comes from scraping `ffmpeg -i` stderr.
-    _lands_in("B2", "ffmpeg_frames")
+    """Real: the upload becomes a frame set and a description of where it came from.
+
+    Three of A0's findings are load-bearing and each one is a place this could have been
+    written wrongly and still passed on the machine it was written on:
+
+    * the ffmpeg binary comes from `imageio_ffmpeg.get_ffmpeg_exe()`. This machine has
+      `/usr/bin/ffmpeg`; `ubuntu-latest` has none, so resolving off `PATH` is green here
+      and red in CI. `tests/test_normalize.py` reads the argv out of the stage log and
+      asserts it points inside the wheel;
+    * there is no `ffprobe` in that wheel, so sensor, date and location are scraped from
+      `ffmpeg -i` stderr -- including **both** iPhone location keys, the `mdta`
+      `com.apple.quicktime.location.ISO6709` and the older `(c)xyz` atom;
+    * `select: sharpness` is top-K and cannot be given a cutoff. A0 measured a 101x
+      within-clip range in variance-of-Laplacian, so no absolute threshold transfers.
+
+    What it does *not* do is read EXIF off a folder of stills or turn a location into a
+    georeference -- `exif_gps` is that stage, and it lands in B4. A location found here is
+    recorded in `source_meta.json` and goes no further.
+    """
+    upload = ctx.input("upload")
+    source = video.pick_source(upload)
+    fps = float(ctx.param("fps", 4))
+    keep = int(ctx.param("keep", 400))
+    select = str(ctx.param("select", "sharpness"))
+    if select not in SELECT_MODES:
+        raise ValueError(
+            f"select={select!r} is not one of {', '.join(SELECT_MODES)}. In particular "
+            f"there is no blur threshold: A0 measured a 101x within-clip range in "
+            f"variance-of-Laplacian, so a cutoff that works on one capture discards a "
+            f"whole other capture. Selection is top-K, set by `keep`"
+        )
+
+    meta = video.VideoMeta()
+    if source.is_video:
+        ctx.log(f"$ {' '.join(video.probe_argv(source.path))}")
+        text = video.probe_text(source.path)
+        for line in text.splitlines():
+            ctx.log(line)
+        meta = video.parse_probe(text)
+        extracted = ctx.work_dir / "extracted"
+        extracted.mkdir(parents=True, exist_ok=True)
+        ctx.run(
+            video.extract_frames_argv(
+                source.path,
+                extracted / "frame_%05d.jpg",
+                fps=fps,
+                quality=int(ctx.param("quality", 2)),
+                max_side=_optional_int(ctx.param("max_side")),
+            )
+        )
+        candidates = sorted(extracted.glob("frame_*.jpg"))
+    else:
+        candidates = list(source.images)
+    if not candidates:
+        raise ValueError(f"no frames came out of {source.path.name}")
+
+    if select == "sharpness":
+        scores = [video.sharpness(path) for path in candidates]
+        chosen = video.select_sharpest(scores, keep)
+    else:
+        scores = []
+        chosen = video.evenly_spaced(len(candidates), keep)
+    written = video.copy_frames([candidates[i] for i in chosen], ctx.output(FRAMES.name))
+
+    kept_scores = [scores[i] for i in chosen] if scores else []
+    dropped_scores = [s for i, s in enumerate(scores) if i not in set(chosen)]
+    first = _image_size(written[0])
+    document: dict[str, object] = {
+        "filename": source.path.name,
+        "format": "video" if source.is_video else "images",
+        "bytes": _bytes_of(source),
+        "checksum": _checksum_of_source(source),
+        "frames": {
+            "candidates": len(candidates),
+            "kept": len(written),
+            "fps": fps if source.is_video else None,
+            "select": select,
+            "keep": keep,
+            "width": first[0],
+            "height": first[1],
+        },
+        # Recorded, not thresholded. The numbers are here so a later run can see *why*
+        # these frames and not others, which is the only thing a non-linear score is
+        # good for.
+        "sharpness": {
+            "metric": "variance-of-laplacian",
+            "selection": "top-K by rank; never an absolute cutoff (A0 #6)",
+            "kept": video.summarise(kept_scores),
+            "rejected": video.summarise(dropped_scores),
+        },
+        "video": meta.to_dict() if source.is_video else None,
+        "location": None if meta.location is None else meta.location.to_dict(),
+        # The capture-level facts, same convention as `ingest_splat`: what the capture row
+        # says wins, and the container's own answer is the fallback rather than the other
+        # way round -- a phone that was renamed is still the phone the row names.
+        "sensor": _optional_str(ctx.param("sensor")) or meta.make,
+        "device": _optional_str(ctx.param("device")) or meta.model,
+        "capturedAt": _optional_str(ctx.param("captured_at")) or meta.created_at,
+        "tools": {"ffmpeg": video.ffmpeg_version(), "ffmpegFrom": "imageio-ffmpeg"},
+    }
+    _write_json(ctx.output(SOURCE_META.name), document)
+    ctx.log(
+        f"{source.kind}: {len(candidates)} candidate frame(s) -> {len(written)} kept "
+        f"by {select} ({first[0]}x{first[1]})"
+    )
+    if meta.location is not None:
+        ctx.log(f"location {meta.location.lat}, {meta.location.lon} from {meta.location.source}")
+    metrics: dict[str, MetricValue] = {
+        "candidates": len(candidates),
+        "frames": len(written),
+        "select": select,
+        "width": first[0],
+        "height": first[1],
+    }
+    if source.is_video:
+        metrics["fps"] = fps
+        if meta.duration_s is not None:
+            metrics["durationS"] = meta.duration_s
+    return StageOutcome(metrics=metrics, summary=f"{len(written)} frames by {select}")
 
 
 # ---------------------------------------------------------------------------------------
@@ -216,15 +348,142 @@ def ffmpeg_frames(ctx: StageContext) -> StageOutcome:
 
 @stage_impl("colmap", consumes=("frames",), produces=(POSES,), summary="COLMAP SfM poses")
 def colmap(ctx: StageContext) -> StageOutcome:
-    # A0 #7 measured this as a real integration test rather than a stub: 40/40 registered,
-    # 0.422 deg median rotation error, CPU-only, 48.3 s. B2 builds that test, with
-    # exhaustive_matcher -- sequential_matcher registers 2/40 on a closed orbit.
-    _lands_in("B2", "pose: colmap")
+    """Real, and tested against known poses rather than against "a file appeared".
+
+    `tests/test_pose_colmap.py` renders the committed synthetic tree from a known orbit
+    and scores what comes back out of here: how many frames registered, and the median
+    rotation and translation error after the similarity that any image-only
+    reconstruction is defined up to. On that fixture it measures 40/40 registered,
+    0.059 deg and 0.092% of scene extent, CPU only, in about 55 s on 4 cores -- better
+    than A0 #7's 40/40, 0.422 deg and 0.636%, because a noise-free pinhole render over a
+    planar textured ground is an easier scene than whatever A0 measured, not because
+    anything improved. The test's thresholds sit where a regression would show.
+
+    Two of A0's findings are enforced here rather than remembered:
+
+    * the matcher defaults to `exhaustive`. `sequential` is 2.5x faster and registered
+      **2 of 40** frames on a closed orbit, because without loop detection the last frame
+      never meets the first. Asking for it logs that;
+    * the focal length. With no prior COLMAP self-calibrates, and the bias that leaves
+      behind is scene-dependent rather than constant -- A0 #7 measured 3.1% low, B2's
+      own fixture measured 0.17% high. `poses.json` therefore records the recovered
+      focal, whether a prior was held, and both measurements, rather than a correction.
+      Pass `focal_px` (EXIF or ARKit) and the prior is held through bundle adjustment.
+    """
+    frames = ctx.input(FRAMES.name)
+    out = ctx.output(POSES.name)
+    matcher = str(ctx.param("matcher", "exhaustive"))
+    if matcher != "exhaustive":
+        ctx.log(
+            f"matcher={matcher!r}: A0 #7 measured {matcher}_matcher registering 2 of 40 "
+            f"frames on a closed orbit, where exhaustive_matcher registered 40"
+        )
+    images = sorted(p for p in frames.iterdir() if p.is_file())
+    if not images:
+        raise ValueError(f"the frames artifact at {frames} is empty")
+    width, height = _image_size(images[0])
+    focal_prior = _optional_float(ctx.param("focal_px"))
+    params = None if focal_prior is None else (focal_prior, width / 2.0, height / 2.0, 0.0)
+
+    database = ctx.work_dir / "database.db"
+    sparse = ctx.work_dir / "sparse"
+    if database.exists():
+        database.unlink()
+    if sparse.exists():
+        shutil.rmtree(sparse)
+    sparse.mkdir(parents=True)
+    ctx.run(
+        sfm.feature_extractor_argv(
+            database,
+            frames,
+            camera_model=str(ctx.param("camera_model", "SIMPLE_RADIAL")),
+            camera_params=params,
+            max_image_size=int(ctx.param("max_image_size", 2400)),
+            max_features=int(ctx.param("max_features", 8192)),
+        )
+    )
+    ctx.run(sfm.matcher_argv(database, matcher))
+    ctx.run(sfm.mapper_argv(database, frames, sparse, refine_focal_length=focal_prior is None))
+    model_dir = _largest_model(sparse)
+    if model_dir is None:
+        raise ValueError(
+            f"COLMAP's mapper registered no model from {len(images)} frame(s). With "
+            f"matcher={matcher!r} that is the failure A0 #7 saw on a closed orbit; "
+            f"exhaustive is the matcher that closes one"
+        )
+    for entry in sorted(model_dir.iterdir()):
+        if entry.is_file():
+            shutil.copyfile(entry, out / entry.name)
+    model = sfm.read_model(out)
+    focal = model.cameras[0].focal_px if model.cameras else 0.0
+    document: dict[str, object] = {
+        "tool": "colmap",
+        "version": sfm.colmap_version(),
+        "matcher": matcher,
+        "frames": len(images),
+        "registered": model.registered,
+        "points3D": model.points3d,
+        "meanTrackLength": round(model.mean_track_length, 3),
+        "cameras": [camera.to_dict() for camera in model.cameras],
+        "images": [image.to_dict() for image in model.images],
+        "focal": {
+            "px": round(focal, 3),
+            "priorPx": focal_prior,
+            "refined": focal_prior is None,
+            # Said out loud rather than left for somebody to rediscover: a
+            # self-calibrated focal that is low makes the whole reconstruction small by
+            # about the same fraction, and nothing downstream can see that from the
+            # poses alone.
+            "biasNote": (
+                # Two measurements, both recorded, because they disagree and the
+                # disagreement is the finding: the bias is a property of the capture,
+                # not a constant to correct by. A0 #7 measured the self-calibrated
+                # focal 3.1% LOW on its phone-like orbit; B2's rendered-orbit fixture
+                # measured it 0.17% HIGH on 40 frames of the synthetic tree. With no
+                # prior, the only honest statement is that the scale is unverified.
+                "self-calibrated, so the scale is unverified: A0 #7 measured this 3.1% "
+                "low, B2's rendered-orbit fixture measured it 0.17% high. Neither is a "
+                "correction to apply -- pass focal_px (EXIF or ARKit) to hold a prior"
+                if focal_prior is None
+                else "held at the supplied prior through bundle adjustment"
+            ),
+        },
+        "scale": {
+            "metric": False,
+            "source": "none",
+            "note": (
+                "a reconstruction from images alone has no metric scale; `arkit` or a "
+                "measured baseline is what produces one"
+            ),
+        },
+    }
+    _write_json(out / "poses.json", document)
+    ctx.log(
+        f"colmap: {model.registered}/{len(images)} registered, {model.points3d} points, "
+        f"mean track {model.mean_track_length:.2f}, focal {focal:.1f} px"
+    )
+    metrics: dict[str, MetricValue] = {
+        "frames": len(images),
+        "registered": model.registered,
+        "points3D": model.points3d,
+        "meanTrackLength": round(model.mean_track_length, 3),
+        "focalPx": round(focal, 3),
+        "focalPrior": focal_prior is not None,
+        "matcher": matcher,
+    }
+    return StageOutcome(
+        metrics=metrics, summary=f"{model.registered}/{len(images)} frames registered"
+    )
 
 
 @stage_impl("glomap", consumes=("frames",), produces=(POSES,), summary="GLOMAP global SfM poses")
 def glomap(ctx: StageContext) -> StageOutcome:
-    _lands_in("B2", "pose: glomap")
+    # Still a stub after B2, deliberately: GLOMAP is not in Ubuntu 24.04's archive
+    # (`apt-cache policy glomap` finds nothing), so it cannot be installed on this
+    # machine or on `ubuntu-latest`, and an implementation nothing can run is a second
+    # unverified sketch. It reads the same database `colmap` builds, so when there is a
+    # box with one, this is the mapper call and the same `read_model` afterwards.
+    _lands_in("B3", "pose: glomap")
 
 
 @stage_impl(
@@ -234,7 +493,12 @@ def glomap(ctx: StageContext) -> StageOutcome:
     summary="poses and metric scale straight out of an ARKit capture",
 )
 def arkit(ctx: StageContext) -> StageOutcome:
-    _lands_in("B2", "pose: arkit")
+    # Still a stub after B2: there is no ARKit capture in this repository, and the format
+    # is a per-frame pose stream from a device nobody here has. Writing a parser against
+    # a format description and calling it done would be the second unverified
+    # implementation in this file. It is also the only stage that produces `scale.json`,
+    # which is the one thing a phone can give that COLMAP cannot.
+    _lands_in("B4", "pose: arkit")
 
 
 # ---------------------------------------------------------------------------------------
@@ -276,9 +540,96 @@ def robust(ctx: StageContext) -> StageOutcome:
     summary="gsplat 3DGS training; consumes masks when a mask stage produced any",
 )
 def gsplat(ctx: StageContext) -> StageOutcome:
-    # The optional `masks` input is how `mask: none` and `mask: robust` are both legal
-    # without the trainer or the executor knowing which one ran.
-    _lands_in("B2", "train: gsplat")
+    """Dispatches a training run. **No training run has ever been executed here.**
+
+    That sentence is the point of this docstring and it is not hedged: `gsplat` needs
+    CUDA, the machine this was written on has no GPU, and no GPU provider was reachable
+    from it. What exists and is tested is everything around the trainer -- the COLMAP
+    dataset it is handed, the argv it is given, the checkpoint layout that lets a
+    preempted attempt resume, the metrics read back out of its output, and the PLY
+    normalised into `canonical.ply`. What is untested is `gsplat` itself and the exact
+    spelling of its outputs, which `training.py` records as transcribed rather than
+    observed. `tests/test_train_gsplat.py` drives all of the above with a stand-in
+    trainer and says so in its name.
+
+    The one design decision worth reading: `--result_dir` is inside `checkpoint/`. A
+    trainer that writes its checkpoints anywhere else loses them the moment the box is
+    reclaimed, because `checkpoint/` is the only directory the executor keeps between
+    attempts and the only one B1b's syncer copies out while the stage is still running.
+
+    The optional `masks` input is how `mask: none` and `mask: robust` are both legal
+    without the executor knowing which one ran. This trainer has no mask input, so masks
+    that arrive are recorded as ignored rather than silently dropped; B3 is where a
+    trainer that consumes them lands.
+    """
+    frames = ctx.input(FRAMES.name)
+    poses = ctx.input(POSES.name)
+    iterations = int(ctx.param("iterations", 30_000))
+    trainer = training.trainer_script(ctx.param("trainer"))
+    dataset = training.build_dataset(frames, poses, ctx.work_dir / "dataset")
+    # Inside checkpoint/: see the docstring. This is the whole resume story.
+    result = ctx.checkpoint_dir / "gsplat"
+    result.mkdir(parents=True, exist_ok=True)
+    resume = training.latest_checkpoint(result)
+    resumed_step = None if resume is None else training.step_of(resume)
+    if resume is not None:
+        ctx.log(f"resuming from {resume.name} (step {resumed_step}) on attempt {ctx.attempt}")
+    if ctx.has_input(MASKS.name):
+        ctx.log(
+            "masks were produced by an earlier stage and this trainer has no mask input; "
+            "they are not used. A mask-aware trainer lands in B3"
+        )
+    ctx.run(
+        training.gsplat_argv(
+            str(ctx.param("python", sys.executable)),
+            trainer,
+            dataset,
+            result,
+            strategy=str(ctx.param("strategy", "default")),
+            max_steps=iterations,
+            data_factor=int(ctx.param("data_factor", 1)),
+            checkpoint=resume,
+            extra=[str(value) for value in (ctx.param("extra_args") or [])],
+        )
+    )
+    ply = training.latest_ply(result)
+    if ply is None:
+        raise ValueError(
+            f"the trainer wrote no .ply under {result}; there is nothing to normalise "
+            f"into {CANONICAL_PLY.name}"
+        )
+    splat = gaussians.read_splat(ply)
+    written = gaussians.write_ply(ctx.output(CANONICAL_PLY.name), splat.columns)
+    metrics_document = training.parse_metrics(
+        result,
+        ctx.log_path.read_text(encoding="utf-8", errors="replace"),
+        trainer=f"gsplat:{trainer.name}",
+        requested_iterations=iterations,
+        resumed_from_step=resumed_step,
+        attempts=ctx.attempt,
+    )
+    document = metrics_document.to_dict()
+    # Read off the PLY rather than trusted from the stats file: this is the count the
+    # artifact actually has, and the two disagreeing is worth being able to see.
+    document["gaussiansInPly"] = splat.count
+    document["masksIgnored"] = ctx.has_input(MASKS.name)
+    _write_json(ctx.output(TRAIN_METRICS.name), document)
+    ctx.log(
+        f"gsplat: {splat.count} gaussians from {ply.name} -> {CANONICAL_PLY.name} "
+        f"({written} bytes); metrics from {metrics_document.source}"
+    )
+    metrics: dict[str, MetricValue] = {
+        "gaussians": splat.count,
+        "canonicalBytes": written,
+        "requestedIterations": iterations,
+        "metricsSource": metrics_document.source,
+        "resumed": resume is not None,
+    }
+    if metrics_document.iterations is not None:
+        metrics["iterations"] = metrics_document.iterations
+    if metrics_document.psnr is not None:
+        metrics["psnr"] = metrics_document.psnr
+    return StageOutcome(metrics=metrics, summary=f"{splat.count} gaussians trained")
 
 
 @stage_impl(
@@ -289,7 +640,12 @@ def gsplat(ctx: StageContext) -> StageOutcome:
     summary="OpenSplat training, the same contract as gsplat",
 )
 def opensplat(ctx: StageContext) -> StageOutcome:
-    _lands_in("B2", "train: opensplat")
+    # Still a stub after B2. OpenSplat needs libtorch with CUDA and there is no GPU here
+    # and no reachable GPU provider, so it would be a second trainer nobody has run --
+    # and one unrun trainer is already the honest limit of this step. It reads the same
+    # COLMAP dataset `training.build_dataset` assembles, so what it needs from this
+    # project already exists.
+    _lands_in("B3", "train: opensplat")
 
 
 # ---------------------------------------------------------------------------------------
@@ -591,6 +947,50 @@ def _read_json(path: Path) -> dict[str, object]:
 
 def _optional_str(value: object) -> str | None:
     return None if value is None else str(value)
+
+
+def _optional_int(value: object) -> int | None:
+    return None if value is None else int(str(value))
+
+
+def _optional_float(value: object) -> float | None:
+    return None if value is None else float(str(value))
+
+
+def _image_size(path: Path) -> tuple[int, int]:
+    with PIL.Image.open(path) as image:
+        return int(image.width), int(image.height)
+
+
+def _bytes_of(source: video.Source) -> int:
+    if source.is_video:
+        return source.path.stat().st_size
+    return sum(path.stat().st_size for path in source.images)
+
+
+def _checksum_of_source(source: video.Source) -> str:
+    """The upload's identity: the file's hash, or a hash over the stills in name order."""
+    digest = hashlib.sha256()
+    paths = (source.path,) if source.is_video else source.images
+    for path in paths:
+        digest.update(path.name.encode("utf-8"))
+        with path.open("rb") as handle:
+            while chunk := handle.read(1 << 20):
+                digest.update(chunk)
+    return f"sha256:{digest.hexdigest()}"
+
+
+def _largest_model(sparse: Path) -> Path | None:
+    """COLMAP's mapper writes one numbered sub-model per connected component.
+
+    The biggest one is the reconstruction; the others are the frames that did not join
+    it. Taking the biggest rather than `0` matters because the numbering is the order
+    they were found in, not their size.
+    """
+    models = [entry for entry in sorted(sparse.iterdir()) if (entry / "images.bin").is_file()]
+    if not models:
+        return None
+    return max(models, key=lambda path: (path / "images.bin").stat().st_size)
 
 
 def _count(value: object) -> int:

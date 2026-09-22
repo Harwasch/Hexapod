@@ -130,10 +130,15 @@ def test_a_recipe_input_that_was_never_seeded_is_refused(tmp_path: Path) -> None
 
 
 def test_an_unimplemented_stage_says_which_step_lands_it(tmp_path: Path) -> None:
-    """Lane 1's stages are real now, so this asks one of Lane 2's, which is not."""
+    """Lane 2's first three stages are real since B2, so this asks a later one.
+
+    It used to ask `ffmpeg_frames`, which now answers by extracting frames. `exif_gps`
+    is the same shape -- it consumes `upload` -- and is still a stub, so the property
+    being tested (a stub refuses by name and says which step lands it) is unchanged.
+    """
     from errors import StageFailedError
 
-    recipe = make_recipe([{"id": "normalize", "impl": "ffmpeg_frames"}], inputs=["upload"])
+    recipe = make_recipe([{"id": "georeference", "impl": "exif_gps"}], inputs=["upload"])
 
-    with pytest.raises(StageFailedError, match="lands in B2"):
+    with pytest.raises(StageFailedError, match="lands in B4"):
         execute(recipe, seeded_workdir(tmp_path / "run"), _local())

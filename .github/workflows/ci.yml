@@ -85,6 +85,17 @@ jobs:
         working-directory: tools/pipeline
     steps:
       - uses: actions/checkout@v4
+      # COLMAP, for the `pose` stage's measured integration test: 40 rendered frames of
+      # the committed synthetic tree, scored against the poses they were rendered from.
+      # Measured before deciding this was affordable: `colmap` on Ubuntu 24.04 pulls a
+      # 176-package, 184 MB dependency closure, which downloaded in 10.2 s and unpacked
+      # in 2.9 s on a 4-core box -- a fraction of what this job already spends on
+      # `uv sync`, and much of that closure is already on a runner image. The COLMAP run
+      # itself is ~55 s on 4 cores. `tests/test_pose_colmap.py` skips where colmap is
+      # absent and *fails* under CI=true where it is, so deleting this step turns the
+      # pose stage's whole test file into silent skips rather than a red job.
+      - name: Install COLMAP
+        run: sudo apt-get update && sudo apt-get install -y colmap
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
@@ -278,12 +289,20 @@ jobs:
           import app.worker.pipeline_bridge as bridge  # puts tools/pipeline on sys.path
 
           import stages  # noqa: F401 - imports captures_bridge, numpy and PIL as a side effect
+          import video
           from captures_bridge import CAPTURES_DIR
 
           assert (bridge.PIPELINE_DIR / "pyproject.toml").is_file(), bridge.PIPELINE_DIR
           assert (bridge.PIPELINE_DIR / "recipes").is_dir(), bridge.PIPELINE_DIR
           assert (CAPTURES_DIR / "splat_tiles.py").is_file(), CAPTURES_DIR
           assert Path(stages.__file__).parent == bridge.PIPELINE_DIR
+
+          # B2's dependency, in the venv the worker's child process actually runs in.
+          # `stages` imports `video`, which imports `imageio_ffmpeg` at module scope, so
+          # the import above already fails without it -- this says which binary it found,
+          # because a system ffmpeg is not what the stage is allowed to use.
+          ffmpeg = Path(video.ffmpeg_exe())
+          assert ffmpeg.is_file() and "imageio_ffmpeg" in ffmpeg.parts, ffmpeg
 
           # B1b's seam, in the same venv, and deliberately without `modal`: the adapter
           # imports its client inside the one function that needs it, so an image that

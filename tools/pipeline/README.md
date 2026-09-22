@@ -7,9 +7,24 @@ which imports this project as a library.
 
 **Lane 1 is real.** `splat-ingest` runs end to end on a CPU: a `.ply` or `.spz` in,
 `canonical.ply`, a `splat/` tileset, a thumbnail, ground samples, a manifest and a
-registration out. Lane 2's GPU stages are still stubs with honest contracts — they declare
-exactly what they read and write, and raise with the step that lands them rather than
-pretending.
+registration out.
+
+**Lane 2's first three stages are real since B2**, with one honest boundary:
+
+- `normalize` / `ffmpeg_frames` extracts and selects frames and scrapes the container's
+  metadata. It runs here and in CI, on a generated clip.
+- `pose` / `colmap` runs real structure from motion and is scored against known poses —
+  40 frames rendered from the committed synthetic tree, 40/40 registered, 0.059° median
+  rotation error, 0.092% of scene extent in translation. CI installs `colmap` so this
+  runs there too, and the test file fails rather than skipping if that install goes away.
+- `train` / `gsplat` **dispatches** a training run: the dataset, the argv, the checkpoint
+  layout that survives a preemption, the metrics, the PLY. **No training run has been
+  executed in this repository** — `gsplat` needs CUDA and there is no GPU here — so its
+  tests drive a stand-in trainer and say so in their names.
+
+`glomap`, `arkit`, `opensplat`, `robust` and `exif_gps` are still stubs with honest
+contracts: they declare exactly what they read and write, and raise with the step that
+lands them rather than pretending. Each one's stub says in a comment why it is still one.
 
 It has no dependency on `apps/api`: no models, no database connection, no HTTP. The
 dependency runs one way only. A stage that wants something registered writes a file saying

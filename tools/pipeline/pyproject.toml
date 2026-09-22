@@ -57,7 +57,11 @@ known-first-party = [
   "run_recipe",
   "run_stage",
   "runners",
+  "sfm",
   "stages",
+  "training",
+  "tree_frames",
+  "video",
   "workdir",
 ]
 

@@ -31,9 +31,14 @@ dependencies = [
   # uvicorn drops it, or `--no-dev` meets a different extra, is a day the recipes stop
   # loading with no change to this file. Declared, like the two above.
   "pyyaml>=6.0",
-  # `imageio-ffmpeg` is in tools/pipeline/pyproject.toml and deliberately not here: it
-  # carries a 79.8 MB ffmpeg binary and no shipped stage imports it yet (normalize is a
-  # stub). B2 adds it when the real `normalize` lands.
+  # Not the API's either: the `normalize` stage's. B1a left this out with a note saying
+  # B2 would add it when the real stage landed, and it has -- `tools/pipeline/video.py`
+  # imports `imageio_ffmpeg` at module scope and `stages.py` imports that, so without it
+  # here the worker's child process cannot import the pipeline's stages at all inside
+  # the image. CI's `image` job is what catches that. It carries an ffmpeg binary of its
+  # own (~80 MB) on purpose: `ubuntu-latest` has no ffmpeg and `static-ffmpeg` downloads
+  # one at import, which fails on a machine with no network.
+  "imageio-ffmpeg>=0.5",
 ]
 
 [dependency-groups]
@@ -103,11 +108,21 @@ module = [
   "registry",
   "run_stage",
   "runners",
+  "sfm",
   "splat_tiles",
   "stages",
+  "training",
+  "video",
   "workdir",
 ]
 follow_imports = "silent"
+
+[[tool.mypy.overrides]]
+# `imageio-ffmpeg` ships no py.typed marker, and `tools/pipeline/video.py` -- which
+# `stages` imports, and which this project type-checks across the seam -- imports it.
+# The same override tools/pipeline/pyproject.toml carries, for the same module.
+module = ["imageio_ffmpeg.*"]
+ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = ["geoalchemy2.*", "shapely.*"]

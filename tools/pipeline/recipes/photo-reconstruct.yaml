@@ -36,6 +36,10 @@ stages:
     impl: gsplat # | opensplat | deformable3dgs
     params:
       iterations: 30000
+      # `trainer` is deliberately absent: gsplat's examples/simple_trainer.py lives in
+      # the training box's image, not in this repository, so the path comes from
+      # $GSPLAT_TRAINER there or from a per-run parameter override. A run started
+      # without either says so by name rather than failing on a missing file.
     gpu:
       tier: l4
       preemptible: true
