@@ -80,10 +80,12 @@ class Settings(BaseSettings):
     # outputs of the stages that already succeeded out of it, and A6's `checkpoint/`
     # contract is only worth anything while the directory is still there.
     worker_workdir: str = "var/worker"
-    # "stub" or "local". Deliberately "stub" until A8 makes Lane 1's stages real: under
-    # the local runner every one of them raises NotImplementedError today, and a worker
-    # that reliably fails is a worse demonstration of the spine than one that runs it.
-    worker_runner: str = "stub"
+    # "stub" or "local". "local" since A8: Lane 1's stages are real, so a dropped `.ply`
+    # or `.spz` becomes a site with no human step, and a worker that ran the stub by
+    # default would produce sites pointing at fabricated tilesets. Lane 2 still needs a
+    # GPU runner it does not have, so `photo-reconstruct` fails at `train` with a message
+    # naming the tier it wanted -- which is the honest answer until B1.
+    worker_runner: str = "local"
     # Extra recipes, by name, for tests and for a deployment that ships its own. The
     # pipeline's shipped recipes are found without this.
     worker_recipe_dir: str | None = None

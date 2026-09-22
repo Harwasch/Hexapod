@@ -6,8 +6,14 @@ import { capturesApi, queryKeys } from "@/api/queries";
 import { abortCaptureFile, isAbort, uploadCaptureFile } from "@/api/uploads";
 import { describeError } from "@/lib/log";
 import { useUploads } from "@/state/uploads";
+import { useViewer } from "@/state/viewer";
 
 import { captureName, classify } from "./recipes";
+
+/** Six decimals is ~0.1 m: finer than a hand placement means anything. */
+function round6(value: number): number {
+  return Math.round(value * 1e6) / 1e6;
+}
 
 /**
  * `File` handles for uploads in flight, outside React and outside the store.
@@ -117,6 +123,7 @@ export function useCaptureUploads(): CaptureUploads {
   const start = useCallback(
     async (files: File[]) => {
       if (files.length === 0) return;
+      const camera = useViewer.getState().camera;
       lastDrop.current = files;
       setBusy(true);
       setError(null);
@@ -128,7 +135,20 @@ export function useCaptureUploads(): CaptureUploads {
           kind: proposal.kind,
           // The proposed recipe rides along so the card can offer it later without
           // re-deriving it from filenames the API has already stored.
-          metadata: { recipe: proposal.recipe, origin: "console" },
+          //
+          // The camera's position is what places the capture. A splat file carries no
+          // EXIF and no poses -- it is geometry with no idea where on Earth it belongs --
+          // so without this the pipeline runs correctly and lands the site at (0, 0), in
+          // the Gulf of Guinea. Where you were looking when you dropped the file is the
+          // best guess available, and the manifest records it as `manual`, uncertainty
+          // 10 m, `scaleSource: unresolved`, so nothing downstream mistakes it for a
+          // survey. B4's placement editor is what replaces the guess.
+          metadata: {
+            recipe: proposal.recipe,
+            origin: "console",
+            lat: round6(camera.latitude),
+            lon: round6(camera.longitude),
+          },
         });
         invalidate();
         for (const file of files) {

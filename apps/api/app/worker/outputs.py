@@ -29,7 +29,7 @@ from app.worker.pipeline_bridge import ArtifactRef
 #:
 #: Anything not named here is `metadata`: the JSON sidecars a stage writes beside its real
 #: output (`georef.json`, `source_meta.json`, `train_metrics.json`, `registration.json`).
-#: A new artifact in A8 or B2 therefore gets a row rather than crashing the worker, and
+#: A new artifact in B2 therefore gets a row rather than crashing the worker, and
 #: gets a better kind by being added here.
 ARTIFACT_KINDS: dict[str, ArtifactKind] = {
     "frames": ArtifactKind.FRAMES,

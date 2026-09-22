@@ -28,31 +28,167 @@ WGS84_A = 6378137.0
 WGS84_E2 = 6.69437999014e-3
 
 
+class SplatFormatError(ValueError):
+    """A splat file this reader cannot honestly turn into gaussians, and why.
+
+    A `ValueError`, not a `SystemExit`: this module is imported as a library by the
+    pipeline (`tools/pipeline/captures_bridge.py`), and a `SystemExit` raised inside a
+    stage escapes every `except Exception` on the way out — the run would die without the
+    stage that failed ever being named.
+    """
+
+
+#: Every scalar type a PLY header may name, and the numpy type it is.
+#:
+#: The short list this used to carry (`float/float32/double/uchar/int`) is why a
+#: PlayCanvas/SuperSplat compressed export died on an unhandled `KeyError: 'uint'`.
+PLY_SCALARS = {
+    "char": "i1",
+    "int8": "i1",
+    "uchar": "u1",
+    "uint8": "u1",
+    "short": "i2",
+    "int16": "i2",
+    "ushort": "u2",
+    "uint16": "u2",
+    "int": "i4",
+    "int32": "i4",
+    "uint": "u4",
+    "uint32": "u4",
+    "float": "f4",
+    "float32": "f4",
+    "double": "f8",
+    "float64": "f8",
+}
+
+_BYTE_ORDER = {"binary_little_endian": "<", "binary_big_endian": ">"}
+
+
+class _Element:
+    """One `element` block of a PLY header: its name, its count, its properties."""
+
+    def __init__(self, name: str, count: int) -> None:
+        self.name = name
+        self.count = count
+        self.types: list[str] = []
+        self.names: list[str] = []
+        self.lists: list[str] = []
+
+    def dtype(self, order: str) -> np.dtype:
+        return np.dtype(
+            [(n, order + PLY_SCALARS[t]) for n, t in zip(self.names, self.types, strict=True)]
+        )
+
+
+def _parse_header(path: Path, lines: list[str]) -> tuple[str, list[_Element]]:
+    """Byte order and the element blocks, in file order.
+
+    Properties belong to the element that most recently opened — which is the whole of
+    A0 #3's second half. Collecting them into one flat list meant a mesh PLY's trailing
+    `element face` contributed `property list uchar int vertex_indices` to the *vertex*
+    dtype, and the vertex block was then read at the wrong stride: no exception, just
+    `|x| max = 1.7e38` and a `ValueError: zero-size array to reduction` twenty lines
+    later, in `convert`.
+    """
+    if not lines or lines[0].strip() != "ply":
+        raise SplatFormatError(f"{path.name} does not start with 'ply'; it is not a PLY file")
+    order = ""
+    elements: list[_Element] = []
+    for line in lines:
+        parts = line.split()
+        if not parts:
+            continue
+        if parts[0] == "format":
+            fmt = parts[1] if len(parts) > 1 else ""
+            if fmt == "ascii":
+                raise SplatFormatError(
+                    f"{path.name} is an ASCII PLY, and only binary PLY is supported. "
+                    f"Re-export it as binary (in MeshLab: 'Binary encoding'), or convert "
+                    f"it with a tool that writes binary_little_endian"
+                )
+            order = _BYTE_ORDER.get(fmt, "")
+            if not order:
+                raise SplatFormatError(
+                    f"{path.name} declares format {fmt!r}; expected binary_little_endian, "
+                    f"binary_big_endian or ascii"
+                )
+        elif parts[0] == "element":
+            if len(parts) < 3 or not parts[2].lstrip("-").isdigit():
+                raise SplatFormatError(f"{path.name}: malformed element line {line!r}")
+            elements.append(_Element(parts[1], int(parts[2])))
+        elif parts[0] == "property":
+            if not elements:
+                raise SplatFormatError(f"{path.name}: property before any element: {line!r}")
+            if parts[1] == "list":
+                elements[-1].lists.append(parts[-1])
+                continue
+            if parts[1] not in PLY_SCALARS:
+                raise SplatFormatError(
+                    f"{path.name}: property {parts[-1]!r} of element "
+                    f"{elements[-1].name!r} has type {parts[1]!r}, which is not a PLY "
+                    f"scalar type. Known types: {', '.join(sorted(PLY_SCALARS))}"
+                )
+            elements[-1].types.append(parts[1])
+            elements[-1].names.append(parts[-1])
+    if not order:
+        raise SplatFormatError(f"{path.name}: the header has no `format` line")
+    return order, elements
+
+
 def read_ply(path: Path) -> dict[str, np.ndarray]:
-    """Binary little-endian 3DGS PLY: one vertex element with float32 properties."""
+    """Binary PLY, either byte order: the `vertex` element's properties as float32 arrays.
+
+    Elements before `vertex` are skipped by their own stride, so a compressed export
+    (PlayCanvas/SuperSplat write `element chunk` first) reads the vertices it means to;
+    elements after it are never read at all, so a mesh PLY's `element face` cannot leak
+    into the vertex dtype.
+    """
     with path.open("rb") as handle:
-        header: list[str] = []
+        lines: list[str] = []
         while True:
-            line = handle.readline().decode("ascii").strip()
-            header.append(line)
+            raw = handle.readline()
+            if not raw:
+                raise SplatFormatError(f"{path.name}: the header has no `end_header` line")
+            line = raw.decode("ascii", errors="replace").strip()
             if line == "end_header":
                 break
-        count = 0
-        names: list[str] = []
-        types: list[str] = []
-        for line in header:
-            parts = line.split()
-            if parts[:2] == ["element", "vertex"]:
-                count = int(parts[2])
-            elif parts[0] == "property" and count:
-                types.append(parts[1])
-                names.append(parts[2])
-        if "binary_little_endian" not in " ".join(header):
-            raise SystemExit("only binary little-endian PLY is supported")
-        fmt = {"float": "f4", "float32": "f4", "double": "f8", "uchar": "u1", "int": "i4"}
-        dtype = np.dtype([(n, "<" + fmt[t]) for n, t in zip(names, types, strict=True)])
-        data = np.frombuffer(handle.read(dtype.itemsize * count), dtype=dtype, count=count)
-    return {name: data[name].astype(np.float32) for name in names}
+            lines.append(line)
+            if len(lines) > 10000:
+                raise SplatFormatError(f"{path.name}: no `end_header` in the first 10000 lines")
+        order, elements = _parse_header(path, lines)
+        vertex = next((element for element in elements if element.name == "vertex"), None)
+        if vertex is None:
+            found = ", ".join(element.name for element in elements) or "none"
+            raise SplatFormatError(
+                f"{path.name} has no `element vertex`; its elements are: {found}"
+            )
+        if vertex.lists:
+            raise SplatFormatError(
+                f"{path.name}: the vertex element has list properties "
+                f"({', '.join(vertex.lists)}), which a gaussian splat never has"
+            )
+        if not vertex.names:
+            raise SplatFormatError(f"{path.name}: the vertex element declares no properties")
+        for earlier in elements:
+            if earlier is vertex:
+                break
+            if earlier.lists:
+                raise SplatFormatError(
+                    f"{path.name}: element {earlier.name!r} comes before the vertex element "
+                    f"and has a list property ({', '.join(earlier.lists)}), so the vertex "
+                    f"data cannot be located without parsing it"
+                )
+            handle.seek(earlier.dtype(order).itemsize * earlier.count, 1)
+        dtype = vertex.dtype(order)
+        wanted = dtype.itemsize * vertex.count
+        payload = handle.read(wanted)
+        if len(payload) < wanted:
+            raise SplatFormatError(
+                f"{path.name} is truncated: the header declares {vertex.count} vertices "
+                f"({wanted} bytes of vertex data) and only {len(payload)} bytes follow it"
+            )
+        data = np.frombuffer(payload, dtype=dtype, count=vertex.count)
+    return {name: data[name].astype(np.float32) for name in vertex.names}
 
 
 def sigmoid(x: np.ndarray) -> np.ndarray:
@@ -113,6 +249,78 @@ def pack_spz(
     )
     # mtime pinned so the same splat packs to the same bytes (git sees no change).
     return gzip.compress(raw, compresslevel=6, mtime=0)
+
+
+#: Alpha 0 and 255 are +/-inf as a logit, so the probability is clamped before the log.
+#:
+#: 0.25/255 is not an arbitrary epsilon: it is a quarter of a byte step, which is the
+#: largest clamp that still rounds back to the byte it came from (`0.25 -> 0`,
+#: `254.75 -> 255`). A half-step clamp would send 255 back as 254.
+SPZ_ALPHA_EPS = 0.25 / 255.0
+
+#: Position (3 x 24-bit), alpha, colour, log-scale and rotation bytes, per gaussian.
+SPZ_BYTES_PER_GAUSSIAN = 19
+
+
+def unpack_spz(blob: bytes) -> dict[str, np.ndarray]:
+    """The inverse of `pack_spz`: a `.spz` file back to the arrays `convert` consumes.
+
+    Scaniverse exports `.spz` natively and it is the format this module already writes,
+    so this is the whole of what Lane 1 needs to ingest a phone scan. Lossless where the
+    packing was (A0 measured position error exactly 0 round-tripping the committed
+    fixture, because `synthetic_tree.py` snaps positions to the 1/4096 grid), lossy where
+    it was not: `unpack -> pack` differs by one byte in 228,016 at a rotation rounding
+    boundary, so no SPZ round trip belongs inside a byte-identity gate.
+    """
+    raw = gzip.decompress(blob)
+    if len(raw) < 16:
+        raise SplatFormatError("not an SPZ file: fewer than 16 bytes after decompression")
+    magic, version, count, _sh, fractional_bits, _flags, _reserved = struct.unpack_from(
+        "<IIIBBBB", raw, 0
+    )
+    if magic != SPZ_MAGIC:
+        raise SplatFormatError(
+            f"not an SPZ file: magic is 0x{magic:08X}, expected 0x{SPZ_MAGIC:08X}"
+        )
+    if version != SPZ_VERSION:
+        raise SplatFormatError(f"SPZ version {version} is not supported; this reads version 2")
+    # 9 bytes of position (three 24-bit components), then one alpha, three colours, three
+    # log-scales and three rotation bytes: 19 per gaussian, after a 16-byte header. The
+    # committed fixture is 16 + 19 * 12000 = 228,016 bytes, which is the denominator in
+    # A0 #4's "one byte in 228,016".
+    wanted = 16 + SPZ_BYTES_PER_GAUSSIAN * count
+    if len(raw) < wanted:
+        raise SplatFormatError(
+            f"SPZ is truncated: {count} gaussians need {wanted} bytes and it has {len(raw)}"
+        )
+    body = np.frombuffer(raw, dtype=np.uint8, count=SPZ_BYTES_PER_GAUSSIAN * count, offset=16)
+    end = 9 * count
+    packed = body[:end].reshape(count, 3, 3).astype(np.uint32)
+    fixed = packed[:, :, 0] | (packed[:, :, 1] << 8) | (packed[:, :, 2] << 16)
+    # 24-bit two's complement, the same truncation `pack_spz` relies on going the other way.
+    signed = (fixed.astype(np.int64) ^ 0x800000) - 0x800000
+    xyz = (signed / float(1 << fractional_bits)).astype(np.float32)
+    alphas = body[end : end + count].astype(np.float32) / 255.0
+    colors = body[end + count : end + 4 * count].reshape(count, 3).astype(np.float32)
+    scales = body[end + 4 * count : end + 7 * count].reshape(count, 3).astype(np.float32)
+    rotations = body[end + 7 * count : end + 10 * count].reshape(count, 3).astype(np.float32)
+    sh0 = (colors - 127.5) / (SPZ_COLOR_SCALE * 255.0)
+    log_scales = scales / 16.0 - 10.0
+    quat_xyz = (rotations - 127.5) / 127.5
+    quat_w = np.sqrt(np.clip(1.0 - (quat_xyz**2).sum(axis=1), 0.0, 1.0))
+    alpha = np.clip(alphas, SPZ_ALPHA_EPS, 1.0 - SPZ_ALPHA_EPS)
+    opacity = np.log(alpha / (1.0 - alpha)).astype(np.float32)
+    columns = {f"f_dc_{i}": sh0[:, i] for i in range(3)}
+    columns.update({f"scale_{i}": log_scales[:, i] for i in range(3)})
+    columns.update({f"rot_{i + 1}": quat_xyz[:, i].astype(np.float32) for i in range(3)})
+    return {
+        "x": xyz[:, 0],
+        "y": xyz[:, 1],
+        "z": xyz[:, 2],
+        "opacity": opacity,
+        "rot_0": quat_w.astype(np.float32),
+        **columns,
+    }
 
 
 def build_glb(count: int, pmin: list[float], pmax: list[float], spz: bytes) -> bytes:

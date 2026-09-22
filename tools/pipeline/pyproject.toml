@@ -13,6 +13,7 @@ dependencies = [
   # ffmpeg is not preinstalled on ubuntu-latest and static-ffmpeg downloads binaries at
   # import, so the choice is pinned now and tests/test_ffmpeg.py holds it to it.
   "imageio-ffmpeg>=0.5",
+  "pillow>=10",
 ]
 
 [dependency-groups]

@@ -10,6 +10,17 @@ import pytest
 from recipe import Recipe
 from workdir import Workdir
 
+#: The committed 12,000-gaussian synthetic tree: a real 3DGS PLY, with a byte-identity
+#: gate of its own, so Lane 1 is tested against real input rather than a generated one.
+FIXTURE_PLY = (
+    Path(__file__).resolve().parents[3]
+    / "data"
+    / "tiles"
+    / "synthetic-tree"
+    / "source"
+    / "splat.ply"
+)
+
 
 def make_recipe(stages: list[dict[str, Any]], *, name: str = "test", inputs: list[str]) -> Recipe:
     return Recipe.from_dict({"name": name, "version": 1, "inputs": inputs, "stages": stages})

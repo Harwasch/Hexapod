@@ -130,9 +130,10 @@ def test_a_recipe_input_that_was_never_seeded_is_refused(tmp_path: Path) -> None
 
 
 def test_an_unimplemented_stage_says_which_step_lands_it(tmp_path: Path) -> None:
+    """Lane 1's stages are real now, so this asks one of Lane 2's, which is not."""
     from errors import StageFailedError
 
-    recipe = make_recipe([{"id": "normalize", "impl": "ingest_splat"}], inputs=["upload"])
+    recipe = make_recipe([{"id": "normalize", "impl": "ffmpeg_frames"}], inputs=["upload"])
 
-    with pytest.raises(StageFailedError, match="lands in A8"):
+    with pytest.raises(StageFailedError, match="lands in B2"):
         execute(recipe, seeded_workdir(tmp_path / "run"), _local())

@@ -8,7 +8,7 @@
 # `compensate` gains a `gpu:` block when its impl becomes `imc` (B3); asking for an L4 to
 # run `none` would be billing a GPU to do nothing.
 name: photo-reconstruct
-version: 1
+version: 2
 description: Reconstruct a splat from a raw capture, then package and register it.
 
 inputs: [upload]
@@ -50,7 +50,27 @@ stages:
     impl: splat_tiles
     params:
       max_gaussians: 400000
+      opacity_min: 0.02
       geometric_error: 2.0
+
+  # The same three stages Lane 1 ends in, reading the same `canonical.ply` and the same
+  # `splat/`. Both lanes end in one artifact set, so the console cannot tell which one
+  # made a site except by reading its manifest -- and `capture_manifest` folds in
+  # `train_metrics.json` here, which only this lane produces.
+  - id: thumbnail
+    impl: splat_thumbnail
+    params:
+      size: 512
+
+  - id: ground_samples
+    impl: splat_ground
+    params:
+      cell_m: 8.0
+      percentile: 5.0
+
+  - id: manifest
+    impl: capture_manifest
+    params: {}
 
   - id: register
     impl: catalog

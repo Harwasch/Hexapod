@@ -335,16 +335,20 @@ def test_the_register_stage_describes_and_the_worker_registers(
     assert registered.status is CaptureStatus.COMPLETE
     assert registered.site_id is not None
     assert registered.georef_method is not None and registered.georef_method.value == "manual"
-    # `manual_placement` writes scaleSource "source", which is not a ScaleSource. An
-    # unknown scale source is what `unresolved` means.
+    # `manual_placement` defaults its scale source to "unresolved", which is what it is:
+    # a hand-placed capture has said nothing about where its metric scale came from.
     assert registered.scale_source is not None
     assert registered.scale_source.value == "unresolved"
+    # No coordinate on the capture, so the recipe's own placement parameters stand.
     assert registered.uncertainty_m == pytest.approx(1.5)
 
     site = db.get(Site, registered.site_id)
     assert site is not None
-    assert site.slug == "orchard-run"
-    assert site.name == "The Orchard"
+    # The recipe says `slug: orchard-run, title: The Orchard`, and the capture wins: a
+    # recipe naming one slug is a recipe that can only ever make one site, and A7's
+    # fallback was the run id, so a console capture became a site named after a uuid.
+    assert site.slug == "orchard"
+    assert site.name == "Back paddock"
     assert len(site.assets) == 1
     assert str(site.assets[0].source["url"]).endswith(f"runs/{job.id}/package/splat/tileset.json")
     # And the tileset really is in the bucket at that key.

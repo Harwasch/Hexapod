@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -85,6 +85,33 @@ class Recipe:
             "inputs": list(self.inputs),
             "stages": [stage.to_dict() for stage in self.stages],
         }
+
+    def with_params(self, overrides: Mapping[str, Mapping[str, Any]]) -> Recipe:
+        """A copy of this recipe with per-stage parameter overrides merged over its own.
+
+        This is how a run carries the facts a recipe file cannot know: where the operator
+        placed this capture, what sensor took it, what the site should be called. The
+        recipe still decides which stages run and in what order -- an override can only
+        change a value a stage already reads.
+
+        Keyed by **stage id**, not by impl, because two stages may run the same impl. An
+        override naming a stage this recipe does not have is refused: a coordinate that
+        silently went nowhere would put the site in the Gulf of Guinea and say nothing.
+        """
+        unknown = sorted(set(overrides) - {stage.id for stage in self.stages})
+        if unknown:
+            known = ", ".join(stage.id for stage in self.stages)
+            raise RecipeError(
+                f"recipe {self.name!r}: parameter overrides name stage(s) "
+                f"{', '.join(unknown)}, which it does not have. Its stages are: {known}"
+            )
+        if not overrides:
+            return self
+        stages = tuple(
+            replace(stage, params={**stage.params, **dict(overrides.get(stage.id, {}))})
+            for stage in self.stages
+        )
+        return replace(self, stages=stages)
 
     @staticmethod
     def from_dict(document: Mapping[str, Any]) -> Recipe:

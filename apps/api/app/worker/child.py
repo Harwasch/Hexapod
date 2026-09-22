@@ -58,6 +58,9 @@ class ChildSpec:
     impl_modules: tuple[str, ...] = ()
     skip: tuple[str, ...] = ()
     attempts: dict[str, int] | None = None
+    #: Per-stage parameter overrides for this run — the capture's coordinate, its sensor,
+    #: and whatever `jobs.params` asked for. See `app.worker.params`.
+    params: dict[str, dict[str, Any]] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -68,6 +71,7 @@ class ChildSpec:
             "implModules": list(self.impl_modules),
             "skip": list(self.skip),
             "attempts": dict(self.attempts or {}),
+            "params": dict(self.params or {}),
         }
 
     def write(self, path: Path) -> Path:
@@ -85,6 +89,7 @@ class ChildSpec:
             impl_modules=tuple(str(name) for name in document.get("implModules", ())),
             skip=tuple(str(name) for name in document.get("skip", ())),
             attempts={str(k): int(v) for k, v in dict(document.get("attempts", {})).items()},
+            params={str(k): dict(v) for k, v in dict(document.get("params", {})).items()},
         )
 
 
@@ -208,7 +213,7 @@ def run(spec: ChildSpec) -> int:
     load_impl_modules(spec.impl_modules)
     reporter = _Reporter()
     try:
-        recipe = resolve_recipe(spec.recipe, spec.recipe_dir)
+        recipe = resolve_recipe(spec.recipe, spec.recipe_dir).with_params(spec.params or {})
         execute(
             recipe,
             Workdir(Path(spec.workdir)),

@@ -3,9 +3,13 @@
 Turns an uploaded capture into the artifact set the console needs, by running an ordered
 list of stages. This project is the executor, the stage registry, the artifact and workdir
 contract, and the runner seam. It is **not** the worker — that is `apps/api/app/worker/`,
-which imports this project as a library — and at this step most stages are stubs with
-honest contracts: they declare exactly what they read and write, and raise rather than
-pretend.
+which imports this project as a library.
+
+**Lane 1 is real.** `splat-ingest` runs end to end on a CPU: a `.ply` or `.spz` in,
+`canonical.ply`, a `splat/` tileset, a thumbnail, ground samples, a manifest and a
+registration out. Lane 2's GPU stages are still stubs with honest contracts — they declare
+exactly what they read and write, and raise with the step that lands them rather than
+pretending.
 
 It has no dependency on `apps/api`: no models, no database connection, no HTTP. The
 dependency runs one way only. A stage that wants something registered writes a file saying
@@ -13,9 +17,14 @@ so (`registration.json`) and the worker, which has the credentials and the sessi
 it.
 
 ```bash
-uv run python run_recipe.py splat-ingest --workdir /tmp/run-1 --seed upload=./capture.ply
+uv run python run_recipe.py splat-ingest --workdir /tmp/run-1 --runner local \
+  --seed upload=./capture.ply
 uv run python run_recipe.py photo-reconstruct --workdir /tmp/run-2 --plan-only
 ```
+
+The recipe's placement parameters are the deployment's defaults; a run overrides them per
+capture (see [Parameters per run](#parameters-per-run)), which is how the worker hands a
+stage the coordinate the operator dropped the capture at.
 
 ## A recipe is an ordered list of stages, not a DAG
 
@@ -209,25 +218,154 @@ is a set of scripts, not a distribution — so it cannot be a path dependency an
 nothing to install.
 
 `captures_bridge.py` is therefore a `sys.path` insertion, in one module, computed from that
-file's own location. Two things keep it honest rather than hidden:
+file's own location — at import rather than lazily, because `SplatFormatError` is caught by
+name and an exception class cannot be imported inside a function. It re-exports `read_ply`,
+`unpack_spz`, `pack_spz` and `convert`, which is the whole of what Lane 1 needs from the
+sibling project. Two things keep it honest rather than hidden:
 
 - `mypy_path = ["../captures"]`, so mypy resolves `splat_tiles` to the real file and
   type-checks every call into it (with `follow_imports = "silent"`, since that project does
   not run mypy and its errors are not this project's to fix);
 - `tests/test_captures_bridge.py` runs the real `convert()` on a generated PLY and asserts
   the files it writes are exactly the `required_members` the `splat` artifact declares — the
-  same declaration StubRunner fabricates from. A8 swaps the stub body for
-  `splat_tiles_convert(...)` and nothing else changes.
+  same declaration StubRunner fabricates from.
+
+**What A8 changed in `tools/captures` and what it did not.** `splat_tiles.read_ply` was
+rewritten and `unpack_spz` added; `convert`, `pack_spz` and `build_glb` were not touched at
+all. That distinction is the fixture byte-identity gate: CI runs
+`git diff --exit-code -- data/tiles/synthetic-tree`, so what that file _writes_ is frozen
+and what it _reads_ is not. And no SPZ round trip may sit inside that gate — A0 #4 measured
+`unpack → pack` differing by one byte in 228,016 at a rotation rounding boundary, so
+`tests/test_spz_ingest.py` generates its `.spz` from the committed PLY rather than
+committing one.
+
+`apps/api` carries `numpy` and `pillow` for the same reason it carries the pipeline on its
+path: the worker runs these stages in that environment. Nothing under `app/api` or
+`app/services` imports either.
 
 ## Recipes shipped
 
-- **`splat-ingest`** — Lane 1, no GPU: `normalize → georeference → package → register`.
-  A8 makes each stage real and inserts `thumbnail`, `ground_samples` and `manifest` before
-  `register`, which is a recipe edit and three decorators.
+- **`splat-ingest`** — Lane 1, no GPU: `normalize → georeference → package → thumbnail →
+ground_samples → manifest → register`. Every stage is real.
 - **`photo-reconstruct`** — Lane 2: `normalize → pose → mask → train → compensate →
-georeference → package → register`. Only `train` declares `gpu:`; `compensate` gains one
-  when its impl becomes `imc` (B3), since asking for an L4 to run `none` would be billing a
-  GPU to do nothing.
+georeference → package → thumbnail → ground_samples → manifest → register`. Only `train`
+  declares `gpu:`; `compensate` gains one when its impl becomes `imc` (B3), since asking
+  for an L4 to run `none` would be billing a GPU to do nothing. Both lanes end in the same
+  artifact set, so the console cannot tell which one made a site except by reading its
+  manifest.
+
+`thumbnail`, `ground_samples` and `manifest` were added in A8 as **a recipe edit and three
+decorators**: `stages.py` gained three `@stage_impl`s and three `ArtifactDecl`s, and the
+recipes gained three entries. `executor.py`, `runners.py`, `plan.py` and `workdir.py` are
+untouched by them, and `StubRunner` fabricates the new artifacts with no edit of its own.
+`tests/test_lane1.py` asserts that rather than leaving it as a claim.
+
+## Lane 1
+
+```
+upload/capture.ply ──▶ canonical.ply ──▶ splat/ ──▶ thumbnail.jpg
+      or .spz            source_meta       ▲        ground_samples.json
+                              │            │            manifest.json
+                         georef.json ──────┘        registration.json
+```
+
+### What arrives, and what is refused
+
+`normalize` (`ingest_splat`) reads a **3DGS PLY** (Scaniverse, Polycam, Postshot, Luma,
+OpenSplat, gsplat) or an **`.spz`** — the format Scaniverse exports natively and the one
+`splat_tiles.pack_spz` already writes, so ingesting it is a 38-line inverse and nothing
+else. A PLY that carries `red/green/blue/alpha` instead of `f_dc_*`/`opacity` is converted;
+`f_rest_*` is read and dropped, because `convert` never reads it and carrying it would
+quadruple `canonical.ply` for nothing.
+
+Everything else **refuses with a message that names the file and the problem** rather than
+producing a splat-shaped nothing: ASCII PLY, a vertex element with list properties, a
+truncated file, an `.spz` with the wrong magic, a compressed PlayCanvas/SuperSplat export
+(named, with the `ply_compressed` impl that will read it), and an upload with no splat in
+it at all. `tests/test_ply_variants.py` holds one case per shape.
+
+Two of those were A0 #3, and they had to be fixed **together** in
+`tools/captures/splat_tiles.py`'s reader: a type map that knew five of PLY's sixteen scalar
+type names (so a compressed export was an unhandled `KeyError: 'uint'`), and a header
+parser that kept collecting `property` lines past the second `element` (so a mesh PLY's
+trailing `element face` joined the vertex dtype, every gaussian was read at the wrong
+stride, and the read came back **silently** with `|x| max = 1.7e38`). Fixing only the type
+map would have turned the loud failure into the silent one.
+
+### `ground_samples.json`
+
+The capture's own ground height per grid cell — half of the height-offset subtraction a
+person does by hand today. Nothing consumes it yet: B4 is where the console samples terrain
+at the same longitude and latitude and takes the median difference.
+
+```json
+{
+  "frame": "enu",
+  "origin": { "lat": 28.0389, "lon": -82.6966, "height": 22.5 },
+  "cellM": 2.0,
+  "percentile": 5.0,
+  "method": "p5 of the gaussian up-coordinate in each 2 m cell",
+  "medianZ": 3.941,
+  "samples": [{ "lon": -82.6966, "lat": 28.0389, "z": 1.211, "n": 5156 }]
+}
+```
+
+`{lon, lat, z, n}` is the shape `tools/captures/ground_samples.py` already prints, so B4
+reads one shape rather than two. `z` is the capture's own up axis in metres relative to the
+placed origin, so a sample's ellipsoid height is `origin.height + z`. The cells are ranked
+by how many gaussians they hold and tie-broken by position — deterministic, unlike the
+sibling script, which picks cells with a seeded RNG.
+
+`method` is spelled out because a low percentile of a _tree_ is canopy, not ground: this is
+the capture's own low surface per cell, and it is the ground only where the capture has one.
+
+### `manifest.json`
+
+Sensor, date, resolution, georeference method, scale source, uncertainty, licence and the
+tools that produced everything else — the row of the plan's artifact table that is easiest
+to skip and the one that lets the inspector stay honest.
+
+Three things it says plainly:
+
+- **`georeference.uncertaintyM` is 10 m, not 0**, for a capture placed by hand, and
+  `scaleSource` is `unresolved` until somebody says where metric scale came from. A
+  hand-placed capture with zero uncertainty is the inspector claiming a survey.
+- **`resolution.gsdM` is `null`.** A splat has no pixels behind it. The honest analogue is
+  `medianGaussianM`, the median gaussian radius, and it is reported instead of inventing a
+  ground sample distance for a phone scan.
+- **`splat.gaussiansPackaged` and `bboxLocalM` are read back out of the GLB that was
+  actually written**, not out of the packer's return value, so the manifest and the tileset
+  cannot disagree.
+
+It carries **no wall clock and no run id**. `capturedAt` is the capture's date; when the run
+happened is already in `step.json` and in the job row, and putting it here is the one thing
+that would stop two runs over the same bytes producing byte-identical outputs. `tools` names
+the pipeline version, numpy, Pillow, and the **sha256 of `splat_tiles.py`** — that project is
+`package = false` and has no version number, and a checksum is a more useful thing to compare
+two runs on than a version string nobody bumps.
+
+The whole manifest rides along in `registration.json`, so the worker writes it into the
+site's metadata without fetching a second file, and `bboxLocalM` is what gives the site a
+boundary the size of the capture instead of A7's 60 m placeholder square.
+
+## Parameters per run
+
+A recipe is a deployment-level document. It can say a capture is placed by hand; it cannot
+say _where this one_ was placed, what took it, or what the site should be called.
+
+```python
+placed = {"georeference": {"lat": 51.5007, "lon": -0.1246}}
+recipe = load_recipe("splat-ingest").with_params(placed)
+```
+
+Merged over the recipe's own parameters, keyed by **stage id** (two stages may run the same
+impl), and an override naming a stage the recipe does not have is **refused** — a coordinate
+that silently went nowhere would put the site in the Gulf of Guinea and say nothing.
+
+The worker resolves these per run in `app/worker/params.py`: the capture's coordinate goes
+to whichever stage places captures by hand, its sensor and date to whichever stage produces
+`source_meta.json`, its slug and name to `catalog`, and `jobs.params` — recorded since A2
+and ignored until A8 — wins over all of them.
 
 ## Verify
 

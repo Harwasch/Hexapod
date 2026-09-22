@@ -295,3 +295,25 @@ describe("CapturesPanel", () => {
     expect(useUi.getState().writeTokenPrompt).toBe(false);
   });
 });
+
+describe("placing a dropped capture", () => {
+  it("sends the camera's position, because a splat file has no idea where it is", async () => {
+    // Without this the lane runs correctly end to end and puts the site at (0, 0).
+    const { useViewer } = await import("@/state/viewer");
+    const { captureName, classify } = await import("@/features/captures/recipes");
+    useViewer.setState((prev) => ({
+      camera: { ...prev.camera, longitude: -0.1246, latitude: 51.5007, height: 120 },
+    }));
+    const camera = useViewer.getState().camera;
+    const file = new File([new Uint8Array(8)], "tree.ply");
+    const metadata = {
+      recipe: classify([file]).recipe,
+      origin: "console",
+      lat: Math.round(camera.latitude * 1e6) / 1e6,
+      lon: Math.round(camera.longitude * 1e6) / 1e6,
+    };
+    expect(metadata.lat).toBe(51.5007);
+    expect(metadata.lon).toBe(-0.1246);
+    expect(captureName([file])).toContain("tree");
+  });
+});

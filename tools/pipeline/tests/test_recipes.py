@@ -73,3 +73,26 @@ def test_every_shipped_recipe_is_valid() -> None:
     assert found == sorted(RECIPES)
     for name in found:
         plan_recipe(load_recipe(name))
+
+
+def test_parameter_overrides_merge_over_a_recipes_own() -> None:
+    """How a run carries what the recipe file cannot know: where this capture is."""
+    recipe = load_recipe("splat-ingest")
+
+    placed = recipe.with_params({"georeference": {"lat": 51.5, "lon": -0.12}})
+
+    before = {stage.id: dict(stage.params) for stage in recipe.stages}
+    after = {stage.id: dict(stage.params) for stage in placed.stages}
+    assert after["georeference"]["lat"] == 51.5
+    # Merged, not replaced: the recipe's own uncertainty survives an override of the
+    # coordinate, and every other stage is untouched.
+    assert after["georeference"]["uncertainty_m"] == before["georeference"]["uncertainty_m"]
+    assert after["package"] == before["package"]
+    assert before["georeference"]["lat"] == 0.0, "the original recipe is not mutated"
+
+
+def test_an_override_for_a_stage_the_recipe_does_not_have_is_refused() -> None:
+    from errors import RecipeError
+
+    with pytest.raises(RecipeError, match="does not have"):
+        load_recipe("splat-ingest").with_params({"trian": {"iterations": 1}})

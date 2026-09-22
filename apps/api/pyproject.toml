@@ -19,6 +19,12 @@ dependencies = [
   "python-multipart>=0.0.20",
   "anthropic>=1.6.0",
   "segno>=1.6",
+  # Not the API's: the worker's. `app/worker/` runs `tools/pipeline`'s stages in this
+  # environment (see app/worker/pipeline_bridge.py), and since A8 those stages read
+  # splats with numpy and draw thumbnails with Pillow. Kept in step with
+  # tools/pipeline/pyproject.toml; nothing under app/api or app/services imports either.
+  "numpy>=1.26",
+  "pillow>=10",
 ]
 
 [dependency-groups]
@@ -63,8 +69,10 @@ exclude = ["\\.venv", "alembic/versions"]
 # tools/pipeline is a flat uv project with `package = false`, so it cannot be a path
 # dependency and there is nothing to install. app/worker/pipeline_bridge.py puts it on
 # sys.path at runtime; this is how mypy sees the same files, so every call across the
-# seam is type-checked rather than Any.
-mypy_path = ["../../tools/pipeline"]
+# seam is type-checked rather than Any. `tools/captures` is on the path for the same
+# reason one step further out: since A8 the pipeline's stages read splats through
+# captures_bridge, and without this mypy would stop at that import.
+mypy_path = ["../../tools/pipeline", "../../tools/captures"]
 
 [[tool.mypy.overrides]]
 # Check calls into the pipeline against its real signatures, but do not report errors
@@ -72,13 +80,16 @@ mypy_path = ["../../tools/pipeline"]
 # project's to fix (the same arrangement tools/pipeline has with tools/captures).
 module = [
   "artifacts",
+  "captures_bridge",
   "contracts",
   "errors",
   "executor",
+  "gaussians",
   "plan",
   "recipe",
   "registry",
   "runners",
+  "splat_tiles",
   "stages",
   "workdir",
 ]

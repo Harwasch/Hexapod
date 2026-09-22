@@ -44,7 +44,7 @@ from app.models import Capture, Job, JobStep
 from app.models.enums import CaptureStatus, RunStatus, UploadStatus
 from app.storage import ObjectStorage
 from app.storage.null import StorageUnavailableError
-from app.worker import claim, events, outputs, registration, steps
+from app.worker import claim, events, outputs, params, registration, steps
 from app.worker.child import ChildSpec, load_impl_modules, resolve_recipe
 from app.worker.config import WorkerConfig
 from app.worker.events import Event
@@ -142,9 +142,11 @@ class JobSupervisor:
             load_impl_modules(self._config.impl_modules)
             recipe = resolve_recipe(job.recipe, self._recipe_dir())
             plan = plan_recipe(recipe)
-        except PipelineError as error:
+            stage_params = self._stage_params(db, job, plan)
+        except (PipelineError, ValueError) as error:
             # A recipe that will not resolve will not resolve on the next attempt either,
-            # so this dead-letters immediately rather than burning the attempt budget.
+            # and neither will a `params` of the wrong shape, so this dead-letters
+            # immediately rather than burning the attempt budget.
             return self._dead_letter(db, job, f"recipe {job.recipe!r} did not resolve: {error}")
         workdir_root = self._config.workdir_for(job_id)
         try:
@@ -165,7 +167,7 @@ class JobSupervisor:
                     f"stage {stage_id!r} has been attempted {attempt - 1} times without "
                     f"completing and will not be retried again{last}",
                 )
-            state = self._supervise(db, job, workdir_root, completed, attempts, stop)
+            state = self._supervise(db, job, workdir_root, completed, attempts, stage_params, stop)
             if state.outcome == "stopped":
                 # This worker is shutting down. Let go of the lease so the next one can
                 # take the job now rather than waiting it out; the stages that finished
@@ -204,6 +206,7 @@ class JobSupervisor:
         workdir_root: Path,
         completed: set[str],
         attempts: dict[str, int],
+        stage_params: dict[str, dict[str, Any]],
         stop: threading.Event | None = None,
     ) -> _RunState:
         spec_path = ChildSpec(
@@ -214,6 +217,7 @@ class JobSupervisor:
             impl_modules=self._config.impl_modules,
             skip=tuple(sorted(completed)),
             attempts=attempts,
+            params=stage_params,
         ).write(workdir_root / "child.json")
         process = subprocess.Popen(  # noqa: S603 - fixed argv, no shell, our own module
             [sys.executable, "-u", "-m", "app.worker.child", str(spec_path)],
@@ -349,6 +353,7 @@ class JobSupervisor:
                 job_id=job.id,
                 registration=document,
                 tiles_stage_id=state.stage_producing("splat"),
+                thumbnail_stage_id=state.stage_producing("thumbnail.jpg"),
             )
         elif capture is not None:
             # A recipe with no `register` stage still finished; the capture is processed
@@ -403,6 +408,17 @@ class JobSupervisor:
         return job.status is RunStatus.IN_PROGRESS and job.claimed_by == self._config.worker_id
 
     # --- helpers ------------------------------------------------------------------
+
+    def _stage_params(self, db: Session, job: Job, plan: Plan) -> dict[str, dict[str, Any]]:
+        """What this capture adds to the recipe's parameters: where it is, what took it."""
+        capture = db.get(Capture, job.capture_id)
+        if capture is None:
+            return {}
+        resolved = params.stage_params(plan, capture, job)
+        # Refused here rather than in the child, so a `params` naming a stage the recipe
+        # does not have dead-letters with the recipe error instead of a failed run.
+        plan.recipe.with_params(resolved)
+        return resolved
 
     def _recipe_dir(self) -> str | None:
         return str(self._config.recipe_dir) if self._config.recipe_dir else None

@@ -4,8 +4,8 @@
         --runner stub --seed upload=./fixture.ply
 
 The worker (A7) calls `executor.execute_recipe` directly rather than shelling out to this;
-this exists so a recipe can be run and inspected by hand, which is how A8 and B2 will
-develop their stages.
+this exists so a recipe can be run and inspected by hand, which is how A8 developed
+Lane 1's stages and how B2 will develop Lane 2's.
 """
 
 from __future__ import annotations
