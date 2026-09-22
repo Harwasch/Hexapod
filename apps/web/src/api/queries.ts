@@ -28,8 +28,10 @@ import type {
   SiteSummary,
 } from "@twin/contracts";
 
+import { env } from "@/app/env";
+
 import { api, isOffline, unwrap } from "./client";
-import { builtinDemoSite, builtinLayers, toSummary } from "./fallback";
+import { builtinDemoSite, builtinLayers, fetchOfflineCatalog, toSummary } from "./fallback";
 
 export const queryKeys = {
   health: ["health"] as const,
@@ -37,6 +39,7 @@ export const queryKeys = {
   site: (id: string) => ["sites", id] as const,
   layers: ["layers"] as const,
   ion: ["ion"] as const,
+  offlineCatalog: ["offline-catalog"] as const,
   captures: ["captures"] as const,
   capture: (id: string) => ["captures", id] as const,
   jobs: ["jobs"] as const,
@@ -65,6 +68,28 @@ function withFallback<T>(query: UseQueryResult<T>, fallback: () => T): CatalogRe
 
 const RETRY = { retry: 1, retryDelay: 800, staleTime: 30_000 } as const;
 
+/**
+ * The captures published to object storage, fetched only once the API has actually
+ * failed.
+ *
+ * `enabled` is the whole point: a healthy deployment never requests this file, so the
+ * offline catalog costs nothing until it is the only catalog there is. It is not retried
+ * either — if the bucket is unreachable too, the built-in demo is the honest answer and a
+ * retry loop would only delay it. With no `VITE_OFFLINE_CATALOG_URL` configured (a local
+ * checkout with no bucket) there is nothing to fetch and the query never runs.
+ */
+function useOfflineSites(enabled: boolean): Site[] {
+  const url = env.offlineCatalogUrl;
+  const query = useQuery({
+    queryKey: queryKeys.offlineCatalog,
+    queryFn: ({ signal }) => fetchOfflineCatalog(url ?? "", signal),
+    enabled: enabled && Boolean(url),
+    retry: false,
+    staleTime: Infinity,
+  });
+  return query.data ?? [];
+}
+
 export function useHealth() {
   return useQuery({
     queryKey: queryKeys.health,
@@ -80,7 +105,11 @@ export function useSites(): CatalogResult<SiteSummary[]> {
     queryFn: () => unwrap<SiteSummary[]>(api.GET("/api/v1/sites")),
     ...RETRY,
   });
-  return withFallback(query, () => [toSummary(builtinDemoSite())]);
+  const captures = useOfflineSites(query.isError && isOffline(query.error));
+  return withFallback(query, () => [
+    toSummary(builtinDemoSite()),
+    ...captures.map((site) => toSummary(site)),
+  ]);
 }
 
 export function useSite(id: string | null): CatalogResult<Site | null> {
@@ -91,6 +120,7 @@ export function useSite(id: string | null): CatalogResult<Site | null> {
     enabled: Boolean(id) && !id?.startsWith("builtin-"),
     ...RETRY,
   });
+  const captures = useOfflineSites(query.isError && isOffline(query.error));
   if (id?.startsWith("builtin-")) {
     return {
       data: builtinDemoSite(),
@@ -100,7 +130,12 @@ export function useSite(id: string | null): CatalogResult<Site | null> {
       refetch: () => Promise.resolve(null),
     };
   }
-  const result = withFallback(query, () => (id ? builtinDemoSite() : null));
+  // A published capture keeps its real id, so the same id that resolved against the API
+  // resolves against the catalog in the bucket — the site the user was looking at does not
+  // change identity when the API goes away.
+  const result = withFallback(query, () =>
+    id ? (captures.find((site) => site.id === id) ?? builtinDemoSite()) : null,
+  );
   return { ...result, data: id ? result.data : null };
 }
 

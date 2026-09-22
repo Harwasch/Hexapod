@@ -75,6 +75,11 @@ export interface LoadedSiteAsset {
   readonly representation: Representation;
   /** Where the tileset was fetched from, or null for an ion-hosted asset. */
   readonly sourceUrl: string | null;
+  /**
+   * The catalog's Living Survey rig claim for this asset, relative to `sourceUrl`, or null.
+   * Read, never probed — see `livingRigs.ts`.
+   */
+  readonly rigPath: string | null;
   /** Whether the site is engaged, so the tileset is actually drawn. */
   readonly shown: boolean;
   readonly tileset: Cesium3DTileset;
@@ -199,6 +204,7 @@ export class SiteManager {
         assetName: handle.asset.name,
         representation: handle.asset.representation,
         sourceUrl: handle.asset.source.type === "3d-tiles-url" ? handle.asset.source.url : null,
+        rigPath: handle.asset.renderConfig.rigUrl ?? null,
         shown: tileset.show,
         tileset,
       });

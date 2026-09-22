@@ -16,6 +16,7 @@ declare global {
     readonly VITE_DEFAULT_MESH_ASSET_ID?: string;
     readonly VITE_DEFAULT_POINTCLOUD_ASSET_ID?: string;
     readonly VITE_API_BASE_URL?: string;
+    readonly VITE_OFFLINE_CATALOG_URL?: string;
     readonly VITE_ENABLE_PHOTOREALISTIC?: string;
     readonly VITE_ENABLE_DEV_TOOLS?: string;
   }

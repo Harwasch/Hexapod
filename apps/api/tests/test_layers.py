@@ -12,7 +12,7 @@ from app.seed.captures import capture_sites
 def test_seed_is_idempotent_and_lists_layers(client: TestClient, db: Session) -> None:
     first = seed(db)
     second = seed(db)
-    # demo + 5 comparison sites + one per capture in data/tiles/captures.json
+    # demo + 5 comparison sites + one per capture in app/seed/legacy_captures.json
     captures = len(capture_sites(get_settings()))
     assert first["layers"] == 10 and first["sites"] == 6 + captures
     assert second == {"sites": 0, "layers": 0}

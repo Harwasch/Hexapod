@@ -69,6 +69,18 @@ class RenderConfig(CamelModel):
     # the model's lowest point on it (plus height_offset_m). Phone scans and downloaded
     # objects rarely carry a usable ellipsoid height; this makes their placement trivial.
     clamp_to_ground: bool = False
+    # Where this asset's Living Survey motion rig sits, relative to its tileset URL
+    # (`../source/rig.json` for everything tools/captures writes today). None means this
+    # asset does not move, which is the answer for every asset that is not a single
+    # object someone measured.
+    #
+    # This is a claim the catalog makes, not a file the viewer goes looking for. It
+    # replaces the hand-maintained LIVING_RIGS table that used to be compiled into the web
+    # bundle: same claim, same absence of any probe, but written where a capture is
+    # registered rather than in a frontend source file that had to be edited and rebuilt
+    # for every new capture. Relative on purpose -- the rig travels with the tiles, so the
+    # same value is correct whether they are served from the dev static mount or a bucket.
+    rig_url: str | None = Field(default=None, max_length=500)
 
 
 class AssetBase(CamelModel):

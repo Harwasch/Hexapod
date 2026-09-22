@@ -27,6 +27,11 @@ export interface AppEnv {
   defaultMeshAssetId: number | undefined;
   defaultPointCloudAssetId: number | undefined;
   apiBaseUrl: string;
+  /**
+   * Where `catalog.json` is published, for the offline catalog. Public by construction —
+   * it is the bucket's public read URL, the same origin the tiles themselves come from.
+   */
+  offlineCatalogUrl: string | undefined;
   photorealisticEnabled: boolean;
   devToolsEnabled: boolean;
   isDev: boolean;
@@ -39,6 +44,7 @@ export function readEnv(source: ImportMetaEnv = import.meta.env): AppEnv {
     defaultMeshAssetId: optionalAssetId(source.VITE_DEFAULT_MESH_ASSET_ID),
     defaultPointCloudAssetId: optionalAssetId(source.VITE_DEFAULT_POINTCLOUD_ASSET_ID),
     apiBaseUrl: optionalString(source.VITE_API_BASE_URL) ?? "",
+    offlineCatalogUrl: optionalString(source.VITE_OFFLINE_CATALOG_URL),
     // On unless switched off: the ion token in use must have access to Google's tiles.
     photorealisticEnabled: flag(source.VITE_ENABLE_PHOTOREALISTIC, true),
     devToolsEnabled: source.DEV || flag(source.VITE_ENABLE_DEV_TOOLS),

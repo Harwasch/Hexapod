@@ -1,5 +1,13 @@
 # Production image for the catalog API (apps/api).
 # Build from the repo root:  docker build -f infra/api.Dockerfile -t twin-api .
+#
+# `apps/api/` is deliberately the whole build context that ends up in the image, and
+# `data/tiles` is deliberately not in it. Until A9 that was a live defect rather than a
+# decision: the API's `/api/v1/tiles` StaticFiles mount reads `data/tiles`, which does not
+# exist here, so the mount was silently absent and every capture 404'd in the one
+# deployment path docs/DEPLOYMENT.md describes. A9 did not fix that by copying 104 MB of
+# tiles into the image -- it moved them to object storage, so a deployment's capture URLs
+# point at the bucket and this image never needs them. See app/seed/captures.tiles_base_url.
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS builder
 WORKDIR /app
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy

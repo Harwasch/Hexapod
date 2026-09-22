@@ -2350,6 +2350,8 @@ export interface components {
             /** Maximumscreenspaceerror */
             maximumScreenSpaceError?: number | null;
             pointCloudShading?: components["schemas"]["PointCloudShading"] | null;
+            /** Rigurl */
+            rigUrl?: string | null;
             /**
              * Screenspaceerrorscale
              * @default 1

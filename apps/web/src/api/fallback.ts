@@ -1,9 +1,28 @@
 /**
- * Built-in catalog used when the API is unreachable.
+ * The catalog used when the API is unreachable.
  *
- * This mirrors the database seed (apps/api/app/seed/data.py) for the public
- * Cesium demo and a minimal open-data stack, so the globe stays useful and
- * the demo still works. The UI labels this state explicitly.
+ * **What "offline" means changed in A9, because what is reachable changed.** This file
+ * used to hold nothing but Cesium ion asset ids, and that was not an oversight: a
+ * capture's tiles were a `StaticFiles` mount *on the API*, so an API that was down took
+ * its tiles down with it. Listing a local capture here would have produced a site whose
+ * every asset 404s — a worse answer than not listing it.
+ *
+ * Now the tiles live in object storage, behind a different host that does not go down
+ * with this API. So offline splits into two questions that used to have one answer:
+ *
+ *  * **are the bytes reachable?** Yes — the bucket, or the CDN in front of it, is
+ *    independent of the catalog service.
+ *  * **is the list of captures knowable?** Only if something published it, because that
+ *    list lives in the database, which is exactly what is unreachable. So
+ *    `app/seed/publish.py` writes `catalog.json` next to the tiles, and this module
+ *    fetches it. It is data published by the same step that publishes the tiles, not a
+ *    table someone keeps in step by hand.
+ *
+ * What stays hard-coded is the two things that are true with no deployment at all: the
+ * public Cesium demo site and the open-data layer stack (mirroring
+ * apps/api/app/seed/data.py), so a fresh checkout with no bucket still shows a globe with
+ * something on it. The UI labels this whole state explicitly, and `builtin: true` keeps
+ * every write form disabled — an offline capture is readable, never editable.
  */
 
 import type { Layer, Site, SiteSummary } from "@twin/contracts";
@@ -307,4 +326,42 @@ export function builtinLayers(): Layer[] {
       defaultVisible: false,
     },
   ];
+}
+
+/**
+ * The published catalog: every site the API knew about when `catalog.json` was last
+ * written, reachable while the API is not.
+ *
+ * Parsed defensively rather than cast. It is JSON from a bucket, written by a different
+ * process at a different time, and the one thing worse than showing no captures offline
+ * would be crashing the globe over a stale document — so anything unrecognisable yields
+ * an empty list and the built-in demo stands alone.
+ */
+export async function fetchOfflineCatalog(url: string, signal?: AbortSignal): Promise<Site[]> {
+  const response = await fetch(url, { signal });
+  if (!response.ok) throw new Error(`offline catalog: ${String(response.status)}`);
+  return readOfflineCatalog(await response.json());
+}
+
+/** The parsing half of {@link fetchOfflineCatalog}, separated so it can be tested directly. */
+export function readOfflineCatalog(document: unknown): Site[] {
+  if (typeof document !== "object" || document === null) return [];
+  const sites: unknown = (document as { sites?: unknown }).sites;
+  if (!Array.isArray(sites)) return [];
+  return sites.filter(isSiteish);
+}
+
+function isSiteish(value: unknown): value is Site {
+  if (typeof value !== "object" || value === null) return false;
+  const site = value as Partial<Site>;
+  return (
+    typeof site.id === "string" &&
+    typeof site.slug === "string" &&
+    typeof site.name === "string" &&
+    Array.isArray(site.assets) &&
+    typeof site.boundary === "object" &&
+    site.boundary !== null &&
+    typeof site.centroid === "object" &&
+    site.centroid !== null
+  );
 }

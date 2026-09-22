@@ -223,7 +223,7 @@ export class LivingSurveyManager {
     if (this.#destroyed) return;
     const live = new Map<string, { slug: string; siteId: string; rigUrl: string }>();
     for (const asset of this.#sites.loadedAssets()) {
-      const rigUrl = rigUrlFor(asset.siteSlug, asset.representation, asset.sourceUrl);
+      const rigUrl = rigUrlFor(asset.rigPath, asset.representation, asset.sourceUrl);
       if (rigUrl === null) continue;
       live.set(asset.assetId, { slug: asset.siteSlug, siteId: asset.siteId, rigUrl });
     }

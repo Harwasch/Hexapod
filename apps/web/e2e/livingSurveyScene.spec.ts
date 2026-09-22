@@ -36,7 +36,7 @@ import { expect, test, type Page } from "@playwright/test";
 /** `data/tiles/synthetic-tree`, from `apps/web/e2e/`. */
 const TILE_ROOT = resolve(process.cwd(), "../../data/tiles/synthetic-tree");
 
-/** Where `synthetic_tree.py` places the fixture, and where `captures.json` registers it. */
+/** Where `synthetic_tree.py` places the fixture, and where the seed archive registers it. */
 const LONGITUDE = -82.6966;
 const LATITUDE = 28.0389;
 

@@ -1,42 +1,47 @@
 /**
  * Which captures have a motion rig, and where it sits.
  *
- * An explicit table rather than a probe. Asking every splat site for a `source/rig.json` it
- * almost certainly does not have would mean a 404 per site per load, and — worse — it would make
- * "this site can move" a property of a missing file rather than a decision someone made. A rig
- * is a claim about a capture; claims get written down.
+ * **Still an explicit claim, no longer an explicit table.** Until A9 this file held
+ * `LIVING_RIGS`, a hand-written slug → rig-path map compiled into the bundle, and its
+ * comment defended two properties worth keeping:
  *
- * The rig lives beside the tileset in the capture folder the API serves statically
- * (`data/tiles/<slug>/`), so the path is relative to the tileset URL. Nothing here reaches the
- * network; resolution is pure string work and unit-tested.
+ *  1. **No probe.** Asking every splat site for a `source/rig.json` it almost certainly
+ *     does not have would mean a 404 per site per load.
+ *  2. **A rig is a claim, not an accident.** "This site can move" must be a decision
+ *     someone made and wrote down, not the side effect of a file happening to exist.
+ *
+ * Both survive. The claim moved to where a capture is described — `renderConfig.rigUrl`
+ * on the asset, written by whoever registered it (`app/schemas/asset.py`) — so it is
+ * still written down, still read rather than discovered, and still costs no request for
+ * a site that has no rig. What it stopped costing is a frontend rebuild per capture,
+ * which is the thing a table in a bundle cannot avoid and the thing this sprint exists
+ * to remove.
+ *
+ * The path is relative to the tileset URL, so the rig travels with the tiles whether
+ * they are served from the development static mount or from a bucket. Nothing here
+ * reaches the network; resolution is pure string work and unit-tested.
  */
-
-/** Rig path per capture slug, relative to that capture's tileset URL. */
-export const LIVING_RIGS: Readonly<Record<string, string>> = {
-  // Emitted by tools/captures/synthetic_tree.py beside the tiles it converts.
-  "synthetic-tree": "../source/rig.json",
-  "synthetic-tree-large": "../source/rig.json",
-};
 
 /**
  * The rig URL for a loaded splat asset, or null when that capture has no rig.
  *
- * Only Gaussian splats can deform: the deformer rewrites a splat attribute texture, and a mesh
- * or a point cloud has nothing of the kind. An ion-hosted asset has no URL to resolve against
- * and is therefore never living either — `sourceUrl` is null for those.
+ * Only Gaussian splats can deform: the deformer rewrites a splat attribute texture, and a
+ * mesh or a point cloud has nothing of the kind. An ion-hosted asset has no URL to resolve
+ * against and is therefore never living either — `sourceUrl` is null for those.
+ *
+ * @param rigPath the catalog's claim, relative to `sourceUrl`, or null for no rig
  */
 export function rigUrlFor(
-  slug: string,
+  rigPath: string | null,
   representation: string,
   sourceUrl: string | null,
 ): string | null {
   if (representation !== "gaussian-splat") return null;
-  const relative = LIVING_RIGS[slug];
-  if (relative === undefined || sourceUrl === null) return null;
+  if (rigPath === null || rigPath === "" || sourceUrl === null) return null;
   try {
     const base =
       typeof window === "undefined" ? new URL(sourceUrl) : new URL(sourceUrl, window.location.href);
-    return new URL(relative, base).toString();
+    return new URL(rigPath, base).toString();
   } catch {
     return null;
   }

@@ -5300,6 +5300,18 @@
               }
             ]
           },
+          "rigUrl": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rigurl"
+          },
           "screenSpaceErrorScale": {
             "default": 1.0,
             "exclusiveMinimum": 0.0,

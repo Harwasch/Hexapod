@@ -167,7 +167,7 @@ describe("geometryProvenance", () => {
   });
 
   it("carries the synthetic tree's own words through untouched", () => {
-    // Exactly what `data/tiles/captures.json` holds for the fixture: no capture date, no
+    // Exactly what the seed archive holds for the fixture: no capture date, no
     // ground sample distance, and a pipeline note that says it was not captured at all.
     const fixture = geometryProvenance(
       site(

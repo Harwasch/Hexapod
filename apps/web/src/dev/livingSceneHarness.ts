@@ -28,10 +28,15 @@ import type { LivingSurveyStatus } from "@/state/living";
 
 export interface LivingSceneHarnessOptions {
   readonly container: HTMLElement;
-  /** A single-tile Gaussian splat `tileset.json` for a capture whose slug has a rig. */
+  /** A single-tile Gaussian splat `tileset.json` for a capture the catalog gives a rig. */
   readonly tilesetUrl: string;
-  /** The capture slug, which is what `livingRigs.ts` keys the rig path off. */
+  /** The capture slug. Identity only — since A9 the rig is claimed by the asset, not the slug. */
   readonly slug: string;
+  /**
+   * The catalog's rig claim for that asset, relative to `tilesetUrl`, as
+   * `renderConfig.rigUrl` carries it. Defaults to where `tools/captures` puts one.
+   */
+  readonly rigUrl?: string | null;
   readonly longitude: number;
   readonly latitude: number;
 }
@@ -150,6 +155,10 @@ function siteFixture(options: LivingSceneHarnessOptions): { site: Site; summary:
           clipsWorld: false,
           clipFootprint: "catalog",
           heightOffsetM: 0,
+          // The catalog's claim that this capture can move. It used to be an entry in
+          // LIVING_RIGS keyed by slug; since A9 it rides on the asset, so a harness that
+          // omitted it would produce a site the Living Survey correctly declines.
+          rigUrl: options.rigUrl === undefined ? "../source/rig.json" : options.rigUrl,
         },
         defaultVisible: true,
         ...timestamps,

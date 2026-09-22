@@ -141,12 +141,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # governed by them rather than by the process-wide lru_cached environment.
     app.state.settings = settings
     app.include_router(api_v1)
-    # Processed captures kept on disk (data/tiles/<site>/<representation>/tileset.json) are
-    # served as static 3D Tiles under the API prefix, so the web app's /api proxy covers them.
+    # **Development only.** Capture tiles kept on a developer's disk
+    # (data/tiles/<slug>/<representation>/tileset.json) are served as static 3D Tiles under
+    # the API prefix, so the web app's /api proxy covers them with no bucket configured.
+    #
+    # This mount used to be the *only* way a local capture was reachable, and
+    # infra/api.Dockerfile copies apps/api/ and nothing else -- so in the one deployment
+    # path the docs describe, `data/tiles` did not exist, this mount was silently absent,
+    # and every local capture 404'd. A9 did not patch that by copying tiles into the image;
+    # it removed the dependency. A deployment with object storage configured seeds tileset
+    # URLs that point at the bucket (app/seed/captures.tiles_base_url), so whether this
+    # directory exists no longer decides whether a capture loads.
+    #
+    # Production is refused the mount outright rather than being allowed to depend on it by
+    # accident: an image that happened to carry a stale data/tiles would otherwise serve it.
     tiles_dir = Path(settings.tiles_dir)
     if not tiles_dir.is_absolute():
         tiles_dir = REPO_ROOT / tiles_dir
-    if tiles_dir.is_dir():
+    if settings.is_production:
+        logger.info("tiles are served from object storage; the local static mount is disabled")
+    elif tiles_dir.is_dir():
         app.mount("/api/v1/tiles", StaticFiles(directory=str(tiles_dir)), name="tiles")
     return app
 

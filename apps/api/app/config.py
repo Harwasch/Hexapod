@@ -7,12 +7,33 @@ repository root. Secrets are never defaulted to real values.
 from __future__ import annotations
 
 from functools import lru_cache
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
+
+def repo_root_for(config_module: PurePosixPath | Path) -> Path:
+    """The deployment root, given where this module sits.
+
+    `<repo>/apps/api/app/config.py` -> the repository root, four levels up. Only
+    development conveniences hang off it: the root `.env`, and a relative `tiles_dir`
+    served by the development-only static mount.
+
+    The fallback is not defensive padding. infra/api.Dockerfile is `WORKDIR /app` +
+    `COPY apps/api/ ./`, so in the image this file is `/app/app/config.py` -- which has
+    three parents, so `parents[3]` raised `IndexError: 3` **at import**. That image could
+    never start: `import app.main` failed before a route or a setting was read, a harder
+    failure than the tiles 404 A9 set out to remove, and one that hid it entirely. Found
+    by reproducing the layout rather than by reading the Dockerfile. In the image this
+    returns `/app`, which is what a deployment root means there.
+    """
+    parents = config_module.parents
+    chosen = parents[3] if len(parents) > 3 else parents[1]
+    return Path(chosen)
+
+
+REPO_ROOT = repo_root_for(Path(__file__).resolve())
 
 
 class Settings(BaseSettings):
@@ -65,9 +86,21 @@ class Settings(BaseSettings):
     anthropic_api_key: str | None = None
     anthropic_model: str = "claude-opus-5"
 
-    # Local 3D Tiles served by the API at /api/v1/tiles (processed captures kept in the repo
-    # or produced by a pipeline on this machine). Relative paths are from the repo root.
+    # Local 3D Tiles served by the API at /api/v1/tiles. **Development only.** The
+    # container image built from infra/api.Dockerfile copies apps/api/ and nothing else, so
+    # this directory does not exist there and the mount is simply absent -- which is why a
+    # deployment's tiles come out of object storage (see `tiles_base_url`) and not from
+    # here. Relative paths are from the repo root.
     tiles_dir: str = "data/tiles"
+    # Where a capture's published tiles are served from, as a URL prefix that a slug is
+    # appended to: `<tiles_base_url>/<slug>/splat/tileset.json`.
+    #
+    # Unset, it is derived by app/seed/captures.py::tiles_base_url, whose rule is: **a
+    # capture is served from the checkout when the checkout has it, and from the bucket
+    # otherwise.** Production never reads the checkout; it does not have one. Set this to
+    # put a CDN in front of the bucket -- R2's custom domain, which is not the S3 API domain
+    # that presigning uses (OBJECT_STORAGE_PUBLIC_URL).
+    tiles_base_url: str | None = None
     # The URL the browser reaches the API at, for seeding absolute tileset URLs.
     public_api_base: str = "http://localhost:8000"
     # The origin the *web app* is served from, for the phone-handoff URL a QR code encodes.

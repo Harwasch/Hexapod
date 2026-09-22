@@ -1,21 +1,67 @@
 # Drone captures: from photos to the map
 
 `tools/captures` turns a folder of drone photos into three representations of one place
-(textured mesh, point cloud, Gaussian splat) that the console serves itself and lets you
-switch between. This is the pipeline the test-run sites under `data/tiles/` came from.
+(textured mesh, point cloud, Gaussian splat) that the console lets you switch between. This
+is the pipeline the test-run sites came from.
 
 ```
 photos ──▶ OpenDroneMap ──▶ 3d_tiles/model (b3dm mesh)       ──▶ build_site.py ──▶ data/tiles/<slug>/mesh
                        ├──▶ odm_georeferenced_model.laz      ──▶                ──▶ data/tiles/<slug>/pointcloud
                        └──▶ opensfm/ (cameras, sparse points)
                                   └──▶ OpenSplat ──▶ splat.ply ──▶                ──▶ data/tiles/<slug>/splat
-                                                                                  └──▶ data/tiles/captures.json
+                                                                                  └──▶ data/tiles/<slug>/site.json
+                                                                                          │
+                                        app.seed.publish ◀───────────────────────────────┘
+                                                │
+                                                └──▶ object storage  sites/<slug>/…  +  catalog.json
 ```
 
-The API mounts `data/tiles` at `/api/v1/tiles/` and seeds one site per manifest entry
-(`apps/api/app/seed/captures.py`), with `clipsWorld` on so the global 3D world is cut away
-under the capture. Sites show up in **Sites** like any other, with the representation
-switcher and the usual quality and provenance metadata.
+`site.json` is the capture's own registration document: one file per capture, beside the
+tiles it describes. It replaced the shared `data/tiles/captures.json` manifest in A9, along
+with the 104 MB of tiles that used to be committed next to it.
+
+**Where the tiles are served from is one rule: a capture is served from your checkout
+when the checkout has it, and from object storage under `sites/<slug>/` otherwise.** In
+development that means `synthetic-tree` and anything you have just built come off disk over
+the API's `/api/v1/tiles/` mount, and the three migrated drone captures come from the
+bucket. Production never reads a checkout — the container image built from
+`infra/api.Dockerfile` copies `apps/api/` and nothing else, so `data/tiles` is not in it and
+never was, which is why every capture 404'd there before A9. `TILES_BASE_URL` overrides
+everything, and is how you put a CDN in front of the bucket.
+
+Either way the seeder (`apps/api/app/seed/captures.py`) creates one site per capture, with
+`clipsWorld` on so the global 3D world is cut away under it. Sites show up in **Sites**
+like any other, with the representation switcher and the usual quality and provenance
+metadata.
+
+## What became of `captures.json`
+
+It is not the interface any more. A capture becomes a site by being **registered**: the
+pipeline's `catalog` stage writes `registration.json` and the worker turns it into rows
+(`apps/api/app/worker/registration.py`). Nothing writes a shared manifest.
+
+Two one-shot remnants carry the old captures forward rather than orphaning them:
+
+- **`apps/api/app/seed/legacy_captures.json`** — the four pre-pipeline captures
+  (`brighton-beach`, `mygla`, `sheffield-park`, `synthetic-tree`), frozen exactly as the old
+  manifest described them. Their attribution, licence, capture date, image count and
+  estimated GSD are real and were not recoverable from the tiles, so they are archived
+  verbatim. Nothing writes this file and a fifth capture does not go in it.
+- **`data/tiles/<slug>/site.json`** — the same shape, one per capture, written by
+  `build_site.py`. A locally built capture still seeds with no bucket and no publish step.
+
+The three drone captures' tiles were deleted from `HEAD`. They remain in git history, so a
+clone that needs them back can restore and publish them:
+
+```bash
+git log --diff-filter=D --format=%H -1 -- data/tiles/mygla   # the commit that removed them
+git checkout <that commit>^ -- data/tiles/mygla
+cd apps/api && uv run python -m app.seed.publish --slug mygla
+```
+
+`synthetic-tree` stays in the repository because it is a CI fixture with a byte-identity
+gate on it, not a capture — but it is published to the bucket like the others, because the
+container does not have it either.
 
 ## Running it
 
@@ -39,12 +85,15 @@ opensplat /path/to/<dataset>/opensfm -n 3000 --downscale-factor 4 --sh-degree 0 
 #    and use the median difference.
 python ground_samples.py /path/to/<dataset>/odm_georeferencing/odm_georeferenced_model.laz
 
-# 4. Assemble the site folder and manifest entry.
+# 4. Assemble the site folder and its site.json.
 python build_site.py /path/to/<dataset> <slug> --name "…" --attribution "…" --license-name "…" \
   --source-url … --captured 2016 --splat /path/to/<dataset>/splat.ply --height-offset -2.1
 
-# 5. Seed and look.
+# 5. Seed and look. In development this is all of it: the API serves the tiles off disk.
 cd apps/api && uv run python -m app.seed
+
+# 6. Deploying it: upload the tiles and refresh the offline catalog. Needs OBJECT_STORAGE_*.
+uv run python -m app.seed.publish --slug <slug>
 ```
 
 `build_site.py` does the work the raw outputs need before Cesium will place them:
@@ -81,6 +130,11 @@ Each run writes `source/splat.ply` (the 3DGS layout `splat_tiles.py` reads), `so
 index per splat, in PLY order), `source/positions.f32`, and a single-tile `splat/tileset.json`
 built by `splat_tiles.convert` — so the app and Playwright can load the tree from disk with no
 API. Both sizes share one 214-node skeleton; only the splat density differs.
+
+Only the committed size is in the catalog. `synthetic-tree-large` is gitignored local output
+with no `site.json`, so it is not seeded and therefore has no rig claim; before A9 it had a
+`LIVING_RIGS` entry that could never fire because nothing seeded it either. To put it in the
+console, write it a `site.json` with `"rig": "../source/rig.json"` on its splat asset.
 
 Two properties the rest of the sprint leans on:
 
@@ -266,18 +320,21 @@ uv run python skeleton.py tree/output/point_cloud/iteration_30000/point_cloud.pl
     --cylinder <east> <north> <radius>
 
 # 6. Wire it up.
-#    - add "minnetonka-tree": "../source/rig.json" to LIVING_RIGS in
-#      apps/web/src/cesium/livingRigs.ts (an explicit table, deliberately not a probe)
-#    - add the entry to data/tiles/captures.json, carrying "captured": "2020-07-20" and the
-#      splat asset's ground_sample_distance_m — without both the Inspector reads
-#      "No capture date or resolution recorded", which would undersell a real scan
+#    - write data/tiles/minnetonka-tree/site.json (the shape build_site.py writes; see
+#      apps/api/app/seed/legacy_captures.json for four worked examples), carrying
+#      "captured": "2020-07-20" and the splat asset's ground_sample_distance_m — without
+#      both the Inspector reads "No capture date or resolution recorded", which would
+#      undersell a real scan
+#    - give that splat asset "rig": "../source/rig.json" in the same file. The rig is
+#      catalog data now, so nothing in apps/web is edited and nothing is rebuilt; it is
+#      still an explicit claim and still deliberately not a probe
 #    - attribution "Matthew Guertin", license_name "CC-BY-4.0",
 #      license_url https://creativecommons.org/licenses/by/4.0/,
 #      source_url https://github.com/Matt1Up/tree-photogrammetry-dataset
 #    - the description must say it is a photogrammetric reconstruction of a real tree and
 #      that the motion is simulated
-#    - if the tileset is large, gitignore it with the regeneration command beside it, the
-#      way data/tiles/synthetic-tree-large already is
+#    - the tiles do not go in git: publish them with
+#      `cd apps/api && uv run python -m app.seed.publish --slug minnetonka-tree`
 cd ../.. && cd apps/api && uv run pytest && uv run python -m app.seed
 ```
 
@@ -286,11 +343,11 @@ tileset is **single-tile** (the deformer refuses anything else, by design), and 
 still reads as _that_ tree rather than a generic sway — headless GL here is SwiftShader, and
 the stale draw order the sorter cannot see needs a human eye on real hardware.
 
-## What the manifest records
+## What `site.json` records
 
-`data/tiles/captures.json` is the source of truth for the seeded sites: boundary (convex hull
-of the point cloud), centre, attribution and license, source URL, capture date, image count,
-and per-asset quality. Ground sample distance is _estimated_ from the reconstructed camera
+A capture's `site.json` is what the seeder builds its site from: boundary (convex hull of
+the point cloud), centre, attribution and license, source URL, capture date, image count,
+per-asset quality, and — for a capture that has one — the rig path. Ground sample distance is _estimated_ from the reconstructed camera
 heights above the model's ground over the focal length in pixels (EXIF altitudes are often
 relative to take-off) and labelled as such; the point spacing is measured from the cloud.
 
@@ -300,8 +357,8 @@ relative to take-off) and labelled as such; the point spacing is measured from t
   exercise the format and switcher, not to compete with the mesh.
 - The height offset is one number per site, so sloping sites can still sit a little above or
   below the terrain at the edges.
-- Tile data lives in the repository for the test run. Real sites belong in object storage or
-  Cesium ion, registered by URL as `docs/ADDING_DATA.md` describes.
+- Tile data no longer lives in the repository. `synthetic-tree` is the one exception, and it
+  is a fixture with a byte-identity gate rather than a capture.
 - **The only tree that moves in the app is the synthetic one.** The skeleton extractor has been
   scored against ground truth but has never been run on a real capture, because none could be
   reached from here — see "The real tree" above for the licence checks, the blocked hosts and

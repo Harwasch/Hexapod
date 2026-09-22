@@ -87,6 +87,7 @@ function createHarness() {
       assetName: "Gaussian splat (procedural)",
       representation: "gaussian-splat",
       sourceUrl: "http://localhost/api/v1/tiles/synthetic-tree/splat/tileset.json",
+      rigPath: "../source/rig.json",
       shown: true,
       tileset: tileset as unknown as LoadedSiteAsset["tileset"],
     },
@@ -157,14 +158,27 @@ describe("the scene clock is the only clock", () => {
 
 describe("attaching", () => {
   it("finds the rig beside the tileset, and only for a rigged splat capture", () => {
+    const rig = "../source/rig.json";
     const url = "http://host/api/v1/tiles/synthetic-tree/splat/tileset.json";
-    expect(rigUrlFor("synthetic-tree", "gaussian-splat", url)).toBe(
+    expect(rigUrlFor(rig, "gaussian-splat", url)).toBe(
       "http://host/api/v1/tiles/synthetic-tree/source/rig.json",
     );
-    // A capture with no rig, a representation that cannot deform, and an ion asset with no URL.
-    expect(rigUrlFor("sheffield-park", "gaussian-splat", url)).toBeNull();
-    expect(rigUrlFor("synthetic-tree", "mesh", url)).toBeNull();
-    expect(rigUrlFor("synthetic-tree", "gaussian-splat", null)).toBeNull();
+    // The same claim resolves against a bucket, because it is relative to the tileset and
+    // the rig travels with the tiles. This is the A9 case: the catalog says the same thing
+    // and only the host changed.
+    expect(
+      rigUrlFor(
+        rig,
+        "gaussian-splat",
+        "https://cdn.example.com/sites/synthetic-tree/splat/tileset.json",
+      ),
+    ).toBe("https://cdn.example.com/sites/synthetic-tree/source/rig.json");
+    // A capture the catalog makes no rig claim about, a representation that cannot deform,
+    // and an ion asset with no URL to resolve against.
+    expect(rigUrlFor(null, "gaussian-splat", url)).toBeNull();
+    expect(rigUrlFor("", "gaussian-splat", url)).toBeNull();
+    expect(rigUrlFor(rig, "mesh", url)).toBeNull();
+    expect(rigUrlFor(rig, "gaussian-splat", null)).toBeNull();
   });
 
   it("attaches to a loaded rigged site and reports it", async () => {

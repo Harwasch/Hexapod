@@ -545,9 +545,13 @@ is the fixed thing, not the number it produces.
   shimmers at millimetres rather than centimetres. What it is _not_ is a leaf: it is a small
   high-frequency offset that stands in for a degree of freedom the rig cannot hold, and two splats
   a millimetre apart on the same leaf get unrelated offsets where a real leaf would move as one.
-- **Rigs are an explicit table.** `LIVING_RIGS` in `apps/web/src/cesium/livingRigs.ts` names which
-  capture slugs have a rig. Probing for `source/rig.json` would mean a 404 per site per load, and
-  would make "this site can move" a property of a missing file rather than a decision someone made.
+- **Rigs are an explicit claim, and since A9 they are catalog data.** `renderConfig.rigUrl` on a
+  splat asset names where that capture's rig sits, relative to its tileset URL; `rigUrlFor` in
+  `apps/web/src/cesium/livingRigs.ts` resolves it. It used to be `LIVING_RIGS`, a hand-written
+  table compiled into the web bundle, and the two properties that table protected both survive:
+  nothing probes for `source/rig.json` (that would be a 404 per site per load), and "this site can
+  move" is still a decision someone wrote down rather than a property of a file happening to exist.
+  What it stopped costing is a frontend rebuild for every new capture.
 - **ion-hosted assets can never be living**: the rig resolves relative to a tileset URL, and an ion
   asset has none.
 - **Snapshots are pinned to the measured pose.** `CesiumSceneManager.snapshot()` holds calm for the

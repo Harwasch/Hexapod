@@ -15,7 +15,7 @@
  * 2. **Resolution is stated as what it is.** Ground sample distance is a property of the
  *    imagery a capture was reconstructed from, not of the reconstruction, so it is printed as
  *    "per pixel of source imagery". A splat does not resolve detail at its source GSD.
- * 3. **The pipeline note is carried verbatim.** `data/tiles/captures.json` says of the
+ * 3. **The pipeline note is carried verbatim.** The capture archive says of the
  *    synthetic tree "procedural; no capture, no reconstruction", and that sentence must reach
  *    the screen unedited. It is the one thing standing between a generated fixture and a viewer
  *    who assumes everything in a survey console was scanned — so no classifier of ours gets to

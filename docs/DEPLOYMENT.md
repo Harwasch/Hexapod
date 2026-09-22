@@ -27,6 +27,7 @@ environment (all public):
 | `VITE_ENABLE_PHOTOREALISTIC`   | on by default; `false` unless your token has Google access and you accept the terms |
 | `VITE_ENABLE_DEV_TOOLS`        | leave unset/false                                                                   |
 | `VITE_DEFAULT_*_ASSET_ID`      | optional                                                                            |
+| `VITE_OFFLINE_CATALOG_URL`     | `https://tiles.example.com/catalog.json` — the offline catalog. See below           |
 
 Vercel: framework preset "Vite", root `apps/web`, install command `pnpm install`, build
 command `pnpm --filter @twin/web build`, output `apps/web/dist`. Cesium's static workers
@@ -42,17 +43,32 @@ docker run -p 8000:8000 --env-file .env twin-api
 The container runs `alembic upgrade head` then uvicorn. Seed the catalog once:
 `docker run --env-file .env twin-api python -m app.seed`.
 
+**The image contains `apps/api/` and nothing else — in particular no `data/tiles`.** That
+used to be a defect: the API's `/api/v1/tiles` static mount reads that directory, so every
+capture 404'd in exactly this deployment path. Since A9 capture tiles live in object
+storage and `APP_ENV=production` seeds their URLs there, so the mount is not merely absent
+but disabled. Publish the tiles once, from a checkout that has them:
+
+```bash
+cd apps/api && uv run python -m app.seed.publish
+```
+
+That uploads `data/tiles/<slug>/**` to `sites/<slug>/**` in the bucket and writes
+`catalog.json` beside it. Re-run it with `--catalog-only` after registering a pipeline run,
+so the offline catalog keeps up.
+
 Required environment:
 
-| Variable                   | Notes                                                                |
-| -------------------------- | -------------------------------------------------------------------- |
-| `DATABASE_URL`             | `postgresql+psycopg://user:pass@host:5432/db` with PostGIS enabled   |
-| `API_CORS_ORIGINS`         | comma-separated browser origins (exact scheme + host)                |
-| `APP_ENV=production`       | tightens URL validation (`ALLOW_PRIVATE_URLS=false` recommended)     |
-| `API_WRITE_TOKEN`          | **required in production**: the shared token every write must carry  |
-| `ALLOW_PRIVATE_URLS=false` | reject loopback/private dataset hosts                                |
-| `OBJECT_STORAGE_*`         | endpoint, bucket, keys, region, public URL. See Object storage below |
-| `CESIUM_ION_SERVER_TOKEN`  | optional; `assets:read` for job monitoring. Never a `VITE_` variable |
+| Variable                   | Notes                                                                   |
+| -------------------------- | ----------------------------------------------------------------------- |
+| `DATABASE_URL`             | `postgresql+psycopg://user:pass@host:5432/db` with PostGIS enabled      |
+| `API_CORS_ORIGINS`         | comma-separated browser origins (exact scheme + host)                   |
+| `APP_ENV=production`       | tightens URL validation (`ALLOW_PRIVATE_URLS=false` recommended)        |
+| `API_WRITE_TOKEN`          | **required in production**: the shared token every write must carry     |
+| `ALLOW_PRIVATE_URLS=false` | reject loopback/private dataset hosts                                   |
+| `OBJECT_STORAGE_*`         | endpoint, bucket, keys, region, public URL. See Object storage below    |
+| `TILES_BASE_URL`           | optional: a CDN in front of the tiles. Derived from the bucket if unset |
+| `CESIUM_ION_SERVER_TOKEN`  | optional; `assets:read` for job monitoring. Never a `VITE_` variable    |
 
 Put the API behind TLS (platform load balancer). It exposes `/api/v1/health` for probes and
 `/api/v1/docs` for OpenAPI; disable docs at the edge if you prefer.
@@ -159,6 +175,26 @@ with the default, botocore's `_default_s3_presign_to_sigv2` makes
 presigned SigV4 -- a dev/prod split no configuration inspection can see. The
 tests assert on the emitted URL string for that reason, and CI runs them against
 a real MinIO.
+
+### Tiles, and what the console does when this API is down
+
+Two objects in the bucket matter to the browser rather than to the API:
+
+- **`sites/<slug>/**`** — a capture's 3D Tiles, fetched directly by CesiumJS. This needs
+  the read CORS rule in `infra/cors/tiles.json` (`GET`/`HEAD`, and `Accept-Ranges` exposed)
+  and public read access, or a signed-URL worker in front.
+- **`catalog.json`** — every site, in the shape `GET /api/v1/sites/{id}` returns. The web
+  app fetches it only after a catalog request has actually failed, and it is what
+  `VITE_OFFLINE_CATALOG_URL` points at.
+
+That second one is what "offline" means now, and it changed with A9. Capture tiles used to
+be a static mount **on this API**, so an unreachable API meant unreachable tiles too and the
+built-in fallback catalog could honestly hold nothing but Cesium ion asset ids. The bytes
+now sit behind a different host that does not go down with the API, so an offline capture is
+reachable — but _which_ captures exist is a database fact, and the database is the thing
+that is unreachable. Publishing `catalog.json` is what makes that fact readable without the
+API. Every write form stays disabled in that state; an offline capture is readable, never
+editable.
 
 ## Database
 

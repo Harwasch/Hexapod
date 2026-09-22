@@ -7,7 +7,19 @@ and, optionally, a Gaussian splat PLY trained on the same OpenSfM reconstruction
                                    and the glTF marked z-up so the mesh stands on the globe
     data/tiles/<slug>/pointcloud/  quantized pnts quadtree from the LAZ
     data/tiles/<slug>/splat/       one SPZ-compressed splat tile
-    data/tiles/captures.json       manifest entry the API seeds a site from
+    data/tiles/<slug>/site.json    this capture's own registration document
+
+`site.json` is per-capture and self-contained. It replaced the shared
+`data/tiles/captures.json` manifest in A9, which was written here, hand-edited afterwards
+and committed beside the tiles: two builds could race on it, a fifth capture meant editing
+a file four other captures shared, and the tiles it pointed at were 104 MB in git. Publish
+a built site with
+
+    cd apps/api && uv run python -m app.seed.publish --slug <slug>
+
+which uploads `data/tiles/<slug>/**` to object storage and refreshes the offline catalog.
+With no bucket configured the API seeds it straight off disk over its development-only
+`/api/v1/tiles` mount, so `uv run python -m app.seed` alone still works on a laptop.
 
 All three share one local east-north-up frame around the OpenSfM reference point, lifted by
 --height-offset so the model's ground meets the globe's terrain (see ground_samples.py).
@@ -203,13 +215,18 @@ def estimate_gsd(project: Path, ground_height: float) -> float | None:
     return round(above / median(focal_px), 4)
 
 
-def upsert_manifest(tiles_dir: Path, entry: dict) -> None:
-    manifest = tiles_dir / "captures.json"
-    data = (
-        json.loads(manifest.read_text(encoding="utf-8")) if manifest.is_file() else {"captures": []}
-    )
-    data["captures"] = [c for c in data["captures"] if c["slug"] != entry["slug"]] + [entry]
-    manifest.write_text(json.dumps(data, indent=1) + "\n", encoding="utf-8")
+def write_site_document(site_dir: Path, entry: dict) -> Path:
+    """Write this capture's own `site.json`, replacing any previous build of it.
+
+    One document per capture rather than one manifest for all of them: nothing to merge,
+    nothing another capture's build can clobber, and the description travels with the
+    tiles it describes -- which is what lets `app.seed.publish` upload a folder and the
+    API read it back without either end holding a list.
+    """
+    site_dir.mkdir(parents=True, exist_ok=True)
+    path = site_dir / "site.json"
+    path.write_text(json.dumps(entry, indent=1) + "\n", encoding="utf-8")
+    return path
 
 
 def main() -> None:
@@ -334,7 +351,7 @@ def main() -> None:
         "images": images,
         "assets": assets,
     }
-    upsert_manifest(args.tiles_dir, entry)
+    report["site_document"] = str(write_site_document(site_dir, entry))
     report["gsd_m"] = gsd
     report["images"] = images
     print(json.dumps(report, indent=1))

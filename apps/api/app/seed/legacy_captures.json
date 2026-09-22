@@ -476,7 +476,8 @@
      "description": "2,000 gaussians generated from a 33-node motion rig",
      "maximum_screen_space_error": 1,
      "clamp_to_ground": true,
-     "default": true
+     "default": true,
+     "rig": "../source/rig.json"
     }
    ],
    "bookmark": {

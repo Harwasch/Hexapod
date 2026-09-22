@@ -120,14 +120,14 @@ kind is one Pydantic model, one enum value and one provider adapter.
 
 ## Seams for what comes next
 
-| Future capability             | Where it plugs in                                                                                                                          |
-| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| STAC catalogs                 | `stac` layer source + client resolver; a backend STAC crawler can populate layers                                                          |
-| S3 / COG / COPC / GeoParquet  | `ObjectStorage` abstraction; new `provider`/`sourceType` values; a tile server (TiTiler/COPC) as an imagery/3D Tiles source                |
-| Temporal captures             | `observed_at` / `valid_from` / `valid_to` on assets; `TimelineControl` already switches versions                                           |
-| Semantic entities / plants    | new tables keyed to `sites` with geometry; `SelectionManager` already resolves features to catalog objects                                 |
-| Robotics (ROS/MCAP)           | a live `MissionProvider` replaces the simulated demo; poses feed `MissionManager` tracks and markers                                       |
-| A living world (wind, growth) | `packages/world` holds the motion model; `LivingSurveyManager` drives it and `SplatDeformer` writes it; rigs are declared in `LIVING_RIGS` |
-| Simulation (Isaac/OpenUSD)    | consumes the same canonical store; the viewer stays a 3D Tiles client                                                                      |
-| LLM geospatial assistant      | the command palette is the entry point; managers expose a small imperative API to drive                                                    |
-| Observability vendor          | `lib/log.ts` sinks and `lib/timing.ts` spans                                                                                               |
+| Future capability             | Where it plugs in                                                                                                                                                 |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| STAC catalogs                 | `stac` layer source + client resolver; a backend STAC crawler can populate layers                                                                                 |
+| S3 / COG / COPC / GeoParquet  | `ObjectStorage` abstraction; new `provider`/`sourceType` values; a tile server (TiTiler/COPC) as an imagery/3D Tiles source                                       |
+| Temporal captures             | `observed_at` / `valid_from` / `valid_to` on assets; `TimelineControl` already switches versions                                                                  |
+| Semantic entities / plants    | new tables keyed to `sites` with geometry; `SelectionManager` already resolves features to catalog objects                                                        |
+| Robotics (ROS/MCAP)           | a live `MissionProvider` replaces the simulated demo; poses feed `MissionManager` tracks and markers                                                              |
+| A living world (wind, growth) | `packages/world` holds the motion model; `LivingSurveyManager` drives it and `SplatDeformer` writes it; a rig is declared by the catalog as `renderConfig.rigUrl` |
+| Simulation (Isaac/OpenUSD)    | consumes the same canonical store; the viewer stays a 3D Tiles client                                                                                             |
+| LLM geospatial assistant      | the command palette is the entry point; managers expose a small imperative API to drive                                                                           |
+| Observability vendor          | `lib/log.ts` sinks and `lib/timing.ts` spans                                                                                                                      |
