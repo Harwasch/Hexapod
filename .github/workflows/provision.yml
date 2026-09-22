@@ -1,0 +1,800 @@
+name: Provision
+
+# Creates the infrastructure that deploy.yml assumes, and then calls deploy.yml.
+#
+# NEVER RUN. Not once, not with dummy credentials. Every provider API this file talks to
+# is unreachable from the environment it was written in -- api.cloudflare.com, api.fly.io
+# and api.neon.tech all fail to connect -- so the request shapes below come from the
+# providers' documented interfaces and from nothing else. A GitHub Actions runner does
+# have the network access this needs, which is the whole reason this is a workflow rather
+# than a script in docs/DEPLOYMENT.md: the things a token can do, CI can do, and what is
+# left for a person is the part that genuinely needs one -- creating accounts, minting
+# tokens, pasting them into repository secrets. See docs/DEPLOYMENT.md § Handover, which
+# also flags which calls in here are the least sure.
+#
+# `workflow_dispatch` only, and never on push: this file is safe to have in a repository
+# with no secrets set precisely because nothing starts it. Dispatched without credentials
+# it stops in its first step naming the secrets that are missing, rather than deep inside
+# a provider's authentication error.
+#
+# IDEMPOTENT BY CONSTRUCTION. Every resource is looked up before it is created, and a
+# create that loses a race to an identical one is treated as success. Re-running this
+# workflow must never produce a second bucket, a second Fly app or -- the expensive one --
+# a second volume. See docs/DEPLOYMENT.md § What a re-run does.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Report what exists and what would be created, and create nothing
+        type: boolean
+        default: false
+      deploy:
+        description: Deploy and verify once the infrastructure is in place
+        type: boolean
+        default: true
+
+concurrency:
+  # Deliberately not the same group as deploy.yml's: a reusable workflow that waited on
+  # its own caller would deadlock. One provisioning run at a time is still the point --
+  # two concurrent runs are how a second volume gets created.
+  group: provision-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  infra:
+    name: Infrastructure · Neon, R2, Pages, Fly
+    runs-on: ubuntu-latest
+    # Neon, Cloudflare and Fly are one job rather than three because the values that
+    # pass between them are secret -- the connection string most of all -- and a job output is
+    # neither masked nor scoped. Nothing secret crosses a job boundary in this file; the
+    # jobs below that need the database re-derive it from NEON_API_KEY.
+    outputs:
+      api_base_url: ${{ steps.summary.outputs.api_base_url }}
+      web_base_url: ${{ steps.summary.outputs.web_base_url }}
+      catalog_url: ${{ steps.summary.outputs.catalog_url }}
+      public_url: ${{ steps.summary.outputs.public_url }}
+      bucket: ${{ steps.summary.outputs.bucket }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: The secrets this workflow needs
+        env:
+          NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          API_WRITE_TOKEN: ${{ secrets.API_WRITE_TOKEN }}
+          VITE_CESIUM_ION_ACCESS_TOKEN: ${{ secrets.VITE_CESIUM_ION_ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          missing=""
+          for name in NEON_API_KEY CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID \
+            R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY FLY_API_TOKEN API_WRITE_TOKEN; do
+            if [ -z "${!name:-}" ]; then
+              missing="${missing} ${name}"
+            fi
+          done
+          if [ -n "${missing}" ]; then
+            echo "::error::missing repository secret(s):${missing}"
+            echo "::error::Each one, what it is for and the exact scopes it needs are in"
+            echo "::error::docs/DEPLOYMENT.md § Handover. Nothing has been created."
+            exit 1
+          fi
+          if [ -z "${VITE_CESIUM_ION_ACCESS_TOKEN:-}" ]; then
+            echo "::warning::VITE_CESIUM_ION_ACCESS_TOKEN is not set. Provisioning does" \
+              "not need it, but the deployed globe will have no ion terrain or imagery."
+          fi
+          echo "every required secret is set."
+
+      # One place per name. The Fly app, its region, the worker's volume and its size are
+      # read out of the committed fly.toml, and the Pages project out of wrangler.toml, so
+      # that provisioning cannot drift from what `fly deploy` and `wrangler pages deploy`
+      # will look for. CI's `image` job already parses fly.toml the same way.
+      - name: Names come from the committed configuration
+        env:
+          R2_BUCKET: ${{ vars.R2_BUCKET }}
+          NEON_PROJECT_NAME: ${{ vars.NEON_PROJECT_NAME }}
+          NEON_REGION_ID: ${{ vars.NEON_REGION_ID }}
+          FLY_ORG: ${{ vars.FLY_ORG }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' >> "$GITHUB_ENV"
+          import os
+          import tomllib
+
+          fly = tomllib.load(open("fly.toml", "rb"))
+          pages = tomllib.load(open("wrangler.toml", "rb"))
+          mounts = fly["mounts"]
+          if len(mounts) != 1:
+              raise SystemExit(f"fly.toml declares {len(mounts)} mounts; this expects one")
+          mount = mounts[0]
+          size = str(mount["initial_size"]).strip().lower().removesuffix("gb")
+          if not size.isdigit():
+              raise SystemExit(f"cannot read a whole number of GB out of {mount['initial_size']!r}")
+
+
+          def setting(name: str, default: str) -> str:
+              return os.environ.get(name, "").strip() or default
+
+
+          for key, value in {
+              "FLY_APP": fly["app"],
+              "FLY_REGION": fly["primary_region"],
+              "FLY_ORG": setting("FLY_ORG", "personal"),
+              "VOLUME_NAME": mount["source"],
+              "VOLUME_SIZE_GB": size,
+              "PAGES_PROJECT": pages["name"],
+              "BUCKET": setting("R2_BUCKET", "twin-assets"),
+              "NEON_PROJECT_NAME": setting("NEON_PROJECT_NAME", "hexapod-twin"),
+              # Neon's name for the region Fly calls iad. Override it with the
+              # NEON_REGION_ID variable if fly.toml's primary_region is not iad.
+              "NEON_REGION_ID": setting("NEON_REGION_ID", "aws-us-east-1"),
+          }.items():
+              print(f"{key}={value}")
+          PY
+          cat "$GITHUB_ENV"
+
+      # Sourced by every step below that talks to an HTTP API. Written once to a file
+      # rather than repeated in each step because steps do not share shell state, and a
+      # request helper copied four times is a request helper that differs four ways.
+      - name: A request helper the steps below share
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/lib.sh" <<'SH'
+          # api METHOD URL [JSON] -- sets STATUS and BODY. Never exits, so the caller
+          # decides what a non-2xx means; several of them mean "already exists", which is
+          # success here. API_HEADERS is a bash array the calling step sets.
+          api() {
+            local method="$1" url="$2" body="${3:-}" out
+            out="$(mktemp)"
+            if [ -n "$body" ]; then
+              STATUS="$(curl -sS -o "$out" -w '%{http_code}' -X "$method" \
+                "${API_HEADERS[@]}" -H 'Content-Type: application/json' \
+                --data "$body" "$url" || echo 000)"
+            else
+              STATUS="$(curl -sS -o "$out" -w '%{http_code}' -X "$method" \
+                "${API_HEADERS[@]}" "$url" || echo 000)"
+            fi
+            BODY="$(cat "$out")"
+            rm -f "$out"
+          }
+
+          # ok -- true for 2xx.
+          ok() { case "${STATUS:-000}" in 2??) return 0 ;; *) return 1 ;; esac; }
+
+          # die MESSAGE -- an annotation, then the last response, truncated. Only ever
+          # called where the last response cannot contain a credential: the one call that
+          # returns a connection string masks it before anything else can run.
+          die() {
+            echo "::error::$1"
+            echo "last response: HTTP ${STATUS:-none}"
+            printf '%s\n' "${BODY:-}" | head -c 2000
+            exit 1
+          }
+          SH
+
+      # ---- Neon ------------------------------------------------------------------
+      #
+      # Find the project by name, create it if it is absent, then read the branch and
+      # database back out of the API rather than out of the create response -- so the
+      # "it already existed" path and the "we just made it" path converge on the same
+      # three calls and produce the same connection string.
+      #
+      # PostGIS is enabled here, over psql, and not in Neon's console: on Neon the owner
+      # role may CREATE EXTENSION itself, which is what removes that human step. If that
+      # turns out to be wrong on your account this step is where it fails, by name.
+      - name: Neon · project, PostGIS, connection string
+        env:
+          NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          . "$RUNNER_TEMP/lib.sh"
+          API_HEADERS=(-H "Authorization: Bearer ${NEON_API_KEY}" -H "Accept: application/json")
+          neon="https://console.neon.tech/api/v2"
+
+          api GET "$neon/projects?limit=400"
+          ok || die "Neon rejected the project list (HTTP $STATUS). NEON_API_KEY must be an API key from Account settings -> API keys."
+          project_id="$(printf '%s' "$BODY" | jq -r --arg n "$NEON_PROJECT_NAME" \
+            'first(.projects[]? | select(.name == $n) | .id) // empty')"
+
+          if [ -n "$project_id" ]; then
+            echo "Neon project '$NEON_PROJECT_NAME' exists: $project_id"
+          elif [ "$DRY_RUN" = "true" ]; then
+            echo "would create Neon project '$NEON_PROJECT_NAME' (pg 16, $NEON_REGION_ID)"
+            exit 0
+          else
+            echo "creating Neon project '$NEON_PROJECT_NAME' (pg 16, $NEON_REGION_ID)"
+            api POST "$neon/projects" "$(jq -n --arg n "$NEON_PROJECT_NAME" --arg r "$NEON_REGION_ID" \
+              '{project: {name: $n, pg_version: 16, region_id: $r}}')"
+            ok || die "creating the Neon project failed. A 'limit exceeded' here means the free plan's project allowance is used up; delete an unused project or set the NEON_PROJECT_NAME variable to one you already have."
+            project_id="$(printf '%s' "$BODY" | jq -r '.project.id // empty')"
+            [ -n "$project_id" ] || die "Neon accepted the create but returned no project id."
+          fi
+
+          api GET "$neon/projects/$project_id/branches"
+          ok || die "could not list the branches of Neon project $project_id."
+          branch_id="$(printf '%s' "$BODY" | jq -r \
+            'first(.branches[]? | select(.default == true) | .id) // (.branches[0].id // empty)')"
+          [ -n "$branch_id" ] || die "Neon project $project_id has no branch to connect to."
+
+          api GET "$neon/projects/$project_id/branches/$branch_id/databases"
+          ok || die "could not list the databases of Neon branch $branch_id."
+          database="$(printf '%s' "$BODY" | jq -r '.databases[0].name // empty')"
+          role="$(printf '%s' "$BODY" | jq -r '.databases[0].owner_name // empty')"
+          [ -n "$database" ] && [ -n "$role" ] || die "Neon branch $branch_id reports no database and owner to connect as."
+          echo "connecting as $role to $database on branch $branch_id"
+
+          api GET "$neon/projects/$project_id/connection_uri?branch_id=$branch_id&database_name=$database&role_name=$role"
+          # Deliberately no `die` on this one: its *successful* body carries the password.
+          if ! ok; then
+            echo "::error::Neon would not hand back a connection string for $database (HTTP $STATUS)."
+            echo "::error::Its body is withheld here because the successful form of this response contains a password."
+            exit 1
+          fi
+          raw="$(printf '%s' "$BODY" | jq -r '.uri // empty')"
+          if [ -z "$raw" ]; then
+            echo "::error::Neon's connection_uri response had no 'uri' field."
+            exit 1
+          fi
+          echo "::add-mask::$raw"
+
+          # The scheme SQLAlchemy needs is not the scheme Neon hands you; docs/DEPLOYMENT.md
+          # § Database says so and this is where it stops being a manual step.
+          case "$raw" in
+            postgresql://*) dsn="postgresql+psycopg://${raw#postgresql://}" ;;
+            postgres://*) dsn="postgresql+psycopg://${raw#postgres://}" ;;
+            *) echo "::error::Neon returned a connection string whose scheme this cannot rewrite."; exit 1 ;;
+          esac
+          case "$dsn" in
+            *sslmode=*) ;;
+            *\?*) dsn="${dsn}&sslmode=require" ;;
+            *) dsn="${dsn}?sslmode=require" ;;
+          esac
+          echo "::add-mask::$dsn"
+
+          # PostGIS. The first migration does `CREATE EXTENSION` too, but only if the role
+          # is allowed to; doing it here means a refusal is a clear failure now rather than
+          # an opaque one inside fly.toml's release_command later.
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "would enable PostGIS on $database"
+          else
+            psql "$raw" -v ON_ERROR_STOP=1 -c 'CREATE EXTENSION IF NOT EXISTS postgis;' \
+              || { echo "::error::could not enable PostGIS on the Neon database. Run 'CREATE EXTENSION postgis;' in Neon's SQL editor as the owner role and re-run this workflow."; exit 1; }
+            psql "$raw" -At -c "SELECT 'postgis ' || postgis_version();"
+          fi
+
+          # Masked before it is written, so the value is redacted everywhere it could be
+          # echoed for the rest of this job.
+          echo "DATABASE_URL=$dsn" >> "$GITHUB_ENV"
+
+      # ---- Cloudflare R2 ----------------------------------------------------------
+      #
+      # The bucket, and its **free managed public URL** -- the `*.r2.dev` development URL
+      # -- rather than a custom domain. That is a deliberate trade, and the reason is not
+      # only the DNS record it saves: the Pages origin, API_CORS_ORIGINS, the bucket's
+      # CORS rule and the ion token's allow-list all have to agree, and a custom tiles
+      # domain adds a fifth name to keep in step with no automation behind it. The r2.dev
+      # URL is handed to us by the API, so it can be computed instead of agreed.
+      #
+      # What it costs: r2.dev is rate-limited by Cloudflare and is not meant for
+      # production traffic, and enabling it makes the WHOLE bucket world-readable --
+      # including the `captures/` prefix that browser uploads land in. See
+      # docs/DEPLOYMENT.md § The public URL, and the custom-domain path below.
+      #
+      # The custom-domain path: set the R2_PUBLIC_URL repository variable to that domain
+      # (e.g. https://tiles.example.com) after connecting it in R2 -> Settings -> Public
+      # access. This step then leaves the managed URL alone and uses yours everywhere.
+      - name: Cloudflare R2 · bucket and public URL
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          R2_PUBLIC_URL: ${{ vars.R2_PUBLIC_URL }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          . "$RUNNER_TEMP/lib.sh"
+          API_HEADERS=(-H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" -H "Accept: application/json")
+          cf="https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}"
+
+          api GET "$cf/r2/buckets"
+          ok || die "Cloudflare rejected the R2 bucket list (HTTP $STATUS). CLOUDFLARE_API_TOKEN needs 'Workers R2 Storage: Edit' on this account, and CLOUDFLARE_ACCOUNT_ID must be the account the bucket lives in."
+          # Documented as .result.buckets; accepting a bare .result array as well costs one
+          # jq alternative and saves a run that fails on a shape difference.
+          found="$(printf '%s' "$BODY" | jq -r --arg b "$BUCKET" \
+            'first((.result.buckets // .result // [])[]? | select(.name == $b) | .name) // empty')"
+
+          if [ -n "$found" ]; then
+            echo "R2 bucket '$BUCKET' exists."
+          elif [ "$DRY_RUN" = "true" ]; then
+            echo "would create R2 bucket '$BUCKET'"
+          else
+            api POST "$cf/r2/buckets" "$(jq -n --arg n "$BUCKET" '{name: $n}')"
+            if ok; then
+              echo "created R2 bucket '$BUCKET'."
+            elif printf '%s' "$BODY" | jq -e '[.errors[]?.message] | join(" ") | test("already exists"; "i")' >/dev/null 2>&1; then
+              # Another run of this workflow, or a bucket someone made by hand between the
+              # list above and this call. Either way the desired state holds.
+              echo "R2 reports '$BUCKET' already exists; nothing to create."
+            else
+              die "creating R2 bucket '$BUCKET' failed."
+            fi
+          fi
+
+          if [ -n "${R2_PUBLIC_URL:-}" ]; then
+            public="${R2_PUBLIC_URL%/}"
+            echo "using the R2_PUBLIC_URL variable: $public (the managed r2.dev URL is left untouched)"
+          elif [ "$DRY_RUN" = "true" ]; then
+            echo "would enable the managed r2.dev public URL on '$BUCKET'"
+            public="https://example.invalid"
+          else
+            api GET "$cf/r2/buckets/$BUCKET/domains/managed"
+            enabled="$(printf '%s' "$BODY" | jq -r '.result.enabled // false')"
+            domain="$(printf '%s' "$BODY" | jq -r '.result.domain // empty')"
+            if [ "$enabled" != "true" ] || [ -z "$domain" ]; then
+              api PUT "$cf/r2/buckets/$BUCKET/domains/managed" '{"enabled": true}'
+              ok || die "could not enable the managed public (r2.dev) URL on '$BUCKET'. Enable it by hand under R2 -> $BUCKET -> Settings -> Public access, or connect a custom domain and set the R2_PUBLIC_URL repository variable, then re-run."
+              domain="$(printf '%s' "$BODY" | jq -r '.result.domain // empty')"
+            fi
+            [ -n "$domain" ] || die "R2 reports the public URL enabled but named no domain."
+            public="https://${domain#https://}"
+            echo "public URL: $public"
+          fi
+          echo "PUBLIC_URL=$public" >> "$GITHUB_ENV"
+
+      # ---- Cloudflare Pages -------------------------------------------------------
+      #
+      # A Direct Upload project, as wrangler.toml documents: the build happens in
+      # deploy.yml, so there is no repository to connect and no build command to set.
+      # The origin is read back from the API rather than assumed to be
+      # <project>.pages.dev, because that is the string four other settings must match.
+      - name: Cloudflare Pages · project and origin
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          WEB_BASE_URL: ${{ vars.WEB_BASE_URL }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          . "$RUNNER_TEMP/lib.sh"
+          API_HEADERS=(-H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" -H "Accept: application/json")
+          cf="https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}"
+
+          api GET "$cf/pages/projects?per_page=100"
+          ok || die "Cloudflare rejected the Pages project list (HTTP $STATUS). CLOUDFLARE_API_TOKEN needs 'Cloudflare Pages: Edit' on this account."
+          subdomain="$(printf '%s' "$BODY" | jq -r --arg n "$PAGES_PROJECT" \
+            'first((.result // [])[]? | select(.name == $n) | .subdomain) // empty')"
+
+          if [ -n "$subdomain" ]; then
+            echo "Pages project '$PAGES_PROJECT' exists."
+          elif [ "$DRY_RUN" = "true" ]; then
+            echo "would create Pages project '$PAGES_PROJECT' (production branch main)"
+            subdomain="$PAGES_PROJECT.pages.dev"
+          else
+            api POST "$cf/pages/projects" "$(jq -n --arg n "$PAGES_PROJECT" \
+              '{name: $n, production_branch: "main"}')"
+            if ok; then
+              subdomain="$(printf '%s' "$BODY" | jq -r '.result.subdomain // empty')"
+              echo "created Pages project '$PAGES_PROJECT'."
+            elif printf '%s' "$BODY" | jq -e '[.errors[]?.message] | join(" ") | test("already exists|already taken|unique"; "i")' >/dev/null 2>&1; then
+              echo "Cloudflare reports a Pages project named '$PAGES_PROJECT' already exists."
+              api GET "$cf/pages/projects/$PAGES_PROJECT"
+              ok || die "'$PAGES_PROJECT' is taken but not on this account. Pages subdomains are global: rename the project in wrangler.toml and re-run."
+              subdomain="$(printf '%s' "$BODY" | jq -r '.result.subdomain // empty')"
+            else
+              die "creating Pages project '$PAGES_PROJECT' failed."
+            fi
+          fi
+
+          if [ -n "${WEB_BASE_URL:-}" ]; then
+            # A custom domain on Pages. Set it here rather than guessed, because this is
+            # the origin the bucket's CORS rule and API_CORS_ORIGINS are built from.
+            web="${WEB_BASE_URL%/}"
+            echo "using the WEB_BASE_URL variable: $web"
+          else
+            [ -n "$subdomain" ] || die "Pages named no subdomain for '$PAGES_PROJECT'; set the WEB_BASE_URL repository variable to the origin you want and re-run."
+            web="https://${subdomain#https://}"
+          fi
+          echo "web origin: $web"
+          echo "WEB_BASE=$web" >> "$GITHUB_ENV"
+
+      # The committed script, not a copy of it: infra/cors/apply-r2.sh already knows that
+      # the bucket takes exactly one CORS document, substitutes the real origin into the
+      # committed placeholder, and prints back what the bucket reports. It runs after the
+      # Pages step because the origin it needs is the one Pages just named.
+      #
+      # Idempotent by the API's own semantics: put-bucket-cors replaces the document.
+      - name: Cloudflare R2 · apply the CORS document
+        if: ${{ !inputs.dry_run }}
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: |
+          set -euo pipefail
+          infra/cors/apply-r2.sh "$CLOUDFLARE_ACCOUNT_ID" "$BUCKET" "$WEB_BASE"
+
+      # ---- Fly.io -----------------------------------------------------------------
+      - name: Install flyctl
+        run: |
+          set -euo pipefail
+          curl -L https://fly.io/install.sh | sh
+          echo "$HOME/.fly/bin" >> "$GITHUB_PATH"
+
+      # The app, then the volume, then the secrets -- and the volume before any deploy,
+      # which is the ordering C1 established in docs/DEPLOYMENT.md: the worker process
+      # group will not start without its mount.
+      #
+      # The volume is the one resource where a duplicate is a silent ongoing bill rather
+      # than an error, so it is counted rather than merely looked for, and a count above
+      # one stops the run.
+      # Not gated on dry_run: the lookups are reads, and a dry run that says nothing about
+      # the one resource a duplicate of which is billed monthly would be the wrong dry run.
+      # Only the two creates are guarded.
+      - name: Fly · app and the worker's volume
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          # flyctl's JSON has changed field casing across versions; accept either.
+          if flyctl apps list --json | jq -e --arg a "$FLY_APP" 'any(.[]?; (.Name // .name) == $a)' >/dev/null; then
+            echo "Fly app '$FLY_APP' exists."
+          elif [ "$DRY_RUN" = "true" ]; then
+            echo "would create Fly app '$FLY_APP' in org '$FLY_ORG', and its volume."
+            exit 0
+          else
+            echo "creating Fly app '$FLY_APP' in org '$FLY_ORG'"
+            flyctl apps create "$FLY_APP" --org "$FLY_ORG" \
+              || { echo "::error::could not create the Fly app '$FLY_APP'. App names are global: if it is taken, change 'app' in fly.toml and re-run. FLY_API_TOKEN must be org-scoped -- an app-scoped deploy token cannot create an app."; exit 1; }
+          fi
+
+          volumes="$(flyctl volumes list --app "$FLY_APP" --json)"
+          count="$(printf '%s' "$volumes" | jq --arg n "$VOLUME_NAME" \
+            '[.[]? | select((.Name // .name) == $n) | select((.State // .state // "created") != "destroyed")] | length')"
+          case "$count" in
+            0)
+              if [ "$DRY_RUN" = "true" ]; then
+                echo "would create volume '$VOLUME_NAME' ($VOLUME_SIZE_GB GB, $FLY_REGION)"
+                exit 0
+              fi
+              echo "creating volume '$VOLUME_NAME' ($VOLUME_SIZE_GB GB, $FLY_REGION)"
+              flyctl volumes create "$VOLUME_NAME" --app "$FLY_APP" \
+                --region "$FLY_REGION" --size "$VOLUME_SIZE_GB" --yes
+              ;;
+            1)
+              echo "volume '$VOLUME_NAME' exists; creating none."
+              ;;
+            *)
+              echo "::error::there are $count volumes named '$VOLUME_NAME' on '$FLY_APP'."
+              echo "::error::That is a duplicate, and duplicates are billed. Destroy the"
+              echo "::error::spare with 'fly volumes destroy <id>' and re-run; this"
+              echo "::error::workflow will not add another."
+              exit 1
+              ;;
+          esac
+          flyctl volumes list --app "$FLY_APP"
+
+      - name: Fly · secrets
+        if: ${{ !inputs.dry_run }}
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          API_WRITE_TOKEN: ${{ secrets.API_WRITE_TOKEN }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          CESIUM_ION_SERVER_TOKEN: ${{ secrets.CESIUM_ION_SERVER_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          set -euo pipefail
+          api_base="https://${FLY_APP}.fly.dev"
+          endpoint="https://${CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com"
+
+          # API_HANDOFF_SECRET is the one value this workflow generates, because it is the
+          # one nobody needs to read: it only has to be the same on every process. So it is
+          # generated once, when the app does not already have it, and left alone
+          # afterwards -- regenerating it on every run would invalidate every outstanding
+          # phone-handoff link. `fly secrets list` reports names and digests, never values.
+          if flyctl secrets list --app "$FLY_APP" --json \
+            | jq -e 'any(.[]?; (.Name // .name) == "API_HANDOFF_SECRET")' >/dev/null; then
+            handoff_args=()
+            echo "API_HANDOFF_SECRET is already set on '$FLY_APP'; keeping it."
+          else
+            handoff="$(openssl rand -hex 32)"
+            echo "::add-mask::$handoff"
+            handoff_args=("API_HANDOFF_SECRET=$handoff")
+            echo "generating API_HANDOFF_SECRET for the first time."
+          fi
+
+          optional_args=()
+          if [ -n "${CESIUM_ION_SERVER_TOKEN:-}" ]; then
+            optional_args+=("CESIUM_ION_SERVER_TOKEN=$CESIUM_ION_SERVER_TOKEN")
+          fi
+          if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+            optional_args+=("ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY")
+          fi
+
+          # --stage, because there are no machines to restart before the first deploy and
+          # because the deploy that follows is what should apply them. Setting the same
+          # values again is a no-op on Fly's side.
+          flyctl secrets set --app "$FLY_APP" --stage \
+            "DATABASE_URL=$DATABASE_URL" \
+            "API_WRITE_TOKEN=$API_WRITE_TOKEN" \
+            "API_CORS_ORIGINS=$WEB_BASE" \
+            "PUBLIC_API_BASE=$api_base" \
+            "PUBLIC_WEB_BASE=$WEB_BASE" \
+            "OBJECT_STORAGE_ENDPOINT_URL=$endpoint" \
+            "OBJECT_STORAGE_BUCKET=$BUCKET" \
+            "OBJECT_STORAGE_ACCESS_KEY=$R2_ACCESS_KEY_ID" \
+            "OBJECT_STORAGE_SECRET_KEY=$R2_SECRET_ACCESS_KEY" \
+            "OBJECT_STORAGE_PUBLIC_URL=$PUBLIC_URL" \
+            "${handoff_args[@]}" "${optional_args[@]}"
+
+          echo "--- the names this app now carries ---"
+          flyctl secrets list --app "$FLY_APP"
+
+      - name: What this run established
+        id: summary
+        run: |
+          set -euo pipefail
+          api_base="https://${FLY_APP}.fly.dev"
+          catalog="${PUBLIC_URL}/catalog.json"
+          {
+            echo "api_base_url=$api_base"
+            echo "web_base_url=$WEB_BASE"
+            echo "public_url=$PUBLIC_URL"
+            echo "catalog_url=$catalog"
+            echo "bucket=$BUCKET"
+          } >> "$GITHUB_OUTPUT"
+          # Nothing secret below. The endpoint URL is deliberately absent: it contains the
+          # Cloudflare account id, which is a repository secret.
+          {
+            echo "## Provisioned"
+            echo
+            echo "| What | Where |"
+            echo "| ---- | ----- |"
+            echo "| API | \`$api_base\` |"
+            echo "| Web | \`$WEB_BASE\` |"
+            echo "| Bucket | \`$BUCKET\`, public at \`$PUBLIC_URL\` |"
+            echo "| Offline catalog | \`$catalog\` |"
+            echo "| Fly volume | \`$VOLUME_NAME\`, ${VOLUME_SIZE_GB} GB in \`$FLY_REGION\` |"
+            echo
+            echo "Running **Deploy** on its own later reads two repository variables that"
+            echo "this run passed to it directly. Set them so a standalone deploy builds"
+            echo "the same bundle:"
+            echo
+            echo '```'
+            echo "VITE_API_BASE_URL=$api_base"
+            echo "VITE_OFFLINE_CATALOG_URL=$catalog"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # The deploy itself is deploy.yml, called rather than copied: there is one description
+  # of how this project is deployed, and `fly deploy` and `wrangler pages deploy` live in
+  # exactly one file. `secrets: inherit` hands it the same repository secrets it reads on
+  # a dispatch, and the two URLs are values this run computed that a dispatch would have
+  # had to be told.
+  deploy:
+    name: Deploy
+    needs: infra
+    if: ${{ inputs.deploy && !inputs.dry_run }}
+    uses: ./.github/workflows/deploy.yml
+    with:
+      target: everything
+      api_base_url: ${{ needs.infra.outputs.api_base_url }}
+      offline_catalog_url: ${{ needs.infra.outputs.catalog_url }}
+    secrets: inherit
+
+  # Seeding and publishing run on the runner, not over `fly ssh console`, for a reason
+  # that is not convenience: `python -m app.seed.publish` copies data/tiles/<slug>/** into
+  # the bucket, and the deployed image deliberately carries no data/tiles. The checkout
+  # does. APP_ENV=production is load-bearing here too -- without it app/seed/captures.py
+  # sees a local tiles directory and seeds every tileset URL against
+  # http://localhost:8000, which is exactly the catalogue of dead links A9 removed.
+  seed:
+    name: Seed the catalogue and publish the tiles
+    needs: [infra, deploy]
+    if: ${{ inputs.deploy && !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      # The same three Neon calls as the infra job, lookup only. The connection string is
+      # re-derived rather than carried across the job boundary, because a job output is
+      # neither masked nor scoped.
+      - name: Neon · the connection string, again
+        env:
+          NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+          NEON_PROJECT_NAME: ${{ vars.NEON_PROJECT_NAME }}
+        run: |
+          set -euo pipefail
+          project_name="${NEON_PROJECT_NAME:-hexapod-twin}"
+          neon="https://console.neon.tech/api/v2"
+          auth=(-H "Authorization: Bearer ${NEON_API_KEY}" -H "Accept: application/json")
+          get() { curl -fsS "${auth[@]}" "$1"; }
+
+          project_id="$(get "$neon/projects?limit=400" | jq -r --arg n "$project_name" \
+            'first(.projects[]? | select(.name == $n) | .id) // empty')"
+          [ -n "$project_id" ] || { echo "::error::no Neon project named '$project_name'; the infra job should have created it."; exit 1; }
+          branch_id="$(get "$neon/projects/$project_id/branches" | jq -r \
+            'first(.branches[]? | select(.default == true) | .id) // (.branches[0].id // empty)')"
+          databases="$(get "$neon/projects/$project_id/branches/$branch_id/databases")"
+          database="$(printf '%s' "$databases" | jq -r '.databases[0].name')"
+          role="$(printf '%s' "$databases" | jq -r '.databases[0].owner_name')"
+          raw="$(get "$neon/projects/$project_id/connection_uri?branch_id=$branch_id&database_name=$database&role_name=$role" | jq -r '.uri')"
+          echo "::add-mask::$raw"
+          case "$raw" in
+            postgresql://*) dsn="postgresql+psycopg://${raw#postgresql://}" ;;
+            postgres://*) dsn="postgresql+psycopg://${raw#postgres://}" ;;
+            *) echo "::error::Neon returned a scheme this cannot rewrite."; exit 1 ;;
+          esac
+          case "$dsn" in
+            *sslmode=*) ;;
+            *\?*) dsn="${dsn}&sslmode=require" ;;
+            *) dsn="${dsn}?sslmode=require" ;;
+          esac
+          echo "::add-mask::$dsn"
+          echo "DATABASE_URL=$dsn" >> "$GITHUB_ENV"
+      - run: uv sync --frozen
+        working-directory: apps/api
+      # The schema is already at head: fly.toml's release_command ran `alembic upgrade
+      # head` during the deploy this job needs.
+      - name: Seed the catalogue
+        working-directory: apps/api
+        env:
+          APP_ENV: production
+          API_WRITE_TOKEN: ${{ secrets.API_WRITE_TOKEN }}
+          OBJECT_STORAGE_ENDPOINT_URL: https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
+          OBJECT_STORAGE_BUCKET: ${{ needs.infra.outputs.bucket }}
+          OBJECT_STORAGE_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY_ID }}
+          OBJECT_STORAGE_SECRET_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          OBJECT_STORAGE_REGION: auto
+          OBJECT_STORAGE_PUBLIC_URL: ${{ needs.infra.outputs.public_url }}
+          PUBLIC_API_BASE: ${{ needs.infra.outputs.api_base_url }}
+          PUBLIC_WEB_BASE: ${{ needs.infra.outputs.web_base_url }}
+        run: uv run python -m app.seed
+      - name: Publish the tiles and the offline catalog
+        working-directory: apps/api
+        env:
+          APP_ENV: production
+          API_WRITE_TOKEN: ${{ secrets.API_WRITE_TOKEN }}
+          OBJECT_STORAGE_ENDPOINT_URL: https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
+          OBJECT_STORAGE_BUCKET: ${{ needs.infra.outputs.bucket }}
+          OBJECT_STORAGE_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY_ID }}
+          OBJECT_STORAGE_SECRET_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          OBJECT_STORAGE_REGION: auto
+          OBJECT_STORAGE_PUBLIC_URL: ${{ needs.infra.outputs.public_url }}
+          PUBLIC_API_BASE: ${{ needs.infra.outputs.api_base_url }}
+          PUBLIC_WEB_BASE: ${{ needs.infra.outputs.web_base_url }}
+        run: uv run python -m app.seed.publish
+
+  # In the order that actually catches things, which is docs/DEPLOYMENT.md's order and
+  # not the order of decreasing convenience:
+  #
+  #   1. health     -- the app boots, and its database answers.
+  #   2. recipes    -- the image carries tools/pipeline. A 404 here is a lost COPY.
+  #   3. CORS       -- a real preflight against a real presigned URL.
+  #   4. an upload  -- register, PUT, read the ETag back, complete.
+  #   5. public read -- the object is readable at the public URL.
+  #
+  # Four and five are last because they are the only checks that exercise presigning, the
+  # bucket's CORS document and the endpoint/public-URL pair together. Nothing earlier
+  # catches a missing `ExposeHeaders: ["ETag"]` -- the presigned PUT itself succeeds
+  # without it; what fails is a browser's ability to *read* the ETag it must send back to
+  # `/complete`, which is why step 3 asks for the preflight explicitly rather than trusting
+  # that curl got through.
+  verify:
+    name: Verify
+    needs: [infra, deploy, seed]
+    if: ${{ inputs.deploy && !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    env:
+      API: ${{ needs.infra.outputs.api_base_url }}
+      WEB: ${{ needs.infra.outputs.web_base_url }}
+      PUBLIC_URL: ${{ needs.infra.outputs.public_url }}
+    steps:
+      - name: 1 · health
+        run: |
+          set -euo pipefail
+          # --retry, because the app process group has min_machines_running = 0 and this
+          # request may be what starts it.
+          curl -fsS --retry 10 --retry-all-errors --retry-delay 3 "$API/api/v1/health" -o health.json
+          cat health.json
+          jq -e '.status == "ok" and .database == true' health.json >/dev/null \
+            || { echo "::error::the API answered but is not healthy. A false 'database' means DATABASE_URL is wrong or PostGIS never got enabled."; exit 1; }
+
+      - name: 2 · the recipe catalogue
+        run: |
+          set -euo pipefail
+          if ! curl -fsS "$API/api/v1/recipes" -o recipes.json; then
+            echo "::error::GET /api/v1/recipes failed. A 404 means the deployed image has no tools/pipeline to read."
+            exit 1
+          fi
+          jq -r '[.recipes[].name] | sort | @tsv' recipes.json
+          jq -e '[.recipes[].name] | (index("splat-ingest") and index("photo-reconstruct"))' recipes.json >/dev/null \
+            || { echo "::error::the deployed catalogue is missing a recipe."; exit 1; }
+
+      - name: 3-5 · a real upload through the presigned path
+        env:
+          API_WRITE_TOKEN: ${{ secrets.API_WRITE_TOKEN }}
+        run: |
+          set -euo pipefail
+          auth=(-H "Authorization: Bearer ${API_WRITE_TOKEN}" -H 'Content-Type: application/json')
+
+          capture="$(curl -fsS -X POST "${auth[@]}" "$API/api/v1/captures" \
+            --data "$(jq -n --arg n "Provisioning check ${GITHUB_RUN_ID}" \
+              '{name: $n, kind: "images", description: "Written by .github/workflows/provision.yml to prove presigning and CORS. Safe to delete."}')")"
+          capture_id="$(printf '%s' "$capture" | jq -r '.id')"
+          echo "capture $capture_id"
+
+          printf 'provisioned by run %s\n' "$GITHUB_RUN_ID" > part.bin
+          size="$(wc -c < part.bin)"
+          registered="$(curl -fsS -X POST "${auth[@]}" \
+            "$API/api/v1/captures/$capture_id/files" \
+            --data "$(jq -n --argjson b "$size" \
+              '{filename: "provision-check.txt", contentType: "text/plain", bytes: $b}')")"
+          file_id="$(printf '%s' "$registered" | jq -r '.file.id')"
+          url="$(printf '%s' "$registered" | jq -r '.upload.parts[0].url')"
+          [ "$url" != "null" ] && [ -n "$url" ] \
+            || { echo "::error::the API registered the file but presigned no part. A 503 here means OBJECT_STORAGE_* never reached the app."; exit 1; }
+
+          # 3. The preflight a browser would send before that PUT. curl is not bound by
+          # CORS, so without asking for this explicitly the upload below would pass on a
+          # bucket whose rules are wrong and the failure would surface in someone's
+          # browser instead.
+          curl -sS -o /dev/null -D preflight.txt -X OPTIONS \
+            -H "Origin: $WEB" \
+            -H 'Access-Control-Request-Method: PUT' \
+            -H 'Access-Control-Request-Headers: content-type' \
+            "$url"
+          tr -d '\r' < preflight.txt | tr 'A-Z' 'a-z' > preflight.lower
+          cat preflight.txt
+          grep -qi "^access-control-allow-origin: \(\*\|$(printf '%s' "$WEB" | tr 'A-Z' 'a-z')\)$" preflight.lower \
+            || { echo "::error::the bucket's CORS rule does not allow $WEB. infra/cors/apply-r2.sh ran against the wrong origin, or the rules were replaced since."; exit 1; }
+          grep -qi '^access-control-expose-headers:.*etag' preflight.lower \
+            || { echo "::error::the bucket does not expose ETag. A browser reads etag === null off each part and the multipart upload can never be completed -- see infra/cors/upload.json."; exit 1; }
+
+          # 4. The PUT itself, and the ETag off its response, which is what /complete needs.
+          curl -fsS -o /dev/null -D put.txt -X PUT --upload-file part.bin "$url"
+          etag="$(tr -d '\r' < put.txt | awk 'tolower($1) == "etag:" { print $2 }' | tail -n1)"
+          [ -n "$etag" ] || { echo "::error::the presigned PUT returned no ETag."; exit 1; }
+          completed="$(curl -fsS -X POST "${auth[@]}" \
+            "$API/api/v1/captures/$capture_id/files/$file_id/complete" \
+            --data "$(jq -n --arg e "$etag" '{parts: [{partNumber: 1, etag: $e}]}')")"
+          printf '%s\n' "$completed" | jq '{status, storageKey, bytes}'
+          key="$(printf '%s' "$completed" | jq -r '.storageKey')"
+
+          # 5. And it is readable at the public URL -- the check that catches an endpoint
+          # and a public URL that belong to different buckets or different accounts.
+          code="$(curl -sS -o /dev/null -w '%{http_code}' "$PUBLIC_URL/$key")"
+          if [ "$code" != "200" ]; then
+            echo "::error::the object uploaded fine but $PUBLIC_URL/<key> answered $code."
+            echo "::error::OBJECT_STORAGE_PUBLIC_URL and OBJECT_STORAGE_ENDPOINT_URL are crossed, or the public URL is not enabled on this bucket."
+            exit 1
+          fi
+          echo "the presigned path works end to end."
+
+      - name: What to look at
+        if: always()
+        run: |
+          {
+            echo "## Verified"
+            echo
+            echo "- \`$API/api/v1/health\`"
+            echo "- \`$API/api/v1/recipes\`"
+            echo "- a presigned upload, its CORS preflight, and a public read"
+            echo
+            echo "Now open **$WEB** -- the globe, the catalogue, then \`/admin.html\`."
+            echo
+            echo "The check above leaves one capture named \`Provisioning check"
+            echo "${GITHUB_RUN_ID}\` and one small object behind. Deleting it is a"
+            echo "console job; leaving it is harmless."
+          } >> "$GITHUB_STEP_SUMMARY"

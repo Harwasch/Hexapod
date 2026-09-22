@@ -10,6 +10,10 @@ name: Deploy
 # Each job checks its own secrets in its first step and fails with the name of the one
 # that is missing, rather than failing forty lines later inside a CLI's auth error.
 #
+# It also assumes the infrastructure already exists -- the Fly app, the worker's volume,
+# the bucket, the Pages project, the database. `.github/workflows/provision.yml` is the
+# step before this one; it creates those and then calls this workflow.
+#
 # NEVER RUN. No deployment has ever been made from this workflow, from this repository or
 # from anywhere else. The commands in it are the same ones docs/DEPLOYMENT.md tells you
 # to run by hand, which is the only sense in which they have been checked.
@@ -25,6 +29,30 @@ on:
           - api
           - web
         default: everything
+  # provision.yml calls this workflow rather than repeating its steps: there is one
+  # deploy, described in one place, whoever starts it. `workflow_call` cannot take a
+  # `choice`, so `target` is a string here and the two `if:` comparisons below accept
+  # exactly the same three words either way.
+  #
+  # The two URL inputs exist because provisioning *computes* values that a standalone
+  # dispatch has to be told: the Fly app's origin and the bucket's public catalog URL.
+  # Both fall back to the repository variables, so a dispatch behaves exactly as it did
+  # before this block was added, and a provisioned first deploy needs no variables set
+  # at all. See docs/DEPLOYMENT.md § Handover.
+  workflow_call:
+    inputs:
+      target:
+        description: What to deploy
+        type: string
+        default: everything
+      api_base_url:
+        description: The API's public origin, overriding the VITE_API_BASE_URL variable
+        type: string
+        default: ""
+      offline_catalog_url:
+        description: catalog.json's public URL, overriding VITE_OFFLINE_CATALOG_URL
+        type: string
+        default: ""
 
 concurrency:
   # One deploy at a time. Not `cancel-in-progress`: a half-applied `fly deploy` is worse
@@ -73,10 +101,10 @@ jobs:
       # be reported as failed because nobody has written down where it went.
       - name: The deployed API answers
         env:
-          API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
+          API_BASE_URL: ${{ inputs.api_base_url || vars.VITE_API_BASE_URL }}
         run: |
           if [ -z "${API_BASE_URL}" ]; then
-            echo "VITE_API_BASE_URL is not set as a repository variable; skipping."
+            echo "Neither an api_base_url input nor a VITE_API_BASE_URL variable; skipping."
             exit 0
           fi
           curl -fsS --retry 5 --retry-all-errors "${API_BASE_URL}/api/v1/health"
@@ -117,8 +145,8 @@ jobs:
       - name: Build
         env:
           VITE_CESIUM_ION_ACCESS_TOKEN: ${{ secrets.VITE_CESIUM_ION_ACCESS_TOKEN }}
-          VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
-          VITE_OFFLINE_CATALOG_URL: ${{ vars.VITE_OFFLINE_CATALOG_URL }}
+          VITE_API_BASE_URL: ${{ inputs.api_base_url || vars.VITE_API_BASE_URL }}
+          VITE_OFFLINE_CATALOG_URL: ${{ inputs.offline_catalog_url || vars.VITE_OFFLINE_CATALOG_URL }}
           VITE_ENABLE_PHOTOREALISTIC: ${{ vars.VITE_ENABLE_PHOTOREALISTIC }}
         run: pnpm --filter @twin/web build
       # Pages reads _headers from the root of the deployed directory, and Vite copies

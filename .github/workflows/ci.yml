@@ -36,6 +36,64 @@ jobs:
         env:
           VITE_CESIUM_ION_ACCESS_TOKEN: ""
 
+  workflows:
+    name: Workflows · parse, and agree with the handover
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # A workflow with a YAML error does not fail -- it silently never runs, and the
+      # Actions tab shows nothing at all. So they are parsed here, where a mistake is
+      # loud. The second half is the cross-check that matters more: provision.yml and
+      # deploy.yml between them read a dozen repository secrets and variables, and the
+      # only place a human learns which ones to create is docs/DEPLOYMENT.md. A name that
+      # exists in a workflow and not in that document is an hour of someone reading YAML
+      # to find out why a dispatch failed.
+      - name: Every secret and variable a workflow reads is in the handover
+        run: |
+          python3 -m pip install --quiet --disable-pip-version-check pyyaml
+          python3 - <<'PY'
+          import pathlib
+          import re
+          import sys
+
+          import yaml
+
+          handover = pathlib.Path("docs/DEPLOYMENT.md").read_text()
+          reference = re.compile(r"\b(secrets|vars)\.([A-Za-z_][A-Za-z0-9_]*)\b")
+          # GITHUB_TOKEN is GitHub's own; nobody creates it.
+          builtin = {"GITHUB_TOKEN"}
+          problems: list[str] = []
+
+          for path in sorted(pathlib.Path(".github/workflows").glob("*.yml")):
+              text = path.read_text()
+              try:
+                  workflow = yaml.safe_load(text)
+              except yaml.YAMLError as error:
+                  problems.append(f"{path} is not valid YAML: {error}")
+                  continue
+              if not isinstance(workflow, dict) or "jobs" not in workflow:
+                  problems.append(f"{path} parsed, but has no jobs table")
+              for kind, name in sorted(set(reference.findall(text))):
+                  if name in builtin:
+                      continue
+                  if f"`{name}`" not in handover:
+                      problems.append(
+                          f"{path} reads {kind}.{name}, which docs/DEPLOYMENT.md never names"
+                      )
+
+          # ci.yml runs on push; the two that spend money or create resources must not.
+          for name in ("deploy.yml", "provision.yml"):
+              triggers = yaml.safe_load(pathlib.Path(".github/workflows", name).read_text())
+              # `on` is YAML 1.1's boolean true, which is why this is not triggers["on"].
+              on = triggers.get(True, triggers.get("on"))
+              if not isinstance(on, dict) or "push" in on or "pull_request" in on:
+                  problems.append(f"{name} must stay dispatch-only; its triggers are {on!r}")
+
+          for problem in problems:
+              print(f"::error::{problem}")
+          sys.exit(1 if problems else 0)
+          PY
+
   e2e:
     name: Web · Playwright
     runs-on: ubuntu-latest
