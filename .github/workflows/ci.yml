@@ -182,3 +182,122 @@ jobs:
       - name: Stop MinIO
         if: always()
         run: docker rm -f minio || true
+
+  image:
+    name: Image · API and worker, from the real Dockerfile
+    runs-on: ubuntu-latest
+    # The other jobs run the code from the checkout, so none of them can see what is
+    # missing from the image. This one builds infra/api.Dockerfile and asks the container
+    # the two questions a deployment asks it: can the API list the recipes, and can the
+    # worker start. Before B1a the image carried `apps/api/` alone, and both answers were
+    # no -- `app/worker/pipeline_bridge.py` calls `ensure_importable()` at module import,
+    # so importing the worker raised ModuleNotFoundError and `/api/v1/recipes` fell to its
+    # `None` branch and answered 404.
+    services:
+      postgis:
+        image: postgis/postgis:16-3.5
+        env:
+          POSTGRES_USER: twin
+          POSTGRES_PASSWORD: twin
+          POSTGRES_DB: twin
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U twin -d twin"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      # The containers below run with `--network host`, so they reach the service
+      # container through the port it publishes on the runner -- the same address the api
+      # job's psql uses.
+      DATABASE_URL: postgresql+psycopg://twin:twin@127.0.0.1:5432/twin
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the image
+        run: docker build -f infra/api.Dockerfile -t twin-api .
+      - name: Start the API
+        # The container runs `alembic upgrade head` before uvicorn, so this step is also
+        # what creates the tables the worker step below queries.
+        run: |
+          docker run -d --name twin-api --network host \
+            -e DATABASE_URL="$DATABASE_URL" \
+            twin-api
+          for _ in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8000/api/v1/health >/dev/null; then
+              echo "API is up"; exit 0
+            fi
+            sleep 2
+          done
+          echo "API did not become reachable"; docker logs twin-api || true; exit 1
+      - name: API is healthy
+        run: |
+          curl -fsS http://127.0.0.1:8000/api/v1/health -o health.json
+          cat health.json
+          python3 - <<'PY'
+          import json
+          import sys
+
+          health = json.load(open("health.json"))
+          if health["status"] != "ok" or not health["database"]:
+              sys.exit(f"the image started but is not healthy: {health}")
+          print("health:", health)
+          PY
+      - name: The image can read the recipe catalogue
+        # This is the assertion that fails on the pre-B1a image: with no tools/pipeline to
+        # import, `app/services/recipes.py::_load_recipes` catches the ModuleNotFoundError,
+        # returns None, and the route raises NotFoundError -- so `curl -f` sees 404 and the
+        # step fails before the names are ever compared.
+        run: |
+          if ! curl -fsS http://127.0.0.1:8000/api/v1/recipes -o recipes.json; then
+            echo "GET /api/v1/recipes failed. A 404 here means the image has no"
+            echo "tools/pipeline to read, which is exactly what this job exists to catch."
+            docker logs twin-api || true
+            exit 1
+          fi
+          python3 - <<'PY'
+          import json
+          import sys
+
+          catalogue = json.load(open("recipes.json"))
+          names = sorted(recipe["name"] for recipe in catalogue["recipes"])
+          missing = sorted({"splat-ingest", "photo-reconstruct"}.difference(names))
+          if missing:
+              sys.exit(f"the catalogue is missing {missing}; it listed {names}")
+          print("catalogue lists:", names)
+          PY
+      - name: The pipeline's stages import in the image's venv
+        # The worker's child process imports `stages` for a real job, in this interpreter,
+        # and nothing above reaches it: an empty queue never plans a recipe. It is also the
+        # only check that crosses the second seam -- `captures_bridge` finds tools/captures
+        # at `../captures` relative to tools/pipeline, and `stages` reads both projects'
+        # files (a pyproject version, a packer checksum) for the run manifest. So this is
+        # where a layout that separated the two, or an API venv missing one of the
+        # pipeline's dependencies, is caught.
+        run: |
+          docker run --rm -i twin-api python - <<'PY'
+          from pathlib import Path
+
+          import app.worker.pipeline_bridge as bridge  # puts tools/pipeline on sys.path
+
+          import stages  # noqa: F401 - imports captures_bridge, numpy and PIL as a side effect
+          from captures_bridge import CAPTURES_DIR
+
+          assert (bridge.PIPELINE_DIR / "pyproject.toml").is_file(), bridge.PIPELINE_DIR
+          assert (bridge.PIPELINE_DIR / "recipes").is_dir(), bridge.PIPELINE_DIR
+          assert (CAPTURES_DIR / "splat_tiles.py").is_file(), CAPTURES_DIR
+          assert Path(stages.__file__).parent == bridge.PIPELINE_DIR
+          print("pipeline:", bridge.PIPELINE_DIR, "captures:", CAPTURES_DIR)
+          PY
+      - name: The worker starts and exits cleanly
+        # `--once` runs a single job or exits when the queue is empty, which is what makes
+        # this runnable with nothing queued. Importing `app.worker` is most of the point:
+        # `app/worker/runner.py` imports pipeline_bridge, which raises at import time on an
+        # image without the pipeline, so this exits non-zero there.
+        run: |
+          docker run --rm --network host \
+            -e DATABASE_URL="$DATABASE_URL" \
+            twin-api python -m app.worker --once
+      - name: API logs
+        if: failure()
+        run: docker logs twin-api || true
+      - name: Stop the API
+        if: always()
+        run: docker rm -f twin-api || true

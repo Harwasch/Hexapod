@@ -5,12 +5,16 @@ names and parameter defaults — it reads the same YAML the executor reads, and 
 answer it gives about a recipe (its version, its stages, whether a parameter override
 names a stage that exists) is the pipeline's answer, not a second implementation of it.
 
-Two facts make this a tolerant import rather than a plain one. `tools/pipeline` is a flat
-uv project put on `sys.path` by `app.worker.pipeline_bridge`, not an installed package;
-and `infra/api.Dockerfile` copies only `apps/api`, so in that image there is no pipeline
-to read. A deployment without it keeps working — captures upload, jobs queue against the
-shipped versions below, the console says the catalogue is unavailable — instead of the
-API failing at import over a directory the API itself never needs.
+The import is tolerant rather than plain because `tools/pipeline` is a flat uv project
+put on `sys.path` by `app.worker.pipeline_bridge`, not an installed package, so whether it
+is there is a fact about the host. Until B1a `infra/api.Dockerfile` copied only
+`apps/api`, and the deployed API therefore always took the `None` branch below; it now
+ships the pipeline and `PIPELINE_DIR` with it, and the `image` job in CI asserts this
+endpoint lists both shipped recipes. The tolerance stays for the hosts that still lack it
+— a seeder run from a wheel, a sidecar with a different layout — where a deployment keeps
+working (captures upload, jobs queue against the shipped versions below, the console says
+the catalogue is unavailable) instead of the API failing at import over a directory the
+API itself never needs.
 """
 
 from __future__ import annotations

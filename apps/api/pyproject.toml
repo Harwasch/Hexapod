@@ -25,6 +25,15 @@ dependencies = [
   # tools/pipeline/pyproject.toml; nothing under app/api or app/services imports either.
   "numpy>=1.26",
   "pillow>=10",
+  # Not the API's either: the recipe loader's. `recipe.load_recipe` is `yaml.safe_load`,
+  # and both `app/services/recipes.py` and the worker call it. It was reaching the venv
+  # only through `uvicorn[standard]` (and dev-only moto/responses) -- so a day when
+  # uvicorn drops it, or `--no-dev` meets a different extra, is a day the recipes stop
+  # loading with no change to this file. Declared, like the two above.
+  "pyyaml>=6.0",
+  # `imageio-ffmpeg` is in tools/pipeline/pyproject.toml and deliberately not here: it
+  # carries a 79.8 MB ffmpeg binary and no shipped stage imports it yet (normalize is a
+  # stub). B2 adds it when the real `normalize` lands.
 ]
 
 [dependency-groups]

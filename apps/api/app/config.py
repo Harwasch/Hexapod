@@ -87,10 +87,11 @@ class Settings(BaseSettings):
     anthropic_model: str = "claude-opus-5"
 
     # Local 3D Tiles served by the API at /api/v1/tiles. **Development only.** The
-    # container image built from infra/api.Dockerfile copies apps/api/ and nothing else, so
-    # this directory does not exist there and the mount is simply absent -- which is why a
-    # deployment's tiles come out of object storage (see `tiles_base_url`) and not from
-    # here. Relative paths are from the repo root.
+    # container image built from infra/api.Dockerfile copies apps/api/ and the two
+    # tools/ projects the worker runs, and no data/ at all, so this directory does not
+    # exist there and the mount is simply absent -- which is why a deployment's tiles come
+    # out of object storage (see `tiles_base_url`) and not from here. Relative paths are
+    # from the repo root.
     tiles_dir: str = "data/tiles"
     # Where a capture's published tiles are served from, as a URL prefix that a slug is
     # appended to: `<tiles_base_url>/<slug>/splat/tileset.json`.

@@ -43,9 +43,20 @@ docker run -p 8000:8000 --env-file .env twin-api
 The container runs `alembic upgrade head` then uvicorn. Seed the catalog once:
 `docker run --env-file .env twin-api python -m app.seed`.
 
-**The image contains `apps/api/` and nothing else — in particular no `data/tiles`.** That
-used to be a defect: the API's `/api/v1/tiles` static mount reads that directory, so every
-capture 404'd in exactly this deployment path. Since A9 capture tiles live in object
+**The same image is the worker**, run with a different command:
+
+```bash
+docker run --env-file .env twin-api python -m app.worker
+```
+
+It polls for queued jobs and runs their recipes in the image's own venv, so the image
+carries `tools/pipeline` and `tools/captures` at `/app/tools/` (`PIPELINE_DIR` is set to
+the first). Without them the worker cannot start at all and the API answers 404 on
+`/api/v1/recipes`; the `image` job in CI builds the real image and asserts both.
+
+**The image contains no `data/tiles`.** That used to be a defect: the API's
+`/api/v1/tiles` static mount reads that directory, so every capture 404'd in exactly this
+deployment path. Since A9 capture tiles live in object
 storage and `APP_ENV=production` seeds their URLs there, so the mount is not merely absent
 but disabled. Publish the tiles once, from a checkout that has them:
 
