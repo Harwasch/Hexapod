@@ -1,6 +1,7 @@
 import { Command } from "cmdk";
 import {
   Bookmark,
+  Boxes,
   Columns2,
   Compass,
   Layers,
@@ -157,6 +158,13 @@ function PaletteBody({ close }: { close: () => void }) {
           <Command.Item value="add data" onSelect={() => run(() => ui.setAddDataOpen(true))}>
             <Plus size={14} aria-hidden="true" />
             Add data
+          </Command.Item>
+          <Command.Item
+            value="upload a capture"
+            onSelect={() => run(() => ui.setPanel("captures"))}
+          >
+            <Boxes size={14} aria-hidden="true" />
+            Upload a capture <Kbd>U</Kbd>
           </Command.Item>
           <Command.Item value="top-down view" onSelect={() => run(() => scene?.camera.topDown())}>
             <Square size={14} aria-hidden="true" />

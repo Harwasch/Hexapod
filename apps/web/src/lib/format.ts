@@ -83,3 +83,29 @@ export function hostOf(url: string): string {
     return url;
   }
 }
+
+const BYTE_UNITS = ["B", "KB", "MB", "GB", "TB"];
+
+/** Bytes in the units a person reads them in; 1024-based, three significant figures. */
+export function formatBytes(bytes: number | null | undefined): string {
+  if (bytes === null || bytes === undefined || !Number.isFinite(bytes)) return "—";
+  if (bytes < 1000) return `${Math.max(0, Math.round(bytes))} B`;
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1000 && unit < BYTE_UNITS.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  const rounded = value >= 100 ? Math.round(value) : Math.round(value * 10) / 10;
+  return `${rounded} ${BYTE_UNITS[unit] ?? "B"}`;
+}
+
+/** A short elapsed time: "4s", "2m 10s", "1h 04m". */
+export function formatDuration(seconds: number | null | undefined): string {
+  if (seconds === null || seconds === undefined || !Number.isFinite(seconds)) return "—";
+  const total = Math.max(0, Math.round(seconds));
+  if (total < 60) return `${total}s`;
+  const minutes = Math.floor(total / 60);
+  if (minutes < 60) return `${minutes}m ${String(total % 60).padStart(2, "0")}s`;
+  return `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, "0")}m`;
+}

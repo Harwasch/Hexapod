@@ -10,6 +10,7 @@ import { useUi } from "@/state/ui";
 
 import { AddDataSheet } from "../add-data/AddDataSheet";
 import { BookmarksPanel } from "../bookmarks/BookmarksPanel";
+import { CapturesPanel } from "../captures/CapturesPanel";
 import { CommandPalette } from "../command-palette/CommandPalette";
 import { ComparePanel } from "../compare/ComparePanel";
 import { DevPanel } from "../dev/DevPanel";
@@ -53,6 +54,7 @@ function GlobalHotkeys() {
   useHotkey("m", () => ui.togglePanel("measure"));
   useHotkey("c", () => ui.togglePanel("compare"));
   useHotkey("b", () => ui.togglePanel("bookmarks"));
+  useHotkey("u", () => ui.togglePanel("captures"));
   useHotkey("n", () => scene?.camera.resetNorth());
   useHotkey("t", () => scene?.camera.topDown());
   useHotkey("h", () => scene?.camera.flyHome());
@@ -68,6 +70,7 @@ function GlobalHotkeys() {
   );
   useHotkey("escape", () => {
     if (ui.paletteOpen) ui.setPaletteOpen(false);
+    else if (ui.writeTokenPrompt) ui.setWriteTokenPrompt(false);
     else if (ui.measureMode) ui.setMeasureMode(null);
     else if (mission.projectsOpen) mission.setProjectsOpen(false);
     else if (mission.feedsOpen) mission.setFeedsOpen(false);
@@ -133,6 +136,7 @@ export function AppShell() {
           <ErrorBoundary inline label="Panel">
             <LayersPanel />
             <SitesPanel />
+            <CapturesPanel />
             <MeasurePanel />
             <ComparePanel />
             <BookmarksPanel />

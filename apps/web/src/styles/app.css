@@ -595,6 +595,137 @@ body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-close {
   flex: 1;
 }
 
+/* ---- Captures ------------------------------------------------------------ */
+.dropzone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 1.1rem 1rem;
+  border: 1px dashed var(--control-border);
+  border-radius: var(--glass-radius-sm);
+  background: var(--control-bg);
+  color: var(--text-secondary);
+  text-align: center;
+  cursor: pointer;
+  transition:
+    background-color var(--motion-fast) var(--ease-out),
+    border-color var(--motion-fast) var(--ease-out);
+}
+
+.dropzone:hover,
+.dropzone:focus-within {
+  background: var(--control-bg-hover);
+}
+
+.dropzone--over {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.dropzone--disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.dropzone__title {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.dropzone__hint,
+.dropzone__proposal {
+  margin: 0;
+  font-size: var(--text-xs);
+  line-height: 1.4;
+}
+
+.dropzone__proposal {
+  color: var(--accent);
+}
+
+.capture__files,
+.capture__stages {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.capture__file-row,
+.capture__stage {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: var(--text-xs);
+}
+
+.capture__file-name,
+.capture__stage-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.capture__file-meta,
+.capture__stage-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.capture__file-row {
+  margin-bottom: 0.2rem;
+}
+
+.capture__file-actions,
+.capture__actions {
+  display: flex;
+  gap: 0.4rem;
+  margin-top: 0.35rem;
+}
+
+.capture__job {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--divider);
+}
+
+.capture__job-title {
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+
+.capture__job-version {
+  color: var(--text-tertiary);
+  font-weight: 400;
+}
+
+.capture__job-note {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+}
+
+.capture__token {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid var(--accent-border);
+  border-radius: var(--glass-radius-sm);
+  background: var(--accent-soft);
+}
+
 .category {
   display: flex;
   align-items: center;

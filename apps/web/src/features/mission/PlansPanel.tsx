@@ -2,7 +2,7 @@ import { ArrowLeft } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect } from "react";
 
-import { GlassPanel } from "@twin/ui";
+import { GlassPanel, GlassProgress } from "@twin/ui";
 
 import type { Plan } from "@/missions/types";
 import { useMission } from "@/state/mission";
@@ -142,18 +142,12 @@ export function PlansPanel() {
                         <span className={`mc-plan__state mc-tone--${p.status}`}>{p.state}</span>
                       </div>
                       <div className="mc-row mc-plan__progress">
-                        <div
+                        <GlassProgress
                           className={`mc-progress mc-progress--${p.status}`}
-                          role="progressbar"
-                          aria-valuenow={p.progressPct}
-                          aria-valuemin={0}
-                          aria-valuemax={100}
-                        >
-                          <div
-                            className="mc-progress__bar"
-                            style={{ width: `${p.progressPct}%` }}
-                          />
-                        </div>
+                          label={`${p.title} progress`}
+                          value={p.progressPct}
+                          valueText={p.progressLabel}
+                        />
                         <span className="mc-mono mc-plan__label">{p.progressLabel}</span>
                       </div>
                       <div className="mc-row mc-plan__meta">
@@ -254,25 +248,18 @@ function PlanDetail({ plan, onBack }: { plan: Plan; onBack: () => void }) {
                 : plan.progressLabel}
             </span>
           </div>
-          <div
+          <GlassProgress
             className={`mc-progress mc-progress--${progress?.tone === "warn" ? "warn" : plan.status}`}
-            role="progressbar"
-            aria-valuenow={progress ? progress.actualPct : plan.progressPct}
-            aria-valuemin={0}
-            aria-valuemax={100}
-          >
-            <div
-              className="mc-progress__bar"
-              style={{ width: `${progress ? progress.actualPct : plan.progressPct}%` }}
-            />
-            {progress && progress.expectedPct > 0 && (
-              <div
-                className="mc-timeline__today"
-                style={{ left: `${progress.expectedPct}%` }}
-                title={`Schedule expects ${progress.expectedPct}% today`}
-              />
-            )}
-          </div>
+            label={`${plan.title} progress`}
+            value={progress ? progress.actualPct : plan.progressPct}
+            valueText={progress ? progress.label : plan.progressLabel}
+            {...(progress && progress.expectedPct > 0
+              ? {
+                  expected: progress.expectedPct,
+                  expectedTitle: `Schedule expects ${progress.expectedPct}% today`,
+                }
+              : {})}
+          />
           {progress && progress.driftDays > 0 && (
             <div className="mc-note mc-note--warn" style={{ marginTop: "0.5rem" }}>
               <span>

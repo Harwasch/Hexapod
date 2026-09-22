@@ -1,7 +1,7 @@
 import { X } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 
-import { GlassPanel } from "@twin/ui";
+import { GlassPanel, GlassProgress } from "@twin/ui";
 
 import { useMission } from "@/state/mission";
 
@@ -117,15 +117,12 @@ export function SelectionCard() {
                 <div className="mc-card__meta">
                   {zone.task} · {zone.machines}
                 </div>
-                <div
+                <GlassProgress
                   className={`mc-progress mc-progress--${zone.tone}`}
-                  role="progressbar"
-                  aria-valuenow={zone.progressPct}
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                >
-                  <div className="mc-progress__bar" style={{ width: `${zone.progressPct}%` }} />
-                </div>
+                  label={`${zone.name} progress`}
+                  value={zone.progressPct}
+                  valueText={`${zone.progressPct}%`}
+                />
                 <div className="mc-card__note">{zone.note}</div>
                 <div className="mc-actions">
                   <button

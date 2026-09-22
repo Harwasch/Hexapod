@@ -78,6 +78,9 @@ See [`.env.example`](.env.example) for every variable with comments. The importa
 | `CESIUM_ION_SERVER_TOKEN`      | api   | Server-side ion token to monitor reconstruction jobs. Never exposed to the browser.     |
 
 `VITE_` variables are public and inlined into the bundle. Server secrets never carry that prefix.
+That is why `API_WRITE_TOKEN` has no `VITE_` twin: the console asks for it in the Captures panel the
+first time a write comes back `401`, and keeps it in this browser (`twin.settings.v1`) rather than in
+the bundle. With no token configured, writes are open and nothing is ever asked for.
 
 ## Everyday commands
 

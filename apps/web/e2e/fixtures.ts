@@ -225,11 +225,144 @@ export interface MockOptions {
   /** Simulate the catalog API being down. */
   apiDown?: boolean;
   onCreateSite?: (body: unknown) => void;
+  /** When set, every mutating request must carry `Authorization: Bearer <token>` or get a 401. */
+  writeToken?: string;
+  /**
+   * Bytes per part. Tiny on purpose: 4 bytes against a 12-byte file is three parts, so a
+   * handful of bytes exercises the same window-walking a 12 GB video would.
+   */
+  partSize?: number;
+  /** Parts per presigned window — the mock's `PRESIGN_WINDOW_PARTS`. */
+  windowParts?: number;
+  /** Fail this part's first PUT, so the retry path has something real to resume from. */
+  failPartOnce?: number;
+  /**
+   * Pretend a worker exists. It does not: A7 builds it, and until then a queued job
+   * really does sit at `not-started`, which is the default here for that reason.
+   */
+  workerRuns?: boolean;
 }
 
-export async function mockApi(page: Page, options: MockOptions = {}): Promise<void> {
+/** What the capture mock saw, so a test can assert on the wire rather than on the DOM alone. */
+export interface CaptureMockState {
+  captures: Record<string, unknown>[];
+  jobs: Record<string, unknown>[];
+  /** One entry per part PUT: which part, how many bytes, and whether it carried auth. */
+  partPuts: { partNumber: number; bytes: number; authorization: string | null }[];
+  /** `firstPartNumber` of every window presigned after the first one. */
+  presigns: number[];
+  /** The ordered parts sent to `.../complete`. */
+  completed: { partNumber: number; etag: string }[][];
+  /** Mutating requests that were refused for want of the write token. */
+  unauthorized: string[];
+}
+
+const STORAGE_PREFIX = "/__storage";
+
+const STAGES = ["normalize", "pose", "train", "package", "register"];
+
+/**
+ * A stand-in for the worker A7 has not built yet: one stage per poll of the job list.
+ *
+ * Only used by tests that ask for it. Left alone, a queued job stays `not-started`,
+ * because that is exactly what happens against the real API today.
+ */
+function advanceJobs(state: CaptureMockState, poll: number): void {
+  for (const job of state.jobs) {
+    if (job.status === "complete" || job.status === "error") continue;
+    // Counted from the job's own first poll, not from the panel's: a job is queued when
+    // it is created no matter how long the panel has been open.
+    const done = Math.max(0, poll - Number(job.createdPoll) - 1);
+    job.status = done === 0 ? "not-started" : done >= STAGES.length ? "complete" : "in-progress";
+    job.steps = STAGES.slice(0, Math.min(done + 1, STAGES.length)).map((stageId, index) => ({
+      id: `${String(job.id)}-${stageId}`,
+      jobId: job.id,
+      stageId,
+      impl: "stub",
+      ordinal: index,
+      attempt: 1,
+      status: index < done ? "complete" : "in-progress",
+      startedAt: "2026-09-20T00:00:00Z",
+      finishedAt: index < done ? "2026-09-20T00:00:12Z" : null,
+      preemptedAt: null,
+      checkpointKey: null,
+      logKey: null,
+      metrics: {},
+      artifacts: [],
+      createdAt: "2026-09-20T00:00:00Z",
+      updatedAt: "2026-09-20T00:00:00Z",
+    }));
+    if (job.status === "complete") {
+      job.finishedAt = "2026-09-20T00:01:00Z";
+      job.durationS = 60;
+      const capture = state.captures.find((c) => String(c.id) === String(job.captureId));
+      if (capture) {
+        capture.status = "complete";
+        capture.siteId = demoSite.id;
+      }
+    }
+  }
+}
+
+export async function mockApi(page: Page, options: MockOptions = {}): Promise<CaptureMockState> {
   // Plans approved during a test live here so list, revise and status round-trip.
   const mockPlans: Record<string, unknown>[] = [];
+  const partSize = options.partSize ?? 4;
+  const windowParts = options.windowParts ?? 2;
+  const state: CaptureMockState = {
+    captures: [],
+    jobs: [],
+    partPuts: [],
+    presigns: [],
+    completed: [],
+    unauthorized: [],
+  };
+  // How many times the job list has been polled: the simulated worker advances one stage
+  // per poll, the way `mockPlans` mutates across calls.
+  let jobPolls = 0;
+
+  /**
+   * One window of presigned parts — never the whole upload.
+   *
+   * The real API hands out 32 at a time (`PRESIGN_WINDOW_PARTS`) because a 12 GB video
+   * is 1536 parts of URL JSON whose tail would expire before a phone reached it. The
+   * mock shrinks both numbers so a 12-byte file walks the same path.
+   */
+  const uploadWindow = (fileId: string, partsTotal: number, firstPartNumber: number) => {
+    const last = Math.min(firstPartNumber + windowParts - 1, partsTotal);
+    return {
+      uploadId: `mpu-${fileId}`,
+      storageKey: `captures/source/${fileId}`,
+      partSize,
+      partsTotal,
+      parts: Array.from({ length: Math.max(0, last - firstPartNumber + 1) }, (_, i) => ({
+        partNumber: firstPartNumber + i,
+        url: `${STORAGE_PREFIX}/${fileId}/${firstPartNumber + i}`,
+      })),
+      expiresIn: 3600,
+      nextPartNumber: last >= partsTotal ? null : last + 1,
+    };
+  };
+
+  // Parts go to "object storage", which here is a same-origin path so the test is about
+  // the uploader rather than about CORS. The ETag header is the load-bearing part: the
+  // real bucket has to expose it, and without it completion is impossible.
+  const failedOnce = new Set<number>();
+  await page.route(`**${STORAGE_PREFIX}/**`, async (route) => {
+    const request = route.request();
+    const partNumber = Number(new URL(request.url()).pathname.split("/").pop());
+    state.partPuts.push({
+      partNumber,
+      bytes: (request.postDataBuffer() ?? Buffer.alloc(0)).length,
+      authorization: await request.headerValue("authorization"),
+    });
+    if (options.failPartOnce === partNumber && !failedOnce.has(partNumber)) {
+      failedOnce.add(partNumber);
+      await route.fulfill({ status: 500, body: "storage said no" });
+      return;
+    }
+    await route.fulfill({ status: 200, headers: { ETag: `"etag-${partNumber}"` }, body: "" });
+  });
   // OpenStreetMap feature lookup for "find on the map": one closed water way in any view.
   await page.route("https://overpass-api.de/**", (route) => {
     // "What contains this point" gets a field around the point; a bbox query gets the lake.
@@ -285,6 +418,154 @@ export async function mockApi(page: Page, options: MockOptions = {}): Promise<vo
     }
     const json = (body: unknown, status = 200) =>
       route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
+
+    // The write gate A3 put on every mutating endpoint. With no token configured the API
+    // leaves writes open, which is why the default here configures none.
+    const mutating = request.method() !== "GET";
+    if (options.writeToken && mutating) {
+      const header = await request.headerValue("authorization");
+      if (header !== `Bearer ${options.writeToken}`) {
+        state.unauthorized.push(`${request.method()} ${path}`);
+        return json(
+          {
+            title: "Unauthorized",
+            status: 401,
+            detail: "This endpoint needs the write token.",
+          },
+          401,
+        );
+      }
+    }
+
+    const captureRoute =
+      /^\/api\/v1\/captures(?:\/([^/]+))?(?:\/files(?:\/([^/]+))?(\/parts|\/complete|\/abort)?|(\/process))?$/.exec(
+        path,
+      );
+    if (captureRoute) {
+      const [, captureId, fileId, fileAction, process] = captureRoute;
+      const capture = state.captures.find((c) => String(c.id) === captureId) as
+        | (Record<string, unknown> & { files: Record<string, unknown>[]; status: string })
+        | undefined;
+      if (!captureId) {
+        if (request.method() === "GET") return json(state.captures);
+        const body = request.postDataJSON() as { name: string; kind: string };
+        const created = {
+          id: `capture-${state.captures.length + 1}`,
+          slug: `capture-${state.captures.length + 1}`,
+          name: body.name,
+          kind: body.kind,
+          description: null,
+          status: "awaiting-files",
+          siteId: null,
+          device: null,
+          sensor: null,
+          capturedAt: null,
+          temporalExtent: null,
+          georefMethod: null,
+          scaleSource: null,
+          uncertaintyM: null,
+          license: null,
+          provenance: null,
+          attribution: [],
+          metadata: (request.postDataJSON() as { metadata?: unknown }).metadata ?? {},
+          files: [] as Record<string, unknown>[],
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+        state.captures.unshift(created);
+        return json(created, 201);
+      }
+      if (!capture) return json({ title: "Not found", status: 404 }, 404);
+      if (process) {
+        const body = request.postDataJSON() as { recipe: string };
+        const job = {
+          id: `job-${state.jobs.length + 1}`,
+          // Bookkeeping for the simulated worker; the API has no such field and the UI
+          // never reads it.
+          createdPoll: jobPolls,
+          captureId: String(capture.id),
+          recipe: body.recipe,
+          recipeVersion: "0.1.0",
+          params: {},
+          status: "not-started",
+          provider: null,
+          tier: null,
+          error: null,
+          claimedBy: null,
+          claimedAt: null,
+          leaseExpiresAt: null,
+          finishedAt: null,
+          durationS: null,
+          costUsd: null,
+          steps: [] as Record<string, unknown>[],
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+        state.jobs.unshift(job);
+        return json(job, 202);
+      }
+      if (fileId && fileAction === "/complete") {
+        const body = request.postDataJSON() as { parts: { partNumber: number; etag: string }[] };
+        state.completed.push(body.parts);
+        const file = capture.files.find((f) => String(f.id) === fileId)!;
+        Object.assign(file, {
+          status: "complete",
+          uploadId: null,
+          partsCompleted: body.parts.length,
+          partsTotal: body.parts.length,
+        });
+        capture.status = "not-started";
+        return json(file);
+      }
+      if (fileId && fileAction === "/parts") {
+        const body = request.postDataJSON() as { firstPartNumber: number };
+        state.presigns.push(body.firstPartNumber);
+        const file = capture.files.find((f) => String(f.id) === fileId)!;
+        return json(uploadWindow(String(file.id), Number(file.partsTotal), body.firstPartNumber));
+      }
+      if (fileId && fileAction === "/abort") {
+        const file = capture.files.find((f) => String(f.id) === fileId)!;
+        Object.assign(file, { status: "aborted", uploadId: null });
+        return json(file);
+      }
+      if (request.method() === "POST") {
+        const body = request.postDataJSON() as {
+          filename: string;
+          bytes: number | null;
+          contentType: string | null;
+        };
+        const id = `file-${capture.files.length + 1}`;
+        const partsTotal = Math.max(1, Math.ceil((body.bytes ?? partSize) / partSize));
+        const file = {
+          id,
+          captureId: capture.id,
+          filename: body.filename,
+          contentType: body.contentType,
+          bytes: body.bytes,
+          checksum: null,
+          storageKey: `captures/${String(capture.id)}/source/${id}/${body.filename}`,
+          status: "in-progress",
+          uploadId: `mpu-${id}`,
+          partsCompleted: 0,
+          partsTotal,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+        capture.files.push(file);
+        return json({ file, upload: uploadWindow(id, partsTotal, 1) }, 201);
+      }
+      return json({
+        ...capture,
+        jobs: state.jobs.filter((j) => String(j.captureId) === String(capture.id)),
+      });
+    }
+
+    if (path === "/api/v1/jobs" && request.method() === "GET") {
+      jobPolls += 1;
+      if (options.workerRuns) advanceJobs(state, jobPolls);
+      return json(state.jobs);
+    }
+
     if (path === "/api/v1/health")
       return json({
         status: "ok",
@@ -523,6 +804,7 @@ export async function mockApi(page: Page, options: MockOptions = {}): Promise<vo
     /https:\/\/(dev\.virtualearth|ecn\.t[0-9]\.tiles\.virtualearth)\.net\/.*/,
     (route) => route.abort(),
   );
+  return state;
 }
 
 export const test = base.extend<{ app: Page }>({

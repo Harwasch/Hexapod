@@ -660,6 +660,8 @@
   box-shadow: var(--focus-ring);
 }
 
+/* The mission skin over <GlassProgress>: geometry and palette only, no second bar
+   implementation. `--tone` stays the name the mission surfaces already use. */
 .mc-progress {
   position: relative;
   height: 7px;
@@ -668,6 +670,7 @@
   margin-top: 0.55rem;
   overflow: visible;
   --tone: var(--accent);
+  --progress-tone: var(--tone);
 }
 
 .mc-progress--amber,
@@ -684,11 +687,16 @@
   --tone: var(--neutral-dot);
 }
 
-.mc-progress__bar {
-  height: 100%;
-  border-radius: 4px;
-  background: var(--tone);
+.mc-progress .glass-progress__bar {
   transition: width var(--motion-slow) var(--ease-out);
+}
+
+.mc-progress .glass-progress__marker {
+  top: -4px;
+  bottom: -4px;
+  opacity: 1;
+  border-radius: 0;
+  box-shadow: 0 0 8px rgba(0, 0, 0, 0.6);
 }
 
 /* ---- Windows (Plan / Fleet) ------------------------------------------- */

@@ -24,6 +24,20 @@ export interface SettingsState {
   ionTokenNoticeDismissed: boolean;
   devToolsOpen: boolean;
   exploreSpeed: number;
+  /**
+   * The API's shared write token (`API_WRITE_TOKEN`), entered once in the UI.
+   *
+   * It lives here, beside the other preferences, and deliberately not in a `VITE_`
+   * variable: those are inlined into the bundle and served to everyone who loads the
+   * page (README.md), which for a shared write credential means publishing it. An
+   * empty token is the normal case — a deployment with no token configured leaves
+   * writes open, so development never has to enter one.
+   *
+   * Trade-off, stated plainly: localStorage is readable by any XSS on this origin, so
+   * this is acceptable for a single-user prototype and would not be for real accounts.
+   * Real accounts want a session cookie the page cannot read.
+   */
+  writeToken: string;
   set: (patch: Partial<Omit<SettingsState, "set" | "reset">>) => void;
   reset: () => void;
 }
@@ -42,6 +56,7 @@ const defaults = {
   ionTokenNoticeDismissed: false,
   devToolsOpen: false,
   exploreSpeed: 4,
+  writeToken: "",
 };
 
 export const useSettings = create<SettingsState>()(

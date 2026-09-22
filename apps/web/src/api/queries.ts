@@ -3,9 +3,14 @@ import { useMutation, useQuery, useQueryClient, type UseQueryResult } from "@tan
 import type {
   AssetCreate,
   CameraBookmarkCreate,
+  Capture,
+  CaptureCreate,
+  CaptureDetail,
   GroundOutline,
   HealthStatus,
   IonStatus,
+  Job,
+  JobCreate,
   Layer,
   LayerCreate,
   OutlineRequest,
@@ -30,6 +35,9 @@ export const queryKeys = {
   site: (id: string) => ["sites", id] as const,
   layers: ["layers"] as const,
   ion: ["ion"] as const,
+  captures: ["captures"] as const,
+  capture: (id: string) => ["captures", id] as const,
+  jobs: ["jobs"] as const,
 };
 
 /** Result decorated with whether the data came from the built-in fallback catalog. */
@@ -225,5 +233,96 @@ export function useDeleteLayer() {
     mutationFn: (layerId: string) =>
       unwrap(api.DELETE("/api/v1/layers/{layer_id}", { params: { path: { layer_id: layerId } } })),
     onSuccess: () => void client.invalidateQueries({ queryKey: queryKeys.layers }),
+  });
+}
+
+/* ---- Captures and jobs ---------------------------------------------------- */
+
+/**
+ * How often the panel asks the API what changed, while it is open.
+ *
+ * Uploads report themselves (the browser is doing them); this poll is for the half the
+ * browser cannot see — a worker picking a job up and moving it through its stages.
+ * `useHealth` set the precedent for polling here; four seconds is the same idea at the
+ * pace a stage list has to move to look alive.
+ */
+const JOB_POLL_MS = 4000;
+
+/** Captures, newest first. `builtin` here means "no API", which disables the drop zone. */
+export function useCaptures(enabled = true): CatalogResult<Capture[]> {
+  const query = useQuery({
+    queryKey: queryKeys.captures,
+    queryFn: () => unwrap<Capture[]>(api.GET("/api/v1/captures")),
+    enabled,
+    ...RETRY,
+    staleTime: 0,
+    refetchInterval: enabled ? JOB_POLL_MS : false,
+  });
+  return withFallback(query, () => []);
+}
+
+/**
+ * Every recent job, polled alongside the captures.
+ *
+ * One list rather than a query per capture: `GET /captures` returns rows without their
+ * jobs, and a panel of ten cards should not mean ten polls.
+ */
+export function useJobs(enabled = true): CatalogResult<Job[]> {
+  const query = useQuery({
+    queryKey: queryKeys.jobs,
+    queryFn: () => unwrap<Job[]>(api.GET("/api/v1/jobs", { params: { query: { limit: 50 } } })),
+    enabled,
+    ...RETRY,
+    staleTime: 0,
+    refetchInterval: enabled ? JOB_POLL_MS : false,
+  });
+  return withFallback(query, () => []);
+}
+
+/** The newest job for each capture: a retry supersedes the run it retried. */
+export function latestJobByCapture(jobs: Job[]): Record<string, Job> {
+  const newest: Record<string, Job> = {};
+  for (const job of jobs) {
+    const current = newest[job.captureId];
+    if (!current || current.createdAt < job.createdAt) newest[job.captureId] = job;
+  }
+  return newest;
+}
+
+export const capturesApi = {
+  create: (body: CaptureCreate) => unwrap<Capture>(api.POST("/api/v1/captures", { body })),
+  get: (captureId: string) =>
+    unwrap<CaptureDetail>(
+      api.GET("/api/v1/captures/{capture_id}", { params: { path: { capture_id: captureId } } }),
+    ),
+  process: (captureId: string, body: JobCreate) =>
+    unwrap<Job>(
+      api.POST("/api/v1/captures/{capture_id}/process", {
+        params: { path: { capture_id: captureId } },
+        body,
+      }),
+    ),
+};
+
+export function useProcessCapture() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: ({ captureId, recipe }: { captureId: string; recipe: string }) =>
+      capturesApi.process(captureId, { recipe }),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: queryKeys.captures });
+      void client.invalidateQueries({ queryKey: queryKeys.jobs });
+    },
+  });
+}
+
+export function useCancelJob() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (jobId: string) =>
+      unwrap<Job>(
+        api.POST("/api/v1/jobs/{job_id}/cancel", { params: { path: { job_id: jobId } } }),
+      ),
+    onSuccess: () => void client.invalidateQueries({ queryKey: queryKeys.jobs }),
   });
 }

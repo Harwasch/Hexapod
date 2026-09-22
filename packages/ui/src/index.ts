@@ -32,6 +32,11 @@ export { GlassSwitch, type GlassSwitchProps } from "./components/GlassSwitch";
 export { GlassSlider, type GlassSliderProps } from "./components/GlassSlider";
 export { Spinner, type SpinnerProps } from "./components/Spinner";
 export {
+  GlassProgress,
+  type GlassProgressProps,
+  type GlassProgressTone,
+} from "./components/GlassProgress";
+export {
   Divider,
   EmptyState,
   GlassBadge,

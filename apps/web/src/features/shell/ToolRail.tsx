@@ -1,4 +1,14 @@
-import { Bookmark, Columns2, Layers, MapPin, Plus, Ruler, Settings2, Terminal } from "lucide-react";
+import {
+  Bookmark,
+  Boxes,
+  Columns2,
+  Layers,
+  MapPin,
+  Plus,
+  Ruler,
+  Settings2,
+  Terminal,
+} from "lucide-react";
 
 import { GlassButton, GlassPanel, GlassTooltip } from "@twin/ui";
 
@@ -9,6 +19,7 @@ import { useUi, type ToolPanel } from "@/state/ui";
 const tools: { id: ToolPanel; label: string; icon: typeof Layers; shortcut: string }[] = [
   { id: "layers", label: "Layers", icon: Layers, shortcut: "L" },
   { id: "sites", label: "Sites", icon: MapPin, shortcut: "S" },
+  { id: "captures", label: "Captures", icon: Boxes, shortcut: "U" },
   { id: "measure", label: "Measure", icon: Ruler, shortcut: "M" },
   { id: "compare", label: "Compare", icon: Columns2, shortcut: "C" },
   { id: "bookmarks", label: "Bookmarks", icon: Bookmark, shortcut: "B" },

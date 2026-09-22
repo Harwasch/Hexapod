@@ -1,4 +1,12 @@
-import { Divider, GlassSegmentedControl, GlassSheet, GlassSlider, GlassSwitch } from "@twin/ui";
+import {
+  Divider,
+  GlassButton,
+  GlassInput,
+  GlassSegmentedControl,
+  GlassSheet,
+  GlassSlider,
+  GlassSwitch,
+} from "@twin/ui";
 
 import { env } from "@/app/env";
 import { DEFAULT_WIND_STRENGTH, useLiving } from "@/state/living";
@@ -124,6 +132,54 @@ function WindSection() {
         </>
       )}
     </section>
+  );
+}
+
+/**
+ * Shown only once a write token is in play — either stored, or asked for by a 401.
+ *
+ * Most deployments configure no `API_WRITE_TOKEN` at all, and writes are then open; a
+ * token field on screen in that case would describe a step that does not exist.
+ */
+function WriteTokenSection() {
+  const writeToken = useSettings((s) => s.writeToken);
+  const setSettings = useSettings((s) => s.set);
+  const prompted = useUi((s) => s.writeTokenPrompt);
+  if (!writeToken && !prompted) return null;
+  return (
+    <>
+      <section aria-labelledby="settings-api">
+        <p className="glass-eyebrow" id="settings-api">
+          API access
+        </p>
+        <Row
+          id="write-token-label"
+          label="Write token"
+          hint="Sent as a bearer token on writes, and kept in this browser — which any script on this origin can read. Fine for a single-user prototype, not for real accounts."
+          control={
+            <div className="glass-row">
+              <GlassInput
+                type="password"
+                aria-labelledby="write-token-label"
+                value={writeToken}
+                autoComplete="off"
+                onChange={(event) => setSettings({ writeToken: event.target.value })}
+                data-testid="settings-write-token"
+              />
+              <GlassButton
+                size="sm"
+                variant="ghost"
+                onClick={() => setSettings({ writeToken: "" })}
+                disabled={!writeToken}
+              >
+                Forget
+              </GlassButton>
+            </div>
+          }
+        />
+      </section>
+      <Divider />
+    </>
   );
 }
 
@@ -332,6 +388,7 @@ export function SettingsSheet() {
         />
       </section>
       <Divider />
+      <WriteTokenSection />
       <WindSection />
     </GlassSheet>
   );

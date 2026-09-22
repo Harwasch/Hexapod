@@ -7,6 +7,7 @@ import {
   GlassButton,
   GlassField,
   GlassInput,
+  GlassProgress,
   GlassSegmentedControl,
   GlassSheet,
   GlassSwitch,
@@ -107,5 +108,43 @@ describe("GlassField / GlassSwitch", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("Required");
     await userEvent.click(screen.getByRole("switch", { name: "Visible" }));
     expect(onChange).toHaveBeenCalledWith(true);
+  });
+});
+
+describe("GlassProgress", () => {
+  it("reports its position against its own unit, not a percentage", () => {
+    render(
+      <GlassProgress
+        label="Uploading clip.mov"
+        value={512}
+        max={2048}
+        valueText="512 MB of 2 GB"
+      />,
+    );
+    const bar = screen.getByRole("progressbar", { name: "Uploading clip.mov" });
+    expect(bar).toHaveAttribute("aria-valuenow", "512");
+    expect(bar).toHaveAttribute("aria-valuemax", "2048");
+    expect(bar).toHaveAttribute("aria-valuetext", "512 MB of 2 GB");
+    expect(bar.querySelector(".glass-progress__bar")).toHaveStyle({ width: "25%" });
+  });
+
+  it("clamps out-of-range values and drops aria-valuenow when indeterminate", () => {
+    const { rerender } = render(<GlassProgress label="Packaging" value={140} />);
+    expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "100");
+    rerender(<GlassProgress label="Packaging" value={-5} />);
+    expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "0");
+    rerender(<GlassProgress label="Packaging" value={0} indeterminate tone="run" />);
+    const bar = screen.getByRole("progressbar", { name: "Packaging" });
+    expect(bar).not.toHaveAttribute("aria-valuenow");
+    expect(bar).toHaveClass("glass-progress--indeterminate", "glass-progress--run");
+  });
+
+  it("draws the expected marker where the schedule says it should be", () => {
+    const { container } = render(
+      <GlassProgress label="Plan" value={30} expected={70} expectedTitle="Schedule expects 70%" />,
+    );
+    const marker = container.querySelector(".glass-progress__marker");
+    expect(marker).toHaveStyle({ left: "70%" });
+    expect(marker).toHaveAttribute("title", "Schedule expects 70%");
   });
 });

@@ -258,7 +258,9 @@ test.describe("interaction", () => {
     await app.keyboard.press("Tab");
     await expect(app.getByTestId("tool-sites")).toBeFocused();
     const rail = app.getByRole("toolbar", { name: "Tools" });
-    await expect(rail.getByRole("button")).toHaveCount(8);
+    // Six panel tools (layers, sites, captures, measure, compare, bookmarks) plus
+    // add data, settings and developer tools.
+    await expect(rail.getByRole("button")).toHaveCount(9);
     for (const button of await rail.getByRole("button").all()) {
       expect(await button.getAttribute("aria-label")).toBeTruthy();
     }
