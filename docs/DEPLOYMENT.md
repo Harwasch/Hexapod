@@ -489,17 +489,18 @@ regenerating it every run would invalidate every outstanding phone-handoff link.
 Repository → Settings → Secrets and variables → Actions → **Variables**. Every one of these
 is optional; the default is in the right-hand column.
 
-| Name                         | Default             | What it is for                                                           |
-| ---------------------------- | ------------------- | ------------------------------------------------------------------------ |
-| `VITE_API_BASE_URL`          | _(passed in)_       | the API origin the bundle is built against                               |
-| `VITE_OFFLINE_CATALOG_URL`   | _(passed in)_       | `catalog.json`'s public URL                                              |
-| `VITE_ENABLE_PHOTOREALISTIC` | on                  | `false` unless your ion token has Google access and you accept the terms |
-| `R2_BUCKET`                  | `twin-assets`       | the bucket's name                                                        |
-| `R2_PUBLIC_URL`              | the `r2.dev` URL    | set it to a custom domain to take the managed URL out of the picture     |
-| `WEB_BASE_URL`               | the `pages.dev` URL | set it to a custom domain on the Pages project                           |
-| `NEON_PROJECT_NAME`          | `hexapod-twin`      | which Neon project to find or create                                     |
-| `NEON_REGION_ID`             | `aws-us-east-1`     | Neon's name for the region `fly.toml`'s `primary_region` is in           |
-| `FLY_ORG`                    | `personal`          | the Fly organization to create the app in                                |
+| Name                         | Default              | What it is for                                                                                |
+| ---------------------------- | -------------------- | --------------------------------------------------------------------------------------------- |
+| `VITE_API_BASE_URL`          | _(passed in)_        | the API origin the bundle is built against                                                    |
+| `VITE_OFFLINE_CATALOG_URL`   | _(passed in)_        | `catalog.json`'s public URL                                                                   |
+| `VITE_ENABLE_PHOTOREALISTIC` | on                   | `false` unless your ion token has Google access and you accept the terms                      |
+| `R2_BUCKET`                  | `twin-assets`        | the bucket's name                                                                             |
+| `R2_PUBLIC_BUCKET`           | `<R2_BUCKET>-public` | the **only** bucket made public; it must differ from `R2_BUCKET`                              |
+| `R2_PUBLIC_URL`              | the `r2.dev` URL     | the public bucket's URL; set it to a custom domain to take the managed one out of the picture |
+| `WEB_BASE_URL`               | the `pages.dev` URL  | set it to a custom domain on the Pages project                                                |
+| `NEON_PROJECT_NAME`          | `hexapod-twin`       | which Neon project to find or create                                                          |
+| `NEON_REGION_ID`             | `aws-us-east-1`      | Neon's name for the region `fly.toml`'s `primary_region` is in                                |
+| `FLY_ORG`                    | `personal`           | the Fly organization to create the app in                                                     |
 
 The first two are marked _(passed in)_ because `provision.yml` computes them and hands them
 to `deploy.yml` directly — a provisioned first deploy needs no variables set at all. A

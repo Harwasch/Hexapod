@@ -100,6 +100,7 @@ jobs:
       - name: Names come from the committed configuration
         env:
           R2_BUCKET: ${{ vars.R2_BUCKET }}
+          R2_PUBLIC_BUCKET: ${{ vars.R2_PUBLIC_BUCKET }}
           NEON_PROJECT_NAME: ${{ vars.NEON_PROJECT_NAME }}
           NEON_REGION_ID: ${{ vars.NEON_REGION_ID }}
           FLY_ORG: ${{ vars.FLY_ORG }}
