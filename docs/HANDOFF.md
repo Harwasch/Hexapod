@@ -40,14 +40,14 @@ orbit. Then it stops, because training has never run.
 
 **The five remaining steps:**
 
-| Step            | What it delivers                                               | Blocked by                         |
-| --------------- | -------------------------------------------------------------- | ---------------------------------- |
-| C3              | `docs/PIPELINE.md` and the remaining ADRs                      | nothing                            |
-| B5              | 4D: measured motion played back, with a mandatory null control | nothing (C2 unblocked it)          |
-| B3              | Crisp splats from captures that moved                          | a GPU — i.e. a Modal token         |
-| the deploy      | The first real URL                                             | accounts                           |
-| B3's validation | `none` vs `robust` vs `imc` on one windy capture               | a GPU _and_ a real capture         |
-| the remote half | The Modal function `ModalAdapter` spawns                       | nothing — but only a run proves it |
+| Step            | What it delivers                                               | Blocked by                 |
+| --------------- | -------------------------------------------------------------- | -------------------------- |
+| C3              | `docs/PIPELINE.md` and the remaining ADRs                      | nothing                    |
+| B5              | 4D: measured motion played back, with a mandatory null control | nothing (C2 unblocked it)  |
+| B3              | Crisp splats from captures that moved                          | a GPU — i.e. a Modal token |
+| the deploy      | The first real URL                                             | accounts                   |
+| B3's validation | `none` vs `robust` vs `imc` on one windy capture               | a GPU _and_ a real capture |
+| the remote half | written: `tools/pipeline/remote.py` + `infra/modal/app.py`     | done, except a real run    |
 
 ## 3. What the network unblocked, and what it did not
 
@@ -84,10 +84,22 @@ the least useful possible outcome:
   the container billing.
 
 **Start with the GPU, still.** One Modal token turns three unproven things into verified
-ones at once: the `train` stage, the adapter, and the ability to start B3. The remote half
-— the deployed Modal function that fetches inputs, runs `run_stage` and syncs
-`checkpoint/` — **is still not in this repository** and has to be written.
-`SubprocessAdapter` is the worked example of what it must do.
+ones at once: the `train` stage, the adapter, and the ability to start B3.
+
+The remote half now exists. `tools/pipeline/remote.py` is what a container does — fetch,
+run, sync the checkpoint on an interval, upload — and it takes a `Transfer`, so
+`tests/test_remote.py` drives all of it here. `infra/modal/app.py` is the Modal wrapper:
+an image, a GPU, a secret and one call, deploying a `run_stage_<tier>` per tier. CI builds
+that App on every run, which caught two deploy-time path bugs and cannot catch a wrong
+`gpu=` string. Deploy it with:
+
+```bash
+uv run --project tools/pipeline --with modal modal deploy infra/modal/app.py
+```
+
+**A training stage will not run on it yet.** `TRAINING_PACKAGES` in that file is empty:
+`gsplat` needs a CUDA, torch and gsplat triple, and pinning one from memory is the failure
+mode this repository exists to avoid. Fill it with versions you have built.
 
 ## 4. Setting up, now that the network allows it
 
