@@ -89,11 +89,30 @@ def test_an_improper_rotation_cannot_become_a_pose() -> None:
         tree_frames.Pose(name="bad", rotation=reflection, translation=np.zeros(3))
 
 
+#: How far a pose may move when it round-trips through the quaternion COLMAP stores.
+#:
+#: Not a precision claim -- a guard against A0 #7's trap, where an improper rotation in
+#: the evaluator produced a constant 90.000 deg error that read exactly like broken SfM.
+#: A flip lands at 90 or 180 degrees, so anything far below that catches it.
+#:
+#: It is 1e-4 rather than the 1e-9 this test shipped with because 1e-9 was calibrated on
+#: one machine's luck. Measured: this development VM round-trips all 40 poses at *exactly*
+#: 0.0 deg, while `ubuntu-latest` reached 1.2e-6 deg on frame_0006 -- the same matrix
+#: element coming out as -5.55e-17 there and 0.0 here. Different CPU, different BLAS,
+#: different rounding in the quaternion extraction's square root. A double-precision
+#: round trip is good to about 1e-6 deg and no better, so 1e-9 was asserting that the
+#: arithmetic is exact, which is not a property any machine owes us. This leaves two
+#: orders of magnitude of headroom over the worst observed value and still sits six
+#: orders below the flip it exists to catch.
+QUATERNION_ROUND_TRIP_DEG = 1e-4
+
+
 def test_every_pose_the_fixture_builds_is_a_proper_rotation() -> None:
     for pose in tree_frames.orbit(FRAMES):
         assert float(np.linalg.det(pose.rotation)) == pytest.approx(1.0, abs=1e-12)
         # Round-tripping through the quaternion COLMAP compares against must not flip it.
-        assert sfm.rotation_angle_deg(sfm.quat_to_matrix(pose.qvec), pose.rotation) < 1e-9
+        error = sfm.rotation_angle_deg(sfm.quat_to_matrix(pose.qvec), pose.rotation)
+        assert error < QUATERNION_ROUND_TRIP_DEG, f"{pose.name} moved {error:.3e} deg"
 
 
 def test_the_rendered_orbit_is_byte_identical_between_runs(tmp_path: Path) -> None:
