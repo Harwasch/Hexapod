@@ -25,6 +25,7 @@ from app.main import create_app
 from app.models import Artifact, Job, JobStep
 from app.models.enums import CaptureStatus
 from app.services import captures as capture_service
+from app.services import recipes as recipe_service
 from app.storage import S3Storage, get_storage
 
 BUCKET = "twin-test"
@@ -365,15 +366,23 @@ def test_process_queues_a_job_and_runs_nothing(client: TestClient, db: Session) 
 
     response = client.post(
         f"/api/v1/captures/{capture['id']}/process",
-        json={"recipe": "splat-ingest", "params": {"sh": 3}, "provider": "modal", "tier": "a10g"},
+        json={
+            # Keyed by stage id, which is the shape `Recipe.with_params` takes. A flat
+            # `{"sh": 3}` used to be accepted here and silently ignored by the worker.
+            "recipe": "splat-ingest",
+            "params": {"package": {"max_gaussians": 120000}},
+            "provider": "modal",
+            "tier": "a10g",
+        },
     )
     assert response.status_code == 202, response.text
     job = response.json()
 
     assert job["status"] == "not-started"
     assert job["recipe"] == "splat-ingest"
-    assert job["recipeVersion"] == "0.1.0"  # resolved here, not supplied
-    assert job["params"] == {"sh": 3}
+    # Resolved from the recipe file, not supplied and not a literal in this service.
+    assert job["recipeVersion"] == recipe_service.version_of("splat-ingest")
+    assert job["params"] == {"package": {"max_gaussians": 120000}}
     assert job["captureId"] == capture["id"]
     # Nothing has run and nothing has claimed it.
     assert job["steps"] == []

@@ -118,6 +118,20 @@ export type JobArtifact = Schemas["ArtifactRead"];
 export type JobRetry = Schemas["JobRetry"];
 export type JobStepLog = Schemas["JobStepLog"];
 export type ArtifactKind = Schemas["ArtifactKind"];
+
+/** The data console (admin.html): outputs with their provenance, and storage reconciled. */
+export type ArtifactRow = Schemas["ArtifactRow"];
+export type ArtifactReference = Schemas["ArtifactReference"];
+export type StorageReconciliation = Schemas["StorageReconciliation"];
+export type OrphanObject = Schemas["OrphanObject"];
+export type MissingObject = Schemas["MissingObject"];
+
+/** The recipe catalogue: what a run can be, read from tools/pipeline rather than restated. */
+export type PipelineCatalogue = Schemas["PipelineCatalogue"];
+export type RecipeRead = Schemas["RecipeRead"];
+export type RecipeStage = Schemas["RecipeStageRead"];
+export type RecipeGpu = Schemas["RecipeGpu"];
+export type PipelineProvider = Schemas["ProviderRead"];
 export type RunStatus = Schemas["RunStatus"];
 export type GeorefMethod = Schemas["GeorefMethod"];
 export type ScaleSource = Schemas["ScaleSource"];

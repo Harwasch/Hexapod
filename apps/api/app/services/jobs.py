@@ -16,21 +16,10 @@ from sqlalchemy.orm import Session, selectinload
 from app.models import Job, JobStep
 from app.models.enums import RunStatus, UploadStatus
 from app.schemas.job import JobCreate, JobRead, JobStepLog
+from app.services import recipes as recipe_service
 from app.services.captures import get_capture
 from app.services.errors import ConflictError, NotFoundError
 from app.storage import ObjectStorage
-
-#: Recipes this API will queue, and the version it stamps on a run.
-#:
-#: A6 builds the real registry in `tools/pipeline`, with each recipe's stages and its
-#: own version; this map is the API's half of that contract until it exists, and is
-#: what makes `recipeVersion` a resolved fact rather than something a caller can claim.
-#: A6 replaces the literals here with a read of the registry -- the endpoint's shape
-#: does not change.
-RECIPE_VERSIONS: dict[str, str] = {
-    "splat-ingest": "0.1.0",
-    "photo-reconstruct": "0.1.0",
-}
 
 #: A run that has not finished. A capture may be run many times -- comparing two runs
 #: is the point of the console -- but not twice at once.
@@ -41,10 +30,16 @@ def create_job(db: Session, capture_id: uuid.UUID, payload: JobCreate) -> Job:
     """Queue a run. Nothing is executed here, and no step rows are written: the recipe
     decides the steps, and the worker that resolves the recipe writes them."""
     capture = get_capture(db, capture_id)
-    version = RECIPE_VERSIONS.get(payload.recipe)
+    # A2 left a literal map here and said A6 would replace it with a read of the registry.
+    # This is that read: the version stamped on a run is the recipe file's own, and the
+    # override check is `Recipe.with_params` rather than a second copy of its rules -- so
+    # a run whose parameters name a stage the recipe does not have is refused while the
+    # console's form is still open, in the pipeline's own words.
+    version = recipe_service.version_of(payload.recipe)
     if version is None:
-        known = ", ".join(sorted(RECIPE_VERSIONS))
+        known = ", ".join(recipe_service.known_names())
         raise ValueError(f"unknown recipe '{payload.recipe}'; known recipes are {known}")
+    recipe_service.check_overrides(payload.recipe, payload.params)
     if not any(file.status is UploadStatus.COMPLETE for file in capture.files):
         raise ConflictError(
             f"capture {capture.id} has no uploaded files; finish an upload before processing"

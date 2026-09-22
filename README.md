@@ -58,6 +58,11 @@ pnpm dev                                  # http://localhost:5173              (
 
 Open <http://localhost:5173>, click **View high-resolution demo**.
 
+Three pages are served, not one. `/` is the globe; `/admin.html` is the data console —
+every capture in storage, every run that produced it, and the form that launches more;
+`/upload.html` is the page a phone opens after scanning a capture's handoff QR code.
+Neither of the last two loads CesiumJS.
+
 Without Docker: any PostgreSQL 16 with the PostGIS extension works; point `DATABASE_URL`
 and `TEST_DATABASE_URL` at it. Without the API at all, the web app still boots with the
 built-in demo site and labels itself "Catalog API offline".

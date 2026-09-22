@@ -109,12 +109,16 @@ export default defineConfig({
     sourcemap: true,
     chunkSizeWarningLimit: 5000,
     rollupOptions: {
-      // Two entries: the console, and the standalone page a phone opens after scanning
-      // the handoff QR code. `upload.html` imports no stores and no CesiumJS on purpose —
-      // a phone should not pull a 3D globe over cellular to pick one file.
+      // Three entries, and only the first one is a globe. `upload.html` is the page a
+      // phone opens after scanning the handoff QR code — it should not pull a 3D globe
+      // over cellular to pick one file. `admin.html` is the data console: full-page and
+      // tabular, because a hundred runs and their parameters cannot be shown in a
+      // floating panel over a 3D scene. Both import no CesiumJS, which e2e asserts by
+      // watching for a cesium script request rather than by trusting this comment.
       input: {
         index: resolve(import.meta.dirname, "index.html"),
         upload: resolve(import.meta.dirname, "upload.html"),
+        admin: resolve(import.meta.dirname, "admin.html"),
       },
       output: {
         manualChunks: (id) =>

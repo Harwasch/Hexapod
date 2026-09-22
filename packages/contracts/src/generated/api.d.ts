@@ -61,6 +61,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/artifacts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List artifacts, newest first
+         * @description Every output the pipeline has written, with the run that produced it and whatever points at it. `unreferenced=true` is the cleanup list: artifacts no site asset or thumbnail URL refers to.
+         */
+        get: operations["list_artifacts_api_v1_artifacts_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/assets": {
         parameters: {
             query?: never;
@@ -477,6 +497,26 @@ export interface paths {
         patch: operations["set_status_api_v1_plans__plan_id__status_patch"];
         trace?: never;
     };
+    "/api/v1/recipes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The recipes a run can use, and the providers it can be sent to
+         * @description Read from `tools/pipeline/recipes/*.yaml`, not restated here: a recipe edited on disk changes what the console offers with no rebuild. Each stage carries its own parameter defaults, which is what `params` on a new run is merged over, keyed by stage id. 404 where the pipeline project is not on this host — the API itself does not need it, so it is not a fault, and jobs still queue against the shipped recipe versions.
+         */
+        get: operations["get_catalogue_api_v1_recipes_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sites": {
         parameters: {
             query?: never;
@@ -600,6 +640,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/storage/reconciliation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Reconcile object storage against the database, in both directions
+         * @description Walks `captures/` and `runs/` and reports **orphans** — objects no row claims, which is what a run that died after uploading leaves behind — then takes every row whose object should exist and reports the **missing** ones. The walk stops at `maxObjects` and says so; the row check asks storage directly, so it is exact either way.
+         */
+        get: operations["get_reconciliation_api_v1_storage_reconciliation_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -661,6 +721,87 @@ export interface components {
              */
             jobStepId: string;
             kind: components["schemas"]["ArtifactKind"];
+            /** Storagekey */
+            storageKey: string;
+            /**
+             * Updatedat
+             * Format: date-time
+             */
+            updatedAt: string;
+        };
+        /**
+         * ArtifactReference
+         * @description Something that points at an artifact, which is why it cannot be deleted.
+         *
+         *     Today that is a site: `register` writes the packaged tileset's public URL onto an
+         *     asset, and the thumbnail's onto the site itself. An artifact with no references is
+         *     not automatically garbage — a `manifest.json` is read by people, not by rows — but
+         *     the Outputs view's unreferenced list is where a cleanup starts.
+         */
+        ArtifactReference: {
+            /** Kind */
+            kind: string;
+            /** Label */
+            label: string;
+            /**
+             * Siteid
+             * Format: uuid
+             */
+            siteId: string;
+            /** Siteslug */
+            siteSlug: string;
+        };
+        /**
+         * ArtifactRow
+         * @description One artifact with the run that produced it and whatever points at it.
+         *
+         *     A join the console would otherwise do four requests to assemble: the Outputs view is
+         *     a flat table of every artifact ever written, and `kind`, `bytes` and `storageKey`
+         *     alone do not say which run to blame or whether anything still needs it.
+         */
+        ArtifactRow: {
+            /** Bytes */
+            bytes: number | null;
+            /**
+             * Captureid
+             * Format: uuid
+             */
+            captureId: string;
+            /** Capturename */
+            captureName: string;
+            /** Checksum */
+            checksum: string | null;
+            /** Contenttype */
+            contentType: string | null;
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Impl */
+            impl: string;
+            /**
+             * Jobid
+             * Format: uuid
+             */
+            jobId: string;
+            /**
+             * Jobstepid
+             * Format: uuid
+             */
+            jobStepId: string;
+            kind: components["schemas"]["ArtifactKind"];
+            /** Recipe */
+            recipe: string;
+            /** References */
+            references: components["schemas"]["ArtifactReference"][];
+            /** Stageid */
+            stageId: string;
             /** Storagekey */
             storageKey: string;
             /**
@@ -1711,6 +1852,27 @@ export interface components {
             /** Url */
             url?: string | null;
         };
+        /**
+         * MissingObject
+         * @description A row whose object is not in the bucket.
+         */
+        MissingObject: {
+            /** Captureid */
+            captureId: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Jobid */
+            jobId: string | null;
+            /** Key */
+            key: string;
+            /** Kind */
+            kind: string;
+            /** Label */
+            label: string;
+        };
         /** MultiPolygon */
         MultiPolygon: {
             /** Coordinates */
@@ -1743,6 +1905,25 @@ export interface components {
             type: "mvt";
             /** Urltemplate */
             urlTemplate: string;
+        };
+        /**
+         * OrphanObject
+         * @description An object in the bucket that no row accounts for.
+         */
+        OrphanObject: {
+            /** Bytes */
+            bytes: number;
+            /** Etag */
+            etag: string;
+            /** Key */
+            key: string;
+            /**
+             * Lastmodified
+             * Format: date-time
+             */
+            lastModified: string;
+            /** Reason */
+            reason: string;
         };
         /** Outline */
         Outline: {
@@ -1795,6 +1976,16 @@ export interface components {
             point: components["schemas"]["OutlinePoint"];
             /** Width */
             width: number;
+        };
+        /**
+         * PipelineCatalogue
+         * @description Everything the New-run form needs: what can be run, and where.
+         */
+        PipelineCatalogue: {
+            /** Providers */
+            providers: components["schemas"]["ProviderRead"][];
+            /** Recipes */
+            recipes: components["schemas"]["RecipeRead"][];
         };
         /**
          * PlanArea
@@ -2324,6 +2515,64 @@ export interface components {
             /** Sourceurl */
             sourceUrl?: string | null;
         };
+        /**
+         * ProviderRead
+         * @description One GPU host a run can be sent to, with the rate the plan's survey recorded.
+         *
+         *     `usdPerHourA100` is a reference point, not a quote: it is what the A0 provider survey
+         *     measured for an A100, recorded here so the console can say which tier is the cheap one
+         *     and which is the reliable one. B1's `ProviderAdapter` carries the real per-tier price
+         *     table and records `jobs.cost_usd` from what a run actually cost.
+         */
+        ProviderRead: {
+            /** Interruptible */
+            interruptible: boolean;
+            /** Label */
+            label: string;
+            /** Name */
+            name: string;
+            /** Note */
+            note: string;
+            /** Tiers */
+            tiers: string[];
+            /** Usdperhoura100 */
+            usdPerHourA100: number;
+        };
+        /**
+         * RecipeGpu
+         * @description A stage's GPU requirement. Its presence is the only routing signal there is.
+         */
+        RecipeGpu: {
+            /** Preemptible */
+            preemptible: boolean;
+            /** Tier */
+            tier: string;
+        };
+        /** RecipeRead */
+        RecipeRead: {
+            /** Description */
+            description: string;
+            /** Inputs */
+            inputs: string[];
+            /** Name */
+            name: string;
+            /** Stages */
+            stages: components["schemas"]["RecipeStageRead"][];
+            /** Version */
+            version: string;
+        };
+        /** RecipeStageRead */
+        RecipeStageRead: {
+            gpu: components["schemas"]["RecipeGpu"] | null;
+            /** Id */
+            id: string;
+            /** Impl */
+            impl: string;
+            /** Params */
+            params: {
+                [key: string]: unknown;
+            };
+        };
         /** RenderConfig */
         RenderConfig: {
             /**
@@ -2569,6 +2818,35 @@ export interface components {
              */
             url: string;
         };
+        /**
+         * StorageReconciliation
+         * @description One pass over the prefixes this system owns, against the rows that claim them.
+         */
+        StorageReconciliation: {
+            /** Bytesorphaned */
+            bytesOrphaned: number;
+            /** Bytesscanned */
+            bytesScanned: number;
+            /**
+             * Checkedat
+             * Format: date-time
+             */
+            checkedAt: string;
+            /** Matched */
+            matched: number;
+            /** Missing */
+            missing: components["schemas"]["MissingObject"][];
+            /** Orphans */
+            orphans: components["schemas"]["OrphanObject"][];
+            /** Prefixes */
+            prefixes: string[];
+            /** Rowschecked */
+            rowsChecked: number;
+            /** Scanned */
+            scanned: number;
+            /** Truncated */
+            truncated: boolean;
+        };
         /** TemporalExtent */
         TemporalExtent: {
             /** End */
@@ -2721,6 +2999,8 @@ export interface components {
 export type SchemaArcGisMapServerSource = components['schemas']['ArcGisMapServerSource'];
 export type SchemaArtifactKind = components['schemas']['ArtifactKind'];
 export type SchemaArtifactRead = components['schemas']['ArtifactRead'];
+export type SchemaArtifactReference = components['schemas']['ArtifactReference'];
+export type SchemaArtifactRow = components['schemas']['ArtifactRow'];
 export type SchemaAssetBase = components['schemas']['AssetBase'];
 export type SchemaAssetCreate = components['schemas']['AssetCreate'];
 export type SchemaAssetProvider = components['schemas']['AssetProvider'];
@@ -2773,11 +3053,14 @@ export type SchemaLayerUpdate = components['schemas']['LayerUpdate'];
 export type SchemaLegendEntry = components['schemas']['LegendEntry'];
 export type SchemaLegendMetadata = components['schemas']['LegendMetadata'];
 export type SchemaLicenseMetadata = components['schemas']['LicenseMetadata'];
+export type SchemaMissingObject = components['schemas']['MissingObject'];
 export type SchemaMultiPolygon = components['schemas']['MultiPolygon'];
 export type SchemaMvtSource = components['schemas']['MvtSource'];
+export type SchemaOrphanObject = components['schemas']['OrphanObject'];
 export type SchemaOutline = components['schemas']['Outline'];
 export type SchemaOutlinePoint = components['schemas']['OutlinePoint'];
 export type SchemaOutlineRequest = components['schemas']['OutlineRequest'];
+export type SchemaPipelineCatalogue = components['schemas']['PipelineCatalogue'];
 export type SchemaPlanArea = components['schemas']['PlanArea'];
 export type SchemaPlanCreate = components['schemas']['PlanCreate'];
 export type SchemaPlanDraft = components['schemas']['PlanDraft'];
@@ -2799,6 +3082,10 @@ export type SchemaPolygon = components['schemas']['Polygon'];
 export type SchemaPresignedPart = components['schemas']['PresignedPart'];
 export type SchemaProblem = components['schemas']['Problem'];
 export type SchemaProvenance = components['schemas']['Provenance'];
+export type SchemaProviderRead = components['schemas']['ProviderRead'];
+export type SchemaRecipeGpu = components['schemas']['RecipeGpu'];
+export type SchemaRecipeRead = components['schemas']['RecipeRead'];
+export type SchemaRecipeStageRead = components['schemas']['RecipeStageRead'];
 export type SchemaRenderConfig = components['schemas']['RenderConfig'];
 export type SchemaRenderMetadata = components['schemas']['RenderMetadata'];
 export type SchemaRepresentation = components['schemas']['Representation'];
@@ -2811,6 +3098,7 @@ export type SchemaSiteRead = components['schemas']['SiteRead'];
 export type SchemaSiteSummary = components['schemas']['SiteSummary'];
 export type SchemaSiteUpdate = components['schemas']['SiteUpdate'];
 export type SchemaStacSource = components['schemas']['StacSource'];
+export type SchemaStorageReconciliation = components['schemas']['StorageReconciliation'];
 export type SchemaTemporalExtent = components['schemas']['TemporalExtent'];
 export type SchemaTilesUrlLayerSource = components['schemas']['TilesUrlLayerSource'];
 export type SchemaTilesUrlSource = components['schemas']['TilesUrlSource'];
@@ -2964,6 +3252,69 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PlannerStatus"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    list_artifacts_api_v1_artifacts_get: {
+        parameters: {
+            query?: {
+                captureId?: string | null;
+                jobId?: string | null;
+                kind?: components["schemas"]["ArtifactKind"] | null;
+                limit?: number;
+                offset?: number;
+                unreferenced?: boolean | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactRow"][];
                 };
             };
             /** @description Missing or wrong write token */
@@ -5003,6 +5354,62 @@ export interface operations {
             };
         };
     };
+    get_catalogue_api_v1_recipes_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PipelineCatalogue"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No recipe catalogue on this host */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     list_sites_api_v1_sites_get: {
         parameters: {
             query?: never;
@@ -5641,6 +6048,73 @@ export interface operations {
             };
             /** @description Validation error */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    get_reconciliation_api_v1_storage_reconciliation_get: {
+        parameters: {
+            query?: {
+                maxObjects?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StorageReconciliation"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Object storage is not configured */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -27,8 +27,14 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Capture, Site
-from app.models.enums import CaptureStatus, GeorefMethod, Representation, ScaleSource
+from app.models import Asset, Capture, Site
+from app.models.enums import (
+    AssetProvider,
+    CaptureStatus,
+    GeorefMethod,
+    Representation,
+    ScaleSource,
+)
 from app.schemas.asset import AssetBase, RenderConfig, TilesUrlSource
 from app.schemas.geojson import Polygon
 from app.schemas.site import SiteCreate
@@ -249,9 +255,19 @@ def register(
         )
         capture.site_id = site.id
     registered = db.get(Site, capture.site_id) if capture.site_id else None
+    if registered is not None and url is not None:
+        # A re-run writes to `runs/<job id>/...`, which is a *different* key from the run
+        # before it -- so the site does not follow the new reconstruction unless it is
+        # repointed here. Without this the site keeps the first run's geometry, takes the
+        # newest run's thumbnail, and the reconstruction you just paid for is invisible
+        # and unreferenced. A10's reconciliation is what caught that: the second run's
+        # tileset showed up in the unreferenced list while its thumbnail did not.
+        #
+        # The newest successful run wins. Which run that was is on the site's metadata,
+        # and every run remains in the console; if a published-run pointer is ever wanted
+        # it belongs on the site, not in the absence of this update.
+        _repoint_splat(db, registered, url, job_id)
     if registered is not None and thumbnail is not None:
-        # Set on a re-run too: the tileset is replaced in place at the same key, so the
-        # picture of it should be replaced as well.
         registered.thumbnail_url = thumbnail
     capture.status = CaptureStatus.COMPLETE
     capture.georef_method = registration.georef_method
@@ -272,3 +288,32 @@ def _free_slug(db: Session, base: str) -> str | None:
         return None
     taken = db.scalar(select(Site.id).where(Site.slug == candidate)) is not None
     return None if taken else candidate
+
+
+def _repoint_splat(db: Session, site: Site, url: str, job_id: uuid.UUID) -> None:
+    """Point the site's splat asset at this run's tileset, or add one if it has none.
+
+    A first run creates the asset; a re-run reaches here instead. A site whose first run
+    produced no tileset (the stub runner with no bucket) has no asset to move, so one is
+    created rather than the re-run silently registering nothing.
+    """
+    splat = next(
+        (a for a in site.assets if a.representation == Representation.GAUSSIAN_SPLAT), None
+    )
+    if splat is None:
+        db.add(
+            Asset(
+                site_id=site.id,
+                name=f"{site.name} splat",
+                representation=Representation.GAUSSIAN_SPLAT,
+                provider=AssetProvider.TILES_3D_URL,
+                source={"type": "3d-tiles-url", "url": url},
+                default_visible=True,
+                render_config={"clampToGround": True},
+            )
+        )
+    else:
+        splat.source = {**dict(splat.source), "url": url}
+    metadata = dict(site.metadata_ or {})
+    metadata["jobId"] = str(job_id)
+    site.metadata_ = metadata

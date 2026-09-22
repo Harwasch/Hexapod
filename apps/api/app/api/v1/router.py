@@ -4,7 +4,20 @@ from typing import Any
 
 from fastapi import APIRouter
 
-from app.api.v1 import agent, assets, captures, ion, jobs, layers, plans, sites, system
+from app.api.v1 import (
+    agent,
+    artifacts,
+    assets,
+    captures,
+    ion,
+    jobs,
+    layers,
+    plans,
+    recipes,
+    sites,
+    storage,
+    system,
+)
 from app.schemas.common import Problem
 
 ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
@@ -26,3 +39,6 @@ api_v1.include_router(agent.router)
 api_v1.include_router(plans.router)
 api_v1.include_router(captures.router)
 api_v1.include_router(jobs.router)
+api_v1.include_router(artifacts.router)
+api_v1.include_router(recipes.router)
+api_v1.include_router(storage.router)

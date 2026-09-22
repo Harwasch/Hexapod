@@ -30,6 +30,7 @@ from app.models.enums import (
     ArtifactKind,
     CaptureKind,
     CaptureStatus,
+    Representation,
     RunStatus,
     UploadStatus,
 )
@@ -443,3 +444,39 @@ def test_the_run_is_repeatable_and_produces_the_same_tileset_bytes(
             f"runs/{second.id}/package/splat/{name}"
         )
     assert isinstance(first.id, uuid.UUID) and first.id != second.id
+
+
+def test_a_re_run_repoints_the_site_at_the_new_reconstruction(
+    db: Session, sessions: sessionmaker[Session], storage: S3Storage, tmp_path: Path
+) -> None:
+    """A10's reconciliation found this: the site kept run 1's geometry and took run 2's
+    thumbnail, so the reconstruction the second run produced was invisible and showed up
+    as an unreferenced object.
+
+    The cause was that a re-run writes to `runs/<job id>/...`, a different key, while
+    registration only created the asset when the capture had no site yet. B3's whole shape
+    is re-running one capture with a different `mask`, so a re-run that the globe ignores
+    would have made that comparison meaningless.
+    """
+    capture = _uploaded_capture(db, storage)
+
+    first = _run(db, sessions, storage, capture, tmp_path / "one")
+    site_id = db.get(Capture, capture.id).site_id  # type: ignore[union-attr]
+    assert site_id is not None
+    first_url = str(db.get(Site, site_id).assets[0].source["url"])  # type: ignore[union-attr]
+    assert first_url.endswith(f"runs/{first.id}/package/splat/tileset.json")
+
+    second = _run(db, sessions, storage, capture, tmp_path / "two")
+    assert second.id != first.id
+
+    db.expire_all()
+    site = db.get(Site, site_id)
+    assert site is not None
+    # Still one splat: a re-run replaces what the globe shows, it does not stack.
+    splats = [a for a in site.assets if a.representation is Representation.GAUSSIAN_SPLAT]
+    assert len(splats) == 1
+    assert str(splats[0].source["url"]).endswith(f"runs/{second.id}/package/splat/tileset.json")
+    # And the picture and the geometry now come from the same run.
+    assert site.thumbnail_url is not None
+    assert f"runs/{second.id}/" in site.thumbnail_url
+    assert str(site.metadata_["jobId"]) == str(second.id)

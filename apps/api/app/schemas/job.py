@@ -61,6 +61,39 @@ class ArtifactRead(CamelModel):
     updated_at: datetime
 
 
+class ArtifactReference(CamelModel):
+    """Something that points at an artifact, which is why it cannot be deleted.
+
+    Today that is a site: `register` writes the packaged tileset's public URL onto an
+    asset, and the thumbnail's onto the site itself. An artifact with no references is
+    not automatically garbage — a `manifest.json` is read by people, not by rows — but
+    the Outputs view's unreferenced list is where a cleanup starts.
+    """
+
+    #: `site-asset` or `site-thumbnail`.
+    kind: str
+    site_id: uuid.UUID
+    site_slug: str
+    label: str
+
+
+class ArtifactRow(ArtifactRead):
+    """One artifact with the run that produced it and whatever points at it.
+
+    A join the console would otherwise do four requests to assemble: the Outputs view is
+    a flat table of every artifact ever written, and `kind`, `bytes` and `storageKey`
+    alone do not say which run to blame or whether anything still needs it.
+    """
+
+    stage_id: str
+    impl: str
+    job_id: uuid.UUID
+    recipe: str
+    capture_id: uuid.UUID
+    capture_name: str
+    references: list[ArtifactReference]
+
+
 class JobStepRead(CamelModel):
     id: uuid.UUID
     job_id: uuid.UUID

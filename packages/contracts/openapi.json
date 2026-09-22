@@ -135,6 +135,156 @@
         "title": "ArtifactRead",
         "type": "object"
       },
+      "ArtifactReference": {
+        "additionalProperties": false,
+        "description": "Something that points at an artifact, which is why it cannot be deleted.\n\nToday that is a site: `register` writes the packaged tileset's public URL onto an\nasset, and the thumbnail's onto the site itself. An artifact with no references is\nnot automatically garbage \u2014 a `manifest.json` is read by people, not by rows \u2014 but\nthe Outputs view's unreferenced list is where a cleanup starts.",
+        "properties": {
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "siteId": {
+            "format": "uuid",
+            "title": "Siteid",
+            "type": "string"
+          },
+          "siteSlug": {
+            "title": "Siteslug",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "siteId",
+          "siteSlug",
+          "label"
+        ],
+        "title": "ArtifactReference",
+        "type": "object"
+      },
+      "ArtifactRow": {
+        "additionalProperties": false,
+        "description": "One artifact with the run that produced it and whatever points at it.\n\nA join the console would otherwise do four requests to assemble: the Outputs view is\na flat table of every artifact ever written, and `kind`, `bytes` and `storageKey`\nalone do not say which run to blame or whether anything still needs it.",
+        "properties": {
+          "bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bytes"
+          },
+          "captureId": {
+            "format": "uuid",
+            "title": "Captureid",
+            "type": "string"
+          },
+          "captureName": {
+            "title": "Capturename",
+            "type": "string"
+          },
+          "checksum": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Checksum"
+          },
+          "contentType": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contenttype"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "impl": {
+            "title": "Impl",
+            "type": "string"
+          },
+          "jobId": {
+            "format": "uuid",
+            "title": "Jobid",
+            "type": "string"
+          },
+          "jobStepId": {
+            "format": "uuid",
+            "title": "Jobstepid",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ArtifactKind"
+          },
+          "recipe": {
+            "title": "Recipe",
+            "type": "string"
+          },
+          "references": {
+            "items": {
+              "$ref": "#/components/schemas/ArtifactReference"
+            },
+            "title": "References",
+            "type": "array"
+          },
+          "stageId": {
+            "title": "Stageid",
+            "type": "string"
+          },
+          "storageKey": {
+            "title": "Storagekey",
+            "type": "string"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "title": "Updatedat",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "jobStepId",
+          "kind",
+          "storageKey",
+          "bytes",
+          "checksum",
+          "contentType",
+          "createdAt",
+          "updatedAt",
+          "stageId",
+          "impl",
+          "jobId",
+          "recipe",
+          "captureId",
+          "captureName",
+          "references"
+        ],
+        "title": "ArtifactRow",
+        "type": "object"
+      },
       "AssetBase": {
         "additionalProperties": false,
         "properties": {
@@ -3595,6 +3745,63 @@
         "title": "LicenseMetadata",
         "type": "object"
       },
+      "MissingObject": {
+        "additionalProperties": false,
+        "description": "A row whose object is not in the bucket.",
+        "properties": {
+          "captureId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Captureid"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "jobId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Jobid"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "id",
+          "key",
+          "label",
+          "captureId",
+          "jobId"
+        ],
+        "title": "MissingObject",
+        "type": "object"
+      },
       "MultiPolygon": {
         "additionalProperties": false,
         "properties": {
@@ -3667,6 +3874,42 @@
           "urlTemplate"
         ],
         "title": "MvtSource",
+        "type": "object"
+      },
+      "OrphanObject": {
+        "additionalProperties": false,
+        "description": "An object in the bucket that no row accounts for.",
+        "properties": {
+          "bytes": {
+            "title": "Bytes",
+            "type": "integer"
+          },
+          "etag": {
+            "title": "Etag",
+            "type": "string"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "lastModified": {
+            "format": "date-time",
+            "title": "Lastmodified",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "bytes",
+          "lastModified",
+          "etag",
+          "reason"
+        ],
+        "title": "OrphanObject",
         "type": "object"
       },
       "Outline": {
@@ -3776,6 +4019,32 @@
           "point"
         ],
         "title": "OutlineRequest",
+        "type": "object"
+      },
+      "PipelineCatalogue": {
+        "additionalProperties": false,
+        "description": "Everything the New-run form needs: what can be run, and where.",
+        "properties": {
+          "providers": {
+            "items": {
+              "$ref": "#/components/schemas/ProviderRead"
+            },
+            "title": "Providers",
+            "type": "array"
+          },
+          "recipes": {
+            "items": {
+              "$ref": "#/components/schemas/RecipeRead"
+            },
+            "title": "Recipes",
+            "type": "array"
+          }
+        },
+        "required": [
+          "recipes",
+          "providers"
+        ],
+        "title": "PipelineCatalogue",
         "type": "object"
       },
       "PlanArea": {
@@ -5250,6 +5519,145 @@
         "title": "Provenance",
         "type": "object"
       },
+      "ProviderRead": {
+        "additionalProperties": false,
+        "description": "One GPU host a run can be sent to, with the rate the plan's survey recorded.\n\n`usdPerHourA100` is a reference point, not a quote: it is what the A0 provider survey\nmeasured for an A100, recorded here so the console can say which tier is the cheap one\nand which is the reliable one. B1's `ProviderAdapter` carries the real per-tier price\ntable and records `jobs.cost_usd` from what a run actually cost.",
+        "properties": {
+          "interruptible": {
+            "title": "Interruptible",
+            "type": "boolean"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "note": {
+            "title": "Note",
+            "type": "string"
+          },
+          "tiers": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Tiers",
+            "type": "array"
+          },
+          "usdPerHourA100": {
+            "title": "Usdperhoura100",
+            "type": "number"
+          }
+        },
+        "required": [
+          "name",
+          "label",
+          "tiers",
+          "usdPerHourA100",
+          "interruptible",
+          "note"
+        ],
+        "title": "ProviderRead",
+        "type": "object"
+      },
+      "RecipeGpu": {
+        "additionalProperties": false,
+        "description": "A stage's GPU requirement. Its presence is the only routing signal there is.",
+        "properties": {
+          "preemptible": {
+            "title": "Preemptible",
+            "type": "boolean"
+          },
+          "tier": {
+            "title": "Tier",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tier",
+          "preemptible"
+        ],
+        "title": "RecipeGpu",
+        "type": "object"
+      },
+      "RecipeRead": {
+        "additionalProperties": false,
+        "properties": {
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "inputs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Inputs",
+            "type": "array"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "stages": {
+            "items": {
+              "$ref": "#/components/schemas/RecipeStageRead"
+            },
+            "title": "Stages",
+            "type": "array"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "version",
+          "description",
+          "inputs",
+          "stages"
+        ],
+        "title": "RecipeRead",
+        "type": "object"
+      },
+      "RecipeStageRead": {
+        "additionalProperties": false,
+        "properties": {
+          "gpu": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RecipeGpu"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "impl": {
+            "title": "Impl",
+            "type": "string"
+          },
+          "params": {
+            "additionalProperties": true,
+            "title": "Params",
+            "type": "object"
+          }
+        },
+        "required": [
+          "id",
+          "impl",
+          "params",
+          "gpu"
+        ],
+        "title": "RecipeStageRead",
+        "type": "object"
+      },
       "RenderConfig": {
         "additionalProperties": false,
         "properties": {
@@ -6017,6 +6425,76 @@
         "title": "StacSource",
         "type": "object"
       },
+      "StorageReconciliation": {
+        "additionalProperties": false,
+        "description": "One pass over the prefixes this system owns, against the rows that claim them.",
+        "properties": {
+          "bytesOrphaned": {
+            "title": "Bytesorphaned",
+            "type": "integer"
+          },
+          "bytesScanned": {
+            "title": "Bytesscanned",
+            "type": "integer"
+          },
+          "checkedAt": {
+            "format": "date-time",
+            "title": "Checkedat",
+            "type": "string"
+          },
+          "matched": {
+            "title": "Matched",
+            "type": "integer"
+          },
+          "missing": {
+            "items": {
+              "$ref": "#/components/schemas/MissingObject"
+            },
+            "title": "Missing",
+            "type": "array"
+          },
+          "orphans": {
+            "items": {
+              "$ref": "#/components/schemas/OrphanObject"
+            },
+            "title": "Orphans",
+            "type": "array"
+          },
+          "prefixes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Prefixes",
+            "type": "array"
+          },
+          "rowsChecked": {
+            "title": "Rowschecked",
+            "type": "integer"
+          },
+          "scanned": {
+            "title": "Scanned",
+            "type": "integer"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "prefixes",
+          "scanned",
+          "truncated",
+          "matched",
+          "bytesScanned",
+          "bytesOrphaned",
+          "orphans",
+          "rowsChecked",
+          "missing",
+          "checkedAt"
+        ],
+        "title": "StorageReconciliation",
+        "type": "object"
+      },
       "TemporalExtent": {
         "additionalProperties": false,
         "properties": {
@@ -6566,6 +7044,163 @@
         "summary": "Mission planner status",
         "tags": [
           "agent"
+        ]
+      }
+    },
+    "/api/v1/artifacts": {
+      "get": {
+        "description": "Every output the pipeline has written, with the run that produced it and whatever points at it. `unreferenced=true` is the cleanup list: artifacts no site asset or thumbnail URL refers to.",
+        "operationId": "list_artifacts_api_v1_artifacts_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/ArtifactKind"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Kind"
+            }
+          },
+          {
+            "in": "query",
+            "name": "jobId",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Jobid"
+            }
+          },
+          {
+            "in": "query",
+            "name": "captureId",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Captureid"
+            }
+          },
+          {
+            "in": "query",
+            "name": "unreferenced",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Unreferenced"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ArtifactRow"
+                  },
+                  "title": "Response List Artifacts Api V1 Artifacts Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "summary": "List artifacts, newest first",
+        "tags": [
+          "artifacts"
         ]
       }
     },
@@ -9259,6 +9894,68 @@
         ]
       }
     },
+    "/api/v1/recipes": {
+      "get": {
+        "description": "Read from `tools/pipeline/recipes/*.yaml`, not restated here: a recipe edited on disk changes what the console offers with no rebuild. Each stage carries its own parameter defaults, which is what `params` on a new run is merged over, keyed by stage id. 404 where the pipeline project is not on this host \u2014 the API itself does not need it, so it is not a fault, and jobs still queue against the shipped recipe versions.",
+        "operationId": "get_catalogue_api_v1_recipes_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PipelineCatalogue"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No recipe catalogue on this host"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "summary": "The recipes a run can use, and the providers it can be sent to",
+        "tags": [
+          "recipes"
+        ]
+      }
+    },
     "/api/v1/sites": {
       "get": {
         "operationId": "list_sites_api_v1_sites_get",
@@ -10104,6 +10801,92 @@
         "summary": "Upload a site thumbnail",
         "tags": [
           "sites"
+        ]
+      }
+    },
+    "/api/v1/storage/reconciliation": {
+      "get": {
+        "description": "Walks `captures/` and `runs/` and reports **orphans** \u2014 objects no row claims, which is what a run that died after uploading leaves behind \u2014 then takes every row whose object should exist and reports the **missing** ones. The walk stops at `maxObjects` and says so; the row check asks storage directly, so it is exact either way.",
+        "operationId": "get_reconciliation_api_v1_storage_reconciliation_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "maxObjects",
+            "required": false,
+            "schema": {
+              "default": 5000,
+              "maximum": 50000,
+              "minimum": 1,
+              "title": "Maxobjects",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageReconciliation"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Object storage is not configured"
+          }
+        },
+        "summary": "Reconcile object storage against the database, in both directions",
+        "tags": [
+          "storage"
         ]
       }
     }
