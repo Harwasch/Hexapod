@@ -1,0 +1,122 @@
+# Fly.io configuration for the catalog API and the job worker.
+#
+# One app, one image (infra/api.Dockerfile), two process groups:
+#
+#   app     uvicorn, behind Fly's proxy and TLS      -- bursty, scales to zero-ish
+#   worker  `python -m app.worker`, a poll loop      -- long-lived, holds a volume
+#
+# Why Fly and not Cloudflare Containers, which would have consolidated this with Pages
+# and R2 on one bill: docs/DECISIONS/0007-fly-for-the-api-cloudflare-for-the-edge.md.
+# The short version is the worker. It is a poll loop that supervises runs measured in
+# hours and holds a lease it must renew every WORKER_POLL_S; a runtime that sleeps
+# instances on idle and bills per active CPU-millisecond is the wrong shape for it, and
+# the workaround (cron-triggered wakeups) couples the worker to one provider -- which is
+# the coupling app/worker/runner.py's runner seam exists to avoid. The static site and
+# the buckets are still Cloudflare's (wrangler.toml, infra/cors/production.json).
+#
+# Deploy:  fly deploy --remote-only       (from the repository root, so the build
+#                                          context is the repo -- the Dockerfile copies
+#                                          apps/api/ *and* tools/pipeline, tools/captures)
+# Secrets: never here. `fly secrets set` -- see docs/DEPLOYMENT.md § Handover.
+#
+# NOT DEPLOYED. No `fly deploy` has ever been run against this file; it was written from
+# the Dockerfile and the settings the code actually reads, and the only mechanical check
+# it has is CI's `image` job, which asserts that every command named under [processes]
+# and in release_command exists on PATH inside the image.
+
+app = "twin-api"
+primary_region = "iad"
+
+# The worker is signalled, not killed: SIGTERM sets a stop flag, and on its next tick
+# (WORKER_POLL_S, 2 s) the worker stops the recipe process, clears the lease on the job
+# it holds and exits, so the next worker can take that job immediately instead of waiting
+# the lease out. 30 s is fourteen ticks of headroom.
+#
+# These two are here, at the top, because TOML gives a bare key to whichever table header
+# precedes it: written after [[http_service.checks]] -- which is where they read most
+# naturally -- they silently become fields of the health check and Fly never sees them.
+kill_signal = "SIGTERM"
+kill_timeout = "30s"
+
+[build]
+  dockerfile = "infra/api.Dockerfile"
+
+[deploy]
+  # Migrations run here rather than on every machine boot. The image's own CMD runs
+  # `alembic upgrade head && uvicorn ...` so that a plain `docker run` works, but on Fly
+  # the process commands below replace CMD: two app machines booting at once would
+  # otherwise race each other through the same migration, and the worker group would run
+  # it a third time. A release command runs once, in its own machine, before any machine
+  # is replaced, and a non-zero exit aborts the deploy.
+  release_command = "alembic upgrade head"
+  strategy = "rolling"
+
+[env]
+  APP_ENV = "production"
+  # Production refuses to start with neither TILES_BASE_URL nor OBJECT_STORAGE_* set
+  # (app/main.py), and refuses to start without API_WRITE_TOKEN. The token and the
+  # bucket keys are secrets; these are not.
+  ALLOW_PRIVATE_URLS = "false"
+  API_PORT = "8000"
+  # R2 wants "auto"; a real region name signs for a host that is not there. True of any
+  # R2 account, so it belongs here rather than in a secret. (What keeps presigning on
+  # SigV4 is S3Storage passing signature_version explicitly, not this value -- see
+  # docs/DEPLOYMENT.md, where that distinction matters more than it looks.)
+  OBJECT_STORAGE_REGION = "auto"
+  # App-wide, because fly.toml has no per-process env. The API never reads it (nothing
+  # outside app/worker/ resolves a workdir), so on the app machines it is inert.
+  #
+  # /data is the volume mounted below, and it is mounted on the worker group only. A run
+  # workdir survives the run on purpose: "retry from this stage" reads the outputs of the
+  # stages that already succeeded out of it, and A6's checkpoint/ contract is worth
+  # nothing once the directory is gone. Left on the machine's root filesystem instead,
+  # every worker restart would throw that away -- the job is still safe (A7 reclaims the
+  # lapsed lease and another worker starts the recipe over) but the work is not -- and a
+  # 12 GB capture would be competing with the image's own layers for the root disk.
+  WORKER_WORKDIR = "/data/worker"
+
+[processes]
+  app = "uvicorn app.main:app --host 0.0.0.0 --port 8000"
+  worker = "python -m app.worker"
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  processes = ["app"]
+  # A single-user, bursty API: let the machine stop when nobody is looking and start on
+  # the next request. The worker group is deliberately not in `processes` here -- it has
+  # no service, so it is never stopped by the proxy and never waits for a request.
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[http_service.checks]]
+    method = "GET"
+    path = "/api/v1/health"
+    interval = "15s"
+    timeout = "5s"
+    grace_period = "20s"
+
+[[vm]]
+  processes = ["app"]
+  size = "shared-cpu-1x"
+  memory = "1gb"
+
+[[vm]]
+  processes = ["worker"]
+  # Lane 1 (splat-ingest) runs its stages in this machine -- packing tiles, not training.
+  # Lane 2's `train` is dispatched elsewhere (WORKER_RUNNER=cloud), so this machine
+  # supervises rather than computes. Raise it when a stage starts being the bottleneck;
+  # `fly scale vm` does not need a redeploy.
+  size = "shared-cpu-2x"
+  memory = "2gb"
+
+[[mounts]]
+  source = "twin_worker_data"
+  destination = "/data"
+  processes = ["worker"]
+  # Captures are large and the workdir outlives the run. 50 GB is roughly four 12 GB
+  # captures in flight; `fly volumes extend` grows it without a redeploy. A volume binds
+  # the worker to one region and one machine -- which is correct here: there is exactly
+  # one worker, and a second one would not share this directory.
+  initial_size = "50gb"

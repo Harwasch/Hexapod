@@ -1,0 +1,20 @@
+{
+  "CORSRules": [
+    {
+      "ID": "browser-multipart-upload",
+      "AllowedOrigins": ["https://twin.example.com"],
+      "AllowedMethods": ["PUT", "GET", "HEAD"],
+      "AllowedHeaders": ["*"],
+      "ExposeHeaders": ["ETag"],
+      "MaxAgeSeconds": 3600
+    },
+    {
+      "ID": "cesium-tiles-read",
+      "AllowedOrigins": ["https://twin.example.com"],
+      "AllowedMethods": ["GET", "HEAD"],
+      "AllowedHeaders": ["*"],
+      "ExposeHeaders": ["ETag", "Content-Length", "Content-Range", "Accept-Ranges"],
+      "MaxAgeSeconds": 86400
+    }
+  ]
+}

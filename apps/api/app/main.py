@@ -63,6 +63,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "API_WRITE_TOKEN must be set when APP_ENV=production: refusing to start an "
             "internet-facing API whose writes are open."
         )
+    # The same instinct, one line later. Production with neither TILES_BASE_URL nor a
+    # bucket used to log an error and carry on seeding capture URLs against the static
+    # mount -- which production disables and this image has no data/tiles to serve
+    # anyway. Every one of those URLs 404s in a browser, hours after the deploy, and the
+    # only trace is a line in a log nobody is reading. A deployment that cannot serve the
+    # thing it exists to serve should not come up.
+    if settings.is_production and not settings.tiles_source_configured:
+        raise RuntimeError(
+            "APP_ENV=production needs somewhere to serve capture tiles from, and has "
+            "neither: set OBJECT_STORAGE_ENDPOINT_URL, OBJECT_STORAGE_BUCKET, "
+            "OBJECT_STORAGE_ACCESS_KEY and OBJECT_STORAGE_SECRET_KEY (uploads need them "
+            "regardless), or set TILES_BASE_URL to the public prefix the tiles are "
+            "published under. With neither, every capture would be seeded against the "
+            "/api/v1/tiles static mount, which production disables and this image does "
+            "not carry -- so every tileset URL would 404."
+        )
     app = FastAPI(
         title=settings.app_name,
         version="1.0.0",

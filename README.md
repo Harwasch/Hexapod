@@ -131,7 +131,7 @@ plain drag orbits the point you clicked.
 - [docs/LIVING_SURVEY.md](docs/LIVING_SURVEY.md) — simulated motion over measured geometry: the mechanism, what is measured vs simulated, and the limits
 - [docs/DATA_MODEL.md](docs/DATA_MODEL.md) — sites, assets, layers, bookmarks, provenance
 - [docs/ADDING_DATA.md](docs/ADDING_DATA.md) — every supported input, validation rules, ion reconstruction
-- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — Vercel-style static web, containerised API, managed PostGIS
+- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — the committed deployment: Cloudflare Pages + R2, the API and worker on Fly, Neon for PostGIS, and what only an account owner can do
 - [docs/DECISIONS/](docs/DECISIONS/) — architecture decision records
 - [docs/ENGINEERING_REPORT.md](docs/ENGINEERING_REPORT.md) — what was built, limitations, next steps
 

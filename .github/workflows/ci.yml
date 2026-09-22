@@ -322,9 +322,75 @@ jobs:
           docker run --rm --network host \
             -e DATABASE_URL="$DATABASE_URL" \
             twin-api python -m app.worker --once
+      # C1 committed a fly.toml whose [processes] replace the image's CMD. A typo there
+      # is a deploy that builds, pushes, boots and then exits 127 -- flyctl's health
+      # check is the first thing that notices. This asks the image itself.
+      - name: fly.toml names commands this image actually has
+        run: |
+          python3 - <<'PY' > commands.txt
+          import shlex
+          import tomllib
+
+          config = tomllib.load(open("fly.toml", "rb"))
+          # TOML gives a bare key to whichever table header precedes it, so the worker's
+          # shutdown grace -- which reads most naturally beside the health check -- turns
+          # into a field of that check, and Fly never sees it. It was written that way
+          # first; this is what noticed.
+          assert "kill_timeout" in config, "kill_timeout is not a top-level key in fly.toml"
+          commands = [*config["processes"].values(), config["deploy"]["release_command"]]
+          for command in commands:
+              print(shlex.split(command)[0])
+          PY
+          cat commands.txt
+          while read -r binary; do
+            if ! docker run --rm twin-api sh -c "command -v '$binary'"; then
+              echo "fly.toml names '$binary', which is not on PATH in the image"
+              exit 1
+            fi
+          done < commands.txt
+      # The deployment configuration's own environment, minus the secrets: APP_ENV
+      # production, a write token, a tiles base URL. Nothing else in CI starts the image
+      # in production mode, so nothing else would catch a guard that refuses a
+      # configuration fly.toml actually sets -- an outage visible only at deploy time.
+      - name: A production configuration starts and is healthy
+        run: |
+          docker run -d --name twin-prod --network host \
+            -e DATABASE_URL="$DATABASE_URL" \
+            -e APP_ENV=production \
+            -e API_WRITE_TOKEN=ci-write-token \
+            -e ALLOW_PRIVATE_URLS=false \
+            -e TILES_BASE_URL=https://tiles.example.com \
+            -e API_PORT=8001 \
+            twin-api
+          for _ in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8001/api/v1/health >/dev/null; then
+              echo "the production configuration is up"; exit 0
+            fi
+            sleep 2
+          done
+          echo "the production configuration never became healthy"
+          docker logs twin-prod || true
+          exit 1
+      # The other half of C1's decision (b): production with nowhere to serve tiles from
+      # refuses to start rather than seeding a catalogue of URLs that 404 in a browser
+      # some hours later. `import app.main` builds the app, so this needs no database and
+      # no port.
+      - name: A production configuration with nowhere to serve tiles refuses to start
+        run: |
+          if docker run --rm -e APP_ENV=production -e API_WRITE_TOKEN=ci-write-token \
+            twin-api python -c "import app.main" 2>startup.log; then
+            echo "the image started with no TILES_BASE_URL and no bucket, which is the"
+            echo "misconfiguration app/main.py is supposed to refuse."
+            exit 1
+          fi
+          cat startup.log
+          grep -q TILES_BASE_URL startup.log
+          grep -q OBJECT_STORAGE_BUCKET startup.log
       - name: API logs
         if: failure()
-        run: docker logs twin-api || true
+        run: |
+          docker logs twin-api || true
+          docker logs twin-prod || true
       - name: Stop the API
         if: always()
-        run: docker rm -f twin-api || true
+        run: docker rm -f twin-api twin-prod || true

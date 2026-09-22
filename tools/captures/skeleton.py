@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 
 import numpy as np
@@ -73,6 +74,30 @@ BAND_STIFFNESS: dict[str, tuple[float, float]] = {
 #: A child counts as a real fork (rather than noise off the side of the trunk) only when its
 #: subtree holds at least this share of its parent's subtree.
 FORK_SHARE = 0.15
+
+# ------------------------------------------------------- constants of the radius estimator
+#
+# Four numbers, all dimensionless, none fitted to a tree. What each is worth, and how much the
+# answer moves when it is changed, is measured in ``tests/test_skeleton.py``.
+
+#: Points that must fall round a circle before a cloud can show it as a ring rather than a blob.
+#: Three is the number that defines a circle, and it sets this module's resolution limit:
+#: ``RING_POINTS * spacing / (2 * pi)``, about half the cloud's own point spacing. A limb
+#: thinner than that is not measurable from the cloud, whatever estimator is pointed at it.
+RING_POINTS = 3
+
+#: Half-width, in points, of the window ``_areal_density`` counts over. Small enough to resolve
+#: a shell, large enough that the count is not one or two points of noise.
+SHELL_NEIGHBOURS = 4
+
+#: Share of the peak areal density at which a point still counts as part of the shell.
+SHELL_DENSITY_SHARE = 0.8
+
+#: Largest relative scatter — standard deviation over mean of the transverse distances — that a
+#: single limb's cross-section may show. Bark is not machined: a real limb is out of round by
+#: some tens of per cent, and a reconstruction adds more. Beyond this the points are not one
+#: cross-section, and the estimator reports the resolution limit instead of averaging them.
+SHELL_ROUNDNESS = 0.3
 
 
 # --------------------------------------------------------------------------------- isolation
@@ -197,30 +222,165 @@ def band_of(z: np.ndarray, ground: float, band_height: float, bands: int) -> np.
     return np.clip(raw, 0, bands - 1)
 
 
-def _rms_radius(points: np.ndarray, centre: np.ndarray) -> float:
-    """Horizontal RMS spread about the centroid: the radius of a cylinder shell of these points.
+def foliage_extent(points: np.ndarray, centre: np.ndarray) -> float:
+    """Horizontal RMS spread of a cluster's points about its centroid, metres.
 
-    **This is not the same quantity as ``SkeletonNode.radius`` in packages/world/src/rig.ts**,
-    and the difference now matters. That field means the *woody cross-section* of the limb, and
-    ``@twin/world`` reads it for natural frequency (``omega ~ radius / length^2``), for damping
-    and for whether a node's splats flutter at all. This function measures the spread of the
-    *points*, which for a leaf cluster is the extent of the foliage rather than the twig holding
-    it up.
-
-    On the old fixture, where a branch really was 12 cm across and its foliage blob 30 cm, the
-    two were within a factor of three and nothing noticed. On the fixture now the true radii run
-    8.8 mm to 15 cm and these come out 2.7 cm to 45 cm, and the consequence is measurable: the
-    median extracted node lands on the motion model's 30 Hz clamp instead of near 8 Hz, so the
-    crown rides quasi-statically, and 9 of 189 nodes flutter instead of 180.
-
-    Fixing it means estimating a woody radius from the cloud — plausibly the RMS spread of the
-    *densest core* of a cluster rather than of all its points, or a fitted cylinder through the
-    bark shell — and it is not done here because there is no real capture to validate it
-    against, and calibrating a new estimator on the one tree whose answer is known is how the
-    frequency scale came to be fitted to a fence post in the first place.
+    For a leaf cluster this is the size of the *foliage blob*: how far out the leaves hang. It
+    is a real and occasionally useful measurement — ``extract()`` reports it beside the woody
+    radius so the two can be compared on a capture — but it is **not** ``SkeletonNode.radius``
+    in packages/world/src/rig.ts and must never be written there. See ``woody_radius``.
     """
     offset = points[:, :2] - centre[:2]
     return float(np.sqrt(np.mean(np.einsum("ij,ij->i", offset, offset))))
+
+
+def _areal_density(distance: np.ndarray, neighbours: int) -> np.ndarray:
+    """Points per unit area of the cross-section, at each point's own transverse distance.
+
+    A cross-section is a two-dimensional thing, so density has to be counted per unit *area*:
+    the number of points between two radii divided by the area of the annulus between them.
+    Counting per unit distance instead would make a fat annulus look denser than a thin one
+    simply because it is longer round, and the estimator would drift outwards into the foliage.
+
+    The window is ``neighbours`` points either side in the radial ordering rather than a fixed
+    width in metres, so it narrows where the points are packed and widens where they are not —
+    which is what lets one function measure a 15 cm bole and a 1 cm twig without being told
+    which it is looking at.
+    """
+    order = np.argsort(distance)
+    sorted_distance = distance[order]
+    count = sorted_distance.size
+    index = np.arange(count)
+    low = np.clip(index - neighbours, 0, count - 1)
+    high = np.clip(index + neighbours, 0, count - 1)
+    # Area of the annulus the window spans, up to a factor of pi that cancels in every ratio.
+    span = sorted_distance[high] ** 2 - sorted_distance[low] ** 2
+    usable = span > 0
+    lam = np.zeros(count, dtype=np.float64)
+    if not usable.any():
+        return lam
+    lam[usable] = (high - low)[usable] / span[usable]
+    # A window of coincident distances has zero area and infinite density; treat it as the
+    # densest thing present rather than letting it dominate by being a division by zero.
+    lam[~usable] = lam.max()
+    out = np.zeros(count, dtype=np.float64)
+    out[order] = lam
+    return out
+
+
+def woody_radius(points: np.ndarray, centre: np.ndarray, axis: np.ndarray, spacing: float) -> float:
+    """Woody cross-sectional radius of the limb a cluster stands for, metres.
+
+    This is the quantity ``SkeletonNode.radius`` means in packages/world/src/rig.ts, and it is
+    read for natural frequency (``omega ~ radius / length^2``), for damping, and for whether a
+    node's splats flutter at all. It replaces ``foliage_extent``, which measured the spread of
+    a cluster's points and so returned the size of the foliage rather than the thickness of the
+    twig holding it up: on the fixture that put the median extracted node on the motion model's
+    30 Hz clamp and left 9 nodes of 189 fluttering instead of 173.
+
+    **Why this method and not another.** The two candidates the old docstring floated were the
+    spread of a cluster's *densest core* and a cylinder fitted to the bark shell. The first was
+    tried and does not work, and the measurement is worth recording: on the fixture the median
+    8-th-neighbour distance is 8.2 cm among bark splats and 6.9 cm among foliage splats, so the
+    foliage is *denser* than the wood. Density in three dimensions is a property of how a
+    trainer spent its splat budget, not of the tree. Local PCA was tried too — the wood/leaf
+    separator that works on a lidar scan — and the surface-variation distributions overlap
+    heavily (median 0.047 on wood against 0.112 on foliage), because a twig's bark is sampled
+    too sparsely to read as a surface and a leaf disc reads as one.
+
+    What *is* reliably different is the structure of a limb's **cross-section**, and that is a
+    fact about splats specifically: a splat sits on the surface it represents, never inside it,
+    so a limb is a hollow shell and its cross-section is a thin ring of high areal density,
+    while foliage is a diffuse halo of low, roughly uniform areal density around the same axis.
+    So: project the cluster onto the plane across its limb, find the densest annulus by area,
+    and take the RMS distance of the points in it. For a clean shell that is exactly the shell's
+    radius; for a twig inside a halo it is the twig.
+
+    **What it refuses to guess.** Two checks stand between the measurement and the rig:
+
+    * *Roundness.* If the points selected as the shell scatter by more than
+      ``SHELL_ROUNDNESS`` of their own mean distance, they are not one limb's cross-section —
+      they are haze, or several limbs a band happened to weld into one cluster. There is no
+      single radius to report and the estimator says so rather than averaging them.
+    * *Resolution.* A ring can only be read as a ring if a few points fall round it, so a limb
+      thinner than ``RING_POINTS`` point spacings of circumference is below what this cloud can
+      resolve: ``r_min = RING_POINTS * spacing / (2 * pi)``, about half the point spacing. The
+      result is clamped there, and a cluster that fails the roundness check is reported *at*
+      that limit — an upper bound on an unresolved limb, not a measurement of one.
+
+    ``axis`` is the limb direction (parent to node, from the skeleton graph). It matters: a
+    band slicing a leaning branch gives a cluster whose horizontal spread is the branch's
+    *length* through the band, which is what made the old estimator wrong twice over.
+
+    **Accuracy, measured.** Against the synthetic tree's known radii, node by node, the median
+    ratio of recovered to true radius is 1.29 on the committed fixture and stays between 0.74
+    and 1.51 across five more trees of different height, thickness, branching and splat
+    density — with two exceptions, both honest ones, recorded in
+    ``test_the_estimator_generalises_across_trees``. Individual nodes are far looser than the
+    median: about seven in ten land within a factor of two. A rig node that stands for half a
+    dozen twigs has no single woody radius to recover, and that is most of the residual.
+    """
+    if points.shape[0] == 0:
+        return 0.0
+    resolution = RING_POINTS * max(spacing, 0.0) / (2.0 * math.pi)
+    offset = points - centre
+    # Distance from the limb axis, not from the centroid: the along-limb part carries no
+    # information about thickness and including it measures the band's slice instead.
+    along = np.outer(offset @ axis, axis)
+    distance = np.linalg.norm(offset - along, axis=1)
+    if distance.size <= 2 * SHELL_NEIGHBOURS + 1:
+        # Too few points to estimate a density profile from; the spread is all there is.
+        return max(float(np.sqrt(np.mean(distance**2))), resolution)
+    lam = _areal_density(distance, SHELL_NEIGHBOURS)
+    if lam.max() <= 0.0:
+        return max(float(np.sqrt(np.mean(distance**2))), resolution)
+    shell = distance[lam >= SHELL_DENSITY_SHARE * lam.max()]
+    if shell.size < 3 or shell.mean() <= 0.0:
+        return resolution
+    if float(shell.std()) > SHELL_ROUNDNESS * float(shell.mean()):
+        return resolution  # not a cross-section: haze, or several limbs in one cluster
+    return max(float(np.sqrt(np.mean(shell**2))), resolution)
+
+
+def _limb_axes(nodes: list[dict]) -> list[np.ndarray]:
+    """Unit direction of the limb each node sits on, from the parented skeleton.
+
+    Parent to node is the limb, by construction of the graph. The root has no parent, so it
+    takes the direction of its children instead, and a node with neither falls back to vertical
+    — which is what a trunk base is anyway.
+    """
+    children: list[list[int]] = [[] for _ in nodes]
+    for i, node in enumerate(nodes):
+        if node["parent"] >= 0:
+            children[node["parent"]].append(i)
+    axes: list[np.ndarray] = []
+    for i, node in enumerate(nodes):
+        if node["parent"] >= 0:
+            direction = np.asarray(node["position"]) - np.asarray(nodes[node["parent"]]["position"])
+        elif children[i]:
+            kids = np.asarray([nodes[k]["position"] for k in children[i]], dtype=np.float64)
+            direction = kids.mean(axis=0) - np.asarray(node["position"])
+        else:
+            direction = np.asarray([0.0, 0.0, 1.0])
+        norm = float(np.linalg.norm(direction))
+        axes.append(
+            direction / norm if norm > 1e-9 else np.asarray([0.0, 0.0, 1.0], dtype=np.float64)
+        )
+    return axes
+
+
+def _measure_radii(nodes: list[dict], xyz: np.ndarray, spacing: float) -> None:
+    """Give every node its woody radius, in place. Runs once the graph knows each limb's axis.
+
+    Deliberately after ``_attach_parents`` and before ``_prune_to``: the axis comes from the
+    parent link, and a node's own cross-section is the one its own band cluster showed, not the
+    one it has after pruning has handed it a child's splats to carry.
+    """
+    for node, axis in zip(nodes, _limb_axes(nodes), strict=True):
+        points = xyz[node["members"]]
+        centre = np.asarray(node["position"], dtype=np.float64)
+        node["radius"] = woody_radius(points, centre, axis, spacing)
+        node["foliage_extent"] = foliage_extent(points, centre)
 
 
 def _build_bands(
@@ -246,10 +406,11 @@ def _build_bands(
                 continue
             centre = xyz[part].mean(axis=0)
             owner[part] = len(nodes)
+            # No radius yet: it needs the limb's axis, which only exists once the graph is
+            # parented. `_measure_radii` fills it in before anything reads it.
             nodes.append(
                 {
                     "position": centre,
-                    "radius": _rms_radius(xyz[part], centre),
                     "band_index": int(b),
                     "members": part,
                     "parent": -1,
@@ -423,16 +584,23 @@ def extract_skeleton(
 ) -> list[dict]:
     """The skeleton as an ordered node list: position, radius, band, parent, member indices.
 
+    ``radius`` is the woody cross-section ``woody_radius`` measures, not the spread of the
+    cluster's points; ``foliage_extent`` carries the latter for anything that wants it.
+
     ``link_radius`` defaults to ``link_factor`` × this cloud's own point spacing. Pass an
     explicit radius only when a capture's spacing is misleading — a scan with one dense side,
     say — and say why in the rig's ``sourceNote``.
     """
     if xyz.shape[0] == 0:
         raise SystemExit("no splats to extract a skeleton from")
+    spacing = neighbour_spacing(xyz)
     if link_radius is None:
-        link_radius = max(link_factor * neighbour_spacing(xyz), 1e-4)
+        link_radius = max(link_factor * spacing, 1e-4)
     raw, _owner = _build_bands(xyz, bands, link_radius, min_cluster_points)
     root = _attach_parents(raw, xyz)
+    # Radii before pruning: a node's cross-section is the one its own band cluster showed, and
+    # the axis it is measured across comes from the parent link `_attach_parents` just made.
+    _measure_radii(raw, xyz, spacing)
     pruned, root = _prune_to(raw, root, max_nodes)
     ordered = _topological(pruned, root)
     for node, band in zip(ordered, _label_bands(ordered), strict=True):
@@ -712,6 +880,13 @@ def extract(
         "height_m": round(float(positions[:, 2].max() - positions[:, 2].min()), 3),
         "spacing_m": round(spacing, 4),
         "link_radius_m": round(float(link_radius), 4),
+        # The two quantities the old estimator conflated, side by side. On a tree the woody
+        # radius should be a small fraction of the foliage extent; if they are equal, either
+        # the capture has no foliage or the radius estimator has fallen back to its resolution
+        # limit everywhere, and the rig's frequencies are a guess rather than a measurement.
+        "radius_median_m": round(float(np.median([n["radius"] for n in nodes])), 4),
+        "foliage_extent_median_m": round(float(np.median([n["foliage_extent"] for n in nodes])), 4),
+        "radius_resolution_m": round(RING_POINTS * spacing / (2.0 * math.pi), 4),
         "canonicalChecksum": rig["canonicalChecksum"],
         "out_dir": str(out_dir),
     }

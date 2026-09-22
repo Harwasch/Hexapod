@@ -73,7 +73,7 @@ def test_tiles_rule_is_read_only() -> None:
     assert set(rule["AllowedMethods"]) == {"GET", "HEAD"}
 
 
-@pytest.mark.parametrize("name", ["upload.json", "tiles.json"])
+@pytest.mark.parametrize("name", ["upload.json", "tiles.json", "production.json"])
 def test_rules_are_shape_valid_to_botocore(name: str) -> None:
     """botocore's client-side parameter validation accepts the document.
 
@@ -93,3 +93,32 @@ def test_rules_are_shape_valid_to_botocore(name: str) -> None:
 def test_dev_xml_matches_the_json_documents() -> None:
     """mc takes XML, everything else takes JSON. They must say the same thing."""
     assert _from_xml(CORS_DIR / "dev-minio.xml") == _load("upload.json") + _load("tiles.json")
+
+
+def _without_origins(rules: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [{k: v for k, v in rule.items() if k != "AllowedOrigins"} for rule in rules]
+
+
+def test_production_is_one_document_holding_both_rules() -> None:
+    """A production deployment has **one** bucket, in both roles.
+
+    The API has a single `OBJECT_STORAGE_BUCKET`: browser uploads land under
+    `captures/` and published tiles under `sites/` in the same bucket. A bucket has one
+    CORS configuration and `put-bucket-cors` replaces it, so applying `upload.json` and
+    then `tiles.json` to that bucket leaves only the second -- and multipart upload stops
+    being completable the moment you do. `production.json` is the combined document
+    `infra/cors/apply-r2.sh` applies, and it must not drift from the two it combines.
+
+    `AllowedOrigins` is excluded because it is the one field that is *meant* to differ:
+    the production bucket does not answer a developer's localhost.
+    """
+    assert _without_origins(_load("production.json")) == _without_origins(
+        _load("upload.json") + _load("tiles.json")
+    )
+
+
+def test_production_origins_are_not_localhost() -> None:
+    for rule in _load("production.json"):
+        for origin in rule["AllowedOrigins"]:
+            assert "localhost" not in origin and "127.0.0.1" not in origin, origin
+            assert origin.startswith("https://"), origin

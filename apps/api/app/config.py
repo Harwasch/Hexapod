@@ -186,6 +186,23 @@ class Settings(BaseSettings):
         return self.environment.lower() in {"production", "prod"}
 
     @property
+    def tiles_source_configured(self) -> bool:
+        """Is there anywhere a browser could fetch a capture's tiles from?
+
+        Either an explicit `TILES_BASE_URL` (a CDN, R2's custom domain) or a bucket whose
+        public URL `app/seed/captures.tiles_base_url` can derive one from. With neither,
+        that function falls back to this API's `/api/v1/tiles` static mount -- which
+        production disables outright, and which the container image has no `data/tiles`
+        to serve in any case, so every seeded tileset URL would 404.
+
+        `create_app` refuses to start a production deployment in that state rather than
+        logging it, for the same reason it refuses one with no write token: a
+        misconfiguration that only shows up as a broken globe in someone's browser is
+        worse than one that shows up as a deploy that would not go out.
+        """
+        return bool(self.tiles_base_url) or self.object_storage_configured
+
+    @property
     def object_storage_configured(self) -> bool:
         return bool(
             self.object_storage_endpoint_url

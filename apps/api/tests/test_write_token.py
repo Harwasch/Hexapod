@@ -28,6 +28,24 @@ AUTH = {"Authorization": f"Bearer {TOKEN}"}
 GATING_SCHEMES = {"writeToken", "uploadToken"}
 
 
+def no_tiles_source(**overrides: object) -> Settings:
+    """Settings with every source of capture tile URLs explicitly unset.
+
+    Spelled out rather than omitted for the reason test_captures.py's NO_STORAGE is: the
+    repository's own .env points at MinIO, so a Settings built without these is
+    configured on a developer's machine and unconfigured in CI -- a test that passes here
+    and fails there.
+    """
+    unset: dict[str, object] = {
+        "object_storage_endpoint_url": None,
+        "object_storage_bucket": None,
+        "object_storage_access_key": None,
+        "object_storage_secret_key": None,
+        "tiles_base_url": None,
+    }
+    return Settings(**{**unset, **overrides})  # type: ignore[arg-type]
+
+
 @pytest.fixture
 def client(db: Session) -> Iterator[TestClient]:
     """An app that actually has a token configured, not a dependency override.
@@ -167,11 +185,60 @@ def test_without_a_token_writes_are_open(db: Session) -> None:
 
 def test_production_without_a_token_refuses_to_start() -> None:
     with pytest.raises(RuntimeError, match="API_WRITE_TOKEN"):
-        create_app(Settings(APP_ENV="production"))
+        create_app(no_tiles_source(APP_ENV="production"))
 
 
 def test_production_with_a_token_starts() -> None:
-    assert create_app(Settings(APP_ENV="production", api_write_token=TOKEN)) is not None
+    settings = no_tiles_source(
+        APP_ENV="production",
+        api_write_token=TOKEN,
+        tiles_base_url="https://tiles.example.com",
+    )
+    assert create_app(settings) is not None
+
+
+# --- the other thing production refuses to start without ---------------------
+
+
+def test_production_with_nowhere_to_serve_tiles_refuses_to_start() -> None:
+    """Neither a bucket nor a base URL. Before C1 this logged an error and carried on
+    seeding every capture against a static mount production disables and the image does
+    not carry, so the whole catalogue 404'd in a browser some hours later."""
+    with pytest.raises(RuntimeError, match="TILES_BASE_URL"):
+        create_app(no_tiles_source(APP_ENV="production", api_write_token=TOKEN))
+
+
+def test_the_message_names_every_setting_that_would_fix_it() -> None:
+    """A startup failure that does not say what to set is a worse outage than the 404s."""
+    with pytest.raises(RuntimeError) as raised:
+        create_app(no_tiles_source(APP_ENV="production", api_write_token=TOKEN))
+    message = str(raised.value)
+    for setting in (
+        "OBJECT_STORAGE_ENDPOINT_URL",
+        "OBJECT_STORAGE_BUCKET",
+        "OBJECT_STORAGE_ACCESS_KEY",
+        "OBJECT_STORAGE_SECRET_KEY",
+        "TILES_BASE_URL",
+    ):
+        assert setting in message
+
+
+def test_a_bucket_is_enough_on_its_own() -> None:
+    """TILES_BASE_URL is for a CDN in front of the bucket, not a second requirement."""
+    settings = no_tiles_source(
+        APP_ENV="production",
+        api_write_token=TOKEN,
+        object_storage_endpoint_url="https://s3.example.com",
+        object_storage_bucket="twin-assets",
+        object_storage_access_key="key",
+        object_storage_secret_key="secret",
+    )
+    assert create_app(settings) is not None
+
+
+def test_development_with_nothing_configured_still_starts() -> None:
+    """The guard is production-only: a fresh checkout has no bucket and must still run."""
+    assert create_app(no_tiles_source()) is not None
 
 
 def test_no_mutating_route_is_left_ungated(client: TestClient) -> None:

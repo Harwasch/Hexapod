@@ -1,0 +1,36 @@
+# Cloudflare Pages configuration for apps/web's static bundle.
+#
+# There is no Worker here and no Pages Function: this is a static, multi-page bundle
+# (index.html, upload.html, admin.html -- see apps/web/vite.config.ts) that talks to the
+# Fly-hosted API over CORS and streams tiles straight out of R2. The only reason this
+# file exists is so that `wrangler pages deploy` needs no arguments and no dashboard
+# state to know which project and which directory it is publishing.
+#
+# It is a **Direct Upload** project, not a Git-integrated one: the build happens in
+# .github/workflows/deploy.yml, where the VITE_* build-time values live as repository
+# secrets. Create it once (see docs/DEPLOYMENT.md § Handover):
+#
+#   pnpm dlx wrangler pages project create twin-web --production-branch main
+#
+# Deploy:
+#
+#   pnpm --filter @twin/web build
+#   cp infra/pages/_headers apps/web/dist/
+#   pnpm dlx wrangler pages deploy
+#
+# The `cp` is not decoration -- `_headers` is read from the deployed directory, and Vite
+# copies only apps/web/public/ into dist. It is kept in infra/ with the rest of the
+# deployment configuration rather than in apps/web/public/ so that a local `pnpm dev`
+# and the e2e suite see exactly the bundle they saw before.
+#
+# NOT DEPLOYED, and unverified. No `wrangler pages deploy` has been run against this
+# file. wrangler is not a dependency of this repository -- the workflow fetches it with
+# `pnpm dlx` -- and developers.cloudflare.com is unreachable from the environment this
+# was written in, so the three keys below were not checked against current wrangler
+# documentation. If `wrangler pages deploy` rejects this file, deleting it and passing
+# the directory positionally (`wrangler pages deploy apps/web/dist --project-name
+# twin-web`) is the equivalent command that needs no config at all.
+
+name = "twin-web"
+pages_build_output_dir = "apps/web/dist"
+compatibility_date = "2026-09-01"
