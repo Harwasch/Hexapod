@@ -28,11 +28,27 @@ What did not change is the shape of the two processes, which is where the decisi
   commits a lease immediately and renews it every `WORKER_POLL_S` (2 s) for as long as it
   supervises the run — and a Lane 2 `train` stage dispatched to a GPU host is measured in
   hours, during which the worker's whole job is to still be there: poll the dispatched
-  stage, sync `checkpoint/` back, and notice a preemption (B1b). A runtime that sleeps
-  instances on idle has no place to put that. The Cloudflare-shaped answer is a cron
-  trigger that wakes something briefly, which changes the worker from a supervisor into a
-  reconciler — a real redesign, of the one component whose lease semantics A7 spent a
-  whole step getting right.
+  stage, sync `checkpoint/` back, and notice a preemption (B1b). The Cloudflare-shaped
+  answer is a cron trigger that wakes something briefly, which changes the worker from a
+  supervisor into a reconciler — a real redesign, of the one component whose lease
+  semantics A7 spent a whole step getting right.
+
+  **Corrected after checking, because the first version of this paragraph said the wrong
+  thing.** It claimed Containers cannot hold a long-running process. They can: Cloudflare
+  does not stop an instance after a fixed runtime, and there is no maximum lifetime. The
+  real obstacle is narrower and worse. `sleepAfter` defaults to `"10m"` and the timer is
+  reset **only by Worker/Durable-Object-side activity** — `@cloudflare/containers`
+  documents that a fetch renews it, and that background work needs an explicit
+  `renewActivityTimeout()` call from outside. Work happening _inside_ the container does
+  not count. So our worker would be renewing its database lease every two seconds, holding
+  a job, syncing checkpoints — and Cloudflare would read all of that as idle and stop the
+  container. Running there means a Worker outside calling `renewActivityTimeout()` on a
+  schedule and never failing, in front of the process A7 made crash-safe.
+
+  The distinction matters because it changes what would reopen this: not "can Containers
+  run long" (they can), but "does internal activity count, or is there a supported
+  keepalive". Note also that the objection only bites for Lane 2 — today's Lane 1 jobs
+  finish in under a minute and would be fine.
 
 There is a second cost that is easy to miss: a Cloudflare Container is fronted by a Durable
 Object, so deploying one means writing and maintaining a TypeScript Worker entrypoint that
@@ -86,10 +102,20 @@ mounted at `/data` on the worker group only and `WORKER_WORKDIR=/data/worker`.
 
 ## What is unverified
 
-Everything about Cloudflare Containers here is second-hand. `developers.cloudflare.com` is
-unreachable from the environment this was written in, so the April 2026 GA date, the
-sleep/billing behaviour, and the Durable Object entrypoint requirement are **reported, not
-checked**. If they are wrong in a way that matters — in particular if Containers now run a
-long-lived process without sleeping — this decision deserves re-opening rather than
-defending. Nothing has been deployed to either provider: no `fly deploy`, no
-`wrangler pages deploy`, no bucket created, no account that exists.
+`developers.cloudflare.com` is unreachable from the environment this was written in, so
+the first version of this ADR was entirely second-hand — and one of its claims was wrong,
+which is corrected above.
+
+**Since checked**, against `@cloudflare/containers`' own README and Cloudflare's container
+lifecycle documentation: there is no maximum instance lifetime; `sleepAfter` defaults to
+ten minutes; only Worker/Durable-Object-side activity resets that timer, and background
+work inside the container requires an explicit `renewActivityTimeout()` from outside.
+
+**Still unchecked**: the April 2026 GA date, the per-10 ms billing model, and whether a
+Durable Object entrypoint is strictly required rather than merely how the official library
+does it. If Cloudflare later makes internal activity reset the timer, or ships a supported
+keepalive for long-running containers, this decision deserves re-opening rather than
+defending.
+
+Nothing has been deployed to either provider: no `fly deploy`, no `wrangler pages deploy`,
+no bucket created, no account that exists.
