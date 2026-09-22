@@ -11,7 +11,12 @@ import { describe, expect, it } from "vitest";
 
 import type { Site, SiteAsset } from "@twin/contracts";
 
-import { formatCaptureDate, formatResolution, geometryProvenance } from "@/lib/provenance";
+import {
+  formatCaptureDate,
+  formatResolution,
+  geometryProvenance,
+  placementProvenance,
+} from "@/lib/provenance";
 
 const NOW = "2026-01-01T00:00:00Z";
 
@@ -203,5 +208,85 @@ describe("geometryProvenance", () => {
       summary: "No capture date or resolution recorded",
       note: "",
     });
+  });
+});
+
+/**
+ * The placement half, which is the one B4 added.
+ *
+ * The case that matters is the first: a capture somebody dropped on a map at plus or minus ten
+ * metres and one aligned to EXIF GPS must not read alike. `geometryProvenance` calls both of
+ * them "Measured capture" and is right to — the geometry was measured either way — so this is
+ * the only function that can tell them apart.
+ */
+describe("placementProvenance", () => {
+  const placed = (over: NonNullable<SiteAsset["provenance"]>) =>
+    site([asset({ provenance: over })]);
+
+  it("does not let a hand placement read like an alignment", () => {
+    const byHand = placementProvenance(
+      placed({ georefMethod: "manual", scaleSource: "unresolved", uncertaintyM: 10 }),
+      "asset-1",
+      "metric",
+    );
+    const aligned = placementProvenance(
+      placed({ georefMethod: "exif-gps", scaleSource: "exif-gps", uncertaintyM: 1.4 }),
+      "asset-1",
+      "metric",
+    );
+    expect(byHand?.summary).toContain("Placed by hand");
+    expect(byHand?.measured).toBe(false);
+    expect(byHand?.scaleUnresolved).toBe(true);
+    expect(aligned?.summary).toContain("Aligned to EXIF GPS");
+    expect(aligned?.measured).toBe(true);
+    expect(aligned?.scaleUnresolved).toBe(false);
+    expect(byHand?.summary).not.toBe(aligned?.summary);
+  });
+
+  it("prints the uncertainty rather than implying there is none", () => {
+    const withUncertainty = placementProvenance(
+      placed({ georefMethod: "manual", scaleSource: "unresolved", uncertaintyM: 10 }),
+      "asset-1",
+      "metric",
+    );
+    const without = placementProvenance(
+      placed({ georefMethod: "manual", scaleSource: "unresolved", uncertaintyM: null }),
+      "asset-1",
+      "metric",
+    );
+    expect(withUncertainty?.summary).toContain("\u00b1");
+    expect(without?.summary).toContain("uncertainty not recorded");
+  });
+
+  it("does not call a bare coordinate an alignment", () => {
+    // `exif_gps` writes `georefMethod: exif-gps` for an iPhone video whose only coordinate
+    // came off the container, with nothing aligned and no scale. That is a location, and
+    // the only thing in the record that distinguishes it is the scale source.
+    const located = placementProvenance(
+      placed({ georefMethod: "exif-gps", scaleSource: "unresolved", uncertaintyM: 10 }),
+      "asset-1",
+      "metric",
+    );
+    expect(located?.summary).toContain("Located by EXIF GPS");
+    expect(located?.summary).not.toContain("Aligned");
+    expect(located?.measured).toBe(false);
+  });
+
+  it("says nothing at all about an asset that predates the pipeline", () => {
+    // Every legacy capture and every seeded reference layer is this case. A row reading
+    // "unknown" would look like a finding; no row is the truth.
+    expect(placementProvenance(site([asset()]), "asset-1", "metric")).toBeNull();
+    expect(placementProvenance(null, null, "metric")).toBeNull();
+  });
+
+  it("falls back to whichever asset of the site records a placement", () => {
+    const mixed = site([
+      asset({ id: "mesh", representation: "mesh" }),
+      asset({
+        id: "splat",
+        provenance: { georefMethod: "arkit", scaleSource: "arkit", uncertaintyM: 0.5 },
+      }),
+    ]);
+    expect(placementProvenance(mixed, "mesh", "metric")?.summary).toContain("ARKit");
   });
 });

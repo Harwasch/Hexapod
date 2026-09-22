@@ -47,8 +47,20 @@ stages:
   - id: compensate
     impl: none # | imc  <- real motion; add `gpu: {tier: l4, preemptible: true}` with it
 
+  # Real since B4. It reads each frame's own EXIF GPS, defines an east/north/up frame
+  # about the median fix, and has `colmap model_aligner` solve for the similarity that
+  # takes the reconstruction into it -- which is also where a metric scale comes from
+  # when the capture has no ARKit. A capture whose frames carry no EXIF (every frame
+  # ffmpeg extracts from a video, for one) falls back to the video's own location if it
+  # had one, and otherwise says to use `manual_placement` and give it a coordinate.
+  #
+  # `arkit_scale` is deliberately absent rather than commented as an option: no such impl
+  # is registered, and `pose: arkit` is the stub it would have depended on.
   - id: georeference
-    impl: exif_gps # | arkit_scale | manual_placement
+    impl: exif_gps # | manual_placement
+    params:
+      # RANSAC inlier threshold in metres. COLMAP 3.9.1 refuses a zero here outright.
+      max_error_m: 5.0
 
   - id: package
     impl: splat_tiles

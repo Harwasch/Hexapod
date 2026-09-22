@@ -22,7 +22,7 @@
  *    paraphrase it away.
  */
 
-import type { Site, SiteAsset } from "@twin/contracts";
+import type { Provenance, Site, SiteAsset } from "@twin/contracts";
 import { formatLength, type UnitSystem } from "@twin/geo";
 
 import { formatDate } from "./format";
@@ -103,4 +103,83 @@ export function geometryProvenance(
     resolution ?? "resolution not recorded",
   ];
   return { measured: true, summary: parts.join(" · "), note };
+}
+
+/**
+ * How a capture was placed on the globe, and whether its size means anything.
+ *
+ * The "where it is" half, and the third thing the inspector has to keep apart from the other
+ * two: a capture somebody dropped on a map at plus or minus ten metres and one aligned to EXIF
+ * GPS are both "measured capture" by `geometryProvenance`, and they are not the same claim.
+ *
+ * The same two rules as above apply. Nothing is said that the catalog does not record — an
+ * asset with no georeference provenance produces `null` and the inspector shows no row at all,
+ * rather than a row reading "unknown" that looks like a finding. And `scaleSource:
+ * "unresolved"` is printed, loudly, because it is the one that matters most and reads like an
+ * absence: a reconstruction from images alone has no metric scale, so a length measured off it
+ * — or a modal frequency derived from it — is meaningless rather than merely imprecise.
+ */
+export interface PlacementProvenance {
+  /** One line: how it was placed, how well, and where its scale came from. */
+  readonly summary: string;
+  /** True only when the placement came from a measurement rather than from a person. */
+  readonly measured: boolean;
+  /** True when the reconstruction's metric scale was never resolved. */
+  readonly scaleUnresolved: boolean;
+}
+
+const GEOREF_LABEL: Record<NonNullable<Provenance["georefMethod"]>, string> = {
+  // "Located", not "Aligned" — the difference is whether a similarity was ever solved for,
+  // and the honest tell for that is `scaleSource`: `exif_gps` sets it to `exif-gps` only on
+  // the branch that ran `colmap model_aligner`, and leaves it `unresolved` when all it had
+  // was a coordinate (an iPhone video's container location, or frames with no pose model).
+  // Calling that "Aligned to EXIF GPS" would be the overclaim this module exists to
+  // prevent, so that one label is chosen from both fields rather than from the method.
+  "exif-gps": "Located by EXIF GPS",
+  arkit: "Aligned to ARKit poses",
+  manual: "Placed by hand",
+  none: "Not georeferenced",
+};
+
+const SCALE_LABEL: Record<NonNullable<Provenance["scaleSource"]>, string> = {
+  arkit: "metric scale from ARKit",
+  "exif-gps": "metric scale from EXIF GPS",
+  manual: "scale set by hand",
+  unresolved: "scale unresolved",
+};
+
+/** The first asset of a site that records how it was placed, or undefined. */
+function placedAsset(
+  site: Site | null | undefined,
+  assetId?: string | null,
+): SiteAsset | undefined {
+  const assets = site?.assets ?? [];
+  const preferred = assetId ? assets.find((a) => a.id === assetId) : undefined;
+  if (preferred?.provenance?.georefMethod) return preferred;
+  return assets.find((a) => a.provenance?.georefMethod);
+}
+
+export function placementProvenance(
+  site: Site | null | undefined,
+  assetId: string | null | undefined,
+  units: UnitSystem,
+): PlacementProvenance | null {
+  const provenance = placedAsset(site, assetId)?.provenance;
+  const method = provenance?.georefMethod;
+  if (!method) return null;
+  const uncertainty = provenance?.uncertaintyM;
+  const scale = provenance?.scaleSource ?? "unresolved";
+  const aligned = method === "exif-gps" && scale === "exif-gps";
+  const parts = [
+    aligned ? "Aligned to EXIF GPS" : GEOREF_LABEL[method],
+    typeof uncertainty === "number" && Number.isFinite(uncertainty)
+      ? `±${formatLength(uncertainty, units)}`
+      : "uncertainty not recorded",
+    SCALE_LABEL[scale],
+  ];
+  return {
+    summary: parts.join(" · "),
+    measured: aligned || method === "arkit",
+    scaleUnresolved: scale === "unresolved",
+  };
 }

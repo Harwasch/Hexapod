@@ -83,6 +83,13 @@ opensplat /path/to/<dataset>/opensfm -n 3000 --downscale-factor 4 --sh-degree 0 
 # 3. Height offset: EXIF altitudes are not on the WGS84 ellipsoid. Sample the model's ground,
 #    sample the console's terrain at the same points (browser console: Cesium.sampleTerrainMostDetailed),
 #    and use the median difference.
+#
+#    This hand loop is still how *this* script places a capture, because build_site.py bakes
+#    the offset into the tileset's own transform. It is not how the pipeline places one any
+#    more: `splat_ground` measures the same cells, they travel with the registered asset as
+#    `renderConfig.groundSamples`, and the viewer does this subtraction itself against
+#    whatever terrain it has (apps/web/src/cesium/placement.ts). A capture that goes through
+#    `tools/pipeline` needs no --height-offset at all.
 python ground_samples.py /path/to/<dataset>/odm_georeferencing/odm_georeferenced_model.laz
 
 # 4. Assemble the site folder and its site.json.

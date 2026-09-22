@@ -6,7 +6,7 @@ import { GlassBadge, GlassButton, GlassTooltip } from "@twin/ui";
 import { useLayers as useLayerCatalog, useSite } from "@/api/queries";
 import { useScene } from "@/cesium/SceneContext";
 import { formatDate } from "@/lib/format";
-import { geometryProvenance } from "@/lib/provenance";
+import { geometryProvenance, placementProvenance } from "@/lib/provenance";
 import { useLiving } from "@/state/living";
 import { useSelection } from "@/state/selection";
 import { useSettings } from "@/state/settings";
@@ -66,6 +66,17 @@ export function InspectorPanel() {
     ? living.sites.find((entry) => entry.siteId === livingSiteId)
     : undefined;
   const geometry = livingSite ? geometryProvenance(site, livingSite.assetId, units) : null;
+  // How the thing got where it is, which is a third question again: `geometryProvenance` calls
+  // both a hand-dropped pin and an EXIF-GPS alignment "Measured capture", and they are not the
+  // same claim. Null when the catalog records no georeference provenance at all — every asset
+  // that predates the pipeline — and then no row is shown rather than a row reading "unknown".
+  const placement = placementProvenance(site, livingSite?.assetId, units);
+  // Shown only where it can be read as being about the site: a site selection, or the
+  // section below, which names the site it is describing. A splat is invisible to picking,
+  // so a click on a capture lands on the terrain behind it as a `ground` selection with no
+  // site at all — and a Placement row between that point's own latitude and its own terrain
+  // height would read as describing the point.
+  const shown = placement && (livingSite || selection?.kind === "site") ? placement : null;
   const attribution = selection?.attribution?.length
     ? selection.attribution
     : (layer?.attribution ?? (selection?.kind === "site" ? site?.attribution : undefined));
@@ -113,6 +124,7 @@ export function InspectorPanel() {
             {livingSite && living.animating && (
               <GlassBadge tone="warning">Simulated motion</GlassBadge>
             )}
+            {shown?.scaleUnresolved && <GlassBadge tone="warning">Scale unresolved</GlassBadge>}
           </div>
           <dl className="dl">
             <dt>Position</dt>
@@ -153,6 +165,12 @@ export function InspectorPanel() {
                 <dd>{site.license?.name ?? "Not specified"}</dd>
               </>
             )}
+            {shown && !livingSite && (
+              <>
+                <dt>Placement</dt>
+                <dd data-testid="inspector-placement">{shown.summary}</dd>
+              </>
+            )}
           </dl>
           {livingSite && geometry && (
             <section
@@ -171,6 +189,12 @@ export function InspectorPanel() {
                     </>
                   )}
                 </dd>
+                {shown && (
+                  <>
+                    <dt>Placement</dt>
+                    <dd data-testid="inspector-placement">{shown.summary}</dd>
+                  </>
+                )}
                 <dt>Motion</dt>
                 <dd data-testid="inspector-motion">
                   Simulated · {livingSite.rigSourceNote}

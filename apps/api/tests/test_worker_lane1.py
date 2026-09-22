@@ -234,6 +234,48 @@ def test_the_georeference_is_recorded_as_placed_not_surveyed(
     assert manifest["splat"]["gaussiansPackaged"] == 12_000
 
 
+def test_the_measured_ground_and_the_placement_reach_the_asset(
+    db: Session, sessions: sessionmaker[Session], storage: S3Storage, tmp_path: Path
+) -> None:
+    """`ground_samples.json` stops being an artifact nothing reads.
+
+    The `splat_ground` stage has produced this file since A8 and nothing consumed it; a
+    person ran `tools/captures/ground_samples.py`, read a second number out of a browser
+    console, subtracted them and typed the difference into `heightOffsetM`. B4 is where
+    the cells travel with the asset instead, as ellipsoid heights, so the viewer can do
+    that subtraction against whatever terrain it actually has.
+
+    The provenance rides with them for the same reason: the inspector is looking at an
+    asset, not at the capture row that produced it.
+    """
+    capture = _uploaded_capture(db, storage)
+
+    _run(db, sessions, storage, capture, tmp_path)
+
+    registered = db.get(Capture, capture.id)
+    assert registered is not None and registered.site_id is not None
+    site = db.get(Site, registered.site_id)
+    assert site is not None
+    splat = next(a for a in site.assets if a.representation == Representation.GAUSSIAN_SPLAT)
+
+    render = splat.render_config
+    assert render["clampToGround"] is True
+    samples = render["groundSamples"]
+    assert len(samples) > 0, "the tree is 4.4 m by 5.8 m, so a 2 m grid has cells in it"
+    # Ellipsoid heights, not the local up-coordinate: the placed origin has been added.
+    # A metre either side of the placement covers the tree's own ground, and what this is
+    # really asserting is that nobody shipped a raw `z` of about 0 as a height of 22.5.
+    for sample in samples:
+        assert abs(sample["height"] - HEIGHT) < 5.0, sample
+        assert abs(sample["lat"] - LAT) < 1e-3 and abs(sample["lon"] - LON) < 1e-3
+
+    # ...and how it was placed, beside them, in the block the inspector already reads.
+    provenance = render["provenance"]
+    assert provenance["georefMethod"] == "manual"
+    assert provenance["scaleSource"] == "unresolved"
+    assert provenance["uncertaintyM"] == pytest.approx(10.0)
+
+
 def test_every_artifact_the_plan_asks_for_reaches_the_bucket_with_a_row(
     db: Session, sessions: sessionmaker[Session], storage: S3Storage, tmp_path: Path
 ) -> None:

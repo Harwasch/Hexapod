@@ -47,6 +47,22 @@ class PointCloudShading(CamelModel):
     maximum_attenuation: float | None = Field(default=None, gt=0)
 
 
+class GroundSample(CamelModel):
+    """One cell of the capture's own measured ground, as a point on the globe.
+
+    This is `ground_samples.json` after one addition and one subtraction: the pipeline
+    writes `z`, the capture's own up-coordinate relative to the placed origin, and the
+    worker adds the origin height so that what reaches the browser is an ellipsoid height
+    in the same datum the terrain is sampled in. The viewer then compares like with like
+    and never has to know what frame the capture was reconstructed in.
+    """
+
+    lon: float = Field(ge=-180, le=180)
+    lat: float = Field(ge=-90, le=90)
+    #: Ellipsoid height of the capture's own ground at this point, in metres.
+    height: float
+
+
 ClipFootprint = Literal["catalog", "tileset"]
 
 
@@ -64,11 +80,30 @@ class RenderConfig(CamelModel):
     # polygon from the loaded tileset's root bounding volume (robust for assets whose
     # exact extent is only known once streamed).
     clip_footprint: ClipFootprint = "catalog"
+    # A manual correction added on top of whatever the clamp works out. It used to be the
+    # only way to fix a sloping capture, because the clamp rested the *lowest corner* of
+    # the bounding box on the terrain *under the centre* -- two different places, so the
+    # slope's own drop came out as float. `ground_samples` is what removes the need for
+    # it: with samples present this is a deliberate nudge on top of a measured clamp, not
+    # a correction for the clamp's own error.
     height_offset_m: float = 0.0
-    # When true, the viewer samples the terrain under the model once it is loaded and rests
-    # the model's lowest point on it (plus height_offset_m). Phone scans and downloaded
-    # objects rarely carry a usable ellipsoid height; this makes their placement trivial.
+    # When true, the viewer rests the model on the ground once it is loaded. Phone scans
+    # and downloaded objects rarely carry a usable ellipsoid height; this makes their
+    # placement trivial.
     clamp_to_ground: bool = False
+    # The capture's own measured ground, cell by cell, as ellipsoid heights. When this is
+    # non-empty the clamp samples the ground at *these* points and takes the median
+    # difference, which is the subtraction a person used to do by hand between
+    # `tools/captures/ground_samples.py` and a browser console. Empty means nobody
+    # measured it, and the clamp falls back to the bounding box exactly as before -- so
+    # no asset that has never had samples can move because of this field.
+    #
+    # It rides in the render config rather than in a field of its own because it is an
+    # input to placement and nothing else, it sits beside the two knobs it replaces, and
+    # `render_config` is the one asset column that already round-trips free-form JSON.
+    # Capped at 64 because that is `splat_ground`'s own `max_cells`, and a catalog
+    # response is not a place to stream a point cloud.
+    ground_samples: list[GroundSample] = Field(default_factory=list, max_length=64)
     # Where this asset's Living Survey motion rig sits, relative to its tileset URL
     # (`../source/rig.json` for everything tools/captures writes today). None means this
     # asset does not move, which is the answer for every asset that is not a single

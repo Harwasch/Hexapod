@@ -22,9 +22,18 @@ registration out.
   executed in this repository** — `gsplat` needs CUDA and there is no GPU here — so its
   tests drive a stand-in trainer and say so in their names.
 
-`glomap`, `arkit`, `opensplat`, `robust` and `exif_gps` are still stubs with honest
-contracts: they declare exactly what they read and write, and raise with the step that
-lands them rather than pretending. Each one's stub says in a comment why it is still one.
+- `georeference` / `exif_gps` reads each frame's own EXIF GPS, defines an east/north/up
+  frame about the median fix, and has `colmap model_aligner` solve for the similarity
+  that takes the reconstruction into it — which is where a **metric scale** comes from
+  when a capture has no ARKit. Scored against GPS written onto the same rendered orbit at
+  the cameras' true positions: 40/40 fixes aligned, 0.0088 m median residual, scale
+  within 1.3e-5 of `umeyama` on the same points.
+
+`glomap`, `arkit`, `opensplat` and `robust` are still stubs with honest contracts: they
+declare exactly what they read and write, and raise with the step that lands them rather
+than pretending. Each one's stub says in a comment why it is still one — `arkit` is the
+one B4 looked at and left, because there is no ARKit capture here and the on-disk format
+is the capture app's rather than Apple's.
 
 It has no dependency on `apps/api`: no models, no database connection, no HTTP. The
 dependency runs one way only. A stage that wants something registered writes a file saying
@@ -364,9 +373,15 @@ map would have turned the loud failure into the silent one.
 
 ### `ground_samples.json`
 
-The capture's own ground height per grid cell — half of the height-offset subtraction a
-person does by hand today. Nothing consumes it yet: B4 is where the console samples terrain
-at the same longitude and latitude and takes the median difference.
+The capture's own ground height per grid cell — the half of the height-offset subtraction
+that used to be done by hand. **Since B4 it is consumed**: `catalog` carries the whole
+document into `registration.json`, the worker adds `origin.height` to each cell's `z` and
+puts the result on the registered asset as `renderConfig.groundSamples`, and the viewer
+samples the ground at exactly those longitudes and latitudes and takes the median
+difference (`apps/web/src/cesium/placement.ts`). The slope cancels, because both sides of
+every subtraction are at the same point — which is what the bounding-box clamp it replaces
+could not do, and why a sloping capture used to need a person to type a correction into
+`heightOffsetM`.
 
 ```json
 {
@@ -380,14 +395,49 @@ at the same longitude and latitude and takes the median difference.
 }
 ```
 
-`{lon, lat, z, n}` is the shape `tools/captures/ground_samples.py` already prints, so B4
-reads one shape rather than two. `z` is the capture's own up axis in metres relative to the
-placed origin, so a sample's ellipsoid height is `origin.height + z`. The cells are ranked
-by how many gaussians they hold and tie-broken by position — deterministic, unlike the
-sibling script, which picks cells with a seeded RNG.
+`{lon, lat, z, n}` is the shape `tools/captures/ground_samples.py` already prints, so there
+is one shape rather than two. `z` is the capture's own up axis in metres relative to the
+placed origin, so a sample's ellipsoid height is `origin.height + z` — and that addition is
+done once, in `app/worker/registration.py`, so the browser compares two heights in one
+datum. The cells are ranked by how many gaussians they hold and tie-broken by position —
+deterministic, unlike the sibling script, which picks cells with a seeded RNG.
 
 `method` is spelled out because a low percentile of a _tree_ is canopy, not ground: this is
 the capture's own low surface per cell, and it is the ground only where the capture has one.
+
+### `georef.json`
+
+Where the capture's local frame sits, and how that was decided. Every producer writes the
+same five keys — `lat`, `lon`, `height`, `georefMethod`, `scaleSource`, `uncertaintyM` —
+because `splat_tiles`, `capture_manifest`, `catalog` and the worker all read them, and
+`app/models/enums.py` fixes the two vocabularies.
+
+`manual_placement` (Lane 1) writes a coordinate somebody chose, `scaleSource: unresolved`
+and ten metres of uncertainty. `exif_gps` (Lane 2) writes one of two shapes:
+
+- **aligned** — three or more frames carried an EXIF fix and there is a pose model, so the
+  document also carries an `alignment` block: the similarity `colmap model_aligner`
+  solved for, its per-image residuals, and the count within the RANSAC threshold. This is
+  the only thing in the project that makes `scaleSource: exif-gps` true.
+- **located** — fixes but no poses, or an iPhone video whose only coordinate is the one
+  `ffmpeg_frames` scraped off the container. The capture is placed and nothing else is
+  claimed: `scaleSource: unresolved`, `alignment: null`, and ten metres — the same as a
+  hand placement, because a coordinate with no orientation is not a better answer.
+
+Three things it will not say:
+
+- **the height is not an ellipsoid height.** `GPSAltitude` is metres above mean sea level,
+  tens of metres from the WGS84 ellipsoid the globe draws. The number goes in with
+  `fixes.heightDatum` beside it saying so, and the viewer's clamp is what actually rests
+  the model on the ground.
+- **the residual is not the accuracy.** Every fix in one capture shares the receiver's
+  bias, and a bias common to all of them moves the whole reconstruction without changing a
+  single residual. `uncertaintyM` is floored at five metres for that reason, and the
+  residual is reported separately as what it is.
+- **the similarity has not been applied.** `alignment.applied` is `false`: `train` writes
+  `canonical.ply` in COLMAP's own frame and `package` places that frame on the globe as if
+  it were east/north/up, so a Lane 2 capture is still packaged in the reconstruction's
+  arbitrary orientation. The transform is recorded; applying it is the next step.
 
 ### `manifest.json`
 

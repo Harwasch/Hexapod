@@ -14,6 +14,24 @@ thin layer that resolves artifacts. Three things live here that are worth naming
 * **`umeyama`**, because a COLMAP reconstruction is only defined up to a similarity. Any
   comparison against known poses has to solve for that similarity first, and the scale it
   returns *is* the scale bias -- it is not a nuisance parameter to throw away.
+* **`model_aligner` is read through `--transform_path`, never through `--output_path`.**
+  Measured on the COLMAP 3.9.1 installed here (`apt-get install -y colmap` on Ubuntu
+  24.04), on the 40-frame rendered orbit, aligning to the cameras' true centres: the
+  model written to `--output_path` **is not georeferenced**. Its camera centres sit a
+  median of 9.315 m from the reference -- the same 9.3 m COLMAP prints as its own
+  "Alignment error", on a 9 m orbit -- while the eight numbers written to
+  `--transform_path`, applied by hand to those same centres, put them 0.009 m from it.
+  The transform is right to millimetres and the model it wrote beside it is not.
+
+  Be precise about the mechanism, because the obvious test for it gives the wrong
+  answer: the output is **not** a byte-for-byte copy of the input. `cameras.bin` is
+  identical, but `images.bin` and `points3D.bin` both differ -- COLMAP rewrites them and
+  the result is still unaligned. So a check that hashes the whole model and finds a
+  difference will conclude the alignment was applied. It was not. The only sound test is
+  the one above: compare the output model's centres against the reference directly.
+
+  Nothing here consumes that model or that number; `alignment_residuals` recomputes the
+  residual from the transform, which is the quantity `georef.json` records anyway.
 
 `read_model` is a reader for COLMAP's own binary format rather than a shell out to
 `model_converter`: the stage needs the camera count and the poses to write `poses.json`,
@@ -30,7 +48,7 @@ import re
 import shutil
 import struct
 import subprocess
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO
@@ -44,16 +62,20 @@ __all__ = [
     "Image",
     "Model",
     "Similarity",
+    "alignment_residuals",
     "colmap_available",
     "colmap_exe",
     "colmap_version",
     "feature_extractor_argv",
     "mapper_argv",
     "matcher_argv",
+    "model_aligner_argv",
     "quat_to_matrix",
     "read_model",
+    "read_similarity",
     "rotation_angle_deg",
     "umeyama",
+    "write_ref_positions",
 ]
 
 F64 = npt.NDArray[np.float64]
@@ -205,6 +227,126 @@ def mapper_argv(
         "--Mapper.ba_refine_extra_params",
         "1" if refine_extra_params else "0",
     ]
+
+
+def model_aligner_argv(
+    model: Path,
+    output: Path,
+    ref_images: Path,
+    transform: Path,
+    *,
+    max_error_m: float,
+    min_common_images: int = 3,
+) -> list[str]:
+    """Estimate the similarity that takes this model into the frame `ref_images` is in.
+
+    Three of these flags are decisions rather than defaults:
+
+    * **`--ref_is_gps 0`** with positions already in metres, and **`--alignment_type
+      custom`**. COLMAP will take latitude and longitude directly (`--ref_is_gps 1`
+      with `ecef` or `enu`), but then *COLMAP* chooses the frame: `enu` puts the origin
+      at the first reference image (measured), and `ecef` produces coordinates of order
+      6.4e6 m. Handing it metres about an origin this project picked means the frame the
+      transform lands in is one the rest of the pipeline already knows.
+    * **`--alignment_max_error` must be greater than zero.** COLMAP 3.9.1 refuses the run
+      outright otherwise -- "You must provide a maximum alignment error > 0" -- so there
+      is no non-robust mode to fall back to. It is a RANSAC inlier threshold in the units
+      of `ref_images`, which here is metres.
+    * **`--output_path` is written and never read.** See the module docstring: on 3.9.1
+      the model it writes there is not georeferenced, though it is not a byte copy of the
+      input either -- two of its three files change and the result is still unaligned.
+    """
+    if max_error_m <= 0.0:
+        raise ValueError(
+            f"alignment_max_error must be > 0; COLMAP 3.9.1 refuses {max_error_m!r} with "
+            f'"You must provide a maximum alignment error > 0". It is a RANSAC inlier '
+            f"threshold in metres, so it is the size of the GPS error being tolerated"
+        )
+    return [
+        colmap_exe(),
+        "model_aligner",
+        "--input_path",
+        str(model),
+        "--output_path",
+        str(output),
+        "--ref_images_path",
+        str(ref_images),
+        "--ref_is_gps",
+        "0",
+        "--alignment_type",
+        "custom",
+        "--merge_image_and_ref_origins",
+        "0",
+        "--transform_path",
+        str(transform),
+        "--min_common_images",
+        str(min_common_images),
+        "--alignment_max_error",
+        f"{max_error_m:.10g}",
+    ]
+
+
+def write_ref_positions(path: Path, positions: Mapping[str, Sequence[float]]) -> int:
+    """`<image name> <x> <y> <z>` per line, which is what `--ref_images_path` reads.
+
+    Sorted by name so two runs over the same capture hand COLMAP the same file. Returns
+    how many lines were written, because "how many frames had a position" is the first
+    number anybody asks about a georeference.
+    """
+    lines = [
+        f"{name} {values[0]:.6f} {values[1]:.6f} {values[2]:.6f}"
+        for name, values in sorted(positions.items())
+    ]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return len(lines)
+
+
+def read_similarity(path: Path) -> Similarity:
+    """Read what COLMAP wrote to `--transform_path`.
+
+    Eight numbers on one line: `scale`, then a w-first quaternion, then a translation,
+    applied as `x' = scale * R(q) @ x + t`. That spelling is not in COLMAP's help text;
+    it was read off 3.9.1's own output and checked against `umeyama` on the same
+    correspondences, which agreed to 7 mm on the rendered orbit.
+    """
+    values = [float(token) for token in path.read_text(encoding="utf-8").split()]
+    if len(values) != 8:
+        raise ValueError(
+            f"{path.name} holds {len(values)} numbers, not the 8 COLMAP 3.9.1 writes "
+            f"(scale, w-first quaternion, translation). A different COLMAP may write a "
+            f"4x4 matrix instead, and this reader has to learn that before trusting it"
+        )
+    return Similarity(
+        scale=values[0],
+        rotation=quat_to_matrix(values[1:5]),
+        translation=np.asarray(values[5:8], dtype=np.float64),
+    )
+
+
+def alignment_residuals(
+    similarity: Similarity,
+    centres: Mapping[str, Sequence[float]],
+    reference: Mapping[str, Sequence[float]],
+) -> dict[str, float]:
+    """Per-image distance, in metres, between an aligned camera centre and its reference.
+
+    Recomputed here rather than scraped out of COLMAP's log for two reasons: on 3.9.1 that
+    number is computed against the model it failed to transform, and a residual is
+    provenance -- it belongs in `georef.json` per image, not in a line of stderr.
+
+    What it measures is *consistency*, not accuracy. Every fix in a capture shares
+    whatever bias the receiver had, and a bias common to all of them moves the whole
+    reconstruction without changing a single residual. That is why the stage floors the
+    uncertainty it reports rather than quoting this number straight.
+    """
+    out: dict[str, float] = {}
+    for name, target in reference.items():
+        centre = centres.get(name)
+        if centre is None:
+            continue
+        moved = similarity.apply(np.asarray([centre], dtype=np.float64))[0]
+        out[name] = float(np.linalg.norm(moved - np.asarray(target, dtype=np.float64)))
+    return out
 
 
 # --- the model COLMAP wrote ---------------------------------------------------------

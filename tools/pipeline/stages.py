@@ -31,6 +31,7 @@ import numpy as np
 import PIL
 import PIL.Image
 
+import exif
 import gaussians
 import sfm
 import training
@@ -130,6 +131,33 @@ REGISTRATION = ArtifactDecl(
     summary="what the pipeline asks the API to register: slug, artifacts, manifest",
 )
 
+
+#: RANSAC inlier threshold for `colmap model_aligner`, in metres.
+#:
+#: COLMAP 3.9.1 refuses a run with zero here outright, so there is no non-robust mode to
+#: fall back to; this is the size of GPS error the alignment will tolerate on one frame
+#: before treating it as an outlier. Five metres is the order of a consumer receiver with
+#: a clear sky, and a phone's first frame -- taken before the GPS has locked, at the last
+#: cell-tower position -- is exactly the outlier this exists to drop.
+DEFAULT_ALIGNMENT_MAX_ERROR_M = 5.0
+
+#: The best horizontal uncertainty an EXIF GPS georeference will ever claim, in metres.
+#:
+#: The alignment residual can be millimetres and the placement still be five metres out:
+#: every fix in one capture shares the receiver's bias, and a bias common to all of them
+#: moves the whole reconstruction without changing a single residual. Quoting the residual
+#: as the uncertainty would be claiming a survey from a phone.
+EXIF_GPS_UNCERTAINTY_FLOOR_M = 5.0
+
+#: What an EXIF georeference that could not be aligned is worth, in metres.
+#:
+#: The same ten metres a hand placement gets, and deliberately so: a coordinate with no
+#: orientation and no scale is not a better answer than a person dropping a pin, however
+#: the coordinate was obtained.
+UNALIGNED_UNCERTAINTY_M = 10.0
+
+#: What `GPSAltitude` is measured from. Not the ellipsoid, which is the point.
+_HEIGHT_DATUM = "exif GPSAltitude: metres above mean sea level, not the WGS84 ellipsoid"
 
 #: What a hand placement is worth, in metres, until somebody measures it.
 #:
@@ -499,11 +527,17 @@ def glomap(ctx: StageContext) -> StageOutcome:
     summary="poses and metric scale straight out of an ARKit capture",
 )
 def arkit(ctx: StageContext) -> StageOutcome:
-    # Still a stub after B2: there is no ARKit capture in this repository, and the format
-    # is a per-frame pose stream from a device nobody here has. Writing a parser against
-    # a format description and calling it done would be the second unverified
-    # implementation in this file. It is also the only stage that produces `scale.json`,
-    # which is the one thing a phone can give that COLMAP cannot.
+    # Still a stub after B4, deliberately, and this is the one-line reason: there is no
+    # ARKit capture here and no agreed on-disk format to synthesise one against --
+    # `ARFrame.camera.transform` is Apple's, but the *file* is Polycam's or Record3D's or
+    # Stray Scanner's, and they disagree about layout, handedness and units. A fixture
+    # would be inventing the format, and a parser tested against an invented format is a
+    # fourth never-executed implementation beside `gsplat`, `opensplat` and ModalAdapter.
+    #
+    # It is still the only producer of `scale.json`. B4 did not make that the only route
+    # to metric scale, though: `georeference: exif_gps` now recovers a metric similarity
+    # from GPS and records it in `georef.json`, so a capture can be scaled without a
+    # phone -- less precisely, and it says so.
     _lands_in("B4", "pose: arkit")
 
 
@@ -694,15 +728,240 @@ def manual_placement(ctx: StageContext) -> StageOutcome:
 
 @stage_impl(
     "exif_gps",
-    consumes=("upload",),
-    optional_consumes=("poses",),
+    consumes=("frames",),
+    optional_consumes=("poses", "source_meta.json"),
     produces=(GEOREF,),
     summary="georeference from EXIF GPS, or an iPhone video's location metadata",
 )
 def exif_gps(ctx: StageContext) -> StageOutcome:
-    # A0 sizing note: read both the mdta com.apple.quicktime.location.ISO6709 key and the
-    # older (c)xyz atom -- iPhone writes one or the other depending on the capture path.
-    _lands_in("B4", "georeference: exif_gps")
+    """Real: the frames' own GPS, through `colmap model_aligner`, into a placed frame.
+
+    Two outcomes, and which one happens is a property of the capture rather than a
+    setting:
+
+    * **aligned** -- at least `min_images` frames carry an EXIF fix and a `poses` model
+      exists, so the fixes define a metric east/north/up frame about their median and
+      COLMAP solves for the similarity that takes the reconstruction into it. That
+      similarity carries **metric scale**, which is the thing a reconstruction from images
+      alone does not have (`poses.json` records `scale: {metric: false}`), so
+      `scaleSource` becomes `exif-gps` and the per-image residuals go into the document.
+    * **located** -- fixes but no poses, or one location and no per-frame fixes (an iPhone
+      video, whose coordinate `ffmpeg_frames` already scraped into `source_meta.json`).
+      The capture is placed at that coordinate and nothing else is claimed: no rotation,
+      no scale, and an uncertainty no better than a hand placement, because a coordinate
+      with no orientation is not a better answer than a person dropping a pin.
+
+    Three things it deliberately does not do:
+
+    * **it does not pretend the altitude is an ellipsoid height.** `GPSAltitude` is metres
+      above mean sea level -- the geoid, tens of metres from the WGS84 ellipsoid the globe
+      draws. The number is recorded, the datum is recorded beside it, and the viewer's
+      clamp is what actually rests the model on the ground.
+    * **it does not quote the residual as the accuracy.** Every fix in one capture shares
+      the receiver's bias, so a common offset moves the whole reconstruction and changes
+      no residual at all. `uncertaintyM` is therefore floored at
+      `EXIF_GPS_UNCERTAINTY_FLOOR_M`, and the residual is reported separately as what it
+      is: consistency.
+    * **it does not transform `canonical.ply`.** The similarity is recorded and nothing
+      downstream applies it yet, so a Lane 2 capture is still packaged in COLMAP's own
+      orientation. That is named here rather than left to be discovered -- see the
+      `alignment.applied` field, which is `false` and says why.
+
+    One consequence worth stating: `georef.json` out of the aligned branch is **not**
+    byte-reproducible the way the rest of a run's outputs are. `model_aligner` has no
+    non-robust mode on 3.9.1, so the similarity comes out of a RANSAC, and the last digits
+    of the scale and the residuals move between runs over the same frames. The Lane 1
+    byte-identity gate is unaffected -- `manual_placement` writes parameters.
+    """
+    frames = ctx.input(FRAMES.name)
+    fixes = exif.read_fixes(frames)
+    min_images = int(ctx.param("min_images", 3))
+    ctx.log(f"{len(fixes)} of {_count_files(frames)} frames carry an EXIF GPS fix")
+
+    model_dir = ctx.input(POSES.name) if ctx.has_input(POSES.name) else None
+    if len(fixes) >= max(min_images, 3) and model_dir is not None:
+        return _exif_gps_aligned(ctx, fixes, model_dir)
+
+    located = _sole_location(ctx, fixes)
+    if located is None:
+        raise ValueError(
+            f"no EXIF GPS on any of {_count_files(frames)} frames and no location in "
+            f"source_meta.json, so there is nothing to georeference from. Frames stripped "
+            f"of EXIF (anything re-encoded, and every frame ffmpeg extracts from a video "
+            f"that carried no location) land here. Use `georeference: manual_placement` "
+            f"and give it the coordinate"
+        )
+    lat, lon, height = located
+    why = "fewer than three EXIF fixes" if model_dir else "no pose model to align against"
+    document: dict[str, object] = {
+        "lat": lat,
+        "lon": lon,
+        "height": height,
+        "georefMethod": "exif-gps",
+        # Not `exif-gps`: a coordinate with no rotation and no similarity says where the
+        # capture is and nothing about how big it is.
+        "scaleSource": "unresolved",
+        "uncertaintyM": UNALIGNED_UNCERTAINTY_M,
+        "note": (
+            f"located from EXIF GPS but not aligned ({why}), so the orientation and the "
+            f"metric scale are both unresolved -- no better than a hand placement"
+        ),
+        "fixes": {"frames": len(fixes), "aligned": 0, "heightDatum": _HEIGHT_DATUM},
+        "alignment": None,
+    }
+    _write_json(ctx.output(GEOREF.name), document)
+    ctx.log(f"located at {lat}, {lon}, {height} m; not aligned ({why})")
+    return StageOutcome(
+        metrics={"fixes": len(fixes), "aligned": 0, "lat": lat, "lon": lon},
+        summary=f"located at {lat:.6f}, {lon:.6f} (not aligned)",
+    )
+
+
+def _exif_gps_aligned(
+    ctx: StageContext, fixes: tuple[exif.Fix, ...], model_dir: Path
+) -> StageOutcome:
+    """The aligned branch: fixes define the frame, COLMAP solves for the similarity."""
+    lat, lon, height = exif.median_fix(fixes)
+    reference = exif.enu_offsets(fixes, (lat, lon, height))
+    model = sfm.read_model(model_dir)
+    centres = {image.name: tuple(float(v) for v in image.centre) for image in model.images}
+    common = {name: value for name, value in reference.items() if name in centres}
+    if len(common) < 3:
+        raise ValueError(
+            f"{len(common)} of {len(fixes)} frames with an EXIF fix are in the pose model "
+            f"({model.registered} registered), and a similarity needs three. Either the "
+            f"reconstruction dropped the frames that had fixes, or the frame names moved "
+            f"between `normalize` and `pose`"
+        )
+
+    work = ctx.work_dir / "align"
+    work.mkdir(parents=True, exist_ok=True)
+    ref_path = work / "ref_positions.txt"
+    sfm.write_ref_positions(ref_path, common)
+    max_error_m = float(ctx.param("max_error_m", DEFAULT_ALIGNMENT_MAX_ERROR_M))
+    # COLMAP 3.9.1 aborts (SIGABRT, no message) rather than creating `--output_path`, and
+    # the directory it writes there is never read -- see `sfm`'s module docstring.
+    aligned = work / "aligned"
+    aligned.mkdir(parents=True, exist_ok=True)
+    argv = sfm.model_aligner_argv(
+        model_dir,
+        aligned,
+        ref_path,
+        work / "transform.txt",
+        max_error_m=max_error_m,
+        min_common_images=3,
+    )
+    ctx.run(argv)
+    similarity = sfm.read_similarity(work / "transform.txt")
+    residuals = sfm.alignment_residuals(similarity, centres, common)
+    values = np.asarray(sorted(residuals.values()), dtype=np.float64)
+    rms = float(np.sqrt(float((values**2).mean()))) if values.size else 0.0
+    inliers = int((values <= max_error_m).sum())
+    # Consistency, floored. The residual cannot see the receiver's own bias, which is
+    # common to every fix in the capture and moves all of it together.
+    uncertainty = max(rms, EXIF_GPS_UNCERTAINTY_FLOOR_M)
+
+    document: dict[str, object] = {
+        "lat": lat,
+        "lon": lon,
+        "height": height,
+        "georefMethod": "exif-gps",
+        "scaleSource": "exif-gps",
+        "uncertaintyM": round(uncertainty, 3),
+        "note": (
+            f"aligned to {len(common)} EXIF GPS fixes with colmap model_aligner; "
+            f"residual {float(np.median(values)):.2f} m median, {rms:.2f} m rms. The "
+            f"reported uncertainty is floored at {EXIF_GPS_UNCERTAINTY_FLOOR_M:g} m "
+            f"because a residual measures consistency, not accuracy"
+        ),
+        "fixes": {
+            "frames": len(fixes),
+            "aligned": len(common),
+            "heightDatum": _HEIGHT_DATUM,
+            "dopMedian": _median_or_none([f.dop for f in fixes if f.dop is not None]),
+        },
+        "alignment": {
+            "tool": "colmap model_aligner",
+            "version": sfm.colmap_version(),
+            "alignmentType": "custom",
+            "maxErrorM": max_error_m,
+            "images": len(common),
+            "inliers": inliers,
+            # `scale * R @ x + t` takes a point in the reconstruction's own units into
+            # east/north/up metres about (lat, lon, height).
+            "scale": similarity.scale,
+            "rotation": [[float(v) for v in row] for row in similarity.rotation],
+            "translationM": [float(v) for v in similarity.translation],
+            "residualM": {
+                "median": round(float(np.median(values)), 4),
+                "rms": round(rms, 4),
+                "max": round(float(values.max()), 4),
+                "perImage": {name: round(value, 4) for name, value in sorted(residuals.items())},
+            },
+            # Said out loud: the transform is recorded and nothing applies it. `train`
+            # writes `canonical.ply` in COLMAP's own frame and `package` places that frame
+            # on the globe as if it were east/north/up, so a Lane 2 capture is still
+            # packaged in the reconstruction's arbitrary orientation. Applying this is the
+            # next step and it is not this one.
+            "applied": False,
+            "appliedNote": (
+                "recorded, not applied: `package` still places canonical.ply's own axes "
+                "as east/north/up, so this rotation and scale are provenance rather than "
+                "a correction that has been made"
+            ),
+        },
+    }
+    _write_json(ctx.output(GEOREF.name), document)
+    ctx.log(
+        f"aligned {len(common)} fixes: scale {similarity.scale:.6g}, residual "
+        f"{float(np.median(values)):.3f} m median / {rms:.3f} m rms, {inliers} within "
+        f"{max_error_m:g} m"
+    )
+    metrics: dict[str, MetricValue] = {
+        "fixes": len(fixes),
+        "aligned": len(common),
+        "inliers": inliers,
+        "scale": round(similarity.scale, 6),
+        "residualMedianM": round(float(np.median(values)), 4),
+        "residualRmsM": round(rms, 4),
+        "uncertaintyM": round(uncertainty, 3),
+    }
+    return StageOutcome(
+        metrics=metrics,
+        summary=f"{len(common)} EXIF fixes, {rms:.2f} m rms residual",
+    )
+
+
+def _sole_location(
+    ctx: StageContext, fixes: tuple[exif.Fix, ...]
+) -> tuple[float, float, float] | None:
+    """One coordinate for the whole capture: the fixes' median, or the video's location.
+
+    A0's sizing note on this stage was to read **both** iPhone location keys -- the `mdta`
+    `com.apple.quicktime.location.ISO6709` and the older `(c)xyz` atom. That is already
+    done, in `video.parse_probe`, and `ffmpeg_frames` put the answer in
+    `source_meta.json`; reading it a second time here would be a second parser of the same
+    two keys.
+    """
+    if fixes:
+        return exif.median_fix(fixes)
+    if not ctx.has_input(SOURCE_META.name):
+        return None
+    location = _read_json(ctx.input(SOURCE_META.name)).get("location")
+    if not isinstance(location, dict):
+        return None
+    lat, lon = _optional_float(location.get("lat")), _optional_float(location.get("lon"))
+    if lat is None or lon is None:
+        return None
+    return lat, lon, _optional_float(location.get("alt")) or 0.0
+
+
+def _count_files(directory: Path) -> int:
+    return sum(1 for path in directory.iterdir() if path.is_file())
+
+
+def _median_or_none(values: list[float]) -> float | None:
+    return round(float(np.median(np.asarray(values, dtype=np.float64))), 3) if values else None
 
 
 # ---------------------------------------------------------------------------------------
@@ -926,12 +1185,22 @@ def catalog(ctx: StageContext) -> StageOutcome:
     georef = _read_json(ctx.input(GEOREF.name))
     tiles = sorted(entry.name for entry in ctx.input(SPLAT_TILES.name).iterdir())
     manifest = _read_json(ctx.input(MANIFEST.name)) if ctx.has_input(MANIFEST.name) else {}
+    ground = (
+        _read_json(ctx.input(GROUND_SAMPLES.name)) if ctx.has_input(GROUND_SAMPLES.name) else None
+    )
     document: dict[str, object] = {
         "slug": str(ctx.param("slug", ctx.run_id)),
         "title": str(ctx.param("title", "")),
         "recipe": ctx.recipe,
         "georef": georef,
         "artifacts": tiles,
+        # `ground_samples.json` in full, not the manifest's five-field summary of it.
+        # B4 is where this stops being an artifact nothing reads: the worker turns each
+        # cell into an ellipsoid height on the asset, and the viewer rests the capture's
+        # own measured ground on the terrain instead of resting its bounding box on it.
+        # `optional_consumes` still, so a recipe without a ground stage registers as
+        # before and the viewer falls back to the bounding box.
+        "ground": ground,
         # The site's boundary, in the capture's own frame, so the worker can place a
         # polygon that is the size of the thing rather than A7's 60 m placeholder square.
         "bboxLocalM": _bbox_of(manifest),

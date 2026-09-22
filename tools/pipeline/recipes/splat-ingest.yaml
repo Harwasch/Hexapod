@@ -20,7 +20,10 @@ stages:
     params: {}
 
   - id: georeference
-    impl: manual_placement # | exif_gps | arkit_scale
+    # The only choice here: Lane 1 ingests a finished splat, so there are no frames to
+    # read EXIF off and no reconstruction to align. `exif_gps` consumes `frames` and
+    # cannot run in this lane at all.
+    impl: manual_placement
     params:
       lat: 0.0
       lon: 0.0

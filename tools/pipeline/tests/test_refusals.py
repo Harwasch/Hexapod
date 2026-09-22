@@ -130,15 +130,20 @@ def test_a_recipe_input_that_was_never_seeded_is_refused(tmp_path: Path) -> None
 
 
 def test_an_unimplemented_stage_says_which_step_lands_it(tmp_path: Path) -> None:
-    """Lane 2's first three stages are real since B2, so this asks a later one.
+    """The stub that is still a stub, asked to run, refuses by name.
 
-    It used to ask `ffmpeg_frames`, which now answers by extracting frames. `exif_gps`
-    is the same shape -- it consumes `upload` -- and is still a stub, so the property
-    being tested (a stub refuses by name and says which step lands it) is unchanged.
+    This has followed the frontier of what is implemented: it asked `ffmpeg_frames`
+    until B2 made that real, then `exif_gps` until B4 made *that* real. It now asks
+    `pose: arkit`, which B4 deliberately left stubbed -- there is no ARKit capture in
+    this repository, and the on-disk format is the capture app's rather than Apple's.
     """
     from errors import StageFailedError
 
-    recipe = make_recipe([{"id": "georeference", "impl": "exif_gps"}], inputs=["upload"])
+    workdir = seeded_workdir(tmp_path / "run")
+    frames = workdir.input_path("frames")
+    frames.mkdir(parents=True, exist_ok=True)
+    (frames / "frame_0000.jpg").write_bytes(b"not really a frame, but deterministic bytes")
+    recipe = make_recipe([{"id": "pose", "impl": "arkit"}], inputs=["upload", "frames"])
 
     with pytest.raises(StageFailedError, match="lands in B4"):
-        execute(recipe, seeded_workdir(tmp_path / "run"), _local())
+        execute(recipe, workdir, _local())

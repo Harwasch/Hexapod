@@ -24,6 +24,7 @@ import type { CameraController } from "./CameraController";
 import type { ClippingManager } from "./ClippingManager";
 import { isIonAuthError, isIonNotFound } from "./ion";
 import { devicePixelError, type PerformanceManager } from "./PerformanceManager";
+import { groundAt, measuredClamp, type MeasuredGround } from "./placement";
 import { createSiteTileset, tileCacheBudget } from "./providers/tiles";
 import type { SceneEvents } from "./types";
 
@@ -582,44 +583,84 @@ export class SiteManager {
    * loaded, so until then the root box is used and the clip is re-derived on tile loads.
    */
   /**
-   * Rests a model's lowest point on the terrain under its centre. Downloaded objects and
-   * phone scans carry no usable ellipsoid height, so the catalog stores where, and the
-   * viewer works out how high once the terrain is known.
+   * Rests a model on the ground. Downloaded objects and phone scans carry no usable ellipsoid
+   * height, so the catalog stores where, and the viewer works out how high once the terrain is
+   * known.
+   *
+   * Two ways of working it out, and which one is used depends only on whether the capture's own
+   * ground was ever measured:
+   *
+   * * **measured** — the asset carries `groundSamples`, the capture's own ground cell by cell
+   *   as ellipsoid heights (`splat_ground` measured them; the worker put them on the asset).
+   *   The ground is sampled at exactly those points and the median per-cell difference is the
+   *   lift. Slope cancels, because both sides of every subtraction are at the same place. This
+   *   is the subtraction a person used to do by hand into `heightOffsetM`.
+   * * **bounding box** — no samples, so the lowest corner of the root box goes on the ground
+   *   under the centre, exactly as before B4, `heightOffsetM` and all. Every asset that
+   *   predates the measured path takes this branch and does not move by a millimetre.
+   *
+   * `heightOffsetM` is still added in both branches. On the measured branch it is no longer
+   * *needed* — nothing about the clamp requires correcting any more — but it is an authored
+   * value, and an asset somebody deliberately nudged should stay nudged.
    */
   private async clampToGround(tileset: Cesium3DTileset, asset: SiteAsset): Promise<void> {
     const sphere = tileset.boundingSphere;
     const center = Cartographic.fromCartesian(sphere.center);
-    const [sample] = await sampleTerrainMostDetailed(this.viewer.terrainProvider, [
-      Cartographic.fromRadians(center.longitude, center.latitude),
-    ]).catch(() => [undefined]);
-    let ground = sample?.height;
+    const measured = asset.renderConfig.groundSamples ?? [];
+    // The centre first, then one point per measured cell, so index 0 is always the centre and
+    // the bounding-box fallback is available even when every cell's sample fails.
+    const wanted: MeasuredGround[] = [
+      {
+        lon: CesiumMath.toDegrees(center.longitude),
+        lat: CesiumMath.toDegrees(center.latitude),
+        height: center.height,
+      },
+      ...measured,
+    ];
+    const cartographics = () => wanted.map((p) => Cartographic.fromDegrees(p.lon, p.lat));
+    const terrain = await sampleTerrainMostDetailed(
+      this.viewer.terrainProvider,
+      cartographics(),
+    ).catch(() => undefined);
     // The ground that is actually drawn may be a mesh (the photorealistic world, another
     // site's model) sitting metres from the terrain; rest on what is visible when there is
     // something plausible there.
-    if (this.scene.sampleHeightSupported) {
-      const [drawn] = await this.scene
-        .sampleHeightMostDetailed(
-          [Cartographic.fromRadians(center.longitude, center.latitude)],
-          [tileset],
-        )
-        .catch(() => [undefined]);
-      const height = drawn?.height;
-      if (
-        height !== undefined &&
-        Number.isFinite(height) &&
-        (ground === undefined || Math.abs(height - ground) < DRAWN_GROUND_TOLERANCE_M)
-      )
-        ground = height;
+    const drawn = this.scene.sampleHeightSupported
+      ? await this.scene.sampleHeightMostDetailed(cartographics(), [tileset]).catch(() => undefined)
+      : undefined;
+    if (tileset.isDestroyed()) return;
+    const ground = wanted.map((_, i) =>
+      groundAt(terrain?.[i]?.height, drawn?.[i]?.height, DRAWN_GROUND_TOLERANCE_M),
+    );
+    const offset = asset.renderConfig.heightOffsetM ?? 0;
+    const clamp = measured.length > 0 ? measuredClamp(measured, ground.slice(1)) : null;
+    let lift: number;
+    if (clamp) {
+      lift = clamp.liftM + offset;
+      log.info("clamped model to its own measured ground", {
+        asset: asset.id,
+        cells: clamp.cells,
+        of: measured.length,
+        lift,
+        spread: Math.round(clamp.spreadM * 100) / 100,
+      });
+    } else {
+      const under = ground[0];
+      if (under === undefined) return;
+      // Lowest point of the root bounding box when there is one (a sphere would float a flat
+      // object by the difference between its radius and its half height).
+      const bottom = lowestHeight(tileset) ?? center.height - sphere.radius;
+      lift = under + offset - bottom;
+      log.info("clamped model to ground", {
+        asset: asset.id,
+        ground: Math.round(under),
+        lift,
+        measuredCells: measured.length,
+      });
     }
-    if (ground === undefined || !Number.isFinite(ground) || tileset.isDestroyed()) return;
-    // Lowest point of the root bounding box when there is one (a sphere would float a flat
-    // object by the difference between its radius and its half height).
-    const bottom = lowestHeight(tileset) ?? center.height - sphere.radius;
-    const lift = ground + (asset.renderConfig.heightOffsetM ?? 0) - bottom;
     const from = Cartesian3.fromRadians(center.longitude, center.latitude, center.height);
     const to = Cartesian3.fromRadians(center.longitude, center.latitude, center.height + lift);
     tileset.modelMatrix = Matrix4.fromTranslation(Cartesian3.subtract(to, from, new Cartesian3()));
-    log.info("clamped model to ground", { asset: asset.id, ground: Math.round(ground), lift });
     this.scene.requestRender();
   }
 

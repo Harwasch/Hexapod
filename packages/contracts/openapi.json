@@ -2454,6 +2454,35 @@
         "title": "GooglePhotorealisticSource",
         "type": "object"
       },
+      "GroundSample": {
+        "additionalProperties": false,
+        "description": "One cell of the capture's own measured ground, as a point on the globe.\n\nThis is `ground_samples.json` after one addition and one subtraction: the pipeline\nwrites `z`, the capture's own up-coordinate relative to the placed origin, and the\nworker adds the origin height so that what reaches the browser is an ellipsoid height\nin the same datum the terrain is sampled in. The viewer then compares like with like\nand never has to know what frame the capture was reconstructed in.",
+        "properties": {
+          "height": {
+            "title": "Height",
+            "type": "number"
+          },
+          "lat": {
+            "maximum": 90.0,
+            "minimum": -90.0,
+            "title": "Lat",
+            "type": "number"
+          },
+          "lon": {
+            "maximum": 180.0,
+            "minimum": -180.0,
+            "title": "Lon",
+            "type": "number"
+          }
+        },
+        "required": [
+          "lon",
+          "lat",
+          "height"
+        ],
+        "title": "GroundSample",
+        "type": "object"
+      },
       "HealthStatus": {
         "additionalProperties": false,
         "properties": {
@@ -5463,8 +5492,18 @@
       },
       "Provenance": {
         "additionalProperties": false,
-        "description": "Where a dataset came from and when.",
+        "description": "Where a dataset came from, when, and how well it is known to be where it is.\n\nThe last three fields are the capture's georeference provenance, and they are here\nrather than on a new schema of their own because this is already the \"where did this\ncome from\" block, it is already carried through `render_config[\"provenance\"]` for\nevery asset and layer, and it is already the one thing the inspector reads. A capture\nplaced by hand at plus or minus ten metres and one aligned to EXIF GPS differ only in\nthese three values, and the console has to be able to say so.\n\nAll three are optional and default to None, which means *not recorded* -- not\n`none`, not `unresolved`, and not zero. Everything that predates the pipeline\n(`legacy_captures.json`, the seeded reference layers) has no georeference provenance\nat all, and inventing `GeorefMethod.NONE` for it would be a claim nobody made.",
         "properties": {
+          "georefMethod": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GeorefMethod"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "notes": {
             "anyOf": [
               {
@@ -5488,6 +5527,16 @@
               }
             ],
             "title": "Publishedat"
+          },
+          "scaleSource": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ScaleSource"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "sourceOrganization": {
             "anyOf": [
@@ -5514,6 +5563,18 @@
               }
             ],
             "title": "Sourceurl"
+          },
+          "uncertaintyM": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Uncertaintym"
           }
         },
         "title": "Provenance",
@@ -5679,6 +5740,14 @@
             "default": true,
             "title": "Clipsworld",
             "type": "boolean"
+          },
+          "groundSamples": {
+            "items": {
+              "$ref": "#/components/schemas/GroundSample"
+            },
+            "maxItems": 64,
+            "title": "Groundsamples",
+            "type": "array"
           },
           "heightOffsetM": {
             "default": 0.0,

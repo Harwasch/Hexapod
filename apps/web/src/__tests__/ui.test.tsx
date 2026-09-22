@@ -6,6 +6,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { GlassTooltipProvider } from "@twin/ui";
 
+import type { Site, SiteAsset } from "@twin/contracts";
+
 import { api } from "@/api/client";
 import { InspectorPanel } from "@/features/inspector/InspectorPanel";
 import { DevPanel } from "@/features/dev/DevPanel";
@@ -18,6 +20,7 @@ import { CommandBar } from "@/features/mission/CommandBar";
 import { ToolRail } from "@/features/shell/ToolRail";
 import {
   DEFAULT_WIND_STRENGTH,
+  LIVING_SURVEY_IDLE,
   useLiving,
   type LivingSiteStatus,
   type LivingSurveyStatus,
@@ -254,6 +257,102 @@ describe("DevPanel: the one place sort staleness is printed", () => {
     useSettings.getState().set({ devToolsOpen: true });
     render(wrap(<DevPanel />));
     expect(screen.getByTestId("dev-living")).toHaveTextContent("no rigged site loaded");
+  });
+});
+
+/** A site whose splat asset records how it was placed, as the worker registers one. */
+function placedSite(provenance: NonNullable<SiteAsset["provenance"]>): Site {
+  const asset = {
+    id: "placed-splat",
+    siteId: "placed-site",
+    provider: "3d-tiles-url",
+    name: "Capture splat",
+    representation: "gaussian-splat",
+    source: { type: "3d-tiles-url", url: "https://example.invalid/splat/tileset.json" },
+    footprint: null,
+    observedAt: null,
+    validFrom: null,
+    validTo: null,
+    resolution: null,
+    crs: null,
+    license: null,
+    attribution: [],
+    provenance,
+    renderConfig: { clipsWorld: true, clipFootprint: "catalog", heightOffsetM: 0 },
+    defaultVisible: true,
+    createdAt: "2026-01-01T00:00:00Z",
+    updatedAt: "2026-01-01T00:00:00Z",
+  } as unknown as SiteAsset;
+  return {
+    id: "placed-site",
+    slug: "placed",
+    name: "Placed capture",
+    description: null,
+    boundary: { type: "Polygon", coordinates: [] },
+    centroid: { longitude: 0, latitude: 0, height: 0 },
+    areaM2: 1,
+    thumbnailUrl: null,
+    metadata: {},
+    attribution: [],
+    license: null,
+    assets: [asset],
+    cameraBookmarks: [],
+    createdAt: "2026-01-01T00:00:00Z",
+    updatedAt: "2026-01-01T00:00:00Z",
+  } as unknown as Site;
+}
+
+async function placementRow(provenance: NonNullable<SiteAsset["provenance"]>): Promise<string> {
+  vi.spyOn(api, "GET").mockResolvedValue({
+    data: placedSite(provenance),
+    error: undefined,
+    response: new Response(null, { status: 200 }),
+  });
+  // Not animating, and no rigged sites: the placement row is about a capture's recorded
+  // georeference, and nothing about it should depend on whether the wind is blowing.
+  useLiving.getState().setStatus(LIVING_SURVEY_IDLE);
+  useSelection.getState().setSelection({
+    kind: "site",
+    title: "Placed capture",
+    longitude: -82.6966,
+    latitude: 28.0389,
+    height: 22.5,
+    terrainHeight: 20,
+    siteId: "placed-site",
+    at: Date.now(),
+  });
+  useUi.getState().setInspectorOpen(true);
+  render(wrap(<InspectorPanel />));
+  const row = await screen.findByTestId("inspector-placement");
+  return row.textContent ?? "";
+}
+
+describe("InspectorPanel: how the capture was placed", () => {
+  it("does not let a hand placement look like an alignment", async () => {
+    const byHand = await placementRow({
+      georefMethod: "manual",
+      scaleSource: "unresolved",
+      uncertaintyM: 10,
+    });
+    expect(byHand).toContain("Placed by hand");
+    expect(byHand).toContain("10");
+    expect(byHand).toContain("scale unresolved");
+    // The one that matters most is said at the top of the panel too: a reconstruction with
+    // no metric scale is one whose measurements mean nothing.
+    expect(screen.getAllByText("Scale unresolved").length).toBeGreaterThan(0);
+    vi.restoreAllMocks();
+  });
+
+  it("says so, differently, when the capture was aligned to EXIF GPS", async () => {
+    const aligned = await placementRow({
+      georefMethod: "exif-gps",
+      scaleSource: "exif-gps",
+      uncertaintyM: 5,
+    });
+    expect(aligned).toContain("Aligned to EXIF GPS");
+    expect(aligned).toContain("metric scale from EXIF GPS");
+    expect(screen.queryByText("Scale unresolved")).not.toBeInTheDocument();
+    vi.restoreAllMocks();
   });
 });
 

@@ -35,7 +35,8 @@ from app.models.enums import (
     Representation,
     ScaleSource,
 )
-from app.schemas.asset import AssetBase, RenderConfig, TilesUrlSource
+from app.schemas.asset import AssetBase, GroundSample, RenderConfig, TilesUrlSource
+from app.schemas.common import Provenance
 from app.schemas.geojson import Polygon
 from app.schemas.site import SiteCreate
 from app.services import sites as site_service
@@ -58,6 +59,11 @@ PLACEHOLDER_HALF_EXTENT_M = 30.0
 #: A capture with no extent along an axis (one gaussian, a flat wall scanned face-on) would
 #: otherwise produce a degenerate polygon that PostGIS accepts and nothing can be clicked on.
 MIN_HALF_EXTENT_M = 0.5
+
+#: How many ground cells travel with the asset. Same number as `splat_ground`'s own
+#: `max_cells` and as `RenderConfig.ground_samples`' cap: a catalog response carries a
+#: measurement of the ground, not a point cloud.
+MAX_GROUND_SAMPLES = 64
 
 _METRES_PER_DEGREE = 111_320.0
 
@@ -82,6 +88,9 @@ class Registration:
     bbox_local_m: tuple[list[float], list[float]] | None = None
     #: The thumbnail artifact's file name, when the run produced one.
     thumbnail: str | None = None
+    #: The capture's own measured ground, already on the globe. Empty is not an error: a
+    #: recipe with no `ground_samples` stage, or a run under the stub runner.
+    ground_samples: tuple[GroundSample, ...] = ()
 
     @staticmethod
     def read(path: Path) -> Registration:
@@ -101,7 +110,54 @@ class Registration:
             document=document if isinstance(document, dict) else {},
             bbox_local_m=_bbox(document.get("bboxLocalM")),
             thumbnail=str(thumbnail) if thumbnail else None,
+            ground_samples=_ground_samples(document.get("ground")),
         )
+
+
+def _ground_samples(value: object) -> tuple[GroundSample, ...]:
+    """`ground_samples.json` turned into ellipsoid heights, or `()` if it is not that.
+
+    One addition, done here rather than in the browser: the pipeline measures `z`, the
+    capture's own up-coordinate relative to the placed origin, and `origin.height` is
+    where that origin sits on the ellipsoid, so a cell's ellipsoid height is their sum.
+    Doing it here means the viewer compares two heights in one datum and never has to
+    know what frame the capture was reconstructed in.
+
+    Read as defensively as `_bbox` above and for the same reason: everything the pipeline
+    writes crosses a file boundary to get here, and a malformed cell drops out rather
+    than failing a run that otherwise succeeded. A capture with no readable cells
+    registers exactly as it did before this existed -- the viewer falls back to the
+    bounding box -- which is why this never raises.
+    """
+    if not isinstance(value, dict):
+        return ()
+    origin = value.get("origin")
+    base = _float(origin.get("height")) if isinstance(origin, dict) else 0.0
+    rows = value.get("samples")
+    if not isinstance(rows, list):
+        return ()
+    out: list[GroundSample] = []
+    for row in rows[:MAX_GROUND_SAMPLES]:
+        if not isinstance(row, dict):
+            continue
+        try:
+            out.append(
+                GroundSample(
+                    lon=float(str(row["lon"])),
+                    lat=float(str(row["lat"])),
+                    height=base + float(str(row["z"])),
+                )
+            )
+        except (KeyError, TypeError, ValueError):
+            continue
+    return tuple(out)
+
+
+def _float(value: object) -> float:
+    try:
+        return float(str(value))
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _bbox(value: object) -> tuple[list[float], list[float]] | None:
@@ -232,9 +288,14 @@ def register(
                     source=TilesUrlSource(url=url),
                     default_visible=True,
                     # A phone scan rarely carries a usable ellipsoid height, which is what
-                    # clamp_to_ground exists for; B4 replaces it with the capture's own
-                    # measured ground median.
-                    render_config=RenderConfig(clamp_to_ground=True),
+                    # clamp_to_ground exists for. What the clamp rests on is the capture's
+                    # own measured ground when the run measured one, and its bounding box
+                    # when it did not.
+                    render_config=RenderConfig(
+                        clamp_to_ground=True,
+                        ground_samples=list(registration.ground_samples),
+                    ),
+                    provenance=_provenance(registration),
                 )
             )
         site = site_service.create_site(
@@ -266,7 +327,7 @@ def register(
         # The newest successful run wins. Which run that was is on the site's metadata,
         # and every run remains in the console; if a published-run pointer is ever wanted
         # it belongs on the site, not in the absence of this update.
-        _repoint_splat(db, registered, url, job_id)
+        _repoint_splat(db, registered, url, job_id, registration)
     if registered is not None and thumbnail is not None:
         registered.thumbnail_url = thumbnail
     capture.status = CaptureStatus.COMPLETE
@@ -275,6 +336,31 @@ def register(
     capture.uncertainty_m = registration.uncertainty_m
     db.commit()
     return capture.site_id
+
+
+def _provenance(registration: Registration) -> Provenance:
+    """How the capture was placed and scaled, on the asset the console reads.
+
+    The same three values the capture row already carries (`app/models/capture.py`), put
+    where the inspector can reach them: the inspector is looking at a site's asset, not at
+    the capture that produced it, and a capture placed by hand at plus or minus ten metres
+    must not read like one aligned to EXIF GPS.
+    """
+    return Provenance(
+        georef_method=registration.georef_method,
+        scale_source=registration.scale_source,
+        uncertainty_m=max(registration.uncertainty_m, 0.0),
+    )
+
+
+def _render_config_document(registration: Registration) -> dict[str, Any]:
+    """The two placement keys a re-run replaces, in the render config's own camel case."""
+    return {
+        "groundSamples": [
+            sample.model_dump(mode="json", by_alias=True) for sample in registration.ground_samples
+        ],
+        "provenance": _provenance(registration).model_dump(mode="json", by_alias=True),
+    }
 
 
 def _free_slug(db: Session, base: str) -> str | None:
@@ -290,16 +376,24 @@ def _free_slug(db: Session, base: str) -> str | None:
     return None if taken else candidate
 
 
-def _repoint_splat(db: Session, site: Site, url: str, job_id: uuid.UUID) -> None:
+def _repoint_splat(
+    db: Session, site: Site, url: str, job_id: uuid.UUID, registration: Registration
+) -> None:
     """Point the site's splat asset at this run's tileset, or add one if it has none.
 
     A first run creates the asset; a re-run reaches here instead. A site whose first run
     produced no tileset (the stub runner with no bucket) has no asset to move, so one is
     created rather than the re-run silently registering nothing.
+
+    The measured ground and the georeference provenance move with the tileset, because
+    they are measurements *of that tileset*: leaving the first run's cells on an asset
+    now pointing at the second run's geometry would be a placement derived from geometry
+    nobody is looking at. A re-run that measured nothing clears them for the same reason.
     """
     splat = next(
         (a for a in site.assets if a.representation == Representation.GAUSSIAN_SPLAT), None
     )
+    placement = _render_config_document(registration)
     if splat is None:
         db.add(
             Asset(
@@ -309,11 +403,12 @@ def _repoint_splat(db: Session, site: Site, url: str, job_id: uuid.UUID) -> None
                 provider=AssetProvider.TILES_3D_URL,
                 source={"type": "3d-tiles-url", "url": url},
                 default_visible=True,
-                render_config={"clampToGround": True},
+                render_config={"clampToGround": True, **placement},
             )
         )
     else:
         splat.source = {**dict(splat.source), "url": url}
+        splat.render_config = {**dict(splat.render_config), **placement}
     metadata = dict(site.metadata_ or {})
     metadata["jobId"] = str(job_id)
     site.metadata_ = metadata

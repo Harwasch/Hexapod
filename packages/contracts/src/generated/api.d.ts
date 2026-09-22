@@ -1501,6 +1501,24 @@ export interface components {
              */
             type: "google-photorealistic";
         };
+        /**
+         * GroundSample
+         * @description One cell of the capture's own measured ground, as a point on the globe.
+         *
+         *     This is `ground_samples.json` after one addition and one subtraction: the pipeline
+         *     writes `z`, the capture's own up-coordinate relative to the placed origin, and the
+         *     worker adds the origin height so that what reaches the browser is an ellipsoid height
+         *     in the same datum the terrain is sampled in. The viewer then compares like with like
+         *     and never has to know what frame the capture was reconstructed in.
+         */
+        GroundSample: {
+            /** Height */
+            height: number;
+            /** Lat */
+            lat: number;
+            /** Lon */
+            lon: number;
+        };
         /** HealthStatus */
         HealthStatus: {
             /** Database */
@@ -2503,17 +2521,33 @@ export interface components {
         };
         /**
          * Provenance
-         * @description Where a dataset came from and when.
+         * @description Where a dataset came from, when, and how well it is known to be where it is.
+         *
+         *     The last three fields are the capture's georeference provenance, and they are here
+         *     rather than on a new schema of their own because this is already the "where did this
+         *     come from" block, it is already carried through `render_config["provenance"]` for
+         *     every asset and layer, and it is already the one thing the inspector reads. A capture
+         *     placed by hand at plus or minus ten metres and one aligned to EXIF GPS differ only in
+         *     these three values, and the console has to be able to say so.
+         *
+         *     All three are optional and default to None, which means *not recorded* -- not
+         *     `none`, not `unresolved`, and not zero. Everything that predates the pipeline
+         *     (`legacy_captures.json`, the seeded reference layers) has no georeference provenance
+         *     at all, and inventing `GeorefMethod.NONE` for it would be a claim nobody made.
          */
         Provenance: {
+            georefMethod?: components["schemas"]["GeorefMethod"] | null;
             /** Notes */
             notes?: string | null;
             /** Publishedat */
             publishedAt?: string | null;
+            scaleSource?: components["schemas"]["ScaleSource"] | null;
             /** Sourceorganization */
             sourceOrganization?: string | null;
             /** Sourceurl */
             sourceUrl?: string | null;
+            /** Uncertaintym */
+            uncertaintyM?: number | null;
         };
         /**
          * ProviderRead
@@ -2591,6 +2625,8 @@ export interface components {
              * @default true
              */
             clipsWorld?: boolean;
+            /** Groundsamples */
+            groundSamples?: components["schemas"]["GroundSample"][];
             /**
              * Heightoffsetm
              * @default 0
@@ -3036,6 +3072,7 @@ export type SchemaGeoJsonSource = components['schemas']['GeoJsonSource'];
 export type SchemaGeoPosition = components['schemas']['GeoPosition'];
 export type SchemaGeorefMethod = components['schemas']['GeorefMethod'];
 export type SchemaGooglePhotorealisticSource = components['schemas']['GooglePhotorealisticSource'];
+export type SchemaGroundSample = components['schemas']['GroundSample'];
 export type SchemaHealthStatus = components['schemas']['HealthStatus'];
 export type SchemaIonAssetMetadata = components['schemas']['IonAssetMetadata'];
 export type SchemaIonReconstructionCapabilities = components['schemas']['IonReconstructionCapabilities'];
