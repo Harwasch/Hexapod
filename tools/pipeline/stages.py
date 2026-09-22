@@ -422,6 +422,7 @@ def colmap(ctx: StageContext) -> StageOutcome:
         "matcher": matcher,
         "frames": len(images),
         "registered": model.registered,
+        "registeredFraction": round(model.registered / len(images) if images else 0.0, 4),
         "points3D": model.points3d,
         "meanTrackLength": round(model.mean_track_length, 3),
         "cameras": [camera.to_dict() for camera in model.cameras],
@@ -462,9 +463,14 @@ def colmap(ctx: StageContext) -> StageOutcome:
         f"colmap: {model.registered}/{len(images)} registered, {model.points3d} points, "
         f"mean track {model.mean_track_length:.2f}, focal {focal:.1f} px"
     )
+    fraction = model.registered / len(images) if images else 0.0
+    warning = partial_registration_warning(model.registered, len(images))
+    if warning is not None:
+        ctx.log(warning)
     metrics: dict[str, MetricValue] = {
         "frames": len(images),
         "registered": model.registered,
+        "registeredFraction": round(fraction, 4),
         "points3D": model.points3d,
         "meanTrackLength": round(model.mean_track_length, 3),
         "focalPx": round(focal, 3),
@@ -978,6 +984,31 @@ def _checksum_of_source(source: video.Source) -> str:
             while chunk := handle.read(1 << 20):
                 digest.update(chunk)
     return f"sha256:{digest.hexdigest()}"
+
+
+def partial_registration_warning(registered: int, frames: int) -> str | None:
+    """Say it as a problem when not every frame joined the reconstruction.
+
+    A partial reconstruction is the ordinary way a real capture disappoints. COLMAP's
+    mapper writes one sub-model per connected component and `_largest_model` takes the
+    biggest, so frames that did not join it are simply gone -- and everything downstream
+    still runs: `train` trains on the subset and the splat covers only what registered.
+    The count was always in the metrics and the summary; what was missing was anything
+    that reads as "this is not what you asked for" rather than as a number.
+
+    Returns None when every frame registered, so the caller logs nothing on the happy
+    path. A pure function because the interesting cases -- a half-registered orbit -- are
+    ones a real COLMAP run cannot be made to produce on demand.
+    """
+    if frames <= 0 or registered >= frames:
+        return None
+    fraction = registered / frames
+    return (
+        f"colmap: WARNING -- {frames - registered} of {frames} frames did not register "
+        f"({100 * fraction:.1f}% registered). The reconstruction covers only the frames "
+        f"that did; a low fraction usually means too little overlap, motion blur, or a "
+        f"scene the matcher could not close."
+    )
 
 
 def _largest_model(sparse: Path) -> Path | None:

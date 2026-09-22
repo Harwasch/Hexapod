@@ -40,6 +40,7 @@ import numpy as np
 import pytest
 
 import sfm
+import stages
 import tree_frames
 from conftest import FIXTURE_PLY, make_recipe
 from executor import execute
@@ -279,3 +280,29 @@ def test_the_poses_artifact_is_a_colmap_model_anything_downstream_can_read(
     assert step["metrics"]["focalPrior"] is False
     artifact = next(a for a in step["artifacts"] if a["name"] == "poses")
     assert artifact["kind"] == "dir" and artifact["bytes"] > 0
+
+
+# --- partial registration -------------------------------------------------------------
+#
+# Added by the orchestrator after a one-in-ten standalone run of the fixture above came
+# back with a subset of the orbit: COLMAP's mapper had split the reconstruction and
+# `_largest_model` took the biggest component, which is the right behaviour and also the
+# quiet one. The count was already in the metrics, the summary and the log; nothing said
+# it was a disappointment. These cover the sentence that now does.
+
+
+def test_a_complete_reconstruction_warns_about_nothing() -> None:
+    assert stages.partial_registration_warning(40, 40) is None
+
+
+def test_a_partial_reconstruction_says_how_many_frames_were_lost() -> None:
+    warning = stages.partial_registration_warning(27, 40)
+    assert warning is not None
+    assert "13 of 40 frames did not register" in warning
+    assert "67.5% registered" in warning
+
+
+def test_no_frames_is_not_a_division_by_zero() -> None:
+    """`_largest_model` returning None already raises for an empty model; this is the
+    guard that stops the reporting path dividing by zero on the way there."""
+    assert stages.partial_registration_warning(0, 0) is None
