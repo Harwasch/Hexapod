@@ -6,7 +6,10 @@ are reading this from a machine with ordinary network access, **most of what is 
 here becomes verifiable in an afternoon**, and that is the highest-value thing you can do
 first.
 
-Written 2026-09-22, at commit `8fabef7` on `claude/funny-carson-937ydv`.
+Written 2026-09-22 at commit `8fabef7` on `claude/funny-carson-937ydv`, and revised the
+same day from an environment that **does** have ordinary network access. Three of the
+questions below are now answered; §3 says which, and what answering them cost and found.
+What is still missing is not network — it is **accounts**.
 
 ## 1. Read these first, in this order
 
@@ -37,32 +40,54 @@ orbit. Then it stops, because training has never run.
 
 **The five remaining steps:**
 
-| Step            | What it delivers                                               | Blocked by                 |
-| --------------- | -------------------------------------------------------------- | -------------------------- |
-| C3              | `docs/PIPELINE.md` and the remaining ADRs                      | nothing                    |
-| B5              | 4D: measured motion played back, with a mandatory null control | nothing (C2 unblocked it)  |
-| B3              | Crisp splats from captures that moved                          | a GPU                      |
-| the deploy      | The first real URL                                             | accounts                   |
-| B3's validation | `none` vs `robust` vs `imc` on one windy capture               | a GPU _and_ a real capture |
+| Step            | What it delivers                                               | Blocked by                         |
+| --------------- | -------------------------------------------------------------- | ---------------------------------- |
+| C3              | `docs/PIPELINE.md` and the remaining ADRs                      | nothing                            |
+| B5              | 4D: measured motion played back, with a mandatory null control | nothing (C2 unblocked it)          |
+| B3              | Crisp splats from captures that moved                          | a GPU — i.e. a Modal token         |
+| the deploy      | The first real URL                                             | accounts                           |
+| B3's validation | `none` vs `robust` vs `imc` on one windy capture               | a GPU _and_ a real capture         |
+| the remote half | The Modal function `ModalAdapter` spawns                       | nothing — but only a run proves it |
 
-## 3. What was impossible here — verify these first
+## 3. What the network unblocked, and what it did not
 
-Every one of these was measured, not assumed. If your environment differs, **re-running
-them is the fastest way to turn this project's largest unknowns into facts.**
+Re-probed 2026-09-22 from an environment with ordinary egress. The result is worth stating
+precisely, because "we have the internet now" turned out to be a smaller change than it
+sounds: **everything that needed a document is done; everything that needs an account is
+not.**
 
-| Blocked from the authoring environment                            | What it left unverified                                                                                                                    |
-| ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `api.cloudflare.com`, `api.fly.io`, `api.neon.tech`               | All of `provision.yml`. Never run, not once, not with dummy credentials.                                                                   |
-| `developers.cloudflare.com`, `*.mcp.cloudflare.com`, `github.com` | The Cloudflare agent-setup plugin could not be installed.                                                                                  |
-| `modal.com`, `api.modal.com`, `rest.runpod.io`, `console.vast.ai` | `train` has never trained. `ModalAdapter` has never executed a line, and its API calls were written _from memory_, not documentation.      |
-| `ghcr.io` blob CDN (403)                                          | `docker build` never ran locally — though CI's `image` job does build and run the real image on every run, so this one is already covered. |
+| Was blocked                                                                       | Now                                                        | What that settled                                                                                                             |
+| --------------------------------------------------------------------------------- | ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `modal.com`, `api.modal.com`                                                      | reachable                                                  | `ModalAdapter` read against `modal==1.5.5`. **Five defects, one fatal** — see below. Still never executed; still `unproven`.  |
+| `developers.cloudflare.com`                                                       | reachable                                                  | The R2 public-bucket claim confirmed verbatim. The bucket split is built (§5a).                                               |
+| `runpod.io/pricing`, `vast.ai/pricing`                                            | reachable                                                  | The GPU rates are surveyed (§5b). Vast has no list price — its page says so.                                                  |
+| `console.neon.tech/api/v2`, `api.fly.io`, `registry.fly.io`, `api.cloudflare.com` | reachable (401 unauthenticated, which is the right answer) | Nothing. `provision.yml` still needs credentials to run, and has still never run.                                             |
+| `ghcr.io`                                                                         | reachable, **but there is no Docker daemon here**          | `docker build` still cannot run locally. CI's `image` job builds and runs the real image on every run, so this stays covered. |
 
-**Start with the GPU.** One Modal account and token turns three unproven things into
-verified ones at once: the `train` stage, the Modal adapter, and the ability to start B3.
-Expect the adapter to be wrong in places — its docstrings carry inline `UNVERIFIED:`
-markers naming exactly what to check, and the remote half (the deployed Modal function
-that fetches inputs, runs `run_stage` and syncs `checkpoint/`) **is not in this repository
-at all** and has to be written.
+Note for whoever re-probes: `api.neon.tech` does not resolve, but `console.neon.tech` does
+— and the latter is the host `provision.yml` actually calls, so that table row was always
+pointing at the wrong name.
+
+**What reading the Modal SDK found**, since "we looked and it was fine" would have been
+the least useful possible outcome:
+
+- `poll()` caught the builtin `TimeoutError`. A zero-timeout poll raises
+  `modal.exception.TimeoutError`, which inherits from `modal.Error` and **not** from the
+  builtin — so every healthy stage was dead-lettered on its first poll. Fatal.
+- None of the three guessed preemption markers exist. Preemption arrives as
+  `InternalFailure`.
+- `FunctionTimeoutError` and `OutputExpiredError` both subclass Modal's `TimeoutError`, so
+  the obvious `isinstance` fix would have read a timed-out stage as running forever.
+- `gpu="A10G"` is AWS's instance name; Modal's tier is `A10`. Nothing local catches this —
+  a Modal `App` with a nonsense GPU name builds fine and is rejected only server-side.
+- `cancel()` defaults to `terminate_containers=False`, which cancels the input and leaves
+  the container billing.
+
+**Start with the GPU, still.** One Modal token turns three unproven things into verified
+ones at once: the `train` stage, the adapter, and the ability to start B3. The remote half
+— the deployed Modal function that fetches inputs, runs `run_stage` and syncs
+`checkpoint/` — **is still not in this repository** and has to be written.
+`SubprocessAdapter` is the worked example of what it must do.
 
 ## 4. Setting up, now that the network allows it
 
@@ -77,20 +102,29 @@ ever run:
 /plugin install cloudflare@cloudflare
 
 # Neon — interactive, writes the agent config for you
-neon mcp
+npx neon@latest init
 
 # Fly — note this CREATES A BILLABLE MACHINE, not just config
 fly mcp launch
 ```
 
 Neon's old `/sse` endpoint is deprecated and stops working on or after 2026-10-01; use
-`https://mcp.neon.tech/mcp`.
+`https://mcp.neon.tech/mcp`. The command above is the current one — this file first said
+`neon mcp`, which has been replaced.
 
-Then: first run interactively via MCP, ongoing deploys via `deploy.yml` with GitHub
-secrets (unattended deploys need tokens regardless), and `provision.yml` as the
-rebuild-from-scratch path rather than the primary one.
+**There is a cheaper route that needs no interactive session at all.** An agent with the
+GitHub tools can dispatch a workflow and read its logs, which is how the branch's CI has
+been driven. So tokens can live as **repository secrets** and never enter an agent's
+environment: put them there, and the first provisioning run and the first GPU run are both
+a `workflow_dispatch` away. The names the workflows already read are in
+`docs/DEPLOYMENT.md`; Modal needs two more, `MODAL_TOKEN_ID` and `MODAL_TOKEN_SECRET`,
+from `modal token new`.
 
-## 5. Two decisions left open, deliberately
+Either way: `deploy.yml` with GitHub secrets is the ongoing path, because unattended
+deploys need tokens regardless, and `provision.yml` is the rebuild-from-scratch path
+rather than the primary one.
+
+## 5. Two decisions, both now settled
 
 **(a) The bucket split — settled: B, and built.** The facts below were re-checked
 against Cloudflare's own documentation on 2026-09-22 and all hold. The application now
@@ -112,12 +146,25 @@ CDN, which makes it wrong for tiles regardless.
   path, since `object_storage_bucket` is currently one value used for both. The Cloudflare
   MCP server makes the infrastructure half of this cheap.
 
-**(b) Cost display.** The provider price table carries only the four A100 rates that were
-actually surveyed, each tagged with its source. The shipped `train` stage requests an L4,
-which has no surveyed rate, so a real run records billed seconds and leaves `cost_usd`
-null rather than printing a plausible number someone would believe. If you would rather
-see an estimate, add recalled list prices tagged `source: recalled, unverified` — the
-tagging is the point.
+**(b) Cost display — settled by surveying, not by estimating.** The table carried only
+the four A100 rates A0 could measure, so the L4 the shipped `train` stage requests had no
+price. Rather than add recalled numbers tagged unverified, the published price lists were
+read: Modal's L4 at $0.7992 an hour and A10 at $1.1016, RunPod's L4 at $0.49 Secure and
+$0.44 Community. `Rate.source` now distinguishes a measured figure from a list price read
+on a named date.
+
+Three things came out of it that outlast the numbers:
+
+- **A0's survey checks out.** RunPod publishes exactly $1.59 and $1.19 an A100 hour;
+  Modal's 80 GB A100 lists at $2.4984 against A0's $2.50. A survey nobody can re-run now
+  has an independent source behind it.
+- **Modal's `a100` is the 80 GB part**, and `gpu="A100"` alone selects the 40 GB one,
+  which is priced 19% lower. `GPU_NAMES` maps the tier to `A100-80GB` explicitly, so the
+  price and the hardware cannot disagree.
+- **Vast stays unpriced on purpose.** Its page says prices are set by the market and not
+  by Vast, so there is no list price to read. That is the reason A0's note about paying
+  20-40% over sticker is in `providers.py`, and it is now the table's worked example of a
+  tier that should have no number.
 
 ## 6. How this project expects to be worked on
 
@@ -152,7 +199,12 @@ pnpm lint && pnpm typecheck && pnpm test`, `pnpm e2e` if `apps/web` changed, plu
 - The repo's `.env` leaks into `apps/api` settings tests. This has caused three separate
   false results; override explicitly rather than trusting ambient config.
 - Two `apps/api` pytest sessions at once deadlock on the shared test database.
-- Postgres may need `service postgresql start` before `apps/api` tests.
+- Postgres may need `service postgresql start` before `apps/api` tests — and a fresh
+  container may have no database at all. What worked here: `apt-get update && apt-get
+install -y postgresql-16-postgis-3`, then create a `twin` role with password `twin` and
+  the `twin`/`twin_test` databases, then `CREATE EXTENSION postgis` in each. The compose
+  file and CI both use `postgis/postgis:16-3.5`, which is simpler where a Docker daemon
+  exists; this environment has the `docker` CLI and no daemon.
 
 ## 7. The three-state honesty model
 
