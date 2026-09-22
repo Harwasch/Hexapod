@@ -77,6 +77,28 @@ jobs:
       - name: Committed fixture is up to date
         run: git diff --exit-code -- ../../data/tiles/synthetic-tree
 
+  pipeline:
+    name: Pipeline · lint, typecheck, test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tools/pipeline
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --frozen
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      # New code, so unlike tools/captures this project is mypy --strict. That also covers
+      # captures_bridge.py's import of tools/captures/splat_tiles.py, via mypy_path.
+      - run: uv run mypy .
+      # Both recipes -- Lane 2 included -- run end to end under StubRunner here. This
+      # runner has no GPU, which is the whole point: if this job needs one, the stub has
+      # stopped doing its job.
+      - run: uv run pytest -q
+
   api:
     name: API · lint, typecheck, test, migrations
     runs-on: ubuntu-latest

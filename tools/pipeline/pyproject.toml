@@ -1,0 +1,83 @@
+[project]
+name = "twin-pipeline"
+version = "0.1.0"
+description = "Recipe-driven capture processing: ordered stages, a stage registry, and the runner seam."
+requires-python = ">=3.11"
+dependencies = [
+  # Recipes are YAML; nothing else in this project reads or writes YAML.
+  "pyyaml>=6.0",
+  # tools/captures' splat_tiles.convert is imported through captures_bridge.py, and it
+  # needs numpy. Declared here so the seam is importable rather than aspirational.
+  "numpy>=1.26",
+  # The normalize stage's real implementation (A8/B2) shells out to ffmpeg. A0 found
+  # ffmpeg is not preinstalled on ubuntu-latest and static-ffmpeg downloads binaries at
+  # import, so the choice is pinned now and tests/test_ffmpeg.py holds it to it.
+  "imageio-ffmpeg>=0.5",
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=8.4",
+  "ruff>=0.13",
+  "mypy>=1.18",
+  "types-pyyaml>=6.0",
+]
+
+[tool.uv]
+# Scripts run from this directory; there is nothing to build or install.
+package = false
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "N", "S", "SIM", "RUF", "ANN", "T20"]
+ignore = ["ANN401", "RUF012", "S101"]
+
+[tool.ruff.lint.isort]
+# Every module in this project is imported by bare name (the tools/captures convention),
+# so ruff cannot tell them from third-party packages without being told.
+known-first-party = [
+  "artifacts",
+  "captures_bridge",
+  "conftest",
+  "contracts",
+  "errors",
+  "executor",
+  "plan",
+  "recipe",
+  "registry",
+  "run_recipe",
+  "runners",
+  "stages",
+  "workdir",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S", "ANN"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+exclude = ["\\.venv"]
+# splat_tiles lives in the sibling uv project tools/captures, which is `package = false`
+# and so cannot be a path dependency. captures_bridge.py puts it on sys.path at runtime;
+# this is how mypy sees the same file, so the seam is type-checked rather than Any.
+mypy_path = ["../captures"]
+
+[[tool.mypy.overrides]]
+# Type-check calls into splat_tiles against its real signatures, but do not report errors
+# inside tools/captures -- that project does not run mypy and is not this project's to fix.
+module = ["splat_tiles"]
+follow_imports = "silent"
+
+[[tool.mypy.overrides]]
+module = ["imageio_ffmpeg.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+# Same convention as tools/captures: run from this directory, import by module name.
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-ra"

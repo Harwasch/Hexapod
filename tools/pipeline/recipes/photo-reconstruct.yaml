@@ -1,0 +1,57 @@
+# Lane 2 -- raw capture: iPhone video, drone video, or a folder of images.
+#
+# Frames, then poses, then training, then the same packaging Lane 1 ends in. Both lanes
+# converge on `canonical.ply` and produce the same `splat/` tileset, so the console cannot
+# tell which one made a site except by reading its manifest.
+#
+# Only `train` declares `gpu:`, and that single fact is what routes it to a GPU runner.
+# `compensate` gains a `gpu:` block when its impl becomes `imc` (B3); asking for an L4 to
+# run `none` would be billing a GPU to do nothing.
+name: photo-reconstruct
+version: 1
+description: Reconstruct a splat from a raw capture, then package and register it.
+
+inputs: [upload]
+
+stages:
+  - id: normalize
+    impl: ffmpeg_frames
+    params:
+      fps: 4
+      # Top-K by variance-of-Laplacian, never an absolute threshold: A0 measured a 101x
+      # within-clip dynamic range, so no cutoff transfers between scenes.
+      select: sharpness
+      keep: 400
+
+  - id: pose
+    impl: colmap # | glomap | arkit
+    params:
+      # A0 #7: sequential_matcher without loop detection registers 2/40 on a closed orbit.
+      matcher: exhaustive
+
+  - id: mask
+    impl: none # | robust | sls  <- transients
+
+  - id: train
+    impl: gsplat # | opensplat | deformable3dgs
+    params:
+      iterations: 30000
+    gpu:
+      tier: l4
+      preemptible: true
+
+  - id: compensate
+    impl: none # | imc  <- real motion; add `gpu: {tier: l4, preemptible: true}` with it
+
+  - id: georeference
+    impl: exif_gps # | arkit_scale | manual_placement
+
+  - id: package
+    impl: splat_tiles
+    params:
+      max_gaussians: 400000
+      geometric_error: 2.0
+
+  - id: register
+    impl: catalog
+    params: {}
