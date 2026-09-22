@@ -2,7 +2,7 @@
 name = "twin-pipeline"
 version = "0.1.0"
 description = "Recipe-driven capture processing: ordered stages, a stage registry, and the runner seam."
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
   # Recipes are YAML; nothing else in this project reads or writes YAML.
   "pyyaml>=6.0",
@@ -59,7 +59,12 @@ known-first-party = [
 "tests/**" = ["S", "ANN"]
 
 [tool.mypy]
-python_version = "3.11"
+# 3.12, matching requires-python, and the two must stay equal. When the floor was 3.11
+# uv was free to build a 3.11 venv here and a 3.12 one on CI; mypy then parsed the 3.12
+# venv's numpy stubs under 3.11 rules and rejected PEP 695 `type` statements that only
+# exist in the newer file. The API requires 3.12 and its worker imports this project, so
+# 3.11 was never a version this code actually had to run on.
+python_version = "3.12"
 strict = true
 exclude = ["\\.venv"]
 # splat_tiles lives in the sibling uv project tools/captures, which is `package = false`
