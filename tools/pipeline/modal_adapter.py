@@ -103,9 +103,12 @@ GPU_NAMES: Mapping[str, str] = {
     "l4": "L4",
     "a10": "A10",
     "l40s": "L40S",
-    "a100": "A100",
+    # `A100-80GB`, not the bare `A100`, which Modal reads as the 40 GB part and prices
+    # 19% lower. `providers.py` carries $2.50 for this tier, which is the 80 GB figure,
+    # so a bare `A100` here would be a table whose price and whose hardware disagree.
+    # The smaller part is reachable, but only by asking for it by name.
+    "a100": "A100-80GB",
     "a100-40gb": "A100-40GB",
-    "a100-80gb": "A100-80GB",
     "h100": "H100",
     "h200": "H200",
     "b200": "B200",

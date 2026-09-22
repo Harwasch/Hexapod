@@ -365,14 +365,35 @@ def test_a_truncated_ledger_costs_history_and_not_the_next_attempt(tmp_path: Pat
 # --- the price table ----------------------------------------------------------------
 
 
-def test_the_table_carries_only_what_was_surveyed() -> None:
+def test_every_rate_says_where_it_came_from_and_no_tier_is_priced_by_guess() -> None:
+    """Two kinds of figure, both sourced; and an unpriced tier stays unpriced.
+
+    The table used to carry exactly four rates because A0 could reach no provider's site
+    to survey anything else. The published lists filled some of the gaps, so what is
+    asserted here is no longer a count -- it is the property that mattered all along:
+    every number names a measurement or a URL, and a tier nobody can price has no number
+    at all rather than a plausible one.
+    """
+    sources = {rate.source for entry in PROVIDERS for rate in entry.rates.values()}
+    assert sources == {
+        "A0 provider survey",
+        "modal.com/pricing, read 2026-09-22",
+        "runpod.io/pricing, read 2026-09-22",
+    }
+    # Every provider still has the surveyed A100 hour the console's column is built on.
     for entry in PROVIDERS:
-        assert set(entry.rates) == {"a100"}, entry.name
-        assert entry.rates["a100"].source == "A0 provider survey"
+        assert entry.rates["a100"].source == "A0 provider survey", entry.name
+
     modal = provider("modal")
     assert modal is not None
-    assert modal.rate("l4") is None
     assert modal.usd_per_hour_a100 == 2.50
+    assert modal.rate("l4") is not None
+
+    # Vast is the unpriced case, and is meant to stay one: a marketplace publishes no
+    # list price, so there is nothing to fill this in from.
+    vast = provider("vast")
+    assert vast is not None
+    assert vast.rate("l4") is None
     assert provider("nobody") is None
 
 
@@ -384,12 +405,18 @@ def test_a_deployment_supplies_its_own_rates_without_editing_the_table() -> None
 
     merged = with_rates(parsed)
     modal = next(entry for entry in merged if entry.name == "modal")
-    assert modal.rate("l4") is not None
+    # A deployment's own price wins over the published one: a contract rate is true for
+    # that deployment in a way a list price is not.
     assert modal.rate("l4").usd_per_hour == 0.80  # type: ignore[union-attr]
     # The surveyed figure is still there, and still says where it came from.
     assert modal.rate("a100").source == "A0 provider survey"  # type: ignore[union-attr]
     # The originals are untouched: `with_rates` returns a copy.
-    assert provider("modal").rate("l4") is None  # type: ignore[union-attr]
+    assert provider("modal").rate("l4").usd_per_hour == 0.7992  # type: ignore[union-attr]
+
+    # And a tier the table cannot price is priced by the deployment or not at all.
+    vast = next(entry for entry in merged if entry.name == "vast")
+    assert vast.rate("l4") is None
+    assert vast.rate("a100").usd_per_hour == 0.44  # type: ignore[union-attr]
 
 
 def test_a_malformed_rate_is_skipped_rather_than_raised_on() -> None:

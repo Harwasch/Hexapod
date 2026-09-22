@@ -6,12 +6,35 @@ other: the API renders it in the New-run form, and `CloudRunner` multiplies a ra
 seconds a provider billed to fill in `jobs.cost_usd`. `tools/pipeline` must not import
 `apps/api`, so the shared fact lives on the side that can be imported from both.
 
-**Only surveyed numbers are in here.** A0 measured an A100 hour at each of the four
-providers and nothing else, so that is what the table carries. A tier with no `Rate` is
-*unpriced*: a run on it records the seconds it was billed and leaves its cost empty,
-which is the honest answer. Inventing an L4 rate to make a column non-null would put a
-number nobody has checked in front of somebody deciding how to spend money -- and a wrong
-price is worse than a missing one, because it will be believed.
+**Only surveyed numbers are in here.** A tier with no `Rate` is *unpriced*: a run on it
+records the seconds it was billed and leaves its cost empty, which is the honest answer.
+Inventing an L4 rate to make a column non-null would put a number nobody has checked in
+front of somebody deciding how to spend money -- and a wrong price is worse than a
+missing one, because it will be believed.
+
+For a long time that meant four numbers: A0 measured an A100 hour at each of the four
+providers and could survey nothing else, because no provider's site was reachable from
+the machine this was written on. They are reachable now, so the gaps that could be
+filled from a published price list have been, and each `Rate` says which kind of figure
+it is. Three things came out of that survey and all three are worth keeping:
+
+* **A0's four numbers hold.** RunPod publishes $1.59 and $1.19 an A100 hour for Secure
+  and Community, which is exactly what A0 recorded. Modal publishes $0.000694 a second
+  for the 80 GB A100, which is $2.4984 an hour against A0's $2.50. A survey nobody could
+  re-run now has an independent check behind it.
+* **Modal's `a100` is the 80 GB part, and that is now enforced rather than assumed.**
+  Modal prices the 40 GB and 80 GB A100 differently ($2.0988 against $2.4984 an hour) and
+  `gpu="A100"` on its own selects the 40 GB one. A0's figure is the 80 GB price, so
+  `modal_adapter.GPU_NAMES` maps this tier to `A100-80GB` explicitly: the alternative is
+  a table whose price and whose hardware disagree by 19%.
+* **Vast still has no list price, because there is no such thing.** Its own pricing page
+  says "Prices are set by the market, not by Vast." That is not a gap to be filled in
+  later; it is the reason A0's note about paying 20-40% over sticker is in this file, and
+  it is why `vast` keeps one measured number and no published ones.
+
+A deployment that knows its own rates -- a contract price, a reserved instance, a box it
+already owns -- supplies them through `rates_from_env()` rather than by editing this file,
+because that number is true for that deployment and for nobody else.
 
 A deployment that knows its own rates -- a contract price, a reserved instance, a box it
 already owns -- supplies them through `rates_from_env()` rather than by editing this file,
@@ -78,14 +101,33 @@ class Provider:
 #: What the A0 provider survey measured: one A100 hour, at each of four hosts.
 A0 = "A0 provider survey"
 
+#: The date the published price lists below were read. One constant, because a price
+#: read on a different day is a different fact and they should not drift apart silently.
+SURVEYED = "2026-09-22"
+
+#: A provider's own published list price. Weaker than a measured invoice -- a list price
+#: is what you are quoted, not what you were charged -- but far stronger than a recalled
+#: one, and it carries a URL anybody can check it against.
+MODAL_LIST = f"modal.com/pricing, read {SURVEYED}"
+RUNPOD_LIST = f"runpod.io/pricing, read {SURVEYED}"
+
 PROVIDERS: tuple[Provider, ...] = (
     Provider(
         name="modal",
         label="Modal",
-        tiers=("l4", "a10g", "a100"),
+        # `a10`, not `a10g`: A10G is AWS's name for the instance and Modal rejects it.
+        tiers=("l4", "a10", "a100"),
         interruptible=False,
         note="Per-second billing, scale to zero. The reliable default.",
-        rates={"a100": Rate(2.50, A0)},
+        rates={
+            # Published per second; an hour is an exact multiple, so no precision is
+            # invented by storing it this way: $0.000222 and $0.000306 a second.
+            "l4": Rate(0.7992, MODAL_LIST),
+            "a10": Rate(1.1016, MODAL_LIST),
+            # A0's measurement, kept over the $2.4984 list price it agrees with, because
+            # a number somebody watched is the better of two numbers that match.
+            "a100": Rate(2.50, A0),
+        },
     ),
     Provider(
         name="runpod-secure",
@@ -93,7 +135,7 @@ PROVIDERS: tuple[Provider, ...] = (
         tiers=("l4", "a100"),
         interruptible=False,
         note="Ordinary rented pods.",
-        rates={"a100": Rate(1.59, A0)},
+        rates={"l4": Rate(0.49, RUNPOD_LIST), "a100": Rate(1.59, A0)},
     ),
     Provider(
         name="runpod-community",
@@ -101,7 +143,7 @@ PROVIDERS: tuple[Provider, ...] = (
         tiers=("l4", "a100"),
         interruptible=True,
         note="Community hosts; cheaper, and killed without warning.",
-        rates={"a100": Rate(1.19, A0)},
+        rates={"l4": Rate(0.44, RUNPOD_LIST), "a100": Rate(1.19, A0)},
     ),
     Provider(
         name="vast",
@@ -110,8 +152,12 @@ PROVIDERS: tuple[Provider, ...] = (
         interruptible=True,
         note=(
             "Cheapest sticker, most variable. A0 measured the unverified tier running "
-            "20-40% above its listed price once restarts and downtime are priced in."
+            "20-40% above its listed price once restarts and downtime are priced in. "
+            "There is no list price to quote: Vast's own page says prices are set by "
+            "the market, not by Vast."
         ),
+        # Deliberately one rate and no published ones. See the module docstring: a
+        # marketplace has no list price, so there is nothing here that could be filled in.
         rates={"a100": Rate(0.52, A0)},
     ),
 )

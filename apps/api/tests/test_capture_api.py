@@ -372,7 +372,7 @@ def test_process_queues_a_job_and_runs_nothing(client: TestClient, db: Session) 
             "recipe": "splat-ingest",
             "params": {"package": {"max_gaussians": 120000}},
             "provider": "modal",
-            "tier": "a10g",
+            "tier": "a10",
         },
     )
     assert response.status_code == 202, response.text

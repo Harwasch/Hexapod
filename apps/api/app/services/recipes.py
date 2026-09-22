@@ -52,10 +52,13 @@ def _providers() -> list[ProviderRead]:
     `jobs.cost_usd`. A second copy here is how the price the console shows and the price
     a run is charged at would eventually disagree.
 
-    It still carries only what A0 measured — an A100 hour at each of four hosts — and
-    `usdPerHourA100` is still a reference point rather than a quote. A deployment's own
-    rates arrive through `PIPELINE_GPU_RATES` and are merged over these; see that module
-    for why no unsurveyed tier has a number.
+    `usdPerHourA100` is still what A0 measured, and still a reference point rather than a
+    quote. The table now also carries published list prices where a provider publishes
+    one, each tagged with its URL and the date it was read, so the L4 the shipped recipe
+    actually requests has a price at last. What has not changed is the rule: a tier
+    nobody can price still has no number, which is why Vast has one rate and not three.
+    A deployment's own rates arrive through `PIPELINE_GPU_RATES` and are merged over
+    these; see that module for the rest.
 
     Only reached from `catalogue()`, which already answers None on a host with no
     `tools/pipeline`, so this import cannot be the thing that makes the endpoint fail.

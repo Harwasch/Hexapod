@@ -230,12 +230,14 @@ def test_gpu_names_are_modals_identifiers() -> None:
     assert "a10g" not in GPU_NAMES
     assert GPU_NAMES["a10"] == "A10"
     assert GPU_NAMES["l4"] == "L4"
+    # Bare "A100" is Modal's 40 GB part; the table's $2.50 is the 80 GB price.
+    assert GPU_NAMES["a100"] == "A100-80GB"
+    assert "A100" not in set(GPU_NAMES.values())
     assert set(GPU_NAMES.values()) == {
         "T4",
         "L4",
         "A10",
         "L40S",
-        "A100",
         "A100-40GB",
         "A100-80GB",
         "H100",
