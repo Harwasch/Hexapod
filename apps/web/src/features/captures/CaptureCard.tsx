@@ -1,9 +1,11 @@
-import { Ban, CheckCircle2, MapPin, Play, RotateCcw } from "lucide-react";
+import { Ban, CheckCircle2, FileText, MapPin, Play, RotateCcw } from "lucide-react";
+import { useState } from "react";
 
-import type { Capture, CaptureFile, Job, RunStatus } from "@twin/contracts";
+import type { Capture, CaptureFile, Job, JobStep, RunStatus } from "@twin/contracts";
 import { PhoneHandoff } from "./PhoneHandoff";
 import { GlassBadge, GlassButton, GlassProgress, type GlassProgressTone } from "@twin/ui";
 
+import { useCancelJob, useRetryJob, useStepLog } from "@/api/queries";
 import { formatBytes, formatDate, formatDuration } from "@/lib/format";
 import { uploadsForCapture, type UploadItem } from "@/state/uploads";
 
@@ -132,7 +134,10 @@ export function CaptureCard({
   );
   const recipe =
     typeof capture.metadata.recipe === "string" ? capture.metadata.recipe : proposal.recipe;
-  const canProcess = filesReady && !uploading && (!job || job.status === "error");
+  // A job that failed before it produced any step can only be started over; one that got
+  // somewhere offers "Retry from <stage>" instead, which keeps the work already done.
+  const canProcess =
+    filesReady && !uploading && (!job || (job.status === "error" && job.steps.length === 0));
 
   return (
     <li>
@@ -255,6 +260,16 @@ function jobProgressPct(job: Job): number {
 function JobStages({ job }: { job: Job }) {
   const queued: boolean = job.status === "not-started" && job.steps.length === 0;
   const status: RunStatus = job.status;
+  const running = status === "not-started" || status === "in-progress";
+  const cancel = useCancelJob();
+  const retry = useRetryJob();
+  const ordered = [...job.steps].sort((a, b) => a.ordinal - b.ordinal);
+  // Where a retry picks up: the stage that failed, or the first one that never finished.
+  const resumeAt =
+    ordered.find((step) => step.status === "error" || step.status === "cancelled") ??
+    ordered.find((step) => step.status !== "complete");
+  const canRetry = (status === "error" || status === "cancelled") && resumeAt !== undefined;
+
   return (
     <div className="capture__job" data-testid="capture-job">
       <div className="card__row card__row--between">
@@ -273,26 +288,14 @@ function JobStages({ job }: { job: Job }) {
       />
       {queued && (
         <p className="capture__job-note" data-testid="capture-job-queued">
-          Queued. A worker claims the job and runs its stages — nothing has picked it up yet.
+          Queued. The next free worker claims it and starts running its stages.
         </p>
       )}
-      {job.steps.length > 0 && (
+      {ordered.length > 0 && (
         <ul className="capture__stages">
-          {[...job.steps]
-            .sort((a, b) => a.ordinal - b.ordinal)
-            .map((step) => (
-              <li key={step.id} className="capture__stage" data-testid="capture-stage">
-                <span
-                  className={`mc-dot mc-dot--${step.status === "complete" ? "done" : step.status === "in-progress" ? "run" : step.status === "error" ? "warn" : "idle"}`}
-                  aria-hidden="true"
-                />
-                <span className="capture__stage-name">{stageLabel(step.stageId)}</span>
-                <span className="capture__stage-meta">
-                  {step.status === "complete" && <CheckCircle2 size={12} aria-hidden="true" />}
-                  {elapsed(step) ?? step.status}
-                </span>
-              </li>
-            ))}
+          {ordered.map((step) => (
+            <StageRow key={step.id} jobId={job.id} step={step} />
+          ))}
         </ul>
       )}
       {job.error && (
@@ -300,6 +303,83 @@ function JobStages({ job }: { job: Job }) {
           {job.error}
         </p>
       )}
+      <div className="capture__file-actions">
+        {running && (
+          <GlassButton
+            size="sm"
+            variant="ghost"
+            loading={cancel.isPending}
+            onClick={() => cancel.mutate(job.id)}
+            leadingIcon={<Ban size={13} aria-hidden="true" />}
+            data-testid="capture-job-cancel"
+          >
+            Cancel
+          </GlassButton>
+        )}
+        {canRetry && (
+          <GlassButton
+            size="sm"
+            loading={retry.isPending}
+            onClick={() => retry.mutate({ jobId: job.id, fromStage: resumeAt.stageId })}
+            leadingIcon={<RotateCcw size={13} aria-hidden="true" />}
+            data-testid="capture-job-retry"
+          >
+            Retry from {stageLabel(resumeAt.stageId)}
+          </GlassButton>
+        )}
+      </div>
     </div>
+  );
+}
+
+function stageDot(status: RunStatus): string {
+  if (status === "complete") return "done";
+  if (status === "in-progress") return "run";
+  if (status === "error") return "warn";
+  return "idle";
+}
+
+/** One stage, with its log behind a disclosure — logs are in object storage, not the row. */
+function StageRow({ jobId, step }: { jobId: string; step: JobStep }) {
+  const [open, setOpen] = useState(false);
+  const log = useStepLog(jobId, step.id, open && step.logKey !== null);
+  const label = stageLabel(step.stageId);
+
+  return (
+    <li className="capture__stage-item" data-testid="capture-stage">
+      <div className="capture__stage">
+        <span className={`mc-dot mc-dot--${stageDot(step.status)}`} aria-hidden="true" />
+        <span className="capture__stage-name">
+          {label}
+          {step.attempt > 1 && (
+            <span className="capture__job-version" data-testid="capture-stage-attempt">
+              {" "}
+              attempt {step.attempt}
+            </span>
+          )}
+        </span>
+        <span className="capture__stage-meta">
+          {step.status === "complete" && <CheckCircle2 size={12} aria-hidden="true" />}
+          {elapsed(step) ?? step.status}
+        </span>
+        {step.logKey !== null && (
+          <GlassButton
+            size="sm"
+            variant="ghost"
+            iconOnly
+            aria-expanded={open}
+            aria-label={`${open ? "Hide" : "Show"} the ${label} log`}
+            onClick={() => setOpen((was) => !was)}
+            leadingIcon={<FileText size={12} aria-hidden="true" />}
+            data-testid="capture-stage-log-toggle"
+          />
+        )}
+      </div>
+      {open && (
+        <pre className="capture__stage-log" data-testid="capture-stage-log">
+          {log.data?.text ?? (log.isError ? "The log could not be read." : "Loading\u2026")}
+        </pre>
+      )}
+    </li>
   );
 }

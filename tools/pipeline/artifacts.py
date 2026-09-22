@@ -12,9 +12,10 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
 from errors import RecipeError
 
@@ -105,6 +106,26 @@ class ArtifactRef:
             "bytes": self.bytes,
             "checksum": self.checksum,
         }
+
+    @staticmethod
+    def from_dict(document: Mapping[str, object]) -> ArtifactRef:
+        """The inverse of `to_dict`, for reading a previous attempt's `step.json` back.
+
+        Resuming a run needs the artifacts of the stages it skipped, or `artifacts.json`
+        would come out of a resumed run shorter than out of a fresh one.
+        """
+        kind = str(document["kind"])
+        if kind not in ("file", "dir"):
+            raise RecipeError(f"artifact {document.get('name')!r} has unknown kind {kind!r}")
+        return ArtifactRef(
+            name=str(document["name"]),
+            stage_id=str(document["stageId"]),
+            path=str(document["path"]),
+            kind=cast(Kind, kind),
+            content_type=str(document["contentType"]),
+            bytes=int(str(document["bytes"])),
+            checksum=str(document["checksum"]),
+        )
 
 
 def file_checksum(path: Path) -> str:

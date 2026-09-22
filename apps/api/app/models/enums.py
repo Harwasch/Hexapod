@@ -145,6 +145,13 @@ class ScaleSource(StrEnum):
 class ArtifactKind(StrEnum):
     """What a stage produced. Step logs and checkpoints are not artifacts: they are
     ``job_steps.log_key`` and ``job_steps.checkpoint_key``.
+
+    ``metadata`` was added in A7, when the worker started rowing everything it uploads.
+    A stage writes JSON sidecars beside its real output — ``georef.json``,
+    ``source_meta.json``, ``train_metrics.json``, ``registration.json`` — and they are
+    genuinely artifacts: they are in the bucket, they are what a later stage reads, and
+    an object with no row is an orphan by the console's own definition. Calling them
+    ``manifest`` would have been the cheaper lie.
     """
 
     FRAMES = "frames"
@@ -159,3 +166,4 @@ class ArtifactKind(StrEnum):
     GROUND_SAMPLES = "ground-samples"
     MANIFEST = "manifest"
     CLIP = "clip"
+    METADATA = "metadata"

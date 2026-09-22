@@ -23,7 +23,7 @@ class Settings(BaseSettings):
         # Without this, pydantic-settings JSON-decodes complex fields (list[str]) inside the
         # dotenv source, before any validator runs -- so the comma-separated
         # API_CORS_ORIGINS that .env.example documents raises SettingsError and nothing can
-        # import. `_split_origins` below is what is meant to parse it.
+        # import. `_split_csv` below is what is meant to parse it.
         enable_decoding=False,
     )
 
@@ -75,12 +75,45 @@ class Settings(BaseSettings):
     # which a deployment has to set this.
     public_web_base: str = "http://localhost:5173"
 
+    # --- The worker (app/worker) ----------------------------------------------------
+    # Where a run's workdir lives. It survives the run: "retry from this stage" reads the
+    # outputs of the stages that already succeeded out of it, and A6's `checkpoint/`
+    # contract is only worth anything while the directory is still there.
+    worker_workdir: str = "var/worker"
+    # "stub" or "local". Deliberately "stub" until A8 makes Lane 1's stages real: under
+    # the local runner every one of them raises NotImplementedError today, and a worker
+    # that reliably fails is a worse demonstration of the spine than one that runs it.
+    worker_runner: str = "stub"
+    # Extra recipes, by name, for tests and for a deployment that ships its own. The
+    # pipeline's shipped recipes are found without this.
+    worker_recipe_dir: str | None = None
+    # Modules the recipe process imports before planning, so their `@stage_impl`s are
+    # registered. Comma-separated, like API_CORS_ORIGINS. A deployment that carries its
+    # own stages names them here rather than editing the pipeline.
+    worker_impl_modules: list[str] = Field(default_factory=list)
+    # A0 #2: the claim commits immediately and holds a lease; a worker pushes the expiry
+    # forward while it supervises the run. 30 s against a 2 s heartbeat tolerates fourteen
+    # missed beats before another worker may take the job.
+    worker_lease_s: float = 30.0
+    # How often the supervisor beats: it renews the lease, notices a cancellation and
+    # drains the running recipe's progress on the same tick. Also the worst-case latency
+    # of `POST /jobs/{id}/cancel`.
+    worker_poll_s: float = 2.0
+    # How long to wait before asking for work again when the queue was empty.
+    worker_idle_s: float = 2.0
+    # Attempts per stage before the job is dead-lettered. Counts crashes and reclaims as
+    # well as ordinary failures, because a job that kills its worker would otherwise be
+    # picked up forever by whoever is next.
+    worker_max_attempts: int = 3
+    # Pause between attempts at the same stage.
+    worker_retry_backoff_s: float = 2.0
+
     api_host: str = "0.0.0.0"  # noqa: S104 - container default, documented in DEPLOYMENT.md
     api_port: int = 8000
 
-    @field_validator("api_cors_origins", mode="before")
+    @field_validator("api_cors_origins", "worker_impl_modules", mode="before")
     @classmethod
-    def _split_origins(cls, value: object) -> object:
+    def _split_csv(cls, value: object) -> object:
         if isinstance(value, str):
             return [origin.strip() for origin in value.split(",") if origin.strip()]
         return value

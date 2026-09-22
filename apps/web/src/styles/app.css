@@ -692,6 +692,27 @@ body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-close {
   margin-top: 0.35rem;
 }
 
+.capture__stage-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.capture__stage-log {
+  margin: 0;
+  max-height: 11rem;
+  overflow: auto;
+  padding: 0.45rem 0.55rem;
+  border-radius: var(--glass-radius-sm);
+  background: var(--surface-sunken, rgb(0 0 0 / 25%));
+  color: var(--text-secondary);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: var(--text-xs);
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .capture__job {
   display: flex;
   flex-direction: column;

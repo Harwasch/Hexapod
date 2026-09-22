@@ -11,6 +11,8 @@ import type {
   IonStatus,
   Job,
   JobCreate,
+  JobRetry,
+  JobStepLog,
   Layer,
   LayerCreate,
   OutlineRequest,
@@ -38,6 +40,7 @@ export const queryKeys = {
   captures: ["captures"] as const,
   capture: (id: string) => ["captures", id] as const,
   jobs: ["jobs"] as const,
+  stepLog: (jobId: string, stepId: string) => ["jobs", jobId, "steps", stepId, "log"] as const,
 };
 
 /** Result decorated with whether the data came from the built-in fallback catalog. */
@@ -324,6 +327,51 @@ export function useCancelJob() {
         api.POST("/api/v1/jobs/{job_id}/cancel", { params: { path: { job_id: jobId } } }),
       ),
     onSuccess: () => void client.invalidateQueries({ queryKey: queryKeys.jobs }),
+  });
+}
+
+/**
+ * Retry a finished run from one of its stages.
+ *
+ * Deliberately not the same thing as the worker's own retry: the worker stops after a few
+ * attempts and dead-letters the job, and this is a person asking again, which gives the
+ * stages being re-run their attempt budget back. Everything before `fromStage` keeps its
+ * completed step and its artifacts, and the worker skips it.
+ */
+export function useRetryJob() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: ({ jobId, fromStage }: { jobId: string; fromStage?: string }) =>
+      unwrap<Job>(
+        api.POST("/api/v1/jobs/{job_id}/retry", {
+          params: { path: { job_id: jobId } },
+          body: { fromStage: fromStage ?? null } satisfies JobRetry,
+        }),
+      ),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: queryKeys.captures });
+      void client.invalidateQueries({ queryKey: queryKeys.jobs });
+    },
+  });
+}
+
+/**
+ * One step's log, fetched only when the drawer is open.
+ *
+ * Logs live in object storage, not in the database, so this is a request per drawer
+ * rather than a field that would ride along on every poll of the job list.
+ */
+export function useStepLog(jobId: string, stepId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: queryKeys.stepLog(jobId, stepId),
+    queryFn: () =>
+      unwrap<JobStepLog>(
+        api.GET("/api/v1/jobs/{job_id}/steps/{step_id}/log", {
+          params: { path: { job_id: jobId, step_id: stepId } },
+        }),
+      ),
+    enabled,
+    retry: false,
   });
 }
 

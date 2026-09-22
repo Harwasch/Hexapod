@@ -346,6 +346,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/jobs/{job_id}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Retry a finished job, from a stage
+         * @description Re-queues a job that failed or was cancelled, resuming at `fromStage` — or at the stage that failed, when it is omitted. Earlier stages keep their completed steps and their artifacts; the worker skips them and picks up from this one. The attempt budget of the stages being re-run is reset, so a dead-lettered job can be retried by a person after the worker has stopped retrying it by itself.
+         */
+        post: operations["retry_job_api_v1_jobs__job_id__retry_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/jobs/{job_id}/steps/{step_id}/log": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read one step's log
+         * @description Logs live in object storage, not in the database: `logKey` on a step is a key, and this is what turns it into text. 404 when the step has not written one.
+         */
+        get: operations["read_step_log_api_v1_jobs__job_id__steps__step_id__log_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/layers": {
         parameters: {
             query?: never;
@@ -583,9 +623,16 @@ export interface components {
          * ArtifactKind
          * @description What a stage produced. Step logs and checkpoints are not artifacts: they are
          *     ``job_steps.log_key`` and ``job_steps.checkpoint_key``.
+         *
+         *     ``metadata`` was added in A7, when the worker started rowing everything it uploads.
+         *     A stage writes JSON sidecars beside its real output — ``georef.json``,
+         *     ``source_meta.json``, ``train_metrics.json``, ``registration.json`` — and they are
+         *     genuinely artifacts: they are in the bucket, they are what a later stage reads, and
+         *     an object with no row is an orphan by the console's own definition. Calling them
+         *     ``manifest`` would have been the cheaper lie.
          * @enum {string}
          */
-        ArtifactKind: "frames" | "poses" | "masks" | "splat" | "deformation-field" | "mesh" | "point-cloud" | "3d-tiles" | "thumbnail" | "ground-samples" | "manifest" | "clip";
+        ArtifactKind: "frames" | "poses" | "masks" | "splat" | "deformation-field" | "mesh" | "point-cloud" | "3d-tiles" | "thumbnail" | "ground-samples" | "manifest" | "clip" | "metadata";
         /**
          * ArtifactRead
          * @description Read model: every field is explicit (no defaults) so the OpenAPI contract marks it
@@ -1443,6 +1490,39 @@ export interface components {
              * Format: date-time
              */
             updatedAt: string;
+        };
+        /**
+         * JobRetry
+         * @description Retry a finished run from one of its stages.
+         *
+         *     `fromStage` is the stage to resume at; omitted, it is the stage that failed. Every
+         *     stage before it keeps its `complete` step row and its artifacts, and the worker skips
+         *     it — which is only possible because the run's workdir is still there (A6 keeps
+         *     `checkpoint/` and clears `out/` at the start of each attempt).
+         */
+        JobRetry: {
+            /** Fromstage */
+            fromStage?: string | null;
+        };
+        /**
+         * JobStepLog
+         * @description One step's log, read back out of object storage.
+         *
+         *     Logs are never in the database: `job_steps.log_key` is a key, and this endpoint is
+         *     what turns it into text for the panel's log drawer.
+         */
+        JobStepLog: {
+            /** Logkey */
+            logKey: string;
+            /** Stageid */
+            stageId: string;
+            /**
+             * Stepid
+             * Format: uuid
+             */
+            stepId: string;
+            /** Text */
+            text: string;
         };
         /** JobStepRead */
         JobStepRead: {
@@ -2680,6 +2760,8 @@ export type SchemaIonReconstructionCapabilities = components['schemas']['IonReco
 export type SchemaIonStatus = components['schemas']['IonStatus'];
 export type SchemaJobCreate = components['schemas']['JobCreate'];
 export type SchemaJobRead = components['schemas']['JobRead'];
+export type SchemaJobRetry = components['schemas']['JobRetry'];
+export type SchemaJobStepLog = components['schemas']['JobStepLog'];
 export type SchemaJobStepRead = components['schemas']['JobStepRead'];
 export type SchemaLayerCategory = components['schemas']['LayerCategory'];
 export type SchemaLayerCreate = components['schemas']['LayerCreate'];
@@ -4132,6 +4214,136 @@ export interface operations {
             };
             /** @description Validation error */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    retry_job_api_v1_jobs__job_id__retry_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["JobRetry"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobRead"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    read_step_log_api_v1_jobs__job_id__steps__step_id__log_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+                step_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobStepLog"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Object storage is not configured */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

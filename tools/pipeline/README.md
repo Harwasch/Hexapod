@@ -2,12 +2,15 @@
 
 Turns an uploaded capture into the artifact set the console needs, by running an ordered
 list of stages. This project is the executor, the stage registry, the artifact and workdir
-contract, and the runner seam. It is **not** the worker (A7), and at this step most stages
-are stubs with honest contracts — they declare exactly what they read and write, and raise
-rather than pretend.
+contract, and the runner seam. It is **not** the worker — that is `apps/api/app/worker/`,
+which imports this project as a library — and at this step most stages are stubs with
+honest contracts: they declare exactly what they read and write, and raise rather than
+pretend.
 
-It has no dependency on `apps/api`: no models, no database connection. The worker invokes
-it and talks to the API over HTTP.
+It has no dependency on `apps/api`: no models, no database connection, no HTTP. The
+dependency runs one way only. A stage that wants something registered writes a file saying
+so (`registration.json`) and the worker, which has the credentials and the session, does
+it.
 
 ```bash
 uv run python run_recipe.py splat-ingest --workdir /tmp/run-1 --seed upload=./capture.ply
@@ -22,9 +25,9 @@ version: 1
 inputs: [upload]
 stages:
   - { id: normalize, impl: ffmpeg_frames, params: { fps: 4, keep: 400 } }
-  - { id: pose,      impl: colmap }            # | glomap | arkit
-  - { id: mask,      impl: none }              # | robust | sls
-  - { id: train,     impl: gsplat, gpu: { tier: l4, preemptible: true } }
+  - { id: pose, impl: colmap } # | glomap | arkit
+  - { id: mask, impl: none } # | robust | sls
+  - { id: train, impl: gsplat, gpu: { tier: l4, preemptible: true } }
 ```
 
 - `inputs` are the artifacts the caller seeds into `inputs/` before the run. Everything
@@ -75,22 +78,23 @@ into it, Lane 2's trainer writes it — so one `package` implementation serves b
 Everything that can be caught before a stage runs is caught before **anything** runs —
 no directory is created, no implementation is invoked:
 
-| Refusal | Raised by |
-| --- | --- |
-| `impl` is not registered (message names the recipe, the stage and every known impl) | `UnknownImplError` |
-| a stage consumes an artifact no earlier stage produces | `UnresolvedArtifactError` |
-| two stages produce the same artifact name | `DuplicateArtifactError` |
-| a declared recipe input was never seeded into the workdir | `MissingInputError` |
-| a `gpu:` stage and no GPU runner configured | `NoRunnerError` |
+| Refusal                                                                             | Raised by                 |
+| ----------------------------------------------------------------------------------- | ------------------------- |
+| `impl` is not registered (message names the recipe, the stage and every known impl) | `UnknownImplError`        |
+| a stage is in `skip` but has no previous `step.json` in the workdir                 | `ResumeError`             |
+| a stage consumes an artifact no earlier stage produces                              | `UnresolvedArtifactError` |
+| two stages produce the same artifact name                                           | `DuplicateArtifactError`  |
+| a declared recipe input was never seeded into the workdir                           | `MissingInputError`       |
+| a `gpu:` stage and no GPU runner configured                                         | `NoRunnerError`           |
 
 And at the end of each stage, in `BaseRunner` — so every runner enforces them identically:
 
-| Refusal | Raised by |
-| --- | --- |
-| declared a `produces` it did not write (or a `required_members` file it did not write) | `MissingArtifactError` |
-| wrote something into `out/` it never declared | `UndeclaredArtifactError` |
-| asked for an input or output it never declared | `StageContractError` |
-| the implementation raised (chained, with the stage named) | `StageFailedError` |
+| Refusal                                                                                | Raised by                 |
+| -------------------------------------------------------------------------------------- | ------------------------- |
+| declared a `produces` it did not write (or a `required_members` file it did not write) | `MissingArtifactError`    |
+| wrote something into `out/` it never declared                                          | `UndeclaredArtifactError` |
+| asked for an input or output it never declared                                         | `StageContractError`      |
+| the implementation raised (chained, with the stage named)                              | `StageFailedError`        |
 
 ## The workdir
 
@@ -120,6 +124,28 @@ One per stage run — the unit A7 writes to `job_step` and A10 renders:
 `stageId`, `impl`, `runner`, `attempt`, `durationS`, `artifacts` (name, path, kind,
 contentType, bytes, sha256 checksum), `metrics`, `logPath`, `checkpointKey`, `gpuTier`,
 `summary`.
+
+### Watching a run, and resuming one
+
+`execute()` takes three optional arguments, all added by A7 and none of which let the API
+into this project:
+
+```python
+execute(recipe, workdir, runners, observer=worker, skip={"pose"}, attempts={"train": 2})
+```
+
+- **`observer`** is told `stage_started` / `stage_finished` / `stage_skipped` /
+  `stage_failed` as they happen. A7 writes a `job_step` row from each one, which is what
+  makes the panel's stage list live rather than a batch that appears at the end. An
+  observer that raises stops the run where it stands — that is how a cancelled job is
+  noticed between stages.
+- **`skip`** names stages whose previous `step.json` in this workdir stands. They are not
+  re-run and their results are read back, so a resumed run's `artifacts.json` says exactly
+  what a fresh run's would. Skipping a stage with no previous result raises `ResumeError`
+  during planning, before anything runs — a cleaned-up workdir gets a fresh run, never a
+  half one.
+- **`attempts`** maps a stage id to the attempt number to record, which is A2's
+  `job_steps.attempt`.
 
 ### Resuming a killed stage
 
@@ -199,7 +225,7 @@ file's own location. Two things keep it honest rather than hidden:
   A8 makes each stage real and inserts `thumbnail`, `ground_samples` and `manifest` before
   `register`, which is a recipe edit and three decorators.
 - **`photo-reconstruct`** — Lane 2: `normalize → pose → mask → train → compensate →
-  georeference → package → register`. Only `train` declares `gpu:`; `compensate` gains one
+georeference → package → register`. Only `train` declares `gpu:`; `compensate` gains one
   when its impl becomes `imc` (B3), since asking for an L4 to run `none` would be billing a
   GPU to do nothing.
 

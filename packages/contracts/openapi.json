@@ -37,7 +37,7 @@
         "type": "object"
       },
       "ArtifactKind": {
-        "description": "What a stage produced. Step logs and checkpoints are not artifacts: they are\n``job_steps.log_key`` and ``job_steps.checkpoint_key``.",
+        "description": "What a stage produced. Step logs and checkpoints are not artifacts: they are\n``job_steps.log_key`` and ``job_steps.checkpoint_key``.\n\n``metadata`` was added in A7, when the worker started rowing everything it uploads.\nA stage writes JSON sidecars beside its real output \u2014 ``georef.json``,\n``source_meta.json``, ``train_metrics.json``, ``registration.json`` \u2014 and they are\ngenuinely artifacts: they are in the bucket, they are what a later stage reads, and\nan object with no row is an orphan by the console's own definition. Calling them\n``manifest`` would have been the cheaper lie.",
         "enum": [
           "frames",
           "poses",
@@ -50,7 +50,8 @@
           "thumbnail",
           "ground-samples",
           "manifest",
-          "clip"
+          "clip",
+          "metadata"
         ],
         "title": "ArtifactKind",
         "type": "string"
@@ -2702,6 +2703,57 @@
           "updatedAt"
         ],
         "title": "JobRead",
+        "type": "object"
+      },
+      "JobRetry": {
+        "additionalProperties": false,
+        "description": "Retry a finished run from one of its stages.\n\n`fromStage` is the stage to resume at; omitted, it is the stage that failed. Every\nstage before it keeps its `complete` step row and its artifacts, and the worker skips\nit \u2014 which is only possible because the run's workdir is still there (A6 keeps\n`checkpoint/` and clears `out/` at the start of each attempt).",
+        "properties": {
+          "fromStage": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fromstage"
+          }
+        },
+        "title": "JobRetry",
+        "type": "object"
+      },
+      "JobStepLog": {
+        "additionalProperties": false,
+        "description": "One step's log, read back out of object storage.\n\nLogs are never in the database: `job_steps.log_key` is a key, and this endpoint is\nwhat turns it into text for the panel's log drawer.",
+        "properties": {
+          "logKey": {
+            "title": "Logkey",
+            "type": "string"
+          },
+          "stageId": {
+            "title": "Stageid",
+            "type": "string"
+          },
+          "stepId": {
+            "format": "uuid",
+            "title": "Stepid",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "stepId",
+          "stageId",
+          "logKey",
+          "text"
+        ],
+        "title": "JobStepLog",
         "type": "object"
       },
       "JobStepRead": {
@@ -8172,6 +8224,189 @@
           }
         ],
         "summary": "Cancel a job",
+        "tags": [
+          "jobs"
+        ]
+      }
+    },
+    "/api/v1/jobs/{job_id}/retry": {
+      "post": {
+        "description": "Re-queues a job that failed or was cancelled, resuming at `fromStage` \u2014 or at the stage that failed, when it is omitted. Earlier stages keep their completed steps and their artifacts; the worker skips them and picks up from this one. The attempt budget of the stages being re-run is reset, so a dead-lettered job can be retried by a person after the worker has stopped retrying it by itself.",
+        "operationId": "retry_job_api_v1_jobs__job_id__retry_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JobRetry"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Retry a finished job, from a stage",
+        "tags": [
+          "jobs"
+        ]
+      }
+    },
+    "/api/v1/jobs/{job_id}/steps/{step_id}/log": {
+      "get": {
+        "description": "Logs live in object storage, not in the database: `logKey` on a step is a key, and this is what turns it into text. 404 when the step has not written one.",
+        "operationId": "read_step_log_api_v1_jobs__job_id__steps__step_id__log_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Job Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "step_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Step Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobStepLog"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Object storage is not configured"
+          }
+        },
+        "summary": "Read one step's log",
         "tags": [
           "jobs"
         ]

@@ -60,6 +60,29 @@ python_version = "3.12"
 strict = true
 plugins = ["pydantic.mypy"]
 exclude = ["\\.venv", "alembic/versions"]
+# tools/pipeline is a flat uv project with `package = false`, so it cannot be a path
+# dependency and there is nothing to install. app/worker/pipeline_bridge.py puts it on
+# sys.path at runtime; this is how mypy sees the same files, so every call across the
+# seam is type-checked rather than Any.
+mypy_path = ["../../tools/pipeline"]
+
+[[tool.mypy.overrides]]
+# Check calls into the pipeline against its real signatures, but do not report errors
+# inside it -- that project runs its own mypy --strict and its errors are not this
+# project's to fix (the same arrangement tools/pipeline has with tools/captures).
+module = [
+  "artifacts",
+  "contracts",
+  "errors",
+  "executor",
+  "plan",
+  "recipe",
+  "registry",
+  "runners",
+  "stages",
+  "workdir",
+]
+follow_imports = "silent"
 
 [[tool.mypy.overrides]]
 module = ["geoalchemy2.*", "shapely.*"]

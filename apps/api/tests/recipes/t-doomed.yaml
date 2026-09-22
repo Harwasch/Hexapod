@@ -1,0 +1,8 @@
+# A stage that always raises: the dead-letter path.
+name: t-doomed
+version: 1
+description: A run that cannot succeed, however many times it is tried.
+inputs: []
+stages:
+  - { id: one, impl: t_first }
+  - { id: two, impl: t_fails }

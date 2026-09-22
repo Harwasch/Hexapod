@@ -21,6 +21,31 @@ class JobCreate(CamelModel):
     tier: str | None = Field(default=None, max_length=40)
 
 
+class JobRetry(CamelModel):
+    """Retry a finished run from one of its stages.
+
+    `fromStage` is the stage to resume at; omitted, it is the stage that failed. Every
+    stage before it keeps its `complete` step row and its artifacts, and the worker skips
+    it — which is only possible because the run's workdir is still there (A6 keeps
+    `checkpoint/` and clears `out/` at the start of each attempt).
+    """
+
+    from_stage: str | None = Field(default=None, max_length=120)
+
+
+class JobStepLog(CamelModel):
+    """One step's log, read back out of object storage.
+
+    Logs are never in the database: `job_steps.log_key` is a key, and this endpoint is
+    what turns it into text for the panel's log drawer.
+    """
+
+    step_id: uuid.UUID
+    stage_id: str
+    log_key: str
+    text: str
+
+
 class ArtifactRead(CamelModel):
     """Read model: every field is explicit (no defaults) so the OpenAPI contract marks it
     required."""

@@ -24,6 +24,10 @@ __pycache__/
 .ruff_cache/
 .mypy_cache/
 
+# Pipeline run workdirs (apps/api/app/worker, WORKER_WORKDIR). Kept after a run so a
+# retry can resume from a stage; never committed.
+var/
+
 # Hardware / simulation output (other parts of this monorepo)
 sim/**/*.raw
 sim/**/*.log

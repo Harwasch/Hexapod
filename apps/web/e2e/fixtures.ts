@@ -237,10 +237,16 @@ export interface MockOptions {
   /** Fail this part's first PUT, so the retry path has something real to resume from. */
   failPartOnce?: number;
   /**
-   * Pretend a worker exists. It does not: A7 builds it, and until then a queued job
-   * really does sit at `not-started`, which is the default here for that reason.
+   * Let a worker claim the queued job and walk its stages, one per poll of the job list.
+   *
+   * A7 built the real worker, so this is now a stand-in for something that exists rather
+   * than for something that does not. Left off, the job stays `not-started` — which is
+   * still an honest state: it is what a queued job looks like before any worker is free
+   * to claim it.
    */
   workerRuns?: boolean;
+  /** The stage the simulated worker fails on, so the retry-from-stage path has a target. */
+  workerFailsAt?: string;
 }
 
 /** What the capture mock saw, so a test can assert on the wire rather than on the DOM alone. */
@@ -267,26 +273,46 @@ const STAGES = ["normalize", "pose", "train", "package", "register"];
  * Only used by tests that ask for it. Left alone, a queued job stays `not-started`,
  * because that is exactly what happens against the real API today.
  */
-function advanceJobs(state: CaptureMockState, poll: number): void {
+function advanceJobs(state: CaptureMockState, poll: number, failAt?: string): void {
   for (const job of state.jobs) {
-    if (job.status === "complete" || job.status === "error") continue;
-    // Counted from the job's own first poll, not from the panel's: a job is queued when
-    // it is created no matter how long the panel has been open.
+    if (job.status === "complete" || job.status === "error" || job.status === "cancelled") continue;
+    // Counted from the poll the job was last queued at, not from the panel's first one:
+    // a job is queued when it is created, and again when somebody retries it.
     const done = Math.max(0, poll - Number(job.createdPoll) - 1);
-    job.status = done === 0 ? "not-started" : done >= STAGES.length ? "complete" : "in-progress";
-    job.steps = STAGES.slice(0, Math.min(done + 1, STAGES.length)).map((stageId, index) => ({
+    // Stages before `resumeFrom` were completed by an earlier run and are not run again,
+    // which is what "retry from a stage" means on the worker's side.
+    const resumeFrom = Number(job.resumeFrom ?? 0);
+    const reached = Math.min(resumeFrom + done, STAGES.length);
+    // The failure is a first-run fact: a retry that failed again at the same stage would
+    // never reach the thing the retry test is about.
+    const failing = failAt && !job.retried ? STAGES.indexOf(failAt) : -1;
+    const stopped = failing >= 0 && reached > failing;
+    // A stopped run got as far as the stage before the one that failed.
+    const settled = stopped ? failing : reached;
+    job.status = stopped
+      ? "error"
+      : done === 0 && resumeFrom === 0
+        ? "not-started"
+        : reached >= STAGES.length
+          ? "complete"
+          : "in-progress";
+    if (stopped) job.error = `stage '${failAt}' failed and will not be retried again`;
+    const shown = stopped ? failing + 1 : Math.min(reached + 1, STAGES.length);
+    job.steps = STAGES.slice(0, shown).map((stageId, index) => ({
       id: `${String(job.id)}-${stageId}`,
       jobId: job.id,
       stageId,
       impl: "stub",
       ordinal: index,
       attempt: 1,
-      status: index < done ? "complete" : "in-progress",
+      status: index < settled ? "complete" : stopped && index === failing ? "error" : "in-progress",
       startedAt: "2026-09-20T00:00:00Z",
-      finishedAt: index < done ? "2026-09-20T00:00:12Z" : null,
+      finishedAt: index < settled ? "2026-09-20T00:00:12Z" : null,
       preemptedAt: null,
       checkpointKey: null,
-      logKey: null,
+      // Logs are in object storage; the panel reads them through
+      // GET /jobs/{id}/steps/{id}/log, which this mock answers below.
+      logKey: `runs/${String(job.id)}/${stageId}/log.txt`,
       metrics: {},
       artifacts: [],
       createdAt: "2026-09-20T00:00:00Z",
@@ -302,6 +328,31 @@ function advanceJobs(state: CaptureMockState, poll: number): void {
       }
     }
   }
+}
+
+/** The worker noticing a cancel: the stage that was running stops where it is. */
+function cancelJob(job: Record<string, unknown>): void {
+  job.status = "cancelled";
+  job.finishedAt = "2026-09-20T00:00:30Z";
+  for (const step of (job.steps ?? []) as Record<string, unknown>[]) {
+    if (step.status === "in-progress" || step.status === "not-started") step.status = "cancelled";
+  }
+}
+
+/** Re-queue a job from one of its stages, keeping the steps before it. */
+function retryJob(job: Record<string, unknown>, poll: number, fromStage: string | null): void {
+  const steps = (job.steps ?? []) as Record<string, unknown>[];
+  const target = fromStage
+    ? steps.findIndex((step) => step.stageId === fromStage)
+    : steps.findIndex((step) => step.status !== "complete");
+  const from = target < 0 ? 0 : target;
+  job.steps = steps.slice(0, from);
+  job.resumeFrom = from;
+  job.createdPoll = poll;
+  job.retried = true;
+  job.status = "not-started";
+  job.error = null;
+  job.finishedAt = null;
 }
 
 export async function mockApi(page: Page, options: MockOptions = {}): Promise<CaptureMockState> {
@@ -481,8 +532,9 @@ export async function mockApi(page: Page, options: MockOptions = {}): Promise<Ca
         const job = {
           id: `job-${state.jobs.length + 1}`,
           // Bookkeeping for the simulated worker; the API has no such field and the UI
-          // never reads it.
+          // never reads it. `resumeFrom` is how a retry keeps the stages already done.
           createdPoll: jobPolls,
+          resumeFrom: 0,
           captureId: String(capture.id),
           recipe: body.recipe,
           recipeVersion: "0.1.0",
@@ -562,8 +614,36 @@ export async function mockApi(page: Page, options: MockOptions = {}): Promise<Ca
 
     if (path === "/api/v1/jobs" && request.method() === "GET") {
       jobPolls += 1;
-      if (options.workerRuns) advanceJobs(state, jobPolls);
+      if (options.workerRuns) advanceJobs(state, jobPolls, options.workerFailsAt);
       return json(state.jobs);
+    }
+
+    const jobRoute = /^\/api\/v1\/jobs\/([^/]+)(?:\/(cancel|retry)|\/steps\/([^/]+)\/log)$/.exec(
+      path,
+    );
+    if (jobRoute) {
+      const [, jobId, action, stepId] = jobRoute;
+      const job = state.jobs.find((j) => String(j.id) === jobId);
+      if (!job) return json({ title: "Not found", status: 404 }, 404);
+      if (action === "cancel") {
+        cancelJob(job);
+        return json(job);
+      }
+      if (action === "retry") {
+        const body = request.postDataJSON() as { fromStage: string | null };
+        retryJob(job, jobPolls, body.fromStage);
+        return json(job);
+      }
+      const step = ((job.steps ?? []) as Record<string, unknown>[]).find(
+        (s) => String(s.id) === stepId,
+      );
+      if (!step?.logKey) return json({ title: "Not found", status: 404 }, 404);
+      return json({
+        stepId: step.id,
+        stageId: step.stageId,
+        logKey: step.logKey,
+        text: `$ run ${String(step.stageId)}\nwrote 1 artifact\n`,
+      });
     }
 
     if (path === "/api/v1/health")

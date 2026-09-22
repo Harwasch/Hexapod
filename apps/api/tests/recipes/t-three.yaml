@@ -1,0 +1,9 @@
+# Three quick stages: what the live-step-row and two-worker tests run.
+name: t-three
+version: 1
+description: Three trivial stages, for the worker's own tests.
+inputs: []
+stages:
+  - { id: one, impl: t_first, params: { delay: 0.3 } }
+  - { id: two, impl: t_second, params: { delay: 0.3 } }
+  - { id: three, impl: t_third, params: { delay: 0.3 } }

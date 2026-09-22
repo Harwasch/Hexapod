@@ -166,3 +166,35 @@ class StepResult:
 
     def write(self, path: Path) -> None:
         path.write_text(json.dumps(self.to_dict(), indent=1, sort_keys=True) + "\n", "utf-8")
+
+    @staticmethod
+    def from_dict(document: Mapping[str, Any]) -> StepResult:
+        """Read a StepResult back out of the `step.json` a previous attempt wrote.
+
+        This is what makes a resumed run whole: A7 re-runs a recipe with the stages that
+        already succeeded skipped, and their results come from here rather than from a
+        second execution.
+        """
+        artifacts = tuple(ArtifactRef.from_dict(entry) for entry in document["artifacts"])
+        metrics: dict[str, MetricValue] = {}
+        for key, value in dict(document["metrics"]).items():
+            metrics[str(key)] = value if isinstance(value, bool | int | float | str) else str(value)
+        checkpoint_key = document.get("checkpointKey")
+        gpu_tier = document.get("gpuTier")
+        return StepResult(
+            stage_id=str(document["stageId"]),
+            impl=str(document["impl"]),
+            runner=str(document["runner"]),
+            attempt=int(document["attempt"]),
+            duration_s=float(document["durationS"]),
+            artifacts=artifacts,
+            metrics=metrics,
+            log_path=str(document["logPath"]),
+            checkpoint_key=None if checkpoint_key is None else str(checkpoint_key),
+            gpu_tier=None if gpu_tier is None else str(gpu_tier),
+            summary=str(document.get("summary", "")),
+        )
+
+    @staticmethod
+    def read(path: Path) -> StepResult:
+        return StepResult.from_dict(json.loads(path.read_text(encoding="utf-8")))

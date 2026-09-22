@@ -15,9 +15,10 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.models import Job, JobStep
 from app.models.enums import RunStatus, UploadStatus
-from app.schemas.job import JobCreate, JobRead
+from app.schemas.job import JobCreate, JobRead, JobStepLog
 from app.services.captures import get_capture
 from app.services.errors import ConflictError, NotFoundError
+from app.storage import ObjectStorage
 
 #: Recipes this API will queue, and the version it stamps on a run.
 #:
@@ -126,6 +127,84 @@ def cancel_job(db: Session, job_id: uuid.UUID) -> Job:
     db.commit()
     db.refresh(job)
     return job
+
+
+def retry_job(db: Session, job_id: uuid.UUID, from_stage: str | None = None) -> Job:
+    """Re-queue a finished run, resuming at one of its stages.
+
+    This is the *human* retry, and it is deliberately not the same thing as the worker's
+    automatic one. The worker retries a stage that failed or was interrupted, up to
+    `worker_max_attempts`, and then dead-letters the job so a poison capture cannot be
+    picked up forever. Asking for it again here is a new decision by a person, so the
+    attempt budget of the stages being re-run is reset with it — otherwise "Retry" on a
+    dead-lettered job would fail instantly and say nothing new.
+
+    Every step before `from_stage` keeps its `complete` row and its artifacts; the worker
+    skips those stages and resumes from this one, using the intermediate artifacts still
+    in the run's workdir.
+    """
+    job = get_job(db, job_id)
+    if job.status in ACTIVE_STATUSES:
+        raise ConflictError(f"job {job.id} is {job.status.value}; cancel it before retrying")
+    if not job.steps:
+        raise ConflictError(f"job {job.id} has no steps to retry from; queue a new run instead")
+    target = _retry_target(job, from_stage)
+    for step in job.steps:
+        if step.ordinal < target.ordinal:
+            continue
+        step.status = RunStatus.NOT_STARTED
+        step.started_at = None
+        step.finished_at = None
+        step.preempted_at = None
+        # Back to zero, not to `attempt`: the worker adds one when it starts the stage,
+        # so this run begins at attempt 1 with the full budget again.
+        step.attempt = 0
+    job.status = RunStatus.NOT_STARTED
+    job.error = None
+    job.finished_at = None
+    job.duration_s = None
+    # Nobody holds it: the claim loop wants an unstarted row with no lease on it.
+    job.claimed_by = None
+    job.claimed_at = None
+    job.lease_expires_at = None
+    db.commit()
+    db.refresh(job)
+    return job
+
+
+def _retry_target(job: Job, from_stage: str | None) -> JobStep:
+    ordered = sorted(job.steps, key=lambda step: step.ordinal)
+    if from_stage is None:
+        failed = [s for s in ordered if s.status in (RunStatus.ERROR, RunStatus.CANCELLED)]
+        incomplete = [s for s in ordered if s.status is not RunStatus.COMPLETE]
+        return (failed or incomplete or ordered)[0]
+    for step in ordered:
+        if step.stage_id == from_stage:
+            return step
+    known = ", ".join(step.stage_id for step in ordered)
+    raise ValueError(f"job {job.id} has no stage '{from_stage}'; its stages are {known}")
+
+
+def read_step_log(
+    db: Session, storage: ObjectStorage, job_id: uuid.UUID, step_id: uuid.UUID
+) -> JobStepLog:
+    """Fetch one step's log out of object storage.
+
+    Logs are not in the database on purpose — a run's logs are unbounded — so this reads
+    the object `job_steps.log_key` names. A step that has not written one yet is a 404,
+    not an empty string, because "no log" and "an empty log" are different answers.
+    """
+    step = db.get(JobStep, step_id)
+    if step is None or step.job_id != job_id:
+        raise NotFoundError("job step", step_id)
+    if not step.log_key:
+        raise NotFoundError("log for job step", step_id)
+    return JobStepLog(
+        step_id=step.id,
+        stage_id=step.stage_id,
+        log_key=step.log_key,
+        text=storage.get_object(step.log_key).decode("utf-8", errors="replace"),
+    )
 
 
 def job_to_read(job: Job) -> JobRead:

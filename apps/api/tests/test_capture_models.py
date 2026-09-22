@@ -6,7 +6,7 @@ from datetime import timedelta
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -26,6 +26,7 @@ from app.models import (
     UploadStatus,
 )
 from app.models.base import utcnow
+from app.worker.claim import claimable
 from tests.conftest import site_payload
 
 
@@ -212,7 +213,11 @@ def test_lease_expiry_query_selects_unstarted_and_abandoned_jobs(db: Session) ->
     """The claim loop's actual predicate: a job is claimable when it has not started, or
     when whoever claimed it has let the lease lapse. A0 #2 -- the claim is a committed
     lease, so a frozen worker's rows come back after the lease, not after a ~2 h 51 min
-    TCP keepalive timeout."""
+    TCP keepalive timeout.
+
+    A7 made this the worker's own predicate rather than a second copy of it: the query
+    below is `app.worker.claim.claimable`, so a change to the worker's idea of claimable
+    that disagrees with this test fails here."""
     capture = make_capture(db)
     now = utcnow()
 
@@ -238,25 +243,17 @@ def test_lease_expiry_query_selects_unstarted_and_abandoned_jobs(db: Session) ->
         claimed_at=now - timedelta(seconds=1),
         lease_expires_at=now + timedelta(seconds=3),
     )
+    # A worker that shut down mid-run lets go of the lease rather than leaving it to
+    # lapse. `NULL < now()` is NULL, so this row is only claimable because `claimable`
+    # names the case; without it the job would be stranded in-progress forever.
+    handed_back = job("handed-back", status=RunStatus.IN_PROGRESS, claimed_at=now)
     finished = job("finished", status=RunStatus.COMPLETE, duration_s=41.5)
     cancelled = job("cancelled", status=RunStatus.CANCELLED)
     db.commit()
 
-    claimable = db.scalars(
-        select(Job)
-        .where(
-            or_(
-                Job.status == RunStatus.NOT_STARTED,
-                and_(
-                    Job.status == RunStatus.IN_PROGRESS,
-                    Job.lease_expires_at < now,
-                ),
-            )
-        )
-        .order_by(Job.created_at)
-    ).all()
+    rows = db.scalars(select(Job).where(claimable(now)).order_by(Job.created_at)).all()
 
-    assert {row.id for row in claimable} == {unstarted.id, abandoned.id}
-    assert alive.id not in {row.id for row in claimable}
-    assert finished.id not in {row.id for row in claimable}
-    assert cancelled.id not in {row.id for row in claimable}
+    assert {row.id for row in rows} == {unstarted.id, abandoned.id, handed_back.id}
+    assert alive.id not in {row.id for row in rows}
+    assert finished.id not in {row.id for row in rows}
+    assert cancelled.id not in {row.id for row in rows}

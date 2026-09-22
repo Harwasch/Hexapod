@@ -1,0 +1,9 @@
+# One quick stage, then one that sleeps: a test can interrupt the second one mid-stage,
+# which is the case cancellation and lease reclaim both turn on.
+name: t-slow
+version: 1
+description: A stage that takes long enough to be cancelled or killed while it runs.
+inputs: []
+stages:
+  - { id: one, impl: t_first }
+  - { id: two, impl: t_slow, params: { seconds: 30 } }

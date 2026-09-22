@@ -16,6 +16,7 @@ __all__ = [
     "NoRunnerError",
     "PipelineError",
     "RecipeError",
+    "ResumeError",
     "StageContractError",
     "StageFailedError",
     "UndeclaredArtifactError",
@@ -108,6 +109,23 @@ class UndeclaredArtifactError(PipelineError):
             f"recipe {recipe!r}, stage {stage_id!r} (impl {impl!r}): wrote undeclared entries "
             f"into its output directory: {names}. Declare them in `produces` or write them to "
             f"the stage's work/ directory instead"
+        )
+        self.recipe = recipe
+        self.stage_id = stage_id
+
+
+class ResumeError(PipelineError):
+    """A run was asked to skip a stage whose previous result is not in the workdir.
+
+    Skipping is how A7 retries from a stage rather than from the beginning, and it is
+    only honest while the earlier stage's `step.json` and outputs are still on disk. A
+    workdir that has been cleaned up gets a fresh run, never a half one.
+    """
+
+    def __init__(self, recipe: str, stage_id: str, path: str) -> None:
+        super().__init__(
+            f"recipe {recipe!r}: cannot skip stage {stage_id!r} -- no previous result at {path}. "
+            f"Run it again instead of resuming past it"
         )
         self.recipe = recipe
         self.stage_id = stage_id

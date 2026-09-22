@@ -128,9 +128,10 @@ test.describe("the Captures panel", () => {
     expect(stored).toContain("letmein");
   });
 
-  test("a queued job says it is queued, because nothing runs it yet", async ({ page }) => {
-    // No worker exists until A7, so this is not a simulation of failure: it is what the
-    // real system does today, and the panel has to read as waiting rather than broken.
+  test("a job with no worker free to claim it says it is queued", async ({ page }) => {
+    // A7 built the worker, so this is no longer "nothing runs it": it is the window
+    // between the API inserting the row and a worker claiming it, which is a real state
+    // and has to read as waiting rather than as broken. The mock holds the worker off.
     const state = await boot(page);
     await openPanel(page);
     await page.getByTestId("capture-file-input").setInputFiles(payload(8));
@@ -143,6 +144,64 @@ test.describe("the Captures panel", () => {
     await expect(card.getByTestId("capture-job-queued")).toBeVisible();
     await expect(card.getByTestId("capture-stage")).toHaveCount(0);
     expect(state.jobs[0]).toMatchObject({ recipe: "photo-reconstruct", status: "not-started" });
+  });
+
+  test("a running job can be cancelled from the card", async ({ page }) => {
+    const state = await boot(page, { workerRuns: true });
+    await openPanel(page);
+    await page.getByTestId("capture-file-input").setInputFiles(payload(8));
+    const card = page.getByTestId("capture-card-capture-1");
+    await card.getByTestId("capture-process").click();
+
+    await expect(card.getByTestId("capture-job-status")).toHaveText("in-progress", {
+      timeout: 40_000,
+    });
+    await card.getByTestId("capture-job-cancel").click();
+
+    await expect(card.getByTestId("capture-job-status")).toHaveText("cancelled");
+    // It stays cancelled: the worker stopped, it did not carry on to the next stage.
+    await expect(card.getByTestId("capture-job-status")).toHaveText("cancelled", {
+      timeout: 10_000,
+    });
+    expect(state.jobs[0]).toMatchObject({ status: "cancelled" });
+  });
+
+  test("a failed job is retried from the stage that failed, keeping the ones before it", async ({
+    page,
+  }) => {
+    await boot(page, { workerRuns: true, workerFailsAt: "train" });
+    await openPanel(page);
+    await page.getByTestId("capture-file-input").setInputFiles(payload(8));
+    const card = page.getByTestId("capture-card-capture-1");
+    await card.getByTestId("capture-process").click();
+
+    await expect(card.getByTestId("capture-job-status")).toHaveText("error", { timeout: 40_000 });
+    await expect(card.getByTestId("capture-job-error")).toContainText("will not be retried");
+    const retry = card.getByTestId("capture-job-retry");
+    await expect(retry).toHaveText(/Retry from Train/);
+    // Starting over from scratch is not offered: the earlier stages' work is still there.
+    await expect(card.getByTestId("capture-process")).toHaveCount(0);
+
+    await retry.click();
+
+    // The two stages that succeeded are kept, and the run picks up at the third.
+    await expect(card.getByTestId("capture-job-status")).toHaveText("complete", {
+      timeout: 40_000,
+    });
+    await expect(card.getByTestId("capture-stage")).toHaveCount(5);
+  });
+
+  test("a stage's log opens in the card, read from object storage", async ({ page }) => {
+    await boot(page, { workerRuns: true });
+    await openPanel(page);
+    await page.getByTestId("capture-file-input").setInputFiles(payload(8));
+    const card = page.getByTestId("capture-card-capture-1");
+    await card.getByTestId("capture-process").click();
+
+    await expect(card.getByTestId("capture-stage").first()).toContainText("Normalize");
+    await card.getByTestId("capture-stage-log-toggle").first().click();
+
+    await expect(card.getByTestId("capture-stage-log").first()).toContainText("wrote 1 artifact");
   });
 
   test("once a worker runs it, the card becomes a live stage list", async ({ page }) => {
