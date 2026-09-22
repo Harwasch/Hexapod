@@ -241,8 +241,17 @@ Three adapters ship, and they are not equally real:
 | `ModalAdapter`      | Modal                | **no. Not one line of it has ever run.** |
 
 `ModalAdapter` says so itself, at length, in its own module docstring. Its Modal calls
-were written from memory rather than from documentation, because Modal was unreachable
-from the environment that wrote it.
+were first written from memory rather than from documentation, because Modal was
+unreachable from the environment that wrote it. They have since been **read against
+`modal==1.5.5`** — the installed SDK's source and docstrings, plus Modal's docs — which
+found five defects, one of them fatal: `poll` caught the builtin `TimeoutError`, while a
+zero-timeout poll raises `modal.exception.TimeoutError`, which does not inherit from it,
+so every healthy stage was dead-lettered on its first poll. `tests/test_modal_adapter.py`
+now pins the classification against fakes that mirror the real exception hierarchy.
+
+That check moves the adapter from _guessed_ to _read_. It does not move it to _verified_,
+and the table above is unchanged on purpose: running it needs an account and a token this
+repository does not have, so `ModalAdapter` stays **unproven**.
 
 `Placement` decides which adapter an attempt goes to, from the preemptions recorded in
 `stages/<id>/attempts.json`. After `preemptions_before_fallback` of them the stage moves
