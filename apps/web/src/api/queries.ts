@@ -326,3 +326,21 @@ export function useCancelJob() {
     onSuccess: () => void client.invalidateQueries({ queryKey: queryKeys.jobs }),
   });
 }
+
+/**
+ * Mint a phone-handoff link for one capture.
+ *
+ * Not cached and not retried: a handoff token is short-lived by design, so a stale one
+ * held in a query cache would be worse than none at all.
+ */
+export function useCreateHandoff() {
+  return useMutation({
+    mutationFn: ({ captureId }: { captureId: string }) =>
+      unwrap(
+        api.POST("/api/v1/captures/{capture_id}/handoff", {
+          params: { path: { capture_id: captureId } },
+        }),
+      ),
+    retry: false,
+  });
+}

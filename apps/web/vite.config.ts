@@ -109,6 +109,13 @@ export default defineConfig({
     sourcemap: true,
     chunkSizeWarningLimit: 5000,
     rollupOptions: {
+      // Two entries: the console, and the standalone page a phone opens after scanning
+      // the handoff QR code. `upload.html` imports no stores and no CesiumJS on purpose —
+      // a phone should not pull a 3D globe over cellular to pick one file.
+      input: {
+        index: resolve(import.meta.dirname, "index.html"),
+        upload: resolve(import.meta.dirname, "upload.html"),
+      },
       output: {
         manualChunks: (id) =>
           id.includes("node_modules/cesium") || id.includes("node_modules/@cesium")

@@ -1207,3 +1207,42 @@ body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-close {
   background: var(--control-bg);
   font-size: var(--text-xs);
 }
+
+/* Phone handoff: the QR code that gets a capture off the device it was shot on. */
+.handoff {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-md);
+  background: var(--glass-bg-subtle);
+}
+.handoff__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+.handoff__title {
+  font-weight: 600;
+  font-size: var(--text-sm);
+}
+.handoff__qr {
+  display: grid;
+  place-items: center;
+  padding: var(--space-2);
+  border-radius: var(--radius-sm);
+  /* The code has to scan off a screen: keep it on white whatever the theme does. */
+  background: #fff;
+}
+.handoff__qr svg {
+  display: block;
+  width: 100%;
+  max-width: 13rem;
+  height: auto;
+}
+.handoff__note {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}

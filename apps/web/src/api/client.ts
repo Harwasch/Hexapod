@@ -3,30 +3,13 @@ import createClient, { type Middleware } from "openapi-fetch";
 import type { paths, Problem } from "@twin/contracts";
 
 import { env } from "@/app/env";
+import { ApiError } from "./error";
 import { recordSpan } from "@/lib/timing";
 import { useSettings } from "@/state/settings";
 import { useUi } from "@/state/ui";
 
 /** Error thrown for non-2xx responses, carrying the API's problem payload when present. */
-export class ApiError extends Error {
-  readonly status: number;
-  readonly problem: Problem | undefined;
-
-  constructor(status: number, problem: Problem | undefined, fallback: string) {
-    super(problem?.detail ?? problem?.title ?? fallback);
-    this.name = "ApiError";
-    this.status = status;
-    this.problem = problem;
-  }
-
-  /** Field-level validation messages, when the API returned any. */
-  get fieldErrors(): string[] {
-    return (this.problem?.errors ?? []).map((e) => {
-      const loc = Array.isArray(e.loc) ? e.loc.filter((p) => p !== "body").join(".") : "";
-      return loc ? `${loc}: ${String(e.msg)}` : String(e.msg);
-    });
-  }
-}
+export { ApiError } from "./error";
 
 const timing: Middleware = {
   onRequest({ request }) {

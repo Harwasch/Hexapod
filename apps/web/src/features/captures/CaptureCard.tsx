@@ -1,6 +1,7 @@
 import { Ban, CheckCircle2, MapPin, Play, RotateCcw } from "lucide-react";
 
 import type { Capture, CaptureFile, Job, RunStatus } from "@twin/contracts";
+import { PhoneHandoff } from "./PhoneHandoff";
 import { GlassBadge, GlassButton, GlassProgress, type GlassProgressTone } from "@twin/ui";
 
 import { formatBytes, formatDate, formatDuration } from "@/lib/format";
@@ -232,6 +233,11 @@ export function CaptureCard({
             >
               Fly to it
             </GlassButton>
+          )}
+          {/* Only while the capture can still take files: a handoff link to a capture
+              that is already processing would mint a credential with nothing to do. */}
+          {(capture.status === "awaiting-files" || capture.status === "not-started") && (
+            <PhoneHandoff captureId={capture.id} />
           )}
         </div>
       </div>

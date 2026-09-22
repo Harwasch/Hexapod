@@ -15,9 +15,15 @@
  * video is 1536 parts, whose URLs would be ~590 KB of JSON and would start expiring long
  * before a phone on cellular reached the end of them.
  */
+// Re-exported so the console keeps one import site for the uploader, while the phone
+// page imports them from ./error and ./putPart directly and pulls in nothing else.
+export { isAbort } from "./error";
+export { putPart } from "./putPart";
+
 import type { CaptureFile, CaptureFileUpload, UploadedPart, UploadWindow } from "@twin/contracts";
 
-import { ApiError, api, unwrap } from "./client";
+import { api, unwrap } from "./client";
+import { putPart } from "./putPart";
 
 export interface UploadProgress {
   /** Bytes storage has taken, including the part in flight. */
@@ -36,68 +42,6 @@ export interface UploadOptions {
   onPart?: (part: UploadedPart) => void;
   onProgress?: (progress: UploadProgress) => void;
   signal?: AbortSignal | undefined;
-}
-
-/** Raised when the caller aborts; callers distinguish it from a real failure. */
-export function isAbort(error: unknown): boolean {
-  return error instanceof DOMException && error.name === "AbortError";
-}
-
-/** PUT one part straight to storage, reporting bytes as they leave. Resolves to the part's ETag. */
-export function putPart(
-  url: string,
-  body: Blob,
-  options: { onProgress?: (loaded: number) => void; signal?: AbortSignal | undefined } = {},
-): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    xhr.open("PUT", url, true);
-    xhr.responseType = "text";
-    const onAbort = () => xhr.abort();
-    options.signal?.addEventListener("abort", onAbort, { once: true });
-    const done = () => options.signal?.removeEventListener("abort", onAbort);
-    xhr.upload.addEventListener("progress", (event) => {
-      if (event.lengthComputable) options.onProgress?.(event.loaded);
-    });
-    xhr.addEventListener("load", () => {
-      done();
-      if (xhr.status < 200 || xhr.status >= 300) {
-        reject(
-          new ApiError(xhr.status, undefined, `Object storage refused the part (${xhr.status})`),
-        );
-        return;
-      }
-      const etag = xhr.getResponseHeader("ETag");
-      if (!etag) {
-        // Not a hypothetical: without ExposeHeaders: ["ETag"] on the bucket's CORS rule
-        // the browser is handed the header and refuses to show it, and completion — which
-        // is a list of part ETags — becomes impossible.
-        reject(
-          new ApiError(
-            xhr.status,
-            undefined,
-            "Object storage did not expose an ETag for this part. The bucket's CORS rule " +
-              'needs ExposeHeaders: ["ETag"] (infra/cors/upload.json).',
-          ),
-        );
-        return;
-      }
-      resolve(etag.replace(/"/g, ""));
-    });
-    xhr.addEventListener("error", () => {
-      done();
-      reject(new ApiError(0, undefined, "Could not reach object storage to upload this part."));
-    });
-    xhr.addEventListener("timeout", () => {
-      done();
-      reject(new ApiError(0, undefined, "Uploading this part timed out."));
-    });
-    xhr.addEventListener("abort", () => {
-      done();
-      reject(new DOMException("Upload cancelled", "AbortError"));
-    });
-    xhr.send(body);
-  });
 }
 
 function throwIfAborted(signal: AbortSignal | undefined): void {
