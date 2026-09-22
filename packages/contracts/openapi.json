@@ -1633,6 +1633,54 @@
         "title": "CaptureFileUpload",
         "type": "object"
       },
+      "CaptureHandoff": {
+        "additionalProperties": false,
+        "description": "A short-lived way to hand one capture's upload to a phone.\n\n`qrSvg` is rendered here rather than in the browser on purpose: the console would\notherwise grow a QR library to draw a picture of a string the server already has.\nIt is a complete `<svg>` element, ready to drop into the DOM.\n\nThe token is *not* the write token. It authorises the upload endpoints of this one\ncapture and expires; see `app/services/handoff.py` for exactly what it can do.",
+        "properties": {
+          "captureId": {
+            "format": "uuid",
+            "title": "Captureid",
+            "type": "string"
+          },
+          "expiresAt": {
+            "format": "date-time",
+            "title": "Expiresat",
+            "type": "string"
+          },
+          "expiresIn": {
+            "title": "Expiresin",
+            "type": "integer"
+          },
+          "qrSvg": {
+            "title": "Qrsvg",
+            "type": "string"
+          },
+          "renewableUntil": {
+            "format": "date-time",
+            "title": "Renewableuntil",
+            "type": "string"
+          },
+          "token": {
+            "title": "Token",
+            "type": "string"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "captureId",
+          "url",
+          "token",
+          "expiresAt",
+          "expiresIn",
+          "renewableUntil",
+          "qrSvg"
+        ],
+        "title": "CaptureHandoff",
+        "type": "object"
+      },
       "CaptureKind": {
         "description": "What was uploaded, which decides the lane a capture runs down.\n\n``gaussian-splat`` and ``point-cloud`` deliberately repeat the identifiers\n:class:`Representation` already fixed in the contract: the same thing should not\nbe spelled two ways depending on which table it is named in.",
         "enum": [
@@ -6220,6 +6268,11 @@
       }
     },
     "securitySchemes": {
+      "uploadToken": {
+        "description": "Either the shared write token (`API_WRITE_TOKEN`), or a capture handoff token from `POST /captures/{capture_id}/handoff`. A handoff token is accepted only on this capture's upload endpoints and only until it expires.",
+        "scheme": "bearer",
+        "type": "http"
+      },
       "writeToken": {
         "description": "The shared write token (`API_WRITE_TOKEN`), as `Authorization: Bearer <token>`.",
         "scheme": "bearer",
@@ -7164,7 +7217,7 @@
         },
         "security": [
           {
-            "writeToken": []
+            "uploadToken": []
           }
         ],
         "summary": "Register a file and begin its upload",
@@ -7262,7 +7315,7 @@
         },
         "security": [
           {
-            "writeToken": []
+            "uploadToken": []
           }
         ],
         "summary": "Abort a file's multipart upload",
@@ -7370,7 +7423,7 @@
         },
         "security": [
           {
-            "writeToken": []
+            "uploadToken": []
           }
         ],
         "summary": "Complete a file's multipart upload",
@@ -7478,10 +7531,89 @@
         },
         "security": [
           {
-            "writeToken": []
+            "uploadToken": []
           }
         ],
         "summary": "Presign the next window of parts",
+        "tags": [
+          "captures"
+        ]
+      }
+    },
+    "/api/v1/captures/{capture_id}/handoff": {
+      "post": {
+        "description": "Returns a short-lived token scoped to this capture's upload endpoints, the URL that carries it in its fragment, and that URL as an inline SVG QR code. The token is **not** the write token: it cannot create a capture, queue a job, or touch any other capture, and it expires. Minting one needs the write token.",
+        "operationId": "create_handoff_api_v1_captures__capture_id__handoff_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "capture_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Capture Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CaptureHandoff"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Mint a phone-upload link for this capture, and draw its QR code",
         "tags": [
           "captures"
         ]

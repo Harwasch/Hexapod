@@ -80,6 +80,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # Authorization carries the write token, so the preflight has to allow it or
         # every browser write fails before it is sent.
         allow_headers=["Content-Type", "Accept", "Authorization"],
+        # A handoff-authorised response carries the next token in this header, and a
+        # cross-origin phone page cannot read a header the server does not expose --
+        # without this line the renewal chain silently breaks the moment the web app is
+        # served from an origin other than the API's.
+        expose_headers=["X-Handoff-Token"],
         max_age=600,
     )
 

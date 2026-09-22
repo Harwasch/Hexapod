@@ -168,3 +168,27 @@ class CaptureDetail(CaptureRead):
     """One capture with everything hanging off it: its files and every run over it."""
 
     jobs: list[JobRead]
+
+
+class CaptureHandoff(CamelModel):
+    """A short-lived way to hand one capture's upload to a phone.
+
+    `qrSvg` is rendered here rather than in the browser on purpose: the console would
+    otherwise grow a QR library to draw a picture of a string the server already has.
+    It is a complete `<svg>` element, ready to drop into the DOM.
+
+    The token is *not* the write token. It authorises the upload endpoints of this one
+    capture and expires; see `app/services/handoff.py` for exactly what it can do.
+    """
+
+    capture_id: uuid.UUID
+    #: `{publicWebBase}/upload.html#<token>` — the token is in the fragment, so it is
+    #: never sent to a server, never lands in an access log, and never leaks in a Referer.
+    url: str
+    token: str
+    expires_at: datetime
+    #: Seconds until `token` stops working, for a countdown that needs no clock skew fix.
+    expires_in: int
+    #: When the chain of renewals ends, however often the phone refreshes its token.
+    renewable_until: datetime
+    qr_svg: str

@@ -9,12 +9,16 @@ from __future__ import annotations
 
 import math
 import re
+import time
 import uuid
 from collections.abc import Sequence
+from datetime import UTC, datetime
 
+import segno
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
+from app.config import Settings
 from app.models import Capture, CaptureFile
 from app.models.enums import CaptureStatus, UploadStatus
 from app.schemas.capture import (
@@ -25,12 +29,14 @@ from app.schemas.capture import (
     CaptureFilePartsRequest,
     CaptureFileRead,
     CaptureFileUpload,
+    CaptureHandoff,
     CaptureRead,
     PresignedPart,
     UploadWindow,
 )
 from app.schemas.common import Attribution, LicenseMetadata, Provenance, TemporalExtent
 from app.schemas.job import JobRead
+from app.services import handoff
 from app.services.errors import ConflictError, NotFoundError
 from app.services.slugs import slugify
 from app.storage import DEFAULT_EXPIRES_IN, MultipartPart, ObjectStorage
@@ -150,6 +156,55 @@ def get_capture(db: Session, capture_id: uuid.UUID) -> Capture:
     if capture is None:
         raise NotFoundError("capture", capture_id)
     return capture
+
+
+# --- phone handoff ----------------------------------------------------------
+
+#: QR error correction. "M" recovers ~15% of the symbol, which is what makes a code
+#: readable off a glossy monitor at an angle; "L" is smaller but marginal in exactly
+#: those conditions, and "Q"/"H" grow the symbol for a link that is on screen for seconds.
+_QR_ERROR = "m"
+#: 4 px per module, so the whole symbol is 212 px square for a token-length URL -- big
+#: enough for a phone camera at arm's length. segno's SVG carries no viewBox, so this is
+#: the rendered size, not a hint.
+_QR_SCALE = 4
+#: Quiet zone, in modules. The spec asks for 4; 2 is the practical minimum and survives a
+#: light card on a dark panel, which is what this sits on.
+_QR_BORDER = 2
+#: Black on white, not `currentColor`: segno rejects it, and a scanner wants the real
+#: thing. The white quiet zone is what makes the code readable on the console's dark glass.
+_QR_DARK = "#000000"
+_QR_LIGHT = "#ffffff"
+
+
+def create_handoff(db: Session, settings: Settings, capture_id: uuid.UUID) -> CaptureHandoff:
+    """Mint an upload link for one existing capture, and draw it.
+
+    The capture is looked up first, so a handoff for a capture that does not exist is a
+    404 rather than a token for nothing. This is the only place a handoff token is
+    created, and reaching it needs the write token (see the router).
+    """
+    capture = get_capture(db, capture_id)
+    now = int(time.time())
+    key = handoff.key_for(settings)
+    token = handoff.issue(key, capture.id, now=now)
+    url = f"{settings.public_web_base.rstrip('/')}/upload.html#{token}"
+    return CaptureHandoff(
+        capture_id=capture.id,
+        url=url,
+        token=token,
+        expires_at=datetime.fromtimestamp(now + handoff.TOKEN_TTL_SECONDS, tz=UTC),
+        expires_in=handoff.TOKEN_TTL_SECONDS,
+        renewable_until=datetime.fromtimestamp(now + handoff.RENEWABLE_FOR_SECONDS, tz=UTC),
+        qr_svg=segno.make(url, error=_QR_ERROR).svg_inline(
+            scale=_QR_SCALE,
+            border=_QR_BORDER,
+            dark=_QR_DARK,
+            light=_QR_LIGHT,
+            svgclass="qr-code",
+            title="Scan to upload from a phone",
+        ),
+    )
 
 
 # --- files ------------------------------------------------------------------

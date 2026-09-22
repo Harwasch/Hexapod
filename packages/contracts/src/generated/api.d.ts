@@ -201,6 +201,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/captures/{capture_id}/handoff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Mint a phone-upload link for this capture, and draw its QR code
+         * @description Returns a short-lived token scoped to this capture's upload endpoints, the URL that carries it in its fragment, and that URL as an inline SVG QR code. The token is **not** the write token: it cannot create a capture, queue a job, or touch any other capture, and it expires. Minting one needs the write token.
+         */
+        post: operations["create_handoff_api_v1_captures__capture_id__handoff_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/captures/{capture_id}/process": {
         parameters: {
             query?: never;
@@ -1027,6 +1047,42 @@ export interface components {
         CaptureFileUpload: {
             file: components["schemas"]["CaptureFileRead"];
             upload: components["schemas"]["UploadWindow"];
+        };
+        /**
+         * CaptureHandoff
+         * @description A short-lived way to hand one capture's upload to a phone.
+         *
+         *     `qrSvg` is rendered here rather than in the browser on purpose: the console would
+         *     otherwise grow a QR library to draw a picture of a string the server already has.
+         *     It is a complete `<svg>` element, ready to drop into the DOM.
+         *
+         *     The token is *not* the write token. It authorises the upload endpoints of this one
+         *     capture and expires; see `app/services/handoff.py` for exactly what it can do.
+         */
+        CaptureHandoff: {
+            /**
+             * Captureid
+             * Format: uuid
+             */
+            captureId: string;
+            /**
+             * Expiresat
+             * Format: date-time
+             */
+            expiresAt: string;
+            /** Expiresin */
+            expiresIn: number;
+            /** Qrsvg */
+            qrSvg: string;
+            /**
+             * Renewableuntil
+             * Format: date-time
+             */
+            renewableUntil: string;
+            /** Token */
+            token: string;
+            /** Url */
+            url: string;
         };
         /**
          * CaptureKind
@@ -2602,6 +2658,7 @@ export type SchemaCaptureFilePart = components['schemas']['CaptureFilePart'];
 export type SchemaCaptureFilePartsRequest = components['schemas']['CaptureFilePartsRequest'];
 export type SchemaCaptureFileRead = components['schemas']['CaptureFileRead'];
 export type SchemaCaptureFileUpload = components['schemas']['CaptureFileUpload'];
+export type SchemaCaptureHandoff = components['schemas']['CaptureHandoff'];
 export type SchemaCaptureKind = components['schemas']['CaptureKind'];
 export type SchemaCaptureRead = components['schemas']['CaptureRead'];
 export type SchemaCaptureStatus = components['schemas']['CaptureStatus'];
@@ -3608,6 +3665,64 @@ export interface operations {
             };
             /** @description Object storage is not configured */
             503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    create_handoff_api_v1_captures__capture_id__handoff_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                capture_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CaptureHandoff"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };

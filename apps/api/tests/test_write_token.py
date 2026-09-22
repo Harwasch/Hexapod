@@ -23,6 +23,10 @@ from tests.conftest import site_payload
 TOKEN = "correct-horse-battery-staple"
 AUTH = {"Authorization": f"Bearer {TOKEN}"}
 
+#: Security schemes that actually gate a write. Every mutating operation in the document
+#: must name one of these and nothing else; see the test at the bottom of this file.
+GATING_SCHEMES = {"writeToken", "uploadToken"}
+
 
 @pytest.fixture
 def client(db: Session) -> Iterator[TestClient]:
@@ -109,6 +113,7 @@ def test_the_right_token_is_accepted(client: TestClient) -> None:
         ),
         ("post", "/api/v1/captures/{id}/files/{id}/abort", None),
         ("post", "/api/v1/captures/{id}/process", {"recipe": "splat-ingest"}),
+        ("post", "/api/v1/captures/{id}/handoff", None),
         ("post", "/api/v1/jobs/{id}/cancel", None),
         ("post", "/api/v1/layers", {"name": "x"}),
         ("post", "/api/v1/assets", {"name": "x"}),
@@ -178,6 +183,16 @@ def test_no_mutating_route_is_left_ungated(client: TestClient) -> None:
     route objects -- the document is the contract clients actually read, and each gated
     operation carries a `security` entry there, so the check cannot drift from what is
     published.
+
+    A5 made this check *narrower*, not looser. The four upload endpoints now carry
+    `uploadToken` instead of `writeToken`, because a phone-handoff token is accepted
+    there as well -- so a test that only asked "is `security` non-empty?" would from now
+    on be satisfied by any scheme at all, including one that gates nothing. So the
+    schemes are named: a mutating operation must be gated by a credential from
+    `GATING_SCHEMES`, and adding a scheme to that set is a deliberate act with a reviewer
+    attached. `uploadToken` belongs in it because it is a real gate -- it demands the
+    write token or an unexpired signature over *this operation's* capture id
+    (`app.api.deps.require_upload_token`), never nothing.
     """
     spec = client.app.openapi()  # type: ignore[attr-defined]
     gated: set[str] = set()
@@ -186,8 +201,30 @@ def test_no_mutating_route_is_left_ungated(client: TestClient) -> None:
         for method, operation in operations.items():
             if method.upper() not in {"POST", "PUT", "PATCH", "DELETE"}:
                 continue
-            target = gated if operation.get("security") else ungated
+            schemes = {name for entry in operation.get("security", []) for name in entry}
+            target = gated if schemes and schemes <= GATING_SCHEMES else ungated
             target.add(f"{method.upper()} {path}")
 
     assert gated, "no gated operations in the document -- the check is looking in the wrong place"
     assert not ungated, f"mutating operations with no write token: {sorted(ungated)}"
+
+
+def test_only_the_upload_endpoints_accept_anything_but_the_write_token(
+    client: TestClient,
+) -> None:
+    """`uploadToken` is the one scheme that is not simply the write token, so where it
+    appears is worth pinning down: a handoff token must never become a credential for a
+    route that was not about putting bytes into one capture."""
+    spec = client.app.openapi()  # type: ignore[attr-defined]
+    accepts_handoff = {
+        f"{method.upper()} {path}"
+        for path, operations in spec["paths"].items()
+        for method, operation in operations.items()
+        if any("uploadToken" in entry for entry in operation.get("security", []))
+    }
+    assert accepts_handoff == {
+        "POST /api/v1/captures/{capture_id}/files",
+        "POST /api/v1/captures/{capture_id}/files/{file_id}/parts",
+        "POST /api/v1/captures/{capture_id}/files/{file_id}/complete",
+        "POST /api/v1/captures/{capture_id}/files/{file_id}/abort",
+    }

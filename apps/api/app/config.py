@@ -51,6 +51,12 @@ class Settings(BaseSettings):
     # `is_production` and this is empty; see app/main.py.
     api_write_token: str | None = None
 
+    # Signing key for the phone-handoff tokens (app/services/handoff.py). Unset falls back
+    # to deriving one from `api_write_token`, and failing that to a random per-process key
+    # -- see `handoff.key_for`. Set it explicitly when the API runs as more than one
+    # process, or a token minted by one will be refused by the next.
+    api_handoff_secret: str | None = None
+
     cesium_ion_server_token: str | None = None
     cesium_ion_api_base: str = "https://api.cesium.com"
 
@@ -64,6 +70,10 @@ class Settings(BaseSettings):
     tiles_dir: str = "data/tiles"
     # The URL the browser reaches the API at, for seeding absolute tileset URLs.
     public_api_base: str = "http://localhost:8000"
+    # The origin the *web app* is served from, for the phone-handoff URL a QR code encodes.
+    # localhost is right for development and useless to a real phone, which is the point at
+    # which a deployment has to set this.
+    public_web_base: str = "http://localhost:5173"
 
     api_host: str = "0.0.0.0"  # noqa: S104 - container default, documented in DEPLOYMENT.md
     api_port: int = 8000

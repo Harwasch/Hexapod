@@ -5,7 +5,13 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Query, status
 
-from app.api.deps import DbSession, RequireWriteToken, Storage
+from app.api.deps import (
+    DbSession,
+    RequireUploadToken,
+    RequireWriteToken,
+    SettingsDep,
+    Storage,
+)
 from app.schemas.capture import (
     CaptureCreate,
     CaptureDetail,
@@ -14,6 +20,7 @@ from app.schemas.capture import (
     CaptureFilePartsRequest,
     CaptureFileRead,
     CaptureFileUpload,
+    CaptureHandoff,
     CaptureRead,
     UploadWindow,
 )
@@ -65,7 +72,7 @@ def get_capture(capture_id: uuid.UUID, db: DbSession) -> CaptureDetail:
     "/{capture_id}/files",
     response_model=CaptureFileUpload,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[RequireWriteToken],
+    dependencies=[RequireUploadToken],
     responses=STORAGE_RESPONSES,
     summary="Register a file and begin its upload",
 )
@@ -78,7 +85,7 @@ def register_file(
 @router.post(
     "/{capture_id}/files/{file_id}/parts",
     response_model=UploadWindow,
-    dependencies=[RequireWriteToken],
+    dependencies=[RequireUploadToken],
     responses=STORAGE_RESPONSES,
     summary="Presign the next window of parts",
 )
@@ -95,7 +102,7 @@ def presign_parts(
 @router.post(
     "/{capture_id}/files/{file_id}/complete",
     response_model=CaptureFileRead,
-    dependencies=[RequireWriteToken],
+    dependencies=[RequireUploadToken],
     responses=STORAGE_RESPONSES,
     summary="Complete a file's multipart upload",
 )
@@ -113,7 +120,7 @@ def complete_file(
 @router.post(
     "/{capture_id}/files/{file_id}/abort",
     response_model=CaptureFileRead,
-    dependencies=[RequireWriteToken],
+    dependencies=[RequireUploadToken],
     responses=STORAGE_RESPONSES,
     summary="Abort a file's multipart upload",
 )
@@ -138,3 +145,20 @@ def abort_file(
 )
 def process_capture(capture_id: uuid.UUID, payload: JobCreate, db: DbSession) -> JobRead:
     return job_service.job_to_read(job_service.create_job(db, capture_id, payload))
+
+
+@router.post(
+    "/{capture_id}/handoff",
+    response_model=CaptureHandoff,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[RequireWriteToken],
+    summary="Mint a phone-upload link for this capture, and draw its QR code",
+    description=(
+        "Returns a short-lived token scoped to this capture's upload endpoints, the URL "
+        "that carries it in its fragment, and that URL as an inline SVG QR code. The "
+        "token is **not** the write token: it cannot create a capture, queue a job, or "
+        "touch any other capture, and it expires. Minting one needs the write token."
+    ),
+)
+def create_handoff(capture_id: uuid.UUID, db: DbSession, settings: SettingsDep) -> CaptureHandoff:
+    return capture_service.create_handoff(db, settings, capture_id)
