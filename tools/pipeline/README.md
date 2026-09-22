@@ -158,16 +158,26 @@ execute(recipe, workdir, runners, observer=worker, skip={"pose"}, attempts={"tra
 
 ### Resuming a killed stage
 
-B1 runs on preemptible GPUs, where being killed is ordinary operation rather than an error,
-so the contract accounts for it now even though nothing checkpoints yet:
+A GPU stage runs on a preemptible tier, where being killed is ordinary operation rather
+than an error:
 
 - `out/` is **cleared** at the start of every attempt, so a half-written output from a
   killed attempt can never be mistaken for a produced artifact;
 - `checkpoint/` is **kept** across attempts. It is the one directory the executor does not
   clear. A stage sees `ctx.has_checkpoint` and `ctx.checkpoint_dir`;
-- `ctx.checkpoint_key` is the object-storage key B1 syncs that directory to
+- `ctx.checkpoint_key` is the object-storage key `CloudRunner` syncs that directory to
   (`runs/<run id>/<stage id>/checkpoint`), and it lands in the StepResult when the stage
   left anything behind, so `job_step.checkpoint_key` has something to record.
+
+The sync is on an **interval** while the stage runs, not at the end: a checkpoint that
+only appears when the stage finishes is worth nothing to an attempt that never does.
+What survives a preemption is whatever the last sync captured, so `checkpoint_every_s`
+is the knob that decides how much work is thrown away.
+
+`tests/test_cloud_preemption.py` is the proof, and it asserts on _work not repeated_: a
+ten-iteration stage is cut off at the same point on both attempts, so it only ever
+reaches ten by the second attempt continuing the first. Remove the checkpoint restore
+and the same test never finishes — which is a test in the file, not a claim.
 
 ## Runners
 
@@ -176,12 +186,57 @@ Runner.run(stage, workdir) -> StepResult
 ├── LocalRunner   calls the registered implementation in this process; a stage that needs
 │                 an external tool shells out through StageContext.run()
 ├── StubRunner    CI: fabricates each declared artifact deterministically
-└── CloudRunner   B1. RunnerSet.gpu is the hole it slots into.
+└── CloudRunner   cloud.py: submits the stage to a provider, tails its log, brings its
+                  outputs and its checkpoint back
 ```
 
 `RunnerSet(cpu=..., gpu=...)` routes on one fact: whether the stage declares `gpu:`.
 `RunnerSet.stubbed()` puts StubRunner in both slots; `RunnerSet.local()` leaves `gpu` empty,
-so a GPU stage fails with a message that names the tier it wanted.
+so a GPU stage fails with a message that names the tier it wanted; `RunnerSet.cloud(...)`
+runs CPU stages here and sends `gpu:` stages away.
+
+### Running a stage somewhere else
+
+`CloudRunner` needs two things, both protocols defined in `cloud.py` and both injected,
+because this project may not grow a `boto3` and may not import `apps/api`:
+
+- **`ProviderAdapter`** — `submit`, `poll`, `logs`, `cancel`, `rate`. `poll` returns
+  `preempted` as a state of its own, separate from `failed`: one resumes and the other
+  does not, and that is the distinction the whole path exists for.
+- **`Transfer`** — `put`, `get`, `exists`, `delete` over opaque keys. The worker supplies
+  an S3 implementation over its `ObjectStorage`; `LocalTransfer` here does the same over
+  a directory. The pipeline says what to move and under which key and knows nothing about
+  buckets — the same split `app/worker/registration.py` set out.
+
+Three adapters ship, and they are not equally real:
+
+| adapter             | where it runs        | verified                                 |
+| ------------------- | -------------------- | ---------------------------------------- |
+| `FakeAdapter`       | in process, no clock | yes — it drives every cloud test         |
+| `SubprocessAdapter` | a local process      | yes — including preemption, by SIGTERM   |
+| `ModalAdapter`      | Modal                | **no. Not one line of it has ever run.** |
+
+`ModalAdapter` says so itself, at length, in its own module docstring. Its Modal calls
+were written from memory rather than from documentation, because Modal was unreachable
+from the environment that wrote it.
+
+`Placement` decides which adapter an attempt goes to, from the preemptions recorded in
+`stages/<id>/attempts.json`. After `preemptions_before_fallback` of them the stage moves
+to the next provider, and the last one may not itself be interruptible — otherwise a
+two-hour stage on a host that preempts hourly is retried until the budget is gone, having
+paid for the same two hours three times.
+
+### What a run cost
+
+`attempts.json` holds one entry per attempt — provider, tier, state, billed seconds, and
+the price if there is one — including the attempts that were preempted, because those
+were paid for too. `run_cost(workdir)` totals it, and the worker writes that onto
+`jobs.cost_usd`, `jobs.provider` and `jobs.tier`.
+
+`providers.py` is the price table, and it carries **only the four A100 rates A0 actually
+measured**. A tier with no rate records its billed seconds and no cost; it does not get
+an invented number, because a plausible price in a cost column is a price that will be
+believed. A deployment supplies its own through `PIPELINE_GPU_RATES`.
 
 Everything that is not "run the implementation" — clearing the previous attempt, keeping the
 checkpoint, checking the declared `produces` exist, hashing them, writing the StepResult —

@@ -3,9 +3,11 @@ from __future__ import annotations
 import os
 from collections.abc import Generator, Iterator
 
+import boto3
 import pytest
 from alembic.config import Config
 from fastapi.testclient import TestClient
+from moto import mock_aws
 from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -13,6 +15,7 @@ from alembic import command
 from app.api.deps import _db
 from app.config import get_settings
 from app.main import create_app
+from app.storage import S3Storage
 
 TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL") or get_settings().test_database_url
 TABLES = (
@@ -55,6 +58,35 @@ def db(engine: Engine) -> Iterator[Session]:
         session.close()
         with engine.begin() as connection:
             connection.execute(text(f"TRUNCATE {', '.join(TABLES)} CASCADE"))
+
+
+#: The bucket the worker's tests write to, inside moto.
+WORKER_BUCKET = "twin-worker-test"
+
+
+@pytest.fixture
+def sessions(engine: Engine) -> sessionmaker[Session]:
+    """A session factory, for the worker: it opens its own sessions per job."""
+    return sessionmaker(bind=engine, expire_on_commit=False)
+
+
+@pytest.fixture
+def storage() -> Iterator[S3Storage]:
+    """A real `S3Storage` against moto, for the worker's uploads and its transfer.
+
+    Here rather than in one test module because two of them need it since B1b: the
+    supervisor's own tests and the cloud seam's.
+    """
+    with mock_aws():
+        boto3.client("s3", region_name="us-east-1").create_bucket(Bucket=WORKER_BUCKET)
+        yield S3Storage(
+            bucket=WORKER_BUCKET,
+            endpoint_url=None,
+            access_key="key",
+            secret_key="secret",
+            region="us-east-1",
+            public_base_url="https://cdn.example.com/twin-worker-test",
+        )
 
 
 @pytest.fixture

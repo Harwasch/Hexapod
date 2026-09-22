@@ -12,7 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, cast
@@ -82,6 +82,37 @@ class ArtifactDecl:
         seen = list(self.stub_members)
         seen += [m for m in self.required_members if m not in seen]
         return tuple(seen)
+
+    def to_dict(self) -> dict[str, object]:
+        """A declaration, over a wire. B1b's `StageRequest` carries these so a machine
+        that has never seen the recipe still knows whether to write a file or a
+        directory, and which members of it are not optional."""
+        return {
+            "name": self.name,
+            "kind": self.kind,
+            "contentType": self.content_type,
+            "summary": self.summary,
+            "requiredMembers": list(self.required_members),
+            "stubMembers": list(self.stub_members),
+            "stubBytes": self.stub_bytes,
+        }
+
+    @staticmethod
+    def from_dict(document: Mapping[str, object]) -> ArtifactDecl:
+        kind = str(document.get("kind", "file"))
+        if kind not in ("file", "dir"):
+            raise RecipeError(f"artifact {document.get('name')!r} has unknown kind {kind!r}")
+        members = cast("Iterable[object]", document.get("requiredMembers") or ())
+        stubs = cast("Iterable[object]", document.get("stubMembers") or ())
+        return ArtifactDecl(
+            name=str(document["name"]),
+            kind=cast(Kind, kind),
+            content_type=str(document.get("contentType", "application/octet-stream")),
+            summary=str(document.get("summary", "")),
+            required_members=tuple(str(m) for m in members),
+            stub_members=tuple(str(m) for m in stubs),
+            stub_bytes=int(str(document.get("stubBytes", 256))),
+        )
 
 
 @dataclass(frozen=True)

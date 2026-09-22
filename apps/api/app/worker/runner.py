@@ -17,10 +17,23 @@ What happens when a worker dies mid-stage: nothing here runs, so `lease_expires_
 simply passes. The job is then claimable by anyone (see `claim.claimable`), and the next
 worker resumes it — the stages that already completed are **skipped**, because their
 `step.json` and outputs are still in the workdir, and the stage that was interrupted is
-re-run from scratch with `attempt` incremented (A6 wipes `out/` at the start of every
-attempt and keeps `checkpoint/`). If the workdir is gone — another machine, a cleaned
-disk — nothing is skipped and the job restarts from the beginning, which is the honest
-answer rather than a resume that silently has no inputs.
+re-run with `attempt` incremented (A6 wipes `out/` at the start of every attempt and
+keeps `checkpoint/`, so a stage that checkpoints continues rather than restarting). If
+the workdir is gone — another machine, a cleaned disk — nothing is skipped and the job
+restarts from the beginning, which is the honest answer rather than a resume that
+silently has no inputs.
+
+B1b added one distinction to that loop and one number to the job:
+
+* **a preemption is not a failure.** `PreemptedError` from the cloud runner marks
+  `job_steps.preempted_at` and records the checkpoint, and it buys the stage extra
+  attempts (`max_preemptions`) rather than spending the budget meant for stages that
+  are actually broken. Which provider the next attempt goes to is the pipeline's
+  decision, taken from the same attempt ledger — see `cloud.Placement`.
+* **`jobs.cost_usd`, `jobs.provider` and `jobs.tier` are filled in** at every terminal
+  status, from the per-stage ledgers in the workdir. Every attempt is in that total,
+  including the ones that were preempted: the time a cheap host billed before it took
+  the machine back was still bought.
 """
 
 from __future__ import annotations
@@ -35,6 +48,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import IO, Any, Literal
 
@@ -51,13 +65,21 @@ from app.worker.events import Event
 from app.worker.pipeline_bridge import (
     PIPELINE_DIR,
     ArtifactRef,
+    AttemptLedger,
     PipelineError,
     Plan,
+    RunCost,
     Workdir,
     plan_recipe,
+    run_cost,
 )
 
 log = logging.getLogger("app.worker")
+
+#: `type(PreemptedError).__name__`, as it arrives over the child's line protocol. The
+#: one place the cloud runner's "the machine was taken back" is translated into a
+#: supervisor decision.
+PREEMPTED = "PreemptedError"
 
 #: Pushed onto the event queue when the child's stdout reaches EOF.
 _EOF = object()
@@ -73,6 +95,9 @@ class _RunState:
     failed_stage: str = ""
     error: str = ""
     error_type: str = ""
+    #: True when the last stage ended because a provider took the machine back, which
+    #: is ordinary operation rather than something to spend the retry budget on.
+    preempted: bool = False
     #: Stage id -> the artifacts it produced, from the StepResult it sent.
     produced: dict[str, tuple[ArtifactRef, ...]] = field(default_factory=dict)
 
@@ -157,15 +182,22 @@ class JobSupervisor:
         while True:
             completed = self._completed_stages(db, job_id, workdir_root)
             attempts = self._attempts(db, job_id, plan, completed)
-            exhausted = self._exhausted(plan, completed, attempts)
+            exhausted = self._exhausted(plan, completed, attempts, workdir_root)
             if exhausted is not None:
-                stage_id, attempt = exhausted
+                stage_id, attempt, preemptions = exhausted
                 last = self._last_error(db, job)
+                lost = (
+                    f" ({preemptions} of them ended with the provider taking the machine "
+                    f"back, which is why it was allowed more than "
+                    f"{self._config.max_attempts})"
+                    if preemptions
+                    else ""
+                )
                 return self._dead_letter(
                     db,
                     job,
                     f"stage {stage_id!r} has been attempted {attempt - 1} times without "
-                    f"completing and will not be retried again{last}",
+                    f"completing and will not be retried again{lost}{last}",
                 )
             state = self._supervise(db, job, workdir_root, completed, attempts, stage_params, stop)
             if state.outcome == "stopped":
@@ -185,6 +217,16 @@ class JobSupervisor:
                 return self._dead_letter(db, job, state.error or "the run failed before any stage")
             job.error = state.error
             db.commit()
+            if state.preempted:
+                # Worth saying out loud in the log: this is the cheap tier doing what the
+                # cheap tier does, not the stage being broken. The next attempt resumes
+                # from the checkpoint and may go to a different provider.
+                log.info(
+                    "worker %s: job %s stage %s was preempted; resuming it",
+                    self._id,
+                    job.id,
+                    state.failed_stage,
+                )
             time.sleep(self._config.retry_backoff_s)
             if (
                 claim.heartbeat(
@@ -218,6 +260,15 @@ class JobSupervisor:
             skip=tuple(sorted(completed)),
             attempts=attempts,
             params=stage_params,
+            cloud_providers=self._config.cloud_providers,
+            preemptions_before_fallback=self._config.preemptions_before_fallback,
+            modal_app=self._config.modal_app,
+            cloud_poll_s=self._config.cloud_poll_s,
+            checkpoint_every_s=self._config.checkpoint_every_s,
+            sandbox=str(self._config.sandbox_for(job.id)),
+            transfer_dir=(
+                str(self._config.cloud_transfer_dir) if self._config.cloud_transfer_dir else None
+            ),
         ).write(workdir_root / "child.json")
         process = subprocess.Popen(  # noqa: S603 - fixed argv, no shell, our own module
             [sys.executable, "-u", "-m", "app.worker.child", str(spec_path)],
@@ -270,7 +321,10 @@ class JobSupervisor:
             if current is not None:
                 state.failed_stage = current.stage_id
                 steps.fail_step(
-                    db, current, log_key=self._upload_log(job.id, workdir_root, current.stage_id)
+                    db,
+                    current,
+                    log_key=self._upload_log(job.id, workdir_root, current.stage_id),
+                    checkpoint_key=self._checkpoint_key(job.id, workdir_root, current.stage_id),
                 )
         return state
 
@@ -323,9 +377,14 @@ class JobSupervisor:
             state.failed_stage = event.stage_id
             state.error = event.error
             state.error_type = event.error_type
+            state.preempted = event.error_type == PREEMPTED
             if current is not None:
                 steps.fail_step(
-                    db, current, log_key=self._upload_log(job.id, workdir_root, event.stage_id)
+                    db,
+                    current,
+                    log_key=self._upload_log(job.id, workdir_root, event.stage_id),
+                    preempted=state.preempted,
+                    checkpoint_key=self._checkpoint_key(job.id, workdir_root, event.stage_id),
                 )
             return None
         if event.kind in (events.RUN_FINISHED, events.RUN_FAILED):
@@ -377,6 +436,8 @@ class JobSupervisor:
         if job.finished_at is None:
             job.finished_at = datetime.now(tz=UTC)
         job.lease_expires_at = None
+        # A cancelled run still ran, and a GPU still billed for the part of it that did.
+        self._record_cost(job)
         db.commit()
         return "cancelled"
 
@@ -402,6 +463,40 @@ class JobSupervisor:
             job.duration_s = (now - job.claimed_at).total_seconds()
         # The lease is over; `claimed_by` stays, because who ran it is a fact worth keeping.
         job.lease_expires_at = None
+        self._record_cost(job)
+
+    def _record_cost(self, job: Job) -> None:
+        """What this run was billed, from the per-stage ledgers the runner wrote.
+
+        Every attempt of every stage is in the total, preempted ones included: a cost
+        that counted only the attempt that happened to succeed would say a stage which
+        was killed twice on a cheap host cost a third of what it did, and the cheap host
+        would keep looking cheap.
+
+        `cost_usd` stays null when no tier the run used has a rate anybody has measured
+        — `tools/pipeline/providers.py` ships only surveyed figures and an operator's own
+        rates come from `PIPELINE_GPU_RATES`. `provider` and `tier` are still recorded in
+        that case, because where the work ran is a fact either way, and the seconds are
+        in the step's metrics.
+        """
+        total: RunCost = run_cost(Workdir(self._config.workdir_for(job.id)))
+        if total.provider is None:
+            return  # Nothing was dispatched: a stub or local run has no bill.
+        job.provider = total.provider
+        job.tier = total.tier
+        if total.usd is not None:
+            job.cost_usd = Decimal(str(round(total.usd, 4)))
+        log.info(
+            "job %s: %.1f billed second(s) on %s (%s) over %d attempt(s), %d preemption(s); "
+            "cost %s",
+            job.id,
+            total.billed_s,
+            total.provider,
+            total.tier,
+            total.attempts,
+            total.preemptions,
+            "unpriced" if total.usd is None else f"${total.usd:.4f}",
+        )
 
     def _still_ours(self, db: Session, job: Job) -> bool:
         db.refresh(job)
@@ -432,6 +527,19 @@ class JobSupervisor:
 
     def _upload_log(self, job_id: uuid.UUID, workdir_root: Path, stage_id: str) -> str | None:
         return outputs.upload_log(self._storage, workdir_root, job_id, stage_id)
+
+    @staticmethod
+    def _checkpoint_key(job_id: uuid.UUID, workdir_root: Path, stage_id: str) -> str | None:
+        """The key of a stage's checkpoint, or None when there is nothing in it.
+
+        Recorded on an attempt that did *not* finish, which is the case with no
+        StepResult to read it out of — and the case where it matters most, because it is
+        what the next attempt resumes from.
+        """
+        directory = Workdir(workdir_root).checkpoint_dir(stage_id)
+        if not directory.is_dir() or not any(directory.iterdir()):
+            return None
+        return outputs.checkpoint_key(job_id, stage_id)
 
     def _seed(self, db: Session, job: Job, inputs: tuple[str, ...], workdir_root: Path) -> None:
         """Put the capture's uploaded bytes where the recipe says its inputs live.
@@ -477,14 +585,31 @@ class JobSupervisor:
         }
 
     def _exhausted(
-        self, plan: Plan, completed: set[str], attempts: dict[str, int]
-    ) -> tuple[str, int] | None:
+        self, plan: Plan, completed: set[str], attempts: dict[str, int], workdir_root: Path
+    ) -> tuple[str, int, int] | None:
+        """The attempt budget, extended rather than replaced.
+
+        `max_attempts` is the budget for a stage that is failing. An attempt the provider
+        ended -- a preemption -- is not that, so it does not spend it; the stage gets
+        `max_preemptions` of those on top. The cap is still hard, because a placement
+        that keeps losing the machine after the fallback is a problem with the placement
+        and retrying it forever would pay for the same hours again and again.
+        """
         for stage in plan.stages:
             if stage.id in completed:
                 continue
             attempt = attempts.get(stage.id, 1)
-            return (stage.id, attempt) if attempt > self._config.max_attempts else None
+            preemptions = self._preemptions(workdir_root, stage.id)
+            allowance = self._config.max_attempts + min(preemptions, self._config.max_preemptions)
+            return (stage.id, attempt, preemptions) if attempt > allowance else None
         return None
+
+    @staticmethod
+    def _preemptions(workdir_root: Path, stage_id: str) -> int:
+        """How often this stage has had its machine taken back, from the pipeline's own
+        ledger. The same file `cloud.Placement` reads to decide where to send it next,
+        so the budget here and the provider choice there cannot disagree."""
+        return AttemptLedger.read(Workdir(workdir_root).attempts_path(stage_id)).preemptions
 
     def _last_error(self, db: Session, job: Job) -> str:
         db.refresh(job)

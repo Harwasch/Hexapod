@@ -263,7 +263,7 @@ jobs:
               sys.exit(f"the catalogue is missing {missing}; it listed {names}")
           print("catalogue lists:", names)
           PY
-      - name: The pipeline's stages import in the image's venv
+      - name: The pipeline's stages and cloud seam import in the image's venv
         # The worker's child process imports `stages` for a real job, in this interpreter,
         # and nothing above reaches it: an empty queue never plans a recipe. It is also the
         # only check that crosses the second seam -- `captures_bridge` finds tools/captures
@@ -284,6 +284,14 @@ jobs:
           assert (bridge.PIPELINE_DIR / "recipes").is_dir(), bridge.PIPELINE_DIR
           assert (CAPTURES_DIR / "splat_tiles.py").is_file(), CAPTURES_DIR
           assert Path(stages.__file__).parent == bridge.PIPELINE_DIR
+
+          # B1b's seam, in the same venv, and deliberately without `modal`: the adapter
+          # imports its client inside the one function that needs it, so an image that
+          # will never dispatch to Modal does not have to carry the library.
+          assert bridge.PROVIDERS, "the provider price table is empty in the image"
+          assert bridge.CloudRunner.name == "cloud"
+          assert bridge.ModalAdapter("unused").name == "modal"
+
           print("pipeline:", bridge.PIPELINE_DIR, "captures:", CAPTURES_DIR)
           PY
       - name: The worker starts and exits cleanly

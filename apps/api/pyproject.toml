@@ -88,15 +88,20 @@ mypy_path = ["../../tools/pipeline", "../../tools/captures"]
 # inside it -- that project runs its own mypy --strict and its errors are not this
 # project's to fix (the same arrangement tools/pipeline has with tools/captures).
 module = [
+  "adapters",
   "artifacts",
   "captures_bridge",
+  "cloud",
   "contracts",
   "errors",
   "executor",
   "gaussians",
+  "modal_adapter",
   "plan",
+  "providers",
   "recipe",
   "registry",
+  "run_stage",
   "runners",
   "splat_tiles",
   "stages",

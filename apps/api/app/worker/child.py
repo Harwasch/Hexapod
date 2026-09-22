@@ -1,4 +1,4 @@
-"""The process that actually runs a recipe. It has no database and no credentials.
+"""The process that actually runs a recipe. It has no database.
 
 Why a separate process at all, when the executor is a library call:
 
@@ -14,8 +14,13 @@ Why a separate process at all, when the executor is a library call:
   is a failed step, not a lost queue.
 
 It reads one JSON spec file, writes one JSON event per line to stdout, and exits 0 or 1.
-Everything it produces lands in the workdir, where the supervisor — which does have the
-credentials — picks it up.
+Everything it produces lands in the workdir, where the supervisor picks it up.
+
+Until B1b this process had no credentials either. With `runner: cloud` it has the
+bucket's, because a stage running on somebody else's machine has to fetch its inputs from
+somewhere and pushing every byte through the process whose job is to hold a lease is the
+wrong shape (`app/worker/cloud.py` says more). It still has no database session, which is
+the part that mattered: nothing it does can write a row.
 """
 
 from __future__ import annotations
@@ -32,7 +37,9 @@ from importlib import import_module
 from pathlib import Path
 from typing import Any
 
+from app.storage.factory import get_storage
 from app.worker import events
+from app.worker.cloud import build_runners
 from app.worker.events import Event
 from app.worker.pipeline_bridge import (
     PlannedStage,
@@ -43,8 +50,6 @@ from app.worker.pipeline_bridge import (
     execute,
     load_recipe,
 )
-
-_RUNNERS = {"stub": RunnerSet.stubbed, "local": RunnerSet.local}
 
 
 @dataclass(frozen=True)
@@ -61,6 +66,17 @@ class ChildSpec:
     #: Per-stage parameter overrides for this run — the capture's coordinate, its sensor,
     #: and whatever `jobs.params` asked for. See `app.worker.params`.
     params: dict[str, dict[str, Any]] | None = None
+    #: Only read when `runner == "cloud"`. See `app.worker.cloud.build_runners`.
+    cloud_providers: tuple[str, ...] = ()
+    preemptions_before_fallback: int = 2
+    modal_app: str = ""
+    cloud_poll_s: float = 5.0
+    checkpoint_every_s: float = 60.0
+    #: Scratch for an adapter that runs a stage on this machine; never the workdir.
+    sandbox: str | None = None
+    #: A directory both this worker and the machine running the stage can see. Unset,
+    #: the bytes go through the bucket.
+    transfer_dir: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -72,6 +88,13 @@ class ChildSpec:
             "skip": list(self.skip),
             "attempts": dict(self.attempts or {}),
             "params": dict(self.params or {}),
+            "cloudProviders": list(self.cloud_providers),
+            "preemptionsBeforeFallback": self.preemptions_before_fallback,
+            "modalApp": self.modal_app,
+            "cloudPollS": self.cloud_poll_s,
+            "checkpointEveryS": self.checkpoint_every_s,
+            "sandbox": self.sandbox,
+            "transferDir": self.transfer_dir,
         }
 
     def write(self, path: Path) -> Path:
@@ -90,7 +113,40 @@ class ChildSpec:
             skip=tuple(str(name) for name in document.get("skip", ())),
             attempts={str(k): int(v) for k, v in dict(document.get("attempts", {})).items()},
             params={str(k): dict(v) for k, v in dict(document.get("params", {})).items()},
+            cloud_providers=tuple(str(n) for n in document.get("cloudProviders", ())),
+            preemptions_before_fallback=int(document.get("preemptionsBeforeFallback", 2)),
+            modal_app=str(document.get("modalApp", "")),
+            cloud_poll_s=float(document.get("cloudPollS", 5.0)),
+            checkpoint_every_s=float(document.get("checkpointEveryS", 60.0)),
+            sandbox=document.get("sandbox"),
+            transfer_dir=document.get("transferDir"),
         )
+
+
+def build_runner_set(spec: ChildSpec) -> RunnerSet:
+    """Which runners this run uses. The one place the three options are spelled out.
+
+    `cloud` is `local` plus a GPU runner, so a recipe's CPU stages still run here and
+    only the stages that declare `gpu:` are dispatched — the routing signal has not
+    changed, only where the GPU stage ends up.
+    """
+    if spec.runner == "stub":
+        return RunnerSet.stubbed()
+    if spec.runner == "local":
+        return RunnerSet.local()
+    if spec.runner == "cloud":
+        return build_runners(
+            get_storage(),
+            providers=spec.cloud_providers,
+            sandbox=Path(spec.sandbox or spec.workdir),
+            impl_modules=spec.impl_modules,
+            preemptions_before_fallback=spec.preemptions_before_fallback,
+            modal_app=spec.modal_app,
+            poll_interval_s=spec.cloud_poll_s,
+            checkpoint_every_s=spec.checkpoint_every_s,
+            transfer_dir=Path(spec.transfer_dir) if spec.transfer_dir else None,
+        )
+    raise ValueError(f"unknown runner {spec.runner!r}: expected stub, local or cloud")
 
 
 def load_impl_modules(names: Sequence[str]) -> None:
@@ -217,7 +273,7 @@ def run(spec: ChildSpec) -> int:
         execute(
             recipe,
             Workdir(Path(spec.workdir)),
-            _RUNNERS[spec.runner](),
+            build_runner_set(spec),
             observer=reporter,
             skip=set(spec.skip),
             attempts=spec.attempts or {},

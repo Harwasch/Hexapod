@@ -50,6 +50,10 @@ class StageContext:
     checkpoint_dir: Path
     log_path: Path
     checkpoint_key: str
+    #: Where the runner -- not the stage -- records what each attempt of this stage was
+    #: placed on and what it billed. It is on the context because a runner's `_invoke` is
+    #: handed the context and nothing else; a stage implementation has no business here.
+    attempts_path: Path
     _inputs: Mapping[str, Path]
     _produces: Mapping[str, ArtifactDecl]
 
@@ -97,10 +101,11 @@ class StageContext:
     def has_checkpoint(self) -> bool:
         """True when a previous attempt left resumable state behind.
 
-        Nothing checkpoints yet. The contract exists now because B1 runs on preemptible
-        GPUs, where being killed is ordinary: `checkpoint/` is the one directory the
-        executor does not clear between attempts, and `checkpoint_key` is where B1 syncs
-        it to object storage.
+        `checkpoint/` is the one directory the executor does not clear between attempts,
+        and `checkpoint_key` is where B1b's `CloudRunner` syncs it to object storage --
+        out before an attempt, back when the attempt ends however it ends. A stage on a
+        preemptible tier writes its progress here and reads it back through this flag;
+        being killed is then ordinary operation rather than lost work.
         """
         return any(self.checkpoint_dir.iterdir())
 

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import time
 
 from app.worker.pipeline_bridge import ensure_importable
@@ -29,6 +30,7 @@ THIRD = ArtifactDecl("third.json", content_type="application/json")
 SLOW = ArtifactDecl("slow.json", content_type="application/json")
 RESUMED = ArtifactDecl("resumed.json", content_type="application/json")
 DOOMED = ArtifactDecl("doomed.json", content_type="application/json")
+TRAINED = ArtifactDecl("trained.json", content_type="application/json")
 
 
 def _write(ctx: StageContext, name: str, **fields: object) -> None:
@@ -107,3 +109,35 @@ def t_package(ctx: StageContext) -> StageOutcome:
     (out / "tileset.json").write_text(json.dumps({"asset": {"version": "1.1"}}), encoding="utf-8")
     (out / "splat.glb").write_bytes(b"glTF-ish bytes")
     return StageOutcome(metrics={"tiles": 1})
+
+
+@stage_impl(
+    "t_gpu_train",
+    produces=(TRAINED,),
+    summary="a GPU stage that checkpoints, is preempted once, and finishes on the next try",
+)
+def t_gpu_train(ctx: StageContext) -> StageOutcome:
+    """The cloud path's stand-in for B2's trainer.
+
+    It counts, writing `checkpoint/progress.json` after every iteration, and at `die_at`
+    it signals itself away — which is what a provider reclaiming a container is. The
+    adapter's checkpoint syncer has already copied `checkpoint/` out by then, so the next
+    attempt resumes from that iteration rather than from zero.
+    """
+    path = ctx.checkpoint_dir / "progress.json"
+    done = int(json.loads(path.read_text(encoding="utf-8"))["iteration"]) if path.is_file() else 0
+    target = int(ctx.param("iterations", 6))
+    die_at = int(ctx.param("die_at", 3))
+    died = ctx.checkpoint_dir / "died-once"
+    ctx.log(f"training from {done} to {target} in pid {os.getpid()}")
+    while done < target:
+        done += 1
+        path.write_text(json.dumps({"iteration": done}), encoding="utf-8")
+        if done == die_at and not died.exists():
+            died.write_text("1", encoding="utf-8")
+            ctx.log("the provider is taking the machine back")
+            time.sleep(float(ctx.param("sync_grace_s", 1.0)))
+            os.kill(os.getpid(), signal.SIGTERM)
+            time.sleep(5.0)  # SIGTERM ends the process well before this
+    _write(ctx, TRAINED.name, iterations=done, resumed=died.exists())
+    return StageOutcome(metrics={"iterations": done}, summary=f"trained to {done}")

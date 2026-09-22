@@ -1,0 +1,19 @@
+# One CPU stage and one GPU stage: the whole routing decision, and the whole cloud path.
+#
+# `train` declares `gpu:`, so it is the only stage a `RunnerSet.cloud` sends to a
+# provider; `one` runs in the worker's own process exactly as it always did.
+name: t-gpu
+version: 1
+description: A GPU stage dispatched to a provider, preempted once, resumed.
+inputs: []
+stages:
+  - { id: one, impl: t_first }
+  - id: train
+    impl: t_gpu_train
+    params:
+      iterations: 6
+      die_at: 3
+      sync_grace_s: 1.0
+    gpu:
+      tier: a100
+      preemptible: true

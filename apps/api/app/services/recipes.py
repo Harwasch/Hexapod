@@ -42,49 +42,37 @@ SHIPPED_RECIPE_VERSIONS: dict[str, str] = {
     "photo-reconstruct": "2",
 }
 
-#: Where a GPU stage can be sent, and the rate A0's survey recorded for an A100.
-#:
-#: Deliberately only the figures the plan actually measured. A per-tier price table that
-#: nobody has checked would be worse than none: it would put invented numbers in front of
-#: a person deciding how to spend money. B1's `ProviderAdapter` brings the real table and
-#: records what a run cost in `jobs.cost_usd`, which is the number that settles it.
-PROVIDERS: tuple[ProviderRead, ...] = (
-    ProviderRead(
-        name="modal",
-        label="Modal",
-        tiers=["l4", "a10g", "a100"],
-        usd_per_hour_a100=2.50,
-        interruptible=False,
-        note="Per-second billing, scale to zero. The reliable default.",
-    ),
-    ProviderRead(
-        name="runpod-secure",
-        label="RunPod Secure",
-        tiers=["l4", "a100"],
-        usd_per_hour_a100=1.59,
-        interruptible=False,
-        note="Ordinary rented pods.",
-    ),
-    ProviderRead(
-        name="runpod-community",
-        label="RunPod Community",
-        tiers=["l4", "a100"],
-        usd_per_hour_a100=1.19,
-        interruptible=True,
-        note="Community hosts; cheaper, and killed without warning.",
-    ),
-    ProviderRead(
-        name="vast",
-        label="Vast.ai",
-        tiers=["l4", "a100"],
-        usd_per_hour_a100=0.52,
-        interruptible=True,
-        note=(
-            "Cheapest sticker, most variable. A0 measured the unverified tier running "
-            "20-40% above its listed price once restarts and downtime are priced in."
-        ),
-    ),
-)
+
+def _providers() -> list[ProviderRead]:
+    """Where a GPU stage can be sent, as the console renders it.
+
+    The table itself moved to `tools/pipeline/providers.py` in B1b, because two things
+    now need it and only one of them may import the other: this endpoint renders it, and
+    `CloudRunner` multiplies a tier's rate by the seconds a provider billed to fill in
+    `jobs.cost_usd`. A second copy here is how the price the console shows and the price
+    a run is charged at would eventually disagree.
+
+    It still carries only what A0 measured — an A100 hour at each of four hosts — and
+    `usdPerHourA100` is still a reference point rather than a quote. A deployment's own
+    rates arrive through `PIPELINE_GPU_RATES` and are merged over these; see that module
+    for why no unsurveyed tier has a number.
+
+    Only reached from `catalogue()`, which already answers None on a host with no
+    `tools/pipeline`, so this import cannot be the thing that makes the endpoint fail.
+    """
+    from app.worker.pipeline_bridge import rates_from_env, with_rates
+
+    return [
+        ProviderRead(
+            name=entry.name,
+            label=entry.label,
+            tiers=list(entry.tiers),
+            usd_per_hour_a100=entry.usd_per_hour_a100 or 0.0,
+            interruptible=entry.interruptible,
+            note=entry.note,
+        )
+        for entry in with_rates(rates_from_env())
+    ]
 
 
 def _load_recipes() -> list[Recipe] | None:
@@ -135,7 +123,7 @@ def catalogue() -> PipelineCatalogue | None:
         return None
     return PipelineCatalogue(
         recipes=[_to_read(recipe) for recipe in recipes],
-        providers=list(PROVIDERS),
+        providers=_providers(),
     )
 
 

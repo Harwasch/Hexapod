@@ -19,6 +19,12 @@ Two things keep it honest rather than hidden:
   because that project runs its own mypy and its errors are not this one's to report);
 * ``tests/test_worker_pipeline.py`` runs a real recipe through a real worker, so a change
   to the executor's signature fails here rather than in production.
+
+B1b added the cloud seam to the list, and the rule did not change: ``cloud``,
+``adapters``, ``providers`` and ``modal_adapter`` are imported here and nowhere else in
+``apps/api``. The direction of the dependency is the point — the pipeline describes a
+stage that has to run somewhere else and what has to move for it to; the worker, which
+holds the bucket credentials, performs it (``app/worker/cloud.py``).
 """
 
 from __future__ import annotations
@@ -47,30 +53,59 @@ def ensure_importable(directory: Path = PIPELINE_DIR) -> None:
 
 ensure_importable()
 
+from adapters import FakeAdapter, LocalTransfer, SubprocessAdapter  # noqa: E402
 from artifacts import ArtifactRef  # noqa: E402
+from cloud import (  # noqa: E402
+    AttemptLedger,
+    CloudRunner,
+    Placement,
+    ProviderAdapter,
+    RunCost,
+    Transfer,
+    run_cost,
+)
 from contracts import StepResult  # noqa: E402
-from errors import PipelineError, StageFailedError  # noqa: E402
+from errors import PipelineError, PreemptedError, StageFailedError  # noqa: E402
 from executor import RunResult, execute  # noqa: E402
+from modal_adapter import ModalAdapter  # noqa: E402
 from plan import Plan, PlannedStage, plan_recipe  # noqa: E402
+from providers import PROVIDERS, Provider, Rate, rates_from_env, with_rates  # noqa: E402
 from recipe import Recipe, load_recipe, recipe_dir  # noqa: E402
 from runners import RunnerSet  # noqa: E402
 from workdir import Workdir  # noqa: E402
 
 __all__ = [
     "PIPELINE_DIR",
+    "PROVIDERS",
     "ArtifactRef",
+    "AttemptLedger",
+    "CloudRunner",
+    "FakeAdapter",
+    "LocalTransfer",
+    "ModalAdapter",
     "PipelineError",
+    "Placement",
     "Plan",
     "PlannedStage",
+    "PreemptedError",
+    "Provider",
+    "ProviderAdapter",
+    "Rate",
     "Recipe",
+    "RunCost",
     "RunResult",
     "RunnerSet",
     "StageFailedError",
     "StepResult",
+    "SubprocessAdapter",
+    "Transfer",
     "Workdir",
     "ensure_importable",
     "execute",
     "load_recipe",
     "plan_recipe",
+    "rates_from_env",
     "recipe_dir",
+    "run_cost",
+    "with_rates",
 ]

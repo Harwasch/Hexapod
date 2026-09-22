@@ -40,16 +40,22 @@ ignore = ["ANN401", "RUF012", "S101"]
 # Every module in this project is imported by bare name (the tools/captures convention),
 # so ruff cannot tell them from third-party packages without being told.
 known-first-party = [
+  "adapters",
   "artifacts",
   "captures_bridge",
+  "cloud",
+  "cloud_stages",
   "conftest",
   "contracts",
   "errors",
   "executor",
+  "modal_adapter",
   "plan",
+  "providers",
   "recipe",
   "registry",
   "run_recipe",
+  "run_stage",
   "runners",
   "stages",
   "workdir",
@@ -80,6 +86,13 @@ follow_imports = "silent"
 
 [[tool.mypy.overrides]]
 module = ["imageio_ffmpeg.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# `modal` is deliberately not a dependency: modal_adapter.py has never been executed and
+# must not pull a client library into an image that does not use it. The import is inside
+# the one function that needs it and is guarded, so the module still type-checks here.
+module = ["modal.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

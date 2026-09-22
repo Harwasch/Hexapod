@@ -114,12 +114,33 @@ class Settings(BaseSettings):
     # outputs of the stages that already succeeded out of it, and A6's `checkpoint/`
     # contract is only worth anything while the directory is still there.
     worker_workdir: str = "var/worker"
-    # "stub" or "local". "local" since A8: Lane 1's stages are real, so a dropped `.ply`
-    # or `.spz` becomes a site with no human step, and a worker that ran the stub by
-    # default would produce sites pointing at fabricated tilesets. Lane 2 still needs a
-    # GPU runner it does not have, so `photo-reconstruct` fails at `train` with a message
-    # naming the tier it wanted -- which is the honest answer until B1.
+    # "stub", "local" or "cloud". "local" since A8: Lane 1's stages are real, so a
+    # dropped `.ply` or `.spz` becomes a site with no human step, and a worker that ran
+    # the stub by default would produce sites pointing at fabricated tilesets. "cloud"
+    # (B1b) adds a GPU runner for the stages that declare `gpu:`, so Lane 2's `train`
+    # has somewhere to go; with it unset `photo-reconstruct` still fails at `train` with
+    # a message naming the tier it wanted, which stays the honest default.
     worker_runner: str = "local"
+    # Where a GPU stage is dispatched, preferred first. Comma-separated, and the **last
+    # one is the fallback**: a stage that keeps being preempted is moved down the list
+    # rather than retried on the cheap host until the cheap host has cost more. The last
+    # entry must not be interruptible, which `Placement.of` enforces at startup.
+    # Known names: fake (tests), subprocess (a box you have a shell on), modal (a sketch
+    # that has never run -- see tools/pipeline/modal_adapter.py).
+    worker_cloud_providers: list[str] = Field(default_factory=list)
+    # How many preemptions of one stage before it moves to the next provider.
+    worker_preemptions_before_fallback: int = 2
+    # The Modal app a ModalAdapter would look its function up in. Unused today.
+    worker_modal_app: str = ""
+    # How often a dispatched stage is polled, and how often the machine running it is
+    # asked to sync `checkpoint/` back. The second is the one that decides how much work
+    # a preemption throws away.
+    worker_cloud_poll_s: float = 5.0
+    worker_checkpoint_every_s: float = 60.0
+    # A directory both the worker and the machine running a dispatched stage can see --
+    # an NFS mount, or a workstation whose GPU is in the same box. Unset, a dispatched
+    # stage's inputs, checkpoint and outputs move through the bucket.
+    worker_cloud_transfer_dir: str | None = None
     # Extra recipes, by name, for tests and for a deployment that ships its own. The
     # pipeline's shipped recipes are found without this.
     worker_recipe_dir: str | None = None
@@ -141,13 +162,19 @@ class Settings(BaseSettings):
     # well as ordinary failures, because a job that kills its worker would otherwise be
     # picked up forever by whoever is next.
     worker_max_attempts: int = 3
+    # Attempts a stage gets on top of `worker_max_attempts` for having been preempted.
+    # Being taken off a cheap interruptible box is not the stage failing, so it does not
+    # spend the budget meant for one that is -- but the ceiling is still hard.
+    worker_max_preemptions: int = 4
     # Pause between attempts at the same stage.
     worker_retry_backoff_s: float = 2.0
 
     api_host: str = "0.0.0.0"  # noqa: S104 - container default, documented in DEPLOYMENT.md
     api_port: int = 8000
 
-    @field_validator("api_cors_origins", "worker_impl_modules", mode="before")
+    @field_validator(
+        "api_cors_origins", "worker_impl_modules", "worker_cloud_providers", mode="before"
+    )
     @classmethod
     def _split_csv(cls, value: object) -> object:
         if isinstance(value, str):

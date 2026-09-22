@@ -52,11 +52,6 @@ def start_step(
     step.status = RunStatus.IN_PROGRESS
     step.started_at = utcnow()
     step.finished_at = None
-    if attempt > 1:
-        # Not a status: A2 deliberately has no `preempted` member, because a step that is
-        # being tried again is resting in `in-progress`. The column records that it
-        # happened.
-        step.preempted_at = utcnow()
     db.commit()
     return step
 
@@ -91,11 +86,34 @@ def finish_step(
     db.commit()
 
 
-def fail_step(db: Session, step: JobStep, *, log_key: str | None) -> None:
+def fail_step(
+    db: Session,
+    step: JobStep,
+    *,
+    log_key: str | None,
+    preempted: bool = False,
+    checkpoint_key: str | None = None,
+) -> None:
+    """Close out an attempt that did not finish.
+
+    `preempted` is the real signal, not an inference: B1b's `CloudRunner` raises
+    `PreemptedError` when a provider takes the machine back, and only that sets
+    `preempted_at`. Until B1b the column was set for *any* second attempt, which made a
+    stage that merely fails twice indistinguishable from one that was interrupted — and
+    those are the two cases the whole cloud path exists to keep apart.
+
+    The status stays `error` while the stage is between attempts; the supervisor's loop
+    is what decides whether there is another one. `checkpoint_key` is recorded here
+    because a preempted attempt has a checkpoint and no StepResult to name it in.
+    """
     step.status = RunStatus.ERROR
     step.finished_at = utcnow()
     if log_key is not None:
         step.log_key = log_key
+    if preempted:
+        step.preempted_at = utcnow()
+    if checkpoint_key is not None:
+        step.checkpoint_key = checkpoint_key
     db.commit()
 
 

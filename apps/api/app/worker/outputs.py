@@ -69,6 +69,17 @@ def artifact_key(job_id: uuid.UUID, stage_id: str, name: str) -> str:
     return f"{stage_prefix(job_id, stage_id)}/{name}"
 
 
+def checkpoint_key(job_id: uuid.UUID, stage_id: str) -> str:
+    """Where a dispatched stage's checkpoint lives, stated once on this side too.
+
+    It is the same string `BaseRunner` puts in `StageContext.checkpoint_key`, built from
+    the same two facts (the run id is the workdir's directory name, which is the job id).
+    The supervisor needs it for a step that did *not* finish -- a preempted attempt has
+    a checkpoint and no StepResult to read it out of.
+    """
+    return f"{stage_prefix(job_id, stage_id)}/checkpoint"
+
+
 @dataclass(frozen=True)
 class UploadedArtifact:
     """One row's worth of `artifacts`, ready to insert."""

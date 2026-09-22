@@ -19,12 +19,9 @@ import sys
 import threading
 import time
 import uuid
-from collections.abc import Iterator
 from pathlib import Path
 
-import boto3
 import pytest
-from moto import mock_aws
 from sqlalchemy import Engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -38,7 +35,6 @@ from app.worker.loop import Worker
 from app.worker.runner import JobSupervisor, Terminal
 from tests.conftest import TEST_DATABASE_URL
 
-BUCKET = "twin-worker-test"
 RECIPES = Path(__file__).resolve().parent / "recipes"
 API_ROOT = Path(__file__).resolve().parents[1]
 
@@ -46,25 +42,6 @@ API_ROOT = Path(__file__).resolve().parents[1]
 # retry backoff are all configuration, and the point of the test is the behaviour.
 FAST_LEASE_S = 1.5
 FAST_POLL_S = 0.2
-
-
-@pytest.fixture
-def sessions(engine: Engine) -> sessionmaker[Session]:
-    return sessionmaker(bind=engine, expire_on_commit=False)
-
-
-@pytest.fixture
-def storage() -> Iterator[S3Storage]:
-    with mock_aws():
-        boto3.client("s3", region_name="us-east-1").create_bucket(Bucket=BUCKET)
-        yield S3Storage(
-            bucket=BUCKET,
-            endpoint_url=None,
-            access_key="key",
-            secret_key="secret",
-            region="us-east-1",
-            public_base_url="https://cdn.example.com/twin-worker-test",
-        )
 
 
 def config(tmp_path: Path, worker_id: str = "worker-a", **overrides: object) -> WorkerConfig:
@@ -377,7 +354,11 @@ def test_a_stage_that_fails_every_time_dead_letters_and_says_why(
     assert steps["one"].status is RunStatus.COMPLETE
     assert steps["two"].status is RunStatus.ERROR
     assert steps["two"].attempt == 2, "the budget was spent, not exceeded"
-    assert steps["two"].preempted_at is not None
+    # It failed; it was not preempted. Until B1b any second attempt set this column,
+    # which made "the stage is broken" and "the provider took the machine back"
+    # indistinguishable -- and those are the two cases the cloud path exists to separate.
+    # `preempted_at` now records only the second, from `PreemptedError`.
+    assert steps["two"].preempted_at is None
     # The capture says so too, rather than sitting at `not-started` forever.
     assert db.get(Capture, capture.id).status is CaptureStatus.ERROR  # type: ignore[union-attr]
 

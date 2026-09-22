@@ -15,7 +15,9 @@ __all__ = [
     "MissingInputError",
     "NoRunnerError",
     "PipelineError",
+    "PreemptedError",
     "RecipeError",
+    "RemoteStageError",
     "ResumeError",
     "StageContractError",
     "StageFailedError",
@@ -137,6 +139,45 @@ class StageContractError(PipelineError):
 
 class NoRunnerError(PipelineError):
     """No runner is configured for a stage -- typically a gpu: stage with no CloudRunner."""
+
+
+class PreemptedError(PipelineError):
+    """The provider took the machine back. **Not a failure**, and deliberately its own
+    class so the worker can tell the two apart.
+
+    On an interruptible tier this is ordinary operation: the attempt is over, whatever
+    the remote last synced to `checkpoint/` has been brought home, and the next attempt
+    continues from it. It still carries what the lost attempt billed, because that money
+    was spent whether or not the work survived.
+    """
+
+    def __init__(
+        self, recipe: str, stage_id: str, attempt: int, provider: str, billed_s: float
+    ) -> None:
+        super().__init__(
+            f"recipe {recipe!r}, stage {stage_id!r}: attempt {attempt} was preempted by "
+            f"{provider!r} after {billed_s:.1f}s of billed time. It resumes from its "
+            f"checkpoint on the next attempt"
+        )
+        self.recipe = recipe
+        self.stage_id = stage_id
+        self.attempt = attempt
+        self.provider = provider
+        self.billed_s = billed_s
+
+
+class RemoteStageError(PipelineError):
+    """A stage run on a provider failed there. The provider's own words, carried back."""
+
+    def __init__(self, recipe: str, stage_id: str, impl: str, provider: str, detail: str) -> None:
+        super().__init__(
+            f"recipe {recipe!r}, stage {stage_id!r} (impl {impl!r}) failed on "
+            f"{provider!r}: {detail or 'no detail was reported'}"
+        )
+        self.recipe = recipe
+        self.stage_id = stage_id
+        self.impl = impl
+        self.provider = provider
 
 
 class StageFailedError(PipelineError):

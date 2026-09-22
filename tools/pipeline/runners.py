@@ -5,7 +5,10 @@
     |                an external tool shell out through StageContext.run()
     |- StubRunner    fabricates each declared artifact deterministically, so a whole recipe
     |                -- Lane 2 included -- is green on a machine with no GPU and no network
-    +- CloudRunner   B1. Not here. RunnerSet.gpu is the hole it slots into.
+    +- CloudRunner   B1b, in cloud.py: submits the stage to a provider, tails it, and
+                     brings its outputs -- and its checkpoint -- back. It lives beside
+                     this module rather than in it only because the two protocols it
+                     needs (ProviderAdapter, Transfer) are a file's worth of contract
 
 Everything that is not "run the implementation" -- clearing the previous attempt's outputs,
 keeping the checkpoint, checking the declared `produces` were actually written, hashing
@@ -96,6 +99,7 @@ class BaseRunner(Runner, ABC):
             checkpoint_dir=workdir.checkpoint_dir(stage.id),
             log_path=log_path,
             checkpoint_key=f"runs/{workdir.root.name}/{stage.id}/checkpoint",
+            attempts_path=workdir.attempts_path(stage.id),
             _inputs={name: workdir.root / path for name, path in stage.inputs.items()},
             _produces={decl.name: decl for decl in stage.impl.produces},
         )
@@ -261,8 +265,8 @@ class RunnerSet:
         if self.gpu is None:
             raise NoRunnerError(
                 f"recipe {stage.recipe!r}, stage {stage.id!r} (impl {stage.impl.name!r}) requires "
-                f"a {stage.gpu.tier} GPU and no GPU runner is configured. Use StubRunner in CI, or "
-                f"CloudRunner once B1 lands"
+                f"a {stage.gpu.tier} GPU and no GPU runner is configured. Use StubRunner in CI, "
+                f"or a CloudRunner (cloud.py) with a ProviderAdapter and a Transfer"
             )
         return self.gpu
 
@@ -273,5 +277,11 @@ class RunnerSet:
 
     @staticmethod
     def local() -> RunnerSet:
-        """CPU stages run for real; GPU stages have nowhere to go until B1."""
+        """CPU stages run for real; GPU stages have nowhere to go without a provider."""
         return RunnerSet(cpu=LocalRunner(), gpu=None)
+
+    @staticmethod
+    def cloud(gpu: Runner) -> RunnerSet:
+        """CPU stages here, GPU stages on somebody else's machine. The one routing fact
+        is still whether the stage declares `gpu:`."""
+        return RunnerSet(cpu=LocalRunner(), gpu=gpu)

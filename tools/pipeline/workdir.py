@@ -10,6 +10,7 @@
         checkpoint/            survives a killed attempt; the resume seam for B1
         log.txt                the stage's log
         step.json              the StepResult for the stage's last attempt
+        attempts.json          B1's ledger: where every attempt ran and what it billed
 
 Nothing outside this module builds a path by string concatenation, so B1 can relocate a
 workdir (object storage, a fresh GPU container) by changing `root` and nothing else.
@@ -70,6 +71,22 @@ class Workdir:
 
     def step_path(self, stage_id: str) -> Path:
         return self.stage_dir(stage_id) / "step.json"
+
+    def attempts_path(self, stage_id: str) -> Path:
+        """B1's attempt ledger: one entry per attempt, preempted ones included.
+
+        Beside `step.json` rather than inside `checkpoint/` or `work/` because it has to
+        outlive both an attempt and a machine -- the supervisor reads it after the run to
+        fill in `jobs.cost_usd`, and a cost that counted only the attempt that succeeded
+        would hide the ones that were paid for and lost.
+        """
+        return self.stage_dir(stage_id) / "attempts.json"
+
+    def attempt_ledgers(self) -> tuple[Path, ...]:
+        """Every stage's ledger that exists, so a whole run can be totalled."""
+        if not self.stages_dir.is_dir():
+            return ()
+        return tuple(sorted(self.stages_dir.glob("*/attempts.json")))
 
     def artifact_path(self, stage_id: str, name: str) -> Path:
         return self.out_dir(stage_id) / name
