@@ -9,6 +9,11 @@
   box-sizing: border-box;
 }
 
+/* 1rem = 14px across the app; the type tokens are written against that. */
+html {
+  font-size: 87.5%;
+}
+
 html,
 body,
 #root {
@@ -17,7 +22,7 @@ body,
   overflow: hidden;
   background: var(--ink);
   font-family: var(--font-sans);
-  font-size: var(--text-md);
+  font-size: var(--text-sm);
   line-height: var(--leading-normal);
   color: var(--text-primary);
   -webkit-font-smoothing: antialiased;
@@ -97,6 +102,7 @@ a {
 }
 
 .cesium-viewer-bottom .cesium-widget-credits {
+  position: static !important;
   display: flex !important;
   align-items: center;
   gap: 0.35rem;
@@ -300,6 +306,19 @@ body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-close {
   max-width: 100%;
 }
 
+/* Shrinkable dock items: each is a column whose surface can shrink and scroll inside itself,
+   so a shorter item is clipped by its own edge instead of spilling over its neighbour. */
+.hud-dock--left > *,
+.hud-detail > * {
+  display: flex;
+  flex-direction: column;
+}
+
+.hud-dock--left > * > *,
+.hud-detail > * > * {
+  min-height: 0;
+}
+
 /* A dock item: a column that lets its panel shrink and scroll. */
 .hud-item {
   display: flex;
@@ -437,7 +456,7 @@ body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-close {
   }
 
   .credit-slot .cesium-viewer-bottom {
-    font-size: 10px;
+    font-size: 12px;
     padding: 0.15rem 0.5rem;
   }
 }
@@ -729,17 +748,44 @@ body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-close {
 }
 
 /* ---- Captures ------------------------------------------------------------ */
+.panel__eyebrow {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.capture-add {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.capture-add__error {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
+.dropzone-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
 .dropzone {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 0.3rem;
-  padding: 1.1rem 1rem;
-  border: 1px dashed var(--control-border);
-  border-radius: var(--glass-radius-sm);
+  align-items: stretch;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1.5px dashed var(--control-border);
+  border-radius: var(--radius-md);
   background: var(--control-bg);
   color: var(--text-secondary);
-  text-align: center;
   cursor: pointer;
   transition:
     background-color var(--motion-fast) var(--ease-out),
@@ -748,7 +794,12 @@ body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-close {
 
 .dropzone:hover,
 .dropzone:focus-within {
+  border-color: var(--accent-border);
   background: var(--control-bg-hover);
+}
+
+.dropzone:focus-within {
+  box-shadow: var(--focus-ring);
 }
 
 .dropzone--over {
@@ -761,28 +812,83 @@ body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-close {
   opacity: 0.6;
 }
 
+.dropzone__head {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  color: var(--accent);
+}
+
 .dropzone__title {
-  font-size: var(--text-sm);
+  font-size: var(--text-md);
   font-weight: 600;
   color: var(--text-primary);
 }
 
-.dropzone__hint,
-.dropzone__proposal {
-  margin: 0;
+.dropzone__kinds {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-2);
+}
+
+.dropzone__kind {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.15rem;
+  padding: var(--space-2) var(--space-1);
+  border-radius: var(--radius-sm);
+  background: var(--control-bg);
+  text-align: center;
+}
+
+.dropzone__kind svg {
+  color: var(--text-primary);
+  margin-bottom: 0.15rem;
+}
+
+.dropzone__kind-label {
   font-size: var(--text-xs);
-  line-height: 1.4;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.dropzone__kind-result {
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
 }
 
 .dropzone__proposal {
-  color: var(--accent);
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.25rem var(--space-2);
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  font-size: var(--text-xs);
+}
+
+.dropzone__proposal strong {
+  font-weight: 600;
+}
+
+.dropzone__proposal span {
+  color: var(--text-secondary);
+}
+
+.capture__kind-icon {
+  flex: none;
+  color: var(--text-secondary);
 }
 
 .capture__files,
 .capture__stages {
   display: flex;
   flex-direction: column;
-  gap: 0.45rem;
+  gap: var(--space-2);
   margin: 0;
   padding: 0;
   list-style: none;
@@ -792,7 +898,8 @@ body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-close {
 .capture__stage {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: var(--space-2);
+  min-height: 1.5rem;
   font-size: var(--text-xs);
 }
 
@@ -818,11 +925,21 @@ body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-close {
   margin-bottom: 0.2rem;
 }
 
+/* A finished file keeps its (full) bar for the record, but thin: it is no longer news. */
+.capture__file-bar--done {
+  height: 3px;
+  opacity: 0.6;
+}
+
 .capture__file-actions,
 .capture__actions {
   display: flex;
-  gap: 0.4rem;
-  margin-top: 0.35rem;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.capture__actions:empty {
+  display: none;
 }
 
 .capture__stage-item {
@@ -836,10 +953,10 @@ body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-close {
   max-height: 11rem;
   overflow: auto;
   padding: 0.45rem 0.55rem;
-  border-radius: var(--glass-radius-sm);
-  background: var(--surface-sunken, rgb(0 0 0 / 25%));
+  border-radius: var(--radius-sm);
+  background: rgb(0 0 0 / 25%);
   color: var(--text-secondary);
-  font-family: var(--font-mono, ui-monospace, monospace);
+  font-family: var(--font-mono);
   font-size: var(--text-xs);
   line-height: 1.45;
   white-space: pre-wrap;
@@ -849,18 +966,21 @@ body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-close {
 .capture__job {
   display: flex;
   flex-direction: column;
-  gap: 0.4rem;
-  padding-top: 0.5rem;
+  gap: var(--space-2);
+  padding-top: var(--space-3);
   border-top: 1px solid var(--divider);
 }
 
 .capture__job-title {
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   font-weight: 600;
 }
 
 .capture__job-version {
+  margin: var(--space-2) 0 0;
   color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
   font-weight: 400;
 }
 
@@ -870,14 +990,70 @@ body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-close {
   color: var(--text-secondary);
 }
 
+.capture__job-note--warn {
+  padding: var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--warn-soft);
+  color: var(--text-primary);
+}
+
+.capture__details-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  cursor: pointer;
+  list-style: none;
+}
+
+.capture__details-summary::-webkit-details-marker {
+  display: none;
+}
+
+.capture__details-summary::before {
+  content: "";
+  width: 0.4rem;
+  height: 0.4rem;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform var(--motion-fast) var(--ease-out);
+}
+
+.capture__details[open] > .capture__details-summary {
+  margin-bottom: var(--space-2);
+}
+
+.capture__details[open] > .capture__details-summary::before {
+  transform: rotate(45deg);
+}
+
+.capture__stub {
+  margin-left: 0.4rem;
+  padding: 0 0.35rem;
+  border-radius: 4px;
+  background: var(--warn-soft);
+  color: var(--warn);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
 .capture__token {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
-  padding: 0.7rem 0.8rem;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-3);
   border: 1px solid var(--accent-border);
-  border-radius: var(--glass-radius-sm);
+  border-radius: var(--radius-md);
   background: var(--accent-soft);
+}
+
+.capture__token > :first-child {
+  align-self: stretch;
 }
 
 .category {
@@ -991,32 +1167,31 @@ body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-close {
 }
 
 .toast {
+  --toast-tone: var(--accent);
   display: flex;
   align-items: flex-start;
-  gap: 0.6rem;
-  padding: 0.7rem 0.6rem 0.7rem 0.85rem;
+  gap: var(--space-2);
+  padding: 0.6rem 0.4rem 0.6rem 0.75rem;
+  border-left: 3px solid var(--toast-tone);
   pointer-events: auto;
+}
+
+.toast--warning {
+  --toast-tone: var(--warn);
+}
+
+.toast--error {
+  --toast-tone: var(--danger);
+}
+
+.toast--info {
+  --toast-tone: var(--agent);
 }
 
 .toast__icon {
   flex: 0 0 auto;
   margin-top: 0.1rem;
-}
-
-.toast--warning .toast__icon {
-  color: var(--warning);
-}
-
-.toast--error .toast__icon {
-  color: var(--danger);
-}
-
-.toast--success .toast__icon {
-  color: var(--success);
-}
-
-.toast--info .toast__icon {
-  color: var(--accent);
+  color: var(--toast-tone);
 }
 
 .toast__text {
@@ -1041,15 +1216,31 @@ body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-close {
 .explore-hud {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
-  padding: 0.4rem 0.6rem 0.4rem 0.9rem;
+  gap: var(--space-2);
+  max-width: 100%;
+  padding: 0.3rem 0.35rem 0.3rem 0.85rem;
   font-size: var(--text-xs);
   color: var(--text-secondary);
 }
 
+.explore-hud strong {
+  color: var(--text-primary);
+}
+
 .explore-hud__keys {
   display: inline-flex;
-  gap: 0.25rem;
+  align-items: center;
+  gap: 0.2rem;
+}
+
+.explore-hud__hint {
+  margin-left: 0.3rem;
+}
+
+@media (max-width: 899px) {
+  .explore-hud__keys {
+    display: none;
+  }
 }
 
 /* ---- Timeline ------------------------------------------------------------ */
@@ -1340,41 +1531,70 @@ body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-close {
   font-size: var(--text-xs);
 }
 
-/* Phone handoff: the QR code that gets a capture off the device it was shot on. */
+/* ---- Phone handoff ------------------------------------------------------- */
+/* The QR code that gets a capture off the device it was shot on: code on the left, the
+   three steps on the right, so it reads without a paragraph. */
 .handoff {
-  display: grid;
-  gap: var(--space-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
   padding: var(--space-3);
-  border: 1px solid var(--glass-border);
+  border: 1px solid var(--accent-border);
   border-radius: var(--radius-md);
-  background: var(--glass-bg-subtle);
+  background: var(--accent-soft);
 }
+
 .handoff__head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-2);
+  margin: -0.25rem -0.25rem 0 0;
 }
+
 .handoff__title {
-  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
   font-size: var(--text-sm);
+  font-weight: 600;
 }
+
+.handoff__body {
+  display: grid;
+  grid-template-columns: minmax(6.5rem, 8.5rem) minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-3);
+}
+
 .handoff__qr {
   display: grid;
   place-items: center;
-  padding: var(--space-2);
+  aspect-ratio: 1;
+  padding: 0.4rem;
   border-radius: var(--radius-sm);
   /* The code has to scan off a screen: keep it on white whatever the theme does. */
   background: #fff;
 }
+
 .handoff__qr svg {
   display: block;
   width: 100%;
-  max-width: 13rem;
   height: auto;
 }
+
+.handoff__steps {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding-left: 1.1rem;
+  font-size: var(--text-xs);
+  line-height: var(--leading-normal);
+}
+
 .handoff__note {
   margin: 0;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   font-size: var(--text-xs);
 }
