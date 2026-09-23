@@ -100,10 +100,11 @@ def check_dispatchable(providers: Sequence[str]) -> None:
 class ObjectStoreTransfer:
     """The pipeline's `Transfer`, over the bucket.
 
-    Whole objects, read and written in memory, exactly as `app.worker.outputs` does: the
-    same trade A7 recorded and the same place streaming belongs when a capture is big
-    enough to need it. Keys are opaque strings chosen by the pipeline, so nothing here
-    knows what a stage or a checkpoint is.
+    Uploads are whole objects read into memory, exactly as `app.worker.outputs` does (a
+    stage's inputs are frames of a megabyte or two each); downloads stream to disk,
+    because what comes back from a GPU stage is one file of hundreds of megabytes. Keys
+    are opaque strings chosen by the pipeline, so nothing here knows what a stage or a
+    checkpoint is.
     """
 
     storage: ObjectStorage

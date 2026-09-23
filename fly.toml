@@ -19,10 +19,10 @@
 #                                          apps/api/ *and* tools/pipeline, tools/captures)
 # Secrets: never here. `fly secrets set` -- see docs/DEPLOYMENT.md § Handover.
 #
-# NOT DEPLOYED. No `fly deploy` has ever been run against this file; it was written from
-# the Dockerfile and the settings the code actually reads, and the only mechanical check
-# it has is CI's `image` job, which asserts that every command named under [processes]
-# and in release_command exists on PATH inside the image.
+# Deployed by the operator (twin-api, with the worker's volume at 20 GB rather than the
+# initial_size below, which only applies when a volume is created). CI's `image` job
+# asserts that every command named under [processes] and in release_command exists on
+# PATH inside the image.
 
 app = "twin-api"
 primary_region = "iad"
@@ -74,6 +74,15 @@ kill_timeout = "30s"
   # lapsed lease and another worker starts the recipe over) but the work is not -- and a
   # 12 GB capture would be competing with the image's own layers for the root disk.
   WORKER_WORKDIR = "/data/worker"
+  # Lane 2. `cloud` is `local` plus a GPU runner: every CPU stage still runs on the worker
+  # (Lane 1 entirely, and Lane 2's frames, poses, georeference and packaging), and only
+  # a stage that declares `gpu:` -- `train` -- is sent to Modal, as the `run_stage_<tier>`
+  # functions infra/modal/app.py deploys under the app name `twin-pipeline` (the worker's
+  # default WORKER_MODAL_APP). It needs MODAL_TOKEN_ID / MODAL_TOKEN_SECRET, which
+  # provision.yml forwards as Fly secrets. Without a deployed app a Lane 2 run fails at
+  # `train` naming the function it could not find; Lane 1 is untouched either way.
+  WORKER_RUNNER = "cloud"
+  WORKER_CLOUD_PROVIDERS = "modal"
 
 [processes]
   app = "uvicorn app.main:app --host 0.0.0.0 --port 8000"
@@ -116,7 +125,11 @@ kill_timeout = "30s"
   destination = "/data"
   processes = ["worker"]
   # Captures are large and the workdir outlives the run. 50 GB is roughly four 12 GB
-  # captures in flight; `fly volumes extend` grows it without a redeploy. A volume binds
+  # captures in flight; `fly volumes extend` grows it without a redeploy. The production
+  # volume is 20 GB, which works because the worker drops each finished run's `inputs/`
+  # and stages' `work/` (WorkerConfig.tidy_finished_runs): what stays per Lane 2 run is
+  # its outputs, a few hundred MB, while a run in flight briefly holds the video, its
+  # candidate frames and COLMAP's database as well. A volume binds
   # the worker to one region and one machine -- which is correct here: there is exactly
   # one worker, and a second one would not share this directory.
   initial_size = "50gb"
