@@ -867,11 +867,20 @@ jobs:
           cat preflight.txt
           grep -qi "^access-control-allow-origin: \(\*\|$(printf '%s' "$WEB" | tr 'A-Z' 'a-z')\)$" preflight.lower \
             || { echo "::error::the bucket's CORS rule does not allow $WEB. infra/cors/apply-r2.sh ran against the wrong origin, or the rules were replaced since."; exit 1; }
-          grep -qi '^access-control-expose-headers:.*etag' preflight.lower \
-            || { echo "::error::the bucket does not expose ETag. A browser reads etag === null off each part and the multipart upload can never be completed -- see infra/cors/upload.json."; exit 1; }
+          # Access-Control-Expose-Headers is deliberately NOT checked here. It is a header
+          # of the actual response and not of the preflight -- the preflight carries
+          # allow-origin, allow-methods, allow-headers and max-age, and nothing else. This
+          # step used to grep the preflight for it and failed against R2, which is simply
+          # correct not to send it there; MinIO returning it on an OPTIONS is the lenient
+          # behaviour, not the standard one. The check moved to the PUT below, where a
+          # browser would actually read it.
 
-          # 4. The PUT itself, and the ETag off its response, which is what /complete needs.
-          curl -fsS -o /dev/null -D put.txt -X PUT --upload-file part.bin "$url"
+          # 4. The PUT itself, with an Origin so the response carries its CORS headers,
+          # and the ETag off it, which is what /complete needs.
+          curl -fsS -o /dev/null -D put.txt -X PUT -H "Origin: $WEB" --upload-file part.bin "$url"
+          tr -d '\r' < put.txt | tr 'A-Z' 'a-z' > put.lower
+          grep -qi '^access-control-expose-headers:.*etag' put.lower \
+            || { echo "::error::the bucket does not expose ETag on the upload response. A browser reads etag === null off each part and the multipart upload can never be completed -- see infra/cors/upload.json."; exit 1; }
           etag="$(tr -d '\r' < put.txt | awk 'tolower($1) == "etag:" { print $2 }' | tail -n1)"
           [ -n "$etag" ] || { echo "::error::the presigned PUT returned no ETag."; exit 1; }
           completed="$(curl -fsS -X POST "${auth[@]}" \
@@ -880,14 +889,30 @@ jobs:
           printf '%s\n' "$completed" | jq '{status, storageKey, bytes}'
           key="$(printf '%s' "$completed" | jq -r '.storageKey')"
 
-          # 5. And it is readable at the public URL -- the check that catches an endpoint
-          # and a public URL that belong to different buckets or different accounts.
-          code="$(curl -sS -o /dev/null -w '%{http_code}' "$PUBLIC_URL/$key")"
+          # 5. The public URL serves the PUBLIC bucket, so two things have to be true and
+          # they pull in opposite directions. This step used to assert only the first, of
+          # the uploaded object -- which was right when one bucket did both jobs and is
+          # exactly backwards now: a raw upload being readable there is the failure.
+
+          # 5a. Something actually published is readable. `app.seed.publish` wrote
+          # catalog.json to the public bucket in the job before this one, so a 200 here
+          # proves the public URL and the bucket behind it are the same bucket.
+          code="$(curl -sS -o /dev/null -w '%{http_code}' "$PUBLIC_URL/catalog.json")"
           if [ "$code" != "200" ]; then
-            echo "::error::the object uploaded fine but $PUBLIC_URL/<key> answered $code."
-            echo "::error::OBJECT_STORAGE_PUBLIC_URL and OBJECT_STORAGE_ENDPOINT_URL are crossed, or the public URL is not enabled on this bucket."
+            echo "::error::$PUBLIC_URL/catalog.json answered $code. The seed job published it to the public bucket, so either OBJECT_STORAGE_PUBLIC_URL names a different bucket than OBJECT_STORAGE_PUBLIC_BUCKET, or public access is not enabled on it."
             exit 1
           fi
+
+          # 5b. And the raw upload is NOT. It went to the private bucket under captures/,
+          # which is the whole point of there being two: R2 exposes a bucket and not a
+          # prefix, so one bucket in both roles publishes every scan anyone uploads. A 200
+          # here means that is what this deployment is doing.
+          code="$(curl -sS -o /dev/null -w '%{http_code}' "$PUBLIC_URL/$key")"
+          if [ "$code" = "200" ]; then
+            echo "::error::a raw upload is readable at $PUBLIC_URL/<key>. The public URL is serving the bucket that holds captures/ and runs/, so every upload and every run's logs and checkpoints are world-readable. Check OBJECT_STORAGE_PUBLIC_BUCKET and which bucket the public URL belongs to."
+            exit 1
+          fi
+          echo "a raw upload is not readable at the public URL ($code), which is correct."
           echo "the presigned path works end to end."
 
       # A 500 from the API is the server's story, not the client's, and the client is
