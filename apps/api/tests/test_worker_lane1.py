@@ -79,7 +79,13 @@ def _uploaded_capture(db: Session, storage: S3Storage, *, placed: bool = True) -
         # Lane 1 has no EXIF and no poses, so the coordinate is the operator's: this is
         # "the capture carries a coordinate", and the worker hands it to whichever stage
         # places captures by hand.
-        metadata_={"lat": LAT, "lon": LON, "height": HEIGHT} if placed else {},
+        #
+        # `upAxis: "z"` because the committed fixture is written east/north/up, which is
+        # not what a `.ply` is taken to be when nobody says (y down, the 3DGS
+        # convention). It is also the path a real capture's override takes.
+        metadata_=(
+            {"lat": LAT, "lon": LON, "height": HEIGHT, "upAxis": "z"} if placed else {"upAxis": "z"}
+        ),
     )
     db.add(capture)
     db.flush()
@@ -462,7 +468,7 @@ def test_the_run_is_repeatable_and_produces_the_same_tileset_bytes(
         sensor="Scaniverse",
         device="iPhone 15 Pro",
         captured_at=datetime(2026, 9, 12, tzinfo=UTC),
-        metadata_={"lat": LAT, "lon": LON, "height": HEIGHT},
+        metadata_={"lat": LAT, "lon": LON, "height": HEIGHT, "upAxis": "z"},
     )
     db.add(second_capture)
     db.flush()

@@ -14,6 +14,12 @@ from app.schemas.job import JobRead
 
 SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
+#: What a capture's `metadata.upAxis` may say: the axis of the uploaded splat file that
+#: points up. The same six `tools/pipeline/gaussians.UP_AXES` names, restated because
+#: this schema must import without the pipeline on the path; `tests/test_capture_api.py`
+#: asserts the two agree.
+UP_AXES: tuple[str, ...] = ("z", "-z", "y", "-y", "x", "-x")
+
 
 class CaptureBase(CamelModel):
     name: str = Field(min_length=1, max_length=200)
@@ -27,6 +33,28 @@ class CaptureBase(CamelModel):
     attribution: list[Attribution] = Field(default_factory=list)
     license: LicenseMetadata | None = None
     provenance: Provenance | None = None
+
+    @field_validator("metadata")
+    @classmethod
+    def _orientation(cls, value: dict[str, Any]) -> dict[str, Any]:
+        """Refuse an orientation the pipeline would refuse, while the request is open.
+
+        `metadata` is otherwise free-form. These two keys are not: the worker hands them
+        to the normalize stage, and a bad one there fails the run an hour later instead of
+        the upload now.
+        """
+        axis = value.get("upAxis")
+        if axis is not None and axis not in UP_AXES:
+            raise ValueError(
+                f"metadata.upAxis must be one of {', '.join(UP_AXES)} (the axis of the "
+                f"uploaded file that points up), not {axis!r}"
+            )
+        heading = value.get("headingDeg")
+        if heading is not None and (
+            isinstance(heading, bool) or not isinstance(heading, int | float)
+        ):
+            raise ValueError("metadata.headingDeg must be a number of degrees clockwise from north")
+        return value
 
 
 class CaptureCreate(CaptureBase):

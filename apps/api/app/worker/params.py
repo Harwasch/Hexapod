@@ -27,6 +27,12 @@ from app.worker.pipeline_bridge import Plan
 
 #: The impl that turns an operator's coordinate into `georef.json`.
 MANUAL_PLACEMENT = "manual_placement"
+#: The impl that turns an uploaded splat's own axes into east/north/up.
+INGEST_SPLAT = "ingest_splat"
+#: The capture-metadata keys that say how a splat file is oriented, and the parameter of
+#: `ingest_splat` each becomes. Metadata is camelCase because the console writes it;
+#: stage parameters are snake_case because the recipes are.
+ORIENTATION_KEYS: dict[str, str] = {"upAxis": "up_axis", "headingDeg": "heading_deg"}
 #: The impl that writes what the run should register.
 CATALOG = "catalog"
 #: The artifact whose producer describes the uploaded bytes.
@@ -38,9 +44,12 @@ def stage_params(plan: Plan, capture: Capture, job: Job) -> dict[str, dict[str, 
     resolved: dict[str, dict[str, Any]] = {}
     placement = _placement(capture)
     facts = _capture_facts(capture)
+    orientation = _orientation(capture)
     for stage in plan.stages:
         if stage.impl.name == MANUAL_PLACEMENT and placement:
             resolved.setdefault(stage.id, {}).update(placement)
+        if stage.impl.name == INGEST_SPLAT and orientation:
+            resolved.setdefault(stage.id, {}).update(orientation)
         if SOURCE_META in stage.impl.produced_names and facts:
             resolved.setdefault(stage.id, {}).update(facts)
         if stage.impl.name == CATALOG:
@@ -91,6 +100,26 @@ def _placement(capture: Capture) -> dict[str, Any]:
     if uncertainty is not None:
         placement["uncertainty_m"] = uncertainty
     return placement
+
+
+def _orientation(capture: Capture) -> dict[str, Any]:
+    """Which way the uploaded splat's own axes point, when somebody said.
+
+    Unsaid, `ingest_splat` applies the format's evidence-based default (`.spz` y up,
+    `.ply` y down -- `tools/pipeline/gaussians.py` records why). Said, it is passed
+    through as given, and a value the stage does not know fails the run with the list of
+    ones it does rather than being dropped here: an `upAxis` that silently went nowhere is
+    a capture that lands on its side with nobody told why.
+    """
+    metadata = capture.metadata_ or {}
+    resolved: dict[str, Any] = {}
+    axis = metadata.get("upAxis")
+    if isinstance(axis, str) and axis.strip():
+        resolved[ORIENTATION_KEYS["upAxis"]] = axis.strip()
+    heading = _number(metadata.get("headingDeg"))
+    if heading is not None:
+        resolved[ORIENTATION_KEYS["headingDeg"]] = heading
+    return resolved
 
 
 def _capture_facts(capture: Capture) -> dict[str, Any]:
