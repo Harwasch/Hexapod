@@ -276,7 +276,7 @@ test.describe("the HUD over the map", () => {
     const menu = app.getByRole("menu", { name: "Projects" });
     await expect(menu).toBeVisible();
 
-    // The menu drops down the left edge, past the vertically centred rail. Hit-test the
+    // The menu drops down the left edge, over the tool rail below the top bar. Hit-test the
     // overlap rather than reading z-index: what matters is which element takes the click.
     const owner = await app.evaluate(() => {
       const menu = document.querySelector(".mc-project__menu");

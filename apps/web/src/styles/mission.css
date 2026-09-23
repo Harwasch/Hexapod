@@ -130,8 +130,18 @@
 
 /* ---- Project badge ----------------------------------------------------- */
 .mc-project {
+  position: relative;
   width: 19.25rem;
   max-width: 100%;
+}
+
+/* The switcher menu is a popover: it drops over the regions below the top bar instead of
+   growing the bar (which would push the whole HUD down while it is open). */
+.mc-project__pop {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
 }
 
 .mc-project__badge {
