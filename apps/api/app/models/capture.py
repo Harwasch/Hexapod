@@ -110,7 +110,18 @@ class CaptureFile(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         nullable=False,
         default=UploadStatus.NOT_STARTED,
     )
-    upload_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # The provider's opaque multipart handle, and 1024 rather than 255 because a real
+    # provider is what settled the size. MinIO and S3 hand back something short, so every
+    # test in this repository passed at 255; R2's are 343 characters, and the first
+    # presigned upload against it failed on `value too long for type character
+    # varying(255)` -- after the API had already created the row's capture, so the
+    # failure arrived as a 500 halfway through a two-call sequence.
+    #
+    # Sized to match `storage_key` above. It is opaque and provider-defined, so there is
+    # no length to be right about, only a length to be beyond: 1024 is three times the
+    # longest anyone here has seen and costs nothing in Postgres, where varchar(n) and
+    # text are the same storage.
+    upload_id: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     parts_total: Mapped[int | None] = mapped_column(Integer, nullable=True)
     parts_completed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 

@@ -126,6 +126,35 @@ def test_capture_file_tracks_multipart_state(db: Session) -> None:
     assert default_status.parts_completed == 0
 
 
+def test_an_upload_id_the_size_a_real_provider_hands_back_fits(db: Session) -> None:
+    """R2's multipart handles are 343 characters. The column held 255 until one arrived.
+
+    Every provider this had been run against before the first real deployment -- MinIO in
+    CI, moto in these tests -- returns something short, so `upload_id="2~abcdef"` above
+    passed and the limit was never approached. Against R2 the insert failed on `value too
+    long for type character varying(255)`, and because the API creates the capture row
+    first, it surfaced as a 500 in the middle of a two-call sequence.
+
+    The length is the provider's and not ours, so this does not assert R2's exact number.
+    It asserts that a handle several times longer than any seen survives a round trip,
+    which is the property that was missing.
+    """
+    capture = make_capture(db)
+    handle = "A" + "".join(f"{n % 10}" for n in range(999))
+    assert len(handle) == 1000
+    file = CaptureFile(
+        capture_id=capture.id,
+        filename="long-handle.bin",
+        storage_key="captures/back-paddock/source/long-handle.bin",
+        upload_id=handle,
+        status=UploadStatus.IN_PROGRESS,
+    )
+    db.add(file)
+    db.commit()
+    db.refresh(file)
+    assert file.upload_id == handle
+
+
 def test_job_step_and_artifact_defaults(db: Session) -> None:
     capture = make_capture(db)
     job, step, artifact = make_run(db, capture)
