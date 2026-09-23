@@ -142,6 +142,10 @@ _STATES: Mapping[str, RemoteState | None] = {
     "modal.exception.OutputExpiredError": "failed",
 }
 
+#: The prefix of the first line `run_stage` prints inside the container. Its appearance
+#: in a call's log is what moves the call from `pending` to `running`.
+START_MARKER = "run_stage: "
+
 #: How many log lines to hold for one call. `logs.fetch()` re-reads a call's whole
 #: history, so an unbounded tail would grow the poll loop's cost with the stage's
 #: chattiness; a training stage that prints a line per step would be unbounded indeed.
@@ -159,6 +163,12 @@ class _Call:
     metrics: Mapping[str, Any] = field(default_factory=dict)
     summary: str = ""
     lines: list[str] = field(default_factory=list)
+    #: Whether a log fetch has ever succeeded. Without one, "no start line yet" is not
+    #: evidence of anything, and the call is reported running as it always was.
+    logs_read: bool = False
+    #: Sticky: the start line scrolls out of `lines` once a run logs more than
+    #: `MAX_LOG_LINES`, and a stage that has started does not stop having started.
+    started: bool = False
 
 
 class ModalAdapter:
@@ -234,7 +244,7 @@ class ModalAdapter:
         except Exception as error:  # every outcome of a poll arrives as one
             state = self._state_of(error)
             if state is None:
-                return Poll(state="running", billed_s=run.billed_s)
+                return Poll(state=self._liveness(run), billed_s=run.billed_s)
             run.state = state
             run.detail = f"{type(error).__name__}: {error}"
             return self._result(run)
@@ -259,7 +269,15 @@ class ModalAdapter:
         # down must not turn into a verdict on a stage that is running perfectly well.
         # The previously fetched lines stay, so a tail goes quiet rather than truncating.
         with suppress(Exception):
-            run.lines = self._tail(run.call.logs.fetch())
+            entries = list(run.call.logs.fetch())
+            # Looked for in the whole fetch, before `_tail` bounds it: a stage that logs
+            # thousands of lines before the first fetch would otherwise have its start
+            # line trimmed away before it was ever seen.
+            run.started = run.started or any(
+                START_MARKER in str(getattr(entry, "message", entry)) for entry in entries
+            )
+            run.lines = self._tail(entries)
+            run.logs_read = True
         return tuple(run.lines[max(since, 0) :])
 
     def cancel(self, handle: RemoteHandle) -> None:
@@ -313,6 +331,22 @@ class ModalAdapter:
             if len(lines) > MAX_LOG_LINES * 2:
                 del lines[:-MAX_LOG_LINES]
         return lines[-MAX_LOG_LINES:]
+
+    @staticmethod
+    def _liveness(run: _Call) -> RemoteState:
+        """`pending` until the stage's own first line appears, then `running`.
+
+        Modal answers "no output yet" identically for a stage that is training and for
+        a container that crash-loops before the function body is reached, so the log is
+        the only thing that tells them apart. `run_stage` prints `run_stage: <impl> for
+        stage ...` before anything else, from inside the function; a container that
+        never gets that far never prints it. `CloudRunner` gives up on a stage that stays
+        pending too long. When the log cannot be read at all this answers `running`, so
+        a log outage cannot get a healthy stage cancelled.
+        """
+        if not run.logs_read:
+            return "running"
+        return "running" if run.started else "pending"
 
     @staticmethod
     def _state_of(error: BaseException) -> RemoteState | None:

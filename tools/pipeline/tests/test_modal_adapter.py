@@ -147,6 +147,39 @@ def test_a_running_stage_is_running_and_not_failed() -> None:
     assert poll.billed_s >= 0.0
 
 
+def test_a_call_whose_stage_has_not_printed_its_first_line_is_pending() -> None:
+    """A container that crash-loops on import looks exactly like a running stage to
+    `get`; only the log tells them apart, and `CloudRunner` gives up on `pending`."""
+    call = FakeCall(raises=TimeoutError())
+    adapter, handle, _ = adapter_over(call)
+    call.logs = FakeLogs([FakeEntry("Traceback (most recent call last):\nIndexError: 2")])
+    adapter.logs(handle)
+    assert adapter.poll(handle).state == "pending"
+    call.logs = FakeLogs([FakeEntry("run_stage: gsplat for stage 'train', attempt 1")])
+    adapter.logs(handle)
+    assert adapter.poll(handle).state == "running"
+
+
+def test_started_is_remembered_after_the_start_line_scrolls_away() -> None:
+    call = FakeCall(raises=TimeoutError())
+    adapter, handle, _ = adapter_over(call)
+    noise = "\n".join(str(n) for n in range(MAX_LOG_LINES * 3))
+    call.logs = FakeLogs([FakeEntry("run_stage: gsplat for stage 'train'"), FakeEntry(noise)])
+    adapter.logs(handle)
+    assert adapter.poll(handle).state == "running"
+    call.logs = FakeLogs([FakeEntry(noise)])
+    adapter.logs(handle)
+    assert adapter.poll(handle).state == "running"
+
+
+def test_an_unreadable_log_never_makes_a_stage_look_stuck() -> None:
+    call = FakeCall(raises=TimeoutError())
+    adapter, handle, _ = adapter_over(call)
+    call.logs = FakeLogs(RuntimeError("log service down"))
+    adapter.logs(handle)
+    assert adapter.poll(handle).state == "running"
+
+
 def test_modals_own_timeout_also_means_not_yet() -> None:
     adapter, handle, _ = adapter_over(FakeCall(raises=ModalTimeout()))
     assert adapter.poll(handle).state == "running"
@@ -222,7 +255,8 @@ def test_a_failed_log_fetch_is_not_a_failed_stage() -> None:
     assert list(adapter.logs(handle)) == ["kept"]
     call.logs = FakeLogs(RuntimeError("log service down"))
     assert list(adapter.logs(handle)) == ["kept"]
-    assert adapter.poll(handle).state == "running"
+    # Not a verdict either way: "kept" is no start line, so the call is still pending.
+    assert adapter.poll(handle).state not in ("failed", "succeeded", "preempted")
 
 
 def test_logs_are_bounded() -> None:

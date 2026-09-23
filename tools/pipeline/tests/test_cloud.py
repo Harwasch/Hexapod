@@ -235,6 +235,67 @@ def test_a_stage_that_never_starts_is_cancelled_and_reported_rather_than_waited_
         execute(gpu_recipe(), workdir, RunnerSet.cloud(waiting))
 
 
+def test_a_stage_stuck_pending_is_given_up_on_long_before_max_wait(tmp_path: Path) -> None:
+    """The crash-looping container: never starts, never returns. `max_pending_s` ends it
+    at half an hour instead of holding the worker for `max_wait_s` (a day)."""
+    transfer = LocalTransfer(tmp_path / "bucket")
+    cancelled: list[str] = []
+
+    class CrashLoops(FakeAdapter):
+        def poll(self, handle: RemoteHandle):  # type: ignore[no-untyped-def]
+            from cloud import Poll
+
+            return Poll(state="pending", billed_s=0.0)
+
+        def cancel(self, handle: RemoteHandle) -> None:
+            cancelled.append(handle.id)
+
+    adapter = CrashLoops(transfer, tmp_path / "sandbox", script=counts)
+    ticks = iter([0.0, 60.0, 1799.0, 1800.0, 1801.0])
+    runner_ = CloudRunner(
+        Placement((adapter,)),
+        transfer,
+        poll_interval_s=0.0,
+        max_wait_s=24 * 3600.0,
+        max_pending_s=1800.0,
+        clock=lambda: next(ticks),
+        sleep=lambda _seconds: None,
+    )
+    workdir = seeded_workdir(tmp_path / "run", upload=False)
+
+    with pytest.raises(RemoteStageError, match="never started"):
+        execute(gpu_recipe(), workdir, RunnerSet.cloud(runner_))
+    assert len(cancelled) == 1
+
+
+def test_a_running_stage_is_not_held_to_the_pending_deadline(tmp_path: Path) -> None:
+    transfer = LocalTransfer(tmp_path / "bucket")
+
+    class SlowButAlive(FakeAdapter):
+        polls = 0
+
+        def poll(self, handle: RemoteHandle):  # type: ignore[no-untyped-def]
+            from cloud import Poll
+
+            SlowButAlive.polls += 1
+            if SlowButAlive.polls < 4:
+                return Poll(state="running", billed_s=0.0)
+            return super().poll(handle)
+
+    adapter = SlowButAlive(transfer, tmp_path / "sandbox", script=counts)
+    ticks = iter(float(t) for t in range(0, 100_000, 3000))
+    runner_ = CloudRunner(
+        Placement((adapter,)),
+        transfer,
+        poll_interval_s=0.0,
+        max_pending_s=1800.0,
+        clock=lambda: next(ticks),
+        sleep=lambda _seconds: None,
+    )
+    workdir = seeded_workdir(tmp_path / "run", upload=False)
+    execute(gpu_recipe(), workdir, RunnerSet.cloud(runner_))
+
+
 # --- placement ----------------------------------------------------------------------
 
 

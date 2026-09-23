@@ -481,6 +481,14 @@ class CloudRunner(BaseRunner):
         #: rarely throws away everything computed since the last sync when the box goes.
         checkpoint_every_s: float = 60.0,
         max_wait_s: float = 24 * 3600.0,
+        #: How long a stage may sit `pending` -- submitted, but no sign it has started --
+        #: before it is cancelled. Much shorter than `max_wait_s`, because the two fail
+        #: differently: a slow stage is making progress, while a container that
+        #: crash-loops on import (the first real Modal deploy did, on `IndexError: 2`)
+        #: never starts and never returns, and `max_wait_s` would hold the worker for a
+        #: day on it. Thirty minutes covers a cold pull of the ~10 GB training image and
+        #: a GPU queue; past that, a person should be told rather than kept waiting.
+        max_pending_s: float = 30 * 60.0,
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
@@ -489,6 +497,7 @@ class CloudRunner(BaseRunner):
         self._poll_interval_s = poll_interval_s
         self._checkpoint_every_s = checkpoint_every_s
         self._max_wait_s = max_wait_s
+        self._max_pending_s = max_pending_s
         self._clock = clock
         self._sleep = sleep
 
@@ -582,7 +591,20 @@ class CloudRunner(BaseRunner):
                 cursor = self._tail(adapter, handle, context, cursor)
                 if poll.state in TERMINAL:
                     return poll
-                if self._clock() - started >= self._max_wait_s:
+                waited = self._clock() - started
+                if poll.state == "pending" and waited >= self._max_pending_s:
+                    adapter.cancel(handle)
+                    return replace(
+                        poll,
+                        state="failed",
+                        detail=(
+                            f"the stage never started on {adapter.name!r}: still pending "
+                            f"after {self._max_pending_s:.0f}s, so it was cancelled. "
+                            f"A container that crashes on start (check the provider's "
+                            f"logs for this app) or no {handle.tier} capacity"
+                        ),
+                    )
+                if waited >= self._max_wait_s:
                     adapter.cancel(handle)
                     return replace(
                         poll,
