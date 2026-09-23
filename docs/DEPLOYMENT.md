@@ -118,8 +118,11 @@ without them.
   before any table header. TOML gives a bare key to whichever table precedes it, so written
   next to the health check — where they read most naturally — they silently become fields of
   that check and Fly never sees them. CI asserts they are top-level.)
-- **a 50 GB volume** at `/data`, on the `worker` group only, with
-  `WORKER_WORKDIR=/data/worker`. See [the workdir](#the-workers-workdir).
+- **a 20 GB volume** at `/data`, on the `worker` group only, with
+  `WORKER_WORKDIR=/data/worker`. See [the workdir](#the-workers-workdir). It asked for
+  50 GB until the first real provisioning run met Fly's "To create more than 20GB in
+  volumes please add a payment method"; `fly volumes extend` raises it later without a
+  redeploy.
 
 ### Configuration
 
@@ -189,8 +192,10 @@ with the image's layers for the root disk while a 12 GB capture is in flight.
 
 That matters because the workdir **outlives the run on purpose**: "retry from this stage"
 reads the outputs of the stages that already succeeded out of it, and A6's `checkpoint/`
-contract is worth nothing once the directory is gone. `fly.toml` therefore mounts a 50 GB
-volume at `/data` on the worker group and sets `WORKER_WORKDIR=/data/worker`.
+contract is worth nothing once the directory is gone. `fly.toml` therefore mounts a 20 GB
+volume at `/data` on the worker group and sets `WORKER_WORKDIR=/data/worker` — roughly one
+and a half 12 GB captures in flight, which is a starting size rather than a judgement about
+how much room the worker needs. Grow it with `fly volumes extend`.
 
 **If your host cannot give the worker a volume**, the deployment still works and nothing is
 corrupted — a worker that dies mid-run leaves a lease that lapses, and A7's reclaim hands
@@ -709,7 +714,7 @@ create that loses a race to an identical one is treated as success:
 | Fly secrets      | set to the same values; `API_HANDOFF_SECRET` is generated only when the app does not already have it                                              |
 | Seed and publish | both are upserts over slugs and keys                                                                                                              |
 
-The volume is the one where a duplicate is not an error but a bill — a second 50 GB volume
+The volume is the one where a duplicate is not an error but a bill — a second 20 GB volume
 is charged monthly and nothing would ever mount it — which is why it is the only resource
 the workflow refuses to proceed past when it finds the count wrong. It will not clean that
 up for you: destroy the spare with `fly volumes destroy <id>` and re-run.

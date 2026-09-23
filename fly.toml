@@ -116,7 +116,16 @@ kill_timeout = "30s"
   destination = "/data"
   processes = ["worker"]
   # Captures are large and the workdir outlives the run. 50 GB is roughly four 12 GB
-  # captures in flight; `fly volumes extend` grows it without a redeploy. A volume binds
-  # the worker to one region and one machine -- which is correct here: there is exactly
-  # one worker, and a second one would not share this directory.
-  initial_size = "50gb"
+  # captures in flight, and that is what this asked for until the first real provisioning
+  # run met Fly's answer: "To create more than 20GB in volumes please add a payment
+  # method." So it starts at the ceiling an account without one is allowed, which is
+  # about one and a half captures in flight rather than four.
+  #
+  # That is a starting size and not a decision about how much room the worker needs.
+  # `fly volumes extend` grows it without a redeploy and without recreating anything, so
+  # raising it later costs nothing but the command -- which is the reason this was the
+  # cheap way out of the block rather than a compromise.
+  #
+  # A volume binds the worker to one region and one machine, which is correct here: there
+  # is exactly one worker, and a second one would not share this directory.
+  initial_size = "20gb"
