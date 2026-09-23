@@ -8,7 +8,8 @@ name: Modal
 #   exists on the default branch, and this one is new. A push-triggered workflow runs from
 #   the pushed commit's own copy, so the GPU path can be proven from the working branch
 #   before any of it is merged. The trigger is narrowed to that branch and to the files
-#   that change what the GPU box runs; ci.yml's check that deploy.yml and provision.yml
+#   that change what the GPU box runs (a push that only touches tests or docs does not
+#   deploy or spend anything); ci.yml's check that deploy.yml and provision.yml
 #   stay dispatch-only does not cover this file, on purpose.
 # * **What a run costs.** The smoke trains 500 steps on 40 renders of the committed
 #   synthetic tree at 640x480, on one L4 (Modal's list price $0.000222/s, $0.80/h, read
@@ -32,11 +33,15 @@ name: Modal
 on:
   push:
     branches: [claude/funny-carson-937ydv]
+    # The image carries a copy of the pipeline (the train stage's own code runs in it), so
+    # any change to that code is a change to what the GPU box runs, and a deployed image
+    # older than the worker's pipeline is a skew nothing else would catch. Tests and docs
+    # are not in the image and do not trigger a run.
     paths:
       - infra/modal/**
-      - tools/pipeline/training.py
-      - tools/pipeline/remote.py
-      - tools/pipeline/modal_adapter.py
+      - tools/pipeline/*.py
+      - tools/pipeline/recipes/**
+      - tools/captures/*.py
       - .github/workflows/modal.yml
   workflow_dispatch:
     inputs:

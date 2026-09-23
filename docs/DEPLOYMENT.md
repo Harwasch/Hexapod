@@ -241,8 +241,10 @@ the function lookup (not observed). Lane 1 is unaffected either way.
    stats file, that every step ran, and that a tileset was written. It deletes its
    `runs/<run id>/` keys afterwards.
 
-It runs on a push to `claude/funny-carson-937ydv` that touches `infra/modal/**`,
-`tools/pipeline/{training,remote,modal_adapter}.py` or the workflow itself. Once it is on
+It runs on a push to `claude/funny-carson-937ydv` that touches `infra/modal/**`, the
+pipeline's modules or recipes, `tools/captures/*.py` or the workflow itself. The image
+carries a copy of the pipeline, and the `train` stage's own code runs inside it, so any of
+those changes is a change to what the GPU box runs. Each such push costs a smoke. Once it is on
 `main` it can be dispatched from the Actions tab (smoke on or off, steps, tier).
 
 **Cost.**
@@ -592,8 +594,8 @@ commit on main red for want of a secret and teach everyone to ignore the badge.
 | `.github/workflows/modal.yml`     | deploys the GPU app and proves it with a small training run           |
 
 `modal.yml` is the exception to "dispatch only", narrowly: it also runs on a push to
-`claude/funny-carson-937ydv` that touches `infra/modal/**` or the three pipeline files the
-GPU container runs, because `workflow_dispatch` only works for a workflow file that is on
+`claude/funny-carson-937ydv` that touches `infra/modal/**` or the pipeline code the GPU
+container carries, because `workflow_dispatch` only works for a workflow file that is on
 the default branch and this one is not yet. See [GPU training — Modal](#gpu-training--modal).
 
 `provision.yml` exists because of an asymmetry that was measured rather than assumed:
