@@ -616,6 +616,7 @@ jobs:
             "PUBLIC_WEB_BASE=$WEB_BASE" \
             "OBJECT_STORAGE_ENDPOINT_URL=$endpoint" \
             "OBJECT_STORAGE_BUCKET=$BUCKET" \
+            "OBJECT_STORAGE_REGION=auto" \
             "OBJECT_STORAGE_PUBLIC_BUCKET=$PUBLIC_BUCKET" \
             "OBJECT_STORAGE_ACCESS_KEY=$R2_ACCESS_KEY_ID" \
             "OBJECT_STORAGE_SECRET_KEY=$R2_SECRET_ACCESS_KEY" \
@@ -813,23 +814,40 @@ jobs:
             || { echo "::error::the deployed catalogue is missing a recipe."; exit 1; }
 
       - name: 3-5 · a real upload through the presigned path
+        id: upload
         env:
           API_WRITE_TOKEN: ${{ secrets.API_WRITE_TOKEN }}
         run: |
           set -euo pipefail
           auth=(-H "Authorization: Bearer ${API_WRITE_TOKEN}" -H 'Content-Type: application/json')
 
-          capture="$(curl -fsS -X POST "${auth[@]}" "$API/api/v1/captures" \
-            --data "$(jq -n --arg n "Provisioning check ${GITHUB_RUN_ID}" \
+          # `curl -f` hides the body, and the body of a failure here is a Problem
+          # document that says what went wrong. The first real run of this workflow
+          # answered 500 on the call below and the log recorded only "error: 500",
+          # which is the least useful possible version of that sentence.
+          post() {
+            local url="$1" data="$2" out code
+            out="$(mktemp)"
+            code="$(curl -sS -o "$out" -w '%{http_code}' -X POST "${auth[@]}" "$url" --data "$data")"
+            BODY="$(cat "$out")"; rm -f "$out"
+            case "$code" in
+              2??) printf '%s' "$BODY"; return 0 ;;
+            esac
+            echo "::error::POST $url answered $code" >&2
+            printf '%s\n' "$BODY" | head -c 2000 >&2
+            return 1
+          }
+
+          capture="$(post "$API/api/v1/captures" \
+            "$(jq -n --arg n "Provisioning check ${GITHUB_RUN_ID}" \
               '{name: $n, kind: "images", description: "Written by .github/workflows/provision.yml to prove presigning and CORS. Safe to delete."}')")"
           capture_id="$(printf '%s' "$capture" | jq -r '.id')"
           echo "capture $capture_id"
 
           printf 'provisioned by run %s\n' "$GITHUB_RUN_ID" > part.bin
           size="$(wc -c < part.bin)"
-          registered="$(curl -fsS -X POST "${auth[@]}" \
-            "$API/api/v1/captures/$capture_id/files" \
-            --data "$(jq -n --argjson b "$size" \
+          registered="$(post "$API/api/v1/captures/$capture_id/files" \
+            "$(jq -n --argjson b "$size" \
               '{filename: "provision-check.txt", contentType: "text/plain", bytes: $b}')")"
           file_id="$(printf '%s' "$registered" | jq -r '.file.id')"
           url="$(printf '%s' "$registered" | jq -r '.upload.parts[0].url')"
@@ -871,6 +889,21 @@ jobs:
             exit 1
           fi
           echo "the presigned path works end to end."
+
+      # A 500 from the API is the server's story, not the client's, and the client is
+      # all this job could see until now. flyctl is installed only on failure because
+      # that is the only time it is wanted.
+      - name: What the API logged, when the check failed
+        if: failure()
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          curl -fsSL https://fly.io/install.sh | sh
+          export PATH="$HOME/.fly/bin:$PATH"
+          echo "--- the last of the app's own log ---"
+          timeout 60 flyctl logs --app twin-api --no-tail | tail -n 120 || \
+            echo "(could not read the app log; the FLY_API_TOKEN may be app-scoped)"
 
       - name: What to look at
         if: always()
