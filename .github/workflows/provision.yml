@@ -352,9 +352,36 @@ jobs:
           # development convenience either way: Cloudflare documents it as rate-limited
           # and "intended for non-production traffic", so a real deployment sets
           # R2_PUBLIC_URL to a custom domain on the public bucket.
+          # The private bucket must not be readable, whatever else is true. This is the
+          # single check the bucket split exists for: `geo-dev`-style buckets hold every
+          # raw upload under captures/ and every run's frames, logs and checkpoints under
+          # runs/, and R2 makes a *bucket* public, never a prefix. A deployment that has
+          # public access switched on here works perfectly and exposes all of it, so this
+          # refuses rather than warns.
+          api GET "$cf/r2/buckets/$BUCKET/domains/managed"
+          if ok && [ "$(printf '%s' "$BODY" | jq -r '.result.enabled // false')" = "true" ]; then
+            leaked="$(printf '%s' "$BODY" | jq -r '.result.domain // "(unnamed)"')"
+            die "R2 bucket '$BUCKET' has public access enabled, at https://${leaked#https://}. That bucket holds raw uploads under captures/ and run outputs under runs/, and R2 exposes whole buckets rather than prefixes -- so everything anyone has ever uploaded is world-readable. Turn it off under R2 -> $BUCKET -> Settings -> Public access. '$PUBLIC_BUCKET' is the bucket that is meant to be public."
+          fi
+
           if [ -n "${R2_PUBLIC_URL:-}" ]; then
             public="${R2_PUBLIC_URL%/}"
             echo "using the R2_PUBLIC_URL variable: $public (the managed r2.dev URL is left untouched)"
+            # An r2.dev hostname names one specific bucket, so when that is what was
+            # given it can be checked against the bucket it is supposed to name. A
+            # custom domain cannot be checked from here and is taken on trust.
+            case "$public" in
+              *.r2.dev)
+                api GET "$cf/r2/buckets/$PUBLIC_BUCKET/domains/managed"
+                want="$(printf '%s' "$BODY" | jq -r '.result.domain // empty')"
+                if [ -n "$want" ] && [ "${public#https://}" != "${want#https://}" ]; then
+                  die "R2_PUBLIC_URL is $public, but the managed r2.dev domain of the public bucket '$PUBLIC_BUCKET' is https://${want#https://}. An r2.dev hostname belongs to exactly one bucket, so this one is pointing at a different bucket -- published tiles would be addressed somewhere they are not. Set R2_PUBLIC_URL to https://${want#https://}, or to a custom domain on '$PUBLIC_BUCKET', or clear it and let this workflow enable the managed URL itself."
+                fi
+                if [ -z "$want" ]; then
+                  die "R2_PUBLIC_URL is an r2.dev hostname but '$PUBLIC_BUCKET' has no managed public URL enabled, so that hostname belongs to some other bucket. Clear R2_PUBLIC_URL and re-run to have this workflow enable the right one."
+                fi
+                ;;
+            esac
           elif [ "$DRY_RUN" = "true" ]; then
             echo "would enable the managed r2.dev public URL on '$PUBLIC_BUCKET'"
             public="https://example.invalid"
@@ -391,10 +418,28 @@ jobs:
           API_HEADERS=(-H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" -H "Accept: application/json")
           cf="https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}"
 
-          api GET "$cf/pages/projects?per_page=100"
-          ok || die "Cloudflare rejected the Pages project list (HTTP $STATUS). CLOUDFLARE_API_TOKEN needs 'Cloudflare Pages: Edit' on this account."
-          subdomain="$(printf '%s' "$BODY" | jq -r --arg n "$PAGES_PROJECT" \
-            'first((.result // [])[]? | select(.name == $n) | .subdomain) // empty')"
+          # By name, not by listing. The first run of this file listed with
+          # `?per_page=100` and Cloudflare answered HTTP 400, code 8000024, "Invalid list
+          # options provided. Review the `page` or `per_page` parameter." -- and the
+          # documentation names both parameters without giving either a range, so a
+          # different number would be another guess. A project is addressable by name, so
+          # the question does not have to be answered: this cannot paginate, cannot miss a
+          # project on a later page, and says exactly what it wants.
+          #
+          # 404 is the ordinary "not there yet" answer and is not an error. Anything else
+          # is reported as what Cloudflare actually said: the old message asserted the
+          # token was missing a scope, which was wrong here and would have sent somebody
+          # to re-mint a perfectly good token.
+          api GET "$cf/pages/projects/$PAGES_PROJECT"
+          if ok; then
+            subdomain="$(printf '%s' "$BODY" | jq -r '.result.subdomain // empty')"
+          elif [ "$STATUS" = "404" ]; then
+            subdomain=""
+          elif [ "$STATUS" = "403" ] || [ "$STATUS" = "401" ]; then
+            die "Cloudflare refused the Pages lookup (HTTP $STATUS). CLOUDFLARE_API_TOKEN needs 'Cloudflare Pages: Edit' on this account."
+          else
+            die "Cloudflare rejected the Pages lookup for '$PAGES_PROJECT' (HTTP $STATUS)."
+          fi
 
           if [ -n "$subdomain" ]; then
             echo "Pages project '$PAGES_PROJECT' exists."
