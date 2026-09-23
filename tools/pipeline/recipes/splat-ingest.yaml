@@ -7,7 +7,7 @@
 # Every stage here is real (A8). `thumbnail`, `ground_samples` and `manifest` were added
 # as a recipe edit and three decorators -- no executor, runner or schema change.
 name: splat-ingest
-version: 2
+version: 3
 description: Package an already-reconstructed splat and register it as a site.
 
 # Seeded into <workdir>/inputs/upload before the run, by the worker (A7) out of object

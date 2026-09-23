@@ -313,3 +313,48 @@ def test_the_normalize_stage_converts_and_records_the_frame(tmp_path: Path) -> N
     assert meta["frame"]["upAxis"] == "y"
     assert meta["frame"]["upAxisSource"] == "capture"
     assert meta["extentM"]["up"] == pytest.approx(4.0, abs=0.2)
+
+
+def test_place_levels_a_trained_splat_by_the_georeferences_frame(tmp_path: Path) -> None:
+    """Lane 2's half: `trained.ply` in a camera-up-levelled frame becomes canonical.
+
+    The frame is what `exif_gps` writes when there is no GPS similarity: the rotation that
+    takes the camera-up estimate onto +z, a scale, and `recentre`. Here the estimate is
+    exactly the file's up (COLMAP-like, y down), so the tree must come out standing, with
+    its ground at the origin and its footprint centred on it.
+    """
+    from conftest import make_recipe
+    from executor import execute
+    from runners import RunnerSet
+    from sfm import rotation_onto_z
+    from workdir import Workdir
+
+    workdir = Workdir.create(tmp_path / "run")
+    trained = workdir.input_path("trained.ply")
+    trained.parent.mkdir(parents=True, exist_ok=True)
+    gaussians.write_ply(trained, _tree("-y"))
+    frame = {
+        "source": "camera-up",
+        "scale": 2.0,
+        "rotation": rotation_onto_z([0.0, -1.0, 0.0]).tolist(),
+        "translationM": None,
+        "recentre": True,
+    }
+    workdir.input_path("georef.json").write_text(json.dumps({"lat": 1.0, "frame": frame}))
+
+    execute(
+        make_recipe(
+            [{"id": "place", "impl": "place_splat"}], inputs=["trained.ply", "georef.json"]
+        ),
+        workdir,
+        RunnerSet.local(),
+    )
+
+    placed = gaussians.read_splat(workdir.out_dir("place") / "canonical.ply")
+    extent = np.ptp(placed.xyz, axis=0)
+    # Twice the size, because the frame said two metres per model unit.
+    assert extent[2] == pytest.approx(8.0, abs=0.4)
+    ground = placed.xyz[:-600]
+    assert np.median(ground[:, 2]) == pytest.approx(0.0, abs=0.2)
+    assert np.median(ground[:, 0]) == pytest.approx(0.0, abs=0.6)
+    assert np.abs(_needle_directions(placed.columns)[:, 2]).min() > 0.999

@@ -1,26 +1,39 @@
-"""Dispatching a 3DGS training run: the dataset it needs, the argv, the resume, the PLY.
+"""Dispatching a 3DGS training run: the dataset it needs, the argv, the PLY it writes.
 
-**No training run has been executed anywhere in this repository.** `gsplat` needs CUDA,
-there is no GPU on the machine this was written on, and none of `modal.com`,
-`api.modal.com`, `rest.runpod.io`, `api.runpod.io` or `console.vast.ai` is reachable
-through this session's proxy. So what is built here is the *dispatch*: the directory
-layout the trainer is handed, the command line it is given, where its checkpoints go so a
-preempted attempt resumes, how its metrics are read back, and how its PLY becomes
-`canonical.ply`. Every one of those is exercised by a test. What is **not** exercised is
-`gsplat` itself, and the two facts below are transcribed from its `examples/` directory
-rather than observed here:
+**No training run has been executed anywhere in this repository.** `gsplat` needs CUDA
+and there is no GPU on any machine this was written on. What is built here is the
+*dispatch*, and since 2026-09-23 it is checked against the trainer it dispatches rather
+than against a memory of it: gsplat **v1.5.3**'s `examples/simple_trainer.py`, read at
+that tag, and the argv below **parsed by that file's own `tyro` CLI** (tyro 1.0.16) in a
+CPU venv holding the exact wheel the training image installs
+(`gsplat-1.5.3+pt24cu124-cp310`), torch 2.4.1 and the example's pinned requirements.
+Parsing is all a CPU can do: `Runner` allocates CUDA tensors in its constructor.
 
-* the trainer is `examples/simple_trainer.py`, whose first positional argument selects a
-  strategy (`default` or `mcmc`) and which takes `--data_dir`, `--data_factor`,
-  `--result_dir`, `--max_steps` and `--ckpt`;
-* under `--result_dir` it writes `ckpts/ckpt_<step>_rank<n>.pt`, `stats/val_step<step>_
-  rank<n>.json` (`psnr`, `ssim`, `lpips`, `num_GS`, `ellipse_time`) and
-  `ply/point_cloud_<step>.ply`.
+Reading the source corrected four things the first version of this file transcribed from
+memory, and each one would have cost a GPU run to discover:
 
-`parse_metrics` is written to survive both being wrong: it reads whatever `stats/*.json`
+* **`--ckpt` is evaluation, not resume.** `main()` in v1.5.3: "if cfg.ckpt is not None:
+  # run eval only". The old argv passed the last checkpoint on a second attempt, so a
+  preempted run would have evaluated the stale checkpoint, written no PLY, and failed.
+  There is no resume in `simple_trainer.py` at all (`init_step = 0`), so a second
+  attempt now **restarts from zero** and says so; nothing is passed that pretends
+  otherwise.
+* **No PLY without `--save_ply`.** It defaults to False. Without it the stage would have
+  trained for half an hour and then failed on "wrote no .ply".
+* **`normalize_world_space` defaults to True**, which rotates, recentres and rescales
+  the scene (`datasets/normalize.py`: `similarity_from_cameras` then
+  `align_principal_axes`) and exports the PLY in *that* frame. Every downstream
+  transform -- the EXIF similarity, the camera-up estimate -- is expressed in COLMAP's
+  frame, so `--no-normalize-world-space` is passed and the PLY comes back in the frame
+  the poses are in.
+* **The file names**: `ply/point_cloud_<step>.ply` and `stats/val_step<step:04d>.json`
+  (no rank suffix on the validation stats; `train_step*_rank<n>.json` carries only
+  memory, time and count), where `<step>` is the zero-based index of the last step --
+  `max_steps - 1`. And stdout's progress line is `Step:  <n> {..., 'num_GS': <n>}`.
+
+`parse_metrics` is still written to survive being wrong: it reads whatever `stats/*.json`
 it finds, falls back to the trainer's stdout, and records `null` for anything it cannot
-find rather than inventing a number. A `train_metrics.json` full of nulls is a stage that
-ran and told you nothing; a plausible one that nobody produced is worse.
+find rather than inventing a number.
 
 The dataset layout is COLMAP's, because that is what `gsplat`'s parser reads and it is
 exactly what the `pose` stage already produced -- `images/` beside `sparse/0/`. Building
@@ -34,28 +47,32 @@ import json
 import os
 import re
 import shutil
+import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 __all__ = [
-    "CHECKPOINT_GLOB",
+    "GSPLAT_VERSION",
     "TrainMetrics",
     "build_dataset",
     "gsplat_argv",
-    "latest_checkpoint",
     "latest_ply",
     "parse_metrics",
     "step_of",
+    "trainer_python",
     "trainer_script",
 ]
 
-#: What `gsplat`'s trainer names its checkpoints. The step number is what orders them.
-CHECKPOINT_GLOB = "ckpt_*.pt"
 _STEP_RE = re.compile(r"(\d+)")
-#: `Step 6999: 123456 GSs` and friends -- the stdout fallback when no stats JSON exists.
-_STDOUT_GS_RE = re.compile(r"[Ss]tep\s+(\d+).*?([\d,]+)\s*GSs")
-_STDOUT_PSNR_RE = re.compile(r"[Pp]snr[:=]\s*([0-9.]+)")
+#: The stdout fallback when no stats JSON exists. v1.5.3 prints
+#: `print("Step: ", step, stats)` at each save step, where `stats` is a dict holding
+#: `num_GS` -- read from the source, not from a run.
+_STDOUT_GS_RE = re.compile(r"Step:\s+(\d+)\s+\{[^}]*'num_GS':\s*(\d+)")
+_STDOUT_PSNR_RE = re.compile(r"PSNR:\s*([0-9.]+)")
+
+#: The gsplat release every flag and file name here was read from.
+GSPLAT_VERSION = "1.5.3"
 
 
 class TrainerMissingError(RuntimeError):
@@ -80,6 +97,21 @@ def trainer_script(configured: object) -> Path:
     if not path.is_file():
         raise TrainerMissingError(f"the trainer {path} does not exist on this machine")
     return path.resolve()
+
+
+def trainer_python(configured: object) -> str:
+    """The interpreter to run the trainer with: the `python` param, else `$GSPLAT_PYTHON`,
+    else this one.
+
+    Separate from the interpreter running the stage on purpose. gsplat publishes its
+    prebuilt CUDA wheels for CPython 3.10 only (docs.gsplat.studio/whl, read 2026-09-23:
+    every `gsplat-1.5.x+pt2xcu1xx` wheel is `cp310`), while this project needs 3.12. The
+    training image therefore carries a 3.10 venv for the trainer beside the 3.12 one the
+    pipeline runs in, and says where through `$GSPLAT_PYTHON`.
+    """
+    if configured:
+        return str(configured)
+    return os.environ.get("GSPLAT_PYTHON") or sys.executable
 
 
 def build_dataset(frames: Path, poses: Path, root: Path) -> Path:
@@ -111,15 +143,27 @@ def gsplat_argv(
     strategy: str = "default",
     max_steps: int = 30_000,
     data_factor: int = 1,
-    checkpoint: Path | None = None,
     extra: Sequence[str] = (),
 ) -> list[str]:
     """The command line, built in one place so a test can read it without a GPU.
 
-    `--disable_viewer` is not optional in this context: the trainer's default is to open
-    a viewer server and block, which on a headless preemptible box is a stage that never
-    finishes and is billed for the whole tier.
+    Every flag was parsed by v1.5.3's own CLI; see the module docstring. Four of them are
+    not optional:
+
+    * `--disable_viewer`: the default opens a viewer server and, after training, sleeps
+      for 1,000,000 seconds (`main()`), which is a stage billed until the tier's timeout;
+    * `--no-normalize-world-space`: keep the PLY in COLMAP's frame, which every transform
+      downstream is expressed in;
+    * `--save_ply --ply_steps N`: without them there is no PLY at all;
+    * `--save_steps N --eval_steps N`: one checkpoint and one evaluation, at the end,
+      rather than the defaults' extra pair at 7,000 -- a checkpoint nothing can resume
+      from is only disk, and the evaluation at N is what `train_metrics.json` reads.
+
+    `--disable_video` too: the trajectory render after evaluation is a video nobody reads.
+    There is no `--ckpt`, and there must not be: in v1.5.3 it means "evaluate this and do
+    not train".
     """
+    steps = str(max_steps)
     argv = [
         python,
         str(trainer),
@@ -131,29 +175,28 @@ def gsplat_argv(
         "--result_dir",
         str(result_dir),
         "--max_steps",
-        str(max_steps),
+        steps,
         "--disable_viewer",
+        "--disable_video",
+        "--no-normalize-world-space",
+        "--save_ply",
+        "--ply_steps",
+        steps,
+        "--save_steps",
+        steps,
+        "--eval_steps",
+        steps,
     ]
-    if checkpoint is not None:
-        argv += ["--ckpt", str(checkpoint)]
     argv += list(extra)
     return argv
 
 
-def latest_checkpoint(directory: Path) -> Path | None:
-    """The furthest-along checkpoint under `directory`, by the step number in its name.
-
-    By step rather than by mtime: a checkpoint synced back from object storage after a
-    preemption has whatever mtime the copy gave it, and "newest file" would then be a
-    property of the transfer rather than of the training run.
-    """
-    if not directory.is_dir():
-        return None
-    found = sorted(directory.rglob(CHECKPOINT_GLOB), key=lambda p: (step_of(p), p.name))
-    return found[-1] if found else None
-
-
 def latest_ply(directory: Path) -> Path | None:
+    """The furthest-along PLY under `directory`, by the step number in its name.
+
+    By step rather than by mtime or by name: `point_cloud_999.ply` sorts after
+    `point_cloud_29999.ply` as text.
+    """
     if not directory.is_dir():
         return None
     found = sorted(directory.rglob("*.ply"), key=lambda p: (step_of(p), p.name))
@@ -226,7 +269,8 @@ def parse_metrics(
         step, document = stats
         return TrainMetrics(
             trainer=trainer,
-            iterations=step,
+            # Zero-based in every file name v1.5.3 writes: `val_step29999` is 30,000 steps.
+            iterations=step + 1,
             requested_iterations=requested_iterations,
             gaussians=_int(document.get("num_GS")),
             psnr=_float(document.get("psnr")),
@@ -240,7 +284,7 @@ def parse_metrics(
     scraped = _scrape(log_text)
     return TrainMetrics(
         trainer=trainer,
-        iterations=_int(scraped.get("step")),
+        iterations=_completed(scraped.get("step")),
         requested_iterations=requested_iterations,
         gaussians=_int(scraped.get("gaussians")),
         psnr=scraped.get("psnr"),
@@ -279,6 +323,12 @@ def _scrape(text: str) -> dict[str, float | int]:
     if psnrs:
         out["psnr"] = float(psnrs[-1])
     return out
+
+
+def _completed(step: object) -> int | None:
+    """A zero-based step index as the number of steps completed."""
+    index = _int(step)
+    return None if index is None else index + 1
 
 
 def _int(value: object) -> int | None:

@@ -8,7 +8,7 @@
 # `compensate` gains a `gpu:` block when its impl becomes `imc` (B3); asking for an L4 to
 # run `none` would be billing a GPU to do nothing.
 name: photo-reconstruct
-version: 2
+version: 3
 description: Reconstruct a splat from a raw capture, then package and register it.
 
 inputs: [upload]
@@ -36,10 +36,10 @@ stages:
     impl: gsplat # | opensplat | deformable3dgs
     params:
       iterations: 30000
-      # `trainer` is deliberately absent: gsplat's examples/simple_trainer.py lives in
-      # the training box's image, not in this repository, so the path comes from
-      # $GSPLAT_TRAINER there or from a per-run parameter override. A run started
-      # without either says so by name rather than failing on a missing file.
+      # `trainer` and `python` are deliberately absent: gsplat v1.5.3's
+      # examples/simple_trainer.py and the CPython 3.10 it needs live in the training
+      # image (infra/modal/app.py), which says where through $GSPLAT_TRAINER and
+      # $GSPLAT_PYTHON. A run started without them says so by name.
     gpu:
       tier: l4
       preemptible: true
@@ -56,11 +56,23 @@ stages:
   #
   # `arkit_scale` is deliberately absent rather than commented as an option: no such impl
   # is registered, and `pose: arkit` is the stub it would have depended on.
+  #
+  # A video with no location, and frames with no EXIF, fall back to the coordinate on the
+  # capture (the worker passes `lat`/`lon`), recorded as `manual`. With none of the three
+  # the stage refuses by name rather than placing the capture at (0, 0).
   - id: georeference
     impl: exif_gps # | manual_placement
     params:
       # RANSAC inlier threshold in metres. COLMAP 3.9.1 refuses a zero here outright.
       max_error_m: 5.0
+
+  # The trained splat is in COLMAP's frame (training runs with gsplat's world
+  # normalisation off). This turns it into east/north/up by the georeference's `frame`:
+  # the EXIF similarity when there is one, otherwise levelled by how the camera was held
+  # and recentred on the splat's own footprint, as Lane 1 is.
+  - id: place
+    impl: place_splat
+    params: {}
 
   - id: package
     impl: splat_tiles

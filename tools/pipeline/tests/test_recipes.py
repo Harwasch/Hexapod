@@ -51,7 +51,9 @@ def test_photo_reconstruct_routes_only_its_gpu_stage_to_the_gpu_runner() -> None
     plan = plan_recipe(load_recipe("photo-reconstruct"))
 
     assert plan.gpu_stages == ("train",)
-    assert plan.origins["canonical.ply"] == "train"
+    # The trainer's splat is in COLMAP's frame; `place` is what makes it canonical.
+    assert plan.origins["trained.ply"] == "train"
+    assert plan.origins["canonical.ply"] == "place"
     assert plan.origins["upload"] == "<input>"
 
 

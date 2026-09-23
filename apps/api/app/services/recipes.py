@@ -38,8 +38,8 @@ if TYPE_CHECKING:  # pragma: no cover - import is for typing only
 #: same whether or not the catalogue is on the path. It is a fallback, not a source of
 #: truth: where the recipes are readable they are read.
 SHIPPED_RECIPE_VERSIONS: dict[str, str] = {
-    "splat-ingest": "2",
-    "photo-reconstruct": "2",
+    "splat-ingest": "3",
+    "photo-reconstruct": "3",
 }
 
 

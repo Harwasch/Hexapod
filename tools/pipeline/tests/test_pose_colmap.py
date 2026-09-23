@@ -262,6 +262,49 @@ def test_the_recovered_poses_are_within_a_degree_and_one_percent_of_the_truth(
 
 
 @requires_colmap
+def test_the_camera_up_estimate_is_the_scenes_up(
+    reconstruction: tuple[Workdir, tree_frames.Truth],
+) -> None:
+    """What `place` levels a GPS-less capture by, scored against the orbit's own up.
+
+    The rendered orbit is in the fixture's east/north/up frame, so its up is +z. The
+    estimate is in COLMAP's arbitrary frame, so it is carried into the truth's by the same
+    similarity the pose score uses before it is compared. Held upright, a camera orbiting
+    a tree averages its tilt away, so this should be within a degree or two; the bound is
+    where a sign or axis error would show (those land at 90 or 180 degrees).
+    """
+    workdir, truth = reconstruction
+    poses = json.loads((workdir.artifact_path("pose", "poses") / "poses.json").read_text())
+    model = sfm.read_model(workdir.artifact_path("pose", "poses"))
+    known = truth.by_name()
+    fit = sfm.umeyama(
+        np.stack([image.centre for image in model.images]),
+        np.stack([known[image.name].centre for image in model.images]),
+    )
+
+    estimate = np.asarray(poses["upEstimate"]["up"])
+    in_truth = fit.rotation @ estimate
+    angle = float(np.degrees(np.arccos(np.clip(in_truth @ np.array([0.0, 0.0, 1.0]), -1, 1))))
+
+    assert poses["upEstimate"]["method"] == "camera-up"
+    assert poses["upEstimate"]["frames"] == FRAMES
+    assert angle < 5.0, f"camera-up is {angle:.2f} deg from the scene's up"
+    # And the rotation `place` builds from it takes it exactly onto +z.
+    # (poses.json rounds to six places, so it is renormalised first.)
+    unit = estimate / np.linalg.norm(estimate)
+    assert sfm.rotation_onto_z(unit) @ unit == pytest.approx([0.0, 0.0, 1.0], abs=1e-9)
+
+
+def test_rotation_onto_z_is_proper_and_handles_both_poles() -> None:
+    for up in ([0.0, 0.0, 1.0], [0.0, 0.0, -1.0], [0.0, -1.0, 0.0], [0.3, -0.9, 0.1]):
+        rotation = sfm.rotation_onto_z(up)
+        unit = np.asarray(up) / np.linalg.norm(up)
+        assert rotation @ unit == pytest.approx([0.0, 0.0, 1.0], abs=1e-9)
+        assert np.linalg.det(rotation) == pytest.approx(1.0)
+        assert rotation @ rotation.T == pytest.approx(np.eye(3), abs=1e-9)
+
+
+@requires_colmap
 def test_the_self_calibrated_focal_is_recorded_with_its_bias_rather_than_trusted(
     reconstruction: tuple[Workdir, tree_frames.Truth],
 ) -> None:

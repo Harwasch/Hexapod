@@ -22,7 +22,6 @@ import hashlib
 import json
 import shutil
 import struct
-import sys
 import tomllib
 from pathlib import Path
 from typing import Any, NoReturn
@@ -81,7 +80,14 @@ MASKS = ArtifactDecl(
 CANONICAL_PLY = ArtifactDecl(
     "canonical.ply",
     content_type="application/octet-stream",
-    summary="the static splat in a local frame: Lane 1 normalises it, Lane 2 trains it",
+    summary="the static splat, east/north/up about its placed origin: Lane 1 normalises "
+    "an upload into it, Lane 2 places the trained splat into it",
+    stub_bytes=1024,
+)
+TRAINED_PLY = ArtifactDecl(
+    "trained.ply",
+    content_type="application/octet-stream",
+    summary="the trainer's splat, in the reconstruction's own (COLMAP) frame",
     stub_bytes=1024,
 )
 TRAIN_METRICS = ArtifactDecl(
@@ -511,6 +517,9 @@ def colmap(ctx: StageContext) -> StageOutcome:
                 "measured baseline is what produces one"
             ),
         },
+        # Gravity, as far as the frames can say: how the phone was held. What `place`
+        # levels the splat by when nothing better (an EXIF similarity) exists.
+        "upEstimate": None if (up := sfm.camera_up(model)) is None else up.to_dict(),
     }
     _write_json(out / "poses.json", document)
     ctx.log(
@@ -602,44 +611,52 @@ def robust(ctx: StageContext) -> StageOutcome:
     "gsplat",
     consumes=("frames", "poses"),
     optional_consumes=("masks",),
-    produces=(CANONICAL_PLY, TRAIN_METRICS),
+    produces=(TRAINED_PLY, TRAIN_METRICS),
     summary="gsplat 3DGS training; consumes masks when a mask stage produced any",
 )
 def gsplat(ctx: StageContext) -> StageOutcome:
     """Dispatches a training run. **No training run has ever been executed here.**
 
     That sentence is the point of this docstring and it is not hedged: `gsplat` needs
-    CUDA, the machine this was written on has no GPU, and no GPU provider was reachable
-    from it. What exists and is tested is everything around the trainer -- the COLMAP
-    dataset it is handed, the argv it is given, the checkpoint layout that lets a
-    preempted attempt resume, the metrics read back out of its output, and the PLY
-    normalised into `canonical.ply`. What is untested is `gsplat` itself and the exact
-    spelling of its outputs, which `training.py` records as transcribed rather than
-    observed. `tests/test_train_gsplat.py` drives all of the above with a stand-in
-    trainer and says so in its name.
+    CUDA and no machine this was written on has a GPU. What exists and is tested is
+    everything around the trainer -- the COLMAP dataset it is handed, the argv it is
+    given, the metrics read back out of its output, and the PLY normalised into
+    `trained.ply`. Since 2026-09-23 the argv and the file names are checked against
+    gsplat v1.5.3's own `simple_trainer.py` rather than a memory of it; `training.py`
+    lists the four things that check corrected. `tests/test_train_gsplat.py` drives the
+    stage with a stand-in trainer and says so in its name.
 
-    The one design decision worth reading: `--result_dir` is inside `checkpoint/`. A
-    trainer that writes its checkpoints anywhere else loses them the moment the box is
-    reclaimed, because `checkpoint/` is the only directory the executor keeps between
-    attempts and the only one B1b's syncer copies out while the stage is still running.
+    **A second attempt starts over.** v1.5.3's trainer cannot resume -- its `--ckpt`
+    means "evaluate this checkpoint and do not train" -- so nothing here pretends to: the
+    result directory is in `work/`, which the executor clears between attempts, and the
+    log says the restart out loud. That makes a preemption cost the attempt, which on
+    Modal is rare: its client retries a reclaimed input eight times below this seam.
+
+    The output is `trained.ply`, **in COLMAP's frame** (`--no-normalize-world-space`), not
+    `canonical.ply`: turning it into east/north/up needs the georeference, which comes
+    later, and is the `place` stage's job. Keeping the GPU stage free of placement also
+    keeps the GPU box free of the pipeline's georeferencing inputs.
 
     The optional `masks` input is how `mask: none` and `mask: robust` are both legal
     without the executor knowing which one ran. This trainer has no mask input, so masks
-    that arrive are recorded as ignored rather than silently dropped; B3 is where a
-    trainer that consumes them lands.
+    that arrive are recorded as ignored rather than silently dropped.
     """
     frames = ctx.input(FRAMES.name)
     poses = ctx.input(POSES.name)
     iterations = int(ctx.param("iterations", 30_000))
     trainer = training.trainer_script(ctx.param("trainer"))
     dataset = training.build_dataset(frames, poses, ctx.work_dir / "dataset")
-    # Inside checkpoint/: see the docstring. This is the whole resume story.
-    result = ctx.checkpoint_dir / "gsplat"
-    result.mkdir(parents=True, exist_ok=True)
-    resume = training.latest_checkpoint(result)
-    resumed_step = None if resume is None else training.step_of(resume)
-    if resume is not None:
-        ctx.log(f"resuming from {resume.name} (step {resumed_step}) on attempt {ctx.attempt}")
+    # In work/, not checkpoint/: see the docstring. Nothing can resume from it.
+    result = ctx.work_dir / "gsplat"
+    if result.exists():
+        shutil.rmtree(result)
+    result.mkdir(parents=True)
+    if ctx.attempt > 1:
+        ctx.log(
+            f"attempt {ctx.attempt}: training restarts from step 0 -- gsplat "
+            f"{training.GSPLAT_VERSION}'s simple_trainer.py has no resume (its --ckpt "
+            f"evaluates a checkpoint instead of continuing one)"
+        )
     if ctx.has_input(MASKS.name):
         ctx.log(
             "masks were produced by an earlier stage and this trainer has no mask input; "
@@ -647,14 +664,13 @@ def gsplat(ctx: StageContext) -> StageOutcome:
         )
     ctx.run(
         training.gsplat_argv(
-            str(ctx.param("python", sys.executable)),
+            training.trainer_python(ctx.param("python")),
             trainer,
             dataset,
             result,
             strategy=str(ctx.param("strategy", "default")),
             max_steps=iterations,
             data_factor=int(ctx.param("data_factor", 1)),
-            checkpoint=resume,
             extra=[str(value) for value in (ctx.param("extra_args") or [])],
         )
     )
@@ -662,16 +678,16 @@ def gsplat(ctx: StageContext) -> StageOutcome:
     if ply is None:
         raise ValueError(
             f"the trainer wrote no .ply under {result}; there is nothing to normalise "
-            f"into {CANONICAL_PLY.name}"
+            f"into {TRAINED_PLY.name}"
         )
     splat = gaussians.read_splat(ply)
-    written = gaussians.write_ply(ctx.output(CANONICAL_PLY.name), splat.columns)
+    written = gaussians.write_ply(ctx.output(TRAINED_PLY.name), splat.columns)
     metrics_document = training.parse_metrics(
         result,
         ctx.log_path.read_text(encoding="utf-8", errors="replace"),
         trainer=f"gsplat:{trainer.name}",
         requested_iterations=iterations,
-        resumed_from_step=resumed_step,
+        resumed_from_step=None,
         attempts=ctx.attempt,
     )
     document = metrics_document.to_dict()
@@ -679,17 +695,17 @@ def gsplat(ctx: StageContext) -> StageOutcome:
     # artifact actually has, and the two disagreeing is worth being able to see.
     document["gaussiansInPly"] = splat.count
     document["masksIgnored"] = ctx.has_input(MASKS.name)
+    document["gsplatVersion"] = training.GSPLAT_VERSION
     _write_json(ctx.output(TRAIN_METRICS.name), document)
     ctx.log(
-        f"gsplat: {splat.count} gaussians from {ply.name} -> {CANONICAL_PLY.name} "
+        f"gsplat: {splat.count} gaussians from {ply.name} -> {TRAINED_PLY.name} "
         f"({written} bytes); metrics from {metrics_document.source}"
     )
     metrics: dict[str, MetricValue] = {
         "gaussians": splat.count,
-        "canonicalBytes": written,
+        "trainedBytes": written,
         "requestedIterations": iterations,
         "metricsSource": metrics_document.source,
-        "resumed": resume is not None,
     }
     if metrics_document.iterations is not None:
         metrics["iterations"] = metrics_document.iterations
@@ -702,7 +718,7 @@ def gsplat(ctx: StageContext) -> StageOutcome:
     "opensplat",
     consumes=("frames", "poses"),
     optional_consumes=("masks",),
-    produces=(CANONICAL_PLY, TRAIN_METRICS),
+    produces=(TRAINED_PLY, TRAIN_METRICS),
     summary="OpenSplat training, the same contract as gsplat",
 )
 def opensplat(ctx: StageContext) -> StageOutcome:
@@ -788,10 +804,12 @@ def exif_gps(ctx: StageContext) -> StageOutcome:
       no residual at all. `uncertaintyM` is therefore floored at
       `EXIF_GPS_UNCERTAINTY_FLOOR_M`, and the residual is reported separately as what it
       is: consistency.
-    * **it does not transform `canonical.ply`.** The similarity is recorded and nothing
-      downstream applies it yet, so a Lane 2 capture is still packaged in COLMAP's own
-      orientation. That is named here rather than left to be discovered -- see the
-      `alignment.applied` field, which is `false` and says why.
+    * **it does not transform the splat itself.** It writes `frame` -- the similarity when
+      aligned, otherwise a levelling by the camera-up estimate `pose` recorded -- and the
+      `place` stage applies it to `trained.ply`. A capture with no EXIF and no location
+      falls back to the coordinate on the capture (`lat`/`lon`, which the worker hands
+      over), recorded as `manual`; with none of those it refuses rather than landing at
+      (0, 0).
 
     One consequence worth stating: `georef.json` out of the aligned branch is **not**
     byte-reproducible the way the rest of a run's outputs are. `model_aligner` has no
@@ -809,38 +827,164 @@ def exif_gps(ctx: StageContext) -> StageOutcome:
         return _exif_gps_aligned(ctx, fixes, model_dir)
 
     located = _sole_location(ctx, fixes)
+    method = "exif-gps"
     if located is None:
-        raise ValueError(
-            f"no EXIF GPS on any of {_count_files(frames)} frames and no location in "
-            f"source_meta.json, so there is nothing to georeference from. Frames stripped "
-            f"of EXIF (anything re-encoded, and every frame ffmpeg extracts from a video "
-            f"that carried no location) land here. Use `georeference: manual_placement` "
-            f"and give it the coordinate"
-        )
+        # The capture's own coordinate -- the console sends where its camera was looking
+        # -- is the last resort, and it is recorded as the hand placement it is. A video
+        # with no location must neither land in the Gulf of Guinea nor fail silently, so
+        # with no coordinate at all this is still a refusal, and it says what to do.
+        placed = _placed_coordinate(ctx)
+        if placed is None:
+            raise ValueError(
+                f"no EXIF GPS on any of {_count_files(frames)} frames, no location in "
+                f"source_meta.json, and no coordinate on the capture, so there is nothing "
+                f"to georeference from. Frames stripped of EXIF (anything re-encoded, and "
+                f"every frame ffmpeg extracts from a video that carried no location) land "
+                f"here. Give the capture a lat/lon -- the console does, from where its "
+                f"camera was looking -- or run `georeference: manual_placement`"
+            )
+        located, method = placed, "manual"
     lat, lon, height = located
     why = "fewer than three EXIF fixes" if model_dir else "no pose model to align against"
+    frame = _frame_from_poses(ctx, model_dir)
+    source = (
+        "the capture's own coordinate (placed by hand)"
+        if method == "manual"
+        else "EXIF GPS / the video's location"
+    )
     document: dict[str, object] = {
         "lat": lat,
         "lon": lon,
         "height": height,
-        "georefMethod": "exif-gps",
+        "georefMethod": method,
         # Not `exif-gps`: a coordinate with no rotation and no similarity says where the
         # capture is and nothing about how big it is.
         "scaleSource": "unresolved",
-        "uncertaintyM": UNALIGNED_UNCERTAINTY_M,
+        "uncertaintyM": float(ctx.param("uncertainty_m", UNALIGNED_UNCERTAINTY_M))
+        if method == "manual"
+        else UNALIGNED_UNCERTAINTY_M,
         "note": (
-            f"located from EXIF GPS but not aligned ({why}), so the orientation and the "
-            f"metric scale are both unresolved -- no better than a hand placement"
+            f"located from {source} but not aligned ({why}): levelled by how the camera "
+            f"was held, facing an arbitrary heading unless one was given, at an unresolved "
+            f"scale -- no better than a hand placement"
         ),
         "fixes": {"frames": len(fixes), "aligned": 0, "heightDatum": _HEIGHT_DATUM},
         "alignment": None,
+        "frame": frame,
     }
     _write_json(ctx.output(GEOREF.name), document)
-    ctx.log(f"located at {lat}, {lon}, {height} m; not aligned ({why})")
+    ctx.log(f"located at {lat}, {lon}, {height} m from {source}; not aligned ({why})")
+    ctx.log(f"frame: {frame['source']}, heading {frame['headingDeg']} deg, scale {frame['scale']}")
     return StageOutcome(
-        metrics={"fixes": len(fixes), "aligned": 0, "lat": lat, "lon": lon},
-        summary=f"located at {lat:.6f}, {lon:.6f} (not aligned)",
+        metrics={"fixes": len(fixes), "aligned": 0, "lat": lat, "lon": lon, "method": method},
+        summary=f"located at {lat:.6f}, {lon:.6f} ({method}, not aligned)",
     )
+
+
+@stage_impl(
+    "place_splat",
+    consumes=("trained.ply", "georef.json"),
+    optional_consumes=("poses",),
+    produces=(CANONICAL_PLY,),
+    summary="Lane 2: the trained splat, turned into east/north/up by the georeference",
+)
+def place_splat(ctx: StageContext) -> StageOutcome:
+    """Real: `trained.ply` (COLMAP's frame) becomes `canonical.ply` (east/north/up).
+
+    The Lane 2 half of what `ingest_splat` does for Lane 1, and the step that makes
+    `alignment.applied` true. It applies `georef.json`'s `frame` with
+    `gaussians.transform` -- positions, each gaussian's quaternion and its log-scale --
+    and, when the frame asks for it (every branch but the EXIF similarity), recentres on
+    the splat's own footprint and ground exactly as Lane 1 does, so both lanes put the
+    placed coordinate at the middle of the capture.
+
+    A `georef.json` with no `frame` (written by `manual_placement`) is levelled by the
+    camera-up estimate in `poses`, if there is one, and otherwise passed through with a
+    warning that nothing levelled it.
+    """
+    georef = _read_json(ctx.input(GEOREF.name))
+    trained = gaussians.read_splat(ctx.input(TRAINED_PLY.name))
+    frame = georef.get("frame")
+    if not isinstance(frame, dict):
+        model_dir = ctx.input(POSES.name) if ctx.has_input(POSES.name) else None
+        frame = _frame_from_poses(ctx, model_dir)
+        if frame["source"] == "none":
+            ctx.log("WARNING: no frame in georef.json and no poses: the splat is not levelled")
+    rotation = np.asarray(frame.get("rotation") or np.eye(3), dtype=np.float64)
+    scale = float(_number(frame.get("scale")) or 1.0)
+    offset = frame.get("translationM")
+    translation = None if offset is None else np.asarray(offset, dtype=np.float64)
+    columns = gaussians.transform(trained.columns, rotation, translation, scale)
+    placed = gaussians.Splat(
+        columns=columns,
+        source_format=trained.source_format,
+        source_name=trained.source_name,
+        source_bytes=trained.source_bytes,
+        source_checksum=trained.source_checksum,
+        properties_in=trained.properties_in,
+        dropped=trained.dropped,
+        non_finite=trained.non_finite,
+    )
+    moved = [0.0, 0.0, 0.0]
+    if frame.get("recentre"):
+        placed, recentred = gaussians.orient(placed, up_axis="z")
+        moved = [float(v) for v in recentred.translation]
+    written = gaussians.write_ply(ctx.output(CANONICAL_PLY.name), placed.columns)
+    low, high = placed.bbox()
+    extent = _extent(low, high)
+    ctx.log(
+        f"placed {placed.count} gaussians by {frame.get('source')}: scale {scale:g}, "
+        f"recentred by {', '.join(f'{v:.3f}' for v in moved)} m; extent "
+        f"{extent['east']:.2f} x {extent['north']:.2f} x {extent['up']:.2f} m"
+    )
+    metrics: dict[str, MetricValue] = {
+        "gaussians": placed.count,
+        "canonicalBytes": written,
+        "frameSource": str(frame.get("source")),
+        "scale": scale,
+        "extentUpM": round(extent["up"], 3),
+    }
+    return StageOutcome(metrics=metrics, summary=f"placed by {frame.get('source')}")
+
+
+def _placed_coordinate(ctx: StageContext) -> tuple[float, float, float] | None:
+    """The coordinate the worker handed over from the capture row, if there was one."""
+    lat, lon = _optional_float(ctx.param("lat")), _optional_float(ctx.param("lon"))
+    if lat is None or lon is None:
+        return None
+    return lat, lon, _optional_float(ctx.param("height")) or 0.0
+
+
+def _frame_from_poses(ctx: StageContext, model_dir: Path | None) -> dict[str, object]:
+    """How `place` turns a reconstruction with no GPS similarity into east/north/up.
+
+    Levelled by the camera-up estimate `pose` recorded (`sfm.camera_up`), turned to
+    `heading_deg` (the capture's `headingDeg`, else 0 -- which is to say arbitrary, and
+    the note says so), scaled by `scale` metres per model unit (else 1, unresolved), and
+    recentred on the splat's own footprint by `place`, because nothing here knows where
+    in the model the placed coordinate is.
+    """
+    heading = float(ctx.param("heading_deg", 0.0) or 0.0)
+    scale = float(ctx.param("scale", 1.0) or 1.0)
+    rotation = np.eye(3)
+    up: dict[str, object] | None = None
+    source = "none"
+    if model_dir is not None:
+        estimate = sfm.camera_up(sfm.read_model(model_dir))
+        if estimate is not None:
+            rotation = gaussians.heading_rotation(heading) @ sfm.rotation_onto_z(estimate.up)
+            up = estimate.to_dict()
+            source = "camera-up"
+    return {
+        "source": source,
+        "scale": scale,
+        "rotation": [[float(v) for v in row] for row in rotation],
+        "translationM": None,
+        "recentre": True,
+        "headingDeg": heading,
+        "headingSource": "capture" if ctx.param("heading_deg") is not None else "none",
+        "up": up,
+    }
 
 
 def _exif_gps_aligned(
@@ -924,17 +1068,28 @@ def _exif_gps_aligned(
                 "max": round(float(values.max()), 4),
                 "perImage": {name: round(value, 4) for name, value in sorted(residuals.items())},
             },
-            # Said out loud: the transform is recorded and nothing applies it. `train`
-            # writes `canonical.ply` in COLMAP's own frame and `package` places that frame
-            # on the globe as if it were east/north/up, so a Lane 2 capture is still
-            # packaged in the reconstruction's arbitrary orientation. Applying this is the
-            # next step and it is not this one.
-            "applied": False,
+            # Applied since the `place` stage exists: `train` writes `trained.ply` in
+            # COLMAP's own frame (gsplat's world normalisation is switched off for exactly
+            # this), and `place` turns it by this similarity into `canonical.ply`.
+            "applied": True,
             "appliedNote": (
-                "recorded, not applied: `package` still places canonical.ply's own axes "
-                "as east/north/up, so this rotation and scale are provenance rather than "
-                "a correction that has been made"
+                "applied by `place`: trained.ply is in the reconstruction's frame and "
+                "canonical.ply is this similarity of it, east/north/up metres about "
+                "(lat, lon, height)"
             ),
+        },
+        # The same similarity, in the shape `place` reads whichever branch wrote it. No
+        # recentring: the origin is the median fix, and the similarity already puts the
+        # model where the fixes say it is relative to that.
+        "frame": {
+            "source": "exif-gps-similarity",
+            "scale": similarity.scale,
+            "rotation": [[float(v) for v in row] for row in similarity.rotation],
+            "translationM": [float(v) for v in similarity.translation],
+            "recentre": False,
+            "headingDeg": None,
+            "headingSource": "exif-gps",
+            "up": None,
         },
     }
     _write_json(ctx.output(GEOREF.name), document)
