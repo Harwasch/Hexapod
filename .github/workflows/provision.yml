@@ -915,6 +915,38 @@ jobs:
           echo "a raw upload is not readable at the public URL ($code), which is correct."
           echo "the presigned path works end to end."
 
+      # The worker is the half of the deployment that does the work, and until this step
+      # nothing checked it. Every other check above proves the API accepts an upload;
+      # none proves anything will ever process one. The first deployment that passed
+      # verify had a worker machine Fly reported as "stopped" -- and Fly's deploy calls
+      # that "a good state", because it restores a machine to whatever state it was in
+      # before. A worker has no HTTP service, so nothing ever auto-starts it: uploads
+      # would queue forever behind a green check.
+      - name: 6 · the worker is running
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          curl -fsSL https://fly.io/install.sh | sh
+          export PATH="$HOME/.fly/bin:$PATH"
+          machines="$(flyctl machines list --app twin-api --json)"
+          printf '%s' "$machines" | jq -r '.[] | "\(.id)  \(.config.metadata.fly_process_group // "?")  \(.state)"'
+          workers="$(printf '%s' "$machines" | jq -r '[.[] | select(.config.metadata.fly_process_group == "worker")]')"
+          [ "$(printf '%s' "$workers" | jq 'length')" -gt 0 ] \
+            || { echo "::error::there is no worker machine at all. fly.toml's [processes] names one; the deploy did not create it."; exit 1; }
+          running="$(printf '%s' "$workers" | jq '[.[] | select(.state == "started")] | length')"
+          if [ "$running" -eq 0 ]; then
+            echo "::error::no worker machine is running. Uploads will be accepted and never processed."
+            for id in $(printf '%s' "$workers" | jq -r '.[].id'); do
+              echo "--- worker $id: last events ---"
+              flyctl machines status "$id" --app twin-api 2>&1 | tail -n 25 || true
+            done
+            echo "--- the worker's own log ---"
+            timeout 60 flyctl logs --app twin-api --no-tail 2>&1 | grep -iE 'worker|Traceback|Error|error:' | tail -n 80 || true
+            exit 1
+          fi
+          echo "$running worker machine(s) running."
+
       # A 500 from the API is the server's story, not the client's, and the client is
       # all this job could see until now. flyctl is installed only on failure because
       # that is the only time it is wanted.
