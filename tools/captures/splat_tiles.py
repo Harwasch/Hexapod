@@ -258,8 +258,15 @@ def pack_spz(
 #: `254.75 -> 255`). A half-step clamp would send 255 back as 254.
 SPZ_ALPHA_EPS = 0.25 / 255.0
 
-#: Position (3 x 24-bit), alpha, colour, log-scale and rotation bytes, per gaussian.
+#: Position (3 x 24-bit), alpha, colour, log-scale and rotation bytes, per gaussian, in
+#: version 2. Version 3 stores a fourth rotation byte (see `_smallest_three`).
 SPZ_BYTES_PER_GAUSSIAN = 19
+
+#: The gzip-framed versions this reads. 2 stores a quaternion's first three components as
+#: bytes; 3 stores its smallest three in 10 bits each, plus the index of the largest.
+#: Version 1 (float16 positions) was never released, per nianticlabs/spz's own loader,
+#: and version 4 is a different container (a plaintext `NGSP` header and ZSTD streams).
+SPZ_READABLE_VERSIONS = (2, 3)
 
 
 def unpack_spz(blob: bytes) -> dict[str, np.ndarray]:
@@ -271,8 +278,29 @@ def unpack_spz(blob: bytes) -> dict[str, np.ndarray]:
     fixture, because `synthetic_tree.py` snaps positions to the 1/4096 grid), lossy where
     it was not: `unpack -> pack` differs by one byte in 228,016 at a rotation rounding
     boundary, so no SPZ round trip belongs inside a byte-identity gate.
+
+    Versions 2 and 3 both occur in the wild: of five public Scaniverse share-page files
+    read on 2026-09-23, three were version 2 and two version 3, and Spark's sample set
+    has one version 3 among twenty-eight. The layout of the rotation bytes is the only
+    difference, and it is read here exactly as nianticlabs/spz's
+    `unpackQuaternionSmallestThree` does. Spherical-harmonic bytes after the rotations
+    are not read -- `canonical.ply` carries the DC term only.
+
+    Nothing here converts axes. SPZ's specification says the stream is right/up/back
+    unless an extension says otherwise, and every public sample checked disagreed with
+    it in one direction or the other -- which is why the pipeline's `ingest_splat` owns
+    the up axis, and why this reader returns the stored coordinates untouched.
     """
-    raw = gzip.decompress(blob)
+    if blob[:4] == b"NGSP":
+        raise SplatFormatError(
+            "SPZ version 4 (a plaintext NGSP header over ZSTD-compressed streams) is not "
+            "supported; this reads the gzip-framed versions 2 and 3. Re-export as an "
+            "earlier SPZ version or as a 3DGS .ply"
+        )
+    try:
+        raw = gzip.decompress(blob)
+    except (OSError, EOFError) as error:
+        raise SplatFormatError(f"not an SPZ file: it does not gunzip ({error})") from error
     if len(raw) < 16:
         raise SplatFormatError("not an SPZ file: fewer than 16 bytes after decompression")
     magic, version, count, _sh, fractional_bits, _flags, _reserved = struct.unpack_from(
@@ -282,18 +310,23 @@ def unpack_spz(blob: bytes) -> dict[str, np.ndarray]:
         raise SplatFormatError(
             f"not an SPZ file: magic is 0x{magic:08X}, expected 0x{SPZ_MAGIC:08X}"
         )
-    if version != SPZ_VERSION:
-        raise SplatFormatError(f"SPZ version {version} is not supported; this reads version 2")
+    if version not in SPZ_READABLE_VERSIONS:
+        raise SplatFormatError(
+            f"SPZ version {version} is not supported; this reads versions "
+            f"{', '.join(str(v) for v in SPZ_READABLE_VERSIONS)}"
+        )
+    rotation_bytes = 3 if version == 2 else 4
+    per_gaussian = SPZ_BYTES_PER_GAUSSIAN - 3 + rotation_bytes
     # 9 bytes of position (three 24-bit components), then one alpha, three colours, three
-    # log-scales and three rotation bytes: 19 per gaussian, after a 16-byte header. The
+    # log-scales and three (or four) rotation bytes, after a 16-byte header. The
     # committed fixture is 16 + 19 * 12000 = 228,016 bytes, which is the denominator in
     # A0 #4's "one byte in 228,016".
-    wanted = 16 + SPZ_BYTES_PER_GAUSSIAN * count
+    wanted = 16 + per_gaussian * count
     if len(raw) < wanted:
         raise SplatFormatError(
             f"SPZ is truncated: {count} gaussians need {wanted} bytes and it has {len(raw)}"
         )
-    body = np.frombuffer(raw, dtype=np.uint8, count=SPZ_BYTES_PER_GAUSSIAN * count, offset=16)
+    body = np.frombuffer(raw, dtype=np.uint8, count=per_gaussian * count, offset=16)
     end = 9 * count
     packed = body[:end].reshape(count, 3, 3).astype(np.uint32)
     fixed = packed[:, :, 0] | (packed[:, :, 1] << 8) | (packed[:, :, 2] << 16)
@@ -303,11 +336,17 @@ def unpack_spz(blob: bytes) -> dict[str, np.ndarray]:
     alphas = body[end : end + count].astype(np.float32) / 255.0
     colors = body[end + count : end + 4 * count].reshape(count, 3).astype(np.float32)
     scales = body[end + 4 * count : end + 7 * count].reshape(count, 3).astype(np.float32)
-    rotations = body[end + 7 * count : end + 10 * count].reshape(count, 3).astype(np.float32)
+    rotations = body[end + 7 * count : end + (7 + rotation_bytes) * count].reshape(
+        count, rotation_bytes
+    )
     sh0 = (colors - 127.5) / (SPZ_COLOR_SCALE * 255.0)
     log_scales = scales / 16.0 - 10.0
-    quat_xyz = (rotations - 127.5) / 127.5
-    quat_w = np.sqrt(np.clip(1.0 - (quat_xyz**2).sum(axis=1), 0.0, 1.0))
+    if version == 2:
+        quat_xyz = (rotations.astype(np.float32) - 127.5) / 127.5
+        quat_w = np.sqrt(np.clip(1.0 - (quat_xyz**2).sum(axis=1), 0.0, 1.0))
+    else:
+        quat_xyzw = _smallest_three(rotations)
+        quat_xyz, quat_w = quat_xyzw[:, :3], quat_xyzw[:, 3]
     alpha = np.clip(alphas, SPZ_ALPHA_EPS, 1.0 - SPZ_ALPHA_EPS)
     opacity = np.log(alpha / (1.0 - alpha)).astype(np.float32)
     columns = {f"f_dc_{i}": sh0[:, i] for i in range(3)}
@@ -321,6 +360,35 @@ def unpack_spz(blob: bytes) -> dict[str, np.ndarray]:
         "rot_0": quat_w.astype(np.float32),
         **columns,
     }
+
+
+def _smallest_three(rotations: np.ndarray) -> np.ndarray:
+    """SPZ version 3's rotation bytes to x, y, z, w quaternions.
+
+    A little-endian u32 per gaussian: the top two bits index the largest component, and
+    the three others follow as 10-bit fields -- nine bits of magnitude scaled by
+    1/sqrt(2) and a sign bit -- packed so that the highest-indexed component sits in the
+    lowest bits. The largest is rebuilt from unit length and is always non-negative,
+    which is the sign convention the writer normalised to.
+    """
+    words = rotations.astype(np.uint32)
+    comp = words[:, 0] | (words[:, 1] << 8) | (words[:, 2] << 16) | (words[:, 3] << 24)
+    largest = (comp >> 30).astype(np.int64)
+    out = np.zeros((comp.shape[0], 4), dtype=np.float64)
+    mask = np.uint32((1 << 9) - 1)
+    remaining = comp.copy()
+    squares = np.zeros(comp.shape[0], dtype=np.float64)
+    for index in range(3, -1, -1):
+        present = largest != index
+        magnitude = (remaining & mask).astype(np.float64)
+        negative = ((remaining >> 9) & 1).astype(bool)
+        value = math.sqrt(0.5) * magnitude / float(mask)
+        value = np.where(negative, -value, value)
+        out[present, index] = value[present]
+        squares += np.where(present, value * value, 0.0)
+        remaining = np.where(present, remaining >> 10, remaining)
+    out[np.arange(comp.shape[0]), largest] = np.sqrt(np.clip(1.0 - squares, 0.0, 1.0))
+    return out.astype(np.float32)
 
 
 def build_glb(count: int, pmin: list[float], pmax: list[float], spz: bytes) -> bytes:
