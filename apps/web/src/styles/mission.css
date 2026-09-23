@@ -1057,6 +1057,11 @@
   align-items: stretch;
   gap: 0;
   width: 100%;
+  min-height: 0;
+}
+
+.mc-stream__pill {
+  flex: none;
 }
 
 .mc-stream.is-open {
@@ -1081,6 +1086,7 @@
 }
 
 .mc-stream.is-open .mc-stream__panel {
+  min-height: 0;
   max-height: min(30rem, 48vh);
   opacity: 1;
   transform: scale(1);
