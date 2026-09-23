@@ -29,6 +29,8 @@ from app.worker.pipeline_bridge import Plan
 MANUAL_PLACEMENT = "manual_placement"
 #: The impl that turns an uploaded splat's own axes into east/north/up.
 INGEST_SPLAT = "ingest_splat"
+#: Lane 2's georeference, which takes the capture's coordinate as its last resort.
+EXIF_GPS = "exif_gps"
 #: The capture-metadata keys that say how a splat file is oriented, and the parameter of
 #: `ingest_splat` each becomes. Metadata is camelCase because the console writes it;
 #: stage parameters are snake_case because the recipes are.
@@ -50,6 +52,18 @@ def stage_params(plan: Plan, capture: Capture, job: Job) -> dict[str, dict[str, 
             resolved.setdefault(stage.id, {}).update(placement)
         if stage.impl.name == INGEST_SPLAT and orientation:
             resolved.setdefault(stage.id, {}).update(orientation)
+        if stage.impl.name == EXIF_GPS:
+            # Lane 2's fallback, not its answer: the frames' own GPS and the video's own
+            # location both win over it inside the stage. Without it a video that
+            # carried no location has nowhere to go -- the stage refuses rather than
+            # landing it at (0, 0), and a phone recording with location services off is
+            # the ordinary way to get there.
+            fallback = {k: v for k, v in placement.items() if k in ("lat", "lon", "height")}
+            heading = orientation.get(ORIENTATION_KEYS["headingDeg"])
+            if heading is not None:
+                fallback["heading_deg"] = heading
+            if fallback:
+                resolved.setdefault(stage.id, {}).update(fallback)
         if SOURCE_META in stage.impl.produced_names and facts:
             resolved.setdefault(stage.id, {}).update(facts)
         if stage.impl.name == CATALOG:

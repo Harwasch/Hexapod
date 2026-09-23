@@ -41,6 +41,7 @@ from __future__ import annotations
 import logging
 import os
 import queue
+import shutil
 import subprocess
 import sys
 import threading
@@ -428,7 +429,32 @@ class JobSupervisor:
         job.error = None
         self._close(job)
         db.commit()
+        if self._config.tidy_finished_runs:
+            self._tidy(self._config.workdir_for(job.id))
         return "complete"
+
+    @staticmethod
+    def _tidy(workdir_root: Path) -> None:
+        """After a run that finished, drop what the workdir contract says is disposable.
+
+        Every stage's `work/` is scratch by A6's own definition ("safe to delete at any
+        time"), and `inputs/` is a copy of what is still in the bucket -- `_seed` fetches
+        it again if a retry ever needs it. Both are the bulk of a Lane 2 run: the uploaded
+        video, every candidate frame ffmpeg extracted before selection, COLMAP's database.
+        On a 20 GB worker volume, keeping them would fill it in three or four captures.
+        `out/`, `step.json` and `checkpoint/` stay, which is all retry-from-stage reads.
+        A failure to tidy is logged and nothing else: the run succeeded.
+        """
+        workdir = Workdir(workdir_root)
+        doomed = [workdir.inputs_dir]
+        if workdir.stages_dir.is_dir():
+            doomed += [stage / "work" for stage in sorted(workdir.stages_dir.iterdir())]
+        for path in doomed:
+            try:
+                if path.is_dir():
+                    shutil.rmtree(path)
+            except OSError:
+                log.warning("worker: could not tidy %s after a finished run", path, exc_info=True)
 
     def _finish_cancelled(self, db: Session, job: Job) -> Terminal:
         """`POST /jobs/{id}/cancel` already set the status; this closes out the run.

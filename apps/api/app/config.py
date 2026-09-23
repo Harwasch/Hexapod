@@ -135,8 +135,10 @@ class Settings(BaseSettings):
     worker_cloud_providers: list[str] = Field(default_factory=list)
     # How many preemptions of one stage before it moves to the next provider.
     worker_preemptions_before_fallback: int = 2
-    # The Modal app a ModalAdapter would look its function up in. Unused today.
-    worker_modal_app: str = ""
+    # The Modal app ModalAdapter looks `run_stage_<tier>` up in: the name infra/modal/app.py
+    # deploys under. It defaulted to empty and the adapter then fell back to "twin", which
+    # is not the app's name, so the first GPU dispatch would have failed on a lookup.
+    worker_modal_app: str = "twin-pipeline"
     # How often a dispatched stage is polled, and how often the machine running it is
     # asked to sync `checkpoint/` back. The second is the one that decides how much work
     # a preemption throws away.

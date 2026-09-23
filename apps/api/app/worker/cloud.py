@@ -65,6 +65,9 @@ __all__ = [
 #: it early again.
 _NEEDS_CLIENT: Mapping[str, str] = {"modal": "modal"}
 
+#: The name `infra/modal/app.py` deploys under, which `ModalAdapter` looks functions up in.
+MODAL_APP = "twin-pipeline"
+
 
 def check_dispatchable(providers: Sequence[str]) -> None:
     """Refuse a worker configured to dispatch somewhere it cannot reach.
@@ -192,7 +195,7 @@ def adapter_for(
         return FakeAdapter(transfer, sandbox, rates=rates)
     if name == "modal":
         # Never executed. See tools/pipeline/modal_adapter.py, which says so at length.
-        return ModalAdapter(modal_app or "twin", rates=rates)
+        return ModalAdapter(modal_app or MODAL_APP, rates=rates)
     raise ValueError(
         f"unknown cloud provider {name!r}. Known: fake, subprocess, modal. A name from "
         f"the price table that has no adapter yet (runpod-*, vast) is a provider this "

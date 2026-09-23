@@ -51,6 +51,18 @@ def test_a_job_can_still_override_the_captures_orientation() -> None:
     assert resolved["normalize"]["up_axis"] == "z"
 
 
+def test_a_video_capture_hands_its_coordinate_to_the_georeference_as_a_fallback() -> None:
+    resolved = _params("photo-reconstruct", {"lat": 51.5, "lon": -0.12, "headingDeg": 90})
+
+    assert resolved["georeference"] == {"lat": 51.5, "lon": -0.12, "heading_deg": 90.0}
+    # And nothing orientation-shaped reaches the frame extractor, which has no such knob.
+    assert "up_axis" not in resolved.get("normalize", {})
+
+
+def test_a_video_capture_with_no_coordinate_hands_over_nothing() -> None:
+    assert "georeference" not in _params("photo-reconstruct", {})
+
+
 def test_the_api_and_the_pipeline_agree_on_the_axis_names() -> None:
     assert set(UP_AXES) == set(gaussians.UP_AXES)
 

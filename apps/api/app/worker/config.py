@@ -52,6 +52,9 @@ class WorkerConfig:
     retry_backoff_s: float = 2.0
     #: How long a cancelled child is given to die politely before it is killed.
     terminate_grace_s: float = 5.0
+    #: Drop `inputs/` and every stage's `work/` once a run has finished successfully (see
+    #: `JobSupervisor._tidy`). On by default; off only for tests that read scratch files.
+    tidy_finished_runs: bool = True
 
     @staticmethod
     def from_settings(settings: Settings | None = None) -> WorkerConfig:
