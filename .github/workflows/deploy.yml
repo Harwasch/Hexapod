@@ -96,6 +96,31 @@ jobs:
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: flyctl deploy --remote-only --wait-timeout 10m
+      # `fly deploy` restores every machine to the state it found it in, so a worker that
+      # was stopped before the deploy is stopped after it -- and flyctl reports that as "a
+      # good state". The app process is behind Fly's proxy, which starts it on the next
+      # request; the worker has no service, so nothing ever would. Found on the first
+      # deployment, where a trial account's five-minute limit stopped the worker and every
+      # later deploy left it stopped while verify passed.
+      #
+      # Starting it here makes a deploy mean "the worker is running on this version",
+      # whatever stopped it: a trial limit, a host migration, a crash that exhausted its
+      # restarts. If the process then dies on start, verify's worker check is what says so.
+      - name: The worker is started, not just updated
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          stopped="$(flyctl machines list --json | jq -r \
+            '.[] | select(.config.metadata.fly_process_group == "worker" and .state != "started") | .id')"
+          if [ -z "$stopped" ]; then
+            echo "every worker machine is already running."
+            exit 0
+          fi
+          for id in $stopped; do
+            echo "starting worker machine $id"
+            flyctl machines start "$id"
+          done
       # The same repository variable the web build bakes into the bundle, so there is
       # one name for one thing. Unset, this step says so and passes: a deploy should not
       # be reported as failed because nobody has written down where it went.
