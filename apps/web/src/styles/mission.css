@@ -131,7 +131,7 @@
 /* ---- Project badge ----------------------------------------------------- */
 .mc-project {
   width: 19.25rem;
-  max-width: calc(100vw - 2 * var(--edge-gap));
+  max-width: 100%;
 }
 
 .mc-project__badge {
@@ -295,14 +295,18 @@
 /* ---- Layer pills ------------------------------------------------------- */
 .mc-pills {
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 0.5rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-1);
+  padding: var(--space-1);
+  border-radius: var(--glass-radius-sm);
 }
 
 .mc-pill {
-  padding: 0.6rem 0.9rem;
-  border-radius: 14px;
+  padding: 0.4rem 0.7rem;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
   color: var(--text-secondary);
   font: 600 11.5px var(--font-sans);
   cursor: pointer;
@@ -335,6 +339,7 @@
 .mc-overlays {
   position: absolute;
   inset: 0;
+  z-index: 0;
   pointer-events: none;
   overflow: hidden;
 }
@@ -490,8 +495,8 @@
 
 /* ---- Selection card ---------------------------------------------------- */
 .mc-card {
-  width: 18.75rem;
-  max-width: calc(100vw - 2 * var(--edge-gap));
+  width: 100%;
+  overflow: auto;
   padding: 1rem 1.1rem;
   border-radius: 20px;
 }
@@ -700,37 +705,27 @@
 }
 
 /* ---- Windows (Plan / Fleet) ------------------------------------------- */
-.hud > .mc-window-wrap,
+/* The Plan / Fleet window lives in the left dock, which it has to itself (one replaces the
+   other, see `state/layout.ts`). It is as tall as its content and scrolls past the dock. */
 .mc-window-wrap {
-  position: absolute;
-  top: 5.75rem;
-  bottom: 6.5rem;
-  right: calc(var(--edge-gap) + 27.5rem);
-  width: 37.5rem;
-  max-width: calc(100vw - 2 * var(--edge-gap));
-  /* A compact window leaves the rest of its slot to the map underneath. */
-  pointer-events: none;
-}
-
-.mc-window-wrap > * {
-  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  width: var(--window-width);
+  max-width: 100%;
+  min-height: 0;
 }
 
 .mc-window-wrap--wide {
-  width: 40rem;
+  width: calc(var(--window-width) + 2.5rem);
 }
 
 .mc-window {
   display: flex;
   flex-direction: column;
-  height: 100%;
-  border-radius: 24px;
-  overflow: hidden;
-}
-
-.mc-window--compact {
-  height: auto;
   max-height: 100%;
+  min-height: 0;
+  border-radius: var(--glass-radius);
+  overflow: hidden;
 }
 
 .mc-window__head {
@@ -1059,10 +1054,9 @@
 .mc-stream {
   display: flex;
   flex-direction: column;
-  align-items: flex-end;
+  align-items: stretch;
   gap: 0;
-  width: 26.875rem;
-  max-width: calc(100vw - 2 * var(--edge-gap));
+  width: 100%;
 }
 
 .mc-stream.is-open {
@@ -1307,8 +1301,7 @@
 
 /* ---- Feeds ------------------------------------------------------------- */
 .mc-feeds {
-  width: 25rem;
-  max-width: calc(100vw - 2 * var(--edge-gap));
+  width: 100%;
   border-radius: 22px;
   overflow: hidden;
 }
@@ -1412,36 +1405,19 @@
 }
 
 /* ---- Responsive --------------------------------------------------------- */
-@media (max-width: 1180px) {
-  .mc-window-wrap {
-    right: var(--edge-gap);
-    width: min(37.5rem, calc(100vw - 2 * var(--edge-gap)));
-  }
-  .mc-stream {
-    width: min(26.875rem, calc(100vw - 2 * var(--edge-gap)));
-  }
-}
-
-@media (max-width: 760px) {
+@media (max-width: 899px) {
   .mc-project {
-    width: 15rem;
+    width: auto;
   }
   .mc-bar__readout {
     display: none;
   }
   .mc-tabs__tab {
-    padding: 0.5rem 0.75rem;
+    padding: 0.45rem 0.7rem;
   }
-  .mc-window-wrap {
-    top: 8.5rem;
-    bottom: 5.5rem;
-  }
-  .mc-stream {
-    width: calc(100vw - 2 * var(--edge-gap));
-  }
-  .mc-card,
-  .mc-feeds {
-    width: calc(100vw - 2 * var(--edge-gap));
+  .mc-window-wrap,
+  .mc-window-wrap--wide {
+    width: 100%;
   }
 }
 

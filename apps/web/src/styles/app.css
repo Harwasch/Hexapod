@@ -58,50 +58,68 @@ a {
   outline: none;
 }
 
-/* Cesium's credit display becomes a small glass chip above the command bar (attribution stays
-   visible — the chip carries the provider credits and the "Data attribution" link to the rest).
-   It stays a chip because the one thing that ever bloated it, CesiumJS's default-token setup
-   advice, is demoted into that dialog in `cesium/ion.ts` rather than clipped here.
-   Viewer.resize() writes inline left/bottom/right on this element, so these win with
-   !important. */
-.viewport .cesium-viewer-bottom {
-  left: calc(var(--edge-gap) + 20rem) !important;
-  bottom: 5.9rem !important;
+/* The data credits. `CreditSlot` moves Cesium's credit container out of the widget and into
+   the HUD's bottom bar, so it is laid out like any other surface instead of being chased with
+   offsets. It stays a chip: the one thing that ever bloated it, CesiumJS's default-token
+   advice, is demoted into the "Data attribution" dialog in `cesium/ion.ts`. Viewer.resize()
+   still writes inline left/bottom/right on the element, so the reset wins with !important. */
+.credit-slot {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: flex-end;
+  max-width: 100%;
+}
+
+.credit-slot:empty {
+  display: none;
+}
+
+.credit-slot .cesium-viewer-bottom {
+  position: static !important;
+  left: auto !important;
   right: auto !important;
-  max-width: min(30vw, 17rem);
-  padding: 0.25rem 0.6rem;
+  bottom: auto !important;
+  display: flex;
+  align-items: center;
+  max-width: 100%;
+  padding: 0.3rem 0.7rem;
   line-height: 1.25;
   border-radius: var(--glass-radius-pill);
-  background: var(--glass-bg);
+  background: var(--glass-bg-strong);
   -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
   backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
   border: 1px solid var(--glass-border);
-  box-shadow: var(--glass-shadow-soft);
   font-size: var(--text-xs);
   color: var(--text-secondary);
-  z-index: var(--z-ui);
+  white-space: nowrap;
+  overflow: hidden;
 }
 
-.viewport .cesium-credit-logoContainer img {
+.cesium-viewer-bottom .cesium-widget-credits {
+  display: flex !important;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0;
+  font-size: var(--text-xs);
+}
+
+.cesium-viewer-bottom .cesium-credit-logoContainer img {
   height: 14px;
   vertical-align: middle;
 }
 
-.viewport .cesium-widget-credits {
-  font-size: 10px;
-}
-
-.viewport .cesium-credit-textContainer,
-.viewport .cesium-credit-expand-link {
+.cesium-viewer-bottom .cesium-credit-textContainer,
+.cesium-viewer-bottom .cesium-credit-expand-link {
   color: var(--text-secondary);
   font-family: var(--font-sans);
 }
 
-.viewport .cesium-credit-expand-link {
-  padding-left: 0.4rem;
+.cesium-viewer-bottom .cesium-credit-expand-link {
+  padding-left: 0.25rem;
 }
 
-.viewport .cesium-widget-credits a {
+.cesium-viewer-bottom .cesium-widget-credits a {
   color: var(--accent-strong);
 }
 
@@ -152,189 +170,275 @@ body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-close {
 }
 
 /* ---- HUD layout ---------------------------------------------------------- */
+/* One grid, fixed regions. Every floating surface is placed in exactly one region, so two
+   surfaces can only meet by stacking inside a dock — never by drawing over each other. Who
+   gets a contested region is decided in `state/layout.ts`.
+
+   Wide (≥ 900px)                               Compact (< 900px)
+   ┌─────────────── top ───────────────┐        ┌──── top ────┐
+   │rail│ left │  center  │ right │nav│        │  messages   │
+   │    │ dock │          │ dock  │   │        │    (map)    │
+   │    │──────── strip ─────────│   │        │    sheet    │
+   ├─────────────── bar ───────────────┤        │ agent/strip │
+   └───────────────────────────────────┘        │ rail · bar  │
+                                                 └─────────────┘ */
 .hud {
+  /* The widest the left dock may be while every other column keeps its width. */
+  --dock-left-max: calc(
+    100vw - 2 * var(--edge-gap) - 4 * var(--hud-gap) - var(--rail-w) - var(--nav-w) -
+      var(--panel-width)
+  );
   position: absolute;
   inset: 0;
   z-index: var(--z-ui);
+  display: grid;
+  grid-template-columns: var(--rail-w) auto minmax(0, 1fr) var(--panel-width) var(--nav-w);
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  grid-template-areas:
+    "top top top top top"
+    "rail left center right nav"
+    "rail strip strip strip nav"
+    "bar bar bar bar bar";
+  gap: var(--hud-gap);
+  padding: var(--edge-gap);
+  padding-top: max(var(--edge-gap), env(safe-area-inset-top));
+  padding-bottom: max(var(--edge-gap), env(safe-area-inset-bottom));
   pointer-events: none;
 }
 
-.hud > * {
-  pointer-events: auto;
-}
-
-/* The project switcher's menu and the search results list drop out of these two regions and
-   over the rest of the HUD. Both are absolutely positioned siblings of the tool rail inside
-   `.hud`, which is the stacking context they all share, so ordering them here is enough — the
-   menu does not need a portal. Without this they paint in DOM order and land under the rail. */
-.hud-top-left {
-  position: absolute;
-  top: var(--edge-gap);
-  left: var(--edge-gap);
-  z-index: var(--z-hud-popover);
-  display: flex;
-  flex-direction: column;
-  gap: 0.6rem;
-  align-items: flex-start;
-}
-
-.hud-top-center {
-  position: absolute;
-  top: var(--edge-gap);
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: var(--z-hud-popover);
-  width: min(26rem, calc(100vw - 46rem));
-}
-
-.hud-top-right {
-  position: absolute;
-  top: var(--edge-gap);
-  right: var(--edge-gap);
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 0.6rem;
-}
-
-.hud-left {
-  position: absolute;
-  top: 50%;
-  left: var(--edge-gap);
-  transform: translateY(-50%);
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-}
-
-.hud-right {
-  position: absolute;
-  top: 5.75rem;
-  right: var(--edge-gap);
-  bottom: 6.5rem;
-  width: var(--panel-width);
-  max-width: calc(100vw - 2 * var(--edge-gap));
-  display: flex;
-  flex-direction: column;
-  justify-content: flex-start;
+/* Regions are layout only: the globe under their empty space must still take the mouse. */
+.hud-region {
+  position: relative;
+  z-index: 1;
+  min-width: 0;
+  min-height: 0;
   pointer-events: none;
 }
 
-.hud-right > * {
+.hud-region > *,
+.hud-stack > * {
   pointer-events: auto;
 }
 
-.hud-right > * + * {
-  margin-top: var(--space-2);
-}
-
-.hud-bottom-left {
-  position: absolute;
-  left: var(--edge-gap);
-  bottom: 6.5rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.6rem;
-  align-items: flex-start;
-}
-
-.hud-bottom-center {
-  position: absolute;
-  left: 50%;
-  bottom: 6.5rem;
-  transform: translateX(-50%);
-  display: flex;
-  flex-direction: column;
+.hud-top {
+  grid-area: top;
+  /* Menus drop out of the top bar, over the regions below it. */
+  z-index: 3;
+  display: grid;
+  grid-template-columns: minmax(max-content, 1fr) minmax(0, 26rem) minmax(max-content, 1fr);
   align-items: center;
-  gap: var(--space-2);
-  max-width: calc(100vw - 2rem);
+  gap: var(--hud-gap);
 }
 
-.hud-bottom-right {
-  position: absolute;
-  right: var(--edge-gap);
-  bottom: 6.5rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.6rem;
-  align-items: flex-end;
+.hud-top > :last-child {
+  justify-self: end;
 }
 
-.hud-bottom-bar {
-  position: absolute;
-  left: var(--edge-gap);
-  right: var(--edge-gap);
-  bottom: var(--edge-gap);
+.hud-top__search {
+  min-width: 0;
+}
+
+.hud-rail {
+  grid-area: rail;
+  align-self: start;
 }
 
 .hud-nav {
-  position: absolute;
-  right: var(--edge-gap);
-  top: 50%;
-  transform: translateY(-50%);
+  grid-area: nav;
+  align-self: end;
 }
 
-.hud-top-right .notice {
-  max-width: 19rem;
-  font-size: var(--text-xs);
+.hud-center {
+  grid-area: center;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: center;
+}
+
+.hud-strip {
+  grid-area: strip;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.hud-bar {
+  grid-area: bar;
+  display: flex;
+  align-items: center;
+  gap: var(--hud-gap);
+}
+
+.hud-bar > :first-child {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Docks stack what they hold. Items shrink before they overflow and panels scroll inside
+   themselves, so a crowded dock gets shorter panels — never panels on top of each other. */
+.hud-dock {
+  display: flex;
+  flex-direction: column;
+  gap: var(--hud-gap);
+}
+
+.hud-dock--left {
+  grid-area: left;
+  max-width: var(--dock-left-max);
+}
+
+.hud-dock--right {
+  grid-area: right;
+}
+
+.hud-dock > *,
+.hud-stack > * {
+  min-height: 0;
+  max-width: 100%;
+}
+
+/* A dock item: a column that lets its panel shrink and scroll. */
+.hud-item {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  max-width: 100%;
+}
+
+.hud-item > * {
+  min-height: 0;
+}
+
+.hud-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-height: 0;
+}
+
+.hud-stack:empty {
+  display: none;
+}
+
+.hud-pills {
+  flex: none;
+  align-items: flex-end;
+}
+
+.hud-messages {
+  flex: 0 1 auto;
+  max-height: 45%;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.hud-messages > * {
+  flex: none;
+}
+
+.hud-detail {
+  flex: 0 1 auto;
+}
+
+.hud-agent {
+  flex: none;
+  margin-top: auto;
 }
 
 @media (max-width: 1180px) {
-  .hud-top-center {
-    display: none;
+  :root {
+    --panel-width: 19.5rem;
+    --panel-width-wide: 22rem;
   }
 }
 
-@media (max-width: 760px) {
+@media (max-width: 899px) {
   :root {
-    --edge-gap: 0.75rem;
+    --edge-gap: 0.625rem;
+    --hud-gap: 0.5rem;
   }
-  .hud-top-right {
-    top: 4.5rem;
+
+  .hud {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto minmax(0, 1fr) auto auto auto auto;
+    grid-template-areas:
+      "top"
+      "messages"
+      "sheet"
+      "agent"
+      "strip"
+      "rail"
+      "bar";
   }
-  .hud-left {
-    top: auto;
-    left: 50%;
-    bottom: 5.5rem;
-    transform: translateX(-50%);
+
+  .hud-top {
+    grid-template-columns: minmax(0, 1fr) auto;
   }
-  .hud-left .tool-rail {
-    flex-direction: row;
-  }
-  .hud-left .panel {
-    position: fixed;
-    left: var(--edge-gap);
-    right: var(--edge-gap);
-    bottom: 9rem;
-    top: auto;
-    width: auto;
-    max-height: 50vh;
-  }
-  .hud-right {
-    top: auto;
-    left: var(--edge-gap);
-    right: var(--edge-gap);
-    bottom: 9rem;
-    width: auto;
-    max-height: 50vh;
-  }
-  .hud-bottom-left,
-  .hud-bottom-right {
-    bottom: 9rem;
-  }
-  .hud-bottom-center {
-    bottom: 5.5rem;
-  }
-  .hud-nav {
+
+  .hud-top__search,
+  .hud-nav,
+  .hud-pills {
     display: none;
   }
-  .viewport .cesium-viewer-bottom {
-    bottom: 5.4rem !important;
-    max-width: 55vw;
-    font-size: 9px;
+
+  /* The right dock's parts go to their own phone rows. */
+  .hud-dock--right {
+    display: contents;
   }
-  .notice.notice--info {
+
+  .hud-messages {
+    grid-area: messages;
+    max-height: 30dvh;
+  }
+
+  .hud-detail,
+  .hud-dock--left,
+  .hud-center {
+    grid-area: sheet;
+    align-self: end;
+    max-height: 100%;
+    max-width: none;
+  }
+
+  .hud-agent {
+    grid-area: agent;
+    margin-top: 0;
+  }
+
+  /* A sheet is as wide as the screen. */
+  .hud-dock--left .panel,
+  .hud-dock--left .hud-item {
+    width: 100%;
+  }
+
+  /* One sheet at a time: the dock touched last. The welcome card gives way to either. */
+  .hud[data-sheet="left"] .hud-detail,
+  .hud[data-sheet="right"] .hud-dock--left,
+  .hud:has(.hud-dock--left > *, .hud-detail > *) .hud-center {
     display: none;
+  }
+
+  .hud-rail {
+    grid-area: rail;
+    align-self: auto;
+  }
+
+  .hud-bar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--space-1);
+  }
+
+  .hud-bar > :first-child {
+    order: 1;
+  }
+
+  .credit-slot .cesium-viewer-bottom {
+    font-size: 10px;
+    padding: 0.15rem 0.5rem;
   }
 }
 
@@ -410,8 +514,10 @@ body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-close {
 .tool-rail {
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
-  padding: 0.35rem;
+  align-items: center;
+  gap: var(--space-1);
+  width: 100%;
+  padding: 0.3rem 0;
 }
 
 .tool-rail .glass-button {
@@ -431,9 +537,31 @@ body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-close {
 }
 
 .tool-rail__divider {
+  width: 60%;
   height: 1px;
-  margin: 0.2rem 0.4rem;
+  margin: 0.2rem 0;
   background: var(--divider);
+}
+
+/* On a phone the rail is a row above the command bar. */
+@media (max-width: 899px) {
+  .tool-rail {
+    flex-direction: row;
+    justify-content: space-between;
+    padding: 0.25rem 0.4rem;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .tool-rail .glass-button {
+    flex: none;
+  }
+
+  .tool-rail__divider {
+    width: 1px;
+    height: 1.5rem;
+    margin: 0 0.1rem;
+  }
 }
 
 /* ---- Panels -------------------------------------------------------------- */
@@ -441,9 +569,14 @@ body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-close {
   display: flex;
   flex-direction: column;
   width: var(--panel-width);
-  max-width: calc(100vw - 6rem);
-  max-height: min(70vh, 40rem);
+  max-width: 100%;
+  max-height: 100%;
   overflow: hidden;
+}
+
+/* In the right dock a panel is as wide as the dock. */
+.hud-dock--right .panel {
+  width: 100%;
 }
 
 .panel--wide {
@@ -799,8 +932,10 @@ body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-close {
 .nav-controls {
   display: flex;
   flex-direction: column;
-  gap: 0.2rem;
-  padding: 0.3rem;
+  align-items: center;
+  gap: 0.15rem;
+  width: 100%;
+  padding: 0.3rem 0;
 }
 
 .nav-controls .glass-button {
@@ -820,12 +955,7 @@ body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-close {
 
 /* ---- Onboarding ---------------------------------------------------------- */
 .onboarding {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 7.5rem;
-  width: min(24rem, calc(100vw - 2rem));
-  margin: 0 auto;
+  width: min(25rem, 100%);
   text-align: center;
 }
 
@@ -850,16 +980,14 @@ body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-close {
 
 /* ---- Toasts -------------------------------------------------------------- */
 .toasts {
-  position: absolute;
-  top: 5.25rem;
-  left: 50%;
-  transform: translateX(-50%);
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
-  width: min(26rem, calc(100vw - 2rem));
-  z-index: var(--z-toast);
+  gap: var(--space-2);
   pointer-events: none;
+}
+
+.toasts:empty {
+  display: none;
 }
 
 .toast {
@@ -1111,19 +1239,49 @@ body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-close {
   font-variant-numeric: tabular-nums;
 }
 
-/* ---- Notices ------------------------------------------------------------- */
-.notice {
+/* ---- Notices and status messages --------------------------------------- */
+/* Notices, toasts and the Simulated badge share one shape: icon, a bold line, a plain line,
+   and at most one control. They live in the right dock's message stack. */
+.notice,
+.living-badge {
   display: flex;
   align-items: flex-start;
-  gap: 0.6rem;
-  padding: 0.65rem 0.8rem;
+  gap: var(--space-2);
+  padding: 0.6rem 0.75rem;
   font-size: var(--text-sm);
+  border-left: 3px solid var(--notice-tone, var(--glass-border));
+}
+
+.notice--warning {
+  --notice-tone: var(--warn);
+}
+
+.notice--info {
+  --notice-tone: var(--agent);
 }
 
 .notice__icon {
-  color: var(--warning);
+  color: var(--notice-tone, var(--text-secondary));
   flex: 0 0 auto;
   margin-top: 0.1rem;
+}
+
+.notice__text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  flex: 1;
+  min-width: 0;
+  line-height: var(--leading-tight);
+}
+
+.notice__text strong {
+  font-weight: 600;
+}
+
+.notice__text span {
+  color: var(--text-secondary);
+  line-height: var(--leading-normal);
 }
 
 .notice code {
@@ -1132,68 +1290,21 @@ body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-close {
   padding: 0.05em 0.35em;
   border-radius: 4px;
   background: var(--control-bg);
-}
-
-/* The notice stack hangs below the view tabs and layer pills and can reach the camera
-   controls and the inspector, both later in the HUD, which would otherwise paint over it and
-   swallow clicks meant for the dismiss button. Only the notices are raised — the tabs and
-   pills above them keep sitting under the inspector, where they belong. */
-.setup-notices {
-  position: relative;
-  z-index: var(--z-hud-popover);
-}
-
-/* An informational notice is a setup note, not a warning: no amber, and it makes room for
-   the control that dismisses it. */
-.notice--info .notice__icon {
-  color: var(--text-tertiary);
-}
-
-.notice--dismissible {
-  align-items: center;
-  padding-right: 0.3rem;
+  overflow-wrap: anywhere;
 }
 
 .notice__dismiss {
   flex: 0 0 auto;
-  margin-left: auto;
-  color: var(--text-tertiary);
+  margin: -0.25rem -0.35rem -0.25rem 0;
+  color: var(--text-secondary);
 }
 
 /* ---- Living Survey: the Simulated badge ---------------------------------- */
-/* Sits under the project badge, which is 19.25rem wide; matching it keeps the top-left
-   column one shape rather than two. Amber marks it, but every word of the meaning is text. */
+/* Amber marks it, but every word of the meaning is text. Ambient, not interactive: it must
+   never take a click meant for the world behind it. */
 .living-badge {
-  display: flex;
-  align-items: flex-start;
-  gap: 0.55rem;
-  width: 19.25rem;
-  max-width: calc(100vw - 2 * var(--edge-gap));
-  padding: 0.55rem 0.7rem;
-  border-left: 3px solid var(--warn);
-  /* Ambient, not interactive: it must never take a click meant for the world behind it. */
+  --notice-tone: var(--warn);
   pointer-events: none;
-}
-
-.living-badge__icon {
-  color: var(--warn);
-  flex: 0 0 auto;
-  margin-top: 0.15rem;
-}
-
-.living-badge__title {
-  display: block;
-  font: 600 12px var(--font-sans);
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
-  color: var(--warn);
-}
-
-.living-badge__body {
-  display: block;
-  margin-top: 0.15rem;
-  font: 400 11.5px/1.35 var(--font-sans);
-  color: var(--text-secondary);
 }
 
 /* ---- Fatal / boot -------------------------------------------------------- */

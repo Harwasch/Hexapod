@@ -56,12 +56,10 @@ export function SimulatedBadge() {
       aria-label="Simulated motion"
       data-testid="simulated-badge"
     >
-      <Wind className="living-badge__icon" size={16} aria-hidden="true" />
-      <div>
-        <strong className="living-badge__title">Simulated motion</strong>
-        <span className="living-badge__body">
-          Modelled wind on {subject}. The data underneath is never altered.
-        </span>
+      <Wind className="notice__icon" size={16} aria-hidden="true" />
+      <div className="notice__text">
+        <strong>Simulated motion</strong>
+        <span>Modelled wind on {subject}. The data underneath is never altered.</span>
       </div>
     </GlassPanel>
   );

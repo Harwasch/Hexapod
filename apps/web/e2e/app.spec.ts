@@ -302,8 +302,8 @@ test.describe("the HUD over the map", () => {
   }) => {
     await app.getByTestId("onboarding-explore").click();
     // Cesium ion's terms and Google Photorealistic 3D Tiles' terms both require the credit
-    // to remain visible. It is a chip above the command bar; it is never removed or hidden.
-    const credits = app.locator(".viewport .cesium-viewer-bottom");
+    // to remain visible. It is a chip in the bottom bar; it is never removed or hidden.
+    const credits = app.getByTestId("credits").locator(".cesium-viewer-bottom");
     await expect(credits).toBeVisible();
     await expect(credits.locator(".cesium-credit-logoContainer img")).toBeVisible();
 
