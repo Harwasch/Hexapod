@@ -551,8 +551,9 @@ class JobSupervisor:
         """Put the capture's uploaded bytes where the recipe says its inputs live.
 
         Skipped when the directory is already populated, so a reclaimed or retried job
-        does not download a 12 GB video again. (It *is* a whole-object read into memory;
-        B1, which moves workdirs between machines, is where streaming belongs.)
+        does not download a 12 GB video again. Streamed to disk, not read into memory:
+        the worker machine has 2 GB and an iPhone video is routinely larger than that,
+        and a whole-object read of one killed the worker before the first stage ran.
         """
         work = Workdir.create(workdir_root)
         capture = db.get(Capture, job.capture_id)
@@ -566,9 +567,7 @@ class JobSupervisor:
             for source in capture.files:
                 if source.status is not UploadStatus.COMPLETE:
                     continue
-                (target / Path(source.filename).name).write_bytes(
-                    self._storage.get_object(source.storage_key)
-                )
+                self._storage.download_file(source.storage_key, target / Path(source.filename).name)
 
     def _completed_stages(self, db: Session, job_id: uuid.UUID, workdir_root: Path) -> set[str]:
         """Stages that may be skipped: complete in the database **and** still on disk."""

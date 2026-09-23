@@ -129,18 +129,13 @@ class ObjectStoreTransfer:
         root = self._key(key)
         single = self.storage.head_object(root)
         if single is not None:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            data = self.storage.get_object(root)
-            target.write_bytes(data)
-            return len(data)
+            # Streamed: what comes back from a GPU stage is a trained splat of hundreds
+            # of megabytes, arriving on a worker with two gigabytes.
+            return self.storage.download_file(root, target)
         moved = 0
         for member in self._listing(f"{root}/"):
             relative = member[len(root) + 1 :]
-            destination = target / relative
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            data = self.storage.get_object(member)
-            destination.write_bytes(data)
-            moved += len(data)
+            moved += self.storage.download_file(member, target / relative)
         return moved
 
     def exists(self, key: str) -> bool:

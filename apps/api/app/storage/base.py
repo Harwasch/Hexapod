@@ -13,6 +13,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Protocol
 
 #: Default lifetime for a presigned URL. An hour is long enough for one part of
@@ -100,6 +101,15 @@ class ObjectStorage(Protocol):
     def put_object(self, key: str, data: bytes, content_type: str) -> StoredObject: ...
 
     def get_object(self, key: str) -> bytes: ...
+
+    def download_file(self, key: str, target: Path) -> int:
+        """Stream an object to a file and return its size, never holding it in memory.
+
+        `get_object` returns the whole object as one `bytes`, which is right for a
+        manifest and wrong for a 4 GB iPhone video on a worker with 2 GB of RAM: the
+        process is killed before the first stage runs, and the job looks like a crash.
+        """
+        ...
 
     def head_object(self, key: str) -> StoredObject | None: ...
 
