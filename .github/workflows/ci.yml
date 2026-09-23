@@ -1,21 +1,506 @@
 name: CI
 
-# This file exists on main only so GitHub registers the workflow and makes
-# workflow_dispatch available. The real CI definition -- lint, typecheck,
-# tests, Playwright, the API job with its PostGIS and MinIO services -- lives
-# on the development branch, and dispatching against a ref runs THAT ref's
-# copy of this file, not this one.
-#
-# It carries no push trigger on purpose: main is currently a stub with none of
-# the project's files, so a run started from here could only fail. When the
-# development branch merges, that merge replaces this file with the real one.
 on:
+  push:
+    branches: [main]
+  pull_request:
+  # Lets CI be run on demand against a feature branch. Without it the only
+  # triggers are main and pull requests, so work on a branch with no PR open
+  # cannot be verified by CI at all -- which matters here because some checks
+  # (the MinIO service in the api job) can only run on a runner.
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  placeholder:
-    name: Placeholder (the real jobs live on the development branch)
+  web:
+    name: Web · lint, typecheck, test, build
     runs-on: ubuntu-latest
     steps:
-      - run: |
-          echo "Dispatch this workflow against a development branch to run the real CI."
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm audit --audit-level high
+      - run: pnpm format:check
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm contracts:check
+      - run: pnpm test
+      - run: pnpm build
+        env:
+          VITE_CESIUM_ION_ACCESS_TOKEN: ""
+
+  workflows:
+    name: Workflows · parse, and agree with the handover
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # A workflow with a YAML error does not fail -- it silently never runs, and the
+      # Actions tab shows nothing at all. So they are parsed here, where a mistake is
+      # loud. The second half is the cross-check that matters more: provision.yml and
+      # deploy.yml between them read a dozen repository secrets and variables, and the
+      # only place a human learns which ones to create is docs/DEPLOYMENT.md. A name that
+      # exists in a workflow and not in that document is an hour of someone reading YAML
+      # to find out why a dispatch failed.
+      - name: Every secret and variable a workflow reads is in the handover
+        run: |
+          python3 -m pip install --quiet --disable-pip-version-check pyyaml
+          python3 - <<'PY'
+          import pathlib
+          import re
+          import sys
+
+          import yaml
+
+          handover = pathlib.Path("docs/DEPLOYMENT.md").read_text()
+          reference = re.compile(r"\b(secrets|vars)\.([A-Za-z_][A-Za-z0-9_]*)\b")
+          # GITHUB_TOKEN is GitHub's own; nobody creates it.
+          builtin = {"GITHUB_TOKEN"}
+          problems: list[str] = []
+
+          for path in sorted(pathlib.Path(".github/workflows").glob("*.yml")):
+              text = path.read_text()
+              try:
+                  workflow = yaml.safe_load(text)
+              except yaml.YAMLError as error:
+                  problems.append(f"{path} is not valid YAML: {error}")
+                  continue
+              if not isinstance(workflow, dict) or "jobs" not in workflow:
+                  problems.append(f"{path} parsed, but has no jobs table")
+              for kind, name in sorted(set(reference.findall(text))):
+                  if name in builtin:
+                      continue
+                  if f"`{name}`" not in handover:
+                      problems.append(
+                          f"{path} reads {kind}.{name}, which docs/DEPLOYMENT.md never names"
+                      )
+
+          # ci.yml runs on push; the two that spend money or create resources must not.
+          for name in ("deploy.yml", "provision.yml"):
+              triggers = yaml.safe_load(pathlib.Path(".github/workflows", name).read_text())
+              # `on` is YAML 1.1's boolean true, which is why this is not triggers["on"].
+              on = triggers.get(True, triggers.get("on"))
+              if not isinstance(on, dict) or "push" in on or "pull_request" in on:
+                  problems.append(f"{name} must stay dispatch-only; its triggers are {on!r}")
+
+          for problem in problems:
+              print(f"::error::{problem}")
+          sys.exit(1 if problems else 0)
+          PY
+
+  e2e:
+    name: Web · Playwright
+    runs-on: ubuntu-latest
+    needs: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @twin/web exec playwright install --with-deps chromium
+      - run: pnpm e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: apps/web/playwright-report
+
+  captures:
+    name: Captures · lint, test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tools/captures
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --frozen
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      # Covers the synthetic tree fixture: reproducible bytes, and a canonical-position
+      # checksum that must agree with checksumPositions in @twin/world (asserted from the
+      # TypeScript side by packages/world/src/fixture.test.ts, under the web job).
+      - run: uv run pytest -q
+      - name: Committed fixture is up to date
+        run: git diff --exit-code -- ../../data/tiles/synthetic-tree
+
+  pipeline:
+    name: Pipeline · lint, typecheck, test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tools/pipeline
+    steps:
+      - uses: actions/checkout@v4
+      # COLMAP, for the `pose` stage's measured integration test: 40 rendered frames of
+      # the committed synthetic tree, scored against the poses they were rendered from.
+      # Measured before deciding this was affordable: `colmap` on Ubuntu 24.04 pulls a
+      # 176-package, 184 MB dependency closure, which downloaded in 10.2 s and unpacked
+      # in 2.9 s on a 4-core box -- a fraction of what this job already spends on
+      # `uv sync`, and much of that closure is already on a runner image. The COLMAP run
+      # itself is ~55 s on 4 cores. `tests/test_pose_colmap.py` skips where colmap is
+      # absent and *fails* under CI=true where it is, so deleting this step turns the
+      # pose stage's whole test file into silent skips rather than a red job.
+      - name: Install COLMAP
+        run: sudo apt-get update && sudo apt-get install -y colmap
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --frozen
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      # New code, so unlike tools/captures this project is mypy --strict. That also covers
+      # captures_bridge.py's import of tools/captures/splat_tiles.py, via mypy_path.
+      - run: uv run mypy .
+      # Both recipes -- Lane 2 included -- run end to end under StubRunner here. This
+      # runner has no GPU, which is the whole point: if this job needs one, the stub has
+      # stopped doing its job.
+      - run: uv run pytest -q
+      # The Modal app's decorators run on the machine that types `modal deploy`, not in
+      # the container, so building the App locally is a real check of everything they
+      # take -- and it is the only check this repository can make of a file that has
+      # never been deployed. It caught two path bugs the day it was written: the tier
+      # table imported from the mount point instead of the checkout, and a relative
+      # `add_local_dir` that depended on the working directory.
+      #
+      # `--with modal` rather than a dependency, so the assertion in the api job below
+      # -- that ModalAdapter imports in a venv with no `modal` at all -- still means
+      # something. What this cannot check is the `gpu=` string: an App with a nonsense
+      # GPU name builds perfectly well and is refused only server-side.
+      - name: The Modal app builds (it has still never been deployed)
+        run: |
+          uv run --with modal python - <<'PY'
+          import importlib.util
+          spec = importlib.util.spec_from_file_location("app", "../../infra/modal/app.py")
+          module = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+          names = sorted(module.FUNCTIONS)
+          print("registered:", names)
+          assert names, "no per-tier function was registered"
+          assert names == sorted(module.TIERS), f"{names} does not match {module.TIERS}"
+          PY
+
+  api:
+    name: API · lint, typecheck, test, migrations
+    runs-on: ubuntu-latest
+    services:
+      postgis:
+        image: postgis/postgis:16-3.5
+        env:
+          POSTGRES_USER: twin
+          POSTGRES_PASSWORD: twin
+          POSTGRES_DB: twin
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U twin -d twin"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    defaults:
+      run:
+        working-directory: apps/api
+    env:
+      DATABASE_URL: postgresql+psycopg://twin:twin@localhost:5432/twin
+      TEST_DATABASE_URL: postgresql+psycopg://twin:twin@localhost:5432/twin_test
+      # Real object storage for the presigned-URL tests. moto cannot speak for
+      # these paths: it returns 200 for a PUT with no signature at all, so only a
+      # real S3 implementation proves the URLs we hand the browser are SigV4 and
+      # are actually accepted. tests/test_storage_minio.py fails (rather than
+      # skipping) if this is unset while CI=true.
+      TEST_S3_ENDPOINT_URL: http://127.0.0.1:9000
+      TEST_S3_ACCESS_KEY: twin
+      TEST_S3_SECRET_KEY: twin-secret
+      TEST_S3_BUCKET: twin-test
+      TEST_S3_REGION: us-east-1
+    steps:
+      - uses: actions/checkout@v4
+      # MinIO is a `docker run` rather than a `services:` container because the
+      # minio/minio image needs the `server /data` command, and a service block
+      # has nowhere to put a command -- `options:` maps to `docker create`
+      # flags, which come before the image name. Health-check and teardown are
+      # the same as a service container's; only the declaration differs.
+      # quay.io, not Docker Hub: MinIO deleted minio/minio from Docker Hub on
+      # 2026-09-11, so `docker run minio/minio` fails with "repository does not
+      # exist". Same image and tag, MinIO's own registry.
+      - name: Start MinIO
+        run: |
+          docker run -d --name minio \
+            -p 9000:9000 \
+            -e MINIO_ROOT_USER=twin \
+            -e MINIO_ROOT_PASSWORD=twin-secret \
+            quay.io/minio/minio:latest server /data
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null; then
+              echo "MinIO is live"; exit 0
+            fi
+            sleep 2
+          done
+          echo "MinIO did not become healthy"; docker logs minio || true; exit 1
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --frozen
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run mypy .
+      - name: Dependency audit
+        run: |
+          uv export --frozen --no-emit-project --no-dev --format requirements-txt -o /tmp/requirements.txt
+          uv run pip-audit --strict --disable-pip -r /tmp/requirements.txt
+      - name: Create test database
+        run: |
+          PGPASSWORD=twin psql -h localhost -U twin -d twin -c "CREATE DATABASE twin_test;"
+          PGPASSWORD=twin psql -h localhost -U twin -d twin_test -c "CREATE EXTENSION IF NOT EXISTS postgis;"
+      - run: uv run alembic upgrade head
+      - run: uv run pytest -q
+      - name: OpenAPI contract is up to date
+        run: |
+          uv run python -m app.scripts.export_openapi ../../packages/contracts/openapi.json
+          git diff --exit-code -- ../../packages/contracts/openapi.json
+      # `|| true` on both: if MinIO never started, these diagnostics would
+      # otherwise fail too and bury the real error under two spurious ones.
+      - name: MinIO logs
+        if: failure()
+        run: docker logs minio || true
+      - name: Stop MinIO
+        if: always()
+        run: docker rm -f minio || true
+
+  image:
+    name: Image · API and worker, from the real Dockerfile
+    runs-on: ubuntu-latest
+    # The other jobs run the code from the checkout, so none of them can see what is
+    # missing from the image. This one builds infra/api.Dockerfile and asks the container
+    # the two questions a deployment asks it: can the API list the recipes, and can the
+    # worker start. Before B1a the image carried `apps/api/` alone, and both answers were
+    # no -- `app/worker/pipeline_bridge.py` calls `ensure_importable()` at module import,
+    # so importing the worker raised ModuleNotFoundError and `/api/v1/recipes` fell to its
+    # `None` branch and answered 404.
+    services:
+      postgis:
+        image: postgis/postgis:16-3.5
+        env:
+          POSTGRES_USER: twin
+          POSTGRES_PASSWORD: twin
+          POSTGRES_DB: twin
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U twin -d twin"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      # The containers below run with `--network host`, so they reach the service
+      # container through the port it publishes on the runner -- the same address the api
+      # job's psql uses.
+      DATABASE_URL: postgresql+psycopg://twin:twin@127.0.0.1:5432/twin
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the image
+        run: docker build -f infra/api.Dockerfile -t twin-api .
+      - name: Start the API
+        # The container runs `alembic upgrade head` before uvicorn, so this step is also
+        # what creates the tables the worker step below queries.
+        run: |
+          docker run -d --name twin-api --network host \
+            -e DATABASE_URL="$DATABASE_URL" \
+            twin-api
+          for _ in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8000/api/v1/health >/dev/null; then
+              echo "API is up"; exit 0
+            fi
+            sleep 2
+          done
+          echo "API did not become reachable"; docker logs twin-api || true; exit 1
+      - name: API is healthy
+        run: |
+          curl -fsS http://127.0.0.1:8000/api/v1/health -o health.json
+          cat health.json
+          python3 - <<'PY'
+          import json
+          import sys
+
+          health = json.load(open("health.json"))
+          if health["status"] != "ok" or not health["database"]:
+              sys.exit(f"the image started but is not healthy: {health}")
+          print("health:", health)
+          PY
+      - name: The image can read the recipe catalogue
+        # This is the assertion that fails on the pre-B1a image: with no tools/pipeline to
+        # import, `app/services/recipes.py::_load_recipes` catches the ModuleNotFoundError,
+        # returns None, and the route raises NotFoundError -- so `curl -f` sees 404 and the
+        # step fails before the names are ever compared.
+        run: |
+          if ! curl -fsS http://127.0.0.1:8000/api/v1/recipes -o recipes.json; then
+            echo "GET /api/v1/recipes failed. A 404 here means the image has no"
+            echo "tools/pipeline to read, which is exactly what this job exists to catch."
+            docker logs twin-api || true
+            exit 1
+          fi
+          python3 - <<'PY'
+          import json
+          import sys
+
+          catalogue = json.load(open("recipes.json"))
+          names = sorted(recipe["name"] for recipe in catalogue["recipes"])
+          missing = sorted({"splat-ingest", "photo-reconstruct"}.difference(names))
+          if missing:
+              sys.exit(f"the catalogue is missing {missing}; it listed {names}")
+          print("catalogue lists:", names)
+          PY
+      - name: The pipeline's stages and cloud seam import in the image's venv
+        # The worker's child process imports `stages` for a real job, in this interpreter,
+        # and nothing above reaches it: an empty queue never plans a recipe. It is also the
+        # only check that crosses the second seam -- `captures_bridge` finds tools/captures
+        # at `../captures` relative to tools/pipeline, and `stages` reads both projects'
+        # files (a pyproject version, a packer checksum) for the run manifest. So this is
+        # where a layout that separated the two, or an API venv missing one of the
+        # pipeline's dependencies, is caught.
+        run: |
+          docker run --rm -i twin-api python - <<'PY'
+          from pathlib import Path
+
+          import app.worker.pipeline_bridge as bridge  # puts tools/pipeline on sys.path
+
+          import stages  # noqa: F401 - imports captures_bridge, numpy and PIL as a side effect
+          import video
+          from captures_bridge import CAPTURES_DIR
+
+          assert (bridge.PIPELINE_DIR / "pyproject.toml").is_file(), bridge.PIPELINE_DIR
+          assert (bridge.PIPELINE_DIR / "recipes").is_dir(), bridge.PIPELINE_DIR
+          assert (CAPTURES_DIR / "splat_tiles.py").is_file(), CAPTURES_DIR
+          assert Path(stages.__file__).parent == bridge.PIPELINE_DIR
+
+          # B2's dependency, in the venv the worker's child process actually runs in.
+          # `stages` imports `video`, which imports `imageio_ffmpeg` at module scope, so
+          # the import above already fails without it -- this says which binary it found,
+          # because a system ffmpeg is not what the stage is allowed to use.
+          ffmpeg = Path(video.ffmpeg_exe())
+          assert ffmpeg.is_file() and "imageio_ffmpeg" in ffmpeg.parts, ffmpeg
+
+          # B1b's seam, in the same venv. The adapter still imports its client inside
+          # the one function that needs it, so constructing it proves nothing about the
+          # library -- which is why the import below is separate and explicit.
+          assert bridge.PROVIDERS, "the provider price table is empty in the image"
+          assert bridge.CloudRunner.name == "cloud"
+          assert bridge.ModalAdapter("unused").name == "modal"
+
+          # And the client itself, which this image carries on purpose. The worker is
+          # what dispatches to Modal -- app/worker/cloud.py builds the adapter and
+          # spawns from this process -- so an image without `modal` makes
+          # WORKER_CLOUD_PROVIDERS=modal a configuration that cannot work. It is an
+          # optional extra of apps/api and infra/api.Dockerfile installs it; this is
+          # what catches a build that dropped the flag.
+          import modal  # noqa: F401
+
+          from app.worker.cloud import check_dispatchable
+
+          check_dispatchable(["modal"])  # raises when the client is absent
+
+          print("pipeline:", bridge.PIPELINE_DIR, "captures:", CAPTURES_DIR)
+          PY
+      - name: The worker starts and exits cleanly
+        # `--once` runs a single job or exits when the queue is empty, which is what makes
+        # this runnable with nothing queued. Importing `app.worker` is most of the point:
+        # `app/worker/runner.py` imports pipeline_bridge, which raises at import time on an
+        # image without the pipeline, so this exits non-zero there.
+        run: |
+          docker run --rm --network host \
+            -e DATABASE_URL="$DATABASE_URL" \
+            twin-api python -m app.worker --once
+      # C1 committed a fly.toml whose [processes] replace the image's CMD. A typo there
+      # is a deploy that builds, pushes, boots and then exits 127 -- flyctl's health
+      # check is the first thing that notices. This asks the image itself.
+      - name: fly.toml names commands this image actually has
+        run: |
+          python3 - <<'PY' > commands.txt
+          import shlex
+          import tomllib
+
+          config = tomllib.load(open("fly.toml", "rb"))
+          # TOML gives a bare key to whichever table header precedes it, so the worker's
+          # shutdown grace -- which reads most naturally beside the health check -- turns
+          # into a field of that check, and Fly never sees it. It was written that way
+          # first; this is what noticed.
+          assert "kill_timeout" in config, "kill_timeout is not a top-level key in fly.toml"
+          commands = [*config["processes"].values(), config["deploy"]["release_command"]]
+          for command in commands:
+              print(shlex.split(command)[0])
+          PY
+          cat commands.txt
+          while read -r binary; do
+            if ! docker run --rm twin-api sh -c "command -v '$binary'"; then
+              echo "fly.toml names '$binary', which is not on PATH in the image"
+              exit 1
+            fi
+          done < commands.txt
+      # The deployment configuration's own environment, minus the secrets: APP_ENV
+      # production, a write token, a tiles base URL. Nothing else in CI starts the image
+      # in production mode, so nothing else would catch a guard that refuses a
+      # configuration fly.toml actually sets -- an outage visible only at deploy time.
+      - name: A production configuration starts and is healthy
+        run: |
+          docker run -d --name twin-prod --network host \
+            -e DATABASE_URL="$DATABASE_URL" \
+            -e APP_ENV=production \
+            -e API_WRITE_TOKEN=ci-write-token \
+            -e ALLOW_PRIVATE_URLS=false \
+            -e TILES_BASE_URL=https://tiles.example.com \
+            -e API_PORT=8001 \
+            twin-api
+          for _ in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8001/api/v1/health >/dev/null; then
+              echo "the production configuration is up"; exit 0
+            fi
+            sleep 2
+          done
+          echo "the production configuration never became healthy"
+          docker logs twin-prod || true
+          exit 1
+      # The other half of C1's decision (b): production with nowhere to serve tiles from
+      # refuses to start rather than seeding a catalogue of URLs that 404 in a browser
+      # some hours later. `import app.main` builds the app, so this needs no database and
+      # no port.
+      - name: A production configuration with nowhere to serve tiles refuses to start
+        run: |
+          if docker run --rm -e APP_ENV=production -e API_WRITE_TOKEN=ci-write-token \
+            twin-api python -c "import app.main" 2>startup.log; then
+            echo "the image started with no TILES_BASE_URL and no bucket, which is the"
+            echo "misconfiguration app/main.py is supposed to refuse."
+            exit 1
+          fi
+          cat startup.log
+          grep -q TILES_BASE_URL startup.log
+          grep -q OBJECT_STORAGE_BUCKET startup.log
+      # The third guard, and the one whose failure is invisible: production serving tiles
+      # out of the same bucket that holds every raw upload. R2 makes a bucket public, not
+      # a prefix, so that deployment works perfectly and publishes every scan with it.
+      - name: A production configuration with one bucket in both roles refuses to start
+        run: |
+          if docker run --rm -e APP_ENV=production -e API_WRITE_TOKEN=ci-write-token \
+            -e OBJECT_STORAGE_ENDPOINT_URL=https://s3.example.com \
+            -e OBJECT_STORAGE_BUCKET=twin-assets \
+            -e OBJECT_STORAGE_ACCESS_KEY=key \
+            -e OBJECT_STORAGE_SECRET_KEY=secret \
+            twin-api python -c "import app.main" 2>split.log; then
+            echo "the image started with one bucket serving both roles, which is the"
+            echo "misconfiguration app/main.py is supposed to refuse."
+            exit 1
+          fi
+          cat split.log
+          grep -q OBJECT_STORAGE_PUBLIC_BUCKET split.log
+      - name: API logs
+        if: failure()
+        run: |
+          docker logs twin-api || true
+          docker logs twin-prod || true
+      - name: Stop the API
+        if: always()
+        run: docker rm -f twin-api twin-prod || true

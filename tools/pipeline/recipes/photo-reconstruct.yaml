@@ -1,0 +1,93 @@
+# Lane 2 -- raw capture: iPhone video, drone video, or a folder of images.
+#
+# Frames, then poses, then training, then the same packaging Lane 1 ends in. Both lanes
+# converge on `canonical.ply` and produce the same `splat/` tileset, so the console cannot
+# tell which one made a site except by reading its manifest.
+#
+# Only `train` declares `gpu:`, and that single fact is what routes it to a GPU runner.
+# `compensate` gains a `gpu:` block when its impl becomes `imc` (B3); asking for an L4 to
+# run `none` would be billing a GPU to do nothing.
+name: photo-reconstruct
+version: 2
+description: Reconstruct a splat from a raw capture, then package and register it.
+
+inputs: [upload]
+
+stages:
+  - id: normalize
+    impl: ffmpeg_frames
+    params:
+      fps: 4
+      # Top-K by variance-of-Laplacian, never an absolute threshold: A0 measured a 101x
+      # within-clip dynamic range, so no cutoff transfers between scenes.
+      select: sharpness
+      keep: 400
+
+  - id: pose
+    impl: colmap # | glomap | arkit
+    params:
+      # A0 #7: sequential_matcher without loop detection registers 2/40 on a closed orbit.
+      matcher: exhaustive
+
+  - id: mask
+    impl: none # | robust | sls  <- transients
+
+  - id: train
+    impl: gsplat # | opensplat | deformable3dgs
+    params:
+      iterations: 30000
+      # `trainer` is deliberately absent: gsplat's examples/simple_trainer.py lives in
+      # the training box's image, not in this repository, so the path comes from
+      # $GSPLAT_TRAINER there or from a per-run parameter override. A run started
+      # without either says so by name rather than failing on a missing file.
+    gpu:
+      tier: l4
+      preemptible: true
+
+  - id: compensate
+    impl: none # | imc  <- real motion; add `gpu: {tier: l4, preemptible: true}` with it
+
+  # Real since B4. It reads each frame's own EXIF GPS, defines an east/north/up frame
+  # about the median fix, and has `colmap model_aligner` solve for the similarity that
+  # takes the reconstruction into it -- which is also where a metric scale comes from
+  # when the capture has no ARKit. A capture whose frames carry no EXIF (every frame
+  # ffmpeg extracts from a video, for one) falls back to the video's own location if it
+  # had one, and otherwise says to use `manual_placement` and give it a coordinate.
+  #
+  # `arkit_scale` is deliberately absent rather than commented as an option: no such impl
+  # is registered, and `pose: arkit` is the stub it would have depended on.
+  - id: georeference
+    impl: exif_gps # | manual_placement
+    params:
+      # RANSAC inlier threshold in metres. COLMAP 3.9.1 refuses a zero here outright.
+      max_error_m: 5.0
+
+  - id: package
+    impl: splat_tiles
+    params:
+      max_gaussians: 400000
+      opacity_min: 0.02
+      geometric_error: 2.0
+
+  # The same three stages Lane 1 ends in, reading the same `canonical.ply` and the same
+  # `splat/`. Both lanes end in one artifact set, so the console cannot tell which one
+  # made a site except by reading its manifest -- and `capture_manifest` folds in
+  # `train_metrics.json` here, which only this lane produces.
+  - id: thumbnail
+    impl: splat_thumbnail
+    params:
+      size: 512
+
+  - id: ground_samples
+    impl: splat_ground
+    params:
+      cell_m: 8.0
+      percentile: 5.0
+
+  - id: manifest
+    impl: capture_manifest
+    params: {}
+
+  - id: register
+    impl: catalog
+    params: {}

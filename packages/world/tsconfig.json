@@ -1,0 +1,5 @@
+{
+  "extends": "@twin/config/tsconfig.base.json",
+  "compilerOptions": { "types": ["vitest/globals", "node"] },
+  "include": ["src"]
+}

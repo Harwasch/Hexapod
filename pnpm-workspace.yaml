@@ -1,0 +1,5 @@
+packages:
+  - apps/web
+  - packages/*
+patchedDependencies:
+  "@cesium/engine@26.3.0": patches/@cesium__engine@26.3.0.patch

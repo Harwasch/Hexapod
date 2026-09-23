@@ -1,0 +1,153 @@
+[project]
+name = "twin-api"
+version = "0.1.0"
+description = "Catalog and site API for the geospatial digital twin."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.118",
+  "uvicorn[standard]>=0.35",
+  "pydantic>=2.11",
+  "pydantic-settings>=2.10",
+  "sqlalchemy>=2.0.43",
+  "geoalchemy2>=0.18",
+  "alembic>=1.16",
+  "psycopg[binary]>=3.2",
+  "shapely>=2.1",
+  "httpx>=0.28",
+  "boto3>=1.40",
+  "python-multipart>=0.0.20",
+  "anthropic>=1.6.0",
+  "segno>=1.6",
+  # Not the API's: the worker's. `app/worker/` runs `tools/pipeline`'s stages in this
+  # environment (see app/worker/pipeline_bridge.py), and since A8 those stages read
+  # splats with numpy and draw thumbnails with Pillow. Kept in step with
+  # tools/pipeline/pyproject.toml; nothing under app/api or app/services imports either.
+  "numpy>=1.26",
+  "pillow>=10",
+  # Not the API's either: the recipe loader's. `recipe.load_recipe` is `yaml.safe_load`,
+  # and both `app/services/recipes.py` and the worker call it. It was reaching the venv
+  # only through `uvicorn[standard]` (and dev-only moto/responses) -- so a day when
+  # uvicorn drops it, or `--no-dev` meets a different extra, is a day the recipes stop
+  # loading with no change to this file. Declared, like the two above.
+  "pyyaml>=6.0",
+  # Not the API's either: the `normalize` stage's. B1a left this out with a note saying
+  # B2 would add it when the real stage landed, and it has -- `tools/pipeline/video.py`
+  # imports `imageio_ffmpeg` at module scope and `stages.py` imports that, so without it
+  # here the worker's child process cannot import the pipeline's stages at all inside
+  # the image. CI's `image` job is what catches that. It carries an ffmpeg binary of its
+  # own (~80 MB) on purpose: `ubuntu-latest` has no ffmpeg and `static-ffmpeg` downloads
+  # one at import, which fails on a machine with no network.
+  "imageio-ffmpeg>=0.5",
+]
+
+[project.optional-dependencies]
+# The Modal client, for the deployment that dispatches GPU stages there. An extra rather
+# than a dependency, and installed by infra/api.Dockerfile, which needs explaining
+# because it reverses an earlier decision.
+#
+# B1b left `modal` out on the grounds that "an image that will never dispatch to Modal
+# does not have to carry the library", and `ModalAdapter` imports its client inside the
+# one function that needs it so that holds. What that missed is which process calls
+# Modal: `app/worker/cloud.py` builds the adapter, so it is the *worker on Fly* that
+# spawns the call, at run time, with a token of its own. Fly runs one image. Without the
+# client in it, WORKER_CLOUD_PROVIDERS=modal is a configuration that cannot work and
+# says so only when the first GPU job reaches it -- so `Worker.from_settings` refuses at
+# start-up instead, and this extra is what makes that refusal something other than
+# permanent.
+#
+# It stays an extra so the choice is still a choice: a deployment with no GPU stages can
+# `uv sync` without it and carry nothing extra.
+modal = ["modal>=1.5.5"]
+
+[dependency-groups]
+dev = [
+  "pytest>=8.4",
+  "pytest-cov>=6",
+  "ruff>=0.13",
+  "mypy>=1.18",
+  "pip-audit>=2.9",
+  "boto3-stubs[s3]>=1.40",
+  "types-shapely>=2.1",
+  "moto[s3]>=5.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint.pycodestyle]
+max-line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "N", "S", "SIM", "RUF", "ANN", "T20"]
+ignore = ["ANN401", "RUF012", "S101"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S", "ANN"]
+"alembic/**" = ["ANN", "E501"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+plugins = ["pydantic.mypy"]
+exclude = ["\\.venv", "alembic/versions"]
+# tools/pipeline is a flat uv project with `package = false`, so it cannot be a path
+# dependency and there is nothing to install. app/worker/pipeline_bridge.py puts it on
+# sys.path at runtime; this is how mypy sees the same files, so every call across the
+# seam is type-checked rather than Any. `tools/captures` is on the path for the same
+# reason one step further out: since A8 the pipeline's stages read splats through
+# captures_bridge, and without this mypy would stop at that import.
+mypy_path = ["../../tools/pipeline", "../../tools/captures"]
+
+[[tool.mypy.overrides]]
+# Check calls into the pipeline against its real signatures, but do not report errors
+# inside it -- that project runs its own mypy --strict and its errors are not this
+# project's to fix (the same arrangement tools/pipeline has with tools/captures).
+module = [
+  "adapters",
+  "artifacts",
+  "captures_bridge",
+  "cloud",
+  "contracts",
+  "errors",
+  "executor",
+  "gaussians",
+  "modal_adapter",
+  "plan",
+  "providers",
+  "recipe",
+  "registry",
+  "run_stage",
+  "runners",
+  "sfm",
+  "splat_tiles",
+  "stages",
+  "training",
+  "video",
+  "workdir",
+]
+follow_imports = "silent"
+
+[[tool.mypy.overrides]]
+# `imageio-ffmpeg` ships no py.typed marker, and `tools/pipeline/video.py` -- which
+# `stages` imports, and which this project type-checks across the seam -- imports it.
+# The same override tools/pipeline/pyproject.toml carries, for the same module.
+module = ["imageio_ffmpeg.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["geoalchemy2.*", "shapely.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+filterwarnings = ["error::DeprecationWarning:app.*"]

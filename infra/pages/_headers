@@ -1,0 +1,39 @@
+# Cloudflare Pages response headers for apps/web's bundle.
+#
+# Copied into apps/web/dist at deploy time (wrangler.toml says why it is not in
+# apps/web/public/). Pages reads this file from the root of the deployed directory.
+#
+# There is deliberately no Content-Security-Policy here. CesiumJS creates web workers and
+# instantiates WebAssembly from its own static directory, and a policy written without a
+# browser to test it against is a policy that breaks the globe on first load and looks
+# like a Cesium bug. Add one when someone can watch the console while it is applied.
+#
+# There is also no _redirects file. The bundle is three real HTML entry points, not a
+# single-page app with client-side routing: the phone handoff opens `/upload.html#token`
+# verbatim (app/services/captures.py) and the console is `/admin.html`. A catch-all
+# `/* /index.html 200` would turn every typo into a silently-served globe instead of a
+# 404, and would buy nothing.
+
+/*
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  X-Frame-Options: DENY
+
+# Vite's output: content-hashed filenames, so a stale copy is unreachable by name.
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+
+# CesiumJS's static build directories are *not* hashed -- vite.config.ts copies them to
+# the fixed CESIUM_BASE_URL (`/cesium/`), so upgrading the `cesium` dependency changes
+# the contents of URLs that keep their names. `immutable` here would hand a returning
+# browser last year's workers beside this year's engine, with no way to invalidate it.
+# A day is long enough to be free on a session and short enough to heal after a deploy.
+/cesium/*
+  Cache-Control: public, max-age=86400
+
+# The entry documents name the hashed assets, so they must not be cached past a deploy.
+/
+  Cache-Control: public, max-age=0, must-revalidate
+
+/*.html
+  Cache-Control: public, max-age=0, must-revalidate

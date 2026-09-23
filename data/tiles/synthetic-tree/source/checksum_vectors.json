@@ -1,0 +1,40 @@
+{
+ "note": "checksumPositions (packages/world/src/rig.ts) must agree with checksum_positions (tools/captures/synthetic_tree.py) on every case",
+ "cases": [
+  {
+   "name": "empty",
+   "positionsHex": "",
+   "checksum": "fnv1a32:0:811c9dc5"
+  },
+  {
+   "name": "origin",
+   "positionsHex": "000000000000000000000000",
+   "checksum": "fnv1a32:1:e23c62b5"
+  },
+  {
+   "name": "unit",
+   "positionsHex": "0000803f0000004000004040",
+   "checksum": "fnv1a32:1:ec72a158"
+  },
+  {
+   "name": "negative-zero",
+   "positionsHex": "000000800000000000000080",
+   "checksum": "fnv1a32:1:bddcb2b5"
+  },
+  {
+   "name": "negatives",
+   "positionsHex": "0000c0bf000080be000080c4",
+   "checksum": "fnv1a32:1:72a4b9d6"
+  },
+  {
+   "name": "two-splats",
+   "positionsHex": "0000003b000000bf0000c040cdcc8c3f000010c00000003e",
+   "checksum": "fnv1a32:2:dd4e647f"
+  },
+  {
+   "name": "fractional-grid",
+   "positionsHex": "00008039000080b900f07f3f0000e03a00f8ffbf0000403a",
+   "checksum": "fnv1a32:2:565e1525"
+  }
+ ]
+}

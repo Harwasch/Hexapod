@@ -1,0 +1,350 @@
+# Cesium notes
+
+Built against **CesiumJS 1.145** (September 2026) using the official
+[cesiumjs-skills](https://github.com/cesiumgs/cesiumjs-skills) agent skills and the current
+Sandcastle sources. Everything below was verified against that version.
+
+## Viewer setup
+
+`CesiumSceneManager` creates one `Viewer` with every stock widget disabled, `scene3DOnly`,
+`baseLayer: false` (imagery is a catalog layer), MSAA off until the still frame is sharpened, `depthTestAgainstTerrain`
+and a WebGL2 context. The credit display is restyled into a glass chip but never hidden;
+provider credits stay visible, and the chip's **Data attribution** link opens CesiumJS's
+dialog with the full list. That dialog is hosted on `<body>` (`creditViewport`) so it can sit
+on the sheet layer instead of inside `.viewport`, which is pinned below the HUD.
+
+One thing does not belong in the chip: when the bundled evaluation token is in use, CesiumJS
+adds a paragraph of setup advice as an _on-screen_ credit, which inflates the chip into a slab
+over the globe. `cesium/ion.ts` flips that one credit (and ArcGIS's equivalent) to
+`showOnScreen: false`, moving it into the Data attribution dialog. It is advice, not
+attribution; the app states the same thing in Setup notices, where it can be dismissed.
+
+## Tokens
+
+- `VITE_CESIUM_ION_ACCESS_TOKEN` empty → CesiumJS's built-in evaluation token is used.
+  It is rate-limited and intended for development; the UI shows a notice, dismissible once
+  read (`ionTokenNoticeDismissed` in the persisted settings).
+- Create your own token at <https://ion.cesium.com/tokens> with only `assets:read` and
+  `geocode`, and restrict _Allowed URLs_ to your origins.
+- Authorization failures from ion (401/403) mark the token invalid in the UI with the
+  exact variable to fix; the globe keeps running on the Natural Earth II basemap that
+  ships inside CesiumJS.
+
+## The demo asset
+
+Ion asset **4547222** is the tileset used by the official _3D Tiles Gaussian splats with LOD_
+Sandcastle. Its root oriented bounding box spans roughly lon −122.1433…−122.1205,
+lat 47.6352…47.6605 (≈1.7 km × 2.8 km near Redmond, WA) at ~109 m height. The seeded
+default bookmark reproduces the Sandcastle's `viewBoundingSphere(heading 100°, pitch −25°,
+range 500 m)`. Loading uses the standard `Cesium3DTileset.fromIonAssetId`; CesiumJS handles
+`KHR_gaussian_splatting` content automatically (WebGL2 required).
+
+## Embedding a site: clipping
+
+`ClippingManager` owns one `ClippingPolygonCollection` on the globe and one on the global
+3D tileset (OSM Buildings or Google Photorealistic when enabled). Polygons are immutable in
+CesiumJS ≥ 1.145, so each footprint is tracked by key and swapped, never mutated.
+
+What gets cut depends on the representation:
+
+- **Meshes and point clouds** (opaque) cut both the globe and the world tileset, so the two
+  surfaces never z-fight. With `clipFootprint: "tileset"` the footprint is the union of the
+  finest loaded tile boxes below the first branching level (`coverageFromTileset`, refreshed
+  as sub-tilesets stream in), otherwise the catalog footprint.
+- **Gaussian splats** cut only the world tileset and keep the terrain. A splat is blended
+  over the opaque globe with a depth test, so the ground layer simply covers the imagery and
+  nothing fights. Cutting the terrain was tried first and leaves a see-through hole to space
+  wherever the capture is sparse: tile bounding boxes include outlier splats, so no
+  tile-derived footprint is tight enough to avoid it.
+
+Tilesets never set `enableCollision`: Cesium then ray-casts every loaded tile's triangles on
+the CPU every frame to find the height under the camera (measured 130 ms per frame on the
+Google world and 400 ms beside the AGI drone mesh). The camera floor over meshes is
+`CameraController.keepAboveDrawnSurface`: 250 ms after a gesture ends, one depth sample
+(`scene.sampleHeight`) under the camera, and a 0.35 s ease back up when the camera ended up
+below the surface plus the zoom floor. Wheel zoom already stops at the surface under the
+cursor. Terrain collision stays on for the globe (cheap, CPU heightmap).
+
+## Representations and LOD
+
+`SiteManager` creates one `Cesium3DTileset` per asset on demand, keeps inactive
+representations loaded but hidden (`preloadWhenHidden`) so switching is instant and the
+camera never moves. Sites load automatically when the camera comes within ~40 km and unload
+beyond ~400 km. Point clouds get attenuation + eye-dome lighting.
+
+The viewer runs in **request-render mode** (`requestRenderMode: true`,
+`maximumRenderTimeChange: ∞`): a frame is drawn only when the camera moves, tiles arrive, or a
+manager calls `scene.requestRender()` after mutating the scene. An idle view costs nothing on
+the GPU, and a Gaussian splat is not re-sorted every 16 ms while nobody is touching it. The one
+manager that renders continuously is `LivingSurveyManager`, and only while wind is non-zero: at
+calm it writes nothing and asks for nothing, so an idle survey is as idle as it ever was.
+
+`PerformanceManager` counts rendered frames on `postRender` and every 500 ms runs
+`decideScreenSpaceError` (pure, unit-tested) within the active preset's bounds:
+
+| Preset      | Base SSE | Adaptive range | Resolution                              | MSAA at rest |
+| ----------- | -------- | -------------- | --------------------------------------- | ------------ |
+| Performance | 16       | 4–48           | browser-recommended (CSS pixels)        | off (FXAA)   |
+| Balanced    | 8        | 2–32           | at most 1.5 device pixels per CSS pixel | 2×           |
+| Ultra       | 4        | 1–16           | native device pixel ratio               | 4×           |
+
+Motion never renders with MSAA at any preset or ladder step: a 2× display already draws
+four times the pixels of a 1× one, and multisampling on top is where an integrated GPU loses
+the frame. The still frame is sharpened (the preset's MSAA, every device pixel) 500 ms
+after the camera rests, but only once tiles have stopped arriving (or after 3 s regardless)
+and only while nothing is animating (`setAnimating`, below):
+every arriving tile re-renders the still frame, and rendering each of those at full quality
+made the seconds after a move feel sluggish. Balanced caps the effective pixel ratio at 1.5
+_while moving_ (`baseResolutionScale`, pure and tested) and renders the still frame at the
+full device ratio like ultra, since nothing else renders at rest; the cap is what kept a 2×
+display looking softer than Google Maps once the camera stopped.
+
+Smoothness comes first, the way a maps app does it: nothing about the render settings
+changes during a gesture. Tile selection is frozen while the camera moves (every change of
+`maximumScreenSpaceError` pops tiles mid-drag), and slow frames at rest never coarsen
+anything (they are tiles arriving, not a stall) — unless something is animating, which is a
+still camera rendering continuously and is the one case where a slow frame at rest is a real
+cost. `PerformanceManager.setAnimating(true)` (the Living Survey turns it on with the wind)
+suppresses the sharpened still frame and lets animated frames step the ladder down, but never
+up: they supply no recovery credit and are never the before/after sample that judges a step,
+because an animation can be smooth on a machine that cannot pan. `animating` rides in the
+performance snapshot so the dev panel's frame rate is not read as responsiveness. At rest the scene uses the idle time the
+way Google Maps does: once nothing is loading (sites and the world both report through
+`reportLoading`) and tileset memory is under 70 % of its budget, the error goes straight to
+the preset minimum on the next 500 ms tick, at any height (2 px on balanced: a 2 to 5 cm
+survey mesh only shows its detail there, measured at 176k triangles and a Google-like
+softness at 8 px versus 416k and the real detail at 2 px). It used to walk one step per
+tick; the intermediate levels were each requested, decoded and dropped on the way down. Nothing returns to the base
+on its own; finer tiles stay until memory pressure (125 % of budget) coarsens, so the next
+gesture starts from what is already loaded. Each SSE change calls `scene.requestRender()`;
+tile selection only runs inside a frame.
+
+A light colour grade (`colorGrade.ts`: saturation 1.18, contrast 1.08 around mid grey) runs
+as the last post-process stage on balanced and ultra. The world's tiles are unlit textures
+drawn as-is, which reads flatter than Google Maps, whose renderer adds a tone curve on
+output. The Photorealistic 3D Tiles API also serves suburbs coarser than Google's own apps
+draw them (measured at a Los Altos Hills house: leaf tiles at 2 m geometric error with
+256×256 textures on 50 m tiles, about 10 to 20 cm per texel, against roughly 3 to 5 cm in
+Google Maps), which no renderer setting can recover.
+
+Resolution and anti-aliasing are constant during a gesture and adapt only on evidence, one
+ladder step at a time; once the camera has rested 500 ms the still frame is re-rendered at
+the preset's full resolution and anti-aliasing (nothing else renders at rest), and the next
+gesture starts by switching back, one framebuffer re-allocation. The device-pixel error
+handed to tilesets ignores the ladder's resolution scale, so that switch never changes which
+tiles are drawn. The ladder's tile floor is a motion measure: at rest the scene refines to
+the preset minimum regardless, and a gesture starts by coarsening to the floor. Every step
+is judged on the next 40 motion frames against the 40 before it: a step that did not make
+motion at least 15 % faster (a tile cut on a fill-bound machine, a resolution cut on a
+CPU-bound one) is reverted and that level is not tried again for 90 s, so a slow machine
+never ends up permanently coarse for nothing. The ladder: a frame rate under 26 fps sustained for 1.2 s _while
+moving_ drops resolution scale (0.8, 0.65, 0.5, on top of the preset's base scale), and only
+then tile detail (+3 SSE per step, never past the preset maximum). A step is undone only after 8 s of motion
+above 50 fps, applied while the camera rests (a resolution switch re-allocates the
+framebuffers, a visible hitch mid-gesture), and every recovery has to earn twice the smooth
+motion of the last, so a borderline machine settles instead of oscillating. Cesium divides
+screen-space error by the pixel ratio, so a resolution step never changes which tiles are
+drawn by itself. A ladder step that raises the error floor coarsens every group at once, so
+the expensive Google world feels it and not only a cheap survey mesh. Mesh tilesets (sites
+and the world) use `skipLevelOfDetail`: the level a view needs loads directly instead of
+every level on the way, which is what made the near, deep part of a pitched view wait
+longest (measured 265k versus 145k triangles in the same time). Every consumer divides the
+error by the pixel ratio the scene renders at
+(`PerformanceManager.addScreenSpaceErrorSink` passes both): Cesium measures screen-space
+error in CSS pixels, which on a HiDPI screen picks tiles twice as coarse as they look, while
+a maps app chooses detail by the pixels you see. A resolution cut therefore also lightens
+the tile load. Sites and the Google world are two tileset groups under the same rules and
+bounds (parity: collected data is never allowed less detail than its surroundings; Google's
+tiles are coarse at Cesium's default 16, hence a base of 8 on balanced), but each group
+walks on its own with its own loading state and memory budget, so the world filling its
+cache never holds a survey mesh at a coarse level. No tileset is asked for finer than 2
+device pixels, except through an asset's `screenSpaceErrorScale`: a tiler assigns geometric
+error from geometry alone, so a survey mesh with centimetre textures but conservative errors
+looks soft next to the Google world at the same error. The Aerometrex San Francisco mesh is
+seeded at 0.25 (measured 7 km up: 2 px draws 17k triangles and a grey blob, 0.5 px draws
+119k and the real detail, still a quarter of what Google draws in the same view). The factor
+is a distance measure (`calibrationFor`): it fades from the asset's value at 8 m per pixel
+to 1 at 0.5 m per pixel, because up close the finest levels already carry textures many
+times finer than a screen pixel and asking for 0.5 px there fetches several times the data
+for no visible gain (317 m up: 2 px settles sharp at 217 tiles, 0.5 px never settled). It
+is re-applied only at rest, when the view scale has moved about 35 %, so it never pops
+tiles mid-gesture. Ladder evidence comes from every motion frame
+(slow frames add up, smooth frames pay them back), so three short slow drags count as much
+as one long one. The dev panel shows the profile (`full` or `reduced`) and the step taken. Gaussian
+splats never refine below SSE 12 / 8 / 4 (performance / balanced / ultra): they are sorted on
+the CPU every camera change, so their cost grows with splat count far faster than a mesh.
+Tile cache budgets come from `navigator.deviceMemory` (256/384/512 MB + overflow). A per-asset
+`maximumScreenSpaceError` acts as a quality floor. Manual SSE in Settings › Advanced disables
+adaptation. Mesh coverage clips (the hole cut in the globe under a photogrammetry model) are
+re-derived as tiles arrive but only swapped in at rest.
+
+While the camera moves the root element carries `data-moving`; glass panels drop their
+backdrop blur for the duration (a full-screen pass per panel otherwise) and use a flat tint,
+and the HUD's continuous animations (agent blink, marker pulse, spinners) pause. At rest the
+blur is 24 px (it was 40: a blur costs radius² per canvas repaint under the panel, and every
+arriving tile is a repaint), and the agent stream's spinner only spins while something runs.
+
+A CPU profile of a drag (software GL, so GL calls are inflated, but the shape holds) put
+Cesium's own JavaScript under 2 % and the main thread in three WebGL stalls instead:
+`readPixels` (a hover pick and the camera floor's `sampleHeight` both fired in the pauses
+between mouse events of one gesture; each is a render pass plus a GPU read-back, now gated
+on no pointer button being held and the floor check rate-limited), `texImage2D` (half of it
+imagery for terrain the photorealistic world clips away; the globe is now limited with
+`cartographicLimitRectangle` to the engaged outlines plus 200 m) and `getProgramParameter`
+(about twenty shader links, once, at start). Cesium's per-frame upload budgets (texture,
+program, buffer: 10/10/30 ms by default) shrink to 3/4/6 ms while the camera moves and grow
+back at rest, so loading never stretches a moving frame the way it did. The dev panel's
+"Frame CPU" row shows the median update and render phase and draw calls of moving frames,
+steady frames apart from tile-loading ones.
+
+Things that are deliberately _not_ done per frame: hover picking waits until the pointer has
+rested 120 ms and never runs while the camera moves (each `scene.pick` is a render pass);
+overlay anchors use `globe.getHeight` (a CPU lookup) while moving and call `sampleHeight`
+only at rest, once per anchor every few seconds; the camera pose is throttled to 10 Hz.
+
+## Judging performance
+
+Judge smoothness on a production build, not the dev server: `pnpm build && pnpm preview`
+serves the bundle on http://localhost:4173 with `/api` proxied to the local API. The dev
+server serves Cesium as thousands of unbundled modules and runs React in development mode
+with StrictMode's double effects; both add per-frame and per-interaction overhead that the
+built app does not have. The dev panel (key `d`) shows the ladder step, resolution scale,
+MSAA, frame CPU and the planning metrics.
+
+## Camera
+
+`CameraController` clamps `minimumZoomDistance` to 0.6 m (5 mm beside a hand-sized object)
+so centimetre data can be inspected, keeps terrain collision on, and derives flight durations
+from distance (1.2–5.5 s, quadratic in/out). Mouse mapping follows Google Maps: left-drag
+pans (Cesium's rotate), wheel and pinch zoom towards the cursor, and Ctrl+drag, right-drag
+and middle-drag orbit the point in the centre of the view. That orbit is implemented here
+rather than with Cesium's tilt: the pivot is the depth-buffer hit at the view centre (a
+model, a building, the ground), else the terrain, with placeholder tile heights rejected,
+and the camera turns around it in its east-north-up frame with the tilt clamped between the
+horizon and straight down. The turn is about the frame's up axis (`constrainedAxis =
+UNIT_Z` for the duration), not the camera's own up: turning a pitched camera about its own
+up rolls the view a little on every drag, which is what tilted the horizon. As a backstop,
+`levelHorizon` zeroes any roll above 0.03° on every `camera.changed`, so the horizon stays
+level whatever the gesture, as in Google Maps. Gaussian splats write no depth, so under a
+splat the pivot is its ground. Cesium keeps pinch tilt for touch. `KeyboardNavigator` adds arrows (pan, screen-space
+speed), Shift+arrows (orbit the same pivot) and `+`/`-` (zoom towards it), ticked on
+`scene.preUpdate` while held and active only when the page body or canvas has focus.
+
+Never set `ScreenSpaceCameraController.minimumCollisionTerrainHeight` to 0: Cesium tests
+terrain collision, and picks tilt pivots on the terrain instead of the ellipsoid, only while
+the camera is _below_ that height (15 km by default). At 0 both switch off, and every tilt
+pivots on sea level, which is 100 m under Redmond and felt like translation at close range. Flights point at the ground: the arrival pitch defaults to -45° (seeded
+bookmarks use -40° to -45°), and any flight that climbs 150 m or 1.5× above its destination
+passes `pitchAdjustHeight`, so the camera looks straight down at the top of the arc and eases
+back to the arrival tilt on the way down instead of interpolating the pitch linearly and
+spending the high part staring at the horizon. `flyToBoundingSphere` with that offset is the
+standard arrival; hand-sized objects arrive at a few times their radius.
+Cesium's default double-click entity tracking is removed; double-click flies halfway to the
+clicked point instead.
+
+## Explore mode
+
+`ExploreController` pauses `ScreenSpaceCameraController.enableInputs` and moves the same
+camera with WASD/QE (+Shift), drag-to-look, wheel-to-move and Shift+wheel to change speed,
+keeping ≥0.3 m above the globe. Escape or the HUD exits. While it is on, ordinary
+drag-to-pan and scroll-to-zoom are intentionally off, which is why the HUD stays visible.
+Its tick runs on `scene.preUpdate` (raised every widget tick) rather than `preRender`, so it
+keeps working in request-render mode. No second renderer or camera exists.
+
+## Picking and measuring
+
+Selection uses `scene.pick` + `scene.pickPosition` (terrain fallback via `globe.pick`),
+resolves `Cesium3DTileFeature`, entities and tilesets to catalog objects, highlights them
+with the accent colour, samples terrain with `sampleTerrainMostDetailed`, and marks the
+point with a small entity. Measurements are entities with `CallbackProperty` geometry;
+distances use `EllipsoidGeodesic` (ground) and `Cartesian3.distance` (3D), areas use
+spherical excess on lon/lat.
+
+## Photorealistic world
+
+On by default (`VITE_ENABLE_PHOTOREALISTIC=false` switches it off), the Google Photorealistic
+3D Tiles catalog layer (via `createGooglePhotorealistic3DTileset`) replaces the globe surface,
+receives the same site clipping, and switches the ion geocoder to Google as Google's terms
+require. It is labeled as visual context only. The globe is hidden in this world except
+inside site footprints: `ClippingManager.setWorldMode` flips the globe's clipping collection
+to `inverse` and fills it with every site's footprint, so terrain and imagery stay as an
+opaque floor under a splat's sparse patches and in the gap between a mesh and its footprint
+(a hole in the Google mesh otherwise shows sky), while the Google mesh is cut away there (its
+buildings would otherwise poke through the site's). The globe is never hidden in that world,
+only clipped away everywhere (a sentinel polygon at the pole keeps the inverse clip active),
+so terrain and imagery keep loading under the Google mesh and are already sharp when a site
+engages; a hidden globe would start from level 0 and show a dark band for seconds. The world clip under a splat uses the
+authored footprint first: a splat's root box spans every outlier splat (the Redmond demo's is
+1.7 × 2.8 km) and would blank the photorealistic world for blocks; the demo boundary is the
+outline traced from a top-down render of the splat. Mesh sites with `clipFootprint:
+"tileset"` use the tiles' coverage only from box or region volumes and only while it is no
+larger than the authored footprint (`tighter`): coarse tiles' spheres reach far past the
+data, and cut out of the world they showed as a ring of black circles around the San
+Francisco mesh. Seeded boundaries of sphere-based meshes are measured from a render and
+inset about 20 m inside the content edge, so the Google mesh overlaps the survey's ragged
+edge rather than leaving a band of coarse terrain imagery between the two. Terrain, imagery
+and ion-hosted meshes share one host, so its request concurrency is raised (36) to keep a
+streaming mesh from crowding out the terrain under it.
+
+A site's model only takes over from the world once the camera is close enough for its
+detail to matter: below 2.5 footprint radii of altitude and within 3 radii horizontally
+(`SiteManager.shouldEngage`, handing back at 3.5 and 4.5 so the threshold does not flicker; a
+flight target is always engaged so the model is there on arrival). Further out the model
+stays loaded but hidden and no clip is applied, so from 20 km up the world is seamless
+instead of showing a 5 km patch of a differently lit capture with a hard edge. Clamped objects (the sample rock and plant) rest on the drawn surface
+(`scene.sampleHeightMostDetailed`, excluding themselves) when it is within 60 m of the
+terrain, so they sit on Google's ground rather than floating over or sinking into it.
+
+## Gaussian splats, and moving them
+
+Splats are a separate subsystem from everything else Cesium draws, and the differences matter
+before anything is built on them (all verified against 1.145):
+
+- **`tileset.customShader` does not reach splat content.** `Scene/GaussianSplatPrimitive.js`
+  bypasses the Model pipeline entirely — its own render resources, its own
+  `PrimitiveGaussianSplatVS/FS`, its own DrawCommand, no `customShader` reference anywhere.
+- **Splat attributes live in one RGBA32UI texture**, two adjacent texels per splat: an even
+  column holding the position as raw float32 bits, the odd column beside it holding packed
+  covariance halves and an RGBA8 colour. `_splatRowMask`/`_splatRowShift` on the primitive give
+  the addressing, and they depend on the device's maximum texture size (8192 under SwiftShader
+  here, 16384 on a typical desktop GPU).
+- **Splats write no depth and are skipped on the pick pass**, so `scene.pick`,
+  `scene.pickPosition` and `scene.sampleHeight` never see them (measured: `undefined` with the
+  globe hidden). A splat cannot be selected, measured against, or used as a camera floor.
+- **The sorter reads `primitive._positions`**, a separate `Float32Array`, not the texture.
+- **Snapshots aggregate over selected tiles**, so splat indices are stable only while tile
+  selection is. `_snapshot.generation` is a monotonic rebuild counter, and a rebuild happens more
+  often than "tile selection changed" — `SiteManager.clampToGround` sets `modelMatrix` after an
+  asynchronous terrain sample, so even a single-tile site rebuilds seconds after load with every
+  baked position changed.
+
+The Living Survey rewrites the position lanes of that texture every tick so a measured tree can
+sway without its canonical positions ever being touched, using the buffer the engine itself packed
+(no engine fork, no `gl.readPixels` on the steady-state path). The internals it depends on are
+declared in one file, `cesium/splatInternals.ts`. See [LIVING_SURVEY.md](LIVING_SURVEY.md) and
+[ADR 0006](DECISIONS/0006-splat-texture-rewrite.md).
+
+## Patched engine
+
+`patches/@cesium__engine@26.3.0.patch` (applied by pnpm on install) guards
+`TerrainFillMesh.propagateEdge` against a neighbour without a mesh. With inverse clipping
+polygons on the globe (the photorealistic world keeps terrain only inside site footprints),
+Cesium skips a clipped-away tile before creating its fill mesh, and a neighbour's fill then
+reads `undefined.westIndicesSouthToNorth` and stops rendering. The guard drops that edge;
+the fill falls back to the tile's height range. Cesium's own error panel is off
+(`showRenderLoopErrors: false`); render errors are logged, toasted and recovered from up to
+five times.
+
+## API changes noted while building
+
+- `ClippingPolygon` positions are frozen (1.145): rebuild instead of mutating.
+- `ClippingPolygonCollection.quality` / `destroy` are deprecated (1.145); not used.
+- `Cesium3DTile.boundingVolume` is not in the public typings; `footprintFromTileset` reads
+  it defensively and falls back to `boundingSphere`.
+- CesiumJS 1.144 added composable camera `Controller`s; the explore mode here is a
+  minimal purpose-built controller and can migrate to that framework later.
+- Nothing in the Gaussian splat subsystem is declared in `Cesium.d.ts` (a grep for
+  `GaussianSplatPrimitive`, `GaussianSplatTextureGenerator` or
+  `Cesium3DTileset.gaussianSplatPrimitive` finds nothing), and `GaussianSplatTextureGenerator`
+  is exported from the barrel without appearing in the typings. The subsystem has about twenty
+  changelog entries across recent releases, so treat every use of it as version-pinned.

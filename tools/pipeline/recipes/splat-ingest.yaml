@@ -1,0 +1,63 @@
+# Lane 1 -- the capture is already reconstructed.
+#
+# Scaniverse, Polycam, Postshot and Luma export Gaussian splats directly, so there is
+# nothing to reconstruct: normalise, georeference, package, describe, register. No GPU,
+# under a minute. This is the lane that makes the phone experience feel instant.
+#
+# Every stage here is real (A8). `thumbnail`, `ground_samples` and `manifest` were added
+# as a recipe edit and three decorators -- no executor, runner or schema change.
+name: splat-ingest
+version: 2
+description: Package an already-reconstructed splat and register it as a site.
+
+# Seeded into <workdir>/inputs/upload before the run, by the worker (A7) out of object
+# storage.
+inputs: [upload]
+
+stages:
+  - id: normalize
+    impl: ingest_splat # | ply_compressed | spz
+    params: {}
+
+  - id: georeference
+    # The only choice here: Lane 1 ingests a finished splat, so there are no frames to
+    # read EXIF off and no reconstruction to align. `exif_gps` consumes `frames` and
+    # cannot run in this lane at all.
+    impl: manual_placement
+    params:
+      lat: 0.0
+      lon: 0.0
+      height: 0.0
+      # Not zero. A capture placed by hand is placed to about the width of a building,
+      # and the inspector must not read a hand placement as a survey. The worker
+      # overrides all four of these from the capture's own coordinate.
+      uncertainty_m: 10.0
+      scale_source: unresolved
+
+  - id: package
+    impl: splat_tiles # tools/captures/splat_tiles.py, unchanged
+    params:
+      max_gaussians: 400000
+      # Where it belongs: `splat_tiles.convert` is the code that reads it. It sat on
+      # `normalize` until A8, where nothing consumed it.
+      opacity_min: 0.02
+      geometric_error: 2.0
+
+  - id: thumbnail
+    impl: splat_thumbnail
+    params:
+      size: 512
+
+  - id: ground_samples
+    impl: splat_ground
+    params:
+      cell_m: 2.0
+      percentile: 5.0
+
+  - id: manifest
+    impl: capture_manifest
+    params: {}
+
+  - id: register
+    impl: catalog
+    params: {}

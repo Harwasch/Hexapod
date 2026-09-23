@@ -1,0 +1,250 @@
+import { describe, expect, it } from "vitest";
+
+import type { PlanDraft } from "@twin/contracts";
+
+import { DemoMissionProvider } from "@/missions/demo";
+import {
+  buildDraftRequest,
+  describeDraft,
+  diffDrafts,
+  overlayFor,
+  planFromDraft,
+  planFromRecord,
+  presentStatus,
+  recordBodyFromDraft,
+  scheduleLanes,
+} from "@/missions/planDraft";
+import { useMission } from "@/state/mission";
+
+const project = new DemoMissionProvider().projectForSite("builtin-demo", null)!;
+
+const draft: PlanDraft = {
+  title: "Clear thistle on the west bench",
+  objective: "Mow Z-14 with TR-04 at 1.5 acres per hour.",
+  zoneIds: ["Z-14"],
+  machineIds: ["TR-04"],
+  cadence: "once",
+  startDate: "2026-09-17",
+  endDate: "2026-09-24",
+  estimates: { acres: 310, machineHours: 206, calendarDays: 7 },
+  steps: [
+    {
+      title: "Survey pass",
+      detail: "",
+      machineIds: ["TR-04"],
+      zoneId: "Z-14",
+      when: "Day 1",
+      startDay: 0,
+      days: 1,
+    },
+    {
+      title: "Treat Z-14",
+      detail: "Mow",
+      machineIds: ["TR-04"],
+      zoneId: "Z-14",
+      when: "Day 2",
+      startDay: 1,
+      days: 6,
+    },
+  ],
+  assumptions: ["1.5 acres per machine-hour"],
+  risks: ["TR-04 is at 22% battery."],
+  questions: [],
+  clarifications: [],
+  source: "rules",
+  model: null,
+  note: "Rule-based draft",
+};
+
+describe("plan drafting", () => {
+  it("builds the planner request from the project", () => {
+    const request = buildDraftRequest(project, {
+      goal: " Mow Z-14 ",
+      zoneIds: ["Z-14"],
+      refinement: "use two machines",
+      previous: draft,
+    });
+    expect(request.goal).toBe("Mow Z-14");
+    expect(request.zones?.map((z) => z.id)).toContain("Z-14");
+    expect(request.machines?.length).toBe(project.machines.length);
+    expect(request.existingPlans?.map((p) => p.id)).toContain("thistle");
+    expect(request.preferredZoneIds).toEqual(["Z-14"]);
+    expect(request.refinement).toBe("use two machines");
+    expect(request.previousDraft?.title).toBe(draft.title);
+    expect(request.previousDraft).not.toHaveProperty("source");
+  });
+
+  it("turns an approved draft into a scheduled plan with steps and provenance", () => {
+    const plan = planFromDraft(draft, project, { goal: "Mow Z-14" });
+    expect(plan.status).toBe("idle");
+    expect(plan.state).toBe("Scheduled");
+    expect(plan.zoneIds).toEqual(["Z-14"]);
+    expect(plan.machineIds).toEqual(["TR-04"]);
+    expect(plan.steps).toHaveLength(2);
+    expect(plan.ongoing).toBe(false);
+    expect(plan.source).toEqual({ kind: "rules", model: null });
+    expect(plan.facts.find((f) => f.k === "Risks")?.v).toContain("22%");
+    expect(plan.facts.find((f) => f.k === "Area")?.v).toBe("Z-14 West bench");
+    const recurring = planFromDraft({ ...draft, cadence: "monthly", endDate: null }, project, {
+      goal: "x",
+    });
+    expect(recurring.ongoing).toBe(true);
+    expect(recurring.end).toBe("Ongoing");
+  });
+
+  it("describes a draft for the agent stream", () => {
+    expect(describeDraft(draft)).toContain("2 steps");
+    expect(describeDraft(draft)).toContain("tell me what to change");
+  });
+
+  it("keeps approved plans with the project and survives a project reload", () => {
+    const store = useMission.getState();
+    store.setProject(project);
+    store.openComposer({ goal: "Mow Z-14" });
+    expect(useMission.getState().composer?.goal).toBe("Mow Z-14");
+    expect(useMission.getState().view).toBe("plan");
+    const plan = planFromDraft(draft, project, { goal: "Mow Z-14", id: "plan-test" });
+    store.approvePlan(plan);
+    let state = useMission.getState();
+    expect(state.composer).toBeNull();
+    expect(state.planId).toBe("plan-test");
+    expect(state.project?.plans.map((p) => p.id)).toContain("plan-test");
+    store.setProject(project);
+    state = useMission.getState();
+    expect(state.project?.plans.filter((p) => p.id === "plan-test")).toHaveLength(1);
+    store.approvePlan({ ...plan, title: "Revised" });
+    expect(useMission.getState().project?.plans.filter((p) => p.id === "plan-test")).toHaveLength(
+      1,
+    );
+    expect(useMission.getState().project?.plans.find((p) => p.id === "plan-test")?.title).toBe(
+      "Revised",
+    );
+    store.removePlan("plan-test");
+    expect(useMission.getState().project?.plans.some((p) => p.id === "plan-test")).toBe(false);
+  });
+
+  it("builds the map overlay in step order and lanes per machine", () => {
+    const overlay = overlayFor({
+      zoneIds: ["Z-21", "Z-14"],
+      machineIds: ["TR-12"],
+      steps: [
+        ...draft.steps,
+        {
+          title: "Treat Z-21",
+          detail: "",
+          machineIds: ["TR-12"],
+          zoneId: "Z-21",
+          when: "",
+          startDay: 1,
+          days: 3,
+        },
+      ],
+    });
+    expect(overlay.zones).toEqual([
+      { zoneId: "Z-14", machineIds: ["TR-04"] },
+      { zoneId: "Z-21", machineIds: ["TR-12"] },
+    ]);
+    const { lanes, totalDays } = scheduleLanes(draft.steps);
+    expect(lanes).toHaveLength(1);
+    expect(lanes[0]?.bars.map((b) => b.startDay)).toEqual([0, 1]);
+    expect(totalDays).toBe(7);
+    expect(scheduleLanes([{ ...draft.steps[0]!, machineIds: [] }]).lanes[0]?.machineId).toBe(
+      "Fleet",
+    );
+  });
+
+  it("describes what a redraft changed", () => {
+    const next: PlanDraft = {
+      ...draft,
+      machineIds: ["TR-04", "TR-12"],
+      zoneIds: ["Z-21"],
+      estimates: { acres: 220, machineHours: 100, calendarDays: 3 },
+      steps: draft.steps.slice(0, 1),
+    };
+    const changes = diffDrafts(draft, next);
+    expect(changes).toContain("Added zone Z-21.");
+    expect(changes).toContain("Dropped zone Z-14.");
+    expect(changes).toContain("Added machine TR-12.");
+    expect(changes).toContain("Machine-hours 206 → 100.");
+    expect(changes).toContain("Duration 7 d → 3 d.");
+    expect(changes).toContain("Steps 2 → 1.");
+    expect(diffDrafts(draft, draft)).toEqual([]);
+  });
+
+  it("round-trips a draft through the API record shape", () => {
+    const body = recordBodyFromDraft(draft, "Mow Z-14", "blackrock-mesa", null);
+    expect(body.projectId).toBe("blackrock-mesa");
+    expect(body.steps).toHaveLength(2);
+    expect(body.source).toBe("rules");
+    const record = {
+      ...body,
+      id: "8b4b7f3e-0d9e-4a1e-9c6d-1f2a3b4c5d6e",
+      siteId: null,
+      status: "dispatched" as const,
+      revision: 2,
+      revisions: [
+        {
+          revision: 1,
+          note: "Approved",
+          createdAt: "2026-09-17T00:00:00Z",
+          title: "Mow Z-14",
+          machineIds: ["TR-04"],
+          zoneIds: ["Z-14"],
+          estimates: draft.estimates,
+        },
+        {
+          revision: 2,
+          note: "Revised: skip nothing",
+          createdAt: "2026-09-18T00:00:00Z",
+          title: "Mow Z-14",
+          machineIds: ["TR-04"],
+          zoneIds: ["Z-14"],
+          estimates: draft.estimates,
+        },
+      ],
+      createdAt: "2026-09-17T00:00:00Z",
+      updatedAt: "2026-09-18T00:00:00Z",
+      areas: body.areas ?? [],
+      zoneIds: body.zoneIds ?? [],
+      machineIds: body.machineIds ?? [],
+      steps: body.steps ?? [],
+      assumptions: body.assumptions ?? [],
+      risks: body.risks ?? [],
+      questions: body.questions ?? [],
+      cadence: body.cadence ?? ("once" as const),
+      source: body.source ?? ("rules" as const),
+      model: body.model ?? null,
+      endDate: body.endDate ?? null,
+    };
+    const plan = planFromRecord(record, project);
+    expect(plan.id).toBe(record.id);
+    expect(plan.persisted).toBe(true);
+    expect(plan.status).toBe("run");
+    expect(plan.state).toBe("Dispatched");
+    expect(plan.revision).toBe(2);
+    expect(plan.revisions?.map((r) => r.note)).toEqual(["Approved", "Revised: skip nothing"]);
+    expect(plan.steps).toHaveLength(2);
+    expect(presentStatus("paused").action).toBe("Resume");
+  });
+
+  it("merges remote plans with local-only ones and drops stale console plans", () => {
+    const store = useMission.getState();
+    store.setProject(project);
+    const local = planFromDraft(draft, project, { goal: "local", id: "plan-local" });
+    store.approvePlan(local);
+    const stale = planFromDraft(draft, project, { goal: "stale", id: "plan-stale" });
+    store.approvePlan({ ...stale, persisted: true });
+    const remote = {
+      ...planFromDraft(draft, project, { goal: "remote", id: "plan-remote" }),
+      persisted: true,
+    };
+    store.setRemotePlans(project.id, [remote]);
+    const ids = useMission.getState().project?.plans.map((p) => p.id) ?? [];
+    expect(ids).toContain("plan-remote");
+    expect(ids).toContain("plan-local");
+    expect(ids).not.toContain("plan-stale");
+    expect(ids).toContain("thistle");
+    store.removePlan("plan-local");
+    store.setRemotePlans(project.id, []);
+  });
+});

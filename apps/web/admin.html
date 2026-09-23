@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#0b0c0a" />
+    <meta
+      name="description"
+      content="Everything in storage, every run that produced it, and the form that launches more."
+    />
+    <!-- Not a public page: it lists storage keys, run parameters and costs. -->
+    <meta name="robots" content="noindex, nofollow" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=Azeret+Mono:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <title>Data console</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <!-- A third entry, and deliberately not a panel inside the globe app: a hundred runs
+         and their parameters do not fit over a 3D scene, and this page has no use for a
+         globe. `pnpm build` produces three entries and e2e/admin.spec.ts asserts that no
+         cesium chunk is requested by this one. -->
+    <script type="module" src="/src/admin/main.tsx"></script>
+  </body>
+</html>

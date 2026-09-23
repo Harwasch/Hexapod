@@ -1,0 +1,28 @@
+# The build context for infra/api.Dockerfile is the repository root, so everything here
+# is sent to the daemon before a single COPY runs. None of this belongs in an image:
+#
+#   .mypy_cache      62 MB under apps/api and 30 MB under tools/pipeline in a used checkout
+#   .venv            copied over /app/.venv by `COPY apps/api/ ./`, with the host's
+#                    absolute paths baked into its scripts -- a broken interpreter
+#   node_modules     the web app's, which this image does not contain
+#   var/             worker run workdirs (WORKER_WORKDIR); capture bytes, not code
+#
+# Anything the image needs must not be listed here: apps/api, tools/pipeline and
+# tools/captures are copied by the Dockerfile and are deliberately absent below.
+.git
+.github
+**/node_modules
+**/.venv
+**/__pycache__
+**/*.pyc
+**/.mypy_cache
+**/.pytest_cache
+**/.ruff_cache
+**/dist
+**/var
+**/test-results
+**/playwright-report
+.env
+.env.local
+.env.*.local
+data/tiles

@@ -1,0 +1,16 @@
+# Lane 1's shape with two of its four stages real: `manual_placement` and `catalog` are
+# the shipped implementations, unchanged. What this recipe proves is registration -- who
+# writes the site, from what.
+name: t-ingest
+version: 1
+description: Normalize, place, package, register -- the shape A8 makes real.
+inputs: []
+stages:
+  - { id: normalize, impl: t_normalize }
+  - id: georeference
+    impl: manual_placement
+    params: { lat: 47.6205, lon: -122.3493, height: 12.0, uncertainty_m: 1.5 }
+  - { id: package, impl: t_package }
+  - id: register
+    impl: catalog
+    params: { slug: orchard-run, title: The Orchard }

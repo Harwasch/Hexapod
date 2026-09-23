@@ -1,0 +1,494 @@
+{
+ "captures": [
+  {
+   "slug": "sheffield-park",
+   "name": "Sheffield Park, Florida",
+   "description": "Suburban park flown with a DJI Phantom 3 at low altitude; an ODM sample dataset.",
+   "boundary": [
+    [
+     -82.6976146,
+     28.0392155
+    ],
+    [
+     -82.6976115,
+     28.0390182
+    ],
+    [
+     -82.6976111,
+     28.0389979
+    ],
+    [
+     -82.6976095,
+     28.0389742
+    ],
+    [
+     -82.6975608,
+     28.0386527
+    ],
+    [
+     -82.6975602,
+     28.03865
+    ],
+    [
+     -82.6974316,
+     28.0385748
+    ],
+    [
+     -82.6971536,
+     28.038472
+    ],
+    [
+     -82.6970323,
+     28.0384354
+    ],
+    [
+     -82.6966599,
+     28.0384045
+    ],
+    [
+     -82.6966492,
+     28.038404
+    ],
+    [
+     -82.6961266,
+     28.0384105
+    ],
+    [
+     -82.6960651,
+     28.0384114
+    ],
+    [
+     -82.6960438,
+     28.0384118
+    ],
+    [
+     -82.6960161,
+     28.0384157
+    ],
+    [
+     -82.6956596,
+     28.0387446
+    ],
+    [
+     -82.6956564,
+     28.0387498
+    ],
+    [
+     -82.6956553,
+     28.0387568
+    ],
+    [
+     -82.6956618,
+     28.0391986
+    ],
+    [
+     -82.6956648,
+     28.0392035
+    ],
+    [
+     -82.6960774,
+     28.0397435
+    ],
+    [
+     -82.6962437,
+     28.0398511
+    ],
+    [
+     -82.6962513,
+     28.0398518
+    ],
+    [
+     -82.6970081,
+     28.0398766
+    ],
+    [
+     -82.6976146,
+     28.0392155
+    ]
+   ],
+   "center": [
+    -82.6966556,
+    28.0390667,
+    10.8
+   ],
+   "attribution": "Piero Toffanin / OpenDroneMap",
+   "attribution_url": "https://github.com/pierotofy/drone_dataset_sheffield_park_3",
+   "license_name": "BSD-2-Clause",
+   "license_url": "https://opensource.org/licenses/BSD-2-Clause",
+   "source_url": "https://hub.dronedb.app/r/odm/sheffield-park-3",
+   "captured": "2016",
+   "pipeline": "OpenDroneMap (mesh, point cloud) and OpenSplat (gaussian splat)",
+   "images": 32,
+   "assets": [
+    {
+     "representation": "mesh",
+     "name": "Textured mesh (ODM)",
+     "path": "mesh/tileset.json",
+     "ground_sample_distance_m": 0.0272,
+     "description": "about 2.7 cm per pixel, estimated from the camera heights",
+     "maximum_screen_space_error": 2,
+     "default": true
+    },
+    {
+     "representation": "point-cloud",
+     "name": "Point cloud (ODM)",
+     "path": "pointcloud/tileset.json",
+     "point_spacing_m": 0.193,
+     "description": "1,000,000 points, about 19 cm apart",
+     "maximum_screen_space_error": 4
+    },
+    {
+     "representation": "gaussian-splat",
+     "name": "Gaussian splat (OpenSplat)",
+     "path": "splat/tileset.json",
+     "ground_sample_distance_m": 0.0272,
+     "description": "119,845 gaussians, 3,000 training steps",
+     "maximum_screen_space_error": 2
+    }
+   ]
+  },
+  {
+   "slug": "mygla",
+   "name": "Tokarzonka reservoir, Istebna",
+   "description": "Retention reservoir in the Silesian Beskids flown with a DJI Phantom 3 in winter; a partial, hilly reconstruction where a single height offset fits less well.",
+   "boundary": [
+    [
+     18.8726791,
+     49.5935843
+    ],
+    [
+     18.8728902,
+     49.5933553
+    ],
+    [
+     18.8728931,
+     49.5933521
+    ],
+    [
+     18.8731515,
+     49.5933586
+    ],
+    [
+     18.8731813,
+     49.5933595
+    ],
+    [
+     18.8733456,
+     49.5934383
+    ],
+    [
+     18.873346,
+     49.5934388
+    ],
+    [
+     18.8736577,
+     49.593932
+    ],
+    [
+     18.8736882,
+     49.5940199
+    ],
+    [
+     18.8737058,
+     49.5940725
+    ],
+    [
+     18.8737003,
+     49.5942209
+    ],
+    [
+     18.8735849,
+     49.5942983
+    ],
+    [
+     18.8730923,
+     49.594291
+    ],
+    [
+     18.873075,
+     49.5942903
+    ],
+    [
+     18.8729955,
+     49.594283
+    ],
+    [
+     18.8729946,
+     49.5942825
+    ],
+    [
+     18.872982,
+     49.594269
+    ],
+    [
+     18.8726791,
+     49.5935843
+    ]
+   ],
+   "center": [
+    18.8733134,
+    49.5939973,
+    786.4
+   ],
+   "attribution": "Tomasz Nycz",
+   "attribution_url": "https://hub.dronedb.app/r/odm/mygla",
+   "license_name": "CC-BY-3.0",
+   "license_url": "https://creativecommons.org/licenses/by/3.0/",
+   "source_url": "https://hub.dronedb.app/r/odm/mygla",
+   "captured": null,
+   "pipeline": "OpenDroneMap (mesh, point cloud) and OpenSplat (gaussian splat)",
+   "images": 29,
+   "assets": [
+    {
+     "representation": "mesh",
+     "name": "Textured mesh (ODM)",
+     "path": "mesh/tileset.json",
+     "ground_sample_distance_m": 0.014,
+     "description": "about 1.4 cm per pixel, estimated from the camera heights",
+     "maximum_screen_space_error": 2,
+     "default": true
+    },
+    {
+     "representation": "point-cloud",
+     "name": "Point cloud (ODM)",
+     "path": "pointcloud/tileset.json",
+     "point_spacing_m": 0.097,
+     "description": "1,000,000 points, about 10 cm apart",
+     "maximum_screen_space_error": 4
+    },
+    {
+     "representation": "gaussian-splat",
+     "name": "Gaussian splat (OpenSplat)",
+     "path": "splat/tileset.json",
+     "ground_sample_distance_m": 0.014,
+     "description": "57,410 gaussians, 3,000 training steps",
+     "maximum_screen_space_error": 2
+    }
+   ]
+  },
+  {
+   "slug": "brighton-beach",
+   "name": "Brighton Beach, Duluth",
+   "description": "Lake Superior shoreline park flown with a DJI Phantom 3; a small ODM sample dataset.",
+   "boundary": [
+    [
+     -91.9947833,
+     46.8427518
+    ],
+    [
+     -91.9947825,
+     46.84275
+    ],
+    [
+     -91.9947571,
+     46.8427138
+    ],
+    [
+     -91.9945058,
+     46.8423718
+    ],
+    [
+     -91.9944917,
+     46.8423603
+    ],
+    [
+     -91.9941654,
+     46.8421013
+    ],
+    [
+     -91.9937276,
+     46.8421276
+    ],
+    [
+     -91.9936271,
+     46.8421625
+    ],
+    [
+     -91.9936192,
+     46.8421668
+    ],
+    [
+     -91.9932459,
+     46.842439
+    ],
+    [
+     -91.9931012,
+     46.8425479
+    ],
+    [
+     -91.9930918,
+     46.8425551
+    ],
+    [
+     -91.9930864,
+     46.8425747
+    ],
+    [
+     -91.9932409,
+     46.8428047
+    ],
+    [
+     -91.9932489,
+     46.8428101
+    ],
+    [
+     -91.9934155,
+     46.8429104
+    ],
+    [
+     -91.9934168,
+     46.8429112
+    ],
+    [
+     -91.9934813,
+     46.8429459
+    ],
+    [
+     -91.9936412,
+     46.8430238
+    ],
+    [
+     -91.9943021,
+     46.8430673
+    ],
+    [
+     -91.9943194,
+     46.8430665
+    ],
+    [
+     -91.9945587,
+     46.8429568
+    ],
+    [
+     -91.9947528,
+     46.8428176
+    ],
+    [
+     -91.9947582,
+     46.8428109
+    ],
+    [
+     -91.9947833,
+     46.8427518
+    ]
+   ],
+   "center": [
+    -91.9939179,
+    46.8425713,
+    152.6
+   ],
+   "attribution": "Piero Toffanin / OpenDroneMap",
+   "attribution_url": "https://github.com/pierotofy/drone_dataset_brighton_beach",
+   "license_name": "BSD-2-Clause",
+   "license_url": "https://opensource.org/licenses/BSD-2-Clause",
+   "source_url": "https://hub.dronedb.app/r/odm/brighton-beach",
+   "captured": "2016",
+   "pipeline": "OpenDroneMap (mesh, point cloud) and OpenSplat (gaussian splat)",
+   "images": 18,
+   "assets": [
+    {
+     "representation": "mesh",
+     "name": "Textured mesh (ODM)",
+     "path": "mesh/tileset.json",
+     "ground_sample_distance_m": 0.0189,
+     "description": "about 1.9 cm per pixel, estimated from the camera heights",
+     "maximum_screen_space_error": 2,
+     "default": true
+    },
+    {
+     "representation": "point-cloud",
+     "name": "Point cloud (ODM)",
+     "path": "pointcloud/tileset.json",
+     "point_spacing_m": 0.132,
+     "description": "1,000,000 points, about 13 cm apart",
+     "maximum_screen_space_error": 4
+    },
+    {
+     "representation": "gaussian-splat",
+     "name": "Gaussian splat (OpenSplat)",
+     "path": "splat/tileset.json",
+     "ground_sample_distance_m": 0.0189,
+     "description": "126,298 gaussians, 3,000 training steps",
+     "maximum_screen_space_error": 2
+    }
+   ]
+  },
+  {
+   "slug": "synthetic-tree",
+   "name": "Synthetic tree (Living Survey fixture)",
+   "description": "A 6 m procedural tree with a known skeleton, generated by tools/captures/synthetic_tree.py. Not a survey: it is the fixture the Living Survey motion model is developed and tested against, standing inside the Sheffield Park capture so the two can be seen together.",
+   "boundary": [
+    [
+     -82.6965186,
+     28.0389
+    ],
+    [
+     -82.6965424,
+     28.0389508
+    ],
+    [
+     -82.6966,
+     28.0389719
+    ],
+    [
+     -82.6966576,
+     28.0389508
+    ],
+    [
+     -82.6966814,
+     28.0389
+    ],
+    [
+     -82.6966576,
+     28.0388492
+    ],
+    [
+     -82.6966,
+     28.0388281
+    ],
+    [
+     -82.6965424,
+     28.0388492
+    ],
+    [
+     -82.6965186,
+     28.0389
+    ]
+   ],
+   "center": [
+    -82.6966,
+    28.0389,
+    10.8
+   ],
+   "attribution": "Hexapod synthetic fixture",
+   "attribution_url": null,
+   "license_name": "CC0-1.0",
+   "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+   "source_url": null,
+   "captured": null,
+   "pipeline": "tools/captures/synthetic_tree.py (procedural; no capture, no reconstruction)",
+   "images": null,
+   "assets": [
+    {
+     "representation": "gaussian-splat",
+     "name": "Gaussian splat (procedural)",
+     "path": "splat/tileset.json",
+     "description": "2,000 gaussians generated from a 33-node motion rig",
+     "maximum_screen_space_error": 1,
+     "clamp_to_ground": true,
+     "default": true,
+     "rig": "../source/rig.json"
+    }
+   ],
+   "bookmark": {
+    "name": "The tree",
+    "longitude": -82.6966,
+    "latitude": 28.038780000000003,
+    "height": 15.0,
+    "heading": 0.0,
+    "pitch": -12.0,
+    "is_default": true
+   }
+  }
+ ]
+}

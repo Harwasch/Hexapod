@@ -1,0 +1,165 @@
+name: Deploy
+
+# `workflow_dispatch` only, and deliberately. This workflow needs four secrets that do
+# not exist in this repository yet (nobody has created the accounts -- see
+# docs/DEPLOYMENT.md § Handover), so a `push` trigger would paint every commit on main
+# red for want of a credential and teach everyone to ignore the badge. ci.yml already
+# uses `workflow_dispatch` for the same reason in reverse: it is how a check gets run on
+# demand. Here it is how a deploy stays opt-in until there is somewhere to deploy to.
+#
+# Each job checks its own secrets in its first step and fails with the name of the one
+# that is missing, rather than failing forty lines later inside a CLI's auth error.
+#
+# It also assumes the infrastructure already exists -- the Fly app, the worker's volume,
+# the bucket, the Pages project, the database. `.github/workflows/provision.yml` is the
+# step before this one; it creates those and then calls this workflow.
+#
+# NEVER RUN. No deployment has ever been made from this workflow, from this repository or
+# from anywhere else. The commands in it are the same ones docs/DEPLOYMENT.md tells you
+# to run by hand, which is the only sense in which they have been checked.
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: What to deploy
+        type: choice
+        options:
+          - everything
+          - api
+          - web
+        default: everything
+  # provision.yml calls this workflow rather than repeating its steps: there is one
+  # deploy, described in one place, whoever starts it. `workflow_call` cannot take a
+  # `choice`, so `target` is a string here and the two `if:` comparisons below accept
+  # exactly the same three words either way.
+  #
+  # The two URL inputs exist because provisioning *computes* values that a standalone
+  # dispatch has to be told: the Fly app's origin and the bucket's public catalog URL.
+  # Both fall back to the repository variables, so a dispatch behaves exactly as it did
+  # before this block was added, and a provisioned first deploy needs no variables set
+  # at all. See docs/DEPLOYMENT.md § Handover.
+  workflow_call:
+    inputs:
+      target:
+        description: What to deploy
+        type: string
+        default: everything
+      api_base_url:
+        description: The API's public origin, overriding the VITE_API_BASE_URL variable
+        type: string
+        default: ""
+      offline_catalog_url:
+        description: catalog.json's public URL, overriding VITE_OFFLINE_CATALOG_URL
+        type: string
+        default: ""
+
+concurrency:
+  # One deploy at a time. Not `cancel-in-progress`: a half-applied `fly deploy` is worse
+  # than a queued one, and the release command runs migrations.
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  api:
+    name: API and worker · Fly.io
+    if: inputs.target == 'everything' || inputs.target == 'api'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: The secret this job needs
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          if [ -z "${FLY_API_TOKEN}" ]; then
+            echo "::error::FLY_API_TOKEN is not set. Create a deploy token with"
+            echo "::error::'fly tokens create deploy -a twin-api' and add it as a"
+            echo "::error::repository secret. See docs/DEPLOYMENT.md."
+            exit 1
+          fi
+      # flyctl's own installer rather than a third-party action. `fly deploy` is one
+      # command; an action would add a repository whose tag we would be guessing at, and
+      # Fly's published instructions pin nothing either.
+      - name: Install flyctl
+        run: |
+          curl -L https://fly.io/install.sh | sh
+          echo "$HOME/.fly/bin" >> "$GITHUB_PATH"
+      # `--remote-only` builds on Fly's builder, so the 500 MB+ image is never pulled
+      # through the runner. The build context is the repository root because that is
+      # where fly.toml is: infra/api.Dockerfile copies tools/pipeline and tools/captures
+      # as well as apps/api, and a context of apps/api would fail on the first COPY.
+      #
+      # fly.toml's release_command runs `alembic upgrade head` in its own machine before
+      # any machine is replaced. A migration that fails aborts the deploy with the old
+      # version still serving.
+      - name: fly deploy
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: flyctl deploy --remote-only --wait-timeout 10m
+      # The same repository variable the web build bakes into the bundle, so there is
+      # one name for one thing. Unset, this step says so and passes: a deploy should not
+      # be reported as failed because nobody has written down where it went.
+      - name: The deployed API answers
+        env:
+          API_BASE_URL: ${{ inputs.api_base_url || vars.VITE_API_BASE_URL }}
+        run: |
+          if [ -z "${API_BASE_URL}" ]; then
+            echo "Neither an api_base_url input nor a VITE_API_BASE_URL variable; skipping."
+            exit 0
+          fi
+          curl -fsS --retry 5 --retry-all-errors "${API_BASE_URL}/api/v1/health"
+
+  web:
+    name: Web · Cloudflare Pages
+    if: inputs.target == 'everything' || inputs.target == 'web'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: The secrets this job needs
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          missing=""
+          if [ -z "${CLOUDFLARE_API_TOKEN}" ]; then
+            missing="${missing} CLOUDFLARE_API_TOKEN"
+          fi
+          if [ -z "${CLOUDFLARE_ACCOUNT_ID}" ]; then
+            missing="${missing} CLOUDFLARE_ACCOUNT_ID"
+          fi
+          if [ -n "${missing}" ]; then
+            echo "::error::missing repository secret(s):${missing}."
+            echo "::error::See docs/DEPLOYMENT.md for the token's required permissions."
+            exit 1
+          fi
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # Every VITE_ value is baked into the bundle at build time and is public once it
+      # ships. The ion token is a secret only in the sense that it is yours: scope it to
+      # assets:read + geocode and set its Allowed URLs to this origin, because nothing
+      # here can stop a reader of the bundle from using it otherwise.
+      - name: Build
+        env:
+          VITE_CESIUM_ION_ACCESS_TOKEN: ${{ secrets.VITE_CESIUM_ION_ACCESS_TOKEN }}
+          VITE_API_BASE_URL: ${{ inputs.api_base_url || vars.VITE_API_BASE_URL }}
+          VITE_OFFLINE_CATALOG_URL: ${{ inputs.offline_catalog_url || vars.VITE_OFFLINE_CATALOG_URL }}
+          VITE_ENABLE_PHOTOREALISTIC: ${{ vars.VITE_ENABLE_PHOTOREALISTIC }}
+        run: pnpm --filter @twin/web build
+      # Pages reads _headers from the root of the deployed directory, and Vite copies
+      # only apps/web/public into dist. Keeping the file in infra/ instead means a local
+      # build and the e2e suite see exactly the bundle they saw before this workflow
+      # existed; the cost is this one line, which wrangler.toml also documents.
+      - name: Add the Pages headers
+        run: cp infra/pages/_headers apps/web/dist/_headers
+      # wrangler from npm rather than a third-party action, for the reason flyctl is
+      # installed by hand above. `--branch main` marks this a production deployment;
+      # without it wrangler infers a preview from the current branch name.
+      - name: wrangler pages deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: pnpm dlx wrangler pages deploy --branch main

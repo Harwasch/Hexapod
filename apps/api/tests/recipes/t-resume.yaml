@@ -1,0 +1,8 @@
+# A stage that fails once and then resumes from its checkpoint: the preemption contract.
+name: t-resume
+version: 1
+description: Fails on the first attempt, finishes on the second from `checkpoint/`.
+inputs: []
+stages:
+  - { id: one, impl: t_first }
+  - { id: two, impl: t_resumes }

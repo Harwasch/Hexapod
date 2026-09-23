@@ -1,52 +1,141 @@
-# <project name>
+# Hexapod monorepo
 
-A hardware project built with the [MakeHardware](https://github.com/Harwasch/MakeHardware)
-workflow. Replace this paragraph with one sentence about what the thing is.
+This repository holds several parts of one project. The **Living World** digital twin — a
+continuously zoomable, time-aware 3D world built on CesiumJS — lives in `apps/` and
+`packages/`. Hardware design, simulation and other subsystems live alongside it in their
+own directories.
 
-<!-- PLAN:BEGIN -->
-<!-- PLAN:END -->
-
-## Getting started
-
-This repo was created from the MakeHardware project template, so
-`.claude/settings.json` is already correct. In the **first** session, run:
-
-```
-/hw-new-project
-```
-
-That scaffolds `plan.yaml`, `requirements/`, `hw/`, `cad/`, `concepts/`,
-`sim/`, `docs/`, `strictdoc.toml` and a project `CLAUDE.md` from the plugin's
-current templates, then runs `hw-doctor` and `imagegen --list` so you know what
-the toolchain can actually do before you plan around it.
-
-Then start the vision interview:
-
-```
-Use hw-vision. I want to build <one sentence>.
+```text
+/
+├── apps/
+│   ├── web/        React + Vite + CesiumJS mission control (dark glass UI)
+│   └── api/        FastAPI + PostGIS catalog (sites, assets, layers, bookmarks)
+├── packages/
+│   ├── contracts/  OpenAPI document + generated TypeScript types
+│   ├── geo/        Framework-free geospatial helpers (units, footprints, scale)
+│   ├── world/      Living Survey motion model (rigs, wind, deformation) — no Cesium
+│   ├── ui/         Glass design system (tokens + accessible primitives)
+│   └── config/     Shared TypeScript configuration
+├── infra/          docker compose (PostGIS, MinIO), API Dockerfile
+├── docs/           Architecture, Cesium notes, data model, deployment, decisions
+└── .github/        CI (lint, typecheck, tests, build, audit)
 ```
 
-## The commands you will use
+## What it does
+
+One continuous CesiumJS globe, one camera. Earth → region → site → a high-resolution
+reality model (Gaussian splat, mesh or point cloud) → centimetre detail. The coarse world is
+clipped away under each local model, so nothing z-fights. Open datasets (terrain, imagery,
+land cover, hydrography, buildings) are composable layers with provenance, license and
+attribution. Sites, assets and layers persist in PostGIS.
+
+A public demo site (Cesium's Gaussian-splat sample, ion asset 4547222) works out of the box
+using the evaluation token bundled with CesiumJS. On top of the world sits **mission control**
+for autonomous land-management robots: project badge, Map / Plan / Fleet views, zone and
+machine overlays, plans, fleet and treatment log, an agent activity stream and a command bar.
+The demo fleet is simulated and labeled as such (see [docs/MISSION_CONTROL.md](docs/MISSION_CONTROL.md)).
+
+A **Living Survey** prototype makes one tree sway under a wind setting without its measurement
+ever changing: the deformer recomputes every frame from an immutable copy of the canonical splat
+positions, so calm restores the measured bytes exactly, and the motion is labelled Simulated
+wherever it shows. Today the only tree that moves is a procedural fixture — see
+[docs/LIVING_SURVEY.md](docs/LIVING_SURVEY.md) for what it proves and what it does not.
+
+## Quickstart (clean machine)
+
+Prerequisites: Node 22+, [pnpm](https://pnpm.io) 10, Python 3.12, [uv](https://docs.astral.sh/uv/),
+Docker (for PostGIS/MinIO). The lockfiles pin everything else.
 
 ```bash
-hw-doctor                 # what the toolchain can actually do right now
-/hw-status                # plan progress, what is ready to start, requirements coverage
-plan-render               # refresh docs/plan.svg and the block above
-block-diagram             # refresh the architecture diagram and power budget
-block-diagram --check     # architecture gate; exit 1 on an over-budget rail
-req-trace --gate          # traceability gate; exit 1 while gaps remain
+git clone <this repository> && cd Hexapod
+cp .env.example .env                      # fill in tokens later; nothing is required to boot
+docker compose -f infra/docker-compose.yml up -d   # PostGIS on :5432, MinIO on :9000/:9001
+pnpm install
+cd apps/api && uv sync && uv run alembic upgrade head && uv run python -m app.seed && cd ../..
+pnpm dev:api                              # http://localhost:8000/api/v1/docs  (terminal 1)
+pnpm dev                                  # http://localhost:5173              (terminal 2)
 ```
 
-## Before you start: the environment
+Open <http://localhost:5173>, click **View high-resolution demo**.
 
-The plugin's skills are useless without the toolchain behind them. This repo
-needs a Claude Code cloud environment built from
-[MakeHardware's `env/`](https://github.com/Harwasch/MakeHardware/tree/HEAD/env) —
-network access **Full**, the environment variables file, and the setup script.
+Three pages are served, not one. `/` is the globe; `/admin.html` is the data console —
+every capture in storage, every run that produced it, and the form that launches more;
+`/upload.html` is the page a phone opens after scanning a capture's handoff QR code.
+Neither of the last two loads CesiumJS.
 
-The setup script is not optional. `.claude/settings.json` declares the plugin
-but does not install it: in a cloud session a repo-declared marketplace is
-ignored for an untrusted folder, so the setup script installs the plugin at
-user scope. Without it you get a repo with no skills in it.
+Without Docker: any PostgreSQL 16 with the PostGIS extension works; point `DATABASE_URL`
+and `TEST_DATABASE_URL` at it. Without the API at all, the web app still boots with the
+built-in demo site and labels itself "Catalog API offline".
 
-See [docs/01-environment.md](https://github.com/Harwasch/MakeHardware/blob/HEAD/docs/01-environment.md).
+### Environment variables
+
+See [`.env.example`](.env.example) for every variable with comments. The important ones:
+
+| Variable                       | Where | Purpose                                                                                 |
+| ------------------------------ | ----- | --------------------------------------------------------------------------------------- |
+| `VITE_CESIUM_ION_ACCESS_TOKEN` | web   | Browser token (`assets:read`, `geocode`). Empty → CesiumJS evaluation token (dev only). |
+| `VITE_DEFAULT_*_ASSET_ID`      | web   | Your own splat / mesh / point-cloud ion assets for the built-in site (any subset).      |
+| `VITE_ENABLE_PHOTOREALISTIC`   | web   | Google Photorealistic 3D Tiles world, on by default; `false` switches it off.           |
+| `DATABASE_URL`                 | api   | PostgreSQL + PostGIS connection.                                                        |
+| `API_CORS_ORIGINS`             | api   | Allowed browser origins.                                                                |
+| `API_WRITE_TOKEN`              | api   | Shared token for every write (`Authorization: Bearer …`). Reads stay open.              |
+| `OBJECT_STORAGE_*`             | api   | Optional S3/MinIO for site thumbnails.                                                  |
+| `CESIUM_ION_SERVER_TOKEN`      | api   | Server-side ion token to monitor reconstruction jobs. Never exposed to the browser.     |
+
+`VITE_` variables are public and inlined into the bundle. Server secrets never carry that prefix.
+That is why `API_WRITE_TOKEN` has no `VITE_` twin: the console asks for it in the Captures panel the
+first time a write comes back `401`, and keeps it in this browser (`twin.settings.v1`) rather than in
+the bundle. With no token configured, writes are open and nothing is ever asked for.
+
+## Everyday commands
+
+```bash
+pnpm dev / pnpm dev:api        # dev servers
+pnpm lint && pnpm typecheck    # ESLint (strict, type-aware) + tsc for every package
+pnpm test                      # Vitest: packages/geo, packages/ui, packages/world, apps/web
+pnpm e2e                       # Playwright (needs Chromium: pnpm --filter @twin/web exec playwright install chromium)
+pnpm build                     # production bundle in apps/web/dist
+pnpm contracts:generate        # regenerate TS types after changing API schemas
+cd apps/api && uv run pytest   # backend tests (needs TEST_DATABASE_URL)
+cd apps/api && uv run ruff check . && uv run mypy .
+```
+
+After changing a Pydantic schema: `uv run python -m app.scripts.export_openapi ../../packages/contracts/openapi.json`
+then `pnpm contracts:generate`. CI fails if the committed contract is stale.
+
+## Sample objects for close-range testing
+
+`pnpm samples` (with the API and dev server running) downloads two CC0 photoscanned objects,
+a 14 cm rock and a 2 m weed, and places them on the demo site so millimetre-scale zoom can be
+tested without capturing anything. Press `S` and pick them, or type `fly to rock` in the
+command bar. See [docs/COMPARISON.md](docs/COMPARISON.md).
+
+## Mouse and keyboard
+
+Google Maps conventions: left-drag pans, wheel zooms towards the cursor, **Ctrl+drag,
+right-drag or middle-drag orbit the point in the centre of the view**, and the tilt stops at
+the horizon. Arrow keys pan, `Shift`+arrows orbit the view centre (left/right turn, up/down
+tilt), `+`/`-` zoom towards it; held keys move continuously. Beside a hand-sized object a
+plain drag orbits the point you clicked.
+
+`⌘K`/`Ctrl+K` command palette · `/` search · `L` layers · `S` sites · `M` measure · `C` compare ·
+`B` bookmarks · `N` reset north · `T` top-down · `H` Earth · `G` explore mode · `,` settings ·
+`1`/`2`/`3` Map / Plan / Fleet · `A` agent stream · `D` developer panel (dev builds) · `Esc` closes.
+
+## Documentation
+
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — why CesiumJS, 3D Tiles, PostGIS; the seams for STAC/S3/COPC/robotics
+- [docs/COMPARISON.md](docs/COMPARISON.md) — mesh vs point cloud vs Gaussian splat comparison sites and how to benchmark them
+- [docs/MISSION_CONTROL.md](docs/MISSION_CONTROL.md) — robot mission layer: views, overlays, command bar, provider seam
+- [docs/CESIUM.md](docs/CESIUM.md) — scene manager, clipping, LOD/adaptive quality, splat internals, tokens, current API notes
+- [docs/LIVING_SURVEY.md](docs/LIVING_SURVEY.md) — simulated motion over measured geometry: the mechanism, what is measured vs simulated, and the limits
+- [docs/DATA_MODEL.md](docs/DATA_MODEL.md) — sites, assets, layers, bookmarks, provenance
+- [docs/ADDING_DATA.md](docs/ADDING_DATA.md) — every supported input, validation rules, ion reconstruction
+- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — the committed deployment: Cloudflare Pages + R2, the API and worker on Fly, Neon for PostGIS; a `provision` workflow that creates all of it from CI, and the four steps left for an account owner
+- [docs/DECISIONS/](docs/DECISIONS/) — architecture decision records
+- [docs/ENGINEERING_REPORT.md](docs/ENGINEERING_REPORT.md) — what was built, limitations, next steps
+
+## Hardware subsystems
+
+The MakeHardware workflow used by the hardware parts of this repository is documented in
+[docs/HARDWARE.md](docs/HARDWARE.md).

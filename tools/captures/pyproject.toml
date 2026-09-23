@@ -1,0 +1,31 @@
+[project]
+name = "twin-captures"
+version = "0.1.0"
+description = "Turns drone photogrammetry outputs (ODM, OpenSplat) into 3D Tiles the console serves."
+requires-python = ">=3.11"
+dependencies = [
+  "numpy>=1.26",
+  "pillow>=10",
+  "laspy[lazrs]>=2.5",
+  "pyproj>=3.6",
+  # KD-tree and connected components for skeleton.py's connectivity clustering.
+  "scipy>=1.11",
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=8.4",
+  "ruff>=0.13",
+]
+
+[tool.uv]
+# Scripts run from this directory; there is nothing to build or install.
+package = false
+
+[tool.ruff]
+line-length = 100
+
+[tool.pytest.ini_options]
+# The scripts import each other by bare module name (build_site.py already does).
+pythonpath = ["."]
+testpaths = ["tests"]

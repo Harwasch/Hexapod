@@ -1,0 +1,400 @@
+/* ---------------------------------------------------------------------------
+   The data console. Same tokens and the same glass primitives as the globe app;
+   a different shape, because this page is a table and that one is a map.
+
+   Nothing here imports cesium/Build/Cesium/Widgets/widgets.css — that stylesheet
+   is the globe app's, and pulling it in would defeat the point of a third entry.
+   --------------------------------------------------------------------------- */
+@import "@twin/ui/styles.css";
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+  background: var(--ink);
+  font-family: var(--font-sans);
+  font-size: var(--text-md);
+  line-height: var(--leading-normal);
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+}
+
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
+}
+
+a {
+  color: var(--accent-strong);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+.admin {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-4) var(--space-8);
+  /* A data table wants width. The globe app is constrained by its viewport; this is not. */
+  max-width: 1800px;
+  margin: 0 auto;
+}
+
+/* ---- Bar ----------------------------------------------------------------- */
+
+.admin__bar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--glass-radius);
+  background: var(--glass-bg-flat);
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+}
+
+.admin__title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text-primary);
+}
+
+.admin__title h1 {
+  margin: 0;
+  font-size: var(--text-lg);
+  letter-spacing: var(--tracking-tight);
+}
+
+.admin__bar-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: auto;
+}
+
+.admin__globe {
+  font-size: var(--text-sm);
+  white-space: nowrap;
+}
+
+.admin__token {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--glass-radius-sm);
+  background: var(--glass-bg-flat);
+}
+
+.admin__token .glass-field {
+  flex: 1;
+}
+
+.admin__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+/* ---- Cards --------------------------------------------------------------- */
+
+.admin-card {
+  padding: var(--space-4);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--glass-radius);
+  background: var(--glass-bg-flat);
+}
+
+.admin-card__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
+.admin-card__head h2 {
+  margin: 0;
+  font-size: var(--text-md);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-secondary);
+}
+
+.admin-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: auto;
+}
+
+.admin-subhead {
+  margin: var(--space-4) 0 var(--space-2);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.admin-note {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--text-tertiary);
+}
+
+.admin-summary {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+
+.admin-error {
+  margin: var(--space-2) 0 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--danger);
+  border-radius: var(--glass-radius-sm);
+  background: var(--danger-soft);
+  font-size: var(--text-sm);
+  color: var(--text-primary);
+}
+
+.admin-dim {
+  color: var(--text-tertiary);
+}
+
+.admin-strong {
+  font-weight: 600;
+}
+
+/* ---- Tables -------------------------------------------------------------- */
+
+.admin-table,
+.admin-subtable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+}
+
+.admin-table th,
+.admin-table td,
+.admin-subtable th,
+.admin-subtable td {
+  padding: var(--space-2) var(--space-3);
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--divider);
+}
+
+.admin-table thead th,
+.admin-subtable thead th {
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+
+.admin-table tbody tr:hover {
+  background: var(--glass-tint);
+}
+
+.admin-table__detail > td {
+  background: rgba(0, 0, 0, 0.22);
+}
+
+.admin-table__group th {
+  padding-top: var(--space-3);
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-secondary);
+}
+
+.admin-table--compare th[scope="row"] {
+  width: 22ch;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+/* The only rows a comparison is really about. Marked with a colour *and* a rule,
+   because a difference carried by hue alone is invisible to a lot of people. */
+.admin-row--differs {
+  background: var(--warn-soft);
+}
+
+.admin-row--differs td[data-differs] {
+  box-shadow: inset 2px 0 0 var(--warn);
+}
+
+.admin-mono {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.admin-num {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.admin-ellipsis {
+  max-width: 34ch;
+  overflow-wrap: anywhere;
+}
+
+.admin-actions {
+  display: flex;
+  gap: var(--space-1);
+}
+
+.admin-sort {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  text-transform: inherit;
+  letter-spacing: inherit;
+}
+
+.admin-sort:hover {
+  color: var(--accent-strong);
+}
+
+.admin-sort:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: 4px;
+}
+
+.admin-check {
+  display: inline-flex;
+  align-items: center;
+}
+
+.admin-check input {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent);
+}
+
+.admin-log {
+  max-height: 22rem;
+  margin: var(--space-2) 0 0;
+  padding: var(--space-3);
+  overflow: auto;
+  border-radius: var(--glass-radius-sm);
+  background: rgba(0, 0, 0, 0.4);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  white-space: pre-wrap;
+}
+
+/* ---- New run ------------------------------------------------------------- */
+
+.admin-sheet {
+  width: min(44rem, 100vw);
+}
+
+.admin-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.admin-form__row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-3);
+}
+
+.admin-inline-label {
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-tertiary);
+}
+
+.admin-estimate {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3);
+  border: 1px solid var(--accent-border);
+  border-radius: var(--glass-radius-sm);
+  background: var(--accent-soft);
+}
+
+.admin-estimate__wall {
+  font-weight: 600;
+}
+
+.admin-estimate__cost {
+  font-family: var(--font-mono);
+  color: var(--accent-strong);
+}
+
+.admin-stage {
+  margin: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--divider);
+  border-radius: var(--glass-radius-sm);
+}
+
+.admin-stage legend {
+  padding: 0 var(--space-2);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.admin-stage__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+  gap: var(--space-2);
+}
+
+.admin-param {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.admin-param__name {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+}
+
+@media (max-width: 720px) {
+  .admin-form__row {
+    grid-template-columns: 1fr;
+  }
+
+  .admin__bar-actions {
+    margin-left: 0;
+  }
+}

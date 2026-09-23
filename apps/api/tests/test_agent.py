@@ -1,0 +1,409 @@
+from __future__ import annotations
+
+import base64
+from datetime import date
+from itertools import pairwise
+from typing import Any
+
+import pytest
+from fastapi.testclient import TestClient
+
+from app.config import Settings
+from app.schemas.agent import PlanDraftRequest, PlannerMachine, PlannerZone
+from app.services.planner import ClaudePlanner, ModelPlanDraft, RulesPlanner, build_planner
+
+ZONES = [
+    PlannerZone(id="Z-14", name="West bench", acres=310, task="Mow thistle", progress_pct=40),
+    PlannerZone(id="Z-21", name="Z-21 North fence", acres=220, task="Mow thistle", progress_pct=0),
+    PlannerZone(
+        id="Z-08", name="Corridor", acres=90, task="Inspect", treated=True, progress_pct=100
+    ),
+]
+MACHINES = [
+    PlannerMachine(id="TR-04", name="Kestrel", status="idle", battery_pct=88),
+    PlannerMachine(id="TR-07", name="Harrier", status="attention", battery_pct=22),
+    PlannerMachine(id="TR-12", name="Merlin", status="working", battery_pct=64),
+]
+
+
+def request(goal: str, **overrides: Any) -> PlanDraftRequest:
+    fields: dict[str, Any] = {
+        "goal": goal,
+        "project_name": "Blackrock Mesa",
+        "machines": MACHINES,
+        "zones": ZONES,
+        "today": date(2026, 9, 17),
+    }
+    fields.update(overrides)
+    return PlanDraftRequest(**fields)
+
+
+def test_rules_planner_uses_named_zones_and_machine_count() -> None:
+    draft = RulesPlanner().draft(
+        request("Clear the star thistle from Z-14 and Z-21 with two mowers by Friday")
+    )
+    assert draft.source == "rules"
+    assert draft.zone_ids == ["Z-14", "Z-21"]
+    assert draft.machine_ids == ["TR-04", "TR-12"], "idle first, then working, never attention"
+    assert draft.estimates.acres == 530
+    assert draft.cadence == "once" and draft.end_date is not None
+    assert [s.zone_id for s in draft.steps[1:3]] == ["Z-14", "Z-21"]
+    assert [s.title for s in draft.steps[1:3]] == [
+        "Treat Z-14 West bench",
+        "Treat Z-21 North fence",
+    ]
+    assert not draft.questions, "a deadline was given and zones matched"
+
+
+def test_rules_planner_defaults_to_untreated_zones_and_flags_attention() -> None:
+    draft = RulesPlanner().draft(
+        request("Inspect the fence line monthly", preferred_machine_ids=["TR-07"])
+    )
+    assert draft.zone_ids == ["Z-14", "Z-21"], "treated zones are skipped"
+    assert draft.machine_ids == ["TR-07"], "an operator pre-selection wins"
+    assert draft.cadence == "monthly" and draft.end_date is None
+    assert any("attention" in risk for risk in draft.risks)
+    assert any("22%" in risk for risk in draft.risks)
+
+
+def test_rules_planner_asks_when_nothing_matches() -> None:
+    draft = RulesPlanner().draft(request("Do something", zones=[], machines=[]))
+    assert draft.zone_ids == [] and draft.machine_ids == []
+    assert len(draft.questions) >= 2
+
+
+def test_build_planner_without_key_is_rules() -> None:
+    planner = build_planner(Settings(_env_file=None))
+    assert planner.status().provider == "rules"
+    assert (
+        build_planner(Settings(ANTHROPIC_API_KEY="k", _env_file=None)).status().provider == "claude"
+    )
+
+
+class _FakeMessages:
+    def __init__(self, parsed: ModelPlanDraft) -> None:
+        self.parsed = parsed
+        self.calls: list[dict[str, Any]] = []
+
+    def parse(self, **kwargs: Any) -> Any:
+        self.calls.append(kwargs)
+
+        class Response:
+            stop_reason = "end_turn"
+            parsed_output = self.parsed
+
+        return Response()
+
+
+class _FakeClient:
+    def __init__(self, parsed: ModelPlanDraft) -> None:
+        self.messages = _FakeMessages(parsed)
+
+
+def test_claude_planner_filters_unknown_ids_and_labels_source() -> None:
+    parsed = ModelPlanDraft(
+        title="Clear thistle on the west bench",
+        objective="Mow Z-14 with TR-04 at 1.2 acres/hour.",
+        zone_ids=["Z-14", "Z-99"],
+        machine_ids=["TR-04", "TR-00"],
+        cadence="once",
+        start_date="2026-09-18",
+        end_date="2026-09-25",
+        estimated_acres=310,
+        estimated_machine_hours=258,
+        estimated_calendar_days=7,
+        steps=[
+            {
+                "title": "Mow",
+                "detail": "Mow the bench",
+                "machine_ids": ["TR-04", "TR-00"],
+                "zone_id": "Z-99",
+                "when": "Day 1",
+                "start_day": 0,
+                "days": 7,
+            }
+        ],
+        assumptions=["1.2 acres/hour"],
+        risks=[],
+        questions=[],
+        clarifications=[
+            {
+                "id": "deadline",
+                "question": "When?",
+                "kind": "range",
+                "options": [],
+                "min": 1,
+                "max": 30,
+                "step": 1,
+                "unit": "days",
+                "default": "7",
+                "why": "Sets the end date.",
+            }
+        ],
+    )
+    settings = Settings(ANTHROPIC_API_KEY="k", ANTHROPIC_MODEL="claude-opus-5", _env_file=None)
+    client = _FakeClient(parsed)
+    draft = ClaudePlanner(settings, client=client).draft(request("Clear the thistle"))  # type: ignore[arg-type]
+    assert draft.source == "claude" and draft.model == "claude-opus-5"
+    assert draft.zone_ids == ["Z-14"] and draft.machine_ids == ["TR-04"]
+    assert draft.steps[0].machine_ids == ["TR-04"] and draft.steps[0].zone_id is None
+    assert draft.steps[0].days == 7 and draft.assumptions == ["1.2 acres/hour"]
+    assert draft.clarifications[0].id == "deadline" and draft.clarifications[0].kind == "range"
+    answered = ClaudePlanner(settings, client=client).draft(  # type: ignore[arg-type]
+        request("Clear the thistle", answers={"deadline": 7})
+    )
+    assert answered.clarifications == [], "an answered clarification is not asked again"
+    assert "deadline" in client.messages.calls[-1]["messages"][0]["content"]
+    call = client.messages.calls[0]
+    assert call["model"] == "claude-opus-5" and "Z-14" in call["messages"][0]["content"]
+
+
+def test_plan_draft_endpoint(client: TestClient) -> None:
+    body = {
+        "goal": "Mow Z-21 weekly with one mower",
+        "projectName": "Blackrock Mesa",
+        "zones": [z.model_dump(by_alias=True) for z in ZONES],
+        "machines": [m.model_dump(by_alias=True) for m in MACHINES],
+        "today": "2026-09-17",
+    }
+    response = client.post("/api/v1/agent/plan-draft", json=body)
+    assert response.status_code == 200, response.text
+    draft = response.json()
+    assert draft["source"] in {"rules", "claude"}
+    assert draft["zoneIds"] == ["Z-21"] if draft["source"] == "rules" else True
+    assert client.get("/api/v1/agent/status").json()["provider"] in {"rules", "claude"}
+    assert client.post("/api/v1/agent/plan-draft", json={"goal": "x"}).status_code == 422
+
+
+def test_rules_planner_refinement_overrides_count_and_exclusions() -> None:
+    zones = [*ZONES, PlannerZone(id="Z-08", name="Draw", acres=90, task="Survey", progress_pct=10)]
+    draft = RulesPlanner().draft(
+        request(
+            "Clear Z-14 and Z-21 with two mowers, then survey Z-08",
+            zones=zones,
+            refinement="use three machines and skip Z-08",
+        )
+    )
+    assert draft.zone_ids == ["Z-14", "Z-21"]
+    assert len(draft.machine_ids) == 3
+    # A crew with two zones does them one after the other, never in parallel.
+    by_machine: dict[str, list[tuple[int, int]]] = {}
+    for step in draft.steps[1:-1]:
+        for m in step.machine_ids:
+            by_machine.setdefault(m, []).append((step.start_day, step.start_day + step.days))
+    for spans in by_machine.values():
+        spans.sort()
+        for (_, end), (start, _) in pairwise(spans):
+            assert start >= end
+
+
+def test_rules_planner_sequences_one_crew_over_two_zones() -> None:
+    draft = RulesPlanner().draft(request("Mow Z-14 and Z-21 with TR-04"))
+    assert draft.machine_ids == ["TR-04"]
+    first, second = draft.steps[1], draft.steps[2]
+    assert second.start_day == first.start_day + first.days
+    assert draft.steps[-1].start_day == second.start_day + second.days
+
+
+def test_rules_planner_uses_learned_rates_and_avoids_booked_machines() -> None:
+    from app.schemas.agent import BusyWindow, PlannerExistingPlan, PlannerRate
+
+    draft = RulesPlanner().draft(
+        request(
+            "Mow Z-21 with one mower",
+            rates=[
+                PlannerRate(
+                    task="Mow pass 2", acres_per_machine_hour=11.0, samples=6, machine_ids=["TR-04"]
+                )
+            ],
+            existing_plans=[
+                PlannerExistingPlan(
+                    id="p1",
+                    title="Corridor sweep",
+                    zone_ids=["Z-08"],
+                    status="dispatched",
+                    busy=[
+                        BusyWindow(
+                            machine_id="TR-04",
+                            start_date=date(2026, 9, 17),
+                            end_date=date(2026, 9, 30),
+                        )
+                    ],
+                )
+            ],
+        )
+    )
+    # 220 acres at 11 acres/hour = 20 machine-hours, not 147 at the default rate.
+    assert draft.estimates.machine_hours == 20
+    assert any("learned from 6 logged runs" in a for a in draft.assumptions)
+    # TR-04 is idle but booked; TR-12 (working, free) is chosen instead.
+    assert draft.machine_ids == ["TR-12"]
+    named = RulesPlanner().draft(
+        request(
+            "Mow Z-21 with TR-04",
+            existing_plans=[
+                PlannerExistingPlan(
+                    id="p1",
+                    title="Corridor sweep",
+                    status="scheduled",
+                    busy=[
+                        BusyWindow(
+                            machine_id="TR-04",
+                            start_date=date(2026, 9, 17),
+                            end_date=date(2026, 9, 30),
+                        )
+                    ],
+                )
+            ],
+        )
+    )
+    assert named.machine_ids == ["TR-04"], "an operator's choice stands"
+    assert any("already booked" in r for r in named.risks)
+
+
+def test_rules_planner_asks_structured_questions_and_applies_answers() -> None:
+    first = RulesPlanner().draft(request("Survey the north fence"))
+    ids = [c.id for c in first.clarifications]
+    assert "deadline" in ids and "resolution" in ids and "cadence" in ids
+    deadline = next(c for c in first.clarifications if c.id == "deadline")
+    assert deadline.kind == "range" and deadline.unit == "days" and deadline.default == 14
+    assert all(c.kind != "area" for c in first.clarifications), "no drawn area in scope"
+
+    answered = RulesPlanner().draft(
+        request(
+            "Survey the north fence",
+            answers={"deadline": 3, "resolution": "2", "cadence": "monthly", "crew": "3"},
+        )
+    )
+    assert [c.id for c in answered.clarifications] == []
+    assert answered.cadence == "monthly" and answered.end_date is None
+    assert answered.estimates.machine_hours == pytest.approx(
+        first.estimates.machine_hours * 2, abs=0.2
+    )
+    assert len(answered.machine_ids) == 3
+
+    tight = RulesPlanner().draft(
+        request("Mow Z-14 and Z-21", answers={"deadline": 2, "passes": "two"})
+    )
+    assert any("do not fit the 2-day deadline" in r for r in tight.risks)
+    assert tight.estimates.machine_hours == pytest.approx(
+        RulesPlanner()
+        .draft(request("Mow Z-14 and Z-21", answers={"deadline": 2}))
+        .estimates.machine_hours
+        * 2,
+        abs=0.2,
+    )
+
+    drawn = RulesPlanner().draft(
+        request(
+            "Survey the lake shore",
+            zones=[PlannerZone(id="A-01", name="View area 01", acres=500, task="Treatment")],
+            preferred_zone_ids=["A-01"],
+        )
+    )
+    area = next(c for c in drawn.clarifications if c.id == "area")
+    assert area.kind == "area" and [o.value for o in area.options][:2] == ["keep", "edit"]
+
+
+def test_rules_planner_plans_a_3d_scan_with_capture_and_reconstruction() -> None:
+    field = PlannerZone(id="A-01", name="View area 01", acres=120, task="Treatment")
+    scan = RulesPlanner().draft(
+        request("3D scan this field for a splat", zones=[field], preferred_zone_ids=["A-01"])
+    )
+    titles = [s.title for s in scan.steps]
+    assert titles == [
+        "Capture plan",
+        "Capture A-01 View area 01",
+        "Reconstruction",
+        "Register and QA",
+    ]
+    assert not any("Treat" in t for t in titles)
+    assert scan.steps[2].machine_ids == [], "reconstruction is compute, not machine time"
+    assert any("capture" in a.lower() for a in scan.assumptions)
+    ids = [c.id for c in scan.clarifications]
+    assert ids[:4] == ["area", "output", "resolution", "views"] and "gcp" in ids
+    # 120 acres at 20 ac/h with obliques (x2) = 12 machine-hours.
+    assert scan.estimates.machine_hours == pytest.approx(12, abs=0.2)
+
+    fine = RulesPlanner().draft(
+        request(
+            "3D scan this field for a splat",
+            zones=[field],
+            preferred_zone_ids=["A-01"],
+            answers={"resolution": "1", "views": "nadir", "gcp": "yes", "output": "splat"},
+        )
+    )
+    assert [s.title for s in fine.steps][:2] == ["Capture plan", "Ground control"]
+    assert "gaussian splat" in fine.steps[-2].detail
+    assert "markers" in fine.steps[-1].detail
+    # 120 acres at 6 ac/h nadir only = 20 machine-hours.
+    assert fine.estimates.machine_hours == pytest.approx(20, abs=0.2)
+    assert not any(c.id in {"resolution", "views", "gcp", "output"} for c in fine.clarifications)
+
+    survey = RulesPlanner().draft(request("Inspect the north fence for erosion"))
+    assert survey.steps[0].title == "Survey plan"
+    assert not any("Treat" in s.title for s in survey.steps)
+    assert survey.steps[-1].title == "Review and report"
+
+
+def test_outliner_clamps_points_and_labels_source() -> None:
+    from app.schemas.agent import OutlinePoint, OutlineRequest
+    from app.services.vision import ModelOutline, Outliner
+
+    parsed = ModelOutline(
+        points=[
+            {"x": -0.1, "y": 0.2},
+            {"x": 0.6, "y": 0.2},
+            {"x": 0.6, "y": 1.4},
+            {"x": 0.1, "y": 0.8},
+        ],
+        label="  orchard block ",
+        confidence=1.7,
+        note="Followed the fence lines.",
+    )
+
+    class FakeMessages:
+        def parse(self, **kwargs: Any) -> Any:
+            assert kwargs["output_format"] is ModelOutline
+            content = kwargs["messages"][0]["content"]
+            assert (
+                content[0]["type"] == "image" and content[0]["source"]["media_type"] == "image/png"
+            )
+            assert "x=0.500" in content[1]["text"]
+            return type("R", (), {"stop_reason": "end_turn", "parsed_output": parsed})()
+
+    class FakeClient:
+        messages = FakeMessages()
+
+    png = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"0" * 80).decode()
+    outline = Outliner(
+        Settings(anthropic_api_key="k", anthropic_model="m"),
+        client=FakeClient(),  # type: ignore[arg-type]
+    ).outline(
+        OutlineRequest(
+            image=f"data:image/png;base64,{png}",
+            width=800,
+            height=600,
+            point=OutlinePoint(x=0.5, y=0.5),
+            hint="scan the orchard",
+        )
+    )
+    assert outline.source == "claude" and outline.label == "orchard block"
+    assert outline.confidence == 1.0
+    assert [(p.x, p.y) for p in outline.points] == [(0, 0.2), (0.6, 0.2), (0.6, 1), (0.1, 0.8)]
+
+
+def test_outline_endpoint_says_when_no_model_is_configured(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    from app.config import get_settings
+    from app.main import create_app
+
+    get_settings.cache_clear()
+    client = TestClient(create_app())
+    png = base64.b64encode(b"\x89PNG" + b"0" * 80).decode()
+    response = client.post(
+        "/api/v1/agent/outline",
+        json={"image": png, "width": 100, "height": 100, "point": {"x": 0.5, "y": 0.5}},
+    )
+    assert response.status_code == 503
+    assert "ANTHROPIC_API_KEY" in response.json()["detail"]
