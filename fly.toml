@@ -114,7 +114,7 @@ kill_timeout = "30s"
 [[vm]]
   processes = ["worker"]
   # Lane 1 (splat-ingest) runs its stages in this machine -- packing tiles, not training.
-  # Lane 2's `pose` (Modal cpu4) and `train` (Modal L4) are dispatched elsewhere
+  # Lane 2's `pose` (Modal cpu4) and `train` (Modal L4) run elsewhere, so this machine
   # supervises rather than computes. Raise it when a stage starts being the bottleneck;
   # `fly scale vm` does not need a redeploy.
   size = "shared-cpu-2x"
