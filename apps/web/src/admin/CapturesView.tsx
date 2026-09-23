@@ -78,9 +78,8 @@ function Reconciliation() {
       </div>
 
       <p className="admin-note">
-        Walks <code>captures/</code> and <code>runs/</code> and reports objects no row claims, then
-        takes every row whose object should exist and reports the ones that are gone. It reads a
-        bucket, so it runs when asked rather than on a timer.
+        Finds files in storage that no record points to, and records whose file is missing. Runs
+        only when you ask.
       </p>
 
       {query.isError && (

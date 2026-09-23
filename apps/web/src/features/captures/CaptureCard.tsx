@@ -381,8 +381,8 @@ function JobStages({ job }: { job: Job }) {
       )}
       {ordered.length > 0 && (
         // Live while it runs or needs attention; folded away once it is done.
-        <details className="capture__details" open={status !== "complete"}>
-          <summary className="capture__details-summary">{summary}</summary>
+        <details className="disclosure" open={status !== "complete"}>
+          <summary className="disclosure__summary">{summary}</summary>
           <ul className="capture__stages">
             {ordered.map((step) => (
               <StageRow key={step.id} jobId={job.id} step={step} />

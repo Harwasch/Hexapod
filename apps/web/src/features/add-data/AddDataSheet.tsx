@@ -1,4 +1,14 @@
-import { Box, FileJson, Globe2, Image, Layers3, MapPinned, Upload } from "lucide-react";
+import {
+  Box,
+  ChevronRight,
+  FileJson,
+  Globe2,
+  Image,
+  Layers3,
+  MapPinned,
+  Upload,
+  UploadCloud,
+} from "lucide-react";
 import { useState, type ReactNode, type SubmitEvent } from "react";
 
 import type { AssetInput, LayerCreate, Representation, SiteCreate } from "@twin/contracts";
@@ -59,6 +69,7 @@ export function AddDataSheet() {
   const setOpen = useUi((s) => s.setAddDataOpen);
   const [tab, setTab] = useState<Tab>("site");
   const sites = useSiteCatalog();
+  const setPanel = useUi((s) => s.setPanel);
   return (
     <GlassSheet
       open={open}
@@ -66,12 +77,30 @@ export function AddDataSheet() {
       title="Add data"
       description={
         sites.builtin
-          ? "The catalog API is offline: new data cannot be persisted right now."
-          : "Register data sources and reality models. They are validated and saved to the catalog."
+          ? "Offline: nothing can be saved right now."
+          : "Link a model or map source that is already hosted."
       }
       side="right"
       testId="add-data"
     >
+      {/* Most people arriving here have files, not URLs: send them to the uploader first. */}
+      <button
+        type="button"
+        className="add-upload"
+        data-testid="add-data-upload"
+        onClick={() => {
+          setOpen(false);
+          setPanel("captures");
+        }}
+      >
+        <UploadCloud size={20} aria-hidden="true" />
+        <span className="add-upload__text">
+          <strong>Upload a video, photos or a splat</strong>
+          <span>Videos and photos become 3D models; splats are placed as they are.</span>
+        </span>
+        <ChevronRight size={16} aria-hidden="true" />
+      </button>
+      <p className="panel__eyebrow">Or link a hosted source</p>
       <div className="tabs" role="tablist" aria-label="Data type">
         {TABS.map(({ id, label, icon: Icon }) => (
           <GlassButton
@@ -390,11 +419,7 @@ function SiteForm({ onDone, disabled }: { onDone: () => void; disabled: boolean 
     <form className="form" onSubmit={(e) => void submit(e)} noValidate data-testid="site-form">
       {ion.data && !ion.data.reconstruction.createJobs && (
         <p className="glass-subtle" style={{ margin: 0, fontSize: "var(--text-xs)" }}>
-          Reconstruct photos in Cesium ion (mesh, point cloud, Gaussian splats), then register the
-          resulting asset IDs here.{" "}
-          {ion.data.reconstruction.monitorJobs
-            ? "Job status is monitored via the backend."
-            : "Set CESIUM_ION_SERVER_TOKEN on the API to monitor job status."}
+          Already reconstructed in Cesium ion? Enter its asset ID below.
         </p>
       )}
       <GlassField label="Site name" htmlFor={nameId} error={errors.name}>

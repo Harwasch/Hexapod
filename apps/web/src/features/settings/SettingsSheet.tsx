@@ -155,7 +155,7 @@ function WriteTokenSection() {
         <Row
           id="write-token-label"
           label="Write token"
-          hint="Sent as a bearer token on writes, and kept in this browser — which any script on this origin can read. Fine for a single-user prototype, not for real accounts."
+          hint="Needed to save uploads when the server asks for it. Stored in this browser only."
           control={
             <div className="glass-row">
               <GlassInput
@@ -282,7 +282,7 @@ export function SettingsSheet() {
         <Row
           id="quality-label"
           label="Quality preset"
-          hint={`Screen-space error ${bounds.base} px (adaptive ${bounds.min}–${bounds.max})`}
+          hint="Sharper detail costs frame rate. Fine-tune under Advanced."
           control={
             <GlassSegmentedControl
               aria-label="Quality preset"
