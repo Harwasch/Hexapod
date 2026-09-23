@@ -79,8 +79,8 @@ kill_timeout = "30s"
   # a stage that declares `gpu:` -- `train` -- is sent to Modal, as the `run_stage_<tier>`
   # functions infra/modal/app.py deploys under the app name `twin-pipeline` (the worker's
   # default WORKER_MODAL_APP). It needs MODAL_TOKEN_ID / MODAL_TOKEN_SECRET, which
-  # provision.yml forwards as Fly secrets. Without a deployed app a Lane 2 run fails at
-  # `train` naming the function it could not find; Lane 1 is untouched either way.
+  # provision.yml forwards as Fly secrets. Without a deployed app a Lane 2 run should fail
+  # at `train` on the function lookup (not yet observed); Lane 1 is untouched either way.
   WORKER_RUNNER = "cloud"
   WORKER_CLOUD_PROVIDERS = "modal"
 
