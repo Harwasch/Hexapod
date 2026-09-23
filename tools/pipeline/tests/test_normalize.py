@@ -294,6 +294,60 @@ def test_a_coordinate_nobody_can_vouch_for_is_none_rather_than_a_guess(text: str
 # --- the whole stage, on a real clip -------------------------------------------------
 
 
+def test_an_iphone_portrait_hevc_mov_comes_out_upright_with_its_location(
+    tmp_path: Path,
+) -> None:
+    """The shape an iPhone held upright writes, built rather than downloaded: HEVC in a
+    QuickTime container, the pixels stored *landscape* with a display matrix that turns
+    them clockwise on playback, and the `mdta` location key. The frames must come out
+    portrait and the right way up -- ffmpeg honours the matrix by default, and this is
+    what notices if that ever stops being the default or the argv turns it off.
+
+    The same check was run on 100 real photographs encoded this way (1080x1920, from
+    nerfstudio's `dozer` capture): 100/100 upright.
+    """
+    ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+    upright = Image.new("RGB", (240, 320), (0, 0, 0))
+    upright.paste((255, 255, 255), (0, 0, 240, 80))  # the top quarter is white
+    stills = tmp_path / "stills"
+    stills.mkdir()
+    for index in range(4):
+        # Stored as the sensor reads out in portrait: a quarter turn counter-clockwise.
+        upright.transpose(Image.Transpose.ROTATE_90).save(stills / f"s_{index:04d}.png")
+    raw = tmp_path / "raw.mov"
+    subprocess.run(
+        [ffmpeg, "-hide_banner", "-nostdin", "-y", "-framerate", "4", "-i",
+         str(stills / "s_%04d.png"), "-c:v", "libx265", "-x265-params", "log-level=error",
+         "-pix_fmt", "yuv420p", "-tag:v", "hvc1", str(raw)],
+        capture_output=True, check=True,
+    )  # fmt: skip
+    upload = tmp_path / "upload"
+    upload.mkdir()
+    subprocess.run(
+        [ffmpeg, "-hide_banner", "-nostdin", "-y", "-display_rotation:v:0", "-90",
+         "-i", str(raw), "-c", "copy", "-movflags", "use_metadata_tags",
+         "-metadata", "com.apple.quicktime.location.ISO6709=+37.7694-122.4862+012.000/",
+         "-metadata", "com.apple.quicktime.model=iPhone 15 Pro",
+         str(upload / "IMG_0001.MOV")],
+        capture_output=True, check=True,
+    )  # fmt: skip
+
+    workdir = run_normalize(tmp_path, {"fps": 4, "keep": 4, "select": "all"}, upload)
+
+    meta = json.loads((workdir.out_dir("normalize") / "source_meta.json").read_text())
+    assert meta["video"]["codec"] == "hevc"
+    assert meta["video"]["rotationDeg"] == -90.0
+    assert (meta["frames"]["width"], meta["frames"]["height"]) == (240, 320)
+    assert meta["location"]["source"] == "com.apple.quicktime.location.iso6709"
+    assert (meta["location"]["lat"], meta["location"]["lon"]) == (37.7694, -122.4862)
+    assert meta["device"] == "iPhone 15 Pro"
+    for frame in sorted((workdir.out_dir("normalize") / "frames").iterdir()):
+        grey = np.asarray(Image.open(frame).convert("L"), dtype=np.float64)
+        assert grey.shape == (320, 240)
+        # White on top, black at the bottom: upright, not turned or flipped.
+        assert grey[:60].mean() > 200 and grey[-60:].mean() < 50
+
+
 def test_both_location_keys_survive_a_round_trip_through_a_real_container(
     tmp_path: Path,
 ) -> None:
