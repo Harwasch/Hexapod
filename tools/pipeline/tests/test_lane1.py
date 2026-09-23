@@ -29,7 +29,9 @@ LAT, LON, HEIGHT = 28.0389, -82.6966, 22.5
 
 PLACEMENT: dict[str, dict[str, Any]] = {
     "georeference": {"lat": LAT, "lon": LON, "height": HEIGHT, "uncertainty_m": 10.0},
-    "normalize": {"sensor": "Scaniverse", "captured_at": "2026-09-12"},
+    # The committed fixture is written east/north/up by `synthetic_tree.py`, so it is z up
+    # -- which is no longer what a `.ply` is assumed to be (see gaussians.DEFAULT_UP_AXIS).
+    "normalize": {"sensor": "Scaniverse", "captured_at": "2026-09-12", "up_axis": "z"},
     "register": {"slug": "orchard-tree", "title": "Orchard tree"},
 }
 
@@ -97,11 +99,19 @@ def test_a_real_ply_becomes_a_real_tileset(run: Workdir) -> None:
 
 
 def test_the_canonical_ply_is_the_fixture_normalised(run: Workdir) -> None:
+    """Told the fixture is z up, the only change is the recentring, and it is recorded."""
     canonical = gaussians.read_splat(run.out_dir("normalize") / "canonical.ply")
     source = gaussians.read_splat(FIXTURE_PLY)
+    frame = _json(run, "normalize", "source_meta.json")["frame"]
 
     assert canonical.count == source.count == 12_000
-    for name in gaussians.CANONICAL_PROPERTIES:
+    assert frame["upAxis"] == "z" and frame["upAxisSource"] == "capture"
+    assert frame["rotation"] == [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+    shift = frame["translationM"]
+    for index, axis in enumerate(("x", "y", "z")):
+        moved = source.columns[axis].astype("float64") + shift[index]
+        assert canonical.columns[axis] == pytest.approx(moved, abs=1e-5)
+    for name in gaussians.CANONICAL_PROPERTIES[3:]:
         assert canonical.columns[name].tolist() == source.columns[name].tolist()
 
 
@@ -186,7 +196,9 @@ def test_the_registration_carries_the_extent_and_the_manifest(run: Workdir) -> N
     assert registration["slug"] == "orchard-tree"
     assert registration["artifacts"] == ["splat.glb", "tileset.json"]
     assert registration["thumbnail"] == "thumbnail.jpg"
-    assert registration["bboxLocalM"]["max"][2] == pytest.approx(6.46, abs=0.01)
+    # 6.46 m is the fixture's own top; recentring moved its origin to the capture's base.
+    shift = _json(run, "normalize", "source_meta.json")["frame"]["translationM"][2]
+    assert registration["bboxLocalM"]["max"][2] == pytest.approx(6.46 + shift, abs=0.01)
     # The whole manifest rides along, so the site's metadata records how it was made
     # without the worker having to fetch a second file.
     assert registration["manifest"]["georeference"]["uncertaintyM"] == 10.0

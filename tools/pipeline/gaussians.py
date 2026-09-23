@@ -15,6 +15,13 @@ Three shapes arrive at this project and one leaves it:
 and out of all three comes `canonical.ply`: binary little-endian, exactly the fourteen
 properties `splat_tiles.convert` reads, in one fixed order. Both lanes converge on that
 file, which is why one `package` implementation serves Lane 1 and Lane 2 alike.
+
+**`canonical.ply` is east/north/up, z up, and that is a conversion, not an assumption.**
+Everything downstream -- the tileset's node matrix, the thumbnail, the ground samples --
+reads z as up, and until this module converted axes, nothing did: a Scaniverse `.spz`
+(y up) and an Inria/COLMAP `.ply` (y down) both landed on the globe tipped 90 degrees,
+and `splat_ground` measured "ground" along the capture's depth. `orient` is the
+conversion. See `UP_AXIS_EVIDENCE` for what each format's default rests on.
 """
 
 from __future__ import annotations
@@ -22,7 +29,7 @@ from __future__ import annotations
 import hashlib
 import math
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal
 
@@ -34,11 +41,16 @@ from captures_bridge import SplatFormatError, read_ply, sigmoid, unpack_spz
 
 __all__ = [
     "CANONICAL_PROPERTIES",
+    "UP_AXES",
+    "Frame",
     "GroundSample",
     "Splat",
+    "default_up_axis",
     "ground_samples",
+    "orient",
     "read_splat",
     "render_thumbnail",
+    "transform",
     "write_ply",
 ]
 
@@ -235,6 +247,264 @@ def write_ply(path: Path, columns: Mapping[str, F32]) -> int:
 
 
 # ---------------------------------------------------------------------------------------
+# The frame: which way is up, which way is north, where the origin is
+# ---------------------------------------------------------------------------------------
+
+F64 = npt.NDArray[np.float64]
+
+#: The proper rotation that takes each named axis of a file onto +z (east/north/up's up).
+#:
+#: Each one is chosen so that the file's *forward* lands on north as well: for a y-up
+#: file (right/up/back, OpenGL's and SPZ's convention) forward is -z, and for a y-down
+#: file (right/down/forward, OpenCV's and COLMAP's) forward is +z; both come out facing
+#: +y. So a capture with no heading correction faces north rather than somewhere
+#: arbitrary, and a heading is a single rotation about z on top.
+UP_AXES: Mapping[str, F64] = {
+    "z": np.eye(3),
+    "-z": np.array([[1.0, 0.0, 0.0], [0.0, -1.0, 0.0], [0.0, 0.0, -1.0]]),
+    "y": np.array([[1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]]),
+    "-y": np.array([[1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, -1.0, 0.0]]),
+    "x": np.array([[0.0, 0.0, -1.0], [0.0, 1.0, 0.0], [1.0, 0.0, 0.0]]),
+    "-x": np.array([[0.0, 0.0, 1.0], [0.0, 1.0, 0.0], [-1.0, 0.0, 0.0]]),
+}
+
+#: What a file's up axis is taken to be when nobody said, by format -- and why.
+#:
+#: Not a guess, and not uniform: the two formats disagree, and the evidence for each is
+#: recorded here because the next person to see a capture land upside down needs to
+#: know which of these facts to doubt.
+#:
+#: * **`.spz` is y up.** nianticlabs/spz's README: "By default, SPZ stores data in an RUB
+#:   coordinate system following the OpenGL and three.js convention", and its loader
+#:   converts to that on write. Measured on real files 2026-09-23: two public Scaniverse
+#:   share-page scans (`scaniverse.com/api/media/<id>/gaussians.spz`) render upright
+#:   with y up and upside down with y down. **Counter-evidence, also measured:** six of
+#:   Spark's sample `.spz` files (sparkjs.dev/assets/splats) are y *down* -- Spark's own
+#:   quick start rotates `butterfly.spz` 180 degrees about x -- because a file written
+#:   without declaring its coordinate system is stored unconverted. So `.spz` defaults to
+#:   the specification and to the phone app that writes the format, and a y-down one needs
+#:   `upAxis: "-y"` on the capture.
+#: * **`.ply` is y down.** The same README: PLY "typically uses RDF", and the library's
+#:   own `saveSplatToPly` converts to right/down/forward. Inria's 3DGS, and gsplat and
+#:   nerfstudio run without world normalisation, write the COLMAP world frame, which is
+#:   the first camera's -- y down, *tilted by however that camera was held* (nerfstudio's
+#:   COLMAP parser: "Colmap optimized world often have y direction of the first camera
+#:   pointing towards down direction"). Measured: Inria's Tanks-and-Temples `train`
+#:   (Voxel51/gaussian_splatting on Hugging Face) is upright with y down. Polycam, Luma,
+#:   KIRI and Postshot `.ply` exports were **not** measured -- no public sample was
+#:   downloadable without an account -- so for them this default is the PLY convention,
+#:   not an observation, and the capture override is the remedy.
+#:
+#: There is deliberately no `auto`. Estimating up from the geometry (the dominant plane's
+#: normal) has a sign ambiguity nothing in a splat resolves, fails on an object with no
+#: ground under it, and was not validated on enough real captures here to ship.
+DEFAULT_UP_AXIS: Mapping[str, str] = {"spz": "y", "ply": "-y"}
+
+UP_AXIS_EVIDENCE: Mapping[str, str] = {
+    "spz": (
+        "SPZ specification (right/up/back) and two measured Scaniverse scans; Spark's "
+        "sample files are y-down counter-examples"
+    ),
+    "ply": (
+        "the 3DGS/COLMAP convention (right/down/forward), measured on Inria's `train`; "
+        "Polycam, Luma, KIRI and Postshot exports not measured"
+    ),
+}
+
+
+#: Which of the per-cell ground heights `orient` calls the capture's base. See `orient`.
+BASE_CELL_PERCENTILE = 25.0
+
+
+def default_up_axis(source_format: str) -> str:
+    return DEFAULT_UP_AXIS.get(source_format, "z")
+
+
+@dataclass(frozen=True)
+class Frame:
+    """The similarity `orient` applied: `enu = scale * rotation @ file + translation`.
+
+    Recorded in `source_meta.json` so that a capture that lands wrong can be diagnosed
+    from its own run -- which axis was called up, on whose say-so, and how far the origin
+    moved -- rather than by re-running it.
+    """
+
+    up_axis: str
+    up_axis_source: str
+    heading_deg: float
+    rotation: F64
+    translation: F64
+    scale: float = 1.0
+    recentred: bool = False
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "frame": "enu",
+            "upAxis": self.up_axis,
+            "upAxisSource": self.up_axis_source,
+            "headingDeg": self.heading_deg,
+            "scale": self.scale,
+            "rotation": [[round(float(v), 9) for v in row] for row in self.rotation],
+            "translationM": [round(float(v), 6) for v in self.translation],
+            "recentred": self.recentred,
+        }
+
+
+def heading_rotation(heading_deg: float) -> F64:
+    """Turn the capture so its forward (north, after `UP_AXES`) faces `heading_deg`.
+
+    A compass bearing: clockwise from north, seen from above. So it is a rotation about
+    +z by *minus* the angle.
+    """
+    angle = -math.radians(heading_deg)
+    c, s = math.cos(angle), math.sin(angle)
+    return np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]])
+
+
+def matrix_to_quat(rotation: F64) -> F64:
+    """A proper rotation matrix to a w-first unit quaternion (Shepperd's method)."""
+    m = np.asarray(rotation, dtype=np.float64)
+    trace = float(np.trace(m))
+    if trace > 0.0:
+        s = math.sqrt(trace + 1.0) * 2.0
+        q = [0.25 * s, (m[2, 1] - m[1, 2]) / s, (m[0, 2] - m[2, 0]) / s, (m[1, 0] - m[0, 1]) / s]
+    elif m[0, 0] > m[1, 1] and m[0, 0] > m[2, 2]:
+        s = math.sqrt(1.0 + m[0, 0] - m[1, 1] - m[2, 2]) * 2.0
+        q = [(m[2, 1] - m[1, 2]) / s, 0.25 * s, (m[0, 1] + m[1, 0]) / s, (m[0, 2] + m[2, 0]) / s]
+    elif m[1, 1] > m[2, 2]:
+        s = math.sqrt(1.0 + m[1, 1] - m[0, 0] - m[2, 2]) * 2.0
+        q = [(m[0, 2] - m[2, 0]) / s, (m[0, 1] + m[1, 0]) / s, 0.25 * s, (m[1, 2] + m[2, 1]) / s]
+    else:
+        s = math.sqrt(1.0 + m[2, 2] - m[0, 0] - m[1, 1]) * 2.0
+        q = [(m[1, 0] - m[0, 1]) / s, (m[0, 2] + m[2, 0]) / s, (m[1, 2] + m[2, 1]) / s, 0.25 * s]
+    out = np.asarray(q, dtype=np.float64)
+    return out / np.linalg.norm(out)
+
+
+def transform(
+    columns: Mapping[str, F32],
+    rotation: F64,
+    translation: F64 | None = None,
+    scale: float = 1.0,
+) -> dict[str, F32]:
+    """Apply `x' = scale * R @ x + t` to every gaussian, not just to its centre.
+
+    Three things move and one deliberately does not:
+
+    * **positions** by the whole similarity;
+    * **orientations**: a gaussian's `rot_*` is the rotation from its own axes to the
+      file's, so the new one is `q_R * q` -- the Hamilton product with R on the left. A
+      splat whose centres were rotated and whose quaternions were not keeps every
+      ellipsoid pointing the old way, which is visible as a capture made of needles;
+    * **log-scales** by `ln(scale)`, since a uniform scale multiplies every axis length;
+    * **colour does not**, and that is exact rather than approximate: `canonical.ply`
+      carries only the DC spherical-harmonic term, which is view-independent and so
+      invariant under rotation. Bands above DC are dropped on read (`Splat.dropped`),
+      so there is nothing here that would need a Wigner rotation -- and if they are ever
+      carried, this function is where that rotation has to be added.
+    """
+    r = np.asarray(rotation, dtype=np.float64)
+    if r.shape != (3, 3) or not np.allclose(r @ r.T, np.eye(3), atol=1e-6):
+        raise ValueError("transform: rotation must be a 3x3 orthonormal matrix")
+    if np.linalg.det(r) < 0:
+        raise ValueError(
+            "transform: rotation has determinant -1, which is a mirror. A mirrored splat "
+            "is not a rotated one -- its quaternions cannot follow it -- so it is refused"
+        )
+    if scale <= 0 or not math.isfinite(scale):
+        raise ValueError(f"transform: scale must be positive and finite, not {scale!r}")
+    t = np.zeros(3) if translation is None else np.asarray(translation, dtype=np.float64)
+    out = {name: np.array(values, dtype=np.float32, copy=True) for name, values in columns.items()}
+    xyz = np.stack([columns["x"], columns["y"], columns["z"]], axis=1).astype(np.float64)
+    moved = scale * (xyz @ r.T) + t
+    for index, axis in enumerate(("x", "y", "z")):
+        out[axis] = _f32(moved[:, index])
+    qw, qx, qy, qz = matrix_to_quat(r)
+    w, x, y, z = (np.asarray(columns[f"rot_{i}"], dtype=np.float64) for i in range(4))
+    out["rot_0"] = _f32(qw * w - qx * x - qy * y - qz * z)
+    out["rot_1"] = _f32(qw * x + qx * w + qy * z - qz * y)
+    out["rot_2"] = _f32(qw * y - qx * z + qy * w + qz * x)
+    out["rot_3"] = _f32(qw * z + qx * y - qy * x + qz * w)
+    if scale != 1.0:
+        shift = math.log(scale)
+        for i in range(3):
+            out[f"scale_{i}"] = _f32(np.asarray(columns[f"scale_{i}"], dtype=np.float64) + shift)
+    return out
+
+
+def orient(
+    splat: Splat,
+    *,
+    up_axis: str | None = None,
+    heading_deg: float = 0.0,
+    recentre: bool = True,
+    cell_m: float = 2.0,
+) -> tuple[Splat, Frame]:
+    """Turn a splat into east/north/up about its own footprint, and say what was done.
+
+    `up_axis` None means the format's default (`DEFAULT_UP_AXIS`); anything else is an
+    override from the capture and is recorded as one.
+
+    **Recentring** moves the origin to the centre of the capture's footprint, horizontally,
+    and to its own measured ground, vertically. The placed coordinate is where somebody
+    put the capture -- the console sends where its camera was looking -- and that point
+    should be the capture's middle, not wherever the exporter's origin happened to be
+    (for a phone app, where the phone was when tracking started). Both statistics are
+    robust on purpose:
+
+    * the footprint is the middle of the 2nd-98th percentile range of each horizontal
+      axis, so a few floaters or a background shell cannot drag it;
+    * the base is the lower quartile of `ground_samples`' per-cell heights -- the same
+      per-cell statistic the viewer's clamp rests on the terrain. Not the median: under a
+      tree most cells' lowest surface is canopy (the committed fixture's median cell is
+      3.9 m up a 6.5 m tree), and the quartile reaches the cells that have ground in them.
+      With no ground cells (a capture smaller than a cell), the vertical origin is left
+      alone.
+
+    It is sound with the clamp either way: the clamp compares each sample's `origin.height
+    + z` against the terrain at the same longitude and latitude, and a constant vertical
+    shift of the model moves every `z` by the same amount, so the offset it computes is
+    unchanged. The horizontal shift does change where the samples are, which is the point.
+    """
+    axis = up_axis if up_axis is not None else default_up_axis(splat.source_format)
+    if axis not in UP_AXES:
+        raise ValueError(
+            f"upAxis {axis!r} is not one of {', '.join(UP_AXES)}. It names the axis of the "
+            f"uploaded file that points up: y for Scaniverse/SPZ, -y for 3DGS/COLMAP .ply"
+        )
+    source = "capture" if up_axis is not None else f"format-default ({splat.source_format})"
+    heading = float(heading_deg)
+    if not math.isfinite(heading):
+        raise ValueError(f"headingDeg must be a finite number of degrees, not {heading_deg!r}")
+    rotation = heading_rotation(heading) @ UP_AXES[axis]
+    turned = replace(splat, columns=transform(splat.columns, rotation))
+    translation = np.zeros(3)
+    if recentre:
+        xyz = turned.xyz
+        finite = np.isfinite(xyz).all(axis=1)
+        if bool(finite.any()):
+            low = np.percentile(xyz[finite, :2], 2.0, axis=0)
+            high = np.percentile(xyz[finite, :2], 98.0, axis=0)
+            centre = (low + high) / 2.0
+            translation[:2] = -centre
+            cells = ground_samples(turned, lat=0.0, lon=0.0, cell_m=cell_m)
+            if cells:
+                translation[2] = -float(
+                    np.percentile([cell.z for cell in cells], BASE_CELL_PERCENTILE)
+                )
+            turned = replace(turned, columns=transform(turned.columns, np.eye(3), translation))
+    frame = Frame(
+        up_axis=axis,
+        up_axis_source=source,
+        heading_deg=heading,
+        rotation=rotation,
+        translation=translation,
+        recentred=recentre,
+    )
+    return turned, frame
+
+
+# ---------------------------------------------------------------------------------------
 # Derived products: the thumbnail and the ground samples
 # ---------------------------------------------------------------------------------------
 
@@ -282,8 +552,12 @@ def render_thumbnail(
             1.0,
         )
         across, up, depth = points[:, 0], points[:, 2], points[:, 1]
-        px = _to_pixels(across, drawn, flip=False)
-        py = _to_pixels(up, drawn, flip=True)
+        # Framed on the 1st-99th percentile of each axis, at one scale for both, so a sky
+        # dome, a background shell or a handful of floaters cannot shrink the capture to a
+        # speck, and a tall tree is not squashed into a square. Points outside the frame
+        # are simply not drawn.
+        framed, px, py = _frame(across, up, drawn)
+        colour, depth = colour[framed], depth[framed]
         flat = py * drawn + px
         # Primary key the pixel, secondary key the depth: the first row of each pixel's
         # run is its nearest gaussian.
@@ -298,17 +572,38 @@ def render_thumbnail(
     return {"gaussians": kept, "size": size, "bytes": path.stat().st_size}
 
 
-def _to_pixels(values: F32, size: int, *, flip: bool) -> npt.NDArray[np.intp]:
-    low, high = float(values.min()), float(values.max())
-    span = high - low
-    # A capture with no extent along an axis (a single gaussian, a flat plane) projects to
-    # the middle of the image rather than dividing by zero.
-    scaled = np.full(values.shape, 0.5) if span <= 0 else (values - low) / span
-    if flip:
-        scaled = 1.0 - scaled
+#: The share of points on each side of each axis a thumbnail leaves out of its frame.
+THUMBNAIL_CLIP_PERCENT = 5.0
+
+
+def _frame(
+    across: F32, up: F32, size: int
+) -> tuple[npt.NDArray[np.bool_], npt.NDArray[np.intp], npt.NDArray[np.intp]]:
+    """Which points are inside the frame, and their pixel columns and rows."""
+    low = np.array(
+        [np.percentile(across, THUMBNAIL_CLIP_PERCENT), np.percentile(up, THUMBNAIL_CLIP_PERCENT)]
+    )
+    high = np.array(
+        [
+            np.percentile(across, 100.0 - THUMBNAIL_CLIP_PERCENT),
+            np.percentile(up, 100.0 - THUMBNAIL_CLIP_PERCENT),
+        ]
+    )
+    centre = (low + high) / 2.0
+    span = float(max(high - low))
+    # A capture with no extent (a single gaussian) projects to the middle of the image
+    # rather than dividing by zero.
+    half = span / 2.0 if span > 0 else 1.0
+    inside = (np.abs(across - centre[0]) <= half) & (np.abs(up - centre[1]) <= half)
     margin = 0.04
-    pixels = np.floor((margin + scaled * (1 - 2 * margin)) * size)
-    return np.clip(pixels, 0, size - 1).astype(np.intp)
+    scale = (1 - 2 * margin) * size / (2.0 * half)
+    px = np.floor(size / 2.0 + (across[inside] - centre[0]) * scale)
+    py = np.floor(size / 2.0 - (up[inside] - centre[1]) * scale)
+    return (
+        inside,
+        np.clip(px, 0, size - 1).astype(np.intp),
+        np.clip(py, 0, size - 1).astype(np.intp),
+    )
 
 
 @dataclass(frozen=True)

@@ -192,9 +192,24 @@ def ingest_splat(ctx: StageContext) -> StageOutcome:
     would make two stages disagree about how many gaussians the capture has. Gaussians
     with a non-finite position are *counted* here and neutralised there, for the same
     reason.
+
+    It does convert the frame, and this is the stage that must: `canonical.ply` is
+    east/north/up, and an exporter's file is whatever its convention is. `up_axis` (the
+    capture's `upAxis`) names the file's up; unset, the format's evidence-based default
+    applies (`gaussians.DEFAULT_UP_AXIS`). `heading_deg` turns the capture about the
+    vertical, and `recentre` puts the origin at the footprint's centre and the capture's
+    own ground. What was done is written into `source_meta.json` as `frame`, so a capture
+    that lands wrong carries the reason with it.
     """
     source = gaussians.pick_splat_file(ctx.input("upload"))
-    splat = gaussians.read_splat(source)
+    read = gaussians.read_splat(source)
+    requested = ctx.param("up_axis")
+    splat, frame = gaussians.orient(
+        read,
+        up_axis=None if requested in (None, "") else str(requested),
+        heading_deg=float(ctx.param("heading_deg", 0.0) or 0.0),
+        recentre=bool(ctx.param("recentre", True)),
+    )
     written = gaussians.write_ply(ctx.output(CANONICAL_PLY.name), splat.columns)
     low, high = splat.bbox()
     document: dict[str, object] = {
@@ -211,6 +226,11 @@ def ingest_splat(ctx: StageContext) -> StageOutcome:
         "bboxLocalM": {"min": low, "max": high},
         "extentM": _extent(low, high),
         "medianGaussianM": _median_gaussian_m(splat),
+        # How the file's own axes became east/north/up, and on whose say-so.
+        "frame": {
+            **frame.to_dict(),
+            "evidence": gaussians.UP_AXIS_EVIDENCE.get(splat.source_format),
+        },
         # The capture-level facts the pipeline cannot know by looking at the bytes. The
         # worker passes what the capture row says; a run started by hand leaves them null.
         "sensor": _optional_str(ctx.param("sensor")),
@@ -224,8 +244,14 @@ def ingest_splat(ctx: StageContext) -> StageOutcome:
     )
     if splat.dropped:
         ctx.log(f"dropped {len(splat.dropped)} properties: {', '.join(splat.dropped)}")
+    ctx.log(
+        f"frame: up is the file's {frame.up_axis} ({frame.up_axis_source}), heading "
+        f"{frame.heading_deg:g} deg, origin moved by "
+        f"{', '.join(f'{v:.3f}' for v in frame.translation)} m"
+    )
     metrics: dict[str, MetricValue] = {
         "gaussians": splat.count,
+        "upAxis": frame.up_axis,
         "format": splat.source_format,
         "sourceBytes": splat.source_bytes,
         "canonicalBytes": written,
