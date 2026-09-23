@@ -368,3 +368,49 @@ def test_no_frames_is_not_a_division_by_zero() -> None:
     """`_largest_model` returning None already raises for an empty model; this is the
     guard that stops the reporting path dividing by zero on the way there."""
     assert stages.partial_registration_warning(0, 0) is None
+
+
+# --- retries: the smoke's 2/40 ---------------------------------------------------------
+
+
+def _scripted(results: dict[tuple[int, int], int]):  # type: ignore[no-untyped-def]
+    """An `attempt` that answers from a table, and records what it was asked."""
+    asked: list[tuple[int, int]] = []
+
+    def attempt(round_: int, seed: int) -> tuple[Path | None, int]:
+        asked.append((round_, seed))
+        registered = results.get((round_, seed), 0)
+        return (Path(f"m{round_}-{seed}") if registered else None), registered
+
+    return attempt, asked
+
+
+def test_a_good_first_mapping_is_not_retried() -> None:
+    attempt, asked = _scripted({(0, 0): 40})
+    found, tries = stages._best_reconstruction(attempt, rounds=2, seeds=(0, 1, 2), enough=32)
+    assert found == Path("m0-0")
+    assert asked == [(0, 0)]
+    assert tries == [{"match": 0, "seed": 0, "registered": 40}]
+
+
+def test_a_mapping_that_closes_on_two_frames_is_retried_with_other_seeds() -> None:
+    """The first real Modal smoke: 2 of 40 on the runner's matches, seed 0."""
+    attempt, asked = _scripted({(0, 0): 2, (0, 1): 40})
+    found, _ = stages._best_reconstruction(attempt, rounds=2, seeds=(0, 1, 2), enough=32)
+    assert found == Path("m0-1")
+    assert asked == [(0, 0), (0, 1)]
+
+
+def test_when_no_seed_helps_the_frames_are_matched_again() -> None:
+    attempt, asked = _scripted({(0, 0): 2, (0, 1): 3, (0, 2): 2, (1, 0): 39})
+    found, _ = stages._best_reconstruction(attempt, rounds=2, seeds=(0, 1, 2), enough=32)
+    assert found == Path("m1-0")
+    assert asked[-1] == (1, 0)
+
+
+def test_the_best_attempt_is_kept_when_none_is_enough() -> None:
+    """A capture that genuinely does not close still gets its best model, not its last."""
+    attempt, _ = _scripted({(0, 0): 2, (0, 1): 20, (0, 2): 5, (1, 0): 3, (1, 1): 4, (1, 2): 1})
+    found, tries = stages._best_reconstruction(attempt, rounds=2, seeds=(0, 1, 2), enough=32)
+    assert found == Path("m0-1")
+    assert len(tries) == 6

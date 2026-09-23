@@ -46,6 +46,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import sqlite3
 import struct
 import subprocess
 from collections.abc import Mapping, Sequence
@@ -232,11 +233,19 @@ def mapper_argv(
     *,
     refine_focal_length: bool = True,
     refine_extra_params: bool = True,
+    random_seed: int = 0,
 ) -> list[str]:
-    """Incremental SfM. `refine_focal_length=False` is how a focal prior is *held*."""
+    """Incremental SfM. `refine_focal_length=False` is how a focal prior is *held*.
+
+    `random_seed` is COLMAP's own default, 0, unless a retry asks for another: the
+    mapper's initial-pair search is randomised, and which pair it starts from decides
+    whether an orbit closes (see `colmap` in stages.py).
+    """
     return [
         colmap_exe(),
         "mapper",
+        "--random_seed",
+        str(random_seed),
         "--database_path",
         str(database),
         "--image_path",
@@ -250,6 +259,18 @@ def mapper_argv(
         "--Mapper.ba_refine_extra_params",
         "1" if refine_extra_params else "0",
     ]
+
+
+def clear_matches(database: Path) -> None:
+    """Forget every match and two-view geometry, keeping the features.
+
+    `*_matcher` skips pairs the database already has, so this is what makes a second
+    matching pass actually re-match. Features stay: extraction is deterministic, and it
+    is the matching's geometric verification (RANSAC across threads) that is not.
+    """
+    with sqlite3.connect(database) as connection:
+        connection.execute("DELETE FROM matches")
+        connection.execute("DELETE FROM two_view_geometries")
 
 
 def model_aligner_argv(

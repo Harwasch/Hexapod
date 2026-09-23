@@ -20,9 +20,11 @@ from __future__ import annotations
 import functools
 import hashlib
 import json
+import math
 import shutil
 import struct
 import tomllib
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any, NoReturn
 
@@ -475,8 +477,34 @@ def colmap(ctx: StageContext) -> StageOutcome:
         )
     )
     ctx.run(sfm.matcher_argv(database, matcher))
-    ctx.run(sfm.mapper_argv(database, frames, sparse, refine_focal_length=focal_prior is None))
-    model_dir = _largest_model(sparse)
+
+    target = float(ctx.param("min_registered_fraction", 0.8))
+    seeds = tuple(range(max(1, int(ctx.param("mapper_seeds", 3)))))
+    rematches = max(0, int(ctx.param("rematches", 1)))
+
+    def attempt(round_: int, seed: int) -> tuple[Path | None, int]:
+        if round_ > 0 and seed == seeds[0]:
+            sfm.clear_matches(database)
+            ctx.run(sfm.matcher_argv(database, matcher))
+        into = sparse / f"match{round_}-seed{seed}"
+        into.mkdir(parents=True)
+        ctx.run(
+            sfm.mapper_argv(
+                database, frames, into, refine_focal_length=focal_prior is None, random_seed=seed
+            )
+        )
+        found = _largest_model(into)
+        return found, (sfm.read_model(found).registered if found is not None else 0)
+
+    model_dir, tries = _best_reconstruction(
+        attempt, rounds=1 + rematches, seeds=seeds, enough=math.ceil(target * len(images))
+    )
+    if len(tries) > 1:
+        ctx.log(
+            "colmap: "
+            + ", ".join(f"match {t['match']} seed {t['seed']}: {t['registered']}" for t in tries)
+            + f" of {len(images)} registered; kept the best"
+        )
     if model_dir is None:
         raise ValueError(
             f"COLMAP's mapper registered no model from {len(images)} frame(s). With "
@@ -495,6 +523,8 @@ def colmap(ctx: StageContext) -> StageOutcome:
         "frames": len(images),
         "registered": model.registered,
         "registeredFraction": round(model.registered / len(images) if images else 0.0, 4),
+        # Every mapping tried, so a retry is visible rather than silently lucky.
+        "mapperAttempts": tries,
         "points3D": model.points3d,
         "meanTrackLength": round(model.mean_track_length, 3),
         "cameras": [camera.to_dict() for camera in model.cameras],
@@ -1471,6 +1501,38 @@ def partial_registration_warning(registered: int, frames: int) -> str | None:
         f"that did; a low fraction usually means too little overlap, motion blur, or a "
         f"scene the matcher could not close."
     )
+
+
+def _best_reconstruction(
+    attempt: Callable[[int, int], tuple[Path | None, int]],
+    *,
+    rounds: int,
+    seeds: Sequence[int],
+    enough: int,
+) -> tuple[Path | None, list[dict[str, int]]]:
+    """Map until `enough` frames register, keeping the best model seen.
+
+    Why this exists, measured rather than supposed: the same 40 rendered frames that
+    register 40/40 on one machine registered **2/40** on a GitHub runner in the first
+    real Modal smoke. Feature extraction was identical (the same count on every frame);
+    matching was not quite (343 matched pairs against 338), because geometric
+    verification runs RANSAC across threads. The mapper then found "no good initial
+    image pair" and closed on two frames. So a low result is retried: first the mapper
+    with other seeds (cheap -- under a second on 40 frames, against 40 s of matching),
+    then, `rounds` allowing, a fresh matching pass. Nothing is thrown away: the best
+    model across every attempt is the one returned, and every attempt is reported.
+    """
+    best: tuple[Path | None, int] = (None, -1)
+    tries: list[dict[str, int]] = []
+    for round_ in range(rounds):
+        for seed in seeds:
+            found, registered = attempt(round_, seed)
+            tries.append({"match": round_, "seed": seed, "registered": registered})
+            if found is not None and registered > best[1]:
+                best = (found, registered)
+            if best[1] >= enough:
+                return best[0], tries
+    return best[0], tries
 
 
 def _largest_model(sparse: Path) -> Path | None:
