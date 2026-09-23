@@ -13,6 +13,7 @@ import { CapturesPanel } from "@/features/captures/CapturesPanel";
 import { captureName, classify, extensionOf } from "@/features/captures/recipes";
 import { SettingsSheet } from "@/features/settings/SettingsSheet";
 import { formatBytes, formatDuration } from "@/lib/format";
+import { onSpan } from "@/lib/timing";
 import { useSettings } from "@/state/settings";
 import { useUi } from "@/state/ui";
 import { useUploads } from "@/state/uploads";
@@ -268,6 +269,65 @@ describe("the write token", () => {
     useSettings.getState().set({ writeToken: "kept" });
     rerender(wrap(<SettingsSheet />));
     expect(screen.getByTestId("settings-write-token")).toHaveValue("kept");
+  });
+});
+
+/**
+ * The headers the API's CORS middleware accepts, lower-cased. Mirrors `allow_headers` in
+ * apps/api/app/main.py; a header outside this set on a cross-origin request makes the
+ * browser's preflight fail with `400 Disallowed CORS headers`, and the request is never
+ * sent. Kept here as a literal rather than imported because the two projects share no
+ * code -- which is exactly why the failure crossed the boundary unseen.
+ */
+const API_ALLOWED_HEADERS = new Set(["accept", "content-type", "authorization"]);
+
+describe("what the API client puts on the wire", () => {
+  async function sent(method: "GET" | "POST"): Promise<Request> {
+    let captured: Request | undefined;
+    const capture = (request: Request) => {
+      captured = request;
+      return Promise.resolve(
+        new Response("[]", { status: 200, headers: { "content-type": "application/json" } }),
+      );
+    };
+    if (method === "GET") {
+      await api.GET("/api/v1/sites", { baseUrl: "https://api.invalid", fetch: capture });
+    } else {
+      useSettings.getState().set({ writeToken: "s3cret" });
+      await api.POST("/api/v1/captures", {
+        baseUrl: "https://api.invalid",
+        body: { name: "x", kind: "images" } as never,
+        fetch: capture,
+      });
+    }
+    if (captured === undefined) throw new Error("the client never called fetch");
+    return captured;
+  }
+
+  it("a read carries no header the API would refuse in a preflight", async () => {
+    // The regression this pins: a timing middleware stored its start time as an
+    // `x-request-started` header. Same-origin in development, so nothing noticed; across
+    // origins every read was preflighted, refused, and the app fell back to offline.
+    const names = [...(await sent("GET")).headers.keys()];
+    expect(names.filter((name) => !API_ALLOWED_HEADERS.has(name))).toEqual([]);
+  });
+
+  it("a write, token and all, carries only headers the API allows", async () => {
+    const request = await sent("POST");
+    expect(request.headers.get("authorization")).toBe("Bearer s3cret");
+    const names = [...request.headers.keys()];
+    expect(names.filter((name) => !API_ALLOWED_HEADERS.has(name))).toEqual([]);
+  });
+
+  it("still times each request, now without telling the server", async () => {
+    const recorded: string[] = [];
+    const stop = onSpan((span) => recorded.push(span.name));
+    try {
+      await sent("GET");
+    } finally {
+      stop();
+    }
+    expect(recorded).toContain("api");
   });
 });
 

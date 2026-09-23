@@ -11,14 +11,35 @@ import { useUi } from "@/state/ui";
 /** Error thrown for non-2xx responses, carrying the API's problem payload when present. */
 export { ApiError } from "./error";
 
+/**
+ * When each in-flight request started, keyed by openapi-fetch's per-request `id`.
+ *
+ * Deliberately NOT a header. This used to be `x-request-started`, set on the outgoing
+ * request so `onResponse` could read it back -- and a header on a request goes over the
+ * wire. That made every GET a non-simple CORS request, so the browser sent a preflight
+ * asking to send `x-request-started`, and the API answered `400 Disallowed CORS headers`
+ * because nothing on the server has any use for a client's clock reading. Every read
+ * failed, the app fell back to its offline catalogue, and the globe lost the layers the
+ * API serves.
+ *
+ * It was invisible in development, where Vite proxies `/api` to the API and the page and
+ * the API are the same origin: no CORS, no preflight. The first cross-origin deployment
+ * was the first place it could fail, and it failed there on every request.
+ *
+ * The fix is here rather than in the API's `allow_headers`, because the header was the
+ * bug: allowing it would ship a client-internal timestamp to the server and keep a
+ * preflight round trip in front of every read.
+ */
+const requestStarted = new Map<string, number>();
+
 const timing: Middleware = {
-  onRequest({ request }) {
-    request.headers.set("x-request-started", String(performance.now()));
-    return request;
+  onRequest({ id }) {
+    requestStarted.set(id, performance.now());
   },
-  onResponse({ request, response }) {
-    const started = Number(request.headers.get("x-request-started"));
-    if (Number.isFinite(started)) {
+  onResponse({ id, request, response }) {
+    const started = requestStarted.get(id);
+    requestStarted.delete(id);
+    if (started !== undefined) {
       recordSpan("api", performance.now() - started, {
         method: request.method,
         path: new URL(request.url).pathname,
@@ -26,6 +47,11 @@ const timing: Middleware = {
       });
     }
     return response;
+  },
+  // A request that never gets a response -- offline, refused, a CORS failure -- still
+  // has an entry, and without this the map would grow by one for every such request.
+  onError({ id }) {
+    requestStarted.delete(id);
   },
 };
 
