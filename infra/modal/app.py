@@ -71,10 +71,22 @@ CAPTURES_DIR = "/opt/captures"
 #: not interchangeable: the decorators below execute *locally* at deploy time and read
 #: the tier table, while the function body executes in the container and reads the
 #: copies. Absolute, so `modal deploy` works from any directory.
-REPO_ROOT = Path(__file__).resolve().parents[2]
-LOCAL_PIPELINE = REPO_ROOT / "tools" / "pipeline"
-LOCAL_CAPTURES = REPO_ROOT / "tools" / "captures"
+#:
+#: This whole module is imported a second time, inside every container, before the
+#: function can run -- and there it is `/root/app.py`, with no repository around it.
+#: `parents[2]` of that path does not exist, and computing it unconditionally crashed
+#: every container on import: the first real deploy crash-looped on `IndexError: 2`
+#: while the client waited for a result that could never come. In the container the
+#: pipeline is the image's own copy, so that is what the tier table is read from; the
+#: local-file image steps below are only read when Modal builds the image.
 HERE = Path(__file__).resolve().parent
+if modal.is_local():
+    REPO_ROOT = HERE.parents[1]
+    LOCAL_PIPELINE = REPO_ROOT / "tools" / "pipeline"
+    LOCAL_CAPTURES = REPO_ROOT / "tools" / "captures"
+else:
+    LOCAL_PIPELINE = Path(PIPELINE_DIR)
+    LOCAL_CAPTURES = Path(CAPTURES_DIR)
 
 #: What the 3.12 side needs: the transfer, and every module `stages` imports -- which is
 #: every stage, because `remote.execute` registers them all. Missing any one of these was

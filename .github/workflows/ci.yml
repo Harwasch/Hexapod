@@ -193,6 +193,28 @@ jobs:
           # WORKER_MODAL_APP); an app deployed under another is a lookup that fails.
           assert module.app.name == "twin-pipeline", module.app.name
           PY
+      # And again as a container imports it: as `/root/app.py`, with no repository
+      # around it and the pipeline only at the image's own paths. The first real deploy
+      # crash-looped on exactly this -- `Path(__file__).parents[2]` of `/root/app.py` --
+      # and nothing that imports the file from the checkout can see it.
+      - name: The Modal app imports the way a container imports it
+        run: |
+          sudo mkdir -p /opt /root-sim
+          sudo ln -sfn "$PWD" /opt/pipeline
+          sudo ln -sfn "$PWD/../captures" /opt/captures
+          sudo cp ../../infra/modal/app.py /root-sim/app.py
+          uv run --with modal python - <<'PY'
+          import importlib.util
+          from modal._runtime.task_lifecycle_manager import _TaskLifecycleManager
+          import modal
+          _TaskLifecycleManager._singleton = object()  # what the container entrypoint sets
+          assert not modal.is_local()
+          spec = importlib.util.spec_from_file_location("app", "/root-sim/app.py")
+          module = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+          assert sorted(module.FUNCTIONS) == sorted(module.TIERS), module.TIERS
+          print("container import ok:", sorted(module.FUNCTIONS))
+          PY
 
   trainer:
     name: Trainer · gsplat v1.5.3 accepts the pipeline's argv (CPU replica)
