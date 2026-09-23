@@ -16,11 +16,11 @@ function round6(value: number): number {
 }
 
 /**
- * Where the camera is looking, as the capture's placement guess.
+ * The point on the ground directly under the camera, as the capture's placement guess.
  *
  * A splat file carries no EXIF and no poses -- it is geometry with no idea where on Earth
  * it belongs -- so without this the pipeline runs correctly and lands the site at (0, 0),
- * in the Gulf of Guinea. Where you were looking when you started the capture is the best
+ * in the Gulf of Guinea.  Where the camera was when you started the capture is the best
  * guess available, and the manifest records it as `manual`, uncertainty 10 m,
  * `scaleSource: unresolved`, so nothing downstream mistakes it for a survey. B4's
  * placement editor is what replaces the guess.
