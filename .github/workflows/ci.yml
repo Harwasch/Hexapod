@@ -385,12 +385,24 @@ jobs:
           ffmpeg = Path(video.ffmpeg_exe())
           assert ffmpeg.is_file() and "imageio_ffmpeg" in ffmpeg.parts, ffmpeg
 
-          # B1b's seam, in the same venv, and deliberately without `modal`: the adapter
-          # imports its client inside the one function that needs it, so an image that
-          # will never dispatch to Modal does not have to carry the library.
+          # B1b's seam, in the same venv. The adapter still imports its client inside
+          # the one function that needs it, so constructing it proves nothing about the
+          # library -- which is why the import below is separate and explicit.
           assert bridge.PROVIDERS, "the provider price table is empty in the image"
           assert bridge.CloudRunner.name == "cloud"
           assert bridge.ModalAdapter("unused").name == "modal"
+
+          # And the client itself, which this image carries on purpose. The worker is
+          # what dispatches to Modal -- app/worker/cloud.py builds the adapter and
+          # spawns from this process -- so an image without `modal` makes
+          # WORKER_CLOUD_PROVIDERS=modal a configuration that cannot work. It is an
+          # optional extra of apps/api and infra/api.Dockerfile installs it; this is
+          # what catches a build that dropped the flag.
+          import modal  # noqa: F401
+
+          from app.worker.cloud import check_dispatchable
+
+          check_dispatchable(["modal"])  # raises when the client is absent
 
           print("pipeline:", bridge.PIPELINE_DIR, "captures:", CAPTURES_DIR)
           PY

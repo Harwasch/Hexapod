@@ -222,6 +222,32 @@ Large assets never transit the API: the browser PUTs to presigned S3 multipart U
 CesiumJS reads tiles straight from the bucket. Both are cross-origin, so the bucket's CORS
 configuration is part of the deployment, not an afterthought.
 
+### The Modal token is a runtime credential, and lives on Fly
+
+Worth stating plainly because the intuition points the wrong way: **the worker is what
+calls Modal.** `app/worker/cloud.py` builds `ModalAdapter` and `spawn`s from the Fly
+machine, at run time, so `MODAL_TOKEN_ID` and `MODAL_TOKEN_SECRET` are ordinary runtime
+secrets alongside `DATABASE_URL` — not a build-time or CI credential. Modal's SDK reads
+both straight from the environment, which is why there is no setting for them in
+`app/config.py`.
+
+Three credentials are involved and they point in different directions:
+
+| Held by                      | What                                    | For                                                                        |
+| ---------------------------- | --------------------------------------- | -------------------------------------------------------------------------- |
+| **Fly secrets**              | `MODAL_TOKEN_ID` / `MODAL_TOKEN_SECRET` | the worker spawning a stage on Modal                                       |
+| **Modal's own secret store** | `twin-object-storage` (the R2 pair)     | the GPU container fetching inputs and uploading outputs                    |
+| GitHub Actions secrets       | the same Modal pair, optionally         | only so there is one place to type it — `provision.yml` forwards it to Fly |
+
+`provision.yml` sets both halves or neither and fails if given one: half a pair is a
+worker that starts and cannot authenticate.
+
+**The client is an optional extra.** `modal` is not a dependency of `apps/api`;
+`infra/api.Dockerfile` installs it with `--extra modal` because the worker needs it, and
+a build that drops the flag produces an image that cannot dispatch. That is not a silent
+failure: `Worker.from_settings` refuses to start when `WORKER_CLOUD_PROVIDERS` names a
+provider whose client is missing, rather than claiming a capture and failing on it.
+
 ### Two buckets, one key scheme
 
 **Making an R2 bucket readable makes the whole bucket readable.** Cloudflare's public

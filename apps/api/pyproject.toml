@@ -41,6 +41,25 @@ dependencies = [
   "imageio-ffmpeg>=0.5",
 ]
 
+[project.optional-dependencies]
+# The Modal client, for the deployment that dispatches GPU stages there. An extra rather
+# than a dependency, and installed by infra/api.Dockerfile, which needs explaining
+# because it reverses an earlier decision.
+#
+# B1b left `modal` out on the grounds that "an image that will never dispatch to Modal
+# does not have to carry the library", and `ModalAdapter` imports its client inside the
+# one function that needs it so that holds. What that missed is which process calls
+# Modal: `app/worker/cloud.py` builds the adapter, so it is the *worker on Fly* that
+# spawns the call, at run time, with a token of its own. Fly runs one image. Without the
+# client in it, WORKER_CLOUD_PROVIDERS=modal is a configuration that cannot work and
+# says so only when the first GPU job reaches it -- so `Worker.from_settings` refuses at
+# start-up instead, and this extra is what makes that refusal something other than
+# permanent.
+#
+# It stays an extra so the choice is still a choice: a deployment with no GPU stages can
+# `uv sync` without it and carry nothing extra.
+modal = ["modal>=1.5.5"]
+
 [dependency-groups]
 dev = [
   "pytest>=8.4",

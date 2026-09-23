@@ -519,6 +519,8 @@ jobs:
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           CESIUM_ION_SERVER_TOKEN: ${{ secrets.CESIUM_ION_SERVER_TOKEN }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
         run: |
           set -euo pipefail
           api_base="https://${FLY_APP}.fly.dev"
@@ -546,6 +548,16 @@ jobs:
           fi
           if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
             optional_args+=("ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY")
+          fi
+          # The worker on Fly is what dispatches to Modal, so this is a *runtime*
+          # credential and Fly is where it belongs. It is offered as a repository secret
+          # only so there is one place to type it; this forwards it. Both halves or
+          # neither -- Modal's SDK needs the pair, and half of it is a worker that
+          # starts and cannot authenticate.
+          if [ -n "${MODAL_TOKEN_ID:-}" ] && [ -n "${MODAL_TOKEN_SECRET:-}" ]; then
+            optional_args+=("MODAL_TOKEN_ID=$MODAL_TOKEN_ID" "MODAL_TOKEN_SECRET=$MODAL_TOKEN_SECRET")
+          elif [ -n "${MODAL_TOKEN_ID:-}${MODAL_TOKEN_SECRET:-}" ]; then
+            die "only one of MODAL_TOKEN_ID / MODAL_TOKEN_SECRET is set; Modal needs both or neither."
           fi
 
           # --stage, because there are no machines to restart before the first deploy and

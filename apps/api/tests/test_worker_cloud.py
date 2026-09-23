@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from importlib.util import find_spec
 from pathlib import Path
 
 import pytest
@@ -228,3 +229,31 @@ def test_a_preempted_attempt_is_marked_preempted_rather_than_merely_failed(
     assert finished is not None
     assert finished.provider == "subprocess"
     assert finished.cost_usd is None
+
+
+# --- dispatching somewhere this environment cannot reach ----------------------------
+
+
+def test_a_worker_told_to_use_modal_without_the_client_refuses_at_start_up() -> None:
+    """The guard that stops a configuration mistake becoming a failed capture.
+
+    `ModalAdapter` imports `modal` inside the one function that needs it, which is right
+    -- but it means a worker with `WORKER_CLOUD_PROVIDERS=modal` and no client starts
+    cleanly, polls, claims somebody's real upload and only then cannot dispatch it. The
+    client is an optional extra of this project (`infra/api.Dockerfile` installs it), so
+    the failure is a build that dropped the flag, and the message says so.
+    """
+    from app.worker.cloud import check_dispatchable
+
+    if find_spec("modal") is not None:  # pragma: no cover - not how CI's api job is built
+        pytest.skip("modal is installed here, so the missing-client path cannot be exercised")
+    with pytest.raises(RuntimeError, match="WORKER_CLOUD_PROVIDERS"):
+        check_dispatchable(["modal"])
+
+
+def test_the_providers_that_need_no_client_are_never_refused() -> None:
+    """`subprocess` and `fake` are in this repository; only `modal` is an extra."""
+    from app.worker.cloud import check_dispatchable
+
+    check_dispatchable(["subprocess", "fake"])
+    check_dispatchable([])

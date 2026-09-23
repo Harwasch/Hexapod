@@ -30,7 +30,9 @@ process whose job is to hold a lease. The child still has no database session.
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from importlib.util import find_spec
 from pathlib import Path
 
 from app.storage import ObjectStorage
@@ -48,7 +50,47 @@ from app.worker.pipeline_bridge import (
     rates_from_env,
 )
 
-__all__ = ["ObjectStoreTransfer", "adapter_for", "build_runners", "transfer_for"]
+__all__ = [
+    "ObjectStoreTransfer",
+    "adapter_for",
+    "build_runners",
+    "check_dispatchable",
+    "transfer_for",
+]
+
+#: Providers whose adapter needs a client library that is an optional extra of this
+#: project. `ModalAdapter` imports `modal` inside the one function that needs it, which
+#: keeps the import lazy and also keeps the failure late -- late enough to be the first
+#: GPU job of a deployment rather than its start-up. `check_dispatchable` is what makes
+#: it early again.
+_NEEDS_CLIENT: Mapping[str, str] = {"modal": "modal"}
+
+
+def check_dispatchable(providers: Sequence[str]) -> None:
+    """Refuse a worker configured to dispatch somewhere it cannot reach.
+
+    The same instinct as `create_app`'s three start-up guards, for the same reason: a
+    worker that starts, polls happily, claims a real capture and only then discovers it
+    has no client library has turned a configuration mistake into a failed run and an
+    hour of someone's confusion. The import is the whole test -- credentials are not
+    checked here, because a token that is wrong is a different failure and the provider
+    is the only thing that can tell you so.
+    """
+    missing = sorted(
+        {
+            module
+            for name in providers
+            if (module := _NEEDS_CLIENT.get(name)) and find_spec(module) is None
+        }
+    )
+    if missing:
+        raise RuntimeError(
+            f"WORKER_CLOUD_PROVIDERS names {', '.join(sorted(set(providers)))}, and this "
+            f"environment has no {', '.join(missing)}. It is an optional extra of "
+            "apps/api: install it (`uv sync --extra modal`, which infra/api.Dockerfile "
+            "does) or drop the provider from WORKER_CLOUD_PROVIDERS. Refusing to start a "
+            "worker that would claim a GPU job and then fail to dispatch it."
+        )
 
 
 @dataclass(frozen=True)

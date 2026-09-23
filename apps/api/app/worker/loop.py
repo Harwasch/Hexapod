@@ -17,6 +17,7 @@ from app.db import get_session_factory
 from app.storage import ObjectStorage, build_storage
 from app.storage.factory import build_publish_storage
 from app.worker.claim import claim_next
+from app.worker.cloud import check_dispatchable
 from app.worker.config import WorkerConfig
 from app.worker.runner import JobSupervisor, Terminal
 
@@ -37,6 +38,8 @@ class Worker:
     @staticmethod
     def from_settings(settings: Settings | None = None) -> Worker:
         resolved = settings or get_settings()
+        # Before anything else, and before a job is claimed: see `check_dispatchable`.
+        check_dispatchable(resolved.worker_cloud_providers)
         return Worker(
             session_factory=get_session_factory(resolved.database_url),
             storage=build_storage(resolved),

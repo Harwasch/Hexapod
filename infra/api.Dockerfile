@@ -18,6 +18,16 @@
 # here; their runtime dependencies are declared in apps/api/pyproject.toml instead, which
 # is also where the note about `imageio-ffmpeg`'s deliberate absence lives.
 #
+# `--extra modal` is here because the worker is what dispatches to Modal. `ModalAdapter`
+# is built by app/worker/cloud.py and `spawn`s from *this* process, with a token of its
+# own (MODAL_TOKEN_ID / MODAL_TOKEN_SECRET, which the Modal SDK reads straight from the
+# environment), so the client has to be in the image the worker runs. B1b left it out on
+# the grounds that an image which never dispatches need not carry it; that was right
+# about the library and wrong about which machine calls Modal. It is an extra rather than
+# a dependency so a build that wants neither can drop the flag -- and
+# `Worker.from_settings` refuses at start-up when the providers name Modal and the client
+# is absent, rather than failing on the first GPU job.
+#
 # `data/tiles` is deliberately *not* in the image. Until A9 that was a live defect rather
 # than a decision: the API's `/api/v1/tiles` StaticFiles mount reads `data/tiles`, which
 # does not exist here, so the mount was silently absent and every capture 404'd in the one
@@ -28,9 +38,9 @@ FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS builder
 WORKDIR /app
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
 COPY apps/api/pyproject.toml apps/api/uv.lock ./
-RUN uv sync --frozen --no-install-project --no-dev
+RUN uv sync --frozen --no-install-project --no-dev --extra modal
 COPY apps/api/ ./
-RUN uv sync --frozen --no-dev
+RUN uv sync --frozen --no-dev --extra modal
 
 FROM python:3.12-slim-bookworm AS runtime
 WORKDIR /app
