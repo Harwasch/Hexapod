@@ -8,7 +8,7 @@
 # `compensate` gains a `gpu:` block when its impl becomes `imc` (B3); asking for an L4 to
 # run `none` would be billing a GPU to do nothing.
 name: photo-reconstruct
-version: 3
+version: 4
 description: Reconstruct a splat from a raw capture, then package and register it.
 
 inputs: [upload]
@@ -18,16 +18,26 @@ stages:
     impl: ffmpeg_frames
     params:
       fps: 4
-      # Top-K by variance-of-Laplacian, never an absolute threshold: A0 measured a 101x
-      # within-clip dynamic range, so no cutoff transfers between scenes.
-      select: sharpness
-      keep: 400
+      # Ranked by variance-of-Laplacian, never an absolute threshold: A0 measured a 101x
+      # within-clip dynamic range, so no cutoff transfers between scenes. Windowed, so
+      # that keeping a quarter of a minute's candidates cannot drop a blurred side.
+      select: sharpness-windowed
+      # 100, not 400, because pose runs on the worker's CPU and exhaustive matching is
+      # quadratic in frames. Measured on 4 cores (README, "Where pose runs"): 50 frames
+      # 653 s; 400 would be ~64x the matching, most of a day. Sequential matching, with
+      # or without vocabulary-tree loop closure, was faster and registered 46-76 of 100.
+      keep: 100
 
   - id: pose
     impl: colmap # | glomap | arkit
     params:
-      # A0 #7: sequential_matcher without loop detection registers 2/40 on a closed orbit.
+      # A0 #7: sequential_matcher without loop detection registers 2/40 on a closed orbit;
+      # with it, 76/100 on a real one. Exhaustive registered 50/50.
       matcher: exhaustive
+      # Half the stage's defaults (8192 / 2400): the same 50/50 registered, in 62% of
+      # the time. Training still reads the full-resolution frames.
+      max_features: 4096
+      max_image_size: 1600
 
   - id: mask
     impl: none # | robust | sls  <- transients

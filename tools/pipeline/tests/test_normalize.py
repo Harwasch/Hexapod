@@ -214,6 +214,49 @@ def test_top_k_returns_temporal_order_and_breaks_ties_on_the_earlier_frame() -> 
     assert video.select_sharpest([1.0, 2.0], 9) == (0, 1)
 
 
+def test_windowed_selection_keeps_a_frame_from_a_blurred_stretch() -> None:
+    """A sharp first half and a blurred second half, keep four of twelve.
+
+    Global top-K keeps four frames of the first half and nothing of the second -- a
+    whole side of an orbit gone. Windowed keeps the sharpest of each quarter, blurred or
+    not, which is what COLMAP needs to register that side at all.
+    """
+    scores = [9.0, 8.0, 9.5, 8.5, 9.1, 8.2, 1.0, 1.2, 0.9, 1.1, 1.3, 0.8]
+
+    assert video.select_sharpest(scores, 4) == (0, 2, 3, 4)
+    assert video.select_sharpest_per_window(scores, 4) == (2, 4, 7, 10)
+
+
+def test_windowed_selection_is_temporal_deterministic_and_bounded() -> None:
+    assert video.select_sharpest_per_window([1.0, 1.0, 1.0, 1.0], 2) == (0, 2)
+    assert video.select_sharpest_per_window([1.0, 2.0], 9) == (0, 1)
+    assert video.select_sharpest_per_window([], 3) == ()
+    assert video.select_sharpest_per_window([3.0, 1.0, 2.0], 0) == ()
+    chosen = video.select_sharpest_per_window([float(i % 7) for i in range(241)], 100)
+    assert len(chosen) == 100
+    assert list(chosen) == sorted(set(chosen))
+
+
+def test_the_windowed_mode_runs_in_the_stage_and_says_which_rule_chose(
+    tmp_path: Path,
+) -> None:
+    upload = tmp_path / "upload"
+    upload.mkdir()
+    make_clip(upload / "clip.mp4", frames=20, fps=10)
+
+    workdir = run_normalize(
+        tmp_path, {"fps": 10, "select": "sharpness-windowed", "keep": 10}, upload
+    )
+
+    assert len(list((workdir.out_dir("normalize") / "frames").iterdir())) == 10
+    meta = json.loads((workdir.out_dir("normalize") / "source_meta.json").read_text())
+    assert meta["frames"]["select"] == "sharpness-windowed"
+    assert "equal stretches" in meta["sharpness"]["selection"]
+    # Every other frame is blurred, so each window of two holds one sharp frame, and the
+    # windowed rule keeps exactly the frames global top-K does.
+    assert meta["sharpness"]["kept"]["min"] > 3.0 * meta["sharpness"]["rejected"]["max"]
+
+
 def test_variance_of_laplacian_ranks_a_blurred_frame_below_its_sharp_original(
     tmp_path: Path,
 ) -> None:

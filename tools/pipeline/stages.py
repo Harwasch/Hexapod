@@ -270,7 +270,7 @@ def ingest_splat(ctx: StageContext) -> StageOutcome:
 
 
 #: `select:` values this stage accepts. There is deliberately no threshold among them.
-SELECT_MODES: tuple[str, ...] = ("sharpness", "all")
+SELECT_MODES: tuple[str, ...] = ("sharpness", "sharpness-windowed", "all")
 
 
 @stage_impl(
@@ -294,6 +294,9 @@ def ffmpeg_frames(ctx: StageContext) -> StageOutcome:
       `com.apple.quicktime.location.ISO6709` and the older `(c)xyz` atom;
     * `select: sharpness` is top-K and cannot be given a cutoff. A0 measured a 101x
       within-clip range in variance-of-Laplacian, so no absolute threshold transfers.
+      `sharpness-windowed` is the same rank taken within each of `keep` equal stretches
+      of the clip, for when `keep` is a small fraction of the candidates and a blurred
+      stretch would otherwise lose a whole side of the capture.
 
     What it does *not* do is read EXIF off a folder of stills or turn a location into a
     georeference -- `exif_gps` is that stage, and it lands in B4. A location found here is
@@ -339,6 +342,9 @@ def ffmpeg_frames(ctx: StageContext) -> StageOutcome:
     if select == "sharpness":
         scores = [video.sharpness(path) for path in candidates]
         chosen = video.select_sharpest(scores, keep)
+    elif select == "sharpness-windowed":
+        scores = [video.sharpness(path) for path in candidates]
+        chosen = video.select_sharpest_per_window(scores, keep)
     else:
         scores = []
         chosen = video.evenly_spaced(len(candidates), keep)
@@ -366,7 +372,11 @@ def ffmpeg_frames(ctx: StageContext) -> StageOutcome:
         # good for.
         "sharpness": {
             "metric": "variance-of-laplacian",
-            "selection": "top-K by rank; never an absolute cutoff (A0 #6)",
+            "selection": (
+                "the sharpest of each of K equal stretches; never an absolute cutoff (A0 #6)"
+                if select == "sharpness-windowed"
+                else "top-K by rank; never an absolute cutoff (A0 #6)"
+            ),
             "kept": video.summarise(kept_scores),
             "rejected": video.summarise(dropped_scores),
         },
@@ -423,7 +433,9 @@ def colmap(ctx: StageContext) -> StageOutcome:
 
     * the matcher defaults to `exhaustive`. `sequential` is 2.5x faster and registered
       **2 of 40** frames on a closed orbit, because without loop detection the last frame
-      never meets the first. Asking for it logs that;
+      never meets the first. Asking for it logs that. (On 100 real iPhone frames,
+      vocabulary-tree loop closure lifted it only to 76/100, where exhaustive registered
+      50/50: the README's "Where pose runs" has the table);
     * the focal length. With no prior COLMAP self-calibrates, and the bias that leaves
       behind is scene-dependent rather than constant -- A0 #7 measured 3.1% low, B2's
       own fixture measured 0.17% high. `poses.json` therefore records the recovered

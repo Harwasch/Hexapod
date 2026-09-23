@@ -393,6 +393,51 @@ recipes gained three entries. `executor.py`, `runners.py`, `plan.py` and `workdi
 untouched by them, and `StubRunner` fabricates the new artifacts with no edit of its own.
 `tests/test_lane1.py` asserts that rather than leaving it as a claim.
 
+## Where pose runs
+
+`pose` runs on the **worker's CPU**, not the GPU box. The GPU is billed by the second and
+only `train` needs one. COLMAP's CPU path is the one every finding in `sfm.py` was measured
+on. And shipping frames to Modal for SfM and back would add a round trip the stage does
+not otherwise need. What it costs, measured on 4 cores of this development container
+(COLMAP 3.9.1, the Ubuntu 24.04 package; real iPhone-portrait frames, 1080×1920, orbiting
+one object), with the machine partly contended, so these numbers are upper bounds:
+
+| Matcher                        | Frames | Features / max side | Extract | Match | Map   | Total     | Registered |
+| ------------------------------ | ------ | ------------------- | ------- | ----- | ----- | --------- | ---------- |
+| exhaustive                     | 50     | 8192 / 2400         | 80 s    | 927 s | 54 s  | 1061 s    | 50/50      |
+| **exhaustive**                 | **50** | **4096 / 1600**     | 127 s   | 502 s | 24 s  | **653 s** | **50/50**  |
+| sequential                     | 100    | 8192 / 2400         | 292 s   | 635 s | 146 s | 1073 s    | 60/100     |
+| sequential                     | 100    | 4096 / 1600         | 169 s   | 382 s | 95 s  | 646 s     | 46/100     |
+| sequential + loop (vocab tree) | 100    | 4096 / 1600         | 182 s   | 535 s | 128 s | 845 s     | 76/100     |
+| sequential + loop, overlap 5   | 100    | 4096 / 1600         | 154 s   | 319 s | 144 s | 616 s     | 51/100     |
+
+What this decided, in `recipes/photo-reconstruct.yaml`:
+
+- **`exhaustive`, still.** It is the only matcher that registered every frame. Sequential
+  matching is linear rather than quadratic, but it lost a quarter to a half of the orbit
+  even with vocabulary-tree loop closure (Flickr100K 32K words, sha256 `d37d8f19…`). So
+  `sfm.matcher_argv` can express loop closure, but no recipe asks for it.
+- **`keep: 100`, down from 400.** Exhaustive matching is quadratic. Scaling the 50-frame
+  match by pairs gives about 2 000 s of matching for 100 frames on 4 cores, and about
+  9 h for 400. 100 frames of a one-minute orbit is one every 0.6 s. Frames are chosen by
+  **`sharpness-windowed`**, the sharpest of each of 100 equal stretches, so that the cut
+  cannot lose a whole blurred side the way global top-K could.
+- **4096 features at 1600 px** instead of the stage's 8192 at 2400: the same 50/50 in 62%
+  of the time. Only the SfM sees the downscale; `train` reads the full frames.
+
+That puts a real capture's pose at roughly **35–45 minutes on 4 dedicated cores**. This
+is an extrapolation, not a measurement of 100 frames exhaustive; the 100-frame exhaustive
+run at 8192 features was stopped rather than waited out. Thinning has a floor as well as
+a ceiling: every third of the same 100 frames (30) registered only **4**. Feature
+extraction peaked at 1.7 GB resident (matching 81 MB, mapping 52 MB), which is why
+`docs/DEPLOYMENT.md § GPU training — Modal` sizes the Fly worker up before Lane 2. The
+lever after that is COLMAP's GPU SIFT and matching, which would put `pose` on the Modal
+box too. The Ubuntu package is built without CUDA (`colmap help`: "without CUDA"), so that
+needs a COLMAP build in the training image. It is not done.
+
+A fixture-sized check of the same stage runs in CI: 40 rendered frames, exhaustive,
+40/40 registered.
+
 ## Lane 1
 
 ```
