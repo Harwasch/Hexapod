@@ -188,6 +188,23 @@ image = (
     )
 )
 
+#: The CPU box's image: what `pose` needs and nothing a GPU does. Ubuntu 24.04 because
+#: its `colmap` package is 3.9.1, the version every pose measurement and test in this
+#: repository was made with; the CUDA image above is 22.04, whose package is 3.7.
+#: Offscreen Qt because COLMAP links Qt and there is no display.
+cpu_image = (
+    modal.Image.from_registry("ubuntu:24.04", add_python="3.12")
+    .apt_install("colmap")
+    .pip_install(*IMAGE_PACKAGES)
+    .env({"QT_QPA_PLATFORM": "offscreen", "PYTHONUNBUFFERED": "1"})
+    .add_local_dir(LOCAL_CAPTURES, CAPTURES_DIR, ignore=_IGNORE, copy=True)
+    .add_local_dir(LOCAL_PIPELINE, PIPELINE_DIR, ignore=_IGNORE, copy=True)
+    .run_commands(
+        "colmap -h | head -1",
+        f"cd {PIPELINE_DIR} && python -c 'import remote, stages, captures_bridge, sfm'",
+    )
+)
+
 app = modal.App("twin-pipeline")
 
 
@@ -324,11 +341,12 @@ def _tiers() -> tuple[str, ...]:
     """
     if str(LOCAL_PIPELINE) not in sys.path:
         sys.path.insert(0, str(LOCAL_PIPELINE))
-    from modal_adapter import GPU_NAMES
+    from modal_adapter import CPU_TIERS, GPU_NAMES
     from providers import provider
 
     offered = provider("modal")
-    return tuple(t for t in (offered.tiers if offered is not None else ()) if t in GPU_NAMES)
+    known = set(GPU_NAMES) | set(CPU_TIERS)
+    return tuple(t for t in (offered.tiers if offered is not None else ()) if t in known)
 
 
 def _register() -> dict[str, Any]:
@@ -338,17 +356,30 @@ def _register() -> dict[str, Any]:
     silently missing here -- and so the GPU strings come from `GPU_NAMES`, which is the
     table that was wrong and is now tested.
     """
-    from modal_adapter import GPU_NAMES
+    from modal_adapter import CPU_TIERS, GPU_NAMES
 
     functions: dict[str, Any] = {}
     for tier in TIERS:
+        secrets = [modal.Secret.from_name("twin-object-storage")]
+        if tier in CPU_TIERS:
+            cores, memory_mib = CPU_TIERS[tier]
+            functions[tier] = app.function(
+                image=cpu_image,
+                cpu=cores,
+                memory=memory_mib,
+                timeout=TIMEOUT_S,
+                retries=RETRIES,
+                name=f"run_stage_{tier}",
+                secrets=secrets,
+            )(_run)
+            continue
         functions[tier] = app.function(
             image=image,
             gpu=GPU_NAMES[tier],
             timeout=TIMEOUT_S,
             retries=RETRIES,
             name=f"run_stage_{tier}",
-            secrets=[modal.Secret.from_name("twin-object-storage")],
+            secrets=secrets,
         )(_run)
     return functions
 

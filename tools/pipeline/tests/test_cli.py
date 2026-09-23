@@ -17,7 +17,7 @@ def test_plan_only_validates_without_running_anything(
 
     assert exit_code == 0
     document = json.loads(capsys.readouterr().out)
-    assert document["gpuStages"] == ["train"]
+    assert document["gpuStages"] == ["pose", "train"]
     assert not (tmp_path / "run").exists()
 
 

@@ -285,34 +285,23 @@ because COLMAP links Qt. ffmpeg is not a system package: the pipeline uses the b
 the `imageio-ffmpeg` wheel. CI's `image` job asserts the COLMAP version and the variable
 against the built image.
 
-**Size the worker before the first real Lane 2 capture.** `fly.toml` still gives the
-worker `shared-cpu-2x` with 2 GB, which is right for Lane 1 and wrong for `pose`:
+**`pose` does not run on the worker.** It runs on Modal's CPU box, tier `cpu4` (4
+physical cores, 8 GB, no GPU), from its own Ubuntu 24.04 image with COLMAP 3.9.1. The
+worker stays `shared-cpu-2x` with 2 GB, which is right for Lane 1 and for supervising
+Lane 2, and wrong for doing `pose` in place:
 
-- **Memory.** COLMAP's feature extraction peaked at **1.7 GB** resident. That was
-  measured on 1080×1920 iPhone frames at the recipe's 1600 px and 4 threads. Matching
-  (81 MB) and mapping (52 MB) are small beside it. With the worker's own Python processes
-  alongside, 2 GB is an out-of-memory kill waiting to happen.
+- **Memory.** COLMAP's feature extraction peaked at **1.7 GB** resident, measured on
+  1080×1920 iPhone frames at the recipe's 1600 px and 4 threads. With the worker's own
+  Python processes alongside, 2 GB would be an out-of-memory kill waiting to happen.
 - **CPU.** `pose` on 100 frames is roughly **40 minutes of 4 busy cores** (extrapolated;
-  the measurements are in `tools/pipeline/README.md § Where pose runs`). Fly's shared
-  CPUs are throttled under sustained load, so the same work on `shared-cpu-*` takes
-  several times longer.
+  `tools/pipeline/README.md § Where pose runs`), and Fly's shared CPUs are throttled
+  under sustained load.
 
-The recommendation is **`performance-4x` with 8 GB for the worker group**. This
-repository does not make that change for you, because it changes the bill. To make it, edit
-the worker's `[[vm]]` block in `fly.toml` and deploy:
-
-```toml
-[[vm]]
-  processes = ["worker"]
-  size = "performance-4x"
-  memory = "8gb"
-```
-
-Edit the file rather than running `fly scale vm`: `fly deploy` sizes machines from a
-`[[vm]]` block when the file has one, so a size set only from the CLI is expected to be
-undone by the next deploy (not observed here; editing the file is right either way). Dedicated CPUs bill for
-as long as the machine runs, and the worker runs always, so check Fly's pricing page first.
-The `app` group is untouched either way.
+Priced 2026-09-23, `iad`: a Fly worker big enough (`performance-4x`, 8 GB) is
+**$124.00 a month**, always on; `shared-cpu-4x` with 8 GB is $23.66 but throttled. Modal's
+`cpu4` is **$0.2526 an hour, billed per second only while a capture is posed** -- about
+$0.17 for the 40 minutes above. The cost of that choice is one more round trip: the
+frames go up to R2 and the poses come back, which for 100 JPEG frames is tens of MB.
 
 ### Disk: the 20 GB volume
 

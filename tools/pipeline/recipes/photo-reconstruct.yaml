@@ -8,7 +8,7 @@
 # `compensate` gains a `gpu:` block when its impl becomes `imc` (B3); asking for an L4 to
 # run `none` would be billing a GPU to do nothing.
 name: photo-reconstruct
-version: 4
+version: 5
 description: Reconstruct a splat from a raw capture, then package and register it.
 
 inputs: [upload]
@@ -38,6 +38,14 @@ stages:
       # the time. Training still reads the full-resolution frames.
       max_features: 4096
       max_image_size: 1600
+    # On Modal's CPU box, not the worker: `cpu4` is 4 cores and 8 GB with no GPU, billed
+    # per second ($0.25 an hour) only while a capture is posed. Feature extraction
+    # peaked at 1.7 GB on real 1080p frames, more than the 2 GB worker can spare, and a
+    # Fly machine big enough to do it in place is $124 a month whether it is used or not.
+    # `gpu:` is the key because it is the routing signal; the tier says there is no GPU.
+    gpu:
+      tier: cpu4
+      preemptible: false
 
   - id: mask
     impl: none # | robust | sls  <- transients

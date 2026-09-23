@@ -90,7 +90,14 @@ def main() -> int:
             "version": 1,
             "inputs": ["frames"],
             "stages": [
-                {"id": "pose", "impl": "colmap", "params": {"matcher": "exhaustive"}},
+                # On Modal's CPU box, as the shipped recipe runs it, so the smoke proves
+                # that image and that function as well as the GPU one.
+                {
+                    "id": "pose",
+                    "impl": "colmap",
+                    "params": {"matcher": "exhaustive"},
+                    "gpu": {"tier": "cpu4", "preemptible": False},
+                },
                 {
                     "id": "train",
                     "impl": "gsplat",

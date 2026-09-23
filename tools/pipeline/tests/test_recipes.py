@@ -47,10 +47,14 @@ def test_every_recipe_ends_in_a_registration(name: str, tmp_path: Path) -> None:
     assert sorted(entry.name for entry in tiles.iterdir()) == ["splat.glb", "tileset.json"]
 
 
-def test_photo_reconstruct_routes_only_its_gpu_stage_to_the_gpu_runner() -> None:
+def test_photo_reconstruct_sends_pose_and_train_off_the_worker() -> None:
+    """`train` to a GPU; `pose` to Modal's CPU box, because COLMAP's extraction needs
+    more memory than the 2 GB worker has. Nothing else leaves the worker."""
     plan = plan_recipe(load_recipe("photo-reconstruct"))
 
-    assert plan.gpu_stages == ("train",)
+    assert plan.gpu_stages == ("pose", "train")
+    tiers = {stage.id: stage.gpu.tier for stage in plan.stages if stage.gpu is not None}
+    assert tiers == {"pose": "cpu4", "train": "l4"}
     # The trainer's splat is in COLMAP's frame; `place` is what makes it canonical.
     assert plan.origins["trained.ply"] == "train"
     assert plan.origins["canonical.ply"] == "place"
@@ -65,7 +69,7 @@ def test_a_gpu_stage_with_no_gpu_runner_is_refused_before_anything_runs(tmp_path
     from errors import NoRunnerError
 
     workdir = seeded_workdir(tmp_path / "run")
-    with pytest.raises(NoRunnerError, match="requires a l4 GPU"):
+    with pytest.raises(NoRunnerError, match=r"stage 'pose'.*remotely on tier 'cpu4'"):
         execute(load_recipe("photo-reconstruct"), workdir, RunnerSet.local())
     assert not workdir.stages_dir.exists()
 

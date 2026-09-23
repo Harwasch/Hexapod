@@ -110,16 +110,21 @@ SURVEYED = "2026-09-22"
 #: one, and it carries a URL anybody can check it against.
 MODAL_LIST = f"modal.com/pricing, read {SURVEYED}"
 RUNPOD_LIST = f"runpod.io/pricing, read {SURVEYED}"
+#: Modal's CPU box, `cpu4`: 4 physical cores at $0.0000131 a core-second plus 8 GiB at
+#: $0.00000222 a GiB-second, both from modal.com/pricing read 2026-09-23. 4 x 0.0000131
+#: x 3600 + 8 x 0.00000222 x 3600 = 0.188640 + 0.063936 = $0.252576 an hour.
+MODAL_CPU_LIST = "modal.com/pricing (4 cores + 8 GiB), read 2026-09-23"
 
 PROVIDERS: tuple[Provider, ...] = (
     Provider(
         name="modal",
         label="Modal",
         # `a10`, not `a10g`: A10G is AWS's name for the instance and Modal rejects it.
-        tiers=("l4", "a10", "a100"),
+        tiers=("cpu4", "l4", "a10", "a100"),
         interruptible=False,
         note="Per-second billing, scale to zero. The reliable default.",
         rates={
+            "cpu4": Rate(0.2526, MODAL_CPU_LIST),
             # Published per second; an hour is an exact multiple, so no precision is
             # invented by storing it this way: $0.000222 and $0.000306 a second.
             "l4": Rate(0.7992, MODAL_LIST),

@@ -119,6 +119,16 @@ GPU_NAMES: Mapping[str, str] = {
     "b300": "B300",
 }
 
+#: Tiers with no GPU at all: tier -> (Modal physical cores, memory in MiB). Modal's
+#: `cpu=` counts physical cores, two vCPUs each. `cpu4` is where `pose` runs: COLMAP's
+#: feature extraction peaked at 1.7 GB on real 1080p frames, more than the worker's
+#: 2 GB machine can spare, and a per-second container costs $0.25 an hour only while a
+#: capture is being posed, where a Fly machine big enough would cost $124 a month
+#: whether anything ran or not. Deployed from its own image, which carries COLMAP.
+CPU_TIERS: Mapping[str, tuple[float, int]] = {
+    "cpu4": (4.0, 8192),
+}
+
 #: Fully-qualified exception class name -> what it means for a submitted stage.
 #:
 #: Qualified, and matched on the *exact* class rather than by `isinstance`, for two
