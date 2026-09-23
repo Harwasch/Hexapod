@@ -261,6 +261,8 @@ export interface CaptureMockState {
   completed: { partNumber: number; etag: string }[][];
   /** Mutating requests that were refused for want of the write token. */
   unauthorized: string[];
+  /** The capture id of every handoff minted, in order. */
+  handoffs: string[];
 }
 
 const STORAGE_PREFIX = "/__storage";
@@ -367,6 +369,7 @@ export async function mockApi(page: Page, options: MockOptions = {}): Promise<Ca
     presigns: [],
     completed: [],
     unauthorized: [],
+    handoffs: [],
   };
   // How many times the job list has been polled: the simulated worker advances one stage
   // per poll, the way `mockPlans` mutates across calls.
@@ -486,6 +489,27 @@ export async function mockApi(page: Page, options: MockOptions = {}): Promise<Ca
           401,
         );
       }
+    }
+
+    const handoffRoute = /^\/api\/v1\/captures\/([^/]+)\/handoff$/.exec(path);
+    if (handoffRoute && request.method() === "POST") {
+      const captureId = String(handoffRoute[1]);
+      if (!state.captures.some((c) => String(c.id) === captureId))
+        return json({ title: "Not found", status: 404 }, 404);
+      state.handoffs.push(captureId);
+      const expiresAt = new Date(Date.now() + 600_000).toISOString();
+      return json(
+        {
+          captureId,
+          token: `v1.mock.${captureId}`,
+          url: `https://twin.example/upload.html#v1.mock.${captureId}`,
+          expiresAt,
+          expiresIn: 600,
+          renewableUntil: expiresAt,
+          qrSvg: `<svg xmlns="http://www.w3.org/2000/svg" data-capture="${captureId}"></svg>`,
+        },
+        201,
+      );
     }
 
     const captureRoute =

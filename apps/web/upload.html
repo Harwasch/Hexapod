@@ -122,12 +122,13 @@
 
       <div id="form">
         <label class="pick">
-          Choose a video or scan
+          Choose a video, photos or a scan
           <input
             id="file"
             class="sr-only"
             type="file"
-            accept="video/*,image/*,.ply,.spz,.splat,.las,.laz"
+            multiple
+            accept="video/*,image/*,.ply,.spz,.splat,.ksplat,.sog,.las,.laz"
           />
         </label>
       </div>
@@ -143,7 +144,7 @@
         <div class="bar" id="bar"></div>
       </div>
 
-      <p id="status" aria-live="polite">Pick a file to start.</p>
+      <p id="status" aria-live="polite">Pick a file to start. Photos can be picked together.</p>
       <p id="detail" aria-live="polite"></p>
     </main>
     <script type="module" src="/src/upload/main.ts"></script>

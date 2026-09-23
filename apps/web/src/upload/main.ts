@@ -154,14 +154,14 @@ export function start(root: Document = document): void {
   }
 
   ui.input.addEventListener("change", () => {
-    const file = ui.input.files?.[0];
-    if (!file) return;
+    const files = Array.from(ui.input.files ?? []);
+    if (files.length === 0) return;
     ui.input.disabled = true;
-    ui.status.textContent = `Uploading ${file.name}`;
-    setProgress(ui, 0, file.size);
-    upload(token, captureId, file, ui)
+    uploadAll(token, captureId, files, ui)
       .then(() => {
-        ui.status.textContent = `${file.name} is on its way. You can close this page.`;
+        const what =
+          files.length === 1 ? (files[0]?.name ?? "The file") : `${String(files.length)} files`;
+        ui.status.textContent = `${what} ${files.length === 1 ? "is on its way" : "are on their way"}. You can close this page.`;
         ui.detail.textContent = "The console has it.";
       })
       .catch((error: unknown) => {
@@ -174,6 +174,22 @@ export function start(root: Document = document): void {
           error instanceof Error ? error.message : "The upload failed. Try again.";
       });
   });
+}
+
+/**
+ * One after another, like the console: parallel uploads would share one cellular uplink
+ * and make the progress bar a lie. A failure stops the batch rather than skipping ahead,
+ * so "the console has it" is never said about a set with a hole in it.
+ */
+async function uploadAll(token: string, captureId: string, files: File[], ui: Ui): Promise<void> {
+  for (const [index, file] of files.entries()) {
+    ui.status.textContent =
+      files.length === 1
+        ? `Uploading ${file.name}`
+        : `Uploading ${file.name} (${String(index + 1)} of ${String(files.length)})`;
+    setProgress(ui, 0, file.size);
+    await upload(token, captureId, file, ui);
+  }
 }
 
 if (typeof document !== "undefined" && document.getElementById("file")) start();

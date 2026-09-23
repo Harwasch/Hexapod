@@ -1,4 +1,5 @@
-import { Boxes } from "lucide-react";
+import { Boxes, Smartphone } from "lucide-react";
+import { useState } from "react";
 
 import { EmptyState, GlassBadge, GlassButton, Spinner } from "@twin/ui";
 
@@ -10,6 +11,7 @@ import { useUi } from "@/state/ui";
 import { FloatingPanel } from "../shell/FloatingPanel";
 import { CaptureCard } from "./CaptureCard";
 import { DropZone } from "./DropZone";
+import { PhoneHandoff } from "./PhoneHandoff";
 import { WriteTokenField } from "./WriteTokenField";
 import { useCaptureUploads } from "./useCaptureUploads";
 
@@ -30,6 +32,8 @@ export function CapturesPanel() {
   const clearSettled = useUploads((s) => s.clearSettled);
   const uploads = useCaptureUploads();
   const process = useProcessCapture();
+  // The capture "New capture from phone" made, whose QR code is showing at the top.
+  const [phoneCapture, setPhoneCapture] = useState<string | null>(null);
 
   // `CatalogResult.data` is undefined until the first response lands, exactly as it is
   // for sites; the panel renders its empty state rather than throwing.
@@ -60,6 +64,29 @@ export function CapturesPanel() {
           disabled={captures.builtin}
           busy={uploads.busy}
         />
+        {phoneCapture ? (
+          <PhoneHandoff
+            key={phoneCapture}
+            captureId={phoneCapture}
+            autoOpen
+            onClose={() => setPhoneCapture(null)}
+          />
+        ) : (
+          <GlassButton
+            size="sm"
+            variant="ghost"
+            disabled={captures.builtin || uploads.busy}
+            leadingIcon={<Smartphone size={14} aria-hidden="true" />}
+            data-testid="capture-from-phone"
+            onClick={() => {
+              void uploads.startFromPhone().then((id) => {
+                if (id) setPhoneCapture(id);
+              });
+            }}
+          >
+            New capture from phone
+          </GlassButton>
+        )}
         {uploads.error && (
           <p className="card__error" data-testid="capture-error">
             {uploads.error}

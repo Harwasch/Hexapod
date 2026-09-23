@@ -149,7 +149,13 @@ export function CaptureCard({
           </GlassBadge>
         </div>
         <div className="card__meta">
-          <span>{capture.kind}</span>
+          {/* A phone capture is created before anything is picked, so its stored kind
+              is a guess; once files land, what they are is the better answer. */}
+          <span>
+            {capture.metadata.origin === "phone" && capture.files.length > 0
+              ? proposal.kind
+              : capture.kind}
+          </span>
           <span>{formatDate(capture.createdAt)}</span>
           <span>{proposal.action}</span>
         </div>

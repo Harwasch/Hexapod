@@ -221,6 +221,36 @@ test.describe("the Captures panel", () => {
     await expect(card.getByTestId("capture-fly-to")).toBeVisible();
   });
 
+  test("a new capture from phone makes an empty capture and shows its QR code", async ({
+    page,
+  }) => {
+    const state = await boot(page);
+    await openPanel(page);
+
+    await page.getByTestId("capture-from-phone").click();
+
+    // One capture, with no files, waiting for the phone -- and the code is already up,
+    // without a second click on the card's own "Send from your phone".
+    const qr = page.getByTestId("handoff-qr");
+    await expect(qr).toBeVisible();
+    await expect.poll(() => state.handoffs).toEqual(["capture-1"]);
+    expect(state.captures).toHaveLength(1);
+    const created = state.captures[0] as { files: unknown[]; metadata: Record<string, unknown> };
+    expect(created.files).toEqual([]);
+    // No recipe: nothing has been picked, so the card proposes one from what arrives.
+    expect(created.metadata.origin).toBe("phone");
+    expect(created.metadata.recipe).toBeUndefined();
+    expect(typeof created.metadata.lat).toBe("number");
+    await expect(
+      page.getByTestId("capture-card-capture-1").getByTestId("capture-status"),
+    ).toHaveText("awaiting-files");
+
+    // Closing it brings the button back rather than minting another code on its own.
+    await page.getByRole("button", { name: "Close the phone handoff" }).first().click();
+    await expect(page.getByTestId("capture-from-phone")).toBeVisible();
+    expect(state.handoffs).toEqual(["capture-1"]);
+  });
+
   test("with the API offline the drop zone says so and refuses files", async ({ page }) => {
     await boot(page, { apiDown: true });
     await openPanel(page);

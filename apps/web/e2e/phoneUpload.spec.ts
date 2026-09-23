@@ -125,6 +125,65 @@ test.describe("the phone upload page", () => {
     expect(puts).toEqual(["/part-1", "/part-2"]);
   });
 
+  test("several photos upload one after another into the same capture", async ({ page }) => {
+    const registered: string[] = [];
+    const completed: string[] = [];
+
+    await page.route("**/api/v1/captures/*/files", async (route) => {
+      const { filename } = route.request().postDataJSON() as { filename: string };
+      registered.push(filename);
+      const id = `${FILE_ID.slice(0, -1)}${String(registered.length)}`;
+      await route.fulfill({
+        status: 201,
+        contentType: "application/json",
+        body: JSON.stringify({
+          file: { id, captureId: CAPTURE_ID, filename, partsTotal: 1 },
+          upload: {
+            uploadId: `u-${String(registered.length)}`,
+            storageKey: `captures/${CAPTURE_ID}/source/${id}/${filename}`,
+            partSize: 8,
+            partsTotal: 1,
+            nextPartNumber: null,
+            expiresIn: 3600,
+            parts: [{ partNumber: 1, url: `https://storage.example/${filename}` }],
+          },
+        }),
+      });
+    });
+    await page.route("https://storage.example/**", async (route) => {
+      await route.fulfill({
+        status: 200,
+        headers: {
+          ETag: '"etag-x"',
+          "access-control-allow-origin": "*",
+          "access-control-expose-headers": "ETag",
+        },
+        body: "",
+      });
+    });
+    await page.route("**/api/v1/captures/*/files/*/complete", async (route) => {
+      completed.push(route.request().url());
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ status: "complete" }),
+      });
+    });
+
+    await page.goto(`/upload.html#${token(soon())}`);
+    await page.locator("#file").setInputFiles([
+      { name: "a.jpg", mimeType: "image/jpeg", buffer: Buffer.alloc(8, 1) },
+      { name: "b.jpg", mimeType: "image/jpeg", buffer: Buffer.alloc(8, 2) },
+      { name: "c.jpg", mimeType: "image/jpeg", buffer: Buffer.alloc(8, 3) },
+    ]);
+
+    await expect(page.locator("#status")).toContainText("3 files are on their way", {
+      timeout: 20_000,
+    });
+    expect(registered).toEqual(["a.jpg", "b.jpg", "c.jpg"]);
+    expect(completed).toHaveLength(3);
+  });
+
   test("a bucket that hides the ETag is reported as the CORS problem it is", async ({ page }) => {
     await page.route("**/api/v1/captures/*/files", async (route) => {
       await route.fulfill({
