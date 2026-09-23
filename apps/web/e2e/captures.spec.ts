@@ -277,6 +277,60 @@ test.describe("the Captures panel", () => {
     expect(state.handoffs).toEqual(["capture-1"]);
   });
 
+  test("a video added to a capture that began as a splat is reconstructed, not packaged", async ({
+    page,
+  }) => {
+    const state = await boot(page);
+    const now = new Date().toISOString();
+    // A splat was dropped (so `splat-ingest` was proposed and stored), then a phone sent
+    // a video into the same capture. The files decide the recipe, not the proposal.
+    state.captures.push({
+      id: "capture-1",
+      slug: "capture-1",
+      name: "Mixed",
+      kind: "gaussian-splat",
+      description: null,
+      status: "not-started",
+      siteId: null,
+      device: null,
+      sensor: null,
+      capturedAt: null,
+      temporalExtent: null,
+      georefMethod: null,
+      scaleSource: null,
+      uncertaintyM: null,
+      license: null,
+      provenance: null,
+      attribution: [],
+      metadata: { recipe: "splat-ingest", origin: "console", lat: 1, lon: 2 },
+      files: [
+        {
+          id: "file-1",
+          captureId: "capture-1",
+          filename: "walkaround.mov",
+          contentType: "video/quicktime",
+          bytes: 8,
+          checksum: null,
+          storageKey: "captures/capture-1/source/file-1/walkaround.mov",
+          status: "complete",
+          uploadId: null,
+          partsCompleted: 1,
+          partsTotal: 1,
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+      createdAt: now,
+      updatedAt: now,
+    });
+    await openPanel(page);
+
+    const card = page.getByTestId("capture-card-capture-1");
+    await card.getByTestId("capture-process").click();
+    await expect.poll(() => state.jobs.length).toBe(1);
+    expect(state.jobs[0]).toMatchObject({ recipe: "photo-reconstruct" });
+  });
+
   test("with the API offline the drop zone says so and refuses files", async ({ page }) => {
     await boot(page, { apiDown: true });
     await openPanel(page);

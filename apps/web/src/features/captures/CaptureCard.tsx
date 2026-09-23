@@ -184,8 +184,16 @@ export function CaptureCard({
   const proposal: Proposal = classify(
     capture.files.map((file) => ({ name: file.filename, size: file.bytes ?? 0 })),
   );
+  // The files decide, not what was proposed when the capture was made: a phone can add a
+  // video to a capture that began as a dropped splat, and `splat-ingest` would then fail
+  // at `normalize` on a file it cannot read. The stored recipe is only the fallback for a
+  // capture whose files have not arrived.
   const recipe =
-    typeof capture.metadata.recipe === "string" ? capture.metadata.recipe : proposal.recipe;
+    capture.files.length > 0
+      ? proposal.recipe
+      : typeof capture.metadata.recipe === "string"
+        ? capture.metadata.recipe
+        : proposal.recipe;
   // A job that failed before it produced any step can only be started over; one that got
   // somewhere offers "Retry from <stage>" instead, which keeps the work already done.
   const canProcess =
