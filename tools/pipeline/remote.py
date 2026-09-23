@@ -90,7 +90,7 @@ def execute(
     *,
     impl_modules: Sequence[str] = (),
 ) -> RemoteOutcome:
-    """Fetch, run, sync, upload. Raises whatever the stage raised.
+    """Fetch, run, sync, upload. Raises whatever the stage raised, bar `TimeoutError`.
 
     Letting the stage's exception out is the contract: for Modal it becomes the exception
     `FunctionCall.get` re-raises, which `ModalAdapter.poll` classifies. Swallowing it and
@@ -109,6 +109,15 @@ def execute(
     syncer.start()
     try:
         run_stage.run(_spec(request, root, impl_modules))
+    except TimeoutError as error:
+        # The one exception a stage may not let out as itself. Modal 1.5.5 answers a
+        # zero-timeout `FunctionCall.get` on a call that has not finished by raising the
+        # *builtin* `TimeoutError()` (`modal/_functions.py`, `poll_function`), so on the
+        # client a stage that timed out and a stage that is still running would be the
+        # same exception. `ModalAdapter.poll` reads the builtin as "still running";
+        # this is what keeps that reading true. RuntimeError rather than a class of our
+        # own, because the client unpickles it and must not need this module to do so.
+        raise RuntimeError(f"the stage timed out: {error!r}") from error
     finally:
         # Stopped before anything else, including on the failure path: a syncer left
         # running past its stage would keep writing a checkpoint directory that the next

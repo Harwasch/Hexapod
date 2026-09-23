@@ -17,7 +17,7 @@ import threading
 from pathlib import Path
 
 import pytest
-from remote_stages import GATE, READS, SLOW
+from remote_stages import GATE, READS, SLOW, TIMED
 
 import remote
 from adapters import LocalTransfer
@@ -164,6 +164,21 @@ def test_a_failed_stage_raises_and_uploads_nothing(tmp_path: Path) -> None:
             impl_modules=("cloud_stages",),
         )
     assert not (tmp_path / "bucket" / "runs/run-1/train/transfer/out").exists()
+
+
+def test_a_stage_s_own_timeout_leaves_the_container_as_something_else(tmp_path: Path) -> None:
+    """On the client, the builtin `TimeoutError` is Modal saying "no output yet", and
+    `ModalAdapter.poll` reads it that way. A stage that let its own out would be polled
+    forever, so it has to arrive as a failure that says what happened."""
+    with pytest.raises(RuntimeError, match="the stage timed out") as caught:
+        remote.execute(
+            request_for("t_remote_times_out", produces=(TIMED,)),
+            LocalTransfer(tmp_path / "bucket"),
+            tmp_path / "sandbox",
+            impl_modules=("remote_stages",),
+        )
+    assert not isinstance(caught.value, TimeoutError)
+    assert isinstance(caught.value.__cause__, TimeoutError)
 
 
 def test_an_empty_checkpoint_never_overwrites_a_good_one(tmp_path: Path) -> None:

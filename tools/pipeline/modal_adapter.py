@@ -12,12 +12,15 @@ states `README.md` tracks, `ModalAdapter` is still **unproven**.
 What the check found, since "we looked and it was fine" would be the least useful
 possible report:
 
-* **`poll` classified every running call as failed.** It caught the builtin
-  `TimeoutError`. `modal.exception.TimeoutError` -- which is what
-  `modal/_functions.py` raises from a zero-timeout poll -- inherits from `modal.Error`,
-  **not** from the builtin. The `except TimeoutError` clause never fired, so the first
-  poll of a perfectly healthy stage fell through to `except Exception` and was
-  dead-lettered. This was the fatal one.
+* **"Not finished yet" is the builtin `TimeoutError`, and this file got that wrong
+  twice.** `modal/_functions.py` (`poll_function`) raises a bare `TimeoutError()` --
+  the builtin, since that module never imports Modal's own -- when a zero-timeout
+  `get` finds no output. An earlier revision of this adapter read it as Modal's
+  `modal.exception.TimeoutError` and classified the builtin as a failure, so the first
+  real run on Modal (the smoke in `.github/workflows/modal.yml`) was dead-lettered on
+  its first poll while the GPU was still training. The builtin now means "keep
+  polling", and `remote.execute` converts a stage's own `TimeoutError` into a
+  `RuntimeError` inside the container, so the two can no longer be confused.
 * **None of the three guessed preemption markers exist.** `PreemptedError`,
   `FunctionInterrupted` and `InterruptedError` are not in `modal.exception`. Preemption
   arrives as `InternalFailure`: `modal/_functions.py` says so in as many words --
@@ -122,12 +125,14 @@ GPU_NAMES: Mapping[str, str] = {
 #: reasons that are both real bugs avoided. First, `FunctionTimeoutError` and
 #: `OutputExpiredError` are subclasses of `modal.exception.TimeoutError`, so an
 #: `isinstance` check would read a stage that blew its time limit as still running.
-#: Second, the module matters: a stage whose own code raises the *builtin* `TimeoutError`
-#: has that exception deserialised and re-raised here, and it must be a failure, not a
-#: poll that never terminates. `builtins.TimeoutError` is absent from this table, so it
-#: falls to the default, which is `failed`.
+#: Second, the module matters, because the builtin and Modal's own are different
+#: classes that both carry the name `TimeoutError`.
 _STATES: Mapping[str, RemoteState | None] = {
-    # No result yet. The only entry that means "keep polling".
+    # No result yet: what Modal 1.5.5's zero-timeout `get` raises (`poll_function`).
+    # Unambiguous only because `remote.execute` never lets a stage's own TimeoutError
+    # out of the container as itself.
+    "builtins.TimeoutError": None,
+    # Modal's own, kept in case another client version raises it for the same thing.
     "modal.exception.TimeoutError": None,
     # The container was reclaimed and Modal exhausted its own retries.
     "modal.exception.InternalFailure": "preempted",

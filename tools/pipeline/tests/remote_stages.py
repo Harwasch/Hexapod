@@ -49,3 +49,11 @@ def t_remote_reads(ctx: StageContext) -> StageOutcome:
     text = ctx.input("seed").read_text(encoding="utf-8")
     ctx.output(READS.name).write_text(json.dumps({"seed": text}), encoding="utf-8")
     return StageOutcome(metrics={"chars": len(text)}, summary="echoed")
+
+
+TIMED = ArtifactDecl("timed.json", content_type="application/json")
+
+
+@stage_impl("t_remote_times_out", produces=(TIMED,), summary="its own code times out")
+def t_remote_times_out(ctx: StageContext) -> StageOutcome:
+    raise TimeoutError("read timed out")

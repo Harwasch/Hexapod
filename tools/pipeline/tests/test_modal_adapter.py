@@ -137,15 +137,19 @@ def test_submit_sends_the_request_dict_and_keeps_the_call_id() -> None:
 
 
 def test_a_running_stage_is_running_and_not_failed() -> None:
-    """The regression that matters: `modal.exception.TimeoutError` means "not yet".
-
-    It does not inherit from the builtin `TimeoutError`, so the old `except TimeoutError`
-    never caught it and every healthy stage was dead-lettered on its first poll.
-    """
-    adapter, handle, _ = adapter_over(FakeCall(raises=ModalTimeout()))
+    """The regression that matters, and it happened: a bare builtin `TimeoutError()` is
+    what Modal 1.5.5's zero-timeout `get` raises for a call with no output yet
+    (`modal/_functions.py`, `poll_function`). Classifying it as a failure dead-lettered
+    the first real GPU run on its first poll."""
+    adapter, handle, _ = adapter_over(FakeCall(raises=TimeoutError()))
     poll = adapter.poll(handle)
     assert poll.state == "running"
     assert poll.billed_s >= 0.0
+
+
+def test_modals_own_timeout_also_means_not_yet() -> None:
+    adapter, handle, _ = adapter_over(FakeCall(raises=ModalTimeout()))
+    assert adapter.poll(handle).state == "running"
 
 
 @pytest.mark.parametrize(
@@ -155,9 +159,9 @@ def test_a_running_stage_is_running_and_not_failed() -> None:
         (FunctionTimeout("6h"), "failed"),
         (OutputExpired(), "failed"),
         (InternalFailure("worker lost"), "preempted"),
-        # A stage whose own code times out. Same class name as Modal's, different module,
-        # and it must terminate the poll loop rather than be mistaken for "no result yet".
-        (TimeoutError("the stage's own timeout"), "failed"),
+        # A stage whose own code times out arrives as this, because `remote.execute`
+        # converts it in the container (see test_remote); it must end the poll loop.
+        (RuntimeError("the stage timed out: TimeoutError('read')"), "failed"),
         (RuntimeError("boom"), "failed"),
     ],
 )
