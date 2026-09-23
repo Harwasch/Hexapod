@@ -14,6 +14,7 @@ import type { CaptureFile, CaptureFileUpload, UploadWindow } from "@twin/contrac
 
 import { ApiError, isAbort } from "@/api/error";
 import { partSizeFor, putPart } from "@/api/putPart";
+import { SUPPORTED_TEXT, unsupported } from "@/features/captures/recipes";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
 
@@ -166,6 +167,12 @@ export function start(root: Document = document): void {
   ui.input.addEventListener("change", () => {
     const files = Array.from(ui.input.files ?? []);
     if (files.length === 0) return;
+    const refused = unsupported(files);
+    if (refused.length > 0) {
+      ui.status.textContent = `Can't read ${refused.join(", ")}. Choose ${SUPPORTED_TEXT}.`;
+      ui.input.value = "";
+      return;
+    }
     ui.input.disabled = true;
     setState(ui, "uploading");
     uploadAll(token, captureId, files, ui)

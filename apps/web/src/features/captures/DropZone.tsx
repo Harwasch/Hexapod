@@ -1,7 +1,7 @@
 import { Box, Film, Images, UploadCloud } from "lucide-react";
 import { useRef, useState, type ChangeEvent, type DragEvent } from "react";
 
-import { classify } from "./recipes";
+import { ACCEPT, classify } from "./recipes";
 
 export interface DropZoneProps {
   onFiles: (files: File[]) => void;
@@ -82,6 +82,7 @@ export function DropZone({ onFiles, disabled = false, busy = false }: DropZonePr
           ref={input}
           type="file"
           multiple
+          accept={ACCEPT}
           className="sr-only"
           disabled={disabled || busy}
           onChange={onChange}

@@ -8,7 +8,7 @@ import { describeError } from "@/lib/log";
 import { useUploads } from "@/state/uploads";
 import { useViewer } from "@/state/viewer";
 
-import { captureName, classify } from "./recipes";
+import { captureName, classify, SUPPORTED_TEXT, unsupported } from "./recipes";
 
 /** Six decimals is ~0.1 m: finer than a hand placement means anything. */
 function round6(value: number): number {
@@ -149,6 +149,13 @@ export function useCaptureUploads(): CaptureUploads {
   const start = useCallback(
     async (files: File[]) => {
       if (files.length === 0) return;
+      // Refused here, before a capture exists, rather than by the pipeline minutes later.
+      const refused = unsupported(files);
+      if (refused.length > 0) {
+        setError(`Can't read ${refused.join(", ")}. Upload ${SUPPORTED_TEXT}.`);
+        setCanRetryDrop(false);
+        return;
+      }
       lastDrop.current = files;
       setBusy(true);
       setError(null);

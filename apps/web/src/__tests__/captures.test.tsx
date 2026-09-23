@@ -10,7 +10,7 @@ import { GlassTooltipProvider } from "@twin/ui";
 import { ApiError, api, auth } from "@/api/client";
 import { uploadCaptureFile } from "@/api/uploads";
 import { CapturesPanel } from "@/features/captures/CapturesPanel";
-import { captureName, classify, extensionOf } from "@/features/captures/recipes";
+import { captureName, classify, extensionOf, unsupported } from "@/features/captures/recipes";
 import { SettingsSheet } from "@/features/settings/SettingsSheet";
 import { formatBytes, formatDuration } from "@/lib/format";
 import { onSpan } from "@/lib/timing";
@@ -146,9 +146,16 @@ describe("what was dropped, and what to do with it", () => {
     // A0 clocked ~40 minutes for an 11 GB clip; the estimate must land in that country.
     expect(video.estimate).toBe("About 39 minutes on the cloud GPU");
     expect(classify([{ name: "a.JPG", size: 4_000_000 }]).kind).toBe("images");
-    expect(classify([{ name: "cloud.laz", size: 9_000_000 }]).kind).toBe("point-cloud");
-    // Nothing recognised is still accepted: the API validates, not the filename.
-    expect(classify([{ name: "notes.bin", size: 10 }]).summary).toContain("unrecognised");
+    // Only what the pipeline reads: a point cloud or an HEIC would fail minutes later.
+    expect(
+      unsupported([{ name: "cloud.laz" }, { name: "IMG_1.HEIC" }, { name: "a.ksplat" }]),
+    ).toEqual(["cloud.laz", "IMG_1.HEIC", "a.ksplat"]);
+    expect(
+      unsupported([{ name: "scan.SPZ" }, { name: "IMG_0001.MOV" }, { name: "a.jpeg" }]),
+    ).toEqual([]);
+    // Nothing recognised is refused at the drop now; a card still names it plainly.
+    expect(unsupported([{ name: "notes.bin" }])).toEqual(["notes.bin"]);
+    expect(classify([{ name: "notes.bin", size: 10 }]).summary).toContain("unsupported");
     expect(extensionOf("/tmp/dir.name/CLIP.MOV")).toBe("mov");
   });
 
