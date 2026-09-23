@@ -82,17 +82,19 @@ export function LayerCard({ layer }: { layer: Layer }) {
         </GlassTooltip>
       </div>
       {layer.description && <p className="card__description">{layer.description}</p>}
-      <div className="card__meta">
-        <span title="Source">{sourceLabel(layer.source)}</span>
-        {latest && <span title="Latest date">{formatDate(latest)}</span>}
-        {layer.resolution && <span title="Resolution">{layer.resolution}</span>}
-        {layer.coverage && <span title="Coverage">{layer.coverage}</span>}
-        {layer.license && <span title="License">{layer.license.spdxId ?? layer.license.name}</span>}
-      </div>
+      {/* What decides whether to turn it on: when and how sharp. Source, licence and
+          provenance are one click away, in About. */}
+      {(latest ?? layer.resolution ?? layer.coverage) && (
+        <div className="card__meta" title={sourceLabel(layer.source)}>
+          {latest && <span title="Latest date">{formatDate(latest)}</span>}
+          {layer.resolution && <span title="Resolution">{layer.resolution}</span>}
+          {layer.coverage && <span title="Coverage">{layer.coverage}</span>}
+        </div>
+      )}
       {runtime.error && <p className="card__error">{runtime.error}</p>}
       {worldLocked && (
         <p className="glass-subtle" style={{ margin: 0, fontSize: "var(--text-xs)" }}>
-          Switched off by VITE_ENABLE_PHOTOREALISTIC=false; needs an ion token with access.
+          Not available in this build.
         </p>
       )}
       {runtime.visible && layer.sourceType !== "cesium-ion-terrain" && (

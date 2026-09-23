@@ -22,7 +22,7 @@ export function AgentStream() {
           <span className="mc-stream__title">
             {drafting ? "Planning with the agent" : project.agent.summary}
           </span>
-          <span className="mc-eyebrow">{running} THREADS</span>
+          {running > 0 && <span className="mc-eyebrow">{running} running</span>}
         </div>
         <ul className="mc-stream__list" aria-label="Agent actions">
           {drafting && (
