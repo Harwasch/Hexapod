@@ -95,13 +95,13 @@ precisely, because "we have the internet now" turned out to be a smaller change 
 sounds: **everything that needed a document is done; everything that needs an account is
 not.**
 
-| Was blocked                                                                       | Now                                                        | What that settled                                                                                                             |
-| --------------------------------------------------------------------------------- | ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `modal.com`, `api.modal.com`                                                      | reachable                                                  | `ModalAdapter` read against `modal==1.5.5`. **Five defects, one fatal** — see below. Still never executed; still `unproven`.  |
-| `developers.cloudflare.com`                                                       | reachable                                                  | The R2 public-bucket claim confirmed verbatim. The bucket split is built (§5a).                                               |
-| `runpod.io/pricing`, `vast.ai/pricing`                                            | reachable                                                  | The GPU rates are surveyed (§5b). Vast has no list price — its page says so.                                                  |
-| `console.neon.tech/api/v2`, `api.fly.io`, `registry.fly.io`, `api.cloudflare.com` | reachable (401 unauthenticated, which is the right answer) | Nothing. `provision.yml` still needs credentials to run, and has still never run.                                             |
-| `ghcr.io`                                                                         | reachable, **but there is no Docker daemon here**          | `docker build` still cannot run locally. CI's `image` job builds and runs the real image on every run, so this stays covered. |
+| Was blocked                                                                       | Now                                                        | What that settled                                                                                                               |
+| --------------------------------------------------------------------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `modal.com`, `api.modal.com`                                                      | reachable                                                  | `ModalAdapter` read against `modal==1.5.5`. **Five defects, one fatal** — see below. Since run for real on an L4: **verified**. |
+| `developers.cloudflare.com`                                                       | reachable                                                  | The R2 public-bucket claim confirmed verbatim. The bucket split is built (§5a).                                                 |
+| `runpod.io/pricing`, `vast.ai/pricing`                                            | reachable                                                  | The GPU rates are surveyed (§5b). Vast has no list price — its page says so.                                                    |
+| `console.neon.tech/api/v2`, `api.fly.io`, `registry.fly.io`, `api.cloudflare.com` | reachable (401 unauthenticated, which is the right answer) | Nothing. `provision.yml` still needs credentials to run, and has still never run.                                               |
+| `ghcr.io`                                                                         | reachable, **but there is no Docker daemon here**          | `docker build` still cannot run locally. CI's `image` job builds and runs the real image on every run, so this stays covered.   |
 
 Note for whoever re-probes: `api.neon.tech` does not resolve, but `console.neon.tech` does
 — and the latter is the host `provision.yml` actually calls, so that table row was always
@@ -122,8 +122,12 @@ the least useful possible outcome:
 - `cancel()` defaults to `terminate_containers=False`, which cancels the input and leaves
   the container billing.
 
-**Start with the GPU, still.** One Modal token turns three unproven things into verified
-ones at once: the `train` stage, the adapter, and the ability to start B3.
+**The GPU path is proven.** On 2026-09-23 `.github/workflows/modal.yml` built the training
+image on Modal, then trained 500 steps on an L4 (68 s billed, $0.015), read PSNR from
+gsplat's own stats, and placed and packaged the result. The `train` stage, the adapter
+and the image moved to verified; the first real runs found two bugs no test here could
+(see the pipeline README, "The remote half"). What remains unproven is a full-length
+run on a real capture, and with it the real cost of one.
 
 The remote half now exists. `tools/pipeline/remote.py` is what a container does — fetch,
 run, sync the checkpoint on an interval, upload — and it takes a `Transfer`, so
@@ -257,9 +261,9 @@ install -y postgresql-16-postgis-3`, then create a `twin` role with password `tw
 The pipeline's seventeen stage implementations are tracked as **verified** (runs, and is
 exercised on a machine that is not the development one), **unproven** (real code that has
 never executed against the real thing), and **stub** (raises, and names the step it lands
-in). Twelve, one and four respectively; `gsplat` is the unproven one, and `ModalAdapter`
-and the Modal training image sit outside the stage registry, also unproven. One green run
-of `.github/workflows/modal.yml` moves all three.
+in). Thirteen, zero and four respectively since `gsplat` ran on an L4 in the
+`modal.yml` smoke; `ModalAdapter` and the Modal training image, outside the registry,
+moved with it. A full-length run on a real capture is still unproven.
 
 Keep that distinction. A green test suite hides it, and it is the single most useful thing
 this sprint established about its own work.

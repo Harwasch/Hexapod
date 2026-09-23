@@ -13,17 +13,18 @@ z -- see [The up axis](#the-up-axis) -- which is what stopped uploads landing on
 **Lane 2 is real up to the GPU, and the GPU half is built and checked but has never run.**
 The state of each piece, in the three-state vocabulary of `docs/HANDOFF.md`:
 
-| Piece                                         | State        | Evidence                                                                                                                                       |
-| --------------------------------------------- | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| frames from an iPhone-shaped HEVC `.mov`      | verified     | portrait (display matrix -90), HEVC, `mdta` location: 100/100 frames upright, location read (`tests/test_normalize.py` and a real-frame check) |
-| poses (COLMAP 3.9.1, CPU)                     | verified     | rendered orbit 40/40 (CI); real photographs, 50/50 exhaustive; timing in [Where pose runs](#where-pose-runs)                                   |
-| levelling by camera-up                        | verified     | real reconstruction: dominant plane 0.39 deg from up after levelling; rendered orbit within 5 deg (CI)                                         |
-| the EXIF similarity, applied (`place`)        | verified     | rendered orbit with synthetic GPS: sparse points 0.011 m from the scene placed, 0.41 m unplaced (CI)                                           |
-| a video with no location                      | verified     | falls back to the capture's `lat`/`lon`, recorded `manual`; with neither it refuses by name (CI)                                               |
-| `train` argv and output layout (gsplat 1.5.3) | verified     | parsed by v1.5.3's own `simple_trainer.py` CLI in a CPU replica of the image's venv (CI job `trainer`); file names read from the source        |
-| the Modal training image                      | **unproven** | every artifact it names exists and was pinned; the App builds locally; no image has been built by Modal                                        |
-| a training run                                | **unproven** | none has happened. `.github/workflows/modal.yml` is the proof, at about $0.07-0.20                                                             |
-| `ModalAdapter` against a live workspace       | **unproven** | read against `modal==1.5.5`; the same workflow's smoke is its first real call                                                                  |
+| Piece                                         | State        | Evidence                                                                                                                                                                                                                                                                                                     |
+| --------------------------------------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| frames from an iPhone-shaped HEVC `.mov`      | verified     | portrait (display matrix -90), HEVC, `mdta` location: 100/100 frames upright, location read (`tests/test_normalize.py` and a real-frame check)                                                                                                                                                               |
+| poses (COLMAP 3.9.1, CPU)                     | verified     | rendered orbit 40/40 (CI, on a GitHub runner too); real photographs, 50/50 exhaustive; timing in [Where pose runs](#where-pose-runs). Matching is not deterministic, so a low registration is retried: other mapper seeds, then one fresh matching pass, keeping the best (`mapperAttempts` in `poses.json`) |
+| levelling by camera-up                        | verified     | real reconstruction: dominant plane 0.39 deg from up after levelling; rendered orbit within 5 deg (CI)                                                                                                                                                                                                       |
+| the EXIF similarity, applied (`place`)        | verified     | rendered orbit with synthetic GPS: sparse points 0.011 m from the scene placed, 0.41 m unplaced (CI)                                                                                                                                                                                                         |
+| a video with no location                      | verified     | falls back to the capture's `lat`/`lon`, recorded `manual`; with neither it refuses by name (CI)                                                                                                                                                                                                             |
+| `train` argv and output layout (gsplat 1.5.3) | verified     | parsed by v1.5.3's own `simple_trainer.py` CLI in a CPU replica of the image's venv (CI job `trainer`), then run for real on an L4 (below)                                                                                                                                                                   |
+| the Modal training image                      | verified     | built by Modal on 2026-09-23 (about 8 minutes, once); CUDA 12.4.1, torch 2.4.1, gsplat 1.5.3                                                                                                                                                                                                                 |
+| the GPU path end to end                       | verified     | `modal.yml` smoke, 2026-09-23: 500 steps on an L4, 68 s billed, $0.015, PSNR/SSIM read from gsplat's stats file, `trained.ply` placed and packaged to a tileset                                                                                                                                              |
+| `ModalAdapter` against a live workspace       | verified     | the same smoke: submit, poll to success, log tail, outputs back through R2. Its first two real runs found two bugs, both fixed and tested (below)                                                                                                                                                            |
+| a full-length training run on a real capture  | **unproven** | the smoke trained 500 steps; 30,000 steps on a real video has not run. Its cost is unmeasured -- scale from the smoke's billed seconds                                                                                                                                                                       |
 
 - `normalize` / `ffmpeg_frames` extracts and selects frames and scrapes the container's
   metadata. It runs here and in CI, on a generated clip.
@@ -270,9 +271,23 @@ zero-timeout poll raises `modal.exception.TimeoutError`, which does not inherit 
 so every healthy stage was dead-lettered on its first poll. `tests/test_modal_adapter.py`
 now pins the classification against fakes that mirror the real exception hierarchy.
 
-That check moves the adapter from _guessed_ to _read_. It does not move it to _verified_,
-and the table above is unchanged on purpose: running it needs an account and a token this
-repository does not have, so `ModalAdapter` stays **unproven**.
+That check moved the adapter from _guessed_ to _read_; the first real runs moved it to
+_verified_, and found two more things no reading could have:
+
+- **"Not finished yet" is the builtin `TimeoutError`.** `FunctionCall.get(timeout=0)` in
+  `modal==1.5.5` raises a bare builtin `TimeoutError()` (`poll_function`), not
+  `modal.exception.TimeoutError`. The adapter called that a failure, so the first smoke
+  was dead-lettered on its first poll. The builtin now means "keep polling", and
+  `remote.execute` converts a stage's own `TimeoutError` so the two cannot be confused.
+- **A container imports `app.py` itself**, as `/root/app.py` with no repository around
+  it; computing the repo root there crash-looped every container on `IndexError: 2`. CI
+  now imports the file the way the container entrypoint does.
+
+And one guard that came out of the second: Modal answers "no output yet" identically for
+a training stage and for a container that crash-loops before the function starts. The
+adapter reports `pending` until `run_stage`'s own first line appears in the call's log,
+and `CloudRunner` cancels a stage still pending after `max_pending_s` (30 minutes) rather
+than holding the worker for `max_wait_s` (a day).
 
 ### The remote half
 
