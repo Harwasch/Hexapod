@@ -55,7 +55,7 @@ export function classify(files: { name: string; size: number }[]): Proposal {
       kind: "gaussian-splat",
       recipe: "splat-ingest",
       action: "Package and place",
-      summary: `${count} splat ${noun} — package and place`,
+      summary: `${count} splat ${noun} → placed as is`,
       estimate: "About 30 seconds",
     };
   }
@@ -64,7 +64,7 @@ export function classify(files: { name: string; size: number }[]): Proposal {
       kind: "point-cloud",
       recipe: "splat-ingest",
       action: "Package and place",
-      summary: `${count} point-cloud ${noun} — package and place`,
+      summary: `${count} point-cloud ${noun} → placed as is`,
       estimate: "About a minute",
     };
   }
@@ -73,7 +73,7 @@ export function classify(files: { name: string; size: number }[]): Proposal {
       kind: "video",
       recipe: "photo-reconstruct",
       action: "Reconstruct",
-      summary: `${count} video ${noun} — reconstruct`,
+      summary: `${count} ${count === 1 ? "video" : "videos"} → 3D model`,
       estimate: reconstructEstimate(bytes),
     };
   }
@@ -82,7 +82,7 @@ export function classify(files: { name: string; size: number }[]): Proposal {
       kind: "images",
       recipe: "photo-reconstruct",
       action: "Reconstruct",
-      summary: `${count} ${count === 1 ? "photo" : "photos"} — reconstruct`,
+      summary: `${count} ${count === 1 ? "photo" : "photos"} → 3D model`,
       estimate: reconstructEstimate(bytes),
     };
   }
@@ -92,7 +92,7 @@ export function classify(files: { name: string; size: number }[]): Proposal {
     kind: "images",
     recipe: "photo-reconstruct",
     action: "Reconstruct",
-    summary: `${count} unrecognised ${noun} — will be treated as photos`,
+    summary: `${count} unrecognised ${noun} → treated as photos`,
     estimate: reconstructEstimate(bytes),
   };
 }

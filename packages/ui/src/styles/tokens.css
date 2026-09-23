@@ -12,11 +12,13 @@
     "Instrument Sans", -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable",
     "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-mono: "Azeret Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-  --text-xs: 0.6875rem;
-  --text-sm: 0.78rem;
-  --text-md: 0.875rem;
-  --text-lg: 1.1875rem;
-  --text-xl: 1.5rem;
+  /* Type scale: 12 / 13 / 14 / 17 / 22px against the app's 14px root (apps/web sets it).
+     Nothing drawn over the globe is smaller than 12px. */
+  --text-xs: 0.8572rem;
+  --text-sm: 0.9286rem;
+  --text-md: 1rem;
+  --text-lg: 1.2143rem;
+  --text-xl: 1.5715rem;
   --leading-tight: 1.2;
   --leading-normal: 1.45;
   --tracking-tight: -0.005em;
@@ -31,27 +33,32 @@
   --space-8: 2rem;
 
   /* Glass material — dark olive, blur 40px, saturate 1.7, inset top highlight. */
-  --glass-bg: linear-gradient(160deg, rgba(16, 20, 14, 0.68), rgba(16, 20, 14, 0.42));
-  --glass-bg-flat: rgba(16, 20, 14, 0.88);
-  --glass-bg-strong: linear-gradient(160deg, rgba(16, 20, 14, 0.78), rgba(16, 20, 14, 0.56));
-  --glass-bg-hover: linear-gradient(160deg, rgba(24, 29, 21, 0.8), rgba(24, 29, 21, 0.58));
-  --glass-border: rgba(255, 255, 255, 0.2);
-  --glass-highlight: rgba(255, 255, 255, 0.4);
-  --glass-shadow: 0 22px 52px rgba(0, 0, 0, 0.48), 0 1px 2px rgba(0, 0, 0, 0.3);
-  --glass-shadow-soft: 0 14px 34px rgba(0, 0, 0, 0.42);
+  /* Opaque enough (≥ 0.78 at the thin end) that every text token below keeps WCAG AA
+     contrast even over white cloud or snow; see `apps/web/e2e/layout.spec.ts`. */
+  --glass-bg: linear-gradient(160deg, rgba(16, 20, 14, 0.84), rgba(16, 20, 14, 0.78));
+  --glass-bg-flat: rgba(16, 20, 14, 0.9);
+  --glass-bg-strong: linear-gradient(160deg, rgba(16, 20, 14, 0.9), rgba(16, 20, 14, 0.82));
+  --glass-bg-hover: linear-gradient(160deg, rgba(26, 31, 23, 0.92), rgba(26, 31, 23, 0.84));
+  --glass-border: rgba(255, 255, 255, 0.16);
+  --glass-highlight: rgba(255, 255, 255, 0.28);
+  --glass-shadow: 0 12px 32px rgba(0, 0, 0, 0.4), 0 1px 2px rgba(0, 0, 0, 0.3);
+  --glass-shadow-soft: 0 8px 22px rgba(0, 0, 0, 0.34);
   --glass-inner-shadow: inset 0 1px 0 var(--glass-highlight);
   /* A blur's cost grows with its radius squared and is paid on every canvas repaint under the panel. */
   --glass-blur: 24px;
   --glass-saturate: 1.7;
-  --glass-radius: 20px;
-  --glass-radius-sm: 13px;
+  --radius-sm: 10px;
+  --radius-md: 14px;
+  --radius-lg: 18px;
+  --glass-radius: var(--radius-lg);
+  --glass-radius-sm: var(--radius-md);
   --glass-radius-pill: 999px;
   --glass-tint: rgba(255, 255, 255, 0.08);
 
   /* Text */
   --text-primary: #f2f6ef;
-  --text-secondary: rgba(242, 246, 239, 0.74);
-  --text-tertiary: rgba(242, 246, 239, 0.55);
+  --text-secondary: rgba(242, 246, 239, 0.8);
+  --text-tertiary: rgba(242, 246, 239, 0.66);
   --text-on-accent: #101310;
 
   /* Colour — teal (working / done), blue (agent / running), amber (attention). */
@@ -60,6 +67,9 @@
   --accent-soft: rgba(127, 216, 192, 0.2);
   --accent-ring: rgba(127, 216, 192, 0.55);
   --accent-border: rgba(127, 216, 192, 0.45);
+  --accent-fill: #7fd8c0;
+  --accent-fill-hover: #9fe4d0;
+  --on-accent-fill: #0b1410;
   --agent: #9db8f0;
   --agent-soft: rgba(157, 184, 240, 0.2);
   --agent-border: rgba(157, 184, 240, 0.45);
@@ -89,18 +99,16 @@
   --ease-spring: cubic-bezier(0.22, 1, 0.3, 1);
   --press-scale: 0.98;
 
-  /* Layout */
+  /* Layout: the HUD grid's fixed columns and gaps (`.hud` in apps/web). */
   --panel-width: 21rem;
   --panel-width-wide: 26rem;
-  --edge-gap: 1.5rem;
+  --window-width: 36rem;
+  --rail-w: 3.25rem;
+  --nav-w: 3rem;
+  --edge-gap: 1rem;
+  --hud-gap: 0.75rem;
   --z-map: 0;
   --z-ui: 10;
-  /* HUD regions that open a transient overlay (a switcher menu, a results list) sit here.
-     The HUD's regions are absolutely positioned siblings with no z-index of their own, so
-     they paint in DOM order and a menu opened from an earlier region disappears behind a
-     later one — the tool rail, in practice. This is the layer that says "still HUD, but
-     drawn over the rest of it"; it stays below overlays, sheets and toasts. */
-  --z-hud-popover: 15;
   --z-overlay: 20;
   --z-sheet: 30;
   --z-toast: 40;
@@ -109,24 +117,27 @@
 /* ---- Light glass (opt-in) ------------------------------------------------ */
 :root[data-theme="light"] {
   color-scheme: light;
-  --glass-bg: linear-gradient(160deg, rgba(255, 255, 255, 0.62), rgba(255, 255, 255, 0.42));
-  --glass-bg-flat: rgba(255, 255, 255, 0.9);
-  --glass-bg-strong: linear-gradient(160deg, rgba(255, 255, 255, 0.86), rgba(255, 255, 255, 0.7));
-  --glass-bg-hover: linear-gradient(160deg, rgba(255, 255, 255, 0.78), rgba(255, 255, 255, 0.6));
+  --glass-bg: linear-gradient(160deg, rgba(255, 255, 255, 0.88), rgba(255, 255, 255, 0.82));
+  --glass-bg-flat: rgba(255, 255, 255, 0.94);
+  --glass-bg-strong: linear-gradient(160deg, rgba(255, 255, 255, 0.93), rgba(255, 255, 255, 0.86));
+  --glass-bg-hover: linear-gradient(160deg, rgba(255, 255, 255, 0.96), rgba(255, 255, 255, 0.9));
   --glass-border: rgba(255, 255, 255, 0.6);
   --glass-highlight: rgba(255, 255, 255, 0.95);
   --glass-shadow: 0 12px 32px rgba(15, 23, 42, 0.2), 0 1px 2px rgba(15, 23, 42, 0.08);
   --glass-shadow-soft: 0 6px 18px rgba(15, 23, 42, 0.14);
   --glass-tint: rgba(255, 255, 255, 0.35);
   --text-primary: #0f172a;
-  --text-secondary: rgba(15, 23, 42, 0.7);
-  --text-tertiary: rgba(15, 23, 42, 0.48);
+  --text-secondary: rgba(15, 23, 42, 0.76);
+  --text-tertiary: rgba(15, 23, 42, 0.64);
   --text-on-accent: #0f172a;
   --accent: #128f74;
   --accent-strong: #0d6b57;
   --accent-soft: rgba(18, 143, 116, 0.14);
   --accent-ring: rgba(18, 143, 116, 0.45);
   --accent-border: rgba(18, 143, 116, 0.4);
+  --accent-fill: #0d6b57;
+  --accent-fill-hover: #0a5747;
+  --on-accent-fill: #ffffff;
   --agent: #3f6fd6;
   --agent-soft: rgba(63, 111, 214, 0.14);
   --agent-border: rgba(63, 111, 214, 0.4);

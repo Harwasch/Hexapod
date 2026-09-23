@@ -56,11 +56,19 @@ async function call<T>(token: string, path: string, body: unknown): Promise<T> {
 }
 
 interface Ui {
+  /** Carries `data-state`, which the page's CSS reads: idle, invalid, uploading, done, error. */
+  main: HTMLElement | null;
   status: HTMLElement;
   bar: HTMLElement;
   detail: HTMLElement;
   input: HTMLInputElement;
   form: HTMLElement;
+}
+
+type PageState = "idle" | "invalid" | "uploading" | "done" | "error";
+
+function setState(ui: Ui, state: PageState): void {
+  ui.main?.setAttribute("data-state", state);
 }
 
 function setProgress(ui: Ui, uploaded: number, total: number): void {
@@ -130,7 +138,7 @@ function collectUi(root: Document): Ui | null {
   const form = root.getElementById("form");
   const input = root.getElementById("file");
   if (!status || !bar || !detail || !form || !(input instanceof HTMLInputElement)) return null;
-  return { status, bar, detail, form, input };
+  return { main: root.querySelector("main"), status, bar, detail, form, input };
 }
 
 export function start(root: Document = document): void {
@@ -141,14 +149,16 @@ export function start(root: Document = document): void {
   const captureId = token ? captureIdFromToken(token) : null;
   if (!captureId) {
     ui.form.hidden = true;
+    setState(ui, "invalid");
     ui.status.textContent =
-      "This link is not a valid handoff. Open the Captures panel on the console and scan the QR code again.";
+      "This link is not a valid handoff. Scan the QR code in the Captures panel again.";
     return;
   }
 
   const expiresAt = expiryFromToken(token);
   if (expiresAt !== null && expiresAt * 1000 < Date.now()) {
     ui.form.hidden = true;
+    setState(ui, "invalid");
     ui.status.textContent = "This link has expired. Ask the console for a fresh QR code.";
     return;
   }
@@ -157,8 +167,10 @@ export function start(root: Document = document): void {
     const files = Array.from(ui.input.files ?? []);
     if (files.length === 0) return;
     ui.input.disabled = true;
+    setState(ui, "uploading");
     uploadAll(token, captureId, files, ui)
       .then(() => {
+        setState(ui, "done");
         const what =
           files.length === 1 ? (files[0]?.name ?? "The file") : `${String(files.length)} files`;
         ui.status.textContent = `${what} ${files.length === 1 ? "is on its way" : "are on their way"}. You can close this page.`;
@@ -167,9 +179,11 @@ export function start(root: Document = document): void {
       .catch((error: unknown) => {
         ui.input.disabled = false;
         if (isAbort(error)) {
+          setState(ui, "idle");
           ui.status.textContent = "Upload cancelled.";
           return;
         }
+        setState(ui, "error");
         ui.status.textContent =
           error instanceof Error ? error.message : "The upload failed. Try again.";
       });

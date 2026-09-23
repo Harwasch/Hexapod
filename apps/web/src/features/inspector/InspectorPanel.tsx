@@ -228,8 +228,11 @@ export function InspectorPanel() {
             </section>
           )}
           {selection.properties && selection.properties.length > 0 && (
-            <section aria-label="Properties">
-              <p className="glass-eyebrow">Properties</p>
+            // Feature properties can run to dozens of raw keys: folded until asked for.
+            <details className="disclosure" aria-label="Properties">
+              <summary className="disclosure__summary">
+                Properties ({selection.properties.length})
+              </summary>
               <dl className="dl" style={{ marginTop: "0.3rem", fontSize: "var(--text-xs)" }}>
                 {selection.properties.map((p) => (
                   <div key={p.key} style={{ display: "contents" }}>
@@ -238,7 +241,7 @@ export function InspectorPanel() {
                   </div>
                 ))}
               </dl>
-            </section>
+            </details>
           )}
         </div>
       )}

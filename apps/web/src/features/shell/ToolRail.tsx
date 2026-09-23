@@ -1,6 +1,6 @@
 import {
   Bookmark,
-  Boxes,
+  CloudUpload,
   Columns2,
   Layers,
   MapPin,
@@ -19,7 +19,7 @@ import { useUi, type ToolPanel } from "@/state/ui";
 const tools: { id: ToolPanel; label: string; icon: typeof Layers; shortcut: string }[] = [
   { id: "layers", label: "Layers", icon: Layers, shortcut: "L" },
   { id: "sites", label: "Sites", icon: MapPin, shortcut: "S" },
-  { id: "captures", label: "Captures", icon: Boxes, shortcut: "U" },
+  { id: "captures", label: "Captures", icon: CloudUpload, shortcut: "U" },
   { id: "measure", label: "Measure", icon: Ruler, shortcut: "M" },
   { id: "compare", label: "Compare", icon: Columns2, shortcut: "C" },
   { id: "bookmarks", label: "Bookmarks", icon: Bookmark, shortcut: "B" },

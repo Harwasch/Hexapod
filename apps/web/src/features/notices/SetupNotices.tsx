@@ -1,4 +1,4 @@
-import { CloudOff, KeyRound, X } from "lucide-react";
+import { CloudOff, KeyRound, TriangleAlert, X } from "lucide-react";
 
 import { GlassButton, GlassPanel } from "@twin/ui";
 
@@ -13,6 +13,9 @@ import { useViewer } from "@/state/viewer";
  * deployed this build why their tiles are rate-limited, which is a one-time thing to learn,
  * while an operator who reads it can do nothing about it. A rejected token is a real fault
  * and stays until it is fixed.
+ *
+ * Each notice is one line of plain language. The variable to set is named only where a
+ * person can act on it, and then as a detail, not as the headline.
  */
 export function SetupNotices() {
   const tokenState = useViewer((s) => s.tokenState);
@@ -20,30 +23,41 @@ export function SetupNotices() {
   const tokenNoticeDismissed = useSettings((s) => s.ionTokenNoticeDismissed);
   const setSettings = useSettings((s) => s.set);
   const sites = useSiteCatalog();
+  const showDefaultToken = tokenState === "default" && !tokenNoticeDismissed;
+  const contextLost = status === "context-lost";
+  if (tokenState !== "invalid" && !showDefaultToken && !sites.builtin && !contextLost) return null;
   return (
-    <div className="glass-stack setup-notices" style={{ gap: "0.5rem" }}>
+    <>
       {tokenState === "invalid" && (
-        <GlassPanel strong compact className="notice" role="status" data-testid="notice-token">
-          <KeyRound className="notice__icon" size={18} aria-hidden="true" />
-          <div>
-            <strong>Cesium ion rejected the access token.</strong> Set{" "}
-            <code>VITE_CESIUM_ION_ACCESS_TOKEN</code> in <code>.env</code> to a token with{" "}
-            <code>assets:read</code> and <code>geocode</code> scopes, or leave it empty to use the
-            CesiumJS evaluation token.
+        <GlassPanel
+          strong
+          compact
+          className="notice notice--warning"
+          role="status"
+          data-testid="notice-token"
+        >
+          <KeyRound className="notice__icon" size={16} aria-hidden="true" />
+          <div className="notice__text">
+            <strong>Map key rejected</strong>
+            <span>
+              Cesium ion tiles won’t load. Set <code>VITE_CESIUM_ION_ACCESS_TOKEN</code> to a valid
+              token.
+            </span>
           </div>
         </GlassPanel>
       )}
-      {tokenState === "default" && !tokenNoticeDismissed && (
+      {showDefaultToken && (
         <GlassPanel
+          strong
           compact
-          soft
-          className="notice notice--info notice--dismissible"
+          className="notice notice--info"
           role="status"
           data-testid="notice-default-token"
         >
           <KeyRound className="notice__icon" size={16} aria-hidden="true" />
-          <div className="glass-muted">
-            Evaluation ion token · set <code>VITE_CESIUM_ION_ACCESS_TOKEN</code>
+          <div className="notice__text">
+            <strong>Shared demo map key</strong>
+            <span>Tiles may load slowly.</span>
           </div>
           <GlassButton
             iconOnly
@@ -59,23 +73,29 @@ export function SetupNotices() {
         </GlassPanel>
       )}
       {sites.builtin && (
-        <GlassPanel compact soft className="notice" role="status" data-testid="notice-api-offline">
-          <CloudOff className="notice__icon" size={18} aria-hidden="true" />
-          <div className="glass-muted">
-            Catalog API offline — showing the built-in demo site and a minimal layer set. Start the
-            API (<code>pnpm dev:api</code>) to load your catalog.
+        <GlassPanel
+          strong
+          compact
+          className="notice notice--warning"
+          role="status"
+          data-testid="notice-api-offline"
+        >
+          <CloudOff className="notice__icon" size={16} aria-hidden="true" />
+          <div className="notice__text">
+            <strong>Offline</strong>
+            <span>Showing the built-in demo. Uploads are unavailable.</span>
           </div>
         </GlassPanel>
       )}
-      {status === "context-lost" && (
-        <GlassPanel strong compact className="notice" role="alert">
-          <CloudOff className="notice__icon" size={18} aria-hidden="true" />
-          <div>
-            The graphics context was lost. The globe will resume if the browser restores it;
-            otherwise reload the page.
+      {contextLost && (
+        <GlassPanel strong compact className="notice notice--warning" role="alert">
+          <TriangleAlert className="notice__icon" size={16} aria-hidden="true" />
+          <div className="notice__text">
+            <strong>Graphics paused</strong>
+            <span>The browser dropped the 3D view. Reload if it doesn’t come back.</span>
           </div>
         </GlassPanel>
       )}
-    </div>
+    </>
   );
 }

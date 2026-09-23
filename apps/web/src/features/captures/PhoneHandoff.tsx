@@ -1,12 +1,12 @@
-import { QrCode, X } from "lucide-react";
+import { QrCode, Smartphone, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
-import { GlassButton } from "@twin/ui";
+import { GlassButton, Spinner } from "@twin/ui";
 
 import { useCreateHandoff } from "@/api/queries";
 
 /**
- * "Send from your phone" — the QR code that gets a capture off the device it is on.
+ * "Add from phone" — the QR code that gets a capture off the device it is on.
  *
  * The SVG is rendered by the API, not here: drawing a QR code is the server's job when
  * the server already has the string, and the alternative is the console growing a QR
@@ -50,12 +50,13 @@ export function PhoneHandoff({
         size="sm"
         variant="ghost"
         data-testid="handoff-open"
+        leadingIcon={<QrCode size={14} aria-hidden="true" />}
         onClick={() => {
           setOpen(true);
           handoff.mutate({ captureId });
         }}
       >
-        <QrCode size={14} aria-hidden="true" /> Send from your phone
+        Add from phone
       </GlassButton>
     );
   }
@@ -63,8 +64,11 @@ export function PhoneHandoff({
   return (
     <div className="handoff" data-testid="handoff">
       <div className="handoff__head">
-        <span className="handoff__title">Scan with your phone</span>
+        <span className="handoff__title">
+          <Smartphone size={15} aria-hidden="true" /> Scan with your phone
+        </span>
         <GlassButton
+          iconOnly
           size="sm"
           variant="ghost"
           aria-label="Close the phone handoff"
@@ -78,25 +82,36 @@ export function PhoneHandoff({
         </GlassButton>
       </div>
 
-      {handoff.isPending && <p className="handoff__note">Making a link…</p>}
+      {handoff.isPending && (
+        <div className="glass-row">
+          <Spinner label="Making a link" />
+          <span className="handoff__note">Making a link…</span>
+        </div>
+      )}
 
       {handoff.isError && (
         <p className="card__error" data-testid="handoff-error">
-          Could not make a handoff link. {handoff.error.message}
+          Couldn’t make a link. {handoff.error.message}
         </p>
       )}
 
       {data && (
         <>
-          {/* The API renders this; it is our own server's SVG, not user content. */}
-          <div
-            className="handoff__qr"
-            data-testid="handoff-qr"
-            dangerouslySetInnerHTML={{ __html: data.qrSvg }}
-          />
+          <div className="handoff__body">
+            {/* The API renders this; it is our own server's SVG, not user content. */}
+            <div
+              className="handoff__qr"
+              data-testid="handoff-qr"
+              dangerouslySetInnerHTML={{ __html: data.qrSvg }}
+            />
+            <ol className="handoff__steps">
+              <li>Point the phone’s camera at the code.</li>
+              <li>Pick videos, photos or a scan.</li>
+              <li>They show up here as they upload.</li>
+            </ol>
+          </div>
           <p className="handoff__note">
-            Expires in ten minutes. It can only add files to this capture. Keep this panel open: the
-            files appear below as they arrive.
+            The link works for 10 minutes and can only add files to this capture.
           </p>
         </>
       )}

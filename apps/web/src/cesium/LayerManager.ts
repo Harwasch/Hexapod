@@ -292,7 +292,7 @@ export class LayerManager {
       })
       .catch((error: unknown) => {
         const message = isIonAuthError(error)
-          ? "Cesium ion rejected the request. Check VITE_CESIUM_ION_ACCESS_TOKEN and the asset's access."
+          ? "Cesium ion refused the request: the map key has no access to it."
           : describeError(error);
         log.warn("layer failed", { id, error: message });
         entry.visible = false;

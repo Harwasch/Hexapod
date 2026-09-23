@@ -503,9 +503,9 @@ export class SiteManager {
       })
       .catch((error: unknown) => {
         const message = isIonAuthError(error)
-          ? "Cesium ion rejected the asset request. Provide VITE_CESIUM_ION_ACCESS_TOKEN with access to this asset."
+          ? "Cesium ion refused this asset: the map key has no access to it."
           : isIonNotFound(error)
-            ? "Asset not found on Cesium ion (check the asset ID and that your token can read it)."
+            ? "Cesium ion has no asset with this ID that the map key can see."
             : describeError(error);
         log.warn("asset failed", { asset: asset.id, error: message });
         this.events.emit("asset", { id: asset.id, patch: { loadState: "error", error: message } });

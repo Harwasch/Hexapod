@@ -99,7 +99,7 @@ export function ComparePanel() {
                 />
               </div>
               <p className="glass-subtle" style={{ fontSize: "var(--text-xs)", margin: 0 }}>
-                Both layers are switched on; exclusive basemaps are compared side by side.
+                Drag the divider on the map to compare.
               </p>
             </>
           )}

@@ -1,15 +1,64 @@
-import { Ban, CheckCircle2, FileText, MapPin, Play, RotateCcw } from "lucide-react";
+import {
+  Ban,
+  Box,
+  CheckCircle2,
+  Film,
+  FileText,
+  Images,
+  MapPin,
+  Play,
+  RotateCcw,
+  ScanLine,
+} from "lucide-react";
 import { useState } from "react";
 
 import type { Capture, CaptureFile, Job, JobStep, RunStatus } from "@twin/contracts";
-import { PhoneHandoff } from "./PhoneHandoff";
 import { GlassBadge, GlassButton, GlassProgress, type GlassProgressTone } from "@twin/ui";
 
 import { useCancelJob, useRetryJob, useStepLog } from "@/api/queries";
 import { formatBytes, formatDate, formatDuration } from "@/lib/format";
 import { uploadsForCapture, type UploadItem } from "@/state/uploads";
 
+import { PhoneHandoff } from "./PhoneHandoff";
 import { classify, type Proposal } from "./recipes";
+
+/**
+ * Plain words for the API's status values. The raw value stays on `data-status`, where
+ * tests and anyone inspecting the page can still read it exactly.
+ */
+const CAPTURE_STATUS: Record<string, string> = {
+  "awaiting-files": "Waiting for files",
+  "not-started": "Ready",
+  "in-progress": "Processing",
+  complete: "Done",
+  error: "Failed",
+  cancelled: "Cancelled",
+};
+
+const JOB_STATUS: Record<string, string> = {
+  "not-started": "Queued",
+  "in-progress": "Running",
+  complete: "Done",
+  error: "Failed",
+  cancelled: "Cancelled",
+};
+
+const KIND: Record<string, { label: string; icon: typeof Film }> = {
+  video: { label: "Video", icon: Film },
+  images: { label: "Photos", icon: Images },
+  "gaussian-splat": { label: "Splat", icon: Box },
+  "point-cloud": { label: "Point cloud", icon: ScanLine },
+};
+
+/** The recipe's verb, which is what a person asked for: "Reconstruct", "Package and place". */
+function recipeLabel(recipe: string): string {
+  if (recipe === "photo-reconstruct") return "Reconstruct";
+  if (recipe === "splat-ingest") return "Package and place";
+  return recipe
+    .split(/[-_]/)
+    .map((part, i) => (i === 0 ? part.charAt(0).toUpperCase() + part.slice(1) : part))
+    .join(" ");
+}
 
 /** Stage ids the two shipped recipes walk through, in the order they run. */
 const STAGE_LABELS: Record<string, string> = {
@@ -109,6 +158,8 @@ export interface CaptureCardProps {
   onCancelUpload: (uploadId: string) => void;
   onFlyTo: (siteId: string) => void;
   processing: boolean;
+  /** Its QR code is already open at the top of the panel, so the card does not offer one. */
+  handoffShown?: boolean;
 }
 
 export function CaptureCard({
@@ -120,6 +171,7 @@ export function CaptureCard({
   onCancelUpload,
   onFlyTo,
   processing,
+  handoffShown = false,
 }: CaptureCardProps) {
   const mine = uploadsForCapture(uploads, capture.id);
   const byFileId = new Map(mine.filter((item) => item.fileId).map((item) => [item.fileId, item]));
@@ -139,25 +191,31 @@ export function CaptureCard({
   const canProcess =
     filesReady && !uploading && (!job || (job.status === "error" && job.steps.length === 0));
 
+  // A phone capture is created before anything is picked, so its stored kind is a guess;
+  // once files land, what they are is the better answer.
+  const kindId =
+    capture.metadata.origin === "phone" && capture.files.length > 0 ? proposal.kind : capture.kind;
+  const kind = KIND[kindId] ?? { label: kindId, icon: Box };
+  const KindIcon = kind.icon;
+
   return (
     <li>
-      <div className="card" data-testid={`capture-card-${capture.slug}`}>
+      <div className="card capture" data-testid={`capture-card-${capture.slug}`}>
         <div className="card__row">
-          <h3 className="card__title">{capture.name}</h3>
-          <GlassBadge tone={statusTone(capture.status)} data-testid="capture-status">
-            {capture.status}
+          <KindIcon className="capture__kind-icon" size={16} aria-hidden="true" />
+          <h4 className="card__title">{capture.name}</h4>
+          <GlassBadge
+            tone={statusTone(capture.status)}
+            data-testid="capture-status"
+            data-status={capture.status}
+          >
+            {CAPTURE_STATUS[capture.status] ?? capture.status}
           </GlassBadge>
         </div>
         <div className="card__meta">
-          {/* A phone capture is created before anything is picked, so its stored kind
-              is a guess; once files land, what they are is the better answer. */}
-          <span>
-            {capture.metadata.origin === "phone" && capture.files.length > 0
-              ? proposal.kind
-              : capture.kind}
-          </span>
+          <span>{kind.label}</span>
           <span>{formatDate(capture.createdAt)}</span>
-          <span>{proposal.action}</span>
+          {capture.metadata.origin === "phone" && <span>From phone</span>}
         </div>
 
         <ul className="capture__files">
@@ -173,6 +231,11 @@ export function CaptureCard({
                   </span>
                 </div>
                 <GlassProgress
+                  className={
+                    file.status === "complete" || item?.phase === "complete"
+                      ? "capture__file-bar capture__file-bar--done"
+                      : "capture__file-bar"
+                  }
                   label={`Uploading ${file.filename}`}
                   value={item ? item.uploaded : server.value}
                   max={item ? Math.max(item.bytes, 1) : server.max}
@@ -220,36 +283,42 @@ export function CaptureCard({
           </>
         )}
 
+        {capture.files.length === 0 && capture.status === "awaiting-files" && (
+          <p className="capture__job-note">No files yet.</p>
+        )}
+
         {job ? <JobStages job={job} /> : null}
 
         <div className="capture__actions">
           {canProcess && (
             <GlassButton
               size="sm"
+              variant="primary"
               onClick={() => onProcess(recipe)}
               loading={processing}
               leadingIcon={<Play size={13} aria-hidden="true" />}
               data-testid="capture-process"
             >
-              {job?.status === "error" ? "Retry" : proposal.action}
+              {job?.status === "error" ? "Start again" : recipeLabel(recipe)}
             </GlassButton>
           )}
           {capture.siteId && (
             <GlassButton
               size="sm"
-              variant="ghost"
+              variant={canProcess ? "ghost" : "primary"}
               onClick={() => capture.siteId && onFlyTo(capture.siteId)}
               leadingIcon={<MapPin size={13} aria-hidden="true" />}
               data-testid="capture-fly-to"
             >
-              Fly to it
+              Show on map
             </GlassButton>
           )}
           {/* Only while the capture can still take files: a handoff link to a capture
               that is already processing would mint a credential with nothing to do. */}
-          {(capture.status === "awaiting-files" || capture.status === "not-started") && (
-            <PhoneHandoff captureId={capture.id} />
-          )}
+          {!handoffShown &&
+            (capture.status === "awaiting-files" || capture.status === "not-started") && (
+              <PhoneHandoff captureId={capture.id} />
+            )}
         </div>
       </div>
     </li>
@@ -276,33 +345,53 @@ function JobStages({ job }: { job: Job }) {
     ordered.find((step) => step.status !== "complete");
   const canRetry = (status === "error" || status === "cancelled") && resumeAt !== undefined;
 
+  const current = ordered.find((step) => step.status !== "complete") ?? ordered.at(-1);
+  const stubbed = ordered.filter((step) => step.impl === "stub").length;
+  const summary =
+    status === "complete"
+      ? `${ordered.length} stages${job.durationS ? ` · ${formatDuration(job.durationS)}` : ""}`
+      : current
+        ? `Stage ${ordered.indexOf(current) + 1} of ${Math.max(ordered.length, 1)} · ${stageLabel(current.stageId)}`
+        : "Stages";
+
   return (
     <div className="capture__job" data-testid="capture-job">
       <div className="card__row card__row--between">
-        <span className="capture__job-title">
-          {job.recipe} <span className="capture__job-version">{job.recipeVersion}</span>
-        </span>
-        <GlassBadge tone={statusTone(status)} data-testid="capture-job-status">
-          {status}
+        <span className="capture__job-title">{recipeLabel(job.recipe)}</span>
+        <GlassBadge tone={statusTone(status)} data-testid="capture-job-status" data-status={status}>
+          {JOB_STATUS[status] ?? status}
         </GlassBadge>
       </div>
       <GlassProgress
-        label={`${job.recipe} progress`}
+        label={`${recipeLabel(job.recipe)} progress`}
         value={jobProgressPct(job)}
         valueText={queued ? "Queued" : `${jobProgressPct(job)}%`}
         tone={progressTone(status)}
       />
       {queued && (
         <p className="capture__job-note" data-testid="capture-job-queued">
-          Queued. The next free worker claims it and starts running its stages.
+          Waiting for a free worker.
+        </p>
+      )}
+      {stubbed > 0 && (
+        <p className="capture__job-note capture__job-note--warn" data-testid="capture-job-stub">
+          {stubbed === ordered.length ? "All stages" : `${stubbed} of ${ordered.length} stages`} ran
+          as stand-ins: the output is placeholder, not a real reconstruction.
         </p>
       )}
       {ordered.length > 0 && (
-        <ul className="capture__stages">
-          {ordered.map((step) => (
-            <StageRow key={step.id} jobId={job.id} step={step} />
-          ))}
-        </ul>
+        // Live while it runs or needs attention; folded away once it is done.
+        <details className="disclosure" open={status !== "complete"}>
+          <summary className="disclosure__summary">{summary}</summary>
+          <ul className="capture__stages">
+            {ordered.map((step) => (
+              <StageRow key={step.id} jobId={job.id} step={step} />
+            ))}
+          </ul>
+          <p className="capture__job-version">
+            {job.recipe} {job.recipeVersion}
+          </p>
+        </details>
       )}
       {job.error && (
         <p className="card__error" data-testid="capture-job-error">
@@ -357,6 +446,11 @@ function StageRow({ jobId, step }: { jobId: string; step: JobStep }) {
         <span className={`mc-dot mc-dot--${stageDot(step.status)}`} aria-hidden="true" />
         <span className="capture__stage-name">
           {label}
+          {step.impl === "stub" && (
+            <span className="capture__stub" title="Ran as a stand-in; its output is placeholder">
+              stub
+            </span>
+          )}
           {step.attempt > 1 && (
             <span className="capture__job-version" data-testid="capture-stage-attempt">
               {" "}
