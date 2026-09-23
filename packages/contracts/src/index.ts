@@ -96,6 +96,8 @@ export type OutlineRequest = Schemas["OutlineRequest"];
 /** Captures: an upload session and the source files it is made of. */
 export type Capture = Schemas["CaptureRead"];
 export type CaptureDetail = Schemas["CaptureDetail"];
+/** A capture a phone started with the phone key, and its upload token. */
+export type PhoneCapture = Schemas["PhoneCapture"];
 export type CaptureCreate = Schemas["CaptureCreate"];
 export type CaptureKind = Schemas["CaptureKind"];
 export type CaptureStatus = Schemas["CaptureStatus"];

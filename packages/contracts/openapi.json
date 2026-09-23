@@ -4050,6 +4050,82 @@
         "title": "OutlineRequest",
         "type": "object"
       },
+      "PhoneCapture": {
+        "additionalProperties": false,
+        "properties": {
+          "capture": {
+            "$ref": "#/components/schemas/CaptureRead"
+          },
+          "uploadToken": {
+            "title": "Uploadtoken",
+            "type": "string"
+          }
+        },
+        "required": [
+          "capture",
+          "uploadToken"
+        ],
+        "title": "PhoneCapture",
+        "type": "object"
+      },
+      "PhoneCaptureCreate": {
+        "additionalProperties": false,
+        "description": "Where the phone was, if it said. Both or neither.",
+        "properties": {
+          "accuracyM": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accuracym"
+          },
+          "lat": {
+            "anyOf": [
+              {
+                "maximum": 90.0,
+                "minimum": -90.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lat"
+          },
+          "lon": {
+            "anyOf": [
+              {
+                "maximum": 180.0,
+                "minimum": -180.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lon"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          }
+        },
+        "title": "PhoneCaptureCreate",
+        "type": "object"
+      },
       "PipelineCatalogue": {
         "additionalProperties": false,
         "description": "Everything the New-run form needs: what can be run, and where.",
@@ -6879,6 +6955,11 @@
       }
     },
     "securitySchemes": {
+      "phoneKey": {
+        "description": "The phone key, as `Authorization: Bearer <key>`. Opens only /phone routes.",
+        "scheme": "bearer",
+        "type": "http"
+      },
       "uploadToken": {
         "description": "Either the shared write token (`API_WRITE_TOKEN`), or a capture handoff token from `POST /captures/{capture_id}/handoff`. A handoff token is accepted only on this capture's upload endpoints and only until it expires.",
         "scheme": "bearer",
@@ -9492,6 +9573,230 @@
         "summary": "Update a layer",
         "tags": [
           "layers"
+        ]
+      }
+    },
+    "/api/v1/phone/captures": {
+      "post": {
+        "operationId": "create_phone_capture_api_v1_phone_captures_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PhoneCaptureCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PhoneCapture"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "phoneKey": []
+          }
+        ],
+        "summary": "Start a capture from a phone",
+        "tags": [
+          "phone"
+        ]
+      }
+    },
+    "/api/v1/phone/captures/{capture_id}/process": {
+      "post": {
+        "operationId": "process_phone_capture_api_v1_phone_captures__capture_id__process_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "capture_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Capture Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JobCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "phoneKey": []
+          }
+        ],
+        "summary": "Queue a run over a capture this phone key started",
+        "tags": [
+          "phone"
+        ]
+      }
+    },
+    "/api/v1/phone/check": {
+      "post": {
+        "description": "204 when the key is right, so the page can say so before anything is picked.",
+        "operationId": "check_key_api_v1_phone_check_post",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "phoneKey": []
+          }
+        ],
+        "summary": "Check Key",
+        "tags": [
+          "phone"
         ]
       }
     },

@@ -25,7 +25,9 @@ AUTH = {"Authorization": f"Bearer {TOKEN}"}
 
 #: Security schemes that actually gate a write. Every mutating operation in the document
 #: must name one of these and nothing else; see the test at the bottom of this file.
-GATING_SCHEMES = {"writeToken", "uploadToken"}
+#: `phoneKey` joined deliberately: it is a real gate (a PBKDF2-checked key; see
+#: app/services/phone_key.py), and the test below pins it to the /phone routes alone.
+GATING_SCHEMES = {"writeToken", "uploadToken", "phoneKey"}
 
 
 def no_tiles_source(**overrides: object) -> Settings:
@@ -335,4 +337,22 @@ def test_only_the_upload_endpoints_accept_anything_but_the_write_token(
         "POST /api/v1/captures/{capture_id}/files/{file_id}/parts",
         "POST /api/v1/captures/{capture_id}/files/{file_id}/complete",
         "POST /api/v1/captures/{capture_id}/files/{file_id}/abort",
+    }
+
+
+def test_the_phone_key_opens_the_phone_routes_and_nothing_else(client: TestClient) -> None:
+    """The phone key is weaker than the write token by design, so where it is accepted
+    is pinned: three routes under /phone, none of which reaches a capture it did not
+    create (tests/test_phone.py)."""
+    spec = client.app.openapi()  # type: ignore[attr-defined]
+    accepts_phone_key = {
+        f"{method.upper()} {path}"
+        for path, operations in spec["paths"].items()
+        for method, operation in operations.items()
+        if any("phoneKey" in entry for entry in operation.get("security", []))
+    }
+    assert accepts_phone_key == {
+        "POST /api/v1/phone/check",
+        "POST /api/v1/phone/captures",
+        "POST /api/v1/phone/captures/{capture_id}/process",
     }

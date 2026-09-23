@@ -76,11 +76,15 @@ kill_timeout = "30s"
   WORKER_WORKDIR = "/data/worker"
   # Lane 2. `cloud` is `local` plus a GPU runner: every CPU stage still runs on the worker
   # (Lane 1 entirely, and Lane 2's frames, poses, georeference and packaging), and only
-  # a stage that declares `gpu:` -- `train` -- is sent to Modal, as the `run_stage_<tier>`
+  # a stage that declares `gpu:` -- `pose` (cpu4) and `train` (l4) -- is sent to Modal, as the `run_stage_<tier>`
   # functions infra/modal/app.py deploys under the app name `twin-pipeline` (the worker's
   # default WORKER_MODAL_APP). It needs MODAL_TOKEN_ID / MODAL_TOKEN_SECRET, which
   # provision.yml forwards as Fly secrets. Without a deployed app a Lane 2 run should fail
   # at `train` on the function lookup (not yet observed); Lane 1 is untouched either way.
+  # The phone key's salted PBKDF2 hash (app/services/phone_key.py). A hash, not the key,
+  # which is why it can sit in a public file: 200,000 SHA-256 rounds per guess against
+  # ~59 bits. Rotate by generating a new key and replacing this line.
+  API_PHONE_KEY_HASH = "pbkdf2_sha256$200000$540675f0b3538e6c6a46379620b09ccc$7ba333cf98f74da149cc1c88daabf29645f265100c8f51f75fa36fb90b91816b"
   WORKER_RUNNER = "cloud"
   WORKER_CLOUD_PROVIDERS = "modal"
 

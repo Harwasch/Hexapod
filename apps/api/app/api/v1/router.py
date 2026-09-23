@@ -12,6 +12,7 @@ from app.api.v1 import (
     ion,
     jobs,
     layers,
+    phone,
     plans,
     recipes,
     sites,
@@ -38,6 +39,7 @@ api_v1.include_router(ion.router)
 api_v1.include_router(agent.router)
 api_v1.include_router(plans.router)
 api_v1.include_router(captures.router)
+api_v1.include_router(phone.router)
 api_v1.include_router(jobs.router)
 api_v1.include_router(artifacts.router)
 api_v1.include_router(recipes.router)

@@ -36,10 +36,29 @@ test.describe("the phone upload page", () => {
     await expect(page.locator("#status")).toContainText("Pick a file");
   });
 
-  test("a link with no token refuses rather than showing a dead picker", async ({ page }) => {
+  test("with no link the page asks for the phone key, once", async ({ page }) => {
+    await page.route("**/api/v1/phone/check", async (route) => {
+      const good = route.request().headers().authorization === "Bearer abcd-efgh-jkmn";
+      await route.fulfill({ status: good ? 204 : 401, body: good ? "" : "{}" });
+    });
     await page.goto("/upload.html");
-    await expect(page.locator("#status")).toContainText("not a valid handoff");
+    await expect(page.locator("#keyform")).toBeVisible();
     await expect(page.locator("#form")).toBeHidden();
+
+    await page.locator("#key").fill("abcd-efgh-jkmm");
+    await page.getByRole("button", { name: "Continue" }).click();
+    await expect(page.locator("#status")).toContainText("isn't right");
+
+    // Typed the way a phone types it: capitals and a trailing space are forgiven.
+    await page.locator("#key").fill("ABCD-EFGH-JKMN ");
+    await page.getByRole("button", { name: "Continue" }).click();
+    await expect(page.locator("#form")).toBeVisible();
+    await expect(page.locator("#keyform")).toBeHidden();
+
+    // Remembered: a reload goes straight to the picker.
+    await page.reload();
+    await expect(page.locator("#form")).toBeVisible();
+    await expect(page.locator("#keyform")).toBeHidden();
   });
 
   test("an expired link says so before asking for a file", async ({ page }) => {
@@ -182,6 +201,99 @@ test.describe("the phone upload page", () => {
     });
     expect(registered).toEqual(["a.jpg", "b.jpg", "c.jpg"]);
     expect(completed).toHaveLength(3);
+  });
+
+  test("with the key, a picked video becomes a placed capture and starts processing", async ({
+    page,
+    context,
+  }) => {
+    await context.grantPermissions(["geolocation"]);
+    await context.setGeolocation({ latitude: 44.9778, longitude: -93.265, accuracy: 7 });
+    await page.addInitScript(() => {
+      window.localStorage.setItem("twin.phoneKey", "abcd-efgh-jkmn");
+    });
+
+    const created: unknown[] = [];
+    const processed: unknown[] = [];
+    const tokens: string[] = [];
+    await page.route("**/api/v1/phone/captures", async (route) => {
+      expect(route.request().headers().authorization).toBe("Bearer abcd-efgh-jkmn");
+      created.push(route.request().postDataJSON());
+      await route.fulfill({
+        status: 201,
+        contentType: "application/json",
+        body: JSON.stringify({
+          capture: { id: CAPTURE_ID, name: "Phone capture", files: [], metadata: {} },
+          uploadToken: "h1.first",
+        }),
+      });
+    });
+    await page.route("**/api/v1/captures/*/files", async (route) => {
+      tokens.push(String(route.request().headers().authorization));
+      await route.fulfill({
+        status: 201,
+        contentType: "application/json",
+        // The renewal: every handoff-authorised response carries the next token.
+        headers: {
+          "x-handoff-token": "h1.second",
+          "access-control-expose-headers": "X-Handoff-Token",
+        },
+        body: JSON.stringify({
+          file: { id: FILE_ID, captureId: CAPTURE_ID, filename: "walk.mov", partsTotal: 1 },
+          upload: {
+            uploadId: "u-1",
+            storageKey: "k",
+            partSize: 8,
+            partsTotal: 1,
+            nextPartNumber: null,
+            expiresIn: 3600,
+            parts: [{ partNumber: 1, url: "https://storage.example/part-1" }],
+          },
+        }),
+      });
+    });
+    await page.route("https://storage.example/**", async (route) => {
+      await route.fulfill({
+        status: 200,
+        headers: {
+          ETag: '"etag-x"',
+          "access-control-allow-origin": "*",
+          "access-control-expose-headers": "ETag",
+        },
+        body: "",
+      });
+    });
+    await page.route("**/api/v1/captures/*/files/*/complete", async (route) => {
+      tokens.push(String(route.request().headers().authorization));
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ status: "complete" }),
+      });
+    });
+    await page.route("**/api/v1/phone/captures/*/process", async (route) => {
+      processed.push(route.request().postDataJSON());
+      await route.fulfill({
+        status: 202,
+        contentType: "application/json",
+        body: JSON.stringify({ id: "job-1", status: "not-started", steps: [] }),
+      });
+    });
+
+    await page.goto("/upload.html");
+    await page.locator("#file").setInputFiles({
+      name: "walk.mov",
+      mimeType: "video/quicktime",
+      buffer: Buffer.alloc(8, 5),
+    });
+
+    await expect(page.locator("#status")).toContainText("processing has started", {
+      timeout: 20_000,
+    });
+    expect(created).toEqual([{ lat: 44.9778, lon: -93.265, accuracyM: 7 }]);
+    expect(processed).toEqual([{ recipe: "photo-reconstruct" }]);
+    // The first call used the token the capture came with; the next used the renewal.
+    expect(tokens).toEqual(["Bearer h1.first", "Bearer h1.second"]);
   });
 
   test("a bucket that hides the ETag is reported as the CORS problem it is", async ({ page }) => {

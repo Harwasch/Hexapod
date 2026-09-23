@@ -105,6 +105,58 @@
         outline: 3px solid var(--accent);
         outline-offset: 3px;
       }
+      /* A class that sets display must not win over the attribute that hides it. */
+      [hidden] {
+        display: none !important;
+      }
+      .keyform {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .keyform label {
+        font-weight: 650;
+      }
+      .keyform input {
+        min-height: 52px;
+        padding: 0 16px;
+        border-radius: 14px;
+        border: 1px solid var(--border);
+        background: var(--surface);
+        color: var(--fg);
+        font:
+          600 1.125rem/1 ui-monospace,
+          "SF Mono",
+          Menlo,
+          monospace;
+        letter-spacing: 0.06em;
+      }
+      .keyform input:focus {
+        outline: 3px solid var(--accent);
+        outline-offset: 2px;
+      }
+      .keyform button,
+      .linkbtn {
+        min-height: 52px;
+        border: 0;
+        border-radius: 14px;
+        background: var(--accent);
+        color: var(--on-accent);
+        font: inherit;
+        font-weight: 650;
+      }
+      .linkbtn {
+        min-height: 0;
+        padding: 0;
+        background: none;
+        color: var(--muted);
+        text-decoration: underline;
+        font-weight: 500;
+      }
+      #done-link {
+        color: var(--accent);
+        font-weight: 650;
+      }
       .pick:has(input:disabled) {
         opacity: 0.55;
         cursor: progress;
@@ -234,6 +286,22 @@
         <p class="lead">It goes straight to the survey. Keep this page open until it’s done.</p>
       </div>
 
+      <form id="keyform" class="keyform" hidden>
+        <label for="key">Phone key</label>
+        <input
+          id="key"
+          name="key"
+          inputmode="text"
+          autocomplete="off"
+          autocapitalize="none"
+          autocorrect="off"
+          spellcheck="false"
+          placeholder="xxxx-xxxx-xxxx"
+          required
+        />
+        <button type="submit">Continue</button>
+      </form>
+
       <div id="form">
         <label class="pick">
           <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -296,7 +364,11 @@
         <p id="detail" aria-live="polite"></p>
       </section>
 
-      <p class="foot">This link only adds files to one capture and expires after 10 minutes.</p>
+      <a id="done-link" href="/" hidden>Open the map</a>
+      <p class="foot" id="foot">
+        This link only adds files to one capture and expires after 10 minutes.
+      </p>
+      <button id="forget" class="linkbtn" type="button" hidden>Forget the key on this phone</button>
     </main>
     <script type="module" src="/src/upload/main.ts"></script>
   </body>

@@ -82,6 +82,13 @@ class Settings(BaseSettings):
     # -- see `handoff.key_for`. Set it explicitly when the API runs as more than one
     # process, or a token minted by one will be refused by the next.
     api_handoff_secret: str | None = None
+    # The phone key (app/services/phone_key.py): a short shared key typed once on a phone,
+    # stored here only as `pbkdf2_sha256$<iterations>$<salt hex>$<digest hex>`. Unset
+    # means the phone routes are closed. It unlocks less than the write token: creating a
+    # phone capture, uploading to it and processing it.
+    api_phone_key_hash: str | None = None
+    # How many captures the phone key may create in any 24 hours.
+    api_phone_daily_captures: int = 20
 
     cesium_ion_server_token: str | None = None
     cesium_ion_api_base: str = "https://api.cesium.com"
