@@ -56,6 +56,9 @@ def config(tmp_path: Path, worker_id: str = "worker-a", **overrides: object) -> 
         "idle_s": 0.05,
         "retry_backoff_s": 0.0,
         "terminate_grace_s": 2.0,
+        # These tests read counters the test stages leave in `work/` after a run, which
+        # a production worker tidies away once the run has finished.
+        "tidy_finished_runs": False,
     }
     defaults.update(overrides)
     return WorkerConfig(**defaults)  # type: ignore[arg-type]

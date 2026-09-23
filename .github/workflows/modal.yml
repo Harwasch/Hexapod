@@ -1,0 +1,147 @@
+name: Modal
+
+# Deploys infra/modal/app.py -- the GPU half of Lane 2 -- and, by default, proves it with a
+# tiny real training run. The only workflow here that spends money on a push, and it is
+# worth saying exactly how much and why:
+#
+# * **Why a push trigger at all.** `workflow_dispatch` only works for a workflow file that
+#   exists on the default branch, and this one is new. A push-triggered workflow runs from
+#   the pushed commit's own copy, so the GPU path can be proven from the working branch
+#   before any of it is merged. The trigger is narrowed to that branch and to the files
+#   that change what the GPU box runs (a push that only touches tests or docs does not
+#   deploy or spend anything); ci.yml's check that deploy.yml and provision.yml
+#   stay dispatch-only does not cover this file, on purpose.
+# * **What a run costs.** The smoke trains 500 steps on 40 renders of the committed
+#   synthetic tree at 640x480, on one L4 (Modal's list price $0.000222/s, $0.80/h, read
+#   2026-09-22). The GPU container's wall time is dominated by its cold start -- pulling
+#   an image of roughly 10 GB -- rather than by training; budget 5-15 minutes of L4, so
+#   $0.07-0.20 per run. The first deploy also builds the image on Modal's builders (torch,
+#   the gsplat wheel, fused-ssim compiled with nvcc): expect 15-30 minutes, once; later
+#   deploys reuse every unchanged layer. The runner-side work (COLMAP on 40 frames) is
+#   ordinary Actions minutes.
+# * **What it proves.** Everything `ModalAdapter` and the training image have never done:
+#   the image builds (and its build-time check that gsplat v1.5.3's trainer accepts the
+#   pipeline's argv passes), the secret reaches the container, `spawn` / `get` / `logs`
+#   behave as the adapter was written to expect, the bytes cross the private bucket both
+#   ways, and gsplat trains and writes a PLY the pipeline reads. It proves nothing about
+#   quality on a real capture -- 500 steps on a synthetic orbit is a smoke, not a result.
+#
+# Secrets it reads, all already used by provision.yml: MODAL_TOKEN_ID, MODAL_TOKEN_SECRET,
+# CLOUDFLARE_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY; and the R2_BUCKET
+# variable (default twin-assets). See docs/DEPLOYMENT.md.
+
+on:
+  push:
+    branches: [claude/funny-carson-937ydv]
+    # The image carries a copy of the pipeline (the train stage's own code runs in it), so
+    # any change to that code is a change to what the GPU box runs, and a deployed image
+    # older than the worker's pipeline is a skew nothing else would catch. Tests and docs
+    # are not in the image and do not trigger a run.
+    paths:
+      - infra/modal/**
+      - tools/pipeline/*.py
+      - tools/pipeline/recipes/**
+      - tools/captures/*.py
+      - .github/workflows/modal.yml
+  workflow_dispatch:
+    inputs:
+      smoke:
+        description: Run the smoke training after deploying
+        type: boolean
+        default: true
+      iterations:
+        description: Training steps in the smoke run
+        type: string
+        default: "500"
+      tier:
+        description: GPU tier (l4, a10, a100)
+        type: choice
+        options: [l4, a10, a100]
+        default: l4
+
+concurrency:
+  # One deploy at a time, and never cancelled halfway: a half-built image is only lost
+  # time, but a cancelled smoke leaves a GPU container to time out on its own.
+  group: modal
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy the Modal app, and prove the GPU path
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+      OBJECT_STORAGE_ENDPOINT_URL: https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
+      OBJECT_STORAGE_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY_ID }}
+      OBJECT_STORAGE_SECRET_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      OBJECT_STORAGE_BUCKET: ${{ vars.R2_BUCKET || 'twin-assets' }}
+      OBJECT_STORAGE_REGION: auto
+      SMOKE: ${{ github.event_name == 'push' || inputs.smoke }}
+      ITERATIONS: ${{ inputs.iterations || '500' }}
+      TIER: ${{ inputs.tier || 'l4' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: The secrets this job needs
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          missing=""
+          for name in MODAL_TOKEN_ID MODAL_TOKEN_SECRET OBJECT_STORAGE_ACCESS_KEY OBJECT_STORAGE_SECRET_KEY CLOUDFLARE_ACCOUNT_ID; do
+            if [ -z "${!name:-}" ]; then missing="$missing $name"; fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::missing:$missing. The R2 pair is the R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY repository secrets; see docs/DEPLOYMENT.md."
+            exit 1
+          fi
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: The Modal client
+        working-directory: tools/pipeline
+        run: |
+          uv sync --frozen
+          uv run --with modal==1.5.5 --with boto3 modal --version
+      # The container reads and writes the *private* bucket: raw uploads in, run outputs
+      # out. Written from a JSON file rather than KEY=VALUE arguments so the values never
+      # appear on a command line; --force because it is the update path too.
+      - name: The twin-object-storage secret, from the R2 private-bucket credentials
+        working-directory: tools/pipeline
+        run: |
+          umask 077
+          python3 - > "$RUNNER_TEMP/secret.json" <<'PY'
+          import json, os
+          keys = ["OBJECT_STORAGE_ENDPOINT_URL", "OBJECT_STORAGE_ACCESS_KEY",
+                  "OBJECT_STORAGE_SECRET_KEY", "OBJECT_STORAGE_BUCKET", "OBJECT_STORAGE_REGION"]
+          print(json.dumps({key: os.environ[key] for key in keys}))
+          PY
+          uv run --with modal==1.5.5 modal secret create twin-object-storage --force \
+            --from-json "$RUNNER_TEMP/secret.json"
+          rm -f "$RUNNER_TEMP/secret.json"
+      # Builds the image on Modal (the first time is the long one) and deploys one
+      # run_stage_<tier> per tier. The build's last step runs infra/modal/check_trainer.py,
+      # so an image whose trainer would refuse the pipeline's argv fails here.
+      - name: modal deploy infra/modal/app.py
+        working-directory: tools/pipeline
+        run: uv run --with modal==1.5.5 --with boto3 modal deploy ../../infra/modal/app.py
+      - name: COLMAP, for the smoke's pose stage on this runner
+        if: env.SMOKE == 'true'
+        run: sudo apt-get update && sudo apt-get install -y colmap
+      - name: Smoke training on a Modal GPU
+        if: env.SMOKE == 'true'
+        working-directory: tools/pipeline
+        run: |
+          uv run --with modal==1.5.5 --with boto3 python ../../infra/modal/smoke.py \
+            --iterations "$ITERATIONS" --tier "$TIER" --work "$RUNNER_TEMP/smoke"
+      - name: Keep what the smoke produced
+        if: always() && env.SMOKE == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: modal-smoke
+          path: |
+            ${{ runner.temp }}/smoke/*/stages/*/out/train_metrics.json
+            ${{ runner.temp }}/smoke/*/stages/*/out/thumbnail.jpg
+            ${{ runner.temp }}/smoke/*/stages/*/log.txt
+            ${{ runner.temp }}/smoke/*/stages/*/attempts.json
+          if-no-files-found: ignore

@@ -7,7 +7,7 @@
 # Every stage here is real (A8). `thumbnail`, `ground_samples` and `manifest` were added
 # as a recipe edit and three decorators -- no executor, runner or schema change.
 name: splat-ingest
-version: 2
+version: 3
 description: Package an already-reconstructed splat and register it as a site.
 
 # Seeded into <workdir>/inputs/upload before the run, by the worker (A7) out of object
@@ -17,7 +17,13 @@ inputs: [upload]
 stages:
   - id: normalize
     impl: ingest_splat # | ply_compressed | spz
-    params: {}
+    # `up_axis` is deliberately absent: unset, each format gets the default its evidence
+    # supports (`.spz` y up, `.ply` y down -- gaussians.DEFAULT_UP_AXIS says why), and the
+    # worker sets it from the capture's `upAxis` when somebody knows better. The same for
+    # `heading_deg` (the capture's `headingDeg`). `recentre` puts the origin at the
+    # footprint's centre and the capture's own ground rather than the exporter's origin.
+    params:
+      recentre: true
 
   - id: georeference
     # The only choice here: Lane 1 ingests a finished splat, so there are no frames to

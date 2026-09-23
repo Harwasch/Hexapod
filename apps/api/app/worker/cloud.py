@@ -65,6 +65,9 @@ __all__ = [
 #: it early again.
 _NEEDS_CLIENT: Mapping[str, str] = {"modal": "modal"}
 
+#: The name `infra/modal/app.py` deploys under, which `ModalAdapter` looks functions up in.
+MODAL_APP = "twin-pipeline"
+
 
 def check_dispatchable(providers: Sequence[str]) -> None:
     """Refuse a worker configured to dispatch somewhere it cannot reach.
@@ -97,10 +100,11 @@ def check_dispatchable(providers: Sequence[str]) -> None:
 class ObjectStoreTransfer:
     """The pipeline's `Transfer`, over the bucket.
 
-    Whole objects, read and written in memory, exactly as `app.worker.outputs` does: the
-    same trade A7 recorded and the same place streaming belongs when a capture is big
-    enough to need it. Keys are opaque strings chosen by the pipeline, so nothing here
-    knows what a stage or a checkpoint is.
+    Uploads are whole objects read into memory, exactly as `app.worker.outputs` does (a
+    stage's inputs are frames of a megabyte or two each); downloads stream to disk,
+    because what comes back from a GPU stage is one file of hundreds of megabytes. Keys
+    are opaque strings chosen by the pipeline, so nothing here knows what a stage or a
+    checkpoint is.
     """
 
     storage: ObjectStorage
@@ -129,18 +133,13 @@ class ObjectStoreTransfer:
         root = self._key(key)
         single = self.storage.head_object(root)
         if single is not None:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            data = self.storage.get_object(root)
-            target.write_bytes(data)
-            return len(data)
+            # Streamed: what comes back from a GPU stage is a trained splat of hundreds
+            # of megabytes, arriving on a worker with two gigabytes.
+            return self.storage.download_file(root, target)
         moved = 0
         for member in self._listing(f"{root}/"):
             relative = member[len(root) + 1 :]
-            destination = target / relative
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            data = self.storage.get_object(member)
-            destination.write_bytes(data)
-            moved += len(data)
+            moved += self.storage.download_file(member, target / relative)
         return moved
 
     def exists(self, key: str) -> bool:
@@ -197,7 +196,7 @@ def adapter_for(
         return FakeAdapter(transfer, sandbox, rates=rates)
     if name == "modal":
         # Never executed. See tools/pipeline/modal_adapter.py, which says so at length.
-        return ModalAdapter(modal_app or "twin", rates=rates)
+        return ModalAdapter(modal_app or MODAL_APP, rates=rates)
     raise ValueError(
         f"unknown cloud provider {name!r}. Known: fake, subprocess, modal. A name from "
         f"the price table that has no adapter yet (runpod-*, vast) is a provider this "

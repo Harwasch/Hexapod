@@ -214,6 +214,49 @@ def test_top_k_returns_temporal_order_and_breaks_ties_on_the_earlier_frame() -> 
     assert video.select_sharpest([1.0, 2.0], 9) == (0, 1)
 
 
+def test_windowed_selection_keeps_a_frame_from_a_blurred_stretch() -> None:
+    """A sharp first half and a blurred second half, keep four of twelve.
+
+    Global top-K keeps four frames of the first half and nothing of the second -- a
+    whole side of an orbit gone. Windowed keeps the sharpest of each quarter, blurred or
+    not, which is what COLMAP needs to register that side at all.
+    """
+    scores = [9.0, 8.0, 9.5, 8.5, 9.1, 8.2, 1.0, 1.2, 0.9, 1.1, 1.3, 0.8]
+
+    assert video.select_sharpest(scores, 4) == (0, 2, 3, 4)
+    assert video.select_sharpest_per_window(scores, 4) == (2, 4, 7, 10)
+
+
+def test_windowed_selection_is_temporal_deterministic_and_bounded() -> None:
+    assert video.select_sharpest_per_window([1.0, 1.0, 1.0, 1.0], 2) == (0, 2)
+    assert video.select_sharpest_per_window([1.0, 2.0], 9) == (0, 1)
+    assert video.select_sharpest_per_window([], 3) == ()
+    assert video.select_sharpest_per_window([3.0, 1.0, 2.0], 0) == ()
+    chosen = video.select_sharpest_per_window([float(i % 7) for i in range(241)], 100)
+    assert len(chosen) == 100
+    assert list(chosen) == sorted(set(chosen))
+
+
+def test_the_windowed_mode_runs_in_the_stage_and_says_which_rule_chose(
+    tmp_path: Path,
+) -> None:
+    upload = tmp_path / "upload"
+    upload.mkdir()
+    make_clip(upload / "clip.mp4", frames=20, fps=10)
+
+    workdir = run_normalize(
+        tmp_path, {"fps": 10, "select": "sharpness-windowed", "keep": 10}, upload
+    )
+
+    assert len(list((workdir.out_dir("normalize") / "frames").iterdir())) == 10
+    meta = json.loads((workdir.out_dir("normalize") / "source_meta.json").read_text())
+    assert meta["frames"]["select"] == "sharpness-windowed"
+    assert "equal stretches" in meta["sharpness"]["selection"]
+    # Every other frame is blurred, so each window of two holds one sharp frame, and the
+    # windowed rule keeps exactly the frames global top-K does.
+    assert meta["sharpness"]["kept"]["min"] > 3.0 * meta["sharpness"]["rejected"]["max"]
+
+
 def test_variance_of_laplacian_ranks_a_blurred_frame_below_its_sharp_original(
     tmp_path: Path,
 ) -> None:
@@ -292,6 +335,60 @@ def test_a_coordinate_nobody_can_vouch_for_is_none_rather_than_a_guess(text: str
 
 
 # --- the whole stage, on a real clip -------------------------------------------------
+
+
+def test_an_iphone_portrait_hevc_mov_comes_out_upright_with_its_location(
+    tmp_path: Path,
+) -> None:
+    """The shape an iPhone held upright writes, built rather than downloaded: HEVC in a
+    QuickTime container, the pixels stored *landscape* with a display matrix that turns
+    them clockwise on playback, and the `mdta` location key. The frames must come out
+    portrait and the right way up -- ffmpeg honours the matrix by default, and this is
+    what notices if that ever stops being the default or the argv turns it off.
+
+    The same check was run on 100 real photographs encoded this way (1080x1920, from
+    nerfstudio's `dozer` capture): 100/100 upright.
+    """
+    ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+    upright = Image.new("RGB", (240, 320), (0, 0, 0))
+    upright.paste((255, 255, 255), (0, 0, 240, 80))  # the top quarter is white
+    stills = tmp_path / "stills"
+    stills.mkdir()
+    for index in range(4):
+        # Stored as the sensor reads out in portrait: a quarter turn counter-clockwise.
+        upright.transpose(Image.Transpose.ROTATE_90).save(stills / f"s_{index:04d}.png")
+    raw = tmp_path / "raw.mov"
+    subprocess.run(
+        [ffmpeg, "-hide_banner", "-nostdin", "-y", "-framerate", "4", "-i",
+         str(stills / "s_%04d.png"), "-c:v", "libx265", "-x265-params", "log-level=error",
+         "-pix_fmt", "yuv420p", "-tag:v", "hvc1", str(raw)],
+        capture_output=True, check=True,
+    )  # fmt: skip
+    upload = tmp_path / "upload"
+    upload.mkdir()
+    subprocess.run(
+        [ffmpeg, "-hide_banner", "-nostdin", "-y", "-display_rotation:v:0", "-90",
+         "-i", str(raw), "-c", "copy", "-movflags", "use_metadata_tags",
+         "-metadata", "com.apple.quicktime.location.ISO6709=+37.7694-122.4862+012.000/",
+         "-metadata", "com.apple.quicktime.model=iPhone 15 Pro",
+         str(upload / "IMG_0001.MOV")],
+        capture_output=True, check=True,
+    )  # fmt: skip
+
+    workdir = run_normalize(tmp_path, {"fps": 4, "keep": 4, "select": "all"}, upload)
+
+    meta = json.loads((workdir.out_dir("normalize") / "source_meta.json").read_text())
+    assert meta["video"]["codec"] == "hevc"
+    assert meta["video"]["rotationDeg"] == -90.0
+    assert (meta["frames"]["width"], meta["frames"]["height"]) == (240, 320)
+    assert meta["location"]["source"] == "com.apple.quicktime.location.iso6709"
+    assert (meta["location"]["lat"], meta["location"]["lon"]) == (37.7694, -122.4862)
+    assert meta["device"] == "iPhone 15 Pro"
+    for frame in sorted((workdir.out_dir("normalize") / "frames").iterdir()):
+        grey = np.asarray(Image.open(frame).convert("L"), dtype=np.float64)
+        assert grey.shape == (320, 240)
+        # White on top, black at the bottom: upright, not turned or flipped.
+        assert grey[:60].mean() > 200 and grey[-60:].mean() < 50
 
 
 def test_both_location_keys_survive_a_round_trip_through_a_real_container(

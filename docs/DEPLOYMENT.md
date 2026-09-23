@@ -1,13 +1,16 @@
 # Deployment
 
-**Nothing here has been deployed.** No account exists, no `fly deploy` has run, no bucket
-has been created, and no `wrangler pages deploy` has been made. What this document
-describes is what the repository now _codifies_ — every row of the table below has a file
-behind it — plus, at the end, a [handover](#handover) which is now four steps long: create
-accounts, mint tokens, paste secrets, dispatch. Everything after a token exists is
-`.github/workflows/provision.yml`. Read the
-[what is unverified](#what-is-unverified) section before trusting any provider-specific
-claim in here; none of it has run.
+**Production exists, deployed by the operator** (as of 2026-09-23): Pages, the Fly app
+`twin-api` with its `worker` process and a 20 GB volume, Neon, and the two R2 buckets. The
+Modal pair is a repository secret that `provision.yml` forwards to Fly. That is the
+operator's report; nothing in this repository has observed it, and this document was
+first written before any of it existed. What it describes is what the repository
+_codifies_ — every row of the table below has a file behind it — plus, at the end, a
+[handover](#handover): create accounts, mint tokens, paste secrets, dispatch. Everything
+after a token exists is `.github/workflows/provision.yml`. **The GPU half of Lane 2 has
+never run anywhere**; [GPU training — Modal](#gpu-training--modal) says what proves it and
+what that costs. Read [what is unverified](#what-is-unverified) before trusting any
+provider-specific claim in here.
 
 | Layer                           | Where                        | Codified in                                            |
 | ------------------------------- | ---------------------------- | ------------------------------------------------------ |
@@ -15,6 +18,7 @@ claim in here; none of it has run.
 | API (`app` process)             | Fly.io                       | `fly.toml`                                             |
 | Worker (`worker` process)       | Fly.io, same image           | `fly.toml` (`[processes]`, `[[mounts]]`)               |
 | Captures, tiles, `catalog.json` | Cloudflare R2                | `infra/cors/production.json`, `infra/cors/apply-r2.sh` |
+| Lane 2 training (`train`)       | Modal, one GPU per stage     | `infra/modal/app.py`, `.github/workflows/modal.yml`    |
 | Database                        | Neon (Postgres 16 + PostGIS) | `.github/workflows/provision.yml`                      |
 | Provisioning                    | GitHub Actions, on demand    | `.github/workflows/provision.yml`                      |
 | Deploys                         | GitHub Actions, on demand    | `.github/workflows/deploy.yml`                         |
@@ -203,6 +207,150 @@ the job to the next worker, which starts the recipe over. What you lose is the w
 completed stage is recomputed, and a Lane 2 run that was two hours into `train` pays those
 two hours again. You also need a root disk big enough for the largest capture plus the
 image. Size the machine accordingly and treat restarts as expensive.
+
+## GPU training — Modal
+
+Lane 2 (`photo-reconstruct`: a phone or desktop video in, a placed splat out) splits
+across two machines, and the split is one fact: **only a stage that declares `gpu:` leaves
+the worker.** That is `train`. Frames, poses, georeference, placement and packaging all run
+on the Fly worker, exactly as Lane 1 does.
+
+| Where          | What runs                                                                        | Why there                                                                                    |
+| -------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| Fly `worker`   | `normalize` (ffmpeg), `pose` (COLMAP 3.9.1, CPU), `georeference`, `place`, tiles | CPU work; the worker already holds the upload, and COLMAP's CPU path is what was measured    |
+| Modal, one GPU | `train` (gsplat 1.5.3 `simple_trainer.py`)                                       | needs CUDA; billed per second only while it runs, so an idle deployment costs nothing for it |
+
+`fly.toml` sets `WORKER_RUNNER=cloud` and `WORKER_CLOUD_PROVIDERS=modal`. The worker then
+calls `run_stage_<tier>` in the Modal app `twin-pipeline` (`WORKER_MODAL_APP`'s default),
+with `MODAL_TOKEN_ID` / `MODAL_TOKEN_SECRET` from its Fly secrets. The GPU container moves
+bytes through the **private** bucket under `runs/<run id>/`, using the Modal secret
+`twin-object-storage`. Until the app is deployed, a Lane 2 run should fail at `train` on
+the function lookup (not observed). Lane 1 is unaffected either way.
+
+### Deploying it, and proving it
+
+`.github/workflows/modal.yml`, in one job:
+
+1. It checks that the secrets are present: `MODAL_TOKEN_ID`, `MODAL_TOKEN_SECRET`,
+   `CLOUDFLARE_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, and the variable
+   `R2_BUCKET`. It reads nothing `provision.yml` does not already read.
+2. It creates or updates the Modal secret `twin-object-storage` from that R2 pair, via a
+   JSON file, so the values never reach a command line.
+3. It runs `modal deploy infra/modal/app.py`. The image's last build step runs
+   `infra/modal/check_trainer.py`, so an image whose trainer refuses the pipeline's argv
+   fails the deploy instead of the first real capture.
+4. It runs a smoke (`infra/modal/smoke.py`). Forty 640×480 renders of the committed
+   synthetic tree go through COLMAP on the runner, then 500 gsplat steps on a Modal L4
+   through `CloudRunner` → `ModalAdapter` → R2, then georeference, placement and
+   packaging. It asserts that gaussians came back, that PSNR was read from gsplat's own
+   stats file, that every step ran, and that a tileset was written. It deletes its
+   `runs/<run id>/` keys afterwards.
+
+It runs on a push to `claude/funny-carson-937ydv` that touches `infra/modal/**`, the
+pipeline's modules or recipes, `tools/captures/*.py` or the workflow itself. The image
+carries a copy of the pipeline, and the `train` stage's own code runs inside it, so any of
+those changes is a change to what the GPU box runs. Each such push costs a smoke. Once it is on
+`main` it can be dispatched from the Actions tab (smoke on or off, steps, tier).
+
+**Cost.**
+
+- **Each smoke: about $0.07–0.20.** An L4 is $0.000222/s (Modal's list price, read
+  2026-09-22). Budget 5–15 minutes of GPU per smoke. That is an estimate: the cold start
+  pulls an image estimated at roughly 10 GB, and it should dominate the time, not the
+  training.
+- **The first deploy** also builds the image on Modal's builders: 15–30 minutes, once.
+  That covers torch, the gsplat wheel, and fused-ssim compiled with nvcc. Later deploys
+  reuse every unchanged layer.
+- **A real capture** at the recipe's 30 000 steps: unmeasured, because no real capture
+  has been trained anywhere yet. The smoke's attempt ledger (billed seconds for 500
+  steps, in its job summary) is the first number to scale from; every hour of L4 is
+  $0.80.
+- **Idle costs nothing.** No container stays warm.
+
+`rehearse` it locally first if you have changed it. That runs the same flow with a
+subprocess in place of Modal, a directory in place of R2, and the test suite's stand-in
+trainer:
+
+```bash
+cd tools/pipeline && uv run python ../../infra/modal/smoke.py --rehearse --work /tmp/smoke
+```
+
+### The worker image carries COLMAP
+
+`infra/api.Dockerfile` is built on `ubuntu:24.04` for one package: `colmap` 3.9.1, the
+version every finding in `tools/pipeline/sfm.py` was measured on. Debian bookworm has 3.8.
+The COLMAP closure is 176 packages, about 370 MB installed. It lands on the `app` machines
+too, because Fly runs one image for both process groups. `QT_QPA_PLATFORM=offscreen` is set
+because COLMAP links Qt. ffmpeg is not a system package: the pipeline uses the binary in
+the `imageio-ffmpeg` wheel. CI's `image` job asserts the COLMAP version and the variable
+against the built image.
+
+**Size the worker before the first real Lane 2 capture.** `fly.toml` still gives the
+worker `shared-cpu-2x` with 2 GB, which is right for Lane 1 and wrong for `pose`:
+
+- **Memory.** COLMAP's feature extraction peaked at **1.7 GB** resident. That was
+  measured on 1080×1920 iPhone frames at the recipe's 1600 px and 4 threads. Matching
+  (81 MB) and mapping (52 MB) are small beside it. With the worker's own Python processes
+  alongside, 2 GB is an out-of-memory kill waiting to happen.
+- **CPU.** `pose` on 100 frames is roughly **40 minutes of 4 busy cores** (extrapolated;
+  the measurements are in `tools/pipeline/README.md § Where pose runs`). Fly's shared
+  CPUs are throttled under sustained load, so the same work on `shared-cpu-*` takes
+  several times longer.
+
+The recommendation is **`performance-4x` with 8 GB for the worker group**. This
+repository does not make that change for you, because it changes the bill. To make it, edit
+the worker's `[[vm]]` block in `fly.toml` and deploy:
+
+```toml
+[[vm]]
+  processes = ["worker"]
+  size = "performance-4x"
+  memory = "8gb"
+```
+
+Edit the file rather than running `fly scale vm`: `fly deploy` sizes machines from a
+`[[vm]]` block when the file has one, so a size set only from the CLI is expected to be
+undone by the next deploy (not observed here; editing the file is right either way). Dedicated CPUs bill for
+as long as the machine runs, and the worker runs always, so check Fly's pricing page first.
+The `app` group is untouched either way.
+
+### Disk: the 20 GB volume
+
+A Lane 2 run in flight holds several things on the worker's volume at once:
+
+- the upload (a phone video is 0.1–2 GB a minute);
+- every candidate frame ffmpeg extracted before selection (`fps: 4` over the whole clip,
+  as JPEG);
+- COLMAP's database;
+- the trained PLY coming back from Modal (hundreds of MB);
+- the packaged tiles.
+
+When a run finishes, the worker deletes `inputs/` and every stage's `work/`
+(`WorkerConfig.tidy_finished_runs`, on by default). That leaves `out/`, `step.json` and
+`checkpoint/`, which is everything "retry from this stage" reads: a few hundred MB per
+finished Lane 2 run. **20 GB is therefore enough for one capture of up to about 8 GB in
+flight, with room for dozens of finished runs.** Past that, run `fly volumes extend`,
+which needs no redeploy. A failed run keeps its scratch on purpose, for diagnosis. Clear
+it by hand if the volume fills (`fly ssh console`, then remove
+`/data/worker/runs/<job id>`).
+
+### Uploads: what the API accepts
+
+Nothing in the upload path limits size or type, and a video needs nothing Lane 1 did not:
+
+- **Size.** Parts are 8 MiB until a file would need more than S3's 10 000. Past 78 GiB the
+  part size grows (`choose_part_size`), so the only ceiling is the provider's. R2 and S3
+  both allow 5 TiB for one object.
+- **Part URLs** are presigned 32 at a time (256 MiB of upload per window), so a 12 GB video
+  never needs one response of 1 500 URLs.
+- **Content type** is whatever the client declares, stored on the object;
+  `application/octet-stream` otherwise. Nothing routes on it: Lane 2 opens whatever it
+  is given with ffmpeg, and Lane 1 reads a splat by its extension and header.
+- **The worker streams the upload to disk** (`ObjectStorage.download_file`). It never
+  holds the file in memory, which matters on a 2 GB machine.
+- **Which lane runs is the client's choice.** `POST /captures/{id}/process` takes a
+  `recipe`. A video must be sent as `photo-reconstruct`. Sent as `splat-ingest`, it fails
+  at `normalize` naming the formats Lane 1 reads (`.ply`, `.spz`), not silently.
 
 ## Database — Neon
 
@@ -448,6 +596,12 @@ commit on main red for want of a secret and teach everyone to ignore the badge.
 | --------------------------------- | --------------------------------------------------------------------- |
 | `.github/workflows/provision.yml` | creates the infrastructure, then calls `deploy.yml`, then verifies it |
 | `.github/workflows/deploy.yml`    | builds and deploys the API, the worker and the web bundle             |
+| `.github/workflows/modal.yml`     | deploys the GPU app and proves it with a small training run           |
+
+`modal.yml` is the exception to "dispatch only", narrowly: it also runs on a push to
+`claude/funny-carson-937ydv` that touches `infra/modal/**` or the pipeline code the GPU
+container carries, because `workflow_dispatch` only works for a workflow file that is on
+the default branch and this one is not yet. See [GPU training — Modal](#gpu-training--modal).
 
 `provision.yml` exists because of an asymmetry that was measured rather than assumed:
 **every provider API is unreachable from the development environment this was written in —
@@ -766,11 +920,33 @@ Honestly, and not quietly left on the list:
 
 ## What is unverified
 
-Undersold on purpose, because none of it has been deployed:
+Undersold on purpose. Most of this list was written before production existed. The
+operator has since deployed it, but nothing here has observed that deployment. So each item
+below is still true of this repository's evidence, whatever it now says about the world:
 
-- **No deployment exists.** No Fly app, no Pages project, no R2 bucket, no Neon database, no
-  account. Every command in the handover was written from the tools' documented interfaces,
-  not run.
+- **The GPU path has never run.** Everything below is unproven until
+  `.github/workflows/modal.yml` passes once:
+  - the Modal image has never been built by Modal;
+  - `ModalAdapter` has never spoken to a live workspace;
+  - no gsplat training run has happened.
+
+  What _is_ verified:
+  - the App builds locally and in CI;
+  - gsplat v1.5.3's own `simple_trainer.py` CLI accepts the pipeline's argv, in a CPU
+    replica of the image's venv (CI's `trainer` job);
+  - every pinned artifact was resolved, and the gsplat wheel is pinned by sha256;
+  - the whole smoke flow passes locally with `--rehearse`.
+
+  Two things only the first build and run can prove: that the CUDA image compiles
+  fused-ssim, and that `modal_adapter.GPU_NAMES` names tiers Modal accepts. An App with a
+  wrong GPU name builds fine locally and is refused only server-side.
+
+- **The worker image's COLMAP has not run on Fly.** CI builds the image and asserts the
+  version. Pose on a real capture on a Fly machine is an extrapolation from the timings in
+  `tools/pipeline/README.md`, measured on a 4-core development container.
+- **Handover commands were written from documentation.** Every command in the handover was
+  written from the tools' documented interfaces, and none has been run from this
+  repository.
 - **`provision.yml` has never run, and could not have been tested from where it was
   written.** `api.cloudflare.com`, `api.fly.io`, `api.neon.tech` and `registry.fly.io` are
   all unreachable from that environment — which is the workflow's whole premise, and also

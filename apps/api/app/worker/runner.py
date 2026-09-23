@@ -41,6 +41,7 @@ from __future__ import annotations
 import logging
 import os
 import queue
+import shutil
 import subprocess
 import sys
 import threading
@@ -428,7 +429,32 @@ class JobSupervisor:
         job.error = None
         self._close(job)
         db.commit()
+        if self._config.tidy_finished_runs:
+            self._tidy(self._config.workdir_for(job.id))
         return "complete"
+
+    @staticmethod
+    def _tidy(workdir_root: Path) -> None:
+        """After a run that finished, drop what the workdir contract says is disposable.
+
+        Every stage's `work/` is scratch by A6's own definition ("safe to delete at any
+        time"), and `inputs/` is a copy of what is still in the bucket -- `_seed` fetches
+        it again if a retry ever needs it. Both are the bulk of a Lane 2 run: the uploaded
+        video, every candidate frame ffmpeg extracted before selection, COLMAP's database.
+        On a 20 GB worker volume, keeping them would fill it in three or four captures.
+        `out/`, `step.json` and `checkpoint/` stay, which is all retry-from-stage reads.
+        A failure to tidy is logged and nothing else: the run succeeded.
+        """
+        workdir = Workdir(workdir_root)
+        doomed = [workdir.inputs_dir]
+        if workdir.stages_dir.is_dir():
+            doomed += [stage / "work" for stage in sorted(workdir.stages_dir.iterdir())]
+        for path in doomed:
+            try:
+                if path.is_dir():
+                    shutil.rmtree(path)
+            except OSError:
+                log.warning("worker: could not tidy %s after a finished run", path, exc_info=True)
 
     def _finish_cancelled(self, db: Session, job: Job) -> Terminal:
         """`POST /jobs/{id}/cancel` already set the status; this closes out the run.
@@ -551,8 +577,9 @@ class JobSupervisor:
         """Put the capture's uploaded bytes where the recipe says its inputs live.
 
         Skipped when the directory is already populated, so a reclaimed or retried job
-        does not download a 12 GB video again. (It *is* a whole-object read into memory;
-        B1, which moves workdirs between machines, is where streaming belongs.)
+        does not download a 12 GB video again. Streamed to disk, not read into memory:
+        the worker machine has 2 GB and an iPhone video is routinely larger than that,
+        and a whole-object read of one killed the worker before the first stage ran.
         """
         work = Workdir.create(workdir_root)
         capture = db.get(Capture, job.capture_id)
@@ -566,9 +593,7 @@ class JobSupervisor:
             for source in capture.files:
                 if source.status is not UploadStatus.COMPLETE:
                     continue
-                (target / Path(source.filename).name).write_bytes(
-                    self._storage.get_object(source.storage_key)
-                )
+                self._storage.download_file(source.storage_key, target / Path(source.filename).name)
 
     def _completed_stages(self, db: Session, job_id: uuid.UUID, workdir_root: Path) -> set[str]:
         """Stages that may be skipped: complete in the database **and** still on disk."""

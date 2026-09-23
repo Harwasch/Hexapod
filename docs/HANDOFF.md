@@ -49,6 +49,45 @@ orbit. Then it stops, because training has never run.
 | B3's validation | `none` vs `robust` vs `imc` on one windy capture               | a GPU _and_ a real capture |
 | the remote half | written: `tools/pipeline/remote.py` + `infra/modal/app.py`     | done, except a real run    |
 
+## 2a. Capture → splat, as of 2026-09-23
+
+A phone or desktop video should become a correctly placed splat on the globe. Two things
+changed:
+
+- **Lane 1 no longer lands uploads on their side.** `normalize` converts the file's up axis
+  into east/north/up by rotating the positions and each gaussian's quaternion. The colour
+  needs no rotation: only the SH DC term is kept, and it is rotation-invariant. It then
+  recentres the origin on the splat's footprint and base. Each format's default up axis is
+  cited in `tools/pipeline/README.md § The up axis`. A capture's `upAxis` / `headingDeg`
+  metadata overrides it. There is deliberately no `auto` mode: a plane normal has a sign
+  nothing in a splat resolves.
+- **Lane 2 is complete up to the GPU.** The GPU half is built and checked, and has never
+  run:
+  - frames from an iPhone-shaped HEVC `.mov` come out upright;
+  - COLMAP poses run on the worker's CPU;
+  - `train` goes to Modal;
+  - the georeference falls back to the capture's own coordinate when the video has no
+    location, and refuses rather than placing it at (0, 0);
+  - a new `place` stage applies the EXIF similarity, or levels by camera-up.
+
+  The state of each piece is in the table at the top of `tools/pipeline/README.md`.
+
+**What to run, in order:**
+
+1. **Push the branch.** `.github/workflows/modal.yml` runs on a push to
+   `claude/funny-carson-937ydv` that touches `infra/modal/**`, so this push triggers it. It
+   creates the Modal secret `twin-object-storage` from the R2 private-bucket pair, deploys
+   `twin-pipeline` (the first image build takes 15–30 min), and trains 500 steps on an L4,
+   for about $0.07–0.20. Its job summary carries the gaussian count, PSNR and billed
+   seconds. Once the file is on `main`, the Actions tab dispatches it.
+2. **Deploy the worker image** (`deploy.yml` → `api`, or `fly deploy --remote-only`). It
+   carries COLMAP 3.9.1, `WORKER_RUNNER=cloud` and `WORKER_CLOUD_PROVIDERS=modal`, and it
+   keeps uid 1000 so the existing volume stays writable.
+3. **Resize the worker** before a real Lane 2 capture: see `docs/DEPLOYMENT.md § GPU
+training — Modal`.
+4. **Upload a short orbit video and process it as `photo-reconstruct`.** This is the
+   first end-to-end Lane 2 run. Nothing has done it yet.
+
 ## 3. What the network unblocked, and what it did not
 
 Re-probed 2026-09-22 from an environment with ordinary egress. The result is worth stating
@@ -91,15 +130,10 @@ run, sync the checkpoint on an interval, upload — and it takes a `Transfer`, s
 `tests/test_remote.py` drives all of it here. `infra/modal/app.py` is the Modal wrapper:
 an image, a GPU, a secret and one call, deploying a `run_stage_<tier>` per tier. CI builds
 that App on every run, which caught two deploy-time path bugs and cannot catch a wrong
-`gpu=` string. Deploy it with:
-
-```bash
-uv run --project tools/pipeline --with modal modal deploy infra/modal/app.py
-```
-
-**A training stage will not run on it yet.** `TRAINING_PACKAGES` in that file is empty:
-`gsplat` needs a CUDA, torch and gsplat triple, and pinning one from memory is the failure
-mode this repository exists to avoid. Fill it with versions you have built.
+`gpu=` string. Since 2026-09-23 the image is filled: CUDA 12.4, torch 2.4.1+cu124, and the gsplat 1.5.3
+wheel pinned by sha256. Every pin was resolved rather than recalled. It deploys as
+`twin-pipeline` through `.github/workflows/modal.yml`, which then runs a small real
+training run. See §2a.
 
 ## 4. Setting up, now that the network allows it
 
@@ -220,11 +254,12 @@ install -y postgresql-16-postgis-3`, then create a `twin` role with password `tw
 
 ## 7. The three-state honesty model
 
-The pipeline's sixteen stage implementations are tracked as **verified** (runs, and is
+The pipeline's seventeen stage implementations are tracked as **verified** (runs, and is
 exercised on a machine that is not the development one), **unproven** (real code that has
 never executed against the real thing), and **stub** (raises, and names the step it lands
-in). Eleven, one and four respectively; `gsplat` is the unproven one, and `ModalAdapter`
-is a twelfth outside the stage registry.
+in). Twelve, one and four respectively; `gsplat` is the unproven one, and `ModalAdapter`
+and the Modal training image sit outside the stage registry, also unproven. One green run
+of `.github/workflows/modal.yml` moves all three.
 
 Keep that distinction. A green test suite hides it, and it is the single most useful thing
 this sprint established about its own work.

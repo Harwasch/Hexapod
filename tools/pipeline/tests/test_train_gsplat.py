@@ -1,20 +1,20 @@
 """`train` / `gsplat`: everything around the trainer, and nothing that needs a GPU.
 
 **No training run has been executed anywhere in this repository.** `gsplat` needs CUDA,
-the machine this was written on has none, and no GPU provider was reachable from it. So
-what is tested here is the dispatch: the COLMAP dataset the trainer is handed, the argv it
-is given, the checkpoint layout that lets a preempted attempt continue, the metrics read
-back out of its output, and the PLY normalised into `canonical.ply`.
+and no machine this was written on has a GPU. So what is tested here is the dispatch:
+the COLMAP dataset the trainer is handed, the argv it is given, the metrics read back
+out of its output, and the PLY normalised into `trained.ply`.
 
 `gsplat_stand_in.py` plays the trainer. It is named that way in every test below so no
 reader can mistake one of these for a training measurement -- it writes made-up numbers
-into the file layout gsplat uses, and the only thing it is evidence about is this
+into the file layout gsplat v1.5.3 uses, and the only thing it is evidence about is this
 project's half of the arrangement.
 
-The two facts it stands in for -- the trainer's CLI and its output file names -- are
-transcribed from `gsplat/examples/simple_trainer.py` rather than observed, and
-`training.py` says so. If they are wrong, `parse_metrics` records nulls and the stage
-raises on the missing PLY; neither invents a result.
+What the stand-in imitates was read from gsplat v1.5.3's `examples/simple_trainer.py`,
+and the argv `training.gsplat_argv` builds was parsed by that file's own CLI in a CPU venv
+with the training image's exact wheel -- see `training.py`, which lists what that check
+corrected. The image build in `infra/modal/app.py` repeats the parse against the
+installed trainer, so an argv that stops parsing fails the deploy rather than a run.
 """
 
 from __future__ import annotations
@@ -38,7 +38,8 @@ from workdir import Workdir
 
 STAND_IN = Path(__file__).resolve().parent / "gsplat_stand_in.py"
 
-#: A real `stats/val_step<n>_rank0.json` shape, as gsplat writes it.
+#: A `stats/val_step<i:04d>.json` shape, as v1.5.3's `eval()` writes it: the metrics
+#: dict plus `ellipse_time` and `num_GS` (and `cc_*` when bilateral grids are on).
 REAL_FORMAT_STATS = {
     "psnr": 28.417469024658203,
     "ssim": 0.9124583005905151,
@@ -82,9 +83,14 @@ def stand_in_params(**overrides: object) -> dict[str, object]:
 # --- argv and dataset, which need neither a trainer nor a GPU ------------------------
 
 
-def test_the_argv_is_gsplats_and_disables_the_viewer() -> None:
-    """`--disable_viewer` is not cosmetic: the default opens a server and blocks, which
-    on a headless preemptible box is a stage that is billed until the tier runs out."""
+def test_the_argv_is_gsplat_1_5_3s_and_carries_the_four_switches_it_cannot_do_without() -> None:
+    """Each of these was learned by reading v1.5.3, and each one missing costs a GPU run:
+
+    no `--disable_viewer` and the trainer sleeps for a million seconds after training; no
+    `--save_ply` and there is no PLY; no `--no-normalize-world-space` and the PLY is in a
+    rotated, rescaled frame nothing downstream knows; and `--ckpt`, if it were ever
+    passed, would evaluate a checkpoint instead of training.
+    """
     argv = training.gsplat_argv(
         "python3", Path("/t/simple_trainer.py"), Path("/d"), Path("/r"), max_steps=7000
     )
@@ -93,36 +99,41 @@ def test_the_argv_is_gsplats_and_disables_the_viewer() -> None:
     assert argv[argv.index("--data_dir") + 1] == "/d"
     assert argv[argv.index("--result_dir") + 1] == "/r"
     assert argv[argv.index("--max_steps") + 1] == "7000"
-    assert "--disable_viewer" in argv
+    for switch in ("--disable_viewer", "--save_ply", "--no-normalize-world-space"):
+        assert switch in argv
+    for steps in ("--ply_steps", "--save_steps", "--eval_steps"):
+        assert argv[argv.index(steps) + 1] == "7000"
     assert "--ckpt" not in argv
 
 
-def test_a_checkpoint_turns_into_the_resume_flag() -> None:
+def test_extra_arguments_come_last_so_they_can_override() -> None:
     argv = training.gsplat_argv(
-        "python3",
-        Path("/t/simple_trainer.py"),
-        Path("/d"),
-        Path("/r"),
-        checkpoint=Path("/r/ckpts/ckpt_6999_rank0.pt"),
-        extra=["--data_factor", "2"],
+        "python3", Path("/t/s.py"), Path("/d"), Path("/r"), extra=["--data_factor", "2"]
     )
 
-    assert argv[argv.index("--ckpt") + 1] == "/r/ckpts/ckpt_6999_rank0.pt"
     assert argv[-2:] == ["--data_factor", "2"]
 
 
-def test_checkpoints_are_ordered_by_step_and_not_by_mtime(tmp_path: Path) -> None:
-    """A checkpoint pulled back out of object storage has whatever mtime the copy gave
-    it, so "newest file" would be a fact about the transfer rather than the training."""
-    ckpts = tmp_path / "ckpts"
-    ckpts.mkdir()
-    for step in (500, 29000, 7000):
-        (ckpts / f"ckpt_{step}_rank0.pt").write_text("x")
-    (ckpts / "ckpt_500_rank0.pt").touch()  # the oldest step, the newest mtime
+def test_the_trainer_runs_under_its_own_interpreter(monkeypatch: pytest.MonkeyPatch) -> None:
+    """gsplat's prebuilt CUDA wheels are CPython 3.10 only; this project is 3.12."""
+    monkeypatch.setenv("GSPLAT_PYTHON", "/opt/trainer/bin/python")
 
-    newest = training.latest_checkpoint(tmp_path)
-    assert newest is not None and newest.name == "ckpt_29000_rank0.pt"
-    assert training.latest_checkpoint(tmp_path / "nothing") is None
+    assert training.trainer_python(None) == "/opt/trainer/bin/python"
+    assert training.trainer_python("/other/python") == "/other/python"
+    monkeypatch.delenv("GSPLAT_PYTHON")
+    assert training.trainer_python(None) == sys.executable
+
+
+def test_the_ply_is_the_furthest_step_and_not_the_last_name(tmp_path: Path) -> None:
+    """`point_cloud_999.ply` sorts after `point_cloud_29999.ply` as text."""
+    plys = tmp_path / "ply"
+    plys.mkdir()
+    for step in (999, 29999, 6999):
+        (plys / f"point_cloud_{step}.ply").write_text("x")
+
+    newest = training.latest_ply(tmp_path)
+    assert newest is not None and newest.name == "point_cloud_29999.ply"
+    assert training.latest_ply(tmp_path / "nothing") is None
 
 
 def test_the_dataset_is_colmaps_own_layout(tmp_path: Path) -> None:
@@ -154,14 +165,17 @@ def test_a_missing_trainer_says_where_one_comes_from() -> None:
 def test_metrics_come_out_of_the_stats_file_gsplat_writes(tmp_path: Path) -> None:
     stats = tmp_path / "stats"
     stats.mkdir()
-    (stats / "val_step6999_rank0.json").write_text(json.dumps({"psnr": 1.0, "num_GS": 1}))
-    (stats / "val_step29999_rank0.json").write_text(json.dumps(REAL_FORMAT_STATS))
+    (stats / "val_step6999.json").write_text(json.dumps({"psnr": 1.0, "num_GS": 1}))
+    (stats / "val_step29999.json").write_text(json.dumps(REAL_FORMAT_STATS))
+    # The per-save training stats sit beside them and carry no quality metrics.
+    (stats / "train_step29999_rank0.json").write_text(json.dumps({"mem": 3.1, "num_GS": 9}))
 
     metrics = training.parse_metrics(tmp_path, requested_iterations=30000)
 
     assert metrics.source == "stats"
-    # The furthest-along step, not the last file the glob happened to return.
-    assert metrics.iterations == 29999
+    # The furthest-along step, as a count: `val_step29999` is the zero-based index of
+    # the 30,000th step.
+    assert metrics.iterations == 30000
     assert metrics.psnr == pytest.approx(28.417469)
     assert metrics.ssim == pytest.approx(0.912458)
     assert metrics.lpips == pytest.approx(0.104227)
@@ -170,12 +184,17 @@ def test_metrics_come_out_of_the_stats_file_gsplat_writes(tmp_path: Path) -> Non
 
 
 def test_metrics_fall_back_to_the_trainers_stdout(tmp_path: Path) -> None:
-    log = "Step 6999: 412,733 GSs\nStep 13999: 508,120 GSs\npsnr: 26.11\n"
+    """v1.5.3 prints `print("Step: ", step, stats)` and an eval line with PSNR."""
+    log = (
+        "Step:  6999 {'mem': 2.1, 'ellipse_time': 310.2, 'num_GS': 412733}\n"
+        "Step:  13999 {'mem': 2.6, 'ellipse_time': 640.8, 'num_GS': 508120}\n"
+        "PSNR: 26.110, SSIM: 0.8410, LPIPS: 0.172 Time: 0.011s/image Number of GS: 508120\n"
+    )
 
     metrics = training.parse_metrics(tmp_path, log)
 
     assert metrics.source == "stdout"
-    assert metrics.iterations == 13999
+    assert metrics.iterations == 14000
     assert metrics.gaussians == 508120
     assert metrics.psnr == pytest.approx(26.11)
 
@@ -204,7 +223,7 @@ def test_the_stage_dispatches_and_normalises_what_the_stand_in_trainer_wrote(
     execute(train_recipe(stand_in_params()), workdir, RunnerSet(cpu=LocalRunner()))
 
     out = workdir.out_dir("train")
-    assert (out / "canonical.ply").read_bytes()[:3] == b"ply"
+    assert (out / "trained.ply").read_bytes()[:3] == b"ply"
     metrics = json.loads((out / "train_metrics.json").read_text())
     assert metrics["source"] == "stats"
     assert metrics["iterations"] == 300
@@ -212,39 +231,32 @@ def test_the_stage_dispatches_and_normalises_what_the_stand_in_trainer_wrote(
     assert metrics["gaussiansInPly"] == 64
     assert metrics["resumedFromStep"] is None
     assert metrics["masksIgnored"] is False
+    assert metrics["gsplatVersion"] == training.GSPLAT_VERSION
     assert metrics["trainer"] == "gsplat:gsplat_stand_in.py"
     log = workdir.log_path("train").read_text()
     assert "--disable_viewer" in log and "--ckpt " not in log
 
 
-def test_the_result_directory_lives_inside_the_checkpoint_so_a_kill_keeps_it(
+def test_the_result_directory_is_scratch_because_nothing_can_resume_from_it(
     tmp_path: Path,
 ) -> None:
-    """The one design decision in this stage, asserted rather than described.
-
-    `checkpoint/` is the only directory the executor keeps between attempts and the only
-    one B1b's syncer copies out while the stage is still running. A trainer whose
-    `--result_dir` is anywhere else loses everything the moment the box goes.
-    """
+    """In `work/`, not `checkpoint/`: v1.5.3 cannot continue a checkpoint, so syncing its
+    checkpoints out every minute would be paying to move bytes nothing reads."""
     workdir = Workdir.create(tmp_path / "run")
     seed_inputs(workdir)
 
     execute(train_recipe(stand_in_params()), workdir, RunnerSet(cpu=LocalRunner()))
 
-    checkpoints = sorted((workdir.checkpoint_dir("train") / "gsplat" / "ckpts").iterdir())
-    assert [p.name for p in checkpoints][-1] == "ckpt_300_rank0.pt"
-    assert not any(workdir.work_dir("train").rglob("ckpt_*.pt"))
+    assert any(workdir.work_dir("train").rglob("ckpt_*.pt"))
+    assert not any(workdir.checkpoint_dir("train").rglob("*"))
 
 
 def test_a_trainer_that_writes_no_ply_is_a_failure_rather_than_an_empty_artifact(
     tmp_path: Path,
 ) -> None:
-    """The failure mode `training.py` names out loud.
-
-    gsplat's output file names are transcribed from its repository rather than observed
-    here. If they are wrong, this is what happens: the stage raises and says the splat is
-    missing, instead of producing a `canonical.ply` of nothing.
-    """
+    """If the trainer puts its splat somewhere this project does not look, the stage
+    raises and says the splat is missing, instead of producing a `trained.ply` of
+    nothing."""
     workdir = Workdir.create(tmp_path / "run")
     seed_inputs(workdir)
     params = stand_in_params(extra_args=["--ckpt-every", "100", "--gaussians", "64", "--no-ply"])
@@ -252,7 +264,7 @@ def test_a_trainer_that_writes_no_ply_is_a_failure_rather_than_an_empty_artifact
     with pytest.raises(Exception, match=r"wrote no \.ply"):
         execute(train_recipe(params), workdir, RunnerSet(cpu=LocalRunner()))
 
-    assert not (workdir.out_dir("train") / "canonical.ply").exists()
+    assert not (workdir.out_dir("train") / "trained.ply").exists()
 
 
 def test_masks_that_this_trainer_cannot_use_are_recorded_as_ignored(tmp_path: Path) -> None:
@@ -274,15 +286,15 @@ def test_masks_that_this_trainer_cannot_use_are_recorded_as_ignored(tmp_path: Pa
     assert "not used" in workdir.log_path("train").read_text()
 
 
-# --- preemption and resume, through the cloud seam -----------------------------------
+# --- preemption, through the cloud seam ----------------------------------------------
 
 
-def test_a_killed_training_attempt_resumes_from_its_checkpoint(tmp_path: Path) -> None:
+def test_a_killed_training_attempt_starts_over_and_says_so(tmp_path: Path) -> None:
     """A genuine SIGTERM mid-run, through `SubprocessAdapter` and `CloudRunner`.
 
-    The stand-in is killed at step 150 of 300. The second attempt is handed `--ckpt` and
-    starts at 100 -- the last checkpoint that was written and synced -- rather than at
-    zero, which is the whole reason `--result_dir` is inside `checkpoint/`.
+    The stand-in is killed at step 150 of 300. The second attempt trains from step 0 --
+    v1.5.3 has no resume, and pretending otherwise was the bug this replaces -- and the
+    log says why. Both attempts are in the ledger, because both were paid for.
     """
     transfer = LocalTransfer(tmp_path / "bucket")
     adapter = SubprocessAdapter(transfer, tmp_path / "sandbox", rates={"l4": Rate(0.80, "test")})
@@ -291,25 +303,37 @@ def test_a_killed_training_attempt_resumes_from_its_checkpoint(tmp_path: Path) -
     )
     workdir = Workdir.create(tmp_path / "run")
     seed_inputs(workdir)
+    marker = tmp_path / "died-once"
     params = stand_in_params(
-        extra_args=["--ckpt-every", "100", "--gaussians", "64", "--die-at", "150", "--kill-parent"]
+        extra_args=[
+            "--ckpt-every",
+            "100",
+            "--gaussians",
+            "64",
+            "--die-at",
+            "150",
+            "--die-marker",
+            str(marker),
+            "--kill-parent",
+        ]
     )
     recipe = train_recipe(params, gpu={"tier": "l4", "preemptible": True})
 
     with pytest.raises(PreemptedError):
         execute(recipe, workdir, RunnerSet.cloud(cloud), attempts={"train": 1})
 
-    kept = sorted((workdir.checkpoint_dir("train") / "gsplat" / "ckpts").iterdir())
-    assert [p.name for p in kept] == ["ckpt_100_rank0.pt"]
-    assert not (workdir.out_dir("train") / "canonical.ply").exists()
+    assert marker.exists()
+    assert not (workdir.out_dir("train") / "trained.ply").exists()
 
     execute(recipe, workdir, RunnerSet.cloud(cloud), attempts={"train": 2})
 
     metrics = json.loads((workdir.out_dir("train") / "train_metrics.json").read_text())
-    assert metrics["resumedFromStep"] == 100
+    assert metrics["resumedFromStep"] is None
     assert metrics["iterations"] == 300
     assert metrics["attempts"] == 2
     ledger = AttemptLedger.read(workdir.attempts_path("train"))
     assert [entry.state for entry in ledger.entries] == ["preempted", "succeeded"]
     assert ledger.usd is not None and ledger.usd > 0
-    assert "resuming at step 100" in workdir.log_path("train").read_text()
+    log = workdir.log_path("train").read_text()
+    assert "restarts from step 0" in log
+    assert "starting at step 0" in log

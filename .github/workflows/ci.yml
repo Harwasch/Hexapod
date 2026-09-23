@@ -189,7 +189,38 @@ jobs:
           print("registered:", names)
           assert names, "no per-tier function was registered"
           assert names == sorted(module.TIERS), f"{names} does not match {module.TIERS}"
+          # The worker looks functions up under this name (app/config.py's default
+          # WORKER_MODAL_APP); an app deployed under another is a lookup that fails.
+          assert module.app.name == "twin-pipeline", module.app.name
           PY
+
+  trainer:
+    name: Trainer · gsplat v1.5.3 accepts the pipeline's argv (CPU replica)
+    runs-on: ubuntu-latest
+    # The training image's Python 3.10 environment, minus CUDA: CPU torch at the version
+    # the gsplat wheel was built for, the committed trainer-requirements.txt, and the
+    # committed check the image build itself runs last. It imports gsplat v1.5.3's own
+    # simple_trainer.py and parses training.gsplat_argv with that file's own CLI, so a
+    # renamed flag, a requirement that no longer resolves or an argv the trainer would
+    # refuse fails here rather than on a GPU. What it cannot check is anything CUDA: the
+    # fused-ssim extension is stubbed, and nothing trains.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: gsplat v1.5.3's examples
+        run: git clone --depth 1 --branch v1.5.3 https://github.com/nerfstudio-project/gsplat "$RUNNER_TEMP/gsplat"
+      - name: The training venv, minus CUDA
+        run: |
+          uv venv -p 3.10 "$RUNNER_TEMP/trainer"
+          export VIRTUAL_ENV="$RUNNER_TEMP/trainer"
+          uv pip install --index-url https://download.pytorch.org/whl/cpu torch==2.4.1 torchvision==0.19.1
+          printf 'torch==2.4.1\ntorchvision==0.19.1\n' > "$RUNNER_TEMP/constraints.txt"
+          uv pip install -c "$RUNNER_TEMP/constraints.txt" -r infra/modal/trainer-requirements.txt
+      - name: simple_trainer.py parses training.gsplat_argv
+        run: |
+          "$RUNNER_TEMP/trainer/bin/python" infra/modal/check_trainer.py \
+            "$RUNNER_TEMP/gsplat/examples/simple_trainer.py" tools/pipeline \
+            --allow-missing-cuda-extensions
 
   api:
     name: API · lint, typecheck, test, migrations
@@ -384,6 +415,17 @@ jobs:
           # because a system ffmpeg is not what the stage is allowed to use.
           ffmpeg = Path(video.ffmpeg_exe())
           assert ffmpeg.is_file() and "imageio_ffmpeg" in ffmpeg.parts, ffmpeg
+
+          # Lane 2's pose stage runs COLMAP on the worker, and everything sfm.py says
+          # about model_aligner was measured on 3.9.1 -- Ubuntu 24.04's, which is why the
+          # image is built on it. A base that quietly brought another version would make
+          # those findings about a program the image does not have.
+          import os
+
+          import sfm
+
+          assert sfm.colmap_version() == "3.9.1", sfm.colmap_version()
+          assert os.environ.get("QT_QPA_PLATFORM") == "offscreen"
 
           # B1b's seam, in the same venv. The adapter still imports its client inside
           # the one function that needs it, so constructing it proves nothing about the

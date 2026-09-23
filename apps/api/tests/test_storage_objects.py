@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable, Iterator
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 import boto3
@@ -135,6 +136,20 @@ def test_put_get_head_round_trip(storage: S3Storage) -> None:
     assert head.content_type == "text/plain"
     assert head.etag == stored.etag
     assert head.url == storage.public_url("a/b.txt")
+
+
+def test_a_download_streams_to_a_file_rather_than_into_memory(
+    storage: S3Storage, tmp_path: Path
+) -> None:
+    """The worker's seed path for a multi-gigabyte video: bytes to disk, parents made."""
+    body = os.urandom(3 * 1024 * 1024 + 17)
+    storage.put_object("captures/c/source/f/IMG_0001.MOV", body, "video/quicktime")
+
+    target = tmp_path / "inputs" / "upload" / "IMG_0001.MOV"
+    written = storage.download_file("captures/c/source/f/IMG_0001.MOV", target)
+
+    assert written == len(body)
+    assert target.read_bytes() == body
 
 
 def test_head_object_returns_none_when_absent(storage: S3Storage) -> None:
@@ -263,6 +278,7 @@ def test_null_storage_raises_from_every_method() -> None:
     calls: list[Callable[[], object]] = [
         lambda: null.put_object("k", b"x", "text/plain"),
         lambda: null.get_object("k"),
+        lambda: null.download_file("k", Path("never-written")),
         lambda: null.head_object("k"),
         lambda: null.list_objects("p/"),
         lambda: null.delete_object("k"),

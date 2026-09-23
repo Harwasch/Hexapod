@@ -30,6 +30,7 @@ import shutil
 import subprocess
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
+from itertools import pairwise
 from pathlib import Path
 
 import imageio_ffmpeg
@@ -53,6 +54,7 @@ __all__ = [
     "probe_argv",
     "probe_text",
     "select_sharpest",
+    "select_sharpest_per_window",
     "sharpness",
     "summarise",
 ]
@@ -355,6 +357,29 @@ def select_sharpest(scores: Sequence[float], keep: int) -> tuple[int, ...]:
         return tuple(range(len(scores)))
     order = sorted(range(len(scores)), key=lambda i: (-scores[i], i))
     return tuple(sorted(order[:keep]))
+
+
+def select_sharpest_per_window(scores: Sequence[float], keep: int) -> tuple[int, ...]:
+    """The sharpest frame of each of `keep` equal stretches of the clip, in temporal order.
+
+    Still top-K by rank and still no cutoff -- the rank is taken within a window rather
+    than across the clip. Global top-K is right when it keeps most candidates; when it
+    keeps a quarter of them, a stretch of motion blur (walking faster round one side of
+    the object) can lose every frame of that side, and COLMAP cannot register what it
+    was never given. Windows are `evenly_spaced`'s boundaries; ties break on the earlier
+    index, as `select_sharpest`'s do.
+    """
+    count = len(scores)
+    if keep <= 0 or count == 0:
+        return ()
+    if keep >= count:
+        return tuple(range(count))
+    edges = [round(i * count / keep) for i in range(keep + 1)]
+    return tuple(
+        max(range(start, end), key=lambda i: (scores[i], -i))
+        for start, end in pairwise(edges)
+        if end > start
+    )
 
 
 def evenly_spaced(count: int, keep: int) -> tuple[int, ...]:

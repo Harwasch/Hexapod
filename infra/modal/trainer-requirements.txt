@@ -1,0 +1,79 @@
+# The training box's Python 3.10 environment, pinned: gsplat v1.5.3's examples/
+# requirements.txt, resolved against the exact gsplat wheel below with torch 2.4.1 and
+# torchvision 0.19.1 held fixed (an unpinned torchmetrics[image] otherwise drags torch
+# forward to a CUDA 13 build the wheel was not compiled against).
+#
+# Resolved 2026-09-23 in a CPU venv (CPython 3.10.20), where simple_trainer.py at v1.5.3
+# imported with every one of these and parsed the pipeline's argv; see
+# tools/pipeline/training.py. torch and torchvision are installed separately, from
+# PyTorch's cu124 index, by infra/modal/app.py -- they are not in this file on purpose.
+#
+# fused-ssim is not here either: it is a CUDA extension built from source against the
+# installed torch (`--no-build-isolation`), after this file, by app.py.
+
+# The prebuilt CUDA wheel, cp310 only (docs.gsplat.studio/whl), sha256 checked on
+# download against the file read here.
+gsplat @ https://github.com/nerfstudio-project/gsplat/releases/download/v1.5.3/gsplat-1.5.3%2Bpt24cu124-cp310-cp310-linux_x86_64.whl#sha256=01e1fd63dc69c9945e70158c818c3bb07fedf4aabcf020e6608d264cf27cc5dd
+
+# examples/requirements.txt at v1.5.3, with its git pins kept as the commits it names.
+pycolmap @ git+https://github.com/rmbrualla/pycolmap@cc7ea4b7301720ac29287dbe450952511b32125e
+nerfview @ git+https://github.com/nerfstudio-project/nerfview@4538024fe0d15fd1a0e4d760f3695fc44ca72787
+viser==1.1.1
+imageio[ffmpeg]==2.37.4
+imageio-ffmpeg==0.6.0
+numpy==1.26.4
+scikit-learn==1.7.2
+tqdm==4.70.1
+torchmetrics[image]==1.9.0
+# opencv-python-headless rather than the example's opencv-python: the same cv2, without
+# the X11/GL libraries a headless container does not have.
+opencv-python-headless==4.11.0.86
+tyro==1.0.16
+pillow==12.3.0
+tensorboard==2.21.0
+tensorly==0.9.0
+pyyaml==6.0.3
+matplotlib==3.10.9
+splines==0.3.3
+
+# What those resolved to, pinned so a rebuild resolves the same environment.
+absl-py==2.5.0
+certifi==2026.7.22
+charset-normalizer==3.5.1
+cloudpickle==3.1.2
+contourpy==1.3.2
+cycler==0.12.1
+docstring-parser==0.18.0
+fonttools==4.65.0
+grpcio==1.84.0
+idna==3.20
+jaxtyping==0.3.7
+joblib==1.6.0
+kiwisolver==1.5.1
+lightning-utilities==0.15.3
+markdown==3.10.3
+markdown-it-py==4.2.0
+mdurl==0.1.2
+msgspec==0.21.1
+ninja==1.13.2
+packaging==26.3
+protobuf==7.36.2
+psutil==7.2.2
+pygments==2.21.0
+pyparsing==3.3.3
+python-dateutil==2.9.0.post0
+requests==2.34.2
+rich==14.3.4
+scipy==1.15.3
+six==1.17.0
+tensorboard-data-server==0.7.2
+threadpoolctl==3.7.0
+torch-fidelity==0.4.0
+trimesh==5.1.0
+typeguard==4.6.0
+typing-extensions==4.16.0
+urllib3==2.8.0
+wadler-lindig==0.1.7
+websockets==16.1.1
+werkzeug==3.1.8
+zstandard==0.25.0

@@ -62,7 +62,9 @@ __all__ = [
     "Image",
     "Model",
     "Similarity",
+    "UpEstimate",
     "alignment_residuals",
+    "camera_up",
     "colmap_available",
     "colmap_exe",
     "colmap_version",
@@ -72,8 +74,10 @@ __all__ = [
     "model_aligner_argv",
     "quat_to_matrix",
     "read_model",
+    "read_points",
     "read_similarity",
     "rotation_angle_deg",
+    "rotation_onto_z",
     "umeyama",
     "write_ref_positions",
 ]
@@ -186,13 +190,21 @@ def feature_extractor_argv(
 
 
 def matcher_argv(
-    database: Path, matcher: str = "exhaustive", *, use_gpu: bool = False
+    database: Path,
+    matcher: str = "exhaustive",
+    *,
+    use_gpu: bool = False,
+    overlap: int | None = None,
+    vocab_tree: Path | None = None,
 ) -> list[str]:
+    """The matching pass. For `sequential`, `overlap` neighbours in each direction and,
+    with a `vocab_tree`, loop detection -- which is what closes an orbit that sequential
+    matching alone would leave open (A0 #7's 2/40)."""
     if matcher not in MATCHERS:
         raise ValueError(
             f"unknown matcher {matcher!r}; this stage runs one of {', '.join(sorted(MATCHERS))}"
         )
-    return [
+    argv = [
         colmap_exe(),
         f"{matcher}_matcher",
         "--database_path",
@@ -200,6 +212,17 @@ def matcher_argv(
         "--SiftMatching.use_gpu",
         "1" if use_gpu else "0",
     ]
+    if matcher == "sequential":
+        if overlap is not None:
+            argv += ["--SequentialMatching.overlap", str(overlap)]
+        if vocab_tree is not None:
+            argv += [
+                "--SequentialMatching.loop_detection",
+                "1",
+                "--SequentialMatching.vocab_tree_path",
+                str(vocab_tree),
+            ]
+    return argv
 
 
 def mapper_argv(
@@ -507,6 +530,93 @@ def _read_images(path: Path) -> tuple[Image, ...]:
                 )
             )
     return tuple(sorted(out, key=lambda image: image.name))
+
+
+def read_points(directory: Path) -> F64:
+    """The sparse model's 3D points, as an (n, 3) array in the model's own frame."""
+    out: list[tuple[float, float, float]] = []
+    with (directory / "points3D.bin").open("rb") as handle:
+        for _ in range(_u64(handle)):
+            record = handle.read(43)  # id u64, xyz 3 x f64, rgb 3 x u8, error f64
+            out.append(struct.unpack_from("<3d", record, 8))
+            handle.read(8 * _u64(handle))
+    return np.asarray(out, dtype=np.float64).reshape(-1, 3)
+
+
+@dataclass(frozen=True)
+class UpEstimate:
+    """Which way is up in a reconstruction, from how the camera was held.
+
+    `consistency` is the length of the mean of the per-frame up vectors: 1.0 when every
+    frame was held at the same roll and pitch, falling as they disagree. It is reported
+    rather than thresholded -- a capture walking round a tree tilts the phone a little,
+    one filming the ground from above tilts it a lot, and the number says which.
+    """
+
+    up: tuple[float, float, float]
+    consistency: float
+    frames: int
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "method": "camera-up",
+            "up": [round(v, 6) for v in self.up],
+            "consistency": round(self.consistency, 4),
+            "frames": self.frames,
+            "note": (
+                "the mean of each registered frame's up (-y of the camera, in the model's "
+                "frame): nerfstudio's `up` orientation and gsplat's similarity_from_cameras "
+                "use the same estimate. Right when the capture was filmed roughly upright"
+            ),
+        }
+
+
+def camera_up(model: Model) -> UpEstimate | None:
+    """The mean camera-up direction of a reconstruction, in its own frame.
+
+    COLMAP cameras look down +z with +y pointing *down* the image, so a frame's up in the
+    world is `-R[1, :]` for its world-to-camera rotation `R`. Averaged over every
+    registered frame this is a robust estimate of gravity for footage taken the way
+    people hold phones -- upright, roughly level -- which is what nerfstudio's default
+    `orientation_method="up"` and gsplat's `similarity_from_cameras` both rely on. It is
+    no estimate at all of *heading*: nothing in a reconstruction from images says which
+    way north is.
+    """
+    if not model.images:
+        return None
+    ups = np.stack([-image.rotation[1, :] for image in model.images])
+    mean = ups.mean(axis=0)
+    length = float(np.linalg.norm(mean))
+    if length == 0.0:
+        return None
+    unit = mean / length
+    return UpEstimate(
+        up=(float(unit[0]), float(unit[1]), float(unit[2])),
+        consistency=length,
+        frames=len(model.images),
+    )
+
+
+def rotation_onto_z(up: Sequence[float] | F64) -> F64:
+    """The smallest proper rotation that takes the unit vector `up` onto +z.
+
+    Rodrigues about `up x z`. When `up` is already (anti)parallel to z the axis is
+    undefined, so +z is the identity and -z is a half turn about x -- the same choice
+    `gaussians.UP_AXES["-z"]` makes, so a y-up estimate and a y-up file land the same.
+    """
+    u = np.asarray(up, dtype=np.float64)
+    u = u / np.linalg.norm(u)
+    z = np.array([0.0, 0.0, 1.0])
+    c = float(u @ z)
+    if c > 1.0 - 1e-12:
+        return np.eye(3)
+    if c < -1.0 + 1e-12:
+        return np.diag([1.0, -1.0, -1.0])
+    axis = np.cross(u, z)
+    s = float(np.linalg.norm(axis))
+    k = axis / s
+    kx = np.array([[0.0, -k[2], k[1]], [k[2], 0.0, -k[0]], [-k[1], k[0], 0.0]])
+    return np.asarray(np.eye(3) + s * kx + (1.0 - c) * (kx @ kx), dtype=np.float64)
 
 
 def _read_points3d(path: Path) -> tuple[int, int]:

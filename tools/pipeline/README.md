@@ -7,9 +7,23 @@ which imports this project as a library.
 
 **Lane 1 is real.** `splat-ingest` runs end to end on a CPU: a `.ply` or `.spz` in,
 `canonical.ply`, a `splat/` tileset, a thumbnail, ground samples, a manifest and a
-registration out.
+registration out. Since 2026-09-23 it **converts the file's up axis** rather than assuming
+z -- see [The up axis](#the-up-axis) -- which is what stopped uploads landing on their side.
 
-**Lane 2's first three stages are real since B2**, with one honest boundary:
+**Lane 2 is real up to the GPU, and the GPU half is built and checked but has never run.**
+The state of each piece, in the three-state vocabulary of `docs/HANDOFF.md`:
+
+| Piece                                         | State        | Evidence                                                                                                                                       |
+| --------------------------------------------- | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| frames from an iPhone-shaped HEVC `.mov`      | verified     | portrait (display matrix -90), HEVC, `mdta` location: 100/100 frames upright, location read (`tests/test_normalize.py` and a real-frame check) |
+| poses (COLMAP 3.9.1, CPU)                     | verified     | rendered orbit 40/40 (CI); real photographs, 50/50 exhaustive; timing in [Where pose runs](#where-pose-runs)                                   |
+| levelling by camera-up                        | verified     | real reconstruction: dominant plane 0.39 deg from up after levelling; rendered orbit within 5 deg (CI)                                         |
+| the EXIF similarity, applied (`place`)        | verified     | rendered orbit with synthetic GPS: sparse points 0.011 m from the scene placed, 0.41 m unplaced (CI)                                           |
+| a video with no location                      | verified     | falls back to the capture's `lat`/`lon`, recorded `manual`; with neither it refuses by name (CI)                                               |
+| `train` argv and output layout (gsplat 1.5.3) | verified     | parsed by v1.5.3's own `simple_trainer.py` CLI in a CPU replica of the image's venv (CI job `trainer`); file names read from the source        |
+| the Modal training image                      | **unproven** | every artifact it names exists and was pinned; the App builds locally; no image has been built by Modal                                        |
+| a training run                                | **unproven** | none has happened. `.github/workflows/modal.yml` is the proof, at about $0.07-0.20                                                             |
+| `ModalAdapter` against a live workspace       | **unproven** | read against `modal==1.5.5`; the same workflow's smoke is its first real call                                                                  |
 
 - `normalize` / `ffmpeg_frames` extracts and selects frames and scrapes the container's
   metadata. It runs here and in CI, on a generated clip.
@@ -17,10 +31,15 @@ registration out.
   40 frames rendered from the committed synthetic tree, 40/40 registered, 0.059° median
   rotation error, 0.092% of scene extent in translation. CI installs `colmap` so this
   runs there too, and the test file fails rather than skipping if that install goes away.
-- `train` / `gsplat` **dispatches** a training run: the dataset, the argv, the checkpoint
-  layout that survives a preemption, the metrics, the PLY. **No training run has been
-  executed in this repository** — `gsplat` needs CUDA and there is no GPU here — so its
-  tests drive a stand-in trainer and say so in their names.
+- `train` / `gsplat` **dispatches** a training run: the dataset, the argv, the metrics,
+  the PLY. **No training run has been executed in this repository** — `gsplat` needs CUDA
+  and there is no GPU here — so its tests drive a stand-in trainer and say so in their
+  names. Since 2026-09-23 the argv and file names are checked against gsplat v1.5.3's own
+  `simple_trainer.py`, which corrected four transcription errors, each of which would have
+  cost a GPU run: `--ckpt` means _evaluate_, not resume (so a preempted attempt now
+  restarts, and says so); there is no PLY without `--save_ply`; world normalisation is on
+  by default and would have exported the splat in a rotated, rescaled frame; and the
+  stats and PLY names are zero-based (`val_step29999.json`, `point_cloud_29999.ply`).
 
 - `georeference` / `exif_gps` reads each frame's own EXIF GPS, defines an east/north/up
   frame about the median fix, and has `colmap model_aligner` solve for the similarity
@@ -103,8 +122,10 @@ def gsplat(ctx: StageContext) -> StageOutcome:
 `optional_consumes` is how `mask: none` and `mask: robust` are both legal without the
 trainer or the executor knowing which one ran.
 
-Both lanes converge on `canonical.ply` — Lane 1 normalises an already-reconstructed splat
-into it, Lane 2's trainer writes it — so one `package` implementation serves both.
+Both lanes converge on `canonical.ply`, always east/north/up about the placed origin —
+Lane 1 normalises an already-reconstructed splat into it, Lane 2's `place` stage turns the
+trainer's `trained.ply` (COLMAP's frame) into it — so one `package` implementation serves
+both.
 
 ### What fails, and when
 
@@ -360,7 +381,7 @@ path: the worker runs these stages in that environment. Nothing under `app/api` 
 - **`splat-ingest`** — Lane 1, no GPU: `normalize → georeference → package → thumbnail →
 ground_samples → manifest → register`. Every stage is real.
 - **`photo-reconstruct`** — Lane 2: `normalize → pose → mask → train → compensate →
-georeference → package → thumbnail → ground_samples → manifest → register`. Only `train`
+georeference → place → package → thumbnail → ground_samples → manifest → register`. Only `train`
   declares `gpu:`; `compensate` gains one when its impl becomes `imc` (B3), since asking
   for an L4 to run `none` would be billing a GPU to do nothing. Both lanes end in the same
   artifact set, so the console cannot tell which one made a site except by reading its
@@ -371,6 +392,51 @@ decorators**: `stages.py` gained three `@stage_impl`s and three `ArtifactDecl`s,
 recipes gained three entries. `executor.py`, `runners.py`, `plan.py` and `workdir.py` are
 untouched by them, and `StubRunner` fabricates the new artifacts with no edit of its own.
 `tests/test_lane1.py` asserts that rather than leaving it as a claim.
+
+## Where pose runs
+
+`pose` runs on the **worker's CPU**, not the GPU box. The GPU is billed by the second and
+only `train` needs one. COLMAP's CPU path is the one every finding in `sfm.py` was measured
+on. And shipping frames to Modal for SfM and back would add a round trip the stage does
+not otherwise need. What it costs, measured on 4 cores of this development container
+(COLMAP 3.9.1, the Ubuntu 24.04 package; real iPhone-portrait frames, 1080×1920, orbiting
+one object), with the machine partly contended, so these numbers are upper bounds:
+
+| Matcher                        | Frames | Features / max side | Extract | Match | Map   | Total     | Registered |
+| ------------------------------ | ------ | ------------------- | ------- | ----- | ----- | --------- | ---------- |
+| exhaustive                     | 50     | 8192 / 2400         | 80 s    | 927 s | 54 s  | 1061 s    | 50/50      |
+| **exhaustive**                 | **50** | **4096 / 1600**     | 127 s   | 502 s | 24 s  | **653 s** | **50/50**  |
+| sequential                     | 100    | 8192 / 2400         | 292 s   | 635 s | 146 s | 1073 s    | 60/100     |
+| sequential                     | 100    | 4096 / 1600         | 169 s   | 382 s | 95 s  | 646 s     | 46/100     |
+| sequential + loop (vocab tree) | 100    | 4096 / 1600         | 182 s   | 535 s | 128 s | 845 s     | 76/100     |
+| sequential + loop, overlap 5   | 100    | 4096 / 1600         | 154 s   | 319 s | 144 s | 616 s     | 51/100     |
+
+What this decided, in `recipes/photo-reconstruct.yaml`:
+
+- **`exhaustive`, still.** It is the only matcher that registered every frame. Sequential
+  matching is linear rather than quadratic, but it lost a quarter to a half of the orbit
+  even with vocabulary-tree loop closure (Flickr100K 32K words, sha256 `d37d8f19…`). So
+  `sfm.matcher_argv` can express loop closure, but no recipe asks for it.
+- **`keep: 100`, down from 400.** Exhaustive matching is quadratic. Scaling the 50-frame
+  match by pairs gives about 2 000 s of matching for 100 frames on 4 cores, and about
+  9 h for 400. 100 frames of a one-minute orbit is one every 0.6 s. Frames are chosen by
+  **`sharpness-windowed`**, the sharpest of each of 100 equal stretches, so that the cut
+  cannot lose a whole blurred side the way global top-K could.
+- **4096 features at 1600 px** instead of the stage's 8192 at 2400: the same 50/50 in 62%
+  of the time. Only the SfM sees the downscale; `train` reads the full frames.
+
+That puts a real capture's pose at roughly **35–45 minutes on 4 dedicated cores**. This
+is an extrapolation, not a measurement of 100 frames exhaustive; the 100-frame exhaustive
+run at 8192 features was stopped rather than waited out. Thinning has a floor as well as
+a ceiling: every third of the same 100 frames (30) registered only **4**. Feature
+extraction peaked at 1.7 GB resident (matching 81 MB, mapping 52 MB), which is why
+`docs/DEPLOYMENT.md § GPU training — Modal` sizes the Fly worker up before Lane 2. The
+lever after that is COLMAP's GPU SIFT and matching, which would put `pose` on the Modal
+box too. The Ubuntu package is built without CUDA (`colmap help`: "without CUDA"), so that
+needs a COLMAP build in the training image. It is not done.
+
+A fixture-sized check of the same stage runs in CI: 40 rendered frames, exhaustive,
+40/40 registered.
 
 ## Lane 1
 
@@ -403,6 +469,49 @@ parser that kept collecting `property` lines past the second `element` (so a mes
 trailing `element face` joined the vertex dtype, every gaussian was read at the wrong
 stride, and the read came back **silently** with `|x| max = 1.7e38`). Fixing only the type
 map would have turned the loud failure into the silent one.
+
+### The up axis
+
+Everything downstream reads `canonical.ply` as east/north/up with z up -- the tileset's
+node matrix, the thumbnail, the ground samples -- and until 2026-09-23 nothing converted
+an upload into that frame. So a Scaniverse `.spz` (y up) and a 3DGS/COLMAP `.ply` (y down)
+both landed tipped 90 degrees, and `splat_ground` measured "ground" along the capture's
+depth, which the viewer's clamp then dutifully rested on the terrain.
+
+`ingest_splat` now turns the file into east/north/up (`gaussians.orient`): positions, each
+gaussian's quaternion (`q' = q_R * q`), and nothing else -- the colour is exactly
+invariant, because `canonical.ply` keeps only the view-independent SH DC term. Which axis
+is up:
+
+| Source                                    | Default | Evidence                                                                                                                                                                   |
+| ----------------------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `.spz`                                    | `y`     | the SPZ README ("RUB coordinate system following the OpenGL and three.js convention"); two real Scaniverse share-page scans render upright y-up and upside down y-down     |
+| `.spz` counter-examples                   | --      | six of Spark's sample `.spz` files are y **down** (Spark's quick start rotates `butterfly.spz` 180 degrees): written without declaring a frame. They need `upAxis: "-y"`   |
+| `.ply`                                    | `-y`    | the SPZ README ("PLY ... typically uses RDF"), Niantic's own `saveSplatToPly` converting to right/down/forward; Inria's `train` renders upright y-down                     |
+| Inria 3DGS / gsplat / nerfstudio (COLMAP) | `-y`    | the COLMAP world frame is the first camera's, y down, tilted by however it was held (nerfstudio's parser says so); nerfstudio's own exporter writes its z-up world instead |
+| Polycam, Luma, KIRI, Postshot `.ply`      | `-y`    | **not measured** -- no public sample downloadable without an account; this is the PLY convention, and the override is the remedy                                           |
+
+A capture's `metadata.upAxis` (`z`, `-z`, `y`, `-y`, `x`, `-x`) overrides the default and
+`metadata.headingDeg` turns it about the vertical; the API refuses anything else at
+creation, and the worker hands both to whichever stage runs `ingest_splat`. There is no
+`auto`: a plane normal has a sign nothing in a splat resolves, and an object has no ground
+under it. The origin moves to the footprint's centre and the lower quartile of the per-cell
+ground heights, which cannot change the viewer's clamp (a constant vertical shift moves
+every sample by the same amount) and puts the placed coordinate in the middle of the
+capture. `source_meta.json`'s `frame` records all of it.
+
+Before and after on real downloads -- the thumbnails are in the session's scratchpad, and
+`tests/test_up_axis.py` holds the same facts on synthetic trees of known orientation,
+needles and all:
+
+| Sample                               | Before (z assumed)                                 | After (format default)                            |
+| ------------------------------------ | -------------------------------------------------- | ------------------------------------------------- |
+| Scaniverse `oebjag65cbkuvm42` (.spz) | lying down: the elevation view shows it from above | a hedge standing on a path                        |
+| Scaniverse `jb4dj3iobbwt6px2` (.spz) | lying down: seen from above                        | a bin and bushes upright on the ground            |
+| Inria `train` (.ply)                 | the locomotive on its side                         | upright                                           |
+| Spark `cat.spz` (.spz, y-down file)  | lying down: seen from above                        | upside down, as its file is: needs `upAxis: "-y"` |
+
+`.spz` versions 2 and 3 are read; version 4 (ZSTD streams) is refused by name.
 
 ### `ground_samples.json`
 
@@ -467,10 +576,25 @@ Three things it will not say:
   bias, and a bias common to all of them moves the whole reconstruction without changing a
   single residual. `uncertaintyM` is floored at five metres for that reason, and the
   residual is reported separately as what it is.
-- **the similarity has not been applied.** `alignment.applied` is `false`: `train` writes
-  `canonical.ply` in COLMAP's own frame and `package` places that frame on the globe as if
-  it were east/north/up, so a Lane 2 capture is still packaged in the reconstruction's
-  arbitrary orientation. The transform is recorded; applying it is the next step.
+- **the similarity is applied, and not by this stage.** `alignment.applied` is `true`
+  since the `place` stage exists: `train` writes `trained.ply` in COLMAP's own frame
+  (gsplat's world normalisation is off for exactly this), `georef.json` carries the
+  transform as `frame`, and `place` turns the splat by it into `canonical.ply`. Checked
+  against the scene rather than against itself: on the rendered orbit, COLMAP's sparse
+  points placed this way sit a median 0.011 m from the tree and ground they were rendered
+  from, and 0.41 m unplaced.
+
+Without GPS -- the ordinary iPhone video -- `frame` is a **levelling by camera-up**: the
+mean of every registered frame's up vector, which is gravity for footage filmed the way
+people hold phones (nerfstudio's default `orientation_method="up"` and gsplat's
+`similarity_from_cameras` use the same estimate). On a real 50-frame reconstruction of
+hand-held photographs the dominant plane came out 0.39 degrees from vertical after
+levelling, with 71% of points above it and 3% below. Heading is not knowable from images
+(the capture's `headingDeg` turns it), scale stays unresolved (`scale`, metres per model
+unit, defaults to 1), and the splat is recentred on its own footprint as Lane 1 is. A
+video with no location falls back to the capture's own `lat`/`lon` -- the console sends
+where its camera was looking -- recorded as `manual`; with none of the three the stage
+refuses rather than placing the capture at (0, 0).
 
 ### `manifest.json`
 
