@@ -437,9 +437,29 @@ test.describe("the phone upload page", () => {
       createdAt: new Date().toISOString(),
       error: null,
       steps: [
-        { ordinal: 0, stageId: "normalize", status: "complete", startedAt: null },
+        {
+          ordinal: 0,
+          stageId: "normalize",
+          status: "complete",
+          startedAt: null,
+          metrics: { durationS: 9 },
+        },
         {
           ordinal: 1,
+          stageId: "pose",
+          status: "complete",
+          startedAt: null,
+          metrics: { durationS: 35, stageCostUsd: 0.002, summary: "4/4 frames registered" },
+        },
+        {
+          ordinal: 2,
+          stageId: "mask",
+          status: "complete",
+          startedAt: null,
+          metrics: { skipped: true },
+        },
+        {
+          ordinal: 3,
           stageId: "train",
           status: "in-progress",
           startedAt: new Date(Date.now() - 12 * 60_000).toISOString(),
@@ -458,9 +478,16 @@ test.describe("the phone upload page", () => {
             recipes: [
               {
                 name: "photo-reconstruct",
-                stages: ["normalize", "pose", "train", "register"].map((id) => ({ id })),
+                stages: [
+                  { id: "normalize", impl: "ffmpeg_frames", gpu: null },
+                  { id: "pose", impl: "colmap", gpu: { tier: "cpu4" } },
+                  { id: "mask", impl: "none", gpu: null },
+                  { id: "train", impl: "gsplat", gpu: { tier: "l4" } },
+                  { id: "register", impl: "catalog", gpu: null },
+                ],
               },
             ],
+            providers: [{ name: "modal", usdPerHour: { l4: 0.8, cpu4: 0.25 } }],
           },
         }),
     );
@@ -478,9 +505,12 @@ test.describe("the phone upload page", () => {
       "href",
       "/view.html#site-1",
     );
-    await expect(row("Training")).toContainText("Training the 3D model");
-    await expect(row("Training")).toContainText("Step 2 of 4");
+    await expect(row("Training")).toContainText("Train the 3D model");
+    // mask is a placeholder, so it is not counted: normalize, pose, train, register.
+    await expect(row("Training")).toContainText("Step 3 of 4");
     await expect(row("Training")).toContainText("12 min");
+    // 12 min of L4 at $0.80/h is $0.16, plus pose's recorded $0.002.
+    await expect(row("Training")).toContainText("≈$0.16");
     await expect(row("Training").getByRole("button", { name: "Process" })).toHaveCount(0);
     await expect(row("Training").getByRole("button", { name: "Progress" })).toBeVisible();
 
@@ -537,13 +567,37 @@ test.describe("the phone upload page", () => {
     );
     await page.route(
       (url) => url.pathname === "/api/v1/recipes",
-      (route) => route.fulfill({ json: { recipes: [] } }),
+      (route) =>
+        route.fulfill({
+          json: {
+            recipes: [
+              {
+                name: "photo-reconstruct",
+                stages: [
+                  { id: "normalize", impl: "ffmpeg_frames", gpu: null },
+                  { id: "pose", impl: "colmap", gpu: { tier: "cpu4" } },
+                  { id: "train", impl: "gsplat", gpu: { tier: "l4" } },
+                  { id: "register", impl: "catalog", gpu: null },
+                ],
+              },
+            ],
+            providers: [{ name: "modal", usdPerHour: { cpu4: 0.25 } }],
+          },
+        }),
     );
 
     await page.goto("/upload.html");
     await page.locator("#mine-list li").getByRole("button", { name: "Progress" }).click();
-    await expect(page.locator("#status")).toContainText("Working out where each photo was taken");
-    await expect(page.locator("#detail")).toContainText("running");
+    await expect(page.locator("#status")).toContainText("Find where each photo was taken");
+    await expect(page.locator("#detail")).toContainText("so far");
+    // The whole pipeline is listed, with the running step explained and costed.
+    const stages = page.locator("#stages li");
+    await expect(stages).toHaveCount(4);
+    await expect(page.locator('#stages li[data-state="running"]')).toContainText("COLMAP");
+    await expect(page.locator('#stages li[data-state="running"]')).toContainText(
+      "Modal · 4 CPU cores",
+    );
+    await expect(page.locator("#run-cost")).toContainText("Compute so far: $0.0042");
   });
 
   test("a bucket that hides the ETag is reported as the CORS problem it is", async ({ page }) => {

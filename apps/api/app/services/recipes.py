@@ -71,6 +71,7 @@ def _providers() -> list[ProviderRead]:
             label=entry.label,
             tiers=list(entry.tiers),
             usd_per_hour_a100=entry.usd_per_hour_a100 or 0.0,
+            usd_per_hour={tier: rate.usd_per_hour for tier, rate in entry.rates.items()},
             interruptible=entry.interruptible,
             note=entry.note,
         )

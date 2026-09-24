@@ -2643,6 +2643,10 @@ export interface components {
             note: string;
             /** Tiers */
             tiers: string[];
+            /** Usdperhour */
+            usdPerHour: {
+                [key: string]: number;
+            };
             /** Usdperhoura100 */
             usdPerHourA100: number;
         };

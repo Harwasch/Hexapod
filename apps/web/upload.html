@@ -153,6 +153,80 @@
         text-decoration: underline;
         font-weight: 500;
       }
+      .run-title {
+        margin: 6px 0 0;
+        font-weight: 650;
+      }
+      .stages {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+      .stages li {
+        display: grid;
+        grid-template-columns: 22px 1fr;
+        gap: 8px;
+        padding: 8px 0;
+        border-top: 1px solid var(--border);
+      }
+      .stages .stage-mark {
+        font-weight: 700;
+        text-align: center;
+        color: var(--muted);
+      }
+      .stages li[data-state="done"] .stage-mark {
+        color: var(--accent);
+      }
+      .stages li[data-state="running"] {
+        background: var(--accent-soft);
+        border-radius: 10px;
+        padding-inline: 6px;
+      }
+      .stages li[data-state="running"] .stage-mark {
+        color: var(--accent);
+        animation: pulse 1.4s ease-in-out infinite;
+      }
+      .stages li[data-state="failed"] .stage-mark {
+        color: var(--danger);
+      }
+      .stages li[data-state="waiting"],
+      .stages li[data-state="skipped"] {
+        opacity: 0.6;
+      }
+      .stages strong {
+        display: block;
+        font-size: 0.9375rem;
+      }
+      .stages .facts,
+      .stages .result {
+        display: block;
+        color: var(--muted);
+        font-size: 0.8125rem;
+      }
+      .stages .result {
+        color: var(--fg);
+      }
+      .stages p {
+        margin: 4px 0 2px;
+        font-size: 0.875rem;
+      }
+      .run-cost {
+        margin: 4px 0 0;
+        font-weight: 600;
+      }
+      @keyframes pulse {
+        50% {
+          opacity: 0.35;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .stages li[data-state="running"] .stage-mark {
+          animation: none;
+        }
+      }
       .pick-secondary {
         min-height: 52px;
         border: 1px solid var(--accent);
@@ -433,6 +507,9 @@
           <div class="bar" id="bar"></div>
         </div>
         <p id="detail" aria-live="polite"></p>
+        <p id="run-title" class="run-title" hidden></p>
+        <ol id="stages" class="stages" hidden aria-label="Pipeline steps"></ol>
+        <p id="run-cost" class="run-cost" hidden></p>
       </section>
 
       <button id="resume" class="pick-secondary" type="button" hidden>Resume upload</button>

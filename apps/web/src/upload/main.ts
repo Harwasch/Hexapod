@@ -18,6 +18,7 @@ import type {
   CaptureFileUpload,
   Job,
   PhoneCapture,
+  PipelineCatalogue,
   UploadWindow,
 } from "@twin/contracts";
 
@@ -131,6 +132,9 @@ interface Ui {
   resume: HTMLButtonElement | null;
   mine: HTMLElement | null;
   mineList: HTMLElement | null;
+  stages: HTMLElement | null;
+  runTitle: HTMLElement | null;
+  runCost: HTMLElement | null;
 }
 
 type PageState = "idle" | "invalid" | "uploading" | "done" | "error";
@@ -387,46 +391,120 @@ function locate(): Promise<GeolocationPosition | null> {
   });
 }
 
-/** What each stage is, in words a person watching a phone would use. */
-const STAGE_LABEL: Record<string, string> = {
-  normalize: "Preparing the frames",
-  pose: "Working out where each photo was taken",
-  mask: "Masking moving things",
-  train: "Training the 3D model (the long part)",
-  compensate: "Evening out the exposure",
-  georeference: "Placing it on the map",
-  place: "Placing it on the map",
-  package: "Packaging it for viewing",
-  thumbnail: "Making a preview",
-  ground_samples: "Measuring the ground",
-  manifest: "Writing it up",
-  register: "Publishing",
+/** A stage in words: its name, and one sentence on what it does and why. */
+interface StageText {
+  name: string;
+  what: string;
+}
+
+/**
+ * Every stage of the two shipped recipes, keyed by `impl` because that is what decides
+ * what happens (`normalize` is frame selection in one recipe and reading a splat file
+ * in the other). `none` is a placeholder stage that does nothing yet.
+ */
+const STAGE_TEXT: Record<string, StageText> = {
+  ffmpeg_frames: {
+    name: "Prepare the frames",
+    what: "Picks the sharpest frames from a video, or takes your photos, and reads their location and camera details.",
+  },
+  ingest_splat: {
+    name: "Read the scan",
+    what: "Reads your splat file and turns it the right way up.",
+  },
+  colmap: {
+    name: "Find where each photo was taken",
+    what: "COLMAP matches the same features across photos to work out each camera's position, building a sparse 3D point cloud.",
+  },
+  gsplat: {
+    name: "Train the 3D model",
+    what: "Gaussian splatting on a GPU: fits hundreds of thousands of small coloured blobs until renders of them match your photos. The long step.",
+  },
+  exif_gps: {
+    name: "Find where on Earth it is",
+    what: "Uses the photos' GPS, or your phone's location, to place the model and give it a real-world scale.",
+  },
+  manual_placement: {
+    name: "Place it",
+    what: "Puts the scan where your phone was, since a splat file carries no location of its own.",
+  },
+  place_splat: {
+    name: "Level and place it",
+    what: "Turns the model upright and moves it to that spot.",
+  },
+  splat_tiles: {
+    name: "Package it for viewing",
+    what: "Compresses the model into tiles the map and the 3D viewer can stream.",
+  },
+  splat_thumbnail: {
+    name: "Make a preview",
+    what: "Renders the small picture shown in the lists.",
+  },
+  splat_ground: {
+    name: "Measure the ground",
+    what: "Finds where the ground is in the model, so it sits on the terrain rather than above it.",
+  },
+  capture_manifest: {
+    name: "Write the record",
+    what: "Records where it came from, how it was made and how accurate the placement is.",
+  },
+  catalog: { name: "Publish", what: "Adds it to the map and to the scans list." },
 };
 
-function stageLabel(stageId: string): string {
-  return STAGE_LABEL[stageId] ?? stageId;
+/** Placeholder stages, named by their stage id since their impl is just `none`. */
+const PLACEHOLDER_TEXT: Record<string, StageText> = {
+  mask: {
+    name: "Mask moving things",
+    what: "Would hide people and cars that moved. Not switched on yet.",
+  },
+  compensate: {
+    name: "Even out the exposure",
+    what: "Would balance brightness between photos. Not switched on yet.",
+  },
+};
+
+function stageText(stage: { id: string; impl: string }): StageText {
+  if (stage.impl === "none")
+    return PLACEHOLDER_TEXT[stage.id] ?? { name: stage.id, what: "Skipped." };
+  return STAGE_TEXT[stage.impl] ?? { name: stage.id, what: stage.impl };
 }
 
-function minutesSince(iso: string | null | undefined): string {
-  if (!iso) return "";
-  const minutes = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 60_000));
-  return minutes < 1 ? "under a minute" : `${String(minutes)} min`;
+const RECIPE_NAME: Record<string, string> = {
+  "photo-reconstruct": "Photos or video → 3D model",
+  "splat-ingest": "Splat → placed on the map",
+};
+
+/** Where a stage runs, from its `gpu.tier`: the worker unless it says otherwise. */
+function whereItRuns(tier: string | undefined): string {
+  if (!tier) return "Our server";
+  if (tier.startsWith("cpu")) return `Modal · ${tier.slice(3)} CPU cores`;
+  return `Modal · ${tier.toUpperCase()} GPU`;
 }
 
-/** Every recipe's stage ids in order, fetched once: steps appear only as they start. */
-let recipeStages: Promise<Map<string, string[]>> | null = null;
-function stagesOf(recipe: string): Promise<string[]> {
-  recipeStages ??= fetch(`${API_BASE}/api/v1/recipes`)
-    .then((response) => response.json())
-    .then(
-      (body: { recipes?: { name: string; stages: { id: string }[] }[] }) =>
-        new Map((body.recipes ?? []).map((r) => [r.name, r.stages.map((stage) => stage.id)])),
-    )
+function duration(seconds: number): string {
+  if (seconds < 60) return `${String(Math.max(1, Math.round(seconds)))} s`;
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${String(minutes)} min`;
+  return `${String(Math.floor(minutes / 60))} h ${String(minutes % 60)} min`;
+}
+
+function secondsSince(iso: string | null | undefined): number {
+  return iso ? Math.max(0, (Date.now() - Date.parse(iso)) / 1000) : 0;
+}
+
+function dollars(usd: number): string {
+  return usd < 0.01 ? `$${usd.toFixed(4)}` : `$${usd.toFixed(2)}`;
+}
+
+/** The recipes and the providers' rates, fetched once. Steps appear only as they start. */
+let catalogue: Promise<PipelineCatalogue | null> | null = null;
+function pipelineCatalogue(): Promise<PipelineCatalogue | null> {
+  catalogue ??= fetch(`${API_BASE}/api/v1/recipes`)
+    .then((response) => (response.ok ? (response.json() as Promise<PipelineCatalogue>) : null))
     .catch(() => {
-      recipeStages = null;
-      return new Map<string, string[]>();
+      catalogue = null;
+      return null;
     });
-  return recipeStages.then((all) => all.get(recipe) ?? []);
+  return catalogue;
 }
 
 function latestJob(jobs: Job[]): Job | undefined {
@@ -435,40 +513,165 @@ function latestJob(jobs: Job[]): Job | undefined {
 
 const ENDED = new Set(["complete", "error", "cancelled"]);
 
-/** Headline, detail and a 0-1 fraction for one run, from its steps and its recipe. */
-async function describeRun(job: Job): Promise<{ headline: string; detail: string; done: number }> {
-  const order = await stagesOf(job.recipe);
-  const steps = [...job.steps].sort((a, b) => a.ordinal - b.ordinal);
-  const total = Math.max(order.length, steps.length, 1);
-  const finished = steps.filter((step) => step.status === "complete").length;
+type StageState = "done" | "running" | "waiting" | "skipped" | "failed";
+
+interface StageRow {
+  text: StageText;
+  where: string;
+  state: StageState;
+  /** Seconds taken, or running so far. */
+  seconds: number | null;
+  /** What it cost, or (running) what it has cost so far at the tier's rate. */
+  usd: number | null;
+  estimated: boolean;
+  /** The stage's own one-line result, e.g. "4/4 frames registered". */
+  result: string | null;
+}
+
+interface RunView {
+  title: string;
+  headline: string;
+  detail: string;
+  done: number;
+  rows: StageRow[];
+  usd: number;
+  usdEstimated: boolean;
+}
+
+function metric(step: { metrics?: Record<string, unknown> | null }, key: string): unknown {
+  return step.metrics?.[key];
+}
+
+/** Everything the page shows about one run: each stage, and what it is costing. */
+async function describeRun(job: Job): Promise<RunView> {
+  const catalogueNow = await pipelineCatalogue();
+  const recipe = catalogueNow?.recipes.find((r) => r.name === job.recipe);
+  const rates =
+    catalogueNow?.providers.find((p) => p.name === (job.provider ?? "modal"))?.usdPerHour ?? {};
+  const byStage = new Map(job.steps.map((step) => [step.stageId, step]));
+  const order =
+    recipe?.stages ?? job.steps.map((step) => ({ id: step.stageId, impl: "", gpu: null }));
+
+  const rows: StageRow[] = order.map((stage) => {
+    const step = byStage.get(stage.id);
+    const tier = stage.gpu?.tier;
+    const text = stageText(stage);
+    let state: StageState = "waiting";
+    if (step?.status === "complete") state = metric(step, "skipped") === true ? "skipped" : "done";
+    else if (step?.status === "in-progress") state = "running";
+    else if (step?.status === "error" || step?.status === "cancelled") state = "failed";
+    else if (stage.impl === "none") state = "skipped";
+
+    const took = step ? metric(step, "durationS") : undefined;
+    let seconds = typeof took === "number" ? took : null;
+    if (state === "running") seconds = secondsSince(step?.startedAt);
+    const cost = step ? (metric(step, "stageCostUsd") ?? metric(step, "costUsd")) : undefined;
+    let usd = typeof cost === "number" ? cost : null;
+    let estimated = false;
+    const rate = tier ? rates[tier] : undefined;
+    if (state === "running" && tier && rate !== undefined) {
+      usd = ((seconds ?? 0) / 3600) * rate;
+      estimated = true;
+    }
+    const summary = step ? metric(step, "summary") : undefined;
+    return {
+      text,
+      where: whereItRuns(tier),
+      state,
+      seconds,
+      usd,
+      estimated,
+      result: typeof summary === "string" && state !== "skipped" ? summary : null,
+    };
+  });
+
+  const counted = rows.filter((row) => row.state !== "skipped");
+  const finished = counted.filter((row) => row.state === "done").length;
+  const total = Math.max(counted.length, 1);
+  const usd = rows.reduce((sum, row) => sum + (row.usd ?? 0), 0);
+  const usdEstimated = rows.some((row) => row.estimated);
+  const title = RECIPE_NAME[job.recipe] ?? job.recipe;
+  const running = rows.find((row) => row.state === "running");
+  const failedRow = rows.find((row) => row.state === "failed");
+
+  let headline: string;
+  let detail: string;
   if (job.status === "complete") {
-    return { headline: "Done.", detail: "Tap View in 3D.", done: 1 };
+    headline = "Done.";
+    detail = "Tap View in 3D.";
+  } else if (job.status === "error" || job.status === "cancelled") {
+    headline = `Stopped at: ${failedRow?.text.name ?? "a step"}.`;
+    detail = job.error ?? "It can be retried from the console.";
+  } else if (running) {
+    headline = `${running.text.name}…`;
+    detail = `Step ${String(finished + 1)} of ${String(total)} · ${duration(running.seconds ?? 0)} so far`;
+  } else if (finished === 0) {
+    headline = "Queued.";
+    detail = "Waiting for the worker to pick it up, usually under a minute.";
+  } else {
+    headline = "Between steps…";
+    detail = `${String(finished)} of ${String(total)} steps done`;
   }
-  if (job.status === "error" || job.status === "cancelled") {
-    const stopped = steps.find((step) => step.status === "error" || step.status === "cancelled");
-    return {
-      headline: `Processing stopped${stopped ? `: ${stageLabel(stopped.stageId)}` : ""}.`,
-      detail: job.error ?? "It can be retried from the console.",
-      done: finished / total,
-    };
+  return { title, headline, detail, done: finished / total, rows, usd, usdEstimated };
+}
+
+const STATE_MARK: Record<StageState, string> = {
+  done: "✓",
+  running: "●",
+  waiting: "○",
+  skipped: "–",
+  failed: "✕",
+};
+
+/** The stage list under the status line: every step, where it runs, time, cost, result. */
+function renderStages(ui: Ui, run: RunView): void {
+  const list = ui.stages;
+  if (!list) return;
+  list.hidden = false;
+  if (ui.runTitle) {
+    ui.runTitle.hidden = false;
+    ui.runTitle.textContent = run.title;
   }
-  const current = steps.find((step) => step.status === "in-progress");
-  if (!current) {
-    return {
-      headline: finished === 0 ? "Queued." : "Between steps…",
-      detail:
-        finished === 0
-          ? "Waiting for the worker to pick it up, usually under a minute."
-          : `${String(finished)} of ${String(total)} steps done.`,
-      done: finished / total,
-    };
+  if (ui.runCost) {
+    ui.runCost.hidden = false;
+    ui.runCost.textContent = `Compute so far: ${dollars(run.usd)}${run.usdEstimated ? " (running step estimated from its hourly rate)" : ""}`;
   }
-  const long = current.stageId === "train" ? " Usually 10–30 minutes." : "";
-  return {
-    headline: `${stageLabel(current.stageId)}…`,
-    detail: `Step ${String(finished + 1)} of ${String(total)} · running ${minutesSince(current.startedAt)}.${long}`,
-    done: finished / total,
-  };
+  list.replaceChildren(
+    ...run.rows.map((row) => {
+      const item = document.createElement("li");
+      item.dataset.state = row.state;
+      const mark = document.createElement("span");
+      mark.className = "stage-mark";
+      mark.setAttribute("aria-hidden", "true");
+      mark.textContent = STATE_MARK[row.state];
+      const body = document.createElement("div");
+      const name = document.createElement("strong");
+      name.textContent = row.text.name;
+      const facts = document.createElement("span");
+      facts.className = "facts";
+      const parts = [row.where];
+      if (row.state === "skipped") parts.push("skipped");
+      if (row.seconds !== null && row.state !== "skipped") parts.push(duration(row.seconds));
+      if (row.usd !== null) parts.push(`${row.estimated ? "≈" : ""}${dollars(row.usd)}`);
+      facts.textContent = parts.join(" · ");
+      body.append(name, facts);
+      // What a stage *does* is shown for the one running, and for any that failed: the
+      // two a person is reading the list to understand.
+      if (row.state === "running" || row.state === "failed") {
+        const what = document.createElement("p");
+        what.textContent = row.text.what;
+        body.append(what);
+      }
+      if (row.result) {
+        const result = document.createElement("span");
+        result.className = "result";
+        result.textContent = row.result;
+        body.append(result);
+      }
+      item.append(mark, body);
+      return item;
+    }),
+  );
 }
 
 /** The standalone scan viewer (view.html) on one site. */
@@ -505,6 +708,7 @@ function follow(captureId: string, ui: Ui): void {
         ui.status.textContent = run.headline;
         ui.detail.textContent = run.detail;
         ui.bar.style.width = `${String(Math.round(run.done * 100))}%`;
+        renderStages(ui, run);
         if (ENDED.has(job.status)) {
           setState(ui, job.status === "complete" ? "done" : "error");
           const capture = (await fetch(`${API_BASE}/api/v1/captures/${captureId}`).then((r) =>
@@ -564,6 +768,9 @@ function collectUi(root: Document): Ui | null {
     resume: resume instanceof HTMLButtonElement ? resume : null,
     mine: root.getElementById("mine"),
     mineList: root.getElementById("mine-list"),
+    stages: root.getElementById("stages"),
+    runTitle: root.getElementById("run-title"),
+    runCost: root.getElementById("run-cost"),
   };
 }
 
@@ -736,7 +943,7 @@ async function captureRow(ui: Ui, capture: Capture, job: Job | undefined): Promi
     row.append(view);
   } else if (job && !ENDED.has(job.status)) {
     const run = await describeRun(job);
-    state.textContent = `${run.headline} ${run.detail}`;
+    state.textContent = `${run.headline} ${run.detail} · ${run.usdEstimated ? "≈" : ""}${dollars(run.usd)}`;
     row.append(rowButton("Progress", () => follow(capture.id, ui)));
   } else if (job) {
     const run = await describeRun(job);

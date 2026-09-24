@@ -5683,6 +5683,13 @@
             "title": "Tiers",
             "type": "array"
           },
+          "usdPerHour": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Usdperhour",
+            "type": "object"
+          },
           "usdPerHourA100": {
             "title": "Usdperhoura100",
             "type": "number"
@@ -5693,6 +5700,7 @@
           "label",
           "tiers",
           "usdPerHourA100",
+          "usdPerHour",
           "interruptible",
           "note"
         ],
