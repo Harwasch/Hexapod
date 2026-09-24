@@ -307,8 +307,11 @@ def extract_frames_argv(
     """
     chain = [f"fps={fps:g}"]
     if max_side is not None:
-        # Even dimensions, long side bounded, aspect preserved. -2 rounds to even.
-        chain.append(f"scale=w='min({max_side},iw)':h=-2:force_original_aspect_ratio=decrease")
+        # The *long* side bounded, whichever it is, aspect preserved, even dimensions (-2).
+        # Bounding the width alone, as this once did, left a portrait phone clip -- whose
+        # width is its short side -- at nearly full height.
+        m = max_side
+        chain.append(f"scale=w='if(gte(iw,ih),min({m},iw),-2)':h='if(gte(iw,ih),-2,min({m},ih))'")
     return [
         ffmpeg_exe(),
         "-hide_banner",
@@ -399,20 +402,57 @@ def evenly_spaced(count: int, keep: int) -> tuple[int, ...]:
     return tuple(sorted({round(i * step) for i in range(keep)}))
 
 
-def copy_frames(sources: Sequence[Path], out_dir: Path, *, stem: str = "frame") -> tuple[Path, ...]:
+def copy_frames(
+    sources: Sequence[Path],
+    out_dir: Path,
+    *,
+    stem: str = "frame",
+    max_side: int | None = None,
+) -> tuple[Path, ...]:
     """Copy the selected frames into `out_dir`, renumbered from zero in order.
 
     Renumbered rather than keeping the extraction numbers: the frame *set* is the
     artifact, and a gap in it would make the numbering mean "when in the clip" for the
     pose stage, which is a fact it must not be able to read off a filename.
+
+    `max_side` shrinks a frame whose long side is bigger. An iPhone photo is 5712x4284;
+    training on that ran 30,000 gsplat steps on 24 MP images, many times the work of the
+    same scene at 1600 px for no detail a splat can hold. The EXIF block is carried
+    across unchanged, because `georeference` reads each frame's GPS from it and the focal
+    length in 35 mm terms is independent of the pixel count.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     written: list[Path] = []
     for index, source in enumerate(sources):
         target = out_dir / f"{stem}_{index:04d}{source.suffix.lower()}"
-        shutil.copyfile(source, target)
+        if max_side is None or not _shrink(source, target, max_side):
+            shutil.copyfile(source, target)
         written.append(target)
     return tuple(written)
+
+
+def _shrink(source: Path, target: Path, max_side: int) -> bool:
+    """Write `source` into `target` with its long side at most `max_side`.
+
+    False (and nothing written) when it is already small enough, so the caller copies the
+    bytes untouched rather than re-encoding a frame that did not need it.
+    """
+    from PIL import Image
+
+    with Image.open(source) as image:
+        width, height = image.size
+        if max(width, height) <= max_side:
+            return False
+        scale = max_side / max(width, height)
+        size = (max(1, round(width * scale)), max(1, round(height * scale)))
+        exif = image.info.get("exif")
+        resized = image.convert("RGB").resize(size, Image.Resampling.LANCZOS)
+        options: dict[str, object] = {"quality": 95}
+        if exif:
+            options["exif"] = exif
+        kind = "JPEG" if target.suffix in {".jpg", ".jpeg"} else None
+        resized.save(target, format=kind, **options)
+    return True
 
 
 def _run(argv: Sequence[str]) -> str:

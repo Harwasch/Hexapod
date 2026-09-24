@@ -350,7 +350,13 @@ def ffmpeg_frames(ctx: StageContext) -> StageOutcome:
     else:
         scores = []
         chosen = video.evenly_spaced(len(candidates), keep)
-    written = video.copy_frames([candidates[i] for i in chosen], ctx.output(FRAMES.name))
+    written = video.copy_frames(
+        [candidates[i] for i in chosen],
+        ctx.output(FRAMES.name),
+        # Photos arrive at full sensor size; a video's frames were bounded by ffmpeg
+        # already and pass straight through.
+        max_side=_optional_int(ctx.param("max_side")),
+    )
 
     kept_scores = [scores[i] for i in chosen] if scores else []
     dropped_scores = [s for i, s in enumerate(scores) if i not in set(chosen)]

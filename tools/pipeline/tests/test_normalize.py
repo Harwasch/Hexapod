@@ -492,3 +492,45 @@ def test_a_video_beside_a_poster_frame_is_still_a_video(tmp_path: Path) -> None:
     _frame(0, blurred=False).save(upload / "poster.jpg")
 
     assert video.pick_source(upload).kind == "video"
+
+
+# --- frame size --------------------------------------------------------------------
+
+
+def test_a_full_size_photo_is_shrunk_and_keeps_its_gps(tmp_path: Path) -> None:
+    """An iPhone photo is 5712x4284; training on that multiplied the GPU time for no
+    detail a splat holds. The GPS has to survive, because `georeference` reads it."""
+    import gps_frames
+    from PIL import Image
+
+    import exif
+
+    source = tmp_path / "in" / "IMG_0001.jpeg"
+    source.parent.mkdir()
+    Image.new("RGB", (3000, 2000), (90, 140, 60)).save(source, quality=90)
+    gps_frames.write_gps(source, 44.9778, -93.265, 256.0)
+
+    (out,) = video.copy_frames([source], tmp_path / "out", max_side=1600)
+    with Image.open(out) as image:
+        assert image.size == (1600, 1067)
+    fix = exif.read_fix(out)
+    assert fix is not None
+    assert (round(fix.lat, 4), round(fix.lon, 4)) == (44.9778, -93.265)
+
+
+def test_a_frame_already_small_enough_is_copied_byte_for_byte(tmp_path: Path) -> None:
+    from PIL import Image
+
+    source = tmp_path / "small.jpg"
+    Image.new("RGB", (1280, 720), (10, 20, 30)).save(source, quality=90)
+    (out,) = video.copy_frames([source], tmp_path / "out", max_side=1600)
+    assert out.read_bytes() == source.read_bytes()
+
+
+def test_video_frames_are_bounded_on_the_long_side_even_in_portrait() -> None:
+    """The filter once bounded the width only, so a portrait clip -- width its short
+    side -- kept nearly its full height."""
+    argv = video.extract_frames_argv(Path("x.mov"), Path("f_%05d.jpg"), fps=4, max_side=1600)
+    chain = argv[argv.index("-vf") + 1]
+    assert "if(gte(iw,ih),min(1600,iw),-2)" in chain
+    assert "if(gte(iw,ih),-2,min(1600,ih))" in chain

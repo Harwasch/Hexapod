@@ -8,7 +8,7 @@
 # `compensate` gains a `gpu:` block when its impl becomes `imc` (B3); asking for an L4 to
 # run `none` would be billing a GPU to do nothing.
 name: photo-reconstruct
-version: 5
+version: 6
 description: Reconstruct a splat from a raw capture, then package and register it.
 
 inputs: [upload]
@@ -27,6 +27,11 @@ stages:
       # 653 s; 400 would be ~64x the matching, most of a day. Sequential matching, with
       # or without vocabulary-tree loop closure, was faster and registered 46-76 of 100.
       keep: 100
+      # Long side, in pixels, for every frame: photos arrive at full sensor size (an
+      # iPhone's 5712x4284) and 4K video at 3840. A splat holds no more detail than
+      # this from a phone, and training on 24 MP frames multiplies the GPU time. Pose
+      # already worked at 1600 (max_image_size below), so the two now agree.
+      max_side: 1600
 
   - id: pose
     impl: colmap # | glomap | arkit
