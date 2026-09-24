@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="referrer" content="no-referrer" />
+    <meta name="theme-color" content="#0b0c0a" />
+    <title>Scans</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0b0c0a;
+        --surface: #161a13;
+        --border: rgba(255, 255, 255, 0.14);
+        --fg: #f2f6ef;
+        --muted: rgba(242, 246, 239, 0.74);
+        --accent: #7fd8c0;
+        --on-accent: #0b1410;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      [hidden] {
+        display: none !important;
+      }
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: var(--bg);
+        color: var(--fg);
+        font:
+          16px/1.5 system-ui,
+          -apple-system,
+          "Segoe UI",
+          sans-serif;
+      }
+      a {
+        color: inherit;
+      }
+      /* Gallery */
+      .gallery {
+        max-width: 960px;
+        margin: 0 auto;
+        padding: calc(env(safe-area-inset-top, 0px) + 28px) 16px 40px;
+        display: flex;
+        flex-direction: column;
+        gap: 20px;
+      }
+      .gallery h1 {
+        margin: 0;
+        font-size: 1.75rem;
+        line-height: 1.2;
+      }
+      .gallery p {
+        margin: 0;
+        color: var(--muted);
+      }
+      .cards {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+        gap: 12px;
+      }
+      .card {
+        display: flex;
+        flex-direction: column;
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        overflow: hidden;
+        background: var(--surface);
+        text-decoration: none;
+      }
+      .card:focus-visible {
+        outline: 3px solid var(--accent);
+        outline-offset: 2px;
+      }
+      .card img,
+      .card .blank {
+        width: 100%;
+        aspect-ratio: 4 / 3;
+        object-fit: cover;
+        background: #20261c;
+        display: block;
+      }
+      .card .meta {
+        padding: 12px 14px;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+      .card strong {
+        font-weight: 650;
+      }
+      .card span {
+        color: var(--muted);
+        font-size: 0.875rem;
+      }
+      /* Viewer */
+      .viewer {
+        position: fixed;
+        inset: 0;
+      }
+      .viewer canvas {
+        display: block;
+        width: 100%;
+        height: 100%;
+        touch-action: none;
+      }
+      .bar {
+        position: fixed;
+        left: 0;
+        right: 0;
+        top: 0;
+        padding: calc(env(safe-area-inset-top, 0px) + 12px) 16px 12px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        background: linear-gradient(rgba(11, 12, 10, 0.85), rgba(11, 12, 10, 0));
+        pointer-events: none;
+      }
+      .bar > * {
+        pointer-events: auto;
+      }
+      .back {
+        min-height: 40px;
+        padding: 0 14px;
+        border-radius: 12px;
+        border: 1px solid var(--border);
+        background: rgba(22, 26, 19, 0.9);
+        display: inline-flex;
+        align-items: center;
+        text-decoration: none;
+        font-weight: 600;
+      }
+      .title {
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+      }
+      .title strong {
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .title span {
+        color: var(--muted);
+        font-size: 0.8125rem;
+      }
+      .note {
+        position: fixed;
+        left: 50%;
+        bottom: calc(env(safe-area-inset-bottom, 0px) + 20px);
+        transform: translateX(-50%);
+        max-width: calc(100% - 32px);
+        padding: 10px 16px;
+        border-radius: 12px;
+        background: rgba(22, 26, 19, 0.92);
+        border: 1px solid var(--border);
+        color: var(--muted);
+        font-size: 0.875rem;
+        text-align: center;
+      }
+    </style>
+  </head>
+  <body>
+    <main id="gallery" class="gallery" hidden>
+      <h1>Scans</h1>
+      <p id="gallery-status">Loading…</p>
+      <ul id="cards" class="cards"></ul>
+    </main>
+
+    <section id="viewer" class="viewer" hidden aria-label="3D scan">
+      <div class="bar">
+        <a class="back" href="#">All scans</a>
+        <div class="title">
+          <strong id="scan-name"></strong>
+          <span id="scan-date"></span>
+        </div>
+      </div>
+      <p id="viewer-status" class="note" aria-live="polite">Loading the scan…</p>
+    </section>
+
+    <script type="module" src="/src/view/main.ts"></script>
+  </body>
+</html>

@@ -321,6 +321,18 @@ export function CaptureCard({
               Show on map
             </GlassButton>
           )}
+          {capture.siteId && (
+            // The scan on its own, in the standalone viewer, not on the globe.
+            <a
+              className="capture__view3d"
+              href={`/view.html#${encodeURIComponent(capture.siteId)}`}
+              target="_blank"
+              rel="noopener"
+              data-testid="capture-view-3d"
+            >
+              <Box size={13} aria-hidden="true" /> View in 3D
+            </a>
+          )}
           {/* Only while the capture can still take files: a handoff link to a capture
               that is already processing would mint a credential with nothing to do. */}
           {!handoffShown &&

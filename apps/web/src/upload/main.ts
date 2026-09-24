@@ -12,6 +12,7 @@
  * token stays out of access logs and out of `Referer` headers on the way here.
  */
 import type {
+  Capture,
   CaptureDetail,
   CaptureFile,
   CaptureFileUpload,
@@ -127,6 +128,9 @@ interface Ui {
   foot: HTMLElement | null;
   forget: HTMLElement | null;
   doneLink: HTMLAnchorElement | null;
+  resume: HTMLButtonElement | null;
+  mine: HTMLElement | null;
+  mineList: HTMLElement | null;
 }
 
 type PageState = "idle" | "invalid" | "uploading" | "done" | "error";
@@ -154,65 +158,195 @@ function formatBytes(bytes: number): string {
   return `${value.toFixed(value < 10 ? 1 : 0)} ${String(units[unit])}`;
 }
 
-async function uploadOne(upload: Upload, file: File, ui: Ui): Promise<void> {
-  const parts: { partNumber: number; etag: string }[] = [];
-  let uploaded = 0;
+/** How far one file got, so a resume continues it rather than starting it again. */
+interface FileProgress {
+  fileId: string | null;
+  parts: { partNumber: number; etag: string }[];
+  done: boolean;
+}
+
+/** Tries per step before the page gives up and offers "Resume upload" instead. */
+const ATTEMPTS = 8;
+
+/** A failure worth trying again: no connection, a gateway, a busy server. Not a refusal. */
+function transient(error: unknown): boolean {
+  if (error instanceof TypeError) return true; // fetch's own "network error"
+  if (!(error instanceof ApiError)) return false;
+  return error.status === 0 || error.status === 408 || error.status === 429 || error.status >= 500;
+}
+
+/** Resolves once the page is on screen and the phone thinks it is online. */
+function whenReachable(): Promise<void> {
+  if (document.visibilityState === "visible" && navigator.onLine) return Promise.resolve();
+  return new Promise((resolve) => {
+    const check = (): void => {
+      if (document.visibilityState === "visible" && navigator.onLine) {
+        document.removeEventListener("visibilitychange", check);
+        window.removeEventListener("online", check);
+        resolve();
+      }
+    };
+    document.addEventListener("visibilitychange", check);
+    window.addEventListener("online", check);
+  });
+}
+
+/**
+ * One step of an upload, tried again when the connection drops.
+ *
+ * A phone that locks mid-upload suspends the page: the request in flight dies with a
+ * network error and nothing more is sent until it is unlocked. So a transient failure
+ * waits for the page to be visible and online again, backs off, and repeats the same
+ * step -- a part is the unit, so at most one part's bytes are sent twice.
+ */
+async function persist<T>(ui: Ui, step: () => Promise<T>): Promise<T> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await step();
+    } catch (error) {
+      if (!transient(error) || attempt >= ATTEMPTS) throw error;
+      const hidden = document.visibilityState !== "visible" || !navigator.onLine;
+      ui.detail.textContent = hidden
+        ? "Paused while the phone was asleep or offline. It carries on when you come back."
+        : `Connection dropped. Trying again (${String(attempt)} of ${String(ATTEMPTS - 1)})…`;
+      await whenReachable();
+      await new Promise((resolve) =>
+        window.setTimeout(resolve, Math.min(30_000, 1_000 * 2 ** attempt)),
+      );
+    }
+  }
+}
+
+/**
+ * Keep the screen on while bytes are moving. iOS Safari 16.4+ and Chrome honour it;
+ * where it is refused the upload still works, and `persist` covers a lock.
+ */
+function keepAwake(): () => void {
+  let lock: WakeLockSentinel | null = null;
+  let wanted = true;
+  const request = async (): Promise<void> => {
+    try {
+      if (wanted && document.visibilityState === "visible" && "wakeLock" in navigator) {
+        lock = await navigator.wakeLock.request("screen");
+      }
+    } catch {
+      lock = null;
+    }
+  };
+  // The system drops the lock whenever the page is hidden; take it again on return.
+  const onVisible = (): void => void request();
+  document.addEventListener("visibilitychange", onVisible);
+  void request();
+  return () => {
+    wanted = false;
+    document.removeEventListener("visibilitychange", onVisible);
+    void lock?.release().catch(() => undefined);
+  };
+}
+
+async function uploadOne(
+  upload: Upload,
+  file: File,
+  progress: FileProgress,
+  ui: Ui,
+): Promise<void> {
   const base = `/api/v1/captures/${upload.captureId}/files`;
   const opts = { unauthorized: LINK_EXPIRED, upload };
+  const partBytes = (partNumber: number, partSize: number): number =>
+    partSizeFor(file.size, partSize, partNumber);
 
-  const registered = await post<CaptureFileUpload>(
-    upload.token,
-    base,
-    {
-      filename: file.name,
-      contentType: file.type || "application/octet-stream",
-      bytes: file.size,
-    },
-    opts,
-  );
-  const fileId = registered.file.id;
-  let window: UploadWindow = registered.upload;
+  let window: UploadWindow;
+  if (progress.fileId === null) {
+    const registered = await persist(ui, () =>
+      post<CaptureFileUpload>(
+        upload.token,
+        base,
+        {
+          filename: file.name,
+          contentType: file.type || "application/octet-stream",
+          bytes: file.size,
+        },
+        opts,
+      ),
+    );
+    progress.fileId = registered.file.id;
+    window = registered.upload;
+  } else {
+    // A resume: ask for fresh URLs from the first part that has not landed.
+    const fileId = progress.fileId;
+    window = await persist(ui, () =>
+      post<UploadWindow>(
+        upload.token,
+        `${base}/${fileId}/parts`,
+        { fromPartNumber: progress.parts.length + 1 },
+        opts,
+      ),
+    );
+  }
+  const fileId = progress.fileId;
+  const landed = (): number =>
+    progress.parts.reduce((sum, part) => sum + partBytes(part.partNumber, window.partSize), 0);
 
   for (;;) {
     for (const part of window.parts) {
-      const size = partSizeFor(file.size, window.partSize, part.partNumber);
+      if (progress.parts.some((done) => done.partNumber === part.partNumber)) continue;
+      const size = partBytes(part.partNumber, window.partSize);
       const start = (part.partNumber - 1) * window.partSize;
-      const done = uploaded;
-      const etag = await putPart(part.url, file.slice(start, start + size), {
-        onProgress: (loaded) => {
-          setProgress(ui, done + loaded, file.size);
-        },
-      });
-      parts.push({ partNumber: part.partNumber, etag });
-      uploaded = done + size;
-      setProgress(ui, uploaded, file.size);
+      const before = landed();
+      const etag = await persist(ui, () =>
+        putPart(part.url, file.slice(start, start + size), {
+          onProgress: (loaded) => {
+            setProgress(ui, before + loaded, file.size);
+          },
+        }),
+      );
+      progress.parts.push({ partNumber: part.partNumber, etag });
+      setProgress(ui, landed(), file.size);
     }
     if (window.nextPartNumber === null || window.nextPartNumber === undefined) break;
-    window = await post<UploadWindow>(
-      upload.token,
-      `${base}/${fileId}/parts`,
-      { fromPartNumber: window.nextPartNumber },
-      opts,
+    const from = window.nextPartNumber;
+    window = await persist(ui, () =>
+      post<UploadWindow>(upload.token, `${base}/${fileId}/parts`, { fromPartNumber: from }, opts),
     );
     if (window.parts.length === 0) break;
   }
 
-  await post<CaptureFile>(upload.token, `${base}/${fileId}/complete`, { parts }, opts);
+  const parts = [...progress.parts].sort((a, b) => a.partNumber - b.partNumber);
+  await persist(ui, () =>
+    post<CaptureFile>(upload.token, `${base}/${fileId}/complete`, { parts }, opts),
+  );
+  progress.done = true;
 }
 
 /**
  * One after another, like the console: parallel uploads would share one cellular uplink
- * and make the progress bar a lie. A failure stops the batch rather than skipping ahead,
- * so "the console has it" is never said about a set with a hole in it.
+ * and make the progress bar a lie. A file already done is skipped, which is what makes
+ * calling this again a resume.
  */
-async function uploadAll(upload: Upload, files: File[], ui: Ui): Promise<void> {
-  for (const [index, file] of files.entries()) {
-    ui.status.textContent =
-      files.length === 1
-        ? `Uploading ${file.name}`
-        : `Uploading ${file.name} (${String(index + 1)} of ${String(files.length)})`;
-    setProgress(ui, 0, file.size);
-    await uploadOne(upload, file, ui);
+async function uploadAll(
+  upload: Upload,
+  files: File[],
+  progress: Map<File, FileProgress>,
+  ui: Ui,
+): Promise<void> {
+  const release = keepAwake();
+  try {
+    for (const [index, file] of files.entries()) {
+      let state = progress.get(file);
+      if (!state) {
+        state = { fileId: null, parts: [], done: false };
+        progress.set(file, state);
+      }
+      if (state.done) continue;
+      ui.status.textContent =
+        files.length === 1
+          ? `Uploading ${file.name}`
+          : `Uploading ${file.name} (${String(index + 1)} of ${String(files.length)})`;
+      setProgress(ui, 0, file.size);
+      await uploadOne(upload, file, state, ui);
+    }
+  } finally {
+    release();
   }
 }
 
@@ -256,14 +390,19 @@ function locate(): Promise<GeolocationPosition | null> {
 function describeJob(job: Job): string {
   const steps = [...job.steps].sort((a, b) => a.ordinal - b.ordinal);
   const done = steps.filter((step) => step.status === "complete").length;
-  if (job.status === "complete") return "Done. It's on the map.";
+  if (job.status === "complete") return "Done. Tap View in 3D.";
   if (job.status === "error" || job.status === "cancelled") {
     const failed = steps.find((step) => step.status === "error" || step.status === "cancelled");
-    return `Processing stopped${failed ? ` at ${failed.stageId}` : ""}. Open the map to retry it.`;
+    return `Processing stopped${failed ? ` at ${failed.stageId}` : ""}. It can be retried from the console.`;
   }
   const current = steps.find((step) => step.status === "in-progress");
   if (!current) return "Queued. Processing starts in a moment.";
   return `Processing: ${current.stageId} (${String(done + 1)} of ${String(steps.length)})`;
+}
+
+/** The standalone scan viewer (view.html) on one site. */
+function viewerLink(siteId: string): string {
+  return `/view.html#${encodeURIComponent(siteId)}`;
 }
 
 /** Report on the run until it ends. Reads are open, so this needs no credential. */
@@ -277,7 +416,11 @@ function follow(captureId: string, ui: Ui): void {
       if (!job) return;
       ui.detail.textContent = describeJob(job);
       if (job.status === "complete" || job.status === "error" || job.status === "cancelled") {
-        if (ui.doneLink) ui.doneLink.hidden = false;
+        if (ui.doneLink && capture.siteId) {
+          ui.doneLink.href = viewerLink(capture.siteId);
+          ui.doneLink.hidden = false;
+        }
+        refreshMine(ui);
         return;
       }
     } catch {
@@ -298,6 +441,7 @@ function collectUi(root: Document): Ui | null {
   const keyForm = root.getElementById("keyform");
   const keyInput = root.getElementById("key");
   const doneLink = root.getElementById("done-link");
+  const resume = root.getElementById("resume");
   return {
     main: root.querySelector("main"),
     status,
@@ -310,6 +454,9 @@ function collectUi(root: Document): Ui | null {
     foot: root.getElementById("foot"),
     forget: root.getElementById("forget"),
     doneLink: doneLink instanceof HTMLAnchorElement ? doneLink : null,
+    resume: resume instanceof HTMLButtonElement ? resume : null,
+    mine: root.getElementById("mine"),
+    mineList: root.getElementById("mine-list"),
   };
 }
 
@@ -337,22 +484,130 @@ function failed(ui: Ui, error: unknown): void {
   ui.status.textContent = error instanceof Error ? error.message : "The upload failed. Try again.";
 }
 
+/**
+ * Offer to carry on from where an upload stopped, in the same capture. The `File`s are
+ * still held by this page, so nothing has to be picked again -- which is exactly what
+ * is lost if the page is closed, so the message says to keep it open.
+ */
+function offerResume(ui: Ui, error: unknown, resume: () => void): void {
+  failed(ui, error);
+  if (isAbort(error) || !ui.resume) return;
+  ui.detail.textContent = "What already arrived is kept. Keep this page open and resume.";
+  ui.resume.hidden = false;
+  ui.resume.onclick = () => {
+    if (ui.resume) ui.resume.hidden = true;
+    resume();
+  };
+}
+
 /** A QR code from the console: one capture that already exists. */
 function startHandoff(ui: Ui, token: string, captureId: string): void {
   const upload: Upload = { token, captureId };
-  ui.input.addEventListener("change", () => {
-    const files = picked(ui);
-    if (!files) return;
+  const progress = new Map<File, FileProgress>();
+  const run = (files: File[]): void => {
     ui.input.disabled = true;
     setState(ui, "uploading");
-    uploadAll(upload, files, ui)
+    uploadAll(upload, files, progress, ui)
       .then(() => {
         setState(ui, "done");
         ui.status.textContent = `${sent(files)}. You can close this page.`;
         ui.detail.textContent = "The console has it.";
       })
-      .catch((error: unknown) => failed(ui, error));
+      .catch((error: unknown) => offerResume(ui, error, () => run(files)));
+  };
+  ui.input.addEventListener("change", () => {
+    const files = picked(ui);
+    if (files) run(files);
   });
+}
+
+// --- this phone's captures -----------------------------------------------------------
+
+const STATE_LABEL: Record<string, string> = {
+  "awaiting-files": "Upload not finished",
+  "not-started": "Uploaded, not processed",
+  "in-progress": "Processing",
+  complete: "Ready",
+  error: "Processing failed",
+};
+
+/**
+ * What this key has sent, newest first, with what can be done about each: view a
+ * finished one in 3D, or process one whose upload stopped part-way with what arrived.
+ * Reads are open in this API, so listing needs no key; processing uses it.
+ */
+function refreshMine(ui: Ui): void {
+  const list = ui.mineList;
+  const section = ui.mine;
+  if (!list || !section) return;
+  void (async () => {
+    try {
+      const response = await fetch(`${API_BASE}/api/v1/captures?limit=100`);
+      if (!response.ok) return;
+      const captures = ((await response.json()) as Capture[])
+        .filter((capture) => capture.metadata.origin === "phone-key")
+        .slice(0, 12);
+      section.hidden = captures.length === 0;
+      list.replaceChildren(...captures.map((capture) => captureRow(ui, capture)));
+    } catch {
+      // Offline: the list simply stays as it was.
+    }
+  })();
+}
+
+function captureRow(ui: Ui, capture: Capture): HTMLElement {
+  const row = document.createElement("li");
+  const text = document.createElement("div");
+  const name = document.createElement("strong");
+  name.textContent = capture.name;
+  const state = document.createElement("span");
+  const complete = capture.files.filter((file) => file.status === "complete");
+  state.textContent =
+    `${STATE_LABEL[capture.status] ?? capture.status} · ` +
+    `${String(complete.length)} of ${String(capture.files.length)} files`;
+  text.append(name, state);
+  row.append(text);
+
+  if (capture.siteId) {
+    const view = document.createElement("a");
+    view.className = "rowbtn";
+    view.href = viewerLink(capture.siteId);
+    view.textContent = "View in 3D";
+    row.append(view);
+  } else if (
+    (capture.status === "not-started" || capture.status === "awaiting-files") &&
+    complete.length > 0
+  ) {
+    const process = document.createElement("button");
+    process.type = "button";
+    process.className = "rowbtn";
+    process.textContent = "Process";
+    process.addEventListener("click", () => {
+      const key = readStoredKey();
+      if (!key) return;
+      process.disabled = true;
+      const recipe = classify(
+        complete.map((file) => ({ name: file.filename, size: file.bytes ?? 0 })),
+      ).recipe;
+      post<Job>(
+        key,
+        `/api/v1/phone/captures/${capture.id}/process`,
+        { recipe },
+        { unauthorized: KEY_WRONG },
+      )
+        .then(() => {
+          ui.status.textContent = `Processing "${capture.name}" with the ${String(complete.length)} file(s) that arrived.`;
+          follow(capture.id, ui);
+          refreshMine(ui);
+        })
+        .catch((error: unknown) => {
+          process.disabled = false;
+          ui.status.textContent = error instanceof Error ? error.message : "Could not start it.";
+        });
+    });
+    row.append(process);
+  }
+  return row;
 }
 
 /** The phone key: start a capture here, upload it, and start processing it. */
@@ -367,11 +622,13 @@ function startWithKey(ui: Ui): void {
     if (ui.forget) ui.forget.hidden = false;
     setState(ui, "idle");
     ui.status.textContent = "Pick a video, photos or a scan. You can pick several photos at once.";
+    refreshMine(ui);
   };
   const askForKey = (message: string): void => {
     ui.form.hidden = true;
     if (ui.forget) ui.forget.hidden = true;
     if (ui.keyForm) ui.keyForm.hidden = false;
+    if (ui.mine) ui.mine.hidden = true;
     setState(ui, "idle");
     ui.status.textContent = message;
     ui.keyInput?.focus();
@@ -397,6 +654,75 @@ function startWithKey(ui: Ui): void {
       });
   });
 
+  /** One pick: a capture, its uploads, its run. Resumable from whichever step failed. */
+  const send = (key: string, files: File[]): void => {
+    const proposal = classify(files.map((file) => ({ name: file.name, size: file.size })));
+    const progress = new Map<File, FileProgress>();
+    let upload: Upload | null = null;
+    let located = false;
+    let processed = false;
+
+    const attempt = async (): Promise<void> => {
+      ui.input.disabled = true;
+      setState(ui, "uploading");
+      if (!upload) {
+        ui.status.textContent = "Finding where you are (a few seconds at most)…";
+        const coords = (await locate())?.coords;
+        located = coords !== undefined;
+        ui.status.textContent = "Starting the capture…";
+        const created = await persist(ui, () =>
+          post<PhoneCapture>(
+            key,
+            "/api/v1/phone/captures",
+            coords
+              ? { lat: coords.latitude, lon: coords.longitude, accuracyM: coords.accuracy }
+              : {},
+            { unauthorized: KEY_WRONG },
+          ),
+        );
+        upload = { token: created.uploadToken, captureId: created.capture.id };
+        refreshMine(ui);
+      }
+      const current = upload;
+      await uploadAll(current, files, progress, ui);
+      if (!processed) {
+        ui.status.textContent = "Starting processing…";
+        await persist(ui, () =>
+          post<Job>(
+            key,
+            `/api/v1/phone/captures/${current.captureId}/process`,
+            { recipe: proposal.recipe },
+            { unauthorized: KEY_WRONG },
+          ),
+        );
+        processed = true;
+      }
+      setState(ui, "done");
+      ui.input.disabled = false;
+      ui.input.value = "";
+      ui.status.textContent = `${sent(files)} and processing has started. ${proposal.estimate}.`;
+      ui.detail.textContent = located
+        ? "Placed where this phone is. You can close this page; it will be in Your captures."
+        : "Location was not shared, so it is placed from the file (or where the map was).";
+      follow(current.captureId, ui);
+      refreshMine(ui);
+    };
+
+    const run = (): void => {
+      attempt().catch((error: unknown) => {
+        if (error instanceof ApiError && error.status === 401 && !upload) {
+          storeKey(null);
+          ui.input.disabled = false;
+          askForKey(KEY_WRONG);
+          return;
+        }
+        offerResume(ui, error, run);
+        refreshMine(ui);
+      });
+    };
+    run();
+  };
+
   ui.input.addEventListener("change", () => {
     const files = picked(ui);
     const key = readStoredKey();
@@ -405,46 +731,8 @@ function startWithKey(ui: Ui): void {
       askForKey("Enter the phone key first.");
       return;
     }
-    ui.input.disabled = true;
-    setState(ui, "uploading");
-    const proposal = classify(files.map((file) => ({ name: file.name, size: file.size })));
-    void (async () => {
-      ui.status.textContent = "Finding where you are (a few seconds at most)…";
-      const position = await locate();
-      ui.status.textContent = "Starting the capture…";
-      const coords = position?.coords;
-      const created = await post<PhoneCapture>(
-        key,
-        "/api/v1/phone/captures",
-        coords ? { lat: coords.latitude, lon: coords.longitude, accuracyM: coords.accuracy } : {},
-        { unauthorized: KEY_WRONG },
-      );
-      const upload: Upload = { token: created.uploadToken, captureId: created.capture.id };
-      await uploadAll(upload, files, ui);
-      ui.status.textContent = "Starting processing…";
-      await post<Job>(
-        key,
-        `/api/v1/phone/captures/${upload.captureId}/process`,
-        { recipe: proposal.recipe },
-        { unauthorized: KEY_WRONG },
-      );
-      setState(ui, "done");
-      ui.input.disabled = false;
-      ui.input.value = "";
-      ui.status.textContent = `${sent(files)} and processing has started. ${proposal.estimate}.`;
-      ui.detail.textContent = position
-        ? "Placed where this phone is. You can close this page."
-        : "Location was not shared, so it is placed from the file (or where the map was).";
-      follow(upload.captureId, ui);
-    })().catch((error: unknown) => {
-      if (error instanceof ApiError && error.status === 401) {
-        storeKey(null);
-        ui.input.disabled = false;
-        askForKey(KEY_WRONG);
-        return;
-      }
-      failed(ui, error);
-    });
+    if (ui.resume) ui.resume.hidden = true;
+    send(key, files);
   });
 
   if (readStoredKey()) showPicker();

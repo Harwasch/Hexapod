@@ -119,6 +119,9 @@ export default defineConfig({
         index: resolve(import.meta.dirname, "index.html"),
         upload: resolve(import.meta.dirname, "upload.html"),
         admin: resolve(import.meta.dirname, "admin.html"),
+        // The scan viewer: one splat on its own, rendered with Spark (three.js), not the
+        // globe. Also free of CesiumJS, which e2e asserts the same way.
+        view: resolve(import.meta.dirname, "view.html"),
       },
       output: {
         manualChunks: (id) =>

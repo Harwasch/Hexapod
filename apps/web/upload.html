@@ -153,6 +153,77 @@
         text-decoration: underline;
         font-weight: 500;
       }
+      .pick-secondary {
+        min-height: 52px;
+        border: 1px solid var(--accent);
+        border-radius: 14px;
+        background: var(--accent-soft);
+        color: var(--fg);
+        font: inherit;
+        font-weight: 650;
+      }
+      .mine {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .mine h2 {
+        margin: 0;
+        font-size: 1.0625rem;
+      }
+      .mine ul {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .mine li {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 12px 14px;
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        background: var(--surface);
+      }
+      .mine li div {
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+      }
+      .mine li strong {
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .mine li span {
+        color: var(--muted);
+        font-size: 0.875rem;
+      }
+      .rowbtn {
+        flex: none;
+        min-height: 40px;
+        padding: 0 14px;
+        border: 0;
+        border-radius: 12px;
+        background: var(--accent);
+        color: var(--on-accent);
+        font: inherit;
+        font-weight: 650;
+        display: inline-flex;
+        align-items: center;
+        text-decoration: none;
+      }
+      .rowbtn:disabled {
+        opacity: 0.55;
+      }
+      .all-scans {
+        color: var(--accent);
+        font-weight: 600;
+      }
       #done-link {
         color: var(--accent);
         font-weight: 650;
@@ -364,7 +435,14 @@
         <p id="detail" aria-live="polite"></p>
       </section>
 
-      <a id="done-link" href="/" hidden>Open the map</a>
+      <button id="resume" class="pick-secondary" type="button" hidden>Resume upload</button>
+      <a id="done-link" href="/view.html" hidden>View in 3D</a>
+
+      <section id="mine" class="mine" hidden aria-labelledby="mine-title">
+        <h2 id="mine-title">Your captures</h2>
+        <ul id="mine-list"></ul>
+        <a class="all-scans" href="/view.html">All scans in 3D</a>
+      </section>
       <p class="foot" id="foot">
         This link only adds files to one capture and expires after 10 minutes.
       </p>

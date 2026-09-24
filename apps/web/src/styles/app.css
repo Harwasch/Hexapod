@@ -942,6 +942,27 @@ body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-close {
   gap: var(--space-2);
 }
 
+/* A link styled like the small ghost button beside it: it opens the scan viewer. */
+.capture__view3d {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 10px;
+  border-radius: var(--radius-sm, 8px);
+  color: inherit;
+  font-size: var(--text-sm, 13px);
+  font-weight: 600;
+  text-decoration: none;
+  border: 1px solid var(--glass-border, rgba(255, 255, 255, 0.14));
+}
+.capture__view3d:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+.capture__view3d:focus-visible {
+  outline: 2px solid var(--accent, #7fd8c0);
+  outline-offset: 2px;
+}
 .capture__actions:empty {
   display: none;
 }

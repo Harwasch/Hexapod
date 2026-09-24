@@ -323,6 +323,112 @@ test.describe("the phone upload page", () => {
     expect(created[0]).toEqual({});
   });
 
+  test("a part that fails while the phone sleeps is sent again, not lost", async ({ page }) => {
+    await page.route("**/api/v1/captures/*/files", async (route) => {
+      await route.fulfill({
+        status: 201,
+        contentType: "application/json",
+        body: JSON.stringify({
+          file: { id: FILE_ID, captureId: CAPTURE_ID, filename: "a.jpg", partsTotal: 1 },
+          upload: {
+            uploadId: "u-1",
+            storageKey: "k",
+            partSize: 8,
+            partsTotal: 1,
+            nextPartNumber: null,
+            expiresIn: 3600,
+            parts: [{ partNumber: 1, url: "https://storage.example/part-1" }],
+          },
+        }),
+      });
+    });
+    let puts = 0;
+    await page.route("https://storage.example/**", async (route) => {
+      puts += 1;
+      // The first attempt dies the way a locked phone kills it: no response at all.
+      if (puts === 1) return route.abort("connectionreset");
+      await route.fulfill({
+        status: 200,
+        headers: {
+          ETag: '"etag-x"',
+          "access-control-allow-origin": "*",
+          "access-control-expose-headers": "ETag",
+        },
+        body: "",
+      });
+    });
+    await page.route("**/api/v1/captures/*/files/*/complete", (route) =>
+      route.fulfill({ status: 200, contentType: "application/json", body: "{}" }),
+    );
+
+    await page.goto(`/upload.html#${token(soon())}`);
+    await page.locator("#file").setInputFiles({
+      name: "a.jpg",
+      mimeType: "image/jpeg",
+      buffer: Buffer.alloc(8, 1),
+    });
+    await expect(page.locator("#status")).toContainText("on its way", { timeout: 20_000 });
+    expect(puts).toBe(2);
+  });
+
+  test("your captures offer View in 3D when done, and Process when an upload stopped", async ({
+    page,
+  }) => {
+    await page.addInitScript(() => {
+      window.localStorage.setItem("twin.phoneKey", "abcd-efgh-jkmn");
+    });
+    const file = (status: string) => ({ filename: "a.jpg", status, bytes: 8 });
+    await page.route(
+      (url) => url.pathname === "/api/v1/captures",
+      (route) =>
+        route.fulfill({
+          json: [
+            {
+              id: "done-1",
+              name: "Finished",
+              siteId: "site-1",
+              status: "complete",
+              metadata: { origin: "phone-key" },
+              files: [file("complete")],
+            },
+            {
+              id: "half-1",
+              name: "Half sent",
+              siteId: null,
+              status: "not-started",
+              metadata: { origin: "phone-key" },
+              files: [file("complete"), file("in-progress")],
+            },
+            {
+              id: "desk-1",
+              name: "From the desktop",
+              siteId: "site-2",
+              status: "complete",
+              metadata: { origin: "console" },
+              files: [file("complete")],
+            },
+          ],
+        }),
+    );
+    const processed: string[] = [];
+    await page.route("**/api/v1/phone/captures/*/process", async (route) => {
+      processed.push(route.request().url());
+      await route.fulfill({ status: 202, json: { id: "j", status: "not-started", steps: [] } });
+    });
+
+    await page.goto("/upload.html");
+    const rows = page.locator("#mine-list li");
+    await expect(rows).toHaveCount(2);
+    await expect(rows.nth(0).getByRole("link", { name: "View in 3D" })).toHaveAttribute(
+      "href",
+      "/view.html#site-1",
+    );
+    await expect(rows.nth(1)).toContainText("1 of 2 files");
+    await rows.nth(1).getByRole("button", { name: "Process" }).click();
+    await expect.poll(() => processed.length).toBe(1);
+    expect(processed[0]).toContain("/api/v1/phone/captures/half-1/process");
+  });
+
   test("a bucket that hides the ETag is reported as the CORS problem it is", async ({ page }) => {
     await page.route("**/api/v1/captures/*/files", async (route) => {
       await route.fulfill({
