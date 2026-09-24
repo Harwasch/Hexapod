@@ -691,9 +691,25 @@ def gsplat(ctx: StageContext) -> StageOutcome:
     """
     frames = ctx.input(FRAMES.name)
     poses = ctx.input(POSES.name)
-    iterations = int(ctx.param("iterations", 30_000))
+    full_iterations = int(ctx.param("iterations", 30_000))
     trainer = training.trainer_script(ctx.param("trainer"))
     dataset = training.build_dataset(frames, poses, ctx.work_dir / "dataset")
+    # A shorter schedule for a smaller capture (`training.schedule_scale`), unless the
+    # recipe leaves `schedule_full_at` out, which keeps the full one.
+    images = sum(1 for path in (dataset / "images").iterdir() if path.is_file())
+    full_at = _optional_int(ctx.param("schedule_full_at"))
+    steps_scaler = (
+        training.schedule_scale(
+            images, full_at=full_at, floor=float(ctx.param("schedule_floor", 0.25))
+        )
+        if full_at
+        else 1.0
+    )
+    iterations = training.scaled_steps(full_iterations, steps_scaler)
+    ctx.log(
+        f"gsplat: {images} frames -> {steps_scaler:g} of the {full_iterations}-step schedule "
+        f"= {iterations} steps"
+    )
     # In work/, not checkpoint/: see the docstring. Nothing can resume from it.
     result = ctx.work_dir / "gsplat"
     if result.exists():
@@ -717,8 +733,10 @@ def gsplat(ctx: StageContext) -> StageOutcome:
             dataset,
             result,
             strategy=str(ctx.param("strategy", "default")),
-            max_steps=iterations,
+            max_steps=full_iterations,
             data_factor=int(ctx.param("data_factor", 1)),
+            steps_scaler=steps_scaler,
+            cap_max=_optional_int(ctx.param("cap_max")),
             extra=[str(value) for value in (ctx.param("extra_args") or [])],
         )
     )
@@ -753,6 +771,7 @@ def gsplat(ctx: StageContext) -> StageOutcome:
         "gaussians": splat.count,
         "trainedBytes": written,
         "requestedIterations": iterations,
+        "scheduleScale": steps_scaler,
         "metricsSource": metrics_document.source,
     }
     if metrics_document.iterations is not None:

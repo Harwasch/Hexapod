@@ -78,6 +78,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--disable_viewer", action="store_true")
     # v1.5.3's own switches, spelled as `training.gsplat_argv` spells them.
     parser.add_argument("--save_ply", action="store_true")
+    parser.add_argument("--steps_scaler", type=float, default=1.0)
+    parser.add_argument("--strategy.cap-max", dest="cap_max", type=int, default=None)
     parser.add_argument("--no-normalize-world-space", action="store_true")
     # Not gsplat's: how this stand-in is told to behave like a reclaimed machine.
     parser.add_argument("--ckpt-every", type=int, default=100)
@@ -95,6 +97,13 @@ def main(argv: list[str] | None = None) -> int:
     # put its splat somewhere this project does not look" is a real possibility.
     parser.add_argument("--no-ply", action="store_true")
     args, _unknown = parser.parse_known_args(argv)
+    # What v1.5.3's `Config.adjust_steps` does to the one number this stand-in uses.
+    args.max_steps = int(args.max_steps * args.steps_scaler)
+    if args.cap_max is not None:
+        if args.strategy != "mcmc":
+            sys.stderr.write("stand-in: only mcmc has a cap_max\n")
+            return 2
+        args.gaussians = min(args.gaussians, args.cap_max)
 
     images = args.data_dir / "images"
     sparse = args.data_dir / "sparse" / "0"

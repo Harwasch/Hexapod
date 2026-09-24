@@ -340,3 +340,52 @@ def test_a_killed_training_attempt_starts_over_and_says_so(tmp_path: Path) -> No
     log = workdir.log_path("train").read_text()
     assert "restarts from step 0" in log
     assert "starting at step 0" in log
+
+
+# --- a schedule sized to the capture ----------------------------------------------------
+
+
+def test_a_small_capture_gets_a_proportionally_shorter_schedule_with_a_floor() -> None:
+    assert training.schedule_scale(4, full_at=60, floor=0.25) == 0.25
+    assert training.schedule_scale(30, full_at=60, floor=0.25) == 0.5
+    assert training.schedule_scale(60, full_at=60, floor=0.25) == 1.0
+    assert training.schedule_scale(400, full_at=60, floor=0.25) == 1.0
+    assert training.schedule_scale(4, full_at=0, floor=0.25) == 1.0
+    assert training.scaled_steps(30_000, 0.25) == 7_500
+
+
+def test_the_schedule_is_scaled_by_the_trainer_and_the_cap_only_goes_to_mcmc() -> None:
+    argv = training.gsplat_argv(
+        "python",
+        Path("t.py"),
+        Path("d"),
+        Path("r"),
+        strategy="mcmc",
+        steps_scaler=0.25,
+        cap_max=500_000,
+    )
+    # The step lists stay unscaled: `adjust_steps` scales them alongside max_steps.
+    assert argv[argv.index("--max_steps") + 1] == "30000"
+    assert argv[argv.index("--ply_steps") + 1] == "30000"
+    assert argv[argv.index("--steps_scaler") + 1] == "0.25"
+    assert argv[argv.index("--strategy.cap-max") + 1] == "500000"
+    assert "--steps_scaler" not in training.gsplat_argv("p", Path("t"), Path("d"), Path("r"))
+    with pytest.raises(ValueError, match="cap_max"):
+        training.gsplat_argv("p", Path("t"), Path("d"), Path("r"), cap_max=10)
+
+
+def test_a_four_frame_capture_trains_a_quarter_schedule_under_the_cap(tmp_path: Path) -> None:
+    workdir = Workdir.create(tmp_path / "run")
+    seed_inputs(workdir, frames=4)
+
+    params = stand_in_params(schedule_full_at=16, strategy="mcmc", cap_max=32)
+    execute(train_recipe(params), workdir, RunnerSet(cpu=LocalRunner()))
+
+    metrics = json.loads((workdir.out_dir("train") / "train_metrics.json").read_text())
+    assert metrics["requestedIterations"] == 75
+    assert metrics["iterations"] == 75
+    assert metrics["gaussiansInPly"] == 32
+    log = workdir.log_path("train").read_text()
+    assert "4 frames -> 0.25 of the 300-step schedule = 75 steps" in log
+    last = progress.latest(log)
+    assert last is not None and last.total == 75

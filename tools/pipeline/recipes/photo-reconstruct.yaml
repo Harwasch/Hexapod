@@ -8,7 +8,7 @@
 # `compensate` gains a `gpu:` block when its impl becomes `imc` (B3); asking for an L4 to
 # run `none` would be billing a GPU to do nothing.
 name: photo-reconstruct
-version: 6
+version: 7
 description: Reconstruct a splat from a raw capture, then package and register it.
 
 inputs: [upload]
@@ -58,7 +58,19 @@ stages:
   - id: train
     impl: gsplat # | opensplat | deformable3dgs
     params:
+      # The full schedule. A capture with fewer than `schedule_full_at` frames runs a
+      # proportionally shorter one -- all of it, decay and densification included, via
+      # gsplat's own `--steps_scaler` -- and never less than `schedule_floor` of it. A
+      # 4-photo capture ran the full 30k for 50 min and $0.66 and learned nothing the
+      # 7.5k it now gets would not have.
       iterations: 30000
+      schedule_full_at: 60
+      schedule_floor: 0.25
+      # MCMC densification with a ceiling on the gaussian count, so time and cost are
+      # bounded by the cap rather than by how enthusiastically a capture densifies (the
+      # same 4 photos grew 894k gaussians; `package` keeps 400k of any of them).
+      strategy: mcmc
+      cap_max: 500000
       # `trainer` and `python` are deliberately absent: gsplat v1.5.3's
       # examples/simple_trainer.py and the CPython 3.10 it needs live in the training
       # image (infra/modal/app.py), which says where through $GSPLAT_TRAINER and

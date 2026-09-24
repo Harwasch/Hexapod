@@ -143,6 +143,8 @@ def gsplat_argv(
     strategy: str = "default",
     max_steps: int = 30_000,
     data_factor: int = 1,
+    steps_scaler: float = 1.0,
+    cap_max: int | None = None,
     extra: Sequence[str] = (),
 ) -> list[str]:
     """The command line, built in one place so a test can read it without a GPU.
@@ -158,6 +160,19 @@ def gsplat_argv(
     * `--save_steps N --eval_steps N`: one checkpoint and one evaluation, at the end,
       rather than the defaults' extra pair at 7,000 -- a checkpoint nothing can resume
       from is only disk, and the evaluation at N is what `train_metrics.json` reads.
+
+    `--steps_scaler` is v1.5.3's own way to run a shorter schedule (`Config.adjust_steps`):
+    it multiplies `max_steps`, the save/ply/eval steps, the SH-degree interval and the
+    strategy's refine window together, and the position learning rate decays over the
+    scaled `max_steps`. A short run is then a *complete* short run -- decayed and
+    densified on schedule -- where passing a smaller `--max_steps` alone would stop a
+    30k schedule a quarter of the way in, learning rate still high. So `max_steps` and
+    the three step lists stay the unscaled number here and the trainer scales them.
+
+    `--strategy.cap-max` (spelled as v1.5.3's `examples/benchmarks/mcmc.sh` spells it) is
+    `MCMCStrategy`'s ceiling on the number of gaussians; the
+    default strategy has no such field and refuses the flag, so it is only passed with
+    `mcmc`.
 
     `--disable_video` too: the trajectory render after evaluation is a video nobody reads.
     There is no `--ckpt`, and there must not be: in v1.5.3 it means "evaluate this and do
@@ -187,8 +202,36 @@ def gsplat_argv(
         "--eval_steps",
         steps,
     ]
+    if steps_scaler != 1.0:
+        argv += ["--steps_scaler", f"{steps_scaler:g}"]
+    if cap_max is not None:
+        if strategy != "mcmc":
+            raise ValueError(
+                f"cap_max bounds MCMCStrategy's gaussian count; strategy {strategy!r} has "
+                f"no cap and gsplat {GSPLAT_VERSION} would refuse the flag"
+            )
+        argv += ["--strategy.cap-max", str(cap_max)]
     argv += list(extra)
     return argv
+
+
+def schedule_scale(images: int, *, full_at: int, floor: float) -> float:
+    """How much of the full schedule a capture of `images` frames gets.
+
+    Linear in the frame count up to `full_at`, never below `floor`. Every iteration
+    renders one frame, so a 4-frame capture sees each frame 7,500 times over a 30k
+    schedule: past the point of learning anything new about the scene, and paid for by
+    the GPU-second. Rounded to hundredths so the argv, and the log, stay readable.
+    """
+    if full_at <= 0:
+        return 1.0
+    return round(min(1.0, max(floor, images / full_at)), 2)
+
+
+def scaled_steps(max_steps: int, steps_scaler: float) -> int:
+    """The step count the trainer will actually run: `int(max_steps * factor)`, as
+    v1.5.3's `adjust_steps` computes it."""
+    return int(max_steps * steps_scaler)
 
 
 def latest_ply(directory: Path) -> Path | None:
