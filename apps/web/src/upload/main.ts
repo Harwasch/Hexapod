@@ -222,15 +222,34 @@ function sent(files: File[]): string {
   return `${what} ${files.length === 1 ? "is on its way" : "are on their way"}`;
 }
 
-/** The phone's own position, or null if it is refused or slow. Never blocks for long. */
+/**
+ * The phone's own position, or null -- in at most `LOCATE_MS`, whatever the browser does.
+ *
+ * The API's own `timeout` is not enough on iOS: it only starts once permission has been
+ * granted, so a permission prompt that is never answered (or an in-app browser that
+ * never shows one) leaves the callbacks uncalled for ever, and the page sat on "Finding
+ * where you are…" with the files never sent. Location is a better placement, not a
+ * requirement, so after a few seconds the capture goes ahead without it.
+ */
+const LOCATE_MS = 8_000;
+
 function locate(): Promise<GeolocationPosition | null> {
   if (!("geolocation" in navigator)) return Promise.resolve(null);
   return new Promise((resolve) => {
-    navigator.geolocation.getCurrentPosition(resolve, () => resolve(null), {
-      enableHighAccuracy: true,
-      timeout: 10_000,
-      maximumAge: 60_000,
-    });
+    const giveUp = window.setTimeout(() => resolve(null), LOCATE_MS);
+    const settle = (position: GeolocationPosition | null): void => {
+      window.clearTimeout(giveUp);
+      resolve(position);
+    };
+    try {
+      navigator.geolocation.getCurrentPosition(settle, () => settle(null), {
+        enableHighAccuracy: true,
+        timeout: LOCATE_MS,
+        maximumAge: 60_000,
+      });
+    } catch {
+      settle(null);
+    }
   });
 }
 
@@ -390,7 +409,7 @@ function startWithKey(ui: Ui): void {
     setState(ui, "uploading");
     const proposal = classify(files.map((file) => ({ name: file.name, size: file.size })));
     void (async () => {
-      ui.status.textContent = "Finding where you are…";
+      ui.status.textContent = "Finding where you are (a few seconds at most)…";
       const position = await locate();
       ui.status.textContent = "Starting the capture…";
       const coords = position?.coords;

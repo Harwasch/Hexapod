@@ -296,6 +296,33 @@ test.describe("the phone upload page", () => {
     expect(tokens).toEqual(["Bearer h1.first", "Bearer h1.second"]);
   });
 
+  test("a location request that never answers does not stop the upload", async ({ page }) => {
+    // What an iOS in-app browser, or an unanswered permission prompt, looks like: the
+    // callbacks are simply never called.
+    await page.addInitScript(() => {
+      window.localStorage.setItem("twin.phoneKey", "abcd-efgh-jkmn");
+      Object.defineProperty(navigator, "geolocation", {
+        value: { getCurrentPosition: () => undefined },
+        configurable: true,
+      });
+    });
+    const created: unknown[] = [];
+    await page.route("**/api/v1/phone/captures", async (route) => {
+      created.push(route.request().postDataJSON());
+      // Refused, so this test stops at the point it is about: the capture was asked for.
+      await route.fulfill({ status: 409, contentType: "application/json", body: "{}" });
+    });
+
+    await page.goto("/upload.html");
+    await page.locator("#file").setInputFiles({
+      name: "a.jpg",
+      mimeType: "image/jpeg",
+      buffer: Buffer.alloc(8, 1),
+    });
+    await expect.poll(() => created.length, { timeout: 15_000 }).toBe(1);
+    expect(created[0]).toEqual({});
+  });
+
   test("a bucket that hides the ETag is reported as the CORS problem it is", async ({ page }) => {
     await page.route("**/api/v1/captures/*/files", async (route) => {
       await route.fulfill({
