@@ -30,7 +30,7 @@ const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
 /** Where the phone key is remembered. Only on this phone, only in this browser. */
 const KEY_STORAGE = "twin.phoneKey";
 /** How often the page asks how processing is going, once it has started a run. */
-const POLL_MS = 20_000;
+const POLL_MS = 10_000;
 
 /** `version.captureIdHex.expiresAt.ceiling.signature` — signed, not secret. */
 function captureIdFromToken(token: string): string | null {
@@ -387,17 +387,88 @@ function locate(): Promise<GeolocationPosition | null> {
   });
 }
 
-function describeJob(job: Job): string {
+/** What each stage is, in words a person watching a phone would use. */
+const STAGE_LABEL: Record<string, string> = {
+  normalize: "Preparing the frames",
+  pose: "Working out where each photo was taken",
+  mask: "Masking moving things",
+  train: "Training the 3D model (the long part)",
+  compensate: "Evening out the exposure",
+  georeference: "Placing it on the map",
+  place: "Placing it on the map",
+  package: "Packaging it for viewing",
+  thumbnail: "Making a preview",
+  ground_samples: "Measuring the ground",
+  manifest: "Writing it up",
+  register: "Publishing",
+};
+
+function stageLabel(stageId: string): string {
+  return STAGE_LABEL[stageId] ?? stageId;
+}
+
+function minutesSince(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const minutes = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 60_000));
+  return minutes < 1 ? "under a minute" : `${String(minutes)} min`;
+}
+
+/** Every recipe's stage ids in order, fetched once: steps appear only as they start. */
+let recipeStages: Promise<Map<string, string[]>> | null = null;
+function stagesOf(recipe: string): Promise<string[]> {
+  recipeStages ??= fetch(`${API_BASE}/api/v1/recipes`)
+    .then((response) => response.json())
+    .then(
+      (body: { recipes?: { name: string; stages: { id: string }[] }[] }) =>
+        new Map((body.recipes ?? []).map((r) => [r.name, r.stages.map((stage) => stage.id)])),
+    )
+    .catch(() => {
+      recipeStages = null;
+      return new Map<string, string[]>();
+    });
+  return recipeStages.then((all) => all.get(recipe) ?? []);
+}
+
+function latestJob(jobs: Job[]): Job | undefined {
+  return [...jobs].sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+}
+
+const ENDED = new Set(["complete", "error", "cancelled"]);
+
+/** Headline, detail and a 0-1 fraction for one run, from its steps and its recipe. */
+async function describeRun(job: Job): Promise<{ headline: string; detail: string; done: number }> {
+  const order = await stagesOf(job.recipe);
   const steps = [...job.steps].sort((a, b) => a.ordinal - b.ordinal);
-  const done = steps.filter((step) => step.status === "complete").length;
-  if (job.status === "complete") return "Done. Tap View in 3D.";
+  const total = Math.max(order.length, steps.length, 1);
+  const finished = steps.filter((step) => step.status === "complete").length;
+  if (job.status === "complete") {
+    return { headline: "Done.", detail: "Tap View in 3D.", done: 1 };
+  }
   if (job.status === "error" || job.status === "cancelled") {
-    const failed = steps.find((step) => step.status === "error" || step.status === "cancelled");
-    return `Processing stopped${failed ? ` at ${failed.stageId}` : ""}. It can be retried from the console.`;
+    const stopped = steps.find((step) => step.status === "error" || step.status === "cancelled");
+    return {
+      headline: `Processing stopped${stopped ? `: ${stageLabel(stopped.stageId)}` : ""}.`,
+      detail: job.error ?? "It can be retried from the console.",
+      done: finished / total,
+    };
   }
   const current = steps.find((step) => step.status === "in-progress");
-  if (!current) return "Queued. Processing starts in a moment.";
-  return `Processing: ${current.stageId} (${String(done + 1)} of ${String(steps.length)})`;
+  if (!current) {
+    return {
+      headline: finished === 0 ? "Queued." : "Between steps…",
+      detail:
+        finished === 0
+          ? "Waiting for the worker to pick it up, usually under a minute."
+          : `${String(finished)} of ${String(total)} steps done.`,
+      done: finished / total,
+    };
+  }
+  const long = current.stageId === "train" ? " Usually 10–30 minutes." : "";
+  return {
+    headline: `${stageLabel(current.stageId)}…`,
+    detail: `Step ${String(finished + 1)} of ${String(total)} · running ${minutesSince(current.startedAt)}.${long}`,
+    done: finished / total,
+  };
 }
 
 /** The standalone scan viewer (view.html) on one site. */
@@ -405,30 +476,66 @@ function viewerLink(siteId: string): string {
   return `/view.html#${encodeURIComponent(siteId)}`;
 }
 
-/** Report on the run until it ends. Reads are open, so this needs no credential. */
+/** The one run the status panel is following; starting another stops this one. */
+let following: (() => void) | null = null;
+
+/**
+ * Show a capture's run in the status panel until it ends.
+ *
+ * It keeps asking whatever goes wrong -- a phone drops requests, and one bad answer
+ * once ended the polling for good, which is how the page sat on "Queued" while the GPU
+ * was training. It also asks again the moment the page is back on screen, because a
+ * phone suspends timers while it is locked or in another app. Reads are open in this
+ * API, so this needs no credential.
+ */
 function follow(captureId: string, ui: Ui): void {
+  following?.();
+  let timer = 0;
+  let stopped = false;
   const tick = async (): Promise<void> => {
+    window.clearTimeout(timer);
+    if (stopped) return;
     try {
-      const response = await fetch(`${API_BASE}/api/v1/captures/${captureId}`);
-      if (!response.ok) return;
-      const capture = (await response.json()) as CaptureDetail;
-      const job = [...capture.jobs].sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
-      if (!job) return;
-      ui.detail.textContent = describeJob(job);
-      if (job.status === "complete" || job.status === "error" || job.status === "cancelled") {
-        if (ui.doneLink && capture.siteId) {
-          ui.doneLink.href = viewerLink(capture.siteId);
-          ui.doneLink.hidden = false;
+      const response = await fetch(
+        `${API_BASE}/api/v1/jobs?captureId=${encodeURIComponent(captureId)}&limit=5`,
+      );
+      const job = response.ok ? latestJob((await response.json()) as Job[]) : undefined;
+      if (job && !stopped) {
+        const run = await describeRun(job);
+        ui.status.textContent = run.headline;
+        ui.detail.textContent = run.detail;
+        ui.bar.style.width = `${String(Math.round(run.done * 100))}%`;
+        if (ENDED.has(job.status)) {
+          setState(ui, job.status === "complete" ? "done" : "error");
+          const capture = (await fetch(`${API_BASE}/api/v1/captures/${captureId}`).then((r) =>
+            r.json(),
+          )) as CaptureDetail;
+          if (ui.doneLink && capture.siteId) {
+            ui.doneLink.href = viewerLink(capture.siteId);
+            ui.doneLink.hidden = false;
+          }
+          refreshMine(ui);
+          stop();
+          return;
         }
-        refreshMine(ui);
-        return;
       }
     } catch {
       // A dropped connection on a phone is normal; the next tick tries again.
     }
-    window.setTimeout(() => void tick(), POLL_MS);
+    if (!stopped) timer = window.setTimeout(() => void tick(), POLL_MS);
   };
-  window.setTimeout(() => void tick(), 2_000);
+  const onVisible = (): void => {
+    if (document.visibilityState === "visible") void tick();
+  };
+  const stop = (): void => {
+    stopped = true;
+    window.clearTimeout(timer);
+    document.removeEventListener("visibilitychange", onVisible);
+    if (following === stop) following = null;
+  };
+  following = stop;
+  document.addEventListener("visibilitychange", onVisible);
+  void tick();
 }
 
 function collectUi(root: Document): Ui | null {
@@ -523,89 +630,125 @@ function startHandoff(ui: Ui, token: string, captureId: string): void {
 
 // --- this phone's captures -----------------------------------------------------------
 
-const STATE_LABEL: Record<string, string> = {
-  "awaiting-files": "Upload not finished",
-  "not-started": "Uploaded, not processed",
-  "in-progress": "Processing",
-  complete: "Ready",
-  error: "Processing failed",
-};
+/** Refreshes the list while anything in it is still processing. */
+let mineTimer = 0;
 
 /**
- * What this key has sent, newest first, with what can be done about each: view a
- * finished one in 3D, or process one whose upload stopped part-way with what arrived.
- * Reads are open in this API, so listing needs no key; processing uses it.
+ * What this key has sent, newest first, with what can be done about each. The state
+ * comes from each capture's latest run, not from the capture's own status, which does
+ * not change while a run is going -- reading that is how a capture that was training
+ * still offered "Process". Reads are open in this API, so listing needs no key.
  */
 function refreshMine(ui: Ui): void {
   const list = ui.mineList;
   const section = ui.mine;
   if (!list || !section) return;
+  window.clearTimeout(mineTimer);
   void (async () => {
     try {
-      const response = await fetch(`${API_BASE}/api/v1/captures?limit=100`);
-      if (!response.ok) return;
-      const captures = ((await response.json()) as Capture[])
+      const [captureResponse, jobResponse] = await Promise.all([
+        fetch(`${API_BASE}/api/v1/captures?limit=100`),
+        fetch(`${API_BASE}/api/v1/jobs?limit=100`),
+      ]);
+      if (!captureResponse.ok) return;
+      const captures = ((await captureResponse.json()) as Capture[])
         .filter((capture) => capture.metadata.origin === "phone-key")
         .slice(0, 12);
+      const jobs = jobResponse.ok ? ((await jobResponse.json()) as Job[]) : [];
+      const byCapture = new Map<string, Job[]>();
+      for (const job of jobs) {
+        byCapture.set(job.captureId, [...(byCapture.get(job.captureId) ?? []), job]);
+      }
       section.hidden = captures.length === 0;
-      list.replaceChildren(...captures.map((capture) => captureRow(ui, capture)));
+      const rows = await Promise.all(
+        captures.map((capture) =>
+          captureRow(ui, capture, latestJob(byCapture.get(capture.id) ?? [])),
+        ),
+      );
+      list.replaceChildren(...rows);
+      const busy = captures.some((capture) => {
+        const job = latestJob(byCapture.get(capture.id) ?? []);
+        return job !== undefined && !ENDED.has(job.status);
+      });
+      if (busy) mineTimer = window.setTimeout(() => refreshMine(ui), POLL_MS);
     } catch {
       // Offline: the list simply stays as it was.
     }
   })();
 }
 
-function captureRow(ui: Ui, capture: Capture): HTMLElement {
+function rowButton(label: string, onClick: () => void): HTMLButtonElement {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "rowbtn";
+  button.textContent = label;
+  button.addEventListener("click", onClick);
+  return button;
+}
+
+async function captureRow(ui: Ui, capture: Capture, job: Job | undefined): Promise<HTMLElement> {
   const row = document.createElement("li");
+  row.dataset.state = job?.status ?? "none";
   const text = document.createElement("div");
   const name = document.createElement("strong");
   name.textContent = capture.name;
   const state = document.createElement("span");
-  const complete = capture.files.filter((file) => file.status === "complete");
-  state.textContent =
-    `${STATE_LABEL[capture.status] ?? capture.status} · ` +
-    `${String(complete.length)} of ${String(capture.files.length)} files`;
   text.append(name, state);
   row.append(text);
 
-  if (capture.siteId) {
+  const complete = capture.files.filter((file) => file.status === "complete");
+  const everything = capture.files.length > 0 && complete.length === capture.files.length;
+
+  const process = (): void => {
+    const key = readStoredKey();
+    if (!key) return;
+    const recipe = classify(
+      complete.map((file) => ({ name: file.filename, size: file.bytes ?? 0 })),
+    ).recipe;
+    post<Job>(
+      key,
+      `/api/v1/phone/captures/${capture.id}/process`,
+      { recipe },
+      {
+        unauthorized: KEY_WRONG,
+      },
+    )
+      .catch((error: unknown) => {
+        // Already running is not a failure: follow the run that is.
+        if (error instanceof ApiError && error.status === 409) return undefined;
+        throw error;
+      })
+      .then(() => {
+        follow(capture.id, ui);
+        refreshMine(ui);
+      })
+      .catch((error: unknown) => {
+        ui.status.textContent = error instanceof Error ? error.message : "Could not start it.";
+      });
+  };
+
+  if (capture.siteId && (!job || job.status === "complete")) {
+    state.textContent = "Ready";
     const view = document.createElement("a");
     view.className = "rowbtn";
     view.href = viewerLink(capture.siteId);
     view.textContent = "View in 3D";
     row.append(view);
-  } else if (
-    (capture.status === "not-started" || capture.status === "awaiting-files") &&
-    complete.length > 0
-  ) {
-    const process = document.createElement("button");
-    process.type = "button";
-    process.className = "rowbtn";
-    process.textContent = "Process";
-    process.addEventListener("click", () => {
-      const key = readStoredKey();
-      if (!key) return;
-      process.disabled = true;
-      const recipe = classify(
-        complete.map((file) => ({ name: file.filename, size: file.bytes ?? 0 })),
-      ).recipe;
-      post<Job>(
-        key,
-        `/api/v1/phone/captures/${capture.id}/process`,
-        { recipe },
-        { unauthorized: KEY_WRONG },
-      )
-        .then(() => {
-          ui.status.textContent = `Processing "${capture.name}" with the ${String(complete.length)} file(s) that arrived.`;
-          follow(capture.id, ui);
-          refreshMine(ui);
-        })
-        .catch((error: unknown) => {
-          process.disabled = false;
-          ui.status.textContent = error instanceof Error ? error.message : "Could not start it.";
-        });
-    });
-    row.append(process);
+  } else if (job && !ENDED.has(job.status)) {
+    const run = await describeRun(job);
+    state.textContent = `${run.headline} ${run.detail}`;
+    row.append(rowButton("Progress", () => follow(capture.id, ui)));
+  } else if (job) {
+    const run = await describeRun(job);
+    state.textContent = run.headline;
+    if (everything) row.append(rowButton("Try again", process));
+  } else if (!everything) {
+    // Deliberately no Process: a reconstruction from part of a capture is not the
+    // capture, and it would be spent GPU time on a result nobody asked for.
+    state.textContent = `Upload didn't finish · ${String(complete.length)} of ${String(capture.files.length)} files. Send it again.`;
+  } else {
+    state.textContent = `Uploaded, not processed · ${String(complete.length)} files`;
+    row.append(rowButton("Process", process));
   }
   return row;
 }

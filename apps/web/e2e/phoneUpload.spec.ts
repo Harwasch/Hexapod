@@ -371,36 +371,55 @@ test.describe("the phone upload page", () => {
     expect(puts).toBe(2);
   });
 
-  test("your captures offer View in 3D when done, and Process when an upload stopped", async ({
+  test("your captures show each one's real state and only the action that fits it", async ({
     page,
   }) => {
     await page.addInitScript(() => {
       window.localStorage.setItem("twin.phoneKey", "abcd-efgh-jkmn");
     });
     const file = (status: string) => ({ filename: "a.jpg", status, bytes: 8 });
+    const phone = { origin: "phone-key" };
     await page.route(
       (url) => url.pathname === "/api/v1/captures",
       (route) =>
         route.fulfill({
           json: [
             {
-              id: "done-1",
+              id: "done",
               name: "Finished",
               siteId: "site-1",
               status: "complete",
-              metadata: { origin: "phone-key" },
+              metadata: phone,
+              files: [file("complete")],
+            },
+            // The capture's own status stays not-started while its run goes: the state
+            // has to come from the run, or this offers Process on something training.
+            {
+              id: "busy",
+              name: "Training",
+              siteId: null,
+              status: "not-started",
+              metadata: phone,
               files: [file("complete")],
             },
             {
-              id: "half-1",
+              id: "half",
               name: "Half sent",
               siteId: null,
               status: "not-started",
-              metadata: { origin: "phone-key" },
+              metadata: phone,
               files: [file("complete"), file("in-progress")],
             },
             {
-              id: "desk-1",
+              id: "idle",
+              name: "Never run",
+              siteId: null,
+              status: "not-started",
+              metadata: phone,
+              files: [file("complete"), file("complete")],
+            },
+            {
+              id: "desk",
               name: "From the desktop",
               siteId: "site-2",
               status: "complete",
@@ -410,6 +429,41 @@ test.describe("the phone upload page", () => {
           ],
         }),
     );
+    const training = {
+      id: "job-busy",
+      captureId: "busy",
+      recipe: "photo-reconstruct",
+      status: "in-progress",
+      createdAt: new Date().toISOString(),
+      error: null,
+      steps: [
+        { ordinal: 0, stageId: "normalize", status: "complete", startedAt: null },
+        {
+          ordinal: 1,
+          stageId: "train",
+          status: "in-progress",
+          startedAt: new Date(Date.now() - 12 * 60_000).toISOString(),
+        },
+      ],
+    };
+    await page.route(
+      (url) => url.pathname === "/api/v1/jobs",
+      (route) => route.fulfill({ json: [training] }),
+    );
+    await page.route(
+      (url) => url.pathname === "/api/v1/recipes",
+      (route) =>
+        route.fulfill({
+          json: {
+            recipes: [
+              {
+                name: "photo-reconstruct",
+                stages: ["normalize", "pose", "train", "register"].map((id) => ({ id })),
+              },
+            ],
+          },
+        }),
+    );
     const processed: string[] = [];
     await page.route("**/api/v1/phone/captures/*/process", async (route) => {
       processed.push(route.request().url());
@@ -417,16 +471,79 @@ test.describe("the phone upload page", () => {
     });
 
     await page.goto("/upload.html");
-    const rows = page.locator("#mine-list li");
-    await expect(rows).toHaveCount(2);
-    await expect(rows.nth(0).getByRole("link", { name: "View in 3D" })).toHaveAttribute(
+    const row = (name: string) => page.locator("#mine-list li", { hasText: name });
+    await expect(page.locator("#mine-list li")).toHaveCount(4);
+
+    await expect(row("Finished").getByRole("link", { name: "View in 3D" })).toHaveAttribute(
       "href",
       "/view.html#site-1",
     );
-    await expect(rows.nth(1)).toContainText("1 of 2 files");
-    await rows.nth(1).getByRole("button", { name: "Process" }).click();
+    await expect(row("Training")).toContainText("Training the 3D model");
+    await expect(row("Training")).toContainText("Step 2 of 4");
+    await expect(row("Training")).toContainText("12 min");
+    await expect(row("Training").getByRole("button", { name: "Process" })).toHaveCount(0);
+    await expect(row("Training").getByRole("button", { name: "Progress" })).toBeVisible();
+
+    await expect(row("Half sent")).toContainText("Upload didn't finish");
+    await expect(row("Half sent").getByRole("button")).toHaveCount(0);
+
+    await row("Never run").getByRole("button", { name: "Process" }).click();
     await expect.poll(() => processed.length).toBe(1);
-    expect(processed[0]).toContain("/api/v1/phone/captures/half-1/process");
+    expect(processed[0]).toContain("/api/v1/phone/captures/idle/process");
+  });
+
+  test("the status panel follows a run through its stages", async ({ page }) => {
+    await page.addInitScript(() => {
+      window.localStorage.setItem("twin.phoneKey", "abcd-efgh-jkmn");
+    });
+    await page.route(
+      (url) => url.pathname === "/api/v1/captures",
+      (route) =>
+        route.fulfill({
+          json: [
+            {
+              id: "busy",
+              name: "Training",
+              siteId: null,
+              status: "not-started",
+              metadata: { origin: "phone-key" },
+              files: [{ filename: "a.jpg", status: "complete", bytes: 8 }],
+            },
+          ],
+        }),
+    );
+    let polls = 0;
+    await page.route(
+      (url) => url.pathname === "/api/v1/jobs",
+      async (route) => {
+        polls += 1;
+        // One failed answer must not end the polling: that was the "Queued" forever bug.
+        if (polls === 2) return route.fulfill({ status: 502, body: "" });
+        const started = new Date(Date.now() - 60_000).toISOString();
+        await route.fulfill({
+          json: [
+            {
+              id: "job",
+              captureId: "busy",
+              recipe: "photo-reconstruct",
+              status: "in-progress",
+              createdAt: started,
+              error: null,
+              steps: [{ ordinal: 0, stageId: "pose", status: "in-progress", startedAt: started }],
+            },
+          ],
+        });
+      },
+    );
+    await page.route(
+      (url) => url.pathname === "/api/v1/recipes",
+      (route) => route.fulfill({ json: { recipes: [] } }),
+    );
+
+    await page.goto("/upload.html");
+    await page.locator("#mine-list li").getByRole("button", { name: "Progress" }).click();
+    await expect(page.locator("#status")).toContainText("Working out where each photo was taken");
+    await expect(page.locator("#detail")).toContainText("running");
   });
 
   test("a bucket that hides the ETag is reported as the CORS problem it is", async ({ page }) => {
