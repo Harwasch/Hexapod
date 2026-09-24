@@ -115,6 +115,37 @@ def test_the_key_starts_runs_only_on_its_own_captures(client: TestClient, db: Se
     assert odd.status_code == 409
 
 
+def test_the_key_stops_a_run_on_its_own_captures_only(client: TestClient, db: Session) -> None:
+    mine = client.post("/api/v1/phone/captures", json={}, headers=PHONE).json()["capture"]
+    uploaded(db, mine["id"])
+    other = client.post(
+        "/api/v1/captures",
+        json={"name": "desktop", "kind": "video"},
+        headers={"Authorization": f"Bearer {WRITE}"},
+    ).json()
+    uploaded(db, other["id"])
+    run = {"recipe": "photo-reconstruct"}
+    started = client.post(f"/api/v1/phone/captures/{mine['id']}/process", json=run, headers=PHONE)
+    client.post(
+        f"/api/v1/captures/{other['id']}/jobs",
+        json=run,
+        headers={"Authorization": f"Bearer {WRITE}"},
+    )
+
+    assert client.post(f"/api/v1/phone/captures/{mine['id']}/stop").status_code == 401
+    refused = client.post(f"/api/v1/phone/captures/{other['id']}/stop", headers=PHONE)
+    assert refused.status_code == 401
+    stopped = client.post(f"/api/v1/phone/captures/{mine['id']}/stop", headers=PHONE)
+    assert stopped.status_code == 200, stopped.text
+    assert stopped.json()["id"] == started.json()["id"]
+    assert stopped.json()["status"] == "cancelled"
+    again = client.post(f"/api/v1/phone/captures/{mine['id']}/stop", headers=PHONE)
+    assert again.status_code == 409
+    # Stopped, it can be started again.
+    retried = client.post(f"/api/v1/phone/captures/{mine['id']}/process", json=run, headers=PHONE)
+    assert retried.status_code == 202, retried.text
+
+
 def test_the_key_cannot_do_what_the_write_token_does(client: TestClient) -> None:
     assert (
         client.post(

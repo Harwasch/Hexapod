@@ -15,6 +15,7 @@ from sqlalchemy import func, select
 from app.api.deps import DbSession, SettingsDep
 from app.models.capture import Capture
 from app.models.enums import CaptureKind
+from app.models.job import Job
 from app.schemas.base import CamelModel
 from app.schemas.capture import CaptureCreate, CaptureRead
 from app.schemas.job import JobCreate, JobRead
@@ -120,3 +121,26 @@ def process_phone_capture(capture_id: uuid.UUID, payload: JobCreate, db: DbSessi
     return job_service.job_to_read(
         job_service.create_job(db, capture_id, JobCreate(recipe=payload.recipe))
     )
+
+
+@router.post(
+    "/captures/{capture_id}/stop",
+    response_model=JobRead,
+    dependencies=[RequirePhoneKey],
+    summary="Stop the run in progress over a capture this phone key started",
+)
+def stop_phone_capture(capture_id: uuid.UUID, db: DbSession) -> JobRead:
+    """The phone's Stop button. The same cancel as `POST /jobs/{id}/cancel`, reached with
+    the phone key and only for this phone's own captures, so a run that is taking far
+    too long can be stopped from the phone that started it."""
+    capture = capture_service.get_capture(db, capture_id)
+    if (capture.metadata_ or {}).get("origin") != ORIGIN:
+        raise UnauthorizedError("That phone key is not right.")
+    active = db.scalars(
+        select(Job)
+        .where(Job.capture_id == capture_id, Job.status.in_(job_service.ACTIVE_STATUSES))
+        .order_by(Job.created_at.desc())
+    ).first()
+    if active is None:
+        raise ConflictError("Nothing is running for that capture.")
+    return job_service.job_to_read(job_service.cancel_job(db, active.id))

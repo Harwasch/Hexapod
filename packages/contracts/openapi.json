@@ -9748,6 +9748,85 @@
         ]
       }
     },
+    "/api/v1/phone/captures/{capture_id}/stop": {
+      "post": {
+        "description": "The phone's Stop button. The same cancel as `POST /jobs/{id}/cancel`, reached with\nthe phone key and only for this phone's own captures, so a run that is taking far\ntoo long can be stopped from the phone that started it.",
+        "operationId": "stop_phone_capture_api_v1_phone_captures__capture_id__stop_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "capture_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Capture Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "phoneKey": []
+          }
+        ],
+        "summary": "Stop the run in progress over a capture this phone key started",
+        "tags": [
+          "phone"
+        ]
+      }
+    },
     "/api/v1/phone/check": {
       "post": {
         "description": "204 when the key is right, so the page can say so before anything is picked.",

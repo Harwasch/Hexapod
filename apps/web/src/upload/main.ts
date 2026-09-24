@@ -1013,6 +1013,29 @@ async function captureRow(ui: Ui, capture: Capture, job: Job | undefined): Promi
       });
   };
 
+  const stop = (): void => {
+    const key = readStoredKey();
+    if (!key) return;
+    // A GPU run is the one thing on this page that costs money by the minute, so this
+    // asks once; it is also the one thing that cannot be undone, only started again.
+    if (!window.confirm("Stop this run? What it has done so far is lost; you can start it again."))
+      return;
+    post<Job>(key, `/api/v1/phone/captures/${capture.id}/stop`, undefined, {
+      unauthorized: KEY_WRONG,
+    })
+      .catch((error: unknown) => {
+        // Already ended is what Stop wanted.
+        if (error instanceof ApiError && error.status === 409) return undefined;
+        throw error;
+      })
+      .then(() => {
+        refreshMine(ui);
+      })
+      .catch((error: unknown) => {
+        ui.status.textContent = error instanceof Error ? error.message : "Could not stop it.";
+      });
+  };
+
   if (capture.siteId && (!job || job.status === "complete")) {
     state.textContent = "Ready";
     const view = document.createElement("a");
@@ -1023,7 +1046,10 @@ async function captureRow(ui: Ui, capture: Capture, job: Job | undefined): Promi
   } else if (job && !ENDED.has(job.status)) {
     const run = await describeRun(job);
     state.textContent = `${run.headline} ${run.detail} · ${run.usdEstimated ? "≈" : ""}${dollars(run.usd)}`;
-    row.append(rowButton("Progress", () => follow(capture.id, ui)));
+    row.append(
+      rowButton("Progress", () => follow(capture.id, ui)),
+      rowButton("Stop", stop),
+    );
   } else if (job) {
     const run = await describeRun(job);
     state.textContent = run.headline;

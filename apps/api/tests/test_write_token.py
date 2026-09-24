@@ -355,4 +355,5 @@ def test_the_phone_key_opens_the_phone_routes_and_nothing_else(client: TestClien
         "POST /api/v1/phone/check",
         "POST /api/v1/phone/captures",
         "POST /api/v1/phone/captures/{capture_id}/process",
+        "POST /api/v1/phone/captures/{capture_id}/stop",
     }

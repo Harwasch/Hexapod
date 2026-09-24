@@ -525,6 +525,16 @@ test.describe("the phone upload page", () => {
       "11,100 of 30,000 iterations · about 20 min left · ≈ $0.43 when done",
     );
 
+    const stopped: string[] = [];
+    await page.route("**/api/v1/phone/captures/*/stop", async (route) => {
+      stopped.push(route.request().url());
+      await route.fulfill({ json: { ...training, status: "cancelled" } });
+    });
+    page.once("dialog", (dialog) => void dialog.accept());
+    await row("Training").getByRole("button", { name: "Stop" }).click();
+    await expect.poll(() => stopped.length).toBe(1);
+    expect(stopped[0]).toContain(`/api/v1/phone/captures/${training.captureId}/stop`);
+
     await expect(row("Half sent")).toContainText("Upload didn't finish");
     await expect(row("Half sent").getByRole("button")).toHaveCount(0);
 
