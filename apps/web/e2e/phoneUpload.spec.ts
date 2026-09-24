@@ -463,6 +463,8 @@ test.describe("the phone upload page", () => {
           stageId: "train",
           status: "in-progress",
           startedAt: new Date(Date.now() - 12 * 60_000).toISOString(),
+          // What the worker copies off the trainer's progress bar.
+          metrics: { progress: { done: 11100, total: 30000, elapsedS: 700, remainingS: 1200 } },
         },
       ],
     };
@@ -512,7 +514,16 @@ test.describe("the phone upload page", () => {
     // 12 min of L4 at $0.80/h is $0.16, plus pose's recorded $0.002.
     await expect(row("Training")).toContainText("≈$0.16");
     await expect(row("Training").getByRole("button", { name: "Process" })).toHaveCount(0);
+    await expect(row("Training")).toContainText("about 20 min left");
     await expect(row("Training").getByRole("button", { name: "Progress" })).toBeVisible();
+
+    await row("Training").getByRole("button", { name: "Progress" }).click();
+    const runningStep = page.locator('#stages li[data-state="running"]');
+    await expect(runningStep.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "11100");
+    // 12 min so far and 20 to go, at $0.80/h.
+    await expect(runningStep).toContainText(
+      "11,100 of 30,000 iterations · about 20 min left · ≈ $0.43 when done",
+    );
 
     await expect(row("Half sent")).toContainText("Upload didn't finish");
     await expect(row("Half sent").getByRole("button")).toHaveCount(0);

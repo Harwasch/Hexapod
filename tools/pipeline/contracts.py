@@ -10,11 +10,13 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import progress
 from artifacts import ArtifactDecl, ArtifactRef
 from errors import StageContractError
 
@@ -56,6 +58,9 @@ class StageContext:
     attempts_path: Path
     _inputs: Mapping[str, Path]
     _produces: Mapping[str, ArtifactDecl]
+    #: Also write each log line to stdout. Set on a remote machine, where stdout is what
+    #: the provider's log tail reads, so a line reaches the worker while the stage runs.
+    echo: bool = False
 
     @property
     def inputs(self) -> Mapping[str, Path]:
@@ -110,27 +115,25 @@ class StageContext:
         return any(self.checkpoint_dir.iterdir())
 
     def log(self, message: str) -> None:
+        line = message.rstrip("\n") + "\n"
         with self.log_path.open("a", encoding="utf-8") as handle:
-            handle.write(message.rstrip("\n") + "\n")
+            handle.write(line)
+        if self.echo:
+            sys.stdout.write(line)
+            sys.stdout.flush()
 
     def run(self, argv: Sequence[str]) -> None:
-        """Run an external tool, with its output in the stage log.
+        """Run an external tool, with its output in the stage log as it is printed.
 
         This is LocalRunner's subprocess half: a stage that shells out (colmap, ffmpeg)
         does it here rather than each runner growing a second way to invoke stages.
+        Streamed rather than collected at exit, so a long tool's progress is visible
+        while it runs (`progress.py`).
         """
         self.log(f"$ {' '.join(argv)}")
-        completed = subprocess.run(  # noqa: S603 - argv comes from stage code, never a shell
-            list(argv),
-            cwd=self.work_dir,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        for line in (completed.stdout + completed.stderr).splitlines():
-            self.log(line)
-        if completed.returncode != 0:
-            raise subprocess.CalledProcessError(completed.returncode, list(argv))
+        code = progress.stream(argv, cwd=self.work_dir, log=self.log)
+        if code != 0:
+            raise subprocess.CalledProcessError(code, list(argv))
 
 
 @dataclass(frozen=True)

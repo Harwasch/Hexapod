@@ -213,6 +213,10 @@
         margin: 4px 0 2px;
         font-size: 0.875rem;
       }
+      .stages .stage-track {
+        height: 6px;
+        margin: 8px 0 4px;
+      }
       .run-cost {
         margin: 4px 0 0;
         font-weight: 600;
@@ -400,8 +404,8 @@
         display: none;
       }
       /* Set by main.ts: nothing to track before a file is picked, or when the link is bad. */
-      main[data-state="idle"] .track,
-      main[data-state="invalid"] .track {
+      main[data-state="idle"] .track:not(.stage-track),
+      main[data-state="invalid"] .track:not(.stage-track) {
         display: none;
       }
       main[data-state="done"] .progress {

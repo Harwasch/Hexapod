@@ -69,6 +69,8 @@ from errors import PipelineError, PreemptedError, StageFailedError  # noqa: E402
 from executor import RunResult, execute  # noqa: E402
 from modal_adapter import ModalAdapter  # noqa: E402
 from plan import Plan, PlannedStage, plan_recipe  # noqa: E402
+from progress import latest as latest_progress  # noqa: E402
+from progress import tail as tail_of  # noqa: E402
 from providers import PROVIDERS, Provider, Rate, rates_from_env, with_rates  # noqa: E402
 from recipe import Recipe, load_recipe, recipe_dir  # noqa: E402
 from runners import RunnerSet  # noqa: E402
@@ -102,10 +104,12 @@ __all__ = [
     "Workdir",
     "ensure_importable",
     "execute",
+    "latest_progress",
     "load_recipe",
     "plan_recipe",
     "rates_from_env",
     "recipe_dir",
     "run_cost",
+    "tail_of",
     "with_rates",
 ]

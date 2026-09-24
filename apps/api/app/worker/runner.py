@@ -71,8 +71,10 @@ from app.worker.pipeline_bridge import (
     Plan,
     RunCost,
     Workdir,
+    latest_progress,
     plan_recipe,
     run_cost,
+    tail_of,
 )
 from app.worker.publish import Publisher
 
@@ -307,6 +309,8 @@ class JobSupervisor:
                     _stop(process, self._config.terminate_grace_s)
                     state.outcome = "cancelled" if beat is claim.Heartbeat.CANCELLED else "lost"
                     return state
+                if current is not None:
+                    self._report_progress(db, current, workdir_root)
                 next_beat = now + self._config.poll_s
             try:
                 item = inbox.get(timeout=max(0.01, next_beat - time.monotonic()))
@@ -556,6 +560,17 @@ class JobSupervisor:
         env["PYTHONPATH"] = f"{_API_ROOT}:{existing}" if existing else str(_API_ROOT)
         env["PIPELINE_DIR"] = str(PIPELINE_DIR)
         return env
+
+    @staticmethod
+    def _report_progress(db: Session, step: JobStep, workdir_root: Path) -> None:
+        """Copy the newest progress line in a running stage's log onto its row.
+
+        On the heartbeat, so it costs one small read a tick. A stage that prints no
+        progress line (most of them) leaves the row alone.
+        """
+        found = latest_progress(tail_of(Workdir(workdir_root).log_path(step.stage_id)))
+        if found is not None:
+            steps.report_progress(db, step, found.to_dict())
 
     def _upload_log(self, job_id: uuid.UUID, workdir_root: Path, stage_id: str) -> str | None:
         return outputs.upload_log(self._storage, workdir_root, job_id, stage_id)

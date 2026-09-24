@@ -86,6 +86,19 @@ def finish_step(
     db.commit()
 
 
+def report_progress(db: Session, step: JobStep, progress: dict[str, Any]) -> bool:
+    """Record how far a running stage has got, read from its log. True when it changed.
+
+    Kept under `metrics.progress` because `finish_step` replaces the metrics wholesale,
+    so the progress of a finished stage disappears with the stage rather than going stale.
+    """
+    if step.status != RunStatus.IN_PROGRESS or (step.metrics or {}).get("progress") == progress:
+        return False
+    step.metrics = {**(step.metrics or {}), "progress": progress}
+    db.commit()
+    return True
+
+
 def fail_step(
     db: Session,
     step: JobStep,

@@ -25,6 +25,7 @@ from pathlib import Path
 
 import pytest
 
+import progress
 import training
 from adapters import LocalTransfer, SubprocessAdapter
 from cloud import AttemptLedger, CloudRunner, Placement
@@ -235,6 +236,8 @@ def test_the_stage_dispatches_and_normalises_what_the_stand_in_trainer_wrote(
     assert metrics["trainer"] == "gsplat:gsplat_stand_in.py"
     log = workdir.log_path("train").read_text()
     assert "--disable_viewer" in log and "--ckpt " not in log
+    # The trainer's progress bar reaches the stage log, so the worker can read it back.
+    assert progress.latest(log) == progress.Progress(300, 300, 9, 1)
 
 
 def test_the_result_directory_is_scratch_because_nothing_can_resume_from_it(

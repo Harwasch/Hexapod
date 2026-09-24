@@ -119,6 +119,12 @@ def main(argv: list[str] | None = None) -> int:
     step = start
     while step < args.max_steps:
         step += 1
+        # tqdm's redraw, carriage return and all, which is what the real trainer's loop
+        # prints to stderr and what `progress.parse` reads back.
+        sys.stderr.write(
+            f"\rloss=0.1| sh degree=3| : {100 * step // args.max_steps:3d}%|#| "
+            f"{step}/{args.max_steps} [00:0{min(step, 9)}<00:01, 99.00it/s]"
+        )
         if step % args.ckpt_every == 0 or step == args.max_steps:
             index = step - 1
             (ckpts / f"ckpt_{index}_rank0.pt").write_text(

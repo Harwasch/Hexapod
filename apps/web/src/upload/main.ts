@@ -517,6 +517,7 @@ type StageState = "done" | "running" | "waiting" | "skipped" | "failed";
 
 interface StageRow {
   text: StageText;
+  impl: string;
   where: string;
   state: StageState;
   /** Seconds taken, or running so far. */
@@ -526,6 +527,30 @@ interface StageRow {
   estimated: boolean;
   /** The stage's own one-line result, e.g. "4/4 frames registered". */
   result: string | null;
+  /** How far a running stage has got, when its tool reports it (the trainer does). */
+  progress: StageProgress | null;
+  /** What the running stage will have cost when it ends, from its progress and rate. */
+  usdAtEnd: number | null;
+}
+
+/** `metrics.progress` on a running step: the worker copies it from the stage's log. */
+interface StageProgress {
+  done: number;
+  total: number;
+  remainingS: number | null;
+}
+
+/** What a stage's progress counts, where that is worth saying. */
+const PROGRESS_UNIT: Record<string, string> = { gsplat: "iterations" };
+
+function readProgress(
+  step: { metrics?: Record<string, unknown> | null } | undefined,
+): StageProgress | null {
+  const value = step ? metric(step, "progress") : undefined;
+  if (!value || typeof value !== "object") return null;
+  const { done, total, remainingS } = value as Record<string, unknown>;
+  if (typeof done !== "number" || typeof total !== "number" || total <= 0) return null;
+  return { done, total, remainingS: typeof remainingS === "number" ? remainingS : null };
 }
 
 interface RunView {
@@ -569,19 +594,27 @@ async function describeRun(job: Job): Promise<RunView> {
     let usd = typeof cost === "number" ? cost : null;
     let estimated = false;
     const rate = tier ? rates[tier] : undefined;
+    const progress = state === "running" ? readProgress(step) : null;
+    let usdAtEnd: number | null = null;
     if (state === "running" && tier && rate !== undefined) {
       usd = ((seconds ?? 0) / 3600) * rate;
       estimated = true;
+      if (progress?.remainingS != null) {
+        usdAtEnd = (((seconds ?? 0) + progress.remainingS) / 3600) * rate;
+      }
     }
     const summary = step ? metric(step, "summary") : undefined;
     return {
       text,
+      impl: stage.impl,
       where: whereItRuns(tier),
       state,
       seconds,
       usd,
       estimated,
       result: typeof summary === "string" && state !== "skipped" ? summary : null,
+      progress,
+      usdAtEnd,
     };
   });
 
@@ -605,6 +638,9 @@ async function describeRun(job: Job): Promise<RunView> {
   } else if (running) {
     headline = `${running.text.name}…`;
     detail = `Step ${String(finished + 1)} of ${String(total)} · ${duration(running.seconds ?? 0)} so far`;
+    if (running.progress?.remainingS != null) {
+      detail += ` · about ${duration(running.progress.remainingS)} left`;
+    }
   } else if (finished === 0) {
     headline = "Queued.";
     detail = "Waiting for the worker to pick it up, usually under a minute.";
@@ -662,6 +698,7 @@ function renderStages(ui: Ui, run: RunView): void {
         what.textContent = row.text.what;
         body.append(what);
       }
+      if (row.state === "running") body.append(progressView(row));
       if (row.result) {
         const result = document.createElement("span");
         result.className = "result";
@@ -672,6 +709,48 @@ function renderStages(ui: Ui, run: RunView): void {
       return item;
     }),
   );
+}
+
+/**
+ * A running stage's progress: a bar and "11,100 of 30,000 iterations · about 1 h 8 min
+ * left · ≈ $1.52 when done" when its tool reports it, and a plain statement when it does
+ * not, so "no news" is never mistaken for "stuck".
+ */
+function progressView(row: StageRow): HTMLElement {
+  const box = document.createElement("div");
+  box.className = "stage-progress";
+  const { progress } = row;
+  if (!progress) {
+    // A short step needs no apology; one running for minutes with nothing to show does.
+    if ((row.seconds ?? 0) < 120) return box;
+    const note = document.createElement("span");
+    note.className = "facts";
+    note.textContent = "This step does not report how far along it is; it is still running.";
+    box.append(note);
+    return box;
+  }
+  // The upload bar's own track and fill, so the two read as the same kind of thing.
+  const bar = document.createElement("div");
+  bar.className = "track stage-track";
+  bar.setAttribute("role", "progressbar");
+  bar.setAttribute("aria-valuemin", "0");
+  bar.setAttribute("aria-valuemax", String(progress.total));
+  bar.setAttribute("aria-valuenow", String(progress.done));
+  const fill = document.createElement("div");
+  fill.className = "bar";
+  fill.style.width = `${String(Math.min(100, (100 * progress.done) / progress.total))}%`;
+  bar.append(fill);
+  const words = document.createElement("span");
+  words.className = "facts";
+  const unit = PROGRESS_UNIT[row.impl] ?? "";
+  const parts = [
+    `${progress.done.toLocaleString("en-US")} of ${progress.total.toLocaleString("en-US")}${unit ? ` ${unit}` : ""}`,
+  ];
+  if (progress.remainingS !== null) parts.push(`about ${duration(progress.remainingS)} left`);
+  if (row.usdAtEnd !== null) parts.push(`≈ ${dollars(row.usdAtEnd)} when done`);
+  words.textContent = parts.join(" · ");
+  box.append(bar, words);
+  return box;
 }
 
 /** The standalone scan viewer (view.html) on one site. */

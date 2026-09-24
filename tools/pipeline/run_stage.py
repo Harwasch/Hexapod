@@ -50,6 +50,7 @@ def _context(request: StageRequest, sandbox: Path) -> StageContext:
         attempts_path=sandbox / "attempts.json",
         _inputs={name: sandbox / "inputs" / name for name in request.inputs},
         _produces={decl.name: decl for decl in request.produces},
+        echo=True,
     )
 
 
@@ -66,10 +67,9 @@ def run(spec_path: Path) -> int:
         f"run_stage: {request.impl} for stage {request.stage_id!r}, attempt {request.attempt}, "
         f"{'resuming' if context.has_checkpoint else 'from scratch'}\n"
     )
+    # `echo` puts each stage log line on stdout as it is written, so one `logs()` tail
+    # shows both, and shows them while the stage runs rather than after it ends.
     outcome: StageOutcome = impl.fn(context)
-    # The stage's own log is part of this process's log, so one `logs()` tail shows both.
-    if context.log_path.is_file():
-        sys.stdout.write(context.log_path.read_text(encoding="utf-8", errors="replace"))
     (sandbox / "result.json").write_text(
         json.dumps({"metrics": dict(outcome.metrics), "summary": outcome.summary}, sort_keys=True)
         + "\n",

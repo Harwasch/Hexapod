@@ -29,9 +29,11 @@ from app.models import Artifact, Capture, Job, JobStep, Site
 from app.models.enums import CaptureKind, CaptureStatus, RunStatus
 from app.services import jobs as job_service
 from app.storage import NullStorage, ObjectStorage, S3Storage
+from app.worker import steps as step_service
 from app.worker.claim import Heartbeat, claim_next, heartbeat, release
 from app.worker.config import WorkerConfig
 from app.worker.loop import Worker
+from app.worker.pipeline_bridge import Workdir
 from app.worker.runner import JobSupervisor, Terminal
 from tests.conftest import TEST_DATABASE_URL
 
@@ -672,3 +674,40 @@ def test_a_recipe_that_does_not_resolve_is_dead_lettered_immediately(
     assert dead is not None
     assert dead.status is RunStatus.ERROR
     assert "did not resolve" in (dead.error or "")
+
+
+def test_a_running_stages_progress_line_reaches_its_row(db: Session, tmp_path: Path) -> None:
+    """A two-hour training stage says how far it has got while it runs, not after.
+
+    The supervisor reads the newest progress line from the stage's log on each heartbeat
+    and keeps it under `metrics.progress`; finishing the stage replaces it.
+    """
+    job = queue_job(db, make_capture(db))
+    step = step_service.start_step(
+        db, job.id, stage_id="train", ordinal=3, impl="gsplat", attempt=1
+    )
+    log_path = Workdir(tmp_path).log_path("train")
+    log_path.parent.mkdir(parents=True)
+    log_path.write_text("$ trainer\nstand-in: starting\n", encoding="utf-8")
+
+    JobSupervisor._report_progress(db, step, tmp_path)
+    assert step.metrics == {}
+
+    with log_path.open("a", encoding="utf-8") as handle:
+        handle.write("loss=0.04| :  37%|###7  | 11100/30000 [40:12<1:08:30,  4.60it/s]\n")
+    JobSupervisor._report_progress(db, step, tmp_path)
+    db.expire_all()
+    row = steps_by_stage(db, job.id)["train"]
+    assert row.metrics["progress"] == {
+        "done": 11100,
+        "total": 30000,
+        "elapsedS": 2412,
+        "remainingS": 4110,
+    }
+    assert step_service.report_progress(db, row, row.metrics["progress"]) is False
+
+    step_service.finish_step(
+        db, row, metrics={"iterations": 30000}, log_key=None, checkpoint_key=None, artifacts=[]
+    )
+    assert step_service.report_progress(db, row, {"done": 1, "total": 2}) is False
+    assert "progress" not in steps_by_stage(db, job.id)["train"].metrics
