@@ -29,6 +29,14 @@ on:
           - api
           - web
         default: everything
+      api_base_url:
+        description: The API's public origin (blank = VITE_API_BASE_URL, else the Fly app in fly.toml)
+        type: string
+        default: ""
+      offline_catalog_url:
+        description: catalog.json's public URL (blank = VITE_OFFLINE_CATALOG_URL)
+        type: string
+        default: ""
   # provision.yml calls this workflow rather than repeating its steps: there is one
   # deploy, described in one place, whoever starts it. `workflow_call` cannot take a
   # `choice`, so `target` is a string here and the two `if:` comparisons below accept
@@ -36,9 +44,12 @@ on:
   #
   # The two URL inputs exist because provisioning *computes* values that a standalone
   # dispatch has to be told: the Fly app's origin and the bucket's public catalog URL.
-  # Both fall back to the repository variables, so a dispatch behaves exactly as it did
-  # before this block was added, and a provisioned first deploy needs no variables set
-  # at all. See docs/DEPLOYMENT.md § Handover.
+  # Both fall back to the repository variables. A provisioned deployment has neither
+  # variable set -- provision passes the values in -- and a plain dispatch of this
+  # workflow therefore once built the web app with no API origin at all: every request
+  # went to Pages itself and was answered 405, and the console said the API was offline.
+  # So the API origin now also falls back to the Fly app `fly.toml` names, and a build
+  # that still has none fails instead of shipping. See docs/DEPLOYMENT.md § Handover.
   workflow_call:
     inputs:
       target:
@@ -170,10 +181,27 @@ jobs:
       - name: Build
         env:
           VITE_CESIUM_ION_ACCESS_TOKEN: ${{ secrets.VITE_CESIUM_ION_ACCESS_TOKEN }}
-          VITE_API_BASE_URL: ${{ inputs.api_base_url || vars.VITE_API_BASE_URL }}
+          GIVEN_API_BASE_URL: ${{ inputs.api_base_url || vars.VITE_API_BASE_URL }}
           VITE_OFFLINE_CATALOG_URL: ${{ inputs.offline_catalog_url || vars.VITE_OFFLINE_CATALOG_URL }}
           VITE_ENABLE_PHOTOREALISTIC: ${{ vars.VITE_ENABLE_PHOTOREALISTIC }}
-        run: pnpm --filter @twin/web build
+        run: |
+          api="${GIVEN_API_BASE_URL%/}"
+          if [ -z "$api" ]; then
+            app=$(sed -n 's/^app *= *"\(.*\)"/\1/p' fly.toml | head -1)
+            [ -n "$app" ] && api="https://${app}.fly.dev"
+            echo "no API origin given; using the Fly app in fly.toml: $api"
+          fi
+          if [ -z "$api" ]; then
+            echo "::error::no API origin: pass api_base_url, set VITE_API_BASE_URL, or name the app in fly.toml."
+            echo "::error::A web build without one sends every API call to Pages and gets 405s."
+            exit 1
+          fi
+          if [ -z "${VITE_OFFLINE_CATALOG_URL}" ]; then
+            echo "::warning::no offline catalog URL: the console has no fallback catalogue when the API is down."
+          fi
+          VITE_API_BASE_URL="$api" pnpm --filter @twin/web build
+          # The origin is inlined into the bundle; not finding it there is the bug above.
+          grep -rqF "$api" apps/web/dist/assets || { echo "::error::$api is not in the built bundle"; exit 1; }
       # Pages reads _headers from the root of the deployed directory, and Vite copies
       # only apps/web/public into dist. Keeping the file in infra/ instead means a local
       # build and the e2e suite see exactly the bundle they saw before this workflow
