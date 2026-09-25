@@ -4,16 +4,19 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Iterator
+from datetime import UTC, datetime
 
 import pytest
 from fastapi.testclient import TestClient
+from httpx import Response
 from sqlalchemy.orm import Session
 
 from app.api.deps import _db
 from app.config import Settings
 from app.main import create_app
 from app.models.capture import CaptureFile
-from app.models.enums import UploadStatus
+from app.models.enums import ArtifactKind, RunStatus, UploadStatus
+from app.models.job import Artifact, Job, JobStep
 from app.services import phone_key
 from app.storage import S3Storage, get_storage
 
@@ -172,3 +175,61 @@ def test_with_no_key_configured_the_phone_routes_are_closed(db: Session) -> None
     app.dependency_overrides[_db] = override_db
     with TestClient(app) as test_client:
         assert test_client.post("/api/v1/phone/check", headers=PHONE).status_code == 401
+
+
+def test_a_phone_sets_only_the_options_it_is_allowed(client: TestClient, db: Session) -> None:
+    mine = client.post("/api/v1/phone/captures", json={}, headers=PHONE).json()["capture"]
+    uploaded(db, mine["id"])
+    url = f"/api/v1/phone/captures/{mine['id']}/process"
+
+    def start(params: dict[str, object], recipe: str = "photo-reconstruct") -> Response:
+        return client.post(url, json={"recipe": recipe, "params": params}, headers=PHONE)
+
+    for refused in (
+        {"train": {"trainer": "/bin/sh"}},
+        {"train": {"cap_max": 10}},
+        {"train": {"cap_max": True}},
+        {"pose": {"matcher": "sequential"}},
+        {"normalize": "fast"},
+    ):
+        response = start(refused)
+        assert response.status_code == 409, (refused, response.text)
+    assert start({"normalize": {"up_axis": "sideways"}}, "splat-ingest").status_code == 409
+
+    chosen = {
+        "normalize": {"max_side": 2400},
+        "train": {"schedule_floor": 1.0, "cap_max": 1_000_000},
+        "package": {"max_gaussians": 800_000},
+    }
+    ok = start(chosen)
+    assert ok.status_code == 202, ok.text
+    job = db.get(Job, uuid.UUID(ok.json()["id"]))
+    assert job is not None and job.params == chosen
+
+
+def test_a_finished_capture_downloads_its_placed_splat(client: TestClient, db: Session) -> None:
+    mine = client.post("/api/v1/phone/captures", json={}, headers=PHONE).json()["capture"]
+    capture_id = uuid.UUID(mine["id"])
+    url = f"/api/v1/captures/{capture_id}/splat.ply"
+    assert client.get(url, follow_redirects=False).status_code == 404
+
+    job = Job(capture_id=capture_id, recipe="photo-reconstruct", recipe_version="7", params={})
+    job.status = RunStatus.COMPLETE
+    job.finished_at = datetime.now(tz=UTC)
+    db.add(job)
+    db.flush()
+    for ordinal, stage, key in (
+        (3, "train", "runs/x/train/trained.ply"),
+        (6, "place", "runs/x/place/canonical.ply"),
+    ):
+        step = JobStep(job_id=job.id, stage_id=stage, ordinal=ordinal, impl=stage)
+        step.status = RunStatus.COMPLETE
+        db.add(step)
+        db.flush()
+        kind = ArtifactKind.SPLAT if stage == "place" else ArtifactKind.METADATA
+        db.add(Artifact(job_step_id=step.id, kind=kind, storage_key=key, bytes=1))
+    db.commit()
+
+    response = client.get(url, follow_redirects=False)
+    assert response.status_code == 307
+    assert "runs/x/place/canonical.ply" in response.headers["location"]

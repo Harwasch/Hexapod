@@ -19,8 +19,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.config import Settings
-from app.models import Capture, CaptureFile
-from app.models.enums import CaptureStatus, UploadStatus
+from app.models import Artifact, Capture, CaptureFile, Job, JobStep
+from app.models.enums import ArtifactKind, CaptureStatus, RunStatus, UploadStatus
 from app.schemas.capture import (
     CaptureCreate,
     CaptureDetail,
@@ -421,3 +421,27 @@ def _capture_fields(capture: Capture) -> dict[str, object]:
         "created_at": capture.created_at,
         "updated_at": capture.updated_at,
     }
+
+
+def latest_splat_key(db: Session, capture_id: uuid.UUID) -> str:
+    """The storage key of `canonical.ply` from the capture's newest finished run.
+
+    The last step that wrote one wins: in photo-reconstruct `place` rewrites the trained
+    splat into east/north/up, and that placed one is the capture's splat.
+    """
+    get_capture(db, capture_id)
+    key = db.scalar(
+        select(Artifact.storage_key)
+        .join(JobStep, Artifact.job_step_id == JobStep.id)
+        .join(Job, JobStep.job_id == Job.id)
+        .where(
+            Job.capture_id == capture_id,
+            Job.status == RunStatus.COMPLETE,
+            Artifact.kind == ArtifactKind.SPLAT,
+        )
+        .order_by(Job.finished_at.desc(), JobStep.ordinal.desc())
+        .limit(1)
+    )
+    if key is None:
+        raise NotFoundError("finished splat for capture", capture_id)
+    return key

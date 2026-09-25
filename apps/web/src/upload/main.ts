@@ -26,6 +26,8 @@ import { ApiError, isAbort } from "@/api/error";
 import { partSizeFor, putPart } from "@/api/putPart";
 import { classify, SUPPORTED_TEXT, unsupported } from "@/features/captures/recipes";
 
+import { mountOptions, type OptionsPanel, paramsFor } from "./options";
+
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
 
 /** Where the phone key is remembered. Only on this phone, only in this browser. */
@@ -132,6 +134,7 @@ interface Ui {
   resume: HTMLButtonElement | null;
   mine: HTMLElement | null;
   mineList: HTMLElement | null;
+  options: HTMLDetailsElement | null;
   stages: HTMLElement | null;
   runTitle: HTMLElement | null;
   runCost: HTMLElement | null;
@@ -758,6 +761,13 @@ function viewerLink(siteId: string): string {
   return `/view.html#${encodeURIComponent(siteId)}`;
 }
 
+/** The processing options, in key mode: what every run started from this page uses. */
+let optionsPanel: OptionsPanel | null = null;
+
+function optionsParams(recipe: "photo-reconstruct" | "splat-ingest"): Record<string, unknown> {
+  return optionsPanel ? paramsFor(recipe, optionsPanel.current()) : {};
+}
+
 /** The one run the status panel is following; starting another stops this one. */
 let following: (() => void) | null = null;
 
@@ -847,6 +857,7 @@ function collectUi(root: Document): Ui | null {
     resume: resume instanceof HTMLButtonElement ? resume : null,
     mine: root.getElementById("mine"),
     mineList: root.getElementById("mine-list"),
+    options: root.querySelector<HTMLDetailsElement>("details#options"),
     stages: root.getElementById("stages"),
     runTitle: root.getElementById("run-title"),
     runCost: root.getElementById("run-cost"),
@@ -994,7 +1005,7 @@ async function captureRow(ui: Ui, capture: Capture, job: Job | undefined): Promi
     post<Job>(
       key,
       `/api/v1/phone/captures/${capture.id}/process`,
-      { recipe },
+      { recipe, params: optionsParams(recipe) },
       {
         unauthorized: KEY_WRONG,
       },
@@ -1042,7 +1053,13 @@ async function captureRow(ui: Ui, capture: Capture, job: Job | undefined): Promi
     view.className = "rowbtn";
     view.href = viewerLink(capture.siteId);
     view.textContent = "View in 3D";
-    row.append(view);
+    const download = document.createElement("a");
+    download.className = "rowbtn rowbtn--quiet";
+    download.href = `${API_BASE}/api/v1/captures/${capture.id}/splat.ply`;
+    download.download = `${capture.name}.ply`;
+    download.textContent = ".ply";
+    download.setAttribute("aria-label", `Download ${capture.name} as a .ply file`);
+    row.append(view, download);
   } else if (job && !ENDED.has(job.status)) {
     const run = await describeRun(job);
     state.textContent = `${run.headline} ${run.detail} · ${run.usdEstimated ? "≈" : ""}${dollars(run.usd)}`;
@@ -1075,6 +1092,10 @@ function startWithKey(ui: Ui): void {
     if (ui.keyForm) ui.keyForm.hidden = true;
     ui.form.hidden = false;
     if (ui.forget) ui.forget.hidden = false;
+    if (ui.options) {
+      optionsPanel ??= mountOptions(ui.options);
+      ui.options.hidden = false;
+    }
     setState(ui, "idle");
     ui.status.textContent = "Pick a video, photos or a scan. You can pick several photos at once.";
     refreshMine(ui);
@@ -1112,6 +1133,7 @@ function startWithKey(ui: Ui): void {
   /** One pick: a capture, its uploads, its run. Resumable from whichever step failed. */
   const send = (key: string, files: File[]): void => {
     const proposal = classify(files.map((file) => ({ name: file.name, size: file.size })));
+    optionsPanel?.showFor(proposal.recipe);
     const progress = new Map<File, FileProgress>();
     let upload: Upload | null = null;
     let located = false;
@@ -1146,7 +1168,7 @@ function startWithKey(ui: Ui): void {
           post<Job>(
             key,
             `/api/v1/phone/captures/${current.captureId}/process`,
-            { recipe: proposal.recipe },
+            { recipe: proposal.recipe, params: optionsParams(proposal.recipe) },
             { unauthorized: KEY_WRONG },
           ),
         );

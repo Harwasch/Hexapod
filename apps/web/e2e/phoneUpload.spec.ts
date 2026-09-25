@@ -281,6 +281,12 @@ test.describe("the phone upload page", () => {
     });
 
     await page.goto("/upload.html");
+    // The options are set before the pick, because the pick starts everything.
+    await page.getByText("Processing options").click();
+    await page.getByRole("radio", { name: "Best" }).check();
+    await page.getByRole("radio", { name: "2400 px" }).check();
+    await page.getByRole("radio", { name: "Full" }).check();
+    await expect(page.locator("#options summary")).toContainText("Best · 2400 px · Full detail");
     await page.locator("#file").setInputFiles({
       name: "walk.mov",
       mimeType: "video/quicktime",
@@ -291,7 +297,18 @@ test.describe("the phone upload page", () => {
       timeout: 20_000,
     });
     expect(created).toEqual([{ lat: 44.9778, lon: -93.265, accuracyM: 7 }]);
-    expect(processed).toEqual([{ recipe: "photo-reconstruct" }]);
+    expect(processed).toEqual([
+      {
+        recipe: "photo-reconstruct",
+        params: {
+          normalize: { max_side: 2400, fps: 4 },
+          package: { max_gaussians: 800000 },
+          train: { schedule_floor: 1, cap_max: 1000000 },
+        },
+      },
+    ]);
+    // Only the options that apply to a video are left showing.
+    await expect(page.getByRole("radio", { name: "Y up" })).toBeHidden();
     // The first call used the token the capture came with; the next used the renewal.
     expect(tokens).toEqual(["Bearer h1.first", "Bearer h1.second"]);
   });
@@ -507,6 +524,10 @@ test.describe("the phone upload page", () => {
       "href",
       "/view.html#site-1",
     );
+    await expect(row("Finished").getByRole("link", { name: /Download .* \.ply/ })).toHaveAttribute(
+      "href",
+      /\/api\/v1\/captures\/[^/]+\/splat\.ply$/,
+    );
     await expect(row("Training")).toContainText("Train the 3D model");
     // mask is a placeholder, so it is not counted: normalize, pose, train, register.
     await expect(row("Training")).toContainText("Step 3 of 4");
@@ -674,5 +695,48 @@ test.describe("the phone upload page", () => {
     // The entire reason upload.html is a separate entry: a phone on cellular should not
     // download a 3D globe to pick one file.
     expect(scripts.filter((url) => /cesium/i.test(url))).toEqual([]);
+  });
+
+  test("nothing scrolls sideways on a narrow phone", async ({ page }) => {
+    await page.setViewportSize({ width: 320, height: 700 });
+    await page.addInitScript(() => {
+      window.localStorage.setItem("twin.phoneKey", "abcd-efgh-jkmn");
+    });
+    const running = {
+      id: "job-r",
+      captureId: "long",
+      recipe: "photo-reconstruct",
+      status: "in-progress",
+      createdAt: new Date().toISOString(),
+      steps: [],
+    };
+    await page.route(
+      (url) => url.pathname === "/api/v1/captures",
+      (route) =>
+        route.fulfill({
+          json: [
+            {
+              id: "long",
+              name: "A capture with a very long name from the back paddock by the river",
+              metadata: { origin: "phone-key" },
+              files: [{ status: "complete", filename: "a.jpg", bytes: 1 }],
+              siteId: null,
+              createdAt: new Date().toISOString(),
+            },
+          ],
+        }),
+    );
+    await page.route(
+      (url) => url.pathname === "/api/v1/jobs",
+      (route) => route.fulfill({ json: [running] }),
+    );
+    await page.goto("/upload.html");
+    await page.getByText("Processing options").click();
+    await expect(page.getByRole("button", { name: "Stop" })).toBeVisible();
+    const widths = await page.evaluate(() => [
+      document.documentElement.scrollWidth,
+      document.documentElement.clientWidth,
+    ]);
+    expect(widths[0]).toBeLessThanOrEqual(widths[1]);
   });
 });

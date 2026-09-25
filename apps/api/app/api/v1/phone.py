@@ -31,6 +31,58 @@ ORIGIN = "phone-key"
 #: The only recipes a phone can start: the two lanes a capture can go down.
 PHONE_RECIPES = frozenset({"splat-ingest", "photo-reconstruct"})
 
+#: The options a phone may set, per recipe and stage: each parameter's allowed range, or
+#: its allowed values. Anything else is refused by name rather than passed through, so
+#: the key cannot reach a stage parameter that was never meant to be a phone's choice
+#: (a trainer path, a Python interpreter, a GPU tier).
+PHONE_OPTIONS: dict[str, dict[str, dict[str, tuple[float, float] | frozenset[str]]]] = {
+    "photo-reconstruct": {
+        # The long side frames are shrunk to before pose and training; frames per second
+        # taken from a video.
+        "normalize": {"max_side": (800, 4000), "fps": (1, 10)},
+        # The training schedule (`training.schedule_scale`) and the gaussian cap.
+        "train": {
+            "schedule_full_at": (0, 400),
+            "schedule_floor": (0.1, 1.0),
+            "cap_max": (100_000, 1_500_000),
+        },
+        # How many gaussians the map and the viewer are sent.
+        "package": {"max_gaussians": (100_000, 1_000_000)},
+    },
+    "splat-ingest": {
+        "normalize": {
+            "up_axis": frozenset({"", "z", "-z", "y", "-y", "x", "-x"}),
+            "heading_deg": (-360, 360),
+        },
+        "package": {"max_gaussians": (100_000, 1_000_000)},
+    },
+}
+
+
+def _checked_options(recipe: str, params: dict[str, object]) -> dict[str, dict[str, object]]:
+    allowed = PHONE_OPTIONS.get(recipe, {})
+    checked: dict[str, dict[str, object]] = {}
+    for stage, values in params.items():
+        stage_allowed = allowed.get(stage)
+        if stage_allowed is None or not isinstance(values, dict):
+            raise ConflictError(f"A phone cannot set options on {stage!r} for {recipe}.")
+        for name, value in values.items():
+            rule = stage_allowed.get(name)
+            if rule is None:
+                raise ConflictError(f"A phone cannot set {stage}.{name}.")
+            if isinstance(rule, frozenset):
+                if value not in rule:
+                    raise ConflictError(f"{stage}.{name} must be one of {sorted(rule)}.")
+            elif (
+                isinstance(value, bool)
+                or not isinstance(value, int | float)
+                or not rule[0] <= value <= rule[1]
+            ):
+                raise ConflictError(f"{stage}.{name} must be a number from {rule[0]} to {rule[1]}.")
+            checked.setdefault(stage, {})[name] = value
+    return checked
+
+
 phone_key_scheme = HTTPBearer(
     auto_error=False,
     scheme_name="phoneKey",
@@ -118,8 +170,9 @@ def process_phone_capture(capture_id: uuid.UUID, payload: JobCreate, db: DbSessi
         raise UnauthorizedError("That phone key is not right.")
     if payload.recipe not in PHONE_RECIPES:
         raise ConflictError(f"A phone can start {', '.join(sorted(PHONE_RECIPES))}, not that.")
+    params = _checked_options(payload.recipe, payload.params)
     return job_service.job_to_read(
-        job_service.create_job(db, capture_id, JobCreate(recipe=payload.recipe))
+        job_service.create_job(db, capture_id, JobCreate(recipe=payload.recipe, params=params))
     )
 
 

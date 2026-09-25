@@ -4,6 +4,7 @@ import uuid
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Query, status
+from fastapi.responses import RedirectResponse
 
 from app.api.deps import (
     DbSession,
@@ -162,3 +163,20 @@ def process_capture(capture_id: uuid.UUID, payload: JobCreate, db: DbSession) ->
 )
 def create_handoff(capture_id: uuid.UUID, db: DbSession, settings: SettingsDep) -> CaptureHandoff:
     return capture_service.create_handoff(db, settings, capture_id)
+
+
+@router.get(
+    "/{capture_id}/splat.ply",
+    status_code=status.HTTP_307_TEMPORARY_REDIRECT,
+    response_class=RedirectResponse,
+    summary="Download the capture's finished splat as a .ply",
+    description=(
+        "Redirects to a short-lived signed URL for `canonical.ply` from the capture's "
+        "latest finished run: the whole splat, east/north/up, before it was thinned "
+        "and tiled for the map. Opens in SuperSplat, Scaniverse and most splat tools."
+    ),
+    responses={404: {"model": Problem}},
+)
+def download_splat(capture_id: uuid.UUID, db: DbSession, storage: Storage) -> RedirectResponse:
+    key = capture_service.latest_splat_key(db, capture_id)
+    return RedirectResponse(storage.presign_get(key, expires_in=15 * 60))
