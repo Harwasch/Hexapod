@@ -711,3 +711,18 @@ def test_a_running_stages_progress_line_reaches_its_row(db: Session, tmp_path: P
     )
     assert step_service.report_progress(db, row, {"done": 1, "total": 2}) is False
     assert "progress" not in steps_by_stage(db, job.id)["train"].metrics
+
+
+def test_a_restarted_step_does_not_show_the_last_attempts_progress(db: Session) -> None:
+    job = queue_job(db, make_capture(db, "restart"))
+    step = step_service.start_step(
+        db, job.id, stage_id="train", ordinal=3, impl="gsplat", attempt=1
+    )
+    step_service.report_progress(db, step, {"done": 2994, "total": 3000})
+    step_service.finish_step(
+        db, step, metrics={"psnr": 23.1}, log_key=None, checkpoint_key=None, artifacts=[]
+    )
+    again = step_service.start_step(
+        db, job.id, stage_id="train", ordinal=3, impl="gsplat", attempt=2
+    )
+    assert again.metrics == {}

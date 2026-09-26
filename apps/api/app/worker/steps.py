@@ -51,6 +51,9 @@ def start_step(
     step.attempt = attempt
     step.status = RunStatus.IN_PROGRESS
     step.started_at = utcnow()
+    # A restarted step (a retry, the phone's Refine) starts with nothing measured: the
+    # previous attempt's metrics, its progress bar included, describe a run that is over.
+    step.metrics = {}
     step.finished_at = None
     db.commit()
     return step

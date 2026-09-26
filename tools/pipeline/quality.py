@@ -160,6 +160,11 @@ class Thresholds:
     context_min_spread_deg: float = 15.0
     context_max_gsd_ratio: float = 6.0
     min_opacity: float = 0.02
+    #: Context is a backdrop for the subject, so it must be near it: within this many ROI
+    #: radii of the ROI's centre. Without it, a scattered far fringe that a few frames
+    #: happened to see from a spread of angles was kept (at half opacity) as "context" --
+    #: exactly the noise the bar exists to remove.
+    context_max_roi_radii: float = 2.0
     #: An absolute ceiling on the keep tier's GSD, applied only when the scale is metric.
     keep_max_gsd_mm: float | None = None
 
@@ -631,8 +636,14 @@ def assign_tiers(
     alpha: F32,
     thresholds: Thresholds,
     gsd_mm: F32 | None = None,
+    roi_radii: F32 | None = None,
 ) -> U8:
-    """keep / context / drop per gaussian. Pure, so the rules are testable on their own."""
+    """keep / context / drop per gaussian. Pure, so the rules are testable on their own.
+
+    `roi_radii` is each gaussian's distance from the ROI's centre in ROI radii; given, it
+    limits *context* to `context_max_roi_radii`. Keep is not limited: a well-supported
+    splat is kept wherever it is.
+    """
     opaque_enough = np.nan_to_num(alpha, nan=0.0) >= thresholds.min_opacity
     keep = (
         (views >= thresholds.keep_min_views)
@@ -649,6 +660,8 @@ def assign_tiers(
         & (gsd_ratio <= thresholds.context_max_gsd_ratio)
         & opaque_enough
     )
+    if roi_radii is not None:
+        context &= roi_radii <= thresholds.context_max_roi_radii
     tiers = np.full(views.shape[0], TIER_DROP, dtype=np.uint8)
     tiers[context] = TIER_CONTEXT
     tiers[keep] = TIER_KEEP
@@ -822,15 +835,20 @@ def capture_tips(
         east /= np.linalg.norm(east)
         north = np.cross(axis, east)
         azimuth = np.degrees(np.arctan2(offsets @ north, offsets @ east)) % 360.0
-        sectors = np.unique((azimuth // 45).astype(int))
-        geometry["azimuthSectors"] = {"covered": int(sectors.size), "of": 8}
-        missing = 8 - int(sectors.size)
-        if missing >= 2:
+        # The uncovered arc is the widest gap between neighbouring camera directions.
+        # (Counting occupied 45-degree sectors undercounted it: a half-circle walk touches
+        # six of eight sectors at their edges and read as "90 degrees missing".)
+        ordered = np.sort(azimuth)
+        gaps = np.diff(np.concatenate([ordered, ordered[:1] + 360.0]))
+        gap = float(gaps.max()) if gaps.size else 360.0
+        missing_deg = int(round(gap / 15.0) * 15)
+        geometry["azimuthGapDeg"] = round(gap, 1)
+        if missing_deg >= 60:
             tips.append(
                 {
                     "id": "all-around",
                     "text": (
-                        f"Walk all the way around: about {missing * 45}° of the circle around "
+                        f"Walk all the way around: about {missing_deg}° of the circle around "
                         f"it has no frames, so that side is guessed."
                     ),
                 }
@@ -987,7 +1005,12 @@ def support_gate(ctx: StageContext) -> StageOutcome:
     gsd_mm = (
         None if metres is None else (support.gsd * np.float32(metres * 1000.0)).astype(np.float32)
     )
-    tiers = assign_tiers(support.views, support.spread_deg, gsd_ratio, alpha, thresholds, gsd_mm)
+    roi_radii = (
+        np.linalg.norm(xyz.astype(np.float64) - roi.centre, axis=1) / max(roi.radius, 1e-12)
+    ).astype(np.float32)
+    tiers = assign_tiers(
+        support.views, support.spread_deg, gsd_ratio, alpha, thresholds, gsd_mm, roi_radii
+    )
 
     min_gaussians = int(ctx.param("min_gaussians", 1000))
     applied = bar

@@ -70,6 +70,20 @@ def test_an_absolute_gsd_ceiling_applies_only_when_given_a_metric_gsd() -> None:
     assert quality.assign_tiers(*args, gsd_mm=coarse).tolist() == [quality.TIER_CONTEXT]
 
 
+def test_context_is_only_kept_near_the_subject() -> None:
+    args = (
+        np.asarray([4, 4, 20], dtype=np.int32),
+        np.asarray([20.0, 20.0, 90.0], dtype=np.float32),
+        np.asarray([1.0, 1.0, 1.0], dtype=np.float32),
+        np.asarray([0.9, 0.9, 0.9], dtype=np.float32),
+        TH,
+    )
+    radii = np.asarray([1.5, 3.0, 9.0], dtype=np.float32)
+    tiers = quality.assign_tiers(*args, roi_radii=radii).tolist()
+    # Near context stays; far context goes; far *keep* is kept, since it earned it.
+    assert tiers == [quality.TIER_CONTEXT, quality.TIER_DROP, quality.TIER_KEEP]
+
+
 def test_thresholds_come_from_stage_params_by_name() -> None:
     parsed = quality.Thresholds.from_params({"keep_min_views": "12", "keep_min_spread_deg": 30})
     assert parsed.keep_min_views == 12
@@ -378,6 +392,13 @@ def test_tips_come_from_the_capture_itself(tmp_path: Path) -> None:
     ids = [tip["id"] for tip in document["tips"]]
     assert "from-above" in ids
     assert "all-around" in ids
+    # Three quarters of the way round leaves at least a quarter, measured as the widest
+    # gap about the ROI's centre (which the partial ring pulls off the ring's own centre),
+    # plus one camera spacing -- not as a count of occupied 45-degree sectors.
+    gap = document["capture"]["azimuthGapDeg"]
+    assert 90 <= gap <= 135
+    around = next(tip for tip in document["tips"] if tip["id"] == "all-around")
+    assert f"about {int(round(gap / 15.0) * 15)}°" in around["text"]
     assert document["heldOutPsnr"] is None
     assert 1 <= len(ids) <= 4
 
