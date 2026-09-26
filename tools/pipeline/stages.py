@@ -21,8 +21,10 @@ import functools
 import hashlib
 import json
 import math
+import os
 import shutil
 import struct
+import time
 import tomllib
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -424,7 +426,13 @@ def ffmpeg_frames(ctx: StageContext) -> StageOutcome:
 # ---------------------------------------------------------------------------------------
 
 
-@stage_impl("colmap", consumes=("frames",), produces=(POSES,), summary="COLMAP SfM poses")
+@stage_impl(
+    "colmap",
+    consumes=("frames",),
+    optional_consumes=("source_meta.json",),
+    produces=(POSES,),
+    summary="COLMAP SfM poses",
+)
 def colmap(ctx: StageContext) -> StageOutcome:
     """Real, and tested against known poses rather than against "a file appeared".
 
@@ -437,33 +445,57 @@ def colmap(ctx: StageContext) -> StageOutcome:
     planar textured ground is an easier scene than whatever A0 measured, not because
     anything improved. The test's thresholds sit where a regression would show.
 
-    Two of A0's findings are enforced here rather than remembered:
+    **Which pairs get matched** is `sfm.matching_plan`'s decision, from `matcher`
+    (`auto` in the recipe) and `source_meta.json`'s `format`: frames cut from a video are
+    matched sequentially with vocabulary-tree loop closure, a photo set exhaustively.
+    Sequential is a first try, not a verdict. If its best mapping registers fewer than
+    `min_registered_fraction` of the frames, the stage matches exhaustively on the same
+    database -- which fills in only the pairs sequential skipped -- and maps again, and
+    says so in the log and in `poses.json`'s `matching`. A0 #7 is why: sequential without
+    loop detection registered **2 of 40** on a closed orbit, and with it, 76 of 100 real
+    iPhone frames where exhaustive registered 50 of 50.
 
-    * the matcher defaults to `exhaustive`. `sequential` is 2.5x faster and registered
-      **2 of 40** frames on a closed orbit, because without loop detection the last frame
-      never meets the first. Asking for it logs that. (On 100 real iPhone frames,
-      vocabulary-tree loop closure lifted it only to 76/100, where exhaustive registered
-      50/50: the README's "Where pose runs" has the table);
-    * the focal length. With no prior COLMAP self-calibrates, and the bias that leaves
-      behind is scene-dependent rather than constant -- A0 #7 measured 3.1% low, B2's
-      own fixture measured 0.17% high. `poses.json` therefore records the recovered
-      focal, whether a prior was held, and both measurements, rather than a correction.
-      Pass `focal_px` (EXIF or ARKit) and the prior is held through bundle adjustment.
+    The focal length is the other finding enforced rather than remembered. With no prior
+    COLMAP self-calibrates, and the bias that leaves behind is scene-dependent rather
+    than constant -- A0 #7 measured 3.1% low, B2's own fixture measured 0.17% high.
+    `poses.json` therefore records the recovered focal, whether a prior was held, and
+    both measurements, rather than a correction. Pass `focal_px` (EXIF or ARKit) and the
+    prior is held through bundle adjustment.
     """
     frames = ctx.input(FRAMES.name)
     out = ctx.output(POSES.name)
-    matcher = str(ctx.param("matcher", "exhaustive"))
-    if matcher != "exhaustive":
-        ctx.log(
-            f"matcher={matcher!r}: A0 #7 measured {matcher}_matcher registering 2 of 40 "
-            f"frames on a closed orbit, where exhaustive_matcher registered 40"
-        )
+    requested = str(ctx.param("matcher", "auto"))
     images = sorted(p for p in frames.iterdir() if p.is_file())
     if not images:
         raise ValueError(f"the frames artifact at {frames} is empty")
+    source_format = _source_format(ctx)
+    vocab_tree = sfm.vocab_tree_path(ctx.param("vocab_tree"))
+    rematches = max(0, int(ctx.param("rematches", 1)))
+    plan = sfm.matching_plan(
+        requested,
+        source_format=source_format,
+        vocab_tree=vocab_tree is not None,
+        rematches=rematches,
+    )
+    ctx.log(
+        f"colmap: matcher={requested}, frames from {source_format or 'an unknown source'}, "
+        f"vocabulary tree {vocab_tree or 'absent'}; plan: "
+        + " -> ".join(
+            f"{step.matcher}{' (loop)' if step.loop_detection else ''}"
+            f"{' (cleared)' if step.clear else ''}"
+            for step in plan
+        )
+    )
     width, height = _image_size(images[0])
     focal_prior = _optional_float(ctx.param("focal_px"))
     params = None if focal_prior is None else (focal_prior, width / 2.0, height / 2.0, 0.0)
+    threads = _optional_int(ctx.param("threads"))
+    seconds = {"extract": 0.0, "match": 0.0, "map": 0.0}
+
+    def timed(phase: str, argv: list[str]) -> None:
+        began = time.monotonic()
+        ctx.run(argv)
+        seconds[phase] += time.monotonic() - began
 
     database = ctx.work_dir / "database.db"
     sparse = ctx.work_dir / "sparse"
@@ -472,7 +504,8 @@ def colmap(ctx: StageContext) -> StageOutcome:
     if sparse.exists():
         shutil.rmtree(sparse)
     sparse.mkdir(parents=True)
-    ctx.run(
+    timed(
+        "extract",
         sfm.feature_extractor_argv(
             database,
             frames,
@@ -480,43 +513,93 @@ def colmap(ctx: StageContext) -> StageOutcome:
             camera_params=params,
             max_image_size=int(ctx.param("max_image_size", 2400)),
             max_features=int(ctx.param("max_features", 8192)),
-        )
+            first_octave=_optional_int(ctx.param("first_octave")),
+            num_threads=threads,
+        ),
     )
-    ctx.run(sfm.matcher_argv(database, matcher))
+    passes_run: list[dict[str, object]] = []
+    pairs = [0]
+
+    def match(step: sfm.MatchPass) -> None:
+        if step.clear:
+            sfm.clear_matches(database)
+        timed(
+            "match",
+            sfm.matcher_argv(
+                database,
+                step.matcher,
+                overlap=_optional_int(ctx.param("sequential_overlap")),
+                vocab_tree=vocab_tree if step.loop_detection else None,
+                num_threads=threads,
+            ),
+        )
+        tried, verified = sfm.count_pairs(database)
+        pairs[0] = tried
+        passes_run.append({**step.to_dict(), "pairs": tried, "verifiedPairs": verified})
+
+    match(plan[0])
 
     target = float(ctx.param("min_registered_fraction", 0.8))
+    enough = math.ceil(target * len(images))
     seeds = tuple(range(max(1, int(ctx.param("mapper_seeds", 3)))))
-    rematches = max(0, int(ctx.param("rematches", 1)))
+    # One mapping for a sequential pass, every seed for the rest. A short sequential
+    # result is missing pairs -- a loop not closed, a fast pan -- far more often than it
+    # is an unlucky initial pair, and the exhaustive pass after it gets every seed anyway.
+    schedule = [seeds[:1] if step.matcher == "sequential" else seeds for step in plan]
+    best_so_far = [0]
+    round_of: dict[Path, int] = {}
 
     def attempt(round_: int, seed: int) -> tuple[Path | None, int]:
-        if round_ > 0 and seed == seeds[0]:
-            sfm.clear_matches(database)
-            ctx.run(sfm.matcher_argv(database, matcher))
+        if round_ > 0 and seed == schedule[round_][0]:
+            step = plan[round_]
+            ctx.log(
+                f"colmap: best so far {best_so_far[0]} of {len(images)} registered, short of "
+                f"min_registered_fraction {target:g} ({enough}); matching again: "
+                f"{step.matcher}{', cleared first' if step.clear else ''} -- {step.why}"
+            )
+            match(step)
         into = sparse / f"match{round_}-seed{seed}"
         into.mkdir(parents=True)
+        began = time.monotonic()
         ctx.run(
             sfm.mapper_argv(
-                database, frames, into, refine_focal_length=focal_prior is None, random_seed=seed
+                database,
+                frames,
+                into,
+                refine_focal_length=focal_prior is None,
+                random_seed=seed,
+                num_threads=threads,
             )
         )
+        seconds["map"] += time.monotonic() - began
         found = _largest_model(into)
-        return found, (sfm.read_model(found).registered if found is not None else 0)
+        registered = 0
+        if found is not None:
+            round_of[found] = round_
+            registered = sfm.read_model(found).registered
+        best_so_far[0] = max(best_so_far[0], registered)
+        return found, registered
 
-    model_dir, tries = _best_reconstruction(
-        attempt, rounds=1 + rematches, seeds=seeds, enough=math.ceil(target * len(images))
-    )
+    model_dir, tries = _best_reconstruction(attempt, rounds=schedule, enough=enough)
+    for tried in tries:
+        tried["matcher"] = plan[int(tried["match"])].matcher
     if len(tries) > 1:
         ctx.log(
             "colmap: "
-            + ", ".join(f"match {t['match']} seed {t['seed']}: {t['registered']}" for t in tries)
+            + ", ".join(
+                f"match {t['match']} ({t['matcher']}) seed {t['seed']}: {t['registered']}"
+                for t in tries
+            )
             + f" of {len(images)} registered; kept the best"
         )
     if model_dir is None:
         raise ValueError(
-            f"COLMAP's mapper registered no model from {len(images)} frame(s). With "
-            f"matcher={matcher!r} that is the failure A0 #7 saw on a closed orbit; "
-            f"exhaustive is the matcher that closes one"
+            f"COLMAP's mapper registered no model from {len(images)} frame(s) after "
+            f"{len(passes_run)} matching pass(es) ending in {plan[len(passes_run) - 1].matcher}"
         )
+    # The model kept came from the pass it was mapped after; name the chain up to it.
+    matcher = "+".join(dict.fromkeys(step.matcher for step in plan[: round_of[model_dir] + 1]))
+    fell_back = plan[0].matcher == "sequential" and len(passes_run) > 1
     for entry in sorted(model_dir.iterdir()):
         if entry.is_file():
             shutil.copyfile(entry, out / entry.name)
@@ -526,6 +609,19 @@ def colmap(ctx: StageContext) -> StageOutcome:
         "tool": "colmap",
         "version": sfm.colmap_version(),
         "matcher": matcher,
+        # What was asked, what the frames were, and every pass that ran with its pair
+        # count -- so a fallback, and what it cost, is visible rather than inferred.
+        "matching": {
+            "requested": requested,
+            "sourceFormat": source_format,
+            "vocabTree": None if vocab_tree is None else vocab_tree.name,
+            "passes": passes_run,
+            "fellBackToExhaustive": fell_back,
+            "minRegisteredFraction": target,
+        },
+        # What COLMAP's `num_threads -1` saw, which on a container can be the host's
+        # cores rather than the ones the container is billed for.
+        "machine": {"cpuCount": os.cpu_count(), "threads": threads},
         "frames": len(images),
         "registered": model.registered,
         "registeredFraction": round(model.registered / len(images) if images else 0.0, 4),
@@ -587,10 +683,23 @@ def colmap(ctx: StageContext) -> StageOutcome:
         "focalPx": round(focal, 3),
         "focalPrior": focal_prior is not None,
         "matcher": matcher,
+        "matchedPairs": pairs[0],
+        "fellBack": fell_back,
+        "extractS": round(seconds["extract"], 1),
+        "matchS": round(seconds["match"], 1),
+        "mapS": round(seconds["map"], 1),
     }
     return StageOutcome(
         metrics=metrics, summary=f"{model.registered}/{len(images)} frames registered"
     )
+
+
+def _source_format(ctx: StageContext) -> str | None:
+    """`video` or `images`, as `ffmpeg_frames` recorded it; None when nobody said."""
+    if not ctx.has_input(SOURCE_META.name):
+        return None
+    value = _read_json(ctx.input(SOURCE_META.name)).get("format")
+    return str(value) if isinstance(value, str) else None
 
 
 @stage_impl("glomap", consumes=("frames",), produces=(POSES,), summary="GLOMAP global SfM poses")
@@ -688,27 +797,89 @@ def gsplat(ctx: StageContext) -> StageOutcome:
     The optional `masks` input is how `mask: none` and `mask: robust` are both legal
     without the executor knowing which one ran. This trainer has no mask input, so masks
     that arrive are recorded as ignored rather than silently dropped.
+
+    Parameters beyond the recipe's schedule, each off unless asked for, so a run that
+    names none of them is the run every earlier capture got:
+
+    * `schedule_scale` (0.05-1.0) replaces the fraction `schedule_full_at` would compute;
+    * `train_max_side` shrinks the frames the trainer reads, not the poses
+      (`training.build_dataset`);
+    * `antialiased`, `opacity_reg`, `depth_loss` are gsplat's own switches
+      (`training.gsplat_argv` says what each does);
+    * `roi` (`{"center": [x, y, z], "radius": r}`, COLMAP frame) crops the initial points
+      to the sphere before training and the trained gaussians to 1.5 radii after it;
+    * `variant` is `3dgs`; `2dgs` is refused, and `training.py` says why.
+
+    `psnr`, `ssim` and `lpips` are all measured on gsplat's held-out `val` split -- every
+    8th registered frame -- and `train_metrics.json` says so and how many frames that is.
     """
+    variant = str(ctx.param("variant", "3dgs"))
+    if variant != "3dgs":
+        raise ValueError(
+            training.VARIANT_REFUSALS.get(variant, f"variant={variant!r} is not one of: 3dgs")
+        )
     frames = ctx.input(FRAMES.name)
     poses = ctx.input(POSES.name)
     full_iterations = int(ctx.param("iterations", 30_000))
     trainer = training.trainer_script(ctx.param("trainer"))
-    dataset = training.build_dataset(frames, poses, ctx.work_dir / "dataset")
+    data_factor = int(ctx.param("data_factor", 1))
+    max_side = _optional_int(ctx.param("train_max_side"))
+    if max_side is not None and data_factor != 1:
+        raise ValueError(
+            f"train_max_side={max_side} and data_factor={data_factor} both shrink the "
+            f"training images; give one. train_max_side works at any size, and gsplat's "
+            f"parser rescales the intrinsics to match"
+        )
+    roi = training.Roi.parse(ctx.param("roi"))
+    dataset = training.build_dataset(frames, poses, ctx.work_dir / "dataset", max_side=max_side)
     # A shorter schedule for a smaller capture (`training.schedule_scale`), unless the
-    # recipe leaves `schedule_full_at` out, which keeps the full one.
+    # recipe leaves `schedule_full_at` out, which keeps the full one -- or unless the run
+    # names its own `schedule_scale`, which wins over both.
     images = sum(1 for path in (dataset / "images").iterdir() if path.is_file())
     full_at = _optional_int(ctx.param("schedule_full_at"))
-    steps_scaler = (
+    computed = (
         training.schedule_scale(
             images, full_at=full_at, floor=float(ctx.param("schedule_floor", 0.25))
         )
         if full_at
         else 1.0
     )
+    requested_scale = _optional_float(ctx.param("schedule_scale"))
+    steps_scaler = (
+        computed if requested_scale is None else training.check_schedule_scale(requested_scale)
+    )
     iterations = training.scaled_steps(full_iterations, steps_scaler)
     ctx.log(
         f"gsplat: {images} frames -> {steps_scaler:g} of the {full_iterations}-step schedule "
         f"= {iterations} steps"
+        + (
+            ""
+            if requested_scale is None
+            else f" (schedule_scale given; the capture's own would be {computed:g})"
+        )
+    )
+    train_size: tuple[int, int] | None = None
+    if max_side is not None:
+        first = min(p for p in (dataset / "images").iterdir() if p.is_file())
+        train_size = _image_size(first)
+        ctx.log(
+            f"gsplat: training images at most {max_side} px on the long side "
+            f"({train_size[0]}x{train_size[1]}); poses unchanged"
+        )
+    crop: training.RoiCrop | None = None
+    if roi is not None:
+        crop = training.crop_initial_points(dataset / "sparse" / "0", roi)
+        ctx.log(
+            f"gsplat: roi centre {roi.center} radius {roi.radius:g}: {crop.points_kept} of "
+            f"{crop.points_in} initial points kept ({crop.inside} inside, "
+            f"{crop.outside_sampled} sampled outside, {crop.kept_for_coverage} kept so "
+            f"every frame still sees some)"
+        )
+    registered = _registered_count(poses, images)
+    train_frames, val_frames = training.held_out_split(registered)
+    ctx.log(
+        f"gsplat: {registered} posed frames -> {train_frames} train, {val_frames} held out "
+        f"(every {training.TEST_EVERY}th) for psnr/ssim/lpips"
     )
     # In work/, not checkpoint/: see the docstring. Nothing can resume from it.
     result = ctx.work_dir / "gsplat"
@@ -726,6 +897,9 @@ def gsplat(ctx: StageContext) -> StageOutcome:
             "masks were produced by an earlier stage and this trainer has no mask input; "
             "they are not used. A mask-aware trainer lands in B3"
         )
+    antialiased = _optional_bool(ctx.param("antialiased"), "antialiased")
+    depth_loss = _optional_bool(ctx.param("depth_loss"), "depth_loss")
+    opacity_reg = _optional_float(ctx.param("opacity_reg"))
     ctx.run(
         training.gsplat_argv(
             training.trainer_python(ctx.param("python")),
@@ -734,9 +908,12 @@ def gsplat(ctx: StageContext) -> StageOutcome:
             result,
             strategy=str(ctx.param("strategy", "default")),
             max_steps=full_iterations,
-            data_factor=int(ctx.param("data_factor", 1)),
+            data_factor=data_factor,
             steps_scaler=steps_scaler,
             cap_max=_optional_int(ctx.param("cap_max")),
+            antialiased=antialiased,
+            opacity_reg=opacity_reg,
+            depth_loss=depth_loss,
             extra=[str(value) for value in (ctx.param("extra_args") or [])],
         )
     )
@@ -747,7 +924,16 @@ def gsplat(ctx: StageContext) -> StageOutcome:
             f"into {TRAINED_PLY.name}"
         )
     splat = gaussians.read_splat(ply)
-    written = gaussians.write_ply(ctx.output(TRAINED_PLY.name), splat.columns)
+    columns = splat.columns
+    trained_count = splat.count
+    if roi is not None:
+        columns, kept = training.crop_splat(columns, roi)
+        ctx.log(
+            f"gsplat: roi: kept {kept} of {trained_count} trained gaussians within "
+            f"{training.ROI_KEEP_RADII:g} radii of the centre"
+        )
+    written = gaussians.write_ply(ctx.output(TRAINED_PLY.name), columns)
+    in_ply = int(columns["x"].shape[0])
     metrics_document = training.parse_metrics(
         result,
         ctx.log_path.read_text(encoding="utf-8", errors="replace"),
@@ -755,30 +941,91 @@ def gsplat(ctx: StageContext) -> StageOutcome:
         requested_iterations=iterations,
         resumed_from_step=None,
         attempts=ctx.attempt,
+        registered=registered,
     )
     document = metrics_document.to_dict()
     # Read off the PLY rather than trusted from the stats file: this is the count the
     # artifact actually has, and the two disagreeing is worth being able to see.
-    document["gaussiansInPly"] = splat.count
+    document["gaussiansInPly"] = in_ply
     document["masksIgnored"] = ctx.has_input(MASKS.name)
     document["gsplatVersion"] = training.GSPLAT_VERSION
+    # Every knob this run turned, beside the numbers it produced, so two runs of one
+    # capture can be compared without reading their recipes.
+    document["settings"] = {
+        "strategy": str(ctx.param("strategy", "default")),
+        "capMax": _optional_int(ctx.param("cap_max")),
+        "scheduleScale": steps_scaler,
+        "scheduleScaleRequested": requested_scale,
+        "trainMaxSide": max_side,
+        "trainImageSize": None if train_size is None else list(train_size),
+        "antialiased": antialiased,
+        "opacityReg": opacity_reg,
+        "depthLoss": depth_loss,
+        "variant": variant,
+    }
+    document["roi"] = (
+        None
+        if roi is None or crop is None
+        else {
+            **roi.to_dict(),
+            **crop.to_dict(),
+            "keepRadii": training.ROI_KEEP_RADII,
+            "gaussiansTrained": trained_count,
+            "gaussiansKept": in_ply,
+        }
+    )
     _write_json(ctx.output(TRAIN_METRICS.name), document)
     ctx.log(
-        f"gsplat: {splat.count} gaussians from {ply.name} -> {TRAINED_PLY.name} "
+        f"gsplat: {in_ply} gaussians from {ply.name} -> {TRAINED_PLY.name} "
         f"({written} bytes); metrics from {metrics_document.source}"
     )
     metrics: dict[str, MetricValue] = {
-        "gaussians": splat.count,
+        "gaussians": in_ply,
         "trainedBytes": written,
         "requestedIterations": iterations,
         "scheduleScale": steps_scaler,
         "metricsSource": metrics_document.source,
+        # Quality below is on the held-out split, never the training frames.
+        "metricsSplit": f"val: every {training.TEST_EVERY}th frame",
+        "valFrames": val_frames,
+        "trainFrames": train_frames,
     }
     if metrics_document.iterations is not None:
         metrics["iterations"] = metrics_document.iterations
-    if metrics_document.psnr is not None:
-        metrics["psnr"] = metrics_document.psnr
-    return StageOutcome(metrics=metrics, summary=f"{splat.count} gaussians trained")
+    for name, value in (
+        ("psnr", metrics_document.psnr),
+        ("ssim", metrics_document.ssim),
+        ("lpips", metrics_document.lpips),
+        ("trainSeconds", metrics_document.train_seconds),
+    ):
+        if value is not None:
+            metrics[name] = value
+    if max_side is not None:
+        metrics["trainMaxSide"] = max_side
+    if roi is not None:
+        metrics["gaussiansTrained"] = trained_count
+    return StageOutcome(metrics=metrics, summary=f"{in_ply} gaussians trained")
+
+
+def _registered_count(poses: Path, fallback: int) -> int:
+    """How many frames the pose stage registered -- the ones gsplat's parser splits --
+    from `poses.json`, or `fallback` when a hand-made model has no summary."""
+    summary = poses / "poses.json"
+    if summary.is_file():
+        value = _read_json(summary).get("registered")
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value
+    return fallback
+
+
+def _optional_bool(value: object, name: str) -> bool:
+    """A switch: unset is off, a JSON bool is itself, anything else is refused by name
+    rather than read by truthiness -- `"false"` is a truthy string."""
+    if value is None:
+        return False
+    if isinstance(value, bool):
+        return value
+    raise ValueError(f"{name} must be true or false, not {value!r}")
 
 
 @stage_impl(
@@ -1531,10 +1778,9 @@ def partial_registration_warning(registered: int, frames: int) -> str | None:
 def _best_reconstruction(
     attempt: Callable[[int, int], tuple[Path | None, int]],
     *,
-    rounds: int,
-    seeds: Sequence[int],
+    rounds: Sequence[Sequence[int]],
     enough: int,
-) -> tuple[Path | None, list[dict[str, int]]]:
+) -> tuple[Path | None, list[dict[str, int | str]]]:
     """Map until `enough` frames register, keeping the best model seen.
 
     Why this exists, measured rather than supposed: the same 40 rendered frames that
@@ -1546,10 +1792,13 @@ def _best_reconstruction(
     with other seeds (cheap -- under a second on 40 frames, against 40 s of matching),
     then, `rounds` allowing, a fresh matching pass. Nothing is thrown away: the best
     model across every attempt is the one returned, and every attempt is reported.
+
+    `rounds` is the seeds to map with after each matching pass, in order; `attempt` is
+    told the round and does that round's matching before its first seed.
     """
     best: tuple[Path | None, int] = (None, -1)
-    tries: list[dict[str, int]] = []
-    for round_ in range(rounds):
+    tries: list[dict[str, int | str]] = []
+    for round_, seeds in enumerate(rounds):
         for seed in seeds:
             found, registered = attempt(round_, seed)
             tries.append({"match": round_, "seed": seed, "registered": registered})

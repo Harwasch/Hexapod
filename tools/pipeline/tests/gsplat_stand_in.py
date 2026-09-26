@@ -14,6 +14,15 @@ Like the real trainer it cannot resume: a second attempt starts again at step 0.
 is genuinely evidence for: that the stage builds a COLMAP dataset the trainer can find,
 passes the switches without which v1.5.3 writes no PLY or writes it in another frame,
 and reads whatever the trainer writes back into `train_metrics.json` and `trained.ply`.
+
+It also writes `cfg.yml`, as the real `train()` does (`yaml.dump(vars(cfg))`), holding
+the settings it resolved the way v1.5.3 resolves them: the `mcmc` preset's
+`opacity_reg` 0.01 unless `--opacity_reg` overrides it, the switches it was given, and
+-- when the dataset holds a real `cameras.bin` and a real first image -- the ratio the
+v1.5.3 parser would scale the intrinsics by (`image_scale`, the image's size over the
+COLMAP camera's). Tests read that file; nothing in the pipeline does. With
+`--depth_loss` it refuses a dataset without `sparse/0/points3D.bin`, which is where the
+real parser's `load_depths` gets its points.
 """
 
 from __future__ import annotations
@@ -27,6 +36,7 @@ import time
 from pathlib import Path
 
 import numpy as np
+from PIL import Image, UnidentifiedImageError
 
 PLY_PROPERTIES = (
     "x",
@@ -68,6 +78,28 @@ def write_ply(path: Path, count: int, seed: int) -> None:
     path.write_bytes(header.encode("ascii") + rows.tobytes())
 
 
+def image_scale(data_dir: Path) -> list[float] | None:
+    """What v1.5.3's parser scales `K` by: the first image's size over the camera's.
+
+    None when either side is not real (the fake bytes most tests seed), since the real
+    parser would fail on those rather than scale anything.
+    """
+    cameras = data_dir / "sparse" / "0" / "cameras.bin"
+    images = sorted(p for p in (data_dir / "images").iterdir() if p.is_file())
+    try:
+        raw = cameras.read_bytes()
+        count = int.from_bytes(raw[:8], "little")
+        width = int.from_bytes(raw[16:24], "little")
+        height = int.from_bytes(raw[24:32], "little")
+        with Image.open(images[0]) as first:
+            actual = first.size
+    except (OSError, IndexError, UnidentifiedImageError):
+        return None
+    if count < 1 or width <= 0 or height <= 0:
+        return None
+    return [actual[0] / width, actual[1] / height]
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("strategy")
@@ -81,6 +113,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--steps_scaler", type=float, default=1.0)
     parser.add_argument("--strategy.cap-max", dest="cap_max", type=int, default=None)
     parser.add_argument("--no-normalize-world-space", action="store_true")
+    parser.add_argument("--antialiased", action="store_true")
+    parser.add_argument("--opacity_reg", type=float, default=None)
+    parser.add_argument("--depth_loss", action="store_true")
     # Not gsplat's: how this stand-in is told to behave like a reclaimed machine.
     parser.add_argument("--ckpt-every", type=int, default=100)
     parser.add_argument("--die-at", type=int, default=None)
@@ -117,6 +152,28 @@ def main(argv: list[str] | None = None) -> int:
     if not args.no_normalize_world_space:
         sys.stderr.write("stand-in: refusing to train in a normalised world frame\n")
         return 2
+    points = sparse / "points3D.bin"
+    if args.depth_loss and not (points.is_file() and points.stat().st_size > 0):
+        sys.stderr.write(f"stand-in: --depth_loss needs SfM points and {points} has none\n")
+        return 2
+    args.result_dir.mkdir(parents=True, exist_ok=True)
+    resolved = {
+        "strategy": args.strategy,
+        "max_steps": args.max_steps,
+        "steps_scaler": args.steps_scaler,
+        "cap_max": args.cap_max,
+        "data_factor": args.data_factor,
+        "antialiased": args.antialiased,
+        # The `mcmc` preset's 0.01 (the MCMC paper's), `default`'s 0.0, unless overridden.
+        "opacity_reg": (
+            args.opacity_reg
+            if args.opacity_reg is not None
+            else (0.01 if args.strategy == "mcmc" else 0.0)
+        ),
+        "depth_loss": args.depth_loss,
+        "image_scale": image_scale(args.data_dir),
+    }
+    (args.result_dir / "cfg.yml").write_text(json.dumps(resolved) + "\n", encoding="utf-8")
     start = 0
     sys.stdout.write(f"stand-in: strategy={args.strategy} starting at step {start}\n")
     ckpts = args.result_dir / "ckpts"
@@ -141,6 +198,11 @@ def main(argv: list[str] | None = None) -> int:
             )
             stats = {"mem": 0.1, "ellipse_time": 0.5, "num_GS": args.gaussians + step}
             sys.stdout.write(f"Step:  {index} {stats}" + "\n")
+            # v1.5.3 writes the save step's stats beside the checkpoint.
+            (args.result_dir / "stats").mkdir(parents=True, exist_ok=True)
+            (args.result_dir / "stats" / f"train_step{index:04d}_rank0.json").write_text(
+                json.dumps({**stats, "ellipse_time": 12.5}), encoding="utf-8"
+            )
         if args.die_at is not None and step == args.die_at and not died.exists():
             died.write_text("1", encoding="utf-8")
             sys.stdout.write(f"stand-in: the machine is being taken back at step {step}" + "\n")

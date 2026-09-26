@@ -15,6 +15,8 @@ import ast
 import sys
 from pathlib import Path
 
+import sfm
+
 PIPELINE = Path(__file__).resolve().parent.parent
 APP = PIPELINE.parent.parent / "infra" / "modal" / "app.py"
 
@@ -74,3 +76,31 @@ def test_the_image_puts_captures_beside_the_pipeline() -> None:
     }
 
     assert Path(values["CAPTURES_DIR"]) == Path(values["PIPELINE_DIR"]).parent / "captures"
+
+
+def _constants(*names: str) -> dict[str, object]:
+    tree = ast.parse(APP.read_text(encoding="utf-8"))
+    return {
+        target.id: ast.literal_eval(node.value)
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        for target in node.targets
+        if isinstance(target, ast.Name) and target.id in names
+    }
+
+
+def test_the_cpu_image_pins_the_vocabulary_tree_colmap_3_9_reads() -> None:
+    """Loop detection needs the tree in the image `pose` runs in, at the path the
+    pipeline looks for. The FLANN-format file, not 3.11's `vocab_tree_faiss_*`, which
+    COLMAP 3.9.1 cannot load; and pinned by sha256, so a changed file fails the build."""
+    values = _constants("VOCAB_TREE_URL", "VOCAB_TREE_SHA256", "VOCAB_TREE")
+    url, digest, path = (
+        str(values[k]) for k in ("VOCAB_TREE_URL", "VOCAB_TREE_SHA256", "VOCAB_TREE")
+    )
+
+    assert url.startswith("https://") and url.endswith("/vocab_tree_flickr100K_words32K.bin")
+    assert Path(path).name == "vocab_tree_flickr100K_words32K.bin"
+    assert len(digest) == 64 and all(c in "0123456789abcdef" for c in digest)
+    source = APP.read_text(encoding="utf-8")
+    assert f'"{sfm.VOCAB_TREE_ENV}": VOCAB_TREE' in source
+    assert "sha256sum -c" in source

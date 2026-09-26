@@ -20,12 +20,17 @@ installed trainer, so an argv that stops parsing fails the deploy rather than a 
 from __future__ import annotations
 
 import json
+import struct
 import sys
 from pathlib import Path
 
+import numpy as np
 import pytest
+from PIL import Image
 
+import gaussians
 import progress
+import sfm
 import training
 from adapters import LocalTransfer, SubprocessAdapter
 from cloud import AttemptLedger, CloudRunner, Placement
@@ -389,3 +394,356 @@ def test_a_four_frame_capture_trains_a_quarter_schedule_under_the_cap(tmp_path: 
     assert "4 frames -> 0.25 of the 300-step schedule = 75 steps" in log
     last = progress.latest(log)
     assert last is not None and last.total == 75
+
+
+# --- the quality parameters (the preview / refine contract) ----------------------------
+
+
+def write_cameras_bin(path: Path, width: int, height: int, focal: float) -> None:
+    """One SIMPLE_RADIAL camera in COLMAP's binary layout, which `sfm.read_model` reads."""
+    path.write_bytes(
+        struct.pack("<Q", 1)
+        + struct.pack("<IiQQ", 1, 2, width, height)
+        + struct.pack("<4d", focal, width / 2.0, height / 2.0, 0.0)
+    )
+
+
+def seed_real_frames(
+    workdir: Workdir, *, frames: int = 4, size: tuple[int, int] = (64, 48)
+) -> None:
+    """Real JPEGs and a real `cameras.bin` of the same size, where the fakes will not do."""
+    seed_inputs(workdir, frames=frames)
+    frame_dir = workdir.input_path("frames")
+    for index in range(frames):
+        Image.new("RGB", size, (40 * index, 90, 160)).save(frame_dir / f"frame_{index:04d}.jpg")
+    write_cameras_bin(workdir.input_path("poses") / "cameras.bin", *size, focal=50.0)
+
+
+def ring_points(count: int, *, images: int, radius: float, first_image: int = 1) -> sfm.Points3D:
+    """`count` points on a ring of `radius` about the origin, point `i` seen by image
+    `first_image + i % images` alone, in `points3D.bin`'s own shape."""
+    angles = np.linspace(0.0, 2.0 * np.pi, count, endpoint=False)
+    xyz = np.stack([radius * np.cos(angles), radius * np.sin(angles), np.zeros(count)], axis=1)
+    image_ids = np.arange(count) % images + first_image
+    track = np.stack([image_ids, np.arange(count)], axis=1).astype(np.uint32)
+    return sfm.Points3D(
+        ids=np.arange(1, count + 1, dtype=np.uint64),
+        xyz=xyz,
+        rgb=np.full((count, 3), 128, dtype=np.uint8),
+        error=np.full(count, 0.5),
+        track=track,
+        track_offsets=np.arange(count + 1, dtype=np.int64),
+    )
+
+
+def test_the_default_argv_carries_none_of_the_quality_switches() -> None:
+    """A run that names none of them is the run every earlier capture got."""
+    plain = training.gsplat_argv("p", Path("t"), Path("d"), Path("r"), strategy="mcmc")
+    tuned = training.gsplat_argv(
+        "p",
+        Path("t"),
+        Path("d"),
+        Path("r"),
+        strategy="mcmc",
+        antialiased=True,
+        opacity_reg=0.001,
+        depth_loss=True,
+    )
+
+    for switch in ("--antialiased", "--opacity_reg", "--depth_loss"):
+        assert switch not in plain
+        assert switch in tuned
+    assert tuned[tuned.index("--opacity_reg") + 1] == "0.001"
+
+
+def test_a_requested_schedule_scale_wins_over_the_captures_own(tmp_path: Path) -> None:
+    """The preview preset: `schedule_scale` 0.1 on a capture that would get the full one."""
+    workdir = Workdir.create(tmp_path / "run")
+    seed_inputs(workdir, frames=4)
+
+    params = stand_in_params(schedule_full_at=4, schedule_scale=0.1)
+    execute(train_recipe(params), workdir, RunnerSet(cpu=LocalRunner()))
+
+    metrics = json.loads((workdir.out_dir("train") / "train_metrics.json").read_text())
+    assert metrics["requestedIterations"] == 30
+    assert metrics["iterations"] == 30
+    assert metrics["settings"]["scheduleScale"] == 0.1
+    assert metrics["settings"]["scheduleScaleRequested"] == 0.1
+    assert "the capture's own would be 1" in workdir.log_path("train").read_text()
+
+
+@pytest.mark.parametrize("scale", [0.01, 1.5])
+def test_a_schedule_scale_outside_its_range_is_refused(tmp_path: Path, scale: float) -> None:
+    workdir = Workdir.create(tmp_path / "run")
+    seed_inputs(workdir)
+
+    with pytest.raises(Exception, match="schedule_scale"):
+        execute(
+            train_recipe(stand_in_params(schedule_scale=scale)),
+            workdir,
+            RunnerSet(cpu=LocalRunner()),
+        )
+
+
+def test_train_max_side_shrinks_the_images_and_not_the_model(tmp_path: Path) -> None:
+    """The images shrink, `sparse/0/` is the pose stage's bytes, and the trainer -- here the
+    stand-in, mirroring v1.5.3's parser -- would scale the intrinsics by exactly 1/2."""
+    workdir = Workdir.create(tmp_path / "run")
+    seed_real_frames(workdir, size=(64, 48))
+    cameras = (workdir.input_path("poses") / "cameras.bin").read_bytes()
+
+    execute(train_recipe(stand_in_params(train_max_side=32)), workdir, RunnerSet(cpu=LocalRunner()))
+
+    dataset = workdir.work_dir("train") / "dataset"
+    with Image.open(dataset / "images" / "frame_0000.jpg") as image:
+        assert image.size == (32, 24)
+    assert (dataset / "sparse" / "0" / "cameras.bin").read_bytes() == cameras
+    cfg = json.loads((workdir.work_dir("train") / "gsplat" / "cfg.yml").read_text())
+    assert cfg["image_scale"] == [0.5, 0.5]
+    assert cfg["data_factor"] == 1
+    metrics = json.loads((workdir.out_dir("train") / "train_metrics.json").read_text())
+    assert metrics["settings"]["trainMaxSide"] == 32
+    assert metrics["settings"]["trainImageSize"] == [32, 24]
+
+
+def test_train_max_side_leaves_frames_that_already_fit_byte_for_byte(tmp_path: Path) -> None:
+    frames, poses = tmp_path / "frames", tmp_path / "poses"
+    frames.mkdir()
+    poses.mkdir()
+    Image.new("RGB", (40, 30), (1, 2, 3)).save(frames / "frame_0000.jpg")
+    original = (frames / "frame_0000.jpg").read_bytes()
+
+    dataset = training.build_dataset(frames, poses, tmp_path / "work", max_side=64)
+
+    assert (dataset / "images" / "frame_0000.jpg").read_bytes() == original
+
+
+def test_train_max_side_and_data_factor_are_not_both_given(tmp_path: Path) -> None:
+    workdir = Workdir.create(tmp_path / "run")
+    seed_inputs(workdir)
+
+    with pytest.raises(Exception, match="give one"):
+        execute(
+            train_recipe(stand_in_params(train_max_side=32, data_factor=2)),
+            workdir,
+            RunnerSet(cpu=LocalRunner()),
+        )
+
+
+def test_the_quality_switches_reach_the_trainer_with_the_presets_semantics(
+    tmp_path: Path,
+) -> None:
+    """The refine shape: mcmc, antialiased, opacity_reg over the preset's 0.01, depth loss."""
+    workdir = Workdir.create(tmp_path / "run")
+    seed_inputs(workdir)
+
+    params = stand_in_params(
+        strategy="mcmc", cap_max=48, antialiased=True, opacity_reg=0.001, depth_loss=True
+    )
+    execute(train_recipe(params), workdir, RunnerSet(cpu=LocalRunner()))
+
+    cfg = json.loads((workdir.work_dir("train") / "gsplat" / "cfg.yml").read_text())
+    assert cfg["antialiased"] is True
+    assert cfg["opacity_reg"] == 0.001
+    assert cfg["depth_loss"] is True
+    document = json.loads((workdir.out_dir("train") / "train_metrics.json").read_text())
+    assert document["settings"] == {
+        "strategy": "mcmc",
+        "capMax": 48,
+        "scheduleScale": 1.0,
+        "scheduleScaleRequested": None,
+        "trainMaxSide": None,
+        "trainImageSize": None,
+        "antialiased": True,
+        "opacityReg": 0.001,
+        "depthLoss": True,
+        "variant": "3dgs",
+    }
+
+
+def test_the_mcmc_preset_keeps_its_own_opacity_reg_when_none_is_given(tmp_path: Path) -> None:
+    workdir = Workdir.create(tmp_path / "run")
+    seed_inputs(workdir)
+
+    execute(train_recipe(stand_in_params(strategy="mcmc")), workdir, RunnerSet(cpu=LocalRunner()))
+
+    cfg = json.loads((workdir.work_dir("train") / "gsplat" / "cfg.yml").read_text())
+    assert cfg["opacity_reg"] == 0.01
+    assert cfg["antialiased"] is False and cfg["depth_loss"] is False
+
+
+def test_a_switch_given_as_a_string_is_refused_rather_than_read_as_true(tmp_path: Path) -> None:
+    """`"false"` is a truthy string; a switch is a JSON bool or nothing."""
+    workdir = Workdir.create(tmp_path / "run")
+    seed_inputs(workdir)
+
+    with pytest.raises(Exception, match="antialiased must be true or false"):
+        execute(
+            train_recipe(stand_in_params(antialiased="false")),
+            workdir,
+            RunnerSet(cpu=LocalRunner()),
+        )
+
+
+def test_2dgs_is_refused_by_name_with_the_reason(tmp_path: Path) -> None:
+    workdir = Workdir.create(tmp_path / "run")
+    seed_inputs(workdir)
+
+    with pytest.raises(Exception, match="writes no PLY"):
+        execute(
+            train_recipe(stand_in_params(variant="2dgs")), workdir, RunnerSet(cpu=LocalRunner())
+        )
+
+
+# --- held-out metrics ------------------------------------------------------------------
+
+
+def test_the_held_out_split_is_every_eighth_registered_frame() -> None:
+    """v1.5.3: `indices % test_every == 0` are `val` -- 1 of 4, 11 of 87, 13 of 100."""
+    assert training.held_out_split(4) == (3, 1)
+    assert training.held_out_split(8) == (7, 1)
+    assert training.held_out_split(9) == (7, 2)
+    assert training.held_out_split(87) == (76, 11)
+    assert training.held_out_split(100) == (87, 13)
+    assert training.held_out_split(0) == (0, 0)
+
+
+def test_the_metrics_say_they_are_held_out_and_on_how_many_frames(tmp_path: Path) -> None:
+    workdir = Workdir.create(tmp_path / "run")
+    seed_inputs(workdir, frames=9)
+
+    execute(train_recipe(stand_in_params()), workdir, RunnerSet(cpu=LocalRunner()))
+
+    document = json.loads((workdir.out_dir("train") / "train_metrics.json").read_text())
+    assert document["heldOut"]["split"] == "val"
+    assert document["heldOut"]["testEvery"] == 8
+    assert document["heldOut"]["valFrames"] == 2
+    assert document["heldOut"]["trainFrames"] == 7
+    assert "never trains on" in document["heldOut"]["note"]
+    assert document["ssim"] == pytest.approx(0.8712)
+    assert document["lpips"] == pytest.approx(0.1431)
+    step = json.loads(workdir.step_path("train").read_text())
+    assert step["metrics"]["valFrames"] == 2
+    assert step["metrics"]["ssim"] == pytest.approx(0.8712)
+    assert step["metrics"]["lpips"] == pytest.approx(0.1431)
+    assert step["metrics"]["metricsSplit"].startswith("val")
+
+
+def test_train_seconds_come_from_the_training_stats_not_the_eval_render_time(
+    tmp_path: Path,
+) -> None:
+    """v1.5.3 uses `ellipse_time` in both files: seconds since training began in
+    `train_step*`, mean seconds to render one val image in `val_step*`."""
+    stats = tmp_path / "stats"
+    stats.mkdir()
+    (stats / "val_step29999.json").write_text(json.dumps(REAL_FORMAT_STATS))
+    (stats / "train_step29999_rank0.json").write_text(
+        json.dumps({"mem": 3.1, "ellipse_time": 1328.4, "num_GS": 412733})
+    )
+
+    metrics = training.parse_metrics(tmp_path, registered=87)
+
+    assert metrics.train_seconds == pytest.approx(1328.4)
+    assert metrics.eval_seconds_per_image == pytest.approx(0.008542)
+    assert metrics.peak_memory_gb == pytest.approx(3.1)
+    held_out = metrics.to_dict()["heldOut"]
+    assert isinstance(held_out, dict) and held_out["valFrames"] == 11
+
+
+def test_the_stdout_fallback_reads_ssim_and_lpips_too(tmp_path: Path) -> None:
+    log = "PSNR: 26.110, SSIM: 0.8410, LPIPS: 0.172 Time: 0.011s/image Number of GS: 5\n"
+
+    metrics = training.parse_metrics(tmp_path, log)
+
+    assert metrics.ssim == pytest.approx(0.841)
+    assert metrics.lpips == pytest.approx(0.172)
+
+
+# --- the region of interest ------------------------------------------------------------
+
+
+def test_points3d_survives_a_round_trip_through_this_projects_writer(tmp_path: Path) -> None:
+    points = ring_points(12, images=3, radius=2.0)
+    path = tmp_path / "points3D.bin"
+
+    sfm.write_points3d(path, points)
+    back = sfm.read_points3d(path)
+
+    assert np.array_equal(back.ids, points.ids)
+    assert np.allclose(back.xyz, points.xyz)
+    assert np.array_equal(back.track, points.track)
+    assert np.array_equal(back.track_offsets, points.track_offsets)
+
+
+def test_an_roi_keeps_its_inside_a_sample_of_the_outside_and_every_frames_view(
+    tmp_path: Path,
+) -> None:
+    """Inside: every point. Outside: one in ten. And no frame is left with fewer than the
+    minimum of its own points, since gsplat's depth loss looks every frame up."""
+    inner = ring_points(40, images=2, radius=1.0)
+    # Images 3-6 see only the outer ring, 50 points each.
+    outer = ring_points(200, images=4, radius=10.0, first_image=3)
+    merged = sfm.Points3D(
+        ids=np.concatenate([inner.ids, outer.ids + 1000]),
+        xyz=np.concatenate([inner.xyz, outer.xyz]),
+        rgb=np.concatenate([inner.rgb, outer.rgb]),
+        error=np.concatenate([inner.error, outer.error]),
+        track=np.concatenate([inner.track, outer.track]),
+        track_offsets=np.arange(241, dtype=np.int64),
+    )
+    sfm.write_points3d(tmp_path / "points3D.bin", merged)
+    roi = training.Roi(center=(0.0, 0.0, 0.0), radius=2.0)
+
+    crop = training.crop_initial_points(tmp_path, roi, outside_every=10, min_per_image=30)
+
+    assert crop.points_in == 240
+    assert crop.inside == 40
+    assert crop.outside_sampled == 20
+    kept = sfm.read_points3d(tmp_path / "points3D.bin")
+    per_image = np.bincount(kept.track[:, 0].astype(np.int64))
+    assert all(per_image[image] >= 30 for image in (3, 4, 5, 6))
+    # Each outer image had 5 sampled points and is topped up to 30 with its own.
+    assert crop.kept_for_coverage == 4 * 25
+    assert crop.points_kept == len(kept) == 40 + 20 + 100
+
+
+def test_a_malformed_roi_is_refused_rather_than_ignored() -> None:
+    assert training.Roi.parse(None) is None
+    assert training.Roi.parse({"center": [1, 2, 3], "radius": 4}) == training.Roi(
+        (1.0, 2.0, 3.0), 4.0
+    )
+    for bad in (
+        {"center": [1, 2], "radius": 1},
+        {"center": [1, 2, "x"], "radius": 1},
+        {"center": [1, 2, 3], "radius": 0},
+        {"center": [1, 2, 3], "radius": True},
+        [0, 0, 0, 1],
+    ):
+        with pytest.raises(ValueError, match="roi"):
+            training.Roi.parse(bad)
+
+
+def test_the_roi_crops_the_initial_points_and_the_trained_splat(tmp_path: Path) -> None:
+    workdir = Workdir.create(tmp_path / "run")
+    seed_inputs(workdir)
+    sfm.write_points3d(
+        workdir.input_path("poses") / "points3D.bin", ring_points(100, images=4, radius=3.0)
+    )
+    params = stand_in_params(roi={"center": [0.0, 0.0, 0.0], "radius": 1.0})
+
+    execute(train_recipe(params), workdir, RunnerSet(cpu=LocalRunner()))
+
+    document = json.loads((workdir.out_dir("train") / "train_metrics.json").read_text())
+    roi = document["roi"]
+    assert roi["center"] == [0.0, 0.0, 0.0] and roi["radius"] == 1.0
+    assert roi["initialPoints"] == 100
+    assert roi["insideRoi"] == 0
+    dataset_points = workdir.work_dir("train") / "dataset" / "sparse" / "0" / "points3D.bin"
+    assert roi["initialPointsKept"] == len(sfm.read_points3d(dataset_points))
+    # The poses artifact is untouched: the crop is the trainer's dataset only.
+    assert len(sfm.read_points3d(workdir.input_path("poses") / "points3D.bin")) == 100
+    trained = gaussians.read_splat(workdir.out_dir("train") / "trained.ply")
+    assert float(np.linalg.norm(trained.xyz, axis=1).max()) <= 1.5
+    assert roi["gaussiansTrained"] == 64
+    assert roi["gaussiansKept"] == trained.count == document["gaussiansInPly"]
+    assert 0 < trained.count < 64

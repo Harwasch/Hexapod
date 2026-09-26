@@ -38,12 +38,43 @@ find rather than inventing a number.
 The dataset layout is COLMAP's, because that is what `gsplat`'s parser reads and it is
 exactly what the `pose` stage already produced -- `images/` beside `sparse/0/`. Building
 it in `work/` rather than reshaping the `poses` artifact keeps the artifact COLMAP's own
-model, which is what `opensplat` and `nerfstudio` want too.
+model, which is what `opensplat` and `nerfstudio` want too. Two things the dataset may
+differ from the artifact in, both read out of v1.5.3's `examples/datasets/colmap.py`:
+
+* **Smaller images, same poses** (`train_max_side`). The parser loads the first image,
+  divides its size by the COLMAP camera's, and scales every intrinsic matrix and image
+  size by that ratio before it builds the undistortion maps. So frames downscaled in
+  place under `images/`, with `--data_factor 1`, train against correctly scaled
+  intrinsics and unchanged extrinsics. `--data_factor N` is the other route and the
+  worse one here: it wants an `images_N/` directory, is integers only, and for JPEGs
+  re-derives PNGs from `images/` itself. Checked by loading a downscaled dataset with
+  that parser on CPU: `K` came back scaled by the ratio of the sizes.
+* **Fewer initial points** (`roi`). `points3D.bin` is the trainer's initialisation (the
+  `sfm` init) and, with `--depth_loss`, its depth supervision: the parser turns each
+  point's track into per-image `point_indices`, and the dataset projects those into the
+  frame. The crop rewrites that one file and keeps every track that survives, so both
+  uses see a consistent, smaller model.
+
+**2DGS is not offered, and not because it was not looked at.** gsplat v1.5.3's
+`examples/simple_trainer_2dgs.py` was read at the tag. It cannot produce what this
+pipeline consumes: it has no `--save_ply` and no PLY writer at all (the splat leaves it
+only as `ckpts/ckpt_<step>.pt`, a torch state dict); it has no MCMC strategy, so
+no `cap_max` and no bound on the gaussian count, which is what bounds this stage's cost;
+and its primitives are surfels -- flat oriented discs -- rasterised by
+`rasterization_2dgs`, a ray-splat intersection that the 3DGS renderer the globe uses does
+not perform. A converter from its checkpoint to a PLY is a page of torch code, but the
+PLY it produced would be 2DGS surfels drawn as flattened 3D gaussians: an approximation
+of what was trained, with no way to measure the difference on a machine without a GPU.
+The trainer is also a separate CLI (`tyro.cli(Config)`, no `default`/`mcmc` subcommand)
+that `gsplat_argv` would have to be forked for. `variant: 2dgs` is refused by name for
+those reasons (`VARIANT_REFUSALS`), rather than dispatched to a trainer whose output
+nothing downstream could honestly read.
 """
 
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import shutil
@@ -51,12 +82,23 @@ import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 __all__ = [
     "GSPLAT_VERSION",
+    "ROI_KEEP_RADII",
+    "SCHEDULE_SCALE_RANGE",
+    "TEST_EVERY",
+    "VARIANT_REFUSALS",
+    "Roi",
+    "RoiCrop",
     "TrainMetrics",
     "build_dataset",
+    "check_schedule_scale",
+    "crop_initial_points",
+    "crop_splat",
     "gsplat_argv",
+    "held_out_split",
     "latest_ply",
     "parse_metrics",
     "step_of",
@@ -70,9 +112,51 @@ _STEP_RE = re.compile(r"(\d+)")
 #: `num_GS` -- read from the source, not from a run.
 _STDOUT_GS_RE = re.compile(r"Step:\s+(\d+)\s+\{[^}]*'num_GS':\s*(\d+)")
 _STDOUT_PSNR_RE = re.compile(r"PSNR:\s*([0-9.]+)")
+#: The rest of `eval()`'s line: `PSNR: 26.110, SSIM: 0.8410, LPIPS: 0.172 Time: ...`.
+_STDOUT_SSIM_RE = re.compile(r"PSNR:[^\n]*?SSIM:\s*([0-9.]+)")
+_STDOUT_LPIPS_RE = re.compile(r"PSNR:[^\n]*?LPIPS:\s*([0-9.]+)")
 
 #: The gsplat release every flag and file name here was read from.
 GSPLAT_VERSION = "1.5.3"
+
+#: v1.5.3's `Config.test_every`, which this stage never overrides. The parser sorts the
+#: registered images by name and holds out every one whose index is a multiple of it
+#: (`indices % test_every == 0`) as the `val` split; the trainer never trains on those,
+#: and `eval()` measures PSNR, SSIM and LPIPS on them. So every quality number in
+#: `train_metrics.json` is a held-out number.
+TEST_EVERY = 8
+
+#: What a caller may ask `schedule_scale` to be. The floor is where a run stops being a
+#: shorter schedule and starts being a few hundred steps of initialisation; 1.0 is the
+#: whole schedule, and a scale above it would be a longer run than the recipe prices.
+SCHEDULE_SCALE_RANGE: tuple[float, float] = (0.05, 1.0)
+
+#: How far from an ROI's centre a trained gaussian may be, in radii, before it is dropped.
+#: More than one: a gaussian whose centre is just outside the sphere still paints its
+#: edge, and the sphere is a person's rough circle round the subject, not a surveyed hull.
+ROI_KEEP_RADII = 1.5
+
+#: Of the initial SfM points outside an ROI, one in this many is kept. Not zero: with no
+#: points at all behind the subject the optimiser has nothing to explain the background
+#: pixels with except the subject's own gaussians, which it then stretches out into
+#: floaters to do it.
+ROI_OUTSIDE_EVERY = 10
+
+#: The fewest initial points any registered frame keeps through an ROI crop. gsplat's
+#: depth loss looks each training frame up in `point_indices` (a KeyError for a frame
+#: with none) and averages over the points it projects (NaN over none), so a frame that
+#: looked mostly away from the subject keeps some of what it saw.
+ROI_MIN_POINTS_PER_IMAGE = 32
+
+#: The `variant` values this stage refuses, and why. See the module docstring.
+VARIANT_REFUSALS: dict[str, str] = {
+    "2dgs": (
+        "variant=2dgs is not offered: gsplat 1.5.3's simple_trainer_2dgs.py writes no PLY "
+        "(only torch checkpoints), has no MCMC strategy and so no cap_max, and trains "
+        "surfels that the globe's 3DGS renderer would draw as flattened gaussians rather "
+        "than as what was trained. See training.py's module docstring"
+    ),
+}
 
 
 class TrainerMissingError(RuntimeError):
@@ -114,12 +198,18 @@ def trainer_python(configured: object) -> str:
     return os.environ.get("GSPLAT_PYTHON") or sys.executable
 
 
-def build_dataset(frames: Path, poses: Path, root: Path) -> Path:
+def build_dataset(frames: Path, poses: Path, root: Path, *, max_side: int | None = None) -> Path:
     """COLMAP's on-disk layout, assembled in `work/` from the two input artifacts.
 
     `images/` and `sparse/0/` are what every 3DGS trainer's COLMAP parser looks for.
     Files are copied rather than linked: the trainer may be in another container with
     this directory mounted, and a symlink out of it resolves to nothing there.
+
+    `max_side` shrinks each frame whose long side is bigger, under its own name, and
+    leaves `sparse/0/` exactly as the pose stage wrote it: gsplat v1.5.3's parser rescales
+    the intrinsics to the size of the images it finds (module docstring). The pixels are
+    written as they are stored, with no EXIF orientation applied, because COLMAP posed the
+    stored pixels and the trainer reads them the same way.
     """
     images = root / "images"
     sparse = root / "sparse" / "0"
@@ -128,10 +218,166 @@ def build_dataset(frames: Path, poses: Path, root: Path) -> Path:
             shutil.rmtree(directory)
         directory.mkdir(parents=True)
     for frame in sorted(p for p in frames.iterdir() if p.is_file()):
-        shutil.copyfile(frame, images / frame.name)
+        if max_side is None or not _shrink(frame, images / frame.name, max_side):
+            shutil.copyfile(frame, images / frame.name)
     for entry in sorted(p for p in poses.iterdir() if p.is_file()):
         shutil.copyfile(entry, sparse / entry.name)
     return root
+
+
+def _shrink(source: Path, target: Path, max_side: int) -> bool:
+    """Write `source` to `target` with its long side at most `max_side`; False if it
+    already fits (nothing written), so an unchanged frame is copied, not re-encoded."""
+    from PIL import Image
+
+    with Image.open(source) as image:
+        width, height = image.size
+        if max(width, height) <= max_side:
+            return False
+        scale = max_side / max(width, height)
+        size = (max(1, round(width * scale)), max(1, round(height * scale)))
+        resized = image.convert("RGB").resize(size, Image.Resampling.LANCZOS)
+        kind = "JPEG" if target.suffix.lower() in {".jpg", ".jpeg"} else None
+        resized.save(target, format=kind, quality=95)
+    return True
+
+
+def held_out_split(registered: int, test_every: int = TEST_EVERY) -> tuple[int, int]:
+    """(train, val) frame counts for `registered` posed frames, as v1.5.3's parser splits.
+
+    Indices `0, test_every, 2 * test_every, ...` are `val`, so there are
+    `ceil(registered / test_every)` of them -- one of 4, 11 of 87.
+    """
+    if registered <= 0:
+        return 0, 0
+    val = -(-registered // test_every)
+    return registered - val, val
+
+
+@dataclass(frozen=True)
+class Roi:
+    """A sphere round what the capture is of, in the COLMAP frame `trained.ply` is in."""
+
+    center: tuple[float, float, float]
+    radius: float
+
+    @staticmethod
+    def parse(value: object) -> Roi | None:
+        """`{"center": [x, y, z], "radius": r}`, or None for no ROI. Anything else is
+        refused by name: a malformed ROI silently ignored is a full-scene run that was
+        paid for as a cropped one."""
+        if value is None:
+            return None
+        if not isinstance(value, Mapping):
+            raise ValueError(f'roi must be {{"center": [x, y, z], "radius": r}}, not {value!r}')
+        center = value.get("center")
+        radius = _finite(value.get("radius"))
+        listed: list[object] = []
+        if isinstance(center, Sequence) and not isinstance(center, str):
+            listed = list(center)
+        values = [v for v in (_finite(item) for item in listed) if v is not None]
+        if len(listed) != 3 or len(values) != 3:
+            raise ValueError(f"roi.center must be three finite numbers, not {center!r}")
+        if radius is None or radius <= 0.0:
+            raise ValueError(f"roi.radius must be a positive number, not {value.get('radius')!r}")
+        x, y, z = values
+        return Roi(center=(x, y, z), radius=radius)
+
+    def to_dict(self) -> dict[str, object]:
+        return {"center": list(self.center), "radius": self.radius}
+
+
+@dataclass(frozen=True)
+class RoiCrop:
+    """What cropping the initial points to an ROI kept, for `train_metrics.json`."""
+
+    points_in: int
+    inside: int
+    outside_sampled: int
+    kept_for_coverage: int
+    points_kept: int
+
+    def to_dict(self) -> dict[str, int]:
+        return {
+            "initialPoints": self.points_in,
+            "insideRoi": self.inside,
+            "outsideSampled": self.outside_sampled,
+            "keptForFrameCoverage": self.kept_for_coverage,
+            "initialPointsKept": self.points_kept,
+        }
+
+
+def crop_initial_points(
+    sparse: Path,
+    roi: Roi,
+    *,
+    outside_every: int = ROI_OUTSIDE_EVERY,
+    min_per_image: int = ROI_MIN_POINTS_PER_IMAGE,
+) -> RoiCrop:
+    """Rewrite `sparse/points3D.bin` to the points inside `roi`, plus a sparse sample.
+
+    Kept: every point within `radius` of the centre; one in `outside_every` of the rest,
+    by file order (deterministic, and spread over the scene the way COLMAP numbered it);
+    and, for any registered frame left with fewer than `min_per_image` observed points,
+    enough of its own observations to reach that (see `ROI_MIN_POINTS_PER_IMAGE`).
+    Tracks travel with their points, so gsplat's `point_indices` stay consistent.
+    """
+    import numpy as np
+
+    import sfm
+
+    path = sparse / "points3D.bin"
+    points = sfm.read_points3d(path)
+    count = len(points)
+    distance = np.linalg.norm(points.xyz - np.asarray(roi.center), axis=1)
+    inside = distance <= roi.radius
+    outside = np.flatnonzero(~inside)
+    sampled = np.zeros(count, dtype=bool)
+    sampled[outside[:: max(1, outside_every)]] = True
+    keep = inside | sampled
+
+    lengths = np.diff(points.track_offsets)
+    row_point = np.repeat(np.arange(count), lengths)
+    row_image = points.track[:, 0] if len(points.track) else np.zeros(0, dtype=np.uint32)
+    added = np.zeros(count, dtype=bool)
+    for image_id in np.unique(row_image):
+        seen = row_point[row_image == image_id]
+        have = int(np.count_nonzero(keep[seen] | added[seen]))
+        if have >= min_per_image:
+            continue
+        missing = seen[~(keep[seen] | added[seen])]
+        added[missing[: min_per_image - have]] = True
+    keep |= added
+    sfm.write_points3d(path, points.subset(keep))
+    return RoiCrop(
+        points_in=count,
+        inside=int(inside.sum()),
+        outside_sampled=int(sampled.sum()),
+        kept_for_coverage=int(added.sum()),
+        points_kept=int(keep.sum()),
+    )
+
+
+def crop_splat(
+    columns: Mapping[str, Any], roi: Roi, *, radii: float = ROI_KEEP_RADII
+) -> tuple[dict[str, Any], int]:
+    """The gaussians whose centre is within `radii * roi.radius` of the centre, and how
+    many that is. A gaussian with a non-finite centre is dropped too: it is nowhere, so it
+    is not inside anything."""
+    import numpy as np
+
+    xyz = np.stack([columns["x"], columns["y"], columns["z"]], axis=1).astype(np.float64)
+    distance = np.linalg.norm(xyz - np.asarray(roi.center), axis=1)
+    keep = np.isfinite(distance) & (distance <= radii * roi.radius)
+    return {name: values[keep] for name, values in columns.items()}, int(keep.sum())
+
+
+def _finite(value: object) -> float | None:
+    """`value` as a float if it is a finite real number (not a bool), else None."""
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    number = float(value)
+    return number if math.isfinite(number) else None
 
 
 def gsplat_argv(
@@ -145,6 +391,9 @@ def gsplat_argv(
     data_factor: int = 1,
     steps_scaler: float = 1.0,
     cap_max: int | None = None,
+    antialiased: bool = False,
+    opacity_reg: float | None = None,
+    depth_loss: bool = False,
     extra: Sequence[str] = (),
 ) -> list[str]:
     """The command line, built in one place so a test can read it without a GPU.
@@ -177,6 +426,22 @@ def gsplat_argv(
     `--disable_video` too: the trajectory render after evaluation is a video nobody reads.
     There is no `--ckpt`, and there must not be: in v1.5.3 it means "evaluate this and do
     not train".
+
+    Three quality switches, each passed only when asked for, so the default argv is the
+    one every earlier run used:
+
+    * `--antialiased` rasterises in v1.5.3's `antialiased` mode (Mip-Splatting's 2D
+      filter), which scales each gaussian's opacity by how much the screen-space blur
+      grew it. The PLY stores the opacities that compensation was trained against, so a
+      renderer that does not apply the same compensation draws small gaussians more
+      opaque than they were trained to be -- which is why it is not a default here.
+    * `--opacity_reg X` replaces the preset's opacity regularisation weight: the `mcmc`
+      preset sets 0.01 (with `scale_reg` 0.01, the MCMC paper's values), `default` 0.
+    * `--depth_loss` adds v1.5.3's sparse depth term: every training frame's own SfM
+      points (`load_depths`, from `points3D.bin` tracks) are projected into it and the
+      rendered expected depth is pulled toward theirs, in disparity, weighted
+      `depth_lambda` 0.01. No extra dataset is needed; the model the pose stage wrote
+      already carries the tracks.
     """
     steps = str(max_steps)
     argv = [
@@ -211,6 +476,12 @@ def gsplat_argv(
                 f"no cap and gsplat {GSPLAT_VERSION} would refuse the flag"
             )
         argv += ["--strategy.cap-max", str(cap_max)]
+    if antialiased:
+        argv.append("--antialiased")
+    if opacity_reg is not None:
+        argv += ["--opacity_reg", f"{opacity_reg:g}"]
+    if depth_loss:
+        argv.append("--depth_loss")
     argv += list(extra)
     return argv
 
@@ -226,6 +497,17 @@ def schedule_scale(images: int, *, full_at: int, floor: float) -> float:
     if full_at <= 0:
         return 1.0
     return round(min(1.0, max(floor, images / full_at)), 2)
+
+
+def check_schedule_scale(value: float) -> float:
+    """A requested `schedule_scale`, or a refusal naming the range it must be in."""
+    low, high = SCHEDULE_SCALE_RANGE
+    if not low <= value <= high:
+        raise ValueError(
+            f"schedule_scale={value:g} is outside {low:g}-{high:g}: it is the fraction of "
+            f"the full schedule to run, and below {low:g} a run is initialisation only"
+        )
+    return value
 
 
 def scaled_steps(max_steps: int, steps_scaler: float) -> int:
@@ -275,20 +557,41 @@ class TrainMetrics:
     ssim: float | None = None
     lpips: float | None = None
     train_seconds: float | None = None
+    eval_seconds_per_image: float | None = None
+    peak_memory_gb: float | None = None
     resumed_from_step: int | None = None
     attempts: int = 1
     source: str = "none"
+    #: The held-out split psnr/ssim/lpips were measured on: (train, val) frame counts.
+    split: tuple[int, int] | None = None
 
     def to_dict(self) -> dict[str, object]:
+        train, val = self.split if self.split is not None else (None, None)
         return {
             "trainer": self.trainer,
             "iterations": self.iterations,
             "requestedIterations": self.requested_iterations,
             "gaussians": self.gaussians,
+            # Held-out numbers, every one: see `heldOut`.
             "psnr": self.psnr,
             "ssim": self.ssim,
             "lpips": self.lpips,
+            "heldOut": {
+                "split": "val",
+                "testEvery": TEST_EVERY,
+                "valFrames": val,
+                "trainFrames": train,
+                "note": (
+                    f"psnr, ssim and lpips are gsplat's eval() on the val split: every "
+                    f"{TEST_EVERY}th registered frame by name (index % {TEST_EVERY} == 0), "
+                    f"which the trainer never trains on"
+                ),
+            },
+            # Wall seconds from the first step to the last save, off the trainer's own
+            # `train_step*` stats; not the stage's duration, which includes loading.
             "trainSeconds": self.train_seconds,
+            "evalSecondsPerImage": self.eval_seconds_per_image,
+            "peakMemoryGb": self.peak_memory_gb,
             "resumedFromStep": self.resumed_from_step,
             "attempts": self.attempts,
             # Which of the two readers produced the numbers above, so a reader of the
@@ -305,24 +608,39 @@ def parse_metrics(
     requested_iterations: int | None = None,
     resumed_from_step: int | None = None,
     attempts: int = 1,
+    registered: int | None = None,
 ) -> TrainMetrics:
-    """Read back what the trainer measured: its stats files first, its stdout second."""
-    stats = _read_stats(result_dir)
-    if stats is not None:
-        step, document = stats
+    """Read back what the trainer measured: its stats files first, its stdout second.
+
+    Two files, because v1.5.3 writes two and they mean different things by the same key:
+    `val_step<i>.json` is `eval()`'s held-out psnr/ssim/lpips, where `ellipse_time` is the
+    mean seconds to *render one val image*; `train_step<i>_rank0.json` is the save step's,
+    where `ellipse_time` is seconds since training started, beside peak `mem` in GB.
+    `registered` is how many posed frames the trainer split, for the held-out counts.
+    """
+    split = held_out_split(registered) if registered is not None else None
+    val = _read_stats(result_dir, "val_step*.json")
+    train = _read_stats(result_dir, "train_step*.json")
+    if val is not None or train is not None:
+        step = max(found[0] for found in (val, train) if found is not None)
+        quality: Mapping[str, object] = val[1] if val is not None else {}
+        timing: Mapping[str, object] = train[1] if train is not None else {}
         return TrainMetrics(
             trainer=trainer,
             # Zero-based in every file name v1.5.3 writes: `val_step29999` is 30,000 steps.
             iterations=step + 1,
             requested_iterations=requested_iterations,
-            gaussians=_int(document.get("num_GS")),
-            psnr=_float(document.get("psnr")),
-            ssim=_float(document.get("ssim")),
-            lpips=_float(document.get("lpips")),
-            train_seconds=_float(document.get("ellipse_time")),
+            gaussians=_int(quality.get("num_GS", timing.get("num_GS"))),
+            psnr=_float(quality.get("psnr")),
+            ssim=_float(quality.get("ssim")),
+            lpips=_float(quality.get("lpips")),
+            train_seconds=_float(timing.get("ellipse_time")),
+            eval_seconds_per_image=_float(quality.get("ellipse_time")),
+            peak_memory_gb=_float(timing.get("mem")),
             resumed_from_step=resumed_from_step,
             attempts=attempts,
             source="stats",
+            split=split,
         )
     scraped = _scrape(log_text)
     return TrainMetrics(
@@ -331,18 +649,21 @@ def parse_metrics(
         requested_iterations=requested_iterations,
         gaussians=_int(scraped.get("gaussians")),
         psnr=scraped.get("psnr"),
+        ssim=scraped.get("ssim"),
+        lpips=scraped.get("lpips"),
         resumed_from_step=resumed_from_step,
         attempts=attempts,
         source="stdout" if scraped else "none",
+        split=split,
     )
 
 
-def _read_stats(result_dir: Path) -> tuple[int, Mapping[str, object]] | None:
-    """The furthest-along `stats/val_step*.json`, or any `stats/*.json` if there is none."""
+def _read_stats(result_dir: Path, pattern: str) -> tuple[int, Mapping[str, object]] | None:
+    """The furthest-along `stats/<pattern>` file that parses as a JSON object."""
     stats = result_dir / "stats"
     if not stats.is_dir():
         return None
-    candidates = sorted(stats.glob("val_step*.json")) or sorted(stats.glob("*.json"))
+    candidates = sorted(stats.glob(pattern))
     best: tuple[int, Mapping[str, object]] | None = None
     for path in candidates:
         try:
@@ -362,9 +683,14 @@ def _scrape(text: str) -> dict[str, float | int]:
     for match in _STDOUT_GS_RE.finditer(text):
         out["step"] = int(match.group(1))
         out["gaussians"] = int(match.group(2).replace(",", ""))
-    psnrs = _STDOUT_PSNR_RE.findall(text)
-    if psnrs:
-        out["psnr"] = float(psnrs[-1])
+    for key, pattern in (
+        ("psnr", _STDOUT_PSNR_RE),
+        ("ssim", _STDOUT_SSIM_RE),
+        ("lpips", _STDOUT_LPIPS_RE),
+    ):
+        found = pattern.findall(text)
+        if found:
+            out[key] = float(found[-1])
     return out
 
 

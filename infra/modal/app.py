@@ -188,20 +188,51 @@ image = (
     )
 )
 
+#: COLMAP's vocabulary tree for sequential matching's loop detection, which is what lets
+#: `pose` match a video's frames sequentially without leaving an orbit open (`sfm.py`).
+#: The FLANN-format Flickr100K 32K-word tree: the one COLMAP 3.9.1 reads (3.11's
+#: `vocab_tree_faiss_*` files are a format 3.9.1 cannot load). Pinned to the copy COLMAP
+#: attaches to its 3.11.1 GitHub release; downloaded 2026-09-26, 15,229,678 bytes, and
+#: byte-identical (same sha256) to the copy on the COLMAP site
+#: (demuc.de/colmap/vocab_tree_flickr100K_words32K.bin) that the README's sequential +
+#: loop timings were measured with.
+VOCAB_TREE_URL = (
+    "https://github.com/colmap/colmap/releases/download/3.11.1/vocab_tree_flickr100K_words32K.bin"
+)
+VOCAB_TREE_SHA256 = "d37d8f19ee0a49705c4c0b06967a08cedfed5cf86519eada3271497256732bc2"
+VOCAB_TREE = "/opt/colmap/vocab_tree_flickr100K_words32K.bin"
+
 #: The CPU box's image: what `pose` needs and nothing a GPU does. Ubuntu 24.04 because
 #: its `colmap` package is 3.9.1, the version every pose measurement and test in this
 #: repository was made with; the CUDA image above is 22.04, whose package is 3.7.
-#: Offscreen Qt because COLMAP links Qt and there is no display.
+#: Offscreen Qt because COLMAP links Qt and there is no display. The vocabulary tree is
+#: fetched at build time and checked against its sha256, so a changed or truncated file
+#: fails the build rather than a capture's loop detection; `$COLMAP_VOCAB_TREE` is how
+#: `sfm.vocab_tree_path` finds it.
 cpu_image = (
     modal.Image.from_registry("ubuntu:24.04", add_python="3.12")
-    .apt_install("colmap")
+    .apt_install("colmap", "curl", "ca-certificates")
+    .run_commands(
+        f"mkdir -p {Path(VOCAB_TREE).parent}",
+        f"curl -fsSL --retry 3 -o {VOCAB_TREE} {VOCAB_TREE_URL}",
+        f"echo '{VOCAB_TREE_SHA256}  {VOCAB_TREE}' | sha256sum -c -",
+    )
     .pip_install(*IMAGE_PACKAGES)
-    .env({"QT_QPA_PLATFORM": "offscreen", "PYTHONUNBUFFERED": "1"})
+    .env(
+        {
+            "QT_QPA_PLATFORM": "offscreen",
+            "PYTHONUNBUFFERED": "1",
+            "COLMAP_VOCAB_TREE": VOCAB_TREE,
+        }
+    )
     .add_local_dir(LOCAL_CAPTURES, CAPTURES_DIR, ignore=_IGNORE, copy=True)
     .add_local_dir(LOCAL_PIPELINE, PIPELINE_DIR, ignore=_IGNORE, copy=True)
     .run_commands(
         "colmap -h | head -1",
         f"cd {PIPELINE_DIR} && python -c 'import remote, stages, captures_bridge, sfm'",
+        # The pipeline finds the tree the way a stage will, or the build stops here.
+        f"cd {PIPELINE_DIR} && python -c 'import sfm; assert sfm.vocab_tree_path(), "
+        f'"no vocabulary tree at $COLMAP_VOCAB_TREE"\'',
     )
 )
 

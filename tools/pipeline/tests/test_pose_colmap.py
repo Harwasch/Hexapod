@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -387,7 +388,7 @@ def _scripted(results: dict[tuple[int, int], int]):  # type: ignore[no-untyped-d
 
 def test_a_good_first_mapping_is_not_retried() -> None:
     attempt, asked = _scripted({(0, 0): 40})
-    found, tries = stages._best_reconstruction(attempt, rounds=2, seeds=(0, 1, 2), enough=32)
+    found, tries = stages._best_reconstruction(attempt, rounds=[(0, 1, 2), (0, 1, 2)], enough=32)
     assert found == Path("m0-0")
     assert asked == [(0, 0)]
     assert tries == [{"match": 0, "seed": 0, "registered": 40}]
@@ -396,14 +397,14 @@ def test_a_good_first_mapping_is_not_retried() -> None:
 def test_a_mapping_that_closes_on_two_frames_is_retried_with_other_seeds() -> None:
     """The first real Modal smoke: 2 of 40 on the runner's matches, seed 0."""
     attempt, asked = _scripted({(0, 0): 2, (0, 1): 40})
-    found, _ = stages._best_reconstruction(attempt, rounds=2, seeds=(0, 1, 2), enough=32)
+    found, _ = stages._best_reconstruction(attempt, rounds=[(0, 1, 2), (0, 1, 2)], enough=32)
     assert found == Path("m0-1")
     assert asked == [(0, 0), (0, 1)]
 
 
 def test_when_no_seed_helps_the_frames_are_matched_again() -> None:
     attempt, asked = _scripted({(0, 0): 2, (0, 1): 3, (0, 2): 2, (1, 0): 39})
-    found, _ = stages._best_reconstruction(attempt, rounds=2, seeds=(0, 1, 2), enough=32)
+    found, _ = stages._best_reconstruction(attempt, rounds=[(0, 1, 2), (0, 1, 2)], enough=32)
     assert found == Path("m1-0")
     assert asked[-1] == (1, 0)
 
@@ -411,6 +412,161 @@ def test_when_no_seed_helps_the_frames_are_matched_again() -> None:
 def test_the_best_attempt_is_kept_when_none_is_enough() -> None:
     """A capture that genuinely does not close still gets its best model, not its last."""
     attempt, _ = _scripted({(0, 0): 2, (0, 1): 20, (0, 2): 5, (1, 0): 3, (1, 1): 4, (1, 2): 1})
-    found, tries = stages._best_reconstruction(attempt, rounds=2, seeds=(0, 1, 2), enough=32)
+    found, tries = stages._best_reconstruction(attempt, rounds=[(0, 1, 2), (0, 1, 2)], enough=32)
     assert found == Path("m0-1")
     assert len(tries) == 6
+
+
+def test_a_sequential_round_maps_once_and_the_fallback_gets_every_seed() -> None:
+    """Rounds carry their own seeds: one mapping after sequential matching, then the
+    exhaustive fill-in with all three."""
+    attempt, asked = _scripted({(0, 0): 20, (1, 0): 2, (1, 1): 40})
+    found, tries = stages._best_reconstruction(attempt, rounds=[(0,), (0, 1, 2)], enough=32)
+    assert found == Path("m1-1")
+    assert asked == [(0, 0), (1, 0), (1, 1)]
+    assert [t["match"] for t in tries] == [0, 1, 1]
+
+
+# --- which pairs get matched ------------------------------------------------------------
+
+
+def test_a_video_is_matched_sequentially_with_loop_closure_then_exhaustively() -> None:
+    plan = sfm.matching_plan("auto", source_format="video", vocab_tree=True, rematches=1)
+
+    assert [(p.matcher, p.loop_detection, p.clear) for p in plan] == [
+        ("sequential", True, False),
+        # The fallback fills in: no clear, so only the pairs sequential skipped are matched.
+        ("exhaustive", False, False),
+        ("exhaustive", False, True),
+    ]
+    assert "fallback" in plan[1].why
+
+
+def test_a_photo_set_or_an_unknown_source_is_matched_exhaustively() -> None:
+    for source in ("images", None):
+        plan = sfm.matching_plan("auto", source_format=source, vocab_tree=True, rematches=0)
+        assert [p.matcher for p in plan] == ["exhaustive"]
+
+
+def test_sequential_never_runs_without_a_vocabulary_tree() -> None:
+    """A0 #7's 2/40 is sequential matching with no loop detection. Asked for by name or
+    chosen for a video, with no tree it is exhaustive, and the plan says why."""
+    for requested, source in (("auto", "video"), ("sequential", "images")):
+        plan = sfm.matching_plan(requested, source_format=source, vocab_tree=False, rematches=0)
+        assert [p.matcher for p in plan] == ["exhaustive"]
+        assert "no vocabulary tree" in plan[0].why
+
+
+def test_exhaustive_by_name_is_exhaustive_and_an_unknown_matcher_is_refused() -> None:
+    plan = sfm.matching_plan("exhaustive", source_format="video", vocab_tree=True, rematches=2)
+    assert [(p.matcher, p.clear) for p in plan] == [
+        ("exhaustive", False),
+        ("exhaustive", True),
+        ("exhaustive", True),
+    ]
+    with pytest.raises(ValueError, match="unknown matcher"):
+        sfm.matching_plan("nearest_friend", source_format=None, vocab_tree=True)
+
+
+def test_the_vocabulary_tree_is_found_by_param_or_environment_and_only_if_it_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tree = tmp_path / "vocab_tree_flickr100K_words32K.bin"
+    tree.write_bytes(b"tree")
+    monkeypatch.delenv(sfm.VOCAB_TREE_ENV, raising=False)
+
+    assert sfm.vocab_tree_path() is None
+    assert sfm.vocab_tree_path(str(tree)) == tree.resolve()
+    monkeypatch.setenv(sfm.VOCAB_TREE_ENV, str(tree))
+    assert sfm.vocab_tree_path() == tree.resolve()
+    monkeypatch.setenv(sfm.VOCAB_TREE_ENV, str(tmp_path / "missing.bin"))
+    assert sfm.vocab_tree_path() is None
+
+
+@requires_colmap
+def test_the_threads_and_octave_flags_reach_colmap_only_when_given() -> None:
+    plain = sfm.feature_extractor_argv(Path("d"), Path("i"))
+    tuned = sfm.feature_extractor_argv(Path("d"), Path("i"), first_octave=0, num_threads=4)
+
+    assert "--SiftExtraction.first_octave" not in plain
+    assert tuned[tuned.index("--SiftExtraction.first_octave") + 1] == "0"
+    assert tuned[tuned.index("--SiftExtraction.num_threads") + 1] == "4"
+    matcher = sfm.matcher_argv(Path("d"), "exhaustive", num_threads=4)
+    assert matcher[matcher.index("--SiftMatching.num_threads") + 1] == "4"
+    mapper = sfm.mapper_argv(Path("d"), Path("i"), Path("o"), num_threads=4)
+    assert mapper[mapper.index("--Mapper.num_threads") + 1] == "4"
+
+
+# --- a video's frames, matched for real ------------------------------------------------
+#
+# These need COLMAP and the vocabulary tree. The Modal CPU image has both; CI and the
+# worker have no tree, so there the plan is exhaustive (tested above) and these skip.
+
+VOCAB_TREE = sfm.vocab_tree_path()
+requires_vocab_tree = pytest.mark.skipif(
+    not sfm.colmap_available() or VOCAB_TREE is None,
+    reason=f"needs colmap and a vocabulary tree at ${sfm.VOCAB_TREE_ENV} (infra/modal/app.py)",
+)
+VIDEO_FRAMES = 30
+
+
+def _pose_a_video(root: Path, frames: Path, **params: object) -> Workdir:
+    workdir = Workdir.create(root)
+    shutil.copytree(frames, workdir.input_path("frames"))
+    workdir.input_path("source_meta.json").write_text(json.dumps({"format": "video"}))
+    recipe = make_recipe(
+        [{"id": "pose", "impl": "colmap", "params": {"matcher": "auto", **params}}],
+        inputs=["frames", "source_meta.json"],
+    )
+    execute(recipe, workdir, RunnerSet(cpu=LocalRunner()))
+    return workdir
+
+
+@pytest.fixture(scope="module")
+def video_frames(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    frames = tmp_path_factory.mktemp("video") / "frames"
+    tree_frames.render_orbit(FIXTURE_PLY, frames, count=VIDEO_FRAMES)
+    return frames
+
+
+@requires_vocab_tree
+def test_a_videos_frames_are_matched_sequentially_and_close_the_orbit(
+    tmp_path: Path, video_frames: Path
+) -> None:
+    workdir = _pose_a_video(tmp_path / "run", video_frames)
+
+    poses = json.loads((workdir.artifact_path("pose", "poses") / "poses.json").read_text())
+    assert poses["registered"] == VIDEO_FRAMES
+    assert poses["matcher"] == "sequential"
+    matching = poses["matching"]
+    assert matching["sourceFormat"] == "video"
+    assert matching["fellBackToExhaustive"] is False
+    assert [p["matcher"] for p in matching["passes"]] == ["sequential"]
+    assert matching["passes"][0]["loopDetection"] is True
+    assert matching["passes"][0]["pairs"] < VIDEO_FRAMES * (VIDEO_FRAMES - 1) // 2
+
+
+@requires_vocab_tree
+def test_a_short_sequential_result_falls_back_to_filling_in_every_pair(
+    tmp_path: Path, video_frames: Path
+) -> None:
+    """Forced: a fraction no model can reach, so every planned pass runs. The fill-in
+    matches only what sequential skipped -- the pair count ends at n(n-1)/2, not above."""
+    workdir = _pose_a_video(
+        tmp_path / "run", video_frames, min_registered_fraction=1.01, rematches=0
+    )
+
+    poses = json.loads((workdir.artifact_path("pose", "poses") / "poses.json").read_text())
+    matching = poses["matching"]
+    assert matching["fellBackToExhaustive"] is True
+    passes = matching["passes"]
+    assert [(p["matcher"], p["clear"]) for p in passes] == [
+        ("sequential", False),
+        ("exhaustive", False),
+    ]
+    assert passes[0]["pairs"] < passes[1]["pairs"] == VIDEO_FRAMES * (VIDEO_FRAMES - 1) // 2
+    assert poses["registered"] == VIDEO_FRAMES
+    assert [t["seed"] for t in poses["mapperAttempts"] if t["matcher"] == "sequential"] == [0]
+    log = workdir.log_path("pose").read_text()
+    assert "short of min_registered_fraction" in log
+    assert "fallback" in log

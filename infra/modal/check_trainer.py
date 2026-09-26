@@ -20,6 +20,7 @@ from __future__ import annotations
 import sys
 import types
 from pathlib import Path
+from typing import Any
 
 
 def main() -> int:
@@ -58,18 +59,55 @@ def main() -> int:
     config = namespace["Config"]
     default_strategy = namespace["DefaultStrategy"]
     mcmc_strategy = namespace["MCMCStrategy"]
+    # The presets exactly as the trainer's own `__main__` builds them, so a flag that
+    # overrides a preset value (`--opacity_reg` over mcmc's 0.01) is checked against it.
     configs = {
         "default": ("default", config(strategy=default_strategy(verbose=True))),  # type: ignore[operator]
-        "mcmc": ("mcmc", config(strategy=mcmc_strategy(verbose=True))),  # type: ignore[operator]
+        "mcmc": (
+            "mcmc",
+            config(  # type: ignore[operator]
+                init_opa=0.5,
+                init_scale=0.1,
+                opacity_reg=0.01,
+                scale_reg=0.01,
+                strategy=mcmc_strategy(verbose=True),  # type: ignore[operator]
+            ),
+        ),
     }
-    argv = training.gsplat_argv(
-        sys.executable, trainer, Path("/data"), Path("/result"), max_steps=500
+
+    def parse(argv: list[str]) -> object:
+        sys.argv = [str(trainer), *argv[2:]]
+        cfg = tyro.extras.overridable_config_cli(configs)
+        cfg.adjust_steps(cfg.steps_scaler)
+        return cfg
+
+    cfg: Any = parse(
+        training.gsplat_argv(sys.executable, trainer, Path("/data"), Path("/result"), max_steps=500)
     )
-    sys.argv = [str(trainer), *argv[2:]]
-    cfg = tyro.extras.overridable_config_cli(configs)
-    cfg.adjust_steps(cfg.steps_scaler)
+    # Every optional switch the `train` stage can pass, at once: the refine-quality shape.
+    tuned: Any = parse(
+        training.gsplat_argv(
+            sys.executable,
+            trainer,
+            Path("/data"),
+            Path("/result"),
+            strategy="mcmc",
+            max_steps=30_000,
+            steps_scaler=0.1,
+            cap_max=200_000,
+            antialiased=True,
+            opacity_reg=0.001,
+            depth_loss=True,
+        )
+    )
 
     checks = {
+        "mcmc strategy": type(tuned.strategy).__name__ == "MCMCStrategy",
+        "cap_max": tuned.strategy.cap_max == 200_000,
+        "steps_scaler": tuned.max_steps == 3_000,
+        "antialiased": tuned.antialiased is True and cfg.antialiased is False,
+        "opacity_reg": tuned.opacity_reg == 0.001 and tuned.scale_reg == 0.01,
+        "depth_loss": tuned.depth_loss is True and cfg.depth_loss is False,
         "data_dir": cfg.data_dir == "/data",
         "result_dir": cfg.result_dir == "/result",
         "max_steps": cfg.max_steps == 500,
