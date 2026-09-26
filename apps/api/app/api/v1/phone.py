@@ -15,7 +15,7 @@ from sqlalchemy import func, select
 
 from app.api.deps import DbSession, SettingsDep
 from app.models.capture import Capture
-from app.models.enums import CaptureKind, RunStatus
+from app.models.enums import CaptureKind
 from app.models.job import Job
 from app.schemas.base import CamelModel
 from app.schemas.capture import QUALITY_BARS, QUALITY_MODES, CaptureCreate, CaptureRead
@@ -263,11 +263,12 @@ def refine_phone_capture(capture_id: uuid.UUID, payload: PhoneRefine, db: DbSess
         raise ConflictError("It is still running. Refine it when it has finished.")
     if job.recipe != "photo-reconstruct":
         raise ConflictError("Only a photo or video capture can be refined.")
-    if job.status is not RunStatus.COMPLETE:
-        raise ConflictError("That run did not finish, so there is nothing to refine. Try again.")
+    # The verdict is what makes a run refinable: it is written when a run *finishes*, so
+    # one that belongs to this job means its frames and poses were made -- including when
+    # the job has since failed or been stopped as a Refine, which is then refined again.
     verdict = capture_service.quality_of(capture)
     if verdict is None or verdict.job_id != job.id:
-        raise ConflictError("That run has no quality check to refine from. Try again.")
+        raise ConflictError("That run has no finished quality check to refine from. Try again.")
     requested = _checked_options(job.recipe, payload.params)
     params: dict[str, dict[str, object]] = {
         stage: dict(values) for stage, values in requested.items() if stage != "normalize"

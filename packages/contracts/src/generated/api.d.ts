@@ -497,6 +497,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/phone/captures/{capture_id}/refine": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Refine a finished preview: train it again at full quality, inside its region
+         * @description Resumes the capture's latest finished photo-reconstruct run at `train` with new parameters: the phone's quality options, `train.roi` set to the region of interest the preview's quality stage measured, and `quality.mode` = `refine`. The frames and poses are kept, so the region is in the frame it was measured in. If the worker no longer has them, the run starts over and trains uncropped rather than applying the region to a different reconstruction.
+         */
+        post: operations["refine_phone_capture_api_v1_phone_captures__capture_id__refine_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/phone/captures/{capture_id}/stop": {
         parameters: {
             query?: never;
@@ -1218,6 +1238,7 @@ export interface components {
             /** Name */
             name: string;
             provenance: components["schemas"]["Provenance"] | null;
+            quality: components["schemas"]["CaptureQuality"] | null;
             scaleSource: components["schemas"]["ScaleSource"] | null;
             /** Sensor */
             sensor: string | null;
@@ -1378,6 +1399,41 @@ export interface components {
          * @enum {string}
          */
         CaptureKind: "video" | "images" | "gaussian-splat" | "point-cloud";
+        /**
+         * CaptureQuality
+         * @description The quality bar's verdict on a capture's latest finished run.
+         *
+         *     Read model: every field is explicit so the OpenAPI contract marks it required.
+         */
+        CaptureQuality: {
+            /** Bar */
+            bar: string;
+            /** Barapplied */
+            barApplied: string;
+            /** Contextpct */
+            contextPct: number | null;
+            /** Coverageurl */
+            coverageUrl: string | null;
+            gaussians: components["schemas"]["QualityCounts"];
+            /** Gsdmm */
+            gsdMm: number | null;
+            /** Heldoutpsnr */
+            heldOutPsnr: number | null;
+            /**
+             * Jobid
+             * Format: uuid
+             */
+            jobId: string;
+            /** Keeppct */
+            keepPct: number | null;
+            /** Medianviews */
+            medianViews: number | null;
+            /** Mode */
+            mode: string;
+            roi: components["schemas"]["QualityRoi"] | null;
+            /** Tips */
+            tips: components["schemas"]["QualityTip"][];
+        };
         /** CaptureRead */
         CaptureRead: {
             /** Attribution */
@@ -1410,6 +1466,7 @@ export interface components {
             /** Name */
             name: string;
             provenance: components["schemas"]["Provenance"] | null;
+            quality: components["schemas"]["CaptureQuality"] | null;
             scaleSource: components["schemas"]["ScaleSource"] | null;
             /** Sensor */
             sensor: string | null;
@@ -2112,6 +2169,19 @@ export interface components {
             name?: string | null;
         };
         /**
+         * PhoneRefine
+         * @description The phone's options for the full-quality pass (the same whitelist as `process`).
+         *
+         *     `normalize` options are accepted and ignored: a Refine keeps the preview's frames and
+         *     poses, which is the whole point -- the region of interest is only meaningful in them.
+         */
+        PhoneRefine: {
+            /** Params */
+            params?: {
+                [key: string]: unknown;
+            };
+        };
+        /**
          * PipelineCatalogue
          * @description Everything the New-run form needs: what can be run, and where.
          */
@@ -2693,6 +2763,42 @@ export interface components {
             usdPerHourA100: number;
         };
         /**
+         * QualityCounts
+         * @description Gaussians in, gaussians the bar let out, and each tier's count.
+         */
+        QualityCounts: {
+            /** Context */
+            context: number;
+            /** Drop */
+            drop: number;
+            /** Keep */
+            keep: number;
+            /** Kept */
+            kept: number;
+            /** Total */
+            total: number;
+        };
+        /**
+         * QualityRoi
+         * @description A sphere in the reconstruction's own (COLMAP) frame: where the cameras pointed.
+         *
+         *     Only meaningful over the poses of the run that measured it, which is why a Refine
+         *     re-runs that same job from `train` rather than starting a new one.
+         */
+        QualityRoi: {
+            /** Center */
+            center: number[];
+            /** Radius */
+            radius: number;
+        };
+        /** QualityTip */
+        QualityTip: {
+            /** Id */
+            id: string;
+            /** Text */
+            text: string;
+        };
+        /**
          * RecipeGpu
          * @description A stage's GPU requirement. Its presence is the only routing signal there is.
          */
@@ -3178,6 +3284,7 @@ export type SchemaCaptureFileRead = components['schemas']['CaptureFileRead'];
 export type SchemaCaptureFileUpload = components['schemas']['CaptureFileUpload'];
 export type SchemaCaptureHandoff = components['schemas']['CaptureHandoff'];
 export type SchemaCaptureKind = components['schemas']['CaptureKind'];
+export type SchemaCaptureQuality = components['schemas']['CaptureQuality'];
 export type SchemaCaptureRead = components['schemas']['CaptureRead'];
 export type SchemaCaptureStatus = components['schemas']['CaptureStatus'];
 export type SchemaCesiumIon3DTilesSource = components['schemas']['CesiumIon3DTilesSource'];
@@ -3219,6 +3326,7 @@ export type SchemaOutlinePoint = components['schemas']['OutlinePoint'];
 export type SchemaOutlineRequest = components['schemas']['OutlineRequest'];
 export type SchemaPhoneCapture = components['schemas']['PhoneCapture'];
 export type SchemaPhoneCaptureCreate = components['schemas']['PhoneCaptureCreate'];
+export type SchemaPhoneRefine = components['schemas']['PhoneRefine'];
 export type SchemaPipelineCatalogue = components['schemas']['PipelineCatalogue'];
 export type SchemaPlanArea = components['schemas']['PlanArea'];
 export type SchemaPlanCreate = components['schemas']['PlanCreate'];
@@ -3242,6 +3350,9 @@ export type SchemaPresignedPart = components['schemas']['PresignedPart'];
 export type SchemaProblem = components['schemas']['Problem'];
 export type SchemaProvenance = components['schemas']['Provenance'];
 export type SchemaProviderRead = components['schemas']['ProviderRead'];
+export type SchemaQualityCounts = components['schemas']['QualityCounts'];
+export type SchemaQualityRoi = components['schemas']['QualityRoi'];
+export type SchemaQualityTip = components['schemas']['QualityTip'];
 export type SchemaRecipeGpu = components['schemas']['RecipeGpu'];
 export type SchemaRecipeRead = components['schemas']['RecipeRead'];
 export type SchemaRecipeStageRead = components['schemas']['RecipeStageRead'];
@@ -5285,6 +5396,68 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["JobCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobRead"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    refine_phone_capture_api_v1_phone_captures__capture_id__refine_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                capture_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PhoneRefine"];
             };
         };
         responses: {

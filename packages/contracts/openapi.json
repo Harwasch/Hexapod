@@ -1439,6 +1439,16 @@
               }
             ]
           },
+          "quality": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CaptureQuality"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "scaleSource": {
             "anyOf": [
               {
@@ -1520,6 +1530,7 @@
           "georefMethod",
           "scaleSource",
           "uncertaintyM",
+          "quality",
           "metadata",
           "attribution",
           "license",
@@ -1843,6 +1854,132 @@
         "title": "CaptureKind",
         "type": "string"
       },
+      "CaptureQuality": {
+        "additionalProperties": false,
+        "description": "The quality bar's verdict on a capture's latest finished run.\n\nRead model: every field is explicit so the OpenAPI contract marks it required.",
+        "properties": {
+          "bar": {
+            "title": "Bar",
+            "type": "string"
+          },
+          "barApplied": {
+            "title": "Barapplied",
+            "type": "string"
+          },
+          "contextPct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contextpct"
+          },
+          "coverageUrl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coverageurl"
+          },
+          "gaussians": {
+            "$ref": "#/components/schemas/QualityCounts"
+          },
+          "gsdMm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gsdmm"
+          },
+          "heldOutPsnr": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Heldoutpsnr"
+          },
+          "jobId": {
+            "format": "uuid",
+            "title": "Jobid",
+            "type": "string"
+          },
+          "keepPct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Keeppct"
+          },
+          "medianViews": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Medianviews"
+          },
+          "mode": {
+            "title": "Mode",
+            "type": "string"
+          },
+          "roi": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/QualityRoi"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tips": {
+            "items": {
+              "$ref": "#/components/schemas/QualityTip"
+            },
+            "title": "Tips",
+            "type": "array"
+          }
+        },
+        "required": [
+          "jobId",
+          "mode",
+          "bar",
+          "barApplied",
+          "keepPct",
+          "contextPct",
+          "heldOutPsnr",
+          "gaussians",
+          "roi",
+          "tips",
+          "gsdMm",
+          "medianViews",
+          "coverageUrl"
+        ],
+        "title": "CaptureQuality",
+        "type": "object"
+      },
       "CaptureRead": {
         "additionalProperties": false,
         "properties": {
@@ -1946,6 +2083,16 @@
               }
             ]
           },
+          "quality": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CaptureQuality"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "scaleSource": {
             "anyOf": [
               {
@@ -2027,6 +2174,7 @@
           "georefMethod",
           "scaleSource",
           "uncertaintyM",
+          "quality",
           "metadata",
           "attribution",
           "license",
@@ -4126,6 +4274,19 @@
         "title": "PhoneCaptureCreate",
         "type": "object"
       },
+      "PhoneRefine": {
+        "additionalProperties": false,
+        "description": "The phone's options for the full-quality pass (the same whitelist as `process`).\n\n`normalize` options are accepted and ignored: a Refine keeps the preview's frames and\nposes, which is the whole point -- the region of interest is only meaningful in them.",
+        "properties": {
+          "params": {
+            "additionalProperties": true,
+            "title": "Params",
+            "type": "object"
+          }
+        },
+        "title": "PhoneRefine",
+        "type": "object"
+      },
       "PipelineCatalogue": {
         "additionalProperties": false,
         "description": "Everything the New-run form needs: what can be run, and where.",
@@ -5705,6 +5866,86 @@
           "note"
         ],
         "title": "ProviderRead",
+        "type": "object"
+      },
+      "QualityCounts": {
+        "additionalProperties": false,
+        "description": "Gaussians in, gaussians the bar let out, and each tier's count.",
+        "properties": {
+          "context": {
+            "title": "Context",
+            "type": "integer"
+          },
+          "drop": {
+            "title": "Drop",
+            "type": "integer"
+          },
+          "keep": {
+            "title": "Keep",
+            "type": "integer"
+          },
+          "kept": {
+            "title": "Kept",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total",
+          "kept",
+          "keep",
+          "context",
+          "drop"
+        ],
+        "title": "QualityCounts",
+        "type": "object"
+      },
+      "QualityRoi": {
+        "additionalProperties": false,
+        "description": "A sphere in the reconstruction's own (COLMAP) frame: where the cameras pointed.\n\nOnly meaningful over the poses of the run that measured it, which is why a Refine\nre-runs that same job from `train` rather than starting a new one.",
+        "properties": {
+          "center": {
+            "items": {
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "title": "Center",
+            "type": "array"
+          },
+          "radius": {
+            "exclusiveMinimum": 0.0,
+            "title": "Radius",
+            "type": "number"
+          }
+        },
+        "required": [
+          "center",
+          "radius"
+        ],
+        "title": "QualityRoi",
+        "type": "object"
+      },
+      "QualityTip": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "text"
+        ],
+        "title": "QualityTip",
         "type": "object"
       },
       "RecipeGpu": {
@@ -9810,6 +10051,95 @@
           }
         ],
         "summary": "Queue a run over a capture this phone key started",
+        "tags": [
+          "phone"
+        ]
+      }
+    },
+    "/api/v1/phone/captures/{capture_id}/refine": {
+      "post": {
+        "description": "Resumes the capture's latest finished photo-reconstruct run at `train` with new parameters: the phone's quality options, `train.roi` set to the region of interest the preview's quality stage measured, and `quality.mode` = `refine`. The frames and poses are kept, so the region is in the frame it was measured in. If the worker no longer has them, the run starts over and trains uncropped rather than applying the region to a different reconstruction.",
+        "operationId": "refine_phone_capture_api_v1_phone_captures__capture_id__refine_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "capture_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Capture Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PhoneRefine"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "phoneKey": []
+          }
+        ],
+        "summary": "Refine a finished preview: train it again at full quality, inside its region",
         "tags": [
           "phone"
         ]

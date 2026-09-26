@@ -184,6 +184,12 @@ def test_refine_resumes_the_preview_at_train_inside_its_region(
     # And it is running now, so a second Refine waits for it.
     again = client.post(f"/api/v1/phone/captures/{capture_id}/refine", json={}, headers=PHONE)
     assert again.status_code == 409
+    # Stopped, it still has the preview it started from, and can be refined again.
+    stopped = client.post(f"/api/v1/phone/captures/{capture_id}/stop", headers=PHONE)
+    assert stopped.json()["status"] == "cancelled"
+    retried = client.post(f"/api/v1/phone/captures/{capture_id}/refine", json={}, headers=PHONE)
+    assert retried.status_code == 202, retried.text
+    assert retried.json()["params"]["train"]["roi"] == {"center": [0.1, -0.2, 3.5], "radius": 0.8}
 
 
 def test_refine_defaults_to_the_balanced_bar(client: TestClient, db: Session) -> None:
