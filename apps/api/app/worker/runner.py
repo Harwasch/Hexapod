@@ -207,7 +207,16 @@ class JobSupervisor:
                     f"stage {stage_id!r} has been attempted {attempt - 1} times without "
                     f"completing and will not be retried again{lost}{last}",
                 )
-            state = self._supervise(db, job, workdir_root, completed, attempts, stage_params, stop)
+            run_params, dropped = params.without_stale_roi(stage_params, plan, completed)
+            if dropped:
+                log.warning(
+                    "worker %s: job %s recomputes its poses, so the region of interest on "
+                    "%s is in a frame that no longer exists; training uncropped",
+                    self._id,
+                    job.id,
+                    ", ".join(dropped),
+                )
+            state = self._supervise(db, job, workdir_root, completed, attempts, run_params, stop)
             if state.outcome == "stopped":
                 # This worker is shutting down. Let go of the lease so the next one can
                 # take the job now rather than waiting it out; the stages that finished
@@ -424,6 +433,7 @@ class JobSupervisor:
                 registration=document,
                 tiles_stage_id=state.stage_producing("splat"),
                 thumbnail_stage_id=state.stage_producing("thumbnail.jpg"),
+                coverage_stage_id=state.stage_producing("coverage_enu.ply"),
             )
         elif capture is not None:
             # A recipe with no `register` stage still finished; the capture is processed

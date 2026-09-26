@@ -342,7 +342,7 @@ def test_only_the_upload_endpoints_accept_anything_but_the_write_token(
 
 def test_the_phone_key_opens_the_phone_routes_and_nothing_else(client: TestClient) -> None:
     """The phone key is weaker than the write token by design, so where it is accepted
-    is pinned: three routes under /phone, none of which reaches a capture it did not
+    is pinned: the routes under /phone, none of which reaches a capture it did not
     create (tests/test_phone.py)."""
     spec = client.app.openapi()  # type: ignore[attr-defined]
     accepts_phone_key = {
@@ -355,5 +355,6 @@ def test_the_phone_key_opens_the_phone_routes_and_nothing_else(client: TestClien
         "POST /api/v1/phone/check",
         "POST /api/v1/phone/captures",
         "POST /api/v1/phone/captures/{capture_id}/process",
+        "POST /api/v1/phone/captures/{capture_id}/refine",
         "POST /api/v1/phone/captures/{capture_id}/stop",
     }

@@ -98,6 +98,11 @@ export type Capture = Schemas["CaptureRead"];
 export type CaptureDetail = Schemas["CaptureDetail"];
 /** A capture a phone started with the phone key, and its upload token. */
 export type PhoneCapture = Schemas["PhoneCapture"];
+export type PhoneRefine = Schemas["PhoneRefine"];
+/** The quality bar's verdict on a capture's latest finished run (null before one). */
+export type CaptureQuality = Schemas["CaptureQuality"];
+export type QualityRoi = Schemas["QualityRoi"];
+export type QualityTip = Schemas["QualityTip"];
 export type CaptureCreate = Schemas["CaptureCreate"];
 export type CaptureKind = Schemas["CaptureKind"];
 export type CaptureStatus = Schemas["CaptureStatus"];

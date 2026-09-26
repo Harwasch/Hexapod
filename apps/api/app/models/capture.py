@@ -59,6 +59,12 @@ class Capture(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     uncertainty_m: Mapped[float | None] = mapped_column(Float, nullable=True)
 
+    # app.schemas.capture.CaptureQuality: the quality bar's verdict on the latest finished
+    # run -- tier counts, the forecast, capture tips, and the region of interest in the
+    # reconstruction's own frame that a Refine trains inside. Null until a run with a
+    # `quality` stage has registered.
+    quality: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+
     metadata_: Mapped[dict[str, Any]] = mapped_column(
         "metadata", JSONB, nullable=False, default=dict
     )

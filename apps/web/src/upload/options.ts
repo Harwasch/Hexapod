@@ -8,11 +8,17 @@
  * rather than offering a switch that could only be set one way. The same goes for
  * outputs: every finished scan gets the 3D view and the map, and a .ply download.
  *
+ * Photos and video go through two passes, Scaniverse-style: a cheap **preview** that
+ * trains briefly and forecasts how much of the scan the capture can support, then --
+ * when the forecast is worth it -- **Refine**, the full-quality pass over the same frames
+ * and camera positions, trained only inside the region the cameras were pointed at. The
+ * quality bar decides what of the result is kept (apps/api `quality` stage).
+ *
  * The choices are remembered on this phone (a convenience; losing them loses nothing).
  */
 
 export type Recipe = "photo-reconstruct" | "splat-ingest";
-export type StageParams = Record<string, Record<string, number | string>>;
+export type StageParams = Record<string, Record<string, number | string | boolean>>;
 
 interface Choice<V extends string> {
   value: V;
@@ -24,17 +30,36 @@ const QUALITY = [
   {
     value: "quick",
     label: "Quick",
-    hint: "A short training run and at most 250k splats. A fast preview.",
+    hint: "Refine with a short training run and at most 250k splats.",
   },
   {
     value: "standard",
     label: "Standard",
-    hint: "Training sized to the number of photos, at most 500k splats.",
+    hint: "Refine with training sized to the number of photos, at most 500k splats.",
   },
   {
     value: "best",
     label: "Best",
-    hint: "The full 30,000-step training, up to 1M splats. Slowest and sharpest.",
+    hint: "Refine with the full 30,000-step training, up to 1M splats. Slowest and sharpest.",
+  },
+] as const satisfies readonly Choice<string>[];
+
+/** What is kept of the reconstruction: tools/pipeline/quality.py's `bar`. */
+const BAR = [
+  {
+    value: "strict",
+    label: "Strict",
+    hint: "Only what enough photos saw well, from enough angles. Thin fringes are cut away.",
+  },
+  {
+    value: "balanced",
+    label: "Balanced",
+    hint: "The well-seen parts, plus the fringes faded, for context.",
+  },
+  {
+    value: "everything",
+    label: "Everything",
+    hint: "No quality bar: everything the training made, spikes and all.",
   },
 ] as const satisfies readonly Choice<string>[];
 
@@ -65,6 +90,7 @@ const DETAIL = [
 
 export interface Options {
   quality: (typeof QUALITY)[number]["value"];
+  bar: (typeof BAR)[number]["value"];
   photoSize: (typeof PHOTO_SIZE)[number]["value"];
   videoFps: (typeof VIDEO_FPS)[number]["value"];
   upAxis: (typeof UP_AXIS)[number]["value"];
@@ -74,6 +100,7 @@ export interface Options {
 
 export const DEFAULTS: Options = {
   quality: "standard",
+  bar: "balanced",
   photoSize: "1600",
   videoFps: "4",
   upAxis: "",
@@ -88,7 +115,14 @@ const TRAIN: Record<Options["quality"], Record<string, number>> = {
   best: { schedule_floor: 1, cap_max: 1_000_000 },
 };
 
-/** The per-stage params a run of `recipe` is started with. */
+/**
+ * The preview's training: a tenth of the schedule, at most 200k splats, on 800 px images.
+ * Minutes on the GPU rather than most of an hour, and enough to see what the capture can
+ * support -- which is what the quality stage forecasts from.
+ */
+export const PREVIEW_TRAIN = { schedule_scale: 0.1, cap_max: 200_000, train_max_side: 800 };
+
+/** The per-stage params of a full-quality run of `recipe`: what Refine sends. */
 export function paramsFor(recipe: Recipe, options: Options): StageParams {
   const packaged = { max_gaussians: Number(options.detail) };
   if (recipe === "splat-ingest") {
@@ -100,10 +134,22 @@ export function paramsFor(recipe: Recipe, options: Options): StageParams {
   const params: StageParams = {
     normalize: { max_side: Number(options.photoSize), fps: Number(options.videoFps) },
     package: packaged,
+    quality: { bar: options.bar },
   };
   const train = TRAIN[options.quality];
   if (Object.keys(train).length > 0) params.train = train;
   return params;
+}
+
+/**
+ * The params a new capture is first processed with: the preview. The frames and the
+ * camera positions it makes are the ones Refine keeps, so the photo size and frame rate
+ * are the phone's choices here; the training is the preview's own.
+ */
+export function previewParamsFor(recipe: Recipe, options: Options): StageParams {
+  const params = paramsFor(recipe, options);
+  if (recipe === "splat-ingest") return params;
+  return { ...params, train: { ...PREVIEW_TRAIN }, quality: { mode: "preview", bar: options.bar } };
 }
 
 /** One line for the panel's closed state, e.g. "Standard · 1600 px · Standard detail". */
@@ -114,6 +160,7 @@ export function summarise(options: Options): string {
     label(QUALITY, options.quality),
     label(PHOTO_SIZE, options.photoSize),
     `${label(DETAIL, options.detail)} detail`,
+    `${label(BAR, options.bar)} bar`,
   ].join(" · ");
 }
 
@@ -208,7 +255,8 @@ export function mountOptions(root: HTMLDetailsElement): OptionsPanel {
   photos.className = "group";
   photos.append(
     groupTitle("For photos and video"),
-    segmented("quality", "Quality", QUALITY, options, changed),
+    segmented("bar", "Quality bar", BAR, options, changed),
+    segmented("quality", "Refine training", QUALITY, options, changed),
     segmented("photoSize", "Photo size for training", PHOTO_SIZE, options, changed),
     segmented("videoFps", "Frames from a video", VIDEO_FPS, options, changed),
   );
@@ -254,6 +302,8 @@ export function mountOptions(root: HTMLDetailsElement): OptionsPanel {
   outputsTitle.textContent = "You get";
   const outputList = document.createElement("ul");
   for (const text of [
+    "A quick preview first, with a forecast of how much will be high quality",
+    "Refine for the full-quality pass, kept to what the photos support",
     "A 3D view, and the scan placed on the map",
     "The full splat as a .ply download",
   ]) {

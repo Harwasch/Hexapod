@@ -40,7 +40,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal, Protocol, cast, runtime_checkable
 
-from artifacts import ArtifactDecl
+from artifacts import ArtifactDecl, checksum_of
 from contracts import MetricValue, StageContext, StageOutcome
 from errors import NoRunnerError, PreemptedError, RemoteStageError
 from plan import PlannedStage
@@ -559,15 +559,40 @@ class CloudRunner(BaseRunner):
         """
         for name, relative in sorted(stage.inputs.items()):
             key = keys.input(relative)
-            if self._transfer.exists(key):
+            source = context.input(name)
+            # "Already up" means the same bytes, not the same key. Keys are per run and
+            # per path, so a stage re-run inside a finished run (retry-from-stage, the
+            # phone's Refine) produces a *new* artifact at the *old* key -- and a
+            # downstream remote stage that found the key and skipped the upload would
+            # quietly read the previous run's `trained.ply`. The checksum rides beside
+            # the input as a small object of its own.
+            digest = checksum_of(source)
+            if self._transfer.exists(key) and self._remote_digest(key, context) == digest:
                 continue
-            sent = self._transfer.put(key, context.input(name))
+            self._transfer.delete(key)
+            sent = self._transfer.put(key, source)
+            self._put_digest(key, digest, context)
             context.log(f"cloud: sent input {name!r} ({sent} bytes) to {key}")
         if context.has_checkpoint:
             sent = self._transfer.put(keys.checkpoint, context.checkpoint_dir)
             context.log(f"cloud: resuming -- sent {sent} byte(s) of checkpoint to the provider")
         else:
             self._transfer.delete(keys.checkpoint)
+
+    def _remote_digest(self, key: str, context: StageContext) -> str | None:
+        """The checksum recorded beside an uploaded input, or None if there is none."""
+        local = context.work_dir / "transfer-digests" / "remote"
+        if local.exists():
+            local.unlink()
+        if self._transfer.get(_digest_key(key), local) == 0 or not local.is_file():
+            return None
+        return local.read_text(encoding="utf-8").strip() or None
+
+    def _put_digest(self, key: str, digest: str, context: StageContext) -> None:
+        local = context.work_dir / "transfer-digests" / "local"
+        local.parent.mkdir(parents=True, exist_ok=True)
+        local.write_text(digest + "\n", encoding="utf-8")
+        self._transfer.put(_digest_key(key), local)
 
     def _restore_checkpoint(self, context: StageContext) -> int:
         """Bring back whatever the remote last synced.
@@ -683,3 +708,12 @@ class CloudRunner(BaseRunner):
         if ledger.unpriced_s > 0:
             metrics["unpricedS"] = round(ledger.unpriced_s, 3)
         return metrics
+
+
+def _digest_key(key: str) -> str:
+    """Where an input's checksum is kept: a sibling object, never a member of the input.
+
+    A sibling rather than `<key>/...` so a directory input's listing -- which is what
+    the remote fetches -- never contains it.
+    """
+    return f"{key}.sha256"

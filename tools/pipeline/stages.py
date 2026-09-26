@@ -31,11 +31,13 @@ from pathlib import Path
 from typing import Any, NoReturn
 
 import numpy as np
+import numpy.typing as npt
 import PIL
 import PIL.Image
 
 import exif
 import gaussians
+import quality
 import sfm
 import training
 import video
@@ -93,6 +95,13 @@ TRAINED_PLY = ArtifactDecl(
     content_type="application/octet-stream",
     summary="the trainer's splat, in the reconstruction's own (COLMAP) frame",
     stub_bytes=1024,
+)
+COVERAGE_ENU = ArtifactDecl(
+    "coverage_enu.ply",
+    content_type="application/octet-stream",
+    summary="quality's coverage.ply, placed exactly as canonical.ply was: gaussian centres "
+    "coloured by tier and the camera path, east/north/up; no points without a quality stage",
+    stub_bytes=512,
 )
 TRAIN_METRICS = ArtifactDecl(
     "train_metrics.json",
@@ -1198,8 +1207,8 @@ def exif_gps(ctx: StageContext) -> StageOutcome:
 @stage_impl(
     "place_splat",
     consumes=("trained.ply", "georef.json"),
-    optional_consumes=("poses",),
-    produces=(CANONICAL_PLY,),
+    optional_consumes=("poses", quality.GATED_PLY.name, quality.COVERAGE_PLY.name),
+    produces=(CANONICAL_PLY, COVERAGE_ENU),
     summary="Lane 2: the trained splat, turned into east/north/up by the georeference",
 )
 def place_splat(ctx: StageContext) -> StageOutcome:
@@ -1212,12 +1221,19 @@ def place_splat(ctx: StageContext) -> StageOutcome:
     the splat's own footprint and ground exactly as Lane 1 does, so both lanes put the
     placed coordinate at the middle of the capture.
 
+    When a `quality` stage ran, its `gated.ply` -- the same schema, less what the capture
+    did not support -- is what is placed, so the footprint it recentres on is the
+    footprint that is published. Its `coverage.ply` is moved by the very same similarity
+    and recentring (`place_points`) into `coverage_enu.ply`, so a viewer can lay it over
+    the splat; with no quality stage that file holds no points.
+
     A `georef.json` with no `frame` (written by `manual_placement`) is levelled by the
     camera-up estimate in `poses`, if there is one, and otherwise passed through with a
     warning that nothing levelled it.
     """
     georef = _read_json(ctx.input(GEOREF.name))
-    trained = gaussians.read_splat(ctx.input(TRAINED_PLY.name))
+    source = quality.GATED_PLY.name if ctx.has_input(quality.GATED_PLY.name) else TRAINED_PLY.name
+    trained = gaussians.read_splat(ctx.input(source))
     frame = georef.get("frame")
     if not isinstance(frame, dict):
         model_dir = ctx.input(POSES.name) if ctx.has_input(POSES.name) else None
@@ -1240,15 +1256,17 @@ def place_splat(ctx: StageContext) -> StageOutcome:
         non_finite=trained.non_finite,
     )
     moved = [0.0, 0.0, 0.0]
+    recentred: gaussians.Frame | None = None
     if frame.get("recentre"):
         placed, recentred = gaussians.orient(placed, up_axis="z")
         moved = [float(v) for v in recentred.translation]
     written = gaussians.write_ply(ctx.output(CANONICAL_PLY.name), placed.columns)
+    coverage_points = _place_coverage(ctx, rotation, translation, scale, recentred)
     low, high = placed.bbox()
     extent = _extent(low, high)
     ctx.log(
-        f"placed {placed.count} gaussians by {frame.get('source')}: scale {scale:g}, "
-        f"recentred by {', '.join(f'{v:.3f}' for v in moved)} m; extent "
+        f"placed {placed.count} gaussians from {source} by {frame.get('source')}: scale "
+        f"{scale:g}, recentred by {', '.join(f'{v:.3f}' for v in moved)} m; extent "
         f"{extent['east']:.2f} x {extent['north']:.2f} x {extent['up']:.2f} m"
     )
     metrics: dict[str, MetricValue] = {
@@ -1257,8 +1275,48 @@ def place_splat(ctx: StageContext) -> StageOutcome:
         "frameSource": str(frame.get("source")),
         "scale": scale,
         "extentUpM": round(extent["up"], 3),
+        "source": source,
+        "coveragePoints": coverage_points,
     }
     return StageOutcome(metrics=metrics, summary=f"placed by {frame.get('source')}")
+
+
+def place_points(
+    points: npt.ArrayLike,
+    rotation: npt.ArrayLike,
+    translation: npt.ArrayLike | None,
+    scale: float,
+    recentred: gaussians.Frame | None,
+) -> npt.NDArray[np.float32]:
+    """The similarity `place_splat` applies to gaussian centres, applied to bare points.
+
+    `gaussians.transform` moves a centre by `scale * R @ x + t`, and `orient`'s recentring
+    is a second `R' @ x + t'`; this is the same two steps and nothing else, so a point
+    that sat on a gaussian's centre before placement sits on it after.
+    """
+    xyz = np.asarray(points, dtype=np.float64).reshape(-1, 3)
+    t = np.zeros(3) if translation is None else np.asarray(translation, dtype=np.float64)
+    moved = scale * (xyz @ np.asarray(rotation, dtype=np.float64).T) + t
+    if recentred is not None:
+        moved = moved @ np.asarray(recentred.rotation, dtype=np.float64).T + recentred.translation
+    return np.ascontiguousarray(moved, dtype=np.float32)
+
+
+def _place_coverage(
+    ctx: StageContext,
+    rotation: npt.ArrayLike,
+    translation: npt.ArrayLike | None,
+    scale: float,
+    recentred: gaussians.Frame | None,
+) -> int:
+    """`coverage.ply` into `coverage_enu.ply`; an empty one when no quality stage ran."""
+    if ctx.has_input(quality.COVERAGE_PLY.name):
+        xyz, tiers = quality.read_coverage(ctx.input(quality.COVERAGE_PLY.name))
+        placed = place_points(xyz, rotation, translation, scale, recentred)
+    else:
+        placed, tiers = np.zeros((0, 3), dtype=np.float32), np.zeros(0, dtype=np.uint8)
+    quality.write_coverage(ctx.output(COVERAGE_ENU.name), placed, tiers)
+    return int(tiers.shape[0])
 
 
 def _placed_coordinate(ctx: StageContext) -> tuple[float, float, float] | None:
@@ -1666,7 +1724,13 @@ def capture_manifest(ctx: StageContext) -> StageOutcome:
 @stage_impl(
     "catalog",
     consumes=("splat", "georef.json"),
-    optional_consumes=("manifest.json", "thumbnail.jpg", "ground_samples.json"),
+    optional_consumes=(
+        "manifest.json",
+        "thumbnail.jpg",
+        "ground_samples.json",
+        quality.QUALITY_JSON.name,
+        COVERAGE_ENU.name,
+    ),
     produces=(REGISTRATION,),
     summary="describe the finished capture for the API's registration endpoint",
 )
@@ -1701,9 +1765,50 @@ def catalog(ctx: StageContext) -> StageOutcome:
         "bboxLocalM": _bbox_of(manifest),
         "thumbnail": THUMBNAIL.name if ctx.has_input(THUMBNAIL.name) else None,
         "manifest": manifest or None,
+        # The quality bar's verdict, for the phone's forecast and for Refine, which reads
+        # the region of interest back out of it (COLMAP frame, the poses this run made).
+        "quality": _quality_summary(ctx),
+        # The tier-coloured point cloud in the splat's own frame, when there is one to
+        # lay over it; the worker publishes it beside the thumbnail.
+        "coverage": _coverage_name(ctx),
     }
     _write_json(ctx.output(REGISTRATION.name), document)
     return StageOutcome(metrics={"artifacts": len(tiles)})
+
+
+#: What of `quality.json` travels to the API. Not the thresholds or the per-bin geometry:
+#: those stay in the run's artifact, where the console's Outputs view reaches them.
+_QUALITY_SUMMARY_KEYS = (
+    "mode",
+    "bar",
+    "barApplied",
+    "roi",
+    "gaussians",
+    "keepPct",
+    "contextPct",
+    "heldOutPsnr",
+    "views",
+    "spreadDeg",
+    "gsd",
+    "tips",
+)
+
+
+def _quality_summary(ctx: StageContext) -> dict[str, object] | None:
+    if not ctx.has_input(quality.QUALITY_JSON.name):
+        return None
+    document = _read_json(ctx.input(quality.QUALITY_JSON.name))
+    return {key: document.get(key) for key in _QUALITY_SUMMARY_KEYS if key in document}
+
+
+def _coverage_name(ctx: StageContext) -> str | None:
+    if not ctx.has_input(COVERAGE_ENU.name):
+        return None
+    try:
+        _, tiers = quality.read_coverage(ctx.input(COVERAGE_ENU.name))
+    except ValueError:
+        return None  # a stub's bytes, not a PLY: nothing to lay over the splat
+    return COVERAGE_ENU.name if tiers.size else None
 
 
 def _write_json(path: Path, document: dict[str, object]) -> None:

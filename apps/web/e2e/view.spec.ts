@@ -95,6 +95,103 @@ test("a scan opens on its own and renders", async ({ page }) => {
   expect(errors).toEqual([]);
 });
 
+/** A coverage_enu.ply as tools/pipeline/quality.py writes it: points, tier, colour. */
+function coveragePly(points: [number, number, number, number][]): Buffer {
+  const header = Buffer.from(
+    [
+      "ply",
+      "format binary_little_endian 1.0",
+      `element vertex ${String(points.length)}`,
+      "property float x",
+      "property float y",
+      "property float z",
+      "property uchar red",
+      "property uchar green",
+      "property uchar blue",
+      "property uchar tier",
+      "end_header",
+      "",
+    ].join("\n"),
+  );
+  const body = Buffer.alloc(points.length * 16);
+  points.forEach(([x, y, z, tier], i) => {
+    body.writeFloatLE(x, i * 16);
+    body.writeFloatLE(y, i * 16 + 4);
+    body.writeFloatLE(z, i * 16 + 8);
+    body.writeUInt8(tier === 2 ? 64 : 200, i * 16 + 12);
+    body.writeUInt8(150, i * 16 + 13);
+    body.writeUInt8(100, i * 16 + 14);
+    body.writeUInt8(tier, i * 16 + 15);
+  });
+  return Buffer.concat([header, body]);
+}
+
+test("a scan with no coverage offers no Coverage toggle", async ({ page }) => {
+  await page.goto(`/view.html#${SITE}`);
+  await expect(page.locator("#viewer-status")).toContainText("Drag to turn", { timeout: 30_000 });
+  await expect(page.getByRole("button", { name: "Coverage" })).toBeHidden();
+});
+
+test("Coverage lays the quality bar's cloud and the camera path over the scan", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  const coverageUrl = "https://tiles.example/runs/job/place/coverage_enu.ply";
+  await page.route(
+    (url) => url.pathname === `/api/v1/sites/${SITE}`,
+    (route) =>
+      route.fulfill({
+        json: {
+          id: SITE,
+          name: "Garden tree",
+          createdAt: "2026-09-24T15:00:00Z",
+          metadata: { captureId: "c1", coverageUrl },
+          assets: [
+            { representation: "gaussian-splat", source: { type: "3d-tiles-url", url: TILESET } },
+          ],
+        },
+      }),
+  );
+  let fetched = 0;
+  await page.route(coverageUrl, async (route) => {
+    fetched += 1;
+    await route.fulfill({
+      body: coveragePly([
+        [0, 0, 1, 2],
+        [0.5, 0, 1, 2],
+        [1, 1, 1, 1],
+        [3, 3, 0, 0],
+        [4, 0, 1.5, 3],
+        [0, 4, 1.5, 3],
+      ]),
+      headers: { "access-control-allow-origin": "*" },
+    });
+  });
+
+  await page.goto(`/view.html#${SITE}`);
+  await expect(page.locator("#viewer-status")).toContainText("Drag to turn", { timeout: 30_000 });
+  const toggle = page.getByRole("button", { name: "Coverage" });
+  await expect(toggle).toBeVisible();
+  // Not fetched until asked for: it is megabytes a phone need not spend unasked.
+  expect(fetched).toBe(0);
+
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-pressed", "true");
+  const legend = page.locator("#coverage-legend");
+  await expect(legend).toBeVisible();
+  await expect(legend).toContainText("Camera path");
+  await expect(legend).toContainText("2 kept · 1 context · 1 dropped");
+
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-pressed", "false");
+  await expect(legend).toBeHidden();
+  await toggle.click();
+  await expect(legend).toBeVisible();
+  expect(fetched).toBe(1);
+  expect(errors).toEqual([]);
+});
+
 test("the viewer does not load CesiumJS", async ({ page }) => {
   const scripts: string[] = [];
   page.on("request", (request) => {

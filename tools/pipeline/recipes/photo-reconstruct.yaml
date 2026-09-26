@@ -142,10 +142,44 @@ stages:
       # RANSAC inlier threshold in metres. COLMAP 3.9.1 refuses a zero here outright.
       max_error_m: 5.0
 
+  # The quality bar (quality.py). Per gaussian: how many frames saw it unoccluded, over
+  # what spread of angles, at what ground sampling distance -- then keep / context / drop,
+  # and `bar` decides what `place` gets: strict (keep only), balanced (keep, plus context
+  # faded to half its opacity) or everything (the splat as trained). It also estimates
+  # the region the cameras were pointed at, in COLMAP's frame, which is what a phone's
+  # Refine trains inside; and writes capture tips and a tier-coloured coverage.ply.
+  #
+  # After `georeference`, not straight after `train`, only so that an EXIF-aligned
+  # capture's metric scale is there to report its GSD in mm/px; the criterion itself is
+  # relative, so nothing depends on it. On Modal's CPU box because it is a projection of
+  # every gaussian into every frame: measured 500k x 90 in the module's tests' synthetic
+  # case, well inside the 8 GB there and more than the worker should spend of its 2 GB.
+  - id: quality
+    impl: support_gate
+    params:
+      # preview | refine: what this run is, for the phone's forecast and its Refine.
+      mode: refine
+      bar: balanced
+      keep_min_views: 8
+      keep_min_spread_deg: 45
+      keep_max_gsd_ratio: 2.0
+      context_min_views: 3
+      context_min_spread_deg: 15
+      context_max_gsd_ratio: 6.0
+      min_opacity: 0.02
+      context_fade: 0.5
+      roi_radius_factor: 0.5
+      coverage_points: 150000
+    gpu:
+      tier: cpu4
+      preemptible: false
+
   # The trained splat is in COLMAP's frame (training runs with gsplat's world
   # normalisation off). This turns it into east/north/up by the georeference's `frame`:
   # the EXIF similarity when there is one, otherwise levelled by how the camera was held
-  # and recentred on the splat's own footprint, as Lane 1 is.
+  # and recentred on the splat's own footprint, as Lane 1 is. It places `quality`'s
+  # gated.ply when there is one (trained.ply otherwise), and moves coverage.ply by the
+  # same transform so the viewer's coverage overlay sits on the published splat.
   - id: place
     impl: place_splat
     params: {}
