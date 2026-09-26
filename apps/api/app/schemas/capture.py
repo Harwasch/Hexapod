@@ -93,6 +93,66 @@ class CaptureFileRead(CamelModel):
     updated_at: datetime
 
 
+#: What `quality.mode` and `quality.bar` may be; tools/pipeline/quality.py's MODES and BARS.
+QUALITY_MODES: tuple[str, ...] = ("preview", "refine")
+QUALITY_BARS: tuple[str, ...] = ("strict", "balanced", "everything")
+
+
+class QualityRoi(CamelModel):
+    """A sphere in the reconstruction's own (COLMAP) frame: where the cameras pointed.
+
+    Only meaningful over the poses of the run that measured it, which is why a Refine
+    re-runs that same job from `train` rather than starting a new one.
+    """
+
+    center: list[float] = Field(min_length=3, max_length=3)
+    radius: float = Field(gt=0)
+
+
+class QualityTip(CamelModel):
+    id: str
+    text: str
+
+
+class QualityCounts(CamelModel):
+    """Gaussians in, gaussians the bar let out, and each tier's count."""
+
+    total: int
+    kept: int
+    keep: int
+    context: int
+    drop: int
+
+
+class CaptureQuality(CamelModel):
+    """The quality bar's verdict on a capture's latest finished run.
+
+    Read model: every field is explicit so the OpenAPI contract marks it required.
+    """
+
+    job_id: uuid.UUID
+    #: `preview` (a short run that forecasts) or `refine` (the full-quality pass).
+    mode: str
+    #: The bar asked for, and the one applied: a bar that would have left almost nothing
+    #: falls back to the next looser one rather than failing the run.
+    bar: str
+    bar_applied: str
+    #: Share of the occupied region of interest that reached the keep tier, in percent.
+    keep_pct: float | None
+    context_pct: float | None
+    #: gsplat's own held-out frames, in dB.
+    held_out_psnr: float | None
+    gaussians: QualityCounts
+    roi: QualityRoi | None
+    tips: list[QualityTip]
+    #: The median ground sampling distance in the region, in mm per pixel, when the
+    #: capture had a metric scale (EXIF GPS); null otherwise.
+    gsd_mm: float | None
+    median_views: int | None
+    #: The tier-coloured point cloud, east/north/up like the published splat.
+    coverage_url: str | None
+
+
 class CaptureRead(CamelModel):
     id: uuid.UUID
     slug: str
@@ -109,6 +169,8 @@ class CaptureRead(CamelModel):
     georef_method: GeorefMethod | None
     scale_source: ScaleSource | None
     uncertainty_m: float | None
+    # The quality bar's verdict on the latest finished run; null before one ran.
+    quality: CaptureQuality | None
     metadata: dict[str, Any]
     attribution: list[Attribution]
     license: LicenseMetadata | None

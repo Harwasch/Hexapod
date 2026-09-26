@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import math
 import time
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Annotated
+from typing import Annotated, Any, Final, Literal
 
 from fastapi import APIRouter, Depends, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -14,14 +15,15 @@ from sqlalchemy import func, select
 
 from app.api.deps import DbSession, SettingsDep
 from app.models.capture import Capture
-from app.models.enums import CaptureKind
+from app.models.enums import CaptureKind, RunStatus
 from app.models.job import Job
 from app.schemas.base import CamelModel
-from app.schemas.capture import CaptureCreate, CaptureRead
+from app.schemas.capture import QUALITY_BARS, QUALITY_MODES, CaptureCreate, CaptureRead
 from app.schemas.job import JobCreate, JobRead
 from app.services import captures as capture_service
 from app.services import handoff, phone_key
 from app.services import jobs as job_service
+from app.services import recipes as recipe_service
 from app.services.errors import ConflictError, UnauthorizedError
 
 router = APIRouter(prefix="/phone", tags=["phone"])
@@ -31,21 +33,38 @@ ORIGIN = "phone-key"
 #: The only recipes a phone can start: the two lanes a capture can go down.
 PHONE_RECIPES = frozenset({"splat-ingest", "photo-reconstruct"})
 
+#: A rule that is not a range or a set of values: `FLAG` is a boolean, `ROI` is a region
+#: of interest, `{"center": [x, y, z], "radius": r}` with every number finite and r > 0.
+FLAG: Final = "flag"
+ROI: Final = "roi"
+Rule = tuple[float, float] | frozenset[str] | Literal["flag", "roi"]
+
 #: The options a phone may set, per recipe and stage: each parameter's allowed range, or
 #: its allowed values. Anything else is refused by name rather than passed through, so
 #: the key cannot reach a stage parameter that was never meant to be a phone's choice
 #: (a trainer path, a Python interpreter, a GPU tier).
-PHONE_OPTIONS: dict[str, dict[str, dict[str, tuple[float, float] | frozenset[str]]]] = {
+PHONE_OPTIONS: dict[str, dict[str, dict[str, Rule]]] = {
     "photo-reconstruct": {
         # The long side frames are shrunk to before pose and training; frames per second
         # taken from a video.
         "normalize": {"max_side": (800, 4000), "fps": (1, 10)},
-        # The training schedule (`training.schedule_scale`) and the gaussian cap.
+        # The training schedule (`training.schedule_scale`) and the gaussian cap; then the
+        # preview's and Refine's knobs: a forced schedule scale, the training image size,
+        # the region to train inside (COLMAP frame, from a preview's quality stage), and
+        # three quality switches.
         "train": {
             "schedule_full_at": (0, 400),
             "schedule_floor": (0.1, 1.0),
             "cap_max": (100_000, 1_500_000),
+            "schedule_scale": (0.05, 1.0),
+            "train_max_side": (400, 4000),
+            "roi": ROI,
+            "antialiased": FLAG,
+            "depth_loss": FLAG,
+            "opacity_reg": (0.0, 0.05),
         },
+        # The quality bar: what is kept, and whether this run is a preview or a refine.
+        "quality": {"bar": frozenset(QUALITY_BARS), "mode": frozenset(QUALITY_MODES)},
         # How many gaussians the map and the viewer are sent.
         "package": {"max_gaussians": (100_000, 1_000_000)},
     },
@@ -70,10 +89,15 @@ def _checked_options(recipe: str, params: dict[str, object]) -> dict[str, dict[s
             rule = stage_allowed.get(name)
             if rule is None:
                 raise ConflictError(f"A phone cannot set {stage}.{name}.")
-            if isinstance(rule, frozenset):
+            if rule == FLAG:
+                if not isinstance(value, bool):
+                    raise ConflictError(f"{stage}.{name} must be true or false.")
+            elif rule == ROI:
+                value = _checked_roi(stage, value)
+            elif isinstance(rule, frozenset):
                 if value not in rule:
                     raise ConflictError(f"{stage}.{name} must be one of {sorted(rule)}.")
-            elif (
+            elif isinstance(rule, tuple) and (
                 isinstance(value, bool)
                 or not isinstance(value, int | float)
                 or not rule[0] <= value <= rule[1]
@@ -81,6 +105,27 @@ def _checked_options(recipe: str, params: dict[str, object]) -> dict[str, dict[s
                 raise ConflictError(f"{stage}.{name} must be a number from {rule[0]} to {rule[1]}.")
             checked.setdefault(stage, {})[name] = value
     return checked
+
+
+def _finite(value: object) -> bool:
+    return (
+        not isinstance(value, bool)
+        and isinstance(value, int | float)
+        and math.isfinite(float(value))
+    )
+
+
+def _checked_roi(stage: str, value: object) -> dict[str, object]:
+    """`{"center": [x, y, z], "radius": r}`, exactly, or a refusal that shows the shape."""
+    shape = f'{stage}.roi must be {{"center": [x, y, z], "radius": r}} with r > 0.'
+    if not isinstance(value, dict) or set(value) != {"center", "radius"}:
+        raise ConflictError(shape)
+    center, radius = value["center"], value["radius"]
+    if not isinstance(center, list) or len(center) != 3 or not all(_finite(v) for v in center):
+        raise ConflictError(shape)
+    if not _finite(radius) or float(radius) <= 0:
+        raise ConflictError(shape)
+    return {"center": [float(v) for v in center], "radius": float(radius)}
 
 
 phone_key_scheme = HTTPBearer(
@@ -174,6 +219,77 @@ def process_phone_capture(capture_id: uuid.UUID, payload: JobCreate, db: DbSessi
     return job_service.job_to_read(
         job_service.create_job(db, capture_id, JobCreate(recipe=payload.recipe, params=params))
     )
+
+
+#: Where a Refine resumes a finished run: training, keeping the frames and poses.
+REFINE_FROM = "train"
+
+
+class PhoneRefine(CamelModel):
+    """The phone's options for the full-quality pass (the same whitelist as `process`).
+
+    `normalize` options are accepted and ignored: a Refine keeps the preview's frames and
+    poses, which is the whole point -- the region of interest is only meaningful in them.
+    """
+
+    params: dict[str, Any] = Field(default_factory=dict)
+
+
+@router.post(
+    "/captures/{capture_id}/refine",
+    response_model=JobRead,
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[RequirePhoneKey],
+    summary="Refine a finished preview: train it again at full quality, inside its region",
+    description=(
+        "Resumes the capture's latest finished photo-reconstruct run at `train` with new "
+        "parameters: the phone's quality options, `train.roi` set to the region of interest "
+        "the preview's quality stage measured, and `quality.mode` = `refine`. The frames "
+        "and poses are kept, so the region is in the frame it was measured in. If the "
+        "worker no longer has them, the run starts over and trains uncropped rather than "
+        "applying the region to a different reconstruction."
+    ),
+)
+def refine_phone_capture(capture_id: uuid.UUID, payload: PhoneRefine, db: DbSession) -> JobRead:
+    capture = capture_service.get_capture(db, capture_id)
+    if (capture.metadata_ or {}).get("origin") != ORIGIN:
+        raise UnauthorizedError("That phone key is not right.")
+    job = db.scalars(
+        select(Job).where(Job.capture_id == capture_id).order_by(Job.created_at.desc())
+    ).first()
+    if job is None:
+        raise ConflictError("Nothing to refine yet: process it first.")
+    if job.status in job_service.ACTIVE_STATUSES:
+        raise ConflictError("It is still running. Refine it when it has finished.")
+    if job.recipe != "photo-reconstruct":
+        raise ConflictError("Only a photo or video capture can be refined.")
+    if job.status is not RunStatus.COMPLETE:
+        raise ConflictError("That run did not finish, so there is nothing to refine. Try again.")
+    verdict = capture_service.quality_of(capture)
+    if verdict is None or verdict.job_id != job.id:
+        raise ConflictError("That run has no quality check to refine from. Try again.")
+    requested = _checked_options(job.recipe, payload.params)
+    params: dict[str, dict[str, object]] = {
+        stage: dict(values) for stage, values in requested.items() if stage != "normalize"
+    }
+    previous = job.params if isinstance(job.params, dict) else {}
+    if isinstance(previous.get("normalize"), dict):
+        # What the kept frames were made with, recorded rather than silently changed.
+        params["normalize"] = dict(previous["normalize"])
+    train = params.setdefault("train", {})
+    if verdict.roi is not None:
+        train["roi"] = {"center": list(verdict.roi.center), "radius": verdict.roi.radius}
+    quality = params.setdefault("quality", {})
+    quality["mode"] = "refine"
+    quality.setdefault("bar", "balanced")
+    recipe_service.check_overrides(job.recipe, params)
+    job.params = params
+    try:
+        refined = job_service.retry_job(db, job.id, from_stage=REFINE_FROM)
+    except ValueError as error:
+        db.rollback()
+        raise ConflictError(f"That run cannot be refined: {error}") from error
+    return job_service.job_to_read(refined)
 
 
 @router.post(

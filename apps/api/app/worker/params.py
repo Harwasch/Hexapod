@@ -75,6 +75,37 @@ def stage_params(plan: Plan, capture: Capture, job: Job) -> dict[str, dict[str, 
     return resolved
 
 
+#: The artifact a region of interest's coordinates are in: an ROI measured by one run's
+#: `quality` stage is a sphere in that run's COLMAP frame, and a pose model computed
+#: again is a different, arbitrary frame.
+POSES = "poses"
+#: The parameter that carries one (the train stage's crop, see the phone's Refine).
+ROI = "roi"
+
+
+def without_stale_roi(
+    resolved: dict[str, dict[str, Any]], plan: Plan, completed: set[str]
+) -> tuple[dict[str, dict[str, Any]], list[str]]:
+    """The parameters with every `roi` removed if the poses will be recomputed.
+
+    A Refine resumes a finished run at `train`, keeping its frames and poses, and crops
+    to the region the preview measured in exactly those poses. If the poses are *not*
+    kept -- the workdir is gone, so nothing can be skipped and the run starts over --
+    the region would be applied to a new reconstruction in a different frame and crop
+    away the wrong part of it. Training uncropped is then the only safe answer. Returns
+    the stage ids an ROI was dropped from, so the caller can say so.
+    """
+    producer = plan.origins.get(POSES)
+    if producer is None or producer in completed:
+        return resolved, []
+    dropped = sorted(stage for stage, values in resolved.items() if ROI in values)
+    if not dropped:
+        return resolved, []
+    return {
+        stage: {k: v for k, v in values.items() if k != ROI} for stage, values in resolved.items()
+    }, dropped
+
+
 def _requested(job: Job) -> dict[str, dict[str, Any]]:
     """`jobs.params`, checked for shape.
 
