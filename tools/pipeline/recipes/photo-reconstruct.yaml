@@ -8,7 +8,7 @@
 # `compensate` gains a `gpu:` block when its impl becomes `imc` (B3); asking for an L4 to
 # run `none` would be billing a GPU to do nothing.
 name: photo-reconstruct
-version: 7
+version: 8
 description: Reconstruct a splat from a raw capture, then package and register it.
 
 inputs: [upload]
@@ -22,10 +22,11 @@ stages:
       # within-clip dynamic range, so no cutoff transfers between scenes. Windowed, so
       # that keeping a quarter of a minute's candidates cannot drop a blurred side.
       select: sharpness-windowed
-      # 100, not 400, because pose runs on the worker's CPU and exhaustive matching is
+      # 100, not 400, because pose runs on 4 CPU cores and exhaustive matching is
       # quadratic in frames. Measured on 4 cores (README, "Where pose runs"): 50 frames
-      # 653 s; 400 would be ~64x the matching, most of a day. Sequential matching, with
-      # or without vocabulary-tree loop closure, was faster and registered 46-76 of 100.
+      # 653 s; 400 would be ~64x the matching, most of a day. A video's frames are now
+      # matched sequentially (linear), but a photo set, and the fallback when sequential
+      # registers too few, are still exhaustive -- so the ceiling stays where that fits.
       keep: 100
       # Long side, in pixels, for every frame: photos arrive at full sensor size (an
       # iPhone's 5712x4284) and 4K video at 3840. A splat holds no more detail than
@@ -36,13 +37,28 @@ stages:
   - id: pose
     impl: colmap # | glomap | arkit
     params:
-      # A0 #7: sequential_matcher without loop detection registers 2/40 on a closed orbit;
-      # with it, 76/100 on a real one. Exhaustive registered 50/50.
-      matcher: exhaustive
+      # `auto`: a video's frames are matched sequentially with vocabulary-tree loop
+      # closure, a photo set exhaustively (`sfm.matching_plan`). Sequential is a first
+      # try: if its mapping registers under `min_registered_fraction` of the frames, the
+      # stage matches exhaustively on the same database -- only the pairs sequential
+      # skipped -- and maps again, and poses.json says so. Measured on 4 cores: 100 real
+      # frames, 1,372 pairs and 607 s sequential (100/100) against 4,950 pairs and about
+      # twice the time exhaustive. The tree is in the Modal CPU image
+      # ($COLMAP_VOCAB_TREE); where there is none, `auto` is exhaustive. A0 #7 is why
+      # sequential never runs without it: 2 of 40 on a closed orbit.
+      matcher: auto
+      min_registered_fraction: 0.8
       # Half the stage's defaults (8192 / 2400): the same 50/50 registered, in 62% of
-      # the time. Training still reads the full-resolution frames.
+      # the time. Training reads the normalized 1600 px frames.
       max_features: 4096
       max_image_size: 1600
+      # SIFT from the frame's own resolution rather than COLMAP's -1 (doubled first):
+      # at 1600 px the 4096 cap is hit either way and the doubled octave's features are
+      # the ones it discards. Measured 2026-09-26: 100 real frames, extraction 109 s ->
+      # 35 s, still 100/100; the fixture orbit rendered at 1600x1200, 40/40 either way,
+      # extract + match + map 168 s -> 107 s, median rotation error 0.026 -> 0.032 deg
+      # and translation 0.030% -> 0.046% of extent against the known poses.
+      first_octave: 0
     # On Modal's CPU box, not the worker: `cpu4` is 4 cores and 8 GB with no GPU, billed
     # per second ($0.25 an hour) only while a capture is posed. Feature extraction
     # peaked at 1.7 GB on real 1080p frames, more than the 2 GB worker can spare, and a
@@ -71,6 +87,31 @@ stages:
       # same 4 photos grew 894k gaussians; `package` keeps 400k of any of them).
       strategy: mcmc
       cap_max: 500000
+      # What is written here is the Standard run. A run may override any of it per
+      # capture (`jobs.params`), and two named presets are:
+      #
+      #   Preview: {schedule_scale: 0.1, cap_max: 200000, train_max_side: 800}
+      #     A tenth of the schedule (3,000 steps, decay and densification included) on
+      #     frames a quarter the pixels. For "did this capture work at all" in minutes.
+      #   Refine:  {schedule_scale: 1.0}
+      #     The whole schedule even for a capture under `schedule_full_at` frames.
+      #
+      # Options, deliberately not defaults of either (`training.gsplat_argv` has each
+      # one's mechanics):
+      #   antialiased: true   -- trains opacities against Mip-Splatting's compensation,
+      #     which the renderer must then apply too; the tileset's renderer is not known
+      #     to, so a default of it would draw small gaussians more opaque than trained.
+      #   opacity_reg: 0.001  -- a tenth of the mcmc preset's 0.01 (the MCMC paper's
+      #     value, which is also what pushes dead gaussians to be relocated). No run here
+      #     has measured the lower weight against it.
+      #   depth_loss: true    -- pulls rendered depth toward each frame's own SfM points;
+      #     gsplat marks it experimental, and it has not been run on a GPU here.
+      #   roi: {center: [x, y, z], radius: r}  -- COLMAP frame; crops the initial points
+      #     to the sphere and the trained splat to 1.5 radii.
+      #
+      # psnr, ssim and lpips in train_metrics.json are on gsplat's held-out split: every
+      # 8th registered frame, never trained on (`heldOut` there says how many).
+      #
       # `trainer` and `python` are deliberately absent: gsplat v1.5.3's
       # examples/simple_trainer.py and the CPython 3.10 it needs live in the training
       # image (infra/modal/app.py), which says where through $GSPLAT_TRAINER and
