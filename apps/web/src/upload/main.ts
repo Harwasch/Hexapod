@@ -26,7 +26,8 @@ import { ApiError, isAbort } from "@/api/error";
 import { partSizeFor, putPart } from "@/api/putPart";
 import { classify, SUPPORTED_TEXT, unsupported } from "@/features/captures/recipes";
 
-import { mountOptions, type OptionsPanel, paramsFor } from "./options";
+import { mountOptions, type OptionsPanel, paramsFor, previewParamsFor } from "./options";
+import { forecast, qualityOf, summary } from "./quality";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
 
@@ -430,6 +431,10 @@ const STAGE_TEXT: Record<string, StageText> = {
     name: "Place it",
     what: "Puts the scan where your phone was, since a splat file carries no location of its own.",
   },
+  support_gate: {
+    name: "Check the quality",
+    what: "Counts how many photos saw each part of the model, from how many angles and how close, and keeps what they support.",
+  },
   place_splat: {
     name: "Level and place it",
     what: "Turns the model upright and moves it to that spot.",
@@ -632,7 +637,10 @@ async function describeRun(job: Job): Promise<RunView> {
 
   let headline: string;
   let detail: string;
-  if (job.status === "complete") {
+  if (job.status === "complete" && isPreview(job)) {
+    headline = "Preview ready.";
+    detail = "Its forecast is in Your captures below. Refine it for the full-quality pass.";
+  } else if (job.status === "complete") {
     headline = "Done.";
     detail = "Tap View in 3D.";
   } else if (job.status === "error" || job.status === "cancelled") {
@@ -764,8 +772,24 @@ function viewerLink(siteId: string): string {
 /** The processing options, in key mode: what every run started from this page uses. */
 let optionsPanel: OptionsPanel | null = null;
 
+/** A new capture's first run: the preview (options.ts). */
 function optionsParams(recipe: "photo-reconstruct" | "splat-ingest"): Record<string, unknown> {
-  return optionsPanel ? paramsFor(recipe, optionsPanel.current()) : {};
+  return optionsPanel ? previewParamsFor(recipe, optionsPanel.current()) : {};
+}
+
+/** What Refine sends: the full-quality options; the server adds the region and the mode. */
+function refineParams(): Record<string, unknown> {
+  return optionsPanel ? paramsFor("photo-reconstruct", optionsPanel.current()) : {};
+}
+
+/** Whether a run is a preview, from what it was started with. */
+function isPreview(job: Job): boolean {
+  const quality = (job.params as Record<string, unknown> | undefined)?.quality;
+  return (
+    typeof quality === "object" &&
+    quality !== null &&
+    (quality as Record<string, unknown>).mode === "preview"
+  );
 }
 
 /** The one run the status panel is following; starting another stops this one. */
@@ -1024,6 +1048,32 @@ async function captureRow(ui: Ui, capture: Capture, job: Job | undefined): Promi
       });
   };
 
+  const refine = (button: HTMLButtonElement): void => {
+    const key = readStoredKey();
+    if (!key) return;
+    button.disabled = true;
+    post<Job>(
+      key,
+      `/api/v1/phone/captures/${capture.id}/refine`,
+      { params: refineParams() },
+      {
+        unauthorized: KEY_WRONG,
+      },
+    )
+      .then(() => {
+        follow(capture.id, ui);
+        refreshMine(ui);
+      })
+      .catch((error: unknown) => {
+        button.disabled = false;
+        ui.status.textContent = error instanceof Error ? error.message : "Could not refine it.";
+      });
+  };
+  const refineButton = (label: string): HTMLButtonElement => {
+    const button = rowButton(label, () => refine(button));
+    return button;
+  };
+
   const stop = (): void => {
     const key = readStoredKey();
     if (!key) return;
@@ -1047,8 +1097,26 @@ async function captureRow(ui: Ui, capture: Capture, job: Job | undefined): Promi
       });
   };
 
+  // The quality bar's verdict on this capture's latest run, when it has one.
+  const quality = qualityOf(capture.quality, job);
+
   if (capture.siteId && (!job || job.status === "complete")) {
     state.textContent = "Ready";
+    if (quality?.mode === "preview") {
+      state.textContent = "Preview ready";
+      row.dataset.quality = "preview";
+      const line = document.createElement("span");
+      line.className = "forecast";
+      line.textContent = forecast(quality);
+      text.append(line);
+      row.append(refineButton("Refine"));
+    } else if (quality) {
+      row.dataset.quality = "refine";
+      const line = document.createElement("span");
+      line.className = "forecast";
+      line.textContent = summary(quality);
+      text.append(line);
+    }
     const view = document.createElement("a");
     view.className = "rowbtn";
     view.href = viewerLink(capture.siteId);
@@ -1059,7 +1127,9 @@ async function captureRow(ui: Ui, capture: Capture, job: Job | undefined): Promi
     download.download = `${capture.name}.ply`;
     download.textContent = ".ply";
     download.setAttribute("aria-label", `Download ${capture.name} as a .ply file`);
+    if (quality) view.className = "rowbtn rowbtn--quiet";
     row.append(view, download);
+    if (quality && quality.tips.length > 0) row.append(tipsView(quality.tips));
   } else if (job && !ENDED.has(job.status)) {
     const run = await describeRun(job);
     state.textContent = `${run.headline} ${run.detail} · ${run.usdEstimated ? "≈" : ""}${dollars(run.usd)}`;
@@ -1070,6 +1140,9 @@ async function captureRow(ui: Ui, capture: Capture, job: Job | undefined): Promi
   } else if (job) {
     const run = await describeRun(job);
     state.textContent = run.headline;
+    // A Refine that failed or was stopped keeps the preview it started from, so it can be
+    // refined again without paying for the preview twice.
+    if (quality?.mode === "preview") row.append(refineButton("Refine again"));
     if (everything) row.append(rowButton("Try again", process));
   } else if (!everything) {
     // Deliberately no Process: a reconstruction from part of a capture is not the
@@ -1080,6 +1153,22 @@ async function captureRow(ui: Ui, capture: Capture, job: Job | undefined): Promi
     row.append(rowButton("Process", process));
   }
   return row;
+}
+
+/** What the capture could have done better, read off its own numbers by the server. */
+function tipsView(tips: { id: string; text: string }[]): HTMLElement {
+  const box = document.createElement("div");
+  box.className = "tips";
+  const title = document.createElement("strong");
+  title.textContent = "Next time";
+  box.append(title);
+  for (const tip of tips) {
+    const line = document.createElement("p");
+    line.dataset.tip = tip.id;
+    line.textContent = tip.text;
+    box.append(line);
+  }
+  return box;
 }
 
 /** The phone key: start a capture here, upload it, and start processing it. */

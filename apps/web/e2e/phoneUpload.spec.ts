@@ -286,7 +286,10 @@ test.describe("the phone upload page", () => {
     await page.getByRole("radio", { name: "Best" }).check();
     await page.getByRole("radio", { name: "2400 px" }).check();
     await page.getByRole("radio", { name: "Full" }).check();
-    await expect(page.locator("#options summary")).toContainText("Best · 2400 px · Full detail");
+    await page.getByRole("radio", { name: "Strict" }).check();
+    await expect(page.locator("#options summary")).toContainText(
+      "Best · 2400 px · Full detail · Strict bar",
+    );
     await page.locator("#file").setInputFiles({
       name: "walk.mov",
       mimeType: "video/quicktime",
@@ -297,13 +300,16 @@ test.describe("the phone upload page", () => {
       timeout: 20_000,
     });
     expect(created).toEqual([{ lat: 44.9778, lon: -93.265, accuracyM: 7 }]);
+    // A new capture is processed as a preview first: the frames at the chosen size, a
+    // short training run, and the quality bar's forecast. "Best" is for its Refine.
     expect(processed).toEqual([
       {
         recipe: "photo-reconstruct",
         params: {
           normalize: { max_side: 2400, fps: 4 },
           package: { max_gaussians: 800000 },
-          train: { schedule_floor: 1, cap_max: 1000000 },
+          train: { schedule_scale: 0.1, cap_max: 200000, train_max_side: 800 },
+          quality: { mode: "preview", bar: "strict" },
         },
       },
     ]);
@@ -564,6 +570,130 @@ test.describe("the phone upload page", () => {
     expect(processed[0]).toContain("/api/v1/phone/captures/idle/process");
   });
 
+  test("a finished preview shows its forecast, and Refine starts the full pass", async ({
+    page,
+  }) => {
+    await page.addInitScript(() => {
+      window.localStorage.setItem("twin.phoneKey", "abcd-efgh-jkmn");
+      window.localStorage.setItem(
+        "twin.phoneOptions",
+        JSON.stringify({ quality: "best", bar: "strict" }),
+      );
+    });
+    const phone = { origin: "phone-key" };
+    const files = [{ filename: "walk.mov", status: "complete", bytes: 8 }];
+    const verdict = (jobId: string, mode: string) => ({
+      jobId,
+      mode,
+      bar: "balanced",
+      barApplied: "balanced",
+      keepPct: mode === "preview" ? 62 : 71.4,
+      contextPct: 90,
+      heldOutPsnr: mode === "preview" ? 23.04 : 25.31,
+      gaussians: { total: 200000, kept: 180000, keep: 120000, context: 60000, drop: 20000 },
+      roi: { center: [0.1, -0.2, 3.5], radius: 0.8 },
+      tips:
+        mode === "preview"
+          ? [
+              {
+                id: "from-above",
+                text: "Add frames from above: the highest one looked down at 12°.",
+              },
+              { id: "all-around", text: "Walk all the way around: about 90° has no frames." },
+            ]
+          : [],
+      gsdMm: null,
+      medianViews: 31,
+      coverageUrl: "https://tiles.example/coverage_enu.ply",
+    });
+    const finished = (id: string, captureId: string, mode: string) => ({
+      id,
+      captureId,
+      recipe: "photo-reconstruct",
+      status: "complete",
+      params: { quality: { mode, bar: "balanced" } },
+      createdAt: new Date().toISOString(),
+      error: null,
+      steps: [],
+    });
+    await page.route(
+      (url) => url.pathname === "/api/v1/captures",
+      (route) =>
+        route.fulfill({
+          json: [
+            {
+              id: "prev",
+              name: "Spool table",
+              siteId: "site-p",
+              status: "complete",
+              metadata: phone,
+              files,
+              quality: verdict("job-p", "preview"),
+            },
+            {
+              id: "done",
+              name: "Garden bench",
+              siteId: "site-d",
+              status: "complete",
+              metadata: phone,
+              files,
+              quality: verdict("job-d", "refine"),
+            },
+          ],
+        }),
+    );
+    await page.route(
+      (url) => url.pathname === "/api/v1/jobs",
+      (route) =>
+        route.fulfill({
+          json: [finished("job-p", "prev", "preview"), finished("job-d", "done", "refine")],
+        }),
+    );
+    const refined: { url: string; body: unknown }[] = [];
+    await page.route("**/api/v1/phone/captures/*/refine", async (route) => {
+      expect(route.request().headers().authorization).toBe("Bearer abcd-efgh-jkmn");
+      refined.push({ url: route.request().url(), body: route.request().postDataJSON() });
+      await route.fulfill({
+        status: 202,
+        json: { ...finished("job-p", "prev", "refine"), status: "not-started" },
+      });
+    });
+
+    await page.goto("/upload.html");
+    const row = (name: string) => page.locator("#mine-list li", { hasText: name });
+    await expect(page.locator("#mine-list > li")).toHaveCount(2);
+
+    // The preview: its forecast, what to capture next time, and Refine.
+    await expect(row("Spool table")).toContainText("Preview ready");
+    await expect(row("Spool table").locator(".forecast")).toHaveText(
+      "62% of the circled area reached high quality · held-out 23.0 dB",
+    );
+    await expect(row("Spool table").locator(".tips p")).toHaveCount(2);
+    await expect(row("Spool table").locator(".tips")).toContainText("Add frames from above");
+    await expect(row("Spool table").getByRole("link", { name: "View in 3D" })).toBeVisible();
+
+    // The refined one: its result, and no Refine.
+    await expect(row("Garden bench").locator(".forecast")).toHaveText(
+      "Refined · 71% of the circled area reached high quality · held-out 25.3 dB · Balanced bar",
+    );
+    await expect(row("Garden bench").getByRole("button", { name: "Refine" })).toHaveCount(0);
+    await expect(row("Garden bench").locator(".tips")).toHaveCount(0);
+
+    await row("Spool table").getByRole("button", { name: "Refine" }).click();
+    await expect.poll(() => refined.length).toBe(1);
+    expect(refined[0]?.url).toContain("/api/v1/phone/captures/prev/refine");
+    // The phone's full-quality options and its quality bar; the server adds the region
+    // (the preview's, in the preview's own camera frame) and the mode.
+    expect(refined[0]?.body).toEqual({
+      params: {
+        normalize: { max_side: 1600, fps: 4 },
+        package: { max_gaussians: 400000 },
+        train: { schedule_floor: 1, cap_max: 1000000 },
+        quality: { bar: "strict" },
+      },
+    });
+  });
+
   test("the status panel follows a run through its stages", async ({ page }) => {
     await page.addInitScript(() => {
       window.localStorage.setItem("twin.phoneKey", "abcd-efgh-jkmn");
@@ -723,16 +853,56 @@ test.describe("the phone upload page", () => {
               siteId: null,
               createdAt: new Date().toISOString(),
             },
+            // A finished preview: the longest row there is, forecast, tips and all.
+            {
+              id: "previewed",
+              name: "Another capture with a long name, previewed and waiting for Refine",
+              metadata: { origin: "phone-key" },
+              files: [{ status: "complete", filename: "a.jpg", bytes: 1 }],
+              siteId: "site-x",
+              createdAt: new Date().toISOString(),
+              quality: {
+                jobId: "job-x",
+                mode: "preview",
+                bar: "balanced",
+                barApplied: "balanced",
+                keepPct: 8,
+                contextPct: 40,
+                heldOutPsnr: 19.52,
+                gaussians: { total: 1, kept: 1, keep: 1, context: 0, drop: 0 },
+                roi: { center: [0, 0, 0], radius: 1 },
+                tips: [
+                  {
+                    id: "more-frames",
+                    text: "Move more slowly or take more photos: a typical point in the circled area was in 3 frames, and 8 is what high quality needs.",
+                  },
+                ],
+                gsdMm: null,
+                medianViews: 3,
+                coverageUrl: null,
+              },
+            },
           ],
         }),
     );
+    const previewed = {
+      id: "job-x",
+      captureId: "previewed",
+      recipe: "photo-reconstruct",
+      status: "complete",
+      params: { quality: { mode: "preview" } },
+      createdAt: new Date().toISOString(),
+      steps: [],
+    };
     await page.route(
       (url) => url.pathname === "/api/v1/jobs",
-      (route) => route.fulfill({ json: [running] }),
+      (route) => route.fulfill({ json: [running, previewed] }),
     );
     await page.goto("/upload.html");
     await page.getByText("Processing options").click();
     await expect(page.getByRole("button", { name: "Stop" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Refine" })).toBeVisible();
+    await expect(page.locator(".tips")).toBeVisible();
     const widths = await page.evaluate(() => [
       document.documentElement.scrollWidth,
       document.documentElement.clientWidth,

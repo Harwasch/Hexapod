@@ -149,6 +149,72 @@
         color: var(--muted);
         font-size: 0.8125rem;
       }
+      .toggle {
+        flex: none;
+        margin-left: auto;
+        min-height: 40px;
+        padding: 0 14px;
+        border-radius: 12px;
+        border: 1px solid var(--border);
+        background: rgba(22, 26, 19, 0.9);
+        color: var(--fg);
+        font: inherit;
+        font-weight: 600;
+      }
+      .toggle[aria-pressed="true"] {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: var(--on-accent);
+      }
+      .toggle:focus-visible {
+        outline: 3px solid var(--accent);
+        outline-offset: 2px;
+      }
+      .legend {
+        position: fixed;
+        left: 16px;
+        right: 16px;
+        top: calc(env(safe-area-inset-top, 0px) + 68px);
+        padding: 8px 12px;
+        border-radius: 12px;
+        background: rgba(22, 26, 19, 0.88);
+        border: 1px solid var(--border);
+        font-size: 0.8125rem;
+      }
+      .legend p {
+        margin: 0;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px 12px;
+      }
+      .legend span {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .legend .counts {
+        margin-top: 4px;
+        color: var(--muted);
+      }
+      .dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        display: inline-block;
+      }
+      /* tools/pipeline/quality.py TIER_COLOURS */
+      .dot--keep {
+        background: rgb(64, 196, 108);
+      }
+      .dot--context {
+        background: rgb(238, 170, 52);
+      }
+      .dot--drop {
+        background: rgb(132, 136, 130);
+      }
+      .dot--camera {
+        background: rgb(127, 216, 192);
+      }
       .note {
         position: fixed;
         left: 50%;
@@ -179,6 +245,18 @@
           <strong id="scan-name"></strong>
           <span id="scan-date"></span>
         </div>
+        <button id="coverage" class="toggle" type="button" aria-pressed="false" hidden>
+          Coverage
+        </button>
+      </div>
+      <div id="coverage-legend" class="legend" hidden>
+        <p>
+          <span><i class="dot dot--keep"></i>High quality</span>
+          <span><i class="dot dot--context"></i>Context</span>
+          <span><i class="dot dot--drop"></i>Dropped</span>
+          <span><i class="dot dot--camera"></i>Camera path</span>
+        </p>
+        <p id="coverage-counts" class="counts"></p>
       </div>
       <p id="viewer-status" class="note" aria-live="polite">Loading the scan…</p>
     </section>

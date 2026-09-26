@@ -18,6 +18,7 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 
 import type { Capture, Site, SiteSummary } from "@twin/contracts";
 
+import { parseCoverage } from "./coverage";
 import { spzFromGlb } from "./glb";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
@@ -169,6 +170,8 @@ async function showScan(siteId: string): Promise<void> {
   status.textContent = "Loading the scan…";
   el("scan-name").textContent = "";
   el("scan-date").textContent = "";
+  el("coverage").hidden = true;
+  el("coverage-legend").hidden = true;
 
   const renderer = new THREE.WebGLRenderer({ antialias: false });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -248,6 +251,7 @@ async function showScan(siteId: string): Promise<void> {
     camera.updateProjectionMatrix();
     controls.minDistance = size * 0.05;
     controls.maxDistance = distance * 4;
+    offerCoverage(site, scene, mesh, size);
     status.textContent = "Drag to turn · pinch to zoom · two fingers to move";
     window.setTimeout(() => {
       status.hidden = true;
@@ -255,6 +259,112 @@ async function showScan(siteId: string): Promise<void> {
   } catch (error) {
     status.textContent = error instanceof Error ? error.message : "The scan could not be shown.";
   }
+}
+
+/**
+ * The Coverage toggle: the quality bar's tier-coloured cloud and the camera path, laid
+ * over the scan. Offered only when the run that made this site measured one (its URL is
+ * on the site's metadata, set by the worker's registration). Fetched on the first tap,
+ * not before: it is up to a couple of megabytes a phone need not spend unasked.
+ */
+function offerCoverage(site: Site, scene: THREE.Scene, mesh: SplatMesh, size: number): void {
+  // Read defensively: a site registered before the quality bar has no such key, and an
+  // older API may send no metadata at all.
+  const metadata = site.metadata as Record<string, unknown> | null | undefined;
+  const url = metadata?.coverageUrl;
+  if (typeof url !== "string" || !url) return;
+  const button = el("coverage");
+  const legend = el("coverage-legend");
+  button.hidden = false;
+  button.setAttribute("aria-pressed", "false");
+  let overlay: THREE.Group | null = null;
+  let loading = false;
+
+  const show = (on: boolean): void => {
+    button.setAttribute("aria-pressed", String(on));
+    legend.hidden = !on;
+    if (overlay) overlay.visible = on;
+    // The splat stays, faded, so each point can be told apart from what it describes.
+    mesh.opacity = on ? 0.25 : 1;
+  };
+
+  button.onclick = () => {
+    const on = button.getAttribute("aria-pressed") !== "true";
+    if (!on || overlay) {
+      show(on);
+      return;
+    }
+    if (loading) return;
+    loading = true;
+    button.textContent = "Coverage…";
+    void fetch(url)
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`The coverage answered ${String(response.status)}.`);
+        const coverage = parseCoverage(await response.arrayBuffer());
+        overlay = coverageOverlay(coverage, size);
+        scene.add(overlay);
+        el("coverage-counts").textContent =
+          `${coverage.counts.keep.toLocaleString("en-US")} kept · ` +
+          `${coverage.counts.context.toLocaleString("en-US")} context · ` +
+          `${coverage.counts.drop.toLocaleString("en-US")} dropped (a sample)`;
+        show(true);
+      })
+      .catch((error: unknown) => {
+        const status = el("viewer-status");
+        status.hidden = false;
+        status.textContent =
+          error instanceof Error ? error.message : "The coverage could not be shown.";
+      })
+      .finally(() => {
+        loading = false;
+        button.textContent = "Coverage";
+      });
+  };
+}
+
+/** Points in their tier colours, and the camera path as a line, turned z-up like the mesh. */
+function coverageOverlay(coverage: ReturnType<typeof parseCoverage>, size: number): THREE.Group {
+  const group = new THREE.Group();
+  group.rotation.x = -Math.PI / 2;
+  const cloud = new THREE.BufferGeometry();
+  cloud.setAttribute("position", new THREE.BufferAttribute(coverage.positions, 3));
+  cloud.setAttribute("color", new THREE.BufferAttribute(coverage.colors, 3));
+  // Drawn over the splat rather than hidden in it: this is an x-ray of the scan's support.
+  const points = new THREE.Points(
+    cloud,
+    new THREE.PointsMaterial({
+      size: 3,
+      sizeAttenuation: false,
+      vertexColors: true,
+      depthTest: false,
+      transparent: true,
+      opacity: 0.9,
+    }),
+  );
+  points.renderOrder = 1;
+  group.add(points);
+  if (coverage.cameraPath.length >= 6) {
+    const path = new THREE.BufferGeometry();
+    path.setAttribute("position", new THREE.BufferAttribute(coverage.cameraPath, 3));
+    const line = new THREE.Line(
+      path,
+      new THREE.LineBasicMaterial({ color: 0x7fd8c0, depthTest: false, transparent: true }),
+    );
+    line.renderOrder = 2;
+    const cameras = new THREE.Points(
+      path,
+      new THREE.PointsMaterial({
+        color: 0x7fd8c0,
+        size: Math.max(size / 150, 1e-3),
+        depthTest: false,
+        transparent: true,
+      }),
+    );
+    cameras.renderOrder = 2;
+    group.add(line, cameras);
+  }
+  group.updateMatrixWorld(true);
+  return group;
 }
 
 function route(): void {
