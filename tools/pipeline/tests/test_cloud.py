@@ -156,6 +156,31 @@ def test_an_input_is_sent_once_however_many_stages_read_it(tmp_path: Path) -> No
     assert len(uploads) == 1
 
 
+def test_an_input_that_changed_under_the_same_key_is_sent_again(tmp_path: Path) -> None:
+    """A stage re-run inside a finished run (retry-from-stage, the phone's Refine) makes
+    a new artifact at the old path. The remote stage after it must get the new bytes,
+    not find the key already there and read the previous run's."""
+    transfer = LocalTransfer(tmp_path / "bucket")
+    adapter = FakeAdapter(transfer, tmp_path / "sandbox", script=counts)
+    workdir = seeded_workdir(tmp_path / "run")
+    recipe = make_recipe(
+        [{"id": "one", "impl": "t_gpu_a", "gpu": {"tier": "a100"}}], inputs=["upload"]
+    )
+    cloud = RunnerSet.cloud(runner(Placement((adapter,)), transfer))
+    execute(recipe, workdir, cloud)
+    key = f"runs/{workdir.root.name}/transfer/inputs/upload"
+    before = {p.name: p.read_bytes() for p in (transfer.root / key).iterdir()}
+
+    changed = next(p for p in workdir.input_path("upload").iterdir() if p.is_file())
+    changed.write_bytes(b"a different capture")
+    execute(recipe, workdir, cloud)
+
+    after = {p.name: p.read_bytes() for p in (transfer.root / key).iterdir()}
+    assert after[changed.name] == b"a different capture" != before[changed.name]
+    # And unchanged inputs are still not re-sent: the checksum object says they match.
+    assert (transfer.root / f"{key}.sha256").is_file()
+
+
 @stage_impl("t_gpu_a", consumes=("upload",), produces=(ArtifactDecl("a.json"),))
 def t_gpu_a(ctx: StageContext) -> StageOutcome:
     raise AssertionError("runs on the provider")
