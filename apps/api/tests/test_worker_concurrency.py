@@ -119,3 +119,27 @@ def test_two_slots_finish_the_queue_and_max_jobs_counts_across_them(
     assert statuses == ["complete", "complete", "not-started"]
     assert worker.run_forever(max_jobs=1) == 1
     assert {_job(db, job).status for job in jobs} == {RunStatus.COMPLETE}
+
+
+def test_an_idle_slot_never_takes_a_job_another_slot_is_running(
+    db: Session, sessions: sessionmaker[Session], storage: S3Storage, tmp_path: Path
+) -> None:
+    """One job, two slots: the idle slot polls the queue the whole time the busy one
+    works, and must never reclaim it (production dead-lettered jobs this way)."""
+    capture = make_capture(db)
+    only = queue_job(db, capture, "t-slow")
+    worker = Worker(sessions, storage, config(tmp_path, concurrency=2))
+    stop = threading.Event()
+    loop = threading.Thread(target=lambda: worker.run_forever(stop=stop), daemon=True)
+    loop.start()
+    try:
+        assert wait_until(lambda: _running_two(db, only))
+        owner = _job(db, only).claimed_by
+        time.sleep(FAST_LEASE_S * 3)
+        after = _job(db, only)
+        assert after.status is RunStatus.IN_PROGRESS, after.error
+        assert after.claimed_by == owner
+        assert steps_by_stage(db, only.id)["one"].attempt == 1
+    finally:
+        stop.set()
+        loop.join(timeout=30)
