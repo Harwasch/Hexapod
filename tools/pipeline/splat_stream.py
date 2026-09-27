@@ -1,12 +1,12 @@
 """The stages after training, on a splat that is never held whole: place, thumbnail, ground.
 
 `gaussians.py` says what these do to a splat in memory -- `orient`, `transform`,
-`render_thumbnail`, `ground_samples` -- and stays the definition (Lane 1's `.spz` ingest
-still uses it, and the tests hold this module to it). This module does the same to a splat
-on disk, a chunk at a time (`splat_io`), so that the 2 GB worker places, thumbnails and
-samples a splat of any size in the same memory: the stages here measured ~0.75 GB a
-million gaussians when they loaded the file (apps/api/app/worker/README.md), which is what
-held training to 2M.
+`render_thumbnail`, `ground_samples` -- and stays the definition: the tests hold this
+module to it. This module does the same to a splat on disk, a chunk at a time
+(`splat_io`), so that the 2 GB worker ingests, places, thumbnails and samples a splat of
+any size in the same memory: those stages measured ~0.75 GB a million gaussians when they
+loaded the file (apps/api/app/worker/README.md), which is what held training to 2M. (A
+`.spz` upload is still unpacked whole -- see `open_splat` -- and then streamed.)
 
 **The same answer, not a similar one.** Every per-gaussian operation is element-wise
 (`gaussians.transform` rounds each row identically however many rows it is given), so

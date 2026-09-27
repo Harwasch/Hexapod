@@ -307,9 +307,15 @@ def test_the_chunked_stages_write_what_the_whole_splat_stages_wrote(
         assert got["lat"] == pytest.approx(want.lat, abs=1e-10)
 
 
-def test_measure_support_is_the_whole_splat_measurement_with_cameras_culled(tmp_path: Path) -> None:
-    """The chunked support pass (occluders regrouped into blocks, cameras culled per cell)
-    against the frozen whole-array one, on points that straddle every frustum edge."""
+@pytest.mark.parametrize("spill", [False, True])
+def test_measure_support_is_the_whole_splat_measurement_with_cameras_culled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, spill: bool
+) -> None:
+    """The chunked support pass (occluders regrouped into blocks, cameras culled per cell,
+    and -- with `spill` -- every block's depth samples spilled to disk) against the frozen
+    whole-array one, on points that straddle every frustum edge."""
+    if spill:
+        monkeypatch.setattr(quality, "SAMPLE_BYTES", 1)
     rng = np.random.default_rng(3)
     n = 60_000
     xyz = rng.uniform([-4, -4, -1], [4, 4, 3], size=(n, 3)).astype(np.float32)

@@ -774,12 +774,14 @@ class _ZBuffers:
 
     def _spill_dir(self) -> Path:
         if self._spill is None:
-            if self._spill_root is None:
-                self._temporary = tempfile.TemporaryDirectory(prefix="zbuffer-samples-")
-                self._spill = Path(self._temporary.name)
-            else:
-                self._spill = self._spill_root
-                self._spill.mkdir(parents=True, exist_ok=True)
+            # A fresh directory of this pass's own (under `spill` when given), so samples
+            # are only ever appended to files this pass began.
+            if self._spill_root is not None:
+                self._spill_root.mkdir(parents=True, exist_ok=True)
+            self._temporary = tempfile.TemporaryDirectory(
+                prefix="zbuffer-samples-", dir=self._spill_root
+            )
+            self._spill = Path(self._temporary.name)
         return self._spill
 
     def _spill_samples(self) -> None:
@@ -1526,6 +1528,9 @@ def support_gate(ctx: StageContext) -> StageOutcome:
     model = sfm.read_model(ctx.input("poses"))
     cameras = Cameras.from_model(model)
     scratch = ctx.work_dir / "quality-chunks"
+    # An attempt killed mid-stage leaves its columns and spilled depth samples here; the
+    # samples are appended to, so they must not survive into the next attempt.
+    shutil.rmtree(scratch, ignore_errors=True)
     store = _Store(scratch / "columns", source.count, chunk)
     try:
         return _grade(ctx, source, model, cameras, store, scratch, thresholds, mode, bar, started)
