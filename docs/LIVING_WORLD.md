@@ -205,7 +205,7 @@ iterates _inside_ one stage.
 | `fit`                  | `tree_modes`, `grass_field`, `water_flow`            | motion_bases + anemometer → `motion.json/bin`, water mesh                      | our code; tree extends `skeleton.py` + `@twin/world`              |
 | `complete`             | `neoverse_repaint`                                   | world state → `generated.ply`, `pseudo_log.json`                               | **research**                                                      |
 | `evaluate`             | `holdout_eval`                                       | everything + holdout.json → `eval.json`; **fails the run** on invariant breach | available now                                                     |
-| `package`              | `splat_tiles` (exists) + `splat_lod` + `motion_pack` | → static LOD tileset, per-object tilesets, sidecars                            | single-tile exists; LOD tiler new                                 |
+| `package`              | `splat_tiles` (exists) + `splat_lod` + `motion_pack` | → static LOD tileset, per-object tilesets, sidecars                            | LOD tiler exists (ADD octree); per-object tilesets new            |
 | `manifest`, `register` | exist                                                | + `world` block                                                                | **verified**                                                      |
 
 The `complete` stage, round by round. The shape is WfM/4DGS-Fixer; the parts are runnable today:

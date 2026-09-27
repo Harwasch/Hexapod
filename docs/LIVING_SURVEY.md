@@ -475,8 +475,10 @@ is the fixed thing, not the number it produces.
 ## Limits
 
 - **Single-tile splats only.** Snapshots aggregate over selected tiles, so splat indices are stable
-  only while tile selection is. `splat_tiles.py` emits single-node tilesets, so indices are stable
-  there. Anything multi-tile is refused, not approximated.
+  only while tile selection is. The Living Survey tools (`synthetic_tree.py`, `skeleton.py`) ask
+  `splat_tiles.py` for a single tile (`tile_gaussians=None`), so indices are stable there; a
+  pipeline capture past 100k gaussians is a level-of-detail hierarchy, and anything multi-tile
+  is refused, not approximated.
 - **Draw order goes stale.** The splat sorter reads `primitive._positions` — canonical positions the
   deformer never touches — so a displaced splat carries a draw-order key for where it used to be.
   This is an artifact to measure, not a correctness bug, and `sortStaleness` in `@twin/world`

@@ -255,7 +255,6 @@ def main() -> None:
     parser.add_argument("--max-edge", type=int, default=2048)
     parser.add_argument("--quality", type=int, default=85)
     parser.add_argument("--max-points", type=int, default=1_000_000)
-    parser.add_argument("--max-gaussians", type=int, default=400_000)
     args = parser.parse_args()
 
     project: Path = args.project
@@ -288,9 +287,7 @@ def main() -> None:
             lat,
             lon,
             args.height_offset,
-            args.max_gaussians,
-            0.02,
-            2.0,
+            opacity_min=0.02,
         )
 
     ring, center = boundary_from_cloud(laz)

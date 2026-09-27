@@ -2,7 +2,7 @@
  "asset": {
   "version": "1.1"
  },
- "geometricError": 4.0,
+ "geometricError": 7.612185024704852,
  "extensionsUsed": [
   "3DTILES_content_gltf"
  ],
@@ -37,26 +37,29 @@
    2980310.87893276,
    1.0
   ],
+  "refine": "ADD",
   "boundingVolume": {
    "box": [
     -0.246826171875,
     -0.358642578125,
     3.2327880859375,
-    3.21923828125,
+    2.7954723951649263,
     0,
     0,
     0,
-    3.903564453125,
+    3.4797985670399263,
     0,
     0,
     0,
-    4.2298583984375
+    3.806092512352426
    ]
   },
-  "geometricError": 0.5,
-  "refine": "ADD",
+  "geometricError": 0.0,
   "content": {
    "uri": "splat.glb"
+  },
+  "extras": {
+   "gaussians": 12000
   }
  }
 }

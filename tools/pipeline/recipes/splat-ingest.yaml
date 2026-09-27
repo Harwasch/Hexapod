@@ -41,13 +41,14 @@ stages:
       scale_source: unresolved
 
   - id: package
-    impl: splat_tiles # tools/captures/splat_tiles.py, unchanged
+    impl: splat_tiles # tools/captures/splat_tiles.py
     params:
-      max_gaussians: 400000
+      # Every gaussian is packed, in a level-of-detail hierarchy of at most this many a
+      # tile; how many are drawn is the viewer's budget (the phone's Detail choice).
+      tile_gaussians: 100000
       # Where it belongs: `splat_tiles.convert` is the code that reads it. It sat on
       # `normalize` until A8, where nothing consumed it.
       opacity_min: 0.02
-      geometric_error: 2.0
 
   - id: thumbnail
     impl: splat_thumbnail

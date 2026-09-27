@@ -20,12 +20,12 @@ baseline: baseline
 
 # What a Refine at the phone's Standard settings trains with, minus the support-mask
 # crop (a fresh `process` has no preview to crop to): 1600 px frames at 4 fps, the whole
-# 30k schedule, the recipe's MCMC at 500k, the strict bar, 400k gaussians packaged.
+# 30k schedule, the recipe's MCMC at 500k, the strict bar. (Every gaussian is packaged
+# since the level-of-detail tileset; `package.max_gaussians` is gone from the whitelist.)
 base:
   normalize: {max_side: 1600, fps: 4}
   train: {schedule_scale: 1.0}
   quality: {mode: refine, bar: strict}
-  package: {max_gaussians: 400000}
 
 variants:
   # Twice, so the table shows how far two identical runs land apart; a switch whose
