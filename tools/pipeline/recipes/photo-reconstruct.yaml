@@ -136,7 +136,7 @@ stages:
       # for the stages after training: the 2M `budget_max` this set was what `place` and
       # `package` could load whole on the 2 GB worker (0.75 GB a million, measured), and
       # they now read the splat a chunk at a time (8M gaussians through quality, place,
-      # thumbnail and ground samples: 197 MB peak). `budget_max: N` here, or in a run's
+      # thumbnail and ground samples: 193 MB peak). `budget_max: N` here, or in a run's
       # params, still caps it; an integer `cap_max` is used as given.
       cap_max: auto
       gaussian_density: 0.1

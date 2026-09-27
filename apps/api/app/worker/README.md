@@ -160,10 +160,10 @@ at a time"), in memory that does not grow with it. Measured the same way
 
 | process | whole splat | a chunk at a time |
 | --- | --- | --- |
-| Lane 1 `normalize` + `thumbnail` + `ground_samples`, 1M-gaussian SH3 upload | 711 MB | 145 MB |
-| the same, 2M | 1,386 MB | 138 MB |
-| Lane 2 `quality` + `place` (+ `thumbnail` + `ground_samples` chunked), 1M | 365 MB | 182 MB |
-| the same, 8M | fails at 1.5 GB | 197 MB |
+| Lane 1 `normalize` + `thumbnail` + `ground_samples`, 1M-gaussian SH3 upload | 711 MB | 139 MB |
+| the same, 2M | 1,386 MB | 144 MB |
+| Lane 2 `quality` + `place` (+ `thumbnail` + `ground_samples` chunked), 1M | 328 MB | 184 MB |
+| the same, 8M | fails at 1.5 GB | 193 MB |
 
 `package` (`tools/captures/splat_tiles.py`) is made out-of-core the same way by the
 large-scene plan's tiler; until that lands it is the one stage here whose peak still

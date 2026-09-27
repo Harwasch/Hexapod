@@ -109,7 +109,7 @@ that applied:
   gaussians on the 2 GB Fly worker (apps/api/app/worker/README.md). They now read it a
   chunk at a time (`splat_io`, `splat_stream`, `outofcore`) in memory that does not grow
   with it -- quality, place, thumbnail and ground samples of an 8M-gaussian splat peaked
-  at 197 MB (tests/test_bounded_memory.py) -- and `package` is made the same by the
+  at 193 MB (tests/test_bounded_memory.py) -- and `package` is made the same by the
   large-scene plan's out-of-core tiler (tools/captures/splat_tiles.py). So nothing after
   training bounds the count, and the recipe sets no `budget_max`; a deployment whose
   packager still loads the whole splat should set one for its worker.

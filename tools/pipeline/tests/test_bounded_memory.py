@@ -1,16 +1,16 @@
 """The stages after training run in memory that does not grow with the splat.
 
 Each measurement is a process of its own (`memory_probe.py`), so its peak resident set
-(`ru_maxrss`) is the stages' and nothing else's. Measured on this code, 2026-09-27, the
+(`VmHWM`) is the stages' and nothing else's. Measured on this code, 2026-09-27, the
 synthetic orbit with held-out arrays, 16 cameras, default chunking:
 
     gaussians   whole-splat quality + place    chunked quality + place + thumbnail + ground
-    250k        122 MB                          162 MB
-    1M          365 MB                          182 MB
-    4M          1,288 MB                        188 MB
-    8M          fails at a 1.5 GB limit         197 MB (81 s)
+    250k        114 MB                          162 MB
+    1M          328 MB                          184 MB
+    4M          1,067 MB                        182 MB
+    8M          fails at a 1.5 GB limit         193 MB (81 s)
 
-The whole-splat stages grew ~0.3 GB a million gaussians on this 14-property input (and
+The whole-splat stages grew ~0.25-0.3 GB a million gaussians on this 14-property input (and
 ~0.75 GB a million on SH3 input, apps/api/app/worker/README.md); the chunked ones hold
 fixed-size chunks, histograms, partitions and buffers, whose caps (`outofcore.BUDGET`,
 `outofcore.COLLECT`, `quality.OCCLUDER_BLOCK`, `quality.SAMPLE_BYTES`,

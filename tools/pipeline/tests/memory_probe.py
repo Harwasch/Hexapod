@@ -16,7 +16,7 @@ the executor, as the worker does. `whole` runs the frozen whole-splat quality st
 (`quality_in_memory.py`) and the whole-splat place; `whole-lane1` the whole-splat ingest,
 thumbnail and ground samples (`gaussians.read_splat`, `orient`, `render_thumbnail`,
 `ground_samples`) -- the before of the before/after. Each prints one JSON line: the peak
-resident set (`ru_maxrss`) of the process, which is what a machine's memory limit bounds,
+resident set (`VmHWM`) of the process, which is what a machine's memory limit bounds,
 and the seconds taken.
 
 `--small` shrinks the fixed-size buffers -- `outofcore`'s partition and collection sizes
@@ -52,8 +52,19 @@ STAGES: dict[str, dict[str, Any]] = {
 
 
 def peak_mb() -> float:
-    # Linux reports kilobytes.
-    return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0
+    """This process's own peak resident set, in MB.
+
+    `VmHWM` from /proc, not `ru_maxrss`: Linux carries `ru_maxrss` across `exec` from the
+    process that forked it, so a probe started by a 160 MB pytest reported 160 MB however
+    little it used itself. `VmHWM` belongs to the address space `exec` made.
+    """
+    try:
+        for line in Path("/proc/self/status").read_text().splitlines():
+            if line.startswith("VmHWM:"):
+                return int(line.split()[1]) / 1024.0
+    except OSError:
+        pass
+    return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0  # KB on Linux
 
 
 def make(root: Path, count: int, cameras: int, *, held: bool, sh3: bool) -> None:

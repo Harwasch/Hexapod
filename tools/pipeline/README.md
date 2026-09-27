@@ -550,23 +550,23 @@ each beside the path it replaced (for `quality`, a frozen copy of the old stage,
 `tests/quality_in_memory.py`) on a few hundred thousand gaussians cut into prime-sized
 chunks and requires the same bytes -- except a ground sample's longitude and latitude,
 whose cell mean is a float64 sum here and a float32 pairwise one in `np.mean` (under a
-micrometre). Peak memory, measured by `tests/memory_probe.py` in a process of its own
+micrometre). Peak memory (`VmHWM`), measured by `tests/memory_probe.py` in a process of its own
 (synthetic orbit, 16 cameras, held-out arrays):
 
 | gaussians | whole-splat quality + place | chunked quality + place + thumbnail + ground |
 | --- | --- | --- |
-| 250k | 122 MB | 162 MB |
-| 1M | 365 MB | 182 MB |
-| 4M | 1,288 MB | 188 MB |
-| 8M | fails under a 1.5 GB limit | 197 MB, 81 s |
+| 250k | 114 MB | 162 MB |
+| 1M | 328 MB | 184 MB |
+| 4M | 1,067 MB | 182 MB |
+| 8M | fails under a 1.5 GB limit | 193 MB, 81 s |
 
 Lane 1 on a phone's SH3 upload (gsplat's 59-float rows), `normalize` + `thumbnail` +
-`ground_samples`: 711 MB whole against 145 MB chunked at 1M gaussians, 1,386 MB against
-138 MB at 2M.
+`ground_samples`: 711 MB whole against 139 MB chunked at 1M gaussians, 1,386 MB against
+144 MB at 2M.
 
 `tests/test_bounded_memory.py` holds the scaling (150k against 600k gaussians, with the
 fixed-size buffers shrunk so both are past them: no growth, where the whole-splat path
-grows 136 MB) and, with `PIPELINE_BENCH=1`, the 8M run under a 1.5 GB address-space limit.
+grows 125 MB) and, with `PIPELINE_BENCH=1`, the 8M run under a 1.5 GB address-space limit.
 Each stage takes `chunk_gaussians` (2^18 rows by default); nothing it computes depends on
 it.
 
