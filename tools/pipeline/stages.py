@@ -36,7 +36,9 @@ import numpy.typing as npt
 import PIL
 import PIL.Image
 
+import convergence
 import exif
+import gaussian_budget
 import gaussians
 import global_sfm
 import holdout
@@ -922,6 +924,20 @@ def gsplat(ctx: StageContext) -> StageOutcome:
       `checkpoint/` (a phone's Refine sets it), on `init_schedule_scale` (0.5) of the
       schedule; with no usable seed it says why and trains as it would have.
       `init_seed.py` has the reasoning.
+    * `cap_max: auto` sizes MCMC's gaussian cap to the capture: its supported surface in
+      finest-view pixels, from the pose stage's sparse model, times `gaussian_density`
+      (x `density_scale`, a phone's quality tier), clamped to `budget_floor` and to the
+      smaller of the GPU's memory (`gpu_memory_gb`, at the training frames' real size) and
+      `budget_max`. An integer is an override, used as given. `gaussian_budget.py` has the
+      formula, the calibration and the memory model; `train_metrics.json`'s `budget` has
+      every input.
+    * `converge` ends training when held-out PSNR has stopped improving after
+      densification (`convergence.py`: `converge_every`, `converge_window`,
+      `converge_min_gain_db`), and lets a budget above 1M lengthen the maximum schedule
+      by up to 2x (`gaussian_budget.schedule_factor`). The trainer runs through
+      `converge_trainer.py`, which ends it with the trainer's own save;
+      `train_metrics.json`'s `convergence` has the held-out curve, the steps run of the
+      maximum, and why it stopped.
 
     `psnr`, `ssim` and `lpips` are all measured on gsplat's held-out `val` split -- every
     8th registered frame -- and `train_metrics.json` says so and how many frames that is.
@@ -984,6 +1000,37 @@ def gsplat(ctx: StageContext) -> StageOutcome:
             f"gsplat: training images at most {max_side} px on the long side "
             f"({train_size[0]}x{train_size[1]}); poses unchanged"
         )
+    strategy = str(ctx.param("strategy", "default"))
+    # The gaussian cap: `auto` measures the capture -- from the pose stage's own model,
+    # so before the ROI crop below rewrites the dataset's points -- at the size the
+    # trainer will really read its frames; an integer is used as given.
+    requested_cap = gaussian_budget.parse_cap(ctx.param("cap_max"))
+    frame_size, pixel_scale = _training_frame(dataset, data_factor)
+    budget = gaussian_budget.plan(
+        requested_cap,
+        model=poses,
+        train_size=frame_size,
+        pixel_scale=pixel_scale,
+        region_contains=_region_test(roi),
+        outside_weight=1.0 / training.ROI_OUTSIDE_EVERY,
+        density=float(ctx.param("gaussian_density", gaussian_budget.DEFAULT_DENSITY)),
+        density_scale=float(ctx.param("density_scale", 1.0)),
+        floor=int(ctx.param("budget_floor", gaussian_budget.DEFAULT_FLOOR)),
+        budget_max=_optional_int(ctx.param("budget_max")),
+        gpu_memory_gb=float(ctx.param("gpu_memory_gb", gaussian_budget.DEFAULT_GPU_MEMORY_GB)),
+    )
+    cap_max = None if budget is None else budget.cap
+    if budget is not None:
+        ctx.log(f"gsplat: {gaussian_budget.describe(budget)}")
+        if (
+            budget.mode == "explicit"
+            and budget.memory_ceiling is not None
+            and budget.cap > budget.memory_ceiling
+        ):
+            ctx.log(
+                f"gsplat: cap_max {budget.cap} is more than {budget.gpu_memory_gb:g} GB is "
+                f"modelled to hold at {frame_size} ({budget.memory_ceiling}); used as given"
+            )
     crop: training.RoiCrop | None = None
     if roi is not None:
         crop = training.crop_initial_points(dataset / "sparse" / "0", roi)
@@ -1000,8 +1047,47 @@ def gsplat(ctx: StageContext) -> StageOutcome:
         )
     # A Refine starts from the preview's splat when it left a seed (init_seed.py).
     seeded, steps_scaler, iterations = _seed_from_preview(
-        ctx, poses, dataset, roi, steps_scaler, full_iterations
+        ctx, poses, dataset, roi, steps_scaler, full_iterations, cap_max
     )
+    # Convergence: a held-out curve after densification, a stop when it is flat, and --
+    # because the tail can now end early -- a longer maximum for a bigger budget.
+    converge = _optional_bool(ctx.param("converge"), "converge")
+    rule = convergence.Rule(
+        every=int(ctx.param("converge_every", convergence.DEFAULT_EVERY)),
+        window=int(ctx.param("converge_window", convergence.DEFAULT_WINDOW)),
+        min_gain_db=float(ctx.param("converge_min_gain_db", convergence.DEFAULT_MIN_GAIN_DB)),
+    )
+    schedule_factor = 1.0
+    if converge and strategy == "mcmc" and cap_max is not None:
+        schedule_factor = gaussian_budget.schedule_factor(cap_max)
+    if schedule_factor != 1.0:
+        steps_scaler = round(steps_scaler * schedule_factor, 4)
+        iterations = training.scaled_steps(full_iterations, steps_scaler)
+        ctx.log(
+            f"gsplat: {cap_max} gaussians -> a maximum schedule {schedule_factor:g}x as long "
+            f"({steps_scaler:g} of {full_iterations} = {iterations} steps), ended early if "
+            f"held-out PSNR goes flat"
+        )
+    refine_stop = convergence.REFINE_STOP_ITER.get(strategy)
+    extra_evals = (
+        convergence.eval_steps(full_iterations, refine_stop, every=rule.every)
+        if converge and refine_stop is not None
+        else []
+    )
+    converge_status = _converge_status(
+        converge, strategy, refine_stop, full_iterations, bool(extra_evals)
+    )
+    if converge:
+        ctx.log(
+            f"gsplat: convergence {converge_status}"
+            + (
+                ""
+                if not extra_evals
+                else f": {len(extra_evals)} extra held-out evaluations; after densification "
+                f"(step {refine_stop} unscaled) it stops once PSNR gains under "
+                f"{rule.min_gain_db:g} dB over {rule.window} steps"
+            )
+        )
     registered = _registered_count(poses, images)
     train_frames, val_frames = training.held_out_split(registered)
     ctx.log(
@@ -1042,11 +1128,11 @@ def gsplat(ctx: StageContext) -> StageOutcome:
         trainer,
         dataset,
         result,
-        strategy=str(ctx.param("strategy", "default")),
+        strategy=strategy,
         max_steps=full_iterations,
         data_factor=data_factor,
         steps_scaler=steps_scaler,
-        cap_max=_optional_int(ctx.param("cap_max")),
+        cap_max=cap_max,
         antialiased=antialiased,
         opacity_reg=opacity_reg,
         depth_loss=depth_loss,
@@ -1054,8 +1140,17 @@ def gsplat(ctx: StageContext) -> StageOutcome:
         app_opt=app_opt,
         bilateral_grid=bilateral_grid,
         live_steps=live_steps,
+        eval_steps=extra_evals,
         extra=[str(value) for value in (ctx.param("extra_args") or [])],
     )
+    if extra_evals:
+        argv = training.converge_argv(
+            argv,
+            script=_optional_path(ctx.param("converge_script")) or CONVERGE_SCRIPT,
+            every=rule.every,
+            window=rule.window,
+            min_gain_db=rule.min_gain_db,
+        )
     with live.SplatWatch(
         result / "ply",
         ctx.checkpoint_dir / live.LIVE_DIR,
@@ -1106,7 +1201,7 @@ def gsplat(ctx: StageContext) -> StageOutcome:
         script=_optional_path(ctx.param("holdout_script")),
         budget_s=float(ctx.param("holdout_budget_s", holdout.DEFAULT_BUDGET_S)),
     )
-    _save_seed(ctx, splat.columns, poses, steps_scaler, iterations, seeded)
+    _save_seed(ctx, splat.columns, poses, steps_scaler, iterations, seeded, cap_max)
     metrics_document = training.parse_metrics(
         result,
         ctx.log_path.read_text(encoding="utf-8", errors="replace"),
@@ -1125,9 +1220,12 @@ def gsplat(ctx: StageContext) -> StageOutcome:
     # Every knob this run turned, beside the numbers it produced, so two runs of one
     # capture can be compared without reading their recipes.
     document["settings"] = {
-        "strategy": str(ctx.param("strategy", "default")),
-        "capMax": _optional_int(ctx.param("cap_max")),
+        "strategy": strategy,
+        "capMax": cap_max,
+        "capMaxRequested": requested_cap,
         "scheduleScale": steps_scaler,
+        "scheduleFactor": schedule_factor,
+        "converge": converge,
         "scheduleScaleRequested": requested_scale,
         "trainMaxSide": max_side,
         "trainImageSize": None if train_size is None else list(train_size),
@@ -1146,6 +1244,27 @@ def gsplat(ctx: StageContext) -> StageOutcome:
         if key in held_out
     }
     document["init"] = None if seeded is None else seeded.to_dict()
+    # The gaussian budget, every input to it, and the bound that applied.
+    document["budget"] = None if budget is None else budget.to_dict()
+    # How long it trained and why: the held-out curve, the steps run of the maximum, and
+    # whether (and why) the convergence rule ended it early.
+    curve = convergence.read_curve(result / "stats")
+    report = convergence.read_report(result) if extra_evals else None
+    stopped_early = bool(report and report.get("stoppedEarly"))
+    document["convergence"] = {
+        "enabled": converge,
+        "status": converge_status,
+        "rule": rule.to_dict() if converge else None,
+        "refineStopIter": (
+            None if refine_stop is None else training.scaled_steps(refine_stop, steps_scaler)
+        ),
+        "stepsMax": iterations,
+        "stepsRun": metrics_document.iterations,
+        "stoppedEarly": stopped_early,
+        "reason": _stop_reason(report),
+        "hook": report,
+        "curve": curve,
+    }
     document["roi"] = (
         None
         if roi is None or crop is None
@@ -1180,6 +1299,19 @@ def gsplat(ctx: StageContext) -> StageOutcome:
     }
     if seeded is not None:
         metrics["seedPoints"] = seeded.seeded
+    if budget is not None:
+        metrics["gaussianBudget"] = budget.cap
+        metrics["budgetMode"] = budget.mode
+        metrics["budgetClamp"] = budget.clamp or "none"
+        if budget.mode == "auto":
+            metrics["budgetFootprints"] = round(budget.footprints)
+            metrics["budgetVoxels"] = budget.inside.voxels
+    metrics["stepsMax"] = iterations
+    if metrics_document.iterations is not None:
+        metrics["stepsRun"] = metrics_document.iterations
+    if converge:
+        metrics["stoppedEarly"] = stopped_early
+        metrics["heldOutEvaluations"] = len(curve)
     if metrics_document.iterations is not None:
         metrics["iterations"] = metrics_document.iterations
     for name, value in (
@@ -1200,6 +1332,75 @@ def gsplat(ctx: StageContext) -> StageOutcome:
         metrics["gaussiansTrained"] = trained_count
     metrics["holdoutError"] = str(held_out.get("status"))
     return StageOutcome(metrics=metrics, summary=f"{in_ply} gaussians trained")
+
+
+#: The wrapper that ends a converged run (`convergence.py`), run with the trainer's own
+#: interpreter in place of the trainer; beside this file, as `holdout_error.py` is.
+CONVERGE_SCRIPT = Path(__file__).resolve().parent / "converge_trainer.py"
+
+
+def _training_frame(dataset: Path, data_factor: int) -> tuple[tuple[int, int] | None, float | None]:
+    """The size of the frames the trainer reads, and that over the posed camera's width.
+
+    As v1.5.3's parser decides it: the first registered image by name against its own
+    COLMAP camera, one ratio for every camera, and `data_factor` dividing it (the parser
+    reads `images_<factor>/`). So frames normalize kept at 2,400 px, or shrank to the
+    preview's 800, are budgeted -- and their memory ceiling modelled -- at that size.
+    (None, None) when either side cannot be read, a hand-made or a test's placeholder
+    dataset, which the budget reports as a fallback.
+    """
+    try:
+        model = sfm.read_model(dataset / "sparse" / "0")
+        cameras = {camera.id: camera for camera in model.cameras}
+        for image in model.images:  # sorted by name, as the parser sorts them
+            path = dataset / "images" / image.name
+            camera = cameras.get(image.camera_id)
+            if path.is_file() and camera is not None and camera.width > 0:
+                width, height = _image_size(path)
+                factor = max(1, data_factor)
+                size = (max(1, round(width / factor)), max(1, round(height / factor)))
+                return size, size[0] / camera.width
+    except (OSError, ValueError, KeyError, IndexError, struct.error):
+        return None, None
+    return None, None
+
+
+def _region_test(
+    region: training.Roi | support_mask.SupportMask | None,
+) -> Callable[[Any], Any] | None:
+    """A Refine's region as the budget's membership test over (n, 3) points."""
+    if region is None:
+        return None
+    return lambda xyz: training.in_region(region, xyz)
+
+
+def _converge_status(
+    converge: bool, strategy: str, refine_stop: int | None, full_iterations: int, active: bool
+) -> str:
+    if not converge:
+        return "off"
+    if refine_stop is None:
+        return f"not applied: strategy {strategy!r} has no densification end this knows"
+    if not active:
+        return (
+            f"not applied: densification runs to step {refine_stop} of this "
+            f"{full_iterations}-step schedule, so there is no tail to end early"
+        )
+    return "on"
+
+
+def _stop_reason(report: dict[str, object] | None) -> str | None:
+    """Why the run ended where it did, from `converge.json`."""
+    if report is None:
+        return None
+    if report.get("stoppedEarly"):
+        return (
+            f"held-out PSNR gained {report.get('gainDb')} dB over the last "
+            f"{report.get('windowSteps')} steps, under the rule's minimum"
+        )
+    if not report.get("hooked"):
+        return f"ran the full schedule: {report.get('reason')}"
+    return f"ran the full schedule (last decision: {report.get('lastDecision')})"
 
 
 def _registered_count(poses: Path, fallback: int) -> int:
@@ -1232,6 +1433,7 @@ def _seed_from_preview(
     region: training.Roi | support_mask.SupportMask | None,
     steps_scaler: float,
     full_iterations: int,
+    cap_max: int | None,
 ) -> tuple[init_seed.SeedApplied | None, float, int]:
     """`init_from: preview`: add the last run's seed to the initial points, and shorten
     the schedule to `init_schedule_scale`. Unchanged when not asked or when no seed fits."""
@@ -1248,9 +1450,7 @@ def _seed_from_preview(
             f"{steps_scaler:g} schedule instead"
         )
         return None, steps_scaler, iterations
-    budget = init_seed.budget_for(
-        _optional_int(ctx.param("cap_max")), _optional_int(ctx.param("init_max_points"))
-    )
+    budget = init_seed.budget_for(cap_max, _optional_int(ctx.param("init_max_points")))
     applied = init_seed.apply(dataset / "sparse" / "0", seed, region, budget=budget)
     scaler = training.check_schedule_scale(
         init_seed.schedule_for(_optional_float(ctx.param("init_schedule_scale")))
@@ -1272,12 +1472,13 @@ def _save_seed(
     steps_scaler: float,
     iterations: int,
     seeded: init_seed.SeedApplied | None,
+    cap_max: int | None,
 ) -> None:
     """Leave this run's splat in `checkpoint/` for a later Refine. Never fails the run."""
     settings = {
         "scheduleScale": steps_scaler,
         "iterations": iterations,
-        "capMax": _optional_int(ctx.param("cap_max")),
+        "capMax": cap_max,
         "trainMaxSide": _optional_int(ctx.param("train_max_side")),
         "initFrom": "sfm" if seeded is None else "preview",
     }

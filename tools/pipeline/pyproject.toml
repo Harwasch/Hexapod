@@ -85,7 +85,10 @@ known-first-party = [
 # 3.11 was never a version this code actually had to run on.
 python_version = "3.12"
 strict = true
-exclude = ["\\.venv"]
+# tests/loop_stand_in/ holds a stand-in `gsplat` package and `simple_trainer.py`, only ever
+# imported by converge_trainer.py from the trainer's directory at run time. Checked as
+# part of this tree, its `gsplat` would shadow the real one's `Any` for every module here.
+exclude = ["\\.venv", "^tests/loop_stand_in/"]
 # splat_tiles lives in the sibling uv project tools/captures, which is `package = false`
 # and so cannot be a path dependency. captures_bridge.py puts it on sys.path at runtime;
 # this is how mypy sees the same file, so the seam is type-checked rather than Any.

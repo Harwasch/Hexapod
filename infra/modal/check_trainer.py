@@ -37,6 +37,7 @@ def main() -> int:
     sys.path.insert(0, str(trainer.parent))
     sys.path.insert(0, str(pipeline))
 
+    import convergence  # the stopping rule's schedule; plain Python, 3.10-compatible
     import training  # the pipeline's own argv builder; plain Python, 3.10-compatible
 
     try:
@@ -111,6 +112,23 @@ def main() -> int:
             bilateral_grid=True,
         )
     )
+    # With `converge`: the held-out evaluations the stopping rule reads, as extra
+    # `--eval_steps` after the final one. What `converge_trainer.py` hands the trainer is
+    # this argv from the strategy on, unchanged.
+    evals = convergence.eval_steps(30_000, convergence.REFINE_STOP_ITER["mcmc"])
+    converging: Any = parse(
+        training.gsplat_argv(
+            sys.executable,
+            trainer,
+            Path("/data"),
+            Path("/result"),
+            strategy="mcmc",
+            max_steps=30_000,
+            steps_scaler=0.5,
+            cap_max=1_500_000,
+            eval_steps=evals,
+        )
+    )
     # The benchmark's argv (tools/pipeline/experiments/benchmark.py): gsplat's 3DGS
     # reproduction, the full schedule, LPIPS on VGG as the paper measured it.
     bench: Any = parse(
@@ -154,6 +172,16 @@ def main() -> int:
         "save_ply": cfg.save_ply is True,
         "ply_steps": list(cfg.ply_steps) == [500],
         "eval_steps": list(cfg.eval_steps) == [500],
+        # Scaled by the trainer as the rule assumes, and densification ending where
+        # `convergence.REFINE_STOP_ITER` says each strategy's does.
+        "converge eval_steps": (
+            list(converging.eval_steps) == [int(i * 0.5) for i in [30_000, *evals]]
+        ),
+        "refine_stop_iter": (
+            converging.strategy.refine_stop_iter
+            == int(convergence.REFINE_STOP_ITER["mcmc"] * 0.5)
+            and cfg.strategy.refine_stop_iter == convergence.REFINE_STOP_ITER["default"]
+        ),
         "ckpt": cfg.ckpt is None,
     }
     failed = sorted(name for name, ok in checks.items() if not ok)

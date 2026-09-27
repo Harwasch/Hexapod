@@ -97,7 +97,29 @@ stages:
       # bounded by the cap rather than by how enthusiastically a capture densifies (the
       # same 4 photos grew 894k gaussians; `package` keeps 400k of any of them).
       strategy: mcmc
-      cap_max: 500000
+      # The ceiling is sized to the capture, not fixed: a fixed 500k was binding on all
+      # nine spool-table runs (a ~2 m table spread thin) while a small object got more
+      # than it had detail for. `auto` measures the supported surface in finest-view
+      # pixels from the sparse model (gaussian_budget.py) -- a Refine's support mask or
+      # roi only -- at the size training reads the frames, and gives `gaussian_density`
+      # gaussians per pixel of it: 0.1 puts 3DGS's Truck at 1.52M, about 3DGS's own count
+      # there and 3x the 500k that already matched its PSNR. Clamped to `budget_floor`
+      # (the preview's 200k) and to the smaller of the L4's memory (`gpu_memory_gb`, at
+      # the real frame size: ~8.7M at 1600 px, ~5.4M at 2400) and `budget_max`: 2M, what
+      # `place`/`package` on the 2 GB worker hold (0.75 GB a million, measured). An
+      # integer here, or in a run's params, is used as given.
+      cap_max: auto
+      gaussian_density: 0.1
+      budget_floor: 200000
+      budget_max: 2000000
+      gpu_memory_gb: 24
+      # Stop when training has converged: after densification ends (25k of 30k, scaled
+      # with the schedule; never before it), held-out PSNR is measured every 500 steps,
+      # and a run whose best of the last 2,000 steps is under 0.05 dB above its best
+      # before them stops -- with the trainer's own save, so the PLY is where it always
+      # is. A budget over 1M may run a longer maximum (sqrt(budget / 1M), at most 2x),
+      # which this then ends early if it went flat. convergence.py has the reasoning.
+      converge: true
       # After training, on the same GPU: render every held-out frame (every 8th, never
       # trained on), compare it with the photo, and share each pixel's error out among
       # the gaussians that painted it (holdout.py). Writes `holdout/`, which `quality`
@@ -108,11 +130,14 @@ stages:
       #
       #   Preview: {schedule_scale: 0.1, cap_max: 200000, train_max_side: 800}
       #     A tenth of the schedule (3,000 steps, decay and densification included) on
-      #     frames a quarter the pixels. For "did this capture work at all" in minutes.
+      #     frames a quarter the pixels. For "did this capture work at all" in minutes;
+      #     its fixed cap keeps it bounded whatever the capture measures.
       #   Refine:  {schedule_scale: 1.0}
       #     The whole schedule even for a capture under `schedule_full_at` frames. The
       #     phone's Refine also sets `init_from: preview`: start from the preview's own
       #     splat (init_seed.py) on `init_schedule_scale` (0.5) of the schedule instead.
+      #   A phone's quality tier scales the budget: `density_scale` 0.5 (Quick), 1
+      #   (Standard), 2 (Best).
       #
       # Options, deliberately not defaults of either (`training.gsplat_argv` has each
       # one's mechanics):

@@ -493,6 +493,37 @@ on the first run**: `train_metrics.json`'s `init` block (seed points, budget) an
 `init_schedule_scale` (the phone may send it) before abandoning the seed; `init_from:
 sfm` restores the old behaviour.
 
+## How many gaussians, and for how long
+
+`train`'s gaussian cap is `cap_max: auto` (`gaussian_budget.py`): the supported surface
+counted in its own finest-view pixels -- per sparse point, depth / focal for the camera
+that saw it largest, at the size training reads the frames; voxels of 32 of those
+footprints, one face each -- times `gaussian_density` 0.1. A Refine counts its support
+mask in full and the rest at a tenth. Clamped to the preview's 200k and to the smaller of
+the L4's memory at that frame size (gsplat's own 1M/2M/3M MCMC measurements: ~8.7M at
+1600 px, ~5.4M at 2400) and `budget_max` 2M (what `place`/`package` on the 2 GB worker
+hold). Measured offline, 2026-09-27: 3DGS's Truck model at its 979 px, **1.52M** (15.2M
+footprints^2; the calibration point); four local phone/photo models at 1600 px, 0.42M-0.81M.
+An integer `cap_max` is an override (the preview's 200k); a phone tier multiplies the
+budget (`density_scale`: Quick 0.5, Best 2).
+
+`converge: true` (`convergence.py`, `converge_trainer.py`) runs the trainer through a
+wrapper that, after MCMC's densification ends (25k of 30k, scaled), evaluates the held-out
+split every 500 steps and stops once the best PSNR of the last 2,000 steps is under
+0.05 dB above the best before them -- by adding the next step to the trainer's own save,
+export and evaluation lists, so the PLY and stats land where they always do. A budget over
+1M may run a longer maximum, `sqrt(budget / 1M)` up to 2x. `train_metrics.json` has
+`budget` (every input, and which clamp applied) and `convergence` (the held-out curve,
+`stepsRun` of `stepsMax`, whether and why it stopped).
+
+**Not yet run on a GPU. Check on the first run**: that `convergence.hook.hooked` is true
+(the wrapper found gsplat's `cli` and the trainer's `Runner`); `peakMemoryGb` against the
+memory model at the budget it chose; `trainSeconds` for a 1.5-2M budget on the L4
+(~35-50 min at 30k, extrapolated from gsplat's A100 table and the spool's 21 min at
+500k); where the curve flattens relative to `refineStopIter` -- the rule can only save
+the last sixth of a schedule, so a curve still rising at the end says the maximum, not
+the rule, is what binds; and `[benchmark:recipe]` against `[benchmark:recipe-500k]`.
+
 ## Lane 1
 
 ```
