@@ -37,6 +37,7 @@ import PIL.Image
 
 import exif
 import gaussians
+import init_seed
 import quality
 import sfm
 import support_mask
@@ -818,7 +819,11 @@ def gsplat(ctx: StageContext) -> StageOutcome:
       (`training.gsplat_argv` says what each does);
     * `roi` (`{"center": [x, y, z], "radius": r}`, COLMAP frame) crops the initial points
       to the sphere before training and the trained gaussians to 1.5 radii after it;
-    * `variant` is `3dgs`; `2dgs` is refused, and `training.py` says why.
+    * `variant` is `3dgs`; `2dgs` is refused, and `training.py` says why;
+    * `init_from: preview` starts from the splat the previous run of this stage left in
+      `checkpoint/` (a phone's Refine sets it), on `init_schedule_scale` (0.5) of the
+      schedule; with no usable seed it says why and trains as it would have.
+      `init_seed.py` has the reasoning.
 
     `psnr`, `ssim` and `lpips` are all measured on gsplat's held-out `val` split -- every
     8th registered frame -- and `train_metrics.json` says so and how many frames that is.
@@ -895,6 +900,10 @@ def gsplat(ctx: StageContext) -> StageOutcome:
             f"{crop.outside_sampled} sampled outside, {crop.kept_for_coverage} kept so "
             f"every frame still sees some)"
         )
+    # A Refine starts from the preview's splat when it left a seed (init_seed.py).
+    seeded, steps_scaler, iterations = _seed_from_preview(
+        ctx, poses, dataset, roi, steps_scaler, full_iterations
+    )
     registered = _registered_count(poses, images)
     train_frames, val_frames = training.held_out_split(registered)
     ctx.log(
@@ -958,6 +967,7 @@ def gsplat(ctx: StageContext) -> StageOutcome:
         )
     written = gaussians.write_ply(ctx.output(TRAINED_PLY.name), columns)
     in_ply = int(columns["x"].shape[0])
+    _save_seed(ctx, splat.columns, poses, steps_scaler, iterations, seeded)
     metrics_document = training.parse_metrics(
         result,
         ctx.log_path.read_text(encoding="utf-8", errors="replace"),
@@ -986,7 +996,9 @@ def gsplat(ctx: StageContext) -> StageOutcome:
         "opacityReg": opacity_reg,
         "depthLoss": depth_loss,
         "variant": variant,
+        "initFrom": "sfm" if seeded is None else "preview",
     }
+    document["init"] = None if seeded is None else seeded.to_dict()
     document["roi"] = (
         None
         if roi is None or crop is None
@@ -1017,7 +1029,10 @@ def gsplat(ctx: StageContext) -> StageOutcome:
         "metricsSplit": f"val: every {training.TEST_EVERY}th frame",
         "valFrames": val_frames,
         "trainFrames": train_frames,
+        "initFrom": "sfm" if seeded is None else "preview",
     }
+    if seeded is not None:
+        metrics["seedPoints"] = seeded.seeded
     if metrics_document.iterations is not None:
         metrics["iterations"] = metrics_document.iterations
     for name, value in (
@@ -1044,6 +1059,77 @@ def _registered_count(poses: Path, fallback: int) -> int:
         if isinstance(value, int) and not isinstance(value, bool):
             return value
     return fallback
+
+
+def _seed_from_preview(
+    ctx: StageContext,
+    poses: Path,
+    dataset: Path,
+    region: training.Roi | support_mask.SupportMask | None,
+    steps_scaler: float,
+    full_iterations: int,
+) -> tuple[init_seed.SeedApplied | None, float, int]:
+    """`init_from: preview`: add the last run's seed to the initial points, and shorten
+    the schedule to `init_schedule_scale`. Unchanged when not asked or when no seed fits."""
+    init_from = str(ctx.param("init_from", "sfm"))
+    if init_from not in ("sfm", "preview"):
+        raise ValueError(f"init_from must be sfm or preview, not {init_from!r}")
+    iterations = training.scaled_steps(full_iterations, steps_scaler)
+    if init_from == "sfm":
+        return None, steps_scaler, iterations
+    seed, why = init_seed.load(ctx.checkpoint_dir, poses)
+    if seed is None:
+        ctx.log(
+            f"gsplat: init_from=preview, but {why}; starting from COLMAP's points on the "
+            f"{steps_scaler:g} schedule instead"
+        )
+        return None, steps_scaler, iterations
+    budget = init_seed.budget_for(
+        _optional_int(ctx.param("cap_max")), _optional_int(ctx.param("init_max_points"))
+    )
+    applied = init_seed.apply(dataset / "sparse" / "0", seed, region, budget=budget)
+    scaler = training.check_schedule_scale(
+        init_seed.schedule_for(_optional_float(ctx.param("init_schedule_scale")))
+    )
+    iterations = training.scaled_steps(full_iterations, scaler)
+    ctx.log(
+        f"gsplat: init_from=preview: {applied.seeded} of the preview's {seed.count} visible "
+        f"gaussians added to {applied.sfm_points} SfM points ({applied.inside} in the "
+        f"region, {applied.outside_sampled} sampled outside, budget {budget}); schedule "
+        f"{steps_scaler:g} -> {scaler:g} = {iterations} steps"
+    )
+    return applied, scaler, iterations
+
+
+def _save_seed(
+    ctx: StageContext,
+    columns: dict[str, Any],
+    poses: Path,
+    steps_scaler: float,
+    iterations: int,
+    seeded: init_seed.SeedApplied | None,
+) -> None:
+    """Leave this run's splat in `checkpoint/` for a later Refine. Never fails the run."""
+    settings = {
+        "scheduleScale": steps_scaler,
+        "iterations": iterations,
+        "capMax": _optional_int(ctx.param("cap_max")),
+        "trainMaxSide": _optional_int(ctx.param("train_max_side")),
+        "initFrom": "sfm" if seeded is None else "preview",
+    }
+    try:
+        count = init_seed.save(
+            ctx.checkpoint_dir,
+            columns,
+            poses,
+            settings=settings,
+            sh_c0=gaussians.SH_C0,
+            scratch=ctx.work_dir / "seed",
+        )
+    except (OSError, KeyError, ValueError) as error:
+        ctx.log(f"gsplat: could not leave a seed for a later Refine: {error!r}")
+        return
+    ctx.log(f"gsplat: left a {count}-gaussian seed in checkpoint/ for a later Refine")
 
 
 def _optional_bool(value: object, name: str) -> bool:
