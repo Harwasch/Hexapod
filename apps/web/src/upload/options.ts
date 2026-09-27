@@ -71,8 +71,12 @@ const PHOTO_SIZE = [
 
 const VIDEO_FPS = [
   { value: "2", label: "2 / s", hint: "For a slow walk-around." },
-  { value: "4", label: "4 / s", hint: "Frames taken from a video, per second of it." },
-  { value: "8", label: "8 / s", hint: "For fast movement; more frames to match." },
+  { value: "4", label: "4 / s", hint: "Fewer frames: faster camera solving, less detail." },
+  {
+    value: "8",
+    label: "8 / s",
+    hint: "The default. Measurably sharper than 4 / s for a few minutes more solving.",
+  },
 ] as const satisfies readonly Choice<string>[];
 
 const UP_AXIS = [
@@ -102,7 +106,7 @@ export const DEFAULTS: Options = {
   quality: "standard",
   bar: "strict",
   photoSize: "1600",
-  videoFps: "4",
+  videoFps: "8",
   upAxis: "",
   headingDeg: 0,
   detail: "400000",
@@ -164,7 +168,9 @@ export function summarise(options: Options): string {
   ].join(" · ");
 }
 
-const STORAGE = "twin.phoneOptions";
+// Versioned: v1 saved every choice, defaults included, so a phone that had opened the
+// page kept 4 / s after the default became 8 / s (measured sharper, 2026-09-27).
+const STORAGE = "twin.phoneOptions.v2";
 
 export function loadOptions(): Options {
   try {

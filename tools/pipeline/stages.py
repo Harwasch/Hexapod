@@ -326,6 +326,10 @@ def ffmpeg_frames(ctx: StageContext) -> StageOutcome:
     fps = float(ctx.param("fps", 4))
     keep = int(ctx.param("keep", 400))
     select = str(ctx.param("select", "sharpness"))
+    # A video's frames are matched sequentially (linear in frames), a photo set's
+    # exhaustively (quadratic), so a video can afford more of them: `keep_video`, when
+    # set, is a video's cap and `keep` stays the photos'.
+    keep_video = _optional_int(ctx.param("keep_video"))
     if select not in SELECT_MODES:
         raise ValueError(
             f"select={select!r} is not one of {', '.join(SELECT_MODES)}. In particular "
@@ -353,6 +357,8 @@ def ffmpeg_frames(ctx: StageContext) -> StageOutcome:
             )
         )
         candidates = sorted(extracted.glob("frame_*.jpg"))
+        if keep_video is not None:
+            keep = keep_video
     else:
         candidates = list(source.images)
     if not candidates:

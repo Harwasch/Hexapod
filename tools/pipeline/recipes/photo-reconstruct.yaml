@@ -17,7 +17,11 @@ stages:
   - id: normalize
     impl: ffmpeg_frames
     params:
-      fps: 4
+      # 8, not 4: on the spool capture (experiments/run_variants.py, 2026-09-27) twice the
+      # frames gave LPIPS 0.148 against 0.174 and kept 41% against 38% -- six times the
+      # run-to-run noise -- for $0.03 more and ~8 min more pose. No training switch
+      # (antialiased, depth loss, bilateral grid, pose opt, opacity reg) beat the noise.
+      fps: 8
       # Ranked by variance-of-Laplacian, never an absolute threshold: A0 measured a 101x
       # within-clip dynamic range, so no cutoff transfers between scenes. Windowed, so
       # that keeping a quarter of a minute's candidates cannot drop a blurred side.
@@ -28,6 +32,9 @@ stages:
       # matched sequentially (linear), but a photo set, and the fallback when sequential
       # registers too few, are still exhaustive -- so the ceiling stays where that fits.
       keep: 100
+      # A video's cap. Its frames are matched sequentially, linear in frames, so 180
+      # (~22 s at 8 fps) posed in 12 min on the spool capture.
+      keep_video: 180
       # Long side, in pixels, for every frame: photos arrive at full sensor size (an
       # iPhone's 5712x4284) and 4K video at 3840. A splat holds no more detail than
       # this from a phone, and training on 24 MP frames multiplies the GPU time. Pose

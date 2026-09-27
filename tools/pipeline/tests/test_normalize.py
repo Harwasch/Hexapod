@@ -534,3 +534,19 @@ def test_video_frames_are_bounded_on_the_long_side_even_in_portrait() -> None:
     chain = argv[argv.index("-vf") + 1]
     assert "if(gte(iw,ih),min(1600,iw),-2)" in chain
     assert "if(gte(iw,ih),-2,min(1600,ih))" in chain
+
+
+def test_a_video_is_capped_by_keep_video_and_photos_by_keep(tmp_path: Path) -> None:
+    """Sequential matching lets a video keep more frames than an exhaustively matched set."""
+    clip = tmp_path / "clip"
+    clip.mkdir()
+    make_clip(clip / "clip.mp4")
+    workdir = run_normalize(tmp_path / "v", {"fps": 10, "keep": 2, "keep_video": 5}, clip)
+    assert len(list((workdir.out_dir("normalize") / "frames").iterdir())) == 5
+
+    stills = tmp_path / "stills"
+    stills.mkdir()
+    for index in range(6):
+        _frame(index, blurred=False).save(stills / f"IMG_{index:04d}.jpg")
+    workdir = run_normalize(tmp_path / "p", {"keep": 2, "keep_video": 5}, stills)
+    assert len(list((workdir.out_dir("normalize") / "frames").iterdir())) == 2
