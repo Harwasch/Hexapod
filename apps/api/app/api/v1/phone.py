@@ -49,12 +49,14 @@ Rule = tuple[float, float] | frozenset[str] | Literal["flag", "roi"]
 PHONE_OPTIONS: dict[str, dict[str, dict[str, Rule]]] = {
     "photo-reconstruct": {
         # The long side frames are shrunk to before pose and training; frames per second
-        # taken from a video.
-        "normalize": {"max_side": (800, 4000), "fps": (1, 10)},
+        # taken from a video, and how many of them are kept (the recipe keeps 100; more
+        # is what a higher fps is for, and pose's exhaustive fallback is quadratic in it).
+        "normalize": {"max_side": (800, 4000), "fps": (1, 10), "keep": (20, 200)},
         # The training schedule (`training.schedule_scale`) and the gaussian cap; then the
         # preview's and Refine's knobs: a forced schedule scale, the training image size,
         # the region to train inside (COLMAP frame, from a preview's quality stage), and
-        # three quality switches.
+        # gsplat's quality switches -- the last three being the phone-capture ones: pose
+        # refinement, per-image appearance, per-image colour (bilateral grid).
         "train": {
             "schedule_full_at": (0, 400),
             "schedule_floor": (0.1, 1.0),
@@ -65,6 +67,9 @@ PHONE_OPTIONS: dict[str, dict[str, dict[str, Rule]]] = {
             "antialiased": FLAG,
             "depth_loss": FLAG,
             "opacity_reg": (0.0, 0.05),
+            "pose_opt": FLAG,
+            "app_opt": FLAG,
+            "bilateral_grid": FLAG,
         },
         # The quality bar: what is kept, and whether this run is a preview or a refine.
         "quality": {"bar": frozenset(QUALITY_BARS), "mode": frozenset(QUALITY_MODES)},

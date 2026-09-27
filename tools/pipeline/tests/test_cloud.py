@@ -466,6 +466,7 @@ def test_every_rate_says_where_it_came_from_and_no_tier_is_priced_by_guess() -> 
         "modal.com/pricing, read 2026-09-22",
         "runpod.io/pricing, read 2026-09-22",
         "modal.com/pricing (4 cores + 8 GiB), read 2026-09-23",
+        "modal.com/pricing ($0.000542/s), read 2026-09-27",
     }
     # Every provider still has the surveyed A100 hour the console's column is built on.
     for entry in PROVIDERS:

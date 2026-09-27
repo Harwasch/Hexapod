@@ -814,8 +814,9 @@ def gsplat(ctx: StageContext) -> StageOutcome:
     * `schedule_scale` (0.05-1.0) replaces the fraction `schedule_full_at` would compute;
     * `train_max_side` shrinks the frames the trainer reads, not the poses
       (`training.build_dataset`);
-    * `antialiased`, `opacity_reg`, `depth_loss` are gsplat's own switches
-      (`training.gsplat_argv` says what each does);
+    * `antialiased`, `opacity_reg`, `depth_loss`, `pose_opt`, `app_opt` and
+      `bilateral_grid` are gsplat's own switches (`training.gsplat_argv` says what each
+      does);
     * `roi` (`{"center": [x, y, z], "radius": r}`, COLMAP frame) crops the initial points
       to the sphere before training and the trained gaussians to 1.5 radii after it;
     * `variant` is `3dgs`; `2dgs` is refused, and `training.py` says why.
@@ -920,6 +921,9 @@ def gsplat(ctx: StageContext) -> StageOutcome:
     antialiased = _optional_bool(ctx.param("antialiased"), "antialiased")
     depth_loss = _optional_bool(ctx.param("depth_loss"), "depth_loss")
     opacity_reg = _optional_float(ctx.param("opacity_reg"))
+    pose_opt = _optional_bool(ctx.param("pose_opt"), "pose_opt")
+    app_opt = _optional_bool(ctx.param("app_opt"), "app_opt")
+    bilateral_grid = _optional_bool(ctx.param("bilateral_grid"), "bilateral_grid")
     ctx.run(
         training.gsplat_argv(
             training.trainer_python(ctx.param("python")),
@@ -934,6 +938,9 @@ def gsplat(ctx: StageContext) -> StageOutcome:
             antialiased=antialiased,
             opacity_reg=opacity_reg,
             depth_loss=depth_loss,
+            pose_opt=pose_opt,
+            app_opt=app_opt,
+            bilateral_grid=bilateral_grid,
             extra=[str(value) for value in (ctx.param("extra_args") or [])],
         )
     )
@@ -985,6 +992,9 @@ def gsplat(ctx: StageContext) -> StageOutcome:
         "antialiased": antialiased,
         "opacityReg": opacity_reg,
         "depthLoss": depth_loss,
+        "poseOpt": pose_opt,
+        "appOpt": app_opt,
+        "bilateralGrid": bilateral_grid,
         "variant": variant,
     }
     document["roi"] = (
@@ -1025,6 +1035,10 @@ def gsplat(ctx: StageContext) -> StageOutcome:
         ("ssim", metrics_document.ssim),
         ("lpips", metrics_document.lpips),
         ("trainSeconds", metrics_document.train_seconds),
+        # Only with a bilateral grid: the same val frames after a per-image colour fit.
+        ("ccPsnr", metrics_document.cc_psnr),
+        ("ccSsim", metrics_document.cc_ssim),
+        ("ccLpips", metrics_document.cc_lpips),
     ):
         if value is not None:
             metrics[name] = value

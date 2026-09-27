@@ -114,10 +114,13 @@ _STEP_RE = re.compile(r"(\d+)")
 #: `print("Step: ", step, stats)` at each save step, where `stats` is a dict holding
 #: `num_GS` -- read from the source, not from a run.
 _STDOUT_GS_RE = re.compile(r"Step:\s+(\d+)\s+\{[^}]*'num_GS':\s*(\d+)")
-_STDOUT_PSNR_RE = re.compile(r"PSNR:\s*([0-9.]+)")
+#: `(?<!CC_)` because with `--use_bilateral_grid` the same line goes on with
+#: `CC_PSNR: ..., CC_SSIM: ..., CC_LPIPS: ...` (the colour-corrected numbers), and without
+#: it the last match of each pattern would be the corrected one.
+_STDOUT_PSNR_RE = re.compile(r"(?<!CC_)PSNR:\s*([0-9.]+)")
 #: The rest of `eval()`'s line: `PSNR: 26.110, SSIM: 0.8410, LPIPS: 0.172 Time: ...`.
-_STDOUT_SSIM_RE = re.compile(r"PSNR:[^\n]*?SSIM:\s*([0-9.]+)")
-_STDOUT_LPIPS_RE = re.compile(r"PSNR:[^\n]*?LPIPS:\s*([0-9.]+)")
+_STDOUT_SSIM_RE = re.compile(r"(?<!CC_)PSNR:[^\n]*?(?<!CC_)SSIM:\s*([0-9.]+)")
+_STDOUT_LPIPS_RE = re.compile(r"(?<!CC_)PSNR:[^\n]*?(?<!CC_)LPIPS:\s*([0-9.]+)")
 
 #: The gsplat release every flag and file name here was read from.
 GSPLAT_VERSION = "1.5.3"
@@ -408,6 +411,9 @@ def gsplat_argv(
     antialiased: bool = False,
     opacity_reg: float | None = None,
     depth_loss: bool = False,
+    pose_opt: bool = False,
+    app_opt: bool = False,
+    bilateral_grid: bool = False,
     extra: Sequence[str] = (),
 ) -> list[str]:
     """The command line, built in one place so a test can read it without a GPU.
@@ -456,6 +462,28 @@ def gsplat_argv(
       rendered expected depth is pulled toward theirs, in disparity, weighted
       `depth_lambda` 0.01. No extra dataset is needed; the model the pose stage wrote
       already carries the tracks.
+
+    And three that phone captures are expected to need -- each off until
+    `experiments/run_variants.py` has measured it on a real capture -- read from v1.5.3's
+    `Config` and `Runner`:
+
+    * `--pose_opt` learns a per-training-image pose correction (`CameraOptModule`: a
+      translation and a 6D rotation delta, zero-initialised, lr 1e-5 decayed to 1% over
+      the run, weight decay 1e-6). The splat stays in the frame the poses are in; only
+      the training cameras move. Held-out frames are rendered from their COLMAP poses
+      uncorrected, so `val` PSNR shows the benefit only through a better splat, never
+      through a better-fitted val camera.
+    * `--app_opt` learns a per-image appearance embedding (`AppearanceOptModule`, 16-dim,
+      plus a 32-dim feature per gaussian) that absorbs exposure / white-balance drift.
+      The PLY is *baked*: `sh0` is the colour under a zero embedding viewed head-on, and
+      `shN` is empty, so the export is degree 0 -- which is all `canonical.ply` carries
+      anyway (`gaussians.CANONICAL_PROPERTIES`). Held-out frames render with the zero
+      embedding.
+    * `--use_bilateral_grid` fits a 16x16x8 bilateral grid per training image (BilaRF's
+      colour model, `examples/lib_bilagrid.py`: plain torch plus `tensorly`, both in the
+      training image) to the render before the loss. Nothing of it reaches the PLY.
+      `eval()` then reports the raw metrics *and* colour-corrected ones (`cc_psnr`, ...),
+      which `parse_metrics` keeps as `colorCorrected`.
     """
     steps = str(max_steps)
     argv = [
@@ -496,6 +524,12 @@ def gsplat_argv(
         argv += ["--opacity_reg", f"{opacity_reg:g}"]
     if depth_loss:
         argv.append("--depth_loss")
+    if pose_opt:
+        argv.append("--pose_opt")
+    if app_opt:
+        argv.append("--app_opt")
+    if bilateral_grid:
+        argv.append("--use_bilateral_grid")
     argv += list(extra)
     return argv
 
@@ -578,6 +612,10 @@ class TrainMetrics:
     source: str = "none"
     #: The held-out split psnr/ssim/lpips were measured on: (train, val) frame counts.
     split: tuple[int, int] | None = None
+    #: `eval()`'s colour-corrected numbers, written only with `--use_bilateral_grid`.
+    cc_psnr: float | None = None
+    cc_ssim: float | None = None
+    cc_lpips: float | None = None
 
     def to_dict(self) -> dict[str, object]:
         train, val = self.split if self.split is not None else (None, None)
@@ -611,6 +649,14 @@ class TrainMetrics:
             # Which of the two readers produced the numbers above, so a reader of the
             # file can tell a parsed stats file from a scraped log line.
             "source": self.source,
+            # With a bilateral grid, the val renders scored again after a per-image
+            # affine colour fit to the ground truth (v1.5.3's `color_correct`): what the
+            # splat scores once exposure is forgiven. Null without one.
+            "colorCorrected": (
+                None
+                if self.cc_psnr is None and self.cc_ssim is None and self.cc_lpips is None
+                else {"psnr": self.cc_psnr, "ssim": self.cc_ssim, "lpips": self.cc_lpips}
+            ),
         }
 
 
@@ -655,6 +701,9 @@ def parse_metrics(
             attempts=attempts,
             source="stats",
             split=split,
+            cc_psnr=_float(quality.get("cc_psnr")),
+            cc_ssim=_float(quality.get("cc_ssim")),
+            cc_lpips=_float(quality.get("cc_lpips")),
         )
     scraped = _scrape(log_text)
     return TrainMetrics(

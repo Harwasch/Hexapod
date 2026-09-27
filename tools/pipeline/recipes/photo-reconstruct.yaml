@@ -106,6 +106,15 @@ stages:
       #     has measured the lower weight against it.
       #   depth_loss: true    -- pulls rendered depth toward each frame's own SfM points;
       #     gsplat marks it experimental, and it has not been run on a GPU here.
+      #   pose_opt: true      -- refines each training frame's pose (phone video poses
+      #     are rolling-shutter and slightly off).
+      #   app_opt: true       -- a per-frame appearance embedding for exposure drift; the
+      #     PLY is baked to degree-0 colour, which is all canonical.ply keeps anyway.
+      #   bilateral_grid: true -- a per-frame colour/exposure correction (gsplat's
+      #     --use_bilateral_grid); train_metrics.json then also has `colorCorrected`.
+      #   These three are the phone-capture recipe the commercial apps are believed to
+      #   use; each stays off until experiments/run_variants.py has measured it on a real
+      #   capture (experiments/variants/spool-table.yaml is that run).
       #   roi: {center: [x, y, z], radius: r}  -- COLMAP frame; crops the initial points
       #     to the sphere and the trained splat to 1.5 radii.
       #

@@ -10,6 +10,11 @@
 #
 # fused-ssim is not here either: it is a CUDA extension built from source against the
 # installed torch (`--no-build-isolation`), after this file, by app.py.
+#
+# Nor is examples/requirements.txt's fused-bilagrid, deliberately: only
+# `--use_fused_bilagrid` imports it. The pipeline's `bilateral_grid` switch passes
+# `--use_bilateral_grid`, which imports examples/lib_bilagrid.py -- plain torch plus the
+# `tensorly` pinned below -- and check_trainer.py runs that grid on CPU at image build.
 
 # The prebuilt CUDA wheel, cp310 only (docs.gsplat.studio/whl), sha256 checked on
 # download against the file read here.

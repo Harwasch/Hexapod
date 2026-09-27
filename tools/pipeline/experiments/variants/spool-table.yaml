@@ -1,0 +1,76 @@
+# The phone-capture recipe, switch by switch, on the spool-table video.
+#
+# Capture 87d772f0-...: 87 frames at 4 fps, held-out PSNR 22.9-23.2 dB, SSIM 0.75-0.78,
+# LPIPS 0.18-0.19 on the standard 30k schedule before any of these were tried.
+#
+#   TWIN_PHONE_KEY=... uv run python -m experiments.run_variants \
+#       --api https://<api host> --variants experiments/variants/spool-table.yaml \
+#       --out runs/spool-table
+#
+# Each variant is a full photo-reconstruct run (normalize and pose included), one after
+# another. Budget, from the runs this capture has had: ~10 min of pose on cpu4 and
+# ~30 min of 30k-step training on an L4 each -- about $0.45 and 45 minutes a variant,
+# so the ten below are roughly $4.50 and 7-8 hours of queue. `--only NAME` runs a subset.
+#
+# Every key here is on the phone's whitelist (apps/api/app/api/v1/phone.py
+# PHONE_OPTIONS); anything else is refused by name before a job is made.
+capture: 87d772f0-92c9-49be-8570-3c830425d3a3
+recipe: photo-reconstruct
+baseline: baseline
+
+# What a Refine at the phone's Standard settings trains with, minus the support-mask
+# crop (a fresh `process` has no preview to crop to): 1600 px frames at 4 fps, the whole
+# 30k schedule, the recipe's MCMC at 500k, the strict bar, 400k gaussians packaged.
+base:
+  normalize: {max_side: 1600, fps: 4}
+  train: {schedule_scale: 1.0}
+  quality: {mode: refine, bar: strict}
+  package: {max_gaussians: 400000}
+
+variants:
+  # Twice, so the table shows how far two identical runs land apart; a switch whose
+  # effect is inside that spread has not been shown to do anything.
+  - name: baseline
+    repeat: 2
+
+  # Mip-Splatting's screen-space filter. Trains opacities the renderer must compensate
+  # the same way; see the recipe's note before making it a default.
+  - name: antialiased
+    params: {train: {antialiased: true}}
+
+  # A tenth of the MCMC preset's 0.01 opacity regularisation.
+  - name: opacity-reg-0.001
+    params: {train: {opacity_reg: 0.001}}
+
+  # Rendered depth pulled toward each frame's own SfM points.
+  - name: depth-loss
+    params: {train: {depth_loss: true}}
+
+  # Per-frame pose refinement: phone video poses are rolling-shutter and slightly off.
+  - name: pose-opt
+    params: {train: {pose_opt: true}}
+
+  # Per-frame colour/exposure correction (bilateral grid); `ccPsnr` is the val split
+  # after a colour fit, `psnr` stays the raw number.
+  - name: bilateral-grid
+    params: {train: {bilateral_grid: true}}
+
+  # The same problem through a per-frame appearance embedding instead; the PLY is baked
+  # to degree-0 colour, which is all canonical.ply keeps anyway.
+  - name: app-opt
+    params: {train: {app_opt: true}}
+
+  # More frames: 8 fps, and up to 180 of them kept (the recipe keeps 100).
+  - name: fps-8
+    params: {normalize: {fps: 8, keep: 180}}
+
+  # Everything at once (bilateral grid rather than app_opt: they model the same drift).
+  - name: all-of-the-recipe
+    params:
+      normalize: {fps: 8, keep: 180}
+      train:
+        antialiased: true
+        opacity_reg: 0.001
+        depth_loss: true
+        pose_opt: true
+        bilateral_grid: true

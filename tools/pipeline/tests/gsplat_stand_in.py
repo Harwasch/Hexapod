@@ -116,6 +116,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--antialiased", action="store_true")
     parser.add_argument("--opacity_reg", type=float, default=None)
     parser.add_argument("--depth_loss", action="store_true")
+    parser.add_argument("--pose_opt", action="store_true")
+    parser.add_argument("--app_opt", action="store_true")
+    parser.add_argument("--use_bilateral_grid", action="store_true")
     # Not gsplat's: how this stand-in is told to behave like a reclaimed machine.
     parser.add_argument("--ckpt-every", type=int, default=100)
     parser.add_argument("--die-at", type=int, default=None)
@@ -171,6 +174,9 @@ def main(argv: list[str] | None = None) -> int:
             else (0.01 if args.strategy == "mcmc" else 0.0)
         ),
         "depth_loss": args.depth_loss,
+        "pose_opt": args.pose_opt,
+        "app_opt": args.app_opt,
+        "use_bilateral_grid": args.use_bilateral_grid,
         "image_scale": image_scale(args.data_dir),
     }
     (args.result_dir / "cfg.yml").write_text(json.dumps(resolved) + "\n", encoding="utf-8")
@@ -217,18 +223,17 @@ def main(argv: list[str] | None = None) -> int:
 
     stats = args.result_dir / "stats"
     stats.mkdir(parents=True, exist_ok=True)
-    (stats / f"val_step{step - 1:04d}.json").write_text(
-        json.dumps(
-            {
-                "psnr": 27.5,
-                "ssim": 0.8712,
-                "lpips": 0.1431,
-                "ellipse_time": 0.0123,
-                "num_GS": args.gaussians,
-            }
-        ),
-        encoding="utf-8",
-    )
+    val: dict[str, float | int] = {
+        "psnr": 27.5,
+        "ssim": 0.8712,
+        "lpips": 0.1431,
+        "ellipse_time": 0.0123,
+        "num_GS": args.gaussians,
+    }
+    if args.use_bilateral_grid:
+        # v1.5.3's eval() adds the colour-corrected three only with a bilateral grid.
+        val.update(cc_psnr=28.25, cc_ssim=0.8801, cc_lpips=0.1402)
+    (stats / f"val_step{step - 1:04d}.json").write_text(json.dumps(val), encoding="utf-8")
     if args.save_ply and not args.no_ply:
         write_ply(
             args.result_dir / "ply" / f"point_cloud_{step - 1}.ply", args.gaussians, seed=step

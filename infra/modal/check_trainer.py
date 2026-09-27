@@ -12,6 +12,14 @@ pipeline's own argv with the same `tyro.extras.overridable_config_cli`. Then the
 the pipeline depends on are asserted. Nothing here needs a GPU: `Runner`, which is the
 part that does, is never constructed.
 
+Three switches go further than parsing, because what they need is only imported once the
+trainer is running: `--use_bilateral_grid` imports `lib_bilagrid` (and through it
+`tensorly`) in `__main__`, after the CLI has accepted the flag; `--app_opt` reaches into
+`gsplat.cuda._torch_impl` on its first forward; `--pose_opt` builds `CameraOptModule`.
+Each is constructed here and run one forward and backward pass on CPU tensors, with the
+shapes and arguments `simple_trainer.py` uses, so an image in which one of them cannot
+run fails to build.
+
 Usage (in the image):  $GSPLAT_PYTHON check_trainer.py <simple_trainer.py> <pipeline dir>
 """
 
@@ -98,6 +106,21 @@ def main() -> int:
             antialiased=True,
             opacity_reg=0.001,
             depth_loss=True,
+            pose_opt=True,
+            app_opt=True,
+            bilateral_grid=True,
+        )
+    )
+    # The benchmark's argv (tools/pipeline/experiments/benchmark.py): gsplat's 3DGS
+    # reproduction, the full schedule, LPIPS on VGG as the paper measured it.
+    bench: Any = parse(
+        training.gsplat_argv(
+            sys.executable,
+            trainer,
+            Path("/data"),
+            Path("/result"),
+            max_steps=30_000,
+            extra=["--lpips_net", "vgg"],
         )
     )
 
@@ -108,6 +131,20 @@ def main() -> int:
         "antialiased": tuned.antialiased is True and cfg.antialiased is False,
         "opacity_reg": tuned.opacity_reg == 0.001 and tuned.scale_reg == 0.01,
         "depth_loss": tuned.depth_loss is True and cfg.depth_loss is False,
+        "pose_opt": tuned.pose_opt is True and cfg.pose_opt is False,
+        "app_opt": tuned.app_opt is True and cfg.app_opt is False,
+        "use_bilateral_grid": (
+            tuned.use_bilateral_grid is True
+            and cfg.use_bilateral_grid is False
+            # The fused CUDA grid is a different package the image does not install; the
+            # flag the pipeline passes must select the plain-torch one.
+            and tuned.use_fused_bilagrid is False
+        ),
+        "benchmark": (
+            bench.lpips_net == "vgg"
+            and type(bench.strategy).__name__ == "DefaultStrategy"
+            and bench.max_steps == 30_000
+        ),
         "data_dir": cfg.data_dir == "/data",
         "result_dir": cfg.result_dir == "/result",
         "max_steps": cfg.max_steps == 500,
@@ -122,11 +159,63 @@ def main() -> int:
     failed = sorted(name for name, ok in checks.items() if not ok)
     if failed:
         raise SystemExit(f"simple_trainer.py parsed the pipeline's argv wrongly: {failed}")
+    ran = _exercise_switches(namespace)
     sys.stdout.write(
         f"trainer ok: {trainer} accepts training.gsplat_argv (tyro {tyro.__version__}); "
-        f"checked {', '.join(sorted(checks))}\n"
+        f"checked {', '.join(sorted(checks))}; ran {', '.join(ran)} on CPU\n"
     )
     return 0
+
+
+def _exercise_switches(namespace: dict[str, Any]) -> list[str]:
+    """One forward and backward pass of what `--use_bilateral_grid`, `--app_opt` and
+    `--pose_opt` build, on CPU tensors, called the way v1.5.3's `Runner` calls them.
+
+    `lib_bilagrid` is imported from beside the trainer, as its `__main__` imports it; the
+    other two are the classes the trainer module itself imported from `utils`.
+    """
+    import torch
+    from lib_bilagrid import BilateralGrid, color_correct, slice, total_variation_loss
+
+    ran: list[str] = []
+    height, width = 12, 16
+    # Runner.__init__: BilateralGrid(len(trainset), grid_X=16, grid_Y=16, grid_W=8).
+    grids = BilateralGrid(2, grid_X=16, grid_Y=16, grid_W=8)
+    colors = torch.rand(1, height, width, 3, requires_grad=True)
+    grid_y, grid_x = torch.meshgrid(
+        (torch.arange(height) + 0.5) / height,
+        (torch.arange(width) + 0.5) / width,
+        indexing="ij",
+    )
+    grid_xy = torch.stack([grid_x, grid_y], dim=-1).unsqueeze(0)
+    image_ids = torch.tensor([1])
+    out = slice(grids, grid_xy.expand(1, -1, -1, -1), colors, image_ids.unsqueeze(-1))["rgb"]
+    (out.mean() + 10 * total_variation_loss(grids.grids)).backward()
+    corrected = color_correct(out.detach(), torch.rand(1, height, width, 3))
+    if grids.grids.grad is None or tuple(corrected.shape) != (1, height, width, 3):
+        raise SystemExit("lib_bilagrid ran but produced no gradient or the wrong shape")
+    ran.append("bilateral grid")
+
+    # Runner: AppearanceOptModule(len(trainset), 32, app_embed_dim, sh_degree), then the
+    # PLY export's bake with embed_ids=None and zero view directions.
+    app = namespace["AppearanceOptModule"](2, 32, 16, 3)
+    features = torch.rand(10, 32, requires_grad=True)
+    app(
+        features=features, embed_ids=image_ids, dirs=torch.rand(1, 10, 3), sh_degree=3
+    ).mean().backward()
+    baked = app(features=features, embed_ids=None, dirs=torch.zeros(1, 10, 3), sh_degree=3)
+    if features.grad is None or not bool(torch.isfinite(baked).all()):
+        raise SystemExit("AppearanceOptModule ran but gave no gradient or a non-finite bake")
+    ran.append("appearance embedding")
+
+    # Runner: CameraOptModule(len(trainset)).zero_init(); a zero delta is the identity.
+    pose = namespace["CameraOptModule"](2)
+    pose.zero_init()
+    adjusted = pose(torch.eye(4)[None], image_ids)
+    if not bool(torch.allclose(adjusted, torch.eye(4)[None])):
+        raise SystemExit("CameraOptModule's zero-initialised correction is not the identity")
+    ran.append("pose correction")
+    return ran
 
 
 if __name__ == "__main__":

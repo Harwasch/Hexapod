@@ -207,6 +207,35 @@ def test_a_phone_sets_only_the_options_it_is_allowed(client: TestClient, db: Ses
     assert job is not None and job.params == chosen
 
 
+def test_a_phone_may_turn_on_the_phone_capture_switches(client: TestClient, db: Session) -> None:
+    """pose_opt, app_opt, bilateral_grid: JSON booleans only; and more frames kept."""
+    mine = client.post("/api/v1/phone/captures", json={}, headers=PHONE).json()["capture"]
+    uploaded(db, mine["id"])
+    url = f"/api/v1/phone/captures/{mine['id']}/process"
+
+    def start(params: dict[str, object]) -> Response:
+        return client.post(
+            url, json={"recipe": "photo-reconstruct", "params": params}, headers=PHONE
+        )
+
+    for refused in (
+        {"train": {"pose_opt": "true"}},
+        {"train": {"bilateral_grid": 1}},
+        {"normalize": {"keep": 1000}},
+    ):
+        response = start(refused)
+        assert response.status_code == 409, (refused, response.text)
+
+    chosen = {
+        "normalize": {"fps": 8, "keep": 180},
+        "train": {"pose_opt": True, "app_opt": False, "bilateral_grid": True, "depth_loss": True},
+    }
+    ok = start(chosen)
+    assert ok.status_code == 202, ok.text
+    job = db.get(Job, uuid.UUID(ok.json()["id"]))
+    assert job is not None and job.params == chosen
+
+
 def test_a_finished_capture_downloads_its_placed_splat(client: TestClient, db: Session) -> None:
     mine = client.post("/api/v1/phone/captures", json={}, headers=PHONE).json()["capture"]
     capture_id = uuid.UUID(mine["id"])

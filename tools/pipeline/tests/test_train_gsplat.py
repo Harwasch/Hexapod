@@ -558,8 +558,71 @@ def test_the_quality_switches_reach_the_trainer_with_the_presets_semantics(
         "antialiased": True,
         "opacityReg": 0.001,
         "depthLoss": True,
+        "poseOpt": False,
+        "appOpt": False,
+        "bilateralGrid": False,
         "variant": "3dgs",
     }
+    assert document["colorCorrected"] is None
+
+
+def test_the_phone_capture_switches_reach_the_trainer_and_the_settings(tmp_path: Path) -> None:
+    """pose_opt, app_opt and bilateral_grid: gsplat's spellings in the argv, JSON booleans
+    in `settings`, and the bilateral grid's colour-corrected numbers kept apart."""
+    workdir = Workdir.create(tmp_path / "run")
+    seed_inputs(workdir)
+
+    params = stand_in_params(pose_opt=True, app_opt=True, bilateral_grid=True)
+    execute(train_recipe(params), workdir, RunnerSet(cpu=LocalRunner()))
+
+    cfg = json.loads((workdir.work_dir("train") / "gsplat" / "cfg.yml").read_text())
+    assert (cfg["pose_opt"], cfg["app_opt"], cfg["use_bilateral_grid"]) == (True, True, True)
+    document = json.loads((workdir.out_dir("train") / "train_metrics.json").read_text())
+    settings = document["settings"]
+    assert (settings["poseOpt"], settings["appOpt"], settings["bilateralGrid"]) == (
+        True,
+        True,
+        True,
+    )
+    # The raw held-out numbers stay the headline; the corrected ones sit beside them.
+    assert document["psnr"] == 27.5
+    assert document["colorCorrected"] == {"psnr": 28.25, "ssim": 0.8801, "lpips": 0.1402}
+
+
+def test_the_phone_capture_switches_are_absent_from_the_default_argv() -> None:
+    plain = training.gsplat_argv("p", Path("t"), Path("d"), Path("r"))
+    tuned = training.gsplat_argv(
+        "p", Path("t"), Path("d"), Path("r"), pose_opt=True, app_opt=True, bilateral_grid=True
+    )
+
+    for switch in ("--pose_opt", "--app_opt", "--use_bilateral_grid"):
+        assert switch not in plain
+        assert switch in tuned
+
+
+@pytest.mark.parametrize("name", ["pose_opt", "app_opt", "bilateral_grid"])
+def test_a_phone_capture_switch_given_as_a_string_is_refused(tmp_path: Path, name: str) -> None:
+    workdir = Workdir.create(tmp_path / "run")
+    seed_inputs(workdir)
+
+    with pytest.raises(Exception, match=f"{name} must be true or false"):
+        execute(
+            train_recipe(stand_in_params(**{name: "true"})), workdir, RunnerSet(cpu=LocalRunner())
+        )
+
+
+def test_the_stdout_fallback_does_not_mistake_the_colour_corrected_numbers(
+    tmp_path: Path,
+) -> None:
+    """With a bilateral grid, eval()'s line carries CC_PSNR/CC_SSIM/CC_LPIPS after the raw
+    three; the scraper must keep the raw ones."""
+    line = (
+        "PSNR: 23.100, SSIM: 0.7600, LPIPS: 0.185 CC_PSNR: 24.900, CC_SSIM: 0.7900, "
+        "CC_LPIPS: 0.171 Time: 0.020s/image Number of GS: 500000\n"
+    )
+    found = training.parse_metrics(tmp_path, line)
+
+    assert (found.psnr, found.ssim, found.lpips) == (23.1, 0.76, 0.185)
 
 
 def test_the_mcmc_preset_keeps_its_own_opacity_reg_when_none_is_given(tmp_path: Path) -> None:

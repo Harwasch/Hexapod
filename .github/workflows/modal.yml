@@ -54,9 +54,9 @@ on:
         type: string
         default: "500"
       tier:
-        description: GPU tier (l4, a10, a100)
+        description: GPU tier (l4, a10, l40s, a100)
         type: choice
-        options: [l4, a10, a100]
+        options: [l4, a10, l40s, a100]
         default: l4
 
 concurrency:
