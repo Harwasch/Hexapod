@@ -31,7 +31,8 @@ export interface QualityDecision {
 
 const LOW_FPS = 26;
 const STEADY_FPS = 50;
-const MEMORY_PRESSURE_RATIO = 1.25;
+/** Past this share of its memory budget a group coarsens (and splat tilesets are trimmed). */
+export const MEMORY_PRESSURE_RATIO = 1.25;
 /** Minimum rendered frames in the last second before the frame rate is trusted. */
 const MIN_FRAMES_FOR_FPS = 6;
 /** Slow motion frames (below LOW_FPS) must add up to this much before quality is cut; smooth

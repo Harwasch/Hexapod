@@ -7,10 +7,13 @@
  * (tools/captures/splat_tiles.py), so how many are drawn is decided on the device that pays
  * for drawing them, and the choice is this device's, not the scan's:
  *
- * - the scan viewer (view.html, Spark) loads tiles coarsest-first until this many gaussians
- *   are loaded (`view/tiles.ts`);
+ * - the scan viewer (view.html, Spark) hands it to Spark's own level of detail as
+ *   `SparkRenderer.lodSplatCount`, the most splats drawn a frame, and downloads up to
+ *   `LOAD_FACTOR` times as many (`view/tiles.ts`);
  * - the globe (CesiumJS) scales a splat tileset's `maximumScreenSpaceError` by
- *   `detailScreenSpaceScale`, since it refines by screen-space error and has no count budget.
+ *   `detailScreenSpaceScale`, since Cesium refines by screen-space error, and counts the
+ *   splats it has loaded against it as a memory budget (`cesium/splatCount.ts`), since
+ *   Cesium's own byte count misses splats.
  *
  * The upload page is where it is chosen (`upload/options.ts`), and the three pages share an
  * origin, so the choice saved there is read here.

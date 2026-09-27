@@ -17,6 +17,8 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 
 import type { LiveCameras, LiveState } from "@twin/contracts";
 
+import { splatBudget } from "@/lib/detail";
+
 import {
   decodeCameras,
   decodePoints,
@@ -130,7 +132,9 @@ export function showLive(captureId: string): { stop: () => void } {
     0.01,
     5000,
   );
-  scene.add(new SparkRenderer({ renderer }));
+  // The phone's Detail choice is Spark's splat budget here too (see main.ts).
+  const budget = splatBudget();
+  scene.add(new SparkRenderer({ renderer, lodSplatCount: budget }));
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
   controls.autoRotate = true;
@@ -289,15 +293,25 @@ export function showLive(captureId: string): { stop: () => void } {
     const response = await fetch(url);
     if (!response.ok) throw new Error(`The splat answered ${String(response.status)}.`);
     const bytes = new Uint8Array(await response.arrayBuffer());
-    const mesh = new SplatMesh({ fileBytes: bytes, fileType: SplatFileType.SPZ });
+    // A snapshot within the Detail budget is drawn whole, as it arrives; only a bigger one
+    // waits for Spark to build its LoD tree (`lodAbove`), and is then drawn within it.
+    const mesh = new SplatMesh({
+      fileBytes: bytes,
+      fileType: SplatFileType.SPZ,
+      lod: true,
+      lodAbove: budget,
+    });
     await mesh.initialized;
     if (stopped) {
       mesh.dispose();
       return;
     }
     if (!cameraLines) {
-      // No cameras to take the frame from: the splat's own centre and the pose up.
-      const box = mesh.getBoundingBox(true);
+      // No cameras to take the frame from: the splat's own centre and the pose up. A LoD
+      // mesh keeps only its LoD tree, so the box is that tree's (its leaves are the splats).
+      const lodSplats = mesh.packedSplats?.lodSplats;
+      const box = lodSplats ? new THREE.Box3() : mesh.getBoundingBox(true);
+      lodSplats?.forEachSplat((_index, centre) => box.expandByPoint(centre));
       const centre = box.getCenter(new THREE.Vector3());
       orient(up, [centre.x, centre.y, centre.z]);
       frameView(box.getSize(new THREE.Vector3()).length() / 2);

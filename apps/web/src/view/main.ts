@@ -24,7 +24,15 @@ import { splatBudget } from "@/lib/detail";
 import { parseCoverage } from "./coverage";
 import { spzFromGlb } from "./glb";
 import { showLive } from "./live";
-import { chooseTiles, countTiles, parseTileset, type TileNode } from "./tiles";
+import {
+  LOAD_FACTOR,
+  countTiles,
+  parseTileset,
+  planLoads,
+  plannedGaussians,
+  type TileNode,
+  type TileTree,
+} from "./tiles";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
 
@@ -125,20 +133,26 @@ async function showGallery(): Promise<void> {
 let active: { stop: () => void } | null = null;
 
 /** A site's gaussian-splat tileset: where it is, and its tile tree (see tiles.ts). */
-async function splatTileset(site: Site): Promise<{ url: string; root: TileNode }> {
+async function splatTileset(site: Site): Promise<{ url: string; tree: TileTree }> {
   const source = site.assets.find(
     (candidate) => candidate.representation === "gaussian-splat",
   )?.source;
   if (source?.type !== "3d-tiles-url") throw new Error("This site has no splat scan to show.");
-  return { url: source.url, root: parseTileset(await json<unknown>(source.url)) };
+  return { url: source.url, tree: parseTileset(await json<unknown>(source.url)) };
 }
 
-/** One tile as a Spark mesh: the SPZ inside the tile's GLB, handed over as it is. */
+/**
+ * One tile as a Spark mesh: the SPZ inside the tile's GLB, handed over as it is, with Spark's
+ * level of detail on. `lod: true` has Spark build a merged LoD tree over the tile in a worker
+ * ("quick" tiny-lod: 1-3 s per million splats, per Spark's lod-getting-started docs; a 100k
+ * tile is a fraction of a second) and draw from it within `SparkRenderer.lodSplatCount`,
+ * which is shared by every mesh in the scene.
+ */
 async function tileMesh(tilesetUrl: string, tile: TileNode): Promise<SplatMesh> {
   const response = await fetch(new URL(tile.uri, tilesetUrl).toString());
   if (!response.ok) throw new Error(`The scan's data answered ${String(response.status)}.`);
   const bytes = spzFromGlb(await response.arrayBuffer());
-  const mesh = new SplatMesh({ fileBytes: bytes, fileType: SplatFileType.SPZ });
+  const mesh = new SplatMesh({ fileBytes: bytes, fileType: SplatFileType.SPZ, lod: true });
   await mesh.initialized;
   return mesh;
 }
@@ -146,14 +160,17 @@ async function tileMesh(tilesetUrl: string, tile: TileNode): Promise<SplatMesh> 
 /**
  * A box around where most of the splats are. Percentiles rather than min/max because
  * some captures carry a sky dome or stray floaters hundreds of metres out, and framing
- * those would leave the subject a dot in the middle of the screen.
+ * those would leave the subject a dot in the middle of the screen. A LoD mesh keeps only its
+ * LoD tree (`packedSplats.lodSplats`), whose leaves are the tile's own splats and whose inner
+ * nodes are merged from them, so the percentiles are read from that.
  */
 function robustBounds(mesh: SplatMesh): THREE.Box3 {
   const xs: number[] = [];
   const ys: number[] = [];
   const zs: number[] = [];
   let seen = 0;
-  mesh.forEachSplat((_index, center, _scales, _quaternion, opacity) => {
+  const splats = mesh.packedSplats?.lodSplats ?? mesh;
+  splats.forEachSplat((_index, center, _scales, _quaternion, opacity) => {
     seen += 1;
     // Every splat up to 50k, then a stride: plenty for a percentile, cheap on a phone.
     if (opacity < 0.1 || (seen > 50_000 && seen % 4 !== 0)) return;
@@ -183,6 +200,7 @@ async function showScan(siteId: string): Promise<void> {
   el("scan-date").textContent = "";
   el("coverage").hidden = true;
   el("coverage-legend").hidden = true;
+  delete section.dataset.tiles;
 
   const renderer = new THREE.WebGLRenderer({ antialias: false });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -197,7 +215,12 @@ async function showScan(siteId: string): Promise<void> {
     0.01,
     5000,
   );
-  scene.add(new SparkRenderer({ renderer }));
+  // The phone's Detail choice is Spark's splat budget: its LoD draws at most this many a
+  // frame, the merged coarse splats far away and the originals close up, across every tile
+  // loaded (lib/detail.ts; SparkRenderer `lodSplatCount`, whose own default -- 1-1.5M on a
+  // phone -- would ignore the choice).
+  const budget = splatBudget();
+  scene.add(new SparkRenderer({ renderer, lodSplatCount: budget }));
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
   controls.autoRotate = true;
@@ -236,21 +259,26 @@ async function showScan(siteId: string): Promise<void> {
     el("scan-date").textContent = date(site.createdAt);
     document.title = site.name;
 
-    // A scan is a level-of-detail tileset holding every gaussian; this phone loads as many
-    // as its Detail choice allows, coarsest-first (tiles.ts). The root comes first and is
-    // shown on its own -- it is the whole scan, evenly thinned -- and the rest fill in.
+    // A scan is a level-of-detail tileset holding every gaussian. This phone downloads all
+    // of it, or the finest cut of it that fits LOAD_FACTOR times its Detail budget
+    // (tiles.ts), and Spark's LoD decides what of that to draw each frame. The root comes
+    // first and is shown on its own -- the whole scan, merged coarse -- and each later step
+    // swaps a tile for its children once all of them have arrived.
     const tileset = await splatTileset(site);
-    const plan = chooseTiles(tileset.root, splatBudget());
+    const steps = planLoads(tileset.tree, budget * LOAD_FACTOR);
     const scan = new THREE.Group();
     // The pipeline's splats are east/north/up with z up (see splat_tiles.py, whose glTF
     // node matrix makes the same turn for Cesium); three.js is y-up.
     scan.rotation.x = -Math.PI / 2;
     scene.add(scan);
-    const [first, ...rest] = plan;
-    if (!first) throw new Error("The scan's tileset names no content.");
-    const mesh = await tileMesh(tileset.url, first);
+    const [first, ...rest] = steps;
+    const root = first?.add[0];
+    if (!root) throw new Error("The scan's tileset names no content.");
+    const mesh = await tileMesh(tileset.url, root);
+    const shown = new Map<TileNode, SplatMesh>([[root, mesh]]);
     scan.add(mesh);
     scan.updateMatrixWorld(true);
+    section.dataset.tiles = root.uri;
 
     const box = robustBounds(mesh).applyMatrix4(mesh.matrixWorld);
     const center = box.getCenter(new THREE.Vector3());
@@ -275,25 +303,41 @@ async function showScan(siteId: string): Promise<void> {
       status.hidden = true;
     }, 4_000);
 
-    // One at a time: a tile is 1-2 MB, and a phone's connection and decoder are better
-    // spent finishing one than starting four.
-    let loaded = first.gaussians;
-    for (const tile of rest) {
-      if (!alive) return;
-      const more = await tileMesh(tileset.url, tile);
+    // One tile at a time: a tile is 1-2 MB, and a phone's connection and decoder are better
+    // spent finishing one than starting four. A step's tiles go on screen together, and
+    // only then does the tile they replace come off.
+    for (const step of rest) {
+      const arrived: [TileNode, SplatMesh][] = [];
+      for (const tile of step.add) {
+        if (!alive) break;
+        arrived.push([tile, await tileMesh(tileset.url, tile)]);
+      }
       if (!alive) {
-        more.dispose();
+        arrived.forEach(([, more]) => more.dispose());
         return;
       }
-      more.opacity = mesh.opacity;
-      scan.add(more);
-      loaded += tile.gaussians;
+      for (const [tile, more] of arrived) {
+        more.opacity = mesh.opacity;
+        scan.add(more);
+        shown.set(tile, more);
+      }
+      for (const tile of step.remove) {
+        const gone = shown.get(tile);
+        if (!gone) continue;
+        scan.remove(gone);
+        gone.dispose();
+        shown.delete(tile);
+      }
+      // What is on screen, for the page's tests: a REPLACE parent is gone once its children
+      // are up.
+      section.dataset.tiles = [...shown.keys()].map((tile) => tile.uri).join(" ");
     }
-    const whole = countTiles(tileset.root).gaussians;
+    const loaded = plannedGaussians(steps);
+    const whole = countTiles(tileset.tree).gaussians;
     if (whole > loaded) {
       el("scan-date").textContent =
         `${date(site.createdAt)} · ${loaded.toLocaleString("en-US")} of ` +
-        `${whole.toLocaleString("en-US")} splats shown · more with Detail on the phone page`;
+        `${whole.toLocaleString("en-US")} splats loaded · more with Detail on the phone page`;
     }
   } catch (error) {
     // Also after the first tile is up: a later one failing leaves what arrived on screen.

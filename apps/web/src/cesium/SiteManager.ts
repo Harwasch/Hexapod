@@ -24,9 +24,14 @@ import { timed } from "@/lib/timing";
 import type { CameraController } from "./CameraController";
 import type { ClippingManager } from "./ClippingManager";
 import { isIonAuthError, isIonNotFound } from "./ion";
-import { devicePixelError, type PerformanceManager } from "./PerformanceManager";
+import {
+  MEMORY_PRESSURE_RATIO,
+  devicePixelError,
+  type PerformanceManager,
+} from "./PerformanceManager";
 import { groundAt, measuredClamp, type MeasuredGround } from "./placement";
 import { createSiteTileset, tileCacheBudget } from "./providers/tiles";
+import { SPLAT_BYTES_ESTIMATE, SplatCount, splatMemory } from "./splatCount";
 import type { SceneEvents } from "./types";
 
 const log = createLogger("sites");
@@ -63,6 +68,8 @@ interface AssetHandle {
   unsubscribe: (() => void)[];
   /** The tile-coverage clip refresh is registered once per tileset. */
   coverageWatched?: boolean;
+  /** A splat tileset's loaded gaussians (splatCount.ts): Cesium's byte count misses them. */
+  splats?: SplatCount;
 }
 
 /**
@@ -120,8 +127,10 @@ export class SiteManager {
   private nearId: string | null = null;
   private objectScale = false;
   private screenSpaceError = 16;
-  /** The phone's Detail choice as a factor on splat screen-space error, read once. */
-  private readonly splatDetailScale = detailScreenSpaceScale(splatBudget());
+  /** The phone's Detail choice: the gaussians a view may hold at once, read once. */
+  private readonly splatDetail = splatBudget();
+  /** The same choice as a factor on splat screen-space error. */
+  private readonly splatDetailScale = detailScreenSpaceScale(this.splatDetail);
   private pixelRatio = 1;
   /** Ground metres per pixel at the view centre when the errors were last applied. */
   private metersPerPixel = Number.POSITIVE_INFINITY;
@@ -142,6 +151,11 @@ export class SiteManager {
       this.applyScreenSpaceError(sse, pixelRatio),
     );
     this.performance.addMemorySource("sites", () => this.memoryUsage());
+    // Splats are budgeted by count, against the Detail choice (splatCount.ts): the group's
+    // pressure is the higher of the two ratios.
+    this.performance.addMemorySource("sites", () =>
+      splatMemory(this.splatsLoaded(), this.splatDetail),
+    );
     const calibrationTimer = setInterval(() => this.refreshCalibration(), CALIBRATION_TICK_MS);
     this.unsubscribe.push(
       viewer.camera.changed.addEventListener(() => this.checkProximity()),
@@ -550,14 +564,31 @@ export class SiteManager {
         screenSpaceError: tileset.maximumScreenSpaceError,
       },
     });
+    if (asset.representation === "gaussian-splat") {
+      const splats = new SplatCount();
+      handle.splats = splats;
+      handle.unsubscribe.push(
+        tileset.tileLoad.addEventListener((tile: Cesium3DTile) => {
+          splats.load(tile);
+          // Past the point where the PerformanceManager would coarsen, first drop what the
+          // last frame did not select (REPLACE parents their children now stand in for,
+          // tiles turned away from), as Cesium's cache would if it could see splat bytes;
+          // only what is still over after that costs detail. Unloads happen next frame.
+          // Not sooner: a trimmed parent must load again before a zoom out can show it.
+          if (this.splatsLoaded() > this.splatDetail * MEMORY_PRESSURE_RATIO) this.trimSplats();
+        }),
+        tileset.tileUnload.addEventListener((tile: Cesium3DTile) => splats.unload(tile)),
+      );
+    }
     handle.unsubscribe.push(
       tileset.loadProgress.addEventListener((pending: number, processing: number) => {
         this.performance.reportLoading("sites", pending, processing);
+        const counted = (handle.splats?.total ?? 0) * SPLAT_BYTES_ESTIMATE;
         this.events.emit("asset", {
           id: asset.id,
           patch: {
             progress: { pending, processing },
-            memoryMb: Math.round(tileset.totalMemoryUsageInBytes / 1048576),
+            memoryMb: Math.round(Math.max(tileset.totalMemoryUsageInBytes, counted) / 1048576),
             screenSpaceError: tileset.maximumScreenSpaceError,
           },
         });
@@ -578,6 +609,21 @@ export class SiteManager {
       if (handle.tileset?.show) bytes += handle.tileset.totalMemoryUsageInBytes;
     }
     return { bytes, budget: cacheBytes + maximumCacheOverflowBytes };
+  }
+
+  /** Gaussians loaded across the visible splat tilesets: one view, one Detail budget. */
+  private splatsLoaded(): number {
+    let total = 0;
+    for (const { handle } of this.handles()) {
+      if (handle.tileset?.show && handle.splats) total += handle.splats.total;
+    }
+    return total;
+  }
+
+  private trimSplats(): void {
+    for (const { handle } of this.handles()) {
+      if (handle.splats && handle.tileset) handle.tileset.trimLoadedTiles();
+    }
   }
 
   /**

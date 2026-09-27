@@ -7,7 +7,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
 import { spzFromGlb } from "../src/view/glb";
 
@@ -97,38 +97,24 @@ test("a scan opens on its own and renders", async ({ page }) => {
   expect(errors).toEqual([]);
 });
 
-test("a level-of-detail scan loads coarsest-first, only as far as this phone's Detail", async ({
-  page,
-}) => {
-  // The shape splat_tiles.py writes past one tile's budget: a root subset, octants holding
-  // subsets of their own, leaves (error 0) holding the rest. Every tile's bytes are the
-  // committed tree's, so they render; the counts say what a real 380k scan would.
-  interface Tile {
-    boundingVolume: { box: number[] };
-    geometricError: number;
-    content: { uri: string };
-    extras: { gaussians: number };
-    children: Tile[];
-  }
-  const tile = (uri: string, gaussians: number, error: number, children: Tile[] = []): Tile => ({
-    boundingVolume: { box: [0, 0, 3, 4, 0, 0, 0, 4, 0, 0, 0, 4] },
-    geometricError: error,
-    content: { uri },
-    extras: { gaussians },
-    children,
-  });
-  const tileset = {
-    asset: { version: "1.1" },
-    geometricError: 8,
-    root: {
-      refine: "ADD",
-      ...tile("splat.glb", 100_000, 0.4, [
-        tile("splat_1.glb", 100_000, 0.1, [tile("splat_1-7.glb", 90_000, 0)]),
-        tile("splat_3.glb", 100_000, 0.2),
-        tile("splat_02.glb", 80_000, 0),
-      ]),
-    },
-  };
+interface Tile {
+  boundingVolume: { box: number[] };
+  geometricError: number;
+  content: { uri: string };
+  extras: { gaussians: number };
+  children: Tile[];
+}
+
+const tile = (uri: string, gaussians: number, error: number, children: Tile[] = []): Tile => ({
+  boundingVolume: { box: [0, 0, 3, 4, 0, 0, 0, 4, 0, 0, 0, 4] },
+  geometricError: error,
+  content: { uri },
+  extras: { gaussians },
+  children,
+});
+
+/** Serves `tileset` for tileset.json and the committed tree's tile for every GLB it names. */
+async function serveTileset(page: Page, tileset: unknown): Promise<string[]> {
   const fetched: string[] = [];
   await page.route("https://tiles.example/**", async (route) => {
     const name = new URL(route.request().url()).pathname.split("/").pop() ?? "";
@@ -141,7 +127,32 @@ test("a level-of-detail scan loads coarsest-first, only as far as this phone's D
       headers: { "access-control-allow-origin": "*" },
     });
   });
-  // "Light", chosen on the phone page: 200k.
+  return fetched;
+}
+
+test("a merged-parent scan swaps each parent for its children, as far as Detail allows", async ({
+  page,
+}) => {
+  // The shape splat_tiles.py writes now: REPLACE, merged parents, leaves (error 0) holding
+  // every gaussian once. Every tile's bytes are the committed tree's, so they render; the
+  // counts say what a real 1.1M scan would.
+  const tileset = {
+    asset: { version: "1.1" },
+    geometricError: 8,
+    root: {
+      refine: "REPLACE",
+      ...tile("splat.glb", 40_000, 0.4, [
+        tile("splat_1.glb", 30_000, 0.1, [
+          tile("splat_1-7.glb", 300_000, 0),
+          tile("splat_1-0.glb", 300_000, 0),
+        ]),
+        tile("splat_3.glb", 300_000, 0),
+        tile("splat_02.glb", 200_000, 0),
+      ]),
+    },
+  };
+  const fetched = await serveTileset(page, tileset);
+  // "Light", chosen on the phone page: Spark draws 200k and the viewer downloads up to 4x.
   await page.addInitScript(() => {
     window.localStorage.setItem("twin.phoneOptions.v3", JSON.stringify({ detail: "200000" }));
   });
@@ -150,12 +161,52 @@ test("a level-of-detail scan loads coarsest-first, only as far as this phone's D
 
   await page.goto(`/view.html#${SITE}`);
 
-  await expect(page.locator("#scan-date")).toContainText("200,000 of 470,000 splats", {
+  await expect(page.locator("#scan-date")).toContainText("530,000 of 1,100,000 splats loaded", {
     timeout: 30_000,
   });
-  // The root, then the root's first octant (its region's error is the root's): 200k.
-  expect(fetched).toEqual(["tileset.json", "splat.glb", "splat_1.glb"]);
+  // The root alone, then all its children -- and the root is gone once they are up.
+  // splat_1's leaves (600k for its 30k) would pass 800k, so it stays merged.
+  expect(fetched).toEqual([
+    "tileset.json",
+    "splat.glb",
+    "splat_1.glb",
+    "splat_3.glb",
+    "splat_02.glb",
+  ]);
+  await expect(page.locator("#viewer")).toHaveAttribute(
+    "data-tiles",
+    "splat_1.glb splat_3.glb splat_02.glb",
+  );
+  await expect(page.locator("#viewer-status")).toContainText("Drag to turn");
   expect(errors).toEqual([]);
+});
+
+test("a scan packed before merged parents still loads additively", async ({ page }) => {
+  const tileset = {
+    asset: { version: "1.1" },
+    geometricError: 8,
+    root: {
+      refine: "ADD",
+      ...tile("splat.glb", 100_000, 0.4, [
+        tile("splat_1.glb", 100_000, 0.1, [tile("splat_1-7.glb", 90_000, 0)]),
+        tile("splat_3.glb", 100_000, 0.2),
+        tile("splat_02.glb", 80_000, 0),
+      ]),
+    },
+  };
+  const fetched = await serveTileset(page, tileset);
+  // "Light" again: 800k to download holds the whole 470k scan, every tile kept.
+  await page.addInitScript(() => {
+    window.localStorage.setItem("twin.phoneOptions.v3", JSON.stringify({ detail: "200000" }));
+  });
+  await page.goto(`/view.html#${SITE}`);
+  await expect(page.locator("#viewer")).toHaveAttribute(
+    "data-tiles",
+    "splat.glb splat_1.glb splat_3.glb splat_02.glb splat_1-7.glb",
+    { timeout: 30_000 },
+  );
+  expect(fetched.slice(0, 2)).toEqual(["tileset.json", "splat.glb"]);
+  await expect(page.locator("#scan-date")).not.toContainText("splats loaded");
 });
 
 /** A coverage_enu.ply as tools/pipeline/quality.py writes it: points, tier, colour. */
