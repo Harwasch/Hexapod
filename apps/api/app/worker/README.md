@@ -121,11 +121,55 @@ registered nothing when the POST failed.
 A deployment with no bucket still runs: the log and artifact uploads are skipped and say
 so by leaving `log_key` null, rather than failing the job.
 
+## Several jobs at once
+
+`WORKER_CONCURRENCY=N` (default 1) runs N **slots** in one worker process (`loop.py`). A
+slot is what the whole worker used to be -- claim one job, supervise it to the end in its
+own recipe process, claim the next -- and nothing about a job is shared between slots:
+
+- each slot claims with its own id, `host:pid/<n>` (one slot keeps the plain `host:pid`),
+  so `claimed_by`, the heartbeat and `_still_ours` behave exactly as between two separate
+  workers: a lease one slot let lapse and another reclaimed is *lost* to the first;
+- each job's lease is renewed by its own slot's heartbeat, and a cancel is seen by that
+  heartbeat and stops that job's recipe process only;
+- SIGTERM sets one stop flag: every slot stops its own recipe process and clears its own
+  lease, so every job is claimable at once;
+- `--max-jobs` counts across slots, and a slot reserves its place before claiming.
+
+`tests/test_worker_concurrency.py` runs two 30-second jobs in two slots against Postgres:
+both run at once under distinct owners, both leases advance past their length, a cancel
+stops one while the other keeps running, and a stop hands the survivor back.
+
+**What N the 2 GB machine can take** is a memory question -- the slots' threads only
+wait, and the GPU and CPU-heavy stages (`pose`, `train`, `quality`) run on Modal. Measured
+2026-09-27 (`/proc` RSS and `getrusage` peaks, on this repository's code):
+
+| process | RSS |
+| --- | --- |
+| the worker (supervisor) after its imports and a DB session | ~105 MB, plus a few MB a slot |
+| a job's recipe process, idle while Modal runs a stage (pipeline, numpy, PIL, modal) | ~80 MB |
+| `normalize` of a 25 s 4K HEVC clip (ffmpeg decoding, 100 frames kept) | peak ~380 MB (ffmpeg) + the 80 |
+| `place`/`package`/`thumbnail` of a 500k-gaussian SH3 splat (Lane 1 recipe, same code) | peak ~395 MB |
+| the same at 1M gaussians (the phone's "Best" cap) | peak ~750 MB |
+
+So a job spends most of its life at ~80 MB and peaks at 0.4-0.75 GB for a few seconds at
+either end. **N = 2 is safe on the 2 GB machine** for phone captures up to 1M gaussians:
+two worst-case peaks landing together are ~1.6 GB with the supervisor. N = 3 fits only
+while peaks do not coincide, which nothing guarantees, so it wants the 4 GB machine
+(`fly scale memory 4096 --process-group worker`, or the `[[vm]]` block in `fly.toml`); so
+does any N with
+Lane 1 uploads of several million gaussians, which scale at ~0.75 GB per million. The
+20 GB volume holds about two captures' workdirs in flight, so N > 2 wants it extended
+too. If the machine does run out, the kernel kills the largest process -- a recipe
+process, whose stage then fails and is retried under the attempt budget -- not the
+supervisor.
+
 ## Configuration
 
 `WORKER_*` in the environment, read through `app.config.Settings` into `WorkerConfig`:
 `WORKDIR`, `RUNNER` (`stub` until A8 makes Lane 1's stages real), `RECIPE_DIR`,
-`IMPL_MODULES`, `LEASE_S`, `POLL_S`, `IDLE_S`, `MAX_ATTEMPTS`, `RETRY_BACKOFF_S`.
+`IMPL_MODULES`, `LEASE_S`, `POLL_S`, `IDLE_S`, `MAX_ATTEMPTS`, `RETRY_BACKOFF_S`,
+`CONCURRENCY` (slots, 1-8, default 1).
 
 ## Verify
 
