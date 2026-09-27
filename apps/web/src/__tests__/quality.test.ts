@@ -2,7 +2,15 @@ import type { CaptureQuality } from "@twin/contracts";
 import { describe, expect, it } from "vitest";
 
 import { DEFAULTS, paramsFor, previewParamsFor } from "@/upload/options";
-import { forecast, qualityOf, summary } from "@/upload/quality";
+import {
+  COVERAGE_TIP_IDS,
+  forecast,
+  qualityOf,
+  REFINE_MIN_KEEP_PCT,
+  REFINE_WITH_GAPS_MIN_KEEP_PCT,
+  refineAdvice,
+  summary,
+} from "@/upload/quality";
 import { parseCoverage } from "@/view/coverage";
 
 /** What tools/pipeline/quality.py `write_coverage` writes, byte for byte. */
@@ -106,6 +114,42 @@ describe("the quality forecast", () => {
     expect(qualityOf(verdict(), { id: "job-2" })).toBeNull();
     expect(qualityOf(verdict(), undefined)).toBeNull();
     expect(qualityOf(null, { id: "job-1" })).toBeNull();
+  });
+});
+
+describe("whether Refine is the next step", () => {
+  const tip = (id: string) => ({ id, text: `tip ${id}` });
+
+  it("leads with Refine when enough of the scene met the bar", () => {
+    expect(refineAdvice(verdict())).toEqual({ worthIt: true, reason: null });
+    // Gaps are worth fixing next time, but with most of the scene kept Refine still helps.
+    expect(refineAdvice(verdict({ keepPct: 62, tips: [tip("from-above")] })).worthIt).toBe(true);
+    expect(refineAdvice(verdict({ keepPct: REFINE_MIN_KEEP_PCT })).worthIt).toBe(true);
+  });
+
+  it("does not when too little of the scene met the bar, whatever the tips", () => {
+    const advice = refineAdvice(verdict({ keepPct: 8, tips: [] }));
+    expect(advice.worthIt).toBe(false);
+    expect(advice.reason).toMatch(/^Only 8% of the scene met the high-quality bar\./);
+    expect(refineAdvice(verdict({ keepPct: null })).reason).toMatch(/^None of the scene/);
+  });
+
+  it("does not when a middling share goes with missing views", () => {
+    const gaps = refineAdvice(verdict({ keepPct: 31, tips: [tip("all-around")] }));
+    expect(gaps.worthIt).toBe(false);
+    expect(gaps.reason).toContain("missing views");
+    expect(refineAdvice(verdict({ keepPct: REFINE_WITH_GAPS_MIN_KEEP_PCT - 1 })).worthIt).toBe(
+      true,
+    );
+    // "Well covered" is not a gap.
+    expect(refineAdvice(verdict({ keepPct: 31, tips: [tip("good")] })).worthIt).toBe(true);
+    for (const id of COVERAGE_TIP_IDS) {
+      expect(refineAdvice(verdict({ keepPct: 31, tips: [tip(id)] })).worthIt).toBe(false);
+    }
+  });
+
+  it("has nothing to say about a run that was already refined", () => {
+    expect(refineAdvice(verdict({ mode: "refine" }))).toEqual({ worthIt: false, reason: null });
   });
 });
 

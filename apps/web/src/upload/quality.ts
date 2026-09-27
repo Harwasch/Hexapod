@@ -44,3 +44,64 @@ export function summary(quality: CaptureQuality): string {
     .filter(Boolean)
     .join(" · ");
 }
+
+/**
+ * Below this share of the scene at the high-quality bar, a Refine is not offered as the
+ * next step. The keep tier is decided by how many frames saw a point, over what spread
+ * of angles, at what pixel size (tools/pipeline/quality.py): geometry of the capture,
+ * which a longer training does not change. So the preview's share is close to the most
+ * a Refine of the same frames can reach, and under a fifth of the scene is a capture to
+ * redo rather than a result to polish. A judgement, not a measurement: revisit it once
+ * previews and their Refines have been compared.
+ */
+export const REFINE_MIN_KEEP_PCT = 20;
+
+/**
+ * With less than this share kept *and* a tip that says views are missing, the same
+ * holds: the tips name what the capture lacks, and Refine cannot add it.
+ */
+export const REFINE_WITH_GAPS_MIN_KEEP_PCT = 40;
+
+/** The tips (quality.py `capture_tips`) that mean frames are missing, not training. */
+export const COVERAGE_TIP_IDS: ReadonlySet<string> = new Set([
+  "all-around",
+  "from-above",
+  "from-level",
+  "more-frames",
+  "more-angles",
+  "get-closer",
+]);
+
+export interface RefineAdvice {
+  /** Offer Refine as the primary action. */
+  worthIt: boolean;
+  /** Why not, in a sentence the phone shows above the tips; null when it is. */
+  reason: string | null;
+}
+
+/**
+ * Whether a finished preview is worth refining: the one place that rule lives. The phone
+ * shows Refine as the primary action when it is, and otherwise the reason, the tips and
+ * a quieter "Refine anyway".
+ */
+export function refineAdvice(
+  quality: Pick<CaptureQuality, "mode" | "keepPct" | "tips">,
+): RefineAdvice {
+  if (quality.mode !== "preview") return { worthIt: false, reason: null };
+  const keep = quality.keepPct;
+  if (keep === null || keep < REFINE_MIN_KEEP_PCT) {
+    const share = keep === null ? "None" : `Only ${String(Math.round(keep))}%`;
+    return {
+      worthIt: false,
+      reason: `${share} of the scene met the high-quality bar. Refine trains longer; it can't add the views this capture is missing, so capturing again will do more.`,
+    };
+  }
+  const gaps = quality.tips.filter((tip) => COVERAGE_TIP_IDS.has(tip.id));
+  if (keep < REFINE_WITH_GAPS_MIN_KEEP_PCT && gaps.length > 0) {
+    return {
+      worthIt: false,
+      reason: `${String(Math.round(keep))}% of the scene met the high-quality bar, and the capture is missing views (see Next time). Refine can't add them, so capturing again will do more.`,
+    };
+  }
+  return { worthIt: true, reason: null };
+}
