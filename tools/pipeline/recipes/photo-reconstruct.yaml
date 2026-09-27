@@ -59,6 +59,10 @@ stages:
       # extract + match + map 168 s -> 107 s, median rotation error 0.026 -> 0.032 deg
       # and translation 0.030% -> 0.046% of extent against the known poses.
       first_octave: 0
+      # `mapper: global` -- GLOMAP through pycolmap (global_sfm.py), falling back to the
+      # incremental mapper when it registers too few -- is opt-in per run until a real
+      # capture has compared the two. Incremental is the default:
+      # mapper: incremental
     # On Modal's CPU box, not the worker: `cpu4` is 4 cores and 8 GB with no GPU, billed
     # per second ($0.25 an hour) only while a capture is posed. Feature extraction
     # peaked at 1.7 GB on real 1080p frames, more than the 2 GB worker can spare, and a
@@ -94,7 +98,9 @@ stages:
       #     A tenth of the schedule (3,000 steps, decay and densification included) on
       #     frames a quarter the pixels. For "did this capture work at all" in minutes.
       #   Refine:  {schedule_scale: 1.0}
-      #     The whole schedule even for a capture under `schedule_full_at` frames.
+      #     The whole schedule even for a capture under `schedule_full_at` frames. The
+      #     phone's Refine also sets `init_from: preview`: start from the preview's own
+      #     splat (init_seed.py) on `init_schedule_scale` (0.5) of the schedule instead.
       #
       # Options, deliberately not defaults of either (`training.gsplat_argv` has each
       # one's mechanics):

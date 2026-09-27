@@ -453,6 +453,46 @@ needs a COLMAP build in the training image. It is not done.
 A fixture-sized check of the same stage runs in CI: 40 rendered frames, exhaustive,
 40/40 registered.
 
+### `mapper: global`, and the minutes that are not COLMAP
+
+`pose` now runs on Modal's `cpu4`. Its first real 87-frame video took 301 s, of which
+COLMAP was 192 s (extract 3.7, match 121, map 67). Two changes aim at the rest:
+
+- **`mapper: global`** (opt-in; `global_sfm.py`) maps with GLOMAP as COLMAP 4 ships it,
+  through the prebuilt `pycolmap==4.2.0` wheel in the CPU image, on a copy of the 3.9.1
+  database; a result under `min_registered_fraction`, or a mapper that cannot run, falls
+  back to the incremental mapper on the same matches. On the 40-frame orbit: 40/40,
+  0.104° / 0.172% against incremental's 0.122° / 0.207%. Whether it saves most of the
+  67 s of mapping on a real video is **unmeasured**; turn it on per run with
+  `{"pose": {"mapper": "global"}}` and compare `mapS` with `globalMapS`.
+- **Transfers.** A frames artifact is ~100 objects, moved one request at a time by both
+  the worker and the container. Both now move eight at once, and every remote stage
+  records where its wall time went: `stageInS` and `outputsBackS` (worker side),
+  `remoteFetchS`, `remoteStageS` and `remoteUploadS` (container side), beside `billedS`.
+  What is left of `billedS` after those is container start and queueing. The next real
+  run is what attributes the 110 s; nothing here measured it.
+
+## Refine from the preview
+
+The phone's Refine re-runs `train` in the preview's workdir with `init_from: preview`
+(`init_seed.py`). Every `train` run leaves a seed -- the centres, colours and opacities of
+its visible gaussians -- in its `checkpoint/`, which a re-run keeps and `CloudRunner`
+carries to the GPU box. The Refine appends that seed, cropped to the support mask, to
+COLMAP's points (with empty tracks, so the depth loss keeps its real observations), and
+trains `init_schedule_scale` (0.5) of the schedule, because gsplat's `sfm` init turns
+exactly those points into its starting gaussians. A seed trained against other poses is
+refused by fingerprint and the run trains from COLMAP's points on its own schedule.
+
+**Expected**: the measured 30k-step Refine was 1,278 s of L4 training (21 min, $0.31 all
+in); half the steps from a dense start should be roughly 650-750 s (the early steps cost
+more, starting near the cap rather than growing to it), about $0.14-0.17 less. **Check
+on the first run**: `train_metrics.json`'s `init` block (seed points, budget) and
+`requestedIterations` (15,000); held-out PSNR/SSIM/LPIPS against the 30k run's
+(`train_metrics.json` of the earlier Refine); `trainSeconds`; the quality stage's
+`keepPct`; and floaters in the viewer. If quality falls short, raise
+`init_schedule_scale` (the phone may send it) before abandoning the seed; `init_from:
+sfm` restores the old behaviour.
+
 ## Lane 1
 
 ```
