@@ -77,8 +77,10 @@ from __future__ import annotations
 
 import json
 import math
+import shutil
+import tempfile
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -88,9 +90,13 @@ import numpy.typing as npt
 
 import gaussians
 import holdout
+import outofcore
 import sfm
+import splat_io
+import splat_stream
 import support_mask
 from artifacts import ArtifactDecl
+from captures_bridge import sigmoid
 from contracts import MetricValue, StageContext, StageOutcome
 from registry import stage_impl
 
@@ -102,13 +108,19 @@ __all__ = [
     "QUALITY_JSON",
     "Cameras",
     "Roi",
+    "RoiStats",
     "Support",
     "Thresholds",
     "assign_tiers",
+    "coverage_positions",
     "estimate_roi",
+    "extent_of",
     "gate",
     "measure_support",
+    "occupied_share_of",
     "read_coverage",
+    "support_pass",
+    "supported_extent",
     "write_coverage",
 ]
 
@@ -316,80 +328,6 @@ class Support:
     camera_depth: F64
 
 
-def measure_support(
-    xyz: F32,
-    alpha: F32,
-    cameras: Cameras,
-    *,
-    zbuffer_side: int = 160,
-    occluder_opacity: float = 0.5,
-    depth_tolerance: float = 0.05,
-    footprint: F32 | None = None,
-    max_footprint_cells: int = 3,
-    chunk: int = 1 << 18,
-) -> Support:
-    """Views, spread and GSD for every gaussian, in bounded memory.
-
-    `footprint` is each gaussian's radius in world units (its largest standard
-    deviation, for a splat). An occluder covers every z-buffer cell within that radius
-    of its centre, up to `max_footprint_cells` cells: a surface made of a few large
-    gaussians must occlude like the surface it renders as, not like a sieve of centres.
-
-    Memory is `cameras x chunk` booleans plus a few `chunk`-long columns at a time, so a
-    1.5-million-gaussian splat over 300 frames costs what 260k over 300 does. Positions
-    are handled as three contiguous columns rather than an (n, 3) array: the per-camera
-    projection is then a dozen streaming float32 operations, which measured 5x faster
-    than a matmul and a strided gather here.
-    """
-    points = np.asarray(xyz, dtype=np.float32).reshape(-1, 3)
-    count = int(points.shape[0])
-    finite = np.isfinite(points).all(axis=1)
-    columns = _columns(np.where(finite[:, None], points, np.float32(0.0)))
-    opaque = finite & (np.nan_to_num(alpha, nan=0.0) >= occluder_opacity)
-    centres = cameras.centres
-    scale = float(np.median(np.linalg.norm(centres - centres.mean(axis=0), axis=1))) or 1.0
-    near = 1e-3 * scale
-
-    radius = (
-        np.zeros(count, dtype=np.float32)
-        if footprint is None
-        else np.nan_to_num(np.asarray(footprint, dtype=np.float32), nan=0.0, posinf=0.0)
-    )
-    buffers, depths = _zbuffers(
-        columns, radius, opaque, cameras, zbuffer_side, near, max_footprint_cells, chunk
-    )
-
-    views = np.zeros(count, dtype=np.int32)
-    spread = np.zeros(count, dtype=np.float32)
-    gsd = np.full(count, _UNSEEN_GSD, dtype=np.float32)
-    for start in range(0, count, chunk):
-        stop = min(count, start + chunk)
-        block = _slice(columns, start, stop)
-        size = stop - start
-        seen = np.zeros((cameras.count, size), dtype=np.bool_)
-        direction_sum = np.zeros((3, size), dtype=np.float32)
-        block_gsd = np.full(size, _UNSEEN_GSD, dtype=np.float32)
-        for j in range(cameras.count):
-            index, depth = _visible(
-                block, cameras, j, buffers[j], zbuffer_side, near, depth_tolerance
-            )
-            if index.size == 0:
-                continue
-            seen[j, index] = True
-            toward = _unit_towards(centres[j], _take(block, index))
-            for axis in range(3):
-                direction_sum[axis, index] += toward[axis]
-            focal = float(min(cameras.fx[j], cameras.fy[j]))
-            # `index` is unique within one camera, so a plain gather-min-scatter is exact.
-            block_gsd[index] = np.minimum(block_gsd[index], depth / np.float32(focal))
-        block_views = seen.sum(axis=0).astype(np.int32)
-        block_views[~finite[start:stop]] = 0
-        views[start:stop] = block_views
-        gsd[start:stop] = np.where(block_views > 0, block_gsd, _UNSEEN_GSD)
-        spread[start:stop] = _spread(block, centres, seen, direction_sum, block_views)
-    return Support(views=views, spread_deg=spread, gsd=gsd, camera_depth=depths)
-
-
 Columns = tuple[F32, F32, F32]
 
 
@@ -457,58 +395,6 @@ def _rows_cols(
 def _cells(u: F32, v: F32, cameras: Cameras, j: int, side: int) -> npt.NDArray[np.intp]:
     row, col = _rows_cols(u, v, cameras, j, side)
     return row * _grid(cameras, j, side)[0] + col
-
-
-def _zbuffers(
-    columns: Columns,
-    radius: F32,
-    opaque: Bools,
-    cameras: Cameras,
-    side: int,
-    near: float,
-    max_cells: int,
-    chunk: int,
-) -> tuple[list[F32], F64]:
-    """The nearest opaque depth per cell, per camera; and each camera's median depth."""
-    buffers: list[F32] = []
-    depths = np.full(cameras.count, np.nan, dtype=np.float64)
-    occluders = _take(columns, opaque)
-    occluder_radius = radius[opaque]
-    total = int(occluders[0].shape[0])
-    for j in range(cameras.count):
-        gw, gh = _grid(cameras, j, side)
-        buffer = np.full(gw * gh, np.inf, dtype=np.float32)
-        cell_world = np.float32(
-            float(cameras.width[j]) / gw / float(min(cameras.fx[j], cameras.fy[j]))
-        )
-        samples: list[F32] = []
-        for start in range(0, total, chunk):
-            index, u, v, z = _project(_slice(occluders, start, start + chunk), cameras, j, near)
-            if z.size == 0:
-                continue
-            row, col = _rows_cols(u, v, cameras, j, side)
-            np.minimum.at(buffer, row * gw + col, z)
-            # The footprint, in cells: world radius over what one cell spans at that depth.
-            reach = np.minimum(
-                (occluder_radius[start + index] / (z * cell_world)).astype(np.intp), max_cells
-            )
-            for ring_ in range(1, max_cells + 1):
-                wide = np.flatnonzero(reach >= ring_)
-                if wide.size == 0:
-                    break
-                r0, c0, zw = row[wide], col[wide], z[wide]
-                for dr in range(-ring_, ring_ + 1):
-                    for dc in range(-ring_, ring_ + 1):
-                        if max(abs(dr), abs(dc)) != ring_:
-                            continue
-                        rr, cc = r0 + dr, c0 + dc
-                        ok = (rr >= 0) & (rr < gh) & (cc >= 0) & (cc < gw)
-                        np.minimum.at(buffer, rr[ok] * gw + cc[ok], zw[ok])
-            samples.append(z[:: max(1, z.size // 20_000)])
-        if samples:
-            depths[j] = float(np.median(np.concatenate(samples)))
-        buffers.append(buffer)
-    return buffers, depths
 
 
 def _visible(
@@ -581,6 +467,422 @@ def _spread(block: Columns, centres: F64, seen: Bools, direction_sum: F32, views
     return degrees
 
 
+#: The visibility matrix of one support chunk (cameras x rows, a byte a pair) is held to
+#: this: the rows are cut to fit, so 300 frames take 2^18 rows at a time (75 MB) and 1,000
+#: take 84k. Views, spread and GSD are each a gaussian's own, so the cut changes nothing.
+SEEN_BYTES = 80 << 20
+#: Occluders are z-buffered in blocks of exactly this many opaque rows, as they always
+#: were: each camera's median depth (the ROI's fallback for a walk) samples every block's
+#: depths at a stride its size sets, so the block is part of the answer, not a tuning knob.
+OCCLUDER_BLOCK = 1 << 18
+#: Depth samples held in memory, over all cameras, before they are spilled to disk: at most
+#: ~40k a camera per block, which at 300 cameras and a 30M-gaussian scene would be ~1.4 GB.
+SAMPLE_BYTES = 32 << 20
+#: Cells per axis a chunk is split into for culling cameras against, and the fewest rows
+#: worth splitting (below it the culling costs more than the projections it saves).
+CULL_CELLS = 8
+CULL_MIN_ROWS = 4096
+
+#: A stream of rows: per chunk, in row order, x, y and z (float32, as stored), alpha and
+#: the occluder radius (`footprint`). Called once per pass.
+Rows = Callable[[], Iterable[tuple[F32, F32, F32, npt.NDArray[Any], F32]]]
+
+
+def measure_support(
+    xyz: F32,
+    alpha: F32,
+    cameras: Cameras,
+    *,
+    zbuffer_side: int = 160,
+    occluder_opacity: float = 0.5,
+    depth_tolerance: float = 0.05,
+    footprint: F32 | None = None,
+    max_footprint_cells: int = 3,
+    chunk: int = OCCLUDER_BLOCK,
+) -> Support:
+    """Views, spread and GSD for every gaussian of arrays in memory (`support_pass` over
+    them, `chunk` rows at a time).
+
+    `footprint` is each gaussian's radius in world units (its largest standard
+    deviation, for a splat). An occluder covers every z-buffer cell within that radius
+    of its centre, up to `max_footprint_cells` cells: a surface made of a few large
+    gaussians must occlude like the surface it renders as, not like a sieve of centres.
+    """
+    points = np.asarray(xyz, dtype=np.float32).reshape(-1, 3)
+    count = int(points.shape[0])
+    opacity = np.asarray(alpha).reshape(-1)
+    radius = (
+        np.zeros(count, dtype=np.float32)
+        if footprint is None
+        else np.asarray(footprint, dtype=np.float32).reshape(-1)
+    )
+
+    def rows() -> Iterator[tuple[F32, F32, F32, npt.NDArray[Any], F32]]:
+        for start, stop in splat_io.ranges(count, chunk):
+            part = points[start:stop]
+            yield part[:, 0], part[:, 1], part[:, 2], opacity[start:stop], radius[start:stop]
+
+    views = np.zeros(count, dtype=np.int32)
+    spread = np.zeros(count, dtype=np.float32)
+    gsd = np.full(count, _UNSEEN_GSD, dtype=np.float32)
+
+    def emit(start: int, block_views: I32, block_spread: F32, block_gsd: F32) -> None:
+        stop = start + block_views.shape[0]
+        views[start:stop], spread[start:stop], gsd[start:stop] = (
+            block_views,
+            block_spread,
+            block_gsd,
+        )
+
+    depths = support_pass(
+        rows,
+        cameras,
+        emit,
+        zbuffer_side=zbuffer_side,
+        occluder_opacity=occluder_opacity,
+        depth_tolerance=depth_tolerance,
+        max_footprint_cells=max_footprint_cells,
+        block=chunk,
+    )
+    return Support(views=views, spread_deg=spread, gsd=gsd, camera_depth=depths)
+
+
+def support_pass(
+    rows: Rows,
+    cameras: Cameras,
+    emit: Callable[[int, I32, F32, F32], None],
+    *,
+    zbuffer_side: int = 160,
+    occluder_opacity: float = 0.5,
+    depth_tolerance: float = 0.05,
+    max_footprint_cells: int = 3,
+    block: int = OCCLUDER_BLOCK,
+    spill: Path | None = None,
+) -> F64:
+    """Views, spread and GSD of every row `rows` yields, in two passes over them and in
+    memory that does not grow with their number; returns each camera's median depth.
+
+    Pass one fills a z-buffer per camera from the opaque rows, `block` of them at a time
+    (`_ZBuffers`). Pass two measures each chunk of rows against the buffers and hands the
+    results to `emit(start, views, spread, gsd)`, in row order. Both split a chunk into
+    spatial cells and test each camera against the cells first (`_Cull`), so a camera
+    projects only the rows that could be in its frame -- which leaves every result as it
+    was, and on a scene larger than any one frame saves most of the work.
+
+    Memory is the cameras' buffers (cameras x `zbuffer_side`^2 floats), one occluder
+    block, and a chunk's `SEEN_BYTES` visibility matrix. Positions are handled as three
+    contiguous columns rather than an (n, 3) array: the per-camera projection is then a
+    dozen streaming float32 operations, which measured 5x faster than a matmul and a
+    strided gather here.
+    """
+    centres = cameras.centres
+    scale = float(np.median(np.linalg.norm(centres - centres.mean(axis=0), axis=1))) or 1.0
+    near = 1e-3 * scale
+    zbuffers = _ZBuffers(cameras, zbuffer_side, near, max_footprint_cells, block, spill)
+    for x, y, z, alpha, radius in rows():
+        finite = np.isfinite(x) & np.isfinite(y) & np.isfinite(z)
+        opaque = finite & (np.nan_to_num(alpha, nan=0.0) >= occluder_opacity)
+        reach = np.nan_to_num(np.asarray(radius, dtype=np.float32), nan=0.0, posinf=0.0)
+        zbuffers.add((x[opaque], y[opaque], z[opaque]), reach[opaque])
+    buffers, depths = zbuffers.finish()
+    step = max(1, min(block, SEEN_BYTES // max(1, cameras.count)))
+    start = 0
+    for x, y, z, _, _ in rows():
+        finite = np.isfinite(x) & np.isfinite(y) & np.isfinite(z)
+        zero = np.float32(0.0)
+        columns = (
+            np.where(finite, x, zero).astype(np.float32),
+            np.where(finite, y, zero).astype(np.float32),
+            np.where(finite, z, zero).astype(np.float32),
+        )
+        size = int(finite.shape[0])
+        for low in range(0, size, step):
+            high = min(size, low + step)
+            views, spread, gsd = _support_rows(
+                _slice(columns, low, high),
+                finite[low:high],
+                cameras,
+                centres,
+                buffers,
+                zbuffer_side,
+                near,
+                depth_tolerance,
+            )
+            emit(start + low, views, spread, gsd)
+        start += size
+    return depths
+
+
+def _support_rows(
+    block: Columns,
+    finite: Bools,
+    cameras: Cameras,
+    centres: F64,
+    buffers: list[F32],
+    side: int,
+    near: float,
+    tolerance: float,
+) -> tuple[I32, F32, F32]:
+    """One chunk of the support pass: views, spread and GSD of each of its rows."""
+    size = int(block[0].shape[0])
+    seen = np.zeros((cameras.count, size), dtype=np.bool_)
+    direction_sum = np.zeros((3, size), dtype=np.float32)
+    block_gsd = np.full(size, _UNSEEN_GSD, dtype=np.float32)
+    cull = _Cull(block)
+    for j in range(cameras.count):
+        subset = cull.rows(cameras, j, near)
+        if subset is not None and subset.size == 0:
+            continue
+        index, depth = _visible(
+            block if subset is None else _take(block, subset),
+            cameras,
+            j,
+            buffers[j],
+            side,
+            near,
+            tolerance,
+        )
+        if index.size == 0:
+            continue
+        if subset is not None:
+            index = subset[index]
+        seen[j, index] = True
+        toward = _unit_towards(centres[j], _take(block, index))
+        for axis in range(3):
+            direction_sum[axis, index] += toward[axis]
+        focal = float(min(cameras.fx[j], cameras.fy[j]))
+        # `index` is unique within one camera, so a plain gather-min-scatter is exact.
+        block_gsd[index] = np.minimum(block_gsd[index], depth / np.float32(focal))
+    views = seen.sum(axis=0).astype(np.int32)
+    views[~finite] = 0
+    gsd = np.where(views > 0, block_gsd, _UNSEEN_GSD).astype(np.float32)
+    spread = _spread(block, centres, seen, direction_sum, views)
+    return views, spread, gsd
+
+
+class _ZBuffers:
+    """The nearest opaque depth per z-buffer cell, per camera, filled a block at a time.
+
+    Opaque rows arrive in row order in chunks of any size; they are regrouped into blocks
+    of exactly `block` rows (the last one shorter), which is how `measure_support` always
+    cut them, because each camera's depth sample is taken per block. Each block's depths
+    are sampled per camera at a stride that keeps ~20k of them; samples beyond
+    `SAMPLE_BYTES` are spilled to `spill` (a temporary directory by default), and the
+    median of each camera's samples is its depth.
+    """
+
+    def __init__(
+        self,
+        cameras: Cameras,
+        side: int,
+        near: float,
+        max_cells: int,
+        block: int,
+        spill: Path | None,
+    ) -> None:
+        self.cameras = cameras
+        self.side = side
+        self.near = near
+        self.max_cells = max_cells
+        self.block = block
+        self.buffers: list[F32] = []
+        for j in range(cameras.count):
+            gw, gh = _grid(cameras, j, side)
+            self.buffers.append(np.full(gw * gh, np.inf, dtype=np.float32))
+        self._pending: list[tuple[Columns, F32]] = []
+        self._pending_rows = 0
+        self._samples: list[list[F32]] = [[] for _ in range(cameras.count)]
+        self._sampled = np.zeros(cameras.count, dtype=np.bool_)
+        self._held = 0
+        self._spill_root = spill
+        self._spill: Path | None = None
+        self._temporary: tempfile.TemporaryDirectory[str] | None = None
+
+    def add(self, columns: Columns, radius: F32) -> None:
+        size = int(columns[0].shape[0])
+        if size == 0:
+            return
+        self._pending.append((columns, radius))
+        self._pending_rows += size
+        while self._pending_rows >= self.block:
+            self._fill(*self._take(self.block))
+
+    def _take(self, count: int) -> tuple[Columns, F32]:
+        xs, ys, zs, rs = zip(*((c[0], c[1], c[2], r) for c, r in self._pending), strict=True)
+        x, y, z, r = (np.concatenate(parts) for parts in (xs, ys, zs, rs))
+        self._pending = (
+            [] if count >= x.shape[0] else [((x[count:], y[count:], z[count:]), r[count:])]
+        )
+        self._pending_rows = max(0, int(x.shape[0]) - count)
+        return (x[:count], y[:count], z[:count]), r[:count]
+
+    def _fill(self, occluders: Columns, radius: F32) -> None:
+        """`_zbuffers`' inner loop for one block, for every camera."""
+        cameras, side, max_cells = self.cameras, self.side, self.max_cells
+        cull = _Cull(occluders)
+        for j in range(cameras.count):
+            subset = cull.rows(cameras, j, self.near)
+            if subset is not None and subset.size == 0:
+                continue
+            index, u, v, z = _project(
+                occluders if subset is None else _take(occluders, subset), cameras, j, self.near
+            )
+            if z.size == 0:
+                continue
+            if subset is not None:
+                index = subset[index]
+            gw, gh = _grid(cameras, j, side)
+            buffer = self.buffers[j]
+            cell_world = np.float32(
+                float(cameras.width[j]) / gw / float(min(cameras.fx[j], cameras.fy[j]))
+            )
+            row, col = _rows_cols(u, v, cameras, j, side)
+            np.minimum.at(buffer, row * gw + col, z)
+            # The footprint, in cells: world radius over what one cell spans at that depth.
+            reach = np.minimum((radius[index] / (z * cell_world)).astype(np.intp), max_cells)
+            for ring_ in range(1, max_cells + 1):
+                wide = np.flatnonzero(reach >= ring_)
+                if wide.size == 0:
+                    break
+                r0, c0, zw = row[wide], col[wide], z[wide]
+                for dr in range(-ring_, ring_ + 1):
+                    for dc in range(-ring_, ring_ + 1):
+                        if max(abs(dr), abs(dc)) != ring_:
+                            continue
+                        rr, cc = r0 + dr, c0 + dc
+                        ok = (rr >= 0) & (rr < gh) & (cc >= 0) & (cc < gw)
+                        np.minimum.at(buffer, rr[ok] * gw + cc[ok], zw[ok])
+            sample = z[:: max(1, z.size // 20_000)]
+            self._samples[j].append(sample)
+            self._sampled[j] = True
+            self._held += int(sample.nbytes)
+        if self._held > SAMPLE_BYTES:
+            self._spill_samples()
+
+    def _spill_dir(self) -> Path:
+        if self._spill is None:
+            if self._spill_root is None:
+                self._temporary = tempfile.TemporaryDirectory(prefix="zbuffer-samples-")
+                self._spill = Path(self._temporary.name)
+            else:
+                self._spill = self._spill_root
+                self._spill.mkdir(parents=True, exist_ok=True)
+        return self._spill
+
+    def _spill_samples(self) -> None:
+        directory = self._spill_dir()
+        for j, held in enumerate(self._samples):
+            if held:
+                with (directory / f"{j}.f32").open("ab") as handle:
+                    for sample in held:
+                        np.ascontiguousarray(sample, dtype=np.float32).tofile(handle)
+                held.clear()
+        self._held = 0
+
+    def finish(self) -> tuple[list[F32], F64]:
+        if self._pending_rows:
+            self._fill(*self._take(self._pending_rows))
+        depths = np.full(self.cameras.count, np.nan, dtype=np.float64)
+        try:
+            for j in range(self.cameras.count):
+                if not self._sampled[j]:
+                    continue
+                parts = list(self._samples[j])
+                spilled = None if self._spill is None else self._spill / f"{j}.f32"
+                if spilled is not None and spilled.is_file():
+                    parts.append(np.fromfile(spilled, dtype=np.float32))
+                    spilled.unlink()
+                # Order does not matter to a median: only which values were sampled.
+                depths[j] = float(np.median(np.concatenate(parts)))
+        finally:
+            if self._temporary is not None:
+                self._temporary.cleanup()
+        return self.buffers, depths
+
+
+class _Cull:
+    """A chunk's rows grouped into spatial cells, so a camera is tested against cells.
+
+    `rows(cameras, j, near)` is None when camera `j` may see every cell (project them
+    all), an empty array when it sees none, and otherwise the rows of the cells it may
+    see, ascending -- so a camera's projections come out in the order, and with the
+    values, they would have had over the whole chunk, and nothing it culls could have
+    been in its frame.
+    """
+
+    def __init__(self, columns: Columns) -> None:
+        size = int(columns[0].shape[0])
+        self.cell: npt.NDArray[np.intp] | None = None
+        if size < CULL_MIN_ROWS:
+            return
+        index = np.zeros(size, dtype=np.intp)
+        for values in columns:
+            least, most = float(values.min()), float(values.max())
+            span = most - least
+            if span > 0 and math.isfinite(span):
+                bins = ((values.astype(np.float64) - least) * (CULL_CELLS / span)).astype(np.intp)
+                index = index * CULL_CELLS + np.clip(bins, 0, CULL_CELLS - 1)
+            else:
+                index = index * CULL_CELLS
+        order = np.argsort(index, kind="stable")
+        ordered = index[order]
+        starts = np.flatnonzero(np.concatenate([[True], ordered[1:] != ordered[:-1]]))
+        self.cell = index
+        self.occupied = ordered[starts]
+        low = np.stack([np.minimum.reduceat(c[order], starts) for c in columns], axis=1)
+        high = np.stack([np.maximum.reduceat(c[order], starts) for c in columns], axis=1)
+        low, high = low.astype(np.float64), high.astype(np.float64)
+        # The eight corners of each occupied cell's own bounding box.
+        pick = np.array([[(k >> a) & 1 for a in range(3)] for k in range(8)], dtype=bool)
+        self.corners = np.where(pick[None, :, :], high[:, None, :], low[:, None, :])
+        self.magnitude = np.abs(self.corners)
+
+    def rows(self, cameras: Cameras, j: int, near: float) -> npt.NDArray[np.intp] | None:
+        if self.cell is None:
+            return None
+        visible = _frustum(cameras, j, self.corners, self.magnitude, near)
+        if bool(visible.all()):
+            return None
+        if not bool(visible.any()):
+            return np.zeros(0, dtype=np.intp)
+        wanted = np.zeros(CULL_CELLS**3, dtype=np.bool_)
+        wanted[self.occupied[visible]] = True
+        return np.flatnonzero(wanted[self.cell])
+
+
+def _frustum(cameras: Cameras, j: int, corners: F64, magnitude: F64, near: float) -> Bools:
+    """Which boxes (given by their corners) camera `j` may see, conservatively.
+
+    A box is culled only when all eight corners are beyond one side of the frustum --
+    behind the near plane, or left, right, above or below the image -- by a margin, so
+    that no point in it can be seen after `_project`'s float32 rounding. Each test is
+    linear in the camera-frame point (`u < 0` is `fx x + cx z < 0` in front of the
+    camera), so all corners beyond it means every point of the box is. The margin is 1e-4
+    of the magnitudes involved -- float32 rounding is ~6e-8 of them -- and grows with how
+    close to the near plane the box reaches, where dividing by depth amplifies rounding.
+    """
+    rotation = cameras.rotations[j]
+    translation = cameras.translations[j]
+    camera = corners @ rotation.T + translation
+    size = magnitude @ np.abs(rotation).T + np.abs(translation)
+    xc, yc, zc = camera[..., 0], camera[..., 1], camera[..., 2]
+    mx, my, mz = size[..., 0], size[..., 1], size[..., 2]
+    depth_scale = mz.max(axis=1)
+    tau = 1e-4 * np.maximum(1.0, depth_scale / near)
+    fx, fy = float(cameras.fx[j]), float(cameras.fy[j])
+    cx, cy = float(cameras.cx[j]), float(cameras.cy[j])
+    width, height = float(cameras.width[j]), float(cameras.height[j])
+    margin_u = (tau * (fx * mx + (abs(cx) + width) * mz).max(axis=1))[:, None]
+    margin_v = (tau * (fy * my + (abs(cy) + height) * mz).max(axis=1))[:, None]
+    behind = (zc <= near - (tau * depth_scale)[:, None]).all(axis=1)
+    left = (fx * xc + cx * zc < -margin_u).all(axis=1)
+    right = (fx * xc + (cx - width) * zc > margin_u).all(axis=1)
+    above = (fy * yc + cy * zc < -margin_v).all(axis=1)
+    below = (fy * yc + (cy - height) * zc > margin_v).all(axis=1)
+    visible: Bools = ~(behind | left | right | above | below)
+    return visible
+
+
 # ---------------------------------------------------------------------------------------
 # The region of interest
 # ---------------------------------------------------------------------------------------
@@ -610,6 +912,10 @@ class Roi:
         return inside
 
 
+#: A stream of finite points, (m, 3) float64 per chunk. Called once per pass.
+Points = Callable[[], Iterable[F64]]
+
+
 def supported_extent(xyz: F32, tiers: U8, fallback: Roi, quantile: float = 99.0) -> Roi:
     """The sphere that holds the well-supported part of the scene: the keep tier's extent.
 
@@ -621,10 +927,35 @@ def supported_extent(xyz: F32, tiers: U8, fallback: Roi, quantile: float = 99.0)
     """
     kept = np.asarray(xyz, dtype=np.float64)[tiers == TIER_KEEP]
     kept = kept[np.isfinite(kept).all(axis=1)]
-    if kept.shape[0] < 32:
+    return extent_of(lambda: [kept], fallback, quantile)
+
+
+def extent_of(kept: Points, fallback: Roi, quantile: float = 99.0) -> Roi:
+    """`supported_extent` of streamed keep points: the same `np.median` (per axis) and
+    `np.percentile`, exactly, in passes over them."""
+    count = sum(int(points.shape[0]) for points in kept())
+    if count < 32:
         return replace(fallback, method=f"{fallback.method} (too little keep for an extent)")
-    centre = np.median(kept, axis=0)
-    radius = float(np.percentile(np.linalg.norm(kept - centre, axis=1), quantile))
+
+    def axes() -> Iterator[tuple[F64, npt.NDArray[np.int64]]]:
+        for points in kept():
+            yield points.T.reshape(-1), np.repeat(np.arange(3, dtype=np.int64), points.shape[0])
+
+    selection = outofcore.order_statistics(axes, outofcore.median_ranks, groups=[0, 1, 2])
+    middle = np.array(
+        [[selection.at(axis, rank) for axis in range(3)] for rank in outofcore.median_ranks(count)],
+        dtype=np.float64,
+    )
+    # `np.median(kept, axis=0)` is the mean of the one or two middle rows, over axis 0.
+    centre = np.mean(middle, axis=0)
+
+    def distances() -> Iterator[F64]:
+        for points in kept():
+            yield np.linalg.norm(points - centre, axis=1)
+
+    found = outofcore.percentile(distances, [quantile])
+    assert found is not None
+    radius = float(found[0])
     return Roi(
         centre=centre,
         radius=max(radius, 1e-6),
@@ -822,10 +1153,20 @@ def read_coverage(path: Path) -> tuple[F32, U8]:
 def _coverage_sample(xyz: F32, alpha: F32, limit: int, seed: int = 0) -> npt.NDArray[np.intp]:
     """Up to `limit` indices of visible gaussians, the same ones on every run."""
     candidates = np.flatnonzero(np.isfinite(xyz).all(axis=1) & (alpha >= 0.05))
-    if candidates.size <= limit:
-        return candidates
+    positions = coverage_positions(int(candidates.size), limit, seed)
+    return candidates if positions is None else candidates[positions]
+
+
+def coverage_positions(candidates: int, limit: int, seed: int = 0) -> npt.NDArray[np.int64] | None:
+    """Which of `candidates` visible gaussians `coverage.ply` samples, as their ranks
+    among the candidates (None: all of them). Drawn from the count alone, so the stage can
+    count the candidates in one pass and pick them out in the next: `rng.choice` over an
+    array draws the same positions as over its length, and sorting them sorts the
+    gaussians, since candidates are in row order."""
+    if candidates <= limit:
+        return None
     rng = np.random.default_rng(seed)
-    return np.sort(rng.choice(candidates, size=limit, replace=False))
+    return np.sort(rng.choice(candidates, size=limit, replace=False)).astype(np.int64)
 
 
 # ---------------------------------------------------------------------------------------
@@ -833,15 +1174,36 @@ def _coverage_sample(xyz: F32, alpha: F32, limit: int, seed: int = 0) -> npt.NDA
 # ---------------------------------------------------------------------------------------
 
 
+@dataclass(frozen=True)
+class RoiStats:
+    """What the tips need of the gaussians in the region of interest: how many there are,
+    how many fall short of keep on each criterion, and their median view count."""
+
+    count: int
+    short_views: int
+    short_spread: int
+    short_gsd: int
+    median_views: int | None
+
+    @staticmethod
+    def of(views: I32, spread: F32, gsd_ratio: F32, tiers: U8, thresholds: Thresholds) -> RoiStats:
+        """From the ROI's gaussians' own arrays."""
+        short = tiers != TIER_KEEP
+        return RoiStats(
+            count=int(views.size),
+            short_views=int((short & (views < thresholds.keep_min_views)).sum()),
+            short_spread=int((short & (spread < thresholds.keep_min_spread_deg)).sum()),
+            short_gsd=int((short & (gsd_ratio > thresholds.keep_max_gsd_ratio)).sum()),
+            median_views=int(np.median(views)) if views.size else None,
+        )
+
+
 def capture_tips(
     *,
     centres: F64,
     roi: Roi,
     up: F64 | None,
-    roi_views: I32,
-    roi_spread: F32,
-    roi_gsd_ratio: F32,
-    roi_tiers: U8,
+    roi_stats: RoiStats,
     thresholds: Thresholds,
     keep_pct: float | None,
 ) -> tuple[list[dict[str, str]], dict[str, object]]:
@@ -910,15 +1272,15 @@ def capture_tips(
                     ),
                 }
             )
-    if roi_views.size:
-        short = roi_tiers != TIER_KEEP
+    if roi_stats.count:
+        # Shares of the ROI's gaussians, as `(mask).mean()` over them gave: count / n.
         failing = {
-            "views": float((short & (roi_views < thresholds.keep_min_views)).mean()),
-            "spread": float((short & (roi_spread < thresholds.keep_min_spread_deg)).mean()),
-            "gsd": float((short & (roi_gsd_ratio > thresholds.keep_max_gsd_ratio)).mean()),
+            "views": roi_stats.short_views / roi_stats.count,
+            "spread": roi_stats.short_spread / roi_stats.count,
+            "gsd": roi_stats.short_gsd / roi_stats.count,
         }
         geometry["shortOfKeepBy"] = {key: round(value, 3) for key, value in failing.items()}
-        median_views = int(np.median(roi_views))
+        median_views = roi_stats.median_views
         if failing["views"] >= 0.15:
             tips.append(
                 {
@@ -956,7 +1318,7 @@ def capture_tips(
 
 
 # ---------------------------------------------------------------------------------------
-# The stage
+# keepPct: its voxel and its share
 # ---------------------------------------------------------------------------------------
 
 
@@ -967,7 +1329,7 @@ SHARE_MIN_CELLS = 24
 
 
 def _share_voxel(
-    mask: support_mask.SupportMask | None, xyz: F32, gsd: F32, seen: Bools, scene: Roi
+    mask: support_mask.SupportMask | None, near: support_mask.PointSet, scene: Roi
 ) -> tuple[float, str]:
     """keepPct's voxel side, in model units, and what decided it.
 
@@ -976,14 +1338,13 @@ def _share_voxel(
     is measured at the data's own resolution, and the same capture at 25x the scale says
     the same number. A fixed count of cells across the scene made a building's voxels
     tens of times larger than a table's. With no mask (too little keep), the same rule
-    over every seen gaussian in the scene stands in.
+    over `near` -- every seen gaussian in the scene -- stands in.
     """
     ceiling = 2.0 * scene.radius / SHARE_MIN_CELLS
     sizing = mask.sizing if mask is not None else None
     basis = "keep-footprint"
     if sizing is None or sizing.rule != "footprint":
-        near = seen & scene.contains(xyz)
-        sizing = support_mask.resolution(xyz[near], gsd[near])
+        sizing = support_mask.resolution_of(near)
         basis = "seen-footprint"
     if sizing is None:
         return ceiling, "scene-diameter"
@@ -992,28 +1353,46 @@ def _share_voxel(
     return sizing.resolution, basis
 
 
+#: A stream of `(xyz (m, 3) float32, tiers, alpha)` chunks, for `occupied_share_of`.
+TierRows = Callable[[], Iterable[tuple[F32, U8, F32]]]
+
+
 def _occupied_share(
     xyz: F32, tiers: U8, alpha: F32, roi: Roi, floor: int, voxel: float
+) -> float | None:
+    """`occupied_share_of` arrays in memory."""
+    return occupied_share_of(lambda: [(xyz, tiers, alpha)], roi, floor, voxel, int(xyz.shape[0]))
+
+
+def occupied_share_of(
+    rows: TierRows, roi: Roi, floor: int, voxel: float, count: int
 ) -> float | None:
     """The share of occupied voxels in the ROI whose gaussians mostly reach `floor`.
 
     "Volume that is keep" measured over the volume that has anything in it: an orbit's
     ROI sphere is mostly air, and a percentage of air would say nothing. `voxel` is the
-    side in model units (`_share_voxel`); only occupied voxels are ever held, so a fine
-    voxel over a large scene costs what the gaussians do, not the grid.
+    side in model units (`_share_voxel`). Only occupied voxels are ever held, a partition
+    of them at a time (`outofcore.group_counts`, `count` an upper bound on the rows), so
+    a fine voxel over a large scene costs neither the grid nor the gaussians.
     """
-    inside = roi.contains(xyz) & (np.nan_to_num(alpha, nan=0.0) >= 0.1)
-    if not inside.any():
-        return None
     cells = int(min(support_mask.MAX_DIM, max(1, math.ceil(2.0 * roi.radius / voxel))))
     size = max(voxel, 2.0 * roi.radius / cells)
-    ijk = np.floor((xyz[inside].astype(np.float64) - (roi.centre - roi.radius)) / size)
-    ijk = np.clip(ijk, 0, cells - 1).astype(np.int64)
-    linear = (ijk[:, 0] * cells + ijk[:, 1]) * cells + ijk[:, 2]
-    _, voxel_of = np.unique(linear, return_inverse=True)
-    total = np.bincount(voxel_of)
-    good = np.bincount(voxel_of, weights=(tiers[inside] >= floor).astype(np.float64))
-    return round(100.0 * float((good >= 0.5 * total).mean()), 1)
+
+    def keyed() -> Iterator[tuple[npt.NDArray[np.int64], F64]]:
+        for xyz, tiers, alpha in rows():
+            inside = roi.contains(xyz) & (np.nan_to_num(alpha, nan=0.0) >= 0.1)
+            ijk = np.floor((xyz[inside].astype(np.float64) - (roi.centre - roi.radius)) / size)
+            ijk = np.clip(ijk, 0, cells - 1).astype(np.int64)
+            linear = (ijk[:, 0] * cells + ijk[:, 1]) * cells + ijk[:, 2]
+            yield linear, (tiers[inside] >= floor).astype(np.float64)
+
+    voxels = good = 0
+    for keys, counts, sums in outofcore.group_counts(keyed, rows=count):
+        voxels += int(keys.shape[0])
+        good += int((sums >= 0.5 * counts).sum())
+    if voxels == 0:
+        return None
+    return round(100.0 * float(good / voxels), 1)
 
 
 def _metres_per_unit(georef: Mapping[str, Any] | None) -> float | None:
@@ -1038,6 +1417,74 @@ def _round(value: float | None, digits: int = 3) -> float | None:
     return None if value is None or not math.isfinite(value) else round(float(value), digits)
 
 
+# ---------------------------------------------------------------------------------------
+# The stage, a chunk at a time
+# ---------------------------------------------------------------------------------------
+
+#: Bits of the per-gaussian `flags` column the stage keeps between passes.
+FLAG_MEASURED = 1
+FLAG_VERIFIED = 2
+FLAG_DEMOTED = 4
+FLAG_COVERAGE_KEEP = 8
+
+
+class _Store:
+    """The stage's per-gaussian columns, on disk between passes, read back in chunks.
+
+    The stage never holds a whole column: positions, alpha and footprint are read from
+    the splat once and kept here (16 bytes a gaussian, not the PLY's 56 -- or gsplat's
+    248), and every later pass reads the columns it needs a chunk at a time.
+    """
+
+    def __init__(self, directory: Path, count: int, chunk: int) -> None:
+        self.columns = splat_io.ColumnStore(directory)
+        self.count = count
+        self.chunk = chunk
+
+    def rows(self, *names: str) -> Iterator[tuple[int, list[npt.NDArray[Any]]]]:
+        for start, stop in splat_io.ranges(self.count, self.chunk):
+            yield start, [self.columns.read(name, start, stop) for name in names]
+
+    def xyz(self, start: int, stop: int) -> F32:
+        return np.stack([self.columns.read(axis, start, stop) for axis in "xyz"], axis=1)
+
+
+@dataclass(frozen=True)
+class _Scale:
+    """What turns a gaussian's GSD into the criteria's units: the ROI's median GSD, and
+    metres per model unit when georeference measured one."""
+
+    median_gsd: float
+    metres: float | None
+
+    def ratio(self, gsd: F32, seen: Bools) -> F32:
+        if math.isfinite(self.median_gsd) and self.median_gsd > 0:
+            return (gsd / np.float32(self.median_gsd)).astype(np.float32)
+        return np.where(seen, np.float32(1.0), np.float32(np.inf)).astype(np.float32)
+
+    def millimetres(self, gsd: F32) -> F32 | None:
+        if self.metres is None:
+            return None
+        return (gsd * np.float32(self.metres * 1000.0)).astype(np.float32)
+
+
+@dataclass
+class _Tally:
+    """Counts gathered over the final tiers, in one pass."""
+
+    tiers: dict[int, int]
+    candidates: int = 0
+    roi: int = 0
+    short_views: int = 0
+    short_spread: int = 0
+    short_gsd: int = 0
+    roi_coverage_keep: int = 0
+    roi_demoted: int = 0
+    verified: int = 0
+    demoted: int = 0
+    measured: int = 0
+
+
 @stage_impl(
     "support_gate",
     consumes=("trained.ply", "poses"),
@@ -1046,7 +1493,13 @@ def _round(value: float | None, digits: int = 3) -> float | None:
     summary="the quality bar: keep what enough frames saw well, and say what to capture next",
 )
 def support_gate(ctx: StageContext) -> StageOutcome:
-    """Measure per-gaussian support, tier it, gate the splat by `bar`. See the module."""
+    """Measure per-gaussian support, tier it, gate the splat by `bar`. See the module.
+
+    A chunk at a time throughout (`chunk_gaussians` rows, 2^18 by default): the splat is
+    read once into the stage's own columns under its work directory, and every result
+    -- `gated.ply`, `quality.json`, `coverage.ply` -- is the one the whole-splat stage
+    wrote (tests/test_chunked_equivalence.py holds it to a frozen copy of that stage).
+    """
     started = time.perf_counter()
     mode = str(ctx.param("mode", "refine"))
     if mode not in MODES:
@@ -1055,75 +1508,223 @@ def support_gate(ctx: StageContext) -> StageOutcome:
     if bar not in BARS:
         raise ValueError(f"quality.bar must be one of {', '.join(BARS)}, not {bar!r}")
     thresholds = Thresholds.from_params(ctx.params)
-
-    splat = gaussians.read_splat(ctx.input(GATED_PLY_SOURCE))
+    chunk = int(ctx.param("chunk_gaussians", splat_io.CHUNK))
+    source = splat_stream.open_splat(ctx.input(GATED_PLY_SOURCE), chunk=chunk)
     model = sfm.read_model(ctx.input("poses"))
     cameras = Cameras.from_model(model)
-    xyz, alpha = splat.xyz, splat.alpha
-    support = measure_support(
-        xyz,
-        alpha,
+    scratch = ctx.work_dir / "quality-chunks"
+    store = _Store(scratch / "columns", source.count, chunk)
+    try:
+        return _grade(ctx, source, model, cameras, store, scratch, thresholds, mode, bar, started)
+    finally:
+        store.columns.remove()
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
+def _grade(
+    ctx: StageContext,
+    source: splat_stream.SplatSource,
+    model: sfm.Model,
+    cameras: Cameras,
+    store: _Store,
+    scratch: Path,
+    thresholds: Thresholds,
+    mode: str,
+    bar: str,
+    started: float,
+) -> StageOutcome:
+    count = source.count
+    columns = store.columns
+    # One read of the splat: what every later pass needs of it, 16 bytes a gaussian.
+    writers = {
+        name: columns.create(name, np.float32) for name in ("x", "y", "z", "alpha", "radius")
+    }
+    for _, read in source.chunks():
+        for axis in "xyz":
+            writers[axis].append(read[axis])
+        writers["alpha"].append(np.ascontiguousarray(sigmoid(read["opacity"]), dtype=np.float32))
+        writers["radius"].append(_footprint(read))
+    columns.finish()
+
+    def positions() -> Iterator[tuple[F32, F32, F32, F32, F32]]:
+        for _, (x, y, z, alpha, radius) in store.rows("x", "y", "z", "alpha", "radius"):
+            yield x, y, z, alpha, radius
+
+    outputs = {
+        "views": columns.create("views", np.int32),
+        "spread": columns.create("spread", np.float32),
+        "gsd": columns.create("gsd", np.float32),
+    }
+
+    def emit(_: int, views: I32, spread: F32, gsd: F32) -> None:
+        outputs["views"].append(views)
+        outputs["spread"].append(spread)
+        outputs["gsd"].append(gsd)
+
+    camera_depth = support_pass(
+        positions,
         cameras,
+        emit,
         zbuffer_side=int(ctx.param("zbuffer_side", 160)),
         occluder_opacity=float(ctx.param("occluder_opacity", 0.5)),
         depth_tolerance=float(ctx.param("depth_tolerance", 0.05)),
-        footprint=_footprint(splat.columns),
+        spill=scratch / "zbuffer-samples",
     )
-    measured = time.perf_counter() - started
+    columns.finish()
+    measured_s = time.perf_counter() - started
+    views_median = outofcore.grouped_median(
+        lambda: (views for _, (views,) in store.rows("views")), None
+    )
     ctx.log(
-        f"support: {splat.count} gaussians x {cameras.count} cameras in {measured:.1f} s; "
-        f"median views {int(np.median(support.views))}"
+        f"support: {count} gaussians x {cameras.count} cameras in {measured_s:.1f} s; "
+        f"median views {int(views_median[0]) if 0 in views_median else 'nan'}"
     )
 
     roi = estimate_roi(
         cameras.centres,
         cameras.axes,
-        support.camera_depth,
+        camera_depth,
         radius_factor=float(ctx.param("roi_radius_factor", 0.5)),
     )
-    in_roi = roi.contains(xyz) & (support.views > 0)
-    seen = support.views > 0
-    reference = in_roi if in_roi.any() else seen
-    median_gsd = float(np.median(support.gsd[reference])) if reference.any() else math.nan
-    gsd_ratio = (
-        (support.gsd / np.float32(median_gsd)).astype(np.float32)
-        if math.isfinite(median_gsd) and median_gsd > 0
-        else np.where(seen, np.float32(1.0), np.float32(np.inf)).astype(np.float32)
-    )
+
+    def in_roi_of(start: int, stop: int, views: I32) -> Bools:
+        contained: Bools = roi.contains(store.xyz(start, stop)) & (views > 0)
+        return contained
+
+    # The GSD the criterion is relative to: the median over the ROI's seen gaussians, or
+    # over every seen one when none of them is in the ROI.
+    def reference_gsd() -> Iterator[tuple[F32, npt.NDArray[np.int64]]]:
+        for start, (views, gsd) in store.rows("views", "gsd"):
+            seen = views > 0
+            inside = in_roi_of(start, start + views.shape[0], views)
+            yield (
+                np.concatenate([gsd[inside], gsd[seen]]),
+                np.concatenate(
+                    [np.zeros(int(inside.sum()), np.int64), np.ones(int(seen.sum()), np.int64)]
+                ),
+            )
+
+    medians = outofcore.grouped_median(reference_gsd, [0, 1])
+    median_gsd = float(medians[0]) if 0 in medians else float(medians.get(1, math.nan))
     georef = _read_json(ctx.input("georef.json")) if ctx.has_input("georef.json") else None
-    metres = _metres_per_unit(georef)
-    gsd_mm = (
-        None if metres is None else (support.gsd * np.float32(metres * 1000.0)).astype(np.float32)
-    )
-    roi_radii = (
-        np.linalg.norm(xyz.astype(np.float64) - roi.centre, axis=1) / max(roi.radius, 1e-12)
-    ).astype(np.float32)
-    tiers = assign_tiers(
-        support.views, support.spread_deg, gsd_ratio, alpha, thresholds, gsd_mm, roi_radii
-    )
+    scale = _Scale(median_gsd, _metres_per_unit(georef))
+
+    def coverage_tiers(start: int, arrays: list[npt.NDArray[Any]]) -> U8:
+        views, spread, gsd, alpha = arrays
+        xyz = store.xyz(start, start + views.shape[0])
+        roi_radii = (
+            np.linalg.norm(xyz.astype(np.float64) - roi.centre, axis=1) / max(roi.radius, 1e-12)
+        ).astype(np.float32)
+        return assign_tiers(
+            views,
+            spread,
+            scale.ratio(gsd, views > 0),
+            alpha,
+            thresholds,
+            scale.millimetres(gsd),
+            roi_radii,
+        )
+
+    first = columns.create("coverage_tiers", np.uint8)
+    for start, arrays in store.rows("views", "spread", "gsd", "alpha"):
+        first.append(coverage_tiers(start, arrays))
+    columns.finish()
+
     # Measured accuracy, where held-out frames saw the splat: keep must also match them.
     held, held_status = (
-        holdout.load(ctx.input(holdout.HOLDOUT.name), splat.count)
+        holdout.open_columns(ctx.input(holdout.HOLDOUT.name), count)
         if ctx.has_input(holdout.HOLDOUT.name)
         else (None, {"status": "missing", "reason": "the train stage wrote no holdout/"})
     )
-    accuracy: holdout.Accuracy | None = None
-    coverage_keep = tiers == TIER_KEEP
+    min_weight = thresholds.holdout_min_weight
+
+    def measured_of(error: F32, weight: F32) -> Bools:
+        measured: Bools = np.isfinite(error) & (weight >= min_weight)
+        return measured
+
+    reference: float | None = None
+    limit: float | None = None
     if held is not None:
-        accuracy = holdout.judge(
-            tiers,
-            held,
+        columns_held = held
+
+        def population() -> Iterator[tuple[F32, npt.NDArray[np.int64]]]:
+            for start, (tiers,) in store.rows("coverage_tiers"):
+                error, weight = columns_held.read(start, start + tiers.shape[0])
+                measured = measured_of(error, weight)
+                keep = measured & (tiers == TIER_KEEP)
+                yield (
+                    np.concatenate([error[keep], error[measured]]),
+                    np.concatenate(
+                        [
+                            np.zeros(int(keep.sum()), np.int64),
+                            np.ones(int(measured.sum()), np.int64),
+                        ]
+                    ),
+                )
+
+        errors = outofcore.grouped_median(population, [0, 1])
+        # `holdout.judge`: the median of measured coverage-keep, else of everything measured.
+        found = errors.get(0, errors.get(1))
+        reference = None if found is None else float(found)
+        limit = holdout.limit_of(
+            reference,
             max_ratio=thresholds.keep_max_holdout_error_ratio,
             max_abs=thresholds.keep_max_holdout_error,
-            min_weight=thresholds.holdout_min_weight,
-            keep=TIER_KEEP,
-            demote_to=TIER_CONTEXT,
         )
-        tiers = accuracy.tiers
+
+    final = columns.create("tiers", np.uint8)
+    flags = columns.create("flags", np.uint8)
+    for start, (tiers,) in store.rows("coverage_tiers"):
+        coverage_keep = tiers == TIER_KEEP
+        bits = np.where(coverage_keep, FLAG_COVERAGE_KEEP, 0).astype(np.uint8)
+        after = tiers
+        if held is not None:
+            error, weight = held.read(start, start + tiers.shape[0])
+            measured = measured_of(error, weight)
+            demoted = (
+                coverage_keep & measured & (error > np.float32(limit))
+                if limit is not None
+                else np.zeros(tiers.shape, dtype=bool)
+            )
+            after = tiers.copy()
+            after[demoted] = np.uint8(TIER_CONTEXT)
+            verified = (after == TIER_KEEP) & measured
+            bits |= np.where(measured, FLAG_MEASURED, 0).astype(np.uint8)
+            bits |= np.where(verified, FLAG_VERIFIED, 0).astype(np.uint8)
+            bits |= np.where(demoted, FLAG_DEMOTED, 0).astype(np.uint8)
+        final.append(after)
+        flags.append(bits)
+    columns.finish()
+
+    # Everything the rest of the stage counts, in one pass over the final tiers.
+    tally = _Tally(tiers=dict.fromkeys(TIER_NAMES, 0))
+    names = ("views", "spread", "gsd", "alpha", "tiers", "flags")
+    for start, (views, spread, gsd, alpha, tiers, bits) in store.rows(*names):
+        stop = start + views.shape[0]
+        for tier in (TIER_DROP, TIER_CONTEXT, TIER_KEEP):
+            tally.tiers[tier] += int((tiers == tier).sum())
+        xyz = store.xyz(start, stop)
+        tally.candidates += int((np.isfinite(xyz).all(axis=1) & (alpha >= 0.05)).sum())
+        inside = in_roi_of(start, stop, views)
+        short = inside & (tiers != TIER_KEEP)
+        tally.roi += int(inside.sum())
+        tally.short_views += int((short & (views < thresholds.keep_min_views)).sum())
+        tally.short_spread += int((short & (spread < thresholds.keep_min_spread_deg)).sum())
+        ratio = scale.ratio(gsd, views > 0)
+        tally.short_gsd += int((short & (ratio > thresholds.keep_max_gsd_ratio)).sum())
+        tally.roi_coverage_keep += int((inside & ((bits & FLAG_COVERAGE_KEEP) > 0)).sum())
+        tally.roi_demoted += int((inside & ((bits & FLAG_DEMOTED) > 0)).sum())
+        tally.verified += int(((bits & FLAG_VERIFIED) > 0).sum())
+        tally.demoted += int(((bits & FLAG_DEMOTED) > 0).sum())
+        tally.measured += int(((bits & FLAG_MEASURED) > 0).sum())
+    coverage_keep_count = sum(
+        int(((bits & FLAG_COVERAGE_KEEP) > 0).sum()) for _, (bits,) in store.rows("flags")
+    )
+    if held is not None:
         ctx.log(
-            f"held-out: {int(accuracy.measured.sum())} of {splat.count} gaussians measured; "
-            f"{int(accuracy.demoted.sum())} of {int(coverage_keep.sum())} coverage-keep over "
-            f"the limit {accuracy.limit}; {int(accuracy.verified.sum())} keep verified"
+            f"held-out: {tally.measured} of {count} gaussians measured; "
+            f"{tally.demoted} of {coverage_keep_count} coverage-keep over "
+            f"the limit {limit}; {tally.verified} keep verified"
         )
     else:
         ctx.log(
@@ -1131,47 +1732,92 @@ def support_gate(ctx: StageContext) -> StageOutcome:
             f"keep is judged by coverage alone"
         )
 
+    # The bar, falling back while it would leave too little -- decided from the counts,
+    # before anything is written, since `gated.ply`'s header states its row count.
     min_gaussians = int(ctx.param("min_gaussians", 1000))
+    context_fade = float(ctx.param("context_fade", 0.5))
+    passing = {
+        "strict": tally.tiers[TIER_KEEP],
+        "balanced": tally.tiers[TIER_KEEP] + tally.tiers[TIER_CONTEXT],
+        "everything": count,
+    }
     applied = bar
-    kept = gate(splat.columns, tiers, applied, context_fade=float(ctx.param("context_fade", 0.5)))
-    while int(kept["x"].shape[0]) < min(min_gaussians, splat.count) and applied != "everything":
+    while passing[applied] < min(min_gaussians, count) and applied != "everything":
         applied = BARS[BARS.index(applied) + 1]
         ctx.log(f"WARNING: bar {bar!r} leaves too little; falling back to {applied!r}")
-        kept = gate(
-            splat.columns, tiers, applied, context_fade=float(ctx.param("context_fade", 0.5))
-        )
-    written = gaussians.write_ply(ctx.output(GATED_PLY.name), kept)
+    kept_count = passing[applied]
+    with splat_io.PlyWriter(
+        ctx.output(GATED_PLY.name), gaussians.CANONICAL_PROPERTIES, count=kept_count
+    ) as writer:
+        for start, read in source.chunks():
+            tiers = columns.read("tiers", start, start + read["x"].shape[0])
+            writer.append(gate(read, tiers, applied, context_fade=context_fade))
+    written = ctx.output(GATED_PLY.name).stat().st_size
 
-    limit = int(ctx.param("coverage_points", 150_000))
-    sample = _coverage_sample(xyz, alpha, max(0, limit - cameras.count))
+    # coverage.ply: a fixed-seed sample of the visible gaussians, then the camera path.
+    limit_points = int(ctx.param("coverage_points", 150_000))
+    positions_wanted = coverage_positions(tally.candidates, max(0, limit_points - cameras.count))
+    sample_xyz: list[F32] = []
+    sample_tiers: list[U8] = []
+    seen_candidates = 0
+    for start, (alpha, tiers) in store.rows("alpha", "tiers"):
+        xyz = store.xyz(start, start + alpha.shape[0])
+        candidates = np.flatnonzero(np.isfinite(xyz).all(axis=1) & (alpha >= 0.05))
+        if positions_wanted is None:
+            chosen = candidates
+        else:
+            low = np.searchsorted(positions_wanted, seen_candidates)
+            high = np.searchsorted(positions_wanted, seen_candidates + candidates.shape[0])
+            chosen = candidates[positions_wanted[low:high] - seen_candidates]
+        seen_candidates += int(candidates.shape[0])
+        sample_xyz.append(xyz[chosen])
+        sample_tiers.append(tiers[chosen])
     path_order = np.argsort(np.asarray(cameras.names))
-    coverage_xyz = np.concatenate([xyz[sample], cameras.centres[path_order].astype(np.float32)])
-    coverage_tiers = np.concatenate(
-        [tiers[sample], np.full(cameras.count, TIER_CAMERA, dtype=np.uint8)]
+    coverage_xyz = np.concatenate(
+        [*sample_xyz, cameras.centres[path_order].astype(np.float32)]
+    ).reshape(-1, 3)
+    coverage_tiers_out = np.concatenate(
+        [*sample_tiers, np.full(cameras.count, TIER_CAMERA, dtype=np.uint8)]
     )
-    write_coverage(ctx.output(COVERAGE_PLY.name), coverage_xyz, coverage_tiers)
+    write_coverage(ctx.output(COVERAGE_PLY.name), coverage_xyz, coverage_tiers_out)
+    del sample_xyz, sample_tiers
 
-    counts = {
-        name: int((tiers == tier).sum()) for tier, name in TIER_NAMES.items() if tier != TIER_CAMERA
-    }
+    counts = {name: tally.tiers[tier] for tier, name in TIER_NAMES.items() if tier != TIER_CAMERA}
+
+    def finite_rows(select: Callable[[int, list[npt.NDArray[Any]]], Bools], *names: str) -> Points:
+        def stream() -> Iterator[F64]:
+            for start, arrays in store.rows(*names):
+                xyz = store.xyz(start, start + arrays[0].shape[0]).astype(np.float64)
+                chosen = select(start, arrays) & np.isfinite(xyz).all(axis=1)
+                yield xyz[chosen]
+
+        return stream
+
     # What a Refine trains inside, and what the percentages are over: the extent the data
     # supports, not the region the cameras pointed at (`roi`, which stays the reference
     # for pixel size and the capture tips).
-    extent = supported_extent(xyz, tiers, roi)
+    extent = extent_of(finite_rows(lambda _, a: a[0] == TIER_KEEP, "tiers"), roi)
     # The region a Refine trains in: the voxels holding the keep tier, in whatever shape
     # they make -- the keep that held-out frames verified, when there is enough of it to
     # be a region (a capture whose held-out frames saw only part of the subject would
     # otherwise refine only that part). `extent` is only the frame the percentages below
     # are measured over.
     mask_source = "keep"
-    mask_from = tiers == TIER_KEEP
-    if accuracy is not None and int(accuracy.verified.sum()) >= max(
-        MIN_VERIFIED_FOR_MASK, VERIFIED_MASK_SHARE * int(mask_from.sum())
+    mask_bit = 0
+    if held is not None and tally.verified >= max(
+        MIN_VERIFIED_FOR_MASK, VERIFIED_MASK_SHARE * tally.tiers[TIER_KEEP]
     ):
-        mask_source, mask_from = "verified-keep", accuracy.verified
+        mask_source, mask_bit = "verified-keep", FLAG_VERIFIED
+
+    def mask_points() -> Iterator[tuple[F64, F64]]:
+        for start, (tiers, bits, gsd) in store.rows("tiers", "flags", "gsd"):
+            chosen = (bits & mask_bit) > 0 if mask_bit else tiers == TIER_KEEP
+            xyz = store.xyz(start, start + tiers.shape[0])
+            yield xyz[chosen].astype(np.float64), gsd[chosen].astype(np.float64)
+
     # Voxels sized from the keep tier's pixel footprint, not the scene's extent (see
     # `support_mask`'s module docstring), so a building's mask is as tight as a table's.
-    mask = support_mask.build(xyz[mask_from], support.gsd[mask_from])
+    mask = support_mask.build_from(support_mask.StreamedPoints(mask_points))
     if mask is not None and mask.sizing is not None:
         sizing = mask.sizing
         ctx.log(
@@ -1182,57 +1828,79 @@ def support_gate(ctx: StageContext) -> StageOutcome:
             + ")"
         )
     scene = replace(extent, radius=extent.radius * 1.5)
-    share_voxel, share_basis = _share_voxel(mask, xyz, support.gsd, seen, scene)
-    keep_pct = _occupied_share(xyz, tiers, alpha, scene, TIER_KEEP, share_voxel)
-    context_pct = _occupied_share(xyz, tiers, alpha, scene, TIER_CONTEXT, share_voxel)
+
+    def near_points() -> Iterator[tuple[F64, F64]]:
+        for start, (views, gsd) in store.rows("views", "gsd"):
+            xyz = store.xyz(start, start + views.shape[0])
+            near = (views > 0) & scene.contains(xyz)
+            yield xyz[near].astype(np.float64), gsd[near].astype(np.float64)
+
+    share_voxel, share_basis = _share_voxel(mask, support_mask.StreamedPoints(near_points), scene)
+
+    def tier_rows(verified_only: bool) -> TierRows:
+        def stream() -> Iterator[tuple[F32, U8, F32]]:
+            for start, (alpha, tiers, bits) in store.rows("alpha", "tiers", "flags"):
+                xyz = store.xyz(start, start + alpha.shape[0])
+                if verified_only:
+                    tiers = np.where((bits & FLAG_VERIFIED) > 0, TIER_KEEP, TIER_DROP).astype(
+                        np.uint8
+                    )
+                yield xyz, tiers, alpha
+
+        return stream
+
+    keep_pct = occupied_share_of(tier_rows(False), scene, TIER_KEEP, share_voxel, count)
+    context_pct = occupied_share_of(tier_rows(False), scene, TIER_CONTEXT, share_voxel, count)
     # The same share, counting only keep that held-out frames confirmed.
     keep_verified_pct = (
         None
-        if accuracy is None
-        else _occupied_share(
-            xyz,
-            np.where(accuracy.verified, TIER_KEEP, TIER_DROP).astype(np.uint8),
-            alpha,
-            scene,
-            TIER_KEEP,
-            share_voxel,
-        )
+        if held is None
+        else occupied_share_of(tier_rows(True), scene, TIER_KEEP, share_voxel, count)
     )
     metrics_doc = (
         _read_json(ctx.input("train_metrics.json")) if ctx.has_input("train_metrics.json") else {}
     )
     psnr = _round(_float_or_none(metrics_doc.get("psnr")), 2)
     up_estimate = sfm.camera_up(model)
-    roi_index = np.flatnonzero(in_roi)
+
+    def roi_values() -> Iterator[I32]:
+        for start, (views,) in store.rows("views"):
+            inside = in_roi_of(start, start + views.shape[0], views)
+            yield views[inside]
+
+    def roi_spread() -> Iterator[F32]:
+        for start, (views, spread) in store.rows("views", "spread"):
+            yield spread[in_roi_of(start, start + views.shape[0], views)]
+
+    roi_views_median = outofcore.median(roi_values)
+    roi_spread_median = outofcore.median(roi_spread)
+    roi_stats = RoiStats(
+        count=tally.roi,
+        short_views=tally.short_views,
+        short_spread=tally.short_spread,
+        short_gsd=tally.short_gsd,
+        median_views=None if roi_views_median is None else int(roi_views_median),
+    )
     tips, geometry = capture_tips(
         centres=cameras.centres,
         roi=roi,
         up=None if up_estimate is None else np.asarray(up_estimate.up, dtype=np.float64),
-        roi_views=support.views[roi_index],
-        roi_spread=support.spread_deg[roi_index],
-        roi_gsd_ratio=gsd_ratio[roi_index],
-        roi_tiers=tiers[roi_index],
+        roi_stats=roi_stats,
         thresholds=thresholds,
         keep_pct=keep_pct,
     )
     held_report: dict[str, object] = dict(held_status)
-    if accuracy is not None and held is not None:
-        held_report = holdout.tier_report(
-            accuracy,
-            held,
-            {tier: name for tier, name in TIER_NAMES.items() if tier != TIER_CAMERA},
-            max_ratio=thresholds.keep_max_holdout_error_ratio,
-            max_abs=thresholds.keep_max_holdout_error,
-            min_weight=thresholds.holdout_min_weight,
-        )
-        near_keep = int(coverage_keep[roi_index].sum())
-        demoted_share = float(accuracy.demoted[roi_index].sum()) / near_keep if near_keep else 0.0
+    if held is not None:
+        held_report = _held_report(store, held, thresholds, reference, limit, tally)
+        near_keep = tally.roi_coverage_keep
+        demoted_share = float(tally.roi_demoted) / near_keep if near_keep else 0.0
         held_report["demotedShareNearSubject"] = round(demoted_share, 3)
         tip = holdout.accuracy_tip(held.summary, demoted_share)
         if tip is not None:
             # Accuracy is what failed, so it leads, and "well covered" is no longer true.
             tips = [tip, *(t for t in tips if t["id"] != "good")][:4]
     held_report["supportMaskFrom"] = mask_source
+    metres = scale.metres
     roi_gsd_mm = None if metres is None else _round(median_gsd * metres * 1000.0, 2)
     document: dict[str, object] = {
         "version": 1,
@@ -1245,7 +1913,7 @@ def support_gate(ctx: StageContext) -> StageOutcome:
         "pointedRoi": roi.to_dict(),
         # What a Refine crops training to, when present: any shape, decided by the data.
         "supportMask": None if mask is None else mask.to_dict(),
-        "gaussians": {"in": splat.count, "out": int(kept["x"].shape[0]), **counts},
+        "gaussians": {"in": count, "out": kept_count, **counts},
         "keepPct": keep_pct,
         "contextPct": context_pct,
         "keepPctNote": (
@@ -1260,8 +1928,10 @@ def support_gate(ctx: StageContext) -> StageOutcome:
         # accuracy was not measured (then every keep is on coverage alone).
         "keepVerifiedPct": keep_verified_pct,
         "heldOut": held_report,
-        "views": {"medianRoi": _median_int(support.views[roi_index])},
-        "spreadDeg": {"medianRoi": _round(_median(support.spread_deg[roi_index]), 1)},
+        "views": {"medianRoi": roi_stats.median_views},
+        "spreadDeg": {
+            "medianRoi": _round(None if roi_spread_median is None else float(roi_spread_median), 1)
+        },
         "gsd": {
             "metric": metres is not None,
             "medianRoiModelUnits": _round(median_gsd, 6),
@@ -1300,13 +1970,13 @@ def support_gate(ctx: StageContext) -> StageOutcome:
     seconds = time.perf_counter() - started
     ctx.log(
         f"quality: {counts['keep']} keep, {counts['context']} context, {counts['drop']} drop; "
-        f"bar {applied}; {int(kept['x'].shape[0])} gaussians out ({written} bytes); "
+        f"bar {applied}; {kept_count} gaussians out ({written} bytes); "
         f"keep {keep_pct}% of the ROI; {len(tips)} tip(s); {seconds:.1f} s"
     )
     metrics: dict[str, MetricValue] = {
         "mode": mode,
         "bar": applied,
-        "gaussiansOut": int(kept["x"].shape[0]),
+        "gaussiansOut": kept_count,
         "keep": counts["keep"],
         "context": counts["context"],
         "drop": counts["drop"],
@@ -1318,9 +1988,9 @@ def support_gate(ctx: StageContext) -> StageOutcome:
         metrics["keepPct"] = keep_pct
     if keep_verified_pct is not None:
         metrics["keepVerifiedPct"] = keep_verified_pct
-    if accuracy is not None:
-        metrics["keepVerified"] = int(accuracy.verified.sum())
-        metrics["demotedByHeldOut"] = int(accuracy.demoted.sum())
+    if held is not None:
+        metrics["keepVerified"] = tally.verified
+        metrics["demotedByHeldOut"] = tally.demoted
     if psnr is not None:
         metrics["heldOutPsnr"] = psnr
     summary = (
@@ -1329,6 +1999,67 @@ def support_gate(ctx: StageContext) -> StageOutcome:
         else "nothing met the high-quality bar"
     )
     return StageOutcome(metrics=metrics, summary=summary)
+
+
+def _held_report(
+    store: _Store,
+    held: holdout.HeldOutColumns,
+    thresholds: Thresholds,
+    reference: float | None,
+    limit: float | None,
+    tally: _Tally,
+) -> dict[str, object]:
+    """`holdout.tier_report`, from statistics gathered a chunk at a time: per tier, the
+    median error of the measured exactly, and the evidence-weighted mean as float64 sums
+    (a chunk's pairwise sum, then chunk by chunk -- which rounds differently from one
+    pairwise sum over the whole tier only below the fifth decimal the report keeps)."""
+    names = {tier: name for tier, name in TIER_NAMES.items() if tier != TIER_CAMERA}
+    members = dict.fromkeys(names, 0)
+    measured_counts = dict.fromkeys(names, 0)
+    weighted = dict.fromkeys(names, 0.0)
+    weights = dict.fromkeys(names, 0.0)
+
+    def errors() -> Iterator[tuple[F32, npt.NDArray[np.int64]]]:
+        for start, (tiers, bits) in store.rows("tiers", "flags"):
+            error, _ = held.read(start, start + tiers.shape[0])
+            measured = (bits & FLAG_MEASURED) > 0
+            yield error[measured], tiers[measured].astype(np.int64)
+
+    for start, (tiers, bits) in store.rows("tiers", "flags"):
+        error, weight = held.read(start, start + tiers.shape[0])
+        measured = (bits & FLAG_MEASURED) > 0
+        for tier in names:
+            mine = tiers == tier
+            members[tier] += int(mine.sum())
+            chosen = mine & measured
+            measured_counts[tier] += int(chosen.sum())
+            values = error[chosen]
+            evidence = weight[chosen].astype(np.float64)
+            weighted[tier] += float((values * evidence).sum())
+            weights[tier] += float(evidence.sum())
+    medians = outofcore.grouped_median(errors, list(names))
+    stats = {
+        name: holdout.TierStats(
+            gaussians=members[tier],
+            measured=measured_counts[tier],
+            median_error=float(medians[tier]) if tier in medians else None,
+            weighted_error=weighted[tier],
+            weight=weights[tier],
+        )
+        for tier, name in names.items()
+    }
+    return holdout.report(
+        stats,
+        summary=held.summary,
+        reference=reference,
+        limit=limit,
+        verified=tally.verified,
+        kept=tally.tiers[TIER_KEEP],
+        demoted=tally.demoted,
+        max_ratio=thresholds.keep_max_holdout_error_ratio,
+        max_abs=thresholds.keep_max_holdout_error,
+        min_weight=thresholds.holdout_min_weight,
+    )
 
 
 def _footprint(columns: Mapping[str, F32]) -> F32:
@@ -1352,11 +2083,3 @@ def _float_or_none(value: object) -> float | None:
     if isinstance(value, bool) or not isinstance(value, int | float):
         return None
     return float(value)
-
-
-def _median(values: npt.NDArray[Any]) -> float | None:
-    return float(np.median(values)) if values.size else None
-
-
-def _median_int(values: I32) -> int | None:
-    return int(np.median(values)) if values.size else None

@@ -59,6 +59,7 @@ known-first-party = [
   "progress",
   "providers",
   "quality",
+  "quality_in_memory",
   "recipe",
   "registry",
   "run_recipe",

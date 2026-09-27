@@ -48,6 +48,8 @@ import live
 import quality
 import resolution
 import sfm
+import splat_io
+import splat_stream
 import support_mask
 import training
 import video
@@ -232,31 +234,39 @@ def ingest_splat(ctx: StageContext) -> StageOutcome:
     own ground. What was done is written into `source_meta.json` as `frame`, so a capture
     that lands wrong carries the reason with it.
     """
-    source = gaussians.pick_splat_file(ctx.input("upload"))
-    read = gaussians.read_splat(source)
+    # A chunk at a time (`splat_stream`): a phone app's PLY of several million gaussians
+    # is placed in the worker's fixed memory, with the same bytes out as `gaussians.orient`.
+    splat = splat_stream.open_splat(
+        gaussians.pick_splat_file(ctx.input("upload")),
+        chunk=int(ctx.param("chunk_gaussians", splat_io.CHUNK)),
+    )
     requested = ctx.param("up_axis")
-    splat, frame = gaussians.orient(
-        read,
+    median_gaussian = splat_stream.median_gaussian_m(splat)
+    placed = splat_stream.orient_to(
+        splat,
+        ctx.output(CANONICAL_PLY.name),
         up_axis=None if requested in (None, "") else str(requested),
         heading_deg=float(ctx.param("heading_deg", 0.0) or 0.0),
         recentre=bool(ctx.param("recentre", True)),
     )
-    written = gaussians.write_ply(ctx.output(CANONICAL_PLY.name), splat.columns)
-    low, high = splat.bbox()
+    assert placed.frame is not None
+    frame = placed.frame
+    written = placed.bytes
+    low, high = placed.low, placed.high
     document: dict[str, object] = {
         "filename": splat.source_name,
         "format": splat.source_format,
         "bytes": splat.source_bytes,
-        "checksum": splat.source_checksum,
+        "checksum": splat.checksum(),
         "gaussians": splat.count,
-        "nonFinite": splat.non_finite,
+        "nonFinite": placed.non_finite,
         "properties": list(splat.properties_in),
         # Spherical-harmonic bands above the DC term, normals, vertex colours already
         # folded into f_dc: read, and deliberately not carried into canonical.ply.
         "dropped": list(splat.dropped),
         "bboxLocalM": {"min": low, "max": high},
         "extentM": _extent(low, high),
-        "medianGaussianM": _median_gaussian_m(splat),
+        "medianGaussianM": median_gaussian,
         # How the file's own axes became east/north/up, and on whose say-so.
         "frame": {
             **frame.to_dict(),
@@ -286,7 +296,7 @@ def ingest_splat(ctx: StageContext) -> StageOutcome:
         "format": splat.source_format,
         "sourceBytes": splat.source_bytes,
         "canonicalBytes": written,
-        "nonFinite": splat.non_finite,
+        "nonFinite": placed.non_finite,
         "droppedProperties": len(splat.dropped),
     }
     return StageOutcome(
@@ -1947,7 +1957,11 @@ def place_splat(ctx: StageContext) -> StageOutcome:
     """
     georef = _read_json(ctx.input(GEOREF.name))
     source = quality.GATED_PLY.name if ctx.has_input(quality.GATED_PLY.name) else TRAINED_PLY.name
-    trained = gaussians.read_splat(ctx.input(source))
+    # A chunk at a time (`splat_stream`), so the worker places a splat of any size in the
+    # same memory; canonical.ply is byte-identical to transforming it whole.
+    trained = splat_stream.open_splat(
+        ctx.input(source), chunk=int(ctx.param("chunk_gaussians", splat_io.CHUNK))
+    )
     frame = georef.get("frame")
     if not isinstance(frame, dict):
         model_dir = ctx.input(POSES.name) if ctx.has_input(POSES.name) else None
@@ -1958,25 +1972,22 @@ def place_splat(ctx: StageContext) -> StageOutcome:
     scale = float(_number(frame.get("scale")) or 1.0)
     offset = frame.get("translationM")
     translation = None if offset is None else np.asarray(offset, dtype=np.float64)
-    columns = gaussians.transform(trained.columns, rotation, translation, scale)
-    placed = gaussians.Splat(
-        columns=columns,
-        source_format=trained.source_format,
-        source_name=trained.source_name,
-        source_bytes=trained.source_bytes,
-        source_checksum=trained.source_checksum,
-        properties_in=trained.properties_in,
-        dropped=trained.dropped,
-        non_finite=trained.non_finite,
-    )
+    georeferenced = splat_stream.Step(rotation, translation, scale)
     moved = [0.0, 0.0, 0.0]
     recentred: gaussians.Frame | None = None
     if frame.get("recentre"):
-        placed, recentred = gaussians.orient(placed, up_axis="z")
+        # `gaussians.orient(placed, up_axis="z")` of the georeferenced splat.
+        placed = splat_stream.orient_to(
+            trained, ctx.output(CANONICAL_PLY.name), before=[georeferenced], up_axis="z"
+        )
+        recentred = placed.frame
+        assert recentred is not None
         moved = [float(v) for v in recentred.translation]
-    written = gaussians.write_ply(ctx.output(CANONICAL_PLY.name), placed.columns)
+    else:
+        placed = splat_stream.transform_to(trained, ctx.output(CANONICAL_PLY.name), [georeferenced])
+    written = placed.bytes
     coverage_points = _place_coverage(ctx, rotation, translation, scale, recentred)
-    low, high = placed.bbox()
+    low, high = placed.low, placed.high
     extent = _extent(low, high)
     ctx.log(
         f"placed {placed.count} gaussians from {source} by {frame.get('source')}: scale "
@@ -2289,9 +2300,12 @@ def splat_tiles(ctx: StageContext) -> StageOutcome:
 )
 def splat_thumbnail(ctx: StageContext) -> StageOutcome:
     """The row of the plan's artifact table that says "the endpoint exists and nothing
-    calls it". Now something does."""
-    splat = gaussians.read_splat(ctx.input(CANONICAL_PLY.name))
-    stats = gaussians.render_thumbnail(
+    calls it". Now something does. Drawn a chunk at a time (`splat_stream.thumbnail`),
+    the same JPEG as `gaussians.render_thumbnail`."""
+    splat = splat_stream.open_splat(
+        ctx.input(CANONICAL_PLY.name), chunk=int(ctx.param("chunk_gaussians", splat_io.CHUNK))
+    )
+    stats = splat_stream.thumbnail(
         splat,
         ctx.output(THUMBNAIL.name),
         size=int(ctx.param("size", 512)),
@@ -2320,10 +2334,14 @@ def splat_ground(ctx: StageContext) -> StageOutcome:
     `origin.height + z`.
     """
     georef = _read_json(ctx.input(GEOREF.name))
-    splat = gaussians.read_splat(ctx.input(CANONICAL_PLY.name))
+    # A chunk at a time (`splat_stream.ground_samples`): the same cells and heights as
+    # `gaussians.ground_samples`, positions to float32 rounding.
+    splat = splat_stream.open_splat(
+        ctx.input(CANONICAL_PLY.name), chunk=int(ctx.param("chunk_gaussians", splat_io.CHUNK))
+    )
     cell_m = float(ctx.param("cell_m", 2.0))
     percentile = float(ctx.param("percentile", 5.0))
-    samples = gaussians.ground_samples(
+    samples = splat_stream.ground_samples(
         splat,
         lat=float(_number(georef.get("lat"))),
         lon=float(_number(georef.get("lon"))),
@@ -2684,15 +2702,6 @@ def _bbox_of(manifest: dict[str, object]) -> dict[str, list[float]] | None:
     if not isinstance(low, list) or not isinstance(high, list) or len(low) != 3 or len(high) != 3:
         return None
     return {"min": [_number(v) for v in low], "max": [_number(v) for v in high]}
-
-
-def _median_gaussian_m(splat: gaussians.Splat) -> float:
-    """The median gaussian radius in metres -- a splat's answer to "how fine is this?"."""
-    scales = np.stack([splat.columns[f"scale_{i}"] for i in range(3)], axis=1)
-    finite = np.isfinite(scales).all(axis=1)
-    if not bool(finite.any()):
-        return 0.0
-    return round(float(np.median(np.exp(scales[finite]))), 6)
 
 
 def _glb_summary(path: Path) -> dict[str, Any]:

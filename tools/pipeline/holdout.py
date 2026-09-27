@@ -36,6 +36,7 @@ import numpy as np
 import numpy.typing as npt
 
 import holdout_maths
+import splat_io
 from artifacts import ArtifactDecl
 from contracts import StageContext
 
@@ -44,10 +45,15 @@ __all__ = [
     "SCRIPT",
     "Accuracy",
     "HeldOut",
+    "HeldOutColumns",
+    "TierStats",
     "accuracy_tip",
     "judge",
+    "limit_of",
     "load",
     "measure",
+    "open_columns",
+    "report",
     "tier_report",
 ]
 
@@ -231,6 +237,57 @@ def load(directory: Path, count: int) -> tuple[HeldOut | None, dict[str, Any]]:
 
 
 @dataclass(frozen=True)
+class HeldOutColumns:
+    """`holdout/` checked as `load` checks it, but read by row range: the quality stage's
+    reader, which never holds a per-gaussian array whole (10 bytes a gaussian here)."""
+
+    error: splat_io.Column
+    weight: splat_io.Column
+    summary: Mapping[str, Any]
+
+    def read(self, start: int, stop: int) -> tuple[F32, F32]:
+        """Rows `[start, stop)` of the error and the weight, as `load` types them."""
+        return (
+            self.error.read(start, stop).astype(np.float32),
+            self.weight.read(start, stop).astype(np.float32),
+        )
+
+
+def open_columns(directory: Path, count: int) -> tuple[HeldOutColumns | None, dict[str, Any]]:
+    """`load`, without loading: the same statuses and reasons, and columns to read."""
+    try:
+        summary = _read_summary(directory)
+    except (OSError, ValueError) as problem:
+        return None, {"status": "unreadable", "reason": f"{type(problem).__name__}: {problem}"}
+    status = str(summary.get("status", "unknown"))
+    if status != "ok":
+        return None, {"status": status, "reason": summary.get("reason")}
+    try:
+        names = (
+            ("error", holdout_maths.ERROR_FILE),
+            ("weight", holdout_maths.WEIGHT_FILE),
+            ("views", holdout_maths.VIEWS_FILE),
+        )
+        columns: dict[str, splat_io.Column] = {}
+        for name, filename in names:
+            path = directory / filename
+            if name == "views" and not path.is_file():
+                continue
+            shape, _, _ = splat_io.npy_header(path)
+            if shape != (count,):
+                raise ValueError(
+                    f"held-out {name} has shape {shape}; the splat has {count} gaussians"
+                )
+            columns[name] = splat_io.npy_column(path)
+    except (OSError, ValueError) as problem:
+        return None, {"status": "mismatch", "reason": f"{type(problem).__name__}: {problem}"}
+    return (
+        HeldOutColumns(error=columns["error"], weight=columns["weight"], summary=summary),
+        {"status": "ok"},
+    )
+
+
+@dataclass(frozen=True)
 class Accuracy:
     """The verdict: tiers after accuracy, and who was measured, verified, or demoted."""
 
@@ -244,6 +301,19 @@ class Accuracy:
     #: The scene's typical error the relative limit is a multiple of, and the limit.
     reference: float | None
     limit: float | None
+
+
+def limit_of(
+    reference: float | None, *, max_ratio: float | None, max_abs: float | None
+) -> float | None:
+    """The error a keep gaussian may have: the lower of `max_ratio` times the scene's
+    `reference` and `max_abs`, whichever are set; None when neither applies."""
+    limits: list[float] = []
+    if max_ratio is not None and reference is not None:
+        limits.append(max_ratio * reference)
+    if max_abs is not None:
+        limits.append(max_abs)
+    return min(limits) if limits else None
 
 
 def judge(
@@ -270,12 +340,7 @@ def judge(
     if population.size == 0:
         population = error[measured]
     reference = float(np.median(population)) if population.size else None
-    limits: list[float] = []
-    if max_ratio is not None and reference is not None:
-        limits.append(max_ratio * reference)
-    if max_abs is not None:
-        limits.append(max_abs)
-    limit = min(limits) if limits else None
+    limit = limit_of(reference, max_ratio=max_ratio, max_abs=max_abs)
     demoted = (
         in_keep & measured & (error > np.float32(limit))
         if limit is not None
@@ -293,6 +358,18 @@ def judge(
     )
 
 
+@dataclass(frozen=True)
+class TierStats:
+    """One tier's held-out evidence: its size, how much of it was measured, the median
+    error of the measured, and the error-times-weight and weight sums of the mean."""
+
+    gaussians: int
+    measured: int
+    median_error: float | None
+    weighted_error: float
+    weight: float
+
+
 def tier_report(
     accuracy: Accuracy,
     held: HeldOut,
@@ -304,26 +381,59 @@ def tier_report(
 ) -> dict[str, Any]:
     """`quality.json`'s `heldOut`: per tier, how much was measured and how wrong it was."""
     error = held.error
-    tiers: dict[str, Any] = {}
+    stats: dict[str, TierStats] = {}
     for tier, name in names.items():
         members = accuracy.tiers == tier
         measured = members & accuracy.measured
         values = error[measured]
         weights = held.weight[measured].astype(np.float64)
-        tiers[name] = {
-            "gaussians": int(members.sum()),
-            "measured": int(measured.sum()),
-            "medianError": _round(float(np.median(values)) if values.size else None, 5),
+        stats[name] = TierStats(
+            gaussians=int(members.sum()),
+            measured=int(measured.sum()),
+            median_error=float(np.median(values)) if values.size else None,
+            weighted_error=float((values * weights).sum()),
+            weight=float(weights.sum()),
+        )
+    keep_tier = next(t for t, n in names.items() if n == "keep")
+    return report(
+        stats,
+        summary=held.summary,
+        reference=accuracy.reference,
+        limit=accuracy.limit,
+        verified=int(accuracy.verified.sum()),
+        kept=int((accuracy.tiers == keep_tier).sum()),
+        demoted=int(accuracy.demoted.sum()),
+        max_ratio=max_ratio,
+        max_abs=max_abs,
+        min_weight=min_weight,
+    )
+
+
+def report(
+    stats: Mapping[str, TierStats],
+    *,
+    summary: Mapping[str, Any],
+    reference: float | None,
+    limit: float | None,
+    verified: int,
+    kept: int,
+    demoted: int,
+    max_ratio: float | None,
+    max_abs: float | None,
+    min_weight: float,
+) -> dict[str, Any]:
+    """`tier_report`'s document from its statistics, however they were gathered -- the
+    quality stage gathers them a chunk at a time."""
+    tiers: dict[str, Any] = {
+        name: {
+            "gaussians": tier.gaussians,
+            "measured": tier.measured,
+            "medianError": _round(tier.median_error, 5),
             # Evidence-weighted: a gaussian that painted more held-out pixels counts more.
-            "meanError": _round(
-                float((values * weights).sum() / weights.sum()) if weights.sum() > 0 else None,
-                5,
-            ),
+            "meanError": _round(tier.weighted_error / tier.weight if tier.weight > 0 else None, 5),
         }
-    keep = accuracy.tiers == next(t for t, n in names.items() if n == "keep")
-    verified = int(accuracy.verified.sum())
-    kept = int(keep.sum())
-    summary = held.summary
+        for name, tier in stats.items()
+    }
     per_view = summary.get("perView")
     views: list[dict[str, Any]] = []
     if isinstance(per_view, list):
@@ -342,8 +452,8 @@ def tier_report(
         "rendered": summary.get("rendered"),
         "seconds": summary.get("seconds"),
         "perView": views,
-        "referenceError": _round(accuracy.reference, 5),
-        "limit": _round(accuracy.limit, 5),
+        "referenceError": _round(reference, 5),
+        "limit": _round(limit, 5),
         "criterion": (
             "keep needs a mean held-out error (0.8 L1 + 0.2 (1 - SSIM), per pixel, shared "
             f"by blending weight) at most the lower of {' and '.join(criterion_parts)}, "
@@ -355,7 +465,7 @@ def tier_report(
         "tiers": tiers,
         "keepVerified": verified,
         "keepGeometryOnly": kept - verified,
-        "demotedFromKeep": int(accuracy.demoted.sum()),
+        "demotedFromKeep": demoted,
         # Of the gaussians kept, the share whose accuracy held-out frames confirmed.
         "keepVerifiedShare": _round(100.0 * verified / kept if kept else None, 1),
     }
