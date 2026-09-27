@@ -108,6 +108,14 @@ PHONE_OPTIONS: dict[str, dict[str, dict[str, Rule]]] = {
             # COLMAP's points, and the schedule it runs when it starts from the preview.
             "init_from": frozenset({"sfm", "preview"}),
             "init_schedule_scale": (0.05, 1.0),
+            # Block training (tools/pipeline/blocks.py): `auto` trains in blocks only when
+            # the budget is more than one GPU holds; a number forces that many, to compare
+            # a capture in blocks with the same capture whole (the spool at 2 against 1).
+            # The camera test's 1 - SSIM threshold and the frozen ring are the knobs that
+            # comparison calibrates; exposure is the existing `bilateral_grid` above.
+            "blocks": RangeOr(1, 16, frozenset({"auto"})),
+            "block_epsilon": (0.0, 0.5),
+            "block_ring": FLAG,
         },
         # The quality bar: what is kept, and whether this run is a preview or a refine.
         "quality": {"bar": frozenset(QUALITY_BARS), "mode": frozenset(QUALITY_MODES)},

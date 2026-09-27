@@ -252,7 +252,8 @@ def test_the_result_directory_is_scratch_because_nothing_can_resume_from_it(
     """In `work/`, not `checkpoint/`: v1.5.3 cannot continue a checkpoint, so syncing its
     checkpoints out every minute would be paying to move bytes nothing reads. What does
     go in `checkpoint/` is read: the live viewer's latest small splat, and the small seed
-    a later Refine starts from (init_seed.py), written once, at the end."""
+    a later Refine starts from (init_seed.py), and the prior a later block run partitions
+    and seeds with (blocks.py), written once, at the end."""
     workdir = Workdir.create(tmp_path / "run")
     seed_inputs(workdir)
 
@@ -265,6 +266,8 @@ def test_the_result_directory_is_scratch_because_nothing_can_resume_from_it(
         if p.is_file()
     )
     assert [name for name in kept if not name.startswith("live/")] == [
+        "block-prior/prior.json",
+        "block-prior/prior.npz",
         "init-seed/seed.json",
         "init-seed/seed.npz",
     ]

@@ -36,6 +36,7 @@ import numpy.typing as npt
 import PIL
 import PIL.Image
 
+import blocks
 import convergence
 import exif
 import gaussian_budget
@@ -1200,6 +1201,17 @@ def gsplat(ctx: StageContext) -> StageOutcome:
       `train_metrics.json`'s `convergence` has the held-out curve, the steps run of the
       maximum, and why it stopped.
 
+    * `blocks` (`auto`, the default, or a count): a budget more than one GPU trains -- its
+      raw count over the smaller of the budget's GPU-memory and `budget_max` ceilings --
+      trains as that many blocks, one after another in this same attempt on this same
+      GPU, and merges them into one `trained.ply` (`blocks.py` has the recipe and its
+      sources; `block_epsilon`, `block_min_images`, `block_margin`, `block_ring`,
+      `block_ring_outer`, `block_blend`, `block_eval` and the `coarse_*` knobs are its
+      parameters). A count forces blocks on a capture that fits one GPU, to compare the
+      two. `train_metrics.json`'s `blocks` has the partition, each block's cameras,
+      budget, steps and time, and the merge; psnr/ssim/lpips are then the merged splat's,
+      by the trainer's own `eval()` on the same held-out frames.
+
     `psnr`, `ssim` and `lpips` are all measured on gsplat's held-out `val` split -- every
     8th registered frame -- and `train_metrics.json` says so and how many frames that is.
     """
@@ -1306,6 +1318,66 @@ def gsplat(ctx: StageContext) -> StageOutcome:
             f"{crop.outside_sampled} sampled outside, {crop.kept_for_coverage} kept so "
             f"every frame still sees some)"
         )
+    # Blocks (blocks.py): a budget more than one GPU trains -- or `blocks: <n>` -- trains as
+    # blocks, one after another on this same GPU, and merges them into one trained.ply.
+    requested_blocks = blocks.parse_blocks(ctx.param("blocks"))
+    block_total, block_reason = blocks.block_count(requested_blocks, budget)
+    if block_total > 1:
+        in_blocks = _train_in_blocks(
+            ctx,
+            blocks.Settings(
+                frames=frames,
+                poses=poses,
+                dataset=dataset,
+                region=roi,
+                budget=budget,
+                frame_size=frame_size,
+                pixel_scale=pixel_scale,
+                strategy=strategy,
+                full_iterations=full_iterations,
+                steps_scaler=_block_schedule(ctx, steps_scaler),
+                data_factor=data_factor,
+                trainer=trainer,
+                python=training.trainer_python(ctx.param("python")),
+                switches={
+                    "antialiased": _optional_bool(ctx.param("antialiased"), "antialiased"),
+                    "opacity_reg": _optional_float(ctx.param("opacity_reg")),
+                    "depth_loss": _optional_bool(ctx.param("depth_loss"), "depth_loss"),
+                    "pose_opt": _optional_bool(ctx.param("pose_opt"), "pose_opt"),
+                    "app_opt": _optional_bool(ctx.param("app_opt"), "app_opt"),
+                    "bilateral_grid": _optional_bool(ctx.param("bilateral_grid"), "bilateral_grid"),
+                },
+                extra=tuple(str(value) for value in (ctx.param("extra_args") or [])),
+                converge=_optional_bool(ctx.param("converge"), "converge"),
+                rule=convergence.Rule(
+                    every=int(ctx.param("converge_every", convergence.DEFAULT_EVERY)),
+                    window=int(ctx.param("converge_window", convergence.DEFAULT_WINDOW)),
+                    min_gain_db=float(
+                        ctx.param("converge_min_gain_db", convergence.DEFAULT_MIN_GAIN_DB)
+                    ),
+                ),
+                live=ctx.param("live") is None or _optional_bool(ctx.param("live"), "live"),
+                up=_up_estimate(poses),
+                requested=requested_blocks,
+                count=block_total,
+                reason=block_reason,
+                init_max_points=_optional_int(ctx.param("init_max_points")),
+                holdout_error=_optional_bool(ctx.param("holdout_error"), "holdout_error"),
+                holdout_script=_optional_path(ctx.param("holdout_script")),
+                holdout_budget_s=float(ctx.param("holdout_budget_s", holdout.DEFAULT_BUDGET_S)),
+                params=dict(ctx.params),
+            ),
+            images=images,
+            requested_cap=requested_cap,
+            requested_scale=requested_scale,
+            max_side=max_side,
+            train_size=train_size,
+            variant=variant,
+        )
+        if in_blocks is not None:
+            return in_blocks
+    elif requested_blocks is None and budget is not None and budget.mode == "auto":
+        ctx.log(f"gsplat: one block: {block_reason}")
     # A Refine starts from the preview's splat when it left a seed (init_seed.py).
     seeded, steps_scaler, iterations = _seed_from_preview(
         ctx, poses, dataset, roi, steps_scaler, full_iterations, cap_max
@@ -1600,6 +1672,135 @@ def gsplat(ctx: StageContext) -> StageOutcome:
 CONVERGE_SCRIPT = Path(__file__).resolve().parent / "converge_trainer.py"
 
 
+def _block_schedule(ctx: StageContext, steps_scaler: float) -> float:
+    """The schedule every block runs: the single run's. Each block starts from the prior
+    as a Refine starts from the preview's seed, so `init_from: preview` gives it the same
+    `init_schedule_scale` (init_seed.py) the one-block Refine it is compared with gets."""
+    if str(ctx.param("init_from", "sfm")) == "preview":
+        return training.check_schedule_scale(
+            init_seed.schedule_for(_optional_float(ctx.param("init_schedule_scale")))
+        )
+    return steps_scaler
+
+
+def _train_in_blocks(
+    ctx: StageContext,
+    settings: blocks.Settings,
+    *,
+    images: int,
+    requested_cap: int | str | None,
+    requested_scale: float | None,
+    max_side: int | None,
+    train_size: tuple[int, int] | None,
+    variant: str,
+) -> StageOutcome | None:
+    """`blocks.py`'s run, written as the stage's outputs; None if it came to one block."""
+    plan = blocks.prepare(ctx, settings)
+    if plan is None:
+        return None
+    run = blocks.train(ctx, settings, plan, ctx.output(TRAINED_PLY.name))
+    registered = _registered_count(settings.poses, images)
+    train_frames, val_frames = training.held_out_split(registered)
+    split = training.TrainMetrics(
+        trainer=f"gsplat:{settings.trainer.name}", split=(train_frames, val_frames)
+    ).to_dict()
+    evaluated = run.document.get("evaluationMetrics")
+    # psnr/ssim/lpips: the merged splat on the run's own held-out frames, by gsplat's
+    # eval() -- the numbers a single run reports, so the two are comparable.
+    document: dict[str, Any] = dict(evaluated) if isinstance(evaluated, dict) else dict(split)
+    document["heldOut"] = split["heldOut"]
+    document["attempts"] = ctx.attempt
+    document["gaussians"] = run.gaussians
+    document["gaussiansInPly"] = run.gaussians
+    document["masksIgnored"] = ctx.has_input(MASKS.name)
+    document["gsplatVersion"] = training.GSPLAT_VERSION
+    record = run.document["blocks"]
+    caps = [block["capMax"] for block in record["blocks"]]
+    document["settings"] = {
+        "strategy": settings.strategy,
+        "capMax": None if any(cap is None for cap in caps) else sum(caps),
+        "capMaxRequested": requested_cap,
+        "scheduleScale": settings.steps_scaler,
+        "scheduleFactor": None,
+        "converge": settings.converge,
+        "scheduleScaleRequested": requested_scale,
+        "trainMaxSide": max_side,
+        "trainImageSize": None if train_size is None else list(train_size),
+        "antialiased": settings.switches.get("antialiased"),
+        "opacityReg": settings.switches.get("opacity_reg"),
+        "depthLoss": settings.switches.get("depth_loss"),
+        "poseOpt": settings.switches.get("pose_opt"),
+        "appOpt": settings.switches.get("app_opt"),
+        "bilateralGrid": settings.switches.get("bilateral_grid"),
+        "variant": variant,
+        "initFrom": "prior",
+        "blocks": record["count"],
+    }
+    held_out = run.document["holdoutSummary"]
+    document["holdout"] = {
+        key: held_out[key]
+        for key in ("status", "reason", "views", "meanPsnr", "gaussiansMeasured", "seconds")
+        if key in held_out
+    }
+    document["init"] = {"from": "prior", "prior": record["prior"]}
+    document["budget"] = None if settings.budget is None else settings.budget.to_dict()
+    steps_max = sum(int(block["stepsMax"]) for block in record["blocks"])
+    steps_run = sum(int(block["stepsRun"] or 0) for block in record["blocks"])
+    stopped = any(bool(block["stoppedEarly"]) for block in record["blocks"])
+    document["convergence"] = {
+        "enabled": settings.converge,
+        "status": "per block (blocks[].stoppedEarly)",
+        "rule": settings.rule.to_dict() if settings.converge else None,
+        "stepsMax": steps_max,
+        "stepsRun": steps_run,
+        "stoppedEarly": stopped,
+    }
+    document["roi"] = None
+    document["blocks"] = record
+    _write_json(ctx.output(TRAIN_METRICS.name), document)
+    ctx.log(
+        f"gsplat: {run.gaussians} gaussians from {record['count']} blocks -> "
+        f"{TRAINED_PLY.name} ({run.written} bytes)"
+    )
+    metrics: dict[str, MetricValue] = {
+        "gaussians": run.gaussians,
+        "trainedBytes": run.written,
+        "requestedIterations": training.scaled_steps(
+            settings.full_iterations, settings.steps_scaler
+        ),
+        "scheduleScale": settings.steps_scaler,
+        "metricsSource": "merged-eval" if isinstance(evaluated, dict) else "none",
+        "metricsSplit": f"val: every {training.TEST_EVERY}th frame",
+        "valFrames": val_frames,
+        "trainFrames": train_frames,
+        "initFrom": "prior",
+        "stepsMax": steps_max,
+        "stepsRun": steps_run,
+        "holdoutError": str(held_out.get("status")),
+        **run.metrics,
+    }
+    total_cap = document["settings"]["capMax"]
+    if settings.budget is not None:
+        metrics["gaussianBudget"] = total_cap if isinstance(total_cap, int) else settings.budget.cap
+        metrics["budgetMode"] = settings.budget.mode
+        metrics["budgetClamp"] = settings.budget.clamp or "none"
+        if settings.budget.raw is not None:
+            metrics["budgetRaw"] = settings.budget.raw
+    if settings.converge:
+        metrics["stoppedEarly"] = stopped
+    for name in ("psnr", "ssim", "lpips"):
+        value = document.get(name)
+        if isinstance(value, int | float) and not isinstance(value, bool):
+            metrics[name] = value
+    if max_side is not None:
+        metrics["trainMaxSide"] = max_side
+    ctx.log("gsplat: a block run leaves no seed; the prior stays for a later block run")
+    return StageOutcome(
+        metrics=metrics,
+        summary=f"{run.gaussians} gaussians trained in {record['count']} blocks",
+    )
+
+
 def _training_frame(dataset: Path, data_factor: int) -> tuple[tuple[int, int] | None, float | None]:
     """The size of the frames the trainer reads, and that over the posed camera's width.
 
@@ -1756,6 +1957,26 @@ def _save_seed(
         ctx.log(f"gsplat: could not leave a seed for a later Refine: {error!r}")
         return
     ctx.log(f"gsplat: left a {count}-gaussian seed in checkpoint/ for a later Refine")
+    # And the splat's shapes, as the prior a later block run partitions, seeds and rings
+    # with (blocks.py) -- the Preview's, in the usual order of runs.
+    try:
+        prior = blocks.save_prior(
+            ctx.checkpoint_dir,
+            columns,
+            poses,
+            scratch=ctx.work_dir / "seed",
+            source=f"a run of {iterations} steps, cap {cap_max}",
+        )
+    except (OSError, KeyError, ValueError) as error:
+        ctx.log(f"gsplat: could not leave a prior for a later block run: {error!r}")
+        return
+    if prior is None:
+        ctx.log(
+            f"gsplat: no prior left for a later block run (over "
+            f"{blocks.PRIOR_MAX_GAUSSIANS} gaussians); an earlier one, if any, stays"
+        )
+    else:
+        ctx.log(f"gsplat: left a {prior}-gaussian prior in checkpoint/ for a block run")
 
 
 def _optional_bool(value: object, name: str) -> bool:

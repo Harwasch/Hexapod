@@ -189,6 +189,14 @@ stages:
       #   capture (experiments/variants/spool-table.yaml is that run).
       #   roi: {center: [x, y, z], radius: r}  -- COLMAP frame; crops the initial points
       #     to the sphere and the trained splat to 1.5 radii.
+      #   blocks: auto        -- the default without being written: a capture whose budget
+      #     is more than one GPU trains (the raw count over the smaller of the memory
+      #     ceiling and budget_max) trains as blocks, one after another on the same L4,
+      #     from the Preview's splat, and is merged into one trained.ply (blocks.py). A
+      #     number forces that many -- `blocks: 2` on the spool against `blocks: 1` is the
+      #     seam test. `block_epsilon` (0.05) is the camera test's 1 - SSIM threshold;
+      #     `bilateral_grid: true` is its per-image exposure correction (a 16x16x8 grid of
+      #     the 3x4 affine H3DGS App. C.2 fits per image, discarded at export).
       #
       # psnr, ssim and lpips in train_metrics.json are on gsplat's held-out split: every
       # 8th registered frame, never trained on (`heldOut` there says how many).

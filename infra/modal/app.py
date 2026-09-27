@@ -193,6 +193,10 @@ image = (
         # And does the parent optimisation (`optimise_lod`) import torch, gsplat, the
         # trainer's datasets and the packer's tree (from ../captures) under it?
         f"{TRAINER_PYTHON} {PIPELINE_DIR}/lod_optimise.py --self-check --trainer {GSPLAT_TRAINER}",
+        # And does it still call the module-global `rasterization` that block training's
+        # frozen ring patches (`block_trainer.py`, tools/pipeline/blocks.py)?
+        f"{TRAINER_PYTHON} {PIPELINE_DIR}/block_trainer.py --self-check "
+        f"--trainer {GSPLAT_TRAINER}",
         # And does the 3.12 side import every stage (the list above, pinned by a test)?
         f"cd {PIPELINE_DIR} && python -c 'import remote, stages, captures_bridge'",
     )
@@ -279,20 +283,51 @@ class S3Transfer:
     def __init__(self, client: Any, bucket: str) -> None:
         self._client = client
         self._bucket = bucket
+        #: Object key -> (size, mtime_ns) of the file this instance last uploaded there.
+        self._sent: dict[str, tuple[int, int]] = {}
 
     def put(self, key: str, source: Path) -> int:
+        """A directory is *mirrored*: members unchanged since this instance uploaded them
+        are not sent again, and objects under the key with no member any more are deleted.
+
+        Both for the checkpoint syncer, which puts `checkpoint/` every minute: a block run
+        (tools/pipeline/blocks.py) keeps each finished block's splat there -- hundreds of
+        megabytes -- and re-sending all of them every minute would be the syncer's whole
+        job; and when it has merged them it deletes them, which must reach the bucket or
+        the next restore brings them back. `LocalTransfer.put` already replaces the
+        directory, so this is the encoding every implementation now agrees on.
+        """
         if source.is_dir():
+            members = sorted(p for p in source.rglob("*") if p.is_file())
 
             def one(member: Path) -> int:
-                relative = member.relative_to(source).as_posix()
-                self._client.upload_file(str(member), self._bucket, f"{key}/{relative}")
-                return member.stat().st_size
+                remote = f"{key}/{member.relative_to(source).as_posix()}"
+                stat = member.stat()
+                signature = (stat.st_size, stat.st_mtime_ns)
+                if self._sent.get(remote) == signature:
+                    return 0
+                self._client.upload_file(str(member), self._bucket, remote)
+                self._sent[remote] = signature
+                return stat.st_size
 
-            return sum(_parallel(one, sorted(p for p in source.rglob("*") if p.is_file())))
+            moved = sum(_parallel(one, members))
+            present = {f"{key}/{m.relative_to(source).as_posix()}" for m in members}
+            for stale in self._listing(f"{key}/"):
+                if stale not in present:
+                    self._client.delete_object(Bucket=self._bucket, Key=stale)
+                    self._sent.pop(stale, None)
+            return moved
         self._client.upload_file(str(source), self._bucket, key)
+        self._forget(key)
         return source.stat().st_size
 
+    def _forget(self, key: str) -> None:
+        """What this instance remembers uploading under `key` is no longer the truth."""
+        for remote in [k for k in self._sent if k == key or k.startswith(f"{key}/")]:
+            self._sent.pop(remote, None)
+
     def get(self, key: str, target: Path) -> int:
+        self._forget(key)
         if self._head(key) is not None:
             target.parent.mkdir(parents=True, exist_ok=True)
             self._client.download_file(self._bucket, key, str(target))
@@ -310,6 +345,7 @@ class S3Transfer:
         return self._head(key) is not None or bool(self._listing(f"{key}/", limit=1))
 
     def delete(self, key: str) -> None:
+        self._forget(key)
         if self._head(key) is not None:
             self._client.delete_object(Bucket=self._bucket, Key=key)
             return
