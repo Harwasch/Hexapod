@@ -328,13 +328,17 @@ def in_region(region: Roi | SupportMask, xyz: Any) -> Any:
 
 def _inside(region: Roi | SupportMask, xyz: Any, *, radii: float = 1.0) -> Any:
     """Which points are in `region`: within `radii` radii of an ROI sphere, or in a
-    support mask's voxels (which already carry their margin)."""
+    support mask's voxels (which already carry their margin). Anything else with a
+    `contains(xyz)` -- a block's region (`blocks.BlockRegion`) -- answers for itself."""
     import numpy as np
 
     from support_mask import SupportMask
 
     if isinstance(region, SupportMask):
         return region.contains(xyz)
+    contains = getattr(region, "contains", None)
+    if callable(contains):
+        return contains(xyz)
     distance = np.linalg.norm(np.asarray(xyz, dtype=np.float64) - np.asarray(region.center), axis=1)
     return np.isfinite(distance) & (distance <= radii * region.radius)
 

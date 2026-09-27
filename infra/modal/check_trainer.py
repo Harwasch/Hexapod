@@ -142,7 +142,36 @@ def main() -> int:
         )
     )
 
+    # A block (tools/pipeline/blocks.py): its own held-out frames through `--test_every`,
+    # and the merged splat scored by the trainer's eval-only `--ckpt`.
+    block: Any = parse(
+        training.gsplat_argv(
+            sys.executable,
+            trainer,
+            Path("/data"),
+            Path("/result"),
+            strategy="mcmc",
+            max_steps=30_000,
+            steps_scaler=0.5,
+            cap_max=1_000_000,
+            extra=["--test_every", "7"],
+        )
+    )
+    evaluating: Any = parse(
+        training.gsplat_argv(
+            sys.executable,
+            trainer,
+            Path("/data"),
+            Path("/result"),
+            strategy="mcmc",
+            max_steps=30_000,
+            extra=["--ckpt", "/result/merged.pt"],
+        )
+    )
+
     checks = {
+        "block test_every": block.test_every == 7 and cfg.test_every == 8,
+        "block eval ckpt": list(evaluating.ckpt or []) == ["/result/merged.pt"],
         "mcmc strategy": type(tuned.strategy).__name__ == "MCMCStrategy",
         "cap_max": tuned.strategy.cap_max == 200_000,
         "steps_scaler": tuned.max_steps == 3_000,

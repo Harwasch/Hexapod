@@ -244,6 +244,37 @@ def test_a_phone_may_turn_on_the_phone_capture_switches(client: TestClient, db: 
     assert job is not None and job.params == chosen
 
 
+def test_a_phone_may_ask_for_blocks_to_compare_a_capture_whole_and_in_blocks(
+    client: TestClient, db: Session
+) -> None:
+    """`blocks` is `auto` or a count (tools/pipeline/blocks.py); the camera test's epsilon
+    and the frozen ring are the two knobs the spool comparison calibrates."""
+    mine = client.post("/api/v1/phone/captures", json={}, headers=PHONE).json()["capture"]
+    uploaded(db, mine["id"])
+    url = f"/api/v1/phone/captures/{mine['id']}/process"
+
+    def start(params: dict[str, object]) -> Response:
+        return client.post(
+            url, json={"recipe": "photo-reconstruct", "params": params}, headers=PHONE
+        )
+
+    for refused in (
+        {"train": {"blocks": "many"}},
+        {"train": {"blocks": 0}},
+        {"train": {"blocks": 64}},
+        {"train": {"block_epsilon": 0.9}},
+        {"train": {"block_ring": "off"}},
+    ):
+        response = start(refused)
+        assert response.status_code == 409, (refused, response.text)
+
+    chosen = {"train": {"blocks": 2, "block_epsilon": 0.08, "block_ring": False}}
+    ok = start(chosen)
+    assert ok.status_code == 202, ok.text
+    job = db.get(Job, uuid.UUID(ok.json()["id"]))
+    assert job is not None and job.params == chosen
+
+
 def test_a_quality_tier_scales_the_measured_budget_within_bounds(
     client: TestClient, db: Session
 ) -> None:

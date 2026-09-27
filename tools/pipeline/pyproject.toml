@@ -42,6 +42,10 @@ ignore = ["ANN401", "RUF012", "S101"]
 known-first-party = [
   "adapters",
   "artifacts",
+  "block_maths",
+  "block_trainer",
+  "block_views",
+  "blocks",
   "captures_bridge",
   "cloud",
   "cloud_stages",

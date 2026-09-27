@@ -236,8 +236,10 @@ class SeedApplied:
 def _inside(region: Region, xyz: npt.NDArray[np.float32]) -> npt.NDArray[np.bool_]:
     if region is None:
         return np.ones(xyz.shape[0], dtype=bool)
-    if isinstance(region, SupportMask):
-        return region.contains(xyz)
+    if isinstance(region, SupportMask) or callable(getattr(region, "contains", None)):
+        # A support mask, or a block's region (`blocks.BlockRegion`): each answers itself.
+        inside_region: npt.NDArray[np.bool_] = np.asarray(region.contains(xyz), dtype=bool)
+        return inside_region
     centre = np.asarray(region.center, dtype=np.float64)
     distance = np.linalg.norm(xyz.astype(np.float64) - centre, axis=1)
     inside: npt.NDArray[np.bool_] = np.isfinite(distance) & (distance <= region.radius)
