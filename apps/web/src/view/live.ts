@@ -183,10 +183,17 @@ export function showLive(captureId: string): { stop: () => void } {
     frame.updateMatrixWorld(true);
   };
 
-  /** Fit the view to a sphere of `radius` around the origin, once. */
+  /**
+   * Fit the view to a sphere of `radius` around the origin. Again whenever the scene has
+   * grown or shrunk by half since the last fit -- the solve starts with a handful of
+   * cameras -- until the user takes the camera, after which it is theirs.
+   */
+  let framedRadius = 0;
   const frameView = (radius: number): void => {
-    if (framed || touched) return;
+    if (touched) return;
+    if (framed && radius < framedRadius * 1.5 && radius > framedRadius / 1.5) return;
     framed = true;
+    framedRadius = radius;
     const size = Math.max(radius, 1e-3);
     const halfV = THREE.MathUtils.degToRad(camera.fov / 2);
     const halfH = Math.atan(Math.tan(halfV) * camera.aspect);
@@ -198,6 +205,22 @@ export function showLive(captureId: string): { stop: () => void } {
     camera.updateProjectionMatrix();
     controls.minDistance = size * 0.02;
     controls.maxDistance = distance * 6;
+  };
+
+  /** The 90th-percentile distance of these points from `centre`: robust to strays. */
+  const spreadRadius = (sets: Float32Array[], centre: readonly number[]): number | null => {
+    const distances: number[] = [];
+    for (const set of sets) {
+      for (let i = 0; i + 2 < set.length; i += 3) {
+        const dx = (set[i] ?? 0) - (centre[0] ?? 0);
+        const dy = (set[i + 1] ?? 0) - (centre[1] ?? 0);
+        const dz = (set[i + 2] ?? 0) - (centre[2] ?? 0);
+        distances.push(Math.hypot(dx, dy, dz));
+      }
+    }
+    if (distances.length < 3) return null;
+    distances.sort((a, b) => a - b);
+    return distances[Math.floor(distances.length * 0.9)] ?? null;
   };
 
   const drawCameras = (payload: LiveCameras, dimPoints: boolean): void => {
@@ -238,7 +261,8 @@ export function showLive(captureId: string): { stop: () => void } {
     frame.updateMatrixWorld(true);
     section.dataset.cameras = String(decoded.count);
     section.dataset.points = String(points.count);
-    frameView(payload.scale * 0.8);
+    // The solve's own spread, not `payload.scale` (the quantisation range, far larger).
+    frameView(spreadRadius([points.positions, decoded.centres], centre) ?? payload.scale * 0.8);
   };
 
   const showSplat = async (
