@@ -23,20 +23,20 @@ export function qualityOf(
 }
 
 function share(quality: CaptureQuality): string {
-  if (quality.keepPct === null) return "none of the circled area reached high quality";
-  return `${String(Math.round(quality.keepPct))}% of the circled area reached high quality`;
+  if (quality.keepPct === null) return "nothing met the high-quality bar";
+  return `${String(Math.round(quality.keepPct))}% of the scene met the high-quality bar`;
 }
 
 function psnr(quality: CaptureQuality): string | null {
   return quality.heldOutPsnr === null ? null : `held-out ${quality.heldOutPsnr.toFixed(1)} dB`;
 }
 
-/** "62% of the circled area reached high quality · held-out 23.0 dB" */
+/** "62% of the scene met the high-quality bar · held-out 23.0 dB" */
 export function forecast(quality: CaptureQuality): string {
   return [share(quality), psnr(quality)].filter(Boolean).join(" · ");
 }
 
-/** "Refined · 71% of the circled area reached high quality · held-out 25.3 dB · Strict bar" */
+/** "Refined · 71% of the scene met the high-quality bar · held-out 25.3 dB · Strict bar" */
 export function summary(quality: CaptureQuality): string {
   const bar = BAR_NAME[quality.barApplied] ?? quality.barApplied;
   const fellBack = quality.barApplied !== quality.bar ? " (the bar asked for kept too little)" : "";

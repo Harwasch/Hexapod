@@ -62,7 +62,7 @@ import json
 import math
 import time
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -71,6 +71,7 @@ import numpy.typing as npt
 
 import gaussians
 import sfm
+import support_mask
 from artifacts import ArtifactDecl
 from contracts import MetricValue, StageContext, StageOutcome
 from registry import stage_impl
@@ -576,6 +577,29 @@ class Roi:
         return inside
 
 
+def supported_extent(xyz: F32, tiers: U8, fallback: Roi, quantile: float = 99.0) -> Roi:
+    """The sphere that holds the well-supported part of the scene: the keep tier's extent.
+
+    This, not where the cameras pointed, is what a Refine trains inside. It is decided by
+    the data alone -- a wall that was seen well enough is inside it wherever it stands --
+    and needs nobody to say what the subject was. The centre is the keep tier's median
+    (robust to a stray keep splat); the radius its `quantile` distance from there. With no
+    keep splats at all, the camera-pointed region stands in, and `method` says so.
+    """
+    kept = np.asarray(xyz, dtype=np.float64)[tiers == TIER_KEEP]
+    kept = kept[np.isfinite(kept).all(axis=1)]
+    if kept.shape[0] < 32:
+        return replace(fallback, method=f"{fallback.method} (too little keep for an extent)")
+    centre = np.median(kept, axis=0)
+    radius = float(np.percentile(np.linalg.norm(kept - centre, axis=1), quantile))
+    return Roi(
+        centre=centre,
+        radius=max(radius, 1e-6),
+        method="keep-extent",
+        camera_distance=fallback.camera_distance,
+    )
+
+
 def estimate_roi(
     centres: F64,
     axes: F64,
@@ -867,8 +891,8 @@ def capture_tips(
                 {
                     "id": "more-frames",
                     "text": (
-                        f"Move more slowly or take more photos: a typical point in the circled "
-                        f"area was in {median_views} frames, and {thresholds.keep_min_views} "
+                        f"Move more slowly or take more photos: a typical point near the "
+                        f"subject was in {median_views} frames, and {thresholds.keep_min_views} "
                         f"is what high quality needs."
                     ),
                 }
@@ -1035,8 +1059,16 @@ def support_gate(ctx: StageContext) -> StageOutcome:
     counts = {
         name: int((tiers == tier).sum()) for tier, name in TIER_NAMES.items() if tier != TIER_CAMERA
     }
-    keep_pct = _occupied_share(xyz, tiers, alpha, roi, TIER_KEEP)
-    context_pct = _occupied_share(xyz, tiers, alpha, roi, TIER_CONTEXT)
+    # What a Refine trains inside, and what the percentages are over: the extent the data
+    # supports, not the region the cameras pointed at (`roi`, which stays the reference
+    # for pixel size and the capture tips).
+    extent = supported_extent(xyz, tiers, roi)
+    # The region a Refine trains in: the voxels holding the keep tier, in whatever shape
+    # they make. `extent` is only the frame the percentages below are measured over.
+    mask = support_mask.build(xyz[tiers == TIER_KEEP])
+    scene = replace(extent, radius=extent.radius * 1.5)
+    keep_pct = _occupied_share(xyz, tiers, alpha, scene, TIER_KEEP)
+    context_pct = _occupied_share(xyz, tiers, alpha, scene, TIER_CONTEXT)
     metrics_doc = (
         _read_json(ctx.input("train_metrics.json")) if ctx.has_input("train_metrics.json") else {}
     )
@@ -1060,12 +1092,17 @@ def support_gate(ctx: StageContext) -> StageOutcome:
         "mode": mode,
         "bar": bar,
         "barApplied": applied,
-        "roi": roi.to_dict(),
+        # `roi` is what a Refine crops training to: the supported extent. `pointedRoi` is
+        # where the cameras converged, kept for the record and for the tips.
+        "roi": extent.to_dict(),
+        "pointedRoi": roi.to_dict(),
+        # What a Refine crops training to, when present: any shape, decided by the data.
+        "supportMask": None if mask is None else mask.to_dict(),
         "gaussians": {"in": splat.count, "out": int(kept["x"].shape[0]), **counts},
         "keepPct": keep_pct,
         "contextPct": context_pct,
         "keepPctNote": (
-            "share of the occupied 1/24-diameter voxels inside the region of interest whose "
+            "share of the occupied 1/24-diameter voxels within 1.5x the supported extent whose "
             "gaussians are mostly keep (contextPct: keep or context)"
         ),
         "heldOutPsnr": psnr,
@@ -1129,9 +1166,9 @@ def support_gate(ctx: StageContext) -> StageOutcome:
     if psnr is not None:
         metrics["heldOutPsnr"] = psnr
     summary = (
-        f"{keep_pct:g}% of the circled area high quality"
+        f"{keep_pct:g}% of the scene met the high-quality bar"
         if keep_pct is not None
-        else "nothing inside the circled area"
+        else "nothing met the high-quality bar"
     )
     return StageOutcome(metrics=metrics, summary=summary)
 

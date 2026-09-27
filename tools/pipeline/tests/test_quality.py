@@ -14,6 +14,7 @@ import pytest
 import gaussians
 import quality
 import sfm
+import support_mask
 from conftest import make_recipe
 from executor import execute
 from runners import RunnerSet
@@ -315,8 +316,13 @@ def test_the_stage_gates_the_fringe_and_place_publishes_what_it_kept(tmp_path: P
     document = json.loads((workdir.out_dir("quality") / "quality.json").read_text())
     assert document["mode"] == "preview"
     assert document["barApplied"] == "strict"
-    np.testing.assert_allclose(document["roi"]["center"], TARGET, atol=1e-6)
+    # Where the cameras pointed is kept for the record; what a Refine trains in is the
+    # data's own extent and, above all, its support mask.
+    np.testing.assert_allclose(document["pointedRoi"]["center"], TARGET, atol=1e-6)
+    assert document["roi"]["method"] == "keep-extent"
     assert document["roi"]["frame"] == "colmap"
+    mask = support_mask.SupportMask.parse(document["supportMask"])
+    assert mask is not None and mask.voxels > 0
     assert document["heldOutPsnr"] == 23.04
     assert document["gsd"]["metric"] is False
     counts = document["gaussians"]

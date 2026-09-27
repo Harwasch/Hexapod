@@ -666,7 +666,7 @@ test.describe("the phone upload page", () => {
     // The preview: its forecast, what to capture next time, and Refine.
     await expect(row("Spool table")).toContainText("Preview ready");
     await expect(row("Spool table").locator(".forecast")).toHaveText(
-      "62% of the circled area reached high quality · held-out 23.0 dB",
+      "62% of the scene met the high-quality bar · held-out 23.0 dB",
     );
     await expect(row("Spool table").locator(".tips p")).toHaveCount(2);
     await expect(row("Spool table").locator(".tips")).toContainText("Add frames from above");
@@ -674,7 +674,7 @@ test.describe("the phone upload page", () => {
 
     // The refined one: its result, and no Refine.
     await expect(row("Garden bench").locator(".forecast")).toHaveText(
-      "Refined · 71% of the circled area reached high quality · held-out 25.3 dB · Balanced bar",
+      "Refined · 71% of the scene met the high-quality bar · held-out 25.3 dB · Balanced bar",
     );
     await expect(row("Garden bench").getByRole("button", { name: "Refine" })).toHaveCount(0);
     await expect(row("Garden bench").locator(".tips")).toHaveCount(0);
@@ -874,7 +874,7 @@ test.describe("the phone upload page", () => {
                 tips: [
                   {
                     id: "more-frames",
-                    text: "Move more slowly or take more photos: a typical point in the circled area was in 3 frames, and 8 is what high quality needs.",
+                    text: "Move more slowly or take more photos: a typical point near the subject was in 3 frames, and 8 is what high quality needs.",
                   },
                 ],
                 gsdMm: null,

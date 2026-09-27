@@ -79,8 +79,10 @@ def stage_params(plan: Plan, capture: Capture, job: Job) -> dict[str, dict[str, 
 #: `quality` stage is a sphere in that run's COLMAP frame, and a pose model computed
 #: again is a different, arbitrary frame.
 POSES = "poses"
-#: The parameter that carries one (the train stage's crop, see the phone's Refine).
+#: The parameters that carry one (the train stage's crop, see the phone's Refine): an ROI
+#: sphere, or a support mask of any shape. Both are in the preview's frame.
 ROI = "roi"
+REGION_PARAMS = frozenset({ROI, "support_mask"})
 
 
 def without_stale_roi(
@@ -98,11 +100,14 @@ def without_stale_roi(
     producer = plan.origins.get(POSES)
     if producer is None or producer in completed:
         return resolved, []
-    dropped = sorted(stage for stage, values in resolved.items() if ROI in values)
+    dropped = sorted(
+        stage for stage, values in resolved.items() if REGION_PARAMS.intersection(values)
+    )
     if not dropped:
         return resolved, []
     return {
-        stage: {k: v for k, v in values.items() if k != ROI} for stage, values in resolved.items()
+        stage: {k: v for k, v in values.items() if k not in REGION_PARAMS}
+        for stage, values in resolved.items()
     }, dropped
 
 

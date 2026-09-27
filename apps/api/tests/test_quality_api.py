@@ -192,14 +192,14 @@ def test_refine_resumes_the_preview_at_train_inside_its_region(
     assert retried.json()["params"]["train"]["roi"] == {"center": [0.1, -0.2, 3.5], "radius": 0.8}
 
 
-def test_refine_defaults_to_the_balanced_bar(client: TestClient, db: Session) -> None:
+def test_refine_defaults_to_the_strict_bar(client: TestClient, db: Session) -> None:
     capture_id = _process(client, db)
     _finish(db, capture_id)
 
     refined = client.post(f"/api/v1/phone/captures/{capture_id}/refine", json={}, headers=PHONE)
 
     assert refined.status_code == 202, refined.text
-    assert refined.json()["params"]["quality"] == {"bar": "balanced", "mode": "refine"}
+    assert refined.json()["params"]["quality"] == {"bar": "strict", "mode": "refine"}
 
 
 def test_refine_is_refused_where_there_is_nothing_to_refine(
@@ -334,3 +334,43 @@ def test_a_region_is_only_passed_on_over_the_poses_it_was_measured_in() -> None:
     assert dropped == ["train"]
     assert fresh == {"train": {"cap_max": 500_000}, "quality": {"mode": "refine"}}
     assert resolved["train"]["roi"]  # the caller's copy is untouched
+
+    # A support mask is a region in the same frame, and goes the same way.
+    masked = {"train": {"support_mask": {"kind": "voxels"}, "cap_max": 1}}
+    fresh, dropped = without_stale_roi(masked, plan, set())
+    assert dropped == ["train"] and fresh == {"train": {"cap_max": 1}}
+
+
+def test_refine_trains_inside_the_previews_support_mask_when_it_has_one(
+    client: TestClient, db: Session, storage: S3Storage
+) -> None:
+    """The region is the voxels the preview's well-supported splats occupy -- any shape --
+    read from its quality.json; the sphere is only the fallback."""
+    from app.storage import get_storage
+
+    capture_id = _process(client, db)
+    job = _finish(db, capture_id)
+    mask = {
+        "kind": "voxels",
+        "frame": "colmap",
+        "origin": [0, 0, 0],
+        "voxel": 0.1,
+        "dims": [2, 2, 2],
+        "voxels": 3,
+        "bits": "eJxrAAAAggCB",
+    }
+    storage.put_object(
+        f"runs/{job.id}/quality/quality.json",
+        json.dumps({"supportMask": mask}).encode(),
+        "application/json",
+    )
+    client.app.dependency_overrides[get_storage] = lambda: storage  # type: ignore[attr-defined]
+    try:
+        refined = client.post(f"/api/v1/phone/captures/{capture_id}/refine", json={}, headers=PHONE)
+    finally:
+        client.app.dependency_overrides.pop(get_storage)  # type: ignore[attr-defined]
+
+    assert refined.status_code == 202, refined.text
+    train = refined.json()["params"]["train"]
+    assert train["support_mask"] == mask
+    assert "roi" not in train

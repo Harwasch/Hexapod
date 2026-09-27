@@ -39,6 +39,7 @@ import exif
 import gaussians
 import quality
 import sfm
+import support_mask
 import training
 import video
 from artifacts import ArtifactDecl
@@ -839,7 +840,12 @@ def gsplat(ctx: StageContext) -> StageOutcome:
             f"training images; give one. train_max_side works at any size, and gsplat's "
             f"parser rescales the intrinsics to match"
         )
-    roi = training.Roi.parse(ctx.param("roi"))
+    # The region to train in: a support mask from a preview's quality stage (any shape the
+    # well-supported data makes) wins over an ROI sphere; neither means the whole scene.
+    mask = support_mask.SupportMask.parse(ctx.param("support_mask"))
+    roi: training.Roi | support_mask.SupportMask | None = (
+        mask if mask is not None else training.Roi.parse(ctx.param("roi"))
+    )
     dataset = training.build_dataset(frames, poses, ctx.work_dir / "dataset", max_side=max_side)
     # A shorter schedule for a smaller capture (`training.schedule_scale`), unless the
     # recipe leaves `schedule_full_at` out, which keeps the full one -- or unless the run
@@ -878,8 +884,13 @@ def gsplat(ctx: StageContext) -> StageOutcome:
     crop: training.RoiCrop | None = None
     if roi is not None:
         crop = training.crop_initial_points(dataset / "sparse" / "0", roi)
+        where = (
+            f"support mask ({roi.voxels} voxels of {roi.voxel:.4g})"
+            if isinstance(roi, support_mask.SupportMask)
+            else f"roi centre {roi.center} radius {roi.radius:g}"
+        )
         ctx.log(
-            f"gsplat: roi centre {roi.center} radius {roi.radius:g}: {crop.points_kept} of "
+            f"gsplat: {where}: {crop.points_kept} of "
             f"{crop.points_in} initial points kept ({crop.inside} inside, "
             f"{crop.outside_sampled} sampled outside, {crop.kept_for_coverage} kept so "
             f"every frame still sees some)"
@@ -938,8 +949,12 @@ def gsplat(ctx: StageContext) -> StageOutcome:
     if roi is not None:
         columns, kept = training.crop_splat(columns, roi)
         ctx.log(
-            f"gsplat: roi: kept {kept} of {trained_count} trained gaussians within "
-            f"{training.ROI_KEEP_RADII:g} radii of the centre"
+            f"gsplat: kept {kept} of {trained_count} trained gaussians inside the "
+            + (
+                "support mask"
+                if isinstance(roi, support_mask.SupportMask)
+                else f"roi ({training.ROI_KEEP_RADII:g} radii)"
+            )
         )
     written = gaussians.write_ply(ctx.output(TRAINED_PLY.name), columns)
     in_ply = int(columns["x"].shape[0])
@@ -976,7 +991,11 @@ def gsplat(ctx: StageContext) -> StageOutcome:
         None
         if roi is None or crop is None
         else {
-            **roi.to_dict(),
+            **(
+                {"kind": "voxels", "voxels": roi.voxels, "voxel": roi.voxel, "dims": list(roi.dims)}
+                if isinstance(roi, support_mask.SupportMask)
+                else roi.to_dict()
+            ),
             **crop.to_dict(),
             "keepRadii": training.ROI_KEEP_RADII,
             "gaussiansTrained": trained_count,

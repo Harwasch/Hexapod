@@ -145,9 +145,11 @@ stages:
   # The quality bar (quality.py). Per gaussian: how many frames saw it unoccluded, over
   # what spread of angles, at what ground sampling distance -- then keep / context / drop,
   # and `bar` decides what `place` gets: strict (keep only), balanced (keep, plus context
-  # faded to half its opacity) or everything (the splat as trained). It also estimates
-  # the region the cameras were pointed at, in COLMAP's frame, which is what a phone's
-  # Refine trains inside; and writes capture tips and a tier-coloured coverage.ply.
+  # faded to half its opacity) or everything (the splat as trained). Strict is the
+  # default: a region is shown only if the data supports it at high quality. It also
+  # measures the extent of the well-supported (keep) splats, in COLMAP's frame, which is
+  # what a phone's Refine trains inside -- decided by the data, with no subject to pick
+  # -- and writes capture tips and a tier-coloured coverage.ply.
   #
   # After `georeference`, not straight after `train`, only so that an EXIF-aligned
   # capture's metric scale is there to report its GSD in mm/px; the criterion itself is
@@ -159,7 +161,7 @@ stages:
     params:
       # preview | refine: what this run is, for the phone's forecast and its Refine.
       mode: refine
-      bar: balanced
+      bar: strict
       keep_min_views: 8
       keep_min_spread_deg: 45
       keep_max_gsd_ratio: 2.0

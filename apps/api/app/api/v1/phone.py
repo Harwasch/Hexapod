@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 import time
 import uuid
@@ -13,7 +14,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import Field
 from sqlalchemy import func, select
 
-from app.api.deps import DbSession, SettingsDep
+from app.api.deps import DbSession, SettingsDep, Storage
 from app.models.capture import Capture
 from app.models.enums import CaptureKind
 from app.models.job import Job
@@ -25,6 +26,8 @@ from app.services import handoff, phone_key
 from app.services import jobs as job_service
 from app.services import recipes as recipe_service
 from app.services.errors import ConflictError, UnauthorizedError
+from app.storage import ObjectStorage
+from app.worker.outputs import artifact_key
 
 router = APIRouter(prefix="/phone", tags=["phone"])
 
@@ -243,14 +246,16 @@ class PhoneRefine(CamelModel):
     summary="Refine a finished preview: train it again at full quality, inside its region",
     description=(
         "Resumes the capture's latest finished photo-reconstruct run at `train` with new "
-        "parameters: the phone's quality options, `train.roi` set to the region of interest "
-        "the preview's quality stage measured, and `quality.mode` = `refine`. The frames "
-        "and poses are kept, so the region is in the frame it was measured in. If the "
+        "parameters: the phone's quality options, `train.support_mask` set to the voxels the "
+        "preview's well-supported splats occupy (any shape), and `quality.mode` = `refine`. "
+        "The frames and poses are kept, so the mask is in the frame it was measured in. If the "
         "worker no longer has them, the run starts over and trains uncropped rather than "
         "applying the region to a different reconstruction."
     ),
 )
-def refine_phone_capture(capture_id: uuid.UUID, payload: PhoneRefine, db: DbSession) -> JobRead:
+def refine_phone_capture(
+    capture_id: uuid.UUID, payload: PhoneRefine, db: DbSession, storage: Storage
+) -> JobRead:
     capture = capture_service.get_capture(db, capture_id)
     if (capture.metadata_ or {}).get("origin") != ORIGIN:
         raise UnauthorizedError("That phone key is not right.")
@@ -278,11 +283,18 @@ def refine_phone_capture(capture_id: uuid.UUID, payload: PhoneRefine, db: DbSess
         # What the kept frames were made with, recorded rather than silently changed.
         params["normalize"] = dict(previous["normalize"])
     train = params.setdefault("train", {})
-    if verdict.roi is not None:
+    # The region to train in is the preview's support mask: the voxels its well-supported
+    # splats occupy, in whatever shape they make. It is too large for the capture's summary,
+    # so it is read from the preview's own quality.json. The sphere is only a fallback for
+    # a verdict written before masks existed.
+    mask = _support_mask(storage, job.id)
+    if mask is not None:
+        train["support_mask"] = mask
+    elif verdict.roi is not None:
         train["roi"] = {"center": list(verdict.roi.center), "radius": verdict.roi.radius}
     quality = params.setdefault("quality", {})
     quality["mode"] = "refine"
-    quality.setdefault("bar", "balanced")
+    quality.setdefault("bar", "strict")
     recipe_service.check_overrides(job.recipe, params)
     job.params = params
     try:
@@ -314,3 +326,17 @@ def stop_phone_capture(capture_id: uuid.UUID, db: DbSession) -> JobRead:
     if active is None:
         raise ConflictError("Nothing is running for that capture.")
     return job_service.job_to_read(job_service.cancel_job(db, active.id))
+
+
+def _support_mask(storage: ObjectStorage, job_id: uuid.UUID) -> dict[str, object] | None:
+    """The support mask in a run's quality.json, or None if it has none or can't be read.
+
+    None is safe: the Refine then crops to the sphere, or not at all, and still applies
+    the quality bar to what it trains.
+    """
+    try:
+        document = json.loads(storage.get_object(artifact_key(job_id, "quality", "quality.json")))
+    except Exception:
+        return None
+    mask = document.get("supportMask") if isinstance(document, dict) else None
+    return mask if isinstance(mask, dict) else None

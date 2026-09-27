@@ -49,7 +49,7 @@ const BAR = [
   {
     value: "strict",
     label: "Strict",
-    hint: "Only what enough photos saw well, from enough angles. Thin fringes are cut away.",
+    hint: "Only what enough frames saw well, from enough angles. Everything else is removed. The default.",
   },
   {
     value: "balanced",
@@ -100,7 +100,7 @@ export interface Options {
 
 export const DEFAULTS: Options = {
   quality: "standard",
-  bar: "balanced",
+  bar: "strict",
   photoSize: "1600",
   videoFps: "4",
   upAxis: "",

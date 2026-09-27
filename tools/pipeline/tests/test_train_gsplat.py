@@ -31,6 +31,7 @@ from PIL import Image
 import gaussians
 import progress
 import sfm
+import support_mask
 import training
 from adapters import LocalTransfer, SubprocessAdapter
 from cloud import AttemptLedger, CloudRunner, Placement
@@ -747,3 +748,32 @@ def test_the_roi_crops_the_initial_points_and_the_trained_splat(tmp_path: Path) 
     assert roi["gaussiansTrained"] == 64
     assert roi["gaussiansKept"] == trained.count == document["gaussiansInPly"]
     assert 0 < trained.count < 64
+
+
+def test_a_support_mask_crops_training_to_whatever_shape_the_data_has(tmp_path: Path) -> None:
+    """The mask, not a sphere: here the supported data is one side of the scene only."""
+    workdir = Workdir.create(tmp_path / "run")
+    seed_inputs(workdir)
+    sfm.write_points3d(
+        workdir.input_path("poses") / "points3D.bin", ring_points(100, images=4, radius=3.0)
+    )
+    rng = np.random.default_rng(3)
+    supported = rng.uniform([0.5, -4.0, -4.0], [4.0, 4.0, 4.0], size=(60_000, 3))
+    mask = support_mask.build(supported)
+    assert mask is not None
+    params = stand_in_params(
+        support_mask=mask.to_dict(),
+        # A mask wins over a sphere given alongside it.
+        roi={"center": [0.0, 0.0, 0.0], "radius": 100.0},
+    )
+
+    execute(train_recipe(params), workdir, RunnerSet(cpu=LocalRunner()))
+
+    document = json.loads((workdir.out_dir("train") / "train_metrics.json").read_text())
+    assert document["roi"]["kind"] == "voxels"
+    trained = gaussians.read_splat(workdir.out_dir("train") / "trained.ply")
+    assert trained.count > 0
+    assert mask.contains(trained.xyz).all()
+    # Nothing from the unsupported side survives, beyond the mask's own margin.
+    assert float(trained.xyz[:, 0].min()) >= 0.5 - 3 * mask.voxel
+    assert document["roi"]["gaussiansKept"] == trained.count

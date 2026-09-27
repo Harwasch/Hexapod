@@ -90,13 +90,13 @@ const verdict = (overrides: Partial<CaptureQuality> = {}): CaptureQuality => ({
 describe("the quality forecast", () => {
   it("reads as the phone shows it", () => {
     expect(forecast(verdict())).toBe(
-      "62% of the circled area reached high quality · held-out 23.0 dB",
+      "62% of the scene met the high-quality bar · held-out 23.0 dB",
     );
     expect(forecast(verdict({ heldOutPsnr: null, keepPct: null }))).toBe(
-      "none of the circled area reached high quality",
+      "nothing met the high-quality bar",
     );
     expect(summary(verdict({ mode: "refine", bar: "strict", barApplied: "balanced" }))).toBe(
-      "Refined · 62% of the circled area reached high quality · held-out 23.0 dB · " +
+      "Refined · 62% of the scene met the high-quality bar · held-out 23.0 dB · " +
         "Balanced bar (the bar asked for kept too little)",
     );
   });

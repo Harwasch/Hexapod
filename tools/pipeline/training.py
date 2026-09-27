@@ -82,7 +82,10 @@ import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from support_mask import SupportMask
 
 __all__ = [
     "GSPLAT_VERSION",
@@ -307,9 +310,22 @@ class RoiCrop:
         }
 
 
+def _inside(region: Roi | SupportMask, xyz: Any, *, radii: float = 1.0) -> Any:
+    """Which points are in `region`: within `radii` radii of an ROI sphere, or in a
+    support mask's voxels (which already carry their margin)."""
+    import numpy as np
+
+    from support_mask import SupportMask
+
+    if isinstance(region, SupportMask):
+        return region.contains(xyz)
+    distance = np.linalg.norm(np.asarray(xyz, dtype=np.float64) - np.asarray(region.center), axis=1)
+    return np.isfinite(distance) & (distance <= radii * region.radius)
+
+
 def crop_initial_points(
     sparse: Path,
-    roi: Roi,
+    roi: Roi | SupportMask,
     *,
     outside_every: int = ROI_OUTSIDE_EVERY,
     min_per_image: int = ROI_MIN_POINTS_PER_IMAGE,
@@ -329,8 +345,7 @@ def crop_initial_points(
     path = sparse / "points3D.bin"
     points = sfm.read_points3d(path)
     count = len(points)
-    distance = np.linalg.norm(points.xyz - np.asarray(roi.center), axis=1)
-    inside = distance <= roi.radius
+    inside = _inside(roi, points.xyz)
     outside = np.flatnonzero(~inside)
     sampled = np.zeros(count, dtype=bool)
     sampled[outside[:: max(1, outside_every)]] = True
@@ -359,16 +374,15 @@ def crop_initial_points(
 
 
 def crop_splat(
-    columns: Mapping[str, Any], roi: Roi, *, radii: float = ROI_KEEP_RADII
+    columns: Mapping[str, Any], roi: Roi | SupportMask, *, radii: float = ROI_KEEP_RADII
 ) -> tuple[dict[str, Any], int]:
-    """The gaussians whose centre is within `radii * roi.radius` of the centre, and how
-    many that is. A gaussian with a non-finite centre is dropped too: it is nowhere, so it
-    is not inside anything."""
+    """The gaussians whose centre is in the region -- within `radii * roi.radius` of an
+    ROI's centre, or in a support mask's voxels -- and how many that is. A gaussian with a
+    non-finite centre is dropped too: it is nowhere, so it is not inside anything."""
     import numpy as np
 
     xyz = np.stack([columns["x"], columns["y"], columns["z"]], axis=1).astype(np.float64)
-    distance = np.linalg.norm(xyz - np.asarray(roi.center), axis=1)
-    keep = np.isfinite(distance) & (distance <= radii * roi.radius)
+    keep = _inside(roi, xyz, radii=radii)
     return {name: values[keep] for name, values in columns.items()}, int(keep.sum())
 
 
