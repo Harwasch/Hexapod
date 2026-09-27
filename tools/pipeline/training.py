@@ -438,6 +438,7 @@ def gsplat_argv(
     live_steps: Sequence[int] = (),
     eval_steps: Sequence[int] = (),
     extra: Sequence[str] = (),
+    packed: bool = True,
 ) -> list[str]:
     """The command line, built in one place so a test can read it without a GPU.
 
@@ -517,6 +518,26 @@ def gsplat_argv(
       training image) to the render before the loss. Nothing of it reaches the PLY.
       `eval()` then reports the raw metrics *and* colour-corrected ones (`cc_psnr`, ...),
       which `parse_metrics` keeps as `colorCorrected`.
+
+    And one memory switch, on by default: `--packed` (v1.5.3 `Config.packed`, default
+    False there, passed straight to `rasterization(packed=...)`). The rasterizer then
+    keeps its per-camera intermediates only for the gaussians a camera sees (`[nnz, ...]`
+    rather than `[C, N, ...]`). gsplat's own profile (docs/source/tests/profile.rst,
+    forward + backward of the rasterizer) has it "not affect the numerical results" and
+    cut the rasterizer's memory from 0.48 to 0.35 GB on a small scene and from 5.67 to
+    3.08 GB at 49M gaussians (12.17 to 6.11 at 107M), for a few percent of speed.
+    `gaussian_budget.memory_ceiling` does not yet count that saving; see its docstring.
+
+    Its two companions are read and deliberately *not* passed. `--sparse_grad` (which
+    v1.5.3 asserts needs packed) swaps Adam for `torch.optim.SparseAdam`, and
+    `--visible_adam` for gsplat's `SelectiveAdam`: both update only the gaussians a step
+    saw, which changes the optimisation, not just its memory -- gsplat marks both
+    "(experimental)". Nor do they free the parameter-sized memory the budget's ceiling is
+    mostly made of: with sparse gradients the rasterizer's gradients for means, quats and
+    scales come out sparse, but the colours' and opacities' are still dense until the
+    trainer sparsifies them (`grad[gaussian_ids]`), and both optimisers keep their two
+    moments dense. Either can be tried per run through `extra_args` once a GPU run has
+    measured it against the default.
     """
     steps = str(max_steps)
     argv = [
@@ -565,6 +586,8 @@ def gsplat_argv(
         argv.append("--app_opt")
     if bilateral_grid:
         argv.append("--use_bilateral_grid")
+    if packed:
+        argv.append("--packed")
     argv += list(extra)
     return argv
 

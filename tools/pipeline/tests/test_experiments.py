@@ -344,7 +344,6 @@ def test_train_params_keep_the_scenes_lpips_net_under_any_switches() -> None:
         "iterations": 30_000,
         "strategy": "mcmc",
         "cap_max": "auto",
-        "budget_max": 2_000_000,
         "converge": True,
         "pose_opt": True,
     }
@@ -358,7 +357,7 @@ def test_the_recipes_budget_and_stopping_rule_are_what_the_recipe_file_says() ->
     train = next(s for s in load_recipe("photo-reconstruct").stages if s.id == "train").params
     config = benchmark.CONFIGS["recipe"]
     for key in ("iterations", "strategy", "cap_max", "budget_max", "converge"):
-        assert config[key] == train[key], key
+        assert config.get(key) == train.get(key), key
 
 
 @pytest.mark.parametrize(

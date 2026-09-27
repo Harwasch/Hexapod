@@ -47,6 +47,7 @@ __all__ = [
     "Splat",
     "default_up_axis",
     "ground_samples",
+    "normalise",
     "orient",
     "read_splat",
     "render_thumbnail",
@@ -199,6 +200,12 @@ def read_splat(path: Path) -> Splat:
         dropped=tuple(name for name in properties_in if name not in columns),
         non_finite=non_finite,
     )
+
+
+def normalise(name: str, data: Mapping[str, F32]) -> dict[str, F32]:
+    """The canonical fourteen from a file's own properties (or a refusal naming what is
+    missing). Row by row, so a chunk of a file normalises exactly as the whole file does."""
+    return _normalise(name, dict(data))
 
 
 def _normalise(name: str, data: dict[str, F32]) -> dict[str, F32]:
@@ -415,10 +422,17 @@ def transform(
         raise ValueError(f"transform: scale must be positive and finite, not {scale!r}")
     t = np.zeros(3) if translation is None else np.asarray(translation, dtype=np.float64)
     out = {name: np.array(values, dtype=np.float32, copy=True) for name, values in columns.items()}
-    xyz = np.stack([columns["x"], columns["y"], columns["z"]], axis=1).astype(np.float64)
-    moved = scale * (xyz @ r.T) + t
-    for index, axis in enumerate(("x", "y", "z")):
-        out[axis] = _f32(moved[:, index])
+    # Written out per axis rather than as `xyz @ r.T`: a BLAS matrix product may take a
+    # different kernel (and a different rounding) for a different number of rows, and
+    # `place` transforms the splat a chunk at a time (`splat_stream`). Element-wise ufuncs
+    # round every row the same way however many rows there are, so a chunked transform is
+    # bit-identical to a whole one.
+    x, y, z = (np.asarray(columns[axis], dtype=np.float64) for axis in ("x", "y", "z"))
+    # A non-finite row stays non-finite (0 * inf is NaN), silently, as it did in BLAS.
+    with np.errstate(invalid="ignore", over="ignore"):
+        for index, axis in enumerate(("x", "y", "z")):
+            row = r[index]
+            out[axis] = _f32(scale * (row[0] * x + row[1] * y + row[2] * z) + t[index])
     qw, qx, qy, qz = matrix_to_quat(r)
     w, x, y, z = (np.asarray(columns[f"rot_{i}"], dtype=np.float64) for i in range(4))
     out["rot_0"] = _f32(qw * w - qx * x - qy * y - qz * z)
@@ -589,6 +603,14 @@ def _frame(
             np.percentile(up, 100.0 - THUMBNAIL_CLIP_PERCENT),
         ]
     )
+    return frame_pixels(across, up, low, high, size)
+
+
+def frame_pixels(
+    across: F32, up: F32, low: npt.NDArray[Any], high: npt.NDArray[Any], size: int
+) -> tuple[npt.NDArray[np.bool_], npt.NDArray[np.intp], npt.NDArray[np.intp]]:
+    """`_frame` given the percentiles it frames on -- which `splat_stream.thumbnail`
+    measures over the whole splat before it draws any of it, a chunk at a time."""
     centre = (low + high) / 2.0
     span = float(max(high - low))
     # A capture with no extent (a single gaussian) projects to the middle of the image

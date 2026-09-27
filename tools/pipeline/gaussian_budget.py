@@ -74,8 +74,9 @@ It is a recipe parameter (`gaussian_density`), and a phone's quality tier multip
 (`density_scale`): Quick 0.5, Best 2.
 
 **The clamp.** At least `DEFAULT_FLOOR` (the preview's own cap: a full run never gets
-fewer gaussians than the preview that forecast it), and at most the smaller of two
-ceilings, each recorded when it is the one that applied:
+fewer gaussians than the preview that forecast it), and at most the GPU's ceiling --
+or `budget_max`, when a run sets one and it is lower -- recorded when it is the one
+that applied:
 
 * **GPU memory**, `memory_ceiling`: gsplat's own measurement of MCMC at 1M, 2M and 3M
   gaussians (docs/source/tests/eval.rst at v1.5.3, "Feature Ablation", A100, Mip-NeRF 360
@@ -92,11 +93,26 @@ ceilings, each recorded when it is the one that applied:
   `max_memory_allocated` does not see) is then shared out at two thirds, leaving a third
   for the caching allocator's fragmentation under MCMC's repeated `torch.cat` growth.
   On the L4 (24 GB): ~8.7M gaussians at 1600x900, ~5.4M at 2400x1350, ~12M at 979x546.
-* **`budget_max`**, the rest of the pipeline: `place` and `package` run on the 2 GB Fly
-  worker, measured at ~0.75 GB a million gaussians (apps/api/app/worker/README.md, SH3
-  input); the recipe sets 2M, which that worker holds with its supervisor and the recipe
-  process beside it even if trained.ply's DC-only rows cost as much as SH3 ones. It is
-  the one that binds in practice: the GPU could hold four times more.
+  **Packed rasterization** (`--packed`, on since `training.gsplat_argv` passes it) is not
+  counted yet. gsplat's profile of the rasterizer alone (docs/source/tests/profile.rst:
+  forward + backward, TITAN RTX) measured it 0.48 -> 0.35 GB on a small scene at batch 1
+  (27% less) and 5.67 -> 3.08 GB at 49M gaussians (46% less), numerically unchanged;
+  applied to `RASTER_BYTES` at the small-scene 27% -- the least it saved, and the case a
+  phone orbit is, every frame seeing most of the scene -- that would be ~9.9M at 1600 px
+  and ~6.6M at 2400. Those bytes were fitted to whole training runs, not to the
+  rasterizer alone, so the saving stays headroom under the dense model until an L4 run
+  with packed on measures `max_memory_allocated` against it (train_metrics.json's
+  per-step memory; the plan's pass criterion is within 15% of the model).
+* **`budget_max`**, an optional override: a run or recipe may cap the count below the
+  GPU's ceiling. It used to be the binding one -- 2M, because `quality`, `place`,
+  `thumbnail` and `package` each loaded the whole splat, measured at ~0.75 GB a million
+  gaussians on the 2 GB Fly worker (apps/api/app/worker/README.md). They now read it a
+  chunk at a time (`splat_io`, `splat_stream`, `outofcore`) in memory that does not grow
+  with it -- quality, place, thumbnail and ground samples of an 8M-gaussian splat peaked
+  at 193 MB (tests/test_bounded_memory.py) -- and `package` is made the same by the
+  large-scene plan's out-of-core tiler (tools/captures/splat_tiles.py). So nothing after
+  training bounds the count, and the recipe sets no `budget_max`; a deployment whose
+  packager still loads the whole splat should set one for its worker.
 
 An explicit integer `cap_max` is an override and is passed through untouched (the preview
 preset's 200k is one); only `auto` computes. A model that cannot be read -- a hand-made

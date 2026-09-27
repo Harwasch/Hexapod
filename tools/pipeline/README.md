@@ -503,10 +503,13 @@ sfm` restores the old behaviour.
 counted in its own finest-view pixels -- per sparse point, depth / focal for the camera
 that saw it largest, at the size training reads the frames; voxels of 32 of those
 footprints, one face each -- times `gaussian_density` 0.1. A Refine counts its support
-mask in full and the rest at a tenth. Clamped to the preview's 200k and to the smaller of
-the L4's memory at that frame size (gsplat's own 1M/2M/3M MCMC measurements: ~8.7M at
-1600 px, ~5.4M at 2400) and `budget_max` 2M (what `place`/`package` on the 2 GB worker
-hold). Measured offline, 2026-09-27: 3DGS's Truck model at its 979 px, **1.52M** (15.2M
+mask in full and the rest at a tenth. Clamped to the preview's 200k and to the L4's
+memory at that frame size (gsplat's own 1M/2M/3M MCMC measurements: ~8.7M at 1600 px,
+~5.4M at 2400; training rasterizes `--packed`, whose saving the model does not yet count).
+The 2M `budget_max` the recipe used to set is gone: it was what `place`/`package` could
+load whole on the 2 GB worker, and the stages after training now read the splat a chunk
+at a time (see "Stages after training, a chunk at a time"); `budget_max` remains an
+override. Measured offline, 2026-09-27: 3DGS's Truck model at its 979 px, **1.52M** (15.2M
 footprints^2; the calibration point); four local phone/photo models at 1600 px, 0.42M-0.81M.
 An integer `cap_max` is an override (the preview's 200k); a phone tier multiplies the
 budget (`density_scale`: Quick 0.5, Best 2).
@@ -562,6 +565,45 @@ where its error projects to 16 px against its own leaves, merged and optimised, 
 measure Phase 1 made; `accepted`. `experiments/lod_compare.py` repeats Phase 1's exact
 protocol (root at the switch distance, Cesium's cut from four distances) on the GPU, on
 two tilesets packed from the run's `canonical.ply` with and without `--parents`.
+
+## Stages after training, a chunk at a time
+
+`quality`, `place`, `thumbnail`, `ground_samples` and Lane 1's `normalize` never hold the
+splat. They read it in fixed row ranges (`splat_io.py`: `SplatReader` parses the PLY
+header as the packager does and reads a range with one read, `PlyWriter` appends
+`canonical.ply` byte-identical to `gaussians.write_ply`, `ColumnStore` keeps
+per-gaussian results on disk between passes), and get every whole-splat statistic in
+passes over the ranges (`outofcore.py`: radix selection that reproduces `np.median` and
+`np.percentile` bit for bit, and group-by counts in hash partitions). `splat_stream.py`
+is `gaussians.orient`/`transform`/`render_thumbnail`/`ground_samples` on such a stream;
+`quality.support_pass` regroups the opaque occluders into the same 2^18-row blocks the
+whole-splat stage used and tests each camera against spatial cells of a chunk before it
+projects any of it.
+
+The outputs are the whole-splat stages' own: `tests/test_chunked_equivalence.py` runs
+each beside the path it replaced (for `quality`, a frozen copy of the old stage,
+`tests/quality_in_memory.py`) on a few hundred thousand gaussians cut into prime-sized
+chunks and requires the same bytes -- except a ground sample's longitude and latitude,
+whose cell mean is a float64 sum here and a float32 pairwise one in `np.mean` (under a
+micrometre). Peak memory (`VmHWM`), measured by `tests/memory_probe.py` in a process of its own
+(synthetic orbit, 16 cameras, held-out arrays):
+
+| gaussians | whole-splat quality + place | chunked quality + place + thumbnail + ground |
+| --- | --- | --- |
+| 250k | 114 MB | 162 MB |
+| 1M | 328 MB | 184 MB |
+| 4M | 1,067 MB | 182 MB |
+| 8M | fails under a 1.5 GB limit | 193 MB, 81 s |
+
+Lane 1 on a phone's SH3 upload (gsplat's 59-float rows), `normalize` + `thumbnail` +
+`ground_samples`: 711 MB whole against 139 MB chunked at 1M gaussians, 1,386 MB against
+144 MB at 2M.
+
+`tests/test_bounded_memory.py` holds the scaling (150k against 600k gaussians, with the
+fixed-size buffers shrunk so both are past them: no growth, where the whole-splat path
+grows 125 MB) and, with `PIPELINE_BENCH=1`, the 8M run under a 1.5 GB address-space limit.
+Each stage takes `chunk_gaussians` (2^18 rows by default); nothing it computes depends on
+it.
 
 ## Lane 1
 

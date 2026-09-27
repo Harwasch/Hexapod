@@ -123,6 +123,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--pose_opt", action="store_true")
     parser.add_argument("--app_opt", action="store_true")
     parser.add_argument("--use_bilateral_grid", action="store_true")
+    parser.add_argument("--packed", action="store_true")
     # Not gsplat's: how this stand-in is told to behave like a reclaimed machine.
     parser.add_argument("--ckpt-every", type=int, default=100)
     parser.add_argument("--die-at", type=int, default=None)
@@ -182,6 +183,7 @@ def main(argv: list[str] | None = None) -> int:
         "pose_opt": args.pose_opt,
         "app_opt": args.app_opt,
         "use_bilateral_grid": args.use_bilateral_grid,
+        "packed": args.packed,
         "image_scale": image_scale(args.data_dir),
     }
     (args.result_dir / "cfg.yml").write_text(json.dumps(resolved) + "\n", encoding="utf-8")

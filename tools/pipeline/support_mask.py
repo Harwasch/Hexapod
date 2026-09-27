@@ -60,22 +60,30 @@ import base64
 import binascii
 import math
 import zlib
-from collections.abc import Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 
 import numpy as np
 import numpy.typing as npt
+
+import outofcore
 
 __all__ = [
     "FOOTPRINT_MULTIPLE",
     "KIND",
     "LEGACY_KIND",
     "MAX_ENCODED_BYTES",
+    "ArrayPoints",
+    "Occupancy",
+    "PointSet",
     "Sizing",
+    "StreamedPoints",
     "SupportMask",
     "build",
+    "build_from",
     "resolution",
+    "resolution_of",
 ]
 
 I64 = npt.NDArray[np.int64]
@@ -287,6 +295,184 @@ class SupportMask:
 # ---------------------------------------------------------------------------------------
 
 
+@dataclass(frozen=True)
+class Occupancy:
+    """What the sizing and the mask need to know of the points in one grid: how many are
+    inside it, how many are in voxels holding at least `min_per_voxel`, and those voxels."""
+
+    total: int
+    retained: int
+    seed_count: int
+    #: The supported voxels' linear indices, sorted; None when there were more than the
+    #: caller's limit (then only `seed_count` is known).
+    seeds: I64 | None
+
+
+class PointSet(Protocol):
+    """The points a mask is built from, as the statistics building needs of them.
+
+    Two implementations: `ArrayPoints` over arrays in memory (what `build(xyz, footprint)`
+    has always done, with the same numpy calls) and `StreamedPoints` over chunks read
+    from disk (`outofcore.py`), which computes the same numbers exactly without holding
+    the points -- the quality stage's keep tier can be most of a many-million-gaussian
+    splat.
+    """
+
+    def size(self) -> int: ...
+
+    def has_footprint(self) -> bool: ...
+
+    def box(self) -> tuple[F64, F64]:
+        """The 0.5 and 99.5 percentiles of each axis, as `np.percentile(points, q, axis=0)`."""
+        ...
+
+    def footprint_percentiles(self, qs: tuple[float, ...]) -> tuple[int, list[float]]:
+        """How many footprints are usable (finite and positive), and their percentiles
+        (none when fewer than `_MIN_POINTS` are)."""
+        ...
+
+    def occupancy(
+        self, origin: F64, dims: tuple[int, int, int], voxel: float, min_per_voxel: int, limit: int
+    ) -> Occupancy: ...
+
+
+class ArrayPoints:
+    """`PointSet` over arrays: the finite points of `xyz`, and their footprints."""
+
+    def __init__(self, xyz: npt.ArrayLike, footprint: npt.ArrayLike | None) -> None:
+        self.points, self.prints = _finite_points(xyz, footprint)
+
+    def size(self) -> int:
+        return int(self.points.shape[0])
+
+    def has_footprint(self) -> bool:
+        return self.prints is not None
+
+    def box(self) -> tuple[F64, F64]:
+        return np.percentile(self.points, 0.5, axis=0), np.percentile(self.points, 99.5, axis=0)
+
+    def footprint_percentiles(self, qs: tuple[float, ...]) -> tuple[int, list[float]]:
+        assert self.prints is not None
+        usable = self.prints[np.isfinite(self.prints) & (self.prints > 0)]
+        if usable.size < _MIN_POINTS:
+            return int(usable.size), []
+        return int(usable.size), [float(np.percentile(usable, q)) for q in qs]
+
+    def occupancy(
+        self, origin: F64, dims: tuple[int, int, int], voxel: float, min_per_voxel: int, limit: int
+    ) -> Occupancy:
+        linear, counts = _occupancy(self.points, origin, dims, voxel)
+        supported = counts >= min_per_voxel
+        seed_count = int(supported.sum())
+        return Occupancy(
+            total=int(counts.sum()),
+            retained=int(counts[supported].sum()),
+            seed_count=seed_count,
+            seeds=linear[supported] if seed_count <= limit else None,
+        )
+
+
+#: A stream of `(points, footprints)` chunks: points (m, 3) float64, footprints (m,)
+#: float64 or None. Called again for every pass.
+PointChunks = Callable[[], Iterable[tuple[F64, F64 | None]]]
+
+
+class StreamedPoints:
+    """`PointSet` over a chunked stream, with the exact statistics of `ArrayPoints`.
+
+    Non-finite points are dropped chunk by chunk, as `_finite_points` drops them. The box
+    and the footprint percentiles are numpy's own `np.percentile` (`outofcore.percentile`,
+    bit for bit); occupancy counts voxels a partition at a time (`outofcore.group_counts`),
+    so memory is bounded by the partition budget and the seed limit, not by the number of
+    points.
+    """
+
+    def __init__(self, chunks: PointChunks) -> None:
+        self._chunks = chunks
+        self._size: int | None = None
+        self._has_footprint: bool | None = None
+
+    def _finite(self) -> Iterator[tuple[F64, F64 | None]]:
+        for points, prints in self._chunks():
+            xyz = np.asarray(points, dtype=np.float64).reshape(-1, 3)
+            finite = np.isfinite(xyz).all(axis=1)
+            footprint = None if prints is None else np.asarray(prints, dtype=np.float64)[finite]
+            yield xyz[finite], footprint
+
+    def _describe(self) -> None:
+        size, has = 0, False
+        for points, prints in self._finite():
+            size += int(points.shape[0])
+            has = has or prints is not None
+        self._size, self._has_footprint = size, has
+
+    def size(self) -> int:
+        if self._size is None:
+            self._describe()
+        assert self._size is not None
+        return self._size
+
+    def has_footprint(self) -> bool:
+        if self._has_footprint is None:
+            self._describe()
+        return bool(self._has_footprint)
+
+    def box(self) -> tuple[F64, F64]:
+        def stream() -> Iterator[tuple[F64, I64]]:
+            for points, _ in self._finite():
+                count = points.shape[0]
+                yield points.T.reshape(-1), np.repeat(np.arange(3, dtype=np.int64), count)
+
+        found = outofcore.grouped_percentile(stream, [0, 1, 2], [0.5, 99.5])
+        low = np.asarray([found[axis][0] for axis in range(3)], dtype=np.float64)
+        high = np.asarray([found[axis][1] for axis in range(3)], dtype=np.float64)
+        return low, high
+
+    def footprint_percentiles(self, qs: tuple[float, ...]) -> tuple[int, list[float]]:
+        def stream() -> Iterator[F64]:
+            for _, prints in self._finite():
+                if prints is not None:
+                    yield prints[np.isfinite(prints) & (prints > 0)]
+
+        usable = sum(int(chunk.shape[0]) for chunk in stream())
+        if usable < _MIN_POINTS:
+            return usable, []
+        found = outofcore.percentile(stream, list(qs))
+        assert found is not None
+        return usable, [float(value) for value in found]
+
+    def occupancy(
+        self, origin: F64, dims: tuple[int, int, int], voxel: float, min_per_voxel: int, limit: int
+    ) -> Occupancy:
+        def stream() -> Iterator[tuple[I64, None]]:
+            for points, _ in self._finite():
+                ijk = np.floor((points - origin) / voxel)
+                inside = (ijk >= 0).all(axis=1) & (ijk < np.asarray(dims)).all(axis=1)
+                yield _linear(ijk[inside].astype(np.int64), dims), None
+
+        total = retained = seed_count = 0
+        seeds: list[I64] | None = []
+        for keys, counts, _ in outofcore.group_counts(stream, rows=self.size()):
+            supported = counts >= min_per_voxel
+            total += int(counts.sum())
+            retained += int(counts[supported].sum())
+            seed_count += int(supported.sum())
+            if seeds is not None:
+                if seed_count > limit:
+                    seeds = None
+                else:
+                    seeds.append(keys[supported])
+        return Occupancy(
+            total=total,
+            retained=retained,
+            seed_count=seed_count,
+            seeds=None if seeds is None else np.sort(np.concatenate([_EMPTY, *seeds])),
+        )
+
+
+_EMPTY = np.zeros(0, dtype=np.int64)
+
+
 def resolution(
     xyz: npt.ArrayLike,
     footprint: npt.ArrayLike,
@@ -299,18 +485,34 @@ def resolution(
 ) -> Sizing | None:
     """The voxel size the points' pixel footprint supports, in model units; None when
     there are too few points or no usable footprint. See the module docstring."""
-    points, prints = _finite_points(xyz, footprint)
-    box = _box(points)
-    if box is None or prints is None:
-        return None
-    return _resolution(
-        points, prints, box, multiple, percentile, min_per_voxel, retained_share, min_cells
+    return resolution_of(
+        ArrayPoints(xyz, footprint),
+        multiple=multiple,
+        percentile=percentile,
+        min_per_voxel=min_per_voxel,
+        retained_share=retained_share,
+        min_cells=min_cells,
     )
 
 
+def resolution_of(
+    points: PointSet,
+    *,
+    multiple: float = FOOTPRINT_MULTIPLE,
+    percentile: float = FOOTPRINT_PERCENTILE,
+    min_per_voxel: int = MIN_PER_VOXEL,
+    retained_share: float = RETAINED_SHARE,
+    min_cells: int = MIN_CELLS_ACROSS,
+) -> Sizing | None:
+    """`resolution` of any `PointSet`."""
+    box = _box(points)
+    if box is None or not points.has_footprint():
+        return None
+    return _resolution(points, box, multiple, percentile, min_per_voxel, retained_share, min_cells)
+
+
 def _resolution(
-    points: F64,
-    prints: F64,
+    points: PointSet,
     box: tuple[F64, F64, float],
     multiple: float,
     percentile: float,
@@ -318,12 +520,11 @@ def _resolution(
     retained_share: float,
     min_cells: int,
 ) -> Sizing | None:
-    usable = prints[np.isfinite(prints) & (prints > 0)]
-    if usable.size < _MIN_POINTS:
+    usable, found = points.footprint_percentiles((percentile, 10.0))
+    if usable < _MIN_POINTS:
         return None
     low, high, span = box
-    size = float(np.percentile(usable, percentile))
-    p10 = float(np.percentile(usable, 10.0))
+    size, p10 = found
     ceiling = span / max(1, min_cells)
     voxel = size * multiple
     steps = 0
@@ -372,17 +573,35 @@ def build(
     The grid spans the points' 0.5-99.5 percentile box (plus the dilation), so one far
     stray does not stretch it; strays outside it are simply not supported.
     """
-    points, prints = _finite_points(xyz, footprint)
+    return build_from(
+        ArrayPoints(xyz, footprint),
+        multiple=multiple,
+        min_per_voxel=min_per_voxel,
+        dilate=dilate,
+        max_voxels=max_voxels,
+        max_bytes=max_bytes,
+    )
+
+
+def build_from(
+    points: PointSet,
+    *,
+    multiple: float = FOOTPRINT_MULTIPLE,
+    min_per_voxel: int = MIN_PER_VOXEL,
+    dilate: int = DILATE,
+    max_voxels: int = MAX_VOXELS,
+    max_bytes: int = MAX_ENCODED_BYTES,
+) -> SupportMask | None:
+    """`build` of any `PointSet` -- the quality stage's streamed keep tier among them."""
     box = _box(points)
     if box is None:
         return None
     low, high, span = box
     sizing = (
         None
-        if prints is None
+        if not points.has_footprint()
         else _resolution(
             points,
-            prints,
             box,
             multiple,
             FOOTPRINT_PERCENTILE,
@@ -406,17 +625,16 @@ def build(
     for _ in range(_MAX_STEPS):
         origin = low - dilate * voxel
         dims = _dims(low, high, voxel, dilate)
-        linear, counts = _occupancy(points, origin, dims, voxel)
-        seeds = linear[counts >= min_per_voxel]
-        if seeds.size == 0:
+        occupancy = points.occupancy(origin, dims, voxel, min_per_voxel, max_voxels // per_seed)
+        if occupancy.seed_count == 0:
             return None
-        if seeds.size * per_seed > max_voxels:
+        if occupancy.seed_count * per_seed > max_voxels or occupancy.seeds is None:
             # Coarsen before dilating: dilation's candidates cost an L1 ball of int64s per
             # seed (25 at `dilate` 2), which is the memory this cap is for.
-            voxel *= _step(seeds.size * per_seed / max_voxels)
+            voxel *= _step(occupancy.seed_count * per_seed / max_voxels)
             bound = "max-voxels"
             continue
-        occupied = _dilate(seeds, dims, dilate)
+        occupied = _dilate(occupancy.seeds, dims, dilate)
         if occupied.size > max_voxels:
             voxel *= _step(occupied.size / max_voxels)
             bound = "max-voxels"
@@ -464,12 +682,11 @@ def _finite_points(xyz: npt.ArrayLike, footprint: npt.ArrayLike | None) -> tuple
     return points[finite], prints[finite]
 
 
-def _box(points: F64) -> tuple[F64, F64, float] | None:
+def _box(points: PointSet) -> tuple[F64, F64, float] | None:
     """The 0.5-99.5 percentile box and its longest side; None for too few points or none."""
-    if points.shape[0] < _MIN_POINTS:
+    if points.size() < _MIN_POINTS:
         return None
-    low = np.percentile(points, 0.5, axis=0)
-    high = np.percentile(points, 99.5, axis=0)
+    low, high = points.box()
     span = float(np.max(high - low))
     if not math.isfinite(span) or span <= 0:
         return None
@@ -499,11 +716,10 @@ def _occupancy(
     return unique.astype(np.int64), counts.astype(np.int64)
 
 
-def _retained(points: F64, low: F64, high: F64, voxel: float, min_per_voxel: int) -> float:
+def _retained(points: PointSet, low: F64, high: F64, voxel: float, min_per_voxel: int) -> float:
     """The share of the points (in the percentile box) that land in supported voxels."""
-    _, counts = _occupancy(points, low, _dims(low, high, voxel, 0), voxel)
-    total = int(counts.sum())
-    return float(counts[counts >= min_per_voxel].sum()) / total if total else 0.0
+    occupied = points.occupancy(low, _dims(low, high, voxel, 0), voxel, min_per_voxel, 0)
+    return float(occupied.retained) / occupied.total if occupied.total else 0.0
 
 
 def _dilate(seeds: I64, dims: tuple[int, int, int], radius: int) -> I64:
