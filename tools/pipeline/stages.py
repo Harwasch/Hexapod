@@ -1184,6 +1184,17 @@ def gsplat(ctx: StageContext) -> StageOutcome:
       `train_metrics.json`'s `convergence` has the held-out curve, the steps run of the
       maximum, and why it stopped.
 
+    * `blocks` (`auto`, the default, or a count): a budget more than one GPU trains -- its
+      raw count over the smaller of the budget's GPU-memory and `budget_max` ceilings --
+      trains as that many blocks, one after another in this same attempt on this same
+      GPU, and merges them into one `trained.ply` (`blocks.py` has the recipe and its
+      sources; `block_epsilon`, `block_min_images`, `block_margin`, `block_ring`,
+      `block_ring_outer`, `block_blend`, `block_eval` and the `coarse_*` knobs are its
+      parameters). A count forces blocks on a capture that fits one GPU, to compare the
+      two. `train_metrics.json`'s `blocks` has the partition, each block's cameras,
+      budget, steps and time, and the merge; psnr/ssim/lpips are then the merged splat's,
+      by the trainer's own `eval()` on the same held-out frames.
+
     `psnr`, `ssim` and `lpips` are all measured on gsplat's held-out `val` split -- every
     8th registered frame -- and `train_metrics.json` says so and how many frames that is.
     """

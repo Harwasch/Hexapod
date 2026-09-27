@@ -138,6 +138,8 @@ ATTEMPT_BUDGET_S = 5 * 3600.0
 #: How long an attempt that yields waits for the checkpoint syncer before it ends: more
 #: than `CloudRunner`'s 60 s interval, so the last finished block is in object storage.
 SYNC_WAIT_S = 75.0
+#: Rows a checkpoint file of a finished block holds (`write_parts`): ~31 MB at SH degree 3.
+PART_ROWS = 131_072
 #: Params that pace an attempt without changing what a block trains.
 RUNTIME_PARAMS = frozenset({"block_attempt_budget_s", "block_sync_wait_s", "live"})
 
@@ -551,6 +553,8 @@ class Settings:
     holdout_script: Path | None = None
     holdout_budget_s: float = holdout.DEFAULT_BUDGET_S
     params: Mapping[str, Any] = field(default_factory=dict)
+    #: When this attempt's block work began (a coarse pass counts against its budget).
+    started: float = field(default_factory=time.monotonic)
 
 
 @dataclass(frozen=True)
@@ -943,7 +947,7 @@ class BlockRun:
 
 def train(ctx: StageContext, settings: Settings, plan: Plan, trained_ply: Path) -> BlockRun:
     """Train every block not already finished, merge them into `trained_ply`, measure."""
-    started = time.monotonic()
+    started = settings.started
     state_dir = _state_dir(ctx)
     work = ctx.work_dir / "blocks"
     state = _read_json(state_dir / _STATE) or {}
@@ -959,7 +963,7 @@ def train(ctx: StageContext, settings: Settings, plan: Plan, trained_ply: Path) 
     trained_here = 0
     for index in range(plan.partition.count):
         key = str(index)
-        if key in done and (state_dir / _block_file(index)).is_file():
+        if key in done and (state_dir / _block_dir(index)).is_dir():
             ctx.log(
                 f"blocks: block {index + 1} of {plan.partition.count} finished in an "
                 f"earlier attempt; skipped"
@@ -986,8 +990,27 @@ def train(ctx: StageContext, settings: Settings, plan: Plan, trained_ply: Path) 
     return _merge_and_measure(ctx, settings, plan, done, trained_ply, work, started)
 
 
-def _block_file(index: int) -> str:
-    return f"block_{index:03d}.ply"
+def _block_dir(index: int) -> str:
+    return f"block_{index:03d}"
+
+
+def write_parts(directory: Path, columns: Mapping[str, Any], names: Sequence[str]) -> int:
+    """A block's splat as PLYs of at most `PART_ROWS` rows each (at least one, maybe
+    empty), so no file in the checkpoint is bigger than a few tens of megabytes: the
+    worker's transfer reads each file whole into its 2 GB (`apps/api/app/worker/cloud.py`)
+    when it carries a resumed run's checkpoint back to the GPU. Returns the rows written."""
+    if directory.exists():
+        shutil.rmtree(directory)
+    directory.mkdir(parents=True)
+    count = int(np.asarray(columns[names[0]]).shape[0])
+    for part, start in enumerate(range(0, max(count, 1), PART_ROWS)):
+        piece = {name: np.asarray(columns[name])[start : start + PART_ROWS] for name in names}
+        write_columns(directory / f"part_{part:04d}.ply", piece, names)
+    return count
+
+
+def block_parts(directory: Path) -> list[Path]:
+    return sorted(directory.glob("part_*.ply"))
 
 
 def _block_cap(
@@ -1153,11 +1176,12 @@ def _train_block(
         keep &= np.asarray(training.crop_rows(columns, settings.region), dtype=bool)
     kept = {name: np.asarray(values)[keep] for name, values in columns.items()}
     kept["opacity"] = block_maths.blended_opacity(kept["opacity"], weight[keep])
-    names_out = list(columns)
-    partial = work / _block_file(index)
-    write_columns(partial, kept, names_out)
-    target = _state_dir(ctx) / _block_file(index)
+    partial = work / _block_dir(index)
+    write_parts(partial, kept, list(columns))
+    target = _state_dir(ctx) / _block_dir(index)
     target.parent.mkdir(parents=True, exist_ok=True)
+    if target.exists():
+        shutil.rmtree(target)
     os.replace(partial, target)
     metrics = training.parse_metrics(
         result, "", trainer=f"gsplat:{settings.trainer.name}", requested_iterations=iterations
@@ -1234,7 +1258,8 @@ def _merge_and_measure(
     work: Path,
     started: float,
 ) -> BlockRun:
-    parts = [_state_dir(ctx) / _block_file(index) for index in range(plan.partition.count)]
+    directories = [_state_dir(ctx) / _block_dir(i) for i in range(plan.partition.count)]
+    parts = [part for directory in directories for part in block_parts(directory)]
     full = work / "merged_full.ply"
     count, _ = merge_plys(parts, full)
     _, written = merge_plys(parts, trained_ply, gaussians.CANONICAL_PROPERTIES)
@@ -1260,10 +1285,14 @@ def _merge_and_measure(
     )
     # The splats are in the merged output now; the checkpoint keeps only the records, so
     # a later run does not carry gigabytes of finished blocks back and forth.
-    for part in parts:
-        part.unlink(missing_ok=True)
-    records = [done[str(i)] for i in range(plan.partition.count)]
+    for directory in directories:
+        shutil.rmtree(directory, ignore_errors=True)
+    records = [dict(done[str(i)]) for i in range(plan.partition.count)]
     seconds = sum(float(r.get("seconds") or 0.0) for r in records)
+    # A block's share of the training time: the GPU is priced per stage (the attempt
+    # ledger, outside this container), so a block's cost is the stage's times this.
+    for record in records:
+        record["costShare"] = round(float(record.get("seconds") or 0.0) / max(seconds, 1e-9), 4)
     document: dict[str, Any] = {
         "count": plan.partition.count,
         "requested": settings.requested,

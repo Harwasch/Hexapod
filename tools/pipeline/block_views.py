@@ -23,7 +23,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -43,8 +45,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--trainer", type=Path, required=True)
     parser.add_argument("--max-side", dest="max_side", type=int, default=800)
+    parser.add_argument("--budget-s", dest="budget_s", type=float, default=1800.0)
     parser.add_argument("--device", default="cuda", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
+    # As holdout_error.py: a hang here must not hold the GPU until the tier's timeout.
+    # The stage then falls back to the CPU visibility test.
+    watchdog = threading.Timer(args.budget_s, _out_of_time, args=(args.budget_s,))
+    watchdog.daemon = True
+    watchdog.start()
     sys.path.insert(0, str(args.trainer.resolve().parent))
     import torch
     from datasets.colmap import Parser
@@ -152,6 +160,12 @@ def main(argv: list[str] | None = None) -> int:
         encoding="utf-8",
     )
     return 0
+
+
+def _out_of_time(budget: float) -> None:
+    sys.stderr.write(f"block_views: out of time after {budget:g} s\n")
+    sys.stderr.flush()
+    os._exit(3)
 
 
 if __name__ == "__main__":

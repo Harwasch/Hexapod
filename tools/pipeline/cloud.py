@@ -34,6 +34,7 @@ retried on the cheap one until the cheap one has cost more (`Placement`).
 from __future__ import annotations
 
 import json
+import shutil
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -613,8 +614,30 @@ class CloudRunner(BaseRunner):
         `checkpoint/` buys nothing, because the state the remote built lives on the
         remote and arrives only through here -- the next attempt then starts from zero
         and the stage never finishes. `tests/test_cloud_preemption.py` holds it to that.
+
+        It *replaces* `checkpoint/` with what came back rather than copying over it: a
+        file the remote deleted -- a block run's finished splats once they are merged
+        (`blocks.py`), an earlier attempt's live snapshots -- would otherwise survive here
+        and be sent out again with every later attempt and run. Fetched beside it first,
+        so a transfer that fails half way leaves the local checkpoint as it was; and
+        nothing at the key (a remote that never synced) leaves it alone too.
         """
-        return self._transfer.get(context.checkpoint_key, context.checkpoint_dir)
+        incoming = context.checkpoint_dir.with_name(f"{context.checkpoint_dir.name}.incoming")
+        if incoming.exists():
+            shutil.rmtree(incoming)
+        moved = self._transfer.get(context.checkpoint_key, incoming)
+        if not incoming.is_dir() or not any(incoming.iterdir()):
+            shutil.rmtree(incoming, ignore_errors=True)
+            return moved
+        for member in list(context.checkpoint_dir.iterdir()):
+            if member.is_dir() and not member.is_symlink():
+                shutil.rmtree(member)
+            else:
+                member.unlink()
+        for member in list(incoming.iterdir()):
+            member.rename(context.checkpoint_dir / member.name)
+        incoming.rmdir()
+        return moved
 
     def _watch(self, adapter: ProviderAdapter, handle: RemoteHandle, context: StageContext) -> Poll:
         """Poll until it ends, tailing the log. Anything that stops this cancels first:

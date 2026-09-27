@@ -27,9 +27,12 @@ import gaussian_budget
 import gaussians
 import sfm
 import synthetic_scene
+from adapters import LocalTransfer, SubprocessAdapter
 from captures_bridge import read_ply
-from errors import StageFailedError
+from cloud import AttemptLedger, CloudRunner, Placement
+from errors import RemoteStageError, StageFailedError
 from executor import execute
+from providers import Rate
 from runners import LocalRunner, RunnerSet
 from test_train_gsplat import stand_in_params, train_recipe
 from workdir import Workdir
@@ -341,12 +344,18 @@ def columns(count: int, seed: int, rest: int = 0) -> dict[str, np.ndarray]:
     return {name: rng.normal(size=count).astype(np.float32) for name in names}
 
 
-def test_the_merged_ply_is_the_concatenation_of_the_cropped_blocks(tmp_path: Path) -> None:
+def test_the_merged_ply_is_the_concatenation_of_the_cropped_blocks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Each block is kept as small PLY parts in the checkpoint (`write_parts`).
+    monkeypatch.setattr(blocks, "PART_ROWS", 300)
     parts = []
     for index, count in enumerate((1000, 0, 2500)):
-        path = tmp_path / f"block_{index}.ply"
-        blocks.write_columns(path, columns(count, index, rest=9), list(columns(1, 0, rest=9)))
-        parts.append(path)
+        directory = tmp_path / f"block_{index}"
+        blocks.write_parts(directory, columns(count, index, rest=9), list(columns(1, 0, rest=9)))
+        found = blocks.block_parts(directory)
+        assert len(found) == max(1, -(-count // 300))
+        parts.extend(found)
     full = tmp_path / "full.ply"
     total, _ = blocks.merge_plys(parts, full, chunk=700)
     assert total == 3500
@@ -564,7 +573,7 @@ def test_a_block_run_resumes_after_the_blocks_it_finished(tmp_path: Path) -> Non
 
     state = json.loads((workdir.checkpoint_dir("train") / "blocks" / "state.json").read_text())
     assert sorted(state["blocks"]) == ["0"]
-    assert (workdir.checkpoint_dir("train") / "blocks" / "block_000.ply").is_file()
+    assert (workdir.checkpoint_dir("train") / "blocks" / "block_000" / "part_0000.ply").is_file()
     log_before = workdir.log_path("train").read_text()
 
     # The budget is pacing, not substance: changing it keeps the finished block.
@@ -576,6 +585,46 @@ def test_a_block_run_resumes_after_the_blocks_it_finished(tmp_path: Path) -> Non
     assert "resumes the plan" in log
     assert [block["attempt"] for block in document["blocks"]["blocks"]] == [1, 2]
     assert document["attempts"] == 2
+
+
+def test_finished_blocks_come_back_through_the_cloud_seam_and_are_not_retrained(
+    tmp_path: Path,
+) -> None:
+    """The Modal path: one remote call per attempt, `checkpoint/` synced out on an interval
+    and brought back by `CloudRunner` whatever the attempt's end, so the next attempt's
+    container starts with the finished block in it."""
+    transfer = LocalTransfer(tmp_path / "bucket")
+    adapter = SubprocessAdapter(transfer, tmp_path / "sandbox", rates={"l4": Rate(0.80, "test")})
+    cloud = CloudRunner(
+        Placement((adapter,)), transfer, poll_interval_s=0.02, checkpoint_every_s=0.05
+    )
+    workdir = Workdir.create(tmp_path / "run")
+    seed_walk(workdir)
+    seed_prior(workdir, tmp_path / "scratch")
+    gpu = {"tier": "l4", "preemptible": True}
+    hurried = block_params(block_attempt_budget_s=0, block_sync_wait_s=0.5)
+
+    with pytest.raises(RemoteStageError):
+        execute(
+            train_recipe(hurried, gpu=gpu), workdir, RunnerSet.cloud(cloud), attempts={"train": 1}
+        )
+    assert (workdir.checkpoint_dir("train") / "blocks" / "block_000" / "part_0000.ply").is_file()
+
+    execute(
+        train_recipe(block_params(), gpu=gpu),
+        workdir,
+        RunnerSet.cloud(cloud),
+        attempts={"train": 2},
+    )
+
+    document = json.loads((workdir.out_dir("train") / "train_metrics.json").read_text())
+    assert [block["attempt"] for block in document["blocks"]["blocks"]] == [1, 2]
+    assert "finished in an earlier attempt; skipped" in workdir.log_path("train").read_text()
+    ledger = AttemptLedger.read(workdir.attempts_path("train"))
+    assert [entry.state for entry in ledger.entries] == ["failed", "succeeded"]
+    # The merged blocks' splats are gone from the checkpoint that came home.
+    home = workdir.checkpoint_dir("train") / "blocks"
+    assert sorted(p.name for p in home.iterdir()) == ["plan.json", "state.json"]
 
 
 def test_a_fresh_run_never_reuses_an_earlier_runs_blocks(tmp_path: Path) -> None:
