@@ -2251,11 +2251,18 @@ def splat_tiles(ctx: StageContext) -> StageOutcome:
     at most `tile_gaussians` to a tile, and how much of it is *drawn* is the viewer's
     budget (the phone's "Detail" choice, apps/web src/lib/detail.ts), not this stage's cut.
 
+    The hierarchy is REPLACE with merged parents: the leaves hold every gaussian once, as
+    trained, and each parent holds its subtree merged by Hierarchical 3DGS's moment
+    matching, so a distant view is the whole scan at lower resolution rather than a
+    thinned subset of it. The parents cost at most ~1/7 more storage (`storage_overhead`
+    in the metrics). The packer reads `canonical.ply` in windows and sorts through disk,
+    so this stage's memory does not grow with the scan (8M gaussians: under 1.5 GB).
+
     `SPLAT_TILES.required_members` still pins `tileset.json` and the root tile
     `splat.glb`, which every tileset has; child tiles are named by `tileset.json`. The
     fixture byte-identity gate (tools/captures tests/test_synthetic_tree.py) still covers
     what it writes: the committed tree is one tile, and its `splat.glb` did not change by
-    a byte when the hierarchy arrived -- only its `tileset.json` did.
+    a byte when merged parents arrived -- only `tileset.json`'s `refine` did.
     """
     georef = _read_json(ctx.input(GEOREF.name))
     for retired in ("max_gaussians", "geometric_error"):
@@ -2275,7 +2282,8 @@ def splat_tiles(ctx: StageContext) -> StageOutcome:
     ctx.log(
         f"packaged {stats['gaussians']} gaussians ({stats['dropped']} dropped) in "
         f"{stats['tiles']} tiles, {stats['depth']} levels deep, "
-        f"extent {stats['extent_m']:.2f} m"
+        f"extent {stats['extent_m']:.2f} m; merged parents add {stats['parent_gaussians']} "
+        f"({float(stats['storage_overhead']):.1%})"
     )
     metrics: dict[str, MetricValue] = {key: value for key, value in stats.items()}
     return StageOutcome(metrics=metrics, summary=f"{stats['gaussians']} gaussians packaged")

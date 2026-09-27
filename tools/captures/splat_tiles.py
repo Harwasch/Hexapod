@@ -5,10 +5,12 @@ around a reference latitude/longitude/height, and writes a level-of-detail hiera
 glTF tiles using the KHR_gaussian_splatting extension with SPZ (v2) compressed data, which
 is the form CesiumJS 1.145 loads, plus a tileset.json whose root transform places the local
 frame on the globe. Every gaussian that passes the opacity and floater filters is written
-exactly once: an adaptive octree splits wherever a tile would hold more than
-`TILE_GAUSSIANS`, each parent keeps an even subset for the coarse view, and refinement is
-ADD (see `convert` for why). A scan within one tile's budget is one tile, as before. The
-glTF node carries the z-up to y-up swap the same way Cesium's own sample tilesets do.
+exactly once, in a leaf: an adaptive octree splits wherever a tile would hold more than
+`TILE_GAUSSIANS`, each parent holds its subtree *merged* -- one gaussian per occupied cell,
+by Hierarchical 3DGS's moment matching -- and refinement is REPLACE (see `convert` for
+why). A scan within one tile's budget is one tile, as before. The packer reads the PLY in
+windows and sorts through disk, so its memory does not grow with the file. The glTF node
+carries the z-up to y-up swap the same way Cesium's own sample tilesets do.
 
 Usage:
     python splat_tiles.py splat.ply out_dir --lat 46.84 --lon -91.99 --height 0
@@ -22,6 +24,8 @@ import gzip
 import json
 import math
 import struct
+import tempfile
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -139,8 +143,27 @@ def _parse_header(path: Path, lines: list[str]) -> tuple[str, list[_Element]]:
     return order, elements
 
 
-def read_ply(path: Path) -> dict[str, np.ndarray]:
-    """Binary PLY, either byte order: the `vertex` element's properties as float32 arrays.
+@dataclass(frozen=True)
+class PlyLayout:
+    """Where a binary PLY's vertex block is and how its rows are laid out.
+
+    Enough to read the block in windows (`iter_ply_rows`) without ever holding the file:
+    a trained 8M-gaussian PLY with its SH rest is 2 GB, and the packer's memory must not
+    grow with it (see `convert`).
+    """
+
+    path: Path
+    dtype: np.dtype
+    offset: int
+    count: int
+
+    @property
+    def names(self) -> tuple[str, ...]:
+        return tuple(self.dtype.names or ())
+
+
+def ply_layout(path: Path) -> PlyLayout:
+    """The vertex block of a binary PLY, either byte order, located from its header.
 
     Elements before `vertex` are skipped by their own stride, so a compressed export
     (PlayCanvas/SuperSplat write `element chunk` first) reads the vertices it means to;
@@ -159,40 +182,91 @@ def read_ply(path: Path) -> dict[str, np.ndarray]:
             lines.append(line)
             if len(lines) > 10000:
                 raise SplatFormatError(f"{path.name}: no `end_header` in the first 10000 lines")
-        order, elements = _parse_header(path, lines)
-        vertex = next((element for element in elements if element.name == "vertex"), None)
-        if vertex is None:
-            found = ", ".join(element.name for element in elements) or "none"
+        offset = handle.tell()
+    order, elements = _parse_header(path, lines)
+    vertex = next((element for element in elements if element.name == "vertex"), None)
+    if vertex is None:
+        found = ", ".join(element.name for element in elements) or "none"
+        raise SplatFormatError(f"{path.name} has no `element vertex`; its elements are: {found}")
+    if vertex.lists:
+        raise SplatFormatError(
+            f"{path.name}: the vertex element has list properties "
+            f"({', '.join(vertex.lists)}), which a gaussian splat never has"
+        )
+    if not vertex.names:
+        raise SplatFormatError(f"{path.name}: the vertex element declares no properties")
+    for earlier in elements:
+        if earlier is vertex:
+            break
+        if earlier.lists:
             raise SplatFormatError(
-                f"{path.name} has no `element vertex`; its elements are: {found}"
+                f"{path.name}: element {earlier.name!r} comes before the vertex element "
+                f"and has a list property ({', '.join(earlier.lists)}), so the vertex "
+                f"data cannot be located without parsing it"
             )
-        if vertex.lists:
-            raise SplatFormatError(
-                f"{path.name}: the vertex element has list properties "
-                f"({', '.join(vertex.lists)}), which a gaussian splat never has"
-            )
-        if not vertex.names:
-            raise SplatFormatError(f"{path.name}: the vertex element declares no properties")
-        for earlier in elements:
-            if earlier is vertex:
-                break
-            if earlier.lists:
-                raise SplatFormatError(
-                    f"{path.name}: element {earlier.name!r} comes before the vertex element "
-                    f"and has a list property ({', '.join(earlier.lists)}), so the vertex "
-                    f"data cannot be located without parsing it"
-                )
-            handle.seek(earlier.dtype(order).itemsize * earlier.count, 1)
-        dtype = vertex.dtype(order)
-        wanted = dtype.itemsize * vertex.count
-        payload = handle.read(wanted)
-        if len(payload) < wanted:
-            raise SplatFormatError(
-                f"{path.name} is truncated: the header declares {vertex.count} vertices "
-                f"({wanted} bytes of vertex data) and only {len(payload)} bytes follow it"
-            )
-        data = np.frombuffer(payload, dtype=dtype, count=vertex.count)
-    return {name: data[name].astype(np.float32) for name in vertex.names}
+        offset += earlier.dtype(order).itemsize * earlier.count
+    dtype = vertex.dtype(order)
+    wanted = dtype.itemsize * vertex.count
+    available = path.stat().st_size - offset
+    if available < wanted:
+        raise SplatFormatError(
+            f"{path.name} is truncated: the header declares {vertex.count} vertices "
+            f"({wanted} bytes of vertex data) and only {max(available, 0)} bytes follow it"
+        )
+    return PlyLayout(path, dtype, offset, vertex.count)
+
+
+#: How much of a PLY is mapped at once when it is read in windows. 64 MiB is ~270k rows of
+#: a full 3DGS PLY (62 floats) and ~1.2M of a `canonical.ply` (14): big enough that numpy's
+#: per-call overheads vanish, small next to the 1.5 GB the packer may use.
+CHUNK_BYTES = 64 << 20
+
+
+def iter_ply_rows(
+    layout: PlyLayout, columns: tuple[str, ...], chunk_bytes: int | None = None
+) -> Iterator[tuple[int, dict[str, np.ndarray]]]:
+    """`(first row, {column: float32 array})` for consecutive windows of the vertex block.
+
+    Each window is its own `np.memmap`, dropped before the next is opened. Mapping the
+    whole file at once would put all of it in the address space, and every page read in
+    the resident set -- which is what reading in windows avoids.
+    """
+    missing = [name for name in columns if name not in layout.names]
+    if missing:
+        raise SplatFormatError(
+            f"{layout.path.name} lacks {', '.join(missing)}; a 3DGS splat PLY carries "
+            f"x/y/z, f_dc_0-2, opacity, scale_0-2 and rot_0-3"
+        )
+    rows = max(1, (chunk_bytes or CHUNK_BYTES) // layout.dtype.itemsize)
+    for start in range(0, layout.count, rows):
+        count = min(rows, layout.count - start)
+        window = np.memmap(
+            layout.path,
+            dtype=layout.dtype,
+            mode="r",
+            offset=layout.offset + start * layout.dtype.itemsize,
+            shape=(count,),
+        )
+        chunk = {name: window[name].astype(np.float32) for name in columns}
+        del window
+        yield start, chunk
+
+
+def read_ply(path: Path) -> dict[str, np.ndarray]:
+    """Binary PLY, either byte order: the `vertex` element's properties as float32 arrays.
+
+    All of it, in memory, for the callers that want the whole splat at once (the skeleton,
+    the pipeline's ingest). `convert` reads in windows instead (`iter_ply_rows`).
+    """
+    layout = ply_layout(path)
+    parts: dict[str, list[np.ndarray]] = {name: [] for name in layout.names}
+    for _, chunk in iter_ply_rows(layout, layout.names):
+        for name, column in chunk.items():
+            parts[name].append(column)
+    return {
+        name: np.concatenate(columns) if columns else np.zeros(0, np.float32)
+        for name, columns in parts.items()
+    }
 
 
 def sigmoid(x: np.ndarray) -> np.ndarray:
@@ -468,7 +542,7 @@ def build_glb(count: int, pmin: list[float], pmax: list[float], spz: bytes) -> b
 #: Smaller tiles refine more finely and cost more rebuilds and requests; bigger ones make
 #: the coarsest view (the root) heavier and the steps between levels coarser. 100k is
 #: ~1.4 MB of SPZ (the committed tree packs at 14.5 bytes a gaussian), one second's
-#: download on a middling phone connection, and 5M gaussians become ~60 tiles.
+#: download on a middling phone connection, and 5M gaussians become ~60 leaves.
 TILE_GAUSSIANS = 100_000
 
 #: The octree is cut on an integer grid 2^21 cells a side, so a cell key at any level fits
@@ -481,23 +555,89 @@ GRID_BITS = 21
 #: range the tiler reasons about sizes in. A garbage scale of +40 must not become exp(40).
 SPZ_LOG_SCALE_RANGE = (-10.0, 255 / 16 - 10.0)
 
+#: The most a merged gaussian may be opaque, and so where H3DGS's "falloff" is cut.
+#:
+#: Merging sets a parent's opacity to `sum(w_i) / S_p` (H3DGS 2406.12080 Sec. 4.1, Eqs. 8-9;
+#: gaussian-hierarchy ClusterMerger.cpp: `clustered.opacity = weight_sum /
+#: ellipseSurface(clustered.scale)`), which the paper calls *falloff* because it exceeds 1
+#: wherever the children overlapped; its own rasteriser then clamps each fragment's alpha
+#: at 0.99 (hierarchy-rasterizer forward.cu: `min(0.99f, con_o.w * exp(power))`). SPZ and
+#: KHR_gaussian_splatting store an opacity in [0, 1] (a sigmoid, then a byte), so the cut
+#: has to happen here instead: at 0.99, the same ceiling that rasteriser applies.
+MERGED_OPACITY_MAX = 0.99
+
+#: How far a merged gaussian may be widened to keep what the opacity cut would lose.
+#:
+#: Cutting falloff F > 1 to 0.99 alone makes a merged surface see-through between its
+#: gaussians -- two neighbours a cell apart each reach ~0.23 alpha at the midpoint, 0.41
+#: together, where the children they replace were opaque. So the product H3DGS conserves
+#: when it merges, opacity x surface (its weights w = o * S, Eq. 8), is conserved here too:
+#: the surface grows by F / 0.99, the scales by the square root of that. That is the rule
+#: Spark's own LoD applies when `lodInflate` is on ("inflate LoD splats to ensure opacity
+#: stays <= 1.0"; spark src/shaders/splatVertex.glsl), and what Cesium ion's own splat
+#: tilesets show (coarse splats enlarged: p99 35 m against 17.7 m a level down). Capped at
+#: 2x: F far above 4 means many *stacked* layers, and widening a node past its cell smears
+#: colour across neighbours instead of filling gaps.
+MERGED_INFLATE_MAX = 2.0
+
+#: Records of the Morton-ordered working copy `convert` spills to disk: what a tile needs of
+#: a gaussian, float32 as the PLY had it, plus the row it came from (tiles keep PLY order).
+RECORD = np.dtype(
+    [
+        ("row", "<i8"),
+        ("xyz", "<f4", (3,)),
+        ("f_dc", "<f4", (3,)),
+        ("opacity", "<f4"),
+        ("scale", "<f4", (3,)),
+        ("rot", "<f4", (4,)),
+    ]
+)
+_BUCKET = np.dtype([("pos", "<i8"), *[(name, RECORD.fields[name][0]) for name in RECORD.names]])
+
+#: Records one bucket of the external sort holds, and so what putting one in order costs:
+#: 512k records are 36 MB read back and 32 MB of sorted block. A scan below this is one
+#: bucket; 8M gaussians are 16.
+BUCKET_RECORDS = 1 << 19
+
+PLY_COLUMNS = (
+    "x",
+    "y",
+    "z",
+    "f_dc_0",
+    "f_dc_1",
+    "f_dc_2",
+    "opacity",
+    "scale_0",
+    "scale_1",
+    "scale_2",
+    "rot_0",
+    "rot_1",
+    "rot_2",
+    "rot_3",
+)
+
 
 @dataclass
 class Tile:
-    """One node of the hierarchy: the gaussians its own content holds, and its children.
+    """One node of the hierarchy.
 
-    Refinement is ADD, so `members` of all tiles partition the kept gaussians: a child
-    holds none of its ancestors' gaussians and a parent is still drawn under its loaded
-    children. `low`/`high` bound the centres of the whole subtree, padded by how far its
-    gaussians reach, and enclose every child's box.
+    Refinement is REPLACE (see `convert`): a leaf holds original gaussians, and the leaves
+    between them hold every kept gaussian exactly once; a parent holds *merged* gaussians,
+    one per occupied cell of its grid at `level`, standing in for everything below it until
+    all its children have loaded. `ranges` are the tile's gaussians as half-open runs of
+    positions in Morton order: one run for a cell, several for a leaf packed from small
+    octants. `low`/`high` bound what the tile and its subtree draw.
     """
 
     path: tuple[str, ...]
-    members: np.ndarray
-    geometric_error: float
-    low: np.ndarray
-    high: np.ndarray
+    ranges: list[tuple[int, int]]
+    depth: int
+    level: int = -1
     children: list[Tile] = field(default_factory=list)
+    count: int = 0
+    geometric_error: float = 0.0
+    low: np.ndarray = field(default_factory=lambda: np.zeros(3))
+    high: np.ndarray = field(default_factory=lambda: np.zeros(3))
 
     @property
     def uri(self) -> str:
@@ -507,6 +647,11 @@ class Tile:
         # Below it, the octant path, one segment a level ("splat_3-5.glb" is octant 5 of
         # octant 3); a segment of several digits is those octants' leftovers packed together.
         return f"splat_{'-'.join(self.path)}.glb" if self.path else "splat.glb"
+
+    @property
+    def size(self) -> int:
+        """Gaussians under this tile: its leaves' originals."""
+        return sum(stop - start for start, stop in self.ranges)
 
     def walk(self) -> list[Tile]:
         """This tile and every descendant, parents before children."""
@@ -530,6 +675,19 @@ def _spread_bits(values: np.ndarray) -> np.ndarray:
     return v
 
 
+def morton_codes(centres: np.ndarray, origin: np.ndarray, edge: float) -> np.ndarray:
+    """63-bit Morton codes of centres on the 2^21 grid over the cube [origin, origin + edge]."""
+    side = 1 << GRID_BITS
+    grid = np.clip(
+        np.floor((centres.astype(np.float64) - origin) / edge * side), 0, side - 1
+    ).astype(np.int64)
+    return (
+        (_spread_bits(grid[:, 0]) << np.uint64(2))
+        | (_spread_bits(grid[:, 1]) << np.uint64(1))
+        | _spread_bits(grid[:, 2])
+    )
+
+
 def _split_levels(codes: np.ndarray) -> np.ndarray:
     """For each adjacent pair of sorted Morton codes, the first octree level that parts them.
 
@@ -547,124 +705,76 @@ def _split_levels(codes: np.ndarray) -> np.ndarray:
     return np.where(diff == 0, GRID_BITS + 1, GRID_BITS - high // 3)
 
 
-def _heaviest_per_run(starts: np.ndarray, weight: np.ndarray) -> np.ndarray:
-    """Positions of the heaviest element of each run (runs begin at `starts`); ties first."""
-    peak = np.maximum.reduceat(weight, starts)
-    run = np.zeros(weight.size, dtype=np.int64)
-    run[starts[1:]] = 1
-    run = np.cumsum(run)
-    best = np.flatnonzero(weight == peak[run])
-    first = np.ones(best.size, dtype=bool)
-    first[1:] = run[best[1:]] != run[best[:-1]]
-    return best[first]
+def _occupancy(codes: np.ndarray, chunk: int = 1 << 20) -> np.ndarray:
+    """`occupancy[L]`: how many cells of level L the sorted `codes` occupy, for every L.
 
-
-def _representatives(
-    codes: np.ndarray, weight: np.ndarray, depth: int, budget: int
-) -> tuple[np.ndarray, int]:
-    """At most `budget` of a tile's gaussians, spread evenly over where they are, and the
-    octree level they were spread at. `codes` are the tile's Morton codes, sorted.
-
-    The level is the finest at which the occupied cells still fit the budget (occupancy
-    only grows with level, and at the tile's own level it is one), and each occupied cell
-    gives its heaviest gaussian: most opaque times broadest face, the one that stands for
-    the most of what the cell looks like from afar. What is left of the budget goes to the
-    heaviest gaussians of the next level's still-empty cells, so a tile is full rather than
-    stopping at the last power of two.
-
-    In Morton order every cell at every level is a contiguous run, so this is two linear
-    passes and no sort -- which is what makes 5M gaussians take seconds, not minutes.
+    Counted in chunks (overlapping by one code, so no adjacent pair is missed), because the
+    root's codes are every gaussian of the scan and `_split_levels` makes several
+    temporaries the size of its input.
     """
-    parts = _split_levels(codes)
-    counts = np.bincount(parts, minlength=GRID_BITS + 2)
-    occupancy = 1 + np.cumsum(counts)  # occupancy[L]: cells occupied at level L
+    counts = np.zeros(GRID_BITS + 2, dtype=np.int64)
+    for start in range(0, max(codes.size - 1, 0), chunk):
+        parts = _split_levels(codes[start : start + chunk + 1])
+        counts += np.bincount(parts, minlength=GRID_BITS + 2)
+    return 1 + np.cumsum(counts)
+
+
+def merge_level(codes: np.ndarray, depth: int, budget: int) -> tuple[int, int]:
+    """The finest grid level at which a tile's occupied cells fit `budget`, and how many.
+
+    That is the level its merged content is built at: one merged gaussian per occupied
+    cell. Occupancy only grows with level, and at the tile's own level it is one.
+    """
+    occupancy = _occupancy(codes)
     level = max(
-        (lvl for lvl in range(depth, GRID_BITS + 1) if occupancy[lvl] <= budget), default=depth
+        (level for level in range(depth, GRID_BITS + 1) if occupancy[level] <= budget),
+        default=depth,
     )
-    starts = np.concatenate([[0], np.flatnonzero(parts <= level) + 1])
-    chosen = _heaviest_per_run(starts, weight)
-    spare = budget - chosen.size
-    if spare > 0 and level < GRID_BITS:
-        finer = np.concatenate([[0], np.flatnonzero(parts <= level + 1) + 1])
-        run = np.zeros(codes.size, dtype=np.int64)
-        run[finer[1:]] = 1
-        run = np.cumsum(run)
-        open_run = np.ones(finer.size, dtype=bool)
-        open_run[run[chosen]] = False
-        extra = _heaviest_per_run(finer, weight)
-        extra = extra[open_run[run[extra]]]
-        pick = extra[np.argsort(-weight[extra], kind="stable")[:spare]]
-        chosen = np.sort(np.concatenate([chosen, pick]))
-    return chosen, level
+    return level, int(occupancy[level])
 
 
-def build_hierarchy(
-    xyz: np.ndarray,
-    log_scales: np.ndarray,
-    opacity: np.ndarray,
-    tile_gaussians: int | None = TILE_GAUSSIANS,
-) -> Tile:
-    """An adaptive octree over the gaussians, each tile holding at most `tile_gaussians`.
+#: How many times more a parent's children hold than the parent: the octree's own 8.
+#:
+#: With it, each level of parents holds at most an eighth of the level below, so all the
+#: parents together add at most 1/8 + 1/64 + ... = 1/7 (~14%) to the leaves -- the
+#: 1/(r - 1) of an r-way hierarchy -- whatever the data. Capping a parent by the tile budget
+#: alone does not: a parent just over the budget splits into a few children and could
+#: still hold nearly a budget itself, and a scan of surfaces (four occupied octants of
+#: eight, not eight) shrinks by four a level, not eight. Measured on the lumpy test scene,
+#: the budget alone cost 35%.
+PARENT_RATIO = 8
 
-    Only a tile holding more than the budget splits: it keeps an even, heaviest-first
-    `budget` of its gaussians as its own content (see `_representatives`) and hands the
-    rest to its occupied octants, so empty space gets no tiles and dense places get deep
-    ones. Refinement is ADD: nothing is duplicated and nothing is lost -- the members of
-    all tiles are exactly the input rows, each once.
 
-    Geometric error, which Cesium projects to pixels and compares with
-    `maximumScreenSpaceError`: a leaf is the data at full resolution, so 0. An inner tile's
-    is the cell size its representatives were spread at -- within that distance it (with
-    its ancestors) has a gaussian wherever the data has one, which is how coarse it is. It
-    never grows with depth, with no clamp to make it so: a child's gaussians are a subset
-    of its parent's on the same aligned grid, so its occupancy at any level is no greater
-    and the level it can afford is no coarser.
+def plan_tree(codes: np.ndarray, tile_gaussians: int | None = TILE_GAUSSIANS) -> Tile:
+    """The adaptive octree over Morton-sorted `codes`, each leaf holding at most the budget.
 
-    `tile_gaussians=None` writes one tile holding everything: the Living Survey deformer
+    Only a tile holding more than the budget splits, into its occupied octants, so empty
+    space gets no tiles and dense places get deep ones. With REPLACE refinement a parent
+    keeps none of its gaussians: all of them go down, and the leaves partition the input
+    exactly. The plan needs only the codes (8 bytes a gaussian); the gaussians themselves
+    are read tile by tile when the tiles are written.
+
+    `tile_gaussians=None` plans one tile holding everything: the Living Survey deformer
     needs it (splat indices are only stable while tile selection is; see
     apps/web/src/cesium/splatInternals.ts `isSingleTile`).
     """
-    count = xyz.shape[0]
+    count = int(codes.size)
     if count == 0:
         raise SplatFormatError("there are no gaussians to tile")
     if tile_gaussians is not None and tile_gaussians < 1:
         raise ValueError(f"tile_gaussians must be at least 1, not {tile_gaussians}")
-    centres = xyz.astype(np.float64)
-    sizes = np.sort(np.clip(log_scales.astype(np.float64), *SPZ_LOG_SCALE_RANGE), axis=1)
-    # Three standard deviations along the longest axis: where a gaussian stops showing.
-    reach = 3.0 * np.exp(sizes[:, 2])
-    origin = centres.min(axis=0)
-    edge = max(float((centres.max(axis=0) - origin).max()), 1e-3)
-    side = 1 << GRID_BITS
-    grid = np.clip(np.floor((centres - origin) / edge * side), 0, side - 1).astype(np.int64)
-    morton = (
-        (_spread_bits(grid[:, 0]) << np.uint64(2))
-        | (_spread_bits(grid[:, 1]) << np.uint64(1))
-        | _spread_bits(grid[:, 2])
-    )
-    # Everything below works in Morton order; `order` maps back to PLY rows. Stable, so
-    # coincident gaussians keep their PLY order and the output is deterministic.
-    order = np.argsort(morton, kind="stable")
-    codes = morton[order]
-    weight = (opacity.astype(np.float64) * np.exp(sizes[:, 1] + sizes[:, 2]))[order]
-    reach = reach[order]
-    centres = centres[order]
 
-    def split(index: np.ndarray, depth: int, path: tuple[str, ...]) -> Tile:
-        # The 99th percentile of reach, not the maximum: one 10 m background gaussian must
-        # not make every box it falls in 20 m wider than the data. Centres are always inside.
-        pad = float(np.percentile(reach[index], 99))
-        low = centres[index].min(axis=0) - pad
-        high = centres[index].max(axis=0) + pad
-        if tile_gaussians is None or index.size <= tile_gaussians or depth >= GRID_BITS:
-            return Tile(path, np.sort(order[index]), 0.0, low, high)
-        chosen, level = _representatives(codes[index], weight[index], depth, tile_gaussians)
-        keep = np.ones(index.size, dtype=bool)
-        keep[chosen] = False
-        rest = index[keep]
-        # Morton order makes each octant a contiguous run, in octant order.
-        octant = (codes[rest] >> np.uint64(3 * (GRID_BITS - depth - 1))) & np.uint64(7)
-        bounds = np.searchsorted(octant, np.arange(9, dtype=np.uint64))
+    def split(start: int, stop: int, depth: int, path: tuple[str, ...]) -> Tile:
+        if tile_gaussians is None or stop - start <= tile_gaussians or depth >= GRID_BITS:
+            return Tile(path, [(start, stop)], depth, count=stop - start)
+        cell = codes[start:stop]
+        # Morton order makes each octant a contiguous run, in octant order: its bounds are
+        # where the codes cross the octant's first code, found without touching the rest.
+        shift = np.uint64(3 * (GRID_BITS - depth - 1))
+        prefix = (int(cell[0]) >> (3 * (GRID_BITS - depth))) << 3
+        firsts = np.array([(prefix + value) << int(shift) for value in range(9)], np.uint64)
+        bounds = start + np.searchsorted(cell, firsts)
+        bounds[8] = stop
         children: list[Tile] = []
         # Octants that would be leaves are packed together, in octant order, up to the
         # budget: an octree's leftovers are otherwise a spray of tiles holding a handful of
@@ -672,33 +782,372 @@ def build_hierarchy(
         # budget of 1000), and each tile costs a request and, in Cesium, a re-aggregation
         # of everything selected. A packed leaf's box is its own gaussians', so it may
         # overlap a sibling's, which 3D Tiles allows.
-        packed: list[tuple[str, np.ndarray]] = []
+        packed: list[tuple[str, tuple[int, int]]] = []
 
         def flush() -> None:
             if packed:
-                rows = np.concatenate([rows for _, rows in packed])
                 digits = "".join(value for value, _ in packed)
-                children.append(split(rows, depth + 1, (*path, digits)))
+                runs = [run for _, run in packed]
+                held = sum(b - a for a, b in runs)
+                children.append(Tile((*path, digits), runs, depth + 1, count=held))
                 packed.clear()
 
         for value in range(8):
-            rows = rest[bounds[value] : bounds[value + 1]]
-            if rows.size == 0:
+            low, high = int(bounds[value]), int(bounds[value + 1])
+            if high == low:
                 continue
-            if rows.size > tile_gaussians:
-                children.append(split(rows, depth + 1, (*path, str(value))))
+            if high - low > tile_gaussians:
+                children.append(split(low, high, depth + 1, (*path, str(value))))
                 continue
-            if sum(held.size for _, held in packed) + rows.size > tile_gaussians:
+            if sum(b - a for _, (a, b) in packed) + high - low > tile_gaussians:
                 flush()
-            packed.append((str(value), rows))
+            packed.append((str(value), (low, high)))
         flush()
-        for child in children:
-            low = np.minimum(low, child.low)
-            high = np.maximum(high, child.high)
-        members = np.sort(order[index[chosen]])
-        return Tile(path, members, edge / (1 << level), low, high, children)
+        # The children are planned first because the parent's allowance is theirs: the
+        # budget, and at most an eighth of what its children hold (`PARENT_RATIO`).
+        allowance = min(tile_gaussians, max(1, sum(c.count for c in children) // PARENT_RATIO))
+        level, held = merge_level(cell, depth, allowance)
+        # Never finer than a child's own merged level: the parent is built from its
+        # children's cells (`write_tiles`), which exist at that level and coarser, and a
+        # parent at least as coarse as each child keeps errors from growing with depth.
+        finest = min((c.level for c in children if c.children), default=level)
+        if finest < level:
+            level = finest
+            held = int(_occupancy(cell)[level])
+        return Tile(path, [(start, stop)], depth, level, children, count=held)
 
-    return split(np.arange(count), 0, ())
+    return split(0, count, 0, ())
+
+
+# ------------------------------------------------------------------------ merging (H3DGS)
+
+
+@dataclass
+class Moments:
+    """Gaussians, or merged cells of gaussians, as the moments H3DGS merges.
+
+    `weight` is H3DGS's unnormalised w = opacity x surface (s0 s1 + s0 s2 + s1 s2) -- for a
+    merged cell, the sum of its members' -- `mean` and `cov` (xx, xy, xz, yy, yz, zz) the
+    weighted first and central second moments, `colour` the weighted SH DC term. `key` is
+    each row's cell at the level it was merged to, ascending.
+
+    The weights add, so merging merged cells is merging their gaussians: a cell's weight is
+    exactly its members' sum (the opacity cut in `to_gaussians` touches only what is
+    *written*, never these), and Eqs. 3-4 are the law of total covariance. So each parent
+    is built from its children's cells rather than re-reading every gaussian below it,
+    the way ClusterMerger.cpp's `mergeRec` merges each child's `merged[0]` -- and the
+    result is the same as merging the leaves directly (tests/test_splat_tiles_lod.py checks
+    it against a brute-force merge).
+    """
+
+    key: np.ndarray
+    weight: np.ndarray
+    mean: np.ndarray
+    cov: np.ndarray
+    colour: np.ndarray
+
+    def __len__(self) -> int:
+        return int(self.key.size)
+
+    @staticmethod
+    def concat(parts: list[Moments]) -> Moments:
+        return Moments(
+            *(np.concatenate([getattr(part, name) for part in parts]) for name in _MOMENT_FIELDS)
+        )
+
+    def take(self, index: np.ndarray) -> Moments:
+        return Moments(*(getattr(self, name)[index] for name in _MOMENT_FIELDS))
+
+
+_MOMENT_FIELDS = ("key", "weight", "mean", "cov", "colour")
+
+
+def _surface(scales: np.ndarray) -> np.ndarray:
+    """H3DGS's surface proxy, s0 s1 + s0 s2 + s1 s2 (ClusterMerger.cpp `ellipseSurface`)."""
+    return scales[:, 0] * scales[:, 1] + scales[:, 0] * scales[:, 2] + scales[:, 1] * scales[:, 2]
+
+
+def _rotation_matrices(quat_wxyz: np.ndarray) -> np.ndarray:
+    """(n, 3, 3) rotations whose columns are each gaussian's axes, from w-first quaternions.
+
+    The 3DGS convention (and gaussian-hierarchy common.h `matrixFromQuat`): covariance is
+    R S S^T R^T with R from the normalised quaternion.
+    """
+    q = quat_wxyz.astype(np.float64)
+    q = q / np.maximum(np.linalg.norm(q, axis=1, keepdims=True), 1e-12)
+    w, x, y, z = q[:, 0], q[:, 1], q[:, 2], q[:, 3]
+    return np.stack(
+        [
+            np.stack([1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y)], 1),
+            np.stack([2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x)], 1),
+            np.stack([2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)], 1),
+        ],
+        axis=1,
+    )
+
+
+def _quaternions(rotations: np.ndarray) -> np.ndarray:
+    """w-first unit quaternions of proper rotation matrices (Shepperd's method, vectorised).
+
+    The branch is chosen per matrix by the largest of trace, R00, R11, R22, so the square
+    root is never taken of a small number.
+    """
+    r = rotations
+    trace = r[:, 0, 0] + r[:, 1, 1] + r[:, 2, 2]
+    pick = np.argmax(np.stack([trace, r[:, 0, 0], r[:, 1, 1], r[:, 2, 2]], 1), axis=1)
+    out = np.empty((r.shape[0], 4))
+    for case in range(4):
+        m = r[pick == case]
+        if case == 0:
+            s = np.sqrt(np.maximum(1 + m[:, 0, 0] + m[:, 1, 1] + m[:, 2, 2], 1e-30)) * 2
+            q = [s / 4, (m[:, 2, 1] - m[:, 1, 2]) / s, (m[:, 0, 2] - m[:, 2, 0]) / s,
+                 (m[:, 1, 0] - m[:, 0, 1]) / s]  # fmt: skip
+        elif case == 1:
+            s = np.sqrt(np.maximum(1 + m[:, 0, 0] - m[:, 1, 1] - m[:, 2, 2], 1e-30)) * 2
+            q = [(m[:, 2, 1] - m[:, 1, 2]) / s, s / 4, (m[:, 0, 1] + m[:, 1, 0]) / s,
+                 (m[:, 0, 2] + m[:, 2, 0]) / s]  # fmt: skip
+        elif case == 2:
+            s = np.sqrt(np.maximum(1 - m[:, 0, 0] + m[:, 1, 1] - m[:, 2, 2], 1e-30)) * 2
+            q = [(m[:, 0, 2] - m[:, 2, 0]) / s, (m[:, 0, 1] + m[:, 1, 0]) / s, s / 4,
+                 (m[:, 1, 2] + m[:, 2, 1]) / s]  # fmt: skip
+        else:
+            s = np.sqrt(np.maximum(1 - m[:, 0, 0] - m[:, 1, 1] + m[:, 2, 2], 1e-30)) * 2
+            q = [(m[:, 1, 0] - m[:, 0, 1]) / s, (m[:, 0, 2] + m[:, 2, 0]) / s,
+                 (m[:, 1, 2] + m[:, 2, 1]) / s, s / 4]  # fmt: skip
+        out[pick == case] = np.stack(q, 1)
+    return out / np.linalg.norm(out, axis=1, keepdims=True)
+
+
+def gaussian_moments(records: np.ndarray, keys: np.ndarray) -> Moments:
+    """Leaf gaussians (`RECORD` rows) as moments, each in its own row.
+
+    Scales are clipped to what SPZ can store first, so a parent merges exactly the sizes
+    its children are drawn at.
+    """
+    scales = np.exp(np.clip(records["scale"].astype(np.float64), *SPZ_LOG_SCALE_RANGE))
+    opacity = sigmoid(records["opacity"].astype(np.float64))
+    # (R S)(R S)^T, batched: a matmul, which is ten times faster here than the einsum.
+    axes = _rotation_matrices(records["rot"]) * scales[:, None, :]
+    cov3 = axes @ axes.transpose(0, 2, 1)
+    return Moments(
+        key=keys.astype(np.int64),
+        # A floor, not a filter: a zero weight (a gaussian SPZ would round to nothing)
+        # must not make a cell of such gaussians divide by zero.
+        weight=np.maximum(opacity * _surface(scales), 1e-30),
+        mean=records["xyz"].astype(np.float64),
+        cov=cov3[:, [0, 0, 0, 1, 1, 2], [0, 1, 2, 1, 2, 2]],
+        colour=records["f_dc"].astype(np.float64),
+    )
+
+
+def merge_cells(moments: Moments) -> Moments:
+    """One row per distinct key: H3DGS moment matching over each key's rows.
+
+    With w_i normalised within the cell (ClusterMerger.cpp, `weights[i] / weight_sum`):
+    mean mu_p = sum w_i mu_i (Eq. 3), covariance Sigma_p = sum w_i (Sigma_i + (mu_i - mu_p)
+    (mu_i - mu_p)^T) (Eq. 4), SH (here the DC term) sum w_i c_i -- and the unnormalised
+    weight sum is kept, so the result merges again exactly. Rows must be sorted by key;
+    each cell is a contiguous run, so this is one `reduceat` per moment and no loop.
+    """
+    if len(moments) == 0:
+        return moments
+    key = moments.key
+    starts = np.flatnonzero(np.r_[True, key[1:] != key[:-1]])
+    run = np.cumsum(np.r_[False, key[1:] != key[:-1]])
+    w = moments.weight
+    total = np.add.reduceat(w, starts)
+    mean = np.add.reduceat(w[:, None] * moments.mean, starts) / total[:, None]
+    colour = np.add.reduceat(w[:, None] * moments.colour, starts) / total[:, None]
+    # Deviations from the cell's own mean, not raw second moments: E[xx^T] - mu mu^T would
+    # cancel catastrophically for centimetre cells a hundred metres from the origin.
+    d = moments.mean - mean[run]
+    spread = d[:, [0, 0, 0, 1, 1, 2]] * d[:, [0, 1, 2, 1, 2, 2]]
+    cov = np.add.reduceat(w[:, None] * (moments.cov + spread), starts) / total[:, None]
+    return Moments(key[starts], total, mean, cov, colour)
+
+
+def coarsen(moments: Moments, levels: int) -> Moments:
+    """Cells `levels` levels coarser: keys shifted up an octant per level, then merged."""
+    if levels <= 0:
+        return moments
+    shifted = Moments(
+        moments.key >> (3 * levels), moments.weight, moments.mean, moments.cov, moments.colour
+    )
+    return merge_cells(shifted)
+
+
+@dataclass
+class Gaussians:
+    """What a tile writes: arrays in `pack_spz`'s terms."""
+
+    xyz: np.ndarray
+    sh0: np.ndarray
+    opacity_logit: np.ndarray
+    log_scales: np.ndarray
+    quat_xyzw: np.ndarray
+
+    @property
+    def reach(self) -> np.ndarray:
+        """Three standard deviations along each gaussian's longest axis, clipped as SPZ is."""
+        top = np.clip(self.log_scales.astype(np.float64), *SPZ_LOG_SCALE_RANGE).max(axis=1)
+        return 3.0 * np.exp(top)
+
+
+def to_gaussians(moments: Moments) -> Gaussians:
+    """Merged cells as gaussians: axes and scales from the covariance, opacity from falloff.
+
+    The covariance's eigenvectors are the axes and the square roots of its eigenvalues the
+    scales (ClusterMerger.cpp: `SelfAdjointEigenSolver`, then `sqrt(eigenvalues)`), with the
+    third axis flipped where needed to make a rotation, not a reflection, and eigenvalues
+    kept off zero as its "Working hard..." loop does. Opacity is H3DGS's falloff,
+    `sum(w_i) / S_p`, cut to `MERGED_OPACITY_MAX` with the surface widened to keep
+    opacity x surface (see `MERGED_INFLATE_MAX` for why and by how much).
+    """
+    c = moments.cov
+    matrices = np.stack(
+        [
+            np.stack([c[:, 0], c[:, 1], c[:, 2]], 1),
+            np.stack([c[:, 1], c[:, 3], c[:, 4]], 1),
+            np.stack([c[:, 2], c[:, 4], c[:, 5]], 1),
+        ],
+        axis=1,
+    )
+    values, vectors = np.linalg.eigh(matrices)
+    floor = np.maximum(values[:, 2:3] * 1e-8, np.exp(2 * SPZ_LOG_SCALE_RANGE[0]))
+    values = np.maximum(values, floor)
+    flip = np.linalg.det(vectors) < 0
+    vectors[flip, :, 2] *= -1
+    scales = np.sqrt(values)
+    falloff = moments.weight / _surface(scales)
+    inflate = np.clip(np.sqrt(falloff / MERGED_OPACITY_MAX), 1.0, MERGED_INFLATE_MAX)
+    scales = scales * inflate[:, None]
+    opacity = np.clip(falloff / inflate**2, 1e-6, MERGED_OPACITY_MAX)
+    quat = _quaternions(vectors)
+    return Gaussians(
+        xyz=moments.mean.astype(np.float32),
+        sh0=moments.colour.astype(np.float32),
+        opacity_logit=np.log(opacity / (1 - opacity)).astype(np.float32),
+        log_scales=np.log(scales).astype(np.float32),
+        quat_xyzw=quat[:, [1, 2, 3, 0]].astype(np.float32),
+    )
+
+
+def records_gaussians(records: np.ndarray) -> Gaussians:
+    """Original gaussians, as the PLY had them."""
+    return Gaussians(
+        xyz=records["xyz"],
+        sh0=records["f_dc"],
+        opacity_logit=records["opacity"],
+        log_scales=records["scale"],
+        quat_xyzw=records["rot"][:, [1, 2, 3, 0]],
+    )
+
+
+# ------------------------------------------------------------------ out-of-core packaging
+
+
+class SortedStore:
+    """The kept gaussians as `RECORD`s in Morton order, in a file, read back by position.
+
+    Built by a distribution sort (`build`): the PLY is read once in windows, each record
+    appended to the bucket its sorted position falls in, and each bucket -- at most
+    `BUCKET_RECORDS` long -- is put in order in memory and appended to the store. Nothing
+    the size of the scan is held but the codes and positions (16 bytes a gaussian), and
+    every read and write is sequential.
+    """
+
+    def __init__(self, path: Path, count: int) -> None:
+        self.path = path
+        self.count = count
+
+    def read(self, start: int, stop: int) -> np.ndarray:
+        with self.path.open("rb") as handle:
+            handle.seek(start * RECORD.itemsize)
+            return np.fromfile(handle, dtype=RECORD, count=stop - start)
+
+    def read_ranges(self, ranges: list[tuple[int, int]]) -> np.ndarray:
+        return np.concatenate([self.read(start, stop) for start, stop in ranges])
+
+
+def _filter_rows(layout: PlyLayout, opacity_min: float) -> tuple[np.ndarray, np.ndarray]:
+    """Rows that are finite, at least `opacity_min` opaque and not floaters, and their centres.
+
+    Floaters are dropped by a robust radius around the median centre -- the same arithmetic
+    on the same float32 values as when the packer held the whole PLY, so the same rows go.
+    """
+    keep = np.zeros(layout.count, dtype=bool)
+    centres = np.empty((layout.count, 3), dtype=np.float32)
+    held = 0
+    for start, chunk in iter_ply_rows(layout, ("x", "y", "z", "opacity")):
+        xyz = np.stack([chunk["x"], chunk["y"], chunk["z"]], axis=1)
+        opacity = sigmoid(chunk["opacity"])
+        # A trainer can leave a few NaN gaussians behind; one of them poisons every statistic.
+        finite = np.isfinite(xyz).all(axis=1) & np.isfinite(opacity)
+        good = finite & (opacity >= opacity_min)
+        keep[start : start + good.size] = good
+        centres[held : held + int(good.sum())] = xyz[good]
+        held += int(good.sum())
+    if held == 0:
+        raise SplatFormatError(
+            f"{layout.path.name}: no gaussian is finite and at least {opacity_min} opaque, "
+            f"so there is nothing to tile"
+        )
+    centres = centres[:held]
+    # Outliers far from the bulk (sky floaters) are dropped by a robust radius.
+    center = np.median(centres, axis=0)
+    radius = np.linalg.norm(centres - center, axis=1)
+    near = radius <= np.percentile(radius, 99.5) * 1.5
+    del radius
+    keep[np.flatnonzero(keep)[~near]] = False
+    return keep, centres[near]
+
+
+def _sort_to_disk(layout: PlyLayout, keep: np.ndarray, rank: np.ndarray, work: Path) -> SortedStore:
+    """Every kept row as a `RECORD` at its Morton position, in a file under `work`.
+
+    `rank[k]` is the sorted position of the k-th kept row. Buckets are ranges of positions,
+    so a bucket in order is a stretch of the store in order.
+    """
+    count = int(rank.size)
+    buckets = max(1, -(-count // BUCKET_RECORDS))
+    paths = [work / f"bucket-{index}.bin" for index in range(buckets)]
+    handles = [path.open("wb") for path in paths]
+    try:
+        seen = 0
+        for start, chunk in iter_ply_rows(layout, PLY_COLUMNS):
+            good = keep[start : start + chunk["x"].size]
+            rows = start + np.flatnonzero(good)
+            positions = rank[seen : seen + rows.size]
+            seen += rows.size
+            out = np.empty(rows.size, dtype=_BUCKET)
+            out["pos"] = positions
+            out["row"] = rows
+            out["xyz"] = np.stack([chunk[n][good] for n in ("x", "y", "z")], axis=1)
+            out["f_dc"] = np.stack([chunk[f"f_dc_{i}"][good] for i in range(3)], axis=1)
+            out["opacity"] = chunk["opacity"][good]
+            out["scale"] = np.stack([chunk[f"scale_{i}"][good] for i in range(3)], axis=1)
+            out["rot"] = np.stack([chunk[f"rot_{i}"][good] for i in range(4)], axis=1)
+            which = positions // BUCKET_RECORDS
+            order = np.argsort(which, kind="stable")
+            edges = np.searchsorted(which[order], np.arange(buckets + 1))
+            for index in range(buckets):
+                part = out[order[edges[index] : edges[index + 1]]]
+                if part.size:
+                    handles[index].write(part.tobytes())
+    finally:
+        for handle in handles:
+            handle.close()
+    store = SortedStore(work / "sorted.bin", count)
+    with store.path.open("wb") as sink:
+        for index, path in enumerate(paths):
+            part = np.fromfile(path, dtype=_BUCKET)
+            path.unlink()
+            block = np.empty(part.size, dtype=RECORD)
+            slots = part["pos"] - index * BUCKET_RECORDS
+            for name in RECORD.names:
+                block[name][slots] = part[name]
+            sink.write(block.tobytes())
+    return store
 
 
 def _box(low: np.ndarray, high: np.ndarray) -> list[float]:
@@ -720,6 +1169,88 @@ def _box(low: np.ndarray, high: np.ndarray) -> list[float]:
     ]
 
 
+def _write_tile(out_dir: Path, tile: Tile, gaussians: Gaussians) -> None:
+    xyz = gaussians.xyz
+    spz = pack_spz(
+        xyz, gaussians.sh0, gaussians.opacity_logit, gaussians.log_scales, gaussians.quat_xyzw
+    )
+    (out_dir / tile.uri).write_bytes(
+        build_glb(int(xyz.shape[0]), xyz.min(axis=0).tolist(), xyz.max(axis=0).tolist(), spz)
+    )
+    tile.count = int(xyz.shape[0])
+
+
+def _bounds(xyz: np.ndarray, reach: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Centres' box padded by the 99th percentile of reach, not the maximum: one 10 m
+    background gaussian must not make every box it falls in 20 m wider than the data."""
+    pad = float(np.percentile(reach, 99))
+    centres = xyz.astype(np.float64)
+    return centres.min(axis=0) - pad, centres.max(axis=0) + pad
+
+
+def write_tiles(
+    root: Tile, codes: np.ndarray, store: SortedStore, out_dir: Path, edge: float
+) -> None:
+    """Write every tile's GLB, children before parents, and fill in counts, errors and boxes.
+
+    A leaf is its originals, in PLY order (the synthetic tree's labels and the Living
+    Survey rig index the single-tile GLB by it). A parent is its children's cells merged
+    to its own level (`Moments`), which each child hands up coarsened to that level -- so
+    every original is read once, by its leaf, and each merged cell is merged once more per
+    level above it.
+
+    Geometric error, which Cesium projects to pixels and refines on: a leaf is the data at
+    full resolution, so 0. A parent's is what the merge gives away: detail finer than the
+    spacing of its merged gaussians (the cell size at its level) or than their own width
+    (the median over its gaussians of twice the longest standard deviation, after
+    widening), whichever is larger. The median, so a handful of huge background gaussians
+    cannot make a whole tile refine early. A parent's level is never finer than a child's
+    (`plan_tree`), so its cells are at least as large, and an error above the parent's is
+    clamped to it on the way out (`_clamp_errors`): errors never grow with depth.
+    """
+
+    def build(tile: Tile, parent_level: int) -> Moments | None:
+        if not tile.children:
+            records = store.read_ranges(tile.ranges)
+            keys = np.concatenate([codes[a:b] for a, b in tile.ranges])
+            order = np.argsort(records["row"], kind="stable")
+            gaussians = records_gaussians(records[order])
+            _write_tile(out_dir, tile, gaussians)
+            tile.low, tile.high = _bounds(gaussians.xyz, gaussians.reach)
+            tile.geometric_error = 0.0
+            if parent_level < 0:
+                return None
+            shift = np.uint64(3 * (GRID_BITS - parent_level))
+            return merge_cells(gaussian_moments(records, (keys >> shift).astype(np.int64)))
+        parts = []
+        for child in tile.children:
+            part = build(child, tile.level)
+            assert part is not None
+            parts.append(part)
+        merged = Moments.concat(parts)
+        merged = merge_cells(merged.take(np.argsort(merged.key, kind="stable")))
+        gaussians = to_gaussians(merged)
+        _write_tile(out_dir, tile, gaussians)
+        cell = edge / (1 << tile.level)
+        width = 2.0 * float(np.median(np.exp(gaussians.log_scales.astype(np.float64).max(axis=1))))
+        tile.geometric_error = max(cell, width)
+        low, high = _bounds(gaussians.xyz, gaussians.reach)
+        for child in tile.children:
+            low = np.minimum(low, child.low)
+            high = np.maximum(high, child.high)
+        tile.low, tile.high = low, high
+        return coarsen(merged, tile.level - parent_level) if parent_level >= 0 else None
+
+    build(root, -1)
+    _clamp_errors(root, math.inf)
+
+
+def _clamp_errors(tile: Tile, ceiling: float) -> None:
+    tile.geometric_error = min(tile.geometric_error, ceiling)
+    for child in tile.children:
+        _clamp_errors(child, tile.geometric_error)
+
+
 def convert(
     ply: Path,
     out_dir: Path,
@@ -728,89 +1259,87 @@ def convert(
     height: float,
     opacity_min: float = 0.02,
     tile_gaussians: int | None = TILE_GAUSSIANS,
+    work_dir: Path | None = None,
 ) -> dict[str, float | int]:
     """Every gaussian that passes the filters, as a level-of-detail tileset.
 
-    There is no top-N cut any more. This used to keep the `max_gaussians` most opaque (400k
-    by default) in one tile and drop the rest, so every trained scene lost detail at
-    delivery and bigger scenes lost more. Now nothing that passes `opacity_min` and the
-    floater radius is dropped, and how much of it is *drawn* is the viewer's budget
-    (CesiumJS: `maximumScreenSpaceError`; the Spark viewer: a gaussian budget over the
-    tiles, coarsest first) -- decided on the device that pays for it.
+    There is no top-N cut. Nothing that passes `opacity_min` and the floater radius is
+    dropped, and how much of it is *drawn* is the viewer's budget (CesiumJS:
+    `maximumScreenSpaceError`, and a splat-count cap in SiteManager.ts; the Spark viewer:
+    Spark's own LoD at the phone's Detail count) -- decided on the device that pays for it.
 
-    No safety ceiling replaces the cut, because nothing downstream needs one: a viewer
-    loads tiles, never the whole set; Cesium's only hard limit is its attribute texture
-    (maximumTextureSize^2 / 2 splats *selected at once*, 8.4M at 4096 -- and it raises its
-    own screen-space error when it is hit); and packing is linear in memory and near-linear
-    in time (5M synthetic gaussians: 30 s and 1.6 GB peak, into 67 tiles and 77 MB).
+    **Refinement is REPLACE, with merged parents.** Each leaf holds original gaussians and
+    the leaves hold every kept gaussian exactly once; each parent holds one gaussian per
+    occupied cell of its grid, merged from everything under it by H3DGS's moment matching
+    (`merge_cells`, `to_gaussians`). What this replaced was ADD with *thinned* parents --
+    the heaviest original per cell, unenlarged -- which is the prune-only baseline LapisGS
+    (2408.14823, Tab. 2) measures worst of all its coarse levels (SSIM 0.548, LPIPS 0.314,
+    against 0.957 / 0.052 for its best), and which every shipping streamer avoids: Cesium
+    ion's own splat tilesets are REPLACE with enlarged coarse splats, Spark and PlayCanvas
+    merge. A parent is drawn only until all its children have loaded (CesiumJS 1.145
+    Source/Scene/Cesium3DTilesetBaseTraversal.js, `updateAndPushChildren`: "For traditional
+    replacement refinement only refine if all children are loaded", non-visible children
+    included), so a REPLACE tileset has no holes while it streams. Storage grows by the
+    parents, about 1/(8 - 1) of the leaves for an octree (`stats["parent_gaussians"]`).
 
-    Refinement is ADD, and deliberately. CesiumJS 1.145 draws a splat tileset as one
-    `GaussianSplatPrimitive` that aggregates `tileset._selectedTiles` into one texture and
-    sorts them together (Source/Scene/GaussianSplatPrimitive.js, `update`), so splats from
-    different tiles blend correctly with no seams between tiles. Its base traversal
-    (Source/Scene/Cesium3DTilesetBaseTraversal.js, `executeTraversal`) *selects* an ADD tile
-    whenever it is visited, alongside its children, and a REPLACE tile only until all its
-    children have loaded. ADD therefore needs no coarse copy of anything: a parent's
-    gaussians are real gaussians of the scene that stay drawn beneath the children's, the
-    tiles partition the data, and the full-detail view is exactly the input. REPLACE would
-    need parents made of merged, enlarged gaussians (a second, lossy representation of the
-    same scene stored alongside the first) for no rendering benefit here. Two further
-    facts from that source this layout honours: `transformTile` bakes each tile through
-    its own `computedTransform` but the spherical-harmonic frame is taken from the *first*
-    selected tile ("All tiles in a typical GS tileset share the same root coordinate
-    frame"), so only the root carries a transform and every GLB has the same node matrix;
-    and site tilesets keep `skipLevelOfDetail` off for splats (apps/web providers/tiles.ts),
-    which is the traversal quoted above.
+    Two further facts from the Cesium source this layout honours: `transformTile` bakes
+    each tile through its own `computedTransform` but the spherical-harmonic frame is taken
+    from the *first* selected tile ("All tiles in a typical GS tileset share the same root
+    coordinate frame"), so only the root carries a transform and every GLB has the same
+    node matrix; and site tilesets keep `skipLevelOfDetail` off for splats (apps/web
+    providers/tiles.ts), which is the traversal quoted above.
+
+    **Out of core.** The PLY is read in windows (`iter_ply_rows`), twice: once for the
+    filters and the Morton codes, once to spill every kept gaussian, in Morton order, to a
+    working file (`SortedStore`, a distribution sort through buckets on disk). Tiles are
+    then written one at a time from that file. What is held for the whole scan is 12 bytes
+    a gaussian of centres during the first pass, then its codes and sorted positions (16):
+    8M gaussians (a 2 GB trained PLY) package at a 380 MB peak, against the 1.5 GB the
+    plan allows (tests/test_splat_tiles_memory.py). The
+    working files go in `work_dir` (by default a temporary directory beside `out_dir`, on
+    the same disk rather than in a RAM-backed /tmp) and are removed afterwards.
     """
-    data = read_ply(ply)
-    xyz = np.stack([data["x"], data["y"], data["z"]], axis=1)
-    opacity = sigmoid(data["opacity"])
-    # A trainer can leave a few NaN gaussians behind; one of them poisons every statistic.
-    finite = np.isfinite(xyz).all(axis=1) & np.isfinite(opacity)
-    xyz = np.where(finite[:, None], xyz, 0.0)
-    keep = finite & (opacity >= opacity_min)
-    if not keep.any():
-        raise SplatFormatError(
-            f"{ply.name}: no gaussian is finite and at least {opacity_min} opaque, so there "
-            f"is nothing to tile"
-        )
-    # Outliers far from the bulk (sky floaters) are dropped by a robust radius.
-    center = np.median(xyz[keep], axis=0)
-    radius = np.linalg.norm(xyz[keep] - center, axis=1)
-    keep &= np.linalg.norm(xyz - center, axis=1) <= np.percentile(radius, 99.5) * 1.5
-    # PLY order is kept, within each tile too: the synthetic tree's ground-truth labels
-    # and the Living Survey rig index the single-tile GLB by it.
-    xyz = xyz[keep]
-    sh0 = np.stack([data["f_dc_0"], data["f_dc_1"], data["f_dc_2"]], axis=1)[keep]
-    log_scales = np.stack([data["scale_0"], data["scale_1"], data["scale_2"]], axis=1)[keep]
-    quat_wxyz = np.stack([data["rot_0"], data["rot_1"], data["rot_2"], data["rot_3"]], axis=1)[keep]
-    quat_xyzw = quat_wxyz[:, [1, 2, 3, 0]]
-    opacity_logit = data["opacity"][keep]
-
-    root = build_hierarchy(xyz, log_scales, opacity[keep], tile_gaussians)
+    layout = ply_layout(ply)
+    keep, centres = _filter_rows(layout, opacity_min)
+    count = int(centres.shape[0])
+    pmin = centres.min(axis=0)
+    pmax = centres.max(axis=0)
+    origin = pmin.astype(np.float64)
+    edge = max(float((pmax.astype(np.float64) - origin).max()), 1e-3)
+    step = 1 << 20
+    codes = np.concatenate(
+        [morton_codes(centres[at : at + step], origin, edge) for at in range(0, count, step)]
+    )
+    del centres
+    # Stable, so coincident gaussians keep their PLY order and the output is deterministic.
+    order = np.argsort(codes, kind="stable")
+    codes = codes[order]
+    rank = np.empty(count, dtype=np.int64)
+    rank[order] = np.arange(count, dtype=np.int64)
+    del order
+    root = plan_tree(codes, tile_gaussians)
     out_dir.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(
+        prefix=".splat_tiles-", dir=work_dir or out_dir.parent
+    ) as scratch:
+        store = _sort_to_disk(layout, keep, rank, Path(scratch))
+        del rank
+        write_tiles(root, codes, store, out_dir, edge)
 
-    def write(tile: Tile) -> dict[str, object]:
-        rows = tile.members
-        spz = pack_spz(xyz[rows], sh0[rows], opacity_logit[rows], log_scales[rows], quat_xyzw[rows])
-        (out_dir / tile.uri).write_bytes(
-            build_glb(
-                int(rows.size), xyz[rows].min(axis=0).tolist(), xyz[rows].max(axis=0).tolist(), spz
-            )
-        )
-        node: dict[str, object] = {
+    def node(tile: Tile) -> dict[str, object]:
+        entry: dict[str, object] = {
             "boundingVolume": {"box": _box(tile.low, tile.high)},
             "geometricError": tile.geometric_error,
             "content": {"uri": tile.uri},
             # How many gaussians the content holds, so a viewer can spend a budget on the
-            # tiles before fetching any of them (apps/web src/view/tiles.ts).
-            "extras": {"gaussians": int(rows.size)},
+            # tiles before fetching any of them (apps/web src/view/tiles.ts, and the
+            # globe's splat-count cap in src/cesium/SiteManager.ts).
+            "extras": {"gaussians": tile.count},
         }
         if tile.children:
-            node["children"] = [write(child) for child in tile.children]
-        return node
+            entry["children"] = [node(child) for child in tile.children]
+        return entry
 
-    root_node = write(root)
     tiles = root.walk()
     size = float((root.high - root.low).max())
     tileset = {
@@ -818,7 +1347,7 @@ def convert(
         # The error of drawing none of it is the size of the thing itself: Cesium skips a
         # tileset whose error projects under `maximumScreenSpaceError`, so a scan appears
         # once it would span about that many pixels, whatever its size.
-        "geometricError": size,
+        "geometricError": max(size, 2 * root.geometric_error),
         "extensionsUsed": ["3DTILES_content_gltf"],
         "extensions": {
             "3DTILES_content_gltf": {
@@ -833,17 +1362,20 @@ def convert(
             }
         },
         # Refinement is stated once, on the root; every tile below inherits it.
-        "root": {"transform": enu_to_ecef(lat, lon, height), "refine": "ADD", **root_node},
+        "root": {"transform": enu_to_ecef(lat, lon, height), "refine": "REPLACE", **node(root)},
     }
     (out_dir / "tileset.json").write_text(json.dumps(tileset, indent=1), encoding="utf-8")
-    pmin = xyz.min(axis=0)
-    pmax = xyz.max(axis=0)
+    leaves = sum(tile.count for tile in tiles if not tile.children)
+    parents = sum(tile.count for tile in tiles if tile.children)
     return {
-        "gaussians": int(xyz.shape[0]),
-        "dropped": int((~keep).sum()),
+        "gaussians": count,
+        "dropped": int(layout.count - count),
         "extent_m": float(max(pmax - pmin)),
         "tiles": len(tiles),
         "depth": max(len(tile.path) for tile in tiles),
+        # What the coarse levels cost on top of the scan itself: the merged parents.
+        "parent_gaussians": parents,
+        "storage_overhead": round(parents / max(leaves, 1), 4),
     }
 
 

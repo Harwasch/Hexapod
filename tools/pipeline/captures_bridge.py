@@ -78,6 +78,10 @@ def splat_tiles_convert(
     """Call the sibling project's packer and return its statistics.
 
     Every gaussian that passes `opacity_min` and the floater radius is packed, into a
-    level-of-detail hierarchy of at most `tile_gaussians` a tile; there is no top-N cut.
+    level-of-detail hierarchy of at most `tile_gaussians` a leaf, with merged parents and
+    REPLACE refinement; there is no top-N cut. The packer reads the PLY in windows and sorts
+    through a working directory beside `out_dir`, so memory does not grow with the scan.
+    The statistics include `parent_gaussians` and `storage_overhead`, what the merged
+    levels cost on top of the scan itself.
     """
     return convert(ply, out_dir, lat, lon, height, opacity_min, tile_gaussians)

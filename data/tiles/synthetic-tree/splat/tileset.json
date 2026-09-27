@@ -37,7 +37,7 @@
    2980310.87893276,
    1.0
   ],
-  "refine": "ADD",
+  "refine": "REPLACE",
   "boundingVolume": {
    "box": [
     -0.246826171875,

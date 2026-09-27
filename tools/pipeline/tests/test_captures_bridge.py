@@ -116,14 +116,19 @@ def test_a_hierarchy_adds_only_the_tiles_its_tileset_names(tmp_path: Path) -> No
     written = {path.name for path in out.iterdir()}
     assert set(SPLAT_TILES.required_members) <= written
     tileset = json.loads((out / "tileset.json").read_text(encoding="utf-8"))
-    named, stack = [], [tileset["root"]]
+    named, leaves, stack = [], [], [tileset["root"]]
     while stack:
         tile = stack.pop()
         named.append(tile["content"]["uri"])
+        if not tile.get("children"):
+            leaves.append(tile["content"]["uri"])
         stack.extend(tile.get("children", []))
     assert tileset["root"]["content"]["uri"] == "splat.glb"
+    assert tileset["root"]["refine"] == "REPLACE"
     assert written == {*named, "tileset.json"}
-    assert sum(tile_count(out / name) for name in named) == 600
+    # REPLACE: the leaves hold every gaussian once; the parents hold merged stand-ins on top.
+    assert sum(tile_count(out / name) for name in leaves) == 600
+    assert stats["parent_gaussians"] == sum(tile_count(out / n) for n in named) - 600
 
 
 def tile_count(path: Path) -> int:
