@@ -63,19 +63,42 @@ const BAR = [
   },
 ] as const satisfies readonly Choice<string>[];
 
+/**
+ * `auto` is tools/pipeline/resolution.py: 1600 px unless a sample of the scan's sharpest
+ * frames measurably holds detail above it (4K video of something far away, full-size
+ * photos), then up to 2400. A number overrides the measurement.
+ */
 const PHOTO_SIZE = [
+  {
+    value: "auto",
+    label: "Auto",
+    hint: "The default. 1600 px, or up to 2400 when the scan measurably holds finer detail.",
+  },
   { value: "1200", label: "1200 px", hint: "Faster; softer detail." },
   { value: "1600", label: "1600 px", hint: "The balance most scans want." },
   { value: "2400", label: "2400 px", hint: "Sharper; about twice the GPU time." },
 ] as const satisfies readonly Choice<string>[];
 
+/**
+ * A video's frames are chosen by how far the camera moved (tools/pipeline/keyframes.py):
+ * a slow close-up keeps few, a long walk many. A number here caps how many a second can
+ * be considered; "" sends nothing, which is the recipe's own rate (15 a second).
+ */
 const VIDEO_FPS = [
-  { value: "2", label: "2 / s", hint: "For a slow walk-around." },
-  { value: "4", label: "4 / s", hint: "Fewer frames: faster camera solving, less detail." },
+  {
+    value: "",
+    label: "By motion",
+    hint: "The default. More frames where the camera moved, fewer where it barely did.",
+  },
+  {
+    value: "4",
+    label: "Up to 4 / s",
+    hint: "At most 4 a second: faster camera solving, less detail.",
+  },
   {
     value: "8",
-    label: "8 / s",
-    hint: "The default. Measurably sharper than 4 / s for a few minutes more solving.",
+    label: "Up to 8 / s",
+    hint: "At most 8 a second, still fewer where the camera paused.",
   },
 ] as const satisfies readonly Choice<string>[];
 
@@ -105,8 +128,8 @@ export interface Options {
 export const DEFAULTS: Options = {
   quality: "standard",
   bar: "strict",
-  photoSize: "1600",
-  videoFps: "8",
+  photoSize: "auto",
+  videoFps: "",
   upAxis: "",
   headingDeg: 0,
   detail: "400000",
@@ -135,8 +158,12 @@ export function paramsFor(recipe: Recipe, options: Options): StageParams {
       package: packaged,
     };
   }
+  const normalize: Record<string, number | string> = {
+    max_side: options.photoSize === "auto" ? "auto" : Number(options.photoSize),
+  };
+  if (options.videoFps !== "") normalize.fps = Number(options.videoFps);
   const params: StageParams = {
-    normalize: { max_side: Number(options.photoSize), fps: Number(options.videoFps) },
+    normalize,
     package: packaged,
     quality: { bar: options.bar },
   };
@@ -162,15 +189,17 @@ export function summarise(options: Options): string {
     choices.find((choice) => choice.value === value)?.label ?? value;
   return [
     label(QUALITY, options.quality),
-    label(PHOTO_SIZE, options.photoSize),
+    options.photoSize === "auto" ? "Auto size" : label(PHOTO_SIZE, options.photoSize),
     `${label(DETAIL, options.detail)} detail`,
     `${label(BAR, options.bar)} bar`,
   ].join(" · ");
 }
 
-// Versioned: v1 saved every choice, defaults included, so a phone that had opened the
-// page kept 4 / s after the default became 8 / s (measured sharper, 2026-09-27).
-const STORAGE = "twin.phoneOptions.v2";
+// Versioned: every choice is saved, defaults included, so a phone that had opened the
+// page keeps an old default after it changes. v1 kept 4 / s after 8 / s became the
+// default (measured sharper, 2026-09-27); v2 kept 1600 px and 8 / s after Auto and
+// frames by camera motion did.
+const STORAGE = "twin.phoneOptions.v3";
 
 export function loadOptions(): Options {
   try {
