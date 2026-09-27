@@ -190,6 +190,9 @@ image = (
         # step lists re-read every step, `eval`, `cli(main, cfg)`), under that interpreter?
         f"{TRAINER_PYTHON} {PIPELINE_DIR}/converge_trainer.py --self-check "
         f"--trainer {GSPLAT_TRAINER}",
+        # And does the parent optimisation (`optimise_lod`) import torch, gsplat, the
+        # trainer's datasets and the packer's tree (from ../captures) under it?
+        f"{TRAINER_PYTHON} {PIPELINE_DIR}/lod_optimise.py --self-check --trainer {GSPLAT_TRAINER}",
         # And does the 3.12 side import every stage (the list above, pinned by a test)?
         f"cd {PIPELINE_DIR} && python -c 'import remote, stages, captures_bridge'",
     )

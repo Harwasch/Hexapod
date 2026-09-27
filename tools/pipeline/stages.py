@@ -45,6 +45,7 @@ import holdout
 import init_seed
 import keyframes
 import live
+import lod_parents
 import quality
 import resolution
 import sfm
@@ -52,7 +53,13 @@ import support_mask
 import training
 import video
 from artifacts import ArtifactDecl
-from captures_bridge import CAPTURES_DIR, TILE_GAUSSIANS, splat_tiles_convert
+from captures_bridge import (
+    CAPTURES_DIR,
+    TILE_GAUSSIANS,
+    ParentOverrideError,
+    ParentOverrides,
+    splat_tiles_convert,
+)
 from contracts import MetricValue, StageContext, StageOutcome
 from registry import stage_impl
 
@@ -1922,7 +1929,7 @@ def exif_gps(ctx: StageContext) -> StageOutcome:
     "place_splat",
     consumes=("trained.ply", "georef.json"),
     optional_consumes=("poses", quality.GATED_PLY.name, quality.COVERAGE_PLY.name),
-    produces=(CANONICAL_PLY, COVERAGE_ENU),
+    produces=(CANONICAL_PLY, COVERAGE_ENU, lod_parents.PLACEMENT),
     summary="Lane 2: the trained splat, turned into east/north/up by the georeference",
 )
 def place_splat(ctx: StageContext) -> StageOutcome:
@@ -1976,6 +1983,12 @@ def place_splat(ctx: StageContext) -> StageOutcome:
         moved = [float(v) for v in recentred.translation]
     written = gaussians.write_ply(ctx.output(CANONICAL_PLY.name), placed.columns)
     coverage_points = _place_coverage(ctx, rotation, translation, scale, recentred)
+    # The same similarity, written down, so the GPU stage that optimises the tileset's
+    # parents (`optimise_lod`) can move the cameras exactly as the splat was moved.
+    _write_json(
+        ctx.output(lod_parents.PLACEMENT.name),
+        lod_parents.placement(rotation, translation, scale, recentred),
+    )
     low, high = placed.bbox()
     extent = _extent(low, high)
     ctx.log(
@@ -2239,6 +2252,7 @@ def _median_or_none(values: list[float]) -> float | None:
 @stage_impl(
     "splat_tiles",
     consumes=("canonical.ply", "georef.json"),
+    optional_consumes=(lod_parents.LOD_PARENTS.name,),
     produces=(SPLAT_TILES,),
     summary="pack every gaussian into a level-of-detail KHR_gaussian_splatting 3D Tileset",
 )
@@ -2270,23 +2284,61 @@ def splat_tiles(ctx: StageContext) -> StageOutcome:
         # still carry these. Say so, rather than silently honouring or refusing them.
         if ctx.param(retired) is not None:
             ctx.log(f"{retired} is no longer read: every gaussian is packed, in tiles")
-    stats = splat_tiles_convert(
-        ctx.input(CANONICAL_PLY.name),
-        ctx.output(SPLAT_TILES.name),
-        lat=float(_number(georef.get("lat"))),
-        lon=float(_number(georef.get("lon"))),
-        height=float(_number(georef.get("height"))),
-        opacity_min=float(ctx.param("opacity_min", 0.02)),
-        tile_gaussians=int(ctx.param("tile_gaussians", TILE_GAUSSIANS)),
-    )
+    parents = _optimised_parents(ctx)
+
+    def pack(parents: ParentOverrides | None) -> dict[str, float | int]:
+        return splat_tiles_convert(
+            ctx.input(CANONICAL_PLY.name),
+            ctx.output(SPLAT_TILES.name),
+            lat=float(_number(georef.get("lat"))),
+            lon=float(_number(georef.get("lon"))),
+            height=float(_number(georef.get("height"))),
+            opacity_min=float(ctx.param("opacity_min", 0.02)),
+            tile_gaussians=int(ctx.param("tile_gaussians", TILE_GAUSSIANS)),
+            parents=parents,
+        )
+
+    try:
+        stats = pack(parents)
+    except ParentOverrideError as problem:
+        # Optimised for another tree: never drawn. The merged parents are what every
+        # tileset had before `optimise_lod`, so the capture loses the optimisation only.
+        ctx.log(f"WARNING: the optimised parents were not used ({problem}); packing merged")
+        shutil.rmtree(ctx.output(SPLAT_TILES.name))
+        stats = pack(None)
     ctx.log(
         f"packaged {stats['gaussians']} gaussians ({stats['dropped']} dropped) in "
         f"{stats['tiles']} tiles, {stats['depth']} levels deep, "
         f"extent {stats['extent_m']:.2f} m; merged parents add {stats['parent_gaussians']} "
         f"({float(stats['storage_overhead']):.1%})"
     )
+    if stats.get("optimised_parent_gaussians"):
+        ctx.log(f"drew {stats['optimised_parent_gaussians']} optimised parents (optimise_lod)")
     metrics: dict[str, MetricValue] = {key: value for key, value in stats.items()}
     return StageOutcome(metrics=metrics, summary=f"{stats['gaussians']} gaussians packaged")
+
+
+def _optimised_parents(ctx: StageContext) -> ParentOverrides | None:
+    """`optimise_lod`'s parents, when it ran and kept them; None otherwise (and why)."""
+    if not ctx.has_input(lod_parents.LOD_PARENTS.name):
+        return None
+    folder = ctx.input(lod_parents.LOD_PARENTS.name)
+    path = folder / lod_parents.PARENTS_FILE
+    if not path.is_file():
+        summary_path = folder / lod_parents.SUMMARY_FILE
+        status = "missing"
+        if summary_path.is_file():
+            try:
+                status = str(_read_json(summary_path).get("status"))
+            except (OSError, ValueError, AttributeError):
+                status = "unreadable"
+        ctx.log(f"no optimised parents (optimise_lod: {status}); drawing the merged ones")
+        return None
+    try:
+        return ParentOverrides.load(path)
+    except (OSError, ValueError) as problem:
+        ctx.log(f"WARNING: {path.name} is unreadable ({problem}); drawing the merged parents")
+        return None
 
 
 @stage_impl(

@@ -14,18 +14,20 @@ carries the z-up to y-up swap the same way Cesium's own sample tilesets do.
 
 Usage:
     python splat_tiles.py splat.ply out_dir --lat 46.84 --lon -91.99 --height 0
-        [--opacity-min 0.02] [--tile-gaussians 100000]
+        [--opacity-min 0.02] [--tile-gaussians 100000] [--parents lod_parents.npz]
 """
 
 from __future__ import annotations
 
 import argparse
 import gzip
+import hashlib
 import json
 import math
 import struct
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -1188,16 +1190,22 @@ def _bounds(xyz: np.ndarray, reach: np.ndarray) -> tuple[np.ndarray, np.ndarray]
     return centres.min(axis=0) - pad, centres.max(axis=0) + pad
 
 
-def write_tiles(
-    root: Tile, codes: np.ndarray, store: SortedStore, out_dir: Path, edge: float
-) -> None:
-    """Write every tile's GLB, children before parents, and fill in counts, errors and boxes.
+#: What `build_tiles` hands each tile to: the tile (its box, error and count filled in),
+#: what it draws, and -- for a parent -- the cell key of each of its merged gaussians, in
+#: the order they are drawn (None for a leaf).
+Emit = Callable[["Tile", "Gaussians", "np.ndarray | None"], None]
+
+
+def build_tiles(root: Tile, codes: np.ndarray, store: SortedStore, edge: float, emit: Emit) -> None:
+    """Build every tile's content, children before parents, and fill in counts, errors, boxes.
 
     A leaf is its originals, in PLY order (the synthetic tree's labels and the Living
     Survey rig index the single-tile GLB by it). A parent is its children's cells merged
     to its own level (`Moments`), which each child hands up coarsened to that level -- so
     every original is read once, by its leaf, and each merged cell is merged once more per
-    level above it.
+    level above it. `emit` receives each tile's content as it is finished: `write_tiles`
+    writes it as a GLB; the GPU stage that optimises the parents (tools/pipeline
+    lod_optimise.py) keeps it, so both see the one tree this function builds.
 
     Geometric error, which Cesium projects to pixels and refines on: a leaf is the data at
     full resolution, so 0. A parent's is what the merge gives away: detail finer than the
@@ -1215,9 +1223,10 @@ def write_tiles(
             keys = np.concatenate([codes[a:b] for a, b in tile.ranges])
             order = np.argsort(records["row"], kind="stable")
             gaussians = records_gaussians(records[order])
-            _write_tile(out_dir, tile, gaussians)
+            tile.count = int(gaussians.xyz.shape[0])
             tile.low, tile.high = _bounds(gaussians.xyz, gaussians.reach)
             tile.geometric_error = 0.0
+            emit(tile, gaussians, None)
             if parent_level < 0:
                 return None
             shift = np.uint64(3 * (GRID_BITS - parent_level))
@@ -1230,7 +1239,7 @@ def write_tiles(
         merged = Moments.concat(parts)
         merged = merge_cells(merged.take(np.argsort(merged.key, kind="stable")))
         gaussians = to_gaussians(merged)
-        _write_tile(out_dir, tile, gaussians)
+        tile.count = int(gaussians.xyz.shape[0])
         cell = edge / (1 << tile.level)
         width = 2.0 * float(np.median(np.exp(gaussians.log_scales.astype(np.float64).max(axis=1))))
         tile.geometric_error = max(cell, width)
@@ -1239,16 +1248,251 @@ def write_tiles(
             low = np.minimum(low, child.low)
             high = np.maximum(high, child.high)
         tile.low, tile.high = low, high
+        emit(tile, gaussians, merged.key)
         return coarsen(merged, tile.level - parent_level) if parent_level >= 0 else None
 
     build(root, -1)
     _clamp_errors(root, math.inf)
 
 
+def write_tiles(
+    root: Tile,
+    codes: np.ndarray,
+    store: SortedStore,
+    out_dir: Path,
+    edge: float,
+    parents: ParentOverrides | None = None,
+) -> int:
+    """Write every tile's GLB (`build_tiles`), a parent's from `parents` where it has one.
+
+    An optimised parent replaces what is *drawn* and nothing else: the tile's box, its
+    geometric error and the moments handed up to its own parent are the merge's, so the
+    tree -- and so the cut a viewer takes through it -- is the one the parents were
+    optimised in (`ParentOverrides`). Returns how many parent gaussians were replaced.
+    """
+    replaced = 0
+
+    def emit(tile: Tile, gaussians: Gaussians, keys: np.ndarray | None) -> None:
+        nonlocal replaced
+        if keys is not None and parents is not None:
+            better = parents.take(tile.uri, keys)
+            if better is not None:
+                gaussians = better
+                replaced += int(keys.size)
+        _write_tile(out_dir, tile, gaussians)
+
+    build_tiles(root, codes, store, edge, emit)
+    return replaced
+
+
 def _clamp_errors(tile: Tile, ceiling: float) -> None:
     tile.geometric_error = min(tile.geometric_error, ceiling)
     for child in tile.children:
         _clamp_errors(child, tile.geometric_error)
+
+
+@dataclass
+class Prepared:
+    """A PLY filtered, Morton-sorted to disk and planned: everything `build_tiles` needs.
+
+    `store` is readable only inside `prepare`'s `with` block, which owns its working files.
+    """
+
+    layout: PlyLayout
+    count: int
+    pmin: np.ndarray
+    pmax: np.ndarray
+    codes: np.ndarray
+    root: Tile
+    store: SortedStore
+    edge: float
+
+
+@contextmanager
+def prepare(
+    ply: Path, opacity_min: float, tile_gaussians: int | None, work_dir: Path
+) -> Iterator[Prepared]:
+    """Filter, sort and plan `ply` exactly as `convert` does, the sorted copy in `work_dir`.
+
+    Deterministic: the same PLY and parameters give the same tree, cell for cell -- which
+    is what lets a parent be optimised on one machine and written on another
+    (`ParentOverrides`).
+    """
+    layout = ply_layout(ply)
+    keep, centres = _filter_rows(layout, opacity_min)
+    count = int(centres.shape[0])
+    pmin = centres.min(axis=0)
+    pmax = centres.max(axis=0)
+    origin = pmin.astype(np.float64)
+    edge = max(float((pmax.astype(np.float64) - origin).max()), 1e-3)
+    step = 1 << 20
+    codes = np.concatenate(
+        [morton_codes(centres[at : at + step], origin, edge) for at in range(0, count, step)]
+    )
+    del centres
+    # Stable, so coincident gaussians keep their PLY order and the output is deterministic.
+    order = np.argsort(codes, kind="stable")
+    codes = codes[order]
+    rank = np.empty(count, dtype=np.int64)
+    rank[order] = np.arange(count, dtype=np.int64)
+    del order
+    root = plan_tree(codes, tile_gaussians)
+    work_dir.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".splat_tiles-", dir=work_dir) as scratch:
+        store = _sort_to_disk(layout, keep, rank, Path(scratch))
+        del rank
+        yield Prepared(layout, count, pmin, pmax, codes, root, store, edge)
+
+
+def hierarchy(
+    ply: Path, opacity_min: float, tile_gaussians: int | None, work_dir: Path, emit: Emit
+) -> Tile:
+    """The tree `convert` would write for `ply`, each tile's content handed to `emit`
+    instead of written (`build_tiles`). Returns the root, boxes and errors filled in."""
+    with prepare(ply, opacity_min, tile_gaussians, work_dir) as tree:
+        build_tiles(tree.root, tree.codes, tree.store, tree.edge, emit)
+    return tree.root
+
+
+# ------------------------------------------------------------- optimised parents (H3DGS)
+
+#: The version of the file `ParentOverrides.save` writes.
+PARENTS_FORMAT = 1
+
+
+class ParentOverrideError(ValueError):
+    """Optimised parents that do not belong to the tree being written, and why."""
+
+
+def file_sha256(path: Path) -> str:
+    """The file's sha256, read in `CHUNK_BYTES` blocks."""
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(CHUNK_BYTES):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+@dataclass
+class ParentOverrides:
+    """Parent gaussians optimised against the photos (Hierarchical 3DGS Sec. 5.1), written
+    in place of the merge's, tile by tile.
+
+    Keyed by tile (`Tile.uri`, the octant path) and, within it, by each merged gaussian's
+    cell key at the tile's level -- the `keys` `build_tiles` emits, in the order the tile
+    draws them. A cell key alone would not do: a parent may sit at the same level as a
+    child, whose cells then share keys. The file also carries what the tree was built
+    from -- the PLY's sha256 and the two packing parameters -- because the tree is a
+    function of exactly those (`prepare`), and parents optimised for any other tree would
+    be gaussians in the wrong places. `convert` refuses a mismatch by name
+    (`ParentOverrideError`), and the pipeline's `package` then packs the merged parents.
+    """
+
+    source_sha256: str
+    opacity_min: float
+    tile_gaussians: int | None
+    uris: list[str]
+    offsets: np.ndarray
+    keys: np.ndarray
+    gaussians: Gaussians
+
+    def mismatch(self, ply: Path, opacity_min: float, tile_gaussians: int | None) -> str:
+        """Why these parents do not belong to this packing, or "" when they do."""
+        if tile_gaussians != self.tile_gaussians:
+            return (
+                f"the parents were optimised for tiles of {self.tile_gaussians} gaussians, "
+                f"and this packing uses {tile_gaussians}"
+            )
+        if not math.isclose(opacity_min, self.opacity_min, rel_tol=0.0, abs_tol=1e-9):
+            return (
+                f"the parents were optimised with opacity_min {self.opacity_min:g}, and "
+                f"this packing uses {opacity_min:g}"
+            )
+        sha = file_sha256(ply)
+        if sha != self.source_sha256:
+            return (
+                f"the parents were optimised on a PLY whose sha256 is "
+                f"{self.source_sha256[:12]}..., and {ply.name}'s is {sha[:12]}..."
+            )
+        return ""
+
+    def take(self, uri: str, keys: np.ndarray) -> Gaussians | None:
+        """The optimised gaussians of tile `uri`, if it has any; its cells must be `keys`."""
+        if uri not in self.uris:
+            return None
+        index = self.uris.index(uri)
+        start, stop = int(self.offsets[index]), int(self.offsets[index + 1])
+        if stop - start != keys.size or not np.array_equal(self.keys[start:stop], keys):
+            raise ParentOverrideError(
+                f"tile {uri}: the optimised parents are {stop - start} cells, and the tree "
+                f"being written has {keys.size} there, or different ones"
+            )
+        g = self.gaussians
+        return Gaussians(
+            xyz=g.xyz[start:stop],
+            sh0=g.sh0[start:stop],
+            opacity_logit=g.opacity_logit[start:stop],
+            log_scales=g.log_scales[start:stop],
+            quat_xyzw=g.quat_xyzw[start:stop],
+        )
+
+    def save(self, path: Path) -> None:
+        g = self.gaussians
+        with path.open("wb") as handle:
+            np.savez(
+                handle,
+                format=np.int64(PARENTS_FORMAT),
+                source_sha256=np.str_(self.source_sha256),
+                opacity_min=np.float64(self.opacity_min),
+                tile_gaussians=np.int64(self.tile_gaussians or 0),
+                uris=np.array(self.uris, dtype=np.str_),
+                offsets=np.asarray(self.offsets, dtype=np.int64),
+                keys=np.asarray(self.keys, dtype=np.int64),
+                xyz=np.asarray(g.xyz, dtype=np.float32),
+                sh0=np.asarray(g.sh0, dtype=np.float32),
+                opacity_logit=np.asarray(g.opacity_logit, dtype=np.float32),
+                log_scales=np.asarray(g.log_scales, dtype=np.float32),
+                quat_xyzw=np.asarray(g.quat_xyzw, dtype=np.float32),
+            )
+
+    @staticmethod
+    def load(path: Path) -> ParentOverrides:
+        with np.load(path, allow_pickle=False) as data:
+            version = int(data["format"])
+            if version != PARENTS_FORMAT:
+                raise ParentOverrideError(
+                    f"{path.name} is parent-override format {version}; this reads "
+                    f"{PARENTS_FORMAT}"
+                )
+            uris = [str(uri) for uri in data["uris"]]
+            offsets = data["offsets"].astype(np.int64)
+            if offsets.shape != (len(uris) + 1,) or (offsets.size and offsets[0] != 0):
+                raise ParentOverrideError(f"{path.name}: its offsets do not index its tiles")
+            count = int(offsets[-1])
+            names = ("keys", "xyz", "sh0", "opacity_logit", "log_scales", "quat_xyzw")
+            arrays = {name: data[name] for name in names}
+            for name, array in arrays.items():
+                if array.shape[0] != count or not np.isfinite(array).all():
+                    raise ParentOverrideError(
+                        f"{path.name}: {name} has {array.shape[0]} rows for {count} parents, "
+                        f"or a value that is not finite"
+                    )
+            budget = int(data["tile_gaussians"])
+            return ParentOverrides(
+                source_sha256=str(data["source_sha256"]),
+                opacity_min=float(data["opacity_min"]),
+                tile_gaussians=budget or None,
+                uris=uris,
+                offsets=offsets,
+                keys=arrays["keys"].astype(np.int64),
+                gaussians=Gaussians(
+                    xyz=arrays["xyz"].astype(np.float32),
+                    sh0=arrays["sh0"].astype(np.float32),
+                    opacity_logit=arrays["opacity_logit"].astype(np.float32),
+                    log_scales=arrays["log_scales"].astype(np.float32),
+                    quat_xyzw=arrays["quat_xyzw"].astype(np.float32),
+                ),
+            )
 
 
 def convert(
@@ -1260,6 +1504,7 @@ def convert(
     opacity_min: float = 0.02,
     tile_gaussians: int | None = TILE_GAUSSIANS,
     work_dir: Path | None = None,
+    parents: ParentOverrides | None = None,
 ) -> dict[str, float | int]:
     """Every gaussian that passes the filters, as a level-of-detail tileset.
 
@@ -1298,33 +1543,21 @@ def convert(
     plan allows (tests/test_splat_tiles_memory.py). The
     working files go in `work_dir` (by default a temporary directory beside `out_dir`, on
     the same disk rather than in a RAM-backed /tmp) and are removed afterwards.
+
+    **Optimised parents.** `parents`, when given, are parent gaussians optimised against
+    the capture's photos on the GPU (tools/pipeline lod_optimise.py, Hierarchical 3DGS
+    Sec. 5.1) for exactly this PLY and these parameters; each parent tile draws them in
+    place of its merge, and nothing else changes (`write_tiles`). A set built for another
+    PLY or other parameters is refused before anything is written (`ParentOverrideError`).
     """
-    layout = ply_layout(ply)
-    keep, centres = _filter_rows(layout, opacity_min)
-    count = int(centres.shape[0])
-    pmin = centres.min(axis=0)
-    pmax = centres.max(axis=0)
-    origin = pmin.astype(np.float64)
-    edge = max(float((pmax.astype(np.float64) - origin).max()), 1e-3)
-    step = 1 << 20
-    codes = np.concatenate(
-        [morton_codes(centres[at : at + step], origin, edge) for at in range(0, count, step)]
-    )
-    del centres
-    # Stable, so coincident gaussians keep their PLY order and the output is deterministic.
-    order = np.argsort(codes, kind="stable")
-    codes = codes[order]
-    rank = np.empty(count, dtype=np.int64)
-    rank[order] = np.arange(count, dtype=np.int64)
-    del order
-    root = plan_tree(codes, tile_gaussians)
+    if parents is not None:
+        why = parents.mismatch(ply, opacity_min, tile_gaussians)
+        if why:
+            raise ParentOverrideError(why)
     out_dir.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(
-        prefix=".splat_tiles-", dir=work_dir or out_dir.parent
-    ) as scratch:
-        store = _sort_to_disk(layout, keep, rank, Path(scratch))
-        del rank
-        write_tiles(root, codes, store, out_dir, edge)
+    with prepare(ply, opacity_min, tile_gaussians, work_dir or out_dir.parent) as tree:
+        replaced = write_tiles(tree.root, tree.codes, tree.store, out_dir, tree.edge, parents)
+    root, layout, count, pmin, pmax = tree.root, tree.layout, tree.count, tree.pmin, tree.pmax
 
     def node(tile: Tile) -> dict[str, object]:
         entry: dict[str, object] = {
@@ -1366,7 +1599,7 @@ def convert(
     }
     (out_dir / "tileset.json").write_text(json.dumps(tileset, indent=1), encoding="utf-8")
     leaves = sum(tile.count for tile in tiles if not tile.children)
-    parents = sum(tile.count for tile in tiles if tile.children)
+    parent_count = sum(tile.count for tile in tiles if tile.children)
     return {
         "gaussians": count,
         "dropped": int(layout.count - count),
@@ -1374,8 +1607,11 @@ def convert(
         "tiles": len(tiles),
         "depth": max(len(tile.path) for tile in tiles),
         # What the coarse levels cost on top of the scan itself: the merged parents.
-        "parent_gaussians": parents,
-        "storage_overhead": round(parents / max(leaves, 1), 4),
+        "parent_gaussians": parent_count,
+        "storage_overhead": round(parent_count / max(leaves, 1), 4),
+        # How many of those were optimised against the photos (`ParentOverrides`); 0
+        # when none were given.
+        "optimised_parent_gaussians": replaced,
     }
 
 
@@ -1393,6 +1629,12 @@ def main() -> None:
         default=TILE_GAUSSIANS,
         help="most gaussians per tile; 0 writes a single tile holding everything",
     )
+    parser.add_argument(
+        "--parents",
+        type=Path,
+        default=None,
+        help="optimised parents (lod_parents.npz) to draw in place of the merged ones",
+    )
     args = parser.parse_args()
     stats = convert(
         args.ply,
@@ -1402,6 +1644,7 @@ def main() -> None:
         args.height,
         args.opacity_min,
         args.tile_gaussians or None,
+        parents=ParentOverrides.load(args.parents) if args.parents else None,
     )
     print(json.dumps(stats))
 

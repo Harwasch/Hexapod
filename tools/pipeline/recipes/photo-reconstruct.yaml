@@ -4,11 +4,11 @@
 # converge on `canonical.ply` and produce the same `splat/` tileset, so the console cannot
 # tell which one made a site except by reading its manifest.
 #
-# Only `train` declares `gpu:`, and that single fact is what routes it to a GPU runner.
+# `train` and `optimise_lod` declare `gpu:`, and that fact is what routes them to a GPU runner.
 # `compensate` gains a `gpu:` block when its impl becomes `imc` (B3); asking for an L4 to
 # run `none` would be billing a GPU to do nothing.
 name: photo-reconstruct
-version: 9
+version: 10
 description: Reconstruct a splat from a raw capture, then package and register it.
 
 inputs: [upload]
@@ -275,13 +275,44 @@ stages:
     impl: place_splat
     params: {}
 
+  # The tileset's coarse levels, optimised (lod_parents.py, lod_optimise.py). `package`
+  # merges each parent from its subtree by Hierarchical 3DGS's moment matching, which is
+  # right in the large and blurry up close; this optimises those parents against the
+  # photos, as H3DGS Sec. 5.1 does its interior nodes: leaves frozen, a random training
+  # view and a random screen-space error tau each step, the viewer's own cut at tau
+  # rendered at full resolution, the trainer's loss. Kept only if the held-out frames'
+  # loss at the cut falls; otherwise, and on any failure, `package` draws the merged
+  # parents as before. On the GPU because it renders; after `place` because the tree is
+  # built on canonical.ply's east/north/up axes, from exactly what `package` packs.
+  #
+  # `tile_gaussians` and `opacity_min` are `package`'s, by anchor: the tree is a function
+  # of them and the PLY, and `package` refuses parents optimised for any other tree.
+  #   tau_min / tau_max: 3 / 64 px, where the viewer's maximumScreenSpaceError lives
+  #     (device pixels; H3DGS's own range spans the same factor of ~20).
+  #   iterations: 0 plans them from the tree -- enough that each parent is optimised as
+  #     often as H3DGS's 15,000 optimise each of its nodes, never more than 15,000.
+  #   budget_s: the loop stops here and keeps what it has (an hour of L4 is $0.80).
+  - id: optimise_lod
+    impl: h3dgs_parents
+    params:
+      enabled: true
+      tile_gaussians: &tile_gaussians 100000
+      opacity_min: &opacity_min 0.02
+      tau_min: 3.0
+      tau_max: 64.0
+      iterations: 0
+      budget_s: 3600
+    gpu:
+      tier: l4
+      preemptible: true
+
   - id: package
     impl: splat_tiles
     params:
       # Every gaussian is packed, in a level-of-detail hierarchy of at most this many a
       # tile; how many are drawn is the viewer's budget (the phone's Detail choice).
-      tile_gaussians: 100000
-      opacity_min: 0.02
+      tile_gaussians: *tile_gaussians
+      opacity_min: *opacity_min
 
   # The same three stages Lane 1 ends in, reading the same `canonical.ply` and the same
   # `splat/`. Both lanes end in one artifact set, so the console cannot tell which one

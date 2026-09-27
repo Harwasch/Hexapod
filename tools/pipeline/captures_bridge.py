@@ -32,6 +32,8 @@ from pathlib import Path
 __all__ = [
     "CAPTURES_DIR",
     "TILE_GAUSSIANS",
+    "ParentOverrideError",
+    "ParentOverrides",
     "SplatFormatError",
     "pack_spz",
     "read_ply",
@@ -57,6 +59,8 @@ _ensure_importable()
 
 from splat_tiles import (  # noqa: E402
     TILE_GAUSSIANS,
+    ParentOverrideError,
+    ParentOverrides,
     SplatFormatError,
     convert,
     pack_spz,
@@ -74,6 +78,7 @@ def splat_tiles_convert(
     height: float,
     opacity_min: float = 0.02,
     tile_gaussians: int | None = TILE_GAUSSIANS,
+    parents: ParentOverrides | None = None,
 ) -> dict[str, float | int]:
     """Call the sibling project's packer and return its statistics.
 
@@ -82,6 +87,7 @@ def splat_tiles_convert(
     REPLACE refinement; there is no top-N cut. The packer reads the PLY in windows and sorts
     through a working directory beside `out_dir`, so memory does not grow with the scan.
     The statistics include `parent_gaussians` and `storage_overhead`, what the merged
-    levels cost on top of the scan itself.
+    levels cost on top of the scan itself, and `optimised_parent_gaussians`, how many of
+    those are `parents` -- optimised on the GPU by `optimise_lod` -- rather than merged.
     """
-    return convert(ply, out_dir, lat, lon, height, opacity_min, tile_gaussians)
+    return convert(ply, out_dir, lat, lon, height, opacity_min, tile_gaussians, parents=parents)
