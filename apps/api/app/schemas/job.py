@@ -5,7 +5,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
-from pydantic import Field
+from pydantic import Field, field_validator
 
 from app.models.enums import ArtifactKind, RunStatus
 from app.schemas.base import CamelModel
@@ -111,6 +111,15 @@ class JobStepRead(CamelModel):
     artifacts: list[ArtifactRead]
     created_at: datetime
     updated_at: datetime
+
+    @field_validator("metrics", mode="after")
+    @classmethod
+    def _without_live(cls, metrics: dict[str, Any]) -> dict[str, Any]:
+        """`metrics.live` (up to ~25 kB of cameras and points) is served by the live
+        endpoint, not with every job a page polls."""
+        if "live" not in metrics:
+            return metrics
+        return {key: value for key, value in metrics.items() if key != "live"}
 
 
 class JobRead(CamelModel):

@@ -5,7 +5,8 @@ accepts the argv `training.gsplat_argv` builds and writes what gsplat v1.5.3's
 `examples/simple_trainer.py` writes, where it writes it -- read from that file at that
 tag, not remembered: `ckpts/ckpt_<i>_rank0.pt`, `stats/val_step<i:04d>.json`, and
 `ply/point_cloud_<i>.ply` **only when `--save_ply` is passed**, where `<i>` is the
-zero-based index of the last step; and it prints the trainer's own progress line,
+zero-based index of the last step (and of each earlier `--ply_steps` step, as the live
+viewer asks for); and it prints the trainer's own progress line,
 `Step:  <i> {...}`. It can SIGTERM itself mid-run so a preemption is a real signal
 rather than a mock. Every number it writes is made up, and no test in this repository
 reads one of them as if it were a measurement.
@@ -110,6 +111,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--disable_viewer", action="store_true")
     # v1.5.3's own switches, spelled as `training.gsplat_argv` spells them.
     parser.add_argument("--save_ply", action="store_true")
+    # A list, as v1.5.3's tyro CLI reads `ply_steps: List[int]`: a PLY at each (scaled)
+    # step, the intermediate ones included -- what the live viewer's snapshots come from.
+    parser.add_argument("--ply_steps", type=int, nargs="+", default=[])
     parser.add_argument("--steps_scaler", type=float, default=1.0)
     parser.add_argument("--strategy.cap-max", dest="cap_max", type=int, default=None)
     parser.add_argument("--no-normalize-world-space", action="store_true")
@@ -134,6 +138,7 @@ def main(argv: list[str] | None = None) -> int:
     args, _unknown = parser.parse_known_args(argv)
     # What v1.5.3's `Config.adjust_steps` does to the one number this stand-in uses.
     args.max_steps = int(args.max_steps * args.steps_scaler)
+    ply_at = {int(value * args.steps_scaler) for value in args.ply_steps}
     if args.cap_max is not None:
         if args.strategy != "mcmc":
             sys.stderr.write("stand-in: only mcmc has a cap_max\n")
@@ -202,6 +207,13 @@ def main(argv: list[str] | None = None) -> int:
             (args.result_dir / "stats").mkdir(parents=True, exist_ok=True)
             (args.result_dir / "stats" / f"train_step{index:04d}_rank0.json").write_text(
                 json.dumps({**stats, "ellipse_time": 12.5}), encoding="utf-8"
+            )
+        if step in ply_at and step < args.max_steps and args.save_ply and not args.no_ply:
+            # v1.5.3: `if step in [i - 1 for i in cfg.ply_steps]`, with a zero-based step.
+            write_ply(
+                args.result_dir / "ply" / f"point_cloud_{step - 1}.ply",
+                args.gaussians,
+                seed=step,
             )
         if args.die_at is not None and step == args.die_at and not died.exists():
             died.write_text("1", encoding="utf-8")

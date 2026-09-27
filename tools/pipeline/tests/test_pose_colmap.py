@@ -40,6 +40,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+import live
 import sfm
 import stages
 import tree_frames
@@ -343,6 +344,32 @@ def test_the_poses_artifact_is_a_colmap_model_anything_downstream_can_read(
     assert step["metrics"]["focalPrior"] is False
     artifact = next(a for a in step["artifacts"] if a["name"] == "poses")
     assert artifact["kind"] == "dir" and artifact["bytes"] > 0
+
+
+@requires_colmap
+def test_the_log_carries_cameras_as_they_were_solved_and_the_final_model(
+    reconstruction: tuple[Workdir, tree_frames.Truth],
+) -> None:
+    """The live viewer's cameras come from the real mapper's own snapshots.
+
+    COLMAP 3.9.1 writes one every `snapshot_images_freq` registered images; the watcher
+    logs them as `live-cameras:` lines, and the chosen model is logged once more, final.
+    """
+    workdir, _ = reconstruction
+    log = workdir.log_path("pose").read_text()
+    lines = [line for line in log.splitlines() if line.startswith(live.CAMERAS_TAG)]
+
+    assert "--Mapper.snapshot_path" in log
+    assert lines, "no live-cameras line at all"
+    parsed = [live.parse_line(line) for line in lines]
+    assert all(entry is not None and entry[0] == "cameras" for entry in parsed)
+    final = live.latest(log)["cameras"]
+    assert final["final"] is True and final["registered"] == FRAMES
+    assert final["cameraCount"] == FRAMES and final["pointCount"] > 100
+    # Snapshots are working files: none is left behind.
+    assert not (workdir.work_dir("pose") / "snapshots").exists() or not any(
+        (workdir.work_dir("pose") / "snapshots").rglob("*.bin")
+    )
 
 
 # --- partial registration -------------------------------------------------------------

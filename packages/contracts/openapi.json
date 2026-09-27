@@ -3922,6 +3922,406 @@
         "title": "LicenseMetadata",
         "type": "object"
       },
+      "LiveCameras": {
+        "additionalProperties": false,
+        "description": "Registered cameras and a sample of the sparse points, from the newest snapshot.",
+        "properties": {
+          "aspect": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Aspect"
+          },
+          "cameraCount": {
+            "title": "Cameracount",
+            "type": "integer"
+          },
+          "cameras": {
+            "title": "Cameras",
+            "type": "string"
+          },
+          "final": {
+            "title": "Final",
+            "type": "boolean"
+          },
+          "frames": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Frames"
+          },
+          "origin": {
+            "items": {
+              "type": "number"
+            },
+            "title": "Origin",
+            "type": "array"
+          },
+          "pointCount": {
+            "title": "Pointcount",
+            "type": "integer"
+          },
+          "points": {
+            "title": "Points",
+            "type": "string"
+          },
+          "pointsTotal": {
+            "title": "Pointstotal",
+            "type": "integer"
+          },
+          "registered": {
+            "title": "Registered",
+            "type": "integer"
+          },
+          "scale": {
+            "title": "Scale",
+            "type": "number"
+          },
+          "seq": {
+            "title": "Seq",
+            "type": "integer"
+          },
+          "stageId": {
+            "title": "Stageid",
+            "type": "string"
+          },
+          "up": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Up"
+          }
+        },
+        "required": [
+          "stageId",
+          "seq",
+          "final",
+          "registered",
+          "frames",
+          "origin",
+          "scale",
+          "up",
+          "aspect",
+          "cameraCount",
+          "cameras",
+          "pointCount",
+          "pointsTotal",
+          "points"
+        ],
+        "title": "LiveCameras",
+        "type": "object"
+      },
+      "LiveProgress": {
+        "additionalProperties": false,
+        "description": "The running stage's tool progress (`metrics.progress`), when it prints one.",
+        "properties": {
+          "done": {
+            "title": "Done",
+            "type": "integer"
+          },
+          "elapsedS": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Elapseds"
+          },
+          "remainingS": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Remainings"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "done",
+          "total",
+          "elapsedS",
+          "remainingS"
+        ],
+        "title": "LiveProgress",
+        "type": "object"
+      },
+      "LiveSplat": {
+        "additionalProperties": false,
+        "description": "The newest intermediate splat, and where to fetch it.",
+        "properties": {
+          "bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bytes"
+          },
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "of": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Of"
+          },
+          "stageId": {
+            "title": "Stageid",
+            "type": "string"
+          },
+          "step": {
+            "title": "Step",
+            "type": "integer"
+          },
+          "total": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total"
+          },
+          "up": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Up"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          }
+        },
+        "required": [
+          "stageId",
+          "step",
+          "total",
+          "count",
+          "of",
+          "bytes",
+          "up",
+          "name",
+          "url"
+        ],
+        "title": "LiveSplat",
+        "type": "object"
+      },
+      "LiveStage": {
+        "additionalProperties": false,
+        "description": "The step the run is on: running now, or the last one to have started.",
+        "properties": {
+          "impl": {
+            "title": "Impl",
+            "type": "string"
+          },
+          "ordinal": {
+            "title": "Ordinal",
+            "type": "integer"
+          },
+          "progress": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LiveProgress"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "stageId": {
+            "title": "Stageid",
+            "type": "string"
+          },
+          "startedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Startedat"
+          },
+          "status": {
+            "$ref": "#/components/schemas/RunStatus"
+          }
+        },
+        "required": [
+          "stageId",
+          "impl",
+          "status",
+          "ordinal",
+          "startedAt",
+          "progress"
+        ],
+        "title": "LiveStage",
+        "type": "object"
+      },
+      "LiveState": {
+        "additionalProperties": false,
+        "properties": {
+          "cameras": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LiveCameras"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "captureId": {
+            "format": "uuid",
+            "title": "Captureid",
+            "type": "string"
+          },
+          "captureName": {
+            "title": "Capturename",
+            "type": "string"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "jobId": {
+            "format": "uuid",
+            "title": "Jobid",
+            "type": "string"
+          },
+          "recipe": {
+            "title": "Recipe",
+            "type": "string"
+          },
+          "siteId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Siteid"
+          },
+          "splat": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LiveSplat"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "stage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LiveStage"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/RunStatus"
+          },
+          "stepsDone": {
+            "title": "Stepsdone",
+            "type": "integer"
+          },
+          "stepsStarted": {
+            "title": "Stepsstarted",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "jobId",
+          "captureId",
+          "captureName",
+          "recipe",
+          "status",
+          "error",
+          "siteId",
+          "stage",
+          "stepsDone",
+          "stepsStarted",
+          "cameras",
+          "splat"
+        ],
+        "title": "LiveState",
+        "type": "object"
+      },
       "MissingObject": {
         "additionalProperties": false,
         "description": "A row whose object is not in the bucket.",
@@ -8717,6 +9117,80 @@
         ]
       }
     },
+    "/api/v1/captures/{capture_id}/live": {
+      "get": {
+        "description": "What a run looks like while it runs, for the live viewer: the pose stage's cameras and a sample of its sparse points as they are solved (quantised, base64; see the schema), and training's newest intermediate splat with a short-lived signed URL for its SPZ (null until the checkpoint syncer has uploaded it). Coordinates are the pose solve's own frame, not east/north/up. Open, like every read: poll it every few seconds.",
+        "operationId": "capture_live_api_v1_captures__capture_id__live_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "capture_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Capture Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LiveState"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "summary": "The live state of a capture's newest run",
+        "tags": [
+          "live"
+        ]
+      }
+    },
     "/api/v1/captures/{capture_id}/process": {
       "post": {
         "description": "Inserts a `not-started` job and returns it. Nothing runs here: the worker claims the row with a lease and executes the recipe.",
@@ -9339,6 +9813,80 @@
         "summary": "Cancel a job",
         "tags": [
           "jobs"
+        ]
+      }
+    },
+    "/api/v1/jobs/{job_id}/live": {
+      "get": {
+        "description": "What a run looks like while it runs, for the live viewer: the pose stage's cameras and a sample of its sparse points as they are solved (quantised, base64; see the schema), and training's newest intermediate splat with a short-lived signed URL for its SPZ (null until the checkpoint syncer has uploaded it). Coordinates are the pose solve's own frame, not east/north/up. Open, like every read: poll it every few seconds.",
+        "operationId": "job_live_api_v1_jobs__job_id__live_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LiveState"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "summary": "The live state of one run",
+        "tags": [
+          "live"
         ]
       }
     },
@@ -10058,7 +10606,7 @@
     },
     "/api/v1/phone/captures/{capture_id}/refine": {
       "post": {
-        "description": "Resumes the capture's latest finished photo-reconstruct run at `train` with new parameters: the phone's quality options, `train.roi` set to the region of interest the preview's quality stage measured, and `quality.mode` = `refine`. The frames and poses are kept, so the region is in the frame it was measured in. If the worker no longer has them, the run starts over and trains uncropped rather than applying the region to a different reconstruction.",
+        "description": "Resumes the capture's latest finished photo-reconstruct run at `train` with new parameters: the phone's quality options, `train.support_mask` set to the voxels the preview's well-supported splats occupy (any shape), and `quality.mode` = `refine`. The frames and poses are kept, so the mask is in the frame it was measured in. If the worker no longer has them, the run starts over and trains uncropped rather than applying the region to a different reconstruction.",
         "operationId": "refine_phone_capture_api_v1_phone_captures__capture_id__refine_post",
         "parameters": [
           {

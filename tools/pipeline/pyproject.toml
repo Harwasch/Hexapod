@@ -49,6 +49,7 @@ known-first-party = [
   "contracts",
   "errors",
   "executor",
+  "live",
   "modal_adapter",
   "plan",
   "progress",

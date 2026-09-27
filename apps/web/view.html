@@ -125,6 +125,8 @@
         pointer-events: auto;
       }
       .back {
+        flex: none;
+        white-space: nowrap;
         min-height: 40px;
         padding: 0 14px;
         border-radius: 12px;
@@ -229,6 +231,70 @@
         font-size: 0.875rem;
         text-align: center;
       }
+      /* Live mode: a run as it happens */
+      .live-panel {
+        position: fixed;
+        left: 16px;
+        right: 16px;
+        bottom: calc(env(safe-area-inset-bottom, 0px) + 16px);
+        max-width: 560px;
+        margin: 0 auto;
+        padding: 12px 14px;
+        border-radius: 14px;
+        background: rgba(22, 26, 19, 0.92);
+        border: 1px solid var(--border);
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .live-panel p {
+        margin: 0;
+        overflow-wrap: anywhere;
+      }
+      #live-status {
+        font-weight: 650;
+      }
+      .live-detail {
+        color: var(--muted);
+        font-size: 0.875rem;
+      }
+      .live-track {
+        height: 6px;
+        border-radius: 3px;
+        background: rgba(255, 255, 255, 0.12);
+        overflow: hidden;
+      }
+      .live-track > div {
+        height: 100%;
+        width: 0;
+        background: var(--accent);
+        transition: width 0.4s ease;
+      }
+      .live-final {
+        align-self: flex-start;
+        min-height: 40px;
+        padding: 0 14px;
+        border-radius: 12px;
+        background: var(--accent);
+        color: var(--on-accent);
+        display: inline-flex;
+        align-items: center;
+        text-decoration: none;
+        font-weight: 650;
+      }
+      .live-final:focus-visible {
+        outline: 3px solid var(--fg);
+        outline-offset: 2px;
+      }
+      .live-dot {
+        display: inline-block;
+        width: 8px;
+        height: 8px;
+        margin-right: 6px;
+        border-radius: 50%;
+        background: #e5484d;
+        vertical-align: middle;
+      }
     </style>
   </head>
   <body>
@@ -259,6 +325,36 @@
         <p id="coverage-counts" class="counts"></p>
       </div>
       <p id="viewer-status" class="note" aria-live="polite">Loading the scan…</p>
+    </section>
+
+    <section id="live" class="viewer" hidden aria-label="Live reconstruction">
+      <div class="bar">
+        <a class="back" href="#">All scans</a>
+        <div class="title">
+          <strong id="live-name">Live</strong>
+          <span
+            ><i class="live-dot" aria-hidden="true"></i>Live · cameras as solved, splats as
+            trained</span
+          >
+        </div>
+      </div>
+      <div class="live-panel">
+        <p id="live-status" aria-live="polite">Connecting…</p>
+        <div
+          id="live-track"
+          class="live-track"
+          role="progressbar"
+          aria-labelledby="live-status"
+          aria-valuemin="0"
+          aria-valuemax="100"
+          aria-valuenow="0"
+          hidden
+        >
+          <div id="live-bar"></div>
+        </div>
+        <p id="live-detail" class="live-detail" aria-live="polite"></p>
+        <a id="live-final" class="live-final" href="#" hidden>Finished — open the final scan</a>
+      </div>
     </section>
 
     <script type="module" src="/src/view/main.ts"></script>
