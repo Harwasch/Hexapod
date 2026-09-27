@@ -95,6 +95,11 @@ describe("the quality forecast", () => {
     expect(forecast(verdict({ heldOutPsnr: null, keepPct: null }))).toBe(
       "nothing met the high-quality bar",
     );
+    expect(forecast(verdict({ keepVerifiedPct: 48.4 }))).toBe(
+      "62% of the scene met the high-quality bar (48% verified by held-out frames) · " +
+        "held-out 23.0 dB",
+    );
+    expect(forecast(verdict({ keepVerifiedPct: null }))).toBe(forecast(verdict()));
     expect(summary(verdict({ mode: "refine", bar: "strict", barApplied: "balanced" }))).toBe(
       "Refined · 62% of the scene met the high-quality bar · held-out 23.0 dB · " +
         "Balanced bar (the bar asked for kept too little)",

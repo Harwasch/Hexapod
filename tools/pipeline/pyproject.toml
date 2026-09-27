@@ -49,6 +49,10 @@ known-first-party = [
   "contracts",
   "errors",
   "executor",
+  "holdout",
+  "holdout_error",
+  "holdout_maths",
+  "holdout_stand_in",
   "modal_adapter",
   "plan",
   "progress",
@@ -62,6 +66,7 @@ known-first-party = [
   "sfm",
   "stages",
   "synthetic_scene",
+  "test_train_gsplat",
   "training",
   "tree_frames",
   "video",
@@ -100,6 +105,13 @@ ignore_missing_imports = true
 # must not pull a client library into an image that does not use it. The import is inside
 # the one function that needs it and is guarded, so the module still type-checks here.
 module = ["modal.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# holdout_error.py runs on the training box, under the trainer's CPython 3.10 venv with
+# torch, gsplat and gsplat's examples/datasets on its path. None of them is a dependency
+# of this project; the imports are inside `main`, and they type as Any here.
+module = ["torch", "torch.*", "gsplat", "gsplat.*", "datasets", "datasets.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

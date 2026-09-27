@@ -273,6 +273,9 @@ function offerCoverage(site: Site, scene: THREE.Scene, mesh: SplatMesh, size: nu
   const metadata = site.metadata as Record<string, unknown> | null | undefined;
   const url = metadata?.coverageUrl;
   if (typeof url !== "string" || !url) return;
+  // How much of the high-quality tier frames held back from training confirmed (the
+  // pipeline's keepVerifiedPct); absent when accuracy was not measured.
+  const verified = metadata?.keepVerifiedPct;
   const button = el("coverage");
   const legend = el("coverage-legend");
   button.hidden = false;
@@ -306,7 +309,10 @@ function offerCoverage(site: Site, scene: THREE.Scene, mesh: SplatMesh, size: nu
         el("coverage-counts").textContent =
           `${coverage.counts.keep.toLocaleString("en-US")} kept · ` +
           `${coverage.counts.context.toLocaleString("en-US")} context · ` +
-          `${coverage.counts.drop.toLocaleString("en-US")} dropped (a sample)`;
+          `${coverage.counts.drop.toLocaleString("en-US")} dropped (a sample)` +
+          (typeof verified === "number"
+            ? ` · ${String(Math.round(verified))}% of the scene verified by held-out frames`
+            : "");
         show(true);
       })
       .catch((error: unknown) => {

@@ -4,7 +4,8 @@
  * After a preview it is a forecast -- how much of the region the cameras were pointed at
  * the capture supports at high quality, and the held-out PSNR the short training reached
  * -- because that is what decides whether Refine is worth the GPU time. After a refine it
- * is the result.
+ * is the result. When the run measured accuracy on the frames training held back, the
+ * share says how much of the high-quality part those frames verified.
  */
 import type { CaptureQuality, Job } from "@twin/contracts";
 
@@ -24,7 +25,13 @@ export function qualityOf(
 
 function share(quality: CaptureQuality): string {
   if (quality.keepPct === null) return "nothing met the high-quality bar";
-  return `${String(Math.round(quality.keepPct))}% of the scene met the high-quality bar`;
+  const met = `${String(Math.round(quality.keepPct))}% of the scene met the high-quality bar`;
+  // How much of that frames held back from training confirmed; the rest is kept because
+  // it was seen well (coverage), not because it was checked. Absent on older verdicts.
+  const verified = quality.keepVerifiedPct;
+  return verified === null || verified === undefined
+    ? met
+    : `${met} (${String(Math.round(verified))}% verified by held-out frames)`;
 }
 
 function psnr(quality: CaptureQuality): string | null {

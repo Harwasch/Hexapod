@@ -99,6 +99,7 @@ __all__ = [
     "build_dataset",
     "check_schedule_scale",
     "crop_initial_points",
+    "crop_rows",
     "crop_splat",
     "gsplat_argv",
     "held_out_split",
@@ -382,11 +383,19 @@ def crop_splat(
     """The gaussians whose centre is in the region -- within `radii * roi.radius` of an
     ROI's centre, or in a support mask's voxels -- and how many that is. A gaussian with a
     non-finite centre is dropped too: it is nowhere, so it is not inside anything."""
+    keep = crop_rows(columns, roi, radii=radii)
+    return {name: values[keep] for name, values in columns.items()}, int(keep.sum())
+
+
+def crop_rows(
+    columns: Mapping[str, Any], roi: Roi | SupportMask, *, radii: float = ROI_KEEP_RADII
+) -> Any:
+    """Which rows `crop_splat` keeps, as a boolean mask -- for anything else held per
+    gaussian in the same order (the held-out error arrays) to be cropped alike."""
     import numpy as np
 
     xyz = np.stack([columns["x"], columns["y"], columns["z"]], axis=1).astype(np.float64)
-    keep = _inside(roi, xyz, radii=radii)
-    return {name: values[keep] for name, values in columns.items()}, int(keep.sum())
+    return _inside(roi, xyz, radii=radii)
 
 
 def _finite(value: object) -> float | None:

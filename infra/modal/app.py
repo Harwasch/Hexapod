@@ -183,6 +183,9 @@ image = (
     .run_commands(
         # The last word before the image is accepted: does this trainer take this argv?
         f"{TRAINER_PYTHON} /opt/twin/check_trainer.py {GSPLAT_TRAINER} {PIPELINE_DIR}",
+        # And does the held-out error pass import torch, gsplat and the trainer's own
+        # dataset classes under that interpreter? (`train`'s `holdout_error`; no GPU used.)
+        f"{TRAINER_PYTHON} {PIPELINE_DIR}/holdout_error.py --self-check --trainer {GSPLAT_TRAINER}",
         # And does the 3.12 side import every stage (the list above, pinned by a test)?
         f"cd {PIPELINE_DIR} && python -c 'import remote, stages, captures_bridge'",
     )

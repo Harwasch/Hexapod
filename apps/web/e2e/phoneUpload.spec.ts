@@ -588,6 +588,7 @@ test.describe("the phone upload page", () => {
       bar: "balanced",
       barApplied: "balanced",
       keepPct: mode === "preview" ? 62 : 71.4,
+      keepVerifiedPct: mode === "preview" ? null : 58.2,
       contextPct: 90,
       heldOutPsnr: mode === "preview" ? 23.04 : 25.31,
       gaussians: { total: 200000, kept: 180000, keep: 120000, context: 60000, drop: 20000 },
@@ -674,7 +675,8 @@ test.describe("the phone upload page", () => {
 
     // The refined one: its result, and no Refine.
     await expect(row("Garden bench").locator(".forecast")).toHaveText(
-      "Refined · 71% of the scene met the high-quality bar · held-out 25.3 dB · Balanced bar",
+      "Refined · 71% of the scene met the high-quality bar (58% verified by held-out frames) · " +
+        "held-out 25.3 dB · Balanced bar",
     );
     await expect(row("Garden bench").getByRole("button", { name: "Refine" })).toHaveCount(0);
     await expect(row("Garden bench").locator(".tips")).toHaveCount(0);
