@@ -510,7 +510,10 @@ class CloudRunner(BaseRunner):
             f"cloud: stage {context.stage_id!r} attempt {context.attempt} on "
             f"{adapter.name!r} ({tier}); {ledger.preemptions} preemption(s) so far"
         )
+        staging = time.monotonic()
         self._stage_in(stage, context, keys)
+        staged_s = time.monotonic() - staging
+        context.log(f"cloud: inputs and checkpoint staged in {staged_s:.1f} s")
         request = StageRequest(
             recipe=context.recipe,
             run_id=context.run_id,
@@ -540,12 +543,18 @@ class CloudRunner(BaseRunner):
             raise RemoteStageError(
                 context.recipe, context.stage_id, context.impl, adapter.name, poll.detail
             )
+        fetching = time.monotonic()
         moved = self._transfer.get(keys.outputs, context.out_dir)
-        context.log(f"cloud: {moved} byte(s) of output(s) came back from {adapter.name!r}")
-        return StageOutcome(
-            metrics=self._metrics(entry, ledger.append(entry), poll),
-            summary=poll.summary,
+        back_s = time.monotonic() - fetching
+        context.log(
+            f"cloud: {moved} byte(s) of output(s) came back from {adapter.name!r} in {back_s:.1f} s"
         )
+        metrics = self._metrics(entry, ledger.append(entry), poll)
+        # The worker's side of the transfer, beside the remote's own (`remote*S`): with
+        # `billedS` they account for a remote stage's wall time end to end.
+        metrics["stageInS"] = round(staged_s, 2)
+        metrics["outputsBackS"] = round(back_s, 2)
+        return StageOutcome(metrics=metrics, summary=poll.summary)
 
     # --- the pieces, each of which a test can reach --------------------------------
 

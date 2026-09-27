@@ -15,6 +15,7 @@ import ast
 import sys
 from pathlib import Path
 
+import global_sfm
 import sfm
 
 PIPELINE = Path(__file__).resolve().parent.parent
@@ -104,3 +105,12 @@ def test_the_cpu_image_pins_the_vocabulary_tree_colmap_3_9_reads() -> None:
     source = APP.read_text(encoding="utf-8")
     assert f'"{sfm.VOCAB_TREE_ENV}": VOCAB_TREE' in source
     assert "sha256sum -c" in source
+
+
+def test_the_cpu_image_installs_the_pycolmap_the_global_mapper_was_measured_with() -> None:
+    """`mapper: global` runs pycolmap in the image's own Python; a different version is a
+    mapper nobody here has scored against the rendered orbit (global_sfm.py)."""
+    pinned = str(_constants("PYCOLMAP")["PYCOLMAP"])
+
+    assert pinned == f"pycolmap=={global_sfm.PYCOLMAP_VERSION}"
+    assert ".pip_install(*IMAGE_PACKAGES, PYCOLMAP)" in APP.read_text(encoding="utf-8")

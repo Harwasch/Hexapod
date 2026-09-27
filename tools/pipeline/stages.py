@@ -24,6 +24,7 @@ import math
 import os
 import shutil
 import struct
+import subprocess
 import time
 import tomllib
 from collections.abc import Callable, Sequence
@@ -37,6 +38,7 @@ import PIL.Image
 
 import exif
 import gaussians
+import global_sfm
 import init_seed
 import quality
 import sfm
@@ -472,10 +474,18 @@ def colmap(ctx: StageContext) -> StageOutcome:
     `poses.json` therefore records the recovered focal, whether a prior was held, and
     both measurements, rather than a correction. Pass `focal_px` (EXIF or ARKit) and the
     prior is held through bundle adjustment.
+
+    `mapper: global` maps with GLOMAP (COLMAP 4, through pycolmap -- `global_sfm.py` has
+    the why and the measurements) before any incremental seed, on the first matches; a
+    result under `min_registered_fraction` falls back to the incremental mapper on the
+    same database, and `poses.json`'s `mapper` records which one made the model kept.
     """
     frames = ctx.input(FRAMES.name)
     out = ctx.output(POSES.name)
     requested = str(ctx.param("matcher", "auto"))
+    mapper = str(ctx.param("mapper", "incremental"))
+    if mapper not in ("incremental", "global"):
+        raise ValueError(f"mapper must be incremental or global, not {mapper!r}")
     images = sorted(p for p in frames.iterdir() if p.is_file())
     if not images:
         raise ValueError(f"the frames artifact at {frames} is empty")
@@ -557,6 +567,10 @@ def colmap(ctx: StageContext) -> StageOutcome:
     # result is missing pairs -- a loop not closed, a fast pan -- far more often than it
     # is an unlucky initial pair, and the exhaustive pass after it gets every seed anyway.
     schedule = [seeds[:1] if step.matcher == "sequential" else seeds for step in plan]
+    # `mapper: global` (global_sfm.py) is tried first, on the first matches; anything
+    # short of `enough` falls through to the incremental seeds on the same matches.
+    if mapper == "global":
+        schedule[0] = (_GLOBAL_SEED, *schedule[0])
     best_so_far = [0]
     round_of: dict[Path, int] = {}
 
@@ -569,36 +583,50 @@ def colmap(ctx: StageContext) -> StageOutcome:
                 f"{step.matcher}{', cleared first' if step.clear else ''} -- {step.why}"
             )
             match(step)
-        into = sparse / f"match{round_}-seed{seed}"
+        global_ = seed == _GLOBAL_SEED
+        into = sparse / (f"match{round_}-global" if global_ else f"match{round_}-seed{seed}")
         into.mkdir(parents=True)
         began = time.monotonic()
-        ctx.run(
-            sfm.mapper_argv(
-                database,
-                frames,
-                into,
-                refine_focal_length=focal_prior is None,
-                random_seed=seed,
-                num_threads=threads,
+        if global_:
+            if not _map_globally(ctx, database, frames, into, focal_prior is None, threads):
+                return None, 0
+            seconds["global"] = time.monotonic() - began
+        else:
+            ctx.run(
+                sfm.mapper_argv(
+                    database,
+                    frames,
+                    into,
+                    refine_focal_length=focal_prior is None,
+                    random_seed=seed,
+                    num_threads=threads,
+                )
             )
-        )
-        seconds["map"] += time.monotonic() - began
+            seconds["map"] += time.monotonic() - began
         found = _largest_model(into)
         registered = 0
         if found is not None:
             round_of[found] = round_
             registered = sfm.read_model(found).registered
         best_so_far[0] = max(best_so_far[0], registered)
+        if global_ and registered < enough:
+            ctx.log(
+                f"colmap: the global mapper registered {registered} of {len(images)}, short "
+                f"of {enough}; mapping incrementally on the same matches"
+            )
         return found, registered
 
     model_dir, tries = _best_reconstruction(attempt, rounds=schedule, enough=enough)
     for tried in tries:
         tried["matcher"] = plan[int(tried["match"])].matcher
+        tried["mapper"] = "global" if tried["seed"] == _GLOBAL_SEED else "incremental"
     if len(tries) > 1:
         ctx.log(
             "colmap: "
             + ", ".join(
-                f"match {t['match']} ({t['matcher']}) seed {t['seed']}: {t['registered']}"
+                f"match {t['match']} ({t['matcher']}) "
+                + ("global" if t["mapper"] == "global" else f"seed {t['seed']}")
+                + f": {t['registered']}"
                 for t in tries
             )
             + f" of {len(images)} registered; kept the best"
@@ -611,6 +639,7 @@ def colmap(ctx: StageContext) -> StageOutcome:
     # The model kept came from the pass it was mapped after; name the chain up to it.
     matcher = "+".join(dict.fromkeys(step.matcher for step in plan[: round_of[model_dir] + 1]))
     fell_back = plan[0].matcher == "sequential" and len(passes_run) > 1
+    mapper_used = "global" if model_dir.parent.name.endswith("-global") else "incremental"
     for entry in sorted(model_dir.iterdir()):
         if entry.is_file():
             shutil.copyfile(entry, out / entry.name)
@@ -620,6 +649,15 @@ def colmap(ctx: StageContext) -> StageOutcome:
         "tool": "colmap",
         "version": sfm.colmap_version(),
         "matcher": matcher,
+        # Which mapper made the model kept: `global` is pycolmap's GLOMAP pipeline
+        # (global_sfm.py), tried first when asked, with the incremental one behind it.
+        "mapper": {
+            "requested": mapper,
+            "used": mapper_used,
+            "fellBackToIncremental": mapper == "global" and mapper_used != "global",
+            "globalMapS": round(seconds["global"], 1) if "global" in seconds else None,
+            "pycolmap": global_sfm.PYCOLMAP_VERSION if mapper == "global" else None,
+        },
         # What was asked, what the frames were, and every pass that ran with its pair
         # count -- so a fallback, and what it cost, is visible rather than inferred.
         "matching": {
@@ -699,10 +737,47 @@ def colmap(ctx: StageContext) -> StageOutcome:
         "extractS": round(seconds["extract"], 1),
         "matchS": round(seconds["match"], 1),
         "mapS": round(seconds["map"], 1),
+        "mapper": mapper_used,
     }
+    if "global" in seconds:
+        metrics["globalMapS"] = round(seconds["global"], 1)
     return StageOutcome(
         metrics=metrics, summary=f"{model.registered}/{len(images)} frames registered"
     )
+
+
+#: The seed `_best_reconstruction` is handed for the global mapper's one try.
+_GLOBAL_SEED = -1
+
+
+def _map_globally(
+    ctx: StageContext,
+    database: Path,
+    frames: Path,
+    into: Path,
+    refine_focal_length: bool,
+    threads: int | None,
+) -> bool:
+    """One global mapping (global_sfm.py) into `into`; False, logged, if it could not run.
+
+    A global mapper that cannot run -- pycolmap missing, a crash in it -- is not the
+    stage failing: the incremental mapper is right behind it on the same matches.
+    """
+    try:
+        ctx.run(
+            global_sfm.argv(
+                global_sfm.python(),
+                database,
+                frames,
+                into,
+                refine_focal_length=refine_focal_length,
+                num_threads=threads,
+            )
+        )
+    except (subprocess.CalledProcessError, OSError) as error:
+        ctx.log(f"colmap: the global mapper did not run ({error}); mapping incrementally")
+        return False
+    return True
 
 
 def _source_format(ctx: StageContext) -> str | None:
@@ -715,11 +790,10 @@ def _source_format(ctx: StageContext) -> str | None:
 
 @stage_impl("glomap", consumes=("frames",), produces=(POSES,), summary="GLOMAP global SfM poses")
 def glomap(ctx: StageContext) -> StageOutcome:
-    # Still a stub after B2, deliberately: GLOMAP is not in Ubuntu 24.04's archive
-    # (`apt-cache policy glomap` finds nothing), so it cannot be installed on this
-    # machine or on `ubuntu-latest`, and an implementation nothing can run is a second
-    # unverified sketch. It reads the same database `colmap` builds, so when there is a
-    # box with one, this is the mapper call and the same `read_model` afterwards.
+    # Still a stub, and now for a different reason: GLOMAP is in COLMAP 4 (and pycolmap's
+    # wheels), and it runs as the `colmap` impl's `mapper: global` -- on the database that
+    # stage builds, with the incremental mapper behind it when it registers too few.
+    # A separate impl would duplicate extraction, matching and that fallback.
     _lands_in("B3", "pose: glomap")
 
 

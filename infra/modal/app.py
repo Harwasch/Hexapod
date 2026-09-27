@@ -202,6 +202,13 @@ VOCAB_TREE_URL = (
 VOCAB_TREE_SHA256 = "d37d8f19ee0a49705c4c0b06967a08cedfed5cf86519eada3271497256732bc2"
 VOCAB_TREE = "/opt/colmap/vocab_tree_flickr100K_words32K.bin"
 
+#: The pose stage's global mapper (`mapper: global`): GLOMAP as COLMAP 4 ships it, from
+#: pycolmap's prebuilt manylinux wheel (CPython 3.10-3.14, glibc >= 2.28; this image is
+#: 24.04, glibc 2.39) rather than a from-source COLMAP 4 build. About 135 MB unpacked, and
+#: seconds to install. Extraction and matching stay on apt's 3.9.1; `global_sfm.py` says
+#: why and what was measured. Pinned to the version `global_sfm.PYCOLMAP_VERSION` names.
+PYCOLMAP = "pycolmap==4.2.0"
+
 #: The CPU box's image: what `pose` needs and nothing a GPU does. Ubuntu 24.04 because
 #: its `colmap` package is 3.9.1, the version every pose measurement and test in this
 #: repository was made with; the CUDA image above is 22.04, whose package is 3.7.
@@ -217,7 +224,7 @@ cpu_image = (
         f"curl -fsSL --retry 3 -o {VOCAB_TREE} {VOCAB_TREE_URL}",
         f"echo '{VOCAB_TREE_SHA256}  {VOCAB_TREE}' | sha256sum -c -",
     )
-    .pip_install(*IMAGE_PACKAGES)
+    .pip_install(*IMAGE_PACKAGES, PYCOLMAP)
     .env(
         {
             "QT_QPA_PLATFORM": "offscreen",
@@ -233,6 +240,10 @@ cpu_image = (
         # The pipeline finds the tree the way a stage will, or the build stops here.
         f"cd {PIPELINE_DIR} && python -c 'import sfm; assert sfm.vocab_tree_path(), "
         f'"no vocabulary tree at $COLMAP_VOCAB_TREE"\'',
+        # And the global mapper is the one `global_sfm.py` was measured with.
+        f"cd {PIPELINE_DIR} && python -c 'import pycolmap, global_sfm; "
+        f"assert pycolmap.__version__ == global_sfm.PYCOLMAP_VERSION, pycolmap.__version__; "
+        f'assert hasattr(pycolmap, "global_mapping")\'',
     )
 )
 
@@ -261,12 +272,13 @@ class S3Transfer:
 
     def put(self, key: str, source: Path) -> int:
         if source.is_dir():
-            moved = 0
-            for member in sorted(p for p in source.rglob("*") if p.is_file()):
+
+            def one(member: Path) -> int:
                 relative = member.relative_to(source).as_posix()
                 self._client.upload_file(str(member), self._bucket, f"{key}/{relative}")
-                moved += member.stat().st_size
-            return moved
+                return member.stat().st_size
+
+            return sum(_parallel(one, sorted(p for p in source.rglob("*") if p.is_file())))
         self._client.upload_file(str(source), self._bucket, key)
         return source.stat().st_size
 
@@ -275,13 +287,14 @@ class S3Transfer:
             target.parent.mkdir(parents=True, exist_ok=True)
             self._client.download_file(self._bucket, key, str(target))
             return target.stat().st_size
-        moved = 0
-        for member in self._listing(f"{key}/"):
+
+        def one(member: str) -> int:
             destination = target / member[len(key) + 1 :]
             destination.parent.mkdir(parents=True, exist_ok=True)
             self._client.download_file(self._bucket, member, str(destination))
-            moved += destination.stat().st_size
-        return moved
+            return destination.stat().st_size
+
+        return sum(_parallel(one, self._listing(f"{key}/")))
 
     def exists(self, key: str) -> bool:
         return self._head(key) is not None or bool(self._listing(f"{key}/", limit=1))
@@ -318,6 +331,23 @@ class S3Transfer:
             token = page.get("NextContinuationToken") if page.get("IsTruncated") else None
             if token is None:
                 return keys
+
+
+#: Objects of one directory moved at once. A frames artifact is ~100 objects, and moving
+#: them one request at a time is mostly round trips: the pose stage's measured 110 s of
+#: non-COLMAP time is where that went (with the worker's side, `apps/api/app/worker/
+#: cloud.py`, which does the same). Within botocore's default pool of ten connections.
+TRANSFER_WORKERS = 8
+
+
+def _parallel(work: Any, items: list[Any]) -> list[int]:
+    """`work` over `items`, `TRANSFER_WORKERS` at a time; the first failure is raised."""
+    if len(items) <= 1:
+        return [work(item) for item in items]
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=TRANSFER_WORKERS) as pool:
+        return list(pool.map(work, items))
 
 
 def _transfer() -> S3Transfer:

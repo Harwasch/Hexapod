@@ -166,6 +166,12 @@ jobs:
       # Both recipes -- Lane 2 included -- run end to end under StubRunner here. This
       # runner has no GPU, which is the whole point: if this job needs one, the stub has
       # stopped doing its job.
+      #
+      # pycolmap, for `mapper: global` (tools/pipeline/global_sfm.py): the prebuilt wheel
+      # the Modal CPU image installs, not a project dependency, so it is added to the venv
+      # here rather than to uv.lock. `tests/test_pose_global.py` fails under CI=true
+      # without it.
+      - run: uv pip install pycolmap==4.2.0
       - run: uv run pytest -q
       # The Modal app's decorators run on the machine that types `modal deploy`, not in
       # the container, so building the App locally is a real check of everything they

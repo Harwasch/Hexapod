@@ -30,7 +30,8 @@ process whose job is to hold a lease. The child still has no database session.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from importlib.util import find_spec
 from pathlib import Path
@@ -118,13 +119,14 @@ class ObjectStoreTransfer:
     def put(self, key: str, source: Path) -> int:
         target = self._key(key)
         if source.is_dir():
-            moved = 0
-            for member in sorted(p for p in source.rglob("*") if p.is_file()):
+
+            def one(member: Path) -> int:
                 data = member.read_bytes()
                 relative = member.relative_to(source).as_posix()
                 self.storage.put_object(f"{target}/{relative}", data, "application/octet-stream")
-                moved += len(data)
-            return moved
+                return len(data)
+
+            return sum(_parallel(one, sorted(p for p in source.rglob("*") if p.is_file())))
         data = source.read_bytes()
         self.storage.put_object(target, data, "application/octet-stream")
         return len(data)
@@ -136,11 +138,12 @@ class ObjectStoreTransfer:
             # Streamed: what comes back from a GPU stage is a trained splat of hundreds
             # of megabytes, arriving on a worker with two gigabytes.
             return self.storage.download_file(root, target)
-        moved = 0
-        for member in self._listing(f"{root}/"):
-            relative = member[len(root) + 1 :]
-            moved += self.storage.download_file(member, target / relative)
-        return moved
+        return sum(
+            _parallel(
+                lambda member: self.storage.download_file(member, target / member[len(root) + 1 :]),
+                self._listing(f"{root}/"),
+            )
+        )
 
     def exists(self, key: str) -> bool:
         root = self._key(key)
@@ -168,6 +171,22 @@ class ObjectStoreTransfer:
             token = page.next_continuation_token
             if token is None or first_page_only:
                 return keys
+
+
+#: How many objects of one directory move at once. A frames artifact is ~100 objects of
+#: 0.2-2 MB, and one request at a time spends most of its time on each request's round
+#: trip rather than on bytes; eight keeps within botocore's default pool of ten
+#: connections and, for uploads (each member read into memory), 8 x 2 MB of the
+#: worker's RAM.
+TRANSFER_WORKERS = 8
+
+
+def _parallel[T](work: Callable[[T], int], items: Sequence[T]) -> list[int]:
+    """`work` over `items`, `TRANSFER_WORKERS` at a time; the first failure is raised."""
+    if len(items) <= 1:
+        return [work(item) for item in items]
+    with ThreadPoolExecutor(max_workers=TRANSFER_WORKERS) as pool:
+        return list(pool.map(work, items))
 
 
 def adapter_for(
