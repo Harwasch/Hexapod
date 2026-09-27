@@ -436,7 +436,11 @@ What this decided, in `recipes/photo-reconstruct.yaml`:
   match by pairs gives about 2 000 s of matching for 100 frames on 4 cores, and about
   9 h for 400. 100 frames of a one-minute orbit is one every 0.6 s. Frames are chosen by
   **`sharpness-windowed`**, the sharpest of each of 100 equal stretches, so that the cut
-  cannot lose a whole blurred side the way global top-K could.
+  cannot lose a whole blurred side the way global top-K could. (Since recipe v9 that is
+  a photo set's rule only: a video's frames are chosen by camera motion, `select:
+  viewpoint` -- the sharpest of each window of ~10% of the view or ~1 deg of viewpoint,
+  as many as the capture covers, up to `keep_video` -- see `keyframes.py`. Frame size is
+  `max_side: auto`, 1600 unless the capture measurably holds more; `resolution.py`.)
 - **4096 features at 1600 px** instead of the stage's 8192 at 2400: the same 50/50 in 62%
   of the time. Only the SfM sees the downscale; `train` reads the full frames.
 

@@ -8,7 +8,7 @@
 # `compensate` gains a `gpu:` block when its impl becomes `imc` (B3); asking for an L4 to
 # run `none` would be billing a GPU to do nothing.
 name: photo-reconstruct
-version: 8
+version: 9
 description: Reconstruct a splat from a raw capture, then package and register it.
 
 inputs: [upload]
@@ -17,29 +17,56 @@ stages:
   - id: normalize
     impl: ffmpeg_frames
     params:
-      # 8, not 4: on the spool capture (experiments/run_variants.py, 2026-09-27) twice the
-      # frames gave LPIPS 0.148 against 0.174 and kept 41% against 38% -- six times the
-      # run-to-run noise -- for $0.03 more and ~8 min more pose. No training switch
-      # (antialiased, depth loss, bilateral grid, pose opt, opacity reg) beat the noise.
-      fps: 8
-      # Ranked by variance-of-Laplacian, never an absolute threshold: A0 measured a 101x
-      # within-clip dynamic range, so no cutoff transfers between scenes. Windowed, so
-      # that keeping a quarter of a minute's candidates cannot drop a blurred side.
-      select: sharpness-windowed
-      # 100, not 400, because pose runs on 4 CPU cores and exhaustive matching is
-      # quadratic in frames. Measured on 4 cores (README, "Where pose runs"): 50 frames
-      # 653 s; 400 would be ~64x the matching, most of a day. A video's frames are now
-      # matched sequentially (linear), but a photo set, and the fallback when sequential
-      # registers too few, are still exhaustive -- so the ceiling stays where that fits.
+      # A video's keyframes follow how far the camera moved, not how long the clip ran
+      # (`keyframes.py`). Frames were the one lever that beat run-to-run noise on the
+      # spool capture (experiments/run_variants.py, 2026-09-27): 87 -> 173 frames gave
+      # LPIPS 0.174 -> 0.148 and kept 41% against 38%, where no training switch
+      # (antialiased, depth loss, bilateral grid, pose opt, opacity reg) did. By time,
+      # a two-minute walk was thinned to ~1.5 frames a second and a slow close-up kept
+      # near-duplicates; by motion, each gets what it covered.
+      select: viewpoint
+      # Under `viewpoint`, the rate *candidates* are taken at -- the densest keyframes
+      # can ever be -- and each motion window keeps its sharpest candidate, so it is
+      # above the 8 fps that measured best. Bounded by the clip's own rate and by
+      # `max_candidates` over its length (1200: two minutes at 10 fps; every candidate
+      # is decoded, scored and tracked on the worker, ~50 ms each).
+      fps: 15
+      max_candidates: 1200
+      # One window's budget of motion; each window keeps one frame, and neighbouring
+      # keyframes are typically one window apart and at most two.
+      #   overlap 0.9: a window closes when 10% of the view has changed, so neighbours
+      #     share ~90% of it and never less than ~80% -- what SfM asks of sequential
+      #     neighbours, met in the worst case, with the typical case denser for training.
+      #   parallax 0.005: of the long side, ~1 deg of change of viewpoint round a subject
+      #     whose depth is +/-0.4 of the distance to it (checked on Tanks and Temples'
+      #     truck: 251 frames round it, 1.43 deg apart, measured 0.73% each) -- ~360
+      #     keyframes a full orbit, the density the spool's better 8 fps run had.
+      overlap: 0.9
+      parallax: 0.005
+      # A photo set's cap, and what `viewpoint` falls back to for one: it has no order to
+      # measure motion along, so photos keep top-K by sharpness, windowed. 100, not 400,
+      # because a photo set is matched exhaustively, quadratic in frames: measured on 4
+      # cores (README, "Where pose runs"), 50 frames 653 s; 400 would be ~64x the
+      # matching, most of a day.
       keep: 100
-      # A video's cap. Its frames are matched sequentially, linear in frames, so 180
-      # (~22 s at 8 fps) posed in 12 min on the spool capture.
-      keep_video: 180
-      # Long side, in pixels, for every frame: photos arrive at full sensor size (an
-      # iPhone's 5712x4284) and 4K video at 3840. A splat holds no more detail than
-      # this from a phone, and training on 24 MP frames multiplies the GPU time. Pose
-      # already worked at 1600 (max_image_size below), so the two now agree.
-      max_side: 1600
+      # A video's ceiling on keyframes -- for pose time only, not the usual limit. A
+      # video is matched sequentially, ~linear in frames: 173 frames posed in 12 min on
+      # 4 cores (~4 s a frame), so 300 is ~21 min. It binds on a long steady walk (past
+      # ~1.5 min at a walking pace); then every window is widened by the same factor,
+      # which spreads the 300 evenly by motion rather than by time. The tail it guards
+      # against is pose's exhaustive fallback (sequential registering under 80%): at the
+      # backhoe's 0.15 s a pair, 300 frames' 45k pairs would be ~2 h rather than 20 min.
+      keep_video: 300
+      # Long side, in pixels. `auto`: 1600 -- where a phone's frames hold what a splat
+      # can use, and what pose extracts at (max_image_size below) -- unless the sharpest
+      # of 8 sampled frames measurably carry detail above it over a quarter of the
+      # picture; then the source's size, at most `auto_ceiling` (`resolution.py`). 2400
+      # is ~2.25x the pixels and about twice the GPU time, so the rule is conservative
+      # and source_meta.json records its measurement. A number here, or the phone's
+      # "Photo size", overrides it.
+      max_side: auto
+      auto_base: 1600
+      auto_ceiling: 2400
 
   - id: pose
     impl: colmap # | glomap | arkit

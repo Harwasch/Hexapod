@@ -6,6 +6,7 @@ import json
 import math
 import time
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Final, Literal
 
@@ -40,7 +41,18 @@ PHONE_RECIPES = frozenset({"splat-ingest", "photo-reconstruct"})
 #: of interest, `{"center": [x, y, z], "radius": r}` with every number finite and r > 0.
 FLAG: Final = "flag"
 ROI: Final = "roi"
-Rule = tuple[float, float] | frozenset[str] | Literal["flag", "roi"]
+
+
+@dataclass(frozen=True)
+class RangeOr:
+    """A number in [low, high], or one of a few words: `max_side` is 800..4000 or `auto`."""
+
+    low: float
+    high: float
+    words: frozenset[str]
+
+
+Rule = tuple[float, float] | frozenset[str] | RangeOr | Literal["flag", "roi"]
 
 #: The options a phone may set, per recipe and stage: each parameter's allowed range, or
 #: its allowed values. Anything else is refused by name rather than passed through, so
@@ -48,10 +60,18 @@ Rule = tuple[float, float] | frozenset[str] | Literal["flag", "roi"]
 #: (a trainer path, a Python interpreter, a GPU tier).
 PHONE_OPTIONS: dict[str, dict[str, dict[str, Rule]]] = {
     "photo-reconstruct": {
-        # The long side frames are shrunk to before pose and training; frames per second
-        # taken from a video, and how many of them are kept (the recipe keeps 100; more
-        # is what a higher fps is for, and pose's exhaustive fallback is quadratic in it).
-        "normalize": {"max_side": (800, 4000), "fps": (1, 10), "keep": (20, 200)},
+        # The long side frames are kept at: a number, or `auto` (the recipe's default:
+        # 1600 unless the capture measurably holds detail above it); the most candidate
+        # frames a second taken from a video (keyframes are then chosen by camera
+        # motion); and how many photos are kept (the recipe keeps 100; pose matches a
+        # photo set exhaustively, quadratic in it). `select` is for comparing the motion
+        # rule with the time-windowed one it replaced (experiments/run_variants.py).
+        "normalize": {
+            "max_side": RangeOr(800, 4000, frozenset({"auto"})),
+            "fps": (1, 30),
+            "keep": (20, 200),
+            "select": frozenset({"viewpoint", "sharpness-windowed"}),
+        },
         # The training schedule (`training.schedule_scale`) and the gaussian cap; then the
         # preview's and Refine's knobs: a forced schedule scale, the training image size,
         # the region to train inside (COLMAP frame, from a preview's quality stage), and
@@ -113,6 +133,22 @@ def _checked_options(recipe: str, params: dict[str, object]) -> dict[str, dict[s
                     raise ConflictError(f"{stage}.{name} must be true or false.")
             elif rule == ROI:
                 value = _checked_roi(stage, value)
+            elif isinstance(rule, RangeOr):
+                if isinstance(value, str):
+                    if value not in rule.words:
+                        raise ConflictError(
+                            f"{stage}.{name} must be a number from {rule.low:g} to "
+                            f"{rule.high:g}, or one of {sorted(rule.words)}."
+                        )
+                elif (
+                    isinstance(value, bool)
+                    or not isinstance(value, int | float)
+                    or not rule.low <= value <= rule.high
+                ):
+                    raise ConflictError(
+                        f"{stage}.{name} must be a number from {rule.low:g} to {rule.high:g}, "
+                        f"or one of {sorted(rule.words)}."
+                    )
             elif isinstance(rule, frozenset):
                 if value not in rule:
                     raise ConflictError(f"{stage}.{name} must be one of {sorted(rule)}.")

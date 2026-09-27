@@ -21,8 +21,11 @@ baseline: baseline
 # What a Refine at the phone's Standard settings trains with, minus the support-mask
 # crop (a fresh `process` has no preview to crop to): 1600 px frames at 4 fps, the whole
 # 30k schedule, the recipe's MCMC at 500k, the strict bar, 400k gaussians packaged.
+#
+# `select: sharpness-windowed` pins the time-based frame rule these runs were made with;
+# the recipe's own rule is by camera motion since v9, which is the `viewpoint` variant.
 base:
-  normalize: {max_side: 1600, fps: 4}
+  normalize: {max_side: 1600, fps: 4, select: sharpness-windowed}
   train: {schedule_scale: 1.0}
   quality: {mode: refine, bar: strict}
   package: {max_gaussians: 400000}
@@ -63,6 +66,13 @@ variants:
   # More frames: 8 fps, and up to 180 of them kept (the recipe keeps 100).
   - name: fps-8
     params: {normalize: {fps: 8, keep: 180}}
+
+  # Keyframes by camera motion (keyframes.py), the recipe's rule since v9: candidates at
+  # 15 a second, a window per 10% of the view or ~1 deg of viewpoint, the sharpest of
+  # each. Its frame count is in source_meta.json `viewpoint`; the question is whether it
+  # keeps about fps-8's 173 frames on this capture and matches or beats its LPIPS.
+  - name: viewpoint
+    params: {normalize: {select: viewpoint, fps: 15}}
 
   # Everything at once (bilateral grid rather than app_opt: they model the same drift).
   - name: all-of-the-recipe

@@ -43,8 +43,10 @@ import gaussians
 import global_sfm
 import holdout
 import init_seed
+import keyframes
 import live
 import quality
+import resolution
 import sfm
 import support_mask
 import training
@@ -291,14 +293,14 @@ def ingest_splat(ctx: StageContext) -> StageOutcome:
 
 
 #: `select:` values this stage accepts. There is deliberately no threshold among them.
-SELECT_MODES: tuple[str, ...] = ("sharpness", "sharpness-windowed", "all")
+SELECT_MODES: tuple[str, ...] = ("viewpoint", "sharpness", "sharpness-windowed", "all")
 
 
 @stage_impl(
     "ffmpeg_frames",
     consumes=("upload",),
     produces=(FRAMES, SOURCE_META),
-    summary="Lane 2: video or image folder to a frame set, top-K by sharpness",
+    summary="Lane 2: video or image folder to a frame set, keyframes by camera motion",
 )
 def ffmpeg_frames(ctx: StageContext) -> StageOutcome:
     """Real: the upload becomes a frame set and a description of where it came from.
@@ -313,11 +315,25 @@ def ffmpeg_frames(ctx: StageContext) -> StageOutcome:
     * there is no `ffprobe` in that wheel, so sensor, date and location are scraped from
       `ffmpeg -i` stderr -- including **both** iPhone location keys, the `mdta`
       `com.apple.quicktime.location.ISO6709` and the older `(c)xyz` atom;
-    * `select: sharpness` is top-K and cannot be given a cutoff. A0 measured a 101x
+    * selection ranks by sharpness and cannot be given a cutoff. A0 measured a 101x
       within-clip range in variance-of-Laplacian, so no absolute threshold transfers.
-      `sharpness-windowed` is the same rank taken within each of `keep` equal stretches
-      of the clip, for when `keep` is a small fraction of the candidates and a blurred
-      stretch would otherwise lose a whole side of the capture.
+
+    Which frames, by `select`:
+
+    * `viewpoint` (the recipe's, for a video): candidates at `fps` (bounded by
+      `max_candidates` over the clip, and by the clip's own rate), cut into windows of
+      equal camera motion -- `overlap` of the view, `parallax` of the long side -- and
+      the sharpest candidate of each kept (`keyframes.py` has the method and the
+      derivation). The count follows the capture; `keep_video` is only a ceiling for
+      pose time, and when it binds the windows are widened evenly by motion. A photo set
+      has no order to measure motion along, and is matched exhaustively (quadratic), so
+      it keeps today's rule: `sharpness-windowed` to `keep`;
+    * `sharpness`: top-K of the candidates by rank; `sharpness-windowed`: the same rank
+      within each of `keep` equal stretches of time; `all`: evenly spaced.
+
+    `max_side` is the long side frames are kept at: a number, or `auto` -- 1600 unless a
+    sample of the capture's sharpest frames measurably carries detail above it, then up
+    to `auto_ceiling` (`resolution.py`). Absent, frames keep their size.
 
     What it does *not* do is read EXIF off a folder of stills or turn a location into a
     georeference -- `exif_gps` is that stage, and it lands in B4. A location found here is
@@ -330,32 +346,46 @@ def ffmpeg_frames(ctx: StageContext) -> StageOutcome:
     select = str(ctx.param("select", "sharpness"))
     # A video's frames are matched sequentially (linear in frames), a photo set's
     # exhaustively (quadratic), so a video can afford more of them: `keep_video`, when
-    # set, is a video's cap and `keep` stays the photos'.
+    # set, is a video's cap -- under `viewpoint`, its ceiling -- and `keep` stays the
+    # photos'.
     keep_video = _optional_int(ctx.param("keep_video"))
     if select not in SELECT_MODES:
         raise ValueError(
             f"select={select!r} is not one of {', '.join(SELECT_MODES)}. In particular "
             f"there is no blur threshold: A0 measured a 101x within-clip range in "
             f"variance-of-Laplacian, so a cutoff that works on one capture discards a "
-            f"whole other capture. Selection is top-K, set by `keep`"
+            f"whole other capture. Selection is by rank: top-K by `keep`, or the sharpest "
+            f"of each window of camera motion"
         )
+    size_rule = _frame_size_rule(ctx.param("max_side"))
+    base = int(ctx.param("auto_base", resolution.BASE))
+    size_ceiling = int(ctx.param("auto_ceiling", resolution.CEILING))
+    # Photos keep today's behaviour under `viewpoint`: there is no capture order to
+    # measure motion along, and their matching is exhaustive, so `keep` stays their cap.
+    applied = "sharpness-windowed" if select == "viewpoint" and not source.is_video else select
 
     meta = video.VideoMeta()
+    rate: float | None = None
+    size: resolution.SizeDecision | None = None
     if source.is_video:
         ctx.log(f"$ {' '.join(video.probe_argv(source.path))}")
         text = video.probe_text(source.path)
         for line in text.splitlines():
             ctx.log(line)
         meta = video.parse_probe(text)
+        if size_rule == "auto":
+            size = _video_frame_size(ctx, source.path, meta, base=base, ceiling=size_ceiling)
+        max_side = size.max_side if size is not None else _fixed_side(size_rule)
+        rate = _candidate_rate(ctx, fps, meta) if applied == "viewpoint" else fps
         extracted = ctx.work_dir / "extracted"
         extracted.mkdir(parents=True, exist_ok=True)
         ctx.run(
             video.extract_frames_argv(
                 source.path,
                 extracted / "frame_%05d.jpg",
-                fps=fps,
+                fps=rate,
                 quality=int(ctx.param("quality", 2)),
-                max_side=_optional_int(ctx.param("max_side")),
+                max_side=max_side,
             )
         )
         candidates = sorted(extracted.glob("frame_*.jpg"))
@@ -363,13 +393,41 @@ def ffmpeg_frames(ctx: StageContext) -> StageOutcome:
             keep = keep_video
     else:
         candidates = list(source.images)
+        if size_rule == "auto" and candidates:
+            size = _photo_frame_size(candidates, base=base, ceiling=size_ceiling)
+        max_side = size.max_side if size is not None else _fixed_side(size_rule)
     if not candidates:
         raise ValueError(f"no frames came out of {source.path.name}")
+    if size is not None:
+        ctx.log(f"frame size: {size.max_side} px -- {size.reason}")
 
-    if select == "sharpness":
+    viewpoint: dict[str, object] | None = None
+    segmentation: keyframes.Segmentation | None = None
+    if applied == "viewpoint":
+        overlap = float(ctx.param("overlap", 0.9))
+        parallax = float(ctx.param("parallax", 0.005))
+        if not 0.0 < overlap < 1.0 or parallax <= 0.0:
+            raise ValueError(
+                f"overlap must be between 0 and 1 and parallax above 0 (got {overlap}, "
+                f"{parallax}): they are the motion one window may hold"
+            )
+        analysis = keyframes.analyse(candidates)
+        scores = list(analysis.scores)
+        segmentation = keyframes.segment(
+            analysis.pairs,
+            frame_size=analysis.frame_size,
+            overlap=overlap,
+            parallax=parallax,
+            ceiling=keep,
+        )
+        chosen = keyframes.select_per_window(scores, segmentation.windows)
+        viewpoint = _viewpoint_record(
+            analysis, segmentation, chosen, overlap=overlap, parallax=parallax
+        )
+    elif applied == "sharpness":
         scores = [video.sharpness(path) for path in candidates]
         chosen = video.select_sharpest(scores, keep)
-    elif select == "sharpness-windowed":
+    elif applied == "sharpness-windowed":
         scores = [video.sharpness(path) for path in candidates]
         chosen = video.select_sharpest_per_window(scores, keep)
     else:
@@ -380,12 +438,19 @@ def ffmpeg_frames(ctx: StageContext) -> StageOutcome:
         ctx.output(FRAMES.name),
         # Photos arrive at full sensor size; a video's frames were bounded by ffmpeg
         # already and pass straight through.
-        max_side=_optional_int(ctx.param("max_side")),
+        max_side=max_side,
     )
 
     kept_scores = [scores[i] for i in chosen] if scores else []
-    dropped_scores = [s for i, s in enumerate(scores) if i not in set(chosen)]
+    chosen_set = set(chosen)
+    dropped_scores = [s for i, s in enumerate(scores) if i not in chosen_set]
     first = _image_size(written[0])
+    selection = {
+        "viewpoint": "the sharpest of each window of camera motion; never an absolute "
+        "cutoff (A0 #6)",
+        "sharpness-windowed": "the sharpest of each of K equal stretches; never an absolute "
+        "cutoff (A0 #6)",
+    }.get(applied, "top-K by rank; never an absolute cutoff (A0 #6)")
     document: dict[str, object] = {
         "filename": source.path.name,
         "format": "video" if source.is_video else "images",
@@ -394,22 +459,30 @@ def ffmpeg_frames(ctx: StageContext) -> StageOutcome:
         "frames": {
             "candidates": len(candidates),
             "kept": len(written),
-            "fps": fps if source.is_video else None,
-            "select": select,
+            # The rate candidates were taken at: `fps`, or less when `max_candidates`
+            # over the clip's length (or the clip's own rate) bounded it.
+            "fps": rate,
+            "fpsRequested": fps if source.is_video else None,
+            "select": applied,
+            "selectRequested": select,
             "keep": keep,
             "width": first[0],
             "height": first[1],
+            "maxSide": max_side,
         },
+        # How big the frames are and why: `auto`'s measurement, or the number asked for.
+        "frameSize": (
+            size.to_dict()
+            if size is not None
+            else {"rule": "fixed" if max_side is not None else "source", "maxSide": max_side}
+        ),
+        "viewpoint": viewpoint,
         # Recorded, not thresholded. The numbers are here so a later run can see *why*
         # these frames and not others, which is the only thing a non-linear score is
         # good for.
         "sharpness": {
             "metric": "variance-of-laplacian",
-            "selection": (
-                "the sharpest of each of K equal stretches; never an absolute cutoff (A0 #6)"
-                if select == "sharpness-windowed"
-                else "top-K by rank; never an absolute cutoff (A0 #6)"
-            ),
+            "selection": selection,
             "kept": video.summarise(kept_scores),
             "rejected": video.summarise(dropped_scores),
         },
@@ -426,22 +499,191 @@ def ffmpeg_frames(ctx: StageContext) -> StageOutcome:
     _write_json(ctx.output(SOURCE_META.name), document)
     ctx.log(
         f"{source.kind}: {len(candidates)} candidate frame(s) -> {len(written)} kept "
-        f"by {select} ({first[0]}x{first[1]})"
+        f"by {applied} ({first[0]}x{first[1]})"
     )
+    if segmentation is not None:
+        widened = (
+            f"widened {segmentation.scale:.2f}x from {segmentation.uncapped_windows} to fit "
+            f"the ceiling of {keep}"
+            if segmentation.bound
+            else f"ceiling {keep} not reached"
+        )
+        ctx.log(
+            f"viewpoint: {len(segmentation.windows)} window(s) of camera motion ({widened}); "
+            f"{segmentation.unmeasured_pairs} pair(s) whose motion could not be measured"
+        )
     if meta.location is not None:
         ctx.log(f"location {meta.location.lat}, {meta.location.lon} from {meta.location.source}")
     metrics: dict[str, MetricValue] = {
         "candidates": len(candidates),
         "frames": len(written),
-        "select": select,
+        "select": applied,
         "width": first[0],
         "height": first[1],
+        "maxSide": max_side if max_side is not None else max(first),
+        "maxSideRule": "auto" if size is not None else "fixed" if max_side else "source",
     }
     if source.is_video:
-        metrics["fps"] = fps
+        metrics["fps"] = rate if rate is not None else fps
         if meta.duration_s is not None:
             metrics["durationS"] = meta.duration_s
-    return StageOutcome(metrics=metrics, summary=f"{len(written)} frames by {select}")
+    if segmentation is not None:
+        metrics["keyframeCeilingBound"] = segmentation.bound
+        metrics["motionScale"] = round(segmentation.scale, 4)
+        metrics["unmeasuredPairs"] = segmentation.unmeasured_pairs
+    return StageOutcome(metrics=metrics, summary=f"{len(written)} frames by {applied}")
+
+
+def _frame_size_rule(value: object) -> int | str | None:
+    """`max_side` as asked: absent (keep the source's size), a number, or `auto`."""
+    if value is None:
+        return None
+    if isinstance(value, str) and value.strip().lower() == "auto":
+        return "auto"
+    if isinstance(value, bool):
+        raise ValueError(f"max_side must be a number of pixels or 'auto', not {value!r}")
+    try:
+        side = int(str(value))
+    except ValueError:
+        raise ValueError(f"max_side must be a number of pixels or 'auto', not {value!r}") from None
+    if side < 64:
+        raise ValueError(f"max_side={side} is too small to reconstruct anything from")
+    return side
+
+
+def _fixed_side(rule: int | str | None) -> int | None:
+    return rule if isinstance(rule, int) else None
+
+
+def _candidate_rate(ctx: StageContext, fps: float, meta: video.VideoMeta) -> float:
+    """The rate `viewpoint` extracts candidates at: `fps`, bounded two ways.
+
+    By the clip's own frame rate, because ffmpeg's `fps` filter duplicates frames to
+    reach a rate the clip does not have, and a duplicate is a candidate with no motion
+    and no new sharpness. And by `max_candidates` over the clip's length, because every
+    candidate is decoded, scored and tracked on the worker (~50 ms each, plus its JPEG on
+    disk): 1200 is two minutes at 10 fps, and a five-minute walk is sampled at 4 fps --
+    still several candidates to every window at a walking pace.
+    """
+    rate = fps
+    if meta.fps is not None and meta.fps > 0:
+        rate = min(rate, meta.fps)
+    max_candidates = int(ctx.param("max_candidates", 1200))
+    if meta.duration_s is not None and meta.duration_s > 0 and max_candidates > 0:
+        rate = min(rate, max_candidates / meta.duration_s)
+    return round(rate, 4)
+
+
+def _video_frame_size(
+    ctx: StageContext, source: Path, meta: video.VideoMeta, *, base: int, ceiling: int
+) -> resolution.SizeDecision:
+    """`max_side: auto` for a clip: frames sampled across it at the size that would be
+    kept, the sharpest half measured. Eight seeks, not a decode of the whole clip."""
+    long_side = max(meta.width, meta.height) if meta.width and meta.height else None
+    side = resolution.measured_side(long_side, base=base, ceiling=ceiling)
+    if long_side is None or side is None:
+        return resolution.not_measured(long_side, base=base)
+    duration = meta.duration_s if meta.duration_s and meta.duration_s > 0 else None
+    count = resolution.SAMPLES
+    times = (
+        [(index + 0.5) * duration / count for index in range(count)]
+        if duration is not None
+        else [float(index) for index in range(count)]
+    )
+    folder = ctx.work_dir / "size-sample"
+    folder.mkdir(parents=True, exist_ok=True)
+    greys: list[npt.NDArray[np.float32]] = []
+    for index, at in enumerate(times):
+        target = folder / f"sample_{index:02d}.png"
+        try:
+            ctx.run(video.grab_frame_argv(source, at, target, max_side=side))
+        except subprocess.CalledProcessError:
+            continue
+        if target.is_file():
+            with PIL.Image.open(target) as image:
+                greys.append(np.asarray(image.convert("L"), dtype=np.float32))
+    return _decide_frame_size(greys, long_side=long_side, base=base, ceiling=ceiling)
+
+
+def _photo_frame_size(
+    photos: Sequence[Path], *, base: int, ceiling: int
+) -> resolution.SizeDecision:
+    """`max_side: auto` for a photo set: the same measurement on photos spread over it."""
+    picks = [photos[i] for i in video.evenly_spaced(len(photos), resolution.SAMPLES)]
+    long_side = min(max(_image_size(path)) for path in picks)
+    side = resolution.measured_side(long_side, base=base, ceiling=ceiling)
+    if side is None:
+        return resolution.not_measured(long_side, base=base)
+    greys: list[npt.NDArray[np.float32]] = []
+    for path in picks:
+        with PIL.Image.open(path) as image:
+            grey = image.convert("L")
+        scale = side / max(grey.size)
+        if scale < 1.0:
+            size = (round(grey.width * scale), round(grey.height * scale))
+            grey = grey.resize(size, PIL.Image.Resampling.LANCZOS)
+        greys.append(np.asarray(grey, dtype=np.float32))
+    return _decide_frame_size(greys, long_side=long_side, base=base, ceiling=ceiling)
+
+
+def _decide_frame_size(
+    greys: Sequence[npt.NDArray[np.float32]], *, long_side: int, base: int, ceiling: int
+) -> resolution.SizeDecision:
+    """The sharpest half of the sample, by rank (A0 #6), measured for detail."""
+    scores = [video.laplacian_variance(grey) for grey in greys]
+    picked = video.select_sharpest(scores, resolution.sample_count(len(greys)))
+    return resolution.decide(
+        [greys[i] for i in picked], source_side=long_side, base=base, ceiling=ceiling
+    )
+
+
+def _viewpoint_record(
+    analysis: keyframes.Analysis,
+    segmentation: keyframes.Segmentation,
+    chosen: Sequence[int],
+    *,
+    overlap: float,
+    parallax: float,
+) -> dict[str, object]:
+    """What `source_meta.json` says about the windows: enough to check the budgets held."""
+    overlaps, drifts = keyframes.neighbour_motion(
+        analysis.pairs, chosen, frame_size=analysis.frame_size
+    )
+    closed_by: dict[str, int] = {}
+    for window in segmentation.windows:
+        closed_by[window.closed_by] = closed_by.get(window.closed_by, 0) + 1
+    tiles = [float(pair.tiles) for pair in analysis.pairs[1:] if pair is not None]
+    return {
+        "method": (
+            f"phase-correlated tiles on grey frames at {keyframes.ANALYSIS_SIDE} px -> "
+            "homography by reweighted DLT; a window closes when the composed homography's "
+            "overlap or the accumulated off-homography parallax spends its budget; the "
+            "sharpest candidate of each window is kept"
+        ),
+        "overlap": overlap,
+        "parallax": parallax,
+        # Each budget as applied: `scale` is 1 unless the ceiling widened them.
+        "windowBudget": {
+            "viewChanged": round((1.0 - overlap) * segmentation.scale, 4),
+            "parallaxOfLongSide": round(parallax * segmentation.scale, 5),
+        },
+        "scale": round(segmentation.scale, 4),
+        "ceiling": segmentation.ceiling,
+        "ceilingBound": segmentation.bound,
+        "windowsBeforeCeiling": segmentation.uncapped_windows,
+        "keyframes": len(chosen),
+        "closedBy": closed_by,
+        "unmeasuredPairs": segmentation.unmeasured_pairs,
+        # Frames that matched nothing but were bridged: the next frame matched across them.
+        "heldFrames": sum(1 for pair in analysis.pairs if pair is not None and pair.held),
+        "tilesPerPair": video.summarise(tiles),
+        "candidatesPerKeyframe": video.summarise(
+            [float(w.end - w.start + 1) for w in segmentation.windows]
+        ),
+        # Between consecutive *kept* frames: what the budgets promise, as it came out.
+        "neighbourOverlap": video.summarise(overlaps),
+        "neighbourParallax": video.summarise(drifts),
+    }
 
 
 # ---------------------------------------------------------------------------------------
