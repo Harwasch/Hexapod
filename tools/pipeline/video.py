@@ -32,9 +32,11 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from itertools import pairwise
 from pathlib import Path
+from typing import Any
 
 import imageio_ffmpeg
 import numpy as np
+import numpy.typing as npt
 from PIL import Image
 
 __all__ = [
@@ -48,11 +50,14 @@ __all__ = [
     "extract_frames_argv",
     "ffmpeg_exe",
     "ffmpeg_version",
+    "grab_frame_argv",
+    "laplacian_variance",
     "parse_iso6709",
     "pick_source",
     "probe",
     "probe_argv",
     "probe_text",
+    "scale_filter",
     "select_sharpest",
     "select_sharpest_per_window",
     "sharpness",
@@ -307,11 +312,7 @@ def extract_frames_argv(
     """
     chain = [f"fps={fps:g}"]
     if max_side is not None:
-        # The *long* side bounded, whichever it is, aspect preserved, even dimensions (-2).
-        # Bounding the width alone, as this once did, left a portrait phone clip -- whose
-        # width is its short side -- at nearly full height.
-        m = max_side
-        chain.append(f"scale=w='if(gte(iw,ih),min({m},iw),-2)':h='if(gte(iw,ih),-2,min({m},ih))'")
+        chain.append(scale_filter(max_side))
     return [
         ffmpeg_exe(),
         "-hide_banner",
@@ -329,6 +330,41 @@ def extract_frames_argv(
     ]
 
 
+def scale_filter(max_side: int) -> str:
+    """The ffmpeg filter that bounds the *long* side, whichever it is, to `max_side`.
+
+    Aspect preserved, even dimensions (-2). Bounding the width alone, as this once did,
+    left a portrait phone clip -- whose width is its short side -- at nearly full height.
+    """
+    m = max_side
+    return f"scale=w='if(gte(iw,ih),min({m},iw),-2)':h='if(gte(iw,ih),-2,min({m},ih))'"
+
+
+def grab_frame_argv(source: Path, at_s: float, target: Path, *, max_side: int) -> list[str]:
+    """The argv that writes the one frame at `at_s` seconds, losslessly, to `target`.
+
+    `-ss` before `-i` seeks the demuxer to the keyframe before `at_s` and decodes only
+    from there, so sampling eight frames across a two-minute 4K clip decodes eight GOPs
+    rather than the whole clip. PNG, not JPEG: the frames are measured for fine detail
+    (`resolution.py`), and a JPEG's own quantisation is exactly the band being measured.
+    """
+    return [
+        ffmpeg_exe(),
+        "-hide_banner",
+        "-nostdin",
+        "-y",
+        "-ss",
+        f"{max(0.0, at_s):.3f}",
+        "-i",
+        str(source),
+        "-frames:v",
+        "1",
+        "-vf",
+        scale_filter(max_side),
+        str(target),
+    ]
+
+
 def sharpness(path: Path) -> float:
     """Variance of the Laplacian of the luminance, at full resolution.
 
@@ -339,8 +375,15 @@ def sharpness(path: Path) -> float:
     """
     with Image.open(path) as image:
         grey = np.asarray(image.convert("L"), dtype=np.float64)
+    return laplacian_variance(grey)
+
+
+def laplacian_variance(grey: npt.NDArray[np.floating[Any]]) -> float:
+    """`sharpness` of a frame already decoded to grey, for a caller that needs the pixels
+    for something else too (`select: viewpoint` measures motion on the same decode)."""
     if grey.shape[0] < 3 or grey.shape[1] < 3:
         return 0.0
+    grey = grey.astype(np.float64, copy=False)
     laplacian = (
         4.0 * grey[1:-1, 1:-1] - grey[:-2, 1:-1] - grey[2:, 1:-1] - grey[1:-1, :-2] - grey[1:-1, 2:]
     )

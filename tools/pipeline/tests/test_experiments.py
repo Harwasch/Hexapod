@@ -303,7 +303,7 @@ def test_a_dry_run_prints_the_merged_params_and_touches_nothing(
 ) -> None:
     assert run_variants.main(["--variants", str(VARIANTS / "spool-table.yaml"), "--dry-run"]) == 0
     out = capsys.readouterr().out
-    assert out.count("\n") == 10
+    assert out.count("\n") == 11
     assert out.startswith("baseline: ")
 
 
