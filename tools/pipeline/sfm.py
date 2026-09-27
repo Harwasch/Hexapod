@@ -295,8 +295,14 @@ def mapper_argv(
     refine_extra_params: bool = True,
     random_seed: int = 0,
     num_threads: int | None = None,
+    snapshot_path: Path | None = None,
+    snapshot_every: int = 0,
 ) -> list[str]:
     """Incremental SfM. `refine_focal_length=False` is how a focal prior is *held*.
+
+    `snapshot_path` with `snapshot_every` N makes the mapper write the reconstruction so
+    far into a new directory under it every N registered images -- what `live.MapperWatch`
+    reads to show cameras as they are solved. Off unless asked for.
 
     `random_seed` is COLMAP's own default, 0, unless a retry asks for another: the
     mapper's initial-pair search is randomised, and which pair it starts from decides
@@ -322,6 +328,13 @@ def mapper_argv(
     ]
     if num_threads is not None:
         argv += ["--Mapper.num_threads", str(num_threads)]
+    if snapshot_path is not None and snapshot_every > 0:
+        argv += [
+            "--Mapper.snapshot_path",
+            str(snapshot_path),
+            "--Mapper.snapshot_images_freq",
+            str(snapshot_every),
+        ]
     return argv
 
 

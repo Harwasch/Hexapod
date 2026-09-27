@@ -543,6 +543,12 @@ test.describe("the phone upload page", () => {
     await expect(row("Training").getByRole("button", { name: "Process" })).toHaveCount(0);
     await expect(row("Training")).toContainText("about 20 min left");
     await expect(row("Training").getByRole("button", { name: "Progress" })).toBeVisible();
+    // A running capture can be watched: cameras as they are solved, splats as they train.
+    await expect(row("Training").getByRole("link", { name: "Watch live" })).toHaveAttribute(
+      "href",
+      "/view.html#live/busy",
+    );
+    await expect(row("Finished").getByRole("link", { name: "Watch live" })).toHaveCount(0);
 
     await row("Training").getByRole("button", { name: "Progress" }).click();
     const runningStep = page.locator('#stages li[data-state="running"]');
@@ -772,6 +778,8 @@ test.describe("the phone upload page", () => {
       "Modal · 4 CPU cores",
     );
     await expect(page.locator("#run-cost")).toContainText("Compute so far: $0.0042");
+    await expect(page.locator("#live-link")).toHaveAttribute("href", "/view.html#live/busy");
+    await expect(page.locator("#live-link")).toBeVisible();
   });
 
   test("a bucket that hides the ETag is reported as the CORS problem it is", async ({ page }) => {

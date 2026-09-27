@@ -71,6 +71,7 @@ from app.worker.pipeline_bridge import (
     Plan,
     RunCost,
     Workdir,
+    latest_live,
     latest_progress,
     plan_recipe,
     run_cost,
@@ -84,6 +85,10 @@ log = logging.getLogger("app.worker")
 #: one place the cloud runner's "the machine was taken back" is translated into a
 #: supervisor decision.
 PREEMPTED = "PreemptedError"
+
+#: How much of a running stage's log the heartbeat reads: the progress line and the live
+#: viewer's lines are all near the end, and a live-cameras line is up to ~25 kB.
+LIVE_TAIL_BYTES = 262_144
 
 #: Pushed onto the event queue when the child's stdout reaches EOF.
 _EOF = object()
@@ -383,6 +388,9 @@ class JobSupervisor:
                 for ref in refs
                 if (result := outputs.upload_artifact(self._storage, workdir_root, job.id, ref))
             ]
+            # The final live-cameras line lands just before the stage ends; read it now,
+            # before a heartbeat could, so the finished step keeps it for the viewer.
+            self._report_progress(db, step, workdir_root)
             steps.finish_step(
                 db,
                 step,
@@ -578,9 +586,16 @@ class JobSupervisor:
         On the heartbeat, so it costs one small read a tick. A stage that prints no
         progress line (most of them) leaves the row alone.
         """
-        found = latest_progress(tail_of(Workdir(workdir_root).log_path(step.stage_id)))
+        # Enough of the log to hold the newest live-cameras line (~25 kB) with room over.
+        text = tail_of(Workdir(workdir_root).log_path(step.stage_id), LIVE_TAIL_BYTES)
+        found = latest_progress(text)
         if found is not None:
             steps.report_progress(db, step, found.to_dict())
+        # What the live viewer draws: the newest cameras and intermediate splat the stage
+        # has logged (`tools/pipeline/live.py`), under `metrics.live`.
+        live = latest_live(text)
+        if live:
+            steps.report_live(db, step, live)
 
     def _upload_log(self, job_id: uuid.UUID, workdir_root: Path, stage_id: str) -> str | None:
         return outputs.upload_log(self._storage, workdir_root, job_id, stage_id)

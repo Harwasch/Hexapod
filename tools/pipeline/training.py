@@ -423,6 +423,7 @@ def gsplat_argv(
     pose_opt: bool = False,
     app_opt: bool = False,
     bilateral_grid: bool = False,
+    live_steps: Sequence[int] = (),
     extra: Sequence[str] = (),
 ) -> list[str]:
     """The command line, built in one place so a test can read it without a GPU.
@@ -451,6 +452,11 @@ def gsplat_argv(
     `MCMCStrategy`'s ceiling on the number of gaussians; the
     default strategy has no such field and refuses the flag, so it is only passed with
     `mcmc`.
+
+    `live_steps` are extra `--ply_steps`, after the final one: v1.5.3 exports a PLY at
+    every listed step (scaled with the rest), which `live.SplatWatch` turns into the
+    intermediate splats the live viewer shows. Order does not matter to the trainer (it
+    tests membership), and the final step stays first so it reads as the one that counts.
 
     `--disable_video` too: the trajectory render after evaluation is a video nobody reads.
     There is no `--ckpt`, and there must not be: in v1.5.3 it means "evaluate this and do
@@ -513,6 +519,7 @@ def gsplat_argv(
         "--save_ply",
         "--ply_steps",
         steps,
+        *(str(step) for step in live_steps if 0 < step < max_steps),
         "--save_steps",
         steps,
         "--eval_steps",

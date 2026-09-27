@@ -126,6 +126,12 @@ export type JobRetry = Schemas["JobRetry"];
 export type JobStepLog = Schemas["JobStepLog"];
 export type ArtifactKind = Schemas["ArtifactKind"];
 
+/** A run while it runs, for the live viewer: cameras as solved, splats as they train. */
+export type LiveState = Schemas["LiveState"];
+export type LiveCameras = Schemas["LiveCameras"];
+export type LiveSplat = Schemas["LiveSplat"];
+export type LiveStage = Schemas["LiveStage"];
+
 /** The data console (admin.html): outputs with their provenance, and storage reconciled. */
 export type ArtifactRow = Schemas["ArtifactRow"];
 export type ArtifactReference = Schemas["ArtifactReference"];

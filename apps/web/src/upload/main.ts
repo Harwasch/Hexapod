@@ -132,6 +132,7 @@ interface Ui {
   foot: HTMLElement | null;
   forget: HTMLElement | null;
   doneLink: HTMLAnchorElement | null;
+  liveLink: HTMLAnchorElement | null;
   resume: HTMLButtonElement | null;
   mine: HTMLElement | null;
   mineList: HTMLElement | null;
@@ -769,6 +770,11 @@ function viewerLink(siteId: string): string {
   return `/view.html#${encodeURIComponent(siteId)}`;
 }
 
+/** The same viewer watching a capture's run as it happens: cameras, then splats. */
+function liveLink(captureId: string): string {
+  return `/view.html#live/${encodeURIComponent(captureId)}`;
+}
+
 /** The processing options, in key mode: what every run started from this page uses. */
 let optionsPanel: OptionsPanel | null = null;
 
@@ -822,6 +828,10 @@ function follow(captureId: string, ui: Ui): void {
         ui.detail.textContent = run.detail;
         ui.bar.style.width = `${String(Math.round(run.done * 100))}%`;
         renderStages(ui, run);
+        if (ui.liveLink) {
+          ui.liveLink.href = liveLink(captureId);
+          ui.liveLink.hidden = ENDED.has(job.status);
+        }
         if (ENDED.has(job.status)) {
           setState(ui, job.status === "complete" ? "done" : "error");
           const capture = (await fetch(`${API_BASE}/api/v1/captures/${captureId}`).then((r) =>
@@ -865,6 +875,7 @@ function collectUi(root: Document): Ui | null {
   const keyForm = root.getElementById("keyform");
   const keyInput = root.getElementById("key");
   const doneLink = root.getElementById("done-link");
+  const liveLinkEl = root.getElementById("live-link");
   const resume = root.getElementById("resume");
   return {
     main: root.querySelector("main"),
@@ -878,6 +889,7 @@ function collectUi(root: Document): Ui | null {
     foot: root.getElementById("foot"),
     forget: root.getElementById("forget"),
     doneLink: doneLink instanceof HTMLAnchorElement ? doneLink : null,
+    liveLink: liveLinkEl instanceof HTMLAnchorElement ? liveLinkEl : null,
     resume: resume instanceof HTMLButtonElement ? resume : null,
     mine: root.getElementById("mine"),
     mineList: root.getElementById("mine-list"),
@@ -1133,8 +1145,13 @@ async function captureRow(ui: Ui, capture: Capture, job: Job | undefined): Promi
   } else if (job && !ENDED.has(job.status)) {
     const run = await describeRun(job);
     state.textContent = `${run.headline} ${run.detail} · ${run.usdEstimated ? "≈" : ""}${dollars(run.usd)}`;
+    const watch = document.createElement("a");
+    watch.className = "rowbtn rowbtn--quiet";
+    watch.href = liveLink(capture.id);
+    watch.textContent = "Watch live";
     row.append(
       rowButton("Progress", () => follow(capture.id, ui)),
+      watch,
       rowButton("Stop", stop),
     );
   } else if (job) {

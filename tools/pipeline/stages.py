@@ -38,6 +38,7 @@ import PIL.Image
 import exif
 import gaussians
 import holdout
+import live
 import quality
 import sfm
 import support_mask
@@ -559,6 +560,8 @@ def colmap(ctx: StageContext) -> StageOutcome:
     schedule = [seeds[:1] if step.matcher == "sequential" else seeds for step in plan]
     best_so_far = [0]
     round_of: dict[Path, int] = {}
+    # On unless the recipe says `live: false`.
+    watch = ctx.param("live") is None or _optional_bool(ctx.param("live"), "live")
 
     def attempt(round_: int, seed: int) -> tuple[Path | None, int]:
         if round_ > 0 and seed == schedule[round_][0]:
@@ -572,16 +575,21 @@ def colmap(ctx: StageContext) -> StageOutcome:
         into = sparse / f"match{round_}-seed{seed}"
         into.mkdir(parents=True)
         began = time.monotonic()
-        ctx.run(
-            sfm.mapper_argv(
-                database,
-                frames,
-                into,
-                refine_focal_length=focal_prior is None,
-                random_seed=seed,
-                num_threads=threads,
+        # Cameras as they are solved, for the live viewer (`live.MapperWatch`).
+        snapshots = ctx.work_dir / "snapshots" / into.name
+        with live.MapperWatch(snapshots, ctx.log, frames=len(images), enabled=watch):
+            ctx.run(
+                sfm.mapper_argv(
+                    database,
+                    frames,
+                    into,
+                    refine_focal_length=focal_prior is None,
+                    random_seed=seed,
+                    num_threads=threads,
+                    snapshot_path=snapshots if watch else None,
+                    snapshot_every=live.snapshot_every(len(images)),
+                )
             )
-        )
         seconds["map"] += time.monotonic() - began
         found = _largest_model(into)
         registered = 0
@@ -615,6 +623,8 @@ def colmap(ctx: StageContext) -> StageOutcome:
         if entry.is_file():
             shutil.copyfile(entry, out / entry.name)
     model = sfm.read_model(out)
+    if watch:
+        live.emit_model(ctx.log, out, frames=len(images), final=True)
     focal = model.cameras[0].focal_px if model.cameras else 0.0
     document: dict[str, object] = {
         "tool": "colmap",
@@ -824,6 +834,9 @@ def gsplat(ctx: StageContext) -> StageOutcome:
     * `holdout_error` renders the held-out frames after training and writes each
       gaussian's error on them to `holdout/` (`holdout.py`), for `quality` to verify keep
       with. It cannot fail the stage: a script that fails leaves `holdout.json` saying so.
+    * `live` (on unless `false`) exports a PLY at 10/25/50/75% of the schedule and packs
+      each into a small SPZ under `checkpoint/live/` for the live viewer (`live.py`).
+      Only those land in `checkpoint/`, and the full intermediate PLYs are deleted.
 
     `psnr`, `ssim` and `lpips` are all measured on gsplat's held-out `val` split -- every
     8th registered frame -- and `train_metrics.json` says so and how many frames that is.
@@ -928,26 +941,42 @@ def gsplat(ctx: StageContext) -> StageOutcome:
     pose_opt = _optional_bool(ctx.param("pose_opt"), "pose_opt")
     app_opt = _optional_bool(ctx.param("app_opt"), "app_opt")
     bilateral_grid = _optional_bool(ctx.param("bilateral_grid"), "bilateral_grid")
-    ctx.run(
-        training.gsplat_argv(
-            training.trainer_python(ctx.param("python")),
-            trainer,
-            dataset,
-            result,
-            strategy=str(ctx.param("strategy", "default")),
-            max_steps=full_iterations,
-            data_factor=data_factor,
-            steps_scaler=steps_scaler,
-            cap_max=_optional_int(ctx.param("cap_max")),
-            antialiased=antialiased,
-            opacity_reg=opacity_reg,
-            depth_loss=depth_loss,
-            pose_opt=pose_opt,
-            app_opt=app_opt,
-            bilateral_grid=bilateral_grid,
-            extra=[str(value) for value in (ctx.param("extra_args") or [])],
-        )
+    # Intermediate splats for the live viewer, packed small into checkpoint/live/ so the
+    # checkpoint syncer uploads them while the stage runs (`live.SplatWatch`).
+    live_steps = (
+        live.train_ply_steps(full_iterations)
+        if ctx.param("live") is None or _optional_bool(ctx.param("live"), "live")
+        else []
     )
+    argv = training.gsplat_argv(
+        training.trainer_python(ctx.param("python")),
+        trainer,
+        dataset,
+        result,
+        strategy=str(ctx.param("strategy", "default")),
+        max_steps=full_iterations,
+        data_factor=data_factor,
+        steps_scaler=steps_scaler,
+        cap_max=_optional_int(ctx.param("cap_max")),
+        antialiased=antialiased,
+        opacity_reg=opacity_reg,
+        depth_loss=depth_loss,
+        pose_opt=pose_opt,
+        app_opt=app_opt,
+        bilateral_grid=bilateral_grid,
+        live_steps=live_steps,
+        extra=[str(value) for value in (ctx.param("extra_args") or [])],
+    )
+    with live.SplatWatch(
+        result / "ply",
+        ctx.checkpoint_dir / live.LIVE_DIR,
+        ctx.log,
+        indices=live.ply_indices(live_steps, steps_scaler),
+        total=iterations,
+        key_prefix=f"{ctx.checkpoint_key}/{live.LIVE_DIR}",
+        up=_up_estimate(poses),
+    ):
+        ctx.run(argv)
     ply = training.latest_ply(result)
     if ply is None:
         raise ValueError(
@@ -1087,6 +1116,18 @@ def _registered_count(poses: Path, fallback: int) -> int:
         if isinstance(value, int) and not isinstance(value, bool):
             return value
     return fallback
+
+
+def _up_estimate(poses: Path) -> list[float] | None:
+    """`poses.json`'s camera-up estimate, in COLMAP's frame, or None."""
+    summary = poses / "poses.json"
+    if not summary.is_file():
+        return None
+    estimate = _read_json(summary).get("upEstimate")
+    up = estimate.get("up") if isinstance(estimate, dict) else None
+    if isinstance(up, list) and len(up) == 3 and all(isinstance(v, int | float) for v in up):
+        return [float(v) for v in up]
+    return None
 
 
 def _optional_bool(value: object, name: str) -> bool:

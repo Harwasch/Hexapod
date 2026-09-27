@@ -9,8 +9,9 @@
  * before its workers -- but because Spark is built for exactly this: splat sorting tuned
  * for phones, and orbit controls meant for an object rather than for the Earth.
  *
- * `view.html` lists every scan; `view.html#<siteId>` opens one. Reads are open in this
- * API, so the page needs no key.
+ * `view.html` lists every scan; `view.html#<siteId>` opens one; `view.html#live/<captureId>`
+ * watches a capture's run as it happens (live.ts). Reads are open in this API, so the page
+ * needs no key.
  */
 import { SparkRenderer, SplatFileType, SplatMesh } from "@sparkjsdev/spark";
 import * as THREE from "three";
@@ -20,6 +21,7 @@ import type { Capture, Site, SiteSummary } from "@twin/contracts";
 
 import { parseCoverage } from "./coverage";
 import { spzFromGlb } from "./glb";
+import { showLive } from "./live";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
 
@@ -387,7 +389,10 @@ function route(): void {
   active?.stop();
   active = null;
   const siteId = window.location.hash.replace(/^#/, "");
-  if (/^[A-Za-z0-9-]{1,64}$/.test(siteId)) void showScan(siteId);
+  // `#live/<captureId>`: a run as it happens (live.ts).
+  const live = /^live\/([A-Za-z0-9-]{1,64})$/.exec(siteId);
+  if (live?.[1]) active = showLive(live[1]);
+  else if (/^[A-Za-z0-9-]{1,64}$/.test(siteId)) void showScan(siteId);
   else void showGallery();
 }
 

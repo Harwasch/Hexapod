@@ -67,6 +67,7 @@ from cloud import (  # noqa: E402
 from contracts import StepResult  # noqa: E402
 from errors import PipelineError, PreemptedError, StageFailedError  # noqa: E402
 from executor import RunResult, execute  # noqa: E402
+from live import latest as latest_live  # noqa: E402
 from modal_adapter import ModalAdapter  # noqa: E402
 from plan import Plan, PlannedStage, plan_recipe  # noqa: E402
 from progress import latest as latest_progress  # noqa: E402
@@ -104,6 +105,7 @@ __all__ = [
     "Workdir",
     "ensure_importable",
     "execute",
+    "latest_live",
     "latest_progress",
     "load_recipe",
     "plan_recipe",

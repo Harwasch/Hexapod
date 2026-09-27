@@ -241,6 +241,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/captures/{capture_id}/live": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The live state of a capture's newest run
+         * @description What a run looks like while it runs, for the live viewer: the pose stage's cameras and a sample of its sparse points as they are solved (quantised, base64; see the schema), and training's newest intermediate splat with a short-lived signed URL for its SPZ (null until the checkpoint syncer has uploaded it). Coordinates are the pose solve's own frame, not east/north/up. Open, like every read: poll it every few seconds.
+         */
+        get: operations["capture_live_api_v1_captures__capture_id__live_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/captures/{capture_id}/process": {
         parameters: {
             query?: never;
@@ -380,6 +400,26 @@ export interface paths {
         put?: never;
         /** Cancel a job */
         post: operations["cancel_job_api_v1_jobs__job_id__cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/jobs/{job_id}/live": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The live state of one run
+         * @description What a run looks like while it runs, for the live viewer: the pose stage's cameras and a sample of its sparse points as they are solved (quantised, base64; see the schema), and training's newest intermediate splat with a short-lived signed URL for its SPZ (null until the checkpoint syncer has uploaded it). Coordinates are the pose solve's own frame, not east/north/up. Open, like every read: poll it every few seconds.
+         */
+        get: operations["job_live_api_v1_jobs__job_id__live_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -2026,6 +2066,123 @@ export interface components {
             url?: string | null;
         };
         /**
+         * LiveCameras
+         * @description Registered cameras and a sample of the sparse points, from the newest snapshot.
+         */
+        LiveCameras: {
+            /** Aspect */
+            aspect: number | null;
+            /** Cameracount */
+            cameraCount: number;
+            /** Cameras */
+            cameras: string;
+            /** Final */
+            final: boolean;
+            /** Frames */
+            frames: number | null;
+            /** Origin */
+            origin: number[];
+            /** Pointcount */
+            pointCount: number;
+            /** Points */
+            points: string;
+            /** Pointstotal */
+            pointsTotal: number;
+            /** Registered */
+            registered: number;
+            /** Scale */
+            scale: number;
+            /** Seq */
+            seq: number;
+            /** Stageid */
+            stageId: string;
+            /** Up */
+            up: number[] | null;
+        };
+        /**
+         * LiveProgress
+         * @description The running stage's tool progress (`metrics.progress`), when it prints one.
+         */
+        LiveProgress: {
+            /** Done */
+            done: number;
+            /** Elapseds */
+            elapsedS: number | null;
+            /** Remainings */
+            remainingS: number | null;
+            /** Total */
+            total: number;
+        };
+        /**
+         * LiveSplat
+         * @description The newest intermediate splat, and where to fetch it.
+         */
+        LiveSplat: {
+            /** Bytes */
+            bytes: number | null;
+            /** Count */
+            count: number;
+            /** Name */
+            name: string;
+            /** Of */
+            of: number | null;
+            /** Stageid */
+            stageId: string;
+            /** Step */
+            step: number;
+            /** Total */
+            total: number | null;
+            /** Up */
+            up: number[] | null;
+            /** Url */
+            url: string | null;
+        };
+        /**
+         * LiveStage
+         * @description The step the run is on: running now, or the last one to have started.
+         */
+        LiveStage: {
+            /** Impl */
+            impl: string;
+            /** Ordinal */
+            ordinal: number;
+            progress: components["schemas"]["LiveProgress"] | null;
+            /** Stageid */
+            stageId: string;
+            /** Startedat */
+            startedAt: string | null;
+            status: components["schemas"]["RunStatus"];
+        };
+        /** LiveState */
+        LiveState: {
+            cameras: components["schemas"]["LiveCameras"] | null;
+            /**
+             * Captureid
+             * Format: uuid
+             */
+            captureId: string;
+            /** Capturename */
+            captureName: string;
+            /** Error */
+            error: string | null;
+            /**
+             * Jobid
+             * Format: uuid
+             */
+            jobId: string;
+            /** Recipe */
+            recipe: string;
+            /** Siteid */
+            siteId: string | null;
+            splat: components["schemas"]["LiveSplat"] | null;
+            stage: components["schemas"]["LiveStage"] | null;
+            status: components["schemas"]["RunStatus"];
+            /** Stepsdone */
+            stepsDone: number;
+            /** Stepsstarted */
+            stepsStarted: number;
+        };
+        /**
          * MissingObject
          * @description A row whose object is not in the bucket.
          */
@@ -3319,6 +3476,11 @@ export type SchemaLayerUpdate = components['schemas']['LayerUpdate'];
 export type SchemaLegendEntry = components['schemas']['LegendEntry'];
 export type SchemaLegendMetadata = components['schemas']['LegendMetadata'];
 export type SchemaLicenseMetadata = components['schemas']['LicenseMetadata'];
+export type SchemaLiveCameras = components['schemas']['LiveCameras'];
+export type SchemaLiveProgress = components['schemas']['LiveProgress'];
+export type SchemaLiveSplat = components['schemas']['LiveSplat'];
+export type SchemaLiveStage = components['schemas']['LiveStage'];
+export type SchemaLiveState = components['schemas']['LiveState'];
 export type SchemaMissingObject = components['schemas']['MissingObject'];
 export type SchemaMultiPolygon = components['schemas']['MultiPolygon'];
 export type SchemaMvtSource = components['schemas']['MvtSource'];
@@ -4439,6 +4601,64 @@ export interface operations {
             };
         };
     };
+    capture_live_api_v1_captures__capture_id__live_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                capture_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LiveState"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     process_capture_api_v1_captures__capture_id__process_post: {
         parameters: {
             query?: never;
@@ -4864,6 +5084,64 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JobRead"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    job_live_api_v1_jobs__job_id__live_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LiveState"];
                 };
             };
             /** @description Missing or wrong write token */

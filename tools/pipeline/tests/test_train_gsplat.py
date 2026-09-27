@@ -250,14 +250,17 @@ def test_the_result_directory_is_scratch_because_nothing_can_resume_from_it(
     tmp_path: Path,
 ) -> None:
     """In `work/`, not `checkpoint/`: v1.5.3 cannot continue a checkpoint, so syncing its
-    checkpoints out every minute would be paying to move bytes nothing reads."""
+    checkpoints out every minute would be paying to move bytes nothing reads. The one
+    thing in `checkpoint/` is the live viewer's latest small splat, which is read."""
     workdir = Workdir.create(tmp_path / "run")
     seed_inputs(workdir)
 
     execute(train_recipe(stand_in_params()), workdir, RunnerSet(cpu=LocalRunner()))
 
     assert any(workdir.work_dir("train").rglob("ckpt_*.pt"))
-    assert not any(workdir.checkpoint_dir("train").rglob("*"))
+    kept = [p for p in workdir.checkpoint_dir("train").rglob("*") if p.is_file()]
+    assert [p.parent.name for p in kept] == ["live"]
+    assert kept[0].suffix == ".spz"
 
 
 def test_a_trainer_that_writes_no_ply_is_a_failure_rather_than_an_empty_artifact(
