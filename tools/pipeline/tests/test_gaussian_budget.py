@@ -328,11 +328,14 @@ def test_auto_reads_the_frames_at_the_size_training_will(tmp_path: Path) -> None
 def test_a_support_mask_budgets_only_what_it_holds_in_full(tmp_path: Path) -> None:
     workdir = Workdir.create(tmp_path / "run")
     seed_measurable(workdir)
-    # Occupied: the patch's x < 0 half only.
-    occupied = np.zeros((2, 2, 1), dtype=bool)
-    occupied[0, :, 0] = True
+    # Occupied: the patch's x < 0 half only -- voxels (0, 0, 0) and (0, 1, 0), which are
+    # C-order linear indices 0 and 1, one run [0, 2).
     mask = support_mask.SupportMask(
-        origin=(-1.0, -1.0, -0.5), voxel=1.0, dims=(2, 2, 1), occupied=occupied
+        origin=(-1.0, -1.0, -0.5),
+        voxel=1.0,
+        dims=(2, 2, 1),
+        starts=np.array([0], dtype=np.int64),
+        stops=np.array([2], dtype=np.int64),
     )
 
     params = stand_in_params(
