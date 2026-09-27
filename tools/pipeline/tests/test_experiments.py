@@ -16,6 +16,7 @@ import pytest
 
 from experiments import benchmark, run_variants
 from experiments.run_variants import PlanError
+from recipe import load_recipe
 
 VARIANTS = Path(__file__).resolve().parents[1] / "experiments" / "variants"
 REPO = Path(__file__).resolve().parents[3]
@@ -342,10 +343,22 @@ def test_train_params_keep_the_scenes_lpips_net_under_any_switches() -> None:
         "extra_args": ["--lpips_net", "vgg"],
         "iterations": 30_000,
         "strategy": "mcmc",
-        "cap_max": 500_000,
+        "cap_max": "auto",
+        "budget_max": 2_000_000,
+        "converge": True,
         "pose_opt": True,
     }
     assert "schedule_full_at" not in params  # the full schedule, never scaled down
+    # The fixed cap the recipe had when it matched the paper, kept to compare against.
+    assert benchmark.train_params(truck, "recipe-500k")["cap_max"] == 500_000
+
+
+def test_the_recipes_budget_and_stopping_rule_are_what_the_recipe_file_says() -> None:
+    """`recipe` stands for photo-reconstruct's train stage; it must not drift from it."""
+    train = next(s for s in load_recipe("photo-reconstruct").stages if s.id == "train").params
+    config = benchmark.CONFIGS["recipe"]
+    for key in ("iterations", "strategy", "cap_max", "budget_max", "converge"):
+        assert config[key] == train[key], key
 
 
 @pytest.mark.parametrize(

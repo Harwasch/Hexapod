@@ -98,11 +98,13 @@ __all__ = [
     "TrainMetrics",
     "build_dataset",
     "check_schedule_scale",
+    "converge_argv",
     "crop_initial_points",
     "crop_rows",
     "crop_splat",
     "gsplat_argv",
     "held_out_split",
+    "in_region",
     "latest_ply",
     "parse_metrics",
     "step_of",
@@ -136,6 +138,9 @@ TEST_EVERY = 8
 #: What a caller may ask `schedule_scale` to be. The floor is where a run stops being a
 #: shorter schedule and starts being a few hundred steps of initialisation; 1.0 is the
 #: whole schedule, and a scale above it would be a longer run than the recipe prices.
+#: The one way past 1.0 is the stage's, not a caller's: with `converge` on, a big
+#: gaussian budget may lengthen the *maximum* (`gaussian_budget.schedule_factor`, at most
+#: 2x), which the convergence rule then ends early when it has gone flat.
 SCHEDULE_SCALE_RANGE: tuple[float, float] = (0.05, 1.0)
 
 #: How far from an ROI's centre a trained gaussian may be, in radii, before it is dropped.
@@ -314,6 +319,13 @@ class RoiCrop:
         }
 
 
+def in_region(region: Roi | SupportMask, xyz: Any) -> Any:
+    """Which of `xyz` are in `region`, as `crop_initial_points` counts inside: within one
+    radius of an ROI's centre, or in a support mask's voxels. For the gaussian budget,
+    which counts a Refine's region in full."""
+    return _inside(region, xyz)
+
+
 def _inside(region: Roi | SupportMask, xyz: Any, *, radii: float = 1.0) -> Any:
     """Which points are in `region`: within `radii` radii of an ROI sphere, or in a
     support mask's voxels (which already carry their margin)."""
@@ -424,6 +436,7 @@ def gsplat_argv(
     app_opt: bool = False,
     bilateral_grid: bool = False,
     live_steps: Sequence[int] = (),
+    eval_steps: Sequence[int] = (),
     extra: Sequence[str] = (),
 ) -> list[str]:
     """The command line, built in one place so a test can read it without a GPU.
@@ -457,6 +470,11 @@ def gsplat_argv(
     every listed step (scaled with the rest), which `live.SplatWatch` turns into the
     intermediate splats the live viewer shows. Order does not matter to the trainer (it
     tests membership), and the final step stays first so it reads as the one that counts.
+
+    `eval_steps` are extra `--eval_steps`, after the final one and unscaled like it: the
+    held-out evaluations the convergence rule reads (`convergence.eval_steps`). Each one
+    writes `stats/val_step<i>.json`; the furthest along is still the final one, so
+    `parse_metrics` reads the same file it always did.
 
     `--disable_video` too: the trajectory render after evaluation is a video nobody reads.
     There is no `--ckpt`, and there must not be: in v1.5.3 it means "evaluate this and do
@@ -524,6 +542,7 @@ def gsplat_argv(
         steps,
         "--eval_steps",
         steps,
+        *(str(step) for step in eval_steps if 0 < step < max_steps),
     ]
     if steps_scaler != 1.0:
         argv += ["--steps_scaler", f"{steps_scaler:g}"]
@@ -548,6 +567,37 @@ def gsplat_argv(
         argv.append("--use_bilateral_grid")
     argv += list(extra)
     return argv
+
+
+def converge_argv(
+    argv: Sequence[str],
+    *,
+    script: Path,
+    every: int,
+    window: int,
+    min_gain_db: float,
+) -> list[str]:
+    """`gsplat_argv`'s command, run through `converge_trainer.py` instead of directly.
+
+    The same interpreter, the wrapper where the trainer was, the rule, `--`, and then the
+    trainer's own arguments unchanged -- so everything `gsplat_argv` says about them still
+    holds, and the wrapper hands them to the trainer as its `sys.argv`.
+    """
+    python, trainer, *rest = argv
+    return [
+        python,
+        str(script),
+        "--trainer",
+        trainer,
+        "--every",
+        str(every),
+        "--window",
+        str(window),
+        "--min-gain-db",
+        f"{min_gain_db:g}",
+        "--",
+        *rest,
+    ]
 
 
 def schedule_scale(images: int, *, full_at: int, floor: float) -> float:

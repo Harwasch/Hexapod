@@ -150,7 +150,7 @@ wait, and the GPU and CPU-heavy stages (`pose`, `train`, `quality`) run on Modal
 | a job's recipe process, idle while Modal runs a stage (pipeline, numpy, PIL, modal) | ~80 MB |
 | `normalize` of a 25 s 4K HEVC clip (ffmpeg decoding, 100 frames kept) | peak ~380 MB (ffmpeg) + the 80 |
 | `place`/`package`/`thumbnail` of a 500k-gaussian SH3 splat (Lane 1 recipe, same code) | peak ~395 MB |
-| the same at 1M gaussians (the phone's "Best" cap) | peak ~750 MB |
+| the same at 1M gaussians (the phone's old "Best" cap) | peak ~750 MB |
 
 So a job spends most of its life at ~80 MB and peaks at 0.4-0.75 GB for a few seconds at
 either end. **N = 2 is safe on the 2 GB machine** for phone captures up to 1M gaussians:
@@ -163,6 +163,13 @@ Lane 1 uploads of several million gaussians, which scale at ~0.75 GB per million
 too. If the machine does run out, the kernel kills the largest process -- a recipe
 process, whose stage then fails and is retried under the attempt budget -- not the
 supervisor.
+
+Lane 2's gaussian count is now sized to the capture (`cap_max: auto`,
+`tools/pipeline/gaussian_budget.py`) and bounded by the recipe's `budget_max: 2000000`,
+which is set from this table: at ~0.75 GB a million, a 2M splat peaks near 1.5 GB plus
+the ~185 MB of supervisor and recipe process -- inside 2 GB at **N = 1** (the current
+default). N = 2 with Lane 2 at that ceiling wants the 4 GB machine, or `budget_max` back
+at 1M.
 
 ## Configuration
 

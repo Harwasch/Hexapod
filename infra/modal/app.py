@@ -186,6 +186,10 @@ image = (
         # And does the held-out error pass import torch, gsplat and the trainer's own
         # dataset classes under that interpreter? (`train`'s `holdout_error`; no GPU used.)
         f"{TRAINER_PYTHON} {PIPELINE_DIR}/holdout_error.py --self-check --trainer {GSPLAT_TRAINER}",
+        # And does the trainer still have the loop `converge_trainer.py` ends early (the
+        # step lists re-read every step, `eval`, `cli(main, cfg)`), under that interpreter?
+        f"{TRAINER_PYTHON} {PIPELINE_DIR}/converge_trainer.py --self-check "
+        f"--trainer {GSPLAT_TRAINER}",
         # And does the 3.12 side import every stage (the list above, pinned by a test)?
         f"cd {PIPELINE_DIR} && python -c 'import remote, stages, captures_bridge'",
     )

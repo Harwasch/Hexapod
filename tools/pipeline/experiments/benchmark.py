@@ -120,8 +120,21 @@ CONFIGS: dict[str, dict[str, Any]] = {
     # gsplat's 3DGS reproduction, as `examples/benchmarks/basic.sh` runs it: the
     # `default` strategy, 30k steps. The one the published numbers are comparable to.
     "gsplat-default": {"iterations": 30_000, "strategy": "default"},
-    # photo-reconstruct's Standard train stage (recipes/photo-reconstruct.yaml).
-    "recipe": {"iterations": 30_000, "strategy": "mcmc", "cap_max": 500_000},
+    # photo-reconstruct's Standard train stage (recipes/photo-reconstruct.yaml): MCMC
+    # under a budget measured from the scene (gaussian_budget.py puts Truck at 1.52M at
+    # its 979 px) and stopped when held-out PSNR goes flat (convergence.py). The budget's
+    # floor, density and ceilings are the stage's defaults, which the recipe restates.
+    "recipe": {
+        "iterations": 30_000,
+        "strategy": "mcmc",
+        "cap_max": "auto",
+        "budget_max": 2_000_000,
+        "converge": True,
+    },
+    # The recipe before the budget: a fixed 500k and the full 30k. Measured 25.12 dB
+    # against the paper's 25.19, so `recipe` against this is what the budget and the
+    # stopping rule buy on a scene with a known answer.
+    "recipe-500k": {"iterations": 30_000, "strategy": "mcmc", "cap_max": 500_000},
 }
 
 

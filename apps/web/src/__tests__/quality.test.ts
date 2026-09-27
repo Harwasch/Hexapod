@@ -170,7 +170,7 @@ describe("preview and refine parameters", () => {
     expect(paramsFor("photo-reconstruct", options)).toEqual({
       normalize: { max_side: 1600, fps: 8 },
       package: { max_gaussians: 400000 },
-      train: { schedule_floor: 1, cap_max: 1000000 },
+      train: { schedule_floor: 1, density_scale: 2 },
       quality: { bar: "strict" },
     });
   });

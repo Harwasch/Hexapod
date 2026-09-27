@@ -563,7 +563,10 @@ def test_the_quality_switches_reach_the_trainer_with_the_presets_semantics(
     assert document["settings"] == {
         "strategy": "mcmc",
         "capMax": 48,
+        "capMaxRequested": 48,
         "scheduleScale": 1.0,
+        "scheduleFactor": 1.0,
+        "converge": False,
         "scheduleScaleRequested": None,
         "trainMaxSide": None,
         "trainImageSize": None,

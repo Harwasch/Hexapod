@@ -236,6 +236,38 @@ def test_a_phone_may_turn_on_the_phone_capture_switches(client: TestClient, db: 
     assert job is not None and job.params == chosen
 
 
+def test_a_quality_tier_scales_the_measured_budget_within_bounds(
+    client: TestClient, db: Session
+) -> None:
+    """Quick and Best are multipliers on the budget the pipeline measures from the
+    capture (`density_scale`), not gaussian counts; the pipeline's floor and ceilings
+    still apply, and a multiplier outside a quarter to four times is refused."""
+    mine = client.post("/api/v1/phone/captures", json={}, headers=PHONE).json()["capture"]
+    uploaded(db, mine["id"])
+    url = f"/api/v1/phone/captures/{mine['id']}/process"
+
+    def start(params: dict[str, object]) -> Response:
+        return client.post(
+            url, json={"recipe": "photo-reconstruct", "params": params}, headers=PHONE
+        )
+
+    refusals: tuple[dict[str, object], ...] = (
+        {"train": {"density_scale": 10}},
+        {"train": {"density_scale": 0}},
+        {"train": {"density_scale": "2"}},
+        {"train": {"gaussian_density": 1.0}},  # the calibrated constant is the recipe's
+    )
+    for refused in refusals:
+        response = start(refused)
+        assert response.status_code == 409, (refused, response.text)
+
+    best: dict[str, object] = {"train": {"schedule_floor": 1, "density_scale": 2}}
+    ok = start(best)
+    assert ok.status_code == 202, ok.text
+    job = db.get(Job, uuid.UUID(ok.json()["id"]))
+    assert job is not None and job.params == best
+
+
 def test_a_finished_capture_downloads_its_placed_splat(client: TestClient, db: Session) -> None:
     mine = client.post("/api/v1/phone/captures", json={}, headers=PHONE).json()["capture"]
     capture_id = uuid.UUID(mine["id"])
