@@ -16,6 +16,7 @@ import {
 import type { Footprint, Representation, Site, SiteAsset, SiteSummary } from "@twin/contracts";
 import { boundingRadiusM, centerOf, circleFootprint, haversineDistance } from "@twin/geo";
 
+import { detailScreenSpaceScale, splatBudget } from "@/lib/detail";
 import type { Emitter } from "@/lib/emitter";
 import { createLogger, describeError } from "@/lib/log";
 import { timed } from "@/lib/timing";
@@ -119,6 +120,8 @@ export class SiteManager {
   private nearId: string | null = null;
   private objectScale = false;
   private screenSpaceError = 16;
+  /** The phone's Detail choice as a factor on splat screen-space error, read once. */
+  private readonly splatDetailScale = detailScreenSpaceScale(splatBudget());
   private pixelRatio = 1;
   /** Ground metres per pixel at the view centre when the errors were last applied. */
   private metersPerPixel = Number.POSITIVE_INFINITY;
@@ -737,8 +740,13 @@ export class SiteManager {
       // A per-asset value acts as a floor for quality (never coarser than configured), while
       // splats have a hard floor on refinement because of their per-frame CPU sort.
       let next = configured ? Math.min(configured, sse) : sse;
+      // The device's Detail choice then scales it (lib/detail.ts): a pipeline scan is a
+      // level-of-detail tileset holding every gaussian, and this is what decides how many of
+      // them this device draws. A single-tile scan (the committed tree, anything packaged
+      // before the hierarchy) has nothing to refine, so it is drawn whole either way.
       if (handle.asset.representation === "gaussian-splat")
-        next = Math.max(next, this.performance.splatMinimumScreenSpaceError);
+        next =
+          Math.max(next, this.performance.splatMinimumScreenSpaceError) * this.splatDetailScale;
       // Cesium measures the error in CSS pixels; hand it device pixels so a HiDPI screen
       // gets the detail it can show, and a resolution cut also lightens the tile load. The
       // asset's calibration comes last: a tiler's geometric errors say nothing about texture

@@ -46,7 +46,6 @@ PREVIEW: dict[str, Any] = {
     "normalize": {"max_side": 1600, "fps": 4},
     "train": {"schedule_scale": 0.1, "cap_max": 200_000, "train_max_side": 800},
     "quality": {"mode": "preview", "bar": "balanced"},
-    "package": {"max_gaussians": 400_000},
 }
 
 SUMMARY: dict[str, Any] = {
@@ -161,7 +160,6 @@ def test_refine_resumes_the_preview_at_train_inside_its_region(
                 "normalize": {"max_side": 2400},
                 "train": {"cap_max": 1_000_000},
                 "quality": {"bar": "strict", "mode": "preview"},
-                "package": {"max_gaussians": 800_000},
             }
         },
         headers=PHONE,
@@ -182,7 +180,6 @@ def test_refine_resumes_the_preview_at_train_inside_its_region(
             "init_from": "preview",
         },
         "quality": {"bar": "strict", "mode": "refine"},
-        "package": {"max_gaussians": 800_000},
     }
     states = {step["stageId"]: step["status"] for step in body["steps"]}
     assert [states[s] for s in ("normalize", "pose", "mask")] == ["complete"] * 3

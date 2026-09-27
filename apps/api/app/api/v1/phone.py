@@ -46,6 +46,13 @@ Rule = tuple[float, float] | frozenset[str] | Literal["flag", "roi"]
 #: its allowed values. Anything else is refused by name rather than passed through, so
 #: the key cannot reach a stage parameter that was never meant to be a phone's choice
 #: (a trainer path, a Python interpreter, a GPU tier).
+#:
+#: Nothing for `package`. It was `max_gaussians` -- how many of a scan's gaussians the map
+#: and the viewer were sent, the rest discarded -- and it is gone because nothing is
+#: discarded any more: every scan is packed whole as a level-of-detail tileset
+#: (tools/captures/splat_tiles.py), and the phone's "Detail" is how much *that phone* draws,
+#: kept on the phone (apps/web src/lib/detail.ts). A stale page still sending it is refused
+#: by name, like any other option a phone may not set.
 PHONE_OPTIONS: dict[str, dict[str, dict[str, Rule]]] = {
     "photo-reconstruct": {
         # The long side frames are shrunk to before pose and training; frames per second
@@ -77,15 +84,12 @@ PHONE_OPTIONS: dict[str, dict[str, dict[str, Rule]]] = {
         },
         # The quality bar: what is kept, and whether this run is a preview or a refine.
         "quality": {"bar": frozenset(QUALITY_BARS), "mode": frozenset(QUALITY_MODES)},
-        # How many gaussians the map and the viewer are sent.
-        "package": {"max_gaussians": (100_000, 1_000_000)},
     },
     "splat-ingest": {
         "normalize": {
             "up_axis": frozenset({"", "z", "-z", "y", "-y", "x", "-x"}),
             "heading_deg": (-360, 360),
         },
-        "package": {"max_gaussians": (100_000, 1_000_000)},
     },
 }
 

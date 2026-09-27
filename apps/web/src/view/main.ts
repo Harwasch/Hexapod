@@ -19,9 +19,12 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 
 import type { Capture, Site, SiteSummary } from "@twin/contracts";
 
+import { splatBudget } from "@/lib/detail";
+
 import { parseCoverage } from "./coverage";
 import { spzFromGlb } from "./glb";
 import { showLive } from "./live";
+import { chooseTiles, countTiles, parseTileset, type TileNode } from "./tiles";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
 
@@ -121,17 +124,23 @@ async function showGallery(): Promise<void> {
 
 let active: { stop: () => void } | null = null;
 
-/** The URL of the splat tile inside a site's gaussian-splat tileset. */
-async function splatTileUrl(site: Site): Promise<string> {
+/** A site's gaussian-splat tileset: where it is, and its tile tree (see tiles.ts). */
+async function splatTileset(site: Site): Promise<{ url: string; root: TileNode }> {
   const source = site.assets.find(
     (candidate) => candidate.representation === "gaussian-splat",
   )?.source;
   if (source?.type !== "3d-tiles-url") throw new Error("This site has no splat scan to show.");
-  const tilesetUrl = source.url;
-  const tileset = await json<{ root?: { content?: { uri?: string } } }>(tilesetUrl);
-  const uri = tileset.root?.content?.uri;
-  if (!uri) throw new Error("The scan's tileset names no content.");
-  return new URL(uri, tilesetUrl).toString();
+  return { url: source.url, root: parseTileset(await json<unknown>(source.url)) };
+}
+
+/** One tile as a Spark mesh: the SPZ inside the tile's GLB, handed over as it is. */
+async function tileMesh(tilesetUrl: string, tile: TileNode): Promise<SplatMesh> {
+  const response = await fetch(new URL(tile.uri, tilesetUrl).toString());
+  if (!response.ok) throw new Error(`The scan's data answered ${String(response.status)}.`);
+  const bytes = spzFromGlb(await response.arrayBuffer());
+  const mesh = new SplatMesh({ fileBytes: bytes, fileType: SplatFileType.SPZ });
+  await mesh.initialized;
+  return mesh;
 }
 
 /**
@@ -208,8 +217,11 @@ async function showScan(siteId: string): Promise<void> {
     controls.update();
     renderer.render(scene, camera);
   });
+  // Tiles keep arriving after the first one is on screen; leaving the scan stops them.
+  let alive = true;
   active = {
     stop: () => {
+      alive = false;
       window.removeEventListener("resize", resize);
       renderer.setAnimationLoop(null);
       controls.dispose();
@@ -224,17 +236,21 @@ async function showScan(siteId: string): Promise<void> {
     el("scan-date").textContent = date(site.createdAt);
     document.title = site.name;
 
-    const tile = await fetch(await splatTileUrl(site));
-    if (!tile.ok) throw new Error(`The scan's data answered ${String(tile.status)}.`);
-    const bytes = spzFromGlb(await tile.arrayBuffer());
-
-    const mesh = new SplatMesh({ fileBytes: bytes, fileType: SplatFileType.SPZ });
+    // A scan is a level-of-detail tileset holding every gaussian; this phone loads as many
+    // as its Detail choice allows, coarsest-first (tiles.ts). The root comes first and is
+    // shown on its own -- it is the whole scan, evenly thinned -- and the rest fill in.
+    const tileset = await splatTileset(site);
+    const plan = chooseTiles(tileset.root, splatBudget());
+    const scan = new THREE.Group();
     // The pipeline's splats are east/north/up with z up (see splat_tiles.py, whose glTF
     // node matrix makes the same turn for Cesium); three.js is y-up.
-    mesh.rotation.x = -Math.PI / 2;
-    scene.add(mesh);
-    await mesh.initialized;
-    mesh.updateMatrixWorld(true);
+    scan.rotation.x = -Math.PI / 2;
+    scene.add(scan);
+    const [first, ...rest] = plan;
+    if (!first) throw new Error("The scan's tileset names no content.");
+    const mesh = await tileMesh(tileset.url, first);
+    scan.add(mesh);
+    scan.updateMatrixWorld(true);
 
     const box = robustBounds(mesh).applyMatrix4(mesh.matrixWorld);
     const center = box.getCenter(new THREE.Vector3());
@@ -253,12 +269,35 @@ async function showScan(siteId: string): Promise<void> {
     camera.updateProjectionMatrix();
     controls.minDistance = size * 0.05;
     controls.maxDistance = distance * 4;
-    offerCoverage(site, scene, mesh, size);
+    offerCoverage(site, scene, scan, size);
     status.textContent = "Drag to turn · pinch to zoom · two fingers to move";
     window.setTimeout(() => {
       status.hidden = true;
     }, 4_000);
+
+    // One at a time: a tile is 1-2 MB, and a phone's connection and decoder are better
+    // spent finishing one than starting four.
+    let loaded = first.gaussians;
+    for (const tile of rest) {
+      if (!alive) return;
+      const more = await tileMesh(tileset.url, tile);
+      if (!alive) {
+        more.dispose();
+        return;
+      }
+      more.opacity = mesh.opacity;
+      scan.add(more);
+      loaded += tile.gaussians;
+    }
+    const whole = countTiles(tileset.root).gaussians;
+    if (whole > loaded) {
+      el("scan-date").textContent =
+        `${date(site.createdAt)} · ${loaded.toLocaleString("en-US")} of ` +
+        `${whole.toLocaleString("en-US")} splats shown · more with Detail on the phone page`;
+    }
   } catch (error) {
+    // Also after the first tile is up: a later one failing leaves what arrived on screen.
+    status.hidden = false;
     status.textContent = error instanceof Error ? error.message : "The scan could not be shown.";
   }
 }
@@ -269,7 +308,7 @@ async function showScan(siteId: string): Promise<void> {
  * on the site's metadata, set by the worker's registration). Fetched on the first tap,
  * not before: it is up to a couple of megabytes a phone need not spend unasked.
  */
-function offerCoverage(site: Site, scene: THREE.Scene, mesh: SplatMesh, size: number): void {
+function offerCoverage(site: Site, scene: THREE.Scene, scan: THREE.Group, size: number): void {
   // Read defensively: a site registered before the quality bar has no such key, and an
   // older API may send no metadata at all.
   const metadata = site.metadata as Record<string, unknown> | null | undefined;
@@ -290,7 +329,10 @@ function offerCoverage(site: Site, scene: THREE.Scene, mesh: SplatMesh, size: nu
     legend.hidden = !on;
     if (overlay) overlay.visible = on;
     // The splat stays, faded, so each point can be told apart from what it describes.
-    mesh.opacity = on ? 0.25 : 1;
+    // Every tile's mesh: tiles still arriving copy the first one's opacity.
+    for (const child of scan.children) {
+      if (child instanceof SplatMesh) child.opacity = on ? 0.25 : 1;
+    }
   };
 
   button.onclick = () => {

@@ -301,13 +301,14 @@ test.describe("the phone upload page", () => {
     });
     expect(created).toEqual([{ lat: 44.9778, lon: -93.265, accuracyM: 7 }]);
     // A new capture is processed as a preview first: the frames at the chosen size, a
-    // short training run, and the quality bar's forecast. "Best" is for its Refine.
+    // short training run, and the quality bar's forecast. "Best" is for its Refine. "Full"
+    // detail is not sent: every scan is packaged whole, and Detail is this phone's own
+    // viewing budget, saved beside the other choices for the viewer and the map to read.
     expect(processed).toEqual([
       {
         recipe: "photo-reconstruct",
         params: {
           normalize: { max_side: 2400, fps: 4 },
-          package: { max_gaussians: 800000 },
           train: { schedule_scale: 0.1, cap_max: 200000, train_max_side: 800 },
           quality: { mode: "preview", bar: "strict" },
         },
@@ -700,7 +701,6 @@ test.describe("the phone upload page", () => {
     expect(refined[0]?.body).toEqual({
       params: {
         normalize: { max_side: 1600, fps: 4 },
-        package: { max_gaussians: 400000 },
         train: { schedule_floor: 1, cap_max: 1000000 },
         quality: { bar: "strict" },
       },
