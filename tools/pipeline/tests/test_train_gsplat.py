@@ -250,17 +250,26 @@ def test_the_result_directory_is_scratch_because_nothing_can_resume_from_it(
     tmp_path: Path,
 ) -> None:
     """In `work/`, not `checkpoint/`: v1.5.3 cannot continue a checkpoint, so syncing its
-    checkpoints out every minute would be paying to move bytes nothing reads. The one
-    thing in `checkpoint/` is the live viewer's latest small splat, which is read."""
+    checkpoints out every minute would be paying to move bytes nothing reads. What does
+    go in `checkpoint/` is read: the live viewer's latest small splat, and the small seed
+    a later Refine starts from (init_seed.py), written once, at the end."""
     workdir = Workdir.create(tmp_path / "run")
     seed_inputs(workdir)
 
     execute(train_recipe(stand_in_params()), workdir, RunnerSet(cpu=LocalRunner()))
 
     assert any(workdir.work_dir("train").rglob("ckpt_*.pt"))
-    kept = [p for p in workdir.checkpoint_dir("train").rglob("*") if p.is_file()]
-    assert [p.parent.name for p in kept] == ["live"]
-    assert kept[0].suffix == ".spz"
+    kept = sorted(
+        p.relative_to(workdir.checkpoint_dir("train")).as_posix()
+        for p in workdir.checkpoint_dir("train").rglob("*")
+        if p.is_file()
+    )
+    assert [name for name in kept if not name.startswith("live/")] == [
+        "init-seed/seed.json",
+        "init-seed/seed.npz",
+    ]
+    live_files = [name for name in kept if name.startswith("live/")]
+    assert len(live_files) == 1 and live_files[0].endswith(".spz")
 
 
 def test_a_trainer_that_writes_no_ply_is_a_failure_rather_than_an_empty_artifact(
@@ -565,6 +574,7 @@ def test_the_quality_switches_reach_the_trainer_with_the_presets_semantics(
         "appOpt": False,
         "bilateralGrid": False,
         "variant": "3dgs",
+        "initFrom": "sfm",
     }
     assert document["colorCorrected"] is None
 

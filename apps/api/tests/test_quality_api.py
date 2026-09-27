@@ -174,8 +174,13 @@ def test_refine_resumes_the_preview_at_train_inside_its_region(
     assert body["params"] == {
         # What the kept frames were made with, not what was asked for now.
         "normalize": PREVIEW["normalize"],
-        # The preview's short-schedule knobs are gone; the region is the preview's.
-        "train": {"cap_max": 1_000_000, "roi": {"center": [0.1, -0.2, 3.5], "radius": 0.8}},
+        # The preview's short-schedule knobs are gone; the region is the preview's, and
+        # training starts from the preview's own splat.
+        "train": {
+            "cap_max": 1_000_000,
+            "roi": {"center": [0.1, -0.2, 3.5], "radius": 0.8},
+            "init_from": "preview",
+        },
         "quality": {"bar": "strict", "mode": "refine"},
         "package": {"max_gaussians": 800_000},
     }
@@ -379,3 +384,30 @@ def test_refine_trains_inside_the_previews_support_mask_when_it_has_one(
     train = refined.json()["params"]["train"]
     assert train["support_mask"] == mask
     assert "roi" not in train
+    assert train["init_from"] == "preview"
+
+
+def test_a_refine_may_ask_to_train_from_scratch(client: TestClient, db: Session) -> None:
+    """`init_from: sfm` is the phone's way out of starting from the preview's splat."""
+    capture_id = _process(client, db)
+    _finish(db, capture_id)
+
+    refined = client.post(
+        f"/api/v1/phone/captures/{capture_id}/refine",
+        json={"params": {"train": {"init_from": "sfm", "init_schedule_scale": 0.6}}},
+        headers=PHONE,
+    )
+
+    assert refined.status_code == 202, refined.text
+    train = refined.json()["params"]["train"]
+    assert train["init_from"] == "sfm"
+    assert train["init_schedule_scale"] == 0.6
+    # Stopped, so that the next Refine is not refused for running already.
+    stopped = client.post(f"/api/v1/phone/captures/{capture_id}/stop", headers=PHONE)
+    assert stopped.status_code == 200
+    bad = client.post(
+        f"/api/v1/phone/captures/{capture_id}/refine",
+        json={"params": {"train": {"init_from": "random"}}},
+        headers=PHONE,
+    )
+    assert bad.status_code == 409

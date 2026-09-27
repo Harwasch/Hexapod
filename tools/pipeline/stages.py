@@ -24,6 +24,7 @@ import math
 import os
 import shutil
 import struct
+import subprocess
 import time
 import tomllib
 from collections.abc import Callable, Sequence
@@ -37,7 +38,9 @@ import PIL.Image
 
 import exif
 import gaussians
+import global_sfm
 import holdout
+import init_seed
 import live
 import quality
 import sfm
@@ -473,10 +476,18 @@ def colmap(ctx: StageContext) -> StageOutcome:
     `poses.json` therefore records the recovered focal, whether a prior was held, and
     both measurements, rather than a correction. Pass `focal_px` (EXIF or ARKit) and the
     prior is held through bundle adjustment.
+
+    `mapper: global` maps with GLOMAP (COLMAP 4, through pycolmap -- `global_sfm.py` has
+    the why and the measurements) before any incremental seed, on the first matches; a
+    result under `min_registered_fraction` falls back to the incremental mapper on the
+    same database, and `poses.json`'s `mapper` records which one made the model kept.
     """
     frames = ctx.input(FRAMES.name)
     out = ctx.output(POSES.name)
     requested = str(ctx.param("matcher", "auto"))
+    mapper = str(ctx.param("mapper", "incremental"))
+    if mapper not in ("incremental", "global"):
+        raise ValueError(f"mapper must be incremental or global, not {mapper!r}")
     images = sorted(p for p in frames.iterdir() if p.is_file())
     if not images:
         raise ValueError(f"the frames artifact at {frames} is empty")
@@ -558,6 +569,10 @@ def colmap(ctx: StageContext) -> StageOutcome:
     # result is missing pairs -- a loop not closed, a fast pan -- far more often than it
     # is an unlucky initial pair, and the exhaustive pass after it gets every seed anyway.
     schedule = [seeds[:1] if step.matcher == "sequential" else seeds for step in plan]
+    # `mapper: global` (global_sfm.py) is tried first, on the first matches; anything
+    # short of `enough` falls through to the incremental seeds on the same matches.
+    if mapper == "global":
+        schedule[0] = (_GLOBAL_SEED, *schedule[0])
     best_so_far = [0]
     round_of: dict[Path, int] = {}
     # On unless the recipe says `live: false`.
@@ -572,41 +587,55 @@ def colmap(ctx: StageContext) -> StageOutcome:
                 f"{step.matcher}{', cleared first' if step.clear else ''} -- {step.why}"
             )
             match(step)
-        into = sparse / f"match{round_}-seed{seed}"
+        global_ = seed == _GLOBAL_SEED
+        into = sparse / (f"match{round_}-global" if global_ else f"match{round_}-seed{seed}")
         into.mkdir(parents=True)
         began = time.monotonic()
-        # Cameras as they are solved, for the live viewer (`live.MapperWatch`).
-        snapshots = ctx.work_dir / "snapshots" / into.name
-        with live.MapperWatch(snapshots, ctx.log, frames=len(images), enabled=watch):
-            ctx.run(
-                sfm.mapper_argv(
-                    database,
-                    frames,
-                    into,
-                    refine_focal_length=focal_prior is None,
-                    random_seed=seed,
-                    num_threads=threads,
-                    snapshot_path=snapshots if watch else None,
-                    snapshot_every=live.snapshot_every(len(images)),
+        if global_:
+            if not _map_globally(ctx, database, frames, into, focal_prior is None, threads):
+                return None, 0
+            seconds["global"] = time.monotonic() - began
+        else:
+            # Cameras as they are solved, for the live viewer (`live.MapperWatch`).
+            snapshots = ctx.work_dir / "snapshots" / into.name
+            with live.MapperWatch(snapshots, ctx.log, frames=len(images), enabled=watch):
+                ctx.run(
+                    sfm.mapper_argv(
+                        database,
+                        frames,
+                        into,
+                        refine_focal_length=focal_prior is None,
+                        random_seed=seed,
+                        num_threads=threads,
+                        snapshot_path=snapshots if watch else None,
+                        snapshot_every=live.snapshot_every(len(images)),
+                    )
                 )
-            )
-        seconds["map"] += time.monotonic() - began
+            seconds["map"] += time.monotonic() - began
         found = _largest_model(into)
         registered = 0
         if found is not None:
             round_of[found] = round_
             registered = sfm.read_model(found).registered
         best_so_far[0] = max(best_so_far[0], registered)
+        if global_ and registered < enough:
+            ctx.log(
+                f"colmap: the global mapper registered {registered} of {len(images)}, short "
+                f"of {enough}; mapping incrementally on the same matches"
+            )
         return found, registered
 
     model_dir, tries = _best_reconstruction(attempt, rounds=schedule, enough=enough)
     for tried in tries:
         tried["matcher"] = plan[int(tried["match"])].matcher
+        tried["mapper"] = "global" if tried["seed"] == _GLOBAL_SEED else "incremental"
     if len(tries) > 1:
         ctx.log(
             "colmap: "
             + ", ".join(
-                f"match {t['match']} ({t['matcher']}) seed {t['seed']}: {t['registered']}"
+                f"match {t['match']} ({t['matcher']}) "
+                + ("global" if t["mapper"] == "global" else f"seed {t['seed']}")
+                + f": {t['registered']}"
                 for t in tries
             )
             + f" of {len(images)} registered; kept the best"
@@ -619,6 +648,7 @@ def colmap(ctx: StageContext) -> StageOutcome:
     # The model kept came from the pass it was mapped after; name the chain up to it.
     matcher = "+".join(dict.fromkeys(step.matcher for step in plan[: round_of[model_dir] + 1]))
     fell_back = plan[0].matcher == "sequential" and len(passes_run) > 1
+    mapper_used = "global" if model_dir.parent.name.endswith("-global") else "incremental"
     for entry in sorted(model_dir.iterdir()):
         if entry.is_file():
             shutil.copyfile(entry, out / entry.name)
@@ -630,6 +660,15 @@ def colmap(ctx: StageContext) -> StageOutcome:
         "tool": "colmap",
         "version": sfm.colmap_version(),
         "matcher": matcher,
+        # Which mapper made the model kept: `global` is pycolmap's GLOMAP pipeline
+        # (global_sfm.py), tried first when asked, with the incremental one behind it.
+        "mapper": {
+            "requested": mapper,
+            "used": mapper_used,
+            "fellBackToIncremental": mapper == "global" and mapper_used != "global",
+            "globalMapS": round(seconds["global"], 1) if "global" in seconds else None,
+            "pycolmap": global_sfm.PYCOLMAP_VERSION if mapper == "global" else None,
+        },
         # What was asked, what the frames were, and every pass that ran with its pair
         # count -- so a fallback, and what it cost, is visible rather than inferred.
         "matching": {
@@ -709,10 +748,47 @@ def colmap(ctx: StageContext) -> StageOutcome:
         "extractS": round(seconds["extract"], 1),
         "matchS": round(seconds["match"], 1),
         "mapS": round(seconds["map"], 1),
+        "mapper": mapper_used,
     }
+    if "global" in seconds:
+        metrics["globalMapS"] = round(seconds["global"], 1)
     return StageOutcome(
         metrics=metrics, summary=f"{model.registered}/{len(images)} frames registered"
     )
+
+
+#: The seed `_best_reconstruction` is handed for the global mapper's one try.
+_GLOBAL_SEED = -1
+
+
+def _map_globally(
+    ctx: StageContext,
+    database: Path,
+    frames: Path,
+    into: Path,
+    refine_focal_length: bool,
+    threads: int | None,
+) -> bool:
+    """One global mapping (global_sfm.py) into `into`; False, logged, if it could not run.
+
+    A global mapper that cannot run -- pycolmap missing, a crash in it -- is not the
+    stage failing: the incremental mapper is right behind it on the same matches.
+    """
+    try:
+        ctx.run(
+            global_sfm.argv(
+                global_sfm.python(),
+                database,
+                frames,
+                into,
+                refine_focal_length=refine_focal_length,
+                num_threads=threads,
+            )
+        )
+    except (subprocess.CalledProcessError, OSError) as error:
+        ctx.log(f"colmap: the global mapper did not run ({error}); mapping incrementally")
+        return False
+    return True
 
 
 def _source_format(ctx: StageContext) -> str | None:
@@ -725,11 +801,10 @@ def _source_format(ctx: StageContext) -> str | None:
 
 @stage_impl("glomap", consumes=("frames",), produces=(POSES,), summary="GLOMAP global SfM poses")
 def glomap(ctx: StageContext) -> StageOutcome:
-    # Still a stub after B2, deliberately: GLOMAP is not in Ubuntu 24.04's archive
-    # (`apt-cache policy glomap` finds nothing), so it cannot be installed on this
-    # machine or on `ubuntu-latest`, and an implementation nothing can run is a second
-    # unverified sketch. It reads the same database `colmap` builds, so when there is a
-    # box with one, this is the mapper call and the same `read_model` afterwards.
+    # Still a stub, and now for a different reason: GLOMAP is in COLMAP 4 (and pycolmap's
+    # wheels), and it runs as the `colmap` impl's `mapper: global` -- on the database that
+    # stage builds, with the incremental mapper behind it when it registers too few.
+    # A separate impl would duplicate extraction, matching and that fallback.
     _lands_in("B3", "pose: glomap")
 
 
@@ -837,6 +912,10 @@ def gsplat(ctx: StageContext) -> StageOutcome:
     * `live` (on unless `false`) exports a PLY at 10/25/50/75% of the schedule and packs
       each into a small SPZ under `checkpoint/live/` for the live viewer (`live.py`).
       Only those land in `checkpoint/`, and the full intermediate PLYs are deleted.
+    * `init_from: preview` starts from the splat the previous run of this stage left in
+      `checkpoint/` (a phone's Refine sets it), on `init_schedule_scale` (0.5) of the
+      schedule; with no usable seed it says why and trains as it would have.
+      `init_seed.py` has the reasoning.
 
     `psnr`, `ssim` and `lpips` are all measured on gsplat's held-out `val` split -- every
     8th registered frame -- and `train_metrics.json` says so and how many frames that is.
@@ -913,6 +992,10 @@ def gsplat(ctx: StageContext) -> StageOutcome:
             f"{crop.outside_sampled} sampled outside, {crop.kept_for_coverage} kept so "
             f"every frame still sees some)"
         )
+    # A Refine starts from the preview's splat when it left a seed (init_seed.py).
+    seeded, steps_scaler, iterations = _seed_from_preview(
+        ctx, poses, dataset, roi, steps_scaler, full_iterations
+    )
     registered = _registered_count(poses, images)
     train_frames, val_frames = training.held_out_split(registered)
     ctx.log(
@@ -1017,6 +1100,7 @@ def gsplat(ctx: StageContext) -> StageOutcome:
         script=_optional_path(ctx.param("holdout_script")),
         budget_s=float(ctx.param("holdout_budget_s", holdout.DEFAULT_BUDGET_S)),
     )
+    _save_seed(ctx, splat.columns, poses, steps_scaler, iterations, seeded)
     metrics_document = training.parse_metrics(
         result,
         ctx.log_path.read_text(encoding="utf-8", errors="replace"),
@@ -1048,12 +1132,14 @@ def gsplat(ctx: StageContext) -> StageOutcome:
         "appOpt": app_opt,
         "bilateralGrid": bilateral_grid,
         "variant": variant,
+        "initFrom": "sfm" if seeded is None else "preview",
     }
     document["holdout"] = {
         key: held_out[key]
         for key in ("status", "reason", "views", "meanPsnr", "gaussiansMeasured", "seconds")
         if key in held_out
     }
+    document["init"] = None if seeded is None else seeded.to_dict()
     document["roi"] = (
         None
         if roi is None or crop is None
@@ -1084,7 +1170,10 @@ def gsplat(ctx: StageContext) -> StageOutcome:
         "metricsSplit": f"val: every {training.TEST_EVERY}th frame",
         "valFrames": val_frames,
         "trainFrames": train_frames,
+        "initFrom": "sfm" if seeded is None else "preview",
     }
+    if seeded is not None:
+        metrics["seedPoints"] = seeded.seeded
     if metrics_document.iterations is not None:
         metrics["iterations"] = metrics_document.iterations
     for name, value in (
@@ -1128,6 +1217,77 @@ def _up_estimate(poses: Path) -> list[float] | None:
     if isinstance(up, list) and len(up) == 3 and all(isinstance(v, int | float) for v in up):
         return [float(v) for v in up]
     return None
+
+
+def _seed_from_preview(
+    ctx: StageContext,
+    poses: Path,
+    dataset: Path,
+    region: training.Roi | support_mask.SupportMask | None,
+    steps_scaler: float,
+    full_iterations: int,
+) -> tuple[init_seed.SeedApplied | None, float, int]:
+    """`init_from: preview`: add the last run's seed to the initial points, and shorten
+    the schedule to `init_schedule_scale`. Unchanged when not asked or when no seed fits."""
+    init_from = str(ctx.param("init_from", "sfm"))
+    if init_from not in ("sfm", "preview"):
+        raise ValueError(f"init_from must be sfm or preview, not {init_from!r}")
+    iterations = training.scaled_steps(full_iterations, steps_scaler)
+    if init_from == "sfm":
+        return None, steps_scaler, iterations
+    seed, why = init_seed.load(ctx.checkpoint_dir, poses)
+    if seed is None:
+        ctx.log(
+            f"gsplat: init_from=preview, but {why}; starting from COLMAP's points on the "
+            f"{steps_scaler:g} schedule instead"
+        )
+        return None, steps_scaler, iterations
+    budget = init_seed.budget_for(
+        _optional_int(ctx.param("cap_max")), _optional_int(ctx.param("init_max_points"))
+    )
+    applied = init_seed.apply(dataset / "sparse" / "0", seed, region, budget=budget)
+    scaler = training.check_schedule_scale(
+        init_seed.schedule_for(_optional_float(ctx.param("init_schedule_scale")))
+    )
+    iterations = training.scaled_steps(full_iterations, scaler)
+    ctx.log(
+        f"gsplat: init_from=preview: {applied.seeded} of the preview's {seed.count} visible "
+        f"gaussians added to {applied.sfm_points} SfM points ({applied.inside} in the "
+        f"region, {applied.outside_sampled} sampled outside, budget {budget}); schedule "
+        f"{steps_scaler:g} -> {scaler:g} = {iterations} steps"
+    )
+    return applied, scaler, iterations
+
+
+def _save_seed(
+    ctx: StageContext,
+    columns: dict[str, Any],
+    poses: Path,
+    steps_scaler: float,
+    iterations: int,
+    seeded: init_seed.SeedApplied | None,
+) -> None:
+    """Leave this run's splat in `checkpoint/` for a later Refine. Never fails the run."""
+    settings = {
+        "scheduleScale": steps_scaler,
+        "iterations": iterations,
+        "capMax": _optional_int(ctx.param("cap_max")),
+        "trainMaxSide": _optional_int(ctx.param("train_max_side")),
+        "initFrom": "sfm" if seeded is None else "preview",
+    }
+    try:
+        count = init_seed.save(
+            ctx.checkpoint_dir,
+            columns,
+            poses,
+            settings=settings,
+            sh_c0=gaussians.SH_C0,
+            scratch=ctx.work_dir / "seed",
+        )
+    except (OSError, KeyError, ValueError) as error:
+        ctx.log(f"gsplat: could not leave a seed for a later Refine: {error!r}")
+        return
+    ctx.log(f"gsplat: left a {count}-gaussian seed in checkpoint/ for a later Refine")
 
 
 def _optional_bool(value: object, name: str) -> bool:

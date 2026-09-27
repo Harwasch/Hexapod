@@ -182,6 +182,10 @@ class Settings(BaseSettings):
     worker_max_preemptions: int = 4
     # Pause between attempts at the same stage.
     worker_retry_backoff_s: float = 2.0
+    # Jobs one worker process supervises at once, each in its own slot with its own claim,
+    # lease, heartbeat and recipe process (app/worker/loop.py). 1 until raised: the
+    # worker's README gives the memory each slot costs on the 2 GB machine.
+    worker_concurrency: int = Field(default=1, ge=1, le=8)
 
     api_host: str = "0.0.0.0"  # noqa: S104 - container default, documented in DEPLOYMENT.md
     api_port: int = 8000

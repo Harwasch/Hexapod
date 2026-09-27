@@ -37,6 +37,7 @@ from __future__ import annotations
 import json
 import sys
 import threading
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -98,7 +99,10 @@ def execute(
     that happened to return bad news, and the adapter would have to guess.
     """
     stage_sandbox(root)
+    began = time.monotonic()
     fetched = _fetch(request, transfer, root)
+    fetched_at = time.monotonic()
+    _say(f"remote: fetched {fetched} byte(s) of input and checkpoint in {fetched_at - began:.1f} s")
 
     stop = threading.Event()
     syncer = threading.Thread(
@@ -129,11 +133,21 @@ def execute(
     # that is no longer needed, and turning a completed GPU run into a failure because
     # the insurance could not be filed would be the expensive way to be wrong. A bucket
     # that rejects this will reject the upload below too, and that one *is* fatal.
+    ran_at = time.monotonic()
     _sync_quietly(request, transfer, root / "checkpoint")
     uploaded = transfer.put(request.outputs_key, root / "out")
+    done_at = time.monotonic()
+    _say(f"remote: uploaded {uploaded} byte(s) of output in {done_at - ran_at:.1f} s")
     result = _result(root)
+    # Where a remote stage's wall time went, beside the stage's own metrics: the part of
+    # a CPU stage's minutes that is not COLMAP is the bytes moving, and this says how much.
+    timing = {
+        "remoteFetchS": round(fetched_at - began, 2),
+        "remoteStageS": round(ran_at - fetched_at, 2),
+        "remoteUploadS": round(done_at - ran_at, 2),
+    }
     return RemoteOutcome(
-        metrics=result.get("metrics") or {},
+        metrics={**(result.get("metrics") or {}), **timing},
         summary=str(result.get("summary") or ""),
         fetched_bytes=fetched,
         uploaded_bytes=uploaded,
@@ -217,6 +231,12 @@ def _sync_quietly(request: StageRequest, transfer: Transfer, checkpoint: Path) -
         sys.stdout.write(f"remote: checkpoint sync failed, continuing: {error!r}\n")
         sys.stdout.flush()
         return 0
+
+
+def _say(line: str) -> None:
+    """One line of this container's log (stdout, which the provider's tail reads)."""
+    sys.stdout.write(line + "\n")
+    sys.stdout.flush()
 
 
 def _result(root: Path) -> dict[str, Any]:

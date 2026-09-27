@@ -27,7 +27,7 @@ import { partSizeFor, putPart } from "@/api/putPart";
 import { classify, SUPPORTED_TEXT, unsupported } from "@/features/captures/recipes";
 
 import { mountOptions, type OptionsPanel, paramsFor, previewParamsFor } from "./options";
-import { forecast, qualityOf, summary } from "./quality";
+import { forecast, qualityOf, refineAdvice, summary } from "./quality";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
 
@@ -1111,6 +1111,8 @@ async function captureRow(ui: Ui, capture: Capture, job: Job | undefined): Promi
 
   // The quality bar's verdict on this capture's latest run, when it has one.
   const quality = qualityOf(capture.quality, job);
+  // Whether that verdict says Refine can help (quality.ts `refineAdvice`).
+  let refineLeads = false;
 
   if (capture.siteId && (!job || job.status === "complete")) {
     state.textContent = "Ready";
@@ -1121,7 +1123,21 @@ async function captureRow(ui: Ui, capture: Capture, job: Job | undefined): Promi
       line.className = "forecast";
       line.textContent = forecast(quality);
       text.append(line);
-      row.append(refineButton("Refine"));
+      const advice = refineAdvice(quality);
+      refineLeads = advice.worthIt;
+      if (advice.worthIt) {
+        row.append(refineButton("Refine"));
+      } else {
+        // The capture, not the training, is what is short: say so, keep the tips below,
+        // and leave Refine available but not as the next step.
+        const why = document.createElement("span");
+        why.className = "advice";
+        why.textContent = advice.reason ?? "";
+        text.append(why);
+        const anyway = refineButton("Refine anyway");
+        anyway.className = "rowbtn rowbtn--quiet";
+        row.append(anyway);
+      }
     } else if (quality) {
       row.dataset.quality = "refine";
       const line = document.createElement("span");
@@ -1139,7 +1155,9 @@ async function captureRow(ui: Ui, capture: Capture, job: Job | undefined): Promi
     download.download = `${capture.name}.ply`;
     download.textContent = ".ply";
     download.setAttribute("aria-label", `Download ${capture.name} as a .ply file`);
-    if (quality) view.className = "rowbtn rowbtn--quiet";
+    // A preview not worth refining keeps View as its primary action.
+    if (quality && (quality.mode !== "preview" || refineLeads))
+      view.className = "rowbtn rowbtn--quiet";
     row.append(view, download);
     if (quality && quality.tips.length > 0) row.append(tipsView(quality.tips));
   } else if (job && !ENDED.has(job.status)) {

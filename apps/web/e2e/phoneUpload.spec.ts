@@ -678,6 +678,11 @@ test.describe("the phone upload page", () => {
     await expect(row("Spool table").locator(".tips p")).toHaveCount(2);
     await expect(row("Spool table").locator(".tips")).toContainText("Add frames from above");
     await expect(row("Spool table").getByRole("link", { name: "View in 3D" })).toBeVisible();
+    // 62% kept: worth refining, so Refine leads and there is no advice against it.
+    await expect(
+      row("Spool table").getByRole("button", { name: "Refine", exact: true }),
+    ).toHaveClass("rowbtn");
+    await expect(row("Spool table").locator(".advice")).toHaveCount(0);
 
     // The refined one: its result, and no Refine.
     await expect(row("Garden bench").locator(".forecast")).toHaveText(
@@ -911,7 +916,9 @@ test.describe("the phone upload page", () => {
     await page.goto("/upload.html");
     await page.getByText("Processing options").click();
     await expect(page.getByRole("button", { name: "Stop" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Refine" })).toBeVisible();
+    // 8% kept: the capture is what is short, so Refine is offered but not as the next step.
+    await expect(page.getByRole("button", { name: "Refine anyway" })).toBeVisible();
+    await expect(page.locator(".advice")).toContainText("Only 8% of the scene");
     await expect(page.locator(".tips")).toBeVisible();
     const widths = await page.evaluate(() => [
       document.documentElement.scrollWidth,

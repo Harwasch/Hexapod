@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import os
 import socket
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from app.config import REPO_ROOT, Settings, get_settings
@@ -55,6 +55,8 @@ class WorkerConfig:
     #: Drop `inputs/` and every stage's `work/` once a run has finished successfully (see
     #: `JobSupervisor._tidy`). On by default; off only for tests that read scratch files.
     tidy_finished_runs: bool = True
+    #: Jobs supervised at once, one slot each (`loop.Worker.run_forever`).
+    concurrency: int = 1
 
     @staticmethod
     def from_settings(settings: Settings | None = None) -> WorkerConfig:
@@ -82,7 +84,22 @@ class WorkerConfig:
             max_attempts=resolved.worker_max_attempts,
             max_preemptions=resolved.worker_max_preemptions,
             retry_backoff_s=resolved.worker_retry_backoff_s,
+            concurrency=resolved.worker_concurrency,
         )
+
+    def for_slot(self, slot: int) -> WorkerConfig:
+        """The configuration one slot of a concurrent worker supervises its job with.
+
+        The same in every way but the id, which gets the slot's number: a claim, a
+        heartbeat and `_still_ours` all compare `claimed_by` with this id, so two slots
+        sharing one would each take the other's job for its own the moment a lease
+        lapsed and was reclaimed inside the same process. With one id per slot they
+        behave exactly as separate workers do, which is what `SKIP LOCKED` is built for.
+        A single-slot worker keeps the plain id it always had.
+        """
+        if self.concurrency <= 1:
+            return self
+        return replace(self, worker_id=f"{self.worker_id}/{slot}")
 
     def workdir_for(self, job_id: object) -> Path:
         return self.workdir_root / str(job_id)

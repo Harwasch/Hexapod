@@ -44,7 +44,7 @@ def main(argv: list[str] | None = None) -> int:
         outcome = worker.run_one()
         log.info("worker %s: %s", worker.worker_id, outcome or "nothing queued")
         return 0
-    log.info("worker %s: polling", worker.worker_id)
+    log.info("worker %s: polling with %d slot(s)", worker.worker_id, worker.slots)
     ran = worker.run_forever(max_jobs=args.max_jobs, stop=stop)
     log.info("worker %s: ran %d job(s)", worker.worker_id, ran)
     return 0

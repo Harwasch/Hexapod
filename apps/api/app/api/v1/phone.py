@@ -70,6 +70,10 @@ PHONE_OPTIONS: dict[str, dict[str, dict[str, Rule]]] = {
             "pose_opt": FLAG,
             "app_opt": FLAG,
             "bilateral_grid": FLAG,
+            # Where a Refine starts: the preview's splat (the default a Refine sets) or
+            # COLMAP's points, and the schedule it runs when it starts from the preview.
+            "init_from": frozenset({"sfm", "preview"}),
+            "init_schedule_scale": (0.05, 1.0),
         },
         # The quality bar: what is kept, and whether this run is a preview or a refine.
         "quality": {"bar": frozenset(QUALITY_BARS), "mode": frozenset(QUALITY_MODES)},
@@ -252,7 +256,9 @@ class PhoneRefine(CamelModel):
     description=(
         "Resumes the capture's latest finished photo-reconstruct run at `train` with new "
         "parameters: the phone's quality options, `train.support_mask` set to the voxels the "
-        "preview's well-supported splats occupy (any shape), and `quality.mode` = `refine`. "
+        "preview's well-supported splats occupy (any shape), `train.init_from` = `preview` "
+        "(start from the preview's splat on a shorter schedule; the phone may send `sfm`), "
+        "and `quality.mode` = `refine`. "
         "The frames and poses are kept, so the mask is in the frame it was measured in. If the "
         "worker no longer has them, the run starts over and trains uncropped rather than "
         "applying the region to a different reconstruction."
@@ -297,6 +303,10 @@ def refine_phone_capture(
         train["support_mask"] = mask
     elif verdict.roi is not None:
         train["roi"] = {"center": list(verdict.roi.center), "radius": verdict.roi.radius}
+    # Start from the preview's own splat on a shorter schedule rather than from COLMAP's
+    # sparse points on the whole one (tools/pipeline/init_seed.py). The train stage checks
+    # that the seed is in these poses, and trains from scratch, saying so, if it is not.
+    train.setdefault("init_from", "preview")
     quality = params.setdefault("quality", {})
     quality["mode"] = "refine"
     quality.setdefault("bar", "strict")
