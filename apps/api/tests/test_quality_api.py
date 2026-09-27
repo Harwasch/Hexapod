@@ -62,6 +62,7 @@ SUMMARY: dict[str, Any] = {
         "drop": 20_000,
     },
     "keepPct": 62.0,
+    "keepVerifiedPct": 48.5,
     "contextPct": 90.5,
     "heldOutPsnr": 23.04,
     "views": {"medianRoi": 31},
@@ -239,6 +240,7 @@ def test_a_capture_reads_back_its_verdict(client: TestClient, db: Session) -> No
         "bar": "balanced",
         "barApplied": "balanced",
         "keepPct": 62.0,
+        "keepVerifiedPct": 48.5,
         "contextPct": 90.5,
         "heldOutPsnr": 23.04,
         "gaussians": {
@@ -307,6 +309,8 @@ def test_registration_publishes_the_coverage_and_records_the_verdict(
     assert capture.quality["coverageUrl"] == url
     site = db.get(Site, capture.site_id)
     assert site is not None and site.metadata_["coverageUrl"] == url
+    # The legend's "verified by held-out frames" share travels with the overlay.
+    assert site.metadata_["keepVerifiedPct"] == 48.5
 
     # A later run with no quality stage clears both: a verdict and an overlay describe
     # the run that measured them, and that is no longer the one on the globe.
@@ -315,6 +319,7 @@ def test_registration_publishes_the_coverage_and_records_the_verdict(
     db.refresh(site)
     assert capture.quality is None
     assert "coverageUrl" not in site.metadata_
+    assert "keepVerifiedPct" not in site.metadata_
 
 
 # --- the worker's guard ----------------------------------------------------------------

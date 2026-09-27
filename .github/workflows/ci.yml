@@ -243,6 +243,10 @@ jobs:
           "$RUNNER_TEMP/trainer/bin/python" infra/modal/check_trainer.py \
             "$RUNNER_TEMP/gsplat/examples/simple_trainer.py" tools/pipeline \
             --allow-missing-cuda-extensions
+      - name: holdout_error.py imports torch, gsplat and the trainer's dataset classes
+        run: |
+          "$RUNNER_TEMP/trainer/bin/python" tools/pipeline/holdout_error.py --self-check \
+            --trainer "$RUNNER_TEMP/gsplat/examples/simple_trainer.py"
 
   api:
     name: API · lint, typecheck, test, migrations

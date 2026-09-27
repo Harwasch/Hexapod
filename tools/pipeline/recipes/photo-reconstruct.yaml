@@ -87,6 +87,11 @@ stages:
       # same 4 photos grew 894k gaussians; `package` keeps 400k of any of them).
       strategy: mcmc
       cap_max: 500000
+      # After training, on the same GPU: render every held-out frame (every 8th, never
+      # trained on), compare it with the photo, and share each pixel's error out among
+      # the gaussians that painted it (holdout.py). Writes `holdout/`, which `quality`
+      # verifies keep with. Seconds of GPU; it cannot fail the stage.
+      holdout_error: true
       # What is written here is the Standard run. A run may override any of it per
       # capture (`jobs.params`), and two named presets are:
       #
@@ -168,6 +173,16 @@ stages:
       context_min_views: 3
       context_min_spread_deg: 15
       context_max_gsd_ratio: 6.0
+      # Measured accuracy, from train's holdout/: where held-out frames saw a gaussian
+      # (at least 2 px of it), keep also needs its held-out error -- the trainer's own
+      # loss per pixel, 0.8 L1 + 0.2 (1 - SSIM) -- at most 2x the scene's median for
+      # coverage-keep and at most 0.25. The ratio catches the parts that are worse than
+      # the rest of this capture; the ceiling, a capture that is bad all over. 0.25 is
+      # a first guess (a good held-out render averages about 0.05): no GPU run has
+      # calibrated it yet. Unseen by held-out frames: coverage alone decides.
+      keep_max_holdout_error_ratio: 2.0
+      keep_max_holdout_error: 0.25
+      holdout_min_weight: 2.0
       min_opacity: 0.02
       context_fade: 0.5
       roi_radius_factor: 0.5

@@ -508,7 +508,7 @@ export interface paths {
         put?: never;
         /**
          * Refine a finished preview: train it again at full quality, inside its region
-         * @description Resumes the capture's latest finished photo-reconstruct run at `train` with new parameters: the phone's quality options, `train.roi` set to the region of interest the preview's quality stage measured, and `quality.mode` = `refine`. The frames and poses are kept, so the region is in the frame it was measured in. If the worker no longer has them, the run starts over and trains uncropped rather than applying the region to a different reconstruction.
+         * @description Resumes the capture's latest finished photo-reconstruct run at `train` with new parameters: the phone's quality options, `train.support_mask` set to the voxels the preview's well-supported splats occupy (any shape), and `quality.mode` = `refine`. The frames and poses are kept, so the mask is in the frame it was measured in. If the worker no longer has them, the run starts over and trains uncropped rather than applying the region to a different reconstruction.
          */
         post: operations["refine_phone_capture_api_v1_phone_captures__capture_id__refine_post"];
         delete?: never;
@@ -1426,6 +1426,8 @@ export interface components {
             jobId: string;
             /** Keeppct */
             keepPct: number | null;
+            /** Keepverifiedpct */
+            keepVerifiedPct?: number | null;
             /** Medianviews */
             medianViews: number | null;
             /** Mode */

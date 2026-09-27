@@ -52,6 +52,17 @@ is `roi_radius_factor` of the median camera distance to it. It is written to
 `quality.json` in the **COLMAP frame** -- the frame of `trained.ply` -- because that is
 what a refine run's `train: {roi: ...}` crops in, over the same poses.
 
+**Measured accuracy.** Coverage says a gaussian could be right; the `holdout` artifact
+(`holdout.py`), when the `train` stage wrote one, says whether it is: each gaussian's mean
+error on gsplat's held-out frames, which training never saw. Where a gaussian has at least
+`holdout_min_weight` pixels of held-out evidence, keep also needs that error at most
+`keep_max_holdout_error_ratio` times the median of the measured coverage-keep (and at most
+`keep_max_holdout_error`, when set); one that fails drops to context. A gaussian no
+held-out frame saw is judged by coverage alone. `heldOut` in quality.json has the counts
+-- verified keep against geometry-only keep, per-tier error -- and `keepVerifiedPct` is
+`keepPct` counting verified keep only. The support mask is built from verified keep when
+there is enough of it.
+
 The stage never fails a run for being strict: a bar that would leave fewer than
 `min_gaussians` falls back to the next looser one and says so (`barApplied`).
 """
@@ -70,6 +81,7 @@ import numpy as np
 import numpy.typing as npt
 
 import gaussians
+import holdout
 import sfm
 import support_mask
 from artifacts import ArtifactDecl
@@ -144,6 +156,12 @@ TIER_COLOURS: Mapping[int, tuple[int, int, int]] = {
 
 _UNSEEN_GSD = np.float32(np.inf)
 
+#: The support mask is built from held-out-verified keep only when at least this many
+#: gaussians, and this share of keep, were verified; otherwise from all of keep, and
+#: `heldOut.supportMaskFrom` says which.
+MIN_VERIFIED_FOR_MASK = 64
+VERIFIED_MASK_SHARE = 0.25
+
 
 # ---------------------------------------------------------------------------------------
 # Parameters
@@ -168,6 +186,15 @@ class Thresholds:
     context_max_roi_radii: float = 2.0
     #: An absolute ceiling on the keep tier's GSD, applied only when the scale is metric.
     keep_max_gsd_mm: float | None = None
+    #: Measured accuracy (`holdout.py`), applied where held-out frames saw the gaussian:
+    #: keep needs its mean held-out error at most this many times the median of the
+    #: measured coverage-keep gaussians...
+    keep_max_holdout_error_ratio: float | None = 2.0
+    #: ...and at most this, absolutely (the per-pixel `0.8 L1 + 0.2 (1 - SSIM)`, 0..1).
+    keep_max_holdout_error: float | None = None
+    #: Pixels of held-out evidence (summed blending weight) a gaussian needs to be judged
+    #: by accuracy at all; with less it is judged by coverage alone.
+    holdout_min_weight: float = 2.0
 
     @staticmethod
     def from_params(params: Mapping[str, Any]) -> Thresholds:
@@ -975,7 +1002,7 @@ def _round(value: float | None, digits: int = 3) -> float | None:
 @stage_impl(
     "support_gate",
     consumes=("trained.ply", "poses"),
-    optional_consumes=("georef.json", "train_metrics.json"),
+    optional_consumes=("georef.json", "train_metrics.json", holdout.HOLDOUT.name),
     produces=(GATED_PLY, QUALITY_JSON, COVERAGE_PLY),
     summary="the quality bar: keep what enough frames saw well, and say what to capture next",
 )
@@ -1035,6 +1062,35 @@ def support_gate(ctx: StageContext) -> StageOutcome:
     tiers = assign_tiers(
         support.views, support.spread_deg, gsd_ratio, alpha, thresholds, gsd_mm, roi_radii
     )
+    # Measured accuracy, where held-out frames saw the splat: keep must also match them.
+    held, held_status = (
+        holdout.load(ctx.input(holdout.HOLDOUT.name), splat.count)
+        if ctx.has_input(holdout.HOLDOUT.name)
+        else (None, {"status": "missing", "reason": "the train stage wrote no holdout/"})
+    )
+    accuracy: holdout.Accuracy | None = None
+    coverage_keep = tiers == TIER_KEEP
+    if held is not None:
+        accuracy = holdout.judge(
+            tiers,
+            held,
+            max_ratio=thresholds.keep_max_holdout_error_ratio,
+            max_abs=thresholds.keep_max_holdout_error,
+            min_weight=thresholds.holdout_min_weight,
+            keep=TIER_KEEP,
+            demote_to=TIER_CONTEXT,
+        )
+        tiers = accuracy.tiers
+        ctx.log(
+            f"held-out: {int(accuracy.measured.sum())} of {splat.count} gaussians measured; "
+            f"{int(accuracy.demoted.sum())} of {int(coverage_keep.sum())} coverage-keep over "
+            f"the limit {accuracy.limit}; {int(accuracy.verified.sum())} keep verified"
+        )
+    else:
+        ctx.log(
+            f"held-out: not used ({held_status['status']}: {held_status.get('reason')}); "
+            f"keep is judged by coverage alone"
+        )
 
     min_gaussians = int(ctx.param("min_gaussians", 1000))
     applied = bar
@@ -1064,11 +1120,32 @@ def support_gate(ctx: StageContext) -> StageOutcome:
     # for pixel size and the capture tips).
     extent = supported_extent(xyz, tiers, roi)
     # The region a Refine trains in: the voxels holding the keep tier, in whatever shape
-    # they make. `extent` is only the frame the percentages below are measured over.
-    mask = support_mask.build(xyz[tiers == TIER_KEEP])
+    # they make -- the keep that held-out frames verified, when there is enough of it to
+    # be a region (a capture whose held-out frames saw only part of the subject would
+    # otherwise refine only that part). `extent` is only the frame the percentages below
+    # are measured over.
+    mask_source = "keep"
+    mask_from = tiers == TIER_KEEP
+    if accuracy is not None and int(accuracy.verified.sum()) >= max(
+        MIN_VERIFIED_FOR_MASK, VERIFIED_MASK_SHARE * int(mask_from.sum())
+    ):
+        mask_source, mask_from = "verified-keep", accuracy.verified
+    mask = support_mask.build(xyz[mask_from])
     scene = replace(extent, radius=extent.radius * 1.5)
     keep_pct = _occupied_share(xyz, tiers, alpha, scene, TIER_KEEP)
     context_pct = _occupied_share(xyz, tiers, alpha, scene, TIER_CONTEXT)
+    # The same share, counting only keep that held-out frames confirmed.
+    keep_verified_pct = (
+        None
+        if accuracy is None
+        else _occupied_share(
+            xyz,
+            np.where(accuracy.verified, TIER_KEEP, TIER_DROP).astype(np.uint8),
+            alpha,
+            scene,
+            TIER_KEEP,
+        )
+    )
     metrics_doc = (
         _read_json(ctx.input("train_metrics.json")) if ctx.has_input("train_metrics.json") else {}
     )
@@ -1086,6 +1163,24 @@ def support_gate(ctx: StageContext) -> StageOutcome:
         thresholds=thresholds,
         keep_pct=keep_pct,
     )
+    held_report: dict[str, object] = dict(held_status)
+    if accuracy is not None and held is not None:
+        held_report = holdout.tier_report(
+            accuracy,
+            held,
+            {tier: name for tier, name in TIER_NAMES.items() if tier != TIER_CAMERA},
+            max_ratio=thresholds.keep_max_holdout_error_ratio,
+            max_abs=thresholds.keep_max_holdout_error,
+            min_weight=thresholds.holdout_min_weight,
+        )
+        near_keep = int(coverage_keep[roi_index].sum())
+        demoted_share = float(accuracy.demoted[roi_index].sum()) / near_keep if near_keep else 0.0
+        held_report["demotedShareNearSubject"] = round(demoted_share, 3)
+        tip = holdout.accuracy_tip(held.summary, demoted_share)
+        if tip is not None:
+            # Accuracy is what failed, so it leads, and "well covered" is no longer true.
+            tips = [tip, *(t for t in tips if t["id"] != "good")][:4]
+    held_report["supportMaskFrom"] = mask_source
     roi_gsd_mm = None if metres is None else _round(median_gsd * metres * 1000.0, 2)
     document: dict[str, object] = {
         "version": 1,
@@ -1107,6 +1202,10 @@ def support_gate(ctx: StageContext) -> StageOutcome:
         ),
         "heldOutPsnr": psnr,
         "heldOutPsnrNote": "gsplat's own held-out frames (every 8th), from train_metrics.json",
+        # keepPct's measure, counting only keep that held-out frames confirmed; null when
+        # accuracy was not measured (then every keep is on coverage alone).
+        "keepVerifiedPct": keep_verified_pct,
+        "heldOut": held_report,
         "views": {"medianRoi": _median_int(support.views[roi_index])},
         "spreadDeg": {"medianRoi": _round(_median(support.spread_deg[roi_index]), 1)},
         "gsd": {
@@ -1163,6 +1262,11 @@ def support_gate(ctx: StageContext) -> StageOutcome:
     }
     if keep_pct is not None:
         metrics["keepPct"] = keep_pct
+    if keep_verified_pct is not None:
+        metrics["keepVerifiedPct"] = keep_verified_pct
+    if accuracy is not None:
+        metrics["keepVerified"] = int(accuracy.verified.sum())
+        metrics["demotedByHeldOut"] = int(accuracy.demoted.sum())
     if psnr is not None:
         metrics["heldOutPsnr"] = psnr
     summary = (

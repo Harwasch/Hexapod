@@ -146,7 +146,7 @@ test("Coverage lays the quality bar's cloud and the camera path over the scan", 
           id: SITE,
           name: "Garden tree",
           createdAt: "2026-09-24T15:00:00Z",
-          metadata: { captureId: "c1", coverageUrl },
+          metadata: { captureId: "c1", coverageUrl, keepVerifiedPct: 47.6 },
           assets: [
             { representation: "gaussian-splat", source: { type: "3d-tiles-url", url: TILESET } },
           ],
@@ -182,6 +182,7 @@ test("Coverage lays the quality bar's cloud and the camera path over the scan", 
   await expect(legend).toBeVisible();
   await expect(legend).toContainText("Camera path");
   await expect(legend).toContainText("2 kept · 1 context · 1 dropped");
+  await expect(legend).toContainText("48% of the scene verified by held-out frames");
 
   await toggle.click();
   await expect(toggle).toHaveAttribute("aria-pressed", "false");

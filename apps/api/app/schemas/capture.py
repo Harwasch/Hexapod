@@ -139,6 +139,10 @@ class CaptureQuality(CamelModel):
     bar_applied: str
     #: Share of the occupied region of interest that reached the keep tier, in percent.
     keep_pct: float | None
+    #: The same share, counting only keep whose accuracy was also verified against
+    #: gsplat's held-out frames (the rest is kept on coverage alone). Null when accuracy
+    #: was not measured, and on verdicts stored before it was.
+    keep_verified_pct: float | None = None
     context_pct: float | None
     #: gsplat's own held-out frames, in dB.
     held_out_psnr: float | None

@@ -214,6 +214,7 @@ def capture_quality(
             bar=bar if bar in QUALITY_BARS else "everything",
             bar_applied=str(summary.get("barApplied") or bar),
             keep_pct=_optional_number(summary.get("keepPct")),
+            keep_verified_pct=_optional_number(summary.get("keepVerifiedPct")),
             context_pct=_optional_number(summary.get("contextPct")),
             held_out_psnr=_optional_number(summary.get("heldOutPsnr")),
             gaussians={
@@ -442,6 +443,12 @@ def register(
             metadata["coverageUrl"] = coverage
         else:
             metadata.pop("coverageUrl", None)
+        # Beside it, how much of the keep tier held-out frames verified, for the legend.
+        verified = _optional_number((registration.quality or {}).get("keepVerifiedPct"))
+        if coverage and verified is not None:
+            metadata["keepVerifiedPct"] = verified
+        else:
+            metadata.pop("keepVerifiedPct", None)
         registered.metadata_ = metadata
     verdict = capture_quality(registration.quality, job_id, coverage)
     capture.quality = None if verdict is None else verdict.model_dump(mode="json", by_alias=True)

@@ -37,6 +37,7 @@ import PIL.Image
 
 import exif
 import gaussians
+import holdout
 import quality
 import sfm
 import support_mask
@@ -778,7 +779,7 @@ def robust(ctx: StageContext) -> StageOutcome:
     "gsplat",
     consumes=("frames", "poses"),
     optional_consumes=("masks",),
-    produces=(TRAINED_PLY, TRAIN_METRICS),
+    produces=(TRAINED_PLY, TRAIN_METRICS, holdout.HOLDOUT),
     summary="gsplat 3DGS training; consumes masks when a mask stage produced any",
 )
 def gsplat(ctx: StageContext) -> StageOutcome:
@@ -818,7 +819,10 @@ def gsplat(ctx: StageContext) -> StageOutcome:
       (`training.gsplat_argv` says what each does);
     * `roi` (`{"center": [x, y, z], "radius": r}`, COLMAP frame) crops the initial points
       to the sphere before training and the trained gaussians to 1.5 radii after it;
-    * `variant` is `3dgs`; `2dgs` is refused, and `training.py` says why.
+    * `variant` is `3dgs`; `2dgs` is refused, and `training.py` says why;
+    * `holdout_error` renders the held-out frames after training and writes each
+      gaussian's error on them to `holdout/` (`holdout.py`), for `quality` to verify keep
+      with. It cannot fail the stage: a script that fails leaves `holdout.json` saying so.
 
     `psnr`, `ssim` and `lpips` are all measured on gsplat's held-out `val` split -- every
     8th registered frame -- and `train_metrics.json` says so and how many frames that is.
@@ -946,7 +950,9 @@ def gsplat(ctx: StageContext) -> StageOutcome:
     splat = gaussians.read_splat(ply)
     columns = splat.columns
     trained_count = splat.count
+    cropped_rows = None
     if roi is not None:
+        cropped_rows = training.crop_rows(columns, roi)
         columns, kept = training.crop_splat(columns, roi)
         ctx.log(
             f"gsplat: kept {kept} of {trained_count} trained gaussians inside the "
@@ -958,6 +964,23 @@ def gsplat(ctx: StageContext) -> StageOutcome:
         )
     written = gaussians.write_ply(ctx.output(TRAINED_PLY.name), columns)
     in_ply = int(columns["x"].shape[0])
+    # Per-gaussian error on the held-out frames, in trained.ply's order. After the splat
+    # is written, and unable to fail the stage: `holdout.measure` says why.
+    held_out = holdout.measure(
+        ctx,
+        enabled=_optional_bool(ctx.param("holdout_error"), "holdout_error"),
+        python=training.trainer_python(ctx.param("python")),
+        trainer=trainer,
+        dataset=dataset,
+        ply=ply,
+        rows=trained_count,
+        keep=cropped_rows,
+        data_factor=data_factor,
+        test_every=training.TEST_EVERY,
+        antialiased=antialiased,
+        script=_optional_path(ctx.param("holdout_script")),
+        budget_s=float(ctx.param("holdout_budget_s", holdout.DEFAULT_BUDGET_S)),
+    )
     metrics_document = training.parse_metrics(
         result,
         ctx.log_path.read_text(encoding="utf-8", errors="replace"),
@@ -986,6 +1009,11 @@ def gsplat(ctx: StageContext) -> StageOutcome:
         "opacityReg": opacity_reg,
         "depthLoss": depth_loss,
         "variant": variant,
+    }
+    document["holdout"] = {
+        key: held_out[key]
+        for key in ("status", "reason", "views", "meanPsnr", "gaussiansMeasured", "seconds")
+        if key in held_out
     }
     document["roi"] = (
         None
@@ -1032,6 +1060,7 @@ def gsplat(ctx: StageContext) -> StageOutcome:
         metrics["trainMaxSide"] = max_side
     if roi is not None:
         metrics["gaussiansTrained"] = trained_count
+    metrics["holdoutError"] = str(held_out.get("status"))
     return StageOutcome(metrics=metrics, summary=f"{in_ply} gaussians trained")
 
 
@@ -1804,6 +1833,7 @@ _QUALITY_SUMMARY_KEYS = (
     "roi",
     "gaussians",
     "keepPct",
+    "keepVerifiedPct",
     "contextPct",
     "heldOutPsnr",
     "views",
@@ -1841,6 +1871,10 @@ def _read_json(path: Path) -> dict[str, object]:
 
 def _optional_str(value: object) -> str | None:
     return None if value is None else str(value)
+
+
+def _optional_path(value: object) -> Path | None:
+    return Path(str(value)) if value else None
 
 
 def _optional_int(value: object) -> int | None:
