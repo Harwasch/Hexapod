@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import sys
 import time
@@ -273,12 +274,23 @@ def test_coverage_round_trips_and_is_coloured_by_tier(tmp_path: Path) -> None:
 # --- the stage, and `place` after it ---------------------------------------------------
 
 
-def _seed(workdir: Workdir, *, n: int, cameras: int, height: float = 1.0) -> np.ndarray:
+def _seed(
+    workdir: Workdir, *, n: int, cameras: int, height: float = 1.0, factor: float = 1.0
+) -> np.ndarray:
+    """The synthetic orbit, `factor` times its size: positions, gaussian scales and the
+    camera ring all scaled, as a COLMAP model of the same capture could be."""
     columns, fringe = scene(n)
+    for axis in ("x", "y", "z"):
+        columns[axis] = (columns[axis] * np.float32(factor)).astype(np.float32)
+    for name in ("scale_0", "scale_1", "scale_2"):
+        columns[name] = (columns[name] + np.float32(math.log(factor))).astype(np.float32)
     trained = workdir.input_path("trained.ply")
     trained.parent.mkdir(parents=True, exist_ok=True)
     gaussians.write_ply(trained, columns)
-    write_model(workdir.input_path("poses"), ring(cameras, height=height))
+    write_model(
+        workdir.input_path("poses"),
+        ring(cameras, radius=1.5 * factor, height=height * factor, target=TARGET * factor),
+    )
     workdir.input_path("train_metrics.json").write_text(json.dumps({"psnr": 23.04}))
     frame = {
         "source": "camera-up",
@@ -349,6 +361,38 @@ def test_the_stage_gates_the_fringe_and_place_publishes_what_it_kept(tmp_path: P
     shift = placed.xyz.mean(axis=0) - gated.xyz.mean(axis=0)
     source_kept = coverage[tiers == quality.TIER_KEEP]
     np.testing.assert_allclose(kept_cov, source_kept + shift, atol=1e-4)
+
+
+def test_keep_pct_and_the_mask_do_not_depend_on_the_scenes_scale(tmp_path: Path) -> None:
+    """The same capture at 25x the size -- a table and a building, as far as a COLMAP
+    model knows -- gets the same keepPct and the same mask topology: both are measured in
+    voxels sized from the pixel footprint, which scales with the scene, not in a fixed
+    number of cells across it."""
+    documents = []
+    for factor in (1.0, 25.0):
+        workdir = Workdir.create(tmp_path / f"x{factor:g}")
+        _seed(workdir, n=20_000, cameras=24, factor=factor)
+        _run(workdir, {"bar": "strict"})
+        documents.append(json.loads((workdir.out_dir("quality") / "quality.json").read_text()))
+    small, large = documents
+    assert small["gaussians"] == large["gaussians"]
+    assert small["keepPct"] == large["keepPct"] > 90
+    assert small["contextPct"] == large["contextPct"]
+    assert small["keepPctVoxel"]["basis"] == large["keepPctVoxel"]["basis"] == "keep-footprint"
+    assert large["keepPctVoxel"]["size"] == pytest.approx(25 * small["keepPctVoxel"]["size"])
+    masks = [support_mask.SupportMask.parse(d["supportMask"]) for d in documents]
+    assert masks[0] is not None and masks[1] is not None
+    assert masks[1].voxel == pytest.approx(25 * masks[0].voxel)
+    assert masks[1].dims == masks[0].dims
+    np.testing.assert_array_equal(masks[1].starts, masks[0].starts)
+    np.testing.assert_array_equal(masks[1].stops, masks[0].stops)
+    sizing = small["supportMask"]["sizing"]
+    assert sizing["rule"] == "footprint" and sizing["bound"] is None
+    # The voxel is a few pixel footprints -- millimetres here, not 1/80 of the scene.
+    assert sizing["footprint"] == pytest.approx(
+        large["supportMask"]["sizing"]["footprint"] / 25, rel=1e-4
+    )
+    assert masks[0].voxel < 0.02
 
 
 def test_everything_passes_the_splat_through_untouched(tmp_path: Path) -> None:

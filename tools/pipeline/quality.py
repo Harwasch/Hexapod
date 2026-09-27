@@ -63,6 +63,12 @@ held-out frame saw is judged by coverage alone. `heldOut` in quality.json has th
 `keepPct` counting verified keep only. The support mask is built from verified keep when
 there is enough of it.
 
+**Resolution.** The support mask's voxels, and the voxels `keepPct` counts, are sized
+from the keep tier's pixel footprint (its GSD; `support_mask` derives the multiple), not
+a fixed number of cells across the scene -- which made a building's voxels tens of times
+coarser than a table's, and "X% of the scene met the bar" mean something different for
+each. `supportMask.sizing` and `keepPctVoxel` say what size was used and why.
+
 The stage never fails a run for being strict: a bar that would leave fewer than
 `min_gaussians` falls back to the next looser one and says so (`barApplied`).
 """
@@ -954,27 +960,60 @@ def capture_tips(
 # ---------------------------------------------------------------------------------------
 
 
+#: keepPct's voxel is never coarser than this fraction of the scene sphere's diameter:
+#: the fixed grid it used to be, now only the bound for a scene imaged so coarsely that
+#: its footprint would make fewer voxels than that across it.
+SHARE_MIN_CELLS = 24
+
+
+def _share_voxel(
+    mask: support_mask.SupportMask | None, xyz: F32, gsd: F32, seen: Bools, scene: Roi
+) -> tuple[float, str]:
+    """keepPct's voxel side, in model units, and what decided it.
+
+    The resolution the keep tier's pixel footprint supports -- the support mask's, before
+    any memory or byte cap coarsened the mask itself -- so "X% of the scene met the bar"
+    is measured at the data's own resolution, and the same capture at 25x the scale says
+    the same number. A fixed count of cells across the scene made a building's voxels
+    tens of times larger than a table's. With no mask (too little keep), the same rule
+    over every seen gaussian in the scene stands in.
+    """
+    ceiling = 2.0 * scene.radius / SHARE_MIN_CELLS
+    sizing = mask.sizing if mask is not None else None
+    basis = "keep-footprint"
+    if sizing is None or sizing.rule != "footprint":
+        near = seen & scene.contains(xyz)
+        sizing = support_mask.resolution(xyz[near], gsd[near])
+        basis = "seen-footprint"
+    if sizing is None:
+        return ceiling, "scene-diameter"
+    if sizing.resolution >= ceiling:
+        return ceiling, f"{basis}, capped at 1/{SHARE_MIN_CELLS} of the scene's diameter"
+    return sizing.resolution, basis
+
+
 def _occupied_share(
-    xyz: F32, tiers: U8, alpha: F32, roi: Roi, floor: int, cells: int = 24
+    xyz: F32, tiers: U8, alpha: F32, roi: Roi, floor: int, voxel: float
 ) -> float | None:
     """The share of occupied voxels in the ROI whose gaussians mostly reach `floor`.
 
     "Volume that is keep" measured over the volume that has anything in it: an orbit's
-    ROI sphere is mostly air, and a percentage of air would say nothing.
+    ROI sphere is mostly air, and a percentage of air would say nothing. `voxel` is the
+    side in model units (`_share_voxel`); only occupied voxels are ever held, so a fine
+    voxel over a large scene costs what the gaussians do, not the grid.
     """
     inside = roi.contains(xyz) & (np.nan_to_num(alpha, nan=0.0) >= 0.1)
     if not inside.any():
         return None
-    size = 2.0 * roi.radius / cells
+    cells = int(min(support_mask.MAX_DIM, max(1, math.ceil(2.0 * roi.radius / voxel))))
+    size = max(voxel, 2.0 * roi.radius / cells)
     ijk = np.floor((xyz[inside].astype(np.float64) - (roi.centre - roi.radius)) / size)
     ijk = np.clip(ijk, 0, cells - 1).astype(np.int64)
-    voxel = (ijk[:, 0] * cells + ijk[:, 1]) * cells + ijk[:, 2]
-    total = np.bincount(voxel, minlength=cells**3)
-    good = np.bincount(
-        voxel, weights=(tiers[inside] >= floor).astype(np.float64), minlength=cells**3
-    )
-    occupied = total > 0
-    return round(100.0 * float((good[occupied] >= 0.5 * total[occupied]).mean()), 1)
+    linear = (ijk[:, 0] * cells + ijk[:, 1]) * cells + ijk[:, 2]
+    _, voxel_of = np.unique(linear, return_inverse=True)
+    total = np.bincount(voxel_of)
+    good = np.bincount(voxel_of, weights=(tiers[inside] >= floor).astype(np.float64))
+    return round(100.0 * float((good >= 0.5 * total).mean()), 1)
 
 
 def _metres_per_unit(georef: Mapping[str, Any] | None) -> float | None:
@@ -1130,10 +1169,22 @@ def support_gate(ctx: StageContext) -> StageOutcome:
         MIN_VERIFIED_FOR_MASK, VERIFIED_MASK_SHARE * int(mask_from.sum())
     ):
         mask_source, mask_from = "verified-keep", accuracy.verified
-    mask = support_mask.build(xyz[mask_from])
+    # Voxels sized from the keep tier's pixel footprint, not the scene's extent (see
+    # `support_mask`'s module docstring), so a building's mask is as tight as a table's.
+    mask = support_mask.build(xyz[mask_from], support.gsd[mask_from])
+    if mask is not None and mask.sizing is not None:
+        sizing = mask.sizing
+        ctx.log(
+            f"support mask: {mask.voxels} voxels of {mask.voxel:.4g} in {mask.runs} runs "
+            f"(footprint {sizing.footprint:.4g} x {sizing.multiple:g}, "
+            f"{sizing.spacing_steps} spacing step(s)"
+            + ("" if sizing.bound is None else f"; bound by {sizing.bound}")
+            + ")"
+        )
     scene = replace(extent, radius=extent.radius * 1.5)
-    keep_pct = _occupied_share(xyz, tiers, alpha, scene, TIER_KEEP)
-    context_pct = _occupied_share(xyz, tiers, alpha, scene, TIER_CONTEXT)
+    share_voxel, share_basis = _share_voxel(mask, xyz, support.gsd, seen, scene)
+    keep_pct = _occupied_share(xyz, tiers, alpha, scene, TIER_KEEP, share_voxel)
+    context_pct = _occupied_share(xyz, tiers, alpha, scene, TIER_CONTEXT, share_voxel)
     # The same share, counting only keep that held-out frames confirmed.
     keep_verified_pct = (
         None
@@ -1144,6 +1195,7 @@ def support_gate(ctx: StageContext) -> StageOutcome:
             alpha,
             scene,
             TIER_KEEP,
+            share_voxel,
         )
     )
     metrics_doc = (
@@ -1197,9 +1249,11 @@ def support_gate(ctx: StageContext) -> StageOutcome:
         "keepPct": keep_pct,
         "contextPct": context_pct,
         "keepPctNote": (
-            "share of the occupied 1/24-diameter voxels within 1.5x the supported extent whose "
+            "share of the occupied voxels (keepPctVoxel on a side, sized from the pixel "
+            "footprint as the support mask's are) within 1.5x the supported extent whose "
             "gaussians are mostly keep (contextPct: keep or context)"
         ),
+        "keepPctVoxel": {"size": share_voxel, "basis": share_basis},
         "heldOutPsnr": psnr,
         "heldOutPsnrNote": "gsplat's own held-out frames (every 8th), from train_metrics.json",
         # keepPct's measure, counting only keep that held-out frames confirmed; null when
