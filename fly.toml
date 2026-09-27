@@ -87,6 +87,10 @@ kill_timeout = "30s"
   API_PHONE_KEY_HASH = "pbkdf2_sha256$200000$540675f0b3538e6c6a46379620b09ccc$7ba333cf98f74da149cc1c88daabf29645f265100c8f51f75fa36fb90b91816b"
   WORKER_RUNNER = "cloud"
   WORKER_CLOUD_PROVIDERS = "modal"
+  # Jobs supervised at once. Two fits the 2 GB machine: measured ~105 MB supervisor, ~80 MB
+  # per idle recipe process, ~400 MB peak for place/package at 500k gaussians. Three needs
+  # 4 GB (apps/api/app/worker/README.md).
+  WORKER_CONCURRENCY = "2"
 
 [processes]
   app = "uvicorn app.main:app --host 0.0.0.0 --port 8000"
