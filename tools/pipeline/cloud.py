@@ -584,7 +584,10 @@ class CloudRunner(BaseRunner):
             context.log(f"cloud: sent input {name!r} ({sent} bytes) to {key}")
         if context.has_checkpoint:
             sent = self._transfer.put(keys.checkpoint, context.checkpoint_dir)
-            context.log(f"cloud: resuming -- sent {sent} byte(s) of checkpoint to the provider")
+            context.log(
+                f"cloud: sent {sent} byte(s) of checkpoint to the provider (an earlier "
+                f"attempt's state, or a seed an earlier run left for this one)"
+            )
         else:
             self._transfer.delete(keys.checkpoint)
 

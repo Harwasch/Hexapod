@@ -23,6 +23,8 @@ import gaussians
 import init_seed
 import sfm
 import support_mask
+from adapters import LocalTransfer, SubprocessAdapter
+from cloud import CloudRunner, Placement
 from executor import execute
 from runners import LocalRunner, RunnerSet
 from workdir import Workdir
@@ -95,6 +97,33 @@ def test_a_refine_starts_from_the_preview_on_half_the_schedule(tmp_path: Path) -
     assert len(sfm.read_points3d(workdir.input_path("poses") / "points3D.bin")) == SFM_POINTS
     log = workdir.log_path("train").read_text()
     assert "init_from=preview" in log and "--steps_scaler 0.5" in log
+
+
+def test_the_seed_travels_to_the_gpu_box_and_back_through_the_cloud_seam(
+    tmp_path: Path,
+) -> None:
+    """The production path: `train` on another machine. The preview's seed comes home in
+    `checkpoint/` after the remote run, and goes out again with the Refine."""
+    transfer = LocalTransfer(tmp_path / "bucket")
+    adapter = SubprocessAdapter(transfer, tmp_path / "sandbox")
+    cloud = RunnerSet.cloud(
+        CloudRunner(Placement((adapter,)), transfer, poll_interval_s=0.02, checkpoint_every_s=0.05)
+    )
+    workdir = Workdir.create(tmp_path / "run")
+    seed_inputs(workdir)
+    sfm.write_points3d(
+        workdir.input_path("poses") / "points3D.bin",
+        ring_points(SFM_POINTS, images=4, radius=3.0),
+    )
+    gpu = {"tier": "l4", "preemptible": True}
+
+    execute(train_recipe(stand_in_params(), gpu=gpu), workdir, cloud)
+    assert (workdir.checkpoint_dir("train") / init_seed.SEED_DIR / "seed.npz").is_file()
+    execute(train_recipe(stand_in_params(init_from="preview"), gpu=gpu), workdir, cloud)
+
+    document = json.loads((workdir.out_dir("train") / "train_metrics.json").read_text())
+    assert document["init"]["seedGaussians"] == 64
+    assert document["requestedIterations"] == 150
 
 
 def test_the_seed_is_cropped_to_the_support_mask_like_the_sfm_points(tmp_path: Path) -> None:
