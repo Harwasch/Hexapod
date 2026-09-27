@@ -259,13 +259,36 @@ def test_a_failed_log_fetch_is_not_a_failed_stage() -> None:
     assert adapter.poll(handle).state not in ("failed", "succeeded", "preempted")
 
 
-def test_logs_are_bounded() -> None:
+def test_logs_are_bounded_per_call_and_never_skip_a_line() -> None:
     call = FakeCall(raises=ModalTimeout())
     adapter, handle, _ = adapter_over(call)
     call.logs = FakeLogs([FakeEntry("\n".join(str(n) for n in range(MAX_LOG_LINES * 3)))])
-    lines = adapter.logs(handle)
-    assert len(lines) == MAX_LOG_LINES
-    assert lines[-1] == str(MAX_LOG_LINES * 3 - 1)
+    first = adapter.logs(handle)
+    assert len(first) == MAX_LOG_LINES
+    assert first[0] == "0"
+    # The caller's cursor advances by what it got; the backlog arrives in order.
+    second = adapter.logs(handle, since=len(first))
+    assert second[0] == str(MAX_LOG_LINES)
+
+
+def test_since_keeps_indexing_the_whole_log_once_it_outgrows_the_held_tail() -> None:
+    # A pose solve logs far more than MAX_LOG_LINES; the lines after that must still
+    # reach the caller (the finished cameras' live line is one of the last).
+    call = FakeCall(raises=ModalTimeout())
+    adapter, handle, _ = adapter_over(call)
+    history = [str(n) for n in range(MAX_LOG_LINES + 10)]
+    call.logs = FakeLogs([FakeEntry("\n".join(history))])
+    cursor = 0
+    while lines := adapter.logs(handle, since=cursor):
+        cursor += len(lines)
+    assert cursor == len(history)
+    history += ["live-cameras: final"]
+    call.logs = FakeLogs([FakeEntry("\n".join(history))])
+    assert list(adapter.logs(handle, since=cursor)) == ["live-cameras: final"]
+    # A failed fetch answers from the held tail, still by the whole log's index.
+    call.logs = FakeLogs(RuntimeError("log service down"))
+    assert list(adapter.logs(handle, since=cursor)) == ["live-cameras: final"]
+    assert list(adapter.logs(handle, since=cursor + 1)) == []
 
 
 def test_logs_of_an_unknown_handle_are_empty() -> None:

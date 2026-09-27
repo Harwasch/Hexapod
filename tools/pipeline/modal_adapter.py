@@ -156,9 +156,11 @@ _STATES: Mapping[str, RemoteState | None] = {
 #: in a call's log is what moves the call from `pending` to `running`.
 START_MARKER = "run_stage: "
 
-#: How many log lines to hold for one call. `logs.fetch()` re-reads a call's whole
-#: history, so an unbounded tail would grow the poll loop's cost with the stage's
-#: chattiness; a training stage that prints a line per step would be unbounded indeed.
+#: How many log lines to hold for one call, and to hand back from one `logs` call.
+#: `logs.fetch()` re-reads a call's whole history, so an unbounded tail would grow the
+#: poll loop's cost with the stage's chattiness; a training stage that prints a line per
+#: step would be unbounded indeed. The bound is on what is *held*: `since` stays an index
+#: into the whole log, however much of it has scrolled out of the held tail.
 MAX_LOG_LINES = 5_000
 
 
@@ -172,7 +174,10 @@ class _Call:
     billed_s: float = 0.0
     metrics: Mapping[str, Any] = field(default_factory=dict)
     summary: str = ""
+    #: The newest lines of the last successful fetch, and the index of the first of them
+    #: in the whole log.
     lines: list[str] = field(default_factory=list)
+    first: int = 0
     #: Whether a log fetch has ever succeeded. Without one, "no start line yet" is not
     #: evidence of anything, and the call is reported running as it always was.
     logs_read: bool = False
@@ -271,24 +276,35 @@ class ModalAdapter:
         of an index-based contract over a time-based source, and it is bounded by
         `MAX_LOG_LINES` rather than by trust. A log fetch that fails is not a stage that
         failed: the poll loop keeps its verdict and simply has nothing new to tail.
+
+        At most `MAX_LOG_LINES` come back per call, the *oldest* from `since`, so a caller
+        that advances by what it got never skips a line: a big backlog arrives over a few
+        polls rather than with a hole in it. (Slicing the held tail by `since` instead went
+        silent for good once a stage passed `MAX_LOG_LINES` -- every pose solve does, and
+        the live viewer then never heard of the finished cameras.)
         """
         run = self._calls.get(handle.id)
         if run is None:
             return ()
+        since = max(since, 0)
         # Suppressed rather than handled: logs are diagnostics, and a log service that is
         # down must not turn into a verdict on a stage that is running perfectly well.
         # The previously fetched lines stay, so a tail goes quiet rather than truncating.
         with suppress(Exception):
             entries = list(run.call.logs.fetch())
-            # Looked for in the whole fetch, before `_tail` bounds it: a stage that logs
+            # Looked for in the whole fetch, before the tail is bounded: a stage that logs
             # thousands of lines before the first fetch would otherwise have its start
             # line trimmed away before it was ever seen.
             run.started = run.started or any(
                 START_MARKER in str(getattr(entry, "message", entry)) for entry in entries
             )
-            run.lines = self._tail(entries)
+            every = self._lines(entries)
+            run.first = max(len(every) - MAX_LOG_LINES, 0)
+            run.lines = every[run.first :]
             run.logs_read = True
-        return tuple(run.lines[max(since, 0) :])
+            return tuple(every[since : since + MAX_LOG_LINES])
+        start = max(since - run.first, 0)
+        return tuple(run.lines[start : start + MAX_LOG_LINES])
 
     def cancel(self, handle: RemoteHandle) -> None:
         run = self._calls.get(handle.id)
@@ -328,8 +344,8 @@ class ModalAdapter:
         )
 
     @staticmethod
-    def _tail(entries: Iterable[Any]) -> list[str]:
-        """`LogEntry` objects to lines, newest-bounded.
+    def _lines(entries: Iterable[Any]) -> list[str]:
+        """`LogEntry` objects to lines.
 
         An entry's `message` can carry several lines or a trailing newline, so it is
         split rather than appended whole: `since` indexes lines, and an index that
@@ -338,9 +354,7 @@ class ModalAdapter:
         lines: list[str] = []
         for entry in entries:
             lines.extend(str(getattr(entry, "message", entry)).rstrip("\n").split("\n"))
-            if len(lines) > MAX_LOG_LINES * 2:
-                del lines[:-MAX_LOG_LINES]
-        return lines[-MAX_LOG_LINES:]
+        return lines
 
     @staticmethod
     def _liveness(run: _Call) -> RemoteState:

@@ -150,6 +150,18 @@ export function showLive(captureId: string): { stop: () => void } {
   let loadingSplat: string | null = null;
   let framed = false;
   let lastSeq = -1;
+  let camerasFinal = false;
+
+  /**
+   * A mid-solve snapshot is in the solve's frame of that moment; a splat is trained in the
+   * finished model's, which COLMAP has re-centred and re-scaled since. Drawn together they
+   * show the scene twice, at two sizes. So once a splat is up, only finished cameras stay.
+   */
+  const showOverlay = (): void => {
+    const visible = splat === null || camerasFinal;
+    if (cameraLines) cameraLines.visible = visible;
+    if (cloud) cloud.visible = visible;
+  };
   let stopped = false;
   let timer = 0;
   const fades: { mesh: SplatMesh; from: number; to: number; start: number; done?: () => void }[] =
@@ -263,6 +275,8 @@ export function showLive(captureId: string): { stop: () => void } {
     section.dataset.points = String(points.count);
     // The solve's own spread, not `payload.scale` (the quantisation range, far larger).
     frameView(spreadRadius([points.positions, decoded.centres], centre) ?? payload.scale * 0.8);
+    camerasFinal = payload.final;
+    showOverlay();
   };
 
   const showSplat = async (
@@ -307,6 +321,7 @@ export function showLive(captureId: string): { stop: () => void } {
     }
     splat = { mesh, name };
     if (cloud) (cloud.material as THREE.PointsMaterial).opacity = 0.25;
+    showOverlay();
     section.dataset.splat = name;
     section.dataset.splatStep = String(step);
   };
