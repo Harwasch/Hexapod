@@ -57,10 +57,17 @@ PHONE_OPTIONS: dict[str, dict[str, dict[str, Rule]]] = {
         # the region to train inside (COLMAP frame, from a preview's quality stage), and
         # gsplat's quality switches -- the last three being the phone-capture ones: pose
         # refinement, per-image appearance, per-image colour (bilateral grid).
+        #
+        # The recipe sizes the cap to the capture (`cap_max: auto`, tools/pipeline/
+        # gaussian_budget.py); a phone's quality tier scales that measured budget by
+        # `density_scale` (Quick 0.5, Best 2) rather than naming a count, and the
+        # pipeline's own floor and ceilings still apply. An explicit `cap_max` remains an
+        # override: the preview's fixed 200k is one.
         "train": {
             "schedule_full_at": (0, 400),
             "schedule_floor": (0.1, 1.0),
             "cap_max": (100_000, 1_500_000),
+            "density_scale": (0.25, 4.0),
             "schedule_scale": (0.05, 1.0),
             "train_max_side": (400, 4000),
             "roi": ROI,

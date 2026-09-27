@@ -30,17 +30,17 @@ const QUALITY = [
   {
     value: "quick",
     label: "Quick",
-    hint: "Refine with a short training run and at most 250k splats.",
+    hint: "Refine with a short training run and half the splats the scan's detail calls for.",
   },
   {
     value: "standard",
     label: "Standard",
-    hint: "Refine with training sized to the number of photos, at most 500k splats.",
+    hint: "Refine with as many splats as the scan's detail calls for, trained until it stops improving.",
   },
   {
     value: "best",
     label: "Best",
-    hint: "Refine with the full 30,000-step training, up to 1M splats. Slowest and sharpest.",
+    hint: "Refine with the full training and twice the splats, as far as the GPU holds. Slowest and sharpest.",
   },
 ] as const satisfies readonly Choice<string>[];
 
@@ -112,11 +112,19 @@ export const DEFAULTS: Options = {
   detail: "400000",
 };
 
+/**
+ * The Refine's training per quality tier. The recipe sizes the gaussian budget to the
+ * capture -- its surface in its own finest pixels (tools/pipeline/gaussian_budget.py) --
+ * so a tier scales that measured budget (`density_scale`) rather than naming a count:
+ * a fixed 500k was too few for a table and too many for a teacup. The pipeline's floor
+ * (the preview's 200k) and its ceilings (GPU memory, what the worker can package) apply
+ * to every tier.
+ */
 const TRAIN: Record<Options["quality"], Record<string, number>> = {
-  quick: { schedule_full_at: 240, schedule_floor: 0.1, cap_max: 250_000 },
+  quick: { schedule_full_at: 240, schedule_floor: 0.1, density_scale: 0.5 },
   // The recipe's own defaults.
   standard: {},
-  best: { schedule_floor: 1, cap_max: 1_000_000 },
+  best: { schedule_floor: 1, density_scale: 2 },
 };
 
 /**
