@@ -93,7 +93,7 @@ class PlySource(SplatSource):
 
     def __init__(self, path: Path, *, chunk: int = splat_io.CHUNK) -> None:
         self.reader = splat_io.SplatReader(path, chunk=chunk)
-        self.chunk = chunk
+        self.chunk = self.reader.chunk
         self.count = self.reader.count
         self.source_format = "ply"
         self.source_name = path.name

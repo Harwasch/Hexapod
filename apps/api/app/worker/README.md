@@ -152,24 +152,36 @@ wait, and the GPU and CPU-heavy stages (`pose`, `train`, `quality`) run on Modal
 | `place`/`package`/`thumbnail` of a 500k-gaussian SH3 splat (Lane 1 recipe, same code) | peak ~395 MB |
 | the same at 1M gaussians (the phone's old "Best" cap) | peak ~750 MB |
 
-So a job spends most of its life at ~80 MB and peaks at 0.4-0.75 GB for a few seconds at
-either end. **N = 2 is safe on the 2 GB machine** for phone captures up to 1M gaussians:
-two worst-case peaks landing together are ~1.6 GB with the supervisor. N = 3 fits only
-while peaks do not coincide, which nothing guarantees, so it wants the 4 GB machine
-(`fly scale memory 4096 --process-group worker`, or the `[[vm]]` block in `fly.toml`); so
-does any N with
-Lane 1 uploads of several million gaussians, which scale at ~0.75 GB per million. The
-20 GB volume holds about two captures' workdirs in flight, so N > 2 wants it extended
-too. If the machine does run out, the kernel kills the largest process -- a recipe
-process, whose stage then fails and is retried under the attempt budget -- not the
-supervisor.
+Those last two rows were the stages loading the whole splat. Since 2026-09-27 `normalize`
+(Lane 1's ingest), `place`, `thumbnail` and `ground_samples` read it a chunk at a time
+(`tools/pipeline/splat_io.py`, `splat_stream.py`; README "Stages after training, a chunk
+at a time"), in memory that does not grow with it. Measured the same way
+(`tools/pipeline/tests/memory_probe.py`, one process per measurement):
 
-Lane 2's gaussian count is now sized to the capture (`cap_max: auto`,
-`tools/pipeline/gaussian_budget.py`) and bounded by the recipe's `budget_max: 2000000`,
-which is set from this table: at ~0.75 GB a million, a 2M splat peaks near 1.5 GB plus
-the ~185 MB of supervisor and recipe process -- inside 2 GB at **N = 1** (the current
-default). N = 2 with Lane 2 at that ceiling wants the 4 GB machine, or `budget_max` back
-at 1M.
+| process | whole splat | a chunk at a time |
+| --- | --- | --- |
+| Lane 1 `normalize` + `thumbnail` + `ground_samples`, 1M-gaussian SH3 upload | 711 MB | 145 MB |
+| the same, 2M | 1,386 MB | 138 MB |
+| Lane 2 `quality` + `place` (+ `thumbnail` + `ground_samples` chunked), 1M | 365 MB | 182 MB |
+| the same, 8M | fails at 1.5 GB | 197 MB |
+
+`package` (`tools/captures/splat_tiles.py`) is made out-of-core the same way by the
+large-scene plan's tiler; until that lands it is the one stage here whose peak still
+grows with the splat (5M synthetic gaussians: 1.6 GB, per its own docstring).
+
+So a job spends most of its life at ~80 MB and peaks at ~0.45 GB (ffmpeg, at the start)
+and, apart from `package`, ~0.2 GB at the end, whatever the capture's size. **N = 2 is
+safe on the 2 GB machine** for a capture of any size once `package` is chunked too; N = 3
+was not measured. The 20 GB volume holds about two captures' workdirs in flight, so N > 2
+wants it extended as well. If the machine does run out, the kernel kills the largest
+process -- a recipe process, whose stage then fails and is retried under the attempt
+budget -- not the supervisor.
+
+Lane 2's gaussian count is sized to the capture (`cap_max: auto`,
+`tools/pipeline/gaussian_budget.py`) and bounded by the L4's memory (~8.7M at 1600 px).
+The recipe's `budget_max: 2000000`, set from the old rows of the first table (a 2M splat
+peaked near 1.5 GB here), is gone; a deployment whose `package` still loads the whole
+splat should put a `budget_max` back in a run's params for its worker.
 
 ## Configuration
 

@@ -128,7 +128,6 @@ CONFIGS: dict[str, dict[str, Any]] = {
         "iterations": 30_000,
         "strategy": "mcmc",
         "cap_max": "auto",
-        "budget_max": 2_000_000,
         "converge": True,
     },
     # The recipe before the budget: a fixed 500k and the full 30k. Measured 25.12 dB

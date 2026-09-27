@@ -32,6 +32,7 @@ import outofcore
 import quality
 import quality_in_memory
 import sfm
+import splat_io
 import splat_stream
 import stages
 import support_mask
@@ -161,7 +162,9 @@ QUALITY_PARAMS: dict[str, Any] = {
 }
 
 
-def _run_chunked(root: Path, inputs: dict[str, Path], params: dict[str, Any]) -> Workdir:
+def _run_chunked(
+    root: Path, inputs: dict[str, Path], params: dict[str, Any], chunk: int
+) -> Workdir:
     workdir = Workdir.create(root)
     for name, path in inputs.items():
         target = workdir.input_path(name)
@@ -172,7 +175,7 @@ def _run_chunked(root: Path, inputs: dict[str, Path], params: dict[str, Any]) ->
                 (target / child.name).write_bytes(child.read_bytes())
         else:
             target.write_bytes(path.read_bytes())
-    chunked = {"chunk_gaussians": CHUNK}
+    chunked = {"chunk_gaussians": chunk}
     execute(
         make_recipe(
             [
@@ -230,11 +233,15 @@ def _same_json(chunked: Any, whole: Any, where: str = "") -> None:
 
 
 @pytest.mark.parametrize(
-    ("label", "n", "held", "metric"),
-    [("orbit, held-out, shuffled", 300_000, True, False), ("walk, metric", 120_000, False, True)],
+    ("label", "n", "held", "metric", "chunk"),
+    [
+        ("orbit, held-out, shuffled", 300_000, True, False, CHUNK),
+        ("orbit, held-out, default chunks", 300_000, True, False, splat_io.CHUNK),
+        ("walk, metric", 120_000, False, True, CHUNK),
+    ],
 )
 def test_the_chunked_stages_write_what_the_whole_splat_stages_wrote(
-    tmp_path: Path, label: str, n: int, held: bool, metric: bool
+    tmp_path: Path, label: str, n: int, held: bool, metric: bool, chunk: int
 ) -> None:
     cameras = ring(24, radius=1.5, height=1.0) if held else _walk(20)
     inputs = _inputs(tmp_path / "inputs", n=n, cameras=cameras, held=held, metric=metric)
@@ -243,7 +250,7 @@ def test_the_chunked_stages_write_what_the_whole_splat_stages_wrote(
     whole = tmp_path / "whole"
     context = _Context(inputs, whole / "quality", params)
     quality_in_memory.support_gate(cast(Any, context))
-    workdir = _run_chunked(tmp_path / "chunked", inputs, params)
+    workdir = _run_chunked(tmp_path / "chunked", inputs, params, chunk)
     chunked = workdir.out_dir("quality")
 
     # quality: the gated splat and the coverage cloud, byte for byte; the report, value

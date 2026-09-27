@@ -14,7 +14,9 @@ top 16 bits of every key into 65,536 bins, which says which bin the k-th value i
 its rank inside it; a second pass either counts the next 16 bits of the keys in that bin
 or, when the bin holds at most `COLLECT` values, collects them and sorts them. A float32
 is exact in two passes, a float64 in at most four. Several ranks, and several groups
-(`groups=`), share the same passes.
+(`groups=`), share the same passes; with many of them the digit narrows so that a pass's
+histograms stay within `HIST_BYTES`, and the keys collected in one pass never exceed
+`COLLECT` together -- the memory is a constant, however many values or groups there are.
 
 **numpy's own answer, not an approximation of it** (`median`, `percentile`). `np.median`
 and `np.percentile` (method "linear") are functions of the count, the requested position
@@ -46,6 +48,7 @@ import numpy.typing as npt
 __all__ = [
     "BUDGET",
     "COLLECT",
+    "HIST_BYTES",
     "Stream",
     "group_counts",
     "grouped_median",
@@ -62,15 +65,20 @@ Stream = Callable[[], Iterable[Any]]
 I64 = npt.NDArray[np.int64]
 F64 = npt.NDArray[np.float64]
 
-#: A bin with at most this many values is collected and sorted rather than refined by
-#: another 16 bits: 8 MB of keys at float64, which ends the selection one pass sooner.
+#: Keys collected and sorted at once, over every rank a pass is finishing: a bin with no
+#: more than this is finished by sorting it rather than by counting another digit, which
+#: ends the selection a pass sooner. 8 MB of keys at float64.
 COLLECT = 1 << 20
+#: A pass's digit histograms together: 16 bits (65,536 int64 bins, 0.5 MB) per group or
+#: open bin while that fits, fewer bits (more passes) when many groups share a pass --
+#: `ground_samples` asks for 64 cells at once.
+HIST_BYTES = 8 << 20
 #: Rows a `group_counts` partition may hold. Its merge buffer peaks near twice this in
 #: (key, count, sum) triples -- ~50 MB -- whatever the number of rows.
 BUDGET = 1 << 20
 
-_DIGIT = 16
-_BINS = 1 << _DIGIT
+_MAX_DIGIT = 16
+_MIN_DIGIT = 8
 
 
 # ---------------------------------------------------------------------------------------
@@ -137,6 +145,8 @@ class _Request:
     #: The rank asked for, and the rank still to find inside the current bin.
     asked: int
     rank: int
+    #: How many values share the key's top `bits` bits (`prefix`): the bin's size.
+    size: int
     bits: int = 0
     prefix: int = 0
     key: int | None = None
@@ -144,8 +154,8 @@ class _Request:
 
 @dataclass
 class Selection:
-    """What `order_statistics` found: per group, how many values and NaNs there were, and
-    the requested order statistics as scalars of the stream's dtype."""
+    """What `order_statistics` found: per group id, how many values and NaNs there were,
+    and the requested order statistics as scalars of the stream's dtype."""
 
     dtype: np.dtype[Any]
     counts: dict[int, int]
@@ -173,6 +183,13 @@ def _split(chunk: Any, lookup: I64 | None) -> tuple[npt.NDArray[Any], npt.NDArra
     return values[wanted], position[wanted]
 
 
+def _digit(histograms: int) -> int:
+    """Bits per pass: 16 (65,536 bins) for a few histograms, fewer for many, so that all
+    of one pass's histograms stay within `HIST_BYTES`."""
+    fit = HIST_BYTES // (8 * max(1, histograms))
+    return int(min(_MAX_DIGIT, max(_MIN_DIGIT, fit.bit_length() - 1)))
+
+
 def order_statistics(
     stream: Stream,
     ranks: Callable[[int, int], Sequence[int]],
@@ -182,13 +199,20 @@ def order_statistics(
 ) -> Selection:
     """The exact order statistics `ranks(count, group)` asks for (0-based, NaNs excluded)
     -- per group when `groups` lists the group ids a grouped stream should be read for,
-    and for group 0 when the stream is not grouped."""
+    and for group 0 when the stream is not grouped.
+
+    Memory is one chunk, histograms of at most `HIST_BYTES` together, and at most
+    `collect` (`COLLECT`) keys gathered at once over every rank being finished.
+    """
     collect = COLLECT if collect is None else collect
     lookup = None if groups is None else np.unique(np.asarray(groups, dtype=np.int64))
     group_count = 1 if lookup is None else int(lookup.shape[0])
+    ids = [0] if lookup is None else [int(g) for g in lookup]
+    digit = _digit(group_count)
+    bins = 1 << digit
     dtype: np.dtype[Any] | None = None
     width = 32
-    hist = np.zeros((group_count, _BINS), dtype=np.int64)
+    hist = np.zeros(group_count * bins, dtype=np.int64)
     nans = np.zeros(group_count, dtype=np.int64)
     for chunk in stream():
         values, where = _split(chunk, lookup)
@@ -202,12 +226,10 @@ def order_statistics(
         if isnan is not None and bool(isnan.any()):
             nans += np.bincount(index[isnan], minlength=group_count)
             keys, index = keys[~isnan], index[~isnan]
-        digit = (keys >> (width - _DIGIT)).astype(np.intp)
-        hist += np.bincount(index * _BINS + digit, minlength=group_count * _BINS).reshape(
-            group_count, _BINS
-        )
-    counts = hist.sum(axis=1)
-    ids = [0] if lookup is None else [int(g) for g in lookup]
+        top = (keys >> (width - digit)).astype(np.intp)
+        hist += np.bincount(index * bins + top, minlength=group_count * bins)
+    table = hist.reshape(group_count, bins)
+    counts = table.sum(axis=1)
     selection = Selection(
         dtype=np.dtype(np.float64) if dtype is None else dtype,
         counts=dict(zip(ids, (int(c) for c in counts), strict=True)),
@@ -218,11 +240,12 @@ def order_statistics(
         for rank in sorted(set(ranks(int(counts[group]), ids[group]))):
             if not 0 <= rank < counts[group]:
                 raise IndexError(f"rank {rank} of {int(counts[group])} values")
-            requests.append(_Request(group=group, asked=rank, rank=rank))
+            request = _Request(group=group, asked=rank, rank=rank, size=int(counts[group]))
+            _descend(request, table[group], digit, width)
+            requests.append(request)
+    del hist, table
     if not requests or dtype is None:
         return selection
-    for request in requests:
-        _descend(request, hist[request.group], width)
     while True:
         pending = [r for r in requests if r.key is None]
         if not pending:
@@ -230,20 +253,19 @@ def order_statistics(
         _refine(stream, lookup, pending, width, collect)
     for request in requests:
         assert request.key is not None
-        value = _value(request.key, dtype)
-        group_id = request.group if lookup is None else int(lookup[request.group])
-        selection.values[(group_id, request.asked)] = value
+        selection.values[(ids[request.group], request.asked)] = _value(request.key, dtype)
     return selection
 
 
-def _descend(request: _Request, hist: I64, width: int) -> None:
+def _descend(request: _Request, hist: I64, digit: int, width: int) -> None:
     """Move `request` one digit down: which bin its rank falls in, and its rank there."""
     cumulative = np.cumsum(hist)
-    digit = int(np.searchsorted(cumulative, request.rank, side="right"))
-    before = int(cumulative[digit - 1]) if digit > 0 else 0
+    chosen = int(np.searchsorted(cumulative, request.rank, side="right"))
+    before = int(cumulative[chosen - 1]) if chosen > 0 else 0
     request.rank -= before
-    request.prefix = (request.prefix << _DIGIT) | digit
-    request.bits += _DIGIT
+    request.size = int(hist[chosen])
+    request.prefix = (request.prefix << digit) | chosen
+    request.bits += digit
     if request.bits >= width:
         request.key = request.prefix
 
@@ -251,17 +273,23 @@ def _descend(request: _Request, hist: I64, width: int) -> None:
 def _refine(
     stream: Stream, lookup: I64 | None, pending: list[_Request], width: int, collect: int
 ) -> None:
-    """One pass: for each distinct (group, prefix) still open, either count its next
-    digit or, if it is small enough, collect its keys and finish it."""
+    """One pass: finish the smallest open bins by collecting and sorting their keys (up to
+    `collect` keys in all), and count the next digit of the rest."""
     targets: dict[tuple[int, int, int], list[_Request]] = {}
     for request in pending:
         targets.setdefault((request.group, request.bits, request.prefix), []).append(request)
-    sizes: dict[tuple[int, int, int], int] = dict.fromkeys(targets, 0)
-    hists = {target: np.zeros(_BINS, dtype=np.int64) for target in targets}
-    gathered: dict[tuple[int, int, int], list[npt.NDArray[Any]]] = {t: [] for t in targets}
-    # The size of each target's bin is not known yet on the first refinement; count and
-    # collect together, and drop the collection if it outgrows `collect`.
-    collecting = dict.fromkeys(targets, True)
+    gathered: dict[tuple[int, int, int], list[npt.NDArray[Any]]] = {}
+    held = 0
+    for target in sorted(targets, key=lambda t: targets[t][0].size):
+        size = targets[target][0].size
+        if held + size > collect:
+            break
+        gathered[target] = []
+        held += size
+    counted = [target for target in targets if target not in gathered]
+    digit = _digit(len(counted))
+    widths = {target: min(digit, width - target[1]) for target in counted}
+    hists = {target: np.zeros(1 << widths[target], dtype=np.int64) for target in counted}
     for chunk in stream():
         values, where = _split(chunk, lookup)
         if values.size == 0:
@@ -272,32 +300,27 @@ def _refine(
             keys, index = keys[~isnan], index[~isnan]
         for target in targets:
             group, bits, prefix = target
-            mask = (keys >> (width - bits)) == prefix
+            mask = (keys >> (width - bits)) == prefix if bits else np.ones(keys.shape, bool)
             if lookup is not None:
                 mask &= index == group
             chosen = keys[mask]
             if chosen.size == 0:
                 continue
-            sizes[target] += int(chosen.size)
-            if bits + _DIGIT <= width:
-                shift = width - bits - _DIGIT
-                digit = ((chosen >> shift) & (_BINS - 1)).astype(np.intp)
-                hists[target] += np.bincount(digit, minlength=_BINS)
-            if collecting[target]:
-                if sizes[target] > collect:
-                    collecting[target] = False
-                    gathered[target].clear()
-                else:
-                    gathered[target].append(chosen)
+            if target in gathered:
+                gathered[target].append(chosen)
+            else:
+                step = widths[target]
+                shift = width - bits - step
+                below = ((chosen >> shift) & ((1 << step) - 1)).astype(np.intp)
+                hists[target] += np.bincount(below, minlength=1 << step)
     for target, requests in targets.items():
-        if collecting[target]:
-            ordered = np.sort(np.concatenate(gathered[target])) if gathered[target] else None
+        if target in gathered:
+            ordered = np.sort(np.concatenate(gathered[target]))
             for request in requests:
-                assert ordered is not None
                 request.key = int(ordered[request.rank])
         else:
             for request in requests:
-                _descend(request, hists[target], width)
+                _descend(request, hists[target], widths[target], width)
 
 
 # ---------------------------------------------------------------------------------------
@@ -431,38 +454,59 @@ def group_counts(
     """Per distinct key: how many rows had it, and the sum of their weights.
 
     The stream yields `(keys, weights)` chunks (weights may be None: all zero). `rows` is
-    an upper bound on how many keys it yields, which sets the number of partitions. Each
-    partition comes out as `(keys, counts, weight_sums)`, keys sorted within it; together
-    they cover every key once.
+    an upper bound on how many keys it yields. Each partition comes out as
+    `(keys, counts, weight_sums)`, keys sorted within it; together they cover every key
+    once.
+
+    One pass first, as one partition: most group-bys here have far fewer distinct keys
+    than rows (2 m ground cells, a coarse voxel grid), and are done in it. The moment its
+    distinct keys pass `budget` it is abandoned for `rows / budget` partitions of a pass
+    each -- so a fine grid costs passes, never memory.
     """
     budget = BUDGET if budget is None else budget
-    parts = max(1, math.ceil(rows / max(1, budget)))
+    whole = _partition_pass(stream, 0, 1, budget, abandon=True)
+    if whole is not None:
+        yield whole
+        return
+    parts = max(2, math.ceil(rows / max(1, budget)))
     for part in range(parts):
-        keys_seen: list[I64] = []
-        counts_seen: list[I64] = []
-        sums_seen: list[F64] = []
-        held = 0
-        for chunk_keys, chunk_weights in stream():
-            keys = np.asarray(chunk_keys, dtype=np.int64).reshape(-1)
-            weights = (
-                np.zeros(keys.shape[0], dtype=np.float64)
-                if chunk_weights is None
-                else np.asarray(chunk_weights, dtype=np.float64).reshape(-1)
-            )
-            if parts > 1:
-                mine = _partition(keys, parts) == part
-                keys, weights = keys[mine], weights[mine]
-            if keys.size == 0:
-                continue
-            unique, inverse, count = np.unique(keys, return_inverse=True, return_counts=True)
-            keys_seen.append(unique.astype(np.int64))
-            counts_seen.append(count.astype(np.int64))
-            sums_seen.append(
-                np.bincount(inverse.reshape(-1), weights=weights, minlength=unique.shape[0])
-            )
-            held += int(unique.shape[0])
-            if held > budget:
-                merged = _merge(keys_seen, counts_seen, sums_seen)
-                keys_seen, counts_seen, sums_seen = [merged[0]], [merged[1]], [merged[2]]
-                held = int(merged[0].shape[0])
-        yield _merge(keys_seen, counts_seen, sums_seen)
+        found = _partition_pass(stream, part, parts, budget, abandon=False)
+        assert found is not None
+        yield found
+
+
+def _partition_pass(
+    stream: Stream, part: int, parts: int, budget: int, *, abandon: bool
+) -> tuple[I64, I64, F64] | None:
+    """One pass over partition `part` of `parts`; None when `abandon` and it outgrew
+    `budget` distinct keys."""
+    keys_seen: list[I64] = []
+    counts_seen: list[I64] = []
+    sums_seen: list[F64] = []
+    held = 0
+    for chunk_keys, chunk_weights in stream():
+        keys = np.asarray(chunk_keys, dtype=np.int64).reshape(-1)
+        weights = (
+            np.zeros(keys.shape[0], dtype=np.float64)
+            if chunk_weights is None
+            else np.asarray(chunk_weights, dtype=np.float64).reshape(-1)
+        )
+        if parts > 1:
+            mine = _partition(keys, parts) == part
+            keys, weights = keys[mine], weights[mine]
+        if keys.size == 0:
+            continue
+        unique, inverse, count = np.unique(keys, return_inverse=True, return_counts=True)
+        keys_seen.append(unique.astype(np.int64))
+        counts_seen.append(count.astype(np.int64))
+        sums_seen.append(
+            np.bincount(inverse.reshape(-1), weights=weights, minlength=unique.shape[0])
+        )
+        held += int(unique.shape[0])
+        if held > budget:
+            merged = _merge(keys_seen, counts_seen, sums_seen)
+            if abandon and merged[0].shape[0] > budget:
+                return None
+            keys_seen, counts_seen, sums_seen = [merged[0]], [merged[1]], [merged[2]]
+            held = int(merged[0].shape[0])
+    return _merge(keys_seen, counts_seen, sums_seen)

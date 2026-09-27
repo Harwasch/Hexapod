@@ -22,6 +22,7 @@ import gaussian_budget
 import sfm
 import support_mask
 from executor import execute
+from recipe import load_recipe
 from runners import LocalRunner, RunnerSet
 from synthetic_scene import look_at, write_model
 from test_train_gsplat import seed_inputs, stand_in_params, train_recipe
@@ -206,6 +207,24 @@ def test_the_memory_ceiling_falls_with_frame_size_and_rises_with_the_card() -> N
     assert (
         gaussian_budget.PARAMETER_BYTES + gaussian_budget.RASTER_BYTES == 1616
     )  # gsplat's measured slope
+
+
+def test_the_recipe_is_bounded_by_the_gpu_not_by_the_worker(tmp_path: Path) -> None:
+    """photo-reconstruct no longer sets the 2M `budget_max` the whole-splat stages after
+    training needed: a surface big enough gets the L4's ceiling (~8.7M at 1600x900), and a
+    run's own `budget_max` still caps below it."""
+    train = next(s for s in load_recipe("photo-reconstruct").stages if s.id == "train").params
+    assert "budget_max" not in train
+    directory = model(tmp_path / "m", patch((0.0, 0.0, 0.0), 1.0), heights=[2.0])
+    params = {
+        "floor": int(train["budget_floor"]),
+        "gpu_memory_gb": float(train["gpu_memory_gb"]),
+        "train_size": (1600, 900),
+    }
+    huge = auto(directory, density=1e6, **params)
+    assert huge.clamp == "gpu-memory"
+    assert huge.cap == gaussian_budget.memory_ceiling(1600 * 900) > 8_000_000
+    assert auto(directory, density=1e6, budget_max=3_000_000, **params).cap == 3_000_000
 
 
 def test_an_explicit_cap_is_used_as_given() -> None:

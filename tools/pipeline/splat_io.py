@@ -17,12 +17,13 @@ Three pieces, each small:
   byte order; elements before `vertex` skipped by their stride; list properties refused),
   so every layout that reaches the pipeline is read the same way: `canonical.ply` and
   `trained.ply` (the fourteen `CANONICAL_PROPERTIES`, 56 bytes a row), gsplat's own export
-  (`x y z`, `f_dc_*`, 45 `f_rest_*`, `opacity`, `scale_*`, `rot_*`: 248 bytes a row at SH
-  degree 3), and the phone apps' PLYs with vertex colours. A range is read with one
-  `pread`, never through a mapping of the whole file: a mapping would make the file's size
-  count against the process's address space and its touched pages against its resident
-  set, and the bound here is meant to be what the process holds, measured honestly.
-  `memmap` is there for a caller that wants random access and can afford the mapping.
+  (`x y z`, `f_dc_*`, 45 `f_rest_*`, `opacity`, `scale_*`, `rot_*`: 236 bytes a row at
+  SH degree 3; Inria's adds normals, 248), and the phone apps' PLYs with vertex colours.
+  A range is read with one `read` at an offset, never through a mapping of the whole
+  file: a mapping would make the file's size count against the process's address space
+  and its touched pages against its resident set, and the bound here is meant to be what
+  the process holds, measured honestly. `memmap` is there for a caller that wants random
+  access and can afford the mapping.
 * `PlyWriter` -- appends chunks to `canonical.ply`, byte-identical to
   `gaussians.write_ply` of the same rows (same header, same record layout), which is what
   `splat_tiles.read_ply` -- the packager -- reads. With the row count known up front (every
@@ -34,9 +35,11 @@ Three pieces, each small:
   (views, tiers, ...) between passes instead of holding them. `npy_column` reads a `.npy`
   file (the `holdout/` arrays) by row range the same way.
 
-`CHUNK` rows is the unit. At 2^18 a canonical chunk is 14.7 MB of file and ~15 MB of
-columns; the quality stage's heaviest per-chunk array is cameras x chunk booleans, which
-it bounds separately (`quality.SEEN_BYTES`).
+`CHUNK` rows is the unit, and `CHUNK_BYTES` of file its ceiling: at 2^18 a canonical chunk
+is 14.7 MB of file and ~15 MB of columns, and a wider layout is read in proportionally
+fewer rows (gsplat's SH3 rows in 71k-row chunks), so a chunk costs the same whatever the
+file carries. The quality stage's heaviest per-chunk array is cameras x rows booleans,
+which it bounds separately (`quality.SEEN_BYTES`).
 """
 
 from __future__ import annotations
@@ -70,6 +73,8 @@ F32 = npt.NDArray[np.float32]
 
 #: Rows per chunk: ~15 MB of canonical columns. See the module docstring.
 CHUNK = 1 << 18
+#: The most bytes of file one chunk reads: a wide layout is read in fewer rows.
+CHUNK_BYTES = 16 << 20
 
 #: Every scalar type a PLY header may name -- the same table as `splat_tiles.PLY_SCALARS`,
 #: which is private to the packager; kept equal by `tests/test_splat_io.py`.
@@ -247,7 +252,8 @@ class SplatReader:
 
     def __init__(self, path: Path, *, chunk: int = CHUNK) -> None:
         self.layout = read_layout(path)
-        self.chunk = chunk
+        # `chunk` rows, or fewer when that many rows of this layout exceed `CHUNK_BYTES`.
+        self.chunk = max(1, min(chunk, CHUNK_BYTES // max(1, self.layout.itemsize)))
 
     @property
     def path(self) -> Path:

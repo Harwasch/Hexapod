@@ -605,6 +605,27 @@ def test_the_phone_capture_switches_reach_the_trainer_and_the_settings(tmp_path:
     assert document["colorCorrected"] == {"psnr": 28.25, "ssim": 0.8801, "lpips": 0.1402}
 
 
+def test_packed_rasterization_is_on_by_default_and_its_companions_are_not(
+    tmp_path: Path,
+) -> None:
+    """`--packed` (v1.5.3 `Config.packed`: rasterizer intermediates only for the gaussians
+    a camera sees; numerically the same) reaches the trainer on every run; `--sparse_grad`
+    and `--visible_adam`, which change the optimiser, are never passed unless asked."""
+    argv = training.gsplat_argv("p", Path("t"), Path("d"), Path("r"), strategy="mcmc")
+    assert "--packed" in argv
+    for switch in ("--sparse_grad", "--visible_adam"):
+        assert switch not in argv
+    assert "--packed" not in training.gsplat_argv(
+        "p", Path("t"), Path("d"), Path("r"), packed=False
+    )
+
+    workdir = Workdir.create(tmp_path / "run")
+    seed_inputs(workdir)
+    execute(train_recipe(stand_in_params()), workdir, RunnerSet(cpu=LocalRunner()))
+    cfg = json.loads((workdir.work_dir("train") / "gsplat" / "cfg.yml").read_text())
+    assert cfg["packed"] is True
+
+
 def test_the_phone_capture_switches_are_absent_from_the_default_argv() -> None:
     plain = training.gsplat_argv("p", Path("t"), Path("d"), Path("r"))
     tuned = training.gsplat_argv(

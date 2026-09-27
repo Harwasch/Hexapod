@@ -100,7 +100,17 @@ def test_nothing_in_the_stream_is_none() -> None:
     assert outofcore.percentile(_stream(empty, 10), [5.0]) is None
 
 
-def test_grouped_percentiles_are_each_groups_own() -> None:
+@pytest.mark.parametrize(("hist_bytes", "collect"), [(None, None), (1 << 14, 100)])
+def test_grouped_percentiles_are_each_groups_own(
+    monkeypatch: pytest.MonkeyPatch, hist_bytes: int | None, collect: int | None
+) -> None:
+    """With the defaults, and with histograms and collection squeezed until every group
+    is found 8 bits a pass and almost nothing is sorted -- the path many groups over
+    many values take, in bounded memory."""
+    if hist_bytes is not None:
+        monkeypatch.setattr(outofcore, "HIST_BYTES", hist_bytes)
+    if collect is not None:
+        monkeypatch.setattr(outofcore, "COLLECT", collect)
     rng = np.random.default_rng(11)
     groups = rng.integers(0, 40, 30_000).astype(np.int64) * 1000
     values = rng.standard_normal(30_000).astype(np.float32)
@@ -109,11 +119,12 @@ def test_grouped_percentiles_are_each_groups_own() -> None:
         for start in range(0, values.shape[0], 4096):
             yield values[start : start + 4096], groups[start : start + 4096]
 
-    wanted = [0, 5000, 39000, 123_456]  # the last has no values
-    got = outofcore.grouped_percentile(stream, wanted, [5.0])
-    assert set(got) == {0, 5000, 39000}
-    for group in (0, 5000, 39000):
+    wanted = [*range(0, 40_000, 1000), 123_456]  # the last has no values
+    got = outofcore.grouped_percentile(stream, wanted, [5.0, 50.0])
+    assert set(got) == set(range(0, 40_000, 1000))
+    for group in range(0, 40_000, 1000):
         _same(got[group][0], np.percentile(values[groups == group], 5.0))
+        _same(got[group][1], np.percentile(values[groups == group], 50.0))
 
 
 @pytest.mark.parametrize("budget", [outofcore.BUDGET, 1000])
@@ -128,7 +139,7 @@ def test_group_counts_cover_every_key_once(budget: int) -> None:
             yield keys[start : start + 5000], weights[start : start + 5000]
 
     parts = list(outofcore.group_counts(stream, rows=keys.shape[0], budget=budget))
-    assert len(parts) == (1 if budget == outofcore.BUDGET else 60)
+    assert len(parts) == (1 if budget == outofcore.BUDGET else 60)  # abandoned, then 60
     got_keys = np.concatenate([p[0] for p in parts])
     got_counts = np.concatenate([p[1] for p in parts])
     got_sums = np.concatenate([p[2] for p in parts])

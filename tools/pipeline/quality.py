@@ -71,6 +71,17 @@ each. `supportMask.sizing` and `keepPctVoxel` say what size was used and why.
 
 The stage never fails a run for being strict: a bar that would leave fewer than
 `min_gaussians` falls back to the next looser one and says so (`barApplied`).
+
+**In chunks.** The stage never holds the splat or a whole per-gaussian column: it reads
+`trained.ply` once into columns of its own on disk (`splat_io`), measures support in two
+passes over them (`support_pass`: the z-buffers from the opaque rows, regrouped into the
+same 2^18-row blocks the whole-splat stage used, then each chunk's views; each camera is
+first tested against spatial cells of the chunk, so it projects only rows it might see),
+and takes every whole-splat statistic -- the ROI's median GSD, the held-out reference,
+the keep extent, the support mask, keepPct's voxels -- in passes over them
+(`outofcore`), exactly. Its outputs are the whole-splat stage's, byte for byte
+(tests/test_chunked_equivalence.py against a frozen copy of it); 8M gaussians peaked at
+under 200 MB (tests/test_bounded_memory.py).
 """
 
 from __future__ import annotations
@@ -556,7 +567,7 @@ def support_pass(
     occluder_opacity: float = 0.5,
     depth_tolerance: float = 0.05,
     max_footprint_cells: int = 3,
-    block: int = OCCLUDER_BLOCK,
+    block: int | None = None,
     spill: Path | None = None,
 ) -> F64:
     """Views, spread and GSD of every row `rows` yields, in two passes over them and in
@@ -578,6 +589,7 @@ def support_pass(
     centres = cameras.centres
     scale = float(np.median(np.linalg.norm(centres - centres.mean(axis=0), axis=1))) or 1.0
     near = 1e-3 * scale
+    block = OCCLUDER_BLOCK if block is None else block
     zbuffers = _ZBuffers(cameras, zbuffer_side, near, max_footprint_cells, block, spill)
     for x, y, z, alpha, radius in rows():
         finite = np.isfinite(x) & np.isfinite(y) & np.isfinite(z)
@@ -752,7 +764,8 @@ class _ZBuffers:
                         rr, cc = r0 + dr, c0 + dc
                         ok = (rr >= 0) & (rr < gh) & (cc >= 0) & (cc < gw)
                         np.minimum.at(buffer, rr[ok] * gw + cc[ok], zw[ok])
-            sample = z[:: max(1, z.size // 20_000)]
+            # A copy: a strided view would keep the whole block's depths alive with it.
+            sample = z[:: max(1, z.size // 20_000)].copy()
             self._samples[j].append(sample)
             self._sampled[j] = True
             self._held += int(sample.nbytes)
@@ -1432,8 +1445,8 @@ class _Store:
     """The stage's per-gaussian columns, on disk between passes, read back in chunks.
 
     The stage never holds a whole column: positions, alpha and footprint are read from
-    the splat once and kept here (16 bytes a gaussian, not the PLY's 56 -- or gsplat's
-    248), and every later pass reads the columns it needs a chunk at a time.
+    the splat once and kept here (20 bytes a gaussian, not the PLY's 56 -- or gsplat's
+    236), and every later pass reads the columns it needs a chunk at a time.
     """
 
     def __init__(self, directory: Path, count: int, chunk: int) -> None:
@@ -1535,7 +1548,7 @@ def _grade(
 ) -> StageOutcome:
     count = source.count
     columns = store.columns
-    # One read of the splat: what every later pass needs of it, 16 bytes a gaussian.
+    # One read of the splat: what every later pass needs of it, 20 bytes a gaussian on disk.
     writers = {
         name: columns.create(name, np.float32) for name in ("x", "y", "z", "alpha", "radius")
     }

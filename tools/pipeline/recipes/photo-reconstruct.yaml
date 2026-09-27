@@ -131,14 +131,16 @@ stages:
       # roi only -- at the size training reads the frames, and gives `gaussian_density`
       # gaussians per pixel of it: 0.1 puts 3DGS's Truck at 1.52M, about 3DGS's own count
       # there and 3x the 500k that already matched its PSNR. Clamped to `budget_floor`
-      # (the preview's 200k) and to the smaller of the L4's memory (`gpu_memory_gb`, at
-      # the real frame size: ~8.7M at 1600 px, ~5.4M at 2400) and `budget_max`: 2M, what
-      # `place`/`package` on the 2 GB worker hold (0.75 GB a million, measured). An
-      # integer here, or in a run's params, is used as given.
+      # (the preview's 200k) and to the L4's memory (`gpu_memory_gb`, at the real frame
+      # size: ~8.7M at 1600 px, ~5.4M at 2400). There is no longer a ceiling below that
+      # for the stages after training: the 2M `budget_max` this set was what `place` and
+      # `package` could load whole on the 2 GB worker (0.75 GB a million, measured), and
+      # they now read the splat a chunk at a time (8M gaussians through quality, place,
+      # thumbnail and ground samples: 197 MB peak). `budget_max: N` here, or in a run's
+      # params, still caps it; an integer `cap_max` is used as given.
       cap_max: auto
       gaussian_density: 0.1
       budget_floor: 200000
-      budget_max: 2000000
       gpu_memory_gb: 24
       # Stop when training has converged: after densification ends (25k of 30k, scaled
       # with the schedule; never before it), held-out PSNR is measured every 500 steps,
@@ -232,9 +234,9 @@ stages:
   #
   # After `georeference`, not straight after `train`, only so that an EXIF-aligned
   # capture's metric scale is there to report its GSD in mm/px; the criterion itself is
-  # relative, so nothing depends on it. On Modal's CPU box because it is a projection of
-  # every gaussian into every frame: measured 500k x 90 in the module's tests' synthetic
-  # case, well inside the 8 GB there and more than the worker should spend of its 2 GB.
+  # relative, so nothing depends on it. On Modal's CPU box for its CPU time -- it projects
+  # every gaussian into every frame (500k x 90 in the module's tests' synthetic case) --
+  # not for its memory: it reads the splat a chunk at a time, 8M gaussians in under 200 MB.
   - id: quality
     impl: support_gate
     params:
