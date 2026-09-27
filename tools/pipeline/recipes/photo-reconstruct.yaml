@@ -278,9 +278,10 @@ stages:
   - id: package
     impl: splat_tiles
     params:
-      max_gaussians: 400000
+      # Every gaussian is packed, in a level-of-detail hierarchy of at most this many a
+      # tile; how many are drawn is the viewer's budget (the phone's Detail choice).
+      tile_gaussians: 100000
       opacity_min: 0.02
-      geometric_error: 2.0
 
   # The same three stages Lane 1 ends in, reading the same `canonical.ply` and the same
   # `splat/`. Both lanes end in one artifact set, so the console cannot tell which one

@@ -52,7 +52,7 @@ import support_mask
 import training
 import video
 from artifacts import ArtifactDecl
-from captures_bridge import CAPTURES_DIR, splat_tiles_convert
+from captures_bridge import CAPTURES_DIR, TILE_GAUSSIANS, splat_tiles_convert
 from contracts import MetricValue, StageContext, StageOutcome
 from registry import stage_impl
 
@@ -132,9 +132,11 @@ SPLAT_TILES = ArtifactDecl(
     "splat",
     kind="dir",
     content_type="inode/directory",
-    summary="the 3D Tiles tileset the console renders",
-    # Pinned to what tools/captures/splat_tiles.convert() actually writes. A stubbed
-    # package stage and the real one produce the same file names or a test fails.
+    summary="the level-of-detail 3D Tiles tileset the console and the viewer render",
+    # Pinned to what tools/captures/splat_tiles.convert() writes for every scan: the
+    # tileset and its root tile. A scan within one tile's budget (the stub, the committed
+    # tree) is exactly these two; a bigger one adds `splat_<octant path>.glb` children,
+    # which `tileset.json` names and tests/test_captures_bridge.py checks it names all of.
     required_members=("tileset.json", "splat.glb"),
     stub_members=("tileset.json", "splat.glb"),
 )
@@ -2238,29 +2240,41 @@ def _median_or_none(values: list[float]) -> float | None:
     "splat_tiles",
     consumes=("canonical.ply", "georef.json"),
     produces=(SPLAT_TILES,),
-    summary="pack the splat into KHR_gaussian_splatting 3D Tiles (tools/captures, unchanged)",
+    summary="pack every gaussian into a level-of-detail KHR_gaussian_splatting 3D Tileset",
 )
 def splat_tiles(ctx: StageContext) -> StageOutcome:
-    """Real, and it is the A6 call unchanged: `tools/captures/splat_tiles.convert`.
+    """Real: `tools/captures/splat_tiles.convert`, which writes a level-of-detail hierarchy.
 
-    Nothing about that function moved for this step. `SPLAT_TILES.required_members`
-    already pinned the file names it writes, `tests/test_captures_bridge.py` already ran
-    it for real, and the fixture byte-identity gate still covers it -- which is why the
-    reader it uses could be fixed here and what it *writes* could not.
+    Until the hierarchy this kept the `max_gaussians` most opaque (400k) in one tile and
+    discarded the rest, so a trained scene of 500k+ lost detail at delivery and a bigger
+    one lost more. Now every gaussian past `opacity_min` and the floater radius is packed,
+    at most `tile_gaussians` to a tile, and how much of it is *drawn* is the viewer's
+    budget (the phone's "Detail" choice, apps/web src/lib/detail.ts), not this stage's cut.
+
+    `SPLAT_TILES.required_members` still pins `tileset.json` and the root tile
+    `splat.glb`, which every tileset has; child tiles are named by `tileset.json`. The
+    fixture byte-identity gate (tools/captures tests/test_synthetic_tree.py) still covers
+    what it writes: the committed tree is one tile, and its `splat.glb` did not change by
+    a byte when the hierarchy arrived -- only its `tileset.json` did.
     """
     georef = _read_json(ctx.input(GEOREF.name))
+    for retired in ("max_gaussians", "geometric_error"):
+        # A run queued before the hierarchy (or a Refine copying a preview's params) may
+        # still carry these. Say so, rather than silently honouring or refusing them.
+        if ctx.param(retired) is not None:
+            ctx.log(f"{retired} is no longer read: every gaussian is packed, in tiles")
     stats = splat_tiles_convert(
         ctx.input(CANONICAL_PLY.name),
         ctx.output(SPLAT_TILES.name),
         lat=float(_number(georef.get("lat"))),
         lon=float(_number(georef.get("lon"))),
         height=float(_number(georef.get("height"))),
-        max_gaussians=int(ctx.param("max_gaussians", 400_000)),
         opacity_min=float(ctx.param("opacity_min", 0.02)),
-        geometric_error=float(ctx.param("geometric_error", 2.0)),
+        tile_gaussians=int(ctx.param("tile_gaussians", TILE_GAUSSIANS)),
     )
     ctx.log(
-        f"packaged {stats['gaussians']} gaussians ({stats['dropped']} dropped), "
+        f"packaged {stats['gaussians']} gaussians ({stats['dropped']} dropped) in "
+        f"{stats['tiles']} tiles, {stats['depth']} levels deep, "
         f"extent {stats['extent_m']:.2f} m"
     )
     metrics: dict[str, MetricValue] = {key: value for key, value in stats.items()}
@@ -2362,7 +2376,7 @@ def capture_manifest(ctx: StageContext) -> StageOutcome:
     source = _read_json(ctx.input(SOURCE_META.name))
     georef = _read_json(ctx.input(GEOREF.name))
     tiles = ctx.input(SPLAT_TILES.name)
-    packaged = _glb_summary(tiles / "splat.glb")
+    packaged = _tileset_summary(tiles)
     ground = (
         _read_json(ctx.input(GROUND_SAMPLES.name)) if ctx.has_input(GROUND_SAMPLES.name) else {}
     )
@@ -2389,6 +2403,7 @@ def capture_manifest(ctx: StageContext) -> StageOutcome:
             "gaussiansIn": source.get("gaussians"),
             "gaussiansPackaged": packaged["gaussians"],
             "bytes": packaged["bytes"],
+            "tiles": packaged["tiles"],
             "bboxLocalM": packaged["bbox"],
             "extentM": _extent(packaged["bbox"]["min"], packaged["bbox"]["max"]),
         },
@@ -2700,6 +2715,41 @@ def _glb_summary(path: Path) -> dict[str, Any]:
         "bbox": {
             "min": [float(v) for v in position["min"]],
             "max": [float(v) for v in position["max"]],
+        },
+    }
+
+
+def _tileset_summary(tiles: Path) -> dict[str, Any]:
+    """`_glb_summary` over every tile `tileset.json` names: counts and bytes summed, boxes
+    united.
+
+    The root tile alone is only the coarsest level of a hierarchy -- a tenth of a 1M scene
+    -- so reading `splat.glb` by itself, as this did when there was one tile, would have
+    the manifest report a scan as a fraction of its size.
+    """
+    tileset = _read_json(tiles / "tileset.json")
+    root = tileset.get("root")
+    stack: list[object] = [root]
+    summaries: list[dict[str, Any]] = []
+    while stack:
+        tile = stack.pop()
+        if not isinstance(tile, dict):
+            continue
+        content = tile.get("content")
+        if isinstance(content, dict) and isinstance(content.get("uri"), str):
+            summaries.append(_glb_summary(tiles / content["uri"]))
+        children = tile.get("children")
+        if isinstance(children, list):
+            stack.extend(children)
+    if not summaries:
+        raise ValueError(f"{tiles.name}/tileset.json names no tile content")
+    return {
+        "gaussians": sum(summary["gaussians"] for summary in summaries),
+        "bytes": sum(summary["bytes"] for summary in summaries),
+        "tiles": len(summaries),
+        "bbox": {
+            "min": [min(s["bbox"]["min"][axis] for s in summaries) for axis in range(3)],
+            "max": [max(s["bbox"]["max"][axis] for s in summaries) for axis in range(3)],
         },
     }
 

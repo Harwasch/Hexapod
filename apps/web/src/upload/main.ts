@@ -442,7 +442,7 @@ const STAGE_TEXT: Record<string, StageText> = {
   },
   splat_tiles: {
     name: "Package it for viewing",
-    what: "Compresses the model into tiles the map and the 3D viewer can stream.",
+    what: "Compresses all of the model into levels of detail the map and the 3D viewer stream.",
   },
   splat_thumbnail: {
     name: "Make a preview",

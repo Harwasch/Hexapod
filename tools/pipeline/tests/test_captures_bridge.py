@@ -9,6 +9,7 @@ same declaration StubRunner fabricates from.
 
 from __future__ import annotations
 
+import json
 import struct
 from pathlib import Path
 
@@ -97,6 +98,38 @@ def test_the_real_packer_is_byte_stable(tmp_path: Path) -> None:
 
     for name in SPLAT_TILES.required_members:
         assert (first / name).read_bytes() == (second / name).read_bytes()
+
+
+def test_a_hierarchy_adds_only_the_tiles_its_tileset_names(tmp_path: Path) -> None:
+    """Past one tile's budget the packer writes children; the pinned members stay the root.
+
+    What a consumer may rely on is `tileset.json` and `splat.glb` (the root), and that every
+    other file is a tile `tileset.json` names -- so nothing is published that the viewer
+    cannot reach, and nothing the viewer reaches is missing.
+    """
+    ply = write_ply(tmp_path / "splat.ply", count=600)
+    out = tmp_path / "splat"
+
+    stats = splat_tiles_convert(ply, out, 46.84, -91.99, 0.0, tile_gaussians=100)
+
+    assert stats["tiles"] > 1 and stats["gaussians"] == 600
+    written = {path.name for path in out.iterdir()}
+    assert set(SPLAT_TILES.required_members) <= written
+    tileset = json.loads((out / "tileset.json").read_text(encoding="utf-8"))
+    named, stack = [], [tileset["root"]]
+    while stack:
+        tile = stack.pop()
+        named.append(tile["content"]["uri"])
+        stack.extend(tile.get("children", []))
+    assert tileset["root"]["content"]["uri"] == "splat.glb"
+    assert written == {*named, "tileset.json"}
+    assert sum(tile_count(out / name) for name in named) == 600
+
+
+def tile_count(path: Path) -> int:
+    blob = path.read_bytes()
+    length = struct.unpack_from("<I", blob, 12)[0]
+    return int(json.loads(blob[20 : 20 + length])["accessors"][0]["count"])
 
 
 @pytest.mark.parametrize("member", SPLAT_TILES.required_members)

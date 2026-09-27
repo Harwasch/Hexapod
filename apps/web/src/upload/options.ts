@@ -15,7 +15,12 @@
  * quality bar decides what of the result is kept (apps/api `quality` stage).
  *
  * The choices are remembered on this phone (a convenience; losing them loses nothing).
+ * One of them is not sent at all: **Detail** is how many splats *this phone* draws, read by
+ * the viewer and the map from the same saved choices (`lib/detail.ts`). Every scan is
+ * packaged whole, as a level-of-detail tileset, whatever it says.
  */
+
+import { OPTIONS_STORAGE } from "@/lib/detail";
 
 export type Recipe = "photo-reconstruct" | "splat-ingest";
 export type StageParams = Record<string, Record<string, number | string | boolean>>;
@@ -109,10 +114,27 @@ const UP_AXIS = [
   { value: "z", label: "Z up", hint: "Already upright, as maps and CAD are." },
 ] as const satisfies readonly Choice<string>[];
 
+/**
+ * How much of a scan this phone draws: `lib/detail.ts`'s budget. Not a processing option any
+ * more -- the scan is kept whole, and a phone that picks Light still sends a scan a desktop
+ * can see in full.
+ */
 const DETAIL = [
-  { value: "200000", label: "Light", hint: "200k splats on the map. Loads fastest." },
-  { value: "400000", label: "Standard", hint: "400k splats on the map and in the viewer." },
-  { value: "800000", label: "Full", hint: "800k splats. Heavier to load on a phone." },
+  {
+    value: "200000",
+    label: "Light",
+    hint: "This phone draws up to about 200k splats of a scan at once. Loads fastest.",
+  },
+  {
+    value: "400000",
+    label: "Standard",
+    hint: "Up to about 400k splats at once, more detail appearing as you zoom in.",
+  },
+  {
+    value: "800000",
+    label: "Full",
+    hint: "Up to about 800k splats at once. Sharpest; heavier on an older phone.",
+  },
 ] as const satisfies readonly Choice<string>[];
 
 export interface Options {
@@ -157,14 +179,13 @@ const TRAIN: Record<Options["quality"], Record<string, number>> = {
  */
 export const PREVIEW_TRAIN = { schedule_scale: 0.1, cap_max: 200_000, train_max_side: 800 };
 
-/** The per-stage params of a full-quality run of `recipe`: what Refine sends. */
+/**
+ * The per-stage params of a full-quality run of `recipe`: what Refine sends. Nothing for
+ * `package`: it packs every gaussian, and Detail is this phone's viewing budget.
+ */
 export function paramsFor(recipe: Recipe, options: Options): StageParams {
-  const packaged = { max_gaussians: Number(options.detail) };
   if (recipe === "splat-ingest") {
-    return {
-      normalize: { up_axis: options.upAxis, heading_deg: options.headingDeg },
-      package: packaged,
-    };
+    return { normalize: { up_axis: options.upAxis, heading_deg: options.headingDeg } };
   }
   const normalize: Record<string, number | string> = {
     max_side: options.photoSize === "auto" ? "auto" : Number(options.photoSize),
@@ -172,7 +193,6 @@ export function paramsFor(recipe: Recipe, options: Options): StageParams {
   if (options.videoFps !== "") normalize.fps = Number(options.videoFps);
   const params: StageParams = {
     normalize,
-    package: packaged,
     quality: { bar: options.bar },
   };
   const train = TRAIN[options.quality];
@@ -203,11 +223,11 @@ export function summarise(options: Options): string {
   ].join(" · ");
 }
 
-// Versioned: every choice is saved, defaults included, so a phone that had opened the
-// page keeps an old default after it changes. v1 kept 4 / s after 8 / s became the
-// default (measured sharper, 2026-09-27); v2 kept 1600 px and 8 / s after Auto and
-// frames by camera motion did.
-const STORAGE = "twin.phoneOptions.v3";
+// Versioned (in `@/lib/detail`, which the viewers read Detail from): every choice is
+// saved, defaults included, so a phone that had opened the page keeps an old default
+// after it changes. v1 kept 4 / s after 8 / s became the default (measured sharper,
+// 2026-09-27); v2 kept 1600 px and 8 / s after Auto and frames by camera motion did.
+const STORAGE = OPTIONS_STORAGE;
 
 export function loadOptions(): Options {
   try {
@@ -334,8 +354,8 @@ export function mountOptions(root: HTMLDetailsElement): OptionsPanel {
   const detail = document.createElement("div");
   detail.className = "group";
   detail.append(
-    groupTitle("For every scan"),
-    segmented("detail", "Detail on the map and in the viewer", DETAIL, options, changed),
+    groupTitle("On this phone"),
+    segmented("detail", "Detail this phone draws", DETAIL, options, changed),
   );
 
   const outputs = document.createElement("div");

@@ -114,9 +114,12 @@ uv run python -m app.seed.publish --slug <slug>
 - **Point cloud.** The LAZ is reprojected from its UTM zone into the same local frame and
   written as a quadtree of quantized `pnts` tiles (refine ADD, each node a random sample of
   what is under it), capped at one million points.
-- **Splat.** The PLY is packed as SPZ inside a single glTF tile with the
-  `KHR_gaussian_splatting` extensions Cesium 1.145 loads, floaters and near-transparent
-  gaussians dropped, and the same frame and offset applied (`splat_tiles.py`).
+- **Splat.** The PLY is packed as SPZ inside glTF tiles with the `KHR_gaussian_splatting`
+  extensions Cesium 1.145 loads, floaters and near-transparent gaussians dropped, and the
+  same frame and offset applied (`splat_tiles.py`). Every other gaussian is kept: an adaptive
+  octree of at most 100k a tile (refine ADD, each parent an even subset of what is under it,
+  geometric error the cell size that subset was spread at), so a small scan is one tile and a
+  big one is a hierarchy the viewer draws as much of as its budget allows.
 
 ## The synthetic tree
 

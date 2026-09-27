@@ -370,7 +370,7 @@ def test_process_queues_a_job_and_runs_nothing(client: TestClient, db: Session) 
             # Keyed by stage id, which is the shape `Recipe.with_params` takes. A flat
             # `{"sh": 3}` used to be accepted here and silently ignored by the worker.
             "recipe": "splat-ingest",
-            "params": {"package": {"max_gaussians": 120000}},
+            "params": {"package": {"tile_gaussians": 120000}},
             "provider": "modal",
             "tier": "a10",
         },
@@ -382,7 +382,7 @@ def test_process_queues_a_job_and_runs_nothing(client: TestClient, db: Session) 
     assert job["recipe"] == "splat-ingest"
     # Resolved from the recipe file, not supplied and not a literal in this service.
     assert job["recipeVersion"] == recipe_service.version_of("splat-ingest")
-    assert job["params"] == {"package": {"max_gaussians": 120000}}
+    assert job["params"] == {"package": {"tile_gaussians": 120000}}
     assert job["captureId"] == capture["id"]
     # Nothing has run and nothing has claimed it.
     assert job["steps"] == []

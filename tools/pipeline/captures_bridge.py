@@ -31,6 +31,7 @@ from pathlib import Path
 
 __all__ = [
     "CAPTURES_DIR",
+    "TILE_GAUSSIANS",
     "SplatFormatError",
     "pack_spz",
     "read_ply",
@@ -55,6 +56,7 @@ def _ensure_importable() -> None:
 _ensure_importable()
 
 from splat_tiles import (  # noqa: E402
+    TILE_GAUSSIANS,
     SplatFormatError,
     convert,
     pack_spz,
@@ -70,9 +72,12 @@ def splat_tiles_convert(
     lat: float,
     lon: float,
     height: float,
-    max_gaussians: int = 400_000,
     opacity_min: float = 0.02,
-    geometric_error: float = 2.0,
+    tile_gaussians: int | None = TILE_GAUSSIANS,
 ) -> dict[str, float | int]:
-    """Call the sibling project's packer, unchanged, and return its statistics."""
-    return convert(ply, out_dir, lat, lon, height, max_gaussians, opacity_min, geometric_error)
+    """Call the sibling project's packer and return its statistics.
+
+    Every gaussian that passes `opacity_min` and the floater radius is packed, into a
+    level-of-detail hierarchy of at most `tile_gaussians` a tile; there is no top-N cut.
+    """
+    return convert(ply, out_dir, lat, lon, height, opacity_min, tile_gaussians)

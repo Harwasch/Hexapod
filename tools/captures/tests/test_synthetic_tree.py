@@ -34,7 +34,6 @@ GENERATE_DEFAULTS = {
     "lon": -82.6966,
     "height": 0.0,
     "height_m": 6.0,
-    "geometric_error": 0.5,
 }
 
 
@@ -110,9 +109,7 @@ def test_the_tiler_keeps_every_splat(generated: Path, tmp_path: Path) -> None:
         lat=0.0,
         lon=0.0,
         height=0.0,
-        max_gaussians=FIXTURE_SPLATS,
         opacity_min=0.02,
-        geometric_error=1.0,
     )
     assert stats["dropped"] == 0
     assert stats["gaussians"] == FIXTURE_SPLATS

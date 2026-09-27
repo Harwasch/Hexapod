@@ -191,15 +191,18 @@ def test_a_phone_sets_only_the_options_it_is_allowed(client: TestClient, db: Ses
         {"train": {"cap_max": True}},
         {"pose": {"matcher": "sequential"}},
         {"normalize": "fast"},
+        # The packaging cut that "Detail" used to be: every scan is now packed whole, and
+        # Detail stays on the phone as its viewing budget.
+        {"package": {"max_gaussians": 400_000}},
     ):
         response = start(refused)
         assert response.status_code == 409, (refused, response.text)
     assert start({"normalize": {"up_axis": "sideways"}}, "splat-ingest").status_code == 409
+    assert start({"package": {"max_gaussians": 800_000}}, "splat-ingest").status_code == 409
 
     chosen = {
         "normalize": {"max_side": 2400},
         "train": {"schedule_floor": 1.0, "cap_max": 1_000_000},
-        "package": {"max_gaussians": 800_000},
     }
     ok = start(chosen)
     assert ok.status_code == 202, ok.text

@@ -828,7 +828,6 @@ def extract(
     link_radius: float | None = None,
     min_cluster_points: int = 8,
     max_nodes: int = 200,
-    geometric_error: float = 0.5,
     source_note: str | None = None,
     tile: bool = True,
     truth: tuple[dict, dict] | None = None,
@@ -935,9 +934,10 @@ def extract(
             lat,
             lon,
             height,
-            max_gaussians=int(positions.shape[0]) + 1,
             opacity_min=opacity_min,
-            geometric_error=geometric_error,
+            # One tile, whatever the splat count: the deformer refuses anything else,
+            # because splat indices are only stable while tile selection is.
+            tile_gaussians=None,
         )
         if stats["dropped"] != 0:
             # The rig's checksum is over the splats written above. If the tiler drops any of
@@ -1000,7 +1000,6 @@ def main() -> None:
     )
     parser.add_argument("--min-cluster-points", type=int, default=8)
     parser.add_argument("--max-nodes", type=int, default=200)
-    parser.add_argument("--geometric-error", type=float, default=0.5)
     parser.add_argument("--source-note", type=str, default=None)
     parser.add_argument("--no-tile", action="store_true", help="skip splat_tiles.convert")
     parser.add_argument("--labels", type=Path, help="ground-truth labels.json, to score against")
@@ -1035,7 +1034,6 @@ def main() -> None:
         link_radius=args.link_radius,
         min_cluster_points=args.min_cluster_points,
         max_nodes=args.max_nodes,
-        geometric_error=args.geometric_error,
         source_note=args.source_note,
         tile=not args.no_tile,
         truth=truth,

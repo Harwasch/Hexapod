@@ -97,6 +97,67 @@ test("a scan opens on its own and renders", async ({ page }) => {
   expect(errors).toEqual([]);
 });
 
+test("a level-of-detail scan loads coarsest-first, only as far as this phone's Detail", async ({
+  page,
+}) => {
+  // The shape splat_tiles.py writes past one tile's budget: a root subset, octants holding
+  // subsets of their own, leaves (error 0) holding the rest. Every tile's bytes are the
+  // committed tree's, so they render; the counts say what a real 380k scan would.
+  interface Tile {
+    boundingVolume: { box: number[] };
+    geometricError: number;
+    content: { uri: string };
+    extras: { gaussians: number };
+    children: Tile[];
+  }
+  const tile = (uri: string, gaussians: number, error: number, children: Tile[] = []): Tile => ({
+    boundingVolume: { box: [0, 0, 3, 4, 0, 0, 0, 4, 0, 0, 0, 4] },
+    geometricError: error,
+    content: { uri },
+    extras: { gaussians },
+    children,
+  });
+  const tileset = {
+    asset: { version: "1.1" },
+    geometricError: 8,
+    root: {
+      refine: "ADD",
+      ...tile("splat.glb", 100_000, 0.4, [
+        tile("splat_1.glb", 100_000, 0.1, [tile("splat_1-7.glb", 90_000, 0)]),
+        tile("splat_3.glb", 100_000, 0.2),
+        tile("splat_02.glb", 80_000, 0),
+      ]),
+    },
+  };
+  const fetched: string[] = [];
+  await page.route("https://tiles.example/**", async (route) => {
+    const name = new URL(route.request().url()).pathname.split("/").pop() ?? "";
+    fetched.push(name);
+    await route.fulfill({
+      body:
+        name === "tileset.json"
+          ? JSON.stringify(tileset)
+          : readFileSync(resolve(TILES, "splat.glb")),
+      headers: { "access-control-allow-origin": "*" },
+    });
+  });
+  // "Light", chosen on the phone page: 200k.
+  await page.addInitScript(() => {
+    window.localStorage.setItem("twin.phoneOptions.v3", JSON.stringify({ detail: "200000" }));
+  });
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+
+  await page.goto(`/view.html#${SITE}`);
+
+  await expect(page.locator("#scan-date")).toContainText("200,000 of 470,000 splats", {
+    timeout: 30_000,
+  });
+  // The root, then the root's first octant (its region's error is the root's): 200k.
+  expect(fetched).toEqual(["tileset.json", "splat.glb", "splat_1.glb"]);
+  expect(errors).toEqual([]);
+});
+
 /** A coverage_enu.ply as tools/pipeline/quality.py writes it: points, tier, colour. */
 function coveragePly(points: [number, number, number, number][]): Buffer {
   const header = Buffer.from(

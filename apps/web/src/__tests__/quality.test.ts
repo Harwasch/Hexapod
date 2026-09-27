@@ -163,13 +163,11 @@ describe("preview and refine parameters", () => {
     const options = { ...DEFAULTS, quality: "best" as const, bar: "strict" as const };
     expect(previewParamsFor("photo-reconstruct", options)).toEqual({
       normalize: { max_side: "auto" },
-      package: { max_gaussians: 400000 },
       train: { schedule_scale: 0.1, cap_max: 200000, train_max_side: 800 },
       quality: { mode: "preview", bar: "strict" },
     });
     expect(paramsFor("photo-reconstruct", options)).toEqual({
       normalize: { max_side: "auto" },
-      package: { max_gaussians: 400000 },
       train: { schedule_floor: 1, density_scale: 2 },
       quality: { bar: "strict" },
     });
@@ -178,6 +176,15 @@ describe("preview and refine parameters", () => {
   it("an explicit photo size and frame rate are sent as numbers", () => {
     const options = { ...DEFAULTS, photoSize: "2400" as const, videoFps: "4" as const };
     expect(paramsFor("photo-reconstruct", options).normalize).toEqual({ max_side: 2400, fps: 4 });
+  });
+
+  it("sends nothing for packaging: Detail is this phone's viewing budget, not a cut", () => {
+    for (const detail of ["200000", "800000"] as const) {
+      expect(paramsFor("photo-reconstruct", { ...DEFAULTS, detail }).package).toBeUndefined();
+      expect(paramsFor("splat-ingest", { ...DEFAULTS, detail })).toEqual({
+        normalize: { up_axis: "", heading_deg: 0 },
+      });
+    }
   });
 
   it("a splat file has no preview and no quality bar", () => {

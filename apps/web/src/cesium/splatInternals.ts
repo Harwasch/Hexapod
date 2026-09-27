@@ -112,8 +112,10 @@ export function bakeTransformOf(tileset: SplatTilesetLike): Mat4 | undefined {
  * Whether the tileset is the single-tile kind this prototype is restricted to.
  *
  * Splat snapshots aggregate over *selected* tiles, so a splat's index is stable only while tile
- * selection is. Our own `splat_tiles.py` emits single-node tilesets, where indices are stable;
- * anywhere else the rig assignment would silently point at different splats between frames.
+ * selection is. The Living Survey tools ask `splat_tiles.py` for a single tile
+ * (`tile_gaussians=None`), where indices are stable; a pipeline capture past one tile's budget is
+ * a level-of-detail hierarchy, and there the rig assignment would silently point at different
+ * splats between frames.
  * Returns `undefined` while the root is not loaded yet, which is a wait, not a refusal.
  */
 export function isSingleTile(tileset: SplatTilesetLike): boolean | undefined {

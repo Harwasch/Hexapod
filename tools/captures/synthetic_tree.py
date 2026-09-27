@@ -784,7 +784,6 @@ def generate(
     lon: float,
     height: float,
     height_m: float,
-    geometric_error: float,
 ) -> dict[str, float | int | str]:
     """Write every artefact for one synthetic tree and return a summary of what was written."""
     rig = synthetic_tree_rig(height_m=height_m)
@@ -834,9 +833,10 @@ def generate(
         lat,
         lon,
         height,
-        max_gaussians=int(positions.shape[0]) + 1,
         opacity_min=0.02,
-        geometric_error=geometric_error,
+        # One tile, whatever the splat count: the Living Survey deformer refuses anything
+        # else, because splat indices are only stable while tile selection is.
+        tile_gaussians=None,
     )
     if stats["dropped"] != 0:
         # The ground-truth labels are in PLY order. splat_tiles preserves order but not
@@ -866,7 +866,6 @@ def main() -> None:
     parser.add_argument("--lon", type=float, default=-82.6966)
     parser.add_argument("--height", type=float, default=0.0)
     parser.add_argument("--height-m", type=float, default=6.0, help="trunk height, metres")
-    parser.add_argument("--geometric-error", type=float, default=0.5)
     args = parser.parse_args()
     print(
         json.dumps(
@@ -878,7 +877,6 @@ def main() -> None:
                 args.lon,
                 args.height,
                 args.height_m,
-                args.geometric_error,
             )
         )
     )
