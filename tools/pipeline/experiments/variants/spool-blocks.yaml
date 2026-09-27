@@ -1,0 +1,55 @@
+# Block training's seam test (tools/pipeline/blocks.py, the plan's Phase 3): the spool
+# capture forced into 2 blocks against the same capture trained whole.
+#
+#   TWIN_PHONE_KEY=... uv run python -m experiments.run_variants \
+#       --api https://<api host> --variants experiments/variants/spool-blocks.yaml \
+#       --out runs/spool-blocks
+#
+# Pass: `blocks-2` within the two `whole` runs' spread (+-0.004 LPIPS, +-0.22 dB PSNR, the
+# spool's run-to-run noise) and no seam in renders crossing the boundary. Each run is a
+# fresh `process` (normalize, pose, train...), so it has no Preview in its workdir: the
+# block runs train their prior as the short coarse pass (7,500 steps at 800 px), which
+# is the path a Standard run of a big scene takes. The phone's own path -- a Preview, then
+# a Refine with `blocks: 2` and one without, in that order (a whole Refine leaves its splat
+# as the next prior; a block run does not) -- is the second check, run from the app.
+#
+# `whole` is `blocks: 1`, which is also what `auto` gives this capture (its budget fits one
+# GPU); each block of `blocks-2` gets the capture's density over its own surface, so the
+# two totals are the same density. psnr/ssim/lpips of a block run are the merged splat's,
+# by the trainer's own eval() on the same held-out frames (train_metrics.json `blocks`
+# has each block's own numbers, cameras, steps and time).
+#
+# Every key here is on the phone's whitelist (apps/api/app/api/v1/phone.py PHONE_OPTIONS).
+capture: 87d772f0-92c9-49be-8570-3c830425d3a3
+recipe: photo-reconstruct
+baseline: whole
+
+base:
+  train: {schedule_scale: 1.0}
+  quality: {mode: refine, bar: strict}
+
+variants:
+  - name: whole
+    repeat: 2
+    params: {train: {blocks: 1}}
+
+  - name: blocks-2
+    repeat: 2
+    params: {train: {blocks: 2}}
+
+  # Per-image exposure correction in every block (gsplat's bilateral grid: H3DGS App. C.2's
+  # per-image affine, per cell of a 16x16x8 grid); against its own whole run, since the
+  # grid alone changed nothing measurable on this capture.
+  - name: blocks-2-exposure
+    params: {train: {blocks: 2, bilateral_grid: true}}
+
+  - name: whole-exposure
+    params: {train: {blocks: 1, bilateral_grid: true}}
+
+  # Without the frozen ring (H3DGS's scaffold): what the ring is worth at the seam.
+  - name: blocks-2-no-ring
+    params: {train: {blocks: 2, block_ring: false}}
+
+  # The camera test's threshold at CityGS V1's own default: fewer cameras per block.
+  - name: blocks-2-epsilon-0.08
+    params: {train: {blocks: 2, block_epsilon: 0.08}}

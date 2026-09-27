@@ -106,6 +106,23 @@ def test_the_spool_table_file_parses_and_stays_on_the_phones_whitelist() -> None
     }
 
 
+def test_the_spool_blocks_file_parses_and_stays_on_the_phones_whitelist() -> None:
+    """The seam test's variants (blocks.py): whole twice, two blocks twice, the rest once."""
+    plan = run_variants.load_plan((VARIANTS / "spool-blocks.yaml").read_text())
+    names = [v.name for v in plan.variants]
+    assert names[:4] == ["whole", "whole#2", "blocks-2", "blocks-2#2"]
+    by_name = {v.name: v.params for v in plan.variants}
+    assert by_name["blocks-2"]["train"] == {"schedule_scale": 1.0, "blocks": 2}
+    assert by_name["whole"]["train"]["blocks"] == 1
+    source = (REPO / "apps" / "api" / "app" / "api" / "v1" / "phone.py").read_text()
+    block = source[source.index('"photo-reconstruct": {') : source.index('"splat-ingest": {')]
+    for variant in plan.variants:
+        for stage, params in variant.params.items():
+            assert f'"{stage}": {{' in block, (variant.name, stage)
+            for name in params:
+                assert f'"{name}"' in block, (variant.name, stage, name)
+
+
 # --- reading jobs back and the table --------------------------------------------------------
 
 
