@@ -323,22 +323,32 @@ function offerCoverage(site: Site, scene: THREE.Scene, mesh: SplatMesh, size: nu
 }
 
 /** Points in their tier colours, and the camera path as a line, turned z-up like the mesh. */
+/** The camera path: white, so it can't be mistaken for any tier's colour. */
+const CAMERA_PATH = 0xffffff;
+
 function coverageOverlay(coverage: ReturnType<typeof parseCoverage>, size: number): THREE.Group {
   const group = new THREE.Group();
   group.rotation.x = -Math.PI / 2;
   const cloud = new THREE.BufferGeometry();
   cloud.setAttribute("position", new THREE.BufferAttribute(coverage.positions, 3));
-  cloud.setAttribute("color", new THREE.BufferAttribute(coverage.colors, 3));
+  // The file's colours are sRGB bytes; three.js treats vertex colours as linear and encodes
+  // on output, which washed the tier colours out (keep read as the camera path's mint).
+  const linear = coverage.colors.map((c) =>
+    c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4),
+  );
+  cloud.setAttribute("color", new THREE.BufferAttribute(linear, 3));
   // Drawn over the splat rather than hidden in it: this is an x-ray of the scan's support.
   const points = new THREE.Points(
     cloud,
     new THREE.PointsMaterial({
-      size: 3,
+      // Small and slightly see-through, so a dense surface reads as a tinted surface
+      // instead of a solid block, and the scan stays legible under it.
+      size: 1.5,
       sizeAttenuation: false,
       vertexColors: true,
       depthTest: false,
       transparent: true,
-      opacity: 0.9,
+      opacity: 0.75,
     }),
   );
   points.renderOrder = 1;
@@ -348,13 +358,13 @@ function coverageOverlay(coverage: ReturnType<typeof parseCoverage>, size: numbe
     path.setAttribute("position", new THREE.BufferAttribute(coverage.cameraPath, 3));
     const line = new THREE.Line(
       path,
-      new THREE.LineBasicMaterial({ color: 0x7fd8c0, depthTest: false, transparent: true }),
+      new THREE.LineBasicMaterial({ color: CAMERA_PATH, depthTest: false, transparent: true }),
     );
     line.renderOrder = 2;
     const cameras = new THREE.Points(
       path,
       new THREE.PointsMaterial({
-        color: 0x7fd8c0,
+        color: CAMERA_PATH,
         size: Math.max(size / 150, 1e-3),
         depthTest: false,
         transparent: true,
