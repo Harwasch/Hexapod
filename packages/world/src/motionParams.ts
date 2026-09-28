@@ -21,16 +21,19 @@
  *
  * ### The allometric rules, and their sources
  *
- * - **Limbs** (`branchStructure`): at every joint the child carrying the most tips continues the
- *   axis, the straightest on a tie, with no angle limit. A limb that would ring above
- *   {@link MODE_MAX_HZ} is a twig: it rides its parent limb's oscillator and bends not at all.
- *   Da Vinci's rule for the axis; the 4 Hz cut is a design choice.
- * - **Branch frequency** `f = 2.55·L^-0.59` Hz, `L` the limb's chord in metres — Coder (2000,
+ * - **Limbs** (`branchStructure`, `limbModes`): at every joint the child carrying the most tips
+ *   continues the axis, the straightest on a tie, with no angle limit. A limb too short to ring
+ *   inside the tree's band ({@link MODE_BAND}·f0) or deeper than {@link MAX_BRANCH_ORDER} is a
+ *   twig: it rides the oscillator of the limb it hangs from and bends not at all itself.
+ * - **Branch frequency** `f = 2.55·L^-0.59` Hz, no lower than `f0`, `L` the limb's span (the
+ *   farthest its subtree reaches from its attachment) in metres — Coder (2000,
  *   "Sway frequency in tree stems", UGA FOR00-24), as used by Habel, Kusternig & Wimmer, EG 2009,
  *   eq. (17), for broadleaf trees in leaf. Habel gives no unit and the primary could not be
  *   retrieved. Metres, because only in metres does the law agree with measured whole trees: it
  *   puts a 6 m stem at 0.89 Hz against the pendulum law's 0.98 Hz (below), where feet would give
- *   0.44 Hz. Leafless branches ring at ~2.5× that (same source).
+ *   0.44 Hz. Leafless branches ring at ~2.5× that (same source). The exponent agrees with beam
+ *   scaling `f ~ D/L²` under the measured allometry `D ~ L^1.37–1.38` (Rodriguez et al. 2008),
+ *   which holds for a whole branch — hence the span, not a segment.
  * - **Whole-tree frequency** `f0 = C / √H` — the simple-pendulum law that best predicts open-grown
  *   broadleaves (Jackson et al. 2021, Biogeosciences 18, 4059, Table 2: R² 0.67, n = 89). The
  *   paper publishes no intercept; `C = 2.4 Hz·m^½` is **an estimate read by eye from its Fig. 2a**
@@ -43,9 +46,9 @@
  *   many sub-branches and leaves sit "close to the critically damped case"; 0.15 is chosen so a
  *   limb's resonance stays visible, not from a measurement.
  * - **Bend per limb**: elastic similarity (McMahon & Kronauer 1976) — every limb deflects by
- *   the same angle whatever its length — times `min(1, f_tree/f)^(1/3)`, the RMS resonant
- *   response to a `-5/3` wind spectrum ({@link RESPONSE_EXPONENT}, an estimate), spread over its
- *   joints in proportion to the limb length each stands for. **This is why no radius is read**:
+ *   the same angle whatever its length — times `min(1, f0/f)^0.305`, so that its tip deflection
+ *   falls as `1/f²` as a sub-resonant oscillator's does ({@link RESPONSE_EXPONENT}), spread over
+ *   its joints in proportion to the limb length each stands for. **This is why no radius is read**:
  *   the woody radius `skeleton.py` reports is a resolution limit on most crown nodes, and the
  *   model does not need it. The constants themselves are estimates (Teacher A's job to fit).
  */
@@ -169,18 +172,27 @@ export const DAMPING_LEVELS = 3;
 /** Shortest branch length used in eq. (17), metres: caps a stub's frequency near 14 Hz. */
 export const MIN_BRANCH_LENGTH_M = 0.05;
 /**
- * A limb whose eq. (17) frequency is above this is a **twig**: it rides its parent limb's
- * oscillator rigidly and moves only by leaf flutter. Chosen, not measured: sway above ~4 Hz
- * reads as vibration, and a limb that short (< 0.47 m) has a lever arm of millimetres anyway.
+ * The band a tree's modes ring in, as a multiple of its whole-tree frequency `f0`. A limb whose
+ * eq. (17) frequency would lie above `MODE_BAND·f0` is too short to be a mode of its own and
+ * becomes a twig. Estimate from Rodriguez, de Langre & Moulia 2008 (AJB 95:1523): the first 25
+ * modes of a 7.9 m walnut all lie in 1.4–2.6 Hz, and trees show "fundamental modes in the range
+ * of 1–1.5 Hz with a large number of their branch modes in the 2.5–3 Hz band".
  */
-export const MODE_MAX_HZ = 4;
+export const MODE_BAND = 3;
 /**
- * A limb's bend falls as `(f_tree / f)^(1/3)`: the RMS resonant response of a lightly damped
- * oscillator to a `f^(-5/3)` (inertial-subrange) wind spectrum goes as `√(f·S(f)) ∝ f^(-1/3)`
- * at a fixed static deflection. Estimate: applied to the mean lean too, and on top of the
- * runtime's Simiu–Scanlan shape, which is nearly flat below `U` Hz.
+ * Deepest branching order that gets a mode of its own; deeper limbs are twigs. SpeedTree moves
+ * one or two branch levels independently and Unreal's Pivot Painter 2 at most four hierarchy
+ * levels; a rig of hundreds of independent parts is not identifiable from video (Chen & Lou,
+ * "Wind on Trees", 2026). A design choice within that practice.
  */
-export const RESPONSE_EXPONENT = 1 / 3;
+export const MAX_BRANCH_ORDER = 3;
+/**
+ * Exponent of a limb's bend in `f0/f`. Below resonance a limb's tip deflects by
+ * `(F/m)/(2πf)²` (Habel eq. 15 at `f ≪ f_h`), and by eq. (17) its length goes as
+ * `f^(1/CODER_EXPONENT)`, so its bend angle — deflection over length — goes as
+ * `f^-(2 + 1/CODER_EXPONENT)` = `f^-0.305`. Derived, at equal drag per unit mass (an estimate).
+ */
+export const RESPONSE_EXPONENT = 2 + 1 / CODER_EXPONENT;
 /** Reference speed the gains are quoted at, m/s. */
 export const REFERENCE_SPEED_MPS = 10;
 /** Whole-tree lean at the reference speed, radians. Estimate (≈1.1°). */
@@ -214,15 +226,15 @@ export const MIN_LEAF_SIZE_M = 0.05;
 
 export const ALLOMETRIC_PROVENANCE: Readonly<Record<string, ProvenanceEntry>> = {
   branchFrequency: {
-    rule: "f = 2.55 * L^-0.59 Hz, L = limb chord (attachment to far end) in metres; unit not stated by Habel, primary not retrieved; metres because only then does it agree with whole-tree data (6 m: 0.89 Hz vs 2.4/sqrt(H) = 0.98; in feet 0.44)",
+    rule: "f = 2.55 * L^-0.59 Hz, L = limb span (farthest reach of its subtree from its attachment) in metres; unit not stated by Habel, primary not retrieved; metres because only then does it agree with whole-tree data (6 m: 0.89 Hz vs 2.4/sqrt(H) = 0.98; in feet 0.44)",
     source:
       "Coder 2000, Sway frequency in tree stems, UGA FOR00-24, via Habel, Kusternig & Wimmer, Physically Guided Animation of Trees, EG 2009, eq. 17",
     status: "cited",
   },
   limbGrouping: {
-    rule: "each joint continues into its child with the most tips (straightest on a tie), no angle limit; limbs ringing above 4 Hz (chord < 0.47 m) are twigs that ride their parent limb with no bend of their own",
+    rule: "each joint continues into its child with the most tips (straightest on a tie), no angle limit; a limb is a mode when eq. 17 puts it within 3 f0 and it is at most third-order, otherwise a twig riding the limb it hangs from with no bend of its own; a mode rings no lower than f0",
     source:
-      "da Vinci's rule for the main axis; the 4 Hz cut is chosen (sway above ~4 Hz reads as vibration)",
+      "da Vinci's rule for the main axis; band from Rodriguez, de Langre & Moulia 2008, AJB 95:1523 (walnut: first 25 modes in 1.4-2.6 Hz; branch modes 2.5-3 Hz over 1-1.5 Hz fundamentals); order cap within game practice (SpeedTree 1-2 branch levels, Pivot Painter 2 up to 4)",
     status: "estimate",
   },
   leaflessFrequency: {
@@ -259,9 +271,9 @@ export const ALLOMETRIC_PROVENANCE: Readonly<Record<string, ProvenanceEntry>> = 
     status: "cited",
   },
   bendGains: {
-    rule: "tree lean 0.02 rad, a limb 0.05 rad * min(1, f_tree/f)^(1/3) at 10 m/s, spread over its joints by segment length",
+    rule: "tree lean 0.02 rad, a limb 0.05 rad * min(1, f0/f)^(2 - 1/0.59) at 10 m/s, spread over its joints by segment length",
     source:
-      "elastic similarity (McMahon & Kronauer 1976) for the spread; f^(-1/3): RMS resonant response to a -5/3 inertial-subrange spectrum (Kolmogorov 1941; Kaimal et al. 1972), applied to the whole bend; magnitudes chosen",
+      "elastic similarity (McMahon & Kronauer 1976) for the spread; tip deflection (F/m)/(2 pi f)^2 below resonance (Habel et al. EG 2009 eq. 15) with L from eq. 17 gives the angle's f^-0.305, at equal drag per unit mass (assumed); magnitudes chosen",
     status: "estimate",
   },
   turbulence: {
@@ -296,18 +308,16 @@ export interface BranchStructure {
   readonly continuation: readonly number[];
   /** Per node: first node of the limb (chain of continuations) it lies on. */
   readonly limb: readonly number[];
-  /**
-   * Per node: first node of the branch whose oscillator it follows — its limb's, or for a twig
-   * its parent limb's. The root is its own branch (index 0).
-   */
-  readonly branch: readonly number[];
-  /** Per node: whether its limb is a twig (see {@link MODE_MAX_HZ}): no bend of its own. */
-  readonly twig: readonly boolean[];
+  /** Per node: its limb's branching order — 0 for the trunk, 1 for a limb on it, and so on. */
+  readonly order: readonly number[];
   /** Per node: length of the segment from its parent, metres. 0 for the root. */
   readonly segmentM: readonly number[];
   /** Per limb base node: the sum of its joints' segments, metres. Spreads the bend. */
   readonly pathLengthM: ReadonlyMap<number, number>;
-  /** Per limb base node: its chord, attachment joint to far end, metres. Sets the frequency. */
+  /**
+   * Per limb base node: its span — the farthest any joint of its subtree (its axis and all
+   * that hangs from it) reaches from the joint it hangs from, metres. Sets the frequency.
+   */
   readonly branchLengthM: ReadonlyMap<number, number>;
   /** Per node: number of tips (childless nodes) at or below it. */
   readonly tips: readonly number[];
@@ -335,8 +345,8 @@ function unit(a: Vec3, b: Vec3): Vec3 | undefined {
  * from to its far end, so that zigzag does not lengthen it either.
  *
  * The root's continuation is the **whole-tree** limb — the trunk — whose mode is the pendulum
- * sway. A limb short enough to ring above {@link MODE_MAX_HZ} is a twig: it follows its parent
- * limb's oscillator (the trunk's, when it hangs from the root) and bends not at all itself.
+ * sway. Which limbs are modes and which are twigs depends on the tree's own frequency, so it is
+ * decided in {@link limbModes}.
  *
  * The first version of this rule (continue within 35° of the incoming direction, when at
  * least half as long as the longest sibling) cut the 200-joint Minnetonka rig into 150
@@ -404,29 +414,38 @@ export function branchStructure(rig: MotionRig): BranchStructure {
     // Topological order: a chain's far end is its highest index.
     last.set(base, i);
   }
-  const branchLengthM = new Map<number, number>();
-  for (const [base, end] of last) {
-    const attach = nodes[nodes[base]?.parent ?? 0]?.position ?? [0, 0, 0];
-    branchLengthM.set(base, distance(attach, nodes[end]?.position ?? attach));
-  }
   const treeBranch = continuation[0] ?? -1;
-  const branch = new Array<number>(count).fill(0);
-  const twig = new Array<boolean>(count).fill(false);
+  // Branching order: the trunk is 0, a limb on it 1, a limb on that 2, ...
+  const order = new Array<number>(count).fill(0);
   for (let i = 1; i < count; i += 1) {
     const base = limb[i] ?? i;
-    if (base !== treeBranch && branchFrequencyHz(branchLengthM.get(base) ?? 0) > MODE_MAX_HZ) {
-      twig[i] = true;
+    if (i === base && base !== treeBranch) {
       const attach = nodes[base]?.parent ?? 0;
-      branch[i] = attach > 0 ? (branch[attach] ?? treeBranch) : treeBranch;
+      order[i] = attach > 0 ? (order[limb[attach] ?? 0] ?? 0) + 1 : 1;
     } else {
-      branch[i] = base;
+      order[i] = order[base] ?? 0;
+    }
+  }
+  // A limb's length is its span: the farthest any joint of its subtree reaches from the joint
+  // it hangs from. Beam scaling (f ~ D/L², D ~ L^1.4) holds for a whole branch, not a segment;
+  // and a straight-line reach ignores the zigzag of an extracted chain.
+  const branchLengthM = new Map<number, number>();
+  for (const base of last.keys()) branchLengthM.set(base, 0);
+  for (let i = 1; i < count; i += 1) {
+    const here = nodes[i]?.position ?? [0, 0, 0];
+    let cursor = i;
+    while (cursor > 0) {
+      const base = limb[cursor] ?? cursor;
+      const attach = nodes[base]?.parent ?? 0;
+      const reach = distance(nodes[attach]?.position ?? here, here);
+      if (reach > (branchLengthM.get(base) ?? 0)) branchLengthM.set(base, reach);
+      cursor = attach;
     }
   }
   return {
     continuation,
     limb,
-    branch,
-    twig,
+    order,
     segmentM,
     pathLengthM,
     branchLengthM,
@@ -434,6 +453,51 @@ export function branchStructure(rig: MotionRig): BranchStructure {
     reachM,
     treeBranch,
   };
+}
+
+/** Which oscillator every joint follows, and whether its limb is a twig. */
+export interface LimbModes {
+  /**
+   * Per node: first node of the branch whose oscillator it follows — its limb's, or for a twig
+   * the limb it hangs from's. The root is its own branch (index 0).
+   */
+  readonly branch: readonly number[];
+  /** Per node: whether its limb is a twig: no bend of its own, leaf flutter only. */
+  readonly twig: readonly boolean[];
+}
+
+/**
+ * Splits limbs into modes and twigs. A limb is a **twig** — it rides the oscillator of the limb
+ * it hangs from, bends not at all itself, and moves only by leaf flutter — when it is too short
+ * to ring inside the tree's band (eq. 17 above {@link MODE_BAND}·f0) or deeper than
+ * {@link MAX_BRANCH_ORDER}. A twig on the root joins the trunk's mode.
+ */
+export function limbModes(
+  rig: MotionRig,
+  structure: BranchStructure,
+  treeFrequency: number,
+): LimbModes {
+  const nodes = rig.nodes;
+  const count = nodes.length;
+  const tree = structure.treeBranch;
+  const ceiling = MODE_BAND * treeFrequency;
+  const branch = new Array<number>(count).fill(0);
+  const twig = new Array<boolean>(count).fill(false);
+  for (let i = 1; i < count; i += 1) {
+    const base = structure.limb[i] ?? i;
+    if (
+      base !== tree &&
+      ((structure.order[base] ?? 0) > MAX_BRANCH_ORDER ||
+        branchFrequencyHz(structure.branchLengthM.get(base) ?? 0) > ceiling)
+    ) {
+      twig[i] = true;
+      const attach = nodes[base]?.parent ?? 0;
+      branch[i] = attach > 0 ? (branch[attach] ?? tree) : tree;
+    } else {
+      branch[i] = base;
+    }
+  }
+  return { branch, twig };
 }
 
 /** Coder's law. */
@@ -450,7 +514,7 @@ export function treeFrequencyHz(heightM: number): number {
 
 /**
  * A limb's total bend at the reference speed, radians: {@link BRANCH_BEND_REF_RAD} scaled by
- * `min(1, f_tree / f)^(1/3)` ({@link RESPONSE_EXPONENT}).
+ * `min(1, f0 / f)^0.305` ({@link RESPONSE_EXPONENT}), so its tip deflection falls as `1/f²`.
  */
 export function limbBendRad(frequencyHz: number, treeFrequency: number): number {
   const ratio = frequencyHz > 0 ? Math.min(1, treeFrequency / frequencyHz) : 1;
@@ -482,9 +546,10 @@ export function deriveMotionSidecar(rig: MotionRig, options: DeriveOptions = {})
   for (const node of nodes) top = Math.max(top, node.position[2] - (root?.position[2] ?? 0));
   const treeHeightM = options.treeHeightM ?? top;
   const treeHz = treeFrequencyHz(treeHeightM);
+  const modes = limbModes(rig, structure, treeHz);
   let maxTips = 0;
   for (let i = 1; i < nodes.length; i += 1) {
-    const base = structure.branch[i] ?? i;
+    const base = modes.branch[i] ?? i;
     if (base === structure.treeBranch) continue;
     maxTips = Math.max(maxTips, structure.tips[base] ?? 0);
   }
@@ -506,12 +571,15 @@ export function deriveMotionSidecar(rig: MotionRig, options: DeriveOptions = {})
       flutterM.push(0);
       return;
     }
-    const base = structure.branch[i] ?? i;
+    const base = modes.branch[i] ?? i;
     const isTree = base === structure.treeBranch;
-    const frequency = isTree ? treeHz : branchFrequencyHz(structure.branchLengthM.get(base) ?? 0);
+    // A mode rings no lower than the tree it hangs from (Rodriguez et al. 2008).
+    const frequency = isTree
+      ? treeHz
+      : Math.max(treeHz, branchFrequencyHz(structure.branchLengthM.get(base) ?? 0));
     // A twig rides its limb: same oscillator, no bend of its own.
     const path = structure.pathLengthM.get(base) ?? 0;
-    const s = structure.twig[i] === true || !(path > 0) ? 0 : (structure.segmentM[i] ?? 0) / path;
+    const s = modes.twig[i] === true || !(path > 0) ? 0 : (structure.segmentM[i] ?? 0) / path;
     const bend = isTree ? TREE_BEND_REF_RAD : limbBendRad(frequency, treeHz);
     branch.push(base);
     mode.push(isTree ? 0 : 1);
