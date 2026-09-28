@@ -1,0 +1,111 @@
+{
+ "slug": "minnetonka-tree",
+ "name": "Minnetonka tree (real capture, Living Survey)",
+ "description": "A photogrammetric reconstruction of a real tree: a Gaussian splat trained on 655 drone photographs of one mature deciduous tree in Minnetonka, Minnesota, flown by Matthew Guertin on 20 July 2020 in still air (Single Tree -- High-Density Photogrammetry Dataset, CC BY 4.0). Its skeleton was extracted from the splat's geometry alone. The motion is simulated: nothing here recorded this tree moving; the sway is the Living Survey's wind model driving that skeleton.",
+ "boundary": [
+  [
+   -93.425903,
+   44.9445895
+  ],
+  [
+   -93.4258898,
+   44.9445876
+  ],
+  [
+   -93.4258786,
+   44.9445823
+  ],
+  [
+   -93.4258711,
+   44.9445744
+  ],
+  [
+   -93.4258685,
+   44.944565
+  ],
+  [
+   -93.4258711,
+   44.9445556
+  ],
+  [
+   -93.4258786,
+   44.9445477
+  ],
+  [
+   -93.4258898,
+   44.9445424
+  ],
+  [
+   -93.425903,
+   44.9445405
+  ],
+  [
+   -93.4259162,
+   44.9445424
+  ],
+  [
+   -93.4259274,
+   44.9445477
+  ],
+  [
+   -93.4259349,
+   44.9445556
+  ],
+  [
+   -93.4259375,
+   44.944565
+  ],
+  [
+   -93.4259349,
+   44.9445744
+  ],
+  [
+   -93.4259274,
+   44.9445823
+  ],
+  [
+   -93.4259162,
+   44.9445876
+  ],
+  [
+   -93.425903,
+   44.9445895
+  ]
+ ],
+ "center": [
+  -93.425903,
+  44.944565,
+  254.6
+ ],
+ "attribution": "Matthew Guertin",
+ "attribution_url": "https://mattguertin.com",
+ "license_name": "CC-BY-4.0",
+ "license_url": "https://creativecommons.org/licenses/by/4.0/",
+ "source_url": "https://github.com/Matt1Up/tree-photogrammetry-dataset",
+ "captured": "2020-07-20",
+ "pipeline": "tools/pipeline pose (COLMAP) + train (gsplat MCMC) on Modal via infra/modal/minnetonka.py; tools/captures/real_tree.py + skeleton.py; held-out PSNR 23.23 dB",
+ "images": 655,
+ "assets": [
+  {
+   "representation": "gaussian-splat",
+   "name": "Gaussian splat (photogrammetric)",
+   "path": "splat/tileset.json",
+   "ground_sample_distance_m": 0.0023,
+   "point_spacing_m": 0.009,
+   "description": "400,000 gaussians of one tree, a single tile, rigged with 200 skeleton nodes; about 2 mm per pixel of the 1600 px training frames, estimated from how close the cameras came to the crown",
+   "maximum_screen_space_error": 1,
+   "clamp_to_ground": true,
+   "default": true,
+   "rig": "../source/rig.json"
+  }
+ ],
+ "bookmark": {
+  "name": "The tree",
+  "longitude": -93.425903,
+  "latitude": 44.944403,
+  "height": 258.6,
+  "heading": 0.0,
+  "pitch": -8.0,
+  "is_default": true
+ }
+}
