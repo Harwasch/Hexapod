@@ -209,16 +209,35 @@ def test_the_memory_ceiling_falls_with_frame_size_and_rises_with_the_card() -> N
     )  # gsplat's measured slope
 
 
+def test_the_ceiling_is_the_placed_gpus_unless_the_run_names_one() -> None:
+    assert gaussian_budget.gpu_memory_for("l4") == 24.0
+    assert gaussian_budget.gpu_memory_for("l40s") == 48.0
+    assert gaussian_budget.gpu_memory_for("a100") == 80.0  # Modal's A100-80GB
+    assert gaussian_budget.gpu_memory_for("l40s", 24) == 24.0  # the run's own wins
+    assert gaussian_budget.gpu_memory_for(None) == gaussian_budget.DEFAULT_GPU_MEMORY_GB
+    assert gaussian_budget.gpu_memory_for("cpu4") == gaussian_budget.DEFAULT_GPU_MEMORY_GB
+    # Every GPU tier Modal is offered on has a memory, so none falls back to the L4's.
+    from providers import provider
+
+    modal = provider("modal")
+    assert modal is not None
+    for tier in modal.tiers:
+        assert tier.startswith("cpu") or tier in gaussian_budget.GPU_MEMORY_GB, tier
+
+
 def test_the_recipe_is_bounded_by_the_gpu_not_by_the_worker(tmp_path: Path) -> None:
     """photo-reconstruct no longer sets the 2M `budget_max` the whole-splat stages after
     training needed: a surface big enough gets the L4's ceiling (~8.7M at 1600x900), and a
     run's own `budget_max` still caps below it."""
-    train = next(s for s in load_recipe("photo-reconstruct").stages if s.id == "train").params
+    stage = next(s for s in load_recipe("photo-reconstruct").stages if s.id == "train")
+    train = stage.params
     assert "budget_max" not in train
+    # The memory is the placed tier's, not a number in the recipe.
+    assert "gpu_memory_gb" not in train and stage.gpu is not None
     directory = model(tmp_path / "m", patch((0.0, 0.0, 0.0), 1.0), heights=[2.0])
     params = {
         "floor": int(train["budget_floor"]),
-        "gpu_memory_gb": float(train["gpu_memory_gb"]),
+        "gpu_memory_gb": gaussian_budget.gpu_memory_for(stage.gpu.tier),
         "train_size": (1600, 900),
     }
     huge = auto(directory, density=1e6, **params)

@@ -29,7 +29,7 @@ import time
 import tomllib
 from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Any, NoReturn
+from typing import IO, Any, NoReturn
 
 import numpy as np
 import numpy.typing as npt
@@ -416,7 +416,7 @@ def ffmpeg_frames(ctx: StageContext) -> StageOutcome:
     else:
         candidates = list(source.images)
         if size_rule == "auto" and candidates:
-            size = _photo_frame_size(candidates, base=base, ceiling=size_ceiling)
+            size = photo_frame_size(candidates, base=base, ceiling=size_ceiling)
         max_side = size.max_side if size is not None else _fixed_side(size_rule)
     if not candidates:
         raise ValueError(f"no frames came out of {source.path.name}")
@@ -627,18 +627,32 @@ def _video_frame_size(
     return _decide_frame_size(greys, long_side=long_side, base=base, ceiling=ceiling)
 
 
-def _photo_frame_size(
-    photos: Sequence[Path], *, base: int, ceiling: int
+def photo_frame_size(
+    photos: Sequence[Path | IO[bytes]], *, base: int, ceiling: int
 ) -> resolution.SizeDecision:
-    """`max_side: auto` for a photo set: the same measurement on photos spread over it."""
-    picks = [photos[i] for i in video.evenly_spaced(len(photos), resolution.SAMPLES)]
-    long_side = min(max(_image_size(path)) for path in picks)
+    """`max_side: auto` for a photo set: the same measurement on photos spread over it.
+
+    `photos` may be open binary files as well as paths: a driver that streams a photo set
+    it never writes to disk (infra/modal/minnetonka.py) sizes it by this same rule from
+    the same sample, `photo_sample(len(photos))` of it, held in memory."""
+    picks = [photos[i] for i in photo_sample(len(photos))]
+
+    def opened(photo: Path | IO[bytes]) -> PIL.Image.Image:
+        if not isinstance(photo, Path):
+            photo.seek(0)
+        return PIL.Image.open(photo)
+
+    sizes = []
+    for photo in picks:
+        with opened(photo) as image:
+            sizes.append(max(int(image.width), int(image.height)))
+    long_side = min(sizes)
     side = resolution.measured_side(long_side, base=base, ceiling=ceiling)
     if side is None:
         return resolution.not_measured(long_side, base=base)
     greys: list[npt.NDArray[np.float32]] = []
-    for path in picks:
-        with PIL.Image.open(path) as image:
+    for photo in picks:
+        with opened(photo) as image:
             grey = image.convert("L")
         scale = side / max(grey.size)
         if scale < 1.0:
@@ -646,6 +660,12 @@ def _photo_frame_size(
             grey = grey.resize(size, PIL.Image.Resampling.LANCZOS)
         greys.append(np.asarray(grey, dtype=np.float32))
     return _decide_frame_size(greys, long_side=long_side, base=base, ceiling=ceiling)
+
+
+def photo_sample(count: int) -> tuple[int, ...]:
+    """Which of `count` photos `max_side: auto` measures: `resolution.SAMPLES` spread
+    evenly over the set."""
+    return video.evenly_spaced(count, resolution.SAMPLES)
 
 
 def _decide_frame_size(
@@ -1223,7 +1243,8 @@ def gsplat(ctx: StageContext) -> StageOutcome:
     * `cap_max: auto` sizes MCMC's gaussian cap to the capture: its supported surface in
       finest-view pixels, from the pose stage's sparse model, times `gaussian_density`
       (x `density_scale`, a phone's quality tier), clamped to `budget_floor` and to the
-      smaller of the GPU's memory (`gpu_memory_gb`, at the training frames' real size) and
+      smaller of the GPU's memory (the placed tier's, `gaussian_budget.GPU_MEMORY_GB`, or
+      `gpu_memory_gb` when a run gives one; at the training frames' real size) and
       `budget_max`. An integer is an override, used as given. `gaussian_budget.py` has the
       formula, the calibration and the memory model; `train_metrics.json`'s `budget` has
       every input.
@@ -1342,7 +1363,7 @@ def gsplat(ctx: StageContext) -> StageOutcome:
         density_scale=float(ctx.param("density_scale", 1.0)),
         floor=int(ctx.param("budget_floor", gaussian_budget.DEFAULT_FLOOR)),
         budget_max=_optional_int(ctx.param("budget_max")),
-        gpu_memory_gb=float(ctx.param("gpu_memory_gb", gaussian_budget.DEFAULT_GPU_MEMORY_GB)),
+        gpu_memory_gb=gaussian_budget.gpu_memory_for(ctx.gpu_tier, ctx.param("gpu_memory_gb")),
         images_per_step=batch_size,
     )
     preamble.add("budget", time.monotonic() - budgeting)

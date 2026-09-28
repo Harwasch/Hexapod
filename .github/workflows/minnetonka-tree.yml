@@ -11,25 +11,30 @@ name: Minnetonka tree
 #     check    DJI metadata of every photo + the published COLMAP model -> the pose gate.
 #              ~130 MB, no GPU, no secrets. Expect it to FAIL: the published poses are
 #              attached to the wrong photos (experiments/minnetonka.py has the evidence).
-#     prepare  659 photos (13.96 GB) streamed, sha256-checked, shrunk to 1600 px in memory;
-#              ~0.5 GB of frames kept. With poses=published the dataset's model is gated too.
+#     prepare  659 photos (13.96 GB) streamed, sha256-checked, shrunk in memory to the size
+#              photo-reconstruct's own `max_side: auto` rule picks for them (resolution.py;
+#              m0 used a fixed 1600 px). With poses=published the dataset's model is gated.
 #     pose     COLMAP 4.2 (the repository's `pose` stage) on Modal cpu4, then the pose gate
-#              on what it solved. Skipped for poses=published.
-#     train    the repository's `train` stage (gsplat MCMC, cap_max auto, converge, SH 3)
-#              on a Modal GPU; the trained PLY and its metrics are kept.
-#     rig      CPU: into metres, isolate the tree, trunk measured, skeleton, one tile,
-#              site.json (tools/captures/real_tree.py). Artifacts for review.
+#              on what it solved; or, with pose_from=TAG, TAG's gated poses adopted for
+#              these frames (same photos, any size: no Modal). Skipped for poses=published.
+#     train    the repository's `train` stage with photo-reconstruct's Standard params as
+#              they are (gsplat MCMC, cap_max auto, converge, blocks auto, SH 3) on the
+#              recipe's train GPU; the trained PLY and its metrics are kept.
+#     rig      CPU: into metres, isolate the tree, trunk measured, skeleton over every
+#              isolated splat, level-of-detail tiles, the rig stamped with every tile's
+#              checksum, site.json (tools/captures/real_tree.py). Artifacts for review.
 #     publish  the site folder to the public bucket under sites/minnetonka-tree/.
 # * **How to run it.** `workflow_dispatch` works once this file is on the default branch.
 #   Before that, push a commit to the working branch whose message carries a token:
 #   `[tree]` runs check,prepare,pose,train,rig; `[tree:check]` just the gate;
-#   `[tree:rig,publish|tag=m0|scale=trunk-diameter-m=0.31]` re-rigs a kept PLY with an
-#   explicit scale and publishes. Options after `|`: tag, poses, tier, budget_max, roi_m,
-#   scale (barometric | metres-per-unit=X | trunk-diameter-m=D), crown_radius_m,
-#   max_splats, force. A push without a token starts this workflow and skips every job.
-# * **What it costs** (estimates, not measurements -- nothing here has run on a GPU yet):
-#   pose ~0.5-1.5 h of cpu4 ($0.25/h); train ~1.5-3.5 h of L4 ($0.80/h) for 655 frames at
-#   1600x1066 under a 2M-gaussian ceiling -- $1.5-4 in all. docs/CAPTURES.md has the sums.
+#   `[tree:rig,publish|tag=m0]` re-rigs a kept PLY and publishes. Options after `|`:
+#   tag, poses, pose_from, max_side (auto | N), sessions (2020-07-20 or 2020-07-20/2,
+#   comma-separated), tier, budget_max, roi_m, scale (barometric | metres-per-unit=X |
+#   trunk-diameter-m=D), crown_radius_m, force. Everything left out is the recipe's own:
+#   no splat count, no gaussian count, no region, no frame size is fixed for this capture.
+#   A push without a token starts this workflow and skips every job.
+# * **What it costs**: docs/CAPTURES.md has the sums. m0 (1600 px, 2M cap, one L4) was
+#   $0.80 of L4 for 38k steps.
 #
 # Secrets (the ones modal.yml and modal-benchmark.yml read): MODAL_TOKEN_ID,
 # MODAL_TOKEN_SECRET, CLOUDFLARE_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY; the
@@ -53,19 +58,30 @@ on:
         type: choice
         options: [colmap, published]
         default: colmap
+      pose_from:
+        description: "Adopt this tag's gated poses instead of solving (same photos, any size)"
+        type: string
+        default: ""
+      max_side:
+        description: "Frame long side: auto (photo-reconstruct's rule) or pixels"
+        type: string
+        default: auto
+      sessions:
+        description: "Train on these capture sessions only: 2020-07-20 or 2020-07-20/2 (empty = all)"
+        type: string
+        default: ""
       tier:
-        description: "GPU tier for train"
-        type: choice
-        options: [l4, a10, l40s, a100]
-        default: l4
+        description: "GPU tier for train (empty = the recipe's)"
+        type: string
+        default: ""
       budget_max:
-        description: "Most gaussians train may use (cap_max auto is clamped to this)"
+        description: "Optional ceiling on cap_max auto (empty = none: the density budget decides)"
         type: string
-        default: "2000000"
+        default: ""
       roi_m:
-        description: "Radius in metres round the orbit's centre trained at full density (0 = none)"
+        description: "Optional sphere in metres round the orbit's centre trained at full density (empty = none)"
         type: string
-        default: "12"
+        default: ""
       scale:
         description: "barometric | metres-per-unit=X | trunk-diameter-m=D"
         type: string
@@ -74,10 +90,6 @@ on:
         description: "Isolation radius in metres (empty = measured from the splat)"
         type: string
         default: ""
-      max_splats:
-        description: "Most splats in the single tile"
-        type: string
-        default: "400000"
       force:
         description: "Carry on past a failed pose gate (for looking, not publishing)"
         type: boolean
@@ -105,12 +117,14 @@ jobs:
       steps: ${{ steps.plan.outputs.steps }}
       tag: ${{ steps.plan.outputs.tag }}
       poses: ${{ steps.plan.outputs.poses }}
+      pose_from: ${{ steps.plan.outputs.pose_from }}
+      max_side: ${{ steps.plan.outputs.max_side }}
+      sessions: ${{ steps.plan.outputs.sessions }}
       tier: ${{ steps.plan.outputs.tier }}
       budget_max: ${{ steps.plan.outputs.budget_max }}
       roi_m: ${{ steps.plan.outputs.roi_m }}
       scale: ${{ steps.plan.outputs.scale }}
       crown_radius_m: ${{ steps.plan.outputs.crown_radius_m }}
-      max_splats: ${{ steps.plan.outputs.max_splats }}
       force: ${{ steps.plan.outputs.force }}
     steps:
       # Read as data -- environment variables, validated here, never interpolated into a
@@ -122,25 +136,30 @@ jobs:
           STEPS: ${{ inputs.steps }}
           TAG: ${{ inputs.tag }}
           POSES: ${{ inputs.poses }}
+          POSE_FROM: ${{ inputs.pose_from }}
+          MAX_SIDE: ${{ inputs.max_side }}
+          SESSIONS: ${{ inputs.sessions }}
           TIER: ${{ inputs.tier }}
           BUDGET_MAX: ${{ inputs.budget_max }}
           ROI_M: ${{ inputs.roi_m }}
           SCALE: ${{ inputs.scale }}
           CROWN_RADIUS_M: ${{ inputs.crown_radius_m }}
-          MAX_SPLATS: ${{ inputs.max_splats }}
           FORCE: ${{ inputs.force }}
         run: |
           python3 - <<'PY' >> "$GITHUB_OUTPUT"
           import os, re
+          # Empty is "the recipe's own": no count, region, size or GPU is fixed here.
+          optional = {"pose_from", "sessions", "tier", "budget_max", "roi_m", "crown_radius_m"}
           options = {
               "steps": "check,prepare,pose,train,rig", "tag": "m0", "poses": "colmap",
-              "tier": "l4", "budget_max": "2000000", "roi_m": "12", "scale": "barometric",
-              "crown_radius_m": "", "max_splats": "400000", "force": "false",
+              "pose_from": "", "max_side": "auto", "sessions": "", "tier": "",
+              "budget_max": "", "roi_m": "", "scale": "barometric", "crown_radius_m": "",
+              "force": "false",
           }
           if os.environ["EVENT"] == "workflow_dispatch":
               for name in options:
                   value = os.environ.get(name.upper(), "")
-                  if value != "" or name == "crown_radius_m":
+                  if value != "" or name in optional:
                       options[name] = value
           else:
               found = re.search(r"\[tree(?::([^\]]*))?\]", os.environ.get("MESSAGE", ""))
@@ -156,12 +175,14 @@ jobs:
               "steps": r"(check|prepare|pose|train|rig|publish)(,(check|prepare|pose|train|rig|publish))*",
               "tag": r"[a-z0-9][a-z0-9-]{0,31}",
               "poses": r"colmap|published",
-              "tier": r"l4|a10|l40s|a100",
-              "budget_max": r"[0-9]{5,8}",
-              "roi_m": r"[0-9]+(\.[0-9]+)?",
+              "pose_from": r"([a-z0-9][a-z0-9-]{0,31})?",
+              "max_side": r"auto|[0-9]{3,5}",
+              "sessions": r"([0-9]{4}-[0-9]{2}-[0-9]{2}(/[0-9]{1,3})?(,[0-9]{4}-[0-9]{2}-[0-9]{2}(/[0-9]{1,3})?)*)?",
+              "tier": r"(l4|a10|l40s|a100)?",
+              "budget_max": r"([0-9]{5,9})?",
+              "roi_m": r"([0-9]+(\.[0-9]+)?)?",
               "scale": r"barometric|metres-per-unit=[0-9]*\.?[0-9]+|trunk-diameter-m=[0-9]*\.?[0-9]+",
               "crown_radius_m": r"([0-9]*\.?[0-9]+)?",
-              "max_splats": r"[0-9]{3,8}",
               "force": r"true|false",
           }
           for name, pattern in valid.items():
@@ -226,7 +247,7 @@ jobs:
         with:
           enable-cache: true
       - name: Free the runner's disk
-        # Nothing is written but the frames (~0.5 GB), but the runner starts with ~14 GB
+        # Nothing is written but the frames (~0.5 GB at 1600 px, ~1.1 GB at 2400), but the runner starts with ~14 GB
         # free and the toolcache is not needed here.
         run: |
           df -h "$RUNNER_TEMP"
@@ -236,13 +257,15 @@ jobs:
         working-directory: tools/pipeline
         env:
           POSES: ${{ needs.plan.outputs.poses }}
+          MAX_SIDE: ${{ needs.plan.outputs.max_side }}
           FORCE: ${{ needs.plan.outputs.force }}
         run: |
           uv sync --frozen
           extra=""
           if [ "$FORCE" = "true" ]; then extra="--force"; fi
           uv run --with modal==1.5.5 --with boto3 python ../../infra/modal/minnetonka.py \
-            --work "$RUNNER_TEMP/tree" --tag "$TAG" prepare --poses "$POSES" $extra
+            --work "$RUNNER_TEMP/tree" --tag "$TAG" prepare --poses "$POSES" \
+            --max-side "$MAX_SIDE" $extra
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -285,17 +308,22 @@ jobs:
         with:
           enable-cache: true
       - name: modal deploy infra/modal/app.py
+        # Adopting another tag's poses solves nothing, so it needs no app.
+        if: needs.plan.outputs.pose_from == ''
         working-directory: tools/pipeline
         run: |
           uv sync --frozen
           uv run --with modal==1.5.5 --with boto3 modal deploy ../../infra/modal/app.py
-      - name: Pose the frames
+      - name: Pose the frames (or adopt pose_from's)
         working-directory: tools/pipeline
         env:
           FORCE: ${{ needs.plan.outputs.force }}
+          POSE_FROM: ${{ needs.plan.outputs.pose_from }}
         run: |
+          uv sync --frozen
           extra=""
           if [ "$FORCE" = "true" ]; then extra="--force"; fi
+          if [ -n "$POSE_FROM" ]; then extra="$extra --from-tag $POSE_FROM"; fi
           uv run --with modal==1.5.5 --with boto3 python ../../infra/modal/minnetonka.py \
             --work "$RUNNER_TEMP/tree" --tag "$TAG" pose --tier cpu4 $extra
       - uses: actions/upload-artifact@v4
@@ -303,6 +331,7 @@ jobs:
         with:
           name: tree-pose
           path: |
+            ${{ runner.temp }}/tree/adopt/pose.json
             ${{ runner.temp }}/tree/tree-pose-*/frame.json
             ${{ runner.temp }}/tree/tree-pose-*/pose.json
             ${{ runner.temp }}/tree/tree-pose-*/stages/pose/log.txt
@@ -319,8 +348,9 @@ jobs:
       group: modal
       cancel-in-progress: false
     runs-on: ubuntu-latest
-    # GitHub's ceiling for a hosted job. The estimate is 1.5-3.5 h; a run that needs more
-    # than this needs a smaller budget_max, not a longer wait.
+    # GitHub's ceiling for a hosted job. A budget past one GPU's memory trains as blocks
+    # on several GPUs at once (blocks.py), so the wait is the longest block's, not their
+    # sum; docs/CAPTURES.md has the estimate.
     timeout-minutes: 355
     env:
       TAG: ${{ needs.plan.outputs.tag }}
@@ -352,13 +382,18 @@ jobs:
           TIER: ${{ needs.plan.outputs.tier }}
           BUDGET_MAX: ${{ needs.plan.outputs.budget_max }}
           ROI_M: ${{ needs.plan.outputs.roi_m }}
+          SESSIONS: ${{ needs.plan.outputs.sessions }}
           FORCE: ${{ needs.plan.outputs.force }}
         run: |
-          extra=""
-          if [ "$FORCE" = "true" ]; then extra="--force"; fi
+          # Only what the run names is passed; everything else is the recipe's.
+          args=()
+          if [ "$FORCE" = "true" ]; then args+=(--force); fi
+          if [ -n "$TIER" ]; then args+=(--tier "$TIER"); fi
+          if [ -n "$BUDGET_MAX" ]; then args+=(--budget-max "$BUDGET_MAX"); fi
+          if [ -n "$ROI_M" ]; then args+=(--roi-m "$ROI_M"); fi
+          if [ -n "$SESSIONS" ]; then args+=(--sessions "$SESSIONS"); fi
           uv run --with modal==1.5.5 --with boto3 python ../../infra/modal/minnetonka.py \
-            --work "$RUNNER_TEMP/tree" --tag "$TAG" train --tier "$TIER" \
-            --budget-max "$BUDGET_MAX" --roi-m "$ROI_M" $extra
+            --work "$RUNNER_TEMP/tree" --tag "$TAG" train "${args[@]}"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -371,13 +406,15 @@ jobs:
           if-no-files-found: ignore
 
   rig:
-    name: Isolate, measure, rig, site.json
+    name: Isolate, measure, rig, LOD tiles, site.json
     needs: [plan, train]
     if: >-
       !cancelled() && !failure() &&
       contains(needs.plan.outputs.steps, ',rig,')
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # Every isolated splat is rigged and tiled: ~30 s a million for the skeleton, seconds
+    # for the packer (measured on a 1M-splat tree, 4 cores).
+    timeout-minutes: 120
     env:
       TAG: ${{ needs.plan.outputs.tag }}
     steps:
@@ -405,19 +442,22 @@ jobs:
             --tag "$TAG" fetch frame.json train/trained.ply train/train.json \
             --into "$RUNNER_TEMP/kept"
           uv run --with modal==1.5.5 --with boto3 python ../../infra/modal/minnetonka.py \
-            --tag "$TAG" fetch pose.json prepare.json --into "$RUNNER_TEMP/kept" --missing-ok
+            --tag "$TAG" fetch pose.json prepare.json meta.json --into "$RUNNER_TEMP/kept" \
+            --missing-ok
+          # Where the tree is, what it is and whose: real_tree.py holds none of it.
+          uv run python ../../infra/modal/minnetonka.py describe --out "$RUNNER_TEMP/kept/capture.json"
       - name: real_tree.py
         working-directory: tools/captures
         env:
           SCALE: ${{ needs.plan.outputs.scale }}
           CROWN_RADIUS_M: ${{ needs.plan.outputs.crown_radius_m }}
-          MAX_SPLATS: ${{ needs.plan.outputs.max_splats }}
           FORCE: ${{ needs.plan.outputs.force }}
         run: |
           uv sync --frozen
           kept="$RUNNER_TEMP/kept"
-          args=(--frame "$kept/frame.json" --train "$kept/train/train.json" --max-splats "$MAX_SPLATS")
+          args=(--frame "$kept/frame.json" --capture "$kept/capture.json" --train "$kept/train/train.json")
           if [ -f "$kept/pose.json" ]; then args+=(--pose "$kept/pose.json"); else args+=(--pose "$kept/prepare.json"); fi
+          if [ -f "$kept/meta.json" ]; then args+=(--meta "$kept/meta.json"); fi
           case "$SCALE" in
             metres-per-unit=*) args+=(--metres-per-unit "${SCALE#*=}") ;;
             trunk-diameter-m=*) args+=(--trunk-diameter-m "${SCALE#*=}") ;;
@@ -430,17 +470,18 @@ jobs:
           python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
           import json
           r = json.load(open("../../data/tiles/minnetonka-tree/source/real_tree.json"))
-          t, u, rig = r["trunk"], r["uprightness"], r["rig"]
+          t, u, rig, tiles = r["trunk"], r["uprightness"], r["rig"], r["tiles"]
           print("## The tree, rigged\n")
           print("| | |\n|---|---|")
           print(f"| scale | {r['scale']['metresPerUnit']:.4f} m/unit ({r['scale']['method']}) |")
           print(f"| trunk diameter | {t['diameterScaledM']:.3f} m (centre spread {t['centreSpreadM']:.3f} m over {len(t['slabs'])} slabs) |")
           print(f"| crown radius | {r['crown']['radiusM']:.2f} m |")
-          print(f"| splats | {rig['splats']:,} of {r['trained']:,} trained |")
+          print(f"| splats | {rig['splats']:,} isolated of {r['trained']:,} trained, every one kept |")
+          print(f"| tiles | {tiles['tiles']} (depth {tiles['depth']}, {tiles['parentGaussians']:,} merged parents, +{tiles['storageOverhead']:.1%}); rig stamped with {tiles['tileChecksums']} tile checksums |")
           print(f"| height | {rig['height_m']:.2f} m |")
           print(f"| rig | {rig['nodes']} nodes {rig['bands']} |")
           print(f"| upright | crown/base {u['crownToBase']} ({'ok' if u['upright'] else 'REFUSED'}) |")
-          print(f"| GSD | {r['gsdM']} m |")
+          print(f"| GSD | {r['gsdM']} m at {r['trainFramePx']} px |")
           print("\nNext: download the `tree-site` artifact, look at it (`site.json`, `source/real_tree.json`),"
                 " commit `data/tiles/minnetonka-tree/site.json`, and publish (the `publish` step).")
           PY
@@ -493,7 +534,16 @@ jobs:
           uv run --with modal==1.5.5 --with boto3 python ../../infra/modal/minnetonka.py \
             --tag "$TAG" fetch site --into "$RUNNER_TEMP/kept"
           mv "$RUNNER_TEMP/kept/site" ../../data/tiles/minnetonka-tree
-          python3 -c "import json; d = json.load(open('../../data/tiles/minnetonka-tree/site.json')); assert d['slug'] == 'minnetonka-tree' and d['assets'][0]['rig'] == '../source/rig.json'"
+          python3 - <<'PY'
+          import json
+          site = "../../data/tiles/minnetonka-tree/"
+          d = json.load(open(site + "site.json"))
+          assert d["slug"] == "minnetonka-tree" and d["assets"][0]["rig"] == "../source/rig.json"
+          # A tiled splat moves only with a rig stamped for its tiles, its sidecar beside it.
+          rig = json.load(open(site + "source/rig.json"))
+          assert rig.get("tileChecksums"), "the rig carries no tileChecksums: re-run rig"
+          assert rig.get("motion") is None or open(site + "source/" + rig["motion"]).read()
+          PY
       # Tiles only: the catalog is rebuilt from the database by provision.yml's seed job,
       # which needs site.json committed at data/tiles/minnetonka-tree/site.json first.
       - name: app.seed.publish --slug minnetonka-tree --no-catalog

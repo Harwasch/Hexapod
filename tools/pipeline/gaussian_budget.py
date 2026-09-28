@@ -176,6 +176,31 @@ FALLBACK_CAP = 500_000
 #: The L4's memory, the tier `photo-reconstruct` trains on. A10 is also 24 GB.
 DEFAULT_GPU_MEMORY_GB = 24.0
 
+#: Each GPU tier's memory, decimal GB as the cards are sold (`modal_adapter.GPU_NAMES`:
+#: `a100` is the 80 GB part). The ceiling is modelled on the GPU the stage was *placed*
+#: on, so a run sent to a bigger card is budgeted for it rather than for an L4.
+GPU_MEMORY_GB: dict[str, float] = {
+    "t4": 16.0,
+    "l4": 24.0,
+    "a10": 24.0,
+    "l40s": 48.0,
+    "a100": 80.0,
+    "a100-40gb": 40.0,
+    "h100": 80.0,
+    "h200": 141.0,
+    "b200": 180.0,
+}
+
+
+def gpu_memory_for(tier: str | None, given: object = None) -> float:
+    """`gpu_memory_gb` as the run gives it, else the memory of `tier`, else the L4's."""
+    if given is not None:
+        return float(str(given))
+    if tier is not None and tier in GPU_MEMORY_GB:
+        return GPU_MEMORY_GB[tier]
+    return DEFAULT_GPU_MEMORY_GB
+
+
 #: The count gsplat's 30k-step schedule is the default for (`MCMCStrategy.cap_max`), and
 #: the smallest count in its own MCMC table. Budgets above it may get a longer maximum
 #: schedule (`schedule_factor`).
