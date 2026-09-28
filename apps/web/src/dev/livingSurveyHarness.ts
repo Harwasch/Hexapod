@@ -27,7 +27,21 @@ import {
 } from "cesium";
 import * as CesiumBarrel from "cesium";
 
-import { deform, flutterField, parseRig, type MotionRig, type WindSettings } from "@twin/world";
+import {
+  deform,
+  FLUTTER_STILL,
+  flutterField,
+  livingFrame,
+  livingWindFromSettings,
+  loadLivingMotion,
+  parseRig,
+  prepareLivingMotion,
+  type FlutterField,
+  type LivingMotion,
+  type MotionRig,
+  type NodeTransform,
+  type WindSettings,
+} from "@twin/world";
 
 import { SplatDeformer, type DeformerStatus } from "@/cesium/SplatDeformer";
 import { installSplatTextureInterception } from "@/cesium/splatCapture";
@@ -47,16 +61,25 @@ export interface LivingSurveyHarnessOptions {
   readonly maximumScreenSpaceError?: number;
   /** Camera distance in bounding radii. Default 3.2. */
   readonly rangeRadii?: number;
+  /**
+   * Drive the rig with Living Mode (ADR 0008) from the motion sidecar it points at — modal sway
+   * and advected leaf flutter — as `LivingSurveyManager` does for such a rig. Default: the
+   * legacy model, whatever the rig carries.
+   */
+  readonly living?: boolean;
 }
+
+/** Which parts of a frame `step` applies: everything, or the sway with flutter held still. */
+export type StepParts = "all" | "sway";
 
 /** What the Playwright spec drives. Everything returns plain JSON so it crosses the bridge. */
 export interface LivingSurveyHarness {
   /** Applies the rig at time `t` under `wind`, then renders one frame. */
-  step(t: number, wind: WindSettings): Promise<DeformerStatus>;
+  step(t: number, wind: WindSettings, parts?: StepParts): Promise<DeformerStatus>;
   /** Renders frames until the deformer attaches or `timeoutMs` elapses. */
   waitUntilReady(timeoutMs: number): Promise<DeformerStatus>;
   status(): HarnessStatus;
-  /** Largest distance any splat has moved from its measured position, metres. */
+  /** Largest distance the rig's transforms move any splat, metres. Flutter is not included. */
   displacementM(t: number, wind: WindSettings): number;
   /** One `apply()` with no render, for timing the CPU and upload-submit cost alone. */
   applyOnly(t: number, wind: WindSettings): DeformerStatus;
@@ -96,6 +119,10 @@ export interface HarnessStatus extends DeformerStatus {
   cameraRangeM: number;
   /** The last traversal selected exactly the tiles the committed snapshot aggregates. */
   selectionSettled: boolean;
+  /** Which motion model drives the rig. */
+  model: "living" | "legacy";
+  /** Side of the leaf-flutter texture the GPU path has uploaded; 0 for none. */
+  gpuFlutterTextureSize: number;
 }
 
 export interface FrameTiming {
@@ -144,6 +171,25 @@ export async function startLivingSurveyHarness(
 
   const rigResponse = await fetch(options.rigUrl);
   const rig: MotionRig = parseRig(await rigResponse.text());
+  let living: LivingMotion | undefined;
+  if (options.living === true) {
+    if (rig.motionPath === undefined) throw new Error("living: the rig points at no sidecar");
+    const url = new URL(rig.motionPath, new URL(options.rigUrl, window.location.href));
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`living: sidecar HTTP ${String(response.status)}`);
+    living = loadLivingMotion(rig, await response.text());
+    prepareLivingMotion(living);
+  }
+  /** One frame of the rig: Living Mode's when asked for, the legacy model's otherwise. */
+  function frameAt(
+    t: number,
+    wind: WindSettings,
+  ): { transforms: NodeTransform[]; flutter: FlutterField } {
+    if (living !== undefined) {
+      return livingFrame(living, t, livingWindFromSettings(wind, living.sidecar));
+    }
+    return { transforms: deform(rig, t, wind), flutter: flutterField(rig, t, wind) };
+  }
 
   const tileset = await Cesium3DTileset.fromUrl(options.tilesetUrl, {
     maximumScreenSpaceError: options.maximumScreenSpaceError ?? 1,
@@ -166,8 +212,13 @@ export async function startLivingSurveyHarness(
   if (options.gpu === true && gpu === undefined) throw new Error("no GPU motion textures");
   const deformer = new SplatDeformer({ tileset: internals, rig, gpu });
 
-  async function step(t: number, wind: WindSettings): Promise<DeformerStatus> {
-    const status = deformer.apply(deform(rig, t, wind), flutterField(rig, t, wind));
+  async function step(
+    t: number,
+    wind: WindSettings,
+    parts: StepParts = "all",
+  ): Promise<DeformerStatus> {
+    const { transforms, flutter } = frameAt(t, wind);
+    const status = deformer.apply(transforms, parts === "sway" ? FLUTTER_STILL : flutter);
     await nextFrame(scene);
     return status;
   }
@@ -191,6 +242,8 @@ export async function startLivingSurveyHarness(
       tilesLoaded: tileset.tilesLoaded,
       pending: primitive?._pendingSnapshot !== undefined && primitive._pendingSnapshot !== null,
       cameraRangeM: Cartesian3.distance(scene.camera.positionWC, bounds.center),
+      model: living === undefined ? "legacy" : "living",
+      gpuFlutterTextureSize: deformer.gpuMotion?.flutterTextureSize ?? 0,
     };
   }
 
@@ -212,7 +265,8 @@ export async function startLivingSurveyHarness(
     step,
     status,
     applyOnly(t: number, wind: WindSettings): DeformerStatus {
-      return deformer.apply(deform(rig, t, wind), flutterField(rig, t, wind));
+      const { transforms, flutter } = frameAt(t, wind);
+      return deformer.apply(transforms, flutter);
     },
     async waitUntilReady(timeoutMs: number): Promise<DeformerStatus> {
       const deadline = Date.now() + timeoutMs;
@@ -320,11 +374,9 @@ export async function startLivingSurveyHarness(
     measureApply(count: number, t0: number, wind: WindSettings) {
       const times: number[] = [];
       for (let i = 0; i < count; i += 1) {
-        const t = t0 + i / 60;
-        const transforms = deform(rig, t, wind);
-        const field = flutterField(rig, t, wind);
+        const { transforms, flutter } = frameAt(t0 + i / 60, wind);
         const start = performance.now();
-        deformer.apply(transforms, field);
+        deformer.apply(transforms, flutter);
         times.push(performance.now() - start);
       }
       return {
@@ -336,11 +388,9 @@ export async function startLivingSurveyHarness(
       const apply: number[] = [];
       const whole: number[] = [];
       for (let i = 0; i < count; i += 1) {
-        const t = t0 + i / 60;
-        const transforms = deform(rig, t, wind);
-        const field = flutterField(rig, t, wind);
+        const { transforms, flutter } = frameAt(t0 + i / 60, wind);
         const start = performance.now();
-        deformer.apply(transforms, field);
+        deformer.apply(transforms, flutter);
         const applied = performance.now();
         await nextFrame(scene);
         apply.push(applied - start);
@@ -365,7 +415,7 @@ export async function startLivingSurveyHarness(
       const canonical = deformer.canonicalPositions;
       const assignment = deformer.assignment;
       if (canonical === undefined || assignment === undefined) return 0;
-      const transforms = deform(rig, t, wind);
+      const { transforms } = frameAt(t, wind);
       let worst = 0;
       const point = new Cartesian3();
       for (let i = 0; i < assignment.length; i += 1) {

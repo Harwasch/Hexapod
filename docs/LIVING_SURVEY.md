@@ -313,6 +313,23 @@ Per frame the CPU computes each node's transform **in the baked frame** (`M = L�
 has a TypeScript transcription (`evaluateSplatMotion`) that the unit tests hold to the CPU path:
 within 2e-5 m on every gaussian of a multi-tile view.
 
+**Living Mode on the GPU path.** A rig with a motion sidecar (ADR 0008) sways by its modal
+transforms — the same node rows — and flutters by an _advected_ field looked up at each splat's
+canonical position (`applyAdvectedFlutter`), which per-node coefficients cannot express. The
+shader computes it from the fetched position, which is canonical, in the baked frame: the CPU
+folds the un-bake `q = L⁻¹·(p_b − b)`, the wind frame, `texelsPerMeter` and the advection into one
+affine row per texture coordinate (six for the three lookups, offsets reduced modulo the texture
+size so float32 stays sub-texel after any amount of advection) plus the rotation `C = L·W` from
+the wind frame back to the baked one, and writes them — ten texels, 160 B — beside the node rows;
+the node's amplitude goes in its flutter texel. The flutter motion texture depends on the sidecar
+seed alone and goes up once, packed so that each bilinear sample is a single fetch (RGBA32F: 16 MB
+for 1024², three fetches a vertex). A kind flag in the same upload selects the legacy
+coefficients for rigs without a sidecar. `splatGpuLiving.test.ts` holds the transcription to
+`deformPositions` with the advected field on the synthetic tree and on two LOD selections, at
+t = 5 s and after 1.5 h of advection: worst 1.0 µm, against up to 7 cm of flutter; a float32
+emulation of the shader's lookups stays within 3 µm even a day in. Calm and winter write the
+field as still: nothing is sampled.
+
 It is behind `VITE_SPLAT_GPU_MOTION` until someone has looked at it on a GPU. The CPU path
 remains the default and the fallback: on an engine without the hook, or for a snapshot whose
 tiles do not share one bake matrix (`splat_tiles.py` tilesets always do).
@@ -344,10 +361,29 @@ tile into 38 tiles with 116k merged parents, stamped by `rig_tiles.py`; not comm
 SwiftShader's pending frame. Inside rendered frames the GPU path's apply averaged 2.5 ms at 1.9M
 splats (the 16 KB upload waiting on the same queue).
 
+Living Mode, measured the same way on 2026-09-28 (wind 0.1, 20 frames, 960×600). The first
+moving frame is reported alone: it is when the GPU path packs and uploads the leaf-flutter
+texture. `apply` is the mean of the next 20, `livingFrame` itself excluded (0.6 ms for 214 nodes
+in Node):
+
+| view                               | path | model  | first moving frame |  apply | upload/frame |
+| ---------------------------------- | ---- | ------ | -----------------: | -----: | -----------: |
+| synthetic tree, 1 tile             | CPU  | living |   26.7 ms (384 KB) | 3.9 ms |       384 KB |
+| synthetic tree, 1 tile             | GPU  | living |    46.6 ms (16 MB) | 0.7 ms |      16.2 KB |
+| synthetic-tree-lod, near (REPLACE) | CPU  | living |   28.8 ms (384 KB) | 3.9 ms |       384 KB |
+| synthetic-tree-lod, near (REPLACE) | GPU  | living |    76.5 ms (16 MB) | 0.7 ms |      16.2 KB |
+| synthetic-tree-lod, near (REPLACE) | GPU  | legacy |     4.1 ms (32 KB) | 0.9 ms |      16.2 KB |
+
+The one-off is ~25 ms of packing plus the 16 MB upload, once per seed per session. In the REPLACE
+e2e (`livingSurveyTiles.spec.ts`) holding the leaves still for one frame changes 15.9 % of pixels
+on both paths, with identical mean differences to four figures — the GPU path draws the same
+flutter the CPU path does.
+
 At calm both paths cost ~0.02 ms (they write nothing). The GPU path's per-frame CPU cost does not
 depend on the splat count; its GPU-side cost (a binding fetch, four motion texel fetches and, for
-fluttering nodes, two `sin/cos` per vertex, four vertices a splat) is exactly what SwiftShader
-cannot measure.
+fluttering nodes, two `sin/cos` per vertex — or, under Living Mode, ten more motion texel
+fetches and three random-access fetches from a 16 MB texture — four vertices a splat) is exactly
+what SwiftShader cannot measure.
 
 ### Draw order
 
@@ -728,9 +764,11 @@ the pipeline runs end to end and nothing more.
    boils, but whether ~55 independently phased splats read as leaves in wind or as scintillation is
    exactly the kind of question SwiftShader cannot answer and a person can, in one glance.
 5. **Does the GPU path hold up on a GPU?** Build with `VITE_SPLAT_GPU_MOTION=1`: the tree should
-   look identical to the CPU path (the unit tests hold them within 2e-5 m), frame time with wind
-   on should barely move from calm at a million splats, and a large tile arriving should not
-   hitch visibly (binding is ~25 ms per 100k-gaussian tile here). None of that is measurable on
+   look identical to the CPU path (the unit tests hold them within 2e-5 m), Living Mode's leaf
+   flutter included, frame time with wind on should barely move from calm at a million splats
+   (the advected flutter's scattered fetches from a 16 MB texture are the unmeasured risk), and
+   a large tile arriving should not hitch visibly (binding is ~25 ms per 100k-gaussian tile
+   here). None of that is measurable on
    SwiftShader, and it is what decides whether the flag comes off.
 
 Then the one that matters most: run `skeleton.py` on a real scanned tree and see whether a rig

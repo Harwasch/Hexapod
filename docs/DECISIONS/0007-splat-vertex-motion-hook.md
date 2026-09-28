@@ -44,6 +44,17 @@ It sits behind `VITE_SPLAT_GPU_MOTION` until it has been looked at on real hardw
 path as the fallback for an unpatched engine or a snapshot whose tiles do not share one bake
 matrix.
 
+**Living Mode on the GPU path** (addendum, same date). Living Mode's leaf flutter (ADR 0008) is an
+advected field looked up at each splat's canonical position, not per-node coefficients, so the
+hook computes it in the shader from the fetched position — which _is_ canonical, in the baked
+frame. No patch change: the hook declares one more sampler. The flutter motion texture depends
+only on the sidecar seed, so it is uploaded once (RGBA32F, packed so that each bilinear sample is
+one fetch: 16 MB for 1024²); per frame the CPU folds the un-bake, wind frame, texel scale and
+advection into six affine rows (offsets reduced modulo the texture size, so float32 keeps
+sub-texel precision after hours of advection) and a wind-to-baked rotation, 160 B beside the node
+rows; the per-node amplitude rides in the node's flutter texel. Rigs without a sidecar keep the
+legacy per-splat coefficients, selected by a kind flag in the same upload.
+
 ## Why a patch now, when ADR 0006 avoided one
 
 The texture rewrite needed no patch because the interception point was a property lookup on an

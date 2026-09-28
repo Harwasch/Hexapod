@@ -9,17 +9,36 @@
  * upload — and the vertex shader applies them per splat through the engine patch's
  * `vertexMotion` hook (`patches/@cesium__engine@26.3.0.patch`).
  *
- * Two textures of our own, never the engine's:
+ * Three textures of our own, never the engine's:
  *
  * - **motion** (RGBA32F, 1024 texels wide). Row 0: the three rows of the bake matrix's linear
- *   part `L` (texels 0–2, for rotating flutter into the baked frame) and the flutter axis table
- *   (texels 4–515, two per axis). From row 1, four texels per rig node: the node's affine
- *   transform **in the baked frame**, `[M | T]` as three rows, and its four flutter
- *   coefficients. `M = L·R·L⁻¹` and `T = b − M·b + L·t` for `B = (L, b)` and the node's local
- *   `(R, t)`, so `M·p_b + T = B·(R·B⁻¹·p_b + t)` — the CPU path's arithmetic, folded per node.
- *   Re-uploaded every moving frame: a row per 256 nodes, 16 KB for this tree.
+ *   part `L` (texels 0–2, for rotating flutter into the baked frame), the flutter axis table
+ *   (texels 4–515, two per axis) and — from texel 520, ten texels — the **flutter frame**: which
+ *   kind of flutter this frame carries, and for Living Mode's advected field its per-frame
+ *   lookup maps (below). From row 1, four texels per rig node: the node's affine transform **in
+ *   the baked frame**, `[M | T]` as three rows, and its flutter texel — the legacy field's four
+ *   coefficients, or the advected field's amplitude in `x`. `M = L·R·L⁻¹` and
+ *   `T = b − M·b + L·t` for `B = (L, b)` and the node's local `(R, t)`, so
+ *   `M·p_b + T = B·(R·B⁻¹·p_b + t)` — the CPU path's arithmetic, folded per node. Re-uploaded
+ *   every moving frame: a row per 256 nodes (16 KB for this tree) plus the flutter frame's ten
+ *   texels (160 B).
  * - **binding** (RG32UI, addressed like the attribute texture). Per splat: its rig node and its
  *   flutter hash (`flutterHash(positionKey)`). Uploaded once per snapshot.
+ * - **leaf flutter** (RGBA32F, `n × n`). Living Mode's periodic flutter motion texture
+ *   (`leafFlutter.ts`), which depends on the sidecar seed alone, so it is uploaded once per
+ *   seed. Packed for bilinear gathering: texel `(x, y)` holds `T[x, y]`, `T[x+1, y]`,
+ *   `T[x, y+1]`, `T[x+1, y+1]` (wrapping), so each bilinear sample is one fetch rather than
+ *   four — three a splat, 16 MB of GPU memory for the 1024² texture. Float, not half: half
+ *   precision alone would cost ~0.2 mm of flutter at full amplitude.
+ *
+ * **Advected flutter** is looked up at the splat's canonical position, as on the CPU
+ * (`applyAdvectedFlutter`), and the fetched position *is* canonical — in the baked frame. Each
+ * lookup coordinate is affine in the rig-frame position `q = L⁻¹·(p_b − b)`, so the CPU folds
+ * the un-bake, the wind frame, the texel scale and the advection into one affine row per
+ * coordinate, `G·p_b + g` — six rows for three lookups — once per frame, in float64, with `g`
+ * reduced modulo the texture size (the texture is periodic, so this changes nothing but the
+ * float32 precision the shader works at). The three values come back in the wind frame
+ * `(along, across, up)` and go to the baked frame through `C = L·W`, three more rows.
  *
  * **Never writing canonical data** is structural here: the attribute texture, `_positions` and
  * everything the sorter reads are untouched, because the displacement exists only inside the
@@ -39,7 +58,9 @@ import {
   flutterCoefficients,
   flutterHash,
   IDENTITY_TRANSFORM,
+  isAdvectedFlutter,
   type FlutterField,
+  type MotionTexture,
   type NodeTransform,
 } from "@twin/world";
 
@@ -60,6 +81,13 @@ export const AXIS_TEXEL_BASE = 4;
 export const NODE_TEXEL_BASE = MOTION_TEXTURE_WIDTH;
 /** `[M|T]` as three rows, then four flutter coefficients. */
 export const TEXELS_PER_NODE = 4;
+/**
+ * Where the per-frame flutter frame starts in row 0, after the axis table. Texel `+0`: the
+ * kind (`x` = 1 for advected, 0 otherwise); `+1..+3`: the rows of `C`, wind frame to baked;
+ * `+4..+9`: for lookup `j`, the affine rows `G·p_b + g` of its `x` then `y` texture coordinate.
+ */
+export const FLUTTER_FRAME_TEXEL = 520;
+export const FLUTTER_FRAME_TEXELS = 10;
 
 const FLOATS_PER_TEXEL = 4;
 
@@ -102,9 +130,10 @@ export function writeMotionHeader(out: Float32Array, bake: Mat4): void {
 }
 
 /**
- * Every node's baked-frame affine rows and flutter coefficients, into the motion texture's node
- * rows. A node flagged still in `nodeMoves` is written as the exact identity with no flutter,
- * which the shader recognises and leaves alone.
+ * Every node's baked-frame affine rows and flutter texel, into the motion texture's node rows.
+ * A node flagged still in `nodeMoves` is written as the exact identity with no flutter, which
+ * the shader recognises and leaves alone. The flutter texel is the legacy field's four
+ * coefficients, or — for an advected field — the node's amplitude in `x`.
  */
 export function writeNodeRows(
   out: Float32Array,
@@ -114,7 +143,9 @@ export function writeNodeRows(
   bake: Mat4,
   inverse: Mat4,
 ): void {
-  const coefficients = flutter.still ? undefined : flutterCoefficients(flutter);
+  const advected = isAdvectedFlutter(flutter);
+  const coefficients = flutter.still || advected ? undefined : flutterCoefficients(flutter);
+  const amplitudes = advected && !flutter.still ? flutter.amplitudeM : undefined;
   // L and L⁻¹ row-major (element (r, c) at r * 3 + c), b as a vector; scratch for R, L·R, M.
   const l = MATRIX_SCRATCH.subarray(0, 9);
   const li = MATRIX_SCRATCH.subarray(9, 18);
@@ -167,8 +198,97 @@ export function writeNodeRows(
         (m0 * b0 + m1 * b1 + m2 * b2) +
         ((l[i * 3] ?? 0) * t0 + (l[i * 3 + 1] ?? 0) * t1 + (l[i * 3 + 2] ?? 0) * t2);
     }
-    for (let c = 0; c < 4; c += 1) out[base + 12 + c] = coefficients?.[n * 4 + c] ?? 0;
+    if (amplitudes !== undefined) {
+      out[base + 12] = amplitudes[n] ?? 0;
+      out[base + 13] = 0;
+      out[base + 14] = 0;
+      out[base + 15] = 0;
+    } else {
+      for (let c = 0; c < 4; c += 1) out[base + 12 + c] = coefficients?.[n * 4 + c] ?? 0;
+    }
   }
+}
+
+/**
+ * The flutter frame: row 0's texels from {@link FLUTTER_FRAME_TEXEL}. For an advected field
+ * that moves, its kind, `C = L·W` (wind frame to baked frame) and the six lookup rows
+ * `G·p_b + g`; anything else is written as kind 0, which the shader reads as the legacy field.
+ *
+ * All of it is folded here in float64 so the shader's float32 only ever sees small numbers:
+ * `g` is reduced into `[−n/2, n/2]`, whatever the advection has grown to.
+ */
+export function writeFlutterFrame(
+  out: Float32Array,
+  flutter: FlutterField,
+  bake: Mat4,
+  inverse: Mat4,
+): void {
+  const base = FLUTTER_FRAME_TEXEL * FLOATS_PER_TEXEL;
+  out.fill(0, base, base + FLUTTER_FRAME_TEXELS * FLOATS_PER_TEXEL);
+  if (!isAdvectedFlutter(flutter) || flutter.still) return;
+  const [ex, ey] = flutter.downwind;
+  const k = flutter.texelsPerMeter;
+  const adv = flutter.advectionTexels;
+  const m = flutter.lookups;
+  const n = flutter.texture.size;
+  const l = (r: number, c: number): number => bake[c * 4 + r] ?? 0;
+  const li = (r: number, c: number): number => inverse[c * 4 + r] ?? 0;
+  const b = [bake[12] ?? 0, bake[13] ?? 0, bake[14] ?? 0];
+  out[base] = 1;
+  for (let r = 0; r < 3; r += 1) {
+    const o = base + (1 + r) * FLOATS_PER_TEXEL;
+    // W's columns: along → (ex, ey, 0), across → (ey, −ex, 0), up → (0, 0, 1).
+    out[o] = l(r, 0) * ex + l(r, 1) * ey;
+    out[o + 1] = l(r, 0) * ey - l(r, 1) * ex;
+    out[o + 2] = l(r, 2);
+  }
+  for (let j = 0; j < 3; j += 1) {
+    for (let axis = 0; axis < 2; axis += 1) {
+      const mo = j * 8 + axis * 3;
+      const mA = m[mo] ?? 0;
+      const mC = m[mo + 1] ?? 0;
+      const mH = m[mo + 2] ?? 0;
+      // The coordinate over the rig-frame position q, then over p_b through q = L⁻¹·(p_b − b).
+      const v = [k * (mA * ex + mC * ey), k * (mA * ey - mC * ex), k * mH];
+      const g = [0, 1, 2].map(
+        (c) => (v[0] ?? 0) * li(0, c) + (v[1] ?? 0) * li(1, c) + (v[2] ?? 0) * li(2, c),
+      );
+      let offset =
+        (m[j * 8 + 6 + axis] ?? 0) -
+        mA * adv -
+        ((g[0] ?? 0) * (b[0] ?? 0) + (g[1] ?? 0) * (b[1] ?? 0) + (g[2] ?? 0) * (b[2] ?? 0));
+      offset -= Math.round(offset / n) * n;
+      const o = base + (4 + j * 2 + axis) * FLOATS_PER_TEXEL;
+      out[o] = g[0] ?? 0;
+      out[o + 1] = g[1] ?? 0;
+      out[o + 2] = g[2] ?? 0;
+      out[o + 3] = offset;
+    }
+  }
+}
+
+/**
+ * A flutter motion texture packed for one-fetch bilinear sampling: texel `(x, y)` holds
+ * `T[x, y]`, `T[x+1, y]`, `T[x, y+1]`, `T[x+1, y+1]`, wrapping at the edges.
+ */
+export function packFlutterTexture(texture: MotionTexture): Float32Array {
+  const n = texture.size;
+  const mask = n - 1;
+  const data = texture.data;
+  const out = new Float32Array(n * n * FLOATS_PER_TEXEL);
+  for (let y = 0; y < n; y += 1) {
+    const ya = y * n;
+    const yb = ((y + 1) & mask) * n;
+    for (let x = 0; x < n; x += 1) {
+      const xb = (x + 1) & mask;
+      const o = (ya + x) * FLOATS_PER_TEXEL;
+      out[o] = data[ya + x] ?? 0;
+      out[o + 1] = data[ya + xb] ?? 0;
+      out[o + 2] = data[yb + x] ?? 0;
+      out[o + 3] = data[yb + xb] ?? 0;
+    }
+  }
+  return out;
 }
 
 /** Five row-major 3×3 scratch matrices for {@link writeNodeRows}. */
@@ -213,7 +333,9 @@ export function bindingTexels(
  *
  * Kept to a transcription of the CPU arithmetic, which `evaluateSplatMotion` below restates in
  * TypeScript for the unit tests: one affine row product per axis, and — only for a node with
- * flutter — two phase look-ups, two table reads and the rotation into the baked frame.
+ * flutter — either the legacy field's two phase look-ups, two table reads and the rotation into
+ * the baked frame, or the advected field's three lookups (an affine row pair and one gathered
+ * bilinear fetch each) and the rotation `C` out of the wind frame.
  */
 export const SPLAT_MOTION_GLSL = `
 const float SPLAT_MOTION_PHASE_STEP = ${((2 * Math.PI) / FLUTTER_GPU_LAYOUT.phaseSteps).toPrecision(
@@ -224,6 +346,23 @@ vec4 splatMotionTexel(int index) {
     return texelFetch(u_splatMotion, ivec2(index & ${String(MOTION_TEXTURE_WIDTH - 1)}, index >> ${String(
       Math.log2(MOTION_TEXTURE_WIDTH),
     )}), 0);
+}
+
+// Bilinear, wrapping, at texel coordinates: \`sampleTexture\` in spectral.ts, one gathered fetch.
+float splatFlutterSample(vec2 p) {
+    int n = textureSize(u_splatFlutterTexture, 0).x;
+    float size = float(n);
+    vec2 f = p - floor(p / size) * size;
+    vec2 f0 = floor(f);
+    vec2 t = f - f0;
+    vec4 q = texelFetch(u_splatFlutterTexture, ivec2(f0) & (n - 1), 0);
+    return (q.x + (q.y - q.x) * t.x) * (1.0 - t.y) + (q.z + (q.w - q.z) * t.x) * t.y;
+}
+
+float splatFlutterLookup(int row, vec3 position) {
+    vec4 gx = splatMotionTexel(row);
+    vec4 gy = splatMotionTexel(row + 1);
+    return splatFlutterSample(vec2(dot(gx.xyz, position) + gx.w, dot(gy.xyz, position) + gy.w));
 }
 
 vec3 splatVertexMotion(uint splatIndex, vec3 position) {
@@ -251,7 +390,19 @@ vec3 splatVertexMotion(uint splatIndex, vec3 position) {
         dot(r1.xyz, position) + r1.w,
         dot(r2.xyz, position) + r2.w
     );
-    if (c != vec4(0.0)) {
+    if (c != vec4(0.0) && splatMotionTexel(${String(FLUTTER_FRAME_TEXEL)}).x > 0.5) {
+        // Living Mode's advected field, looked up at the canonical (fetched) position.
+        vec3 wind = vec3(
+            splatFlutterLookup(${String(FLUTTER_FRAME_TEXEL + 4)}, position),
+            splatFlutterLookup(${String(FLUTTER_FRAME_TEXEL + 6)}, position),
+            splatFlutterLookup(${String(FLUTTER_FRAME_TEXEL + 8)}, position)
+        );
+        moved += c.x * vec3(
+            dot(splatMotionTexel(${String(FLUTTER_FRAME_TEXEL + 1)}).xyz, wind),
+            dot(splatMotionTexel(${String(FLUTTER_FRAME_TEXEL + 2)}).xyz, wind),
+            dot(splatMotionTexel(${String(FLUTTER_FRAME_TEXEL + 3)}).xyz, wind)
+        );
+    } else if (c != vec4(0.0)) {
         uint h = binding.g;
         float p1 = float(h & 1023u) * SPLAT_MOTION_PHASE_STEP;
         float p2 = float((h >> 10u) & 1023u) * SPLAT_MOTION_PHASE_STEP;
@@ -279,6 +430,8 @@ export function evaluateSplatMotion(
   node: number,
   hash: number,
   position: readonly [number, number, number],
+  /** The leaf-flutter texture as uploaded ({@link packFlutterTexture}), for an advected frame. */
+  flutterTexture?: { readonly size: number; readonly data: Float32Array },
 ): [number, number, number] {
   const texel = (index: number): number[] =>
     [0, 1, 2, 3].map((k) => motion[index * FLOATS_PER_TEXEL + k] ?? 0);
@@ -296,7 +449,41 @@ export function evaluateSplatMotion(
       (row[2] ?? 0) * position[2] +
       (row[3] ?? 0),
   ) as [number, number, number];
-  if ((c ?? []).some((v) => v !== 0)) {
+  const flutters = (c ?? []).some((v) => v !== 0);
+  if (flutters && (texel(FLUTTER_FRAME_TEXEL)[0] ?? 0) > 0.5) {
+    const size = flutterTexture?.size ?? 1;
+    const data = flutterTexture?.data ?? new Float32Array(4);
+    const sample = (x: number, y: number): number => {
+      const fx = x - Math.floor(x / size) * size;
+      const fy = y - Math.floor(y / size) * size;
+      const x0 = Math.floor(fx);
+      const y0 = Math.floor(fy);
+      const tx = fx - x0;
+      const ty = fy - y0;
+      const o = ((y0 & (size - 1)) * size + (x0 & (size - 1))) * FLOATS_PER_TEXEL;
+      const [a, b, cc, d] = [data[o] ?? 0, data[o + 1] ?? 0, data[o + 2] ?? 0, data[o + 3] ?? 0];
+      return (a + (b - a) * tx) * (1 - ty) + (cc + (d - cc) * tx) * ty;
+    };
+    const affine = (row: number[]): number =>
+      (row[0] ?? 0) * position[0] +
+      (row[1] ?? 0) * position[1] +
+      (row[2] ?? 0) * position[2] +
+      (row[3] ?? 0);
+    const wind = [0, 1, 2].map((j) => {
+      const row = FLUTTER_FRAME_TEXEL + 4 + j * 2;
+      return sample(affine(texel(row)), affine(texel(row + 1)));
+    });
+    const amplitude = c?.[0] ?? 0;
+    for (let r = 0; r < 3; r += 1) {
+      const cRow = texel(FLUTTER_FRAME_TEXEL + 1 + r);
+      out[r] =
+        (out[r] ?? 0) +
+        amplitude *
+          ((cRow[0] ?? 0) * (wind[0] ?? 0) +
+            (cRow[1] ?? 0) * (wind[1] ?? 0) +
+            (cRow[2] ?? 0) * (wind[2] ?? 0));
+    }
+  } else if (flutters) {
     const step = (2 * Math.PI) / FLUTTER_GPU_LAYOUT.phaseSteps;
     const p1 = (hash & 1023) * step;
     const p2 = ((hash >>> 10) & 1023) * step;
@@ -338,6 +525,9 @@ export class SplatGpuMotion implements SplatVertexMotion {
   #primitive: SplatPrimitive | undefined;
   #motionTexture: OwnedTexture | undefined;
   #bindingTexture: OwnedTexture | undefined;
+  /** The leaf-flutter texture, and the motion texture it was packed from. */
+  #flutterTexture: OwnedTexture | undefined;
+  #flutterSource: MotionTexture | undefined;
   #pendingBinding: { width: number; height: number; data: Uint32Array } | undefined;
   #bound: BoundSnapshot | undefined;
   #headerWritten = false;
@@ -370,10 +560,12 @@ export class SplatGpuMotion implements SplatVertexMotion {
     const vertex = this.#factory.vertexDestination;
     shaderBuilder.addUniform("highp sampler2D", "u_splatMotion", vertex);
     shaderBuilder.addUniform("highp usampler2D", "u_splatMotionBinding", vertex);
+    shaderBuilder.addUniform("highp sampler2D", "u_splatFlutterTexture", vertex);
     shaderBuilder.addUniform("float", "u_splatMotionActive", vertex);
     shaderBuilder.addVertexLines(SPLAT_MOTION_GLSL);
     uniformMap.u_splatMotion = () => this.#motionTexture;
     uniformMap.u_splatMotionBinding = () => this.#bindingTexture;
+    uniformMap.u_splatFlutterTexture = () => this.#flutterTexture;
     uniformMap.u_splatMotionActive = () => (this.#drawActive() ? 1 : 0);
   }
 
@@ -430,6 +622,10 @@ export class SplatGpuMotion implements SplatVertexMotion {
     }
     const texture = this.#motionTexture;
     if (texture === undefined) return false;
+    if (isAdvectedFlutter(flutter) && !flutter.still) {
+      this.lastUploadWords += this.#uploadFlutterTexture(flutter.texture);
+    }
+    writeFlutterFrame(this.#motion, flutter, bound.bake, bound.inverse);
     if (!this.#headerWritten) {
       writeMotionHeader(this.#motion, bound.bake);
       texture.copyFrom({
@@ -443,6 +639,22 @@ export class SplatGpuMotion implements SplatVertexMotion {
       });
       this.#headerWritten = true;
       this.lastUploadWords += MOTION_TEXTURE_WIDTH * FLOATS_PER_TEXEL;
+    } else {
+      // Only the flutter frame of row 0 changes from frame to frame: ten texels.
+      const from = FLUTTER_FRAME_TEXEL * FLOATS_PER_TEXEL;
+      texture.copyFrom({
+        source: {
+          width: FLUTTER_FRAME_TEXELS,
+          height: 1,
+          arrayBufferView: this.#motion.subarray(
+            from,
+            from + FLUTTER_FRAME_TEXELS * FLOATS_PER_TEXEL,
+          ),
+        },
+        xOffset: FLUTTER_FRAME_TEXEL,
+        yOffset: 0,
+      });
+      this.lastUploadWords += FLUTTER_FRAME_TEXELS * FLOATS_PER_TEXEL;
     }
     writeNodeRows(this.#motion, transforms, flutter, nodeMoves, bound.bake, bound.inverse);
     const rows = motionTextureHeight(this.#nodeCount) - 1;
@@ -482,8 +694,16 @@ export class SplatGpuMotion implements SplatVertexMotion {
     }
     this.#motionTexture?.destroy();
     this.#bindingTexture?.destroy();
+    this.#flutterTexture?.destroy();
     this.#motionTexture = undefined;
     this.#bindingTexture = undefined;
+    this.#flutterTexture = undefined;
+    this.#flutterSource = undefined;
+  }
+
+  /** Side of the leaf-flutter texture uploaded, or 0 before an advected field has arrived. */
+  get flutterTextureSize(): number {
+    return this.#flutterSource?.size ?? 0;
   }
 
   /** The words the current motion texture holds, for tests. */
@@ -502,6 +722,7 @@ export class SplatGpuMotion implements SplatVertexMotion {
       primitive._numSplats === bound.numSplats &&
       this.#motionTexture !== undefined &&
       this.#bindingTexture !== undefined &&
+      this.#flutterTexture !== undefined &&
       this.#pendingBinding === undefined
     );
   }
@@ -533,6 +754,26 @@ export class SplatGpuMotion implements SplatVertexMotion {
     } else if (this.#bindingTexture === undefined || this.#bindingTexture.isDestroyed()) {
       this.#bindingTexture = this.#factory.createUintPairs(context, 1, 1, new Uint32Array(2));
     }
+    if (this.#flutterTexture === undefined || this.#flutterTexture.isDestroyed()) {
+      // A placeholder until an advected field arrives; the shader never samples it before.
+      this.#flutterTexture = this.#factory.createFloat(context, 1, 1, new Float32Array(4));
+      this.#flutterSource = undefined;
+    }
     return true;
+  }
+
+  /**
+   * Uploads a leaf-flutter texture unless it is the one already bound. Returns the words
+   * uploaded: `4·n²` the first time a seed is seen, 0 every frame after. The motion texture is
+   * memoised per seed in `@twin/world`, so identity is the right test.
+   */
+  #uploadFlutterTexture(source: MotionTexture): number {
+    const context = this.#context;
+    if (context === undefined || this.#flutterSource === source) return 0;
+    const packed = packFlutterTexture(source);
+    this.#flutterTexture?.destroy();
+    this.#flutterTexture = this.#factory.createFloat(context, source.size, source.size, packed);
+    this.#flutterSource = source;
+    return packed.length;
   }
 }
