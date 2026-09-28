@@ -230,12 +230,14 @@ def test_a_phone_may_turn_on_the_phone_capture_switches(client: TestClient, db: 
         {"normalize": {"max_side": 100}},
         {"normalize": {"max_side": True}},
         {"normalize": {"select": "blur_threshold"}},
+        {"pose": {"mapper": "hierarchical"}},
     ):
         response = start(refused)
         assert response.status_code == 409, (refused, response.text)
 
     chosen = {
         "normalize": {"fps": 15, "keep": 180, "max_side": "auto", "select": "viewpoint"},
+        "pose": {"mapper": "global"},
         "train": {"pose_opt": True, "app_opt": False, "bilateral_grid": True, "depth_loss": True},
     }
     ok = start(chosen)
