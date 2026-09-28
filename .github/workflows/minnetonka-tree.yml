@@ -1,0 +1,512 @@
+name: Minnetonka tree
+
+# Living Survey M0 (docs/LIVING_WORLD.md section 9): a real photogrammetric tree, trained
+# on a Modal GPU from its published photos, rigged, and published as a site. Opt-in, and
+# never run by default. docs/CAPTURES.md "The real tree" is the manual; this header is the
+# summary.
+#
+# * **Steps, one job each**, so each can be checked -- and re-run -- on its own. What a
+#   step keeps goes to the private bucket under experiments/minnetonka-tree/<tag>/, which
+#   is how the next job (or a later run with the same tag) picks it up:
+#     check    DJI metadata of every photo + the published COLMAP model -> the pose gate.
+#              ~130 MB, no GPU, no secrets. Expect it to FAIL: the published poses are
+#              attached to the wrong photos (experiments/minnetonka.py has the evidence).
+#     prepare  659 photos (13.96 GB) streamed, sha256-checked, shrunk to 1600 px in memory;
+#              ~0.5 GB of frames kept. With poses=published the dataset's model is gated too.
+#     pose     COLMAP 4.2 (the repository's `pose` stage) on Modal cpu4, then the pose gate
+#              on what it solved. Skipped for poses=published.
+#     train    the repository's `train` stage (gsplat MCMC, cap_max auto, converge, SH 3)
+#              on a Modal GPU; the trained PLY and its metrics are kept.
+#     rig      CPU: into metres, isolate the tree, trunk measured, skeleton, one tile,
+#              site.json (tools/captures/real_tree.py). Artifacts for review.
+#     publish  the site folder to the public bucket under sites/minnetonka-tree/.
+# * **How to run it.** `workflow_dispatch` works once this file is on the default branch.
+#   Before that, push a commit to the working branch whose message carries a token:
+#   `[tree]` runs check,prepare,pose,train,rig; `[tree:check]` just the gate;
+#   `[tree:rig,publish|tag=m0|scale=trunk-diameter-m=0.31]` re-rigs a kept PLY with an
+#   explicit scale and publishes. Options after `|`: tag, poses, tier, budget_max, roi_m,
+#   scale (barometric | metres-per-unit=X | trunk-diameter-m=D), crown_radius_m,
+#   max_splats, force. A push without a token starts this workflow and skips every job.
+# * **What it costs** (estimates, not measurements -- nothing here has run on a GPU yet):
+#   pose ~0.5-1.5 h of cpu4 ($0.25/h); train ~1.5-3.5 h of L4 ($0.80/h) for 655 frames at
+#   1600x1066 under a 2M-gaussian ceiling -- $1.5-4 in all. docs/CAPTURES.md has the sums.
+#
+# Secrets (the ones modal.yml and modal-benchmark.yml read): MODAL_TOKEN_ID,
+# MODAL_TOKEN_SECRET, CLOUDFLARE_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY; the
+# R2_BUCKET / R2_PUBLIC_BUCKET variables. See docs/DEPLOYMENT.md.
+
+on:
+  push:
+    branches: [claude/funny-carson-937ydv]
+  workflow_dispatch:
+    inputs:
+      steps:
+        description: "Comma-separated, in order: check,prepare,pose,train,rig,publish"
+        type: string
+        default: check,prepare,pose,train,rig
+      tag:
+        description: "Bucket prefix the steps share (experiments/minnetonka-tree/<tag>/)"
+        type: string
+        default: m0
+      poses:
+        description: "colmap (solve them) or published (the dataset's; gated, expected to fail)"
+        type: choice
+        options: [colmap, published]
+        default: colmap
+      tier:
+        description: "GPU tier for train"
+        type: choice
+        options: [l4, a10, l40s, a100]
+        default: l4
+      budget_max:
+        description: "Most gaussians train may use (cap_max auto is clamped to this)"
+        type: string
+        default: "2000000"
+      roi_m:
+        description: "Radius in metres round the orbit's centre trained at full density (0 = none)"
+        type: string
+        default: "12"
+      scale:
+        description: "barometric | metres-per-unit=X | trunk-diameter-m=D"
+        type: string
+        default: barometric
+      crown_radius_m:
+        description: "Isolation radius in metres (empty = measured from the splat)"
+        type: string
+        default: ""
+      max_splats:
+        description: "Most splats in the single tile"
+        type: string
+        default: "400000"
+      force:
+        description: "Carry on past a failed pose gate (for looking, not publishing)"
+        type: boolean
+        default: false
+
+# The bucket and Modal credentials, for the jobs that use them (check does not). At the
+# workflow level because a job-level block would be repeated five times.
+env:
+  OBJECT_STORAGE_ENDPOINT_URL: https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
+  OBJECT_STORAGE_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY_ID }}
+  OBJECT_STORAGE_SECRET_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+  OBJECT_STORAGE_BUCKET: ${{ vars.R2_BUCKET || 'twin-assets' }}
+  OBJECT_STORAGE_REGION: auto
+  MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+  MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+
+jobs:
+  plan:
+    name: What to run
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      contains(github.event.head_commit.message, '[tree')
+    runs-on: ubuntu-latest
+    outputs:
+      steps: ${{ steps.plan.outputs.steps }}
+      tag: ${{ steps.plan.outputs.tag }}
+      poses: ${{ steps.plan.outputs.poses }}
+      tier: ${{ steps.plan.outputs.tier }}
+      budget_max: ${{ steps.plan.outputs.budget_max }}
+      roi_m: ${{ steps.plan.outputs.roi_m }}
+      scale: ${{ steps.plan.outputs.scale }}
+      crown_radius_m: ${{ steps.plan.outputs.crown_radius_m }}
+      max_splats: ${{ steps.plan.outputs.max_splats }}
+      force: ${{ steps.plan.outputs.force }}
+    steps:
+      # Read as data -- environment variables, validated here, never interpolated into a
+      # shell line -- whether they came from the dispatch form or a commit message.
+      - id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          MESSAGE: ${{ github.event.head_commit.message }}
+          STEPS: ${{ inputs.steps }}
+          TAG: ${{ inputs.tag }}
+          POSES: ${{ inputs.poses }}
+          TIER: ${{ inputs.tier }}
+          BUDGET_MAX: ${{ inputs.budget_max }}
+          ROI_M: ${{ inputs.roi_m }}
+          SCALE: ${{ inputs.scale }}
+          CROWN_RADIUS_M: ${{ inputs.crown_radius_m }}
+          MAX_SPLATS: ${{ inputs.max_splats }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import os, re
+          options = {
+              "steps": "check,prepare,pose,train,rig", "tag": "m0", "poses": "colmap",
+              "tier": "l4", "budget_max": "2000000", "roi_m": "12", "scale": "barometric",
+              "crown_radius_m": "", "max_splats": "400000", "force": "false",
+          }
+          if os.environ["EVENT"] == "workflow_dispatch":
+              for name in options:
+                  value = os.environ.get(name.upper(), "")
+                  if value != "" or name == "crown_radius_m":
+                      options[name] = value
+          else:
+              found = re.search(r"\[tree(?::([^\]]*))?\]", os.environ.get("MESSAGE", ""))
+              parts = (found.group(1) or "").split("|") if found else [""]
+              if parts[0]:
+                  options["steps"] = parts[0]
+              for part in parts[1:]:
+                  name, _, value = part.partition("=")
+                  if name not in options or name == "steps":
+                      raise SystemExit(f"unknown option {name!r} in the [tree] token")
+                  options[name] = value if value else "true"
+          valid = {
+              "steps": r"(check|prepare|pose|train|rig|publish)(,(check|prepare|pose|train|rig|publish))*",
+              "tag": r"[a-z0-9][a-z0-9-]{0,31}",
+              "poses": r"colmap|published",
+              "tier": r"l4|a10|l40s|a100",
+              "budget_max": r"[0-9]{5,8}",
+              "roi_m": r"[0-9]+(\.[0-9]+)?",
+              "scale": r"barometric|metres-per-unit=[0-9]*\.?[0-9]+|trunk-diameter-m=[0-9]*\.?[0-9]+",
+              "crown_radius_m": r"([0-9]*\.?[0-9]+)?",
+              "max_splats": r"[0-9]{3,8}",
+              "force": r"true|false",
+          }
+          for name, pattern in valid.items():
+              if not re.fullmatch(pattern, options[name]):
+                  raise SystemExit(f"{name}={options[name]!r} is not {pattern}")
+          options["steps"] = "," + options["steps"] + ","
+          for name, value in options.items():
+              print(f"{name}={value}")
+          PY
+          cat "$GITHUB_OUTPUT"
+
+  check:
+    name: Pose gate on the published model
+    needs: plan
+    if: contains(needs.plan.outputs.steps, ',check,')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Metadata and published poses -> gate
+        working-directory: tools/pipeline
+        run: |
+          uv sync --frozen
+          uv run python ../../infra/modal/minnetonka.py --work "$RUNNER_TEMP/tree" check
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: tree-check
+          path: |
+            ${{ runner.temp }}/tree/check/gate.json
+            ${{ runner.temp }}/tree/check/meta.json
+          if-no-files-found: ignore
+
+  prepare:
+    name: Photos to frames
+    needs: [plan, check]
+    if: >-
+      !cancelled() && !failure() &&
+      contains(needs.plan.outputs.steps, ',prepare,')
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      TAG: ${{ needs.plan.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: The secrets this job needs
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          missing=""
+          for name in MODAL_TOKEN_ID MODAL_TOKEN_SECRET OBJECT_STORAGE_ACCESS_KEY OBJECT_STORAGE_SECRET_KEY CLOUDFLARE_ACCOUNT_ID; do
+            if [ -z "${!name:-}" ]; then missing="$missing $name"; fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::missing:$missing. See docs/DEPLOYMENT.md."
+            exit 1
+          fi
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Free the runner's disk
+        # Nothing is written but the frames (~0.5 GB), but the runner starts with ~14 GB
+        # free and the toolcache is not needed here.
+        run: |
+          df -h "$RUNNER_TEMP"
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android || true
+          df -h "$RUNNER_TEMP"
+      - name: Download, verify, shrink; keep the frames
+        working-directory: tools/pipeline
+        env:
+          POSES: ${{ needs.plan.outputs.poses }}
+          FORCE: ${{ needs.plan.outputs.force }}
+        run: |
+          uv sync --frozen
+          extra=""
+          if [ "$FORCE" = "true" ]; then extra="--force"; fi
+          uv run --with modal==1.5.5 --with boto3 python ../../infra/modal/minnetonka.py \
+            --work "$RUNNER_TEMP/tree" --tag "$TAG" prepare --poses "$POSES" $extra
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: tree-prepare
+          path: |
+            ${{ runner.temp }}/tree/prepare/prepare.json
+            ${{ runner.temp }}/tree/prepare/meta.json
+            ${{ runner.temp }}/tree/prepare/frame.json
+          if-no-files-found: ignore
+
+  pose:
+    name: COLMAP on Modal cpu4, then the gate
+    needs: [plan, prepare]
+    if: >-
+      !cancelled() && !failure() &&
+      contains(needs.plan.outputs.steps, ',pose,') && needs.plan.outputs.poses == 'colmap'
+    # The same group as modal.yml, on the job: two deploys of one app must not overlap.
+    concurrency:
+      group: modal
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    env:
+      TAG: ${{ needs.plan.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: The secrets this job needs
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          missing=""
+          for name in MODAL_TOKEN_ID MODAL_TOKEN_SECRET OBJECT_STORAGE_ACCESS_KEY OBJECT_STORAGE_SECRET_KEY CLOUDFLARE_ACCOUNT_ID; do
+            if [ -z "${!name:-}" ]; then missing="$missing $name"; fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::missing:$missing. See docs/DEPLOYMENT.md."
+            exit 1
+          fi
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: modal deploy infra/modal/app.py
+        working-directory: tools/pipeline
+        run: |
+          uv sync --frozen
+          uv run --with modal==1.5.5 --with boto3 modal deploy ../../infra/modal/app.py
+      - name: Pose the frames
+        working-directory: tools/pipeline
+        env:
+          FORCE: ${{ needs.plan.outputs.force }}
+        run: |
+          extra=""
+          if [ "$FORCE" = "true" ]; then extra="--force"; fi
+          uv run --with modal==1.5.5 --with boto3 python ../../infra/modal/minnetonka.py \
+            --work "$RUNNER_TEMP/tree" --tag "$TAG" pose --tier cpu4 $extra
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: tree-pose
+          path: |
+            ${{ runner.temp }}/tree/tree-pose-*/frame.json
+            ${{ runner.temp }}/tree/tree-pose-*/pose.json
+            ${{ runner.temp }}/tree/tree-pose-*/stages/pose/log.txt
+            ${{ runner.temp }}/tree/tree-pose-*/stages/pose/out/poses/poses.json
+          if-no-files-found: ignore
+
+  train:
+    name: Train on a Modal GPU
+    needs: [plan, pose]
+    if: >-
+      !cancelled() && !failure() &&
+      contains(needs.plan.outputs.steps, ',train,')
+    concurrency:
+      group: modal
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    # GitHub's ceiling for a hosted job. The estimate is 1.5-3.5 h; a run that needs more
+    # than this needs a smaller budget_max, not a longer wait.
+    timeout-minutes: 355
+    env:
+      TAG: ${{ needs.plan.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: The secrets this job needs
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          missing=""
+          for name in MODAL_TOKEN_ID MODAL_TOKEN_SECRET OBJECT_STORAGE_ACCESS_KEY OBJECT_STORAGE_SECRET_KEY CLOUDFLARE_ACCOUNT_ID; do
+            if [ -z "${!name:-}" ]; then missing="$missing $name"; fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::missing:$missing. See docs/DEPLOYMENT.md."
+            exit 1
+          fi
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: modal deploy infra/modal/app.py
+        working-directory: tools/pipeline
+        run: |
+          uv sync --frozen
+          uv run --with modal==1.5.5 --with boto3 modal deploy ../../infra/modal/app.py
+      - name: Train the tree
+        working-directory: tools/pipeline
+        env:
+          TIER: ${{ needs.plan.outputs.tier }}
+          BUDGET_MAX: ${{ needs.plan.outputs.budget_max }}
+          ROI_M: ${{ needs.plan.outputs.roi_m }}
+          FORCE: ${{ needs.plan.outputs.force }}
+        run: |
+          extra=""
+          if [ "$FORCE" = "true" ]; then extra="--force"; fi
+          uv run --with modal==1.5.5 --with boto3 python ../../infra/modal/minnetonka.py \
+            --work "$RUNNER_TEMP/tree" --tag "$TAG" train --tier "$TIER" \
+            --budget-max "$BUDGET_MAX" --roi-m "$ROI_M" $extra
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: tree-train
+          path: |
+            ${{ runner.temp }}/tree/tree-train-*/stages/train/train.json
+            ${{ runner.temp }}/tree/tree-train-*/stages/train/out/train_metrics.json
+            ${{ runner.temp }}/tree/tree-train-*/stages/train/log.txt
+            ${{ runner.temp }}/tree/tree-train-*/stages/train/attempts.json
+          if-no-files-found: ignore
+
+  rig:
+    name: Isolate, measure, rig, site.json
+    needs: [plan, train]
+    if: >-
+      !cancelled() && !failure() &&
+      contains(needs.plan.outputs.steps, ',rig,')
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      TAG: ${{ needs.plan.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: The secrets this job needs
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          missing=""
+          for name in MODAL_TOKEN_ID MODAL_TOKEN_SECRET OBJECT_STORAGE_ACCESS_KEY OBJECT_STORAGE_SECRET_KEY CLOUDFLARE_ACCOUNT_ID; do
+            if [ -z "${!name:-}" ]; then missing="$missing $name"; fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::missing:$missing. See docs/DEPLOYMENT.md."
+            exit 1
+          fi
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: The trained splat and the frame, from the bucket
+        working-directory: tools/pipeline
+        run: |
+          uv sync --frozen
+          uv run --with modal==1.5.5 --with boto3 python ../../infra/modal/minnetonka.py \
+            --tag "$TAG" fetch frame.json train/trained.ply train/train.json \
+            --into "$RUNNER_TEMP/kept"
+          uv run --with modal==1.5.5 --with boto3 python ../../infra/modal/minnetonka.py \
+            --tag "$TAG" fetch pose.json prepare.json --into "$RUNNER_TEMP/kept" --missing-ok
+      - name: real_tree.py
+        working-directory: tools/captures
+        env:
+          SCALE: ${{ needs.plan.outputs.scale }}
+          CROWN_RADIUS_M: ${{ needs.plan.outputs.crown_radius_m }}
+          MAX_SPLATS: ${{ needs.plan.outputs.max_splats }}
+          FORCE: ${{ needs.plan.outputs.force }}
+        run: |
+          uv sync --frozen
+          kept="$RUNNER_TEMP/kept"
+          args=(--frame "$kept/frame.json" --train "$kept/train/train.json" --max-splats "$MAX_SPLATS")
+          if [ -f "$kept/pose.json" ]; then args+=(--pose "$kept/pose.json"); else args+=(--pose "$kept/prepare.json"); fi
+          case "$SCALE" in
+            metres-per-unit=*) args+=(--metres-per-unit "${SCALE#*=}") ;;
+            trunk-diameter-m=*) args+=(--trunk-diameter-m "${SCALE#*=}") ;;
+          esac
+          if [ -n "$CROWN_RADIUS_M" ]; then args+=(--crown-radius-m "$CROWN_RADIUS_M"); fi
+          if [ "$FORCE" = "true" ]; then args+=(--allow-failed-gate); fi
+          rm -rf ../../data/tiles/minnetonka-tree
+          uv run python real_tree.py "$kept/train/trained.ply" ../../data/tiles/minnetonka-tree "${args[@]}" \
+            > "$RUNNER_TEMP/real_tree.out"
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          r = json.load(open("../../data/tiles/minnetonka-tree/source/real_tree.json"))
+          t, u, rig = r["trunk"], r["uprightness"], r["rig"]
+          print("## The tree, rigged\n")
+          print("| | |\n|---|---|")
+          print(f"| scale | {r['scale']['metresPerUnit']:.4f} m/unit ({r['scale']['method']}) |")
+          print(f"| trunk diameter | {t['diameterScaledM']:.3f} m (centre spread {t['centreSpreadM']:.3f} m over {len(t['slabs'])} slabs) |")
+          print(f"| crown radius | {r['crown']['radiusM']:.2f} m |")
+          print(f"| splats | {rig['splats']:,} of {r['trained']:,} trained |")
+          print(f"| height | {rig['height_m']:.2f} m |")
+          print(f"| rig | {rig['nodes']} nodes {rig['bands']} |")
+          print(f"| upright | crown/base {u['crownToBase']} ({'ok' if u['upright'] else 'REFUSED'}) |")
+          print(f"| GSD | {r['gsdM']} m |")
+          print("\nNext: download the `tree-site` artifact, look at it (`site.json`, `source/real_tree.json`),"
+                " commit `data/tiles/minnetonka-tree/site.json`, and publish (the `publish` step).")
+          PY
+      - name: Keep the site folder
+        working-directory: tools/pipeline
+        run: |
+          uv run --with modal==1.5.5 --with boto3 python ../../infra/modal/minnetonka.py \
+            --tag "$TAG" keep ../../data/tiles/minnetonka-tree site
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: tree-site
+          path: |
+            data/tiles/minnetonka-tree/
+            ${{ runner.temp }}/real_tree.out
+          if-no-files-found: ignore
+
+  publish:
+    name: Publish the tiles
+    needs: [plan, rig]
+    if: >-
+      !cancelled() && !failure() &&
+      contains(needs.plan.outputs.steps, ',publish,')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      TAG: ${{ needs.plan.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: The secrets this job needs
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          missing=""
+          for name in MODAL_TOKEN_ID MODAL_TOKEN_SECRET OBJECT_STORAGE_ACCESS_KEY OBJECT_STORAGE_SECRET_KEY CLOUDFLARE_ACCOUNT_ID; do
+            if [ -z "${!name:-}" ]; then missing="$missing $name"; fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::missing:$missing. See docs/DEPLOYMENT.md."
+            exit 1
+          fi
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: The site folder, from the bucket
+        working-directory: tools/pipeline
+        run: |
+          uv sync --frozen
+          rm -rf ../../data/tiles/minnetonka-tree
+          uv run --with modal==1.5.5 --with boto3 python ../../infra/modal/minnetonka.py \
+            --tag "$TAG" fetch site --into "$RUNNER_TEMP/kept"
+          mv "$RUNNER_TEMP/kept/site" ../../data/tiles/minnetonka-tree
+          python3 -c "import json; d = json.load(open('../../data/tiles/minnetonka-tree/site.json')); assert d['slug'] == 'minnetonka-tree' and d['assets'][0]['rig'] == '../source/rig.json'"
+      # Tiles only: the catalog is rebuilt from the database by provision.yml's seed job,
+      # which needs site.json committed at data/tiles/minnetonka-tree/site.json first.
+      - name: app.seed.publish --slug minnetonka-tree --no-catalog
+        working-directory: apps/api
+        env:
+          OBJECT_STORAGE_PUBLIC_BUCKET: ${{ vars.R2_PUBLIC_BUCKET || format('{0}-public', vars.R2_BUCKET || 'twin-assets') }}
+          OBJECT_STORAGE_PUBLIC_URL: ${{ vars.R2_PUBLIC_URL }}
+        run: |
+          uv sync --frozen
+          uv run python -m app.seed.publish --slug minnetonka-tree --no-catalog
+          {
+            echo "## Published sites/minnetonka-tree/"
+            echo
+            echo "Commit data/tiles/minnetonka-tree/site.json (from the tree-site artifact) and"
+            echo "run provision.yml (or its seed job) so the catalogue and catalog.json carry it."
+          } >> "$GITHUB_STEP_SUMMARY"

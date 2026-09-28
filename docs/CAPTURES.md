@@ -228,8 +228,13 @@ a rig, and what it refuses to do, is in [LIVING_SURVEY.md](LIVING_SURVEY.md).
 
 ## The real tree: what was tried, and what it would take
 
-S6 set out to put a real scanned tree in the app. **It did not land, and the reason is
-network egress, not the pipeline.** The record is here so the next attempt starts from it.
+S6 set out to put a real scanned tree in the app. **It did not land, and the reason was
+network egress, not the pipeline.** M0 (docs/LIVING_WORLD.md section 9) picked it up again on
+2026-09-28 with the Hub reachable, found that **the dataset's published camera poses belong to
+the wrong photos**, and built the path to train the tree anyway — solving its poses from the
+photos — as a workflow that runs in GitHub Actions and on Modal
+(`.github/workflows/minnetonka-tree.yml`). It has not run yet: nothing here has a GPU or the
+credentials. The record is here so the run, and whoever reads its output, starts from it.
 
 ### The capture that should be used
 
@@ -245,11 +250,202 @@ licence text in the repository's `LICENSE`, `license: CC-BY-4.0` in `CITATION.cf
 `license: cc-by-4.0` in the Hugging Face dataset card front matter. Attribution is to Matthew
 Guertin (<https://mattguertin.com>).
 
-It suits this pipeline better than the alternatives below because **the solved camera poses
-ship with it in COLMAP format** (`poses/colmap/cameras.txt`, `images.txt`, and a 1.2 M-point
-RGB tie-point cloud), so there is no structure-from-motion run to pay for first.
+It was chosen over the alternatives below because **the solved camera poses ship with it in
+COLMAP format** (`poses/colmap/cameras.txt`, `images.txt`, and a 1.2 M-point RGB tie-point
+cloud), so there would be no structure-from-motion run to pay for first. That turned out not to
+hold — see the next section — and it is still the capture to use: a single tree flown up
+close in still air, with the drone's own metadata in every photo, permissively licensed.
 
-### What actually happened
+Pinned as read on 2026-09-28: Hub revision `5f9de5e4a1be429b192a928cf1359c066dadb4b3`
+(`The_Tree`: 659 photos, 13,961,267,697 bytes; `colmap/points3D.txt` 58,072,943 bytes,
+sha256 `f38ceae8…`), GitHub commit `942f050f7bb7fed530e61c80b3c72e5674986b48`, whose
+`poses/colmap/{cameras,images}.txt` are byte-identical to the Hub's `colmap/` copies. Every
+photo is checked against the LFS sha256 the Hub reports for it (the same digests as the
+GitHub repository's `manifest/checksums.sha256`).
+
+### The published poses are not these photos' poses
+
+M0 reopened this on 2026-09-28, when `huggingface.co` was reachable, and the first thing it
+did was check the poses against the photos — cheaply, without the 14 GB: every photo's
+first 192 KiB holds its DJI XMP (barometric height above take-off, gimbal pitch and yaw,
+capture time), which is enough to say whether a pose belongs to it. For the 655 `The_Tree`
+photos (the four suspects dropped):
+
+| check                                               | published poses         | a correct pose set |
+| --------------------------------------------------- | ----------------------- | ------------------ |
+| solved pitch − gimbal pitch, median / 90th pct      | 12.4° / 38.2°           | ≲ 1° / 2°          |
+| up from gimbal pitch vs up from barometric height   | 11.6°                   | ≲ 1°               |
+| barometric height vs height along up, RMS residual  | 1.87 m (corr. 0.41)     | ≲ 0.3 m            |
+| gimbal compass vs solved heading, median residual   | 78°                     | a few degrees      |
+| consecutive photos (4–8 s apart), median separation | 5.8 units (random 19.7) | small              |
+
+Two photos looked at by eye settle it. `The_Tree-86.jpg` is taken from above the crown,
+looking down; its pose (in `poses/xmp/The_Tree-86.xmp` too) is at the lowest tier looking up
+8°. `The_Tree-542.jpg` is a low shot looking up at the trunk; its pose is at the top of the
+orbit looking down 43°. The mismatch is in the XMP sidecars' names, upstream of the COLMAP
+conversion — the converter pairs by file name, and its in-frame check passes for any camera
+that looks at the middle of an orbit. The poses may well be a correct reconstruction; they
+are not attached to the right photos, and a splat trained on them would be trained on ~half
+its photos in the wrong place.
+
+So the published model is not used. It is kept behind the **pose gate**
+(`tools/pipeline/experiments/minnetonka.py`, `fit_frame`), which the `check` step runs on it
+for anyone who wants to see the table above regenerated, and the poses are solved from the
+photos by the repository's own `pose` stage instead.
+
+### The path now: `.github/workflows/minnetonka-tree.yml`
+
+One job per step, so each can be checked and re-run on its own. What a step keeps goes to the
+private bucket under `experiments/minnetonka-tree/<tag>/`, which is how the next job (or a
+later run with the same tag) picks it up. Drivers: `infra/modal/minnetonka.py` (I/O) over
+`tools/pipeline/experiments/minnetonka.py` (the pure parts) and `tools/captures/real_tree.py`
+(the post-train CPU step).
+
+| step      | where              | what                                                                                                                                                                                                                                                                                                                                                                  | keeps                                                               |
+| --------- | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| `check`   | runner, no secrets | 192 KiB of each photo + the published COLMAP model (sha256-pinned) → the pose gate. ~130 MB, ~2 min. **Expected to fail.**                                                                                                                                                                                                                                            | artifact `tree-check`                                               |
+| `prepare` | runner             | the Hub listing at the pinned revision checked against the pins (659 photos, 13.96 GB); the four suspect cameras not fetched; each of the other 655 (13.88 GB) fetched into memory, its size and sha256 checked against the LFS object id, its XMP read, shrunk to 1600 px (Lanczos, q95) and written as `The_Tree-0001.jpg`… — **no original ever touches the disk** | `frames/` (~0.5 GB), `meta.json`, `prepare.json`                    |
+| `pose`    | Modal `cpu4`       | the `pose` stage (COLMAP 4.2 through pycolmap, photo-reconstruct's settings; sequential matching over the capture-ordered names, 15 neighbours, vocabulary-tree loop closure), then the pose gate on what it solved                                                                                                                                                   | `poses/`, `frame.json` (only if the gate passes), `pose.json`       |
+| `train`   | Modal GPU (`l4`)   | the `train` stage with photo-reconstruct's Standard params — 30k-step schedule, gsplat MCMC, `cap_max: auto` (clamped to `budget_max`, 2M), `converge: true`, gsplat's default SH degree 3 — plus `blocks: 1` and an ROI of 12 m round the orbit's centre; the benchmark's path for a scene with known poses (`benchmark.cloud`, `execute_remotely`)                  | `train/trained.ply`, `train/train_metrics.json`, `train/train.json` |
+| `rig`     | runner             | `real_tree.py`: into metres, the ground, the trunk measured, the tree isolated, ≤400k splats, `skeleton.py`, one tile, `site.json`                                                                                                                                                                                                                                    | `site/`; artifact `tree-site`                                       |
+| `publish` | runner             | `app.seed.publish --slug minnetonka-tree --no-catalog` into the public bucket                                                                                                                                                                                                                                                                                         | `sites/minnetonka-tree/**`                                          |
+
+**Dispatching it.** `workflow_dispatch` (inputs `steps`, `tag`, `poses`, `tier`, `budget_max`,
+`roi_m`, `scale`, `crown_radius_m`, `max_splats`, `force`) works once the file is on the
+default branch. Until then, as with `modal-benchmark.yml`, a commit on the working branch
+carries a token: `[tree]` runs `check,prepare,pose,train,rig`; `[tree:check]` just the gate;
+`[tree:rig,publish|tag=m0|scale=trunk-diameter-m=0.31]` re-rigs the kept PLY with an explicit
+scale and publishes. Options after `|` are the dispatch inputs; the plan job validates every
+one and refuses anything it does not know. A sensible order is `[tree:check]` (free, proves
+the Hub and the pins), then `[tree:prepare,pose]` (cheap; read the gate), then
+`[tree:train,rig]`, then look at the artifacts, then `[tree:publish]`.
+
+**Cost and time** (estimates; nothing here has run on a GPU yet):
+
+- `prepare`: ~14 GB in. Here, 51 of the photos (1.1 GB) streamed, checked and shrunk in 22 s,
+  so ~5 min for all of them plus the upload of ~0.5 GB. Runner minutes only.
+- `pose`: Modal `cpu4`, $0.25/h. The spool capture's 179 frames posed in 11–13 min with COLMAP
+  4.2; 655 photos sequentially is ~4x the pairs and a superlinear mapper — budget 0.5–1.5 h,
+  $0.15–0.40. If sequential matching registers under 70 % the stage would fill in
+  exhaustively (214k pairs), which will not fit the 6-hour limit; the gate would say so first.
+- `train`: L4, $0.80/h. The benchmark's reference point is ~1.5M gaussians in ~37 min at
+  979×546. Here the frames are 1600×1066 (3.2× the pixels), the cap is 2M (1.3× the
+  gaussians, and `converge` lets a 2M budget run up to √2 × 30k = 42k steps before its early
+  stop): roughly 2.5–3.5× the per-step cost for 1.2–1.4× the steps, so **~1.5–3 h, $1.2–2.4**,
+  plus a few minutes of cold start and ~0.5 GB up to the container.
+- `rig`, `publish`: runner minutes.
+
+In all, **about $1.5–3 and 2.5–5 hours** of wall time, most of it the `train` job waiting.
+Its 355-minute timeout is GitHub's ceiling for a hosted job; a run that needs more wants a
+smaller `budget_max` or `roi_m`, not a longer wait.
+
+**What to check afterwards**, in order:
+
+1. `tree-check` / `tree-prepare`: `prepare.json` — 655 photos, 13,875,363,394 bytes, one frame
+   size (1600×1066).
+2. The `pose` job summary: registered count, and the pose gate — every row `ok`. The gate is
+   the evidence that the solved poses and the photos describe the same flight; `frame.json`
+   (artifact `tree-pose`) has the residuals and the 20 worst photos.
+3. The `train` summary and `train.json`: held-out PSNR/SSIM/LPIPS (every 8th frame, never
+   trained on), the gaussian count, steps run and why it stopped, billed seconds and dollars.
+   There is no published number to hold it to; what it is compared with is the Truck
+   benchmark and the spool capture.
+4. The `rig` summary and `source/real_tree.json` (artifact `tree-site`): the scale and how it
+   was set, the trunk diameter and how consistent its three slabs were, the crown radius, the
+   splat count, the rig's bands, and `crownToBase` ≥ 3. **Open `splat/` in the app before
+   publishing**: `pnpm dev` with `TILES_BASE_URL` unset serves it from `data/tiles/`.
+5. After `publish`, commit `data/tiles/minnetonka-tree/site.json` from the artifact (the
+   tiles themselves never go in git; `.gitignore` keeps them out) and run `provision.yml`'s
+   seed so the catalogue and `catalog.json` carry the site. Then, on real hardware: the tile
+   is single, the deformer attaches (no refusal in the Living Survey panel), and the sway
+   reads as _that_ tree. One development gotcha: a checkout holding only that `site.json`
+   has a `data/tiles/minnetonka-tree/` directory, so the dev API serves the site from disk,
+   where the tiles are not (`tiles_base_url`'s rule 2). Set `TILES_BASE_URL` to the public
+   bucket's `…/sites`, or rebuild the folder locally from the kept PLY (`minnetonka.py fetch` +
+   `real_tree.py`).
+
+### Scale, up and heading: from the drone, not from GPS
+
+The dataset's author could not get a scale from GPS (a 17 m footprint against metres of fix
+error) and says so. Every photo also records its **barometric height above take-off**
+(`RelativeAltitude`, 0.1 m steps) and its **gimbal pitch and yaw**, which the gimbal holds
+against its own IMU and compass. From any pose set, `fit_frame` derives:
+
+- **up**: the `u` for which `view · u = sin(gimbal pitch)` for every photo — linear least
+  squares, robust to outliers; each photo's pitch is a measurement of gravity in its frame;
+- **scale**: metres per model unit, the slope of barometric height against `u · centre`, one
+  offset per flight (a gap of more than 2 minutes starts one), so a second take-off does not
+  bend the line;
+- **heading**: the rotation about `u` that best turns solved headings into compass ones;
+- **origin**: on the axis the orbit looks at (least-squares intersection of the optical axes),
+  z = 0 at the main flight's take-off.
+
+Each is checked by a second measurement before anything is paid for: the up the barometer
+finds on its own must agree to 3°, pitch residuals must be ≤ 3° median and ≤ 6° at the 90th
+percentile, height residuals ≤ 0.6 m RMS with ≥ 90 % inliers over a ≥ 2 m span, and compass
+residuals ≤ 8° median, ≤ 20° at the 90th percentile. A synthetic three-tier orbit in an
+arbitrary similarity frame comes back to within 1 % in scale and 0.35 m in position; the same
+orbit with half its metadata shuffled fails `pitch`, `height` and `heading`
+(`tests/test_minnetonka.py`).
+
+**On the real photos**, measured here: 51 consecutive `The_Tree` photos (470–520) streamed,
+checked and shrunk to 1600 px, then the `pose` step rehearsed locally (COLMAP 3.9.1, 4 shared
+cores, exhaustive — no vocabulary tree here; 20 min). It registered 30: the 7.9 m tier. The
+low tier after the drone's 25-second descent did not join them, which is why the gate needs
+the whole capture. Against those 30 solved poses the photos' own gimbal pitch disagrees by
+**0.26° median, 0.35° at the 90th percentile**, and the compass by **0.34° / 0.65°** — an
+order of magnitude inside the bars, where the published model is at 12° and 78°. The same 30
+fail `heightSpan` (0.1 m of barometric height), as they should: a scale needs photos at more
+than one height, and the full capture spans 1.3–7.9 m.
+
+A second run took photos 120–215 across three tiers (5.0, 5.6 and 6.4 m; 2.07 GB streamed;
+83 of 95 registered, 49 min on the same shared cores). There the **barometric fit leaves
+3.7 cm RMS** of height unexplained (correlation 0.93, two flights), the two estimates of up
+agree to 0.87°, pitch is off by 0.56° / 0.68° and the compass by 0.9° / 2.4°. It fails only
+`heightSpan` (1.4 m, against the 2 m bar). The cameras come out on a ring 3.2–4.1 m from the
+axis they look at — a small tree, flown close. So the method holds on the real photos; the
+scale of the whole capture is the one number only the real run can give.
+
+**The trunk is the cross-check, and the override.** `real_tree.py` measures the trunk in
+three slabs 0.3–1.2 m above the lawn: a trunk is a hollow shell of splats, so its
+cross-section is a ring, found by RANSAC over three-point circles and refined by least squares,
+accepted only if splats cover half its circumference and it is several times denser than the
+slab's splats spread evenly would be (a marker post beside the trunk, or haze, is not
+mistaken for it — `tests/test_real_tree.py`). The median of the three is reported; on the
+synthetic tree it comes back within 5 % of the true 0.297 m. **Nothing published gives this
+tree's diameter**, so the barometric scale is the default and the trunk only checks it — a
+mature street tree's trunk is tens of centimetres. If someone measures the real trunk
+(a tape at the tree, or the FARO scan the dataset mentions but does not include),
+`scale=trunk-diameter-m=D` rescales the whole splat about the trunk's foot so the measured
+ring is `D`; `scale=metres-per-unit=X` replaces the barometric slope outright.
+
+### The rig step
+
+`real_tree.py` turns the trained PLY into a site folder, and writes what it measured into
+`source/real_tree.json` at every step: the frame's similarity applied to every gaussian
+(positions, log-scales and rotations — an ellipsoid, not a point); the ground (the densest
+5 cm layer of opaque splats near the trunk — a lawn is a sheet); the trunk as above, whose
+centre becomes the origin; the crown radius (98th percentile of the opaque splats above
+2.5 m inside the camera ring, plus 0.3 m, or `crown_radius_m`); everything 0.2 m above the
+lawn inside that cylinder, opaque, not isolated haze, and then **the packer's own floater rule
+run to a fixed point**, so `splat_tiles.convert` drops nothing and the rig's checksum is over
+exactly what the viewer decodes; at most 400k splats (the viewer's Standard Detail budget — a
+single tile cannot be trimmed by it, so the tile must fit it), the least significant first;
+**the deformer's `upright` refusal checked in Python first** (`uprightness`, a port of
+`treeUprightness`); then `skeleton.extract` with its own isolation turned off, **single tile**
+(`tile_gaussians=None`) because the deformer refuses anything else — M5 lifts that, and this
+step will then want a level-of-detail tileset instead. `site.json` is the `build_site.py`
+shape: attribution Matthew Guertin, `CC-BY-4.0`, the licence and source URLs, captured
+2020-07-20, the splat asset's `ground_sample_distance_m` (median camera-to-crown distance over
+the focal, at the 1600 px the splat was trained at) and `point_spacing_m`,
+`"rig": "../source/rig.json"`, `clamp_to_ground: true` (the drone's altitudes are
+metres-accurate at best, so the tile rests on the viewer's terrain), and a description that
+says it is a photogrammetric reconstruction of a real tree and that the motion is simulated.
+
+The splat keeps degree-0 colour only: `splat_tiles` packs SH0, as for every capture. The
+degree-3 training is still what makes those colours right from every side.
+
+### What happened in S6
 
 The documentation, manifests and camera poses are on GitHub and were cloned here without
 trouble. **The 15.1 GB of imagery, the 58 MB `points3D.txt` and the 80 MB `tiepoints.ply` are
@@ -290,68 +486,20 @@ A few hundred splats cannot carry branch structure, so the extractor would retur
 of the noise. These are site captures at 1.4–2.7 cm GSD flown at altitude; a tree needs a
 capture flown _for_ the tree, which is exactly what the Minnetonka set is.
 
-### The recipe to finish it on a GPU
+### The S6 recipe, superseded
 
-Reconstruction here is CPU-only, and `docs/CAPTURES.md` already concludes that CPU splats are
-proof of format, not of quality — 20–90 minutes per run at quarter resolution for a result
-that is blurry next to the mesh from the same photos. A tree like this one, whose thin
-structure is already near the resolution limit, is the worst possible subject for that. So
-nothing blurry was shipped. On a machine with a GPU and unrestricted egress:
+S6 left a hand recipe here: download everything, copy the published `cameras.txt` /
+`images.txt` / `points3D.txt` into `sparse/0`, `mogrify` to 1600 px, run INRIA's `train.py`,
+then `skeleton.py` and a hand-written `site.json`. Its step 2 would have trained on the
+mismatched poses above. Every other step of it is now a job of the workflow, including the
+wiring it listed — `site.json` with `captured`, `ground_sample_distance_m`, the rig claim,
+attribution, licence and source URL, a description that says real reconstruction and
+simulated motion, and tiles published rather than committed.
 
-```bash
-# 1. Images and poses. ~15.7 GB; --group The_Tree alone is 659 images and enough for the
-#    crown, but the low and mid tiers are what make the trunk resolve.
-pip install -U huggingface_hub
-hf download Matt1up/tree-minnetonka-photogrammetry --repo-type dataset --local-dir tree
-git clone https://github.com/Matt1Up/tree-photogrammetry-dataset tree-docs
-
-# 2. Arrange as 3DGS expects. cameras.txt and images.txt come from the git repo,
-#    points3D.txt from the Hugging Face colmap/ folder.
-mkdir -p tree/sparse/0
-cp tree-docs/poses/colmap/cameras.txt tree-docs/poses/colmap/images.txt tree/sparse/0/
-cp tree/colmap/points3D.txt tree/sparse/0/
-
-# 3. Downsample to ~1600 px wide. Nothing trains at 5464 px.
-mogrify -path tree/images_1600 -resize 1600x tree/images/*.jpg
-
-# 4. Train. 30k steps with spherical harmonics is the real comparison, not the 3,000-step
-#    CPU run the test-run sites used.
-python train.py -s tree -i images_1600 -m tree/output --iterations 30000
-#    Drop the four suspect cameras first (poses/suspect_cameras.txt) — four wrong intrinsics
-#    out of 807 put floaters in the scene.
-
-# 5. Isolate the tree and build its rig. The scene frame has no verified scale (the dataset
-#    says so explicitly), so measure the trunk in the cloud and scale to metres before this
-#    step — the rig is in metres and the motion model assumes it.
-cd tools/captures
-uv run python skeleton.py tree/output/point_cloud/iteration_30000/point_cloud.ply \
-    ../../data/tiles/minnetonka-tree \
-    --lat 44.944565 --lon -93.425903 --height <ellipsoidal height> \
-    --cylinder <east> <north> <radius>
-
-# 6. Wire it up.
-#    - write data/tiles/minnetonka-tree/site.json (the shape build_site.py writes; see
-#      apps/api/app/seed/legacy_captures.json for four worked examples), carrying
-#      "captured": "2020-07-20" and the splat asset's ground_sample_distance_m — without
-#      both the Inspector reads "No capture date or resolution recorded", which would
-#      undersell a real scan
-#    - give that splat asset "rig": "../source/rig.json" in the same file. The rig is
-#      catalog data now, so nothing in apps/web is edited and nothing is rebuilt; it is
-#      still an explicit claim and still deliberately not a probe
-#    - attribution "Matthew Guertin", license_name "CC-BY-4.0",
-#      license_url https://creativecommons.org/licenses/by/4.0/,
-#      source_url https://github.com/Matt1Up/tree-photogrammetry-dataset
-#    - the description must say it is a photogrammetric reconstruction of a real tree and
-#      that the motion is simulated
-#    - the tiles do not go in git: publish them with
-#      `cd apps/api && uv run python -m app.seed.publish --slug minnetonka-tree`
-cd ../.. && cd apps/api && uv run pytest && uv run python -m app.seed
-```
-
-Two things to check when it renders, neither of which this machine can settle: that the splat
-tileset is **single-tile** (the deformer refuses anything else, by design), and that the sway
-still reads as _that_ tree rather than a generic sway — headless GL here is SwiftShader, and
-the stale draw order the sorter cannot see needs a human eye on real hardware.
+Two things only a human on real hardware can check, as before: that the splat tileset is
+**single-tile** and the deformer attaches, and that the sway still reads as _that_ tree
+rather than a generic sway — headless GL here is SwiftShader, and the stale draw order the
+sorter cannot see needs a human eye.
 
 ## What `site.json` records
 
@@ -369,10 +517,10 @@ relative to take-off) and labelled as such; the point spacing is measured from t
   below the terrain at the edges.
 - Tile data no longer lives in the repository. `synthetic-tree` is the one exception, and it
   is a fixture with a byte-identity gate rather than a capture.
-- **The only tree that moves in the app is the synthetic one.** The skeleton extractor has been
-  scored against ground truth but has never been run on a real capture, because none could be
-  reached from here — see "The real tree" above for the licence checks, the blocked hosts and
-  the command to finish it.
+- **The only tree that moves in the app is the synthetic one** until
+  `minnetonka-tree.yml` has run. The skeleton extractor has been scored against ground truth
+  but has never been run on a real capture — see "The real tree" above for the licence
+  checks, why the published poses are not used, and the workflow that finishes it.
 
 ## The test run
 

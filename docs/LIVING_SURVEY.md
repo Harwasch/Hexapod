@@ -604,7 +604,9 @@ the pipeline runs end to end and nothing more.
 Then the one that matters most: run `skeleton.py` on a real scanned tree and see whether a rig
 inferred from geometry alone moves it convincingly. Everything above is demonstrable on a fixture
 whose topology is known by construction, which is exactly the condition the extractor will not have
-in the field.
+in the field. The path to that run is `.github/workflows/minnetonka-tree.yml`; it packages the tree
+single-tile, as the deformer requires until M5, and checks the `upright` refusal before it
+publishes ([CAPTURES](CAPTURES.md#the-rig-step)).
 
 ### What would break on a rig that is not this one
 
