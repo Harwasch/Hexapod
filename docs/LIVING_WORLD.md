@@ -410,8 +410,10 @@ $2.50/h, L40S $1.95/h, H100 $3.95/h.
 
 1. Put `MODAL_TOKEN_ID/SECRET` in repo secrets and run `train: gsplat` once. That one token
    unblocks B3 as well (see [HANDOFF](HANDOFF.md)).
-2. Train the Minnetonka tree (CC BY 4.0, COLMAP poses included), then run `skeleton.py` on it.
-   This answers the Living Survey's first open question.
+2. Train the Minnetonka tree (CC BY 4.0), then run `skeleton.py` on it. This answers the Living
+   Survey's first open question. Its published COLMAP poses turned out to be attached to the
+   wrong photos, so `.github/workflows/minnetonka-tree.yml` solves them from the photos first
+   and gates them against the drone's own metadata ([CAPTURES](CAPTURES.md#the-real-tree-what-was-tried-and-what-it-would-take)).
 3. On an 80 GB GPU, stand up Shape of Motion on one self-shot synchronized tree clip, and NeoVerse
    inference fed by our own renders. Record the real VRAM and minutes.
 4. Scout the site; buy or borrow an RTK rover, an anemometer, 3 tripods and printed targets; do a

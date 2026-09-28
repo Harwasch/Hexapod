@@ -57,3 +57,8 @@ apps/web/public/samples/
 #   cd tools/captures && uv run python synthetic_tree.py \
 #     ../../data/tiles/synthetic-tree-large --splats 50000
 data/tiles/synthetic-tree-large/
+
+# The real tree's tiles are built by .github/workflows/minnetonka-tree.yml and published to
+# the bucket, never committed; only its site.json belongs in git (docs/CAPTURES.md).
+data/tiles/minnetonka-tree/*
+!data/tiles/minnetonka-tree/site.json

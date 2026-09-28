@@ -71,6 +71,52 @@ def _download(url: str, target: Path) -> Path:
     return target
 
 
+def cloud(work: Path, *, app: str, rehearse: bool) -> tuple[object, CloudRunner]:
+    """The transfer and the `CloudRunner` a driver trains through: the deployed Modal
+    app and the private R2 bucket, or -- rehearsing -- a subprocess and a directory.
+
+    Shared with `minnetonka.py`, so a scene with known poses goes to the GPU one way.
+    """
+    if rehearse:
+        from adapters import LocalTransfer, SubprocessAdapter
+
+        transfer: object = LocalTransfer(work / "bucket")
+        adapter: object = SubprocessAdapter(transfer, work / "sandbox")  # type: ignore[arg-type]
+        poll = 0.2
+    else:
+        from modal_adapter import ModalAdapter
+
+        transfer = _s3_transfer()
+        adapter = ModalAdapter(app)
+        poll = 15.0
+    return transfer, CloudRunner(Placement.of(adapter), transfer, poll_interval_s=poll)  # type: ignore[arg-type]
+
+
+def execute_remotely(
+    recipe: Recipe, workdir: Workdir, transfer: object, runner: CloudRunner
+) -> None:
+    """`execute` on the cloud runner, then the run's own `runs/<id>` prefix removed from
+    the bucket whatever happened -- what the run keeps, the caller copies out first."""
+    run_id = workdir.root.name
+    try:
+        execute(recipe, workdir, RunnerSet.cloud(runner))
+    finally:
+        try:
+            transfer.delete(f"runs/{run_id}")  # type: ignore[attr-defined]
+        except Exception as error:  # cleanup must not hide the run's own failure
+            sys.stderr.write(f"cloud: could not delete runs/{run_id}: {error!r}\n")
+
+
+def stand_in_params(extra_args: list[str]) -> dict[str, object]:
+    """Rehearsal: the test suite's stand-in trainer in place of gsplat. Trains nothing."""
+    return {
+        "trainer": str(PIPELINE / "tests" / "gsplat_stand_in.py"),
+        "python": sys.executable,
+        "iterations": 300,
+        "extra_args": [*extra_args, "--gaussians", "2000"],
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--scene", default="truck", choices=sorted(benchmark.SCENES))
@@ -114,36 +160,10 @@ def main() -> int:
         }
     )
     if args.rehearse:
-        from adapters import LocalTransfer, SubprocessAdapter
-
-        transfer: object = LocalTransfer(work / "bucket")
-        adapter: object = SubprocessAdapter(transfer, work / "sandbox")  # type: ignore[arg-type]
-        recipe = recipe.with_params(
-            {
-                "train": {
-                    "trainer": str(PIPELINE / "tests" / "gsplat_stand_in.py"),
-                    "python": sys.executable,
-                    "iterations": 300,
-                    "extra_args": [*params["extra_args"], "--gaussians", "2000"],
-                }
-            }
-        )
-        poll = 0.2
-    else:
-        from modal_adapter import ModalAdapter
-
-        transfer = _s3_transfer()
-        adapter = ModalAdapter(args.app)
-        poll = 15.0
-    cloud = CloudRunner(Placement.of(adapter), transfer, poll_interval_s=poll)  # type: ignore[arg-type]
+        recipe = recipe.with_params({"train": stand_in_params(list(params["extra_args"]))})
+    transfer, runner = cloud(work, app=args.app, rehearse=args.rehearse)
     started = time.monotonic()
-    try:
-        execute(recipe, workdir, RunnerSet.cloud(cloud))
-    finally:
-        try:
-            transfer.delete(f"runs/{run_id}")  # type: ignore[attr-defined]
-        except Exception as error:  # cleanup must not hide the run's own failure
-            sys.stderr.write(f"benchmark: could not delete runs/{run_id}: {error!r}\n")
+    execute_remotely(recipe, workdir, transfer, runner)
 
     metrics = json.loads((workdir.out_dir("train") / "train_metrics.json").read_text())
     ledger = AttemptLedger.read(workdir.attempts_path("train"))
