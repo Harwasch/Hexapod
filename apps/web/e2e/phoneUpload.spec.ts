@@ -920,10 +920,9 @@ test.describe("the phone upload page", () => {
     await expect(page.getByRole("button", { name: "Refine anyway" })).toBeVisible();
     await expect(page.locator(".advice")).toContainText("Only 8% of the scene");
     await expect(page.locator(".tips")).toBeVisible();
-    const widths = await page.evaluate(() => [
-      document.documentElement.scrollWidth,
-      document.documentElement.clientWidth,
-    ]);
-    expect(widths[0]).toBeLessThanOrEqual(widths[1]);
+    const [scrollWidth, clientWidth] = await page.evaluate(
+      () => [document.documentElement.scrollWidth, document.documentElement.clientWidth] as const,
+    );
+    expect(scrollWidth).toBeLessThanOrEqual(clientWidth);
   });
 });
