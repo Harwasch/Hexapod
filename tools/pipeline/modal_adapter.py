@@ -49,11 +49,16 @@ Two things the check settled that are not defects but change what can be claimed
   exposes is `modal.billing.workspace_billing_report(start=..., end=..., resolution=...)`,
   which reports **cost** (a `Decimal`, broken down by resource) per Modal object per
   interval, at a resolution of hours or days. That is a workspace-level reconciliation
-  feed, not something a poll loop can attribute to one `FunctionCall`. So `poll` still
-  reports wall time between `submit` and the poll, and this is still not the billed
-  number: queue time is not billed, a container that outlives the call is. It is a proxy,
-  labelled as one, and `providers.py` refuses to price an unsurveyed tier, so the
-  overstatement stops at seconds and never becomes an invented dollar figure.
+  feed, not something a poll loop can attribute to one `FunctionCall`. So a finished
+  call is billed from **the container's own clock** (`cloud.container_billing`): from
+  the container's start (a cold call) or the call's entry (a warm one) to the call's
+  end, which is what Modal bills a GPU-second for -- and the wait before it, which Modal
+  does not bill, is reported apart as `queueS` (Poll.queue_s). One part of job 33bc1bff
+  waited 1,697 s for an L4 and the old figure counted every second of it as cost. A call
+  that did not report those clocks (failed, preempted, still running, or an older
+  image) keeps the old proxy -- wall time since `submit` -- and says so
+  (`billing: wall-proxy`). Neither counts the container's idle scale-down window after
+  its last call, which Modal does bill and which belongs to no call.
 * **`interruptible = False` is right, for a different reason than it said.** The old
   comment claimed "Modal's own tiers are not interruptible". They are: `nonpreemptible`
   is a real parameter of `@app.function` and it defaults to `False`. What makes Modal the
@@ -88,10 +93,19 @@ from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import Any
 
-from cloud import Poll, RemoteHandle, RemoteState, StageRequest
+from cloud import (
+    BILLING_CONTAINER,
+    BILLING_PROXY,
+    Poll,
+    RemoteHandle,
+    RemoteState,
+    StageRequest,
+    container_billing,
+)
+from contracts import FANOUT_PARAM
 from providers import Rate, provider
 
-__all__ = ["ModalAdapter"]
+__all__ = ["GPU_FALLBACKS", "ModalAdapter", "fallback_tier", "tier_of_gpu"]
 
 #: The SDK release every symbol in this module was read against. Recorded because
 #: "checked" is only meaningful with a version attached, and because the next person to
@@ -118,6 +132,48 @@ GPU_NAMES: Mapping[str, str] = {
     "b200": "B200",
     "b300": "B300",
 }
+
+#: A fan-out part's GPU, ranked: tier asked for -> the tiers Modal may start the part on,
+#: first free wins (`gpu=[...]` in `infra/modal/app.py`, a ranked list in modal 1.5.5's
+#: `_Function.from_local`). A part otherwise waits for its one tier: in job 33bc1bff one
+#: of two L4 parts waited 1,697 s -- 28 minutes of a 30-minute `max_pending_s` -- while
+#: the other trained. Price-aware, on the L4 as the reference:
+#:
+#: * **L40S, in.** $1.95/h against $0.80, 2.44x the price, and it trained ~2.3x faster on
+#:   our benchmark, which put a block's cost ~17% above the L4's (the list prices alone
+#:   give +6% on the training seconds; the start, fetch and syncs are not sped up) -- for
+#:   a part that ends in under half the time, instead of one that has not started. 48 GB,
+#:   so a block sized for the L4's 24 GB fits with room.
+#: * **A10, out, until measured.** $1.10/h, 1.38x the price, 24 GB; nothing here has timed
+#:   gsplat on one. Its memory bandwidth (600 GB/s against 300) suggests it breaks even,
+#:   but a slower-per-dollar GPU that is merely free would make a part cost more *and* end
+#:   later than a short wait for an L4 would.
+#:
+#: Parts only: a single run, a head and a join keep their one tier (the L4 by default),
+#: because they are not waited on by a sibling that is already paid for.
+GPU_FALLBACKS: Mapping[str, tuple[str, ...]] = {
+    "l4": ("l4", "l40s"),
+}
+
+
+def fallback_tier(tier: str) -> str:
+    """The name `infra/modal/app.py` deploys `tier`'s fallback list under, after
+    `run_stage_`: `run_stage_l4_fallback`."""
+    return f"{tier}_fallback"
+
+
+def tier_of_gpu(name: str, chain: Sequence[str]) -> str | None:
+    """Which of `chain`'s tiers the GPU `nvidia-smi` named is (`NVIDIA L40S` -> `l40s`).
+
+    Matched on the name's words, so `L4` is never taken for `L40S` or the other way; an
+    A100's memory is checked too (`NVIDIA A100-SXM4-80GB`). None when no tier matches."""
+    words = name.upper().replace("NVIDIA", " ").replace("-", " ").split()
+    for tier in chain:
+        want = GPU_NAMES.get(tier, "").upper().split("-")
+        if want and want[0] in words and all(part in name.upper() for part in want[1:]):
+            return tier
+    return None
+
 
 #: Tiers with no GPU at all: tier -> (Modal physical cores, memory in MiB). Modal's
 #: `cpu=` counts physical cores, two vCPUs each. `cpu4` is where `pose` runs: COLMAP's
@@ -169,7 +225,14 @@ class _Call:
     request: StageRequest
     call: Any
     started_at: float
+    #: The wall clock at submit (`cloud.container_billing` compares it with the
+    #: container's own clock) and the tiers the call may run on.
+    submitted_at: float = 0.0
+    chain: tuple[str, ...] = ()
     state: RemoteState = "running"
+    tier: str = ""
+    billing: str = BILLING_PROXY
+    queue_s: float | None = None
     detail: str = ""
     billed_s: float = 0.0
     metrics: Mapping[str, Any] = field(default_factory=dict)
@@ -213,12 +276,16 @@ class ModalAdapter:
         rates: Mapping[str, Rate] | None = None,
         timeout_s: float = 6 * 3600.0,
         environment_name: str | None = None,
+        #: Start a fan-out's parts on the first free GPU of `GPU_FALLBACKS` rather than
+        #: only their own tier. Off, every call waits for exactly the tier it asked for.
+        part_fallback: bool = True,
     ) -> None:
         self._app_name = app_name
         self._function_name = function_name
         self._rates = dict(rates or {})
         self._timeout_s = timeout_s
         self._environment_name = environment_name
+        self._part_fallback = part_fallback
         self._calls: dict[str, _Call] = {}
 
     # --- the protocol -------------------------------------------------------------
@@ -240,18 +307,44 @@ class ModalAdapter:
         reconstructs it in a later process, which is what makes a handle outlive the
         supervisor that created it.
         """
-        function = self._function(request.tier)
-        call = function.spawn(request.to_dict())
+        chain = self._chain(request)
+        submitted_at = time.time()
+        if len(chain) > 1:
+            try:
+                call = self._function(fallback_tier(request.tier)).spawn(request.to_dict())
+            except Exception as error:
+                # A deployment older than the fallback functions: the part waits for its
+                # own tier, as every part did before. Anything else is a real failure.
+                if type(error).__name__ != "NotFoundError":
+                    raise
+                chain = (request.tier,)
+                call = self._function(request.tier).spawn(request.to_dict())
+        else:
+            call = self._function(request.tier).spawn(request.to_dict())
         handle = RemoteHandle(id=str(call.object_id), provider=self.name, tier=request.tier)
-        self._calls[handle.id] = _Call(request=request, call=call, started_at=time.monotonic())
+        self._calls[handle.id] = _Call(
+            request=request,
+            call=call,
+            started_at=time.monotonic(),
+            submitted_at=submitted_at,
+            chain=chain,
+        )
         return handle
+
+    def _chain(self, request: StageRequest) -> tuple[str, ...]:
+        """The tiers this call may run on: a part's fallback list, or its own tier."""
+        role = request.params.get(FANOUT_PARAM)
+        is_part = isinstance(role, Mapping) and role.get("role") == "part"
+        if self._part_fallback and is_part and request.tier in GPU_FALLBACKS:
+            return GPU_FALLBACKS[request.tier]
+        return (request.tier,)
 
     def poll(self, handle: RemoteHandle) -> Poll:
         run = self._calls[handle.id]
         if run.state in ("succeeded", "failed", "preempted"):
             return self._result(run)
-        # Wall time, not the billed figure: see the module docstring. A proxy, and
-        # labelled as one, because there is no per-call billed-seconds number to read.
+        # Wall time until the call reports its own clocks: see the module docstring. A
+        # proxy, and labelled as one (`billing`), replaced when the call finishes.
         run.billed_s = time.monotonic() - run.started_at
         try:
             # `timeout=0` is documented as the way to "poll for an output immediately".
@@ -259,14 +352,38 @@ class ModalAdapter:
         except Exception as error:  # every outcome of a poll arrives as one
             state = self._state_of(error)
             if state is None:
-                return Poll(state=self._liveness(run), billed_s=run.billed_s)
+                return Poll(state=self._liveness(run), billed_s=run.billed_s, billing=BILLING_PROXY)
             run.state = state
             run.detail = f"{type(error).__name__}: {error}"
             return self._result(run)
         run.state = "succeeded"
         run.metrics = dict((outcome or {}).get("metrics") or {})
         run.summary = str((outcome or {}).get("summary") or "")
+        figured = container_billing(run.metrics, run.submitted_at, run.billed_s)
+        if figured is not None:
+            run.billed_s, run.queue_s = figured
+            run.billing = BILLING_CONTAINER
+        run.tier = self._ran_on(run)
         return self._result(run)
+
+    @staticmethod
+    def _ran_on(run: _Call) -> str:
+        """The tier the call ran on: its own, unless a fallback list let Modal choose, in
+        which case the GPU the container reported (`remoteGpu`). One it cannot place is
+        priced at the dearest of the list, so a cost is never understated."""
+        if len(run.chain) <= 1:
+            return ""
+        gpu = run.metrics.get("remoteGpu")
+        found = tier_of_gpu(gpu, run.chain) if isinstance(gpu, str) else None
+        if found is not None:
+            return found
+        listed = provider("modal")
+
+        def price(tier: str) -> float:
+            rate = listed.rate(tier) if listed is not None else None
+            return rate.usd_per_hour if rate is not None else 0.0
+
+        return max(run.chain, key=price)
 
     def logs(self, handle: RemoteHandle, *, since: int = 0) -> Sequence[str]:
         """Lines from index `since` onward, via `FunctionCall.logs.fetch()`.
@@ -397,4 +514,7 @@ class ModalAdapter:
             detail=run.detail,
             metrics=metrics if run.state == "succeeded" else None,
             summary=run.summary,
+            billing=run.billing,
+            queue_s=run.queue_s,
+            tier=run.tier,
         )

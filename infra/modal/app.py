@@ -54,6 +54,7 @@ and by whom.
 from __future__ import annotations
 
 import os
+import shutil
 import sys
 import time
 import uuid
@@ -130,6 +131,33 @@ TIMEOUT_S = 6 * 3600
 #: `attempts.json` a fiction.
 RETRIES = 0
 
+#: CPU and memory *reserved* for every GPU function (Modal's `cpu=` counts physical
+#: cores, two vCPUs each). Without them a GPU container is reserved 0.125 of a core and
+#: 128 MiB, and bursts into whatever its host's other tenants leave -- and the trainer is
+#: CPU-fed: four DataLoader workers decode a JPEG per step, and the main process launches
+#: every step's kernels from Python. Two block parts of one fan-out, the same code on the
+#: same cameras, trained at 18 and 3 it/s on two fresh L4 containers (job 33bc1bff), and
+#: the slow one's final checkpoint sync, which touches no GPU, took 65 s against 4.4 s.
+#: `remoteHost` (tools/pipeline/host.py) now says which it was on the next run: the cores
+#: a call got, the cgroup's throttling and pressure, the GPU's utilisation and clock.
+#: Modal bills CPU and memory at max(reserved, used), so reserving them costs at most:
+#: 2 x $0.0472 + 8 GiB x $0.0080 = $0.158 an hour when the trainer uses less, nothing
+#: extra when it uses more (the L4 itself is $0.80). The limit stays soft: a quiet host
+#: still lets the call burst above it.
+GPU_CPU_CORES = 2.0
+GPU_MEMORY_MIB = 8192
+
+#: Thread pools sized to that reservation rather than to `os.cpu_count()`, which in a
+#: container is the *host's* cores (dozens): OpenMP, MKL, OpenBLAS and OpenCV would
+#: otherwise each start that many threads per process -- the trainer and each of its four
+#: DataLoader workers -- and spin them against a two-core share.
+THREAD_ENV: dict[str, str] = {
+    "OMP_NUM_THREADS": "4",
+    "MKL_NUM_THREADS": "4",
+    "OPENBLAS_NUM_THREADS": "4",
+    "OPENCV_FOR_THREADS_NUM": "4",
+}
+
 _IGNORE = ["tests", ".venv", "__pycache__", ".mypy_cache", ".ruff_cache", ".pytest_cache"]
 
 image = (
@@ -176,6 +204,7 @@ image = (
             "GSPLAT_TRAINER": GSPLAT_TRAINER,
             "GSPLAT_PYTHON": TRAINER_PYTHON,
             "PYTHONUNBUFFERED": "1",
+            **THREAD_ENV,
         }
     )
     .add_local_dir(LOCAL_CAPTURES, CAPTURES_DIR, ignore=_IGNORE, copy=True)
@@ -270,6 +299,23 @@ app = modal.App("twin-pipeline")
 #: starting the container, and running (`_run`). Meaningless on the deploying machine,
 #: where nothing reads it.
 BOOTED_AT = time.time()
+
+
+def _container_started_at(now: float) -> float | None:
+    """When the container itself started (epoch seconds): `now` less the sandbox's own
+    uptime, which is what `/proc/uptime` reads inside Modal's gVisor sandbox. Modal bills
+    a container from its start, so this -- not the submit, which also counts the wait for
+    a GPU, and not `BOOTED_AT`, which misses the image's mount and Python's start -- is
+    where a cold call's bill begins (`cloud.billed_from`). None where the uptime is not
+    the container's: a host's is days, and an hour is past any cold start."""
+    try:
+        uptime = float(Path("/proc/uptime").read_text(encoding="utf-8").split()[0])
+    except (OSError, ValueError, IndexError):
+        return None
+    return now - uptime if 0.0 <= uptime < 3600.0 else None
+
+
+STARTED_AT = _container_started_at(BOOTED_AT)
 #: Calls this container has served. The first is a cold start; a later one found the
 #: container warm (Modal keeps it for its scale-down window) and paid no start at all.
 _CALLS = [0]
@@ -462,15 +508,26 @@ def _run(request: dict[str, Any]) -> dict[str, Any]:
     imported_s = time.monotonic() - importing
     parsed = StageRequest.from_dict(request)
     root = Path("/tmp") / f"stage-{parsed.stage_id}-{uuid.uuid4().hex}"  # noqa: S108
-    outcome = remote.execute(parsed, _transfer(), root).to_dict()
+    try:
+        outcome = remote.execute(parsed, _transfer(), root).to_dict()
+    finally:
+        # The sandbox goes with the call. A warm container serves the next call from the
+        # same disk, and a part's dataset, prior and splat are gigabytes it would inherit.
+        shutil.rmtree(root, ignore_errors=True)
     # The container's side of a call's billed seconds (`cloud.CloudRunner` puts them
-    # beside its own): when it was up, whether it was warm, and the imports above.
+    # beside its own): when it was up, whether it was warm, the imports above, and when
+    # the call ended -- a cold call is billed from `containerStartedAt` (or, without it,
+    # `containerBootedAt`), a warm one from `remoteEnteredAt`, to `remoteFinishedAt`
+    # (`cloud.billed_from`, `modal_adapter.ModalAdapter.poll`).
+    started = {} if STARTED_AT is None else {"containerStartedAt": round(STARTED_AT, 3)}
     outcome["metrics"] = {
         **outcome["metrics"],
+        **started,
         "containerBootedAt": round(BOOTED_AT, 3),
         "containerCall": _CALLS[0],
         "remoteEnteredAt": round(entered, 3),
         "remoteImportS": round(imported_s, 2),
+        "remoteFinishedAt": round(time.time(), 3),
     }
     return outcome
 
@@ -499,7 +556,7 @@ def _register() -> dict[str, Any]:
     silently missing here -- and so the GPU strings come from `GPU_NAMES`, which is the
     table that was wrong and is now tested.
     """
-    from modal_adapter import CPU_TIERS, GPU_NAMES
+    from modal_adapter import CPU_TIERS, GPU_FALLBACKS, GPU_NAMES, fallback_tier
 
     functions: dict[str, Any] = {}
     for tier in TIERS:
@@ -516,13 +573,39 @@ def _register() -> dict[str, Any]:
                 secrets=secrets,
             )(_run)
             continue
+        # Not `single_use_containers`: a warm container is reused only within Modal's
+        # scale-down window (a head's for the first part, a last part's for the join), it
+        # saves that call a cold start, and `remote.execute` now leaves it clean -- every
+        # child process killed, the syncer joined, the sandbox removed. The slow part of
+        # job 33bc1bff was a *fresh* container (`containerCall` 1), so one call per
+        # container would not have saved it.
         functions[tier] = app.function(
             image=image,
             gpu=GPU_NAMES[tier],
+            cpu=GPU_CPU_CORES,
+            memory=GPU_MEMORY_MIB,
             timeout=TIMEOUT_S,
             retries=RETRIES,
             name=f"run_stage_{tier}",
             secrets=secrets,
+        )(_run)
+    # The same body over a ranked list of GPUs (`modal_adapter.GPU_FALLBACKS`): Modal
+    # starts the call on the first type it has free, in order. For a fan-out's parts only
+    # (`ModalAdapter` picks it), so a part does not queue for an L4 while another GPU sits
+    # idle; the container reports which it got (`remoteGpu`) and is priced at that tier.
+    for tier, chain in GPU_FALLBACKS.items():
+        if tier not in TIERS or not all(t in TIERS for t in chain):
+            continue
+        name = fallback_tier(tier)
+        functions[name] = app.function(
+            image=image,
+            gpu=[GPU_NAMES[t] for t in chain],
+            cpu=GPU_CPU_CORES,
+            memory=GPU_MEMORY_MIB,
+            timeout=TIMEOUT_S,
+            retries=RETRIES,
+            name=f"run_stage_{name}",
+            secrets=[modal.Secret.from_name("twin-object-storage")],
         )(_run)
     return functions
 

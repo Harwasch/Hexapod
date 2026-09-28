@@ -618,6 +618,58 @@ clock), `containerCall`, `remoteImportS`, `remoteFinalSyncS`/`remoteOutputS` (wi
 bytes) and the syncer's `remoteSyncs`/`remoteSyncS`/`remoteSyncBytes`; the runner submits
 with its own wall clock and puts the two together (`cloud.call_phases`).
 
+**One slow part, and one that waited (job 33bc1bff, spool, `blocks: 2`, L4).** b1 waited
+1,697 s before its function body ran, then trained 28,786 steps at ~18 it/s; b0 started in
+12 s and trained 29,926 steps at ~3 it/s -- 10,089 s of trainer steps, billed 10,285 s --
+on similar blocks (626k / 605k gaussians, the same 156 cameras, no ring). Both report
+`cold:1` (`containerCall` 1: each was its container's first call), so b0 did *not* run in
+the head's warm container, and nothing of the head's could have shared it. What was on b0's
+side: its final checkpoint sync, which touches no GPU, took 65 s against b1's 4.4 s. A GPU
+function that asks Modal for no CPU is reserved 0.125 of a core and bursts into what its
+host's other tenants leave, and the trainer is CPU-fed (four DataLoader workers decoding a
+JPEG a step, a Python loop launching each step's kernels), with thread pools sized to the
+*host's* `os.cpu_count()`. So, ranked: a CPU-starved container (most likely); a slow or
+throttled GPU; different work (least: same code, cameras and schedule). Changed:
+
+- **Every GPU function reserves 2 cores and 8 GiB** (`infra/modal/app.py`, `GPU_CPU_CORES`,
+  `GPU_MEMORY_MIB`; Modal bills max(reserved, used), so at most +$0.16/h over an L4's
+  $0.80), and the image caps OpenMP/MKL/OpenBLAS/OpenCV pools at 4 threads.
+- **The machine is measured**: `remoteHost` (per call; `headHost`, and `fanOutHosts` per
+  part) from `host.HostWatch` -- `cores` (CPU seconds over wall: what the call actually
+  got), `cpus`, `cpuQuota`, `throttledS`, `psiCpu`, `load`; `gpuUtil`/`gpuUtilMin`,
+  `smMHz`/`smMHzMin`, `tempC`, `powerW`, `throttle` (nvidia-smi's reasons, OR-ed), and
+  `remoteGpu`. The next run says which it was: starved is low `gpuUtil` with low `cores`
+  and high `throttledS`/`psiCpu`; a slow GPU is high `gpuUtil` at a low `smMHz` or a
+  `throttle` bit; different work is neither.
+- **A call leaves nothing running** (a warm container's next call would share it):
+  `remote.execute` kills every process started under it, however it ends
+  (`remoteReaped`), names any thread still alive (`remoteLeftoverThreads`), joins the
+  checkpoint syncer for as long as a sync in flight takes, and the app removes the
+  sandbox. `progress.stream` kills its tool when the reading stops. Not
+  `single_use_containers`: reuse only happens within Modal's scale-down window, it saves
+  a cold start, and the slow part was a fresh container anyway.
+
+**Billed from the container, not the submit.** A finished Modal call is now billed from
+its container's start (a cold call: `containerStartedAt`, the sandbox's uptime subtracted
+from the clock; else `containerBootedAt`) or its entry (a warm call) to `remoteFinishedAt`
+(`cloud.container_billing`), clamped to the runner's wall time; the wait before it is
+`queueS` (per call in `attempts.json`, summed on the step), not a cost. `billing`
+(`billingBasis` on the step) says `container` or `wall-proxy` -- the old figure, kept for
+a call that reported no clocks (failed, preempted, an older image). In `call_phases`,
+`start` is then the cold start alone and `queue` sits beside the sum. Not counted by
+either: a container's idle scale-down window after its last call, which Modal bills and
+no call owns; and the reserved CPU and memory, which `providers.py` does not price.
+
+**A part may start on an L40S** (`modal_adapter.GPU_FALLBACKS`: `l4 -> (l4, l40s)`,
+deployed as `run_stage_l4_fallback` with `gpu=["L4", "L40S"]`, Modal's ranked list: the
+first type free wins). Parts only -- a single run, a head and a join keep their L4. The
+L40S is 2.44x the L4's price and trained ~2.3x faster on our benchmark, so a block costs
+~17% more by that benchmark (+6% on training seconds at list prices), and ends in under
+half the time instead of waiting half an hour. The A10 ($1.10, 1.38x) is left out until
+gsplat has been timed on one. The container reports its GPU, and the call is priced and
+ledgered at that tier (`fanOutTiers`); a deployment without the fallback function runs the
+part on its own tier; `ModalAdapter(part_fallback=False)` turns it off.
+
 What was cut, none of it a training step (the merged `trained.ply` stays byte-identical
 to the serial one's, `test_blocks.py`):
 

@@ -57,6 +57,7 @@ known-first-party = [
   "holdout_error",
   "holdout_maths",
   "holdout_stand_in",
+  "host",
   "live",
   "lod_maths",
   "lod_optimise",

@@ -114,3 +114,17 @@ def test_the_cpu_image_installs_the_pycolmap_the_global_mapper_was_measured_with
 
     assert pinned == f"pycolmap=={global_sfm.PYCOLMAP_VERSION}"
     assert ".pip_install(*IMAGE_PACKAGES, PYCOLMAP)" in APP.read_text(encoding="utf-8")
+
+
+def test_gpu_functions_reserve_cpu_and_size_their_thread_pools_to_it() -> None:
+    """A GPU function with no `cpu=` is reserved 0.125 of a core, and the trainer is fed
+    by CPU: every GPU function (the fallback lists too) reserves cores and memory, and
+    the image caps the thread pools that would otherwise size themselves to the host."""
+    values = _constants("GPU_CPU_CORES", "GPU_MEMORY_MIB")
+    cores, memory = float(str(values["GPU_CPU_CORES"])), int(str(values["GPU_MEMORY_MIB"]))
+    assert cores >= 2.0 and memory >= 4096
+    source = APP.read_text(encoding="utf-8")
+    assert source.count("cpu=GPU_CPU_CORES") == 2 and source.count("memory=GPU_MEMORY_MIB") == 2
+    assert "**THREAD_ENV" in source
+    for variable in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS"):
+        assert f'"{variable}": "{int(2 * cores)}"' in source

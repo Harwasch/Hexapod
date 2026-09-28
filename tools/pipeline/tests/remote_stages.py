@@ -11,6 +11,8 @@ once -- which is also exactly how a deployment ships its own stages.
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 import threading
 
 from artifacts import ArtifactDecl
@@ -57,3 +59,55 @@ TIMED = ArtifactDecl("timed.json", content_type="application/json")
 @stage_impl("t_remote_times_out", produces=(TIMED,), summary="its own code times out")
 def t_remote_times_out(ctx: StageContext) -> StageOutcome:
     raise TimeoutError("read timed out")
+
+
+LEFT = ArtifactDecl("left.json", content_type="application/json")
+
+#: What the leaking stages left, for the test to look at afterwards: the pids of the
+#: processes they started, and the event that lets a leaked thread end.
+LEAKED: dict[str, list[int]] = {"pids": []}
+RELEASE = threading.Event()
+
+#: Starts a grandchild, says its pid, and sleeps; so does the grandchild.
+_SLEEPER = (
+    "import subprocess, sys, time\n"
+    "g = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)'])\n"
+    "print(g.pid, flush=True)\n"
+    "time.sleep(120)\n"
+)
+
+
+def _leak_a_process(ctx: StageContext) -> None:
+    """A child that would outlive the call -- the shape of a trainer, a renderer or a
+    packer started and never waited for -- with a grandchild of its own."""
+    child = subprocess.Popen(
+        [sys.executable, "-c", _SLEEPER],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    )
+    assert child.stdout is not None
+    grandchild = int(child.stdout.readline())
+    child.stdout.close()
+    LEAKED["pids"] = [child.pid, grandchild]
+    ctx.log(f"left {child.pid} and {grandchild} running")
+
+
+@stage_impl("t_remote_leaks", produces=(LEFT,), summary="leaves a process tree running")
+def t_remote_leaks(ctx: StageContext) -> StageOutcome:
+    _leak_a_process(ctx)
+    ctx.output(LEFT.name).write_text(json.dumps({"left": LEAKED["pids"]}), encoding="utf-8")
+    return StageOutcome(metrics={"left": len(LEAKED["pids"])}, summary="leaked")
+
+
+@stage_impl("t_remote_leaks_and_fails", produces=(LEFT,), summary="leaks, then raises")
+def t_remote_leaks_and_fails(ctx: StageContext) -> StageOutcome:
+    _leak_a_process(ctx)
+    raise RuntimeError("the trainer's parent gave up")
+
+
+@stage_impl("t_remote_leaks_a_thread", produces=(LEFT,), summary="leaves a thread running")
+def t_remote_leaks_a_thread(ctx: StageContext) -> StageOutcome:
+    RELEASE.clear()
+    threading.Thread(target=RELEASE.wait, args=(30.0,), daemon=True, name="forgotten").start()
+    ctx.output(LEFT.name).write_text("{}", encoding="utf-8")
+    return StageOutcome(metrics={}, summary="a thread left")

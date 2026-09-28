@@ -75,6 +75,30 @@ def test_stream_returns_the_exit_code(tmp_path: Path) -> None:
     assert code == 3 and lines == ["bad"]
 
 
+def test_a_tool_does_not_outlive_the_stream_that_ran_it(tmp_path: Path) -> None:
+    """A log that raises ends the reading; it must end the tool too, or a trainer keeps
+    the GPU of a warm container into the next call."""
+    started = tmp_path / "pid"
+
+    def log(line: str) -> None:
+        raise KeyboardInterrupt("the worker is shutting down")
+
+    script = (
+        "import os, pathlib, time; "
+        f"pathlib.Path({str(started)!r}).write_text(str(os.getpid())); "
+        "print('training', flush=True); time.sleep(120)"
+    )
+    try:
+        progress.stream([sys.executable, "-c", script], cwd=tmp_path, log=log)
+    except KeyboardInterrupt:
+        pass
+    else:
+        raise AssertionError("the log's exception was swallowed")
+    pid = int(started.read_text())
+    stat = Path(f"/proc/{pid}/stat")
+    assert not stat.exists() or stat.read_text().rsplit(")", 1)[-1].split()[0] == "Z"
+
+
 def test_tail_reads_the_end_of_a_long_file(tmp_path: Path) -> None:
     path = tmp_path / "log.txt"
     path.write_text("x\n" * 50_000 + GSPLAT_LINE + "\n", encoding="utf-8")

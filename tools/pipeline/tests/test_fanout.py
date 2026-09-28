@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Collection, Iterator, Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -504,3 +505,87 @@ def test_a_calls_billed_seconds_are_accounted_phase_by_phase() -> None:
     # With nothing reported but the billed figure (an adapter with no remote half), it is
     # all `rest`: the account never claims more than it knows.
     assert call_phases(None, Poll(state="succeeded", billed_s=7.0)) == {"rest": 7.0}
+
+
+class OnAnotherGpu(Watched):
+    """As a Modal part on a fallback list reports: it ran on an L40S, billed from its
+    container's start after a wait for a GPU, on a machine it describes."""
+
+    def poll(self, handle: RemoteHandle) -> Poll:
+        poll = super().poll(handle)
+        role, part = fanout_role(self.inner._runs[handle.id].execution.request.params)
+        if poll.state != "succeeded" or role != "part":
+            return poll
+        metrics = {**(poll.metrics or {}), "remoteHost": "cores:1.9,gpuUtil:97.0"}
+        if part == "p1":
+            return replace(poll, tier="l40s", billing="container", queue_s=1697.0, metrics=metrics)
+        return replace(poll, billing="container", queue_s=12.0, metrics=metrics)
+
+
+def test_a_part_is_priced_at_the_gpu_it_ran_on_and_its_wait_is_not_a_cost(
+    tmp_path: Path,
+) -> None:
+    transfer = LocalTransfer(tmp_path / "bucket")
+    l40s = Rate(1.95, "test: an L40S hour")
+    fake = FakeAdapter(
+        transfer,
+        tmp_path / "sandbox",
+        name="modal",
+        interruptible=False,
+        rates={"l4": RATE, "l40s": l40s},
+        script=pieces(["p0", "p1"], 2),
+    )
+    runner = CloudRunner(
+        Placement((OnAnotherGpu(fake),)),
+        transfer,
+        poll_interval_s=0.0,
+        checkpoint_every_s=0.0,
+        sleep=lambda _seconds: None,
+    )
+    workdir = Workdir.create(tmp_path / "run")
+
+    run(workdir, runner)
+
+    entries = {entry.part: entry for entry in ledger(workdir).entries}
+    assert entries["p0"].tier == "l4" and entries["p1"].tier == "l40s"
+    assert entries["p1"].usd == pytest.approx(l40s.usd_for(entries["p1"].billed_s))
+    assert entries["p1"].billing == "container" and entries["p1"].queue_s == 1697.0
+    assert entries["join"].queue_s is None
+    # And it survives the ledger's round trip.
+    again = AttemptLedger.read(workdir.attempts_path("train")).entries
+    assert [e.queue_s for e in again if e.part == "p1"] == [1697.0]
+    step = json.loads(workdir.step_path("train").read_text())["metrics"]
+    assert step["queueS"] == pytest.approx(1709.0)
+    assert step["billingBasis"] == "container"
+    assert step["fanOutTiers"] == "p0:l4,p1:l40s"
+    assert step["fanOutHosts"] == "p0 cores:1.9,gpuUtil:97.0; p1 cores:1.9,gpuUtil:97.0"
+
+
+def test_on_the_container_s_clock_the_queue_is_beside_the_bill_not_in_it() -> None:
+    """Billed from the container's start, a part's phases sum to what Modal charged; the
+    wait for a GPU before it is `queue`, reported and not summed."""
+    poll = Poll(
+        state="succeeded",
+        billed_s=1_700.0,
+        billing="container",
+        queue_s=1_690.0,
+        metrics={
+            "containerStartedAt": 1_001_690.0,
+            "containerBootedAt": 1_001_695.0,
+            "containerCall": 1,
+            "remoteEnteredAt": 1_001_700.0,
+            "remoteImportS": 2.0,
+            "remoteFetchS": 18.0,
+            "remoteStageS": 1_650.0,
+            "remoteFinalSyncS": 4.0,
+            "remoteOutputS": 0.5,
+        },
+    )
+
+    phases = call_phases(1_000_000.0, poll)
+
+    assert phases["start"] == pytest.approx(10.0)
+    assert phases["queue"] == 1_690.0
+    additive = {k: v for k, v in phases.items() if k not in ("queue", "bgSync", "collect", "cold")}
+    assert sum(additive.values()) == pytest.approx(1_700.0)
+    assert phases["rest"] == pytest.approx(1_700.0 - 10 - 2 - 18 - 1_650 - 4.5)

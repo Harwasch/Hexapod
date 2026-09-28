@@ -13,18 +13,21 @@ part is as small as an image, a GPU and one call.
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 from pathlib import Path
 
 import pytest
-from remote_stages import GATE, READS, SLOW, TIMED
+from remote_stages import GATE, LEAKED, LEFT, READS, RELEASE, SLOW, TIMED
 
+import host
 import remote
 from adapters import LocalTransfer
 from artifacts import ArtifactDecl
 from cloud import StageRequest, Transfer
 from cloud_stages import BROKEN, COUNTED
+from phases import parse_flat
 
 
 def request_for(
@@ -257,3 +260,140 @@ def test_the_outcome_survives_a_round_trip_as_json(tmp_path: Path) -> None:
     assert document["metrics"]["iterations"] == 4
     assert document["summary"] == "counted to 4"
     assert document["uploadedBytes"] > 0
+
+
+# --- a warm container: what one call leaves for the next --------------------------------
+
+
+def _alive(pid: int) -> bool:
+    """Running, not merely a zombie waiting to be reaped."""
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+    except OSError:
+        return False
+    return stat.rsplit(")", 1)[-1].split()[0] != "Z"
+
+
+needs_proc = pytest.mark.skipif(not Path("/proc/self/stat").exists(), reason="needs /proc")
+
+
+@needs_proc
+def test_a_head_call_then_a_part_in_the_same_process_leave_it_as_they_found_it(
+    tmp_path: Path,
+) -> None:
+    """Modal keeps a container warm, so a part can land where the head just ran, and the
+    two calls share one Python process. Whatever the head started -- here a trainer-shaped
+    process tree it never waited for -- must be gone before the part runs, or the part
+    shares its CPU and GPU with it. The part then runs, and leaves nothing either."""
+    transfer = LocalTransfer(tmp_path / "bucket")
+    threads_before = set(threading.enumerate())
+    children_before = host._children(os.getpid())
+
+    head = remote.execute(
+        request_for("t_remote_leaks", produces=(LEFT,), every_s=0.05),
+        transfer,
+        tmp_path / "head",
+        impl_modules=("remote_stages",),
+        host_every_s=0.05,
+    )
+
+    leaked = list(LEAKED["pids"])
+    assert len(leaked) == 2
+    assert not any(_alive(pid) for pid in leaked), "the head's processes outlived it"
+    assert head.metrics["remoteReaped"] == 2
+    assert head.metrics["remoteLeftoverThreads"] == 0
+    assert host._children(os.getpid()) == children_before
+    # The syncer and the machine's sampler were joined, not left for the next call.
+    assert set(threading.enumerate()) <= threads_before
+
+    part = remote.execute(
+        request_for("t_cloud_counts", produces=(COUNTED,), every_s=0.05),
+        transfer,
+        tmp_path / "part",
+        impl_modules=("cloud_stages",),
+        host_every_s=0.05,
+    )
+
+    assert part.metrics["iterations"] == 4
+    assert part.metrics["remoteReaped"] == 0 and part.metrics["remoteLeftoverThreads"] == 0
+    assert host._children(os.getpid()) == children_before
+    assert set(threading.enumerate()) <= threads_before
+
+
+@needs_proc
+def test_a_call_that_fails_still_leaves_nothing_running(tmp_path: Path) -> None:
+    """The failure path is where a trainer is most likely to be abandoned."""
+    children_before = host._children(os.getpid())
+    with pytest.raises(RuntimeError, match="gave up"):
+        remote.execute(
+            request_for("t_remote_leaks_and_fails", produces=(LEFT,)),
+            LocalTransfer(tmp_path / "bucket"),
+            tmp_path / "sandbox",
+            impl_modules=("remote_stages",),
+        )
+    assert not any(_alive(pid) for pid in LEAKED["pids"])
+    assert host._children(os.getpid()) == children_before
+
+
+def test_a_thread_a_call_leaves_running_is_named_and_counted(tmp_path: Path) -> None:
+    """A thread cannot be killed from outside; it is reported, so its source gets fixed."""
+    try:
+        outcome = remote.execute(
+            request_for("t_remote_leaks_a_thread", produces=(LEFT,)),
+            LocalTransfer(tmp_path / "bucket"),
+            tmp_path / "sandbox",
+            impl_modules=("remote_stages",),
+        )
+        assert outcome.metrics["remoteLeftoverThreads"] == 1
+    finally:
+        RELEASE.set()
+
+
+def test_the_machine_the_stage_ran_on_is_reported(tmp_path: Path) -> None:
+    """`remoteHost`: what the GPU and the CPU were doing while the stage ran, sampled
+    beside it -- the figures that tell a starved call from a slow GPU."""
+    looks = iter(range(1_000))
+
+    def probe() -> dict[str, float | str]:
+        n = next(looks)
+        return {
+            "gpu": "NVIDIA L4",
+            "gpuUtil": 30.0 if n % 2 else 90.0,
+            "smMHz": 2040.0,
+            "load": 6.0,
+            "throttledS": 10.0 + n,
+            "throttle": 0x4 if n == 1 else 0,
+        }
+
+    outcome = remote.execute(
+        request_for("t_cloud_counts", produces=(COUNTED,)),
+        LocalTransfer(tmp_path / "bucket"),
+        tmp_path / "sandbox",
+        impl_modules=("cloud_stages",),
+        host_probe=probe,
+        host_every_s=3600.0,
+    )
+
+    assert outcome.metrics["remoteGpu"] == "NVIDIA L4"
+    machine = parse_flat(outcome.metrics["remoteHost"])
+    # Two looks, at the start and the end, however short the stage.
+    assert machine["samples"] == 2
+    assert machine["gpuUtil"] == pytest.approx(60.0) and machine["gpuUtilMin"] == 30.0
+    assert machine["throttledS"] == pytest.approx(1.0)
+    assert machine["throttle"] == 4.0
+    assert machine["cpuS"] >= 0 and "cores" in machine
+
+
+def test_a_probe_that_throws_is_not_a_stage_that_fails(tmp_path: Path) -> None:
+    def probe() -> dict[str, float | str]:
+        raise OSError("nvidia-smi: no devices")
+
+    outcome = remote.execute(
+        request_for("t_cloud_counts", produces=(COUNTED,)),
+        LocalTransfer(tmp_path / "bucket"),
+        tmp_path / "sandbox",
+        impl_modules=("cloud_stages",),
+        host_probe=probe,
+    )
+    assert outcome.metrics["iterations"] == 4
+    assert "remoteGpu" not in outcome.metrics

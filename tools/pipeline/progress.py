@@ -139,16 +139,25 @@ def stream(
             held = line
 
     fd = process.stdout.fileno()
-    while True:
-        chunk = os.read(fd, 65_536)
-        if not chunk:
-            break
-        pending += decoder.decode(chunk)
-        *lines, pending = re.split(r"\r\n|\r|\n", pending)
-        for line in lines:
-            emit(line)
-    pending += decoder.decode(b"", final=True)
-    emit(pending)
-    if held is not None:
-        log(held)
-    return process.wait()
+    try:
+        while True:
+            chunk = os.read(fd, 65_536)
+            if not chunk:
+                break
+            pending += decoder.decode(chunk)
+            *lines, pending = re.split(r"\r\n|\r|\n", pending)
+            for line in lines:
+                emit(line)
+        pending += decoder.decode(b"", final=True)
+        emit(pending)
+        if held is not None:
+            log(held)
+        return process.wait()
+    finally:
+        # Whatever stopped the reading -- a log that raised, an interrupt -- the tool does
+        # not outlive it: on a warm GPU container a trainer left running would share the
+        # GPU with the next call (`host.Leftovers` is the backstop for everything else).
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+        process.stdout.close()

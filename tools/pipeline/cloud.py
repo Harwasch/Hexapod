@@ -89,7 +89,9 @@ __all__ = [
     "StageKeys",
     "StageRequest",
     "Transfer",
+    "billed_from",
     "call_phases",
+    "container_billing",
     "run_cost",
 ]
 
@@ -98,6 +100,13 @@ RemoteState = Literal["pending", "running", "succeeded", "failed", "preempted"]
 
 #: The states a poll loop stops on.
 TERMINAL: tuple[RemoteState, ...] = ("succeeded", "failed", "preempted")
+
+#: How a call's billed seconds were arrived at (`Poll.billing`, `Attempt.billing`):
+#: from the container's own clock -- its start (or, warm, the call's entry) to the call's
+#: end, which is what a per-second provider bills -- or the runner's wall time since the
+#: submit, a proxy that also counts the wait for a GPU and the runner noticing the end.
+BILLING_CONTAINER = "container"
+BILLING_PROXY = "wall-proxy"
 
 
 # --- what crosses the seam ---------------------------------------------------------
@@ -247,6 +256,14 @@ class Poll:
     detail: str = ""
     metrics: Mapping[str, MetricValue] | None = None
     summary: str = ""
+    #: `BILLING_CONTAINER` or `BILLING_PROXY`; empty when the adapter does not say.
+    billing: str = ""
+    #: Seconds between the submit and the start of billing -- the wait for a GPU -- when
+    #: the adapter could tell them apart (`billing == BILLING_CONTAINER`). Not a cost.
+    queue_s: float | None = None
+    #: The tier the call actually ran on, when the provider may pick one of several
+    #: (`modal_adapter.GPU_FALLBACKS`); empty means the tier that was asked for.
+    tier: str = ""
 
 
 @runtime_checkable
@@ -333,6 +350,10 @@ class Attempt:
     #: stage's own (head) call, so a stage that never fans out writes the ledger it always
     #: did. Several entries share one `attempt` number when an attempt fanned out.
     part: str = ""
+    #: How `billed_s` was arrived at (`BILLING_CONTAINER` or `BILLING_PROXY`), and the
+    #: wait for a GPU before it, which is not billed (`Poll.queue_s`).
+    billing: str = ""
+    queue_s: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         document: dict[str, Any] = {
@@ -347,6 +368,10 @@ class Attempt:
         }
         if self.part:
             document["part"] = self.part
+        if self.billing:
+            document["billing"] = self.billing
+        if self.queue_s is not None:
+            document["queueS"] = round(self.queue_s, 3)
         return document
 
     @staticmethod
@@ -363,6 +388,8 @@ class Attempt:
             rate_source=str(document.get("rateSource", "")),
             detail=str(document.get("detail", "")),
             part=str(document.get("part", "")),
+            billing=str(document.get("billing", "")),
+            queue_s=None if document.get("queueS") is None else float(document["queueS"]),
         )
 
 
@@ -594,6 +621,9 @@ class CloudRunner(BaseRunner):
         spec = FanOut.parse((poll.metrics or {}).get(FANOUT_METRIC)) if self._fan_out else None
         if spec is not None:
             fanned["headPhases"] = flat(call_phases(submitted, poll))
+            head_host = (poll.metrics or {}).get("remoteHost")
+            if isinstance(head_host, str) and head_host:
+                fanned["headHost"] = head_host
             fanned.update(self._fan_out_parts(stage, context, keys, tier, spec))
             # Every piece's result is in `checkpoint/` now; the join call starts from it.
             sending = time.monotonic()
@@ -720,8 +750,11 @@ class CloudRunner(BaseRunner):
         billed: dict[str, float] = {part.id: 0.0 for part in spec.parts}
         running: dict[str, _PartRun] = {}
         lost: dict[str, tuple[ProviderAdapter, Poll]] = {}
-        #: Each finished piece's billed seconds, phase by phase (`call_phases`).
+        #: Each finished piece's billed seconds, phase by phase (`call_phases`), the tier
+        #: it ran on, and its machine (`remoteHost`).
         timed: dict[str, str] = {}
+        tiers: dict[str, str] = {}
+        hosts: dict[str, str] = {}
         collect_s = 0.0
         tail = _FanOutLog(context)
         started = self._clock()
@@ -749,6 +782,10 @@ class CloudRunner(BaseRunner):
                         timed[part_id] = flat(
                             call_phases(run.submitted_at, poll, collect_s=collected)
                         )
+                        tiers[part_id] = poll.tier or tier
+                        host = (poll.metrics or {}).get("remoteHost")
+                        if isinstance(host, str) and host:
+                            hosts[part_id] = host
                     entry = self._record(
                         run.adapter,
                         context,
@@ -814,6 +851,10 @@ class CloudRunner(BaseRunner):
             # time bringing the pieces home -- not billed, but the other pieces wait on it.
             "fanOutPhases": "; ".join(f"{k} {v}" for k, v in timed.items()),
             "fanOutCollectS": round(collect_s, 2),
+            # The tier each piece ran on (a fallback list may start one on another GPU),
+            # and the machine it had (`host.HostWatch`): a slow piece says why.
+            "fanOutTiers": ",".join(f"{k}:{v}" for k, v in tiers.items()),
+            "fanOutHosts": "; ".join(f"{k} {v}" for k, v in hosts.items()),
         }
 
     def _submit_part(
@@ -1059,7 +1100,9 @@ class CloudRunner(BaseRunner):
         *,
         part: str = "",
     ) -> Attempt:
-        """Price this call and write it down, whatever state it ended in."""
+        """Price this call and write it down, whatever state it ended in. At the tier it
+        ran on, which a GPU fallback list can make other than the one asked for."""
+        tier = poll.tier or tier
         rate = adapter.rate(tier)
         entry = Attempt(
             attempt=context.attempt,
@@ -1071,11 +1114,16 @@ class CloudRunner(BaseRunner):
             rate_source="" if rate is None else rate.source,
             detail=poll.detail,
             part=part,
+            billing=poll.billing,
+            queue_s=poll.queue_s,
         )
         ledger.append(entry).write(context.attempts_path)
         which = f" (part {part})" if part else ""
+        how = f" ({poll.billing})" if poll.billing else ""
+        waited = "" if poll.queue_s is None else f", after {poll.queue_s:.1f}s waiting for a GPU"
         billed = (
-            f"cloud: {poll.state}{which}; billed {entry.billed_s:.1f}s on {adapter.name!r} ({tier})"
+            f"cloud: {poll.state}{which}; billed {entry.billed_s:.1f}s{how}{waited} on "
+            f"{adapter.name!r} ({tier})"
         )
         if rate is None or entry.usd is None:
             context.log(
@@ -1106,6 +1154,14 @@ class CloudRunner(BaseRunner):
         metrics["tier"] = last.tier
         metrics["billedS"] = round(sum(call.billed_s for call in calls), 3)
         metrics["stageBilledS"] = round(ledger.billed_s, 3)
+        # How those seconds were arrived at, and the wait for a GPU that preceded them --
+        # a cost in time, not money (`Poll.queue_s`).
+        bases = sorted({call.billing for call in calls if call.billing})
+        if bases:
+            metrics["billingBasis"] = ",".join(bases)
+        queued = [call.queue_s for call in calls if call.queue_s is not None]
+        if queued:
+            metrics["queueS"] = round(sum(queued), 3)
         metrics["preemptions"] = ledger.preemptions
         priced = [call.usd for call in calls if call.usd is not None]
         if priced:
@@ -1183,6 +1239,49 @@ def _number(metrics: Mapping[str, MetricValue], name: str) -> float | None:
     return float(value)
 
 
+def billed_from(metrics: Mapping[str, MetricValue]) -> float | None:
+    """When the provider started billing a call (epoch seconds), as its container said.
+
+    A cold container (`containerCall` 1) is billed from its own start: the sandbox's
+    (`containerStartedAt`), or, from an image that does not report it, the moment the
+    app's module was imported (`containerBootedAt`) -- later, so the bill is understated
+    by the image's mount and Python's start, a few seconds. A warm container was already
+    paid for by the call before; this one is billed from entering the function body. None
+    when the call reported neither (an older image), and the proxy stands.
+    """
+    call = _number(metrics, "containerCall")
+    entered = _number(metrics, "remoteEnteredAt") or _number(metrics, "remoteStartedAt")
+    if call is None:
+        return None
+    if call <= 1:
+        return (
+            _number(metrics, "containerStartedAt")
+            or _number(metrics, "containerBootedAt")
+            or entered
+        )
+    return entered
+
+
+def container_billing(
+    metrics: Mapping[str, MetricValue], submitted_at: float, proxy_s: float
+) -> tuple[float, float] | None:
+    """(billed seconds, queue seconds) of a finished call, from the container's clock.
+
+    Billed: `billed_from` to `remoteFinishedAt`. Queue: the submit (`submitted_at`, the
+    runner's wall clock) to `billed_from` -- the wait for a GPU, which a per-second
+    provider does not bill. Both are clamped to `proxy_s` (the runner's wall time from
+    submit to seeing the result), which neither can exceed but for skew between the two
+    clocks. None when the call did not report enough to say.
+    """
+    start = billed_from(metrics)
+    finished = _number(metrics, "remoteFinishedAt")
+    if start is None or finished is None or finished < start:
+        return None
+    billed = min(finished - start, proxy_s)
+    queue = min(max(0.0, start - submitted_at), max(0.0, proxy_s - billed))
+    return billed, queue
+
+
 def call_phases(
     submitted_at: float | None, poll: Poll, *, collect_s: float | None = None
 ) -> dict[str, float]:
@@ -1191,8 +1290,10 @@ def call_phases(
 
     Additive, in order, to the billed figure:
 
-    * `start` -- submit to the function body: the GPU queue, the container's cold start
-      and its image (or nothing, on a warm container: `cold` says which);
+    * `start` -- the container's start to the function body (a cold start: the image and
+      Python; nothing on a warm container, `cold` says which). When the billed figure is
+      the proxy (`poll.billing` is not `BILLING_CONTAINER`) it is the submit to the
+      function body instead, the GPU queue included, because the proxy includes it;
     * `import` -- the pipeline's imports in the container;
     * `fetch` -- inputs and checkpoint down;
     * the stage's own phases (`phases.py`: `stageDataset`, `budget`, `prepare`, and a
@@ -1200,18 +1301,21 @@ def call_phases(
       `holdout`), with `stageOther` for whatever the stage did not time -- or `stage`
       whole when it timed nothing;
     * `finalSync` and `output` -- the checkpoint's last sync and `out/` up;
-    * `rest` -- what none of that covers: the result reaching the runner (a poll
-      interval, a log fetch), and any skew between the two clocks.
+    * `rest` -- what none of that covers: on the proxy, the result reaching the runner
+      (a poll interval, a log fetch); on the container's clock, the call's own tail; and
+      any skew between the two clocks.
 
-    Not in the sum: `bgSync`, the checkpoint syncer's own seconds while the stage ran (on
-    its own thread, beside the stage), and `collect`, the runner bringing a finished
-    piece's result home after the call has stopped billing.
+    Not in the sum: `queue`, the wait for a GPU before billing began (container basis
+    only); `bgSync`, the checkpoint syncer's own seconds while the stage ran (on its own
+    thread, beside the stage); and `collect`, the runner bringing a finished piece's
+    result home after the call has stopped billing.
     """
     metrics: Mapping[str, MetricValue] = poll.metrics or {}
     out: dict[str, float] = {}
     entered = _number(metrics, "remoteEnteredAt") or _number(metrics, "remoteStartedAt")
-    if submitted_at is not None and entered is not None:
-        out["start"] = max(0.0, entered - submitted_at)
+    since = billed_from(metrics) if poll.billing == BILLING_CONTAINER else submitted_at
+    if since is not None and entered is not None:
+        out["start"] = max(0.0, entered - since)
     for name, key in (("import", "remoteImportS"), ("fetch", "remoteFetchS")):
         value = _number(metrics, key)
         if value is not None:
@@ -1232,6 +1336,8 @@ def call_phases(
     elif (upload := _number(metrics, "remoteUploadS")) is not None:
         out["upload"] = upload
     out["rest"] = max(0.0, poll.billed_s - sum(out.values()))
+    if poll.queue_s is not None:
+        out["queue"] = poll.queue_s
     background = _number(metrics, "remoteSyncS")
     if background is not None:
         out["bgSync"] = background

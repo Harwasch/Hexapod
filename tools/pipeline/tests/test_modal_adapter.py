@@ -17,13 +17,23 @@ that flattened them would test nothing.
 from __future__ import annotations
 
 import importlib.util
+from dataclasses import replace
 from typing import Any
 
 import pytest
 
 from artifacts import ArtifactDecl
 from cloud import RemoteHandle, StageRequest
-from modal_adapter import GPU_NAMES, MAX_LOG_LINES, ModalAdapter
+from contracts import FANOUT_PARAM
+from modal_adapter import (
+    GPU_FALLBACKS,
+    GPU_NAMES,
+    MAX_LOG_LINES,
+    ModalAdapter,
+    fallback_tier,
+    tier_of_gpu,
+)
+from providers import provider
 
 
 def modal_exception(name: str, base: type[BaseException] = Exception) -> type[BaseException]:
@@ -337,3 +347,189 @@ def test_reaching_for_modal_without_the_package_explains_itself() -> None:
     adapter = ModalAdapter("twin")
     with pytest.raises(RuntimeError, match="deliberately not a dependency"):
         adapter.submit(request())
+
+
+# --- what a call is billed, and on which GPU ---------------------------------------------
+
+
+def finished(adapter: ModalAdapter, handle: RemoteHandle, *, wall_s: float) -> None:
+    """Make the call `wall_s` old by the runner's clocks: submitted that long ago."""
+    run = adapter._calls[handle.id]
+    run.started_at -= wall_s
+    run.submitted_at = 1_000_000.0
+
+
+def test_a_cold_call_is_billed_from_its_container_s_start_not_from_the_submit() -> None:
+    """Job 33bc1bff's b1 waited 1,697 s for an L4 and the wall-time proxy billed all of it.
+    Modal bills from the container's start; the wait is reported apart, as `queue_s`."""
+    outcome = {
+        "metrics": {
+            "containerCall": 1,
+            "containerStartedAt": 1_001_697.0,
+            "containerBootedAt": 1_001_700.0,
+            "remoteEnteredAt": 1_001_705.0,
+            "remoteFinishedAt": 1_003_365.0,
+        }
+    }
+    adapter, handle, _ = adapter_over(FakeCall(outcome=outcome))
+    finished(adapter, handle, wall_s=3_372.0)
+
+    poll = adapter.poll(handle)
+
+    assert poll.billing == "container"
+    assert poll.billed_s == pytest.approx(1_668.0)
+    assert poll.queue_s == pytest.approx(1_697.0)
+
+
+def test_without_the_sandbox_s_start_a_cold_call_is_billed_from_its_boot() -> None:
+    outcome = {
+        "metrics": {
+            "containerCall": 1,
+            "containerBootedAt": 1_000_010.0,
+            "remoteEnteredAt": 1_000_012.0,
+            "remoteFinishedAt": 1_000_110.0,
+        }
+    }
+    adapter, handle, _ = adapter_over(FakeCall(outcome=outcome))
+    finished(adapter, handle, wall_s=115.0)
+
+    poll = adapter.poll(handle)
+
+    assert poll.billed_s == pytest.approx(100.0) and poll.queue_s == pytest.approx(10.0)
+
+
+def test_a_warm_call_is_billed_from_entering_the_function() -> None:
+    """The container's start was the call before's; this one starts at its own entry."""
+    outcome = {
+        "metrics": {
+            "containerCall": 2,
+            "containerStartedAt": 999_000.0,
+            "remoteEnteredAt": 1_000_001.0,
+            "remoteFinishedAt": 1_000_051.0,
+        }
+    }
+    adapter, handle, _ = adapter_over(FakeCall(outcome=outcome))
+    finished(adapter, handle, wall_s=60.0)
+
+    poll = adapter.poll(handle)
+
+    assert poll.billed_s == pytest.approx(50.0) and poll.queue_s == pytest.approx(1.0)
+
+
+def test_the_container_s_figure_never_exceeds_the_runner_s_wall_time() -> None:
+    """Clock skew between the two machines can only shrink a bill, never grow it."""
+    outcome = {
+        "metrics": {
+            "containerCall": 1,
+            "containerStartedAt": 999_000.0,
+            "remoteEnteredAt": 999_010.0,
+            "remoteFinishedAt": 1_000_500.0,
+        }
+    }
+    adapter, handle, _ = adapter_over(FakeCall(outcome=outcome))
+    finished(adapter, handle, wall_s=400.0)
+
+    poll = adapter.poll(handle)
+
+    assert poll.billed_s == pytest.approx(400.0) and poll.queue_s == 0.0
+
+
+def test_a_call_that_reports_no_clocks_keeps_the_proxy_and_says_so() -> None:
+    adapter, handle, _ = adapter_over(FakeCall(outcome={"metrics": {"psnr": 27.0}}))
+    finished(adapter, handle, wall_s=42.0)
+
+    poll = adapter.poll(handle)
+
+    assert poll.billing == "wall-proxy"
+    assert poll.billed_s == pytest.approx(42.0, abs=1.0) and poll.queue_s is None
+    running, running_handle, _ = adapter_over(FakeCall(raises=TimeoutError()))
+    assert running.poll(running_handle).billing == "wall-proxy"
+
+
+def part_request(tier: str = "l4") -> StageRequest:
+    return replace(request(), tier=tier, params={FANOUT_PARAM: {"role": "part", "part": "b0"}})
+
+
+def test_a_part_may_start_on_the_first_free_gpu_of_its_fallback_list() -> None:
+    """A part waits on no one GPU type: `run_stage_l4_fallback` is deployed with
+    `gpu=["L4", "L40S"]`, and the call is priced at what the container says it got."""
+    looked_up: list[str] = []
+    call = FakeCall(
+        outcome={"metrics": {"remoteGpu": "NVIDIA L40S", "containerCall": 1}, "summary": ""}
+    )
+
+    def lookup(tier: str) -> FakeFunction:
+        looked_up.append(tier)
+        return FakeFunction(call)
+
+    adapter = ModalAdapter("twin")
+    adapter._function = lookup  # type: ignore[method-assign]
+    handle = adapter.submit(part_request())
+    poll = adapter.poll(handle)
+
+    assert looked_up == [fallback_tier("l4")] == ["l4_fallback"]
+    assert poll.tier == "l40s"
+    # The head, the join and a single run keep the tier they asked for.
+    adapter.submit(request())
+    assert looked_up[-1] == "l4"
+    assert GPU_FALLBACKS["l4"][0] == "l4", "the asked-for tier stays first choice"
+
+
+def test_a_part_on_its_own_tier_is_priced_at_it_and_an_unknown_gpu_at_the_dearest() -> None:
+    for gpu, expected in (("NVIDIA L4", "l4"), ("Some Future GPU", "l40s")):
+        call = FakeCall(outcome={"metrics": {"remoteGpu": gpu}})
+        adapter = ModalAdapter("twin")
+        adapter._function = lambda tier, call=call: FakeFunction(call)  # type: ignore[method-assign,misc]
+        assert adapter.poll(adapter.submit(part_request())).tier == expected
+
+
+def test_a_deployment_without_the_fallback_functions_runs_the_part_on_its_tier() -> None:
+    not_found = modal_exception("NotFoundError")
+    looked_up: list[str] = []
+
+    class Missing:
+        def spawn(self, payload: Any) -> Any:
+            raise not_found("Lookup failed for Function 'run_stage_l4_fallback'")
+
+    def lookup(tier: str) -> Any:
+        looked_up.append(tier)
+        return Missing() if tier.endswith("_fallback") else FakeFunction(FakeCall())
+
+    adapter = ModalAdapter("twin")
+    adapter._function = lookup  # type: ignore[method-assign]
+    adapter.submit(part_request())
+    assert looked_up == ["l4_fallback", "l4"]
+
+
+def test_fallback_can_be_turned_off() -> None:
+    looked_up: list[str] = []
+    adapter = ModalAdapter("twin", part_fallback=False)
+    adapter._function = lambda tier: looked_up.append(tier) or FakeFunction(FakeCall())  # type: ignore[method-assign,func-returns-value]
+    adapter.submit(part_request())
+    assert looked_up == ["l4"]
+
+
+@pytest.mark.parametrize(
+    ("name", "chain", "tier"),
+    [
+        ("NVIDIA L4", ("l4", "l40s"), "l4"),
+        ("NVIDIA L40S", ("l4", "l40s"), "l40s"),
+        ("NVIDIA A10", ("l4", "a10"), "a10"),
+        ("NVIDIA A100-SXM4-80GB", ("a100-40gb", "a100"), "a100"),
+        ("NVIDIA A100-SXM4-40GB", ("a100", "a100-40gb"), "a100-40gb"),
+        ("NVIDIA H100 80GB HBM3", ("l4", "l40s"), None),
+    ],
+)
+def test_a_gpu_s_name_is_its_tier(name: str, chain: tuple[str, ...], tier: str | None) -> None:
+    assert tier_of_gpu(name, chain) == tier
+
+
+def test_every_fallback_list_is_of_deployed_priced_tiers() -> None:
+    """Each tier in a list is one `providers.py` offers Modal with and prices, so the
+    call can always be priced at what it ran on."""
+    modal = provider("modal")
+    assert modal is not None
+    for tier, chain in GPU_FALLBACKS.items():
+        assert chain[0] == tier
+        for one in chain:
+            assert one in modal.tiers and one in GPU_NAMES and modal.rate(one) is not None
