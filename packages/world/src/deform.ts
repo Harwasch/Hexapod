@@ -278,6 +278,8 @@ export function deformPositions(
   transforms: readonly NodeTransform[],
   out?: Float32Array,
   flutter?: FlutterField,
+  /** Per-splat flutter identity (`positionKeys`); the splat index when omitted. */
+  flutterKeys?: Uint32Array,
 ): Float32Array {
   if (out === positions)
     throw new Error("deformPositions: canonical positions must not be the output");
@@ -339,7 +341,7 @@ export function deformPositions(
   if (flutter !== undefined) {
     if (isAdvectedFlutter(flutter))
       applyAdvectedFlutter(target, positions, assignment, flutter, count);
-    else applyFlutter(target, assignment, flutter, count);
+    else applyFlutter(target, assignment, flutter, count, flutterKeys);
   }
   return target;
 }

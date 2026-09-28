@@ -80,6 +80,18 @@ export interface MotionRig {
    * to deform rather than deform the wrong splats.
    */
   readonly canonicalChecksum: string;
+  /**
+   * For a level-of-detail (multi-tile) tileset: `checksumPositions` of **every tile's**
+   * canonical positions, in that tile's own gaussian order, leaves and merged parents alike.
+   *
+   * A tileset the viewer streams has no single array to checksum — it only ever holds some
+   * tiles, and a merged parent is a gaussian no leaf contains — so identity is proven tile by
+   * tile: each selected tile's un-baked digest must be in this set. Absent for a single-tile
+   * rig, where `canonicalChecksum` is the one tile's digest. Written by
+   * `tools/captures/rig_tiles.py`. Identity only: which node a gaussian follows is bound at
+   * load time from its own position (`assignSplatsToNodes`), never packaged.
+   */
+  readonly tileChecksums?: readonly string[];
   /** Length unit of `position` and `radius`. Metres, always; present so a reader need not guess. */
   readonly units: "meters";
   /** Free text: what produced this rig, from what capture. Carried into the UI provenance panel. */
@@ -94,6 +106,14 @@ export interface MotionRig {
 }
 
 /** The angular limit in force for a node, radians. */
+/**
+ * Every tile digest this rig accepts: `tileChecksums` when the rig was stamped for a
+ * level-of-detail tileset, otherwise the single tile's `canonicalChecksum`.
+ */
+export function rigTileChecksums(rig: MotionRig): ReadonlySet<string> {
+  return new Set(rig.tileChecksums ?? [rig.canonicalChecksum]);
+}
+
 export function nodeAngleLimit(node: SkeletonNode): number {
   const override = node.maxAngleRad;
   if (override !== undefined && Number.isFinite(override) && override > 0) return override;
@@ -122,6 +142,9 @@ export function heightAboveRoot(rig: MotionRig, index: number): number {
   if (node === undefined || root === undefined) return 0;
   return node.position[2] - root.position[2];
 }
+
+/** The shape `checksumPositions` returns. */
+const CHECKSUM = /^fnv1a32:\d+:[0-9a-f]{8}$/;
 
 function isVec3(value: unknown): value is Vec3 {
   return (
@@ -153,6 +176,13 @@ export function validateRig(rig: MotionRig): string[] {
     issues.push(`units must be "meters", got ${JSON.stringify(rig.units)}`);
   if (typeof rig.canonicalChecksum !== "string" || rig.canonicalChecksum.length === 0) {
     issues.push("canonicalChecksum must be a non-empty string");
+  }
+  if (rig.tileChecksums !== undefined) {
+    if (!Array.isArray(rig.tileChecksums) || rig.tileChecksums.length === 0) {
+      issues.push("tileChecksums, when present, must be a non-empty array");
+    } else if (!rig.tileChecksums.every((c) => typeof c === "string" && CHECKSUM.test(c))) {
+      issues.push("tileChecksums must all be checksumPositions digests (fnv1a32:<n>:<hex8>)");
+    }
   }
   const seenIds = new Set<string>();
   for (let i = 0; i < nodes.length; i += 1) {
@@ -209,6 +239,7 @@ export function serializeRig(rig: MotionRig): string {
     units: rig.units,
     canonicalChecksum: rig.canonicalChecksum,
     sourceNote: rig.sourceNote,
+    ...(rig.tileChecksums === undefined ? {} : { tileChecksums: [...rig.tileChecksums] }),
     nodes: rig.nodes.map((node) => {
       const out: Record<string, unknown> = {
         id: node.id,
@@ -266,16 +297,24 @@ export function parseRig(text: string): MotionRig {
   });
   const units = root.units;
   if (units !== "meters") throw new Error('motion rig: units must be "meters"');
+  const rawTiles = root.tileChecksums;
+  if (rawTiles !== undefined && !Array.isArray(rawTiles)) {
+    throw new Error("motion rig: tileChecksums must be an array");
+  }
   const base: MotionRig = {
     nodes,
     canonicalChecksum: asString(root.canonicalChecksum),
     units,
     sourceNote: asString(root.sourceNote),
   };
+  const rig: MotionRig =
+    rawTiles === undefined
+      ? base
+      : { ...base, tileChecksums: rawTiles.map((value) => asString(value)) };
   const motion = root.motion;
-  if (motion === undefined) return assertValidRig(base);
+  if (motion === undefined) return assertValidRig(rig);
   if (typeof motion !== "string") throw new Error("motion rig: motion must be a string path");
-  return assertValidRig({ ...base, motionPath: motion });
+  return assertValidRig({ ...rig, motionPath: motion });
 }
 
 /**
@@ -286,8 +325,11 @@ export function parseRig(text: string): MotionRig {
 export function checksumPositions(positions: Float32Array): string {
   const bytes = new Uint8Array(positions.buffer, positions.byteOffset, positions.byteLength);
   let h = 0x811c9dc5;
-  for (const byte of bytes) {
-    h = Math.imul(h ^ byte, 0x01000193) >>> 0;
+  // An indexed loop, not `for…of`: the iterator protocol cost about four times as much, and a
+  // level-of-detail tileset digests every tile it loads (`splatTiles.ts`).
+  // eslint-disable-next-line @typescript-eslint/prefer-for-of -- measured, see above
+  for (let i = 0; i < bytes.length; i += 1) {
+    h = Math.imul(h ^ (bytes[i] ?? 0), 0x01000193) >>> 0;
   }
   const count = Math.floor(positions.length / 3);
   return `fnv1a32:${count}:${h.toString(16).padStart(8, "0")}`;

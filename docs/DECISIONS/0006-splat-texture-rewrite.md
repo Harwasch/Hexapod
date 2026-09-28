@@ -1,6 +1,8 @@
 # ADR 0006 — Move splats by rewriting the attribute texture, not by shader or fork
 
-**Status:** accepted · **Date:** 2026-09-21
+**Status:** accepted · **Date:** 2026-09-21 · extended by
+[ADR 0007](0007-splat-vertex-motion-hook.md) (multi-tile tilesets; an optional vertex-shader path
+through a minimal engine patch — this texture rewrite stays the default and the fallback)
 
 ## Context
 

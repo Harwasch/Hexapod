@@ -840,8 +840,9 @@ def generate(
         lon,
         height,
         opacity_min=0.02,
-        # One tile, whatever the splat count: the Living Survey deformer refuses anything
-        # else, because splat indices are only stable while tile selection is.
+        # One tile, whatever the splat count: the ground-truth labels are in PLY order and
+        # the rig's canonicalChecksum is over this one tile. (The deformer also takes tiled
+        # captures now, given a rig stamped by rig_tiles.py; see data/tiles/synthetic-tree-lod.)
         tile_gaussians=None,
     )
     if stats["dropped"] != 0:

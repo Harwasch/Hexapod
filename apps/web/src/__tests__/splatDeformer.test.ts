@@ -398,24 +398,19 @@ describe("snapshot rebuilds re-derive from the new base", () => {
 });
 
 describe("refusing rather than misleading", () => {
-  it("refuses a multi-tile tileset, and never writes again", () => {
+  it("waits rather than guessing which tiles a snapshot holds", () => {
+    // A tree of tiles and no selected-tile list to say which of them the snapshot aggregated:
+    // nothing to bind against, so nothing is written — and it is a wait, not a refusal, because
+    // multi-tile tilesets are supported (splatDeformerTiles.test.ts) when the list is there.
     const { deformer, primitive, tileset } = harness();
     tileset.root.children = [{}, {}];
     const status = deformer.apply(...frameAt(1));
-    expect(status.phase).toBe("refused");
-    expect(status.reason).toBe("multi-tile");
+    expect(status.phase).toBe("waiting");
+    expect(status.reason).toBe("tiles");
     expect(primitive.texture.copyFrom).not.toHaveBeenCalled();
 
     tileset.root.children = [];
-    expect(deformer.apply(...frameAt(2)).phase).toBe("refused");
-    expect(primitive.texture.copyFrom).not.toHaveBeenCalled();
-  });
-
-  it("refuses a snapshot that aggregated more than one tile", () => {
-    const { deformer, primitive } = harness();
-    primitive.selectedTileLength = 3;
-    expect(deformer.apply(...frameAt(1)).reason).toBe("multi-tile");
-    expect(primitive.texture.copyFrom).not.toHaveBeenCalled();
+    expect(deformer.apply(...frameAt(2)).phase).toBe("ready");
   });
 
   it("refuses a root frame whose Z column is not the geodetic normal", () => {

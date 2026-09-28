@@ -34,6 +34,11 @@ export interface AppEnv {
   offlineCatalogUrl: string | undefined;
   photorealisticEnabled: boolean;
   devToolsEnabled: boolean;
+  /**
+   * Living Survey motion evaluated in the splat vertex shader (the engine patch's
+   * `vertexMotion` hook) instead of CPU texture rewrites. Off until checked on real hardware.
+   */
+  splatGpuMotion: boolean;
   isDev: boolean;
 }
 
@@ -48,6 +53,7 @@ export function readEnv(source: ImportMetaEnv = import.meta.env): AppEnv {
     // On unless switched off: the ion token in use must have access to Google's tiles.
     photorealisticEnabled: flag(source.VITE_ENABLE_PHOTOREALISTIC, true),
     devToolsEnabled: source.DEV || flag(source.VITE_ENABLE_DEV_TOOLS),
+    splatGpuMotion: flag(source.VITE_SPLAT_GPU_MOTION),
     isDev: source.DEV,
   };
 }

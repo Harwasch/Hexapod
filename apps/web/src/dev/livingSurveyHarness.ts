@@ -1,15 +1,15 @@
 /**
  * A bare CesiumJS page that loads one splat tileset and deforms it — the driver for the Living
- * Survey's end-to-end check.
+ * Survey's end-to-end checks.
  *
  * It exists because `SplatDeformer` is the one piece of this feature that cannot be proved
- * headlessly: the texel arithmetic, the frame round trip and the refusal logic are all unit
- * tested against a fake primitive, but whether the engine's real packed buffer, the real
- * addressing parameters and a real `Texture.copyFrom` compose into a tree that moves can only be
- * answered by a browser. This is the smallest page that asks that question — no API, no app
- * shell, no store.
+ * headlessly: the texel arithmetic, the frame round trip, the tile bookkeeping and the refusal
+ * logic are all unit tested against fake primitives, but whether the engine's real packed
+ * buffer, the real addressing parameters, a real `Texture.copyFrom` — or, on the GPU path, the
+ * patched vertex shader — compose into a tree that moves can only be answered by a browser. This
+ * is the smallest page that asks that question — no API, no app shell, no store.
  *
- * Loaded dynamically by `e2e/livingSurvey.spec.ts`; nothing imports it, so it never reaches the
+ * Loaded dynamically by `e2e/livingSurvey*.spec.ts`; nothing imports it, so it never reaches the
  * production bundle. It drives `apply()` by hand rather than from `scene.preUpdate` — the
  * animation hook belongs to `LivingSurveyManager`, and a test that installs its own is testing
  * the deformer rather than the manager.
@@ -22,22 +22,31 @@ import {
   Color,
   HeadingPitchRange,
   Math as CesiumMath,
+  Matrix4,
   type Scene,
 } from "cesium";
+import * as CesiumBarrel from "cesium";
 
 import { deform, flutterField, parseRig, type MotionRig, type WindSettings } from "@twin/world";
 
 import { SplatDeformer, type DeformerStatus } from "@/cesium/SplatDeformer";
 import { installSplatTextureInterception } from "@/cesium/splatCapture";
 import { splatCaptureCount } from "@/cesium/splatCaptureRegistry";
+import { cesiumMotionTextures } from "@/cesium/splatGpuTextures";
 import { splatTilesetOf } from "@/cesium/splatInternals";
 
 export interface LivingSurveyHarnessOptions {
   readonly container: HTMLElement;
-  /** A `tileset.json` for a single-tile Gaussian splat capture. */
+  /** A `tileset.json` for a Gaussian splat capture: one tile, or a level-of-detail tree. */
   readonly tilesetUrl: string;
   /** The matching `rig.json`. */
   readonly rigUrl: string;
+  /** Evaluate motion in the vertex shader (engine patch) rather than rewriting the texture. */
+  readonly gpu?: boolean;
+  /** Default 1, which keeps a single-tile capture fully refined; a LOD tree wants Cesium's 16. */
+  readonly maximumScreenSpaceError?: number;
+  /** Camera distance in bounding radii. Default 3.2. */
+  readonly rangeRadii?: number;
 }
 
 /** What the Playwright spec drives. Everything returns plain JSON so it crosses the bridge. */
@@ -46,11 +55,58 @@ export interface LivingSurveyHarness {
   step(t: number, wind: WindSettings): Promise<DeformerStatus>;
   /** Renders frames until the deformer attaches or `timeoutMs` elapses. */
   waitUntilReady(timeoutMs: number): Promise<DeformerStatus>;
-  status(): DeformerStatus & { captures: number; numSplatsLoaded: number };
+  status(): HarnessStatus;
   /** Largest distance any splat has moved from its measured position, metres. */
   displacementM(t: number, wind: WindSettings): number;
   /** One `apply()` with no render, for timing the CPU and upload-submit cost alone. */
   applyOnly(t: number, wind: WindSettings): DeformerStatus;
+  /**
+   * Frames the tileset from `rangeM` metres and steps `(t, wind)` until the tile selection has
+   * settled and the deformer is attached to it.
+   */
+  view(rangeM: number, t: number, wind: WindSettings, timeoutMs: number): Promise<HarnessStatus>;
+  /** Times the engine's own radix sort of this snapshot from this camera, `repeats` times. */
+  sortMs(repeats: number): Promise<{ numSplats: number; ms: number[] }>;
+  /** One line per frame of the last `view`: snapshot key, load state and deformer phase. */
+  lastViewTrace(): string[];
+  /** Keeps a copy of the current frame's pixels under `name`. */
+  capture(name: string): void;
+  /** How two captured frames differ: mean absolute channel difference, and changed share. */
+  diff(a: string, b: string): { meanAbs: number; changed: number };
+  /**
+   * Steps `frames` frames of wind from `t0` at 60 Hz and times them: `apply()` alone (the CPU
+   * cost of the motion path, upload submit included) and the whole frame (apply + render).
+   */
+  measure(frames: number, t0: number, wind: WindSettings): Promise<FrameTiming>;
+  /**
+   * `count` consecutive `apply()` calls with no render between them: the motion path's CPU cost
+   * per frame, upload submit included, for views too large to render many frames of here.
+   */
+  measureApply(count: number, t0: number, wind: WindSettings): { mean: number; max: number };
+}
+
+export interface HarnessStatus extends DeformerStatus {
+  captures: number;
+  numSplatsLoaded: number;
+  selectedTiles: number;
+  tilesLoaded: boolean;
+  /** A snapshot rebuild is in flight. */
+  pending: boolean;
+  /** Camera distance from the tileset's bounding-sphere centre, metres. */
+  cameraRangeM: number;
+  /** The last traversal selected exactly the tiles the committed snapshot aggregates. */
+  selectionSettled: boolean;
+}
+
+export interface FrameTiming {
+  readonly frames: number;
+  readonly applyMsMean: number;
+  readonly applyMsMax: number;
+  readonly frameMsMean: number;
+  readonly frameMsMedian: number;
+  readonly numSplats: number;
+  readonly motion: string;
+  readonly lastUploadWords: number;
 }
 
 /** Resolves on the next completed frame. */
@@ -76,6 +132,8 @@ export async function startLivingSurveyHarness(
     // that stops asking never fires `postRender` for the listener to resolve on.
     requestRenderMode: false,
     msaaSamples: 1,
+    // So a frame can be read back after it is presented, for `capture`.
+    contextOptions: { webgl: { preserveDrawingBuffer: true } },
   });
   const { scene } = widget;
   scene.globe.show = false;
@@ -88,18 +146,25 @@ export async function startLivingSurveyHarness(
   const rig: MotionRig = parseRig(await rigResponse.text());
 
   const tileset = await Cesium3DTileset.fromUrl(options.tilesetUrl, {
-    maximumScreenSpaceError: 1,
+    maximumScreenSpaceError: options.maximumScreenSpaceError ?? 1,
+    // The traversal site tilesets use for splats (providers/tiles.ts): REPLACE, no skipping.
+    skipLevelOfDetail: false,
   });
   scene.primitives.add(tileset);
 
   const bounds = tileset.boundingSphere;
-  scene.camera.lookAt(
-    bounds.center,
-    new HeadingPitchRange(CesiumMath.toRadians(35), CesiumMath.toRadians(-12), bounds.radius * 3.2),
-  );
+  const frame = (rangeM: number): void => {
+    scene.camera.lookAt(
+      bounds.center,
+      new HeadingPitchRange(CesiumMath.toRadians(35), CesiumMath.toRadians(-12), rangeM),
+    );
+  };
+  frame(bounds.radius * (options.rangeRadii ?? 3.2));
 
   const internals = splatTilesetOf(tileset);
-  const deformer = new SplatDeformer({ tileset: internals, rig });
+  const gpu = options.gpu === true ? cesiumMotionTextures() : undefined;
+  if (options.gpu === true && gpu === undefined) throw new Error("no GPU motion textures");
+  const deformer = new SplatDeformer({ tileset: internals, rig, gpu });
 
   async function step(t: number, wind: WindSettings): Promise<DeformerStatus> {
     const status = deformer.apply(deform(rig, t, wind), flutterField(rig, t, wind));
@@ -107,24 +172,193 @@ export async function startLivingSurveyHarness(
     return status;
   }
 
+  function status(): HarnessStatus {
+    const primitive = internals.gaussianSplatPrimitive;
+    // What the last traversal selected, against what the committed snapshot aggregated.
+    const traversal = (tileset as unknown as { _selectedTiles?: readonly unknown[] })
+      ._selectedTiles;
+    const committed = primitive?._selectedTileSet;
+    const selectionSettled =
+      committed !== undefined &&
+      traversal?.length === committed.size &&
+      traversal.every((tile) => committed.has(tile as never));
+    return {
+      selectionSettled,
+      ...deformer.status,
+      captures: splatCaptureCount(),
+      numSplatsLoaded: primitive?._numSplats ?? 0,
+      selectedTiles: primitive?._selectedTileSet?.size ?? 0,
+      tilesLoaded: tileset.tilesLoaded,
+      pending: primitive?._pendingSnapshot !== undefined && primitive._pendingSnapshot !== null,
+      cameraRangeM: Cartesian3.distance(scene.camera.positionWC, bounds.center),
+    };
+  }
+
+  const frames = new Map<string, Uint8ClampedArray>();
+  /** One line per frame of the last `view`, for diagnosing a view that never settles. */
+  const viewTrace: string[] = [];
+  function pixels(): Uint8ClampedArray {
+    const canvas = scene.canvas;
+    const copy = document.createElement("canvas");
+    copy.width = canvas.width;
+    copy.height = canvas.height;
+    const context = copy.getContext("2d");
+    if (!context) return new Uint8ClampedArray(0);
+    context.drawImage(canvas, 0, 0);
+    return context.getImageData(0, 0, copy.width, copy.height).data;
+  }
+
   return {
     step,
+    status,
     applyOnly(t: number, wind: WindSettings): DeformerStatus {
       return deformer.apply(deform(rig, t, wind), flutterField(rig, t, wind));
     },
     async waitUntilReady(timeoutMs: number): Promise<DeformerStatus> {
       const deadline = Date.now() + timeoutMs;
-      let status = deformer.status;
-      while (Date.now() < deadline && status.phase !== "ready" && status.phase !== "refused") {
-        status = await step(0, { strength: 0, bearingDeg: 0 });
+      let current = deformer.status;
+      while (Date.now() < deadline && current.phase !== "ready" && current.phase !== "refused") {
+        current = await step(0, { strength: 0, bearingDeg: 0 });
       }
-      return status;
+      return current;
     },
-    status() {
+    async view(rangeM: number, t: number, wind: WindSettings, timeoutMs: number) {
+      frame(rangeM);
+      const deadline = Date.now() + timeoutMs;
+      let key = "";
+      let stable = 0;
+      viewTrace.length = 0;
+      // Settled: every selected tile loaded, the primitive rebuilt over exactly them, the
+      // deformer attached to that snapshot, and all of it unchanged for a few frames.
+      while (Date.now() < deadline && stable < 6) {
+        await step(t, wind);
+        const now = status();
+        const next = `${String(now.generation)}:${String(now.selectedTiles)}:${String(now.numSplatsLoaded)}`;
+        viewTrace.push(
+          `${next} loaded=${String(now.tilesLoaded)} sel=${String(now.selectionSettled)} pending=${String(now.pending)} ${now.phase}/${now.reason ?? ""} tiles=${String(now.tiles)}`,
+        );
+        const settled =
+          now.tilesLoaded &&
+          now.selectionSettled &&
+          !now.pending &&
+          now.phase === "ready" &&
+          now.tiles === now.selectedTiles &&
+          now.numSplats === now.numSplatsLoaded;
+        stable = settled && next === key ? stable + 1 : 0;
+        key = next;
+        if (now.phase === "refused") break;
+      }
+      return status();
+    },
+    async sortMs(repeats: number): Promise<{ numSplats: number; ms: number[] }> {
+      // The engine's own radix sort (a WASM worker), over this snapshot's positions from this
+      // camera: what one re-sort of displaced positions would cost, were it triggered.
+      const sorter = (
+        CesiumBarrel as unknown as {
+          GaussianSplatSorter?: {
+            radixSortIndexes(parameters: unknown): Promise<unknown> | undefined;
+          };
+        }
+      ).GaussianSplatSorter;
+      const primitive = internals.gaussianSplatPrimitive;
+      const positions = primitive?._positions;
+      const root = primitive?._rootTransform;
+      const count = primitive?._numSplats ?? 0;
+      const ms: number[] = [];
+      if (sorter === undefined || positions === undefined || root === undefined) {
+        return { numSplats: count, ms };
+      }
+      const modelView = Matrix4.multiply(
+        scene.camera.viewMatrix,
+        Matrix4.clone(root as Matrix4),
+        new Matrix4(),
+      );
+      while (ms.length < repeats) {
+        const start = performance.now();
+        const promise = sorter.radixSortIndexes({
+          primitive: {
+            positions: new Float32Array(positions.subarray(0, count * 3)),
+            modelView: Float32Array.from(modelView),
+            count,
+          },
+          sortType: "Index",
+        });
+        if (promise === undefined) {
+          await nextFrame(scene);
+          continue;
+        }
+        await promise;
+        ms.push(performance.now() - start);
+      }
+      return { numSplats: count, ms };
+    },
+    lastViewTrace(): string[] {
+      return [...viewTrace];
+    },
+    capture(name: string): void {
+      frames.set(name, pixels());
+    },
+    diff(a: string, b: string) {
+      const first = frames.get(a);
+      const second = frames.get(b);
+      if (first === undefined || second?.length !== first.length) {
+        return { meanAbs: Number.NaN, changed: Number.NaN };
+      }
+      let total = 0;
+      let changed = 0;
+      for (let i = 0; i < first.length; i += 4) {
+        const d =
+          Math.abs((first[i] ?? 0) - (second[i] ?? 0)) +
+          Math.abs((first[i + 1] ?? 0) - (second[i + 1] ?? 0)) +
+          Math.abs((first[i + 2] ?? 0) - (second[i + 2] ?? 0));
+        total += d / 3;
+        if (d > 0) changed += 1;
+      }
+      const count = first.length / 4;
+      return { meanAbs: total / count, changed: changed / count };
+    },
+    measureApply(count: number, t0: number, wind: WindSettings) {
+      const times: number[] = [];
+      for (let i = 0; i < count; i += 1) {
+        const t = t0 + i / 60;
+        const transforms = deform(rig, t, wind);
+        const field = flutterField(rig, t, wind);
+        const start = performance.now();
+        deformer.apply(transforms, field);
+        times.push(performance.now() - start);
+      }
       return {
-        ...deformer.status,
-        captures: splatCaptureCount(),
-        numSplatsLoaded: internals.gaussianSplatPrimitive?._numSplats ?? 0,
+        mean: times.reduce((sum, value) => sum + value, 0) / Math.max(1, times.length),
+        max: Math.max(...times),
+      };
+    },
+    async measure(count: number, t0: number, wind: WindSettings): Promise<FrameTiming> {
+      const apply: number[] = [];
+      const whole: number[] = [];
+      for (let i = 0; i < count; i += 1) {
+        const t = t0 + i / 60;
+        const transforms = deform(rig, t, wind);
+        const field = flutterField(rig, t, wind);
+        const start = performance.now();
+        deformer.apply(transforms, field);
+        const applied = performance.now();
+        await nextFrame(scene);
+        apply.push(applied - start);
+        whole.push(performance.now() - start);
+      }
+      const sorted = [...whole].sort((x, y) => x - y);
+      const mean = (values: number[]): number =>
+        values.reduce((sum, value) => sum + value, 0) / Math.max(1, values.length);
+      const current = deformer.status;
+      return {
+        frames: count,
+        applyMsMean: mean(apply),
+        applyMsMax: Math.max(...apply),
+        frameMsMean: mean(whole),
+        frameMsMedian: sorted[Math.floor(sorted.length / 2)] ?? Number.NaN,
+        numSplats: current.numSplats,
+        motion: current.motion,
+        lastUploadWords: current.lastUploadWords,
       };
     },
     displacementM(t: number, wind: WindSettings): number {

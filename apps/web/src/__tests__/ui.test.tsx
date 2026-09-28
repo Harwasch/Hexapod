@@ -56,6 +56,7 @@ function livingStatus(
     numSplats: 2000,
     displaced: animating,
     rigSourceNote: RIG_NOTE,
+    motionEvidence: null,
     maxDisplacementM: 0.197,
     sortStaleness: 9.8,
     ...over,

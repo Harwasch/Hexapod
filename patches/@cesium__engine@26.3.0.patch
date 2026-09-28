@@ -1,3 +1,85 @@
+diff --git a/Source/Scene/GaussianSplatPrimitive.js b/Source/Scene/GaussianSplatPrimitive.js
+index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..ab3c383ba29ed811c1420f13d86d37e0ad65f576 100644
+--- a/Source/Scene/GaussianSplatPrimitive.js
++++ b/Source/Scene/GaussianSplatPrimitive.js
+@@ -1070,9 +1070,42 @@ function GaussianSplatPrimitive(options) {
+    * @private
+    */
+   this._splatBudgetSSEScale = 1.0;
++
++  // Hexapod patch (patches/@cesium__engine@26.3.0.patch): see `vertexMotion` below.
++  this._vertexMotion = undefined;
++  this._vertexMotionDirty = false;
+ }
+ 
+ Object.defineProperties(GaussianSplatPrimitive.prototype, {
++  /**
++   * Hexapod patch: an optional vertex-shader motion hook, so splats can be displaced on the
++   * GPU without writing the attribute texture, `_positions` or anything the sorter reads.
++   *
++   * An object with one method, `addToShader(shaderBuilder, uniformMap, context)`, called every
++   * time the draw command is built. It declares its own uniforms (and supplies them through
++   * `uniformMap`) and adds vertex lines defining
++   * `vec3 splatVertexMotion(uint splatIndex, vec3 position)`, which the vertex shader applies
++   * to each splat's fetched position (in the draw command's model frame) before projecting it.
++   * `splatIndex` is the attribute-texture index, addressed with `u_splatRowMask/Shift`.
++   *
++   * Setting or clearing it rebuilds the draw command on the next render; nothing else about
++   * the primitive changes. Upstream has no equivalent: `customShader` does not reach splats.
++   * @memberof GaussianSplatPrimitive.prototype
++   * @type {object|undefined}
++   * @private
++   */
++  vertexMotion: {
++    get: function () {
++      return this._vertexMotion;
++    },
++    set: function (value) {
++      if (this._vertexMotion !== value) {
++        this._vertexMotion = value;
++        this._vertexMotionDirty = true;
++      }
++    },
++  },
++
+   /**
+    * Indicates whether the primitive is ready for use.
+    * @memberof GaussianSplatPrimitive.prototype
+@@ -1577,6 +1610,17 @@ GaussianSplatPrimitive.buildGSplatDrawCommand = function (
+   renderResources.instanceCount = instanceCount;
+   renderResources.count = 4;
+   renderResources.primitiveType = PrimitiveType.TRIANGLE_STRIP;
++  // Hexapod patch: the motion hook's uniforms and function go in ahead of the shader body.
++  const vertexMotion = primitive._vertexMotion;
++  if (defined(vertexMotion)) {
++    shaderBuilder.addDefine(
++      "HAS_SPLAT_VERTEX_MOTION",
++      undefined,
++      ShaderDestination.VERTEX,
++    );
++    vertexMotion.addToShader(shaderBuilder, uniformMap, frameState.context);
++  }
++  primitive._vertexMotionDirty = false;
+   shaderBuilder.addVertexLines(GaussianSplatVS);
+   shaderBuilder.addFragmentLines(GaussianSplatFS);
+   const shaderProgram = shaderBuilder.buildShaderProgram(frameState.context);
+@@ -1689,6 +1733,16 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
+     return;
+   }
+ 
++  // Hexapod patch: a motion hook set or cleared since the draw command was built. Rebuilt
++  // before the command is pushed, so a cleared hook's resources are never drawn with again.
++  if (
++    this._vertexMotionDirty &&
++    defined(this._drawCommand) &&
++    defined(this._indexes)
++  ) {
++    GaussianSplatPrimitive.buildGSplatDrawCommand(this, frameState);
++  }
++
+   if (this._drawCommand) {
+     frameState.commandList.push(this._drawCommand);
+   }
 diff --git a/Source/Scene/TerrainFillMesh.js b/Source/Scene/TerrainFillMesh.js
 index c5d264395fc522ecc29717e57ff159aa4ed3cfd1..f7b22ea41aac67be450cf0e49db7d5195f64d2a4 100644
 --- a/Source/Scene/TerrainFillMesh.js
@@ -16,3 +98,35 @@ index c5d264395fc522ecc29717e57ff159aa4ed3cfd1..f7b22ea41aac67be450cf0e49db7d519
    let edgeMeshes;
    let edgeTiles;
  
+diff --git a/Source/Shaders/PrimitiveGaussianSplatVS.glsl b/Source/Shaders/PrimitiveGaussianSplatVS.glsl
+index 18838d6c4b087d4b2bdcedfd0741d8217fb4900c..dfca6826ab879a99e14534827975224ff960bed3 100644
+--- a/Source/Shaders/PrimitiveGaussianSplatVS.glsl
++++ b/Source/Shaders/PrimitiveGaussianSplatVS.glsl
+@@ -151,6 +151,11 @@ void main() {
+     uint rowShift = uint(u_splatRowShift);
+     ivec2 posCoord = ivec2(int((texIdx & rowMask) << 1), int(texIdx >> rowShift));
+     vec4 splatPosition = vec4( uintBitsToFloat(uvec4(texelFetch(u_splatAttributeTexture, posCoord, 0))) );
++#if defined(HAS_SPLAT_VERTEX_MOTION)
++    // Optional motion hook (GaussianSplatPrimitive.vertexMotion): displaces the fetched
++    // position before projection. The texture itself is never written.
++    splatPosition.xyz = splatVertexMotion(texIdx, splatPosition.xyz);
++#endif
+ 
+     vec4 splatViewPos = czm_modelView * vec4(splatPosition.xyz, 1.0);
+     vec4 clipPosition = czm_projection * splatViewPos;
+diff --git a/Source/Shaders/PrimitiveGaussianSplatVS.js b/Source/Shaders/PrimitiveGaussianSplatVS.js
+index 0fab5dd6b552ab92efe01e4131204530d02e0374..b4542c2e183d44840cde2a77486de5ef4cfc37d3 100644
+--- a/Source/Shaders/PrimitiveGaussianSplatVS.js
++++ b/Source/Shaders/PrimitiveGaussianSplatVS.js
+@@ -152,6 +152,11 @@ void main() {\n\
+     uint rowShift = uint(u_splatRowShift);\n\
+     ivec2 posCoord = ivec2(int((texIdx & rowMask) << 1), int(texIdx >> rowShift));\n\
+     vec4 splatPosition = vec4( uintBitsToFloat(uvec4(texelFetch(u_splatAttributeTexture, posCoord, 0))) );\n\
++#if defined(HAS_SPLAT_VERTEX_MOTION)\n\
++    // Optional motion hook (GaussianSplatPrimitive.vertexMotion): displaces the fetched\n\
++    // position before projection. The texture itself is never written.\n\
++    splatPosition.xyz = splatVertexMotion(texIdx, splatPosition.xyz);\n\
++#endif\n\
+ \n\
+     vec4 splatViewPos = czm_modelView * vec4(splatPosition.xyz, 1.0);\n\
+     vec4 clipPosition = czm_projection * splatViewPos;\n\

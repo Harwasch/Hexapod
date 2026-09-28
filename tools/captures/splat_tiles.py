@@ -1461,8 +1461,7 @@ class ParentOverrides:
             version = int(data["format"])
             if version != PARENTS_FORMAT:
                 raise ParentOverrideError(
-                    f"{path.name} is parent-override format {version}; this reads "
-                    f"{PARENTS_FORMAT}"
+                    f"{path.name} is parent-override format {version}; this reads {PARENTS_FORMAT}"
                 )
             uris = [str(uri) for uri in data["uris"]]
             offsets = data["offsets"].astype(np.int64)

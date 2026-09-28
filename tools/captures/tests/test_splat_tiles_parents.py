@@ -22,9 +22,9 @@ from typing import Any
 
 import numpy as np
 import pytest
+from test_splat_tiles_lod import glb_splats, scene, tiles_of, write_ply
 
 import splat_tiles
-from test_splat_tiles_lod import glb_splats, scene, tiles_of, write_ply
 
 BUDGET = 700
 COUNT = 8_000
@@ -159,12 +159,16 @@ def test_overrides_for_another_packing_are_refused(setup: dict[str, Any], tmp_pa
         splat_tiles.convert(ply, tmp_path / "b", 0, 0, 0, 0.05, BUDGET, parents=overrides)
     other = write_ply(tmp_path / "other.ply", scene(COUNT, seed=12))
     with pytest.raises(splat_tiles.ParentOverrideError, match="sha256"):
-        splat_tiles.convert(other, tmp_path / "c", 0, 0, 0, tile_gaussians=BUDGET, parents=overrides)
+        splat_tiles.convert(
+            other, tmp_path / "c", 0, 0, 0, tile_gaussians=BUDGET, parents=overrides
+        )
     # Refused before a byte was written.
     assert not any((tmp_path / name).exists() for name in ("a", "b", "c"))
 
 
-def test_a_tile_whose_cells_differ_is_refused_by_name(setup: dict[str, Any], tmp_path: Path) -> None:
+def test_a_tile_whose_cells_differ_is_refused_by_name(
+    setup: dict[str, Any], tmp_path: Path
+) -> None:
     overrides: splat_tiles.ParentOverrides = setup["overrides"]
     keys = overrides.keys.copy()
     keys[0] += 1
