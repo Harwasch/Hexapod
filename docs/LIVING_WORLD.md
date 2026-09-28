@@ -7,6 +7,14 @@ been built yet. It extends [LIVING_SURVEY.md](LIVING_SURVEY.md), the
 The component matrix is also available as data in
 [`living-world/components.json`](living-world/components.json).
 
+**Update 2026-09-28: [ADR 0008](DECISIONS/0008-living-mode.md) decides the Living Mode half.**
+Before any recorded motion exists, trees move under a stateless modal model built from the rig
+alone (`motionEvidence: "allometric"`, shipped for the synthetic tree); video models serve only
+as offline teachers — Teacher A fits motion statistics to generated clips (`fitted-generated`),
+Teacher B (deferred) fills unseen regions into a separate "generated" layer — and only models
+whose code and weights permit commercial use may ship. The fitted and recorded rungs below keep
+their place above it on the evidence ladder.
+
 ## 1. The answer
 
 **Do not build one big 4DGS.** Build a **layered world state**. At its base is a measured,

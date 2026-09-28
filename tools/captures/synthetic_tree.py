@@ -10,6 +10,7 @@ It emits, into ``<out_dir>``::
 
     source/splat.ply             binary little-endian 3DGS PLY, the layout splat_tiles reads
     source/rig.json              MotionRig JSON, the schema in packages/world/src/rig.ts
+    source/motion.json           Living Mode motion sidecar (motion_params.py; motionParams.ts)
     source/labels.json           ground-truth node index per splat, in PLY order
     source/positions.f32         the canonical positions the checksum is over, raw float32
     source/checksum_vectors.json small cases pinning checksum_positions to its TS twin
@@ -40,6 +41,7 @@ from pathlib import Path
 
 import numpy as np
 
+import motion_params
 import splat_tiles
 from splat_tiles import SH_C0, SPZ_FRACTIONAL_BITS
 
@@ -795,8 +797,12 @@ def generate(
     source_dir.mkdir(parents=True, exist_ok=True)
     ply_path = source_dir / "splat.ply"
     write_ply(ply_path, data)
-    (source_dir / "rig.json").write_text(
-        json.dumps(rig, separators=(",", ":")) + "\n", encoding="utf-8"
+    # The Living Mode sidecar (motion.json) beside the rig, and the rig's pointer to it: the
+    # tree's height from its splats, its leaf size from its foliage splats.
+    motion_params.write_sidecar(
+        source_dir,
+        rig,
+        motion_params.sidecar_for(rig, positions.astype(np.float64), data["log_scale"]),
     )
     (source_dir / "labels.json").write_text(
         json.dumps(

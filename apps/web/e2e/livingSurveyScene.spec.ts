@@ -118,6 +118,7 @@ interface Status {
     numSplats: number;
     displaced: boolean;
     rigSourceNote: string;
+    motionEvidence: string | null;
     maxDisplacementM: number;
     sortStaleness: number;
   }[];
@@ -153,6 +154,9 @@ test.describe("Living Survey: the scene", () => {
     expect(ready.sites[0]?.reason).toBeUndefined();
     expect(ready.sites[0]?.numSplats).toBe(12000);
     expect(ready.sites[0]?.siteSlug).toBe("synthetic-tree");
+    // The rig points at its Living Mode sidecar (ADR 0008), fetched beside it: the modal model
+    // drives this tree, and the status says how much evidence stands behind it.
+    expect(ready.sites[0]?.motionEvidence).toBe("allometric");
     expect(ready.captures).toBeGreaterThan(0);
     // Wind starts at 0 and the first thing anyone sees is the measurement.
     expect(ready.wind.strength).toBe(0);

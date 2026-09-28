@@ -19,6 +19,7 @@
  */
 
 import { applyFlutter, type FlutterField } from "./flutter";
+import { applyAdvectedFlutter, isAdvectedFlutter } from "./leafFlutter";
 import { nodeModes, turbulentLoad, type NodeMode } from "./modes";
 import { nodeAngleLimit, type MotionRig, type SkeletonNode } from "./rig";
 import {
@@ -331,6 +332,14 @@ export function deformPositions(
   // Flutter in a second pass rather than inside the loop above: the two terms are independent,
   // and kept apart each loop stays small enough for the JIT to hold in registers. Fused, the
   // same arithmetic measured 8.1 ms a frame at 150k splats where split it is 2.7 ms.
-  if (flutter !== undefined) applyFlutter(target, assignment, flutter, count);
+  //
+  // Two kinds of field: the legacy per-splat hashed shimmer (`flutter.ts`), which needs only the
+  // splat index, and Living Mode's advected leaf field (`leafFlutter.ts`), which is looked up at
+  // the splat's canonical position — never the displaced one, so there is no feedback.
+  if (flutter !== undefined) {
+    if (isAdvectedFlutter(flutter))
+      applyAdvectedFlutter(target, positions, assignment, flutter, count);
+    else applyFlutter(target, assignment, flutter, count);
+  }
   return target;
 }

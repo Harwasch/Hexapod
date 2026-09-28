@@ -9,7 +9,12 @@
 
 import { create } from "zustand";
 
-import { DEFAULT_WIND_STRENGTH, WIND_CALM, type WindSettings } from "@twin/world";
+import {
+  DEFAULT_WIND_STRENGTH,
+  WIND_CALM,
+  type MotionEvidence,
+  type WindSettings,
+} from "@twin/world";
 
 import type { DeformerPhase, DeformerReason } from "@/cesium/SplatDeformer";
 
@@ -56,6 +61,11 @@ export interface LivingSiteStatus {
   readonly displaced: boolean;
   /** What the rig says it was built from. Carried into the provenance UI. */
   readonly rigSourceNote: string;
+  /**
+   * How much evidence stands behind the motion (ADR 0008's ladder), or null for the legacy
+   * nine-sine model, which claims none. Shown in the Inspector beside "Simulated".
+   */
+  readonly motionEvidence: MotionEvidence | null;
   /** Worst-case displacement at the scene's current wind, metres. A bound, not a sample. */
   readonly maxDisplacementM: number;
   /** That displacement in splat radii, against {@link REFERENCE_GAUSSIAN_SCALE_M}. */

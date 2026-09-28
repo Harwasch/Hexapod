@@ -2,6 +2,7 @@ import { Crosshair, ExternalLink } from "lucide-react";
 
 import { formatLatLon, formatLength } from "@twin/geo";
 import { GlassBadge, GlassButton, GlassTooltip } from "@twin/ui";
+import { MOTION_EVIDENCE_LABEL } from "@twin/world";
 
 import { useLayers as useLayerCatalog, useSite } from "@/api/queries";
 import { useScene } from "@/cesium/SceneContext";
@@ -197,7 +198,15 @@ export function InspectorPanel() {
                 )}
                 <dt>Motion</dt>
                 <dd data-testid="inspector-motion">
-                  Simulated · {livingSite.rigSourceNote}
+                  Simulated
+                  {livingSite.motionEvidence && (
+                    <span data-testid="inspector-motion-evidence">
+                      {" "}
+                      ({livingSite.motionEvidence}:{" "}
+                      {MOTION_EVIDENCE_LABEL[livingSite.motionEvidence]})
+                    </span>
+                  )}{" "}
+                  · {livingSite.rigSourceNote}
                   <br />
                   <span className="glass-subtle">
                     {motionState(livingSite.phase === "ready", living.animating)}

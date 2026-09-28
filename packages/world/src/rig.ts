@@ -84,6 +84,13 @@ export interface MotionRig {
   readonly units: "meters";
   /** Free text: what produced this rig, from what capture. Carried into the UI provenance panel. */
   readonly sourceNote: string;
+  /**
+   * Where this rig's motion sidecar sits, relative to the rig file (JSON key `motion`), or absent
+   * for a rig with none — which then moves under the legacy model. A claim written into the rig,
+   * as `renderConfig.rigUrl` is written into the catalog, so nothing probes for a sidecar that is
+   * not there. See `motionParams.ts` and docs/DECISIONS/0008-living-mode.md.
+   */
+  readonly motionPath?: string;
 }
 
 /** The angular limit in force for a node, radians. */
@@ -175,6 +182,17 @@ export function validateRig(rig: MotionRig): string[] {
       issues.push(`${where}: maxAngleRad, when present, must be > 0`);
     }
   }
+  const motionPath = rig.motionPath;
+  if (
+    motionPath !== undefined &&
+    (typeof motionPath !== "string" ||
+      motionPath.length === 0 ||
+      motionPath.includes("..") ||
+      motionPath.startsWith("/") ||
+      motionPath.includes(":"))
+  ) {
+    issues.push("motion, when present, must be a relative path beside the rig");
+  }
   return issues;
 }
 
@@ -203,6 +221,7 @@ export function serializeRig(rig: MotionRig): string {
       if (node.maxAngleRad !== undefined) out.maxAngleRad = node.maxAngleRad;
       return out;
     }),
+    ...(rig.motionPath === undefined ? {} : { motion: rig.motionPath }),
   });
 }
 
@@ -247,12 +266,16 @@ export function parseRig(text: string): MotionRig {
   });
   const units = root.units;
   if (units !== "meters") throw new Error('motion rig: units must be "meters"');
-  return assertValidRig({
+  const base: MotionRig = {
     nodes,
     canonicalChecksum: asString(root.canonicalChecksum),
     units,
     sourceNote: asString(root.sourceNote),
-  });
+  };
+  const motion = root.motion;
+  if (motion === undefined) return assertValidRig(base);
+  if (typeof motion !== "string") throw new Error("motion rig: motion must be a string path");
+  return assertValidRig({ ...base, motionPath: motion });
 }
 
 /**

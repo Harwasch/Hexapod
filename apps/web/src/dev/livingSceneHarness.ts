@@ -22,7 +22,7 @@ import type { Site, SiteSummary } from "@twin/contracts";
 import type { WindSettings } from "@twin/world";
 
 import { CesiumSceneManager } from "@/cesium/CesiumSceneManager";
-import { LIVING_EPOCH_ISO } from "@/cesium/LivingSurveyManager";
+import { LIVING_EPOCH_ISO, type LivingMotionModel } from "@/cesium/LivingSurveyManager";
 import { splatCaptureCount } from "@/cesium/splatCaptureRegistry";
 import type { LivingSurveyStatus } from "@/state/living";
 
@@ -67,6 +67,8 @@ export interface LivingSceneHarness {
   /** Moves the scene clock to `t` seconds after the Living Survey epoch. */
   setTime(t: number): void;
   setWind(wind: WindSettings): void;
+  /** Living Mode's sidecar model (`auto`) or the legacy nine-sine model, for comparison clips. */
+  setMotionModel(model: LivingMotionModel): void;
   status(): LivingSurveyStatus & { captures: number };
   counts(): FrameCounts;
   /** Waits until `ticks` has advanced by `n`, whether or not anything renders. */
@@ -76,6 +78,8 @@ export interface LivingSceneHarness {
    * hold the measured pose, so this is what the survey actually looks like right now.
    */
   grabFrameHash(): Promise<string>;
+  /** The same frame as {@link grabFrameHash}, as a PNG data URL — for comparison clips. */
+  grabFrame(): Promise<string>;
   /**
    * `CesiumSceneManager.snapshot()`, with a witness.
    *
@@ -298,6 +302,27 @@ export async function startLivingSceneHarness(
     });
   }
 
+  /**
+   * Renders one frame at the current scene time and returns it as a PNG data URL. Read inside a
+   * postRender, the same way `CesiumSceneManager.snapshot()` does: the drawing buffer is not
+   * preserved between frames. Asking for the frame from inside the listener is what keeps this
+   * from hanging in request-render mode.
+   */
+  function grabPng(): Promise<string> {
+    return new Promise((resolve) => {
+      const remove = gl.postRender.addEventListener(() => {
+        remove();
+        const source = viewer.canvas;
+        const target = document.createElement("canvas");
+        target.width = source.width;
+        target.height = source.height;
+        target.getContext("2d")?.drawImage(source, 0, 0);
+        resolve(target.toDataURL("image/png"));
+      });
+      gl.requestRender();
+    });
+  }
+
   return {
     setTime(t: number): void {
       viewer.clock.currentTime = JulianDate.addSeconds(
@@ -316,23 +341,13 @@ export async function startLivingSceneHarness(
       return { ticks, livingRequests, renderRequests, renders };
     },
     waitTicks,
-    grabFrameHash(): Promise<string> {
-      // Read inside a postRender, the same way `CesiumSceneManager.snapshot()` does: the
-      // drawing buffer is not preserved between frames. Asking for the frame from inside the
-      // listener is what keeps this from hanging in request-render mode.
-      return new Promise((resolve) => {
-        const remove = gl.postRender.addEventListener(() => {
-          remove();
-          const source = viewer.canvas;
-          const target = document.createElement("canvas");
-          target.width = source.width;
-          target.height = source.height;
-          target.getContext("2d")?.drawImage(source, 0, 0);
-          resolve(digest(target.toDataURL("image/png")));
-        });
-        gl.requestRender();
-      });
+    setMotionModel(model: LivingMotionModel): void {
+      scene.living.setMotionModel(model);
     },
+    async grabFrameHash(): Promise<string> {
+      return digest(await grabPng());
+    },
+    grabFrame: grabPng,
     async snapshotProbe(): Promise<{ hash: string; displacedDuringCapture: boolean }> {
       // Registered before `snapshot()` registers its own, so it runs first — while the hold is
       // still in force and before `release()`. `displaced` reports what the deformer wrote in

@@ -7,9 +7,11 @@
  * animating, what happens when a site leaves, and that `destroy()` puts everything back.
  */
 
+import { readFileSync } from "node:fs";
+
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { checksumPositions, WIND_CALM, type WindSettings } from "@twin/world";
+import { checksumPositions, serializeRig, WIND_CALM, type WindSettings } from "@twin/world";
 
 import { LIVING_EPOCH_ISO, LivingSurveyManager, sceneSeconds } from "@/cesium/LivingSurveyManager";
 import { rigUrlFor } from "@/cesium/livingRigs";
@@ -29,6 +31,7 @@ import {
   canonicalPositions,
   FakeSplatPrimitive,
   FakeSplatTileset,
+  fixturePath,
   fixtureRig,
   FIXTURE_SPLATS,
   packedBufferFor,
@@ -473,7 +476,13 @@ describe("the wind store", () => {
   });
 });
 
-/** A manager with the fixture attached and one tick run, so the deformer is `ready`. */
+/**
+ * A manager with the fixture attached and one tick run, so the deformer is `ready`.
+ *
+ * Under the **legacy** model: `JSON.stringify` writes the parsed rig's `motionPath` field, not the
+ * `motion` key a rig file carries, so the served rig points at no sidecar. Living Mode is
+ * exercised by {@link attachedWithSidecar}.
+ */
 async function attached(): Promise<ReturnType<typeof createHarness>> {
   const rigText = JSON.stringify(fixtureRig);
   const fetchMock = vi.fn((input: unknown) =>
@@ -490,3 +499,86 @@ async function attached(): Promise<ReturnType<typeof createHarness>> {
   vi.unstubAllGlobals();
   return harness;
 }
+
+/**
+ * A manager whose rig points at the committed Living Mode sidecar (ADR 0008), both served by
+ * the fetch mock, so the modal model drives the deformer.
+ */
+async function attachedWithSidecar(): Promise<ReturnType<typeof createHarness>> {
+  const rigText = serializeRig(fixtureRig);
+  const sidecarText = readFileSync(fixturePath("source/motion.json"), "utf8");
+  const sidecarUrl = new URL(fixtureRig.motionPath ?? "", RIG_URL).toString();
+  const fetchMock = vi.fn((input: unknown) => {
+    const url = String(input);
+    const body = url === RIG_URL ? rigText : url === sidecarUrl ? sidecarText : "";
+    return Promise.resolve({
+      ok: body !== "",
+      status: body === "" ? 404 : 200,
+      text: () => Promise.resolve(body),
+    } as Response);
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  const harness = createHarness();
+  await vi.waitFor(() => expect(harness.manager.status.sites).toHaveLength(1), {
+    timeout: 20_000,
+  });
+  harness.tick(0);
+  vi.unstubAllGlobals();
+  return harness;
+}
+
+describe("Living Mode", () => {
+  it("loads the sidecar the rig points at and says how much evidence stands behind it", async () => {
+    expect(fixtureRig.motionPath).toBe("motion.json");
+    const harness = await attachedWithSidecar();
+    expect(harness.manager.status.sites[0]?.motionEvidence).toBe("allometric");
+    harness.manager.setMotionModel("legacy");
+    expect(harness.manager.status.sites[0]?.motionEvidence).toBeNull();
+    harness.manager.setMotionModel("auto");
+    expect(harness.manager.status.sites[0]?.motionEvidence).toBe("allometric");
+    harness.manager.destroy();
+  }, 30_000);
+
+  it("moves the tree, then restores the exact measured bytes at calm", async () => {
+    const harness = await attachedWithSidecar();
+    harness.manager.setWind(BREEZE);
+    harness.tick(3);
+    const windy = harness.primitive.texture.uploads.at(-1);
+    expect(windy).toBeDefined();
+    harness.tick(3.5);
+    expect(harness.primitive.texture.uploads.at(-1)?.words).not.toEqual(windy?.words);
+    harness.manager.setWind(WIND_CALM);
+    harness.tick(4);
+    const restored = harness.primitive.texture.uploads.at(-1);
+    const floats = new Float32Array(restored?.words.buffer ?? new ArrayBuffer(0));
+    const positions = new Float32Array(2000 * 3);
+    for (let i = 0; i < 2000; i += 1) {
+      positions[i * 3] = floats[i * 8] ?? 0;
+      positions[i * 3 + 1] = floats[i * 8 + 1] ?? 0;
+      positions[i * 3 + 2] = floats[i * 8 + 2] ?? 0;
+    }
+    expect(checksumPositions(positions)).toBe(
+      checksumPositions(bakeFixture(canonicalPositions).slice(0, 6000)),
+    );
+    harness.manager.destroy();
+  }, 30_000);
+
+  it("falls back to the legacy model when the sidecar cannot be loaded", async () => {
+    const rigText = serializeRig(fixtureRig);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: unknown) =>
+        Promise.resolve({
+          ok: String(input) === RIG_URL,
+          status: String(input) === RIG_URL ? 200 : 404,
+          text: () => Promise.resolve(rigText),
+        } as Response),
+      ),
+    );
+    const harness = createHarness();
+    await vi.waitFor(() => expect(harness.manager.status.sites).toHaveLength(1));
+    vi.unstubAllGlobals();
+    expect(harness.manager.status.sites[0]?.motionEvidence).toBeNull();
+    harness.manager.destroy();
+  });
+});

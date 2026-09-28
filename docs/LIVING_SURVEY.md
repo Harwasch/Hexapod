@@ -9,6 +9,15 @@ positions on the GPU every frame — but the only tree that moves is `data/tiles
 real capture. What that would take, and why it did not happen here, is in
 [CAPTURES.md](CAPTURES.md#the-real-tree-what-was-tried-and-what-it-would-take).
 
+**Living Mode (2026-09-28, [ADR 0008](DECISIONS/0008-living-mode.md)).** A rig whose
+`rig.json` points at a `motion.json` sidecar now moves under a stateless modal model built from
+the skeleton alone — per-branch oscillators at `2.55·L^-0.59` Hz, a whole-tree pendulum mode at
+`2.4/√H`, measured tree damping, a Simiu–Scanlan wind with gusts and `U²` drag, and leaf flutter
+as a field advected with the wind — labelled `motionEvidence: "allometric"` in the Inspector.
+The synthetic tree carries one. The model described below, from "How the tree moves" on, is now
+the **legacy** model: the fallback for a rig without a sidecar and the control arm of the blind
+comparison. The mechanism (canonical never written, calm exact, idle idle) is unchanged.
+
 Read this page for the mechanism and its limits. The numbers below were all measured; where the
 measurement was taken under software GL (SwiftShader), it says so, because those numbers are not
 representative of a machine with a GPU.
@@ -450,6 +459,10 @@ blob past its tip, and bark that spirals along a limb with an azimuthal ripple. 
 
 ## Wind is a scale, not a speed
 
+Under Living Mode ([ADR 0008](DECISIONS/0008-living-mode.md)) the same control is read as dynamic
+pressure, `U = 20·√strength` m/s, because that model's scaling law (deflection ∝ `U²`) is cited;
+its amplitude at any given speed is still an estimate, so the UI keeps the words below.
+
 `strength` is dimensionless, `0..1`, where 1 is the strongest gust this model produces. It is
 deliberately not metres per second: calling it m/s would assert that the sway amplitude had been
 validated against a real tree at that speed. It has not been, and no biomechanical source backs the
@@ -647,18 +660,21 @@ Worth writing down, because the fixture is tidy in ways a real extraction will n
 
 ## Where the code is
 
-| Piece                                                  | What it holds                                                                                |
-| ------------------------------------------------------ | -------------------------------------------------------------------------------------------- |
-| `packages/world` (`@twin/world`)                       | the pure motion model: rig, gust field, resonant modes, per-splat flutter, `deform`, metrics |
-| `tools/captures/synthetic_tree.py`                     | the procedural tree and its ground-truth labels                                              |
-| `tools/captures/skeleton.py`                           | skeleton extraction from a 3DGS PLY, scored against that truth                               |
-| `apps/web/src/cesium/splatCapture.ts`                  | the interception that captures the packed buffer                                             |
-| `apps/web/src/cesium/splatInternals.ts`                | every CesiumJS internal this depends on, declared once, versioned                            |
-| `apps/web/src/cesium/splatTexels.ts`, `splatFrames.ts` | pure texel addressing and frame arithmetic                                                   |
-| `apps/web/src/cesium/SplatDeformer.ts`                 | attach, validate, refuse, write                                                              |
-| `apps/web/src/cesium/LivingSurveyManager.ts`           | wind, the tick, attach/detach as sites load                                                  |
-| `apps/web/src/state/living.ts`                         | wind state and status, and the staleness yardstick                                           |
-| `apps/web/src/features/living/SimulatedBadge.tsx`      | the ambient label                                                                            |
+| Piece                                                                              | What it holds                                                                                                    |
+| ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `packages/world` (`@twin/world`)                                                   | the pure motion model: rig, gust field, resonant modes, per-splat flutter, `deform`, metrics                     |
+| `packages/world/src/living.ts`, `spectral.ts`, `leafFlutter.ts`, `motionParams.ts` | Living Mode ([ADR 0008](DECISIONS/0008-living-mode.md)): modal model, motion textures, advected flutter, sidecar |
+| `tools/captures/motion_params.py`                                                  | writes `motion.json` beside a rig (called by `synthetic_tree.py` and `skeleton.py`)                              |
+| `apps/web/e2e/livingCompare.spec.ts`                                               | blind A/B clips, legacy against Living Mode (`LIVING_COMPARE=1`)                                                 |
+| `tools/captures/synthetic_tree.py`                                                 | the procedural tree and its ground-truth labels                                                                  |
+| `tools/captures/skeleton.py`                                                       | skeleton extraction from a 3DGS PLY, scored against that truth                                                   |
+| `apps/web/src/cesium/splatCapture.ts`                                              | the interception that captures the packed buffer                                                                 |
+| `apps/web/src/cesium/splatInternals.ts`                                            | every CesiumJS internal this depends on, declared once, versioned                                                |
+| `apps/web/src/cesium/splatTexels.ts`, `splatFrames.ts`                             | pure texel addressing and frame arithmetic                                                                       |
+| `apps/web/src/cesium/SplatDeformer.ts`                                             | attach, validate, refuse, write                                                                                  |
+| `apps/web/src/cesium/LivingSurveyManager.ts`                                       | wind, the tick, attach/detach as sites load                                                                      |
+| `apps/web/src/state/living.ts`                                                     | wind state and status, and the staleness yardstick                                                               |
+| `apps/web/src/features/living/SimulatedBadge.tsx`                                  | the ambient label                                                                                                |
 
 Rig authoring and scoring are documented in [CAPTURES.md](CAPTURES.md#the-synthetic-tree); the
 mechanism decision is [ADR 0006](DECISIONS/0006-splat-texture-rewrite.md).

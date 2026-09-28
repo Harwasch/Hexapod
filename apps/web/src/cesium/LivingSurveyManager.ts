@@ -28,13 +28,22 @@
 import { JulianDate, type Viewer } from "cesium";
 
 import {
+  createLivingMotion,
   deform,
   flutterField,
+  livingFrame,
+  livingMaxDisplacement,
+  livingWindFromSettings,
   maxDisplacement,
+  parseMotionSidecar,
   parseRig,
+  prepareLivingMotion,
   sortStaleness,
   WIND_CALM,
+  type FlutterField,
+  type LivingMotion,
   type MotionRig,
+  type NodeTransform,
   type WindSettings,
 } from "@twin/world";
 
@@ -111,9 +120,20 @@ interface LivingEntry {
   readonly siteSlug: string;
   readonly assetId: string;
   readonly rig: MotionRig;
+  /**
+   * Living Mode's modal model, when the rig points at a motion sidecar (ADR 0008). Absent, the
+   * rig moves under the legacy nine-sine model in `deform`.
+   */
+  readonly motion: LivingMotion | undefined;
   readonly deformer: SplatDeformer;
   status: DeformerStatus;
 }
+
+/**
+ * Which motion model drives rigs that carry a sidecar. `auto` uses the sidecar; `legacy` forces
+ * the old nine-sine model everywhere — only for side-by-side comparison (`e2e/livingCompare`).
+ */
+export type LivingMotionModel = "auto" | "legacy";
 
 export class LivingSurveyManager {
   readonly #viewer: Viewer;
@@ -127,6 +147,7 @@ export class LivingSurveyManager {
   readonly #declined = new Set<string>();
   readonly #unsubscribe: (() => void)[] = [];
   #wind: WindSettings = WIND_CALM;
+  #model: LivingMotionModel = "auto";
   /** Counted holds that pin every tree at its measured pose (see {@link holdMeasuredPose}). */
   #holds = 0;
   #removeTick: (() => void) | null = null;
@@ -188,6 +209,14 @@ export class LivingSurveyManager {
     this.#publish();
     // Dropping to calm must still reach the GPU: the deformer owes one restoring write, and
     // without a frame to do it in the tree would stay bent at whatever the last gust left.
+    if (this.#entries.size > 0) this.#viewer.scene.requestRender();
+  }
+
+  /** Chooses the motion model; see {@link LivingMotionModel}. */
+  setMotionModel(model: LivingMotionModel): void {
+    if (this.#destroyed || model === this.#model) return;
+    this.#model = model;
+    this.#publish();
     if (this.#entries.size > 0) this.#viewer.scene.requestRender();
   }
 
@@ -284,6 +313,7 @@ export class LivingSurveyManager {
       });
       return;
     }
+    const motion = await this.#loadMotion(rig, candidate);
     this.#pending.delete(assetId);
     if (this.#destroyed) return;
     // The site may have unloaded while the rig was in flight.
@@ -296,11 +326,70 @@ export class LivingSurveyManager {
       siteSlug: candidate.slug,
       assetId,
       rig,
+      motion,
       deformer,
       status: deformer.status,
     });
-    log.info("motion rig attached", { site: candidate.slug, nodes: rig.nodes.length });
+    log.info("motion rig attached", {
+      site: candidate.slug,
+      nodes: rig.nodes.length,
+      motionEvidence: motion?.sidecar.motionEvidence ?? "legacy",
+    });
     this.#afterEntriesChanged();
+  }
+
+  /**
+   * The rig's motion sidecar, when it points at one. A sidecar that is missing or does not fit
+   * the rig is not a refusal — the tree still moves, under the legacy model — but it is said.
+   */
+  async #loadMotion(
+    rig: MotionRig,
+    candidate: { slug: string; rigUrl: string },
+  ): Promise<LivingMotion | undefined> {
+    if (rig.motionPath === undefined) return undefined;
+    const url = new URL(rig.motionPath, candidate.rigUrl).toString();
+    try {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const motion = createLivingMotion(rig, parseMotionSidecar(await response.text(), rig));
+      // Builds the motion textures now (~0.5 s each, once per session), not on the first frame.
+      prepareLivingMotion(motion);
+      return motion;
+    } catch (error) {
+      log.warn("motion sidecar could not be loaded; using the legacy model", {
+        site: candidate.slug,
+        url,
+        error: describeError(error),
+      });
+      return undefined;
+    }
+  }
+
+  /** Whether an entry runs Living Mode's modal model this frame. */
+  #living(entry: LivingEntry): LivingMotion | undefined {
+    return this.#model === "auto" ? entry.motion : undefined;
+  }
+
+  /** One frame of one rig: Living Mode when it has a sidecar, the legacy model otherwise. */
+  #frame(
+    entry: LivingEntry,
+    t: number,
+    wind: WindSettings,
+  ): { transforms: NodeTransform[]; flutter: FlutterField } {
+    const motion = this.#living(entry);
+    if (motion !== undefined) {
+      return livingFrame(motion, t, livingWindFromSettings(wind, motion.sidecar));
+    }
+    return { transforms: deform(entry.rig, t, wind), flutter: flutterField(entry.rig, t, wind) };
+  }
+
+  /** The proven worst-case splat displacement for an entry at a wind, metres. */
+  #maxDisplacement(entry: LivingEntry, wind: WindSettings): number {
+    const motion = this.#living(entry);
+    if (motion !== undefined) {
+      return livingMaxDisplacement(motion, livingWindFromSettings(wind, motion.sidecar));
+    }
+    return maxDisplacement(entry.rig, wind);
   }
 
   /** Starts or stops the tick, re-decides `animating`, and publishes — never from the tick. */
@@ -333,12 +422,10 @@ export class LivingSurveyManager {
     for (const entry of this.#entries.values()) {
       const before = entry.status;
       // Two terms, computed once per rig per frame: where every node is, and how hard every
-      // node's splats are shimmering. `flutterField` is a pure function of the same `(rig, t,
-      // wind)`, so the frame stays reproducible from the clock alone.
-      const status = entry.deformer.apply(
-        deform(entry.rig, t, wind),
-        flutterField(entry.rig, t, wind),
-      );
+      // node's splats are shimmering. Both are pure functions of the same `(rig, t, wind)`, so
+      // the frame stays reproducible from the clock alone.
+      const frame = this.#frame(entry, t, wind);
+      const status = entry.deformer.apply(frame.transforms, frame.flutter);
       entry.status = status;
       if (status.displaced) displaced = true;
       if (
@@ -435,8 +522,12 @@ export class LivingSurveyManager {
         numSplats: entry.status.numSplats,
         displaced: entry.status.displaced,
         rigSourceNote: entry.rig.sourceNote,
-        maxDisplacementM: maxDisplacement(entry.rig, wind),
-        sortStaleness: sortStaleness(entry.rig, wind, REFERENCE_GAUSSIAN_SCALE_M),
+        motionEvidence: this.#living(entry)?.sidecar.motionEvidence ?? null,
+        maxDisplacementM: this.#maxDisplacement(entry, wind),
+        sortStaleness:
+          this.#living(entry) === undefined
+            ? sortStaleness(entry.rig, wind, REFERENCE_GAUSSIAN_SCALE_M)
+            : this.#maxDisplacement(entry, wind) / REFERENCE_GAUSSIAN_SCALE_M,
       });
     }
     return { wind, animating: wind.strength > 0 && ready, sites };
@@ -465,6 +556,7 @@ function sameStatus(a: LivingSurveyStatus, b: LivingSurveyStatus): boolean {
       site.reason === other.reason &&
       site.numSplats === other.numSplats &&
       site.displaced === other.displaced &&
+      site.motionEvidence === other.motionEvidence &&
       site.maxDisplacementM === other.maxDisplacementM
     );
   });
