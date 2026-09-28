@@ -10,23 +10,37 @@ be checked (and re-run) on its own:
              COLMAP model; the pose gate on that model. No GPU, no bucket. Minutes.
     prepare  ~14 GB streamed, nothing kept but the frames: each photo is fetched, its
              sha256 checked against the pinned revision, its metadata read, and it is
-             shrunk to --max-side (1600) straight from memory, so the runner never holds
-             an original on disk. Frames and meta.json go to the bucket.
+             shrunk straight from memory, so the runner never holds an original on disk.
+             The size is photo-reconstruct's own `max_side: auto` rule (resolution.py),
+             measured on the sample of this set it takes of any photo set; m0 was shrunk
+             to a fixed 1600 px instead. Frames and meta.json go to the bucket.
     pose     the repository's own `pose` stage (COLMAP 4.2, sequential matching with
              loop closure) on Modal's cpu4, then the pose gate on what it solved. With
              `--poses published` the dataset's model is converted instead, and gated.
-    train    the repository's own `train` stage (gsplat MCMC, `cap_max: auto`,
-             `converge`, 30k-step schedule, SH degree 3) on a Modal GPU with those poses --
-             the benchmark's path for a scene with known poses (`benchmark.cloud`,
-             `benchmark.execute_remotely`). Refuses poses the gate failed.
+             With `--from-tag TAG` nothing is solved: TAG's gated poses are checked
+             against these frames (`sfm.poses_serve_frames`) and kept here -- frames
+             re-sized from the same photos train on the same poses, since the stage
+             extracts its features at `max_image_size` whatever size the frames are and
+             gsplat rescales the posed intrinsics to the frames it is given.
+    train    the repository's own `train` stage with photo-reconstruct's Standard params
+             unchanged (gsplat MCMC, `cap_max: auto`, `converge`, `blocks: auto`, SH 3)
+             on a Modal GPU with those poses -- the benchmark's path for a scene with
+             known poses (`benchmark.cloud`, `benchmark.execute_remotely`), on the
+             recipe's train tier unless `--tier` says otherwise. Refuses poses the gate
+             failed. No gaussian count is fixed: the budget is the surface in training
+             pixels, up to what the placed GPU holds, and blocks past that. `--sessions`
+             trains on some capture sessions only (a day, `2020-07-20`, or one flight,
+             `2020-07-20/2`); the poses stay the joint solve, so frame.json and the rig
+             are unchanged.
     fetch    what a later job needs back out of the bucket.
+    describe the capture's descriptor for `real_tree.py` (site, place, attribution).
 
 Everything a step keeps is under `experiments/minnetonka-tree/<tag>/` in the private
 bucket (`OBJECT_STORAGE_*`); the pipeline's own `runs/<id>/` scratch is deleted after each
 stage, as the benchmark does.
 
     uv run --project tools/pipeline --with modal==1.5.5 --with boto3 \\
-        python infra/modal/minnetonka.py train --tag m0 --tier l4
+        python infra/modal/minnetonka.py train --tag m1
 
 `--rehearse` runs everything but Modal and R2: a local directory for the bucket, the test
 suite's stand-in trainer (it trains nothing), and COLMAP from this machine. `--mirror DIR`
@@ -38,6 +52,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import importlib.util
+import io
 import json
 import os
 import shutil
@@ -55,7 +70,7 @@ PIPELINE = REPO / "tools" / "pipeline"
 sys.path.insert(0, str(PIPELINE))
 
 import sfm  # noqa: E402
-import stages  # noqa: E402,F401 - registers every shipped implementation
+import stages  # noqa: E402 - also registers every shipped implementation
 from cloud import AttemptLedger  # noqa: E402
 from experiments import minnetonka as tree  # noqa: E402
 from recipe import Recipe  # noqa: E402
@@ -323,6 +338,23 @@ def cmd_check(args: argparse.Namespace) -> int:
     return 0
 
 
+def frame_size(source: Any, files: Sequence[tree.RemoteFile], asked: str) -> dict[str, Any]:
+    """The long side the frames are kept at: photo-reconstruct's own `max_side` rule.
+
+    `auto` is the recipe's normalize rule (`resolution.py`: its base, unless the sharpest
+    of a sample spread over the set measurably carry detail above it, then up to its
+    ceiling), measured on the same sample of these photos it would take of any photo
+    set -- fetched, checked and held in memory, not written to disk. A number is used as
+    given, as `max_side: N` is by the stage."""
+    if asked != "auto":
+        return {"rule": "fixed", "maxSide": int(asked)}
+    base, ceiling = tree.frame_size_params()
+    picks = [files[i] for i in stages.photo_sample(len(files))]
+    samples = [io.BytesIO(verified(source, file)) for file in picks]
+    decision = stages.photo_frame_size(samples, base=base, ceiling=ceiling)
+    return decision.to_dict()
+
+
 def cmd_prepare(args: argparse.Namespace) -> int:
     source = MirrorSource(args.mirror) if args.mirror else HubSource()
     work = args.work.resolve() / "prepare"
@@ -333,15 +365,18 @@ def cmd_prepare(args: argparse.Namespace) -> int:
     # at all -- the dataset's own advice, and their solved focal says those four photos
     # were hard to place, whoever places them.
     files = [f for f in plan(source, args.groups) if f.name not in tree.SUSPECT_CAMERAS]
+    decision = frame_size(source, files, args.max_side)
+    max_side = int(decision["maxSide"])
     say(
         f"prepare: {len(files)} photos, {tree.planned_bytes(files) / 1e9:.2f} GB, shrunk to "
-        f"{args.max_side} px as they arrive; originals are never written to disk"
+        f"{max_side} px as they arrive ({decision.get('reason') or decision['rule']}); "
+        "originals are never written to disk"
     )
 
     def one(file: tree.RemoteFile) -> tuple[str, tree.DroneMeta, tuple[int, int]]:
         data = verified(source, file)
         name = tree.frame_name(file.name)
-        size = tree.shrink_jpeg(data, frames / name, args.max_side)
+        size = tree.shrink_jpeg(data, frames / name, max_side)
         return name, tree.read_drone_meta(data[: tree.META_BYTES]), size
 
     results = parallel(one, files, args.workers)
@@ -360,6 +395,10 @@ def cmd_prepare(args: argparse.Namespace) -> int:
         "suspectsNotFetched": list(tree.SUSPECT_CAMERAS),
         "bytesDownloaded": tree.planned_bytes(files),
         "frameSizes": [list(s) for s in sizes],
+        # How the size was chosen: photo-reconstruct's `max_side: auto` rule on the same
+        # sample of this set it takes of any photo set (resolution.py), or a number given.
+        "frameSize": decision,
+        "sessions": tree.session_counts(metas),
         "framesBytes": sum(p.stat().st_size for p in frames.iterdir()),
         "gpsMedian": tree.gps_centre(metas.values()),
         "takeoffMslM": tree.takeoff_msl(metas.values()),
@@ -412,13 +451,77 @@ def _inputs(
     return {name: tree.DroneMeta.from_dict(value) for name, value in raw.items()}
 
 
+def _image_size(path: Path) -> list[int]:
+    from PIL import Image
+
+    with Image.open(path) as image:
+        return [int(image.size[0]), int(image.size[1])]
+
+
 def _run_id(step: str) -> str:
     return f"tree-{step}-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}"
 
 
+def _prepared(args: argparse.Namespace, store: Any, into: Path, name: str) -> Path:
+    """This tag's `prepare.json` or `meta.json`: the prepare job's, or the bucket's."""
+    local = args.work.resolve() / "prepare" / name
+    return local if local.is_file() else fetch_kept(store, args.tag, into / name, name)
+
+
+def adopt_poses(args: argparse.Namespace, store: Any) -> int:
+    """`pose --from-tag`: another tag's gated poses, checked against these frames."""
+    source = args.from_tag
+    if source == args.tag:
+        raise SystemExit(f"--from-tag {source} is this tag; solve its poses instead")
+    work = args.work.resolve() / "adopt"
+    if work.exists():
+        shutil.rmtree(work)
+    poses = fetch_kept(store, source, work / "poses", "poses")
+    frame_path = fetch_kept(store, source, work / "frame.json", "frame.json")
+    frame = json.loads(frame_path.read_text(encoding="utf-8"))
+    prepare = json.loads(_prepared(args, store, work, "prepare.json").read_text(encoding="utf-8"))
+    names = sorted(
+        json.loads(_prepared(args, store, work, "meta.json").read_text(encoding="utf-8"))
+    )
+    model = sfm.read_model(poses)
+    fit = sfm.poses_serve_frames(model, prepare["frameSizes"], names)
+    report: dict[str, Any] = {
+        "adoptedFrom": source,
+        **fit,
+        "points3D": model.points3d,
+        "meanReprojectionErrorPx": model.mean_reprojection_error,
+        "gate": frame.get("verdict"),
+    }
+    if store.exists(key(source, "pose.json")):
+        solved = json.loads(
+            fetch_kept(store, source, work / "source-pose.json", "pose.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        report["solved"] = {k: solved.get(k) for k in ("registered", "frames", "cost")}
+    tree.write_json(work / "pose.json", report)
+    summary(
+        f"## Poses from `{source}`, not solved again\n\n"
+        f"{fit['registered']}/{fit['frames']} frames posed; the posed cameras are "
+        f"{fit['posedSize'][0]}x{fit['posedSize'][1]} and these frames "
+        f"{fit['frameSize'][0]}x{fit['frameSize'][1]} (x{fit['pixelScale']:g}): gsplat "
+        f"rescales the intrinsics by that, and the extrinsics are the same photos'. Gate "
+        f"**{frame.get('verdict')}**, as `{source}` measured it."
+    )
+    keep(store, args.tag, work / "pose.json", "pose.json")
+    if frame.get("verdict") != "pass" and not args.force:
+        say(f"pose: {source}'s poses failed the gate; not adopting them (--force does)")
+        return 1
+    keep(store, args.tag, poses, "poses")
+    keep(store, args.tag, frame_path, "frame.json")
+    return 0
+
+
 def cmd_pose(args: argparse.Namespace) -> int:
-    driver = _benchmark()
     store = storage(args)
+    if args.from_tag:
+        return adopt_poses(args, store)
+    driver = _benchmark()
     workdir = Workdir.create(args.work.resolve() / _run_id("pose"))
     metas = _inputs(args, store, workdir, poses=False)
     overrides: dict[str, Any] = {}
@@ -475,14 +578,34 @@ def cmd_train(args: argparse.Namespace) -> int:
     driver = _benchmark()
     store = storage(args)
     workdir = Workdir.create(args.work.resolve() / _run_id("train"))
-    _inputs(args, store, workdir, poses=True)
+    metas = _inputs(args, store, workdir, poses=True)
     frame_path = fetch_kept(store, args.tag, workdir.root / "frame.json", "frame.json")
     frame = json.loads(frame_path.read_text(encoding="utf-8"))
     if frame.get("verdict") != "pass" and not args.force:
         raise SystemExit(
             f"the poses in {key(args.tag, 'poses')} failed the gate: {frame.get('failed')}"
         )
-    overrides: dict[str, Any] = {"budget_max": args.budget_max}
+    frames_dir = workdir.input_path("frames")
+    selection: dict[str, Any] | None = None
+    if args.sessions:
+        # Some capture sessions only: the frames and the posed images both cut to them.
+        # The poses stay the joint solve, so frame.json -- and the rig -- still hold.
+        chosen = tree.names_in(metas, args.sessions)
+        for path in frames_dir.iterdir():
+            if path.is_file() and path.name not in chosen:
+                path.unlink()
+        selection = {
+            "sessions": list(args.sessions),
+            **sfm.keep_images(workdir.input_path("poses"), chosen),
+        }
+        say(f"train: {selection}")
+    trained_on = {p.name for p in frames_dir.iterdir() if p.is_file()}
+    registered = sfm.read_model(workdir.input_path("poses")).registered
+    frame_size = _image_size(frames_dir / min(trained_on))
+    tier = args.tier or tree.train_tier()
+    overrides: dict[str, Any] = {}
+    if args.budget_max:
+        overrides["budget_max"] = args.budget_max
     if args.roi_m > 0:
         radius = args.roi_m / float(frame["metresPerUnit"])
         overrides["roi"] = {"center": frame["lookAt"], "radius": radius}
@@ -502,7 +625,7 @@ def cmd_train(args: argparse.Namespace) -> int:
                     "id": "train",
                     "impl": "gsplat",
                     "params": params,
-                    "gpu": {"tier": args.tier, "preemptible": False},
+                    "gpu": {"tier": tier, "preemptible": False},
                 }
             ],
         }
@@ -516,13 +639,23 @@ def cmd_train(args: argparse.Namespace) -> int:
     report = {
         "params": {k: v for k, v in params.items() if k not in ("trainer", "python")},
         "gaussians": metrics.get("gaussians"),
+        "budget": metrics.get("budget"),
         "iterations": metrics.get("iterations"),
+        # What real_tree.py reads for the site: how many photos, of which days, and the
+        # size the splat was trained at (frame.json's focal is at the posed size).
+        "registered": registered,
+        "frameSize": frame_size,
+        "sessions": (
+            counts := tree.session_counts({n: m for n, m in metas.items() if n in trained_on})
+        ),
+        "days": tree.days(counts),
+        "sessionSelection": selection,
         "psnr": metrics.get("psnr"),
         "ssim": metrics.get("ssim"),
         "lpips": metrics.get("lpips"),
         "trainSeconds": metrics.get("trainSeconds"),
         "wallSeconds": round(time.monotonic() - started, 1),
-        "cost": {"tier": args.tier, "billedSeconds": round(ledger.billed_s, 1), "usd": ledger.usd},
+        "cost": {"tier": tier, "billedSeconds": round(ledger.billed_s, 1), "usd": ledger.usd},
         "rehearsal": bool(args.rehearse),
     }
     tree.write_json(out.parent / "train.json", report)
@@ -537,15 +670,33 @@ def cmd_train(args: argparse.Namespace) -> int:
             if args.rehearse
             else ""
         )
-        + f"## Trained the tree on `{args.tier}`\n\n"
+        + f"## Trained the tree on `{tier}`\n\n"
         "| gaussians | steps | PSNR | SSIM | LPIPS | train s | billed |\n"
         "|---|---|---|---|---|---|---|\n"
         f"| {report['gaussians']} | {report['iterations']} | {report['psnr']} | {report['ssim']} | "
         f"{report['lpips']} | {report['trainSeconds']} | {ledger.billed_s:.0f} s"
         + (f", ${usd:.2f}" if isinstance(usd, int | float) else "")
-        + " |\n\nHeld out: every 8th frame by name, never trained on."
+        + " |\n\nHeld out: every 8th frame by name, never trained on. "
+        + f"Frames {frame_size[0]}x{frame_size[1]}, {registered} posed"
+        + (f" (sessions {', '.join(args.sessions)} only)" if args.sessions else "")
+        + ". "
+        + _budget_line(report["budget"])
     )
     return 0
+
+
+def _budget_line(budget: Any) -> str:
+    """What decided the gaussian count, from train_metrics.json's `budget`."""
+    if not isinstance(budget, dict):
+        return "No budget recorded."
+    raw, cap, clamp = budget.get("raw"), budget.get("capMax"), budget.get("clamp")
+    line = f"Budget: {budget.get('mode')} -> {cap}"
+    if raw is not None:
+        line += f" (density budget {raw}"
+        line += f", clamped to the {clamp})" if clamp else ")"
+    if clamp == "gpu-memory":
+        line += " -- the GPU's memory bound it; a bigger tier would train more"
+    return line + "."
 
 
 def cmd_fetch(args: argparse.Namespace) -> int:
@@ -557,6 +708,12 @@ def cmd_fetch(args: argparse.Namespace) -> int:
             continue
         fetch_kept(store, args.tag, target, *item.split("/"))
         say(f"fetched {key(args.tag, item)} -> {target}")
+    return 0
+
+
+def cmd_describe(args: argparse.Namespace) -> int:
+    tree.write_json(args.out, tree.capture_descriptor())
+    say(f"describe: wrote {args.out}")
     return 0
 
 
@@ -586,7 +743,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     dataset(check)
     prepare = commands.add_parser("prepare", help="download, verify, shrink; keep the frames")
     dataset(prepare)
-    prepare.add_argument("--max-side", type=int, default=1600)
+    prepare.add_argument(
+        "--max-side",
+        default="auto",
+        type=lambda s: s if s == "auto" else str(int(s)),
+        help="auto (photo-reconstruct's rule, the default) or a long side in pixels",
+    )
     prepare.add_argument("--poses", choices=["colmap", "published"], default="colmap")
     prepare.add_argument(
         "--force", action="store_true", help="keep published poses that fail the gate"
@@ -596,11 +758,29 @@ def main(argv: Sequence[str] | None = None) -> int:
     pose.add_argument("--tier", default="cpu4")
     pose.add_argument("--colmap", choices=["3.9", "4.2"], help="override the recipe's COLMAP")
     pose.add_argument("--force", action="store_true", help="keep solved poses that fail the gate")
+    pose.add_argument(
+        "--from-tag", default="", help="adopt this tag's gated poses instead of solving"
+    )
     train = commands.add_parser("train", help="the train stage on a Modal GPU")
-    train.add_argument("--tier", default="l4")
-    train.add_argument("--budget-max", type=int, default=tree.TRAIN_OVERRIDES["budget_max"])
+    train.add_argument("--tier", default="", help="the GPU (default: the recipe's train tier)")
+    train.add_argument(
+        "--budget-max", type=int, default=0, help="an optional ceiling on cap_max auto (0: none)"
+    )
     train.add_argument("--cap-max", type=int, default=0, help="a fixed cap instead of auto")
-    train.add_argument("--roi-m", type=float, default=12.0, help="0 trains the whole scene evenly")
+    train.add_argument(
+        "--roi-m",
+        type=float,
+        default=0.0,
+        help="a sphere round the orbit's look-at point to train at full density; 0 (the "
+        "default) trains the whole scene as the recipe does",
+    )
+    train.add_argument(
+        "--sessions",
+        type=lambda s: [d for d in s.split(",") if d],
+        default=[],
+        help="train on these capture sessions only: a day (2020-07-20) or a flight "
+        "(2020-07-20/2); default every photo",
+    )
     train.add_argument("--force", action="store_true", help="train on poses the gate failed")
     fetch = commands.add_parser("fetch", help="copy kept items out of the bucket")
     fetch.add_argument("items", nargs="+", help="e.g. train/trained.ply frame.json meta.json")
@@ -609,6 +789,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     keeper = commands.add_parser("keep", help="copy a local file or folder into the bucket")
     keeper.add_argument("path", type=Path)
     keeper.add_argument("item", help="where under the tag, e.g. site")
+    describe = commands.add_parser("describe", help="the capture descriptor real_tree.py reads")
+    describe.add_argument("--out", type=Path, required=True)
     args = parser.parse_args(argv)
     return {
         "check": cmd_check,
@@ -617,6 +799,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "train": cmd_train,
         "fetch": cmd_fetch,
         "keep": cmd_keep,
+        "describe": cmd_describe,
     }[args.command](args)
 
 

@@ -6,6 +6,7 @@ tiny JPEGs carrying DJI XMP, and the train step by the test suite's stand-in tra
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import importlib.util
 import io
@@ -21,6 +22,7 @@ from PIL import Image
 
 import sfm
 from experiments import minnetonka as tree
+from recipe import load_recipe
 
 REPO = Path(__file__).resolve().parents[3]
 
@@ -328,16 +330,68 @@ def test_a_second_take_off_gets_its_own_barometric_zero() -> None:
 # --- what the stages are asked for -----------------------------------------------------------
 
 
-def test_the_stages_run_photo_reconstructs_own_settings_bounded_to_one_gpu() -> None:
+def test_the_stages_run_photo_reconstructs_own_settings_unchanged() -> None:
+    """Nothing is fixed for this capture: the recipe's Standard train params as they are
+    (cap_max auto, converge, blocks auto; no budget_max, no memory number), and the
+    recipe's frame-size rule and train tier."""
+    recipe = next(s for s in load_recipe("photo-reconstruct").stages if s.id == "train")
     train = tree.train_params({"roi": {"center": [0, 0, 0], "radius": 5}})
+    assert {k: v for k, v in train.items() if k != "roi"} == dict(recipe.params)
     assert train["iterations"] == 30_000
     assert train["strategy"] == "mcmc" and train["cap_max"] == "auto" and train["converge"] is True
-    assert train["blocks"] == 1 and train["budget_max"] == 2_000_000
+    assert "blocks" not in train  # auto: past one GPU's memory, blocks
+    assert "budget_max" not in train and "gpu_memory_gb" not in train
     assert train["roi"]["radius"] == 5
     assert "sh_degree" not in train  # gsplat's default, 3
+    assert recipe.gpu is not None and tree.train_tier() == recipe.gpu.tier
+    normalize = next(s for s in load_recipe("photo-reconstruct").stages if s.id == "normalize")
+    assert tree.frame_size_params() == (
+        normalize.params["auto_base"],
+        normalize.params["auto_ceiling"],
+    )
     pose = tree.pose_params()
     assert pose["matcher"] == "sequential" and pose["colmap"] == "4.2"
     assert pose["max_image_size"] == 1600
+
+
+# --- capture sessions ---------------------------------------------------------------------------
+
+
+def test_sessions_are_days_and_flights_on_the_cameras_clock() -> None:
+    metas = {
+        "The_Tree-0001.jpg": tree.DroneMeta(taken="2020-07-18T10:00:01"),
+        "The_Tree-0002.jpg": tree.DroneMeta(taken="2020-07-18T10:00:06"),
+        "The_Tree-0003.jpg": tree.DroneMeta(taken="2020-07-20T19:40:00"),
+        "The_Tree-0004.jpg": tree.DroneMeta(taken="2020-07-20T19:40:05"),
+        # A battery change later that evening: a new flight, the same day.
+        "The_Tree-0005.jpg": tree.DroneMeta(taken="2020-07-20T20:10:00"),
+        "The_Tree-0006.jpg": tree.DroneMeta(),
+    }
+    assert tree.session_counts(metas) == {
+        "2020-07-18/0": 2,
+        "2020-07-20/1": 2,
+        "2020-07-20/2": 1,
+        "unknown": 1,
+    }
+    assert tree.days(tree.session_counts(metas)) == {
+        "2020-07-18": 2,
+        "2020-07-20": 3,
+        "unknown": 1,
+    }
+    assert tree.names_in(metas, ["2020-07-20"]) == {
+        "The_Tree-0003.jpg",
+        "The_Tree-0004.jpg",
+        "The_Tree-0005.jpg",
+    }
+    assert tree.names_in(metas, ["2020-07-20/2", "2020-07-18"]) == {
+        "The_Tree-0001.jpg",
+        "The_Tree-0002.jpg",
+        "The_Tree-0005.jpg",
+    }
+    with pytest.raises(ValueError, match="2020-07-19"):
+        tree.names_in(metas, ["2020-07-19"])
+    with pytest.raises(ValueError, match="2020-07-2"):
+        tree.names_in(metas, ["2020-07-2"])  # a prefix of a day is not a day
 
 
 # --- the driver, end to end on a mirror ------------------------------------------------------
@@ -465,15 +519,74 @@ def test_prepare_then_train_rehearse_end_to_end(tmp_path: Path, mirror: tuple[Pa
     assert frames[0] == "The_Tree-0001.jpg" and len(frames) == 30
     assert json.loads((kept / "frame.json").read_text())["verdict"] == "pass"
     assert (kept / "poses" / "images.bin").is_file()
+    # The frames were sized by photo-reconstruct's own rule, not a number of this path's:
+    # 96 px photos are too small to be measured, so they keep their size.
+    prepared = json.loads((kept / "prepare.json").read_text())
+    assert prepared["frameSize"]["rule"] == "auto" and prepared["frameSizes"] == [[96, 64]]
+    assert prepared["sessions"] == {"2020-07-20/0": 30}
     # A fresh job: only the bucket carries anything across.
     (work / "prepare").rename(work / "prepare-elsewhere")
     assert driver.main([*base, "train", "--cap-max", "2000"]) == 0
     assert (kept / "train" / "trained.ply").stat().st_size > 0
     report = json.loads((kept / "train" / "train.json").read_text())
     assert report["rehearsal"] is True
-    assert report["params"]["roi"]["radius"] > 0 and report["params"]["blocks"] == 1
+    # The recipe's params as they are: no ROI, no block count, no budget ceiling.
+    assert not {"roi", "blocks", "budget_max"} & set(report["params"])
+    assert report["cost"]["tier"] == tree.train_tier()
+    assert report["registered"] == 30 and report["frameSize"] == [96, 64]
+    assert report["days"] == {"2020-07-20": 30}
     into = tmp_path / "fetched"
     assert (
         driver.main([*base, "fetch", "train/trained.ply", "frame.json", "--into", str(into)]) == 0
     )
     assert (into / "train" / "trained.ply").is_file() and (into / "frame.json").is_file()
+
+
+def test_poses_adopted_across_tags_and_one_session_trained(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A second tag re-prepares the same photos at another size, adopts the first tag's
+    gated poses instead of solving them again, and trains on one capture session."""
+    scene = Orbit(per_tier=10)
+    for name in scene.names[20:]:  # the low hover tier, flown two days earlier
+        frame = tree.frame_name(name)
+        meta = scene.metas[frame]
+        scene.metas[frame] = dataclasses.replace(
+            meta, taken=str(meta.taken).replace("2020-07-20", "2020-07-18")
+        )
+    pins = build_mirror(tmp_path / "hub", scene)
+    monkeypatch.setattr(tree, "GROUPS", {"The_Tree": pins["group"]})
+    monkeypatch.setattr(tree, "COLMAP_FILES", pins["colmap"])
+    driver = _driver()
+    work = tmp_path / "work"
+    hub = ["--mirror", str(tmp_path / "hub"), "--workers", "2"]
+    base = ["--work", str(work), "--rehearse"]
+    bucket = work / "bucket" / "experiments" / "minnetonka-tree"
+    assert driver.main([*base, "prepare", *hub, "--poses", "published", "--max-side", "48"]) == 0
+    assert json.loads((bucket / "m0" / "prepare.json").read_text())["frameSizes"] == [[48, 32]]
+    assert driver.main([*base, "--tag", "m1", "prepare", *hub]) == 0
+    assert not (bucket / "m1" / "poses").exists()  # colmap poses: nothing kept by prepare
+
+    assert driver.main([*base, "--tag", "m1", "pose", "--from-tag", "m0"]) == 0
+    pose = json.loads((bucket / "m1" / "pose.json").read_text())
+    assert pose["adoptedFrom"] == "m0" and pose["gate"] == "pass"
+    assert pose["frameSize"] == [96, 64] and pose["registered"] == 30
+    kept_frame = (bucket / "m1" / "frame.json").read_bytes()
+    assert kept_frame == (bucket / "m0" / "frame.json").read_bytes()
+    with pytest.raises(SystemExit, match="this tag"):
+        driver.main([*base, "--tag", "m1", "pose", "--from-tag", "m1"])
+
+    train = [*base, "--tag", "m1", "train", "--cap-max", "2000", "--sessions", "2020-07-20"]
+    assert driver.main(train) == 0
+    report = json.loads((bucket / "m1" / "train" / "train.json").read_text())
+    assert report["registered"] == 20 and report["frameSize"] == [96, 64]
+    assert report["days"] == {"2020-07-20": 20}
+    assert report["sessionSelection"]["images"] == 20
+    assert report["sessionSelection"]["imagesBefore"] == 30
+    with pytest.raises(ValueError, match="2020-07-19"):
+        driver.main([*base, "--tag", "m1", "train", "--sessions", "2020-07-19"])
+
+    assert driver.main(["describe", "--out", str(tmp_path / "capture.json")]) == 0
+    capture = json.loads((tmp_path / "capture.json").read_text())
+    assert capture["slug"] == "minnetonka-tree" and capture["licenseName"] == "CC-BY-4.0"
+    assert (capture["latitude"], capture["longitude"]) == (tree.LATITUDE, tree.LONGITUDE)

@@ -301,48 +301,63 @@ later run with the same tag) picks it up. Drivers: `infra/modal/minnetonka.py` (
 `tools/pipeline/experiments/minnetonka.py` (the pure parts) and `tools/captures/real_tree.py`
 (the post-train CPU step).
 
-| step      | where              | what                                                                                                                                                                                                                                                                                                                                                                  | keeps                                                               |
-| --------- | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| `check`   | runner, no secrets | 192 KiB of each photo + the published COLMAP model (sha256-pinned) → the pose gate. ~130 MB, ~2 min. **Expected to fail.**                                                                                                                                                                                                                                            | artifact `tree-check`                                               |
-| `prepare` | runner             | the Hub listing at the pinned revision checked against the pins (659 photos, 13.96 GB); the four suspect cameras not fetched; each of the other 655 (13.88 GB) fetched into memory, its size and sha256 checked against the LFS object id, its XMP read, shrunk to 1600 px (Lanczos, q95) and written as `The_Tree-0001.jpg`… — **no original ever touches the disk** | `frames/` (~0.5 GB), `meta.json`, `prepare.json`                    |
-| `pose`    | Modal `cpu4`       | the `pose` stage (COLMAP 4.2 through pycolmap, photo-reconstruct's settings; sequential matching over the capture-ordered names, 15 neighbours, vocabulary-tree loop closure), then the pose gate on what it solved                                                                                                                                                   | `poses/`, `frame.json` (only if the gate passes), `pose.json`       |
-| `train`   | Modal GPU (`l4`)   | the `train` stage with photo-reconstruct's Standard params — 30k-step schedule, gsplat MCMC, `cap_max: auto` (clamped to `budget_max`, 2M), `converge: true`, gsplat's default SH degree 3 — plus `blocks: 1` and an ROI of 12 m round the orbit's centre; the benchmark's path for a scene with known poses (`benchmark.cloud`, `execute_remotely`)                  | `train/trained.ply`, `train/train_metrics.json`, `train/train.json` |
-| `rig`     | runner             | `real_tree.py`: into metres, the ground, the trunk measured, the tree isolated, ≤400k splats, `skeleton.py`, one tile, `site.json`                                                                                                                                                                                                                                    | `site/`; artifact `tree-site`                                       |
-| `publish` | runner             | `app.seed.publish --slug minnetonka-tree --no-catalog` into the public bucket                                                                                                                                                                                                                                                                                         | `sites/minnetonka-tree/**`                                          |
+| step      | where              | what                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | keeps                                                                                            |
+| --------- | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `check`   | runner, no secrets | 192 KiB of each photo + the published COLMAP model (sha256-pinned) → the pose gate. ~130 MB, ~2 min. **Expected to fail.**                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | artifact `tree-check`                                                                            |
+| `prepare` | runner             | the Hub listing at the pinned revision checked against the pins (659 photos, 13.96 GB); the four suspect cameras not fetched; each of the other 655 (13.88 GB) fetched into memory, its size and sha256 checked against the LFS object id, its XMP read, shrunk (Lanczos, q95) and written as `The_Tree-0001.jpg`… — **no original ever touches the disk**. The size is photo-reconstruct's own `max_side: auto` rule (`resolution.py`), measured on the sample of the set it takes of any photo set: **2400 px** for these photos (98 % of the sharpest frames carry detail above 1600 px against the capture's noise floor); m0 was a fixed 1600 | `frames/` (~1.1 GB at 2400), `meta.json`, `prepare.json` (frame-size decision, capture sessions) |
+| `pose`    | Modal `cpu4`       | the `pose` stage (COLMAP 4.2 through pycolmap; sequential matching over the capture-ordered names, 15 neighbours, vocabulary-tree loop closure), then the pose gate on what it solved. **`pose_from=TAG`** adopts TAG's gated poses instead, on the runner: frames re-sized from the same photos train on the same poses (`sfm.poses_serve_frames` checks names and shape; gsplat rescales the intrinsics; the stage extracts features at 1600 px whatever the frame size, so a fresh solve would give nothing better)                                                                                                                             | `poses/`, `frame.json` (only if the gate passes), `pose.json`                                    |
+| `train`   | Modal GPU          | the `train` stage with photo-reconstruct's Standard params **as they are** — gsplat MCMC, `cap_max: auto`, `converge: true`, `blocks: auto`, SH 3 — on the recipe's train tier (`l4`) unless `tier` says: no gaussian count, no region, no block count is set for this capture. The budget is the surface in training pixels, up to the placed GPU's memory (`gaussian_budget.GPU_MEMORY_GB`), and blocks on several GPUs past it. `sessions=` trains on some capture sessions only (below)                                                                                                                                                        | `train/trained.ply`, `train/train_metrics.json`, `train/train.json`                              |
+| `rig`     | runner             | `real_tree.py`: into metres, the ground, the trunk measured, the tree isolated, **every isolated splat kept**, `skeleton.py` over all of them, **level-of-detail tiles** (`splat_tiles`, 100k a leaf, merged parents), the rig stamped with every tile's checksum (`rig_tiles`) beside its `motion.json`, `site.json`                                                                                                                                                                                                                                                                                                                              | `site/`; artifact `tree-site`                                                                    |
+| `publish` | runner             | `app.seed.publish --slug minnetonka-tree --no-catalog` into the public bucket                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | `sites/minnetonka-tree/**`                                                                       |
 
-**Dispatching it.** `workflow_dispatch` (inputs `steps`, `tag`, `poses`, `tier`, `budget_max`,
-`roi_m`, `scale`, `crown_radius_m`, `max_splats`, `force`) works once the file is on the
-default branch. Until then, as with `modal-benchmark.yml`, a commit on the working branch
-carries a token: `[tree]` runs `check,prepare,pose,train,rig`; `[tree:check]` just the gate;
-`[tree:rig,publish|tag=m0|scale=trunk-diameter-m=0.31]` re-rigs the kept PLY with an explicit
-scale and publishes. Options after `|` are the dispatch inputs; the plan job validates every
-one and refuses anything it does not know. A sensible order is `[tree:check]` (free, proves
-the Hub and the pins), then `[tree:prepare,pose]` (cheap; read the gate), then
-`[tree:train,rig]`, then look at the artifacts, then `[tree:publish]`.
+**Dispatching it.** `workflow_dispatch` (inputs `steps`, `tag`, `poses`, `pose_from`,
+`max_side`, `sessions`, `tier`, `budget_max`, `roi_m`, `scale`, `crown_radius_m`, `force`)
+works once the file is on the default branch. Until then, as with `modal-benchmark.yml`, a
+commit on the working branch carries a token: `[tree]` runs `check,prepare,pose,train,rig`;
+`[tree:check]` just the gate; `[tree:rig,publish|tag=m0]` re-rigs the kept PLY and
+publishes; `[tree:prepare,pose,train,rig|tag=m1|pose_from=m0]` trains a new tag on m0's
+poses. Options after `|` are the dispatch inputs; the plan job validates every one and
+refuses anything it does not know (`max_splats` is gone). Everything left out is the
+recipe's own. A sensible order is `[tree:check]` (free, proves the Hub and the pins), then
+`[tree:prepare,pose]` (cheap; read the gate), then `[tree:train,rig]`, then look at the
+artifacts, then `[tree:publish]`.
 
-**Cost and time** (estimates; nothing here has run on a GPU yet):
+**Capture sessions.** `prepare.json` counts the photos by session, `YYYY-MM-DD/<flight>`: the
+day on the camera's clock and the flight, a new one after any gap over two minutes.
+`sessions=2020-07-20` trains on one day, `sessions=2020-07-20/2` on one flight, a comma
+list on several. The frames and the posed images are both cut to them (`sfm.keep_images`)
+while the poses stay the joint solve, so `frame.json` and the rig step hold unchanged. It
+is how to test whether leaves that moved between visits blur the foliage: train a tag on
+each day with the same `pose_from` and compare held-out LPIPS.
 
-- `prepare`: ~14 GB in. Here, 51 of the photos (1.1 GB) streamed, checked and shrunk in 22 s,
-  so ~5 min for all of them plus the upload of ~0.5 GB. Runner minutes only.
-- `pose`: Modal `cpu4`, $0.25/h. The spool capture's 179 frames posed in 11–13 min with COLMAP
-  4.2; 655 photos sequentially is ~4x the pairs and a superlinear mapper — budget 0.5–1.5 h,
-  $0.15–0.40. If sequential matching registers under 70 % the stage would fill in
-  exhaustively (214k pairs), which will not fit the 6-hour limit; the gate would say so first.
-- `train`: L4, $0.80/h. The benchmark's reference point is ~1.5M gaussians in ~37 min at
-  979×546. Here the frames are 1600×1066 (3.2× the pixels), the cap is 2M (1.3× the
-  gaussians, and `converge` lets a 2M budget run up to √2 × 30k = 42k steps before its early
-  stop): roughly 2.5–3.5× the per-step cost for 1.2–1.4× the steps, so **~1.5–3 h, $1.2–2.4**,
-  plus a few minutes of cold start and ~0.5 GB up to the container.
-- `rig`, `publish`: runner minutes.
+**Cost and time** (estimates from the code's own numbers; m0 is the one measured run):
 
-In all, **about $1.5–3 and 2.5–5 hours** of wall time, most of it the `train` job waiting.
-Its 355-minute timeout is GitHub's ceiling for a hosted job; a run that needs more wants a
-smaller `budget_max` or `roi_m`, not a longer wait.
+- m0, for reference: 655 frames at 1600×1066, budget clamped to 2M (1.885M after the crop),
+  38k steps with `converge`, one L4: **$0.80** (about an hour).
+- `prepare`: ~14 GB in, ~5 min, runner minutes only; the frame-size sample is 8 photos
+  (170 MB) fetched once more.
+- `pose`: with `pose_from`, seconds on the runner. Solving: Modal `cpu4`, $0.25/h, budget
+  0.5–1.5 h ($0.15–0.40).
+- `train` at 2400 px (3.84 MP, 2.25× m0's pixels) with no region: what was inside m0's 12 m
+  sphere alone is ≥ 2.25 × 2M ≈ 4.5M at the recipe's density, the rest of the scene now
+  counts in full, and the L4 holds 4.8M at 2400 px — so expect **1–3 blocks** on L4s,
+  trained at once (`block_parallel` 4). Each block is ~4.8M gaussians at ~2.3× m0's
+  per-step cost, and may run up to 60k steps (the 2× schedule for ≥ 4M; `converge` ends it
+  when flat): **~2.5–3.7 h a block**, $2–3 each, plus a ~15-minute coarse prior when there
+  is more than one. In all **$2–10 and 3–4.5 h** of wall time; `train_metrics.json`'s
+  `budget` says what the density budget was and which ceiling bound it. `tier=l40s` holds
+  10.5M at 2400 px and trains ~2.3× faster for 2.4× the price: likely one block,
+  **~1.5–2.5 h, $3–5**. The 355-minute job ceiling is GitHub's; a block run that nears it
+  wants the bigger tier, not a smaller budget.
+- `rig`: every isolated splat is rigged and tiled — ~30 s a million for the skeleton and a
+  few seconds for the packer (measured on a 1M-splat tree, 4 cores); `publish`: minutes.
+  The published folder is ~20 bytes a gaussian of tiles plus the isolated `source/splat.ply`
+  at 56.
 
 **What to check afterwards**, in order:
 
 1. `tree-check` / `tree-prepare`: `prepare.json` — 655 photos, 13,875,363,394 bytes, one frame
-   size (1600×1066).
+   size, the `frameSize` decision and its measurement, and the photos by session.
 2. The `pose` job summary: registered count, and the pose gate — every row `ok`. The gate is
    the evidence that the solved poses and the photos describe the same flight; `frame.json`
    (artifact `tree-pose`) has the residuals and the 20 worst photos.
@@ -352,12 +367,14 @@ smaller `budget_max` or `roi_m`, not a longer wait.
    benchmark and the spool capture.
 4. The `rig` summary and `source/real_tree.json` (artifact `tree-site`): the scale and how it
    was set, the trunk diameter and how consistent its three slabs were, the crown radius, the
-   splat count, the rig's bands, and `crownToBase` ≥ 3. **Open `splat/` in the app before
+   splat count (every isolated splat), the tiles and their checksums, the rig's bands, and
+   `crownToBase` ≥ 3. **Open `splat/` in the app before
    publishing**: `pnpm dev` with `TILES_BASE_URL` unset serves it from `data/tiles/`.
 5. After `publish`, commit `data/tiles/minnetonka-tree/site.json` from the artifact (the
    tiles themselves never go in git; `.gitignore` keeps them out) and run `provision.yml`'s
-   seed so the catalogue and `catalog.json` carry the site. Then, on real hardware: the tile
-   is single, the deformer attaches (no refusal in the Living Survey panel), and the sway
+   seed so the catalogue and `catalog.json` carry the site. Then, on real hardware: the
+   detail budget picks tiles, the deformer attaches (no refusal in the Living Survey panel),
+   and the sway
    reads as _that_ tree. One development gotcha: a checkout holding only that `site.json`
    has a `data/tiles/minnetonka-tree/` directory, so the dev API serves the site from disk,
    where the tiles are not (`tiles_base_url`'s rule 2). Set `TILES_BASE_URL` to the public
@@ -424,23 +441,54 @@ ring is `D`; `scale=metres-per-unit=X` replaces the barometric slope outright.
 `real_tree.py` turns the trained PLY into a site folder, and writes what it measured into
 `source/real_tree.json` at every step: the frame's similarity applied to every gaussian
 (positions, log-scales and rotations — an ellipsoid, not a point); the ground (the densest
-5 cm layer of opaque splats near the trunk — a lawn is a sheet); the trunk as above, whose
-centre becomes the origin; the crown radius (98th percentile of the opaque splats above
-2.5 m inside the camera ring, plus 0.3 m, or `crown_radius_m`); everything 0.2 m above the
-lawn inside that cylinder, opaque, not isolated haze, and then **the packer's own floater rule
-run to a fixed point**, so `splat_tiles.convert` drops nothing and the rig's checksum is over
-exactly what the viewer decodes; at most 400k splats (the viewer's Standard Detail budget — a
-single tile cannot be trimmed by it, so the tile must fit it), the least significant first;
-**the deformer's `upright` refusal checked in Python first** (`uprightness`, a port of
-`treeUprightness`); then `skeleton.extract` with its own isolation turned off, **single tile**
-(`tile_gaussians=None`) because the deformer refuses anything else — M5 lifts that, and this
-step will then want a level-of-detail tileset instead. `site.json` is the `build_site.py`
-shape: attribution Matthew Guertin, `CC-BY-4.0`, the licence and source URLs, captured
-2020-07-20, the splat asset's `ground_sample_distance_m` (median camera-to-crown distance over
-the focal, at the 1600 px the splat was trained at) and `point_spacing_m`,
+5 cm layer of opaque splats near the trunk and **below the lowest camera** — a lawn is a
+sheet); the trunk as above, whose centre becomes the origin; the crown radius (98th
+percentile of the opaque splats above head height within **the camera ring or 8 m,
+whichever is wider**, plus 0.3 m, or `crown_radius_m`); everything 0.2 m above the lawn
+inside that cylinder, opaque, not isolated haze, and then **the packer's own floater rule
+run to a fixed point**, so `splat_tiles.convert` drops nothing; **the deformer's `upright`
+refusal checked in Python first** (`uprightness`, a port of `treeUprightness`). Then
+**every isolated splat is kept** — there is no count anywhere in this step — and rigged by
+`skeleton.extract` with its own isolation off; packed as a **level-of-detail tileset**
+(`splat_tiles.convert`, the `package` stage's packer and leaf size: REPLACE refinement,
+merged parents, every splat in exactly one leaf); and the rig stamped in place with every
+tile's checksum (`rig_tiles.stamp`, `tileChecksums`), its `motion.json` already beside it,
+which is what lets the deformer move a multi-tile tileset (`splatTiles.ts`). How many
+gaussians are _drawn_ is the viewer's detail budget, spent on tiles at runtime.
+
+Nothing in it is about one capture: the slug, the place, the geoid height there, what the
+subject is and whose the photos are come in a capture descriptor (`--capture`;
+`minnetonka.py describe` writes this one), and its thresholds are properties of trees and
+lawns — breast height, head height, a mature crown's reach — or dimensionless (the module
+docstring lists each). `site.json` is the `build_site.py` shape: attribution, licence and
+source from the descriptor, captured on the last day the splat trained on, the splat
+asset's `ground_sample_distance_m` (median camera-to-crown distance over the focal, at the
+size the splat was _trained_ at, which `train.json` records) and `point_spacing_m`,
 `"rig": "../source/rig.json"`, `clamp_to_ground: true` (the drone's altitudes are
-metres-accurate at best, so the tile rests on the viewer's terrain), and a description that
-says it is a photogrammetric reconstruction of a real tree and that the motion is simulated.
+metres-accurate at best, so the tiles rest on the viewer's terrain), and a description
+that says it is a photogrammetric reconstruction of a real tree and that the motion is
+simulated.
+
+### What m0 taught
+
+m0 (published at `sites/minnetonka-tree/`, 2026-09-28) was the first run end to end:
+1.885M gaussians, held-out PSNR 23.2 / SSIM 0.67 / LPIPS 0.279, $0.80 of L4. Three fixes
+came out of it, each general:
+
+- **The ground is below the lowest camera.** The densest layer near the axis was 3.5 m up a
+  thick trunk, not the lawn, and the "trunk" then measured was the fork. The drone did not
+  fly underground, so the search stops at its lowest camera.
+- **The crown search is at least a mature crown's reach.** The orbit flew tight round the
+  crown (ring p10 3.2 m, crown 2.7 m), so a search bounded by the ring alone clipped it.
+- **No splat count.** 1.07M splats isolated, then cut to 400k to fit one tile by opacity ×
+  area — which keeps the largest gaussians and drops the fine ones, so close up the tree
+  was blobs. Level-of-detail tiles carry all of them and let the viewer's budget choose.
+
+The training side had its own fixed numbers — a fixed 1600 px, `budget_max` 2M,
+`blocks: 1`, a 12 m ROI — and they are gone too: the frames are sized by the recipe's rule
+(which, reading each frame's own noise floor, had kept a tree that fills the frame at
+1600 px: its foliage read as noise; it now reads the capture's floor), the count by the
+density budget and the placed GPU's memory, and past that by blocks.
 
 The splat keeps degree-0 colour only: `splat_tiles` packs SH0, as for every capture. The
 degree-3 training is still what makes those colours right from every side.

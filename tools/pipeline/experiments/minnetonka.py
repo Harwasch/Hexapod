@@ -76,6 +76,7 @@ from typing import Any
 import numpy as np
 import numpy.typing as npt
 
+import resolution
 import sfm
 from recipe import load_recipe
 
@@ -957,26 +958,131 @@ def pose_params(overrides: Mapping[str, Any] | None = None) -> dict[str, Any]:
     return params
 
 
-#: Over photo-reconstruct's Standard train params. `blocks: 1` and `budget_max` bound the
-#: run to one L4 whatever the budget measures (the orbit sees a street, a car park and a
-#: building behind the tree); `live` and `holdout_error` are the phone's and the quality
-#: stage's, and nothing here reads them.
-TRAIN_OVERRIDES: dict[str, Any] = {
-    "blocks": 1,
-    "budget_max": 2_000_000,
-    "live": False,
-    "holdout_error": False,
-}
+#: EGM2008 geoid height near Minneapolis, approximately (+-2 m): the ellipsoid is this far
+#: above mean sea level here. Only the site's recorded centre height uses it; the splat is
+#: clamped to the viewer's terrain.
+GEOID_UNDULATION_M = -27.6
+
+
+def capture_descriptor() -> dict[str, Any]:
+    """What `tools/captures/real_tree.py` needs to know about this capture that is not in
+    its splat or its poses: where it is, what it is of, who made it and under what
+    licence. real_tree.py itself holds nothing about any one capture."""
+    return {
+        "slug": "minnetonka-tree",
+        "name": "Minnetonka tree (real capture, Living Survey)",
+        "subject": "one mature deciduous tree in Minnetonka, Minnesota",
+        "photos": "drone photographs",
+        "capturedBy": ATTRIBUTION,
+        "conditions": "in still air",
+        "dataset": "Single Tree -- High-Density Photogrammetry Dataset, CC BY 4.0",
+        "latitude": LATITUDE,
+        "longitude": LONGITUDE,
+        "geoidUndulationM": GEOID_UNDULATION_M,
+        "attribution": ATTRIBUTION,
+        "attributionUrl": ATTRIBUTION_URL,
+        "licenseName": LICENSE_NAME,
+        "licenseUrl": LICENSE_URL,
+        "sourceUrl": GITHUB_REPO,
+        # The pinned group's date; train.json's sessions say which days a splat used.
+        "captured": GROUPS["The_Tree"].date,
+        "pipeline": (
+            "tools/pipeline pose (COLMAP) + train (gsplat MCMC) on Modal via "
+            "infra/modal/minnetonka.py"
+        ),
+    }
 
 
 def train_params(overrides: Mapping[str, Any] | None = None) -> dict[str, Any]:
-    """photo-reconstruct's own Standard `train` params -- 30k steps, gsplat MCMC,
-    `cap_max: auto`, `converge: true`, gsplat's default SH degree 3 -- plus
-    `TRAIN_OVERRIDES` and the run's own (`roi`, `budget_max`, ...)."""
+    """photo-reconstruct's own Standard `train` params, unchanged -- 30k steps, gsplat
+    MCMC, `cap_max: auto`, `converge: true`, `blocks: auto`, gsplat's default SH degree
+    3 -- plus the run's own (`roi`, `budget_max`, ...).
+
+    Nothing is fixed for this capture. The gaussian count is the density budget
+    (gaussian_budget.py: the surface in finest-seen training pixels), clamped only by the
+    memory of the GPU the stage runs on at the frames' real size; a budget one GPU cannot
+    hold trains as blocks (blocks.py). m0 pinned `blocks: 1` and a `budget_max` of 2M,
+    which is a count, not a quality."""
     stage = next(s for s in load_recipe("photo-reconstruct").stages if s.id == "train")
-    params: dict[str, Any] = {**stage.params, **TRAIN_OVERRIDES}
+    params: dict[str, Any] = dict(stage.params)
     params.update(overrides or {})
     return params
+
+
+def train_tier() -> str:
+    """The GPU the recipe trains on: what this capture trains on unless a run says."""
+    stage = next(s for s in load_recipe("photo-reconstruct").stages if s.id == "train")
+    return str(stage.gpu.tier) if stage.gpu is not None else "l4"
+
+
+def frame_size_params() -> tuple[int, int]:
+    """`normalize`'s `auto_base` and `auto_ceiling`: the rule every capture's frames are
+    sized by (`resolution.py`), which this capture's are too."""
+    stage = next(s for s in load_recipe("photo-reconstruct").stages if s.id == "normalize")
+    return (
+        int(stage.params.get("auto_base", resolution.BASE)),
+        int(stage.params.get("auto_ceiling", resolution.CEILING)),
+    )
+
+
+# --- capture sessions: which photos train ------------------------------------------------
+
+
+def sessions(metas: Mapping[str, DroneMeta]) -> dict[str, str]:
+    """Each photo's capture session, `YYYY-MM-DD/<flight>`: the day on the camera's clock,
+    and the flight -- `flights`' index over the whole capture in time order, a new one
+    after every gap of more than `SEGMENT_GAP_S` (a landing or a battery change). A photo
+    without a timestamp is `unknown`. Generic: any photo set whose EXIF/XMP carries a
+    capture time has sessions, and training on a subset of them is how a capture made
+    over several visits (leaves that moved, light that changed) can be tested for it."""
+    timed = {
+        name: seconds
+        for name, meta in metas.items()
+        if (seconds := meta.seconds()) is not None and meta.taken
+    }
+    names = sorted(timed)
+    flight = flights([timed[name] for name in names]) if names else []
+    out = {name: "unknown" for name in metas}
+    for name, index in zip(names, flight, strict=True):
+        out[name] = f"{str(metas[name].taken)[:10]}/{index}"
+    return out
+
+
+def session_counts(metas: Mapping[str, DroneMeta]) -> dict[str, int]:
+    """How many photos each session holds, in order."""
+    counts: dict[str, int] = {}
+    for label in sessions(metas).values():
+        counts[label] = counts.get(label, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def names_in(metas: Mapping[str, DroneMeta], wanted: Sequence[str]) -> set[str]:
+    """The photos in any of `wanted`: a whole day (`2020-07-20`) or one flight
+    (`2020-07-20/2`). A selector that matches no photo is refused, so a typo cannot
+    quietly train on nothing."""
+    labels = sessions(metas)
+    chosen: set[str] = set()
+    for selector in wanted:
+        hits = {
+            name
+            for name, label in labels.items()
+            if label == selector or label.startswith(selector.rstrip("/") + "/")
+        }
+        if not hits:
+            raise ValueError(
+                f"no photo is in session {selector!r}; the sessions are {session_counts(metas)}"
+            )
+        chosen |= hits
+    return chosen
+
+
+def days(counts: Mapping[str, int]) -> dict[str, int]:
+    """Photo counts by day, from `session_counts`' labels."""
+    out: dict[str, int] = {}
+    for label, count in counts.items():
+        day = label.split("/", 1)[0]
+        out[day] = out.get(day, 0) + count
+    return out
 
 
 def write_json(path: Path, document: Mapping[str, Any]) -> None:
