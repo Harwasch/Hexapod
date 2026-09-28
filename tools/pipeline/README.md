@@ -492,8 +492,10 @@ On the rendered orbits (4 cores, `colmap4.py` has the table) 4.2 matched 1.35-5x
 mapped 2-2.3x faster, with pose error within run-to-run noise of 3.9.1's: 87 frames at 1600x1200, sequential with
 loop closure and the recipe's settings, 475 s -> 294 s (match 255 -> 189 s, map
 193 -> 83 s), 87/87 both. The spool's 179 frames spent 266 s matching and 323 s mapping
-on 3.9.1; whether 4.2 saves the same there is **unmeasured**. 3.9.1 stays the default until
-it is.
+on 3.9.1. Measured there on Modal's cpu4 (two previews each, 2026-09-28): 4.2 matched in
+43-49 s and mapped in 187-225 s, 179/179 registered, with the same preview (24.06-24.07 dB
+/ LPIPS 0.169 against 24.07-24.15 / 0.166-0.168). 4.2 is the recipe's default since;
+`colmap: "3.9"` runs the old CLI.
 
 ## Refine from the preview
 
