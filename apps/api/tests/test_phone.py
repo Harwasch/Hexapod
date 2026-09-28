@@ -211,8 +211,9 @@ def test_a_phone_sets_only_the_options_it_is_allowed(client: TestClient, db: Ses
 
 
 def test_a_phone_may_turn_on_the_phone_capture_switches(client: TestClient, db: Session) -> None:
-    """pose_opt, app_opt, bilateral_grid: JSON booleans only; more frames kept; and
-    `max_side` as a number or `auto`, `select` as one of the two frame rules."""
+    """pose_opt, app_opt, bilateral_grid: JSON booleans only; more frames kept;
+    `max_side` as a number or `auto`, `select` as one of the two frame rules; and the
+    pose mapper and COLMAP version (`"3.9"` or `"4.2"`, strings) an A/B names."""
     mine = client.post("/api/v1/phone/captures", json={}, headers=PHONE).json()["capture"]
     uploaded(db, mine["id"])
     url = f"/api/v1/phone/captures/{mine['id']}/process"
@@ -231,13 +232,15 @@ def test_a_phone_may_turn_on_the_phone_capture_switches(client: TestClient, db: 
         {"normalize": {"max_side": True}},
         {"normalize": {"select": "blur_threshold"}},
         {"pose": {"mapper": "hierarchical"}},
+        {"pose": {"colmap": "3.11"}},
+        {"pose": {"colmap": 4.2}},
     ):
         response = start(refused)
         assert response.status_code == 409, (refused, response.text)
 
     chosen = {
         "normalize": {"fps": 15, "keep": 180, "max_side": "auto", "select": "viewpoint"},
-        "pose": {"mapper": "global"},
+        "pose": {"mapper": "global", "colmap": "4.2"},
         "train": {"pose_opt": True, "app_opt": False, "bilateral_grid": True, "depth_loss": True},
     }
     ok = start(chosen)

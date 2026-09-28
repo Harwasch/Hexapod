@@ -680,6 +680,8 @@ class Model:
     images: tuple[Image, ...]
     points3d: int
     mean_track_length: float
+    #: The mean of the points' own reprojection errors (px) -- `model_analyzer`'s number.
+    mean_reprojection_error: float = 0.0
 
     @property
     def registered(self) -> int:
@@ -704,12 +706,13 @@ def read_model(directory: Path) -> Model:
     """
     cameras = _read_cameras(directory / "cameras.bin")
     images = _read_images(directory / "images.bin")
-    points, tracks = _read_points3d(directory / "points3D.bin")
+    points, tracks, errors = _read_points3d(directory / "points3D.bin")
     return Model(
         cameras=cameras,
         images=images,
         points3d=points,
         mean_track_length=(tracks / points) if points else 0.0,
+        mean_reprojection_error=(errors / points) if points else 0.0,
     )
 
 
@@ -949,18 +952,20 @@ def rotation_onto_z(up: Sequence[float] | F64) -> F64:
     return np.asarray(np.eye(3) + s * kx + (1.0 - c) * (kx @ kx), dtype=np.float64)
 
 
-def _read_points3d(path: Path) -> tuple[int, int]:
-    """(point count, total track length). The points themselves are not needed here."""
+def _read_points3d(path: Path) -> tuple[int, int, float]:
+    """(point count, total track length, summed reprojection error). No positions."""
     points = 0
     tracks = 0
+    errors = 0.0
     with path.open("rb") as handle:
         for _ in range(_u64(handle)):
-            handle.read(43)  # id, xyz, rgb, error
+            record = handle.read(43)  # id, xyz, rgb, error
+            errors += struct.unpack_from("<d", record, 35)[0]
             length = _u64(handle)
             handle.read(8 * length)
             points += 1
             tracks += length
-    return points, tracks
+    return points, tracks, errors
 
 
 def _u64(handle: BinaryIO) -> int:

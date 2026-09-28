@@ -15,6 +15,7 @@ import ast
 import sys
 from pathlib import Path
 
+import colmap4
 import global_sfm
 import sfm
 
@@ -105,6 +106,24 @@ def test_the_cpu_image_pins_the_vocabulary_tree_colmap_3_9_reads() -> None:
     source = APP.read_text(encoding="utf-8")
     assert f'"{sfm.VOCAB_TREE_ENV}": VOCAB_TREE' in source
     assert "sha256sum -c" in source
+
+
+def test_the_cpu_image_pins_the_faiss_tree_colmap_4_2_reads_and_checks_it_loads() -> None:
+    """`colmap: "4.2"` cannot read the FLANN tree above; it gets the faiss build of the
+    same 32K-word tree, pinned by sha256, and the build loads it through pycolmap."""
+    values = _constants("VOCAB_TREE_FAISS_URL", "VOCAB_TREE_FAISS_SHA256", "VOCAB_TREE_FAISS")
+    url, digest, path = (
+        str(values[k])
+        for k in ("VOCAB_TREE_FAISS_URL", "VOCAB_TREE_FAISS_SHA256", "VOCAB_TREE_FAISS")
+    )
+
+    assert url.startswith("https://") and url.endswith("/vocab_tree_faiss_flickr100K_words32K.bin")
+    assert Path(path).name == "vocab_tree_faiss_flickr100K_words32K.bin"
+    assert len(digest) == 64 and all(c in "0123456789abcdef" for c in digest)
+    source = APP.read_text(encoding="utf-8")
+    assert f'"{colmap4.VOCAB_TREE_ENV}": VOCAB_TREE_FAISS' in source
+    assert "sha256sum -c" in source
+    assert "python colmap4.py self-check --vocab-tree {VOCAB_TREE_FAISS}" in source
 
 
 def test_the_cpu_image_installs_the_pycolmap_the_global_mapper_was_measured_with() -> None:

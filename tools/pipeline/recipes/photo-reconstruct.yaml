@@ -97,6 +97,11 @@ stages:
       # incremental mapper when it registers too few -- is opt-in per run until a real
       # capture has compared the two. Incremental is the default:
       # mapper: incremental
+      # `colmap: "4.2"` extracts, matches and maps with COLMAP 4.2 through pycolmap
+      # (colmap4.py) instead of apt's 3.9.1 CLI -- same plan, fallbacks and poses.json,
+      # with `version` saying which ran. Opt-in per run until a real capture has
+      # compared them (README, "COLMAP 4.2"). 3.9.1 is the default:
+      # colmap: "3.9"
     # On Modal's CPU box, not the worker: `cpu4` is 4 cores and 8 GB with no GPU, billed
     # per second ($0.25 an hour) only while a capture is posed. Feature extraction
     # peaked at 1.7 GB on real 1080p frames, more than the 2 GB worker can spare, and a
