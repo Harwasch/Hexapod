@@ -94,14 +94,19 @@ stages:
       # and translation 0.030% -> 0.046% of extent against the known poses.
       first_octave: 0
       # `mapper: global` -- GLOMAP through pycolmap (global_sfm.py), falling back to the
-      # incremental mapper when it registers too few -- is opt-in per run until a real
-      # capture has compared the two. Incremental is the default:
+      # incremental mapper when it registers too few -- stays opt-in: on the spool
+      # capture (179 frames, 2026-09-28, two runs each) it registered 179/179 like the
+      # incremental mapper but took as long (10.7-11.2 min vs 10.3-13.8) and trained a
+      # worse preview (23.69 dB / LPIPS 0.179 vs 24.07-24.15 / 0.166-0.168). It may pay
+      # on much longer walks, where incremental mapping slows most.
       # mapper: incremental
-      # `colmap: "4.2"` extracts, matches and maps with COLMAP 4.2 through pycolmap
-      # (colmap4.py) instead of apt's 3.9.1 CLI -- same plan, fallbacks and poses.json,
-      # with `version` saying which ran. Opt-in per run until a real capture has
-      # compared them (README, "COLMAP 4.2"). 3.9.1 is the default:
-      # colmap: "3.9"
+      # COLMAP 4.2 through pycolmap (colmap4.py) rather than apt's 3.9.1 CLI -- same
+      # plan, fallbacks and poses.json, `version` saying which ran. On the spool capture
+      # (two runs each): matching 43-49 s vs 250-288 s, mapping 187-225 s vs 297-348 s,
+      # 179/179 registered either way, and the same preview (24.06-24.07 dB / LPIPS
+      # 0.169 vs 24.07-24.15 / 0.166-0.168); the preview went from ~17-18 min to 11-13.
+      # `colmap: "3.9"` runs the old CLI.
+      colmap: "4.2"
     # On Modal's CPU box, not the worker: `cpu4` is 4 cores and 8 GB with no GPU, billed
     # per second ($0.25 an hour) only while a capture is posed. Feature extraction
     # peaked at 1.7 GB on real 1080p frames, more than the 2 GB worker can spare, and a
