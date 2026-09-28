@@ -30,7 +30,7 @@ from app.models.enums import CaptureKind, CaptureStatus, RunStatus
 from app.services import jobs as job_service
 from app.storage import NullStorage, ObjectStorage, S3Storage
 from app.worker import steps as step_service
-from app.worker.claim import Heartbeat, claim_next, heartbeat, release
+from app.worker.claim import Heartbeat, LeaseKeeper, claim_next, heartbeat, release
 from app.worker.config import WorkerConfig
 from app.worker.loop import Worker
 from app.worker.pipeline_bridge import Workdir
@@ -188,6 +188,59 @@ def test_a_heartbeat_holds_the_lease_and_reports_what_it_could_not_hold(
     db.commit()
     assert heartbeat(session, job.id, worker_id="worker-a", lease_s=30) is Heartbeat.LOST
     session.close()
+    other.close()
+
+
+def test_a_heartbeat_renews_from_when_it_runs_not_from_when_its_transaction_began(
+    db: Session, sessions: sessionmaker[Session]
+) -> None:
+    """`now()` is the start of the *transaction*. The supervisor's session reads the job,
+    then spends as long as the capture takes to download before its first heartbeat, all
+    in the one transaction those reads opened -- and a lease of `now() + lease_s` written
+    then had lapsed before it was written. The heartbeat said HELD; another slot took
+    the job a moment later (2026-09-27)."""
+    capture = make_capture(db)
+    job = queue_job(db, capture)
+    session, other = sessions(), sessions()
+    try:
+        assert claim_next(session, worker_id="worker-a", lease_s=FAST_LEASE_S) is not None
+        assert session.get(Job, job.id) is not None  # a read: a transaction is open
+        time.sleep(FAST_LEASE_S + 0.5)
+
+        beat = heartbeat(session, job.id, worker_id="worker-a", lease_s=FAST_LEASE_S)
+        assert beat is Heartbeat.HELD
+
+        stolen = claim_next(other, worker_id="worker-b", lease_s=30)
+        assert stolen is None, "a lease renewed a moment ago was already claimable"
+    finally:
+        other.close()
+        session.close()
+
+
+def test_a_lease_keeper_holds_the_lease_while_its_owner_is_busy_and_then_lets_go(
+    db: Session, sessions: sessionmaker[Session]
+) -> None:
+    capture = make_capture(db)
+    job = queue_job(db, capture)
+    owner, other = sessions(), sessions()
+    assert claim_next(owner, worker_id="worker-a", lease_s=FAST_LEASE_S) is not None
+
+    with LeaseKeeper(sessions, job.id, worker_id="worker-a", lease_s=FAST_LEASE_S, interval_s=0.2):
+        # The owner does nothing at all for three leases: an upload, a download.
+        for _ in range(6):
+            time.sleep(FAST_LEASE_S / 2)
+            assert claim_next(other, worker_id="worker-b", lease_s=30) is None
+        release(owner, job.id, worker_id="worker-a")
+        # Released means released: the keeper's renewal is conditional on the owner, so
+        # it cannot put a lease back on a job this worker has let go of.
+        time.sleep(0.5)
+        db.expire_all()
+        let_go = db.get(Job, job.id)
+        assert let_go is not None and let_go.lease_expires_at is None
+    assert not [t for t in threading.enumerate() if t.name.startswith("lease-")]
+    taken = claim_next(other, worker_id="worker-b", lease_s=30)
+    assert taken is not None and taken.claimed_by == "worker-b"
+    owner.close()
     other.close()
 
 

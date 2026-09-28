@@ -1,0 +1,9 @@
+# Two quick stages: a job that finishes at a different moment from `t-three` beside it,
+# so one slot goes idle and polls while the other is still working.
+name: t-two
+version: 1
+description: Two trivial stages, for the worker's concurrency tests.
+inputs: []
+stages:
+  - { id: one, impl: t_first, params: { delay: 0.3 } }
+  - { id: two, impl: t_second, params: { delay: 0.3 } }
