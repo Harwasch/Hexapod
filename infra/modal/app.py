@@ -225,8 +225,7 @@ image = (
         f"{TRAINER_PYTHON} {PIPELINE_DIR}/lod_optimise.py --self-check --trainer {GSPLAT_TRAINER}",
         # And does it still call the module-global `rasterization` that block training's
         # frozen ring patches (`block_trainer.py`, tools/pipeline/blocks.py)?
-        f"{TRAINER_PYTHON} {PIPELINE_DIR}/block_trainer.py --self-check "
-        f"--trainer {GSPLAT_TRAINER}",
+        f"{TRAINER_PYTHON} {PIPELINE_DIR}/block_trainer.py --self-check --trainer {GSPLAT_TRAINER}",
         # And does the 3.12 side import every stage (the list above, pinned by a test)?
         f"cd {PIPELINE_DIR} && python -c 'import remote, stages, captures_bridge'",
     )
