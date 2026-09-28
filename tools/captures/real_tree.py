@@ -301,6 +301,41 @@ def crown_radius(
     return {"radiusM": round(min(radius, limit), 3), "cameraRingP10M": ring, "searchM": limit}
 
 
+def profile(xyz: np.ndarray, opacity: np.ndarray, cameras: np.ndarray | None) -> dict[str, Any]:
+    """Opaque splat counts by height (1 m rows) and distance from the axis (1 m columns),
+    plus where the cameras are: enough to see where a tree is without the PLY."""
+    opaque = opacity >= SURFACE_OPACITY
+    z = xyz[opaque, 2]
+    r = np.hypot(xyz[opaque, 0], xyz[opaque, 1])
+    rows: dict[str, Any] = {}
+    if z.size:
+        lo, hi = math.floor(float(np.percentile(z, 0.5))), math.ceil(float(np.percentile(z, 99.5)))
+        for h in range(lo, hi):
+            band = (z >= h) & (z < h + 1)
+            counts, _ = np.histogram(r[band], bins=np.arange(0.0, 13.0, 1.0))
+            rows[f"{h}..{h + 1}"] = [int(c) for c in counts]
+    out: dict[str, Any] = {
+        "opaque": int(opaque.sum()),
+        "of": len(xyz),
+        "zPercentiles_1_50_99": [round(float(v), 2) for v in np.percentile(z, [1, 50, 99])]
+        if z.size
+        else None,
+        "radiusColumnsM": "0..1, 1..2, ... 11..12",
+        "countsByHeight": rows,
+    }
+    if cameras is not None and len(cameras):
+        cr = np.hypot(cameras[:, 0], cameras[:, 1])
+        out["cameras"] = {
+            "zPercentiles_0_50_100": [
+                round(float(v), 2) for v in np.percentile(cameras[:, 2], [0, 50, 100])
+            ],
+            "radiusPercentiles_0_10_50_100": [
+                round(float(v), 2) for v in np.percentile(cr, [0, 10, 50, 100])
+            ],
+        }
+    return out
+
+
 def floater_fixpoint(xyz: np.ndarray, rounds: int = 10) -> np.ndarray:
     """splat_tiles' floater rule (drop beyond 1.5x the 99.5th-percentile radius about the
     median centre) applied until it drops nothing, so the packer drops nothing either."""
@@ -508,38 +543,46 @@ def build(
     finite = np.isfinite(xyz).all(axis=1) & np.isfinite(opacity)
     data, xyz, opacity = take(data, finite), xyz[finite], opacity[finite]
 
-    ground = ground_height(xyz, opacity, TRUNK_SEARCH_M * 2)
-    trunk = measure_trunk(xyz, opacity, ground)
-    report["groundM"] = round(ground, 4)
-    report["trunk"] = trunk
-    if trunk_diameter_m is not None:
-        factor = trunk_diameter_m / trunk["diameterM"]
-        report["scale"].update(
-            method="trunk",
-            trunkDiameterM=trunk_diameter_m,
-            metresPerUnit=fitted_scale * factor,
-            factorOnBarometric=round(factor, 4),
-        )
-    else:
-        factor = 1.0
-    report["scale"].setdefault("metresPerUnit", fitted_scale)
-    # Origin at the trunk's foot, then any trunk-derived rescale about it.
-    shift = np.array([trunk["centre"][0], trunk["centre"][1], ground])
-    about = np.eye(4)
-    about[:3, :3] *= factor
-    about[:3, 3] = -factor * shift
-    data = transform_splats(data, about)
-    xyz = positions(data)
-    if cameras is not None:
-        cameras = (cameras - shift) * factor
-    report["trunk"]["diameterScaledM"] = round(trunk["diameterM"] * factor, 4)
+    report["profileAboutFrameAxis"] = profile(xyz, opacity, cameras)
+    try:
+        ground = ground_height(xyz, opacity, TRUNK_SEARCH_M * 2)
+        trunk = measure_trunk(xyz, opacity, ground)
+        report["groundM"] = round(ground, 4)
+        report["trunk"] = trunk
+        if trunk_diameter_m is not None:
+            factor = trunk_diameter_m / trunk["diameterM"]
+            report["scale"].update(
+                method="trunk",
+                trunkDiameterM=trunk_diameter_m,
+                metresPerUnit=fitted_scale * factor,
+                factorOnBarometric=round(factor, 4),
+            )
+        else:
+            factor = 1.0
+        report["scale"].setdefault("metresPerUnit", fitted_scale)
+        # Origin at the trunk's foot, then any trunk-derived rescale about it.
+        shift = np.array([trunk["centre"][0], trunk["centre"][1], ground])
+        about = np.eye(4)
+        about[:3, :3] *= factor
+        about[:3, 3] = -factor * shift
+        data = transform_splats(data, about)
+        xyz = positions(data)
+        if cameras is not None:
+            cameras = (cameras - shift) * factor
+        report["trunk"]["diameterScaledM"] = round(trunk["diameterM"] * factor, 4)
 
-    crown = (
-        {"radiusM": crown_radius_m, "method": "given"}
-        if crown_radius_m is not None
-        else {**crown_radius(xyz, opacity, cameras), "method": "splats inside the camera ring"}
-    )
-    report["crown"] = crown
+        crown = (
+            {"radiusM": crown_radius_m, "method": "given"}
+            if crown_radius_m is not None
+            else {**crown_radius(xyz, opacity, cameras), "method": "splats inside the camera ring"}
+        )
+        report["crown"] = crown
+    except ValueError as error:
+        # What the measurements saw, so a failed run can be read without the PLY.
+        if "trunk" in report:
+            report["profileAboutTrunk"] = profile(xyz, opacity, cameras)
+        error.add_note("partial report: " + json.dumps(report, indent=1))
+        raise
     radius = float(crown["radiusM"])
     region = (np.hypot(xyz[:, 0], xyz[:, 1]) <= radius) & (xyz[:, 2] >= ground_clearance_m)
     region &= opacity >= 0.02
