@@ -214,8 +214,13 @@ def build_dataset(frames: Path, poses: Path, root: Path, *, max_side: int | None
     """COLMAP's on-disk layout, assembled in `work/` from the two input artifacts.
 
     `images/` and `sparse/0/` are what every 3DGS trainer's COLMAP parser looks for.
-    Files are copied rather than linked: the trainer may be in another container with
-    this directory mounted, and a symlink out of it resolves to nothing there.
+    Never symlinked: the trainer may be in another container with this directory
+    mounted, and a symlink out of it resolves to nothing there. A frame is *hard*-linked
+    where the filesystem allows (`link_or_copy`) -- the same file under a second name, so
+    it resolves anywhere this directory does -- because nothing writes a frame after this
+    and a copy is only the frames' bytes moved once more on a GPU's time. `sparse/0/` is
+    always copied: `crop_initial_points` and `init_seed.apply` rewrite `points3D.bin`,
+    and a link would rewrite the pose stage's own artifact with it.
 
     `max_side` shrinks each frame whose long side is bigger, under its own name, and
     leaves `sparse/0/` exactly as the pose stage wrote it: gsplat v1.5.3's parser rescales
@@ -231,10 +236,20 @@ def build_dataset(frames: Path, poses: Path, root: Path, *, max_side: int | None
         directory.mkdir(parents=True)
     for frame in sorted(p for p in frames.iterdir() if p.is_file()):
         if max_side is None or not _shrink(frame, images / frame.name, max_side):
-            shutil.copyfile(frame, images / frame.name)
+            link_or_copy(frame, images / frame.name)
     for entry in sorted(p for p in poses.iterdir() if p.is_file()):
         shutil.copyfile(entry, sparse / entry.name)
     return root
+
+
+def link_or_copy(source: Path, target: Path) -> None:
+    """`target` as a hard link to `source`, or a copy where the filesystem cannot link
+    (another device, a filesystem without links). For files nothing writes after: a link
+    is the same bytes, so writing through either name would change both."""
+    try:
+        os.link(source, target)
+    except OSError:
+        shutil.copyfile(source, target)
 
 
 def _shrink(source: Path, target: Path, max_side: int) -> bool:

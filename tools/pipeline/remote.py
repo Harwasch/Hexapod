@@ -39,14 +39,14 @@ import sys
 import threading
 import time
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import run_stage
 from cloud import StageRequest, Transfer
 
-__all__ = ["RemoteOutcome", "execute", "stage_sandbox"]
+__all__ = ["RemoteOutcome", "SyncStats", "execute", "stage_sandbox"]
 
 #: The four directories a stage is given, in the layout `run_stage._context` expects.
 SANDBOX_DIRS: tuple[str, ...] = ("inputs", "out", "work", "checkpoint")
@@ -77,6 +77,25 @@ class RemoteOutcome:
         }
 
 
+@dataclass
+class SyncStats:
+    """What the checkpoint syncer did while the stage ran: how often it synced, how long
+    those syncs took (on its own thread, beside the stage) and what they moved. A syncer
+    that re-sends a big file every interval shows up here as bytes, not as a slow stage.
+    """
+
+    syncs: int = 0
+    seconds: float = 0.0
+    bytes: int = 0
+    lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+
+    def add(self, seconds: float, moved: int) -> None:
+        with self.lock:
+            self.syncs += 1
+            self.seconds += seconds
+            self.bytes += moved
+
+
 def stage_sandbox(root: Path) -> Path:
     """The four directories, created. Separate so a caller can fill one itself."""
     for name in SANDBOX_DIRS:
@@ -99,15 +118,20 @@ def execute(
     that happened to return bad news, and the adapter would have to guess.
     """
     stage_sandbox(root)
+    # The wall clock too, not only the monotonic one: the runner compares it with when it
+    # submitted the call, and the difference is the queue and the container's start --
+    # billed from the container's start, and invisible from inside the stage.
+    started_at = time.time()
     began = time.monotonic()
     fetched = _fetch(request, transfer, root)
     fetched_at = time.monotonic()
     _say(f"remote: fetched {fetched} byte(s) of input and checkpoint in {fetched_at - began:.1f} s")
 
     stop = threading.Event()
+    syncs = SyncStats()
     syncer = threading.Thread(
         target=_sync_forever,
-        args=(request, transfer, root / "checkpoint", stop, request.checkpoint_every_s),
+        args=(request, transfer, root / "checkpoint", stop, request.checkpoint_every_s, syncs),
         daemon=True,
     )
     syncer.start()
@@ -134,17 +158,36 @@ def execute(
     # the insurance could not be filed would be the expensive way to be wrong. A bucket
     # that rejects this will reject the upload below too, and that one *is* fatal.
     ran_at = time.monotonic()
-    _sync_quietly(request, transfer, root / "checkpoint")
+    final = _sync_quietly(request, transfer, root / "checkpoint")
+    synced_at = time.monotonic()
     uploaded = transfer.put(request.outputs_key, root / "out")
     done_at = time.monotonic()
-    _say(f"remote: uploaded {uploaded} byte(s) of output in {done_at - ran_at:.1f} s")
+    _say(
+        f"remote: final checkpoint sync {final} byte(s) in {synced_at - ran_at:.1f} s; "
+        f"uploaded {uploaded} byte(s) of output in {done_at - synced_at:.1f} s; "
+        f"{syncs.syncs} sync(s) while the stage ran moved {syncs.bytes} byte(s) in "
+        f"{syncs.seconds:.1f} s"
+    )
     result = _result(root)
     # Where a remote stage's wall time went, beside the stage's own metrics: the part of
     # a CPU stage's minutes that is not COLMAP is the bytes moving, and this says how much.
+    # `remoteUploadS` is the final checkpoint sync and `out/` together, as it always was;
+    # the two are also given apart. `remoteStartedAt` is the wall clock (epoch seconds)
+    # the function body began at, for the runner's queue-and-start figure.
     timing = {
+        "remoteStartedAt": round(started_at, 3),
         "remoteFetchS": round(fetched_at - began, 2),
+        "remoteFetchBytes": fetched,
         "remoteStageS": round(ran_at - fetched_at, 2),
         "remoteUploadS": round(done_at - ran_at, 2),
+        "remoteFinalSyncS": round(synced_at - ran_at, 2),
+        "remoteFinalSyncBytes": final,
+        "remoteOutputS": round(done_at - synced_at, 2),
+        "remoteOutputBytes": uploaded,
+        "remoteSyncs": syncs.syncs,
+        "remoteSyncS": round(syncs.seconds, 2),
+        "remoteSyncBytes": syncs.bytes,
+        "remoteTotalS": round(done_at - began, 2),
     }
     return RemoteOutcome(
         metrics={**(result.get("metrics") or {}), **timing},
@@ -208,6 +251,7 @@ def _sync_forever(
     checkpoint: Path,
     stop: threading.Event,
     every: float,
+    stats: SyncStats | None = None,
 ) -> None:
     """Sync until told to stop. A failed sync must not take the stage down with it.
 
@@ -215,7 +259,10 @@ def _sync_forever(
     would spin this thread against the bucket for the length of a training run.
     """
     while not stop.wait(max(0.05, every)):
-        _sync_quietly(request, transfer, checkpoint)
+        began = time.monotonic()
+        moved = _sync_quietly(request, transfer, checkpoint)
+        if stats is not None:
+            stats.add(time.monotonic() - began, moved)
 
 
 def _sync_quietly(request: StageRequest, transfer: Transfer, checkpoint: Path) -> int:

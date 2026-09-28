@@ -202,6 +202,47 @@ def test_a_flat_tail_is_stopped_by_the_trainers_own_save(tmp_path: Path) -> None
     assert step["metrics"]["stepsMax"] == 1_500
 
 
+def _strict(text: str) -> Any:
+    """JSON as the API reads it: a NaN is an error, not a number."""
+
+    def refuse(constant: str) -> Any:
+        raise ValueError(f"{constant} in a stats file")
+
+    return json.loads(text, parse_constant=refuse)
+
+
+@pytest.mark.parametrize("plateau", ["0.84", "2.0"])
+def test_evaluations_write_no_renders_and_only_the_last_scores_lpips(
+    tmp_path: Path, plateau: str
+) -> None:
+    """The renders nothing read and the LPIPS the rule never looked at are gone; the PSNR
+    curve, the stop and the reported numbers are what they were. Both endings: a stop (the
+    evaluation after the decision is the last) and the whole schedule (its final step)."""
+    workdir, document = run(tmp_path, converge_params(extra_args=["--plateau-at", plateau]))
+
+    result = workdir.work_dir("train") / "gsplat"
+    stats = sorted((result / "stats").glob("val_step*.json"), key=training.step_of)
+    documents = [_strict(path.read_text()) for path in stats]
+    assert all("psnr" in d for d in documents)
+    assert documents[-1]["lpips"] == pytest.approx(0.2)
+    assert not any("lpips" in d for d in documents[:-1])
+    assert document["lpips"] == pytest.approx(0.2)
+    curve = document["convergence"]["curve"]
+    assert len(curve) == len(stats) and all("psnr" in point for point in curve)
+    assert [("lpips" in point) for point in curve] == [False] * (len(curve) - 1) + [True]
+    assert document["convergence"]["hook"]["lpipsSkipped"] == len(stats) - 1
+    assert document["convergence"]["stepsRun"] == (1_351 if plateau == "0.84" else 1_500)
+    # No render was written, and the trainer's own time is on record.
+    assert not any((result / "renders").iterdir())
+    timing = convergence.read_timing(result)
+    assert timing is not None and timing["hooked"] is True
+    assert timing["evals"] == len(stats)
+    assert timing["rendersSkipped"] == 3 * len(stats)  # the stand-in's three val frames
+    assert timing["plyExports"] == 1 and timing["setupS"] is not None
+    assert timing["stepsS"] is not None
+    assert float(str(timing["wallS"])) >= float(str(timing["trainS"]))
+
+
 def test_a_batch_stops_at_the_same_point_of_its_images_in_half_the_steps(
     tmp_path: Path,
 ) -> None:

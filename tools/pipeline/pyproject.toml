@@ -62,6 +62,7 @@ known-first-party = [
   "lod_optimise",
   "lod_parents",
   "modal_adapter",
+  "phases",
   "plan",
   "progress",
   "providers",

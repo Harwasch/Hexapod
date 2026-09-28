@@ -595,6 +595,47 @@ control) -- `fanOutWallS`, the two parts' `billedS` against the serial 2,530 s /
 PSNR/LPIPS against 26.42 / 0.1056; then a large capture at `blocks: 4` with
 `block_schedule: share` against `frames`.
 
+**Where a part's billed seconds go.** Measured on the L4 (spool, `blocks: 2`, bilateral
+grid, job 62d796d4): parts billed 4,191 s and 4,323 s against 2,967 s and 3,048 s of
+`blockSeconds` (the trainer's process), ~1,250 s each beyond it. Everything a part does
+outside the trainer was timed on this repository's CPU on a real 100-frame capture with a
+1M-gaussian prior and a 1M-gaussian SH-3 block: the dataset (now hard-linked) under 0.5 s,
+both budgets 0.4 s, the prior 0.2 s, the seed 5 s, the ring, the read-back, the crop and
+the parts file 2.5 s -- about 10 s. So the minutes are before the function body (the GPU
+queue, the container's start), after it returns (the runner noticing), or in transfers,
+and nothing recorded which. Now every call says, additively, to its billed figure:
+
+| metric         | what                                                                                                                                                                                                                                                                                                                                                                                                              |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `fanOutPhases` | per part: `start` (submit to function body: queue + cold start; `cold:1` if the container was new), `import`, `fetch`, the stage's `stageDataset`, `budget`, `prepare`, `loadPrior`, `dataset`, `seed`, `train`, `post`, `stageOther`, `finalSync`, `output`, `rest` (the result reaching the runner, clock skew); not summed: `bgSync` (the syncer beside the stage), `collect` (the runner fetching the result) |
+| `headPhases`   | the head call, the same way (`prepare` is the prior and the camera test)                                                                                                                                                                                                                                                                                                                                          |
+| `remotePhases` | the last call: the join (`merge`, `eval`, `holdout`) or the one call                                                                                                                                                                                                                                                                                                                                              |
+| `blockPhases`  | each block record's `phases`, as the join saw them                                                                                                                                                                                                                                                                                                                                                                |
+| `blockTrainer` | inside each block's trainer (`trainer_timing.json`): `setup`, `eval`, `ply`, `steps`, `evals`                                                                                                                                                                                                                                                                                                                     |
+
+The container reports `remoteStartedAt`/`remoteEnteredAt`/`containerBootedAt` (wall
+clock), `containerCall`, `remoteImportS`, `remoteFinalSyncS`/`remoteOutputS` (with their
+bytes) and the syncer's `remoteSyncs`/`remoteSyncS`/`remoteSyncBytes`; the runner submits
+with its own wall clock and puts the two together (`cloud.call_phases`).
+
+What was cut, none of it a training step (the merged `trained.ply` stays byte-identical
+to the serial one's, `test_blocks.py`):
+
+- **Evaluation renders.** gsplat's `eval()` writes every val frame's ground truth and
+  render side by side as a full-size PNG, which `converge_trainer.py` then deleted unread:
+  ~1.1 s of zlib per 4 Mpx canvas measured here, ~1.7 s at 2,400 px, x 22 frames x the 15
+  evaluations of a converging 30k run -- **~7-10 min per block**, and per single run with
+  `converge` (inside `blockSeconds`, which is why it did not show as overhead). The
+  wrappers now give the trainer an `imageio` that skips `renders/`; the join's merged
+  evaluation runs through the block wrapper for the same reason (~40 s).
+- **LPIPS on intermediate evaluations**, which the rule never reads (PSNR only): skipped,
+  and dropped from their stats; the last evaluation, the one reported, keeps it.
+- **Re-uploading what was just downloaded.** `S3Transfer.get` now remembers what it
+  fetched, so the syncer's first sync no longer sends back a part's prior, or the join's
+  every finished block (hundreds of MB to GBs at the L4's budget ceiling).
+- **Bringing home more than the result.** A finished part's declared members are fetched
+  one by one, not its whole key (its prior and live snapshots came back too).
+
 ### Batched steps (`batch_size`)
 
 `batch_size: B` (1-8, default 1) trains B images a step. gsplat v1.5.3 scales every

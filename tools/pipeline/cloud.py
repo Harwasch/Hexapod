@@ -70,6 +70,7 @@ from contracts import (
     StageOutcome,
 )
 from errors import NoRunnerError, PreemptedError, RemoteStageError
+from phases import flat, parse_flat
 from plan import PlannedStage
 from providers import Rate
 from runners import BaseRunner
@@ -88,6 +89,7 @@ __all__ = [
     "StageKeys",
     "StageRequest",
     "Transfer",
+    "call_phases",
     "run_cost",
 ]
 
@@ -538,6 +540,9 @@ class CloudRunner(BaseRunner):
         max_pending_s: float = 30 * 60.0,
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
+        #: The wall clock, for comparing a call's submit time with the remote's own
+        #: (`remote.execute`'s `remoteStartedAt`): the queue and the container's start.
+        wall: Callable[[], float] = time.time,
         #: Offer the head call a fan-out (`contracts.FANOUT_PARAM`). Off only for a
         #: deployment whose remote image predates the protocol -- which ignores the param
         #: and runs the stage whole anyway, so leaving it on costs nothing there either.
@@ -562,6 +567,7 @@ class CloudRunner(BaseRunner):
         self._max_pending_s = max_pending_s
         self._clock = clock
         self._sleep = sleep
+        self._wall = wall
         self._fan_out = fan_out
         self._max_parallel = max(1, max_parallel)
         self._part_attempts = max(1, part_attempts)
@@ -583,16 +589,19 @@ class CloudRunner(BaseRunner):
         params = dict(context.params)
         if self._fan_out:
             params[FANOUT_PARAM] = {"role": "head"}
-        adapter, poll = self._call(stage, context, keys, tier, params)
+        adapter, poll, submitted = self._call(stage, context, keys, tier, params)
         fanned: dict[str, MetricValue] = {}
         spec = FanOut.parse((poll.metrics or {}).get(FANOUT_METRIC)) if self._fan_out else None
         if spec is not None:
-            fanned = self._fan_out_parts(stage, context, keys, tier, spec)
+            fanned["headPhases"] = flat(call_phases(submitted, poll))
+            fanned.update(self._fan_out_parts(stage, context, keys, tier, spec))
             # Every piece's result is in `checkpoint/` now; the join call starts from it.
+            sending = time.monotonic()
             sent = self._transfer.put(keys.checkpoint, context.checkpoint_dir)
+            fanned["joinSendS"] = round(time.monotonic() - sending, 2)
             context.log(f"cloud: sent {sent} byte(s) of checkpoint for the join")
             joined = {**context.params, FANOUT_PARAM: {"role": "join"}}
-            adapter, poll = self._call(stage, context, keys, tier, joined, part="join")
+            adapter, poll, submitted = self._call(stage, context, keys, tier, joined, part="join")
             for part in spec.parts:
                 self._transfer.delete(keys.part_root(part.id))
         fetching = time.monotonic()
@@ -604,6 +613,9 @@ class CloudRunner(BaseRunner):
         ledger = AttemptLedger.read(context.attempts_path)
         metrics = self._metrics(ledger.entries[first:], ledger, poll)
         metrics.update(fanned)
+        # The last call's billed seconds, phase by phase (`call_phases`): the one call, or
+        # the join. A fan-out's head and parts are `headPhases` and `fanOutPhases`.
+        metrics["remotePhases"] = flat(call_phases(submitted, poll))
         # The worker's side of the transfer, beside the remote's own (`remote*S`): with
         # `billedS` they account for a remote stage's wall time end to end.
         metrics["stageInS"] = round(staged_s, 2)
@@ -647,9 +659,10 @@ class CloudRunner(BaseRunner):
         params: Mapping[str, Any],
         *,
         part: str = "",
-    ) -> tuple[ProviderAdapter, Poll]:
+    ) -> tuple[ProviderAdapter, Poll, float]:
         """One call on the stage's own checkpoint key: the head, or a fan-out's join.
-        Raises unless it succeeded, having brought the checkpoint home and recorded it."""
+        Raises unless it succeeded, having brought the checkpoint home and recorded it.
+        Returns the wall-clock time it was submitted at, too (`call_phases`)."""
         ledger = AttemptLedger.read(context.attempts_path)
         adapter = self._placement.adapter_for(ledger.preemptions)
         request = self._request(
@@ -662,6 +675,7 @@ class CloudRunner(BaseRunner):
             outputs_key=keys.outputs,
             produces=stage.impl.produces,
         )
+        submitted = self._wall()
         handle = adapter.submit(request)
         poll = self._watch(adapter, handle, context)
         # Whatever the remote last synced comes home before anything else is decided, so
@@ -676,7 +690,7 @@ class CloudRunner(BaseRunner):
             raise RemoteStageError(
                 context.recipe, context.stage_id, context.impl, adapter.name, poll.detail
             )
-        return adapter, poll
+        return adapter, poll, submitted
 
     # --- fanning out -----------------------------------------------------------------
 
@@ -706,6 +720,9 @@ class CloudRunner(BaseRunner):
         billed: dict[str, float] = {part.id: 0.0 for part in spec.parts}
         running: dict[str, _PartRun] = {}
         lost: dict[str, tuple[ProviderAdapter, Poll]] = {}
+        #: Each finished piece's billed seconds, phase by phase (`call_phases`).
+        timed: dict[str, str] = {}
+        collect_s = 0.0
         tail = _FanOutLog(context)
         started = self._clock()
         peak = 0
@@ -725,7 +742,13 @@ class CloudRunner(BaseRunner):
                     del running[part_id]
                     tail.finished(part_id)
                     if poll.state == "succeeded":
+                        collecting = time.monotonic()
                         poll = self._collect_part(context, keys, run.part, poll)
+                        collected = time.monotonic() - collecting
+                        collect_s += collected
+                        timed[part_id] = flat(
+                            call_phases(run.submitted_at, poll, collect_s=collected)
+                        )
                     entry = self._record(
                         run.adapter,
                         context,
@@ -787,6 +810,10 @@ class CloudRunner(BaseRunner):
             "fanOutWallS": round(wall, 1),
             "fanOutBilledS": round(total, 3),
             "fanOutBilledByPart": ",".join(f"{k}:{v:.1f}" for k, v in billed.items()),
+            # Where each piece's billed seconds went (`call_phases`), and the runner's own
+            # time bringing the pieces home -- not billed, but the other pieces wait on it.
+            "fanOutPhases": "; ".join(f"{k} {v}" for k, v in timed.items()),
+            "fanOutCollectS": round(collect_s, 2),
         }
 
     def _submit_part(
@@ -825,9 +852,16 @@ class CloudRunner(BaseRunner):
             produces=(),
         )
         adapter = self._placement.adapter_for(AttemptLedger.read(context.attempts_path).preemptions)
+        submitted = self._wall()
         handle = adapter.submit(request)
         context.log(f"cloud: part {part.id} submitted to {adapter.name!r} (call {call})")
-        return _PartRun(part=part, adapter=adapter, handle=handle, started=self._clock())
+        return _PartRun(
+            part=part,
+            adapter=adapter,
+            handle=handle,
+            started=self._clock(),
+            submitted_at=submitted,
+        )
 
     def _poll_part(self, run: _PartRun, context: StageContext, tail: _FanOutLog) -> Poll:
         poll = run.adapter.poll(run.handle)
@@ -844,14 +878,19 @@ class CloudRunner(BaseRunner):
     ) -> Poll:
         """A finished piece's result, from its key into the stage's `checkpoint/`.
 
-        Only the paths it declared (`FanOutPart.collect`), each replaced whole. A result
-        that did not come back makes the call a failure: the piece claimed to finish and
-        there is nothing for the join to use, so it runs again.
+        Only the paths it declared (`FanOutPart.collect`), each fetched on its own and
+        replaced whole. Fetched member by member rather than the piece's whole key, which
+        also holds the shared members it was sent (a block's prior) and its live
+        snapshots: bytes that went out with it and are already here. A result that did not
+        come back makes the call a failure: the piece claimed to finish and there is
+        nothing for the join to use, so it runs again.
         """
         incoming = context.work_dir / "fanout" / f"{part.id}.incoming"
         if incoming.exists():
             shutil.rmtree(incoming)
-        self._transfer.get(keys.part_checkpoint(part.id), incoming)
+        incoming.mkdir(parents=True)
+        for member in part.collect:
+            self._transfer.get(f"{keys.part_checkpoint(part.id)}/{member}", incoming / member)
         missing = [member for member in part.collect if not (incoming / member).exists()]
         if missing:
             shutil.rmtree(incoming, ignore_errors=True)
@@ -1088,6 +1127,8 @@ class _PartRun:
     adapter: ProviderAdapter
     handle: RemoteHandle
     started: float
+    #: The wall clock at submit (`call_phases`); None where nothing recorded it.
+    submitted_at: float | None = None
     cursor: int = 0
 
 
@@ -1133,6 +1174,73 @@ class _FanOutLog:
 
     def finished(self, part: str) -> None:
         self.done_share.pop(part, None)
+
+
+def _number(metrics: Mapping[str, MetricValue], name: str) -> float | None:
+    value = metrics.get(name)
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    return float(value)
+
+
+def call_phases(
+    submitted_at: float | None, poll: Poll, *, collect_s: float | None = None
+) -> dict[str, float]:
+    """One call's billed seconds (`poll.billed_s`), phase by phase, from what the remote
+    reported (`remote.execute`, `infra/modal/app.py`) and the stage's own `callPhases`.
+
+    Additive, in order, to the billed figure:
+
+    * `start` -- submit to the function body: the GPU queue, the container's cold start
+      and its image (or nothing, on a warm container: `cold` says which);
+    * `import` -- the pipeline's imports in the container;
+    * `fetch` -- inputs and checkpoint down;
+    * the stage's own phases (`phases.py`: `stageDataset`, `budget`, `prepare`, and a
+      block's `dataset`, `seed`, `train`, `post`, or the join's `merge`, `eval`,
+      `holdout`), with `stageOther` for whatever the stage did not time -- or `stage`
+      whole when it timed nothing;
+    * `finalSync` and `output` -- the checkpoint's last sync and `out/` up;
+    * `rest` -- what none of that covers: the result reaching the runner (a poll
+      interval, a log fetch), and any skew between the two clocks.
+
+    Not in the sum: `bgSync`, the checkpoint syncer's own seconds while the stage ran (on
+    its own thread, beside the stage), and `collect`, the runner bringing a finished
+    piece's result home after the call has stopped billing.
+    """
+    metrics: Mapping[str, MetricValue] = poll.metrics or {}
+    out: dict[str, float] = {}
+    entered = _number(metrics, "remoteEnteredAt") or _number(metrics, "remoteStartedAt")
+    if submitted_at is not None and entered is not None:
+        out["start"] = max(0.0, entered - submitted_at)
+    for name, key in (("import", "remoteImportS"), ("fetch", "remoteFetchS")):
+        value = _number(metrics, key)
+        if value is not None:
+            out[name] = value
+    stage = _number(metrics, "remoteStageS")
+    own = parse_flat(metrics.get("callPhases"))
+    if own:
+        out.update(own)
+        if stage is not None:
+            out["stageOther"] = max(0.0, stage - sum(own.values()))
+    elif stage is not None:
+        out["stage"] = stage
+    final = _number(metrics, "remoteFinalSyncS")
+    output = _number(metrics, "remoteOutputS")
+    if final is not None or output is not None:
+        out["finalSync"] = final or 0.0
+        out["output"] = output or 0.0
+    elif (upload := _number(metrics, "remoteUploadS")) is not None:
+        out["upload"] = upload
+    out["rest"] = max(0.0, poll.billed_s - sum(out.values()))
+    background = _number(metrics, "remoteSyncS")
+    if background is not None:
+        out["bgSync"] = background
+    if collect_s is not None:
+        out["collect"] = collect_s
+    call = _number(metrics, "containerCall")
+    if call is not None:
+        out["cold"] = 1.0 if call <= 1 else 0.0
+    return out
 
 
 def _copy_member(source: Path, target: Path) -> None:

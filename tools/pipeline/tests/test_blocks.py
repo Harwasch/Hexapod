@@ -34,6 +34,7 @@ from captures_bridge import read_ply
 from cloud import AttemptLedger, CloudRunner, Placement
 from errors import RemoteStageError, StageFailedError
 from executor import execute
+from phases import ordered, parse_flat
 from providers import Rate
 from runners import LocalRunner, RunnerSet
 from test_train_gsplat import stand_in_params, train_recipe
@@ -489,6 +490,28 @@ def test_a_blocks_dataset_is_its_frames_renamed_with_their_tracks_only(tmp_path:
     assert set(points.track[:, 0].tolist()) <= {3, 4, 9}
     assert len(points) == 80  # every point kept; those no kept frame saw have no track
     struct.unpack("<Q", (tmp_path / "block" / "sparse" / "0" / "images.bin").read_bytes()[:8])
+    # A frame is the run dataset's own file under its new name -- linked, not copied --
+    # and nothing of the sparse model is: the block's `points3D.bin` is rewritten.
+    linked = (tmp_path / "block" / "images" / "00001_frame_0002.jpg").stat()
+    assert linked.st_ino == (source / "images" / "frame_0002.jpg").stat().st_ino
+    for name in ("cameras.bin", "images.bin", "points3D.bin"):
+        block_file = (tmp_path / "block" / "sparse" / "0" / name).stat()
+        assert block_file.st_ino != (source / "sparse" / "0" / name).stat().st_ino
+        assert block_file.st_nlink == 1
+
+
+def test_a_frame_that_cannot_be_linked_is_copied(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def no_links(source: object, target: object) -> None:
+        raise OSError("cross-device link")
+
+    monkeypatch.setattr("training.os.link", no_links)
+    source = tmp_path / "a.jpg"
+    source.write_bytes(b"frame")
+    training.link_or_copy(source, tmp_path / "b.jpg")
+    assert (tmp_path / "b.jpg").read_bytes() == b"frame"
+    assert (tmp_path / "b.jpg").stat().st_ino != source.stat().st_ino
 
 
 # --- the stage, end to end, with stand-ins --------------------------------------------
@@ -701,6 +724,30 @@ def test_each_block_is_stopped_by_the_convergence_rule_through_the_block_wrapper
     log = workdir.log_path("train").read_text()
     assert log.count("block_trainer.py --trainer") == 2
     assert "--ring" in log and "no rasterization global; no ring" in log
+    # Where each block's seconds went: its call's phases, the trainer's own inside them,
+    # and no evaluation render written (the stand-in's three val frames an evaluation).
+    for block in document["blocks"]["blocks"]:
+        phases = block["phases"]
+        assert set(phases) == {"dataset", "seed", "train", "post"}
+        assert phases["train"] == pytest.approx(block["seconds"], abs=0.11)
+        trainer = block["trainer"]
+        assert trainer["hooked"] is True and trainer["evals"] >= 5
+        assert trainer["rendersSkipped"] == 3 * trainer["evals"]
+        assert trainer["setupS"] is not None and trainer["stepsS"] is not None
+    assert list(ordered(document["blocks"]["phases"])) == [
+        "stageDataset",
+        "budget",
+        "prepare",
+        "loadPrior",
+        "blocks",
+        "merge",
+        "eval",
+        "holdout",
+    ]
+    step = json.loads(workdir.step_path("train").read_text())["metrics"]
+    assert step["blockPhases"].startswith("b0 dataset:") and "; b1 dataset:" in step["blockPhases"]
+    assert step["blockTrainer"].startswith("b0 setup:") and ",evals:" in step["blockTrainer"]
+    assert step["callPhases"].startswith("stageDataset:")
 
 
 def test_the_merged_splat_is_evaluated_or_says_why_not(tmp_path: Path) -> None:
@@ -792,6 +839,29 @@ def test_blocks_fan_out_one_call_each_and_merge_to_what_one_call_trains(tmp_path
     step = json.loads(workdir.step_path("train").read_text())["metrics"]
     assert step["fanOutParts"] == 2 and step["fanOutPeak"] == 2
     assert step["billedS"] == pytest.approx(sum(e.billed_s for e in entries), abs=1e-2)
+    # Where each call's billed seconds went. A part's record has its whole call -- the
+    # stage's dataset and budget, the plan, the block -- and the runner adds its side.
+    for block in document["blocks"]["blocks"]:
+        assert list(ordered(block["phases"])) == [
+            "stageDataset",
+            "budget",
+            "prepare",
+            "loadPrior",
+            "dataset",
+            "seed",
+            "train",
+            "post",
+        ]
+    billed = {entry.part: entry.billed_s for entry in entries}
+    parts = dict(item.split(" ", 1) for item in step["fanOutPhases"].split("; "))
+    assert sorted(parts) == ["b0", "b1"]
+    for part, text in parts.items():
+        phases = parse_flat(text)
+        assert {"prepare", "dataset", "train", "post", "rest", "collect"} <= set(phases)
+        additive = sum(v for k, v in phases.items() if k not in ("collect", "bgSync", "cold"))
+        assert additive == pytest.approx(billed[part], abs=0.1 * len(phases) + 0.05)
+    assert "prepare:" in step["headPhases"] and "merge:" in step["remotePhases"]
+    assert step["fanOutCollectS"] >= 0 and step["joinSendS"] >= 0
     home = workdir.checkpoint_dir("train") / "blocks"
     assert sorted(p.name for p in home.iterdir()) == [
         "block_000.json",

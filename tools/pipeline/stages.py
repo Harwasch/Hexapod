@@ -64,6 +64,7 @@ from captures_bridge import (
     splat_tiles_convert,
 )
 from contracts import FANOUT_METRIC, MetricValue, StageContext, StageOutcome, fanout_role
+from phases import Phases
 from registry import stage_impl
 
 # ---------------------------------------------------------------------------------------
@@ -1252,7 +1253,10 @@ def gsplat(ctx: StageContext) -> StageOutcome:
     roi: training.Roi | support_mask.SupportMask | None = (
         mask if mask is not None else training.Roi.parse(ctx.param("roi"))
     )
-    dataset = training.build_dataset(frames, poses, ctx.work_dir / "dataset", max_side=max_side)
+    # Timed, because every call of a block run's fan-out does this again (`phases.py`).
+    preamble = Phases()
+    with preamble.phase("stageDataset"):
+        dataset = training.build_dataset(frames, poses, ctx.work_dir / "dataset", max_side=max_side)
     # A shorter schedule for a smaller capture (`training.schedule_scale`), unless the
     # recipe leaves `schedule_full_at` out, which keeps the full one -- or unless the run
     # names its own `schedule_scale`, which wins over both.
@@ -1293,6 +1297,7 @@ def gsplat(ctx: StageContext) -> StageOutcome:
     # trainer will really read its frames; an integer is used as given.
     requested_cap = gaussian_budget.parse_cap(ctx.param("cap_max"))
     frame_size, pixel_scale = _training_frame(dataset, data_factor)
+    budgeting = time.monotonic()
     budget = gaussian_budget.plan(
         requested_cap,
         model=poses,
@@ -1307,6 +1312,7 @@ def gsplat(ctx: StageContext) -> StageOutcome:
         gpu_memory_gb=float(ctx.param("gpu_memory_gb", gaussian_budget.DEFAULT_GPU_MEMORY_GB)),
         images_per_step=batch_size,
     )
+    preamble.add("budget", time.monotonic() - budgeting)
     cap_max = None if budget is None else budget.cap
     if budget is not None:
         ctx.log(f"gsplat: {gaussian_budget.describe(budget)}")
@@ -1395,6 +1401,7 @@ def gsplat(ctx: StageContext) -> StageOutcome:
                 block_schedule=_block_schedule_mode(ctx.param("block_schedule")),
                 batch_size=batch_size,
                 parallel=_block_parallel(ctx.param("block_parallel")),
+                phases=preamble.to_dict(),
             ),
             images=images,
             requested_cap=requested_cap,
@@ -1771,20 +1778,26 @@ def _train_in_blocks(
     `checkpoint/`; the join merges and measures, which is what every other call ends in.
     """
     role, part = fanout_role(ctx.params)
-    plan = blocks.prepare(ctx, settings, role=role)
+    # Where this call's seconds go (`phases.py`): the stage's dataset and budget, the
+    # plan (the head renders the prior for the camera test here), then the role's work.
+    call = Phases()
+    call.update(settings.phases)
+    with call.phase("prepare"):
+        plan = blocks.prepare(ctx, settings, role=role)
     if plan is None:
         if role in ("part", "join"):
             raise ValueError(f"blocks: the plan came to one block, so there is no {role}")
         return None
     if role == "part":
         index = blocks.part_index(part, plan)
-        record = blocks.train_part(ctx, settings, plan, index)
+        record = blocks.train_part(ctx, settings, plan, index, phases=call)
         return StageOutcome(
             metrics={
                 "block": index,
                 "blockSteps": int(record["stepsRun"] or 0),
                 "blockSeconds": float(record["seconds"]),
                 "blockGaussians": int(record["gaussiansKept"]),
+                "callPhases": call.flat(),
             },
             summary=f"block {index + 1} of {plan.partition.count} trained",
         )
@@ -1798,10 +1811,14 @@ def _train_in_blocks(
                 f"({', '.join(p.id for p in spec.parts)}, longest first)"
             )
             return StageOutcome(
-                metrics={FANOUT_METRIC: spec.to_json(), "blocks": plan.partition.count},
+                metrics={
+                    FANOUT_METRIC: spec.to_json(),
+                    "blocks": plan.partition.count,
+                    "callPhases": call.flat(),
+                },
                 summary=f"{len(todo)} blocks to train in parallel",
             )
-    run = blocks.train(ctx, settings, plan, ctx.output(TRAINED_PLY.name))
+    run = blocks.train(ctx, settings, plan, ctx.output(TRAINED_PLY.name), phases=call)
     registered = _registered_count(settings.poses, images)
     train_frames, val_frames = training.held_out_split(registered)
     split = training.TrainMetrics(

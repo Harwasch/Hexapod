@@ -55,6 +55,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -263,6 +264,16 @@ cpu_image = (
 
 app = modal.App("twin-pipeline")
 
+#: When this module was imported (epoch seconds): in a container, when the container had
+#: its image and its Python up -- the end of its cold start. With `remoteStartedAt` and the
+#: runner's own submit time it splits a call's billed seconds into waiting for a GPU,
+#: starting the container, and running (`_run`). Meaningless on the deploying machine,
+#: where nothing reads it.
+BOOTED_AT = time.time()
+#: Calls this container has served. The first is a cold start; a later one found the
+#: container warm (Modal keeps it for its scale-down window) and paid no start at all.
+_CALLS = [0]
+
 
 class S3Transfer:
     """The pipeline's `Transfer`, over boto3, inside the container.
@@ -302,13 +313,12 @@ class S3Transfer:
 
             def one(member: Path) -> int:
                 remote = f"{key}/{member.relative_to(source).as_posix()}"
-                stat = member.stat()
-                signature = (stat.st_size, stat.st_mtime_ns)
+                signature = _signature(member)
                 if self._sent.get(remote) == signature:
                     return 0
                 self._client.upload_file(str(member), self._bucket, remote)
                 self._sent[remote] = signature
-                return stat.st_size
+                return signature[0]
 
             moved = sum(_parallel(one, members))
             present = {f"{key}/{m.relative_to(source).as_posix()}" for m in members}
@@ -327,6 +337,11 @@ class S3Transfer:
             self._sent.pop(remote, None)
 
     def get(self, key: str, target: Path) -> int:
+        """A directory's members are remembered as sent, as they are once downloaded: the
+        object under the key *is* the file just written, so the checkpoint syncer's first
+        `put` of that directory has nothing to send until the stage changes a file. It
+        used to send everything it had just fetched -- a part's prior, and the join's
+        every finished block (hundreds of megabytes) -- within its first minute."""
         self._forget(key)
         if self._head(key) is not None:
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -337,7 +352,9 @@ class S3Transfer:
             destination = target / member[len(key) + 1 :]
             destination.parent.mkdir(parents=True, exist_ok=True)
             self._client.download_file(self._bucket, member, str(destination))
-            return destination.stat().st_size
+            signature = _signature(destination)
+            self._sent[member] = signature
+            return signature[0]
 
         return sum(_parallel(one, self._listing(f"{key}/")))
 
@@ -377,6 +394,12 @@ class S3Transfer:
             token = page.get("NextContinuationToken") if page.get("IsTruncated") else None
             if token is None:
                 return keys
+
+
+def _signature(path: Path) -> tuple[int, int]:
+    """(size, mtime_ns): what `S3Transfer.put` compares to skip an unchanged member."""
+    stat = path.stat()
+    return stat.st_size, stat.st_mtime_ns
 
 
 #: Objects of one directory moved at once. A frames artifact is ~100 objects, and moving
@@ -426,17 +449,30 @@ def _run(request: dict[str, Any]) -> dict[str, Any]:
     built, on a machine that has no pipeline mounted -- which is every machine that is
     not a Modal container.
     """
+    entered = time.time()
+    _CALLS[0] += 1
     if PIPELINE_DIR not in sys.path:
         sys.path.insert(0, PIPELINE_DIR)
 
+    importing = time.monotonic()
     import remote
     import stages  # noqa: F401 - registers every shipped implementation
     from cloud import StageRequest
 
+    imported_s = time.monotonic() - importing
     parsed = StageRequest.from_dict(request)
     root = Path("/tmp") / f"stage-{parsed.stage_id}-{uuid.uuid4().hex}"  # noqa: S108
-    outcome = remote.execute(parsed, _transfer(), root)
-    return outcome.to_dict()
+    outcome = remote.execute(parsed, _transfer(), root).to_dict()
+    # The container's side of a call's billed seconds (`cloud.CloudRunner` puts them
+    # beside its own): when it was up, whether it was warm, and the imports above.
+    outcome["metrics"] = {
+        **outcome["metrics"],
+        "containerBootedAt": round(BOOTED_AT, 3),
+        "containerCall": _CALLS[0],
+        "remoteEnteredAt": round(entered, 3),
+        "remoteImportS": round(imported_s, 2),
+    }
+    return outcome
 
 
 def _tiers() -> tuple[str, ...]:

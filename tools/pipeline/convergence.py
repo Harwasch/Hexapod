@@ -60,12 +60,14 @@ __all__ = [
     "DEFAULT_WINDOW",
     "REFINE_STOP_ITER",
     "REPORT",
+    "TIMING",
     "Decision",
     "Rule",
     "decide",
     "eval_steps",
     "read_curve",
     "read_report",
+    "read_timing",
 ]
 
 #: gsplat v1.5.3's densification ends, unscaled: `MCMCStrategy.refine_stop_iter` and
@@ -84,6 +86,9 @@ DEFAULT_CURVE_EVERY = 5_000
 
 #: What `converge_trainer.py` writes beside the trainer's `stats/`.
 REPORT = "converge.json"
+#: And where the trainer's own time went (`converge_trainer.Timing`), written by both
+#: wrappers whether or not the convergence rule is on.
+TIMING = "trainer_timing.json"
 
 
 @dataclass(frozen=True)
@@ -194,7 +199,13 @@ def read_curve(stats: Path) -> list[dict[str, object]]:
         point: dict[str, object] = {"step": int(digits) + 1}
         for key in ("psnr", "ssim", "lpips", "num_GS"):
             value = document.get(key)
-            if isinstance(value, int | float) and not isinstance(value, bool):
+            # Finite only: an evaluation that skipped LPIPS (`converge_trainer.py`) has
+            # none, and a NaN would make `train_metrics.json` invalid JSON.
+            if (
+                isinstance(value, int | float)
+                and not isinstance(value, bool)
+                and math.isfinite(value)
+            ):
                 point["gaussians" if key == "num_GS" else key] = (
                     int(value) if key == "num_GS" else round(float(value), 4)
                 )
@@ -207,6 +218,15 @@ def read_report(result_dir: Path) -> dict[str, object] | None:
     path = result_dir / REPORT
     try:
         document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return document if isinstance(document, dict) else None
+
+
+def read_timing(result_dir: Path) -> dict[str, object] | None:
+    """`trainer_timing.json`, if a wrapper wrote one that parses."""
+    try:
+        document = json.loads((result_dir / TIMING).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
     return document if isinstance(document, dict) else None

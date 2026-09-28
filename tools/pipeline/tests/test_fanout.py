@@ -33,6 +33,7 @@ from cloud import (
     RemoteHandle,
     StageRequest,
     _FanOutLog,
+    call_phases,
     run_cost,
 )
 from conftest import make_recipe
@@ -423,3 +424,83 @@ def test_the_bar_follows_the_slowest_part_and_the_viewer_the_furthest() -> None:
     assert [json.loads(line.split("live-splat: ")[1])["step"] for line in live] == [250, 500, 500]
     assert "[b1] live: a snapshot at step 400 of 1000 is not shown" in shown[-2]
     assert shown[-1] == "[b0] an ordinary line"
+
+
+class Recorded(LocalTransfer):
+    """A `LocalTransfer` that notes every key it is asked to fetch."""
+
+    def __init__(self, root: Path) -> None:
+        super().__init__(root)
+        self.fetched: list[str] = []
+
+    def get(self, key: str, target: Path) -> int:
+        self.fetched.append(key)
+        return super().get(key, target)
+
+
+def test_a_finished_part_brings_home_only_what_it_declared(tmp_path: Path) -> None:
+    """A piece's key also holds the shared members it was sent (a block's prior) and its
+    live snapshots; only its declared result is fetched, member by member."""
+    transfer = Recorded(tmp_path / "bucket")
+    fake = FakeAdapter(
+        LocalTransfer(tmp_path / "bucket"),  # the remote's side, not recorded
+        tmp_path / "sandbox",
+        name="modal",
+        interruptible=False,
+        rates={"l4": RATE},
+        script=pieces(["p0", "p1"], 2),
+    )
+    runner = CloudRunner(
+        Placement((fake,)),
+        transfer,
+        poll_interval_s=0.0,
+        checkpoint_every_s=0.0,
+        sleep=lambda _seconds: None,
+    )
+    workdir = Workdir.create(tmp_path / "run")
+
+    run(workdir, runner)
+
+    parts = [key for key in transfer.fetched if "/parts/" in key and "/checkpoint" in key]
+    assert sorted(set(parts)) == sorted(
+        f"runs/{workdir.root.name}/train/parts/{p}/checkpoint/results/{p}.json"
+        for p in ("p0", "p1")
+    )
+    step = json.loads(workdir.step_path("train").read_text())["metrics"]
+    assert sorted(item.split(" ")[0] for item in step["fanOutPhases"].split("; ")) == ["p0", "p1"]
+
+
+def test_a_calls_billed_seconds_are_accounted_phase_by_phase() -> None:
+    """What `remote.execute`, the Modal app and the stage report, put together: the
+    additive phases sum to the billed figure, and the rest is what none of them saw."""
+    poll = Poll(
+        state="succeeded",
+        billed_s=4300.0,
+        metrics={
+            "containerBootedAt": 1_000_050.0,
+            "containerCall": 1,
+            "remoteEnteredAt": 1_000_060.0,
+            "remoteStartedAt": 1_000_062.0,
+            "remoteImportS": 2.0,
+            "remoteFetchS": 20.0,
+            "remoteStageS": 4100.0,
+            "remoteFinalSyncS": 30.0,
+            "remoteOutputS": 0.5,
+            "remoteUploadS": 30.5,
+            "remoteSyncS": 12.0,
+            "callPhases": "stageDataset:3.0,budget:1.0,prepare:0.5,train:3000.0,post:20.0",
+        },
+    )
+
+    phases = call_phases(1_000_000.0, poll, collect_s=9.0)
+
+    assert phases["start"] == pytest.approx(60.0)
+    assert phases["stageOther"] == pytest.approx(4100.0 - 3024.5)
+    assert phases["finalSync"] == 30.0 and phases["output"] == 0.5
+    additive = {k: v for k, v in phases.items() if k not in ("bgSync", "collect", "cold")}
+    assert sum(additive.values()) == pytest.approx(4300.0)
+    assert phases["rest"] == pytest.approx(4300.0 - 60 - 2 - 20 - 4100 - 30.5)
+    assert phases["bgSync"] == 12.0 and phases["collect"] == 9.0 and phases["cold"] == 1.0
+    # With nothing reported but the billed figure (an adapter with no remote half), it is
+    # all `rest`: the account never claims more than it knows.
+    assert call_phases(None, Poll(state="succeeded", billed_s=7.0)) == {"rest": 7.0}

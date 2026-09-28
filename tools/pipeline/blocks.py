@@ -107,6 +107,7 @@ import sfm
 import training
 from captures_bridge import read_ply
 from contracts import FANOUT_PARAM, FanOut, FanOutPart, MetricValue, StageContext
+from phases import Phases, flat, ordered
 from support_mask import SupportMask
 
 __all__ = [
@@ -461,7 +462,9 @@ def build_block_dataset(
         directory.mkdir(parents=True)
     rename = {name: f"{position:05d}_{name}" for position, (name, _val) in enumerate(order)}
     for old, new in rename.items():
-        shutil.copyfile(dataset / "images" / old, images / new)
+        # Linked, not copied, where it can be: the run's dataset is already a copy of its
+        # own, and nothing writes a frame (`training.link_or_copy`).
+        training.link_or_copy(dataset / "images" / old, images / new)
     source = dataset / "sparse" / "0"
     for entry in sorted(p for p in source.iterdir() if p.is_file()):
         if entry.name not in ("images.bin", "points3D.bin"):
@@ -623,6 +626,9 @@ class Settings:
     batch_size: int = 1
     #: Blocks at once when the runner fans out (`BLOCK_PARALLEL`); 1 trains them in turn.
     parallel: int = BLOCK_PARALLEL
+    #: Seconds the stage spent before it knew there would be blocks (`phases.Phases`):
+    #: building the run's dataset and its budget, which every call of a fan-out repeats.
+    phases: Mapping[str, float] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -1096,26 +1102,54 @@ def fan_out(settings: Settings, plan: Plan, todo: Sequence[int]) -> FanOut:
     )
 
 
-def train_part(ctx: StageContext, settings: Settings, plan: Plan, index: int) -> dict[str, Any]:
+def train_part(
+    ctx: StageContext,
+    settings: Settings,
+    plan: Plan,
+    index: int,
+    *,
+    phases: Phases | None = None,
+) -> dict[str, Any]:
     """One block, alone: what a `part` call of a fan-out does. Its splat and record land in
-    `checkpoint/blocks/`, which is all that comes home; nothing is written to `out/`."""
-    prior, why = load_prior(ctx.checkpoint_dir, settings.poses)
-    if prior is None:
-        raise ValueError(f"blocks: the prior this plan was made from is gone: {why}")
-    uv_prior = plan.partition.project(prior.xyz)
+    `checkpoint/blocks/`, which is all that comes home; nothing is written to `out/`.
+
+    `phases` holds what the call timed before it got here (the stage's dataset and budget,
+    the plan's load); the block's own phases are added to it, and the record keeps them
+    all, so a part's record says where its call's seconds went."""
+    phases = phases if phases is not None else Phases()
+    with phases.phase("loadPrior"):
+        prior, why = load_prior(ctx.checkpoint_dir, settings.poses)
+        if prior is None:
+            raise ValueError(f"blocks: the prior this plan was made from is gone: {why}")
+        uv_prior = plan.partition.project(prior.xyz)
     work = ctx.work_dir / "blocks"
-    return _train_block(ctx, settings, plan, prior, uv_prior, index, work / f"b{index}")
+    return _train_block(
+        ctx, settings, plan, prior, uv_prior, index, work / f"b{index}", phases=phases
+    )
 
 
-def train(ctx: StageContext, settings: Settings, plan: Plan, trained_ply: Path) -> BlockRun:
-    """Train every block not already finished, merge them into `trained_ply`, measure."""
+def train(
+    ctx: StageContext,
+    settings: Settings,
+    plan: Plan,
+    trained_ply: Path,
+    *,
+    phases: Phases | None = None,
+) -> BlockRun:
+    """Train every block not already finished, merge them into `trained_ply`, measure.
+
+    `phases` is the call's own timing (the join's, or the one call that trains every
+    block): the merge, the evaluation and the held-out error are added to it and it goes
+    into the record as `phases`. Each block trained here keeps its own in its record."""
+    phases = phases if phases is not None else Phases()
     started = settings.started
     work = ctx.work_dir / "blocks"
     done = finished(ctx, plan)
-    prior, why = load_prior(ctx.checkpoint_dir, settings.poses)
-    if prior is None:
-        raise ValueError(f"blocks: the prior this plan was made from is gone: {why}")
-    uv_prior = plan.partition.project(prior.xyz)
+    with phases.phase("loadPrior"):
+        prior, why = load_prior(ctx.checkpoint_dir, settings.poses)
+        if prior is None:
+            raise ValueError(f"blocks: the prior this plan was made from is gone: {why}")
+        uv_prior = plan.partition.project(prior.xyz)
     budget_s = _param_float(settings, "block_attempt_budget_s", ATTEMPT_BUDGET_S)
     sync_wait_s = _param_float(settings, "block_sync_wait_s", SYNC_WAIT_S)
     trained_here = 0
@@ -1140,10 +1174,11 @@ def train(ctx: StageContext, settings: Settings, plan: Plan, trained_ply: Path) 
                 f"{len(done)} of {plan.partition.count} blocks trained; the rest resume on "
                 f"the next attempt"
             )
-        record = _train_block(ctx, settings, plan, prior, uv_prior, index, work / f"b{index}")
+        with phases.phase("blocks"):
+            record = _train_block(ctx, settings, plan, prior, uv_prior, index, work / f"b{index}")
         done[key] = record
         trained_here += 1
-    return _merge_and_measure(ctx, settings, plan, done, trained_ply, work, started)
+    return _merge_and_measure(ctx, settings, plan, done, trained_ply, work, started, phases)
 
 
 def _block_dir(index: int) -> str:
@@ -1250,7 +1285,10 @@ def _train_block(
     uv_prior: Any,
     index: int,
     work: Path,
+    *,
+    phases: Phases | None = None,
 ) -> dict[str, Any]:
+    phases = phases if phases is not None else Phases()
     part = plan.partition
     total = part.count
     margin = _param_float(settings, "block_margin", block_maths.DEFAULT_MARGIN)
@@ -1265,9 +1303,12 @@ def _train_block(
         shutil.rmtree(work)
     work.mkdir(parents=True)
     dataset = work / "dataset"
-    build_block_dataset(settings.dataset, dataset, order)
-    sparse = dataset / "sparse" / "0"
-    crop = training.crop_initial_points(sparse, cast("Any", region))
+    with phases.phase("dataset"):
+        build_block_dataset(settings.dataset, dataset, order)
+        sparse = dataset / "sparse" / "0"
+        crop = training.crop_initial_points(sparse, cast("Any", region))
+    # The seed, the block's budget and the frozen ring, up to the trainer's start.
+    seeding = time.monotonic()
     trainable = np.asarray(region.contains(prior.xyz), dtype=bool)
     share = float(trainable.sum()) / max(1, prior.count)
     cap, block_budget = _block_cap(settings, region, share)
@@ -1360,6 +1401,7 @@ def _train_block(
         f"({schedule_rule}) -> {iterations} steps"
         + ("" if settings.batch_size == 1 else f" of {settings.batch_size} images")
     )
+    phases.add("seed", time.monotonic() - seeding)
     began = time.monotonic()
     with live.SplatWatch(
         result / "ply",
@@ -1372,6 +1414,8 @@ def _train_block(
     ):
         ctx.run(argv)
     seconds = time.monotonic() - began
+    phases.add("train", seconds)
+    finishing = time.monotonic()
     ply = training.latest_ply(result)
     if ply is None:
         raise ValueError(f"block {index + 1}: the trainer wrote no .ply under {result}")
@@ -1396,6 +1440,7 @@ def _train_block(
         result, "", trainer=f"gsplat:{settings.trainer.name}", requested_iterations=iterations
     )
     report = convergence.read_report(result) if extra_evals else None
+    phases.add("post", time.monotonic() - finishing)
     record: dict[str, Any] = {
         "fingerprint": plan.fingerprint,
         "index": index,
@@ -1429,6 +1474,11 @@ def _train_block(
         "peakMemoryGb": metrics.peak_memory_gb,
         "seconds": round(seconds, 1),
         "attempt": ctx.attempt,
+        # Where the call's seconds went (`phases.py`): a part's whole call up to here,
+        # its stage's dataset and budget included; `seconds` is its `train`. And where
+        # the trainer's went (`converge_trainer.Timing`): setup, evaluations, exports.
+        "phases": phases.to_dict(),
+        "trainer": convergence.read_timing(result),
     }
     # After the splat is in place: a block with a splat and no record is trained again,
     # never merged half-written.
@@ -1474,17 +1524,21 @@ def _merge_and_measure(
     trained_ply: Path,
     work: Path,
     started: float,
+    phases: Phases,
 ) -> BlockRun:
     directories = [_state_dir(ctx) / _block_dir(i) for i in range(plan.partition.count)]
     parts = [part for directory in directories for part in block_parts(directory)]
     full = work / "merged_full.ply"
-    count, _ = merge_plys(parts, full)
-    _, written = merge_plys(parts, trained_ply, gaussians.CANONICAL_PROPERTIES)
+    with phases.phase("merge"):
+        count, _ = merge_plys(parts, full)
+        _, written = merge_plys(parts, trained_ply, gaussians.CANONICAL_PROPERTIES)
     ctx.log(
         f"blocks: merged {plan.partition.count} blocks into {count} gaussians "
         f"({', '.join(str(done[str(i)]['gaussiansKept']) for i in range(plan.partition.count))})"
     )
-    evaluation = _evaluate(ctx, settings, full, work / "eval")
+    with phases.phase("eval"):
+        evaluation = _evaluate(ctx, settings, full, work / "eval")
+    holding = time.monotonic()
     held_out = holdout.measure(
         ctx,
         enabled=settings.holdout_error,
@@ -1500,6 +1554,7 @@ def _merge_and_measure(
         script=settings.holdout_script,
         budget_s=settings.holdout_budget_s,
     )
+    phases.add("holdout", time.monotonic() - holding)
     # The splats are in the merged output now; the checkpoint keeps only the records, so
     # a later run does not carry gigabytes of finished blocks back and forth.
     for directory in directories:
@@ -1539,6 +1594,8 @@ def _merge_and_measure(
         "evaluation": evaluation[1],
         "seconds": round(seconds, 1),
         "stageSeconds": round(time.monotonic() - started, 1),
+        # This call's own phases (`phases.py`); each block's are in its record.
+        "phases": phases.to_dict(),
     }
     metrics: dict[str, MetricValue] = {
         "blocks": plan.partition.count,
@@ -1552,6 +1609,15 @@ def _merge_and_measure(
         "blockCameraTest": plan.method,
         "blockMerges": len(plan.merges),
         "blockPrior": plan.prior_source,
+        # Where the seconds went, flattened (`phases.flat`): this call's, each block's
+        # call's, and inside each block's trainer. The records have them as objects.
+        "callPhases": phases.flat(),
+        "blockPhases": "; ".join(
+            f"b{r['index']} {flat(ordered(dict(r.get('phases') or {})))}" for r in records
+        ),
+        "blockTrainer": "; ".join(
+            f"b{r['index']} {_trainer_flat(r.get('trainer'))}" for r in records
+        ),
     }
     return BlockRun(
         document={
@@ -1563,6 +1629,21 @@ def _merge_and_measure(
         gaussians=count,
         written=written,
     )
+
+
+def _trainer_flat(timing: object) -> str:
+    """A block's `trainer_timing.json` as `phases.flat` would write it; empty if none."""
+    if not isinstance(timing, Mapping):
+        return ""
+    names = {"setupS": "setup", "evalS": "eval", "plyS": "ply", "stepsS": "steps"}
+    seconds = {
+        short: float(timing[key])
+        for key, short in names.items()
+        if isinstance(timing.get(key), int | float) and not isinstance(timing.get(key), bool)
+    }
+    text = flat(seconds)
+    evals = timing.get("evals")
+    return f"{text},evals:{evals}" if isinstance(evals, int) and text else text
 
 
 def _evaluate(
@@ -1609,7 +1690,9 @@ def _evaluate(
             bilateral_grid=bool(switches.get("bilateral_grid")),
             extra=[*settings.extra, "--ckpt", str(checkpoint)],
         )
-        ctx.run(argv)
+        # Through the block wrapper with neither ring nor rule: the evaluation's renders
+        # are not written (22 full-size PNGs nothing reads; converge_trainer.py).
+        ctx.run(trainer_argv(argv, script=script, rule=None, ring=None))
         metrics = training.parse_metrics(result, "", trainer=f"gsplat:{settings.trainer.name}")
         if metrics.psnr is None:
             raise ValueError("the evaluation wrote no held-out numbers")

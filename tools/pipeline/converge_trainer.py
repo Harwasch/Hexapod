@@ -31,6 +31,32 @@ like a run whose schedule was that long. `converge.json` beside `stats/` says wh
 happened. The rendered val images `eval()` writes are deleted as they are scored: nothing
 reads them, and a tail of evaluations would otherwise leave hundreds of full-size PNGs.
 
+**Two things every evaluation did that nothing reads**, now skipped (`instrument`,
+`install`), neither of which touches a training step:
+
+* v1.5.3's `eval()` writes each val frame's ground truth and render side by side as a
+  full-size PNG (`imageio.imwrite`), and this file deleted them unread. At the spool's
+  2,400 px that is a ~6.5 Mpx PNG per frame, about 1.1-1.8 s of zlib on one CPU core
+  (measured here on a 1,920 x 2,160 canvas: 1.1 s), times 22 held-out frames, times the
+  15 evaluations a converging 30k run makes: 6-10 minutes of a GPU's time spent
+  encoding images for the bin. `instrument` hands the trainer an `imageio` whose
+  `imwrite` skips `renders/`, and delegates everything else.
+* LPIPS -- twice with the bilateral grid (`cc_lpips`) -- on every frame of every
+  intermediate evaluation, where the rule reads PSNR alone. `install` replaces the
+  runner's `lpips` with a NaN for the evaluations that cannot be the last one, and drops
+  the NaN from their stats file before anything reads it. The last evaluation -- the
+  end of the schedule, or the one after a stop -- is the one `training.parse_metrics`
+  reports, and keeps its LPIPS.
+
+The RNG is untouched either way: neither the PNG writer nor LPIPS draws from torch's
+generator, and every evaluation still builds its `DataLoader` (which does) as before.
+
+**Where the trainer's time went** (`Timing`, `trainer_timing.json` beside `stats/`): its
+setup (imports, the parser, the dataset, the runner) up to `train()`, the evaluations,
+the PLY exports, and the rest, which is the steps. Written by this file and
+`block_trainer.py` whether or not the rule is on, so a block's record can say how much of
+its `seconds` were steps.
+
 Single GPU only: gsplat's `cli` spawns one process per device when there are several, and
 a class patched here would not reach them. The pipeline's tiers are all one GPU; with
 more, the hook says so and the trainer runs its full schedule.
@@ -44,6 +70,7 @@ from __future__ import annotations
 import argparse
 import importlib
 import json
+import math
 import os
 import runpy
 import sys
@@ -89,6 +116,8 @@ class _State:
         self.refine_stop: int | None = None
         self.window: int | None = None
         self.started = time.time()
+        #: Intermediate evaluations scored without LPIPS (the docstring says why).
+        self.lpips_skipped = 0
 
     def report(self) -> dict[str, object]:
         return {
@@ -105,6 +134,7 @@ class _State:
             "stoppedAtStep": None if self.stopped_at is None else self.stopped_at + 1,
             "stoppedEarly": self.stopped_at is not None,
             "gainDb": self.gain_db,
+            "lpipsSkipped": self.lpips_skipped,
             "wallSeconds": round(time.time() - self.started, 1),
         }
 
@@ -136,10 +166,22 @@ def install(runner: Any, cfg: Any, state: _State) -> None:
     state.max_steps, state.refine_stop, state.window = max_steps, refine_stop, window
 
     def eval(self: Any, step: int, stage: str = "val") -> None:
-        original_eval(self, step, stage)
+        # The last evaluation is the one reported: the end of the schedule, or the one a
+        # stop decision asked for. Every other one is read for its PSNR only.
+        last = stage != "val" or step + 1 >= max_steps or state.decided_at is not None
+        restore = None if last else _without_lpips(self)
+        try:
+            original_eval(self, step, stage)
+        finally:
+            if restore is not None:
+                restore()
+        stats = Path(self.stats_dir) / f"{stage}_step{step:04d}.json"
+        if restore is not None:
+            _drop_non_finite(stats, ("lpips", "cc_lpips"))
+            state.lpips_skipped += 1
         if stage != "val" or getattr(self, "world_rank", 0) != 0:
             return
-        psnr = _read_psnr(Path(self.stats_dir) / f"{stage}_step{step:04d}.json")
+        psnr = _read_psnr(stats)
         _drop_renders(Path(getattr(self, "render_dir", "")), stage, step)
         if psnr is not None:
             state.history.append((step, psnr))
@@ -189,6 +231,170 @@ def _drop_renders(render_dir: Path, stage: str, step: int) -> None:
         return
     for path in render_dir.glob(f"{stage}_step{step}_*.png"):
         path.unlink(missing_ok=True)
+
+
+def _without_lpips(runner: Any) -> Any:
+    """Replace `runner.lpips` with a NaN of the input's kind; returns the undo, or None
+    when the runner has no `lpips` to replace (then nothing is skipped)."""
+    real = getattr(runner, "lpips", None)
+    if real is None or not callable(real):
+        return None
+
+    def nan(*args: Any, **_kwargs: Any) -> Any:
+        first: Any = args[0] if args else None
+        if hasattr(first, "new_full"):
+            return first.new_full((), float("nan"))
+        return float("nan")
+
+    runner.lpips = nan
+
+    def restore() -> None:
+        runner.lpips = real
+
+    return restore
+
+
+def _drop_non_finite(path: Path, keys: tuple[str, ...]) -> None:
+    """Remove those of `keys` whose value is not a finite number from a stats file."""
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    if not isinstance(document, dict):
+        return
+    kept = {
+        key: value
+        for key, value in document.items()
+        if key not in keys
+        or (
+            isinstance(value, int | float)
+            and not isinstance(value, bool)
+            and math.isfinite(float(value))
+        )
+    }
+    if len(kept) == len(document):
+        return
+    try:
+        path.write_text(json.dumps(kept), encoding="utf-8")
+    except OSError as error:
+        sys.stderr.write(f"converge: could not rewrite {path.name}: {error}\n")
+
+
+class Timing:
+    """Where the trainer's own seconds went; `trainer_timing.json` beside `stats/`.
+
+    `setupS` is the wrapper's start to `Runner.train()` -- imports, the parser, the
+    dataset, the gaussians' initialisation, the runner -- `evalS` and `plyS` the time in
+    `eval()` and in the PLY exports, and `stepsS` the rest of `train()`: the steps.
+    """
+
+    def __init__(self, result_dir: Path | None) -> None:
+        self.result_dir = result_dir
+        self.started = time.monotonic()
+        self.train_entered: float | None = None
+        self.train_s = 0.0
+        self.evals = 0
+        self.eval_s = 0.0
+        self.eval_in_train_s = 0.0
+        self.plys = 0
+        self.ply_s = 0.0
+        self.renders_skipped = 0
+        self.hooked = False
+
+    def report(self) -> dict[str, object]:
+        steps = self.train_s - self.eval_in_train_s - self.ply_s
+        return {
+            "version": 1,
+            "hooked": self.hooked,
+            "setupS": (
+                None if self.train_entered is None else round(self.train_entered - self.started, 1)
+            ),
+            "trainS": round(self.train_s, 1),
+            "stepsS": round(max(0.0, steps), 1) if self.train_s else None,
+            "evals": self.evals,
+            "evalS": round(self.eval_s, 1),
+            "plyExports": self.plys,
+            "plyS": round(self.ply_s, 1),
+            "rendersSkipped": self.renders_skipped,
+            "wallS": round(time.monotonic() - self.started, 1),
+        }
+
+    def write(self) -> None:
+        if self.result_dir is None:
+            return
+        try:
+            self.result_dir.mkdir(parents=True, exist_ok=True)
+            (self.result_dir / convergence.TIMING).write_text(
+                json.dumps(self.report(), indent=2) + "\n", encoding="utf-8"
+            )
+        except OSError as error:
+            sys.stderr.write(f"converge: could not write {convergence.TIMING}: {error}\n")
+
+
+class _NoRenders:
+    """The trainer's `imageio`, whose `imwrite` skips the evaluation's `renders/` PNGs."""
+
+    def __init__(self, real: Any, timing: Timing) -> None:
+        self._real = real
+        self._timing = timing
+
+    def imwrite(self, uri: Any, *args: Any, **kwargs: Any) -> Any:
+        path = Path(str(uri))
+        if path.parent.name == "renders" and path.suffix.lower() == ".png":
+            self._timing.renders_skipped += 1
+            return None
+        return self._real.imwrite(uri, *args, **kwargs)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._real, name)
+
+
+def instrument(module: dict[str, Any], runner: Any, timing: Timing) -> None:
+    """Time `runner` (a class)'s `train` and `eval` and the module's `export_splats`, and
+    give the module an `imageio` that skips the renders. Called with the trainer's
+    `__main__` globals, after `install` when the rule is on, so the evaluations it times
+    include the rule's reading of them. Whatever is missing is left alone."""
+    real_imageio = module.get("imageio")
+    if real_imageio is not None and not isinstance(real_imageio, _NoRenders):
+        module["imageio"] = _NoRenders(real_imageio, timing)
+    real_export = module.get("export_splats")
+    if callable(real_export):
+
+        def export_splats(*args: Any, **kwargs: Any) -> Any:
+            began = time.monotonic()
+            try:
+                return real_export(*args, **kwargs)
+            finally:
+                timing.plys += 1
+                timing.ply_s += time.monotonic() - began
+
+        module["export_splats"] = export_splats
+    if runner is None:
+        return
+    original_eval = runner.eval
+    original_train = runner.train
+
+    def eval(self: Any, *args: Any, **kwargs: Any) -> Any:
+        began = time.monotonic()
+        try:
+            return original_eval(self, *args, **kwargs)
+        finally:
+            spent = time.monotonic() - began
+            timing.evals += 1
+            timing.eval_s += spent
+            if timing.train_entered is not None and not timing.train_s:
+                timing.eval_in_train_s += spent
+
+    def train(self: Any, *args: Any, **kwargs: Any) -> Any:
+        timing.train_entered = time.monotonic()
+        try:
+            return original_train(self, *args, **kwargs)
+        finally:
+            timing.train_s = time.monotonic() - timing.train_entered
+
+    runner.eval = eval
+    runner.train = train
+    timing.hooked = True
 
 
 def _result_dir(argv: list[str]) -> Path | None:
@@ -245,6 +451,7 @@ def main(argv: list[str] | None = None) -> int:
         ),
         _result_dir(rest),
     )
+    timing = Timing(_result_dir(rest))
     try:
         distributed: Any = importlib.import_module("gsplat.distributed")
     except ImportError as error:
@@ -254,7 +461,8 @@ def main(argv: list[str] | None = None) -> int:
         real_cli = distributed.cli
 
         def cli(fn: Any, cfg: Any, verbose: bool = False) -> Any:
-            runner = getattr(fn, "__globals__", {}).get("Runner")
+            module = getattr(fn, "__globals__", {})
+            runner = module.get("Runner")
             devices = _device_count()
             if runner is None:
                 state.reason = (
@@ -269,6 +477,8 @@ def main(argv: list[str] | None = None) -> int:
                 install(runner, cfg, state)
                 state.hooked = True
                 state.reason = "hooked"
+            if devices <= 1:
+                instrument(module, runner, timing)
             return real_cli(fn, cfg, verbose=verbose)
 
         distributed.cli = cli
@@ -280,6 +490,7 @@ def main(argv: list[str] | None = None) -> int:
         return code if isinstance(code, int) else (0 if code is None else 1)
     finally:
         state.write()
+        timing.write()
     return 0
 
 

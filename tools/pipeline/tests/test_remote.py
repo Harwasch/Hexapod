@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -147,6 +148,17 @@ def test_the_checkpoint_is_synced_while_the_stage_is_still_running(tmp_path: Pat
         runner.join(timeout=15.0)
     assert not runner.is_alive()
     assert outcome and outcome[0].summary == "slow"
+    # And it says so: the syncs it made while the stage ran, what they moved and how long
+    # they took, beside the final sync and `out/` -- where a call's seconds went.
+    metrics = outcome[0].metrics
+    assert isinstance(metrics["remoteSyncs"], int) and metrics["remoteSyncs"] >= 1
+    assert metrics["remoteSyncBytes"] > 0 and metrics["remoteSyncS"] >= 0
+    assert metrics["remoteFinalSyncBytes"] > 0 and metrics["remoteOutputBytes"] > 0
+    assert metrics["remoteUploadS"] == pytest.approx(
+        metrics["remoteFinalSyncS"] + metrics["remoteOutputS"], abs=0.02
+    )
+    assert metrics["remoteTotalS"] >= metrics["remoteStageS"]
+    assert abs(float(metrics["remoteStartedAt"]) - time.time()) < 60.0
 
 
 def test_a_failed_stage_raises_and_uploads_nothing(tmp_path: Path) -> None:

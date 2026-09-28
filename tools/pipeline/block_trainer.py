@@ -208,6 +208,7 @@ def main(argv: list[str] | None = None) -> int:
         converge_trainer._result_dir(rest) if options.converge else None,
     )
     ring = None if options.ring is None else load_ring(options.ring)
+    timing = converge_trainer.Timing(converge_trainer._result_dir(rest))
     try:
         distributed: Any = importlib.import_module("gsplat.distributed")
     except ImportError as error:
@@ -241,6 +242,9 @@ def main(argv: list[str] | None = None) -> int:
                     converge_trainer.install(runner, cfg, state)
                     state.hooked = True
                     state.reason = "hooked"
+            # The timing, and no eval renders (converge_trainer.py says why), whether or
+            # not the rule is on: the merged splat's `--ckpt` evaluation comes here too.
+            converge_trainer.instrument(module, runner, timing)
             return real_cli(fn, cfg, verbose=verbose)
 
         distributed.cli = cli
@@ -253,6 +257,7 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         if options.converge:
             state.write()
+        timing.write()
     return 0
 
 

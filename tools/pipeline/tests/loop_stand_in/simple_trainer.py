@@ -10,6 +10,9 @@ imitates the structure `converge_trainer.py` hooks, read from the file at the ta
   `cfg.eval_steps` at every step -- `step in [i - 1 for i in cfg.ply_steps]` -- saving,
   exporting and then evaluating in that order, and whose `eval(step)` writes
   `stats/val_step<step:04d>.json` (and a render per val frame under `renders/`);
+* the module globals v1.5.3's loop calls and `converge_trainer.instrument` wraps: `imageio`
+  (the stand-in beside this file), whose `imwrite` writes each val frame's render, and
+  `export_splats`, which writes the PLYs; and the runner's `self.lpips`, called per frame;
 * a `__main__` block that parses the argv, calls `cfg.adjust_steps(cfg.steps_scaler)`, and
   hands `main` to `cli(main, cfg, verbose=True)` imported with
   `from gsplat.distributed import cli` -- here the stand-in `gsplat/` beside this file.
@@ -28,11 +31,28 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import imageio
 from gsplat.distributed import cli
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from gsplat_stand_in import write_ply
+
+
+def export_splats(path: str, count: int, seed: int) -> None:
+    """v1.5.3's `from gsplat import export_splats`, a module global the loop calls."""
+    write_ply(Path(path), count, seed=seed)
+
+
+class Lpips:
+    """The runner's `self.lpips` (torchmetrics' LPIPS in v1.5.3): called once a frame."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def __call__(self, colors: Any, pixels: Any) -> float:
+        self.calls += 1
+        return 0.2
 
 
 @dataclass
@@ -77,6 +97,7 @@ class Runner:
         self.ply_dir = f"{cfg.result_dir}/ply"
         for directory in (self.stats_dir, self.render_dir, self.ply_dir):
             Path(directory).mkdir(parents=True, exist_ok=True)
+        self.lpips = Lpips()
 
     def train(self) -> None:
         cfg = self.cfg
@@ -89,7 +110,7 @@ class Runner:
                 path = Path(f"{self.stats_dir}/train_step{step:04d}_rank{self.world_rank}.json")
                 path.write_text(json.dumps(stats), encoding="utf-8")
             if (step in [i - 1 for i in cfg.ply_steps] or step == max_steps - 1) and cfg.save_ply:
-                write_ply(Path(f"{self.ply_dir}/point_cloud_{step}.ply"), count, seed=step)
+                export_splats(f"{self.ply_dir}/point_cloud_{step}.ply", count, step)
             if step in [i - 1 for i in cfg.eval_steps]:
                 self.eval(step)
 
@@ -97,10 +118,13 @@ class Runner:
         cfg = self.cfg
         rise = min(step, int(cfg.plateau_at * cfg.max_steps))
         psnr = 20.0 + 5.0 * rise / max(1, cfg.max_steps) + 0.00001 * step
+        scores = []
         for index in range(cfg.val_frames):
-            Path(f"{self.render_dir}/{stage}_step{step}_{index:04d}.png").write_bytes(b"png")
-        stats = {"psnr": psnr, "ssim": 0.8, "lpips": 0.2, "ellipse_time": 0.01, "num_GS": 64}
-        print(f"PSNR: {psnr:.3f}, SSIM: 0.8000, LPIPS: 0.200 Time: 0.010s/image")  # noqa: T201
+            imageio.imwrite(f"{self.render_dir}/{stage}_step{step}_{index:04d}.png", b"png")
+            scores.append(float(self.lpips(None, None)))
+        lpips = sum(scores) / len(scores)
+        stats = {"psnr": psnr, "ssim": 0.8, "lpips": lpips, "ellipse_time": 0.01, "num_GS": 64}
+        print(f"PSNR: {psnr:.3f}, SSIM: 0.8000, LPIPS: {lpips:.3f} Time: 0.010s/image")  # noqa: T201
         with open(f"{self.stats_dir}/{stage}_step{step:04d}.json", "w") as handle:
             json.dump(stats, handle)
 
