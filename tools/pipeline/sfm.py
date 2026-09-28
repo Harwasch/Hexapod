@@ -59,7 +59,7 @@ import subprocess
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import BinaryIO
+from typing import Any, BinaryIO
 
 import numpy as np
 import numpy.typing as npt
@@ -874,6 +874,106 @@ def write_points3d(path: Path, points: Points3D) -> int:
             handle.write(struct.pack("<Q", int(track.shape[0])))
             handle.write(np.ascontiguousarray(track, dtype="<u4").tobytes())
     return len(points)
+
+
+def keep_images(model: Path, names: set[str]) -> dict[str, int]:
+    """Rewrite the binary model in `model` to the images named in `names`, for a
+    trainer's dataset: `images.bin` record by record (each kept image's 2D points as they
+    were), and `points3D.bin` with every track cut to the kept images and a point only
+    the others saw dropped -- gsplat's parser looks every track's image up by id, and
+    the gaussian budget measures a point by the cameras in its track. A point with no
+    track at all (a converted model may carry none) says nothing about who saw it and
+    stays. `cameras.bin` is left as it is. Returns the counts.
+
+    What training on a subset of a capture's photos needs -- one capture session, say --
+    without posing them again: the poses are the joint solve's, so every frame, scale
+    and similarity derived from it still holds."""
+    images_path = model / "images.bin"
+    kept_ids: set[int] = set()
+    records: list[bytes] = []
+    with images_path.open("rb") as handle:
+        count = _u64(handle)
+        for _ in range(count):
+            head = handle.read(64)
+            image_id = int(struct.unpack_from("<I", head, 0)[0])
+            name = _read_cstring(handle)
+            raw_count = handle.read(8)
+            body = handle.read(24 * int(struct.unpack("<Q", raw_count)[0]))
+            if name in names:
+                kept_ids.add(image_id)
+                records.append(head + name.encode("utf-8") + b"\0" + raw_count + body)
+    with images_path.open("wb") as handle:
+        handle.write(struct.pack("<Q", len(records)))
+        for record in records:
+            handle.write(record)
+    points = read_points3d(model / "points3D.bin")
+    rows = np.isin(points.track[:, 0], np.fromiter(kept_ids, dtype=np.uint32))
+    running = np.concatenate([[0], np.cumsum(rows)])
+    lengths = running[points.track_offsets[1:]] - running[points.track_offsets[:-1]]
+    seen = (lengths > 0) | (np.diff(points.track_offsets) == 0)
+    cut = Points3D(
+        ids=points.ids,
+        xyz=points.xyz,
+        rgb=points.rgb,
+        error=points.error,
+        track=points.track[rows],
+        track_offsets=np.concatenate([[0], np.cumsum(lengths)]).astype(np.int64),
+    ).subset(seen)
+    write_points3d(model / "points3D.bin", cut)
+    return {
+        "images": len(records),
+        "imagesBefore": count,
+        "points3D": len(cut),
+        "points3DBefore": len(points),
+    }
+
+
+def poses_serve_frames(
+    model: Model, frame_sizes: Sequence[Sequence[int]], frames: Sequence[str]
+) -> dict[str, Any]:
+    """Whether a model posed on other renderings of the same photos serves these frames,
+    and at what scale; raises with the reason when it does not.
+
+    It does when every posed image is one of the frames and the frames are the posed
+    cameras' shape at one scale: gsplat's parser rescales the intrinsics by the ratio of
+    the first image's size to its camera's and applies it to every camera
+    (`training.build_dataset`), and the extrinsics do not depend on the size at all. So
+    frames re-sized from the same photos train on the same poses -- which is also all a
+    fresh pose run would give them, since `pose` extracts its features at
+    `max_image_size` whatever size the frames are. Rounding of either size is allowed a
+    pixel."""
+    sizes = {tuple(int(v) for v in size) for size in frame_sizes}
+    if len(sizes) != 1:
+        raise ValueError(f"the frames come in {len(sizes)} sizes {sorted(sizes)}; want one")
+    ((width, height),) = sizes
+    posed = {image.name for image in model.images}
+    unknown = sorted(posed - set(frames))
+    if unknown:
+        raise ValueError(
+            f"{len(unknown)} posed images are not among these frames (first: {unknown[:3]})"
+        )
+    cameras = {camera.id for camera in model.cameras}
+    if not cameras or any(image.camera_id not in cameras for image in model.images):
+        raise ValueError("the model's images name cameras it does not have")
+    scales = set()
+    for camera in model.cameras:
+        scale = width / camera.width
+        if abs(camera.height * scale - height) > scale + 1.0:
+            raise ValueError(
+                f"camera {camera.id} is {camera.width}x{camera.height}, the frames "
+                f"{width}x{height}: not the same shape"
+            )
+        scales.add(round(scale, 6))
+    if len(scales) != 1:
+        raise ValueError(f"the cameras scale to these frames by {sorted(scales)}; want one")
+    return {
+        "registered": len(posed),
+        "frames": len(frames),
+        "unposedFrames": len(set(frames) - posed),
+        "frameSize": [width, height],
+        "posedSize": [model.cameras[0].width, model.cameras[0].height],
+        "pixelScale": next(iter(scales)),
+    }
 
 
 @dataclass(frozen=True)

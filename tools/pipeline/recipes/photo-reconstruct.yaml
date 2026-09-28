@@ -141,8 +141,10 @@ stages:
       # roi only -- at the size training reads the frames, and gives `gaussian_density`
       # gaussians per pixel of it: 0.1 puts 3DGS's Truck at 1.52M, about 3DGS's own count
       # there and 3x the 500k that already matched its PSNR. Clamped to `budget_floor`
-      # (the preview's 200k) and to the L4's memory (`gpu_memory_gb`, at the real frame
-      # size: ~8.7M at 1600 px, ~5.4M at 2400). There is no longer a ceiling below that
+      # (the preview's 200k) and to the memory of the GPU the stage was placed on
+      # (`gaussian_budget.GPU_MEMORY_GB` by tier, at the real frame size -- on the L4:
+      # ~8.7M at 1600 px, ~5.4M at 2400; `gpu_memory_gb: N` here or in a run's params
+      # overrides the tier's). There is no longer a ceiling below that
       # for the stages after training: the 2M `budget_max` this set was what `place` and
       # `package` could load whole on the 2 GB worker (0.75 GB a million, measured), and
       # they now read the splat a chunk at a time (8M gaussians through quality, place,
@@ -151,7 +153,6 @@ stages:
       cap_max: auto
       gaussian_density: 0.1
       budget_floor: 200000
-      gpu_memory_gb: 24
       # Stop when training has converged: after densification ends (25k of 30k, scaled
       # with the schedule; never before it), held-out PSNR is measured every 500 steps,
       # and a run whose best of the last 2,000 steps is under 0.05 dB above its best

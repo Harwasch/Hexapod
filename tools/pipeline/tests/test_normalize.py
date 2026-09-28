@@ -908,6 +908,46 @@ def test_noise_is_not_mistaken_for_detail() -> None:
     assert decision.max_side == 1600, decision.reason
 
 
+def _textured(size: tuple[int, int], *, seed: int) -> Image.Image:
+    """`_detailed` with no sky: texture edge to edge, as a tree filling the frame is."""
+    width, height = size
+    rng = np.random.default_rng(seed)
+    fine = rng.integers(0, 256, size=(height // 2 + 1, width // 2 + 1), dtype=np.uint8)
+    texture = np.kron(fine, np.ones((2, 2), dtype=np.uint8))[:height, :width].astype(np.float64)
+    image = Image.fromarray((0.5 * texture + 64.0).astype(np.uint8), mode="L")
+    return image.filter(ImageFilter.GaussianBlur(radius=0.6)).convert("RGB")
+
+
+def test_the_noise_floor_is_the_captures_not_each_frames() -> None:
+    """A frame textured edge to edge has no quiet region, so on its own it reads its
+    texture as noise and earns nothing (the Minnetonka orbit: three frames of foliage and
+    lawn at floors of 4-5 grey levels kept 1600 px). The camera's noise shows in the
+    sample's quietest frame; read against it, the texture is detail."""
+    size = (2400, 1350)
+    textured = [_grey(_textured(size, seed=s)) for s in (1, 2, 3)]
+    alone = resolution.decide(textured, source_side=2400)
+    assert alone.max_side == 1600, alone.reason  # no frame shows the camera's noise
+    with_sky = resolution.decide([*textured, _grey(_detailed(size, seed=4))], source_side=2400)
+    assert with_sky.max_side == 2400, with_sky.reason
+    assert "capture's noise floor" in with_sky.reason
+    assert resolution.capture_noise_floor([*textured, _grey(_detailed(size, seed=4))]) < 1.0
+
+
+def test_a_blown_out_sky_is_not_a_quiet_camera() -> None:
+    """Clipped highlights carry no noise because they carry no signal: a grainy clip with
+    a white sky must not read the sky's zero as the camera's floor."""
+    size = (2400, 1350)
+    rng = np.random.default_rng(0)
+    grainy = []
+    for _ in range(2):
+        frame = _grey(_upscaled(size)) + rng.normal(0, 5, (1350, 2400))
+        frame[: int(1350 * 0.3)] = 255.0  # the sky, blown out
+        grainy.append(np.clip(frame, 0, 255).astype(np.float32))
+    decision = resolution.decide(grainy, source_side=2400)
+    assert decision.max_side == 1600, decision.reason
+    assert resolution.capture_noise_floor(grainy) > 2.0
+
+
 def test_a_source_too_small_to_gain_is_not_measured() -> None:
     decision = resolution.decide([], source_side=1920)
     assert decision.max_side == 1600
