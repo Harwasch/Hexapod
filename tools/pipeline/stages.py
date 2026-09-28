@@ -63,7 +63,7 @@ from captures_bridge import (
     ParentOverrides,
     splat_tiles_convert,
 )
-from contracts import MetricValue, StageContext, StageOutcome
+from contracts import FANOUT_METRIC, MetricValue, StageContext, StageOutcome, fanout_role
 from registry import stage_impl
 
 # ---------------------------------------------------------------------------------------
@@ -1203,14 +1203,20 @@ def gsplat(ctx: StageContext) -> StageOutcome:
 
     * `blocks` (`auto`, the default, or a count): a budget more than one GPU trains -- its
       raw count over the smaller of the budget's GPU-memory and `budget_max` ceilings --
-      trains as that many blocks, one after another in this same attempt on this same
-      GPU, and merges them into one `trained.ply` (`blocks.py` has the recipe and its
-      sources; `block_epsilon`, `block_min_images`, `block_margin`, `block_ring`,
-      `block_ring_outer`, `block_blend`, `block_eval` and the `coarse_*` knobs are its
-      parameters). A count forces blocks on a capture that fits one GPU, to compare the
-      two. `train_metrics.json`'s `blocks` has the partition, each block's cameras,
-      budget, steps and time, and the merge; psnr/ssim/lpips are then the merged splat's,
-      by the trainer's own `eval()` on the same held-out frames.
+      trains as that many blocks and merges them into one `trained.ply` (`blocks.py` has
+      the recipe and its sources; `block_epsilon`, `block_min_images`, `block_margin`,
+      `block_ring`, `block_ring_outer`, `block_blend`, `block_eval` and the `coarse_*`
+      knobs are its parameters). Under a runner that fans out (`cloud.CloudRunner`) the
+      blocks train on `block_parallel` (4) GPUs at once, one call each; otherwise one
+      after another in this call. Each block's schedule follows its own frames
+      (`block_schedule`: `frames`, the default, `share` or `full`). A count forces blocks
+      on a capture that fits one GPU, to compare the two. `train_metrics.json`'s `blocks`
+      has the partition, each block's cameras, budget, steps and time, and the merge;
+      psnr/ssim/lpips are then the merged splat's, by the trainer's own `eval()` on the
+      same held-out frames.
+    * `batch_size` (1-8, default 1): images per training step, with gsplat's own
+      sqrt(batch) learning-rate scaling and the schedule divided by it so the images
+      trained on stay the same (`training.gsplat_argv`). Not with `depth_loss`.
 
     `psnr`, `ssim` and `lpips` are all measured on gsplat's held-out `val` split -- every
     8th registered frame -- and `train_metrics.json` says so and how many frames that is.
@@ -1231,6 +1237,14 @@ def gsplat(ctx: StageContext) -> StageOutcome:
             f"train_max_side={max_side} and data_factor={data_factor} both shrink the "
             f"training images; give one. train_max_side works at any size, and gsplat's "
             f"parser rescales the intrinsics to match"
+        )
+    batch_size = training.check_batch_size(ctx.param("batch_size", 1))
+    if batch_size > 1 and _optional_bool(ctx.param("depth_loss"), "depth_loss"):
+        raise ValueError(
+            f"batch_size={batch_size} and depth_loss cannot go together: each frame brings "
+            f"its own number of SfM points to the depth loss, and v1.5.3's DataLoader "
+            f"stacks a batch with the default collate, which refuses tensors of different "
+            f"lengths. Give one of them"
         )
     # The region to train in: a support mask from a preview's quality stage (any shape the
     # well-supported data makes) wins over an ROI sphere; neither means the whole scene.
@@ -1291,6 +1305,7 @@ def gsplat(ctx: StageContext) -> StageOutcome:
         floor=int(ctx.param("budget_floor", gaussian_budget.DEFAULT_FLOOR)),
         budget_max=_optional_int(ctx.param("budget_max")),
         gpu_memory_gb=float(ctx.param("gpu_memory_gb", gaussian_budget.DEFAULT_GPU_MEMORY_GB)),
+        images_per_step=batch_size,
     )
     cap_max = None if budget is None else budget.cap
     if budget is not None:
@@ -1319,9 +1334,16 @@ def gsplat(ctx: StageContext) -> StageOutcome:
             f"every frame still sees some)"
         )
     # Blocks (blocks.py): a budget more than one GPU trains -- or `blocks: <n>` -- trains as
-    # blocks, one after another on this same GPU, and merges them into one trained.ply.
+    # blocks, on several GPUs at once under a runner that fans out, and merges them into
+    # one trained.ply.
     requested_blocks = blocks.parse_blocks(ctx.param("blocks"))
     block_total, block_reason = blocks.block_count(requested_blocks, budget)
+    role, _part = fanout_role(ctx.params)
+    if role in ("part", "join") and block_total <= 1:
+        raise ValueError(
+            f"a fan-out {role} call of a stage that plans one block ({block_reason}); only "
+            f"a block run fans out, so these params are not the head call's"
+        )
     if block_total > 1:
         in_blocks = _train_in_blocks(
             ctx,
@@ -1366,6 +1388,13 @@ def gsplat(ctx: StageContext) -> StageOutcome:
                 holdout_script=_optional_path(ctx.param("holdout_script")),
                 holdout_budget_s=float(ctx.param("holdout_budget_s", holdout.DEFAULT_BUDGET_S)),
                 params=dict(ctx.params),
+                images=images,
+                schedule_full_at=full_at,
+                schedule_floor=float(ctx.param("schedule_floor", 0.25)),
+                schedule_requested=requested_scale is not None,
+                block_schedule=_block_schedule_mode(ctx.param("block_schedule")),
+                batch_size=batch_size,
+                parallel=_block_parallel(ctx.param("block_parallel")),
             ),
             images=images,
             requested_cap=requested_cap,
@@ -1400,6 +1429,17 @@ def gsplat(ctx: StageContext) -> StageOutcome:
             f"gsplat: {cap_max} gaussians -> a maximum schedule {schedule_factor:g}x as long "
             f"({steps_scaler:g} of {full_iterations} = {iterations} steps), ended early if "
             f"held-out PSNR goes flat"
+        )
+    # A batch of images a step: the same images trained on in that many times fewer steps
+    # (`training.gsplat_argv`); refine window, evaluations and the convergence window all
+    # follow the scaled steps because they are scaled by the same `--steps_scaler`.
+    if batch_size > 1:
+        steps_scaler = training.batch_steps_scaler(steps_scaler, batch_size)
+        iterations = training.scaled_steps(full_iterations, steps_scaler)
+        ctx.log(
+            f"gsplat: {batch_size} images a step -> {iterations} steps "
+            f"({steps_scaler:g} of {full_iterations}), learning rates x{batch_size**0.5:.3g} "
+            f"by the trainer"
         )
     refine_stop = convergence.REFINE_STOP_ITER.get(strategy)
     extra_evals = (
@@ -1474,6 +1514,7 @@ def gsplat(ctx: StageContext) -> StageOutcome:
         bilateral_grid=bilateral_grid,
         live_steps=live_steps,
         eval_steps=extra_evals,
+        batch_size=batch_size,
         extra=[str(value) for value in (ctx.param("extra_args") or [])],
     )
     if extra_evals:
@@ -1568,6 +1609,7 @@ def gsplat(ctx: StageContext) -> StageOutcome:
         "poseOpt": pose_opt,
         "appOpt": app_opt,
         "bilateralGrid": bilateral_grid,
+        "batchSize": batch_size,
         "variant": variant,
         "initFrom": "sfm" if seeded is None else "preview",
     }
@@ -1664,6 +1706,8 @@ def gsplat(ctx: StageContext) -> StageOutcome:
     if roi is not None:
         metrics["gaussiansTrained"] = trained_count
     metrics["holdoutError"] = str(held_out.get("status"))
+    if batch_size > 1:
+        metrics["batchSize"] = batch_size
     return StageOutcome(metrics=metrics, summary=f"{in_ply} gaussians trained")
 
 
@@ -1673,14 +1717,39 @@ CONVERGE_SCRIPT = Path(__file__).resolve().parent / "converge_trainer.py"
 
 
 def _block_schedule(ctx: StageContext, steps_scaler: float) -> float:
-    """The schedule every block runs: the single run's. Each block starts from the prior
-    as a Refine starts from the preview's seed, so `init_from: preview` gives it the same
-    `init_schedule_scale` (init_seed.py) the one-block Refine it is compared with gets."""
+    """The run's schedule, which each block's own is worked out from
+    (`blocks.block_schedule`). Each block starts from the prior as a Refine starts from the
+    preview's seed, so `init_from: preview` gives it the same `init_schedule_scale`
+    (init_seed.py) the one-block Refine it is compared with gets."""
     if str(ctx.param("init_from", "sfm")) == "preview":
         return training.check_schedule_scale(
             init_seed.schedule_for(_optional_float(ctx.param("init_schedule_scale")))
         )
     return steps_scaler
+
+
+def _block_schedule_mode(value: object) -> str:
+    mode = "frames" if value is None else str(value)
+    if mode not in blocks.BLOCK_SCHEDULES:
+        raise ValueError(
+            f"block_schedule must be one of {', '.join(blocks.BLOCK_SCHEDULES)}, not {value!r}"
+        )
+    return mode
+
+
+def _block_parallel(value: object) -> int:
+    """`block_parallel`: blocks at once under a fanning runner; 1 trains them in turn."""
+    if value is None:
+        return blocks.BLOCK_PARALLEL
+    if isinstance(value, bool) or not isinstance(value, int | float | str):
+        raise ValueError(f"block_parallel must be a positive integer, not {value!r}")
+    try:
+        number = int(float(value))
+    except ValueError:
+        raise ValueError(f"block_parallel must be a positive integer, not {value!r}") from None
+    if number < 1 or number != float(value):
+        raise ValueError(f"block_parallel must be a positive integer, not {value!r}")
+    return number
 
 
 def _train_in_blocks(
@@ -1694,10 +1763,44 @@ def _train_in_blocks(
     train_size: tuple[int, int] | None,
     variant: str,
 ) -> StageOutcome | None:
-    """`blocks.py`'s run, written as the stage's outputs; None if it came to one block."""
-    plan = blocks.prepare(ctx, settings)
+    """`blocks.py`'s run, written as the stage's outputs; None if it came to one block.
+
+    Under a fanning runner (`contracts.FANOUT_PARAM`) this is one of three calls: the head
+    plans and, with two or more blocks to train and `block_parallel` above 1, answers with
+    a part per block (`blocks.fan_out`) and no outputs; a part trains its one block into
+    `checkpoint/`; the join merges and measures, which is what every other call ends in.
+    """
+    role, part = fanout_role(ctx.params)
+    plan = blocks.prepare(ctx, settings, role=role)
     if plan is None:
+        if role in ("part", "join"):
+            raise ValueError(f"blocks: the plan came to one block, so there is no {role}")
         return None
+    if role == "part":
+        index = blocks.part_index(part, plan)
+        record = blocks.train_part(ctx, settings, plan, index)
+        return StageOutcome(
+            metrics={
+                "block": index,
+                "blockSteps": int(record["stepsRun"] or 0),
+                "blockSeconds": float(record["seconds"]),
+                "blockGaussians": int(record["gaussiansKept"]),
+            },
+            summary=f"block {index + 1} of {plan.partition.count} trained",
+        )
+    if role == "head":
+        todo = blocks.pending(ctx, plan)
+        if settings.parallel > 1 and len(todo) > 1:
+            spec = blocks.fan_out(settings, plan, todo)
+            ctx.log(
+                f"blocks: {len(todo)} of {plan.partition.count} blocks to train, "
+                f"{min(settings.parallel, len(todo))} at a time on their own GPUs "
+                f"({', '.join(p.id for p in spec.parts)}, longest first)"
+            )
+            return StageOutcome(
+                metrics={FANOUT_METRIC: spec.to_json(), "blocks": plan.partition.count},
+                summary=f"{len(todo)} blocks to train in parallel",
+            )
     run = blocks.train(ctx, settings, plan, ctx.output(TRAINED_PLY.name))
     registered = _registered_count(settings.poses, images)
     train_frames, val_frames = training.held_out_split(registered)

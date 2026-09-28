@@ -428,6 +428,7 @@ def plan(
     budget_max: int | None = None,
     gpu_memory_gb: float = DEFAULT_GPU_MEMORY_GB,
     voxel_footprints: float = VOXEL_FOOTPRINTS,
+    images_per_step: int = 1,
 ) -> Budget | None:
     """The cap for `requested` (`parse_cap`'s result): None for no cap at all.
 
@@ -438,11 +439,15 @@ def plan(
     `outside_weight`: the trainer is given a tenth of the points outside to explain the
     background with (`training.ROI_OUTSIDE_EVERY`), and a tenth of that surface is what
     those gaussians are budgeted.
+
+    `images_per_step` is the trainer's `batch_size`: a step rasterises that many frames at
+    once, so the image and raster terms of the memory model are that many frames' worth
+    (`train_size` stays one frame's size in the budget's record).
     """
     if requested is None:
         return None
     pixels = 0 if train_size is None else train_size[0] * train_size[1]
-    ceiling = memory_ceiling(pixels, gpu_memory_gb) if pixels else None
+    ceiling = memory_ceiling(pixels * max(1, images_per_step), gpu_memory_gb) if pixels else None
     common: dict[str, Any] = {
         "floor": floor,
         "memory_ceiling": ceiling,

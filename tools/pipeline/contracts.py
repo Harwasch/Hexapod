@@ -20,9 +20,116 @@ import progress
 from artifacts import ArtifactDecl, ArtifactRef
 from errors import StageContractError
 
-__all__ = ["MetricValue", "StageContext", "StageOutcome", "StepResult"]
+__all__ = [
+    "FANOUT_METRIC",
+    "FANOUT_PARAM",
+    "FanOut",
+    "FanOutPart",
+    "MetricValue",
+    "StageContext",
+    "StageOutcome",
+    "StepResult",
+    "fanout_role",
+]
 
 MetricValue = bool | int | float | str
+
+
+# --- fanning one stage out over several remote calls ------------------------------------
+#
+# Block training (`blocks.py`) is one stage whose work splits into independent pieces that
+# want a GPU each. Measured on the spool at `blocks: 2` on one L4, the blocks ran one after
+# another inside a single attempt -- 2,530 s then 2,207 s, 2.3 h and $1.73 in all against
+# ~1 h and $0.67 whole -- while Modal bills per GPU-second, so the same blocks on two GPUs
+# at once cost the same seconds and end when the longer one does. The runner that already
+# owns retries, preemption and the attempt ledger (`cloud.CloudRunner`) does the fanning
+# out; the stage only says what the pieces are. Three roles, carried in one reserved param
+# so no remote image needs a new request field to ignore:
+#
+#   head  the stage's usual call. A stage that can split may answer it with `FANOUT_METRIC`
+#         (a `FanOut`, as JSON) instead of its outputs; one that cannot ignores the role.
+#   part  one piece, on its own checkpoint key; it writes into `checkpoint/` only.
+#   join  after every piece has finished and been brought home: the ordinary end of the
+#         stage (for blocks: the merge, the evaluation and the held-out error).
+#
+# A runner that knows nothing of this (`LocalRunner`, the stub, an older worker) never sets
+# the param, and the stage then does everything in one call, as before.
+
+#: The reserved param a fanning runner adds to a request: `{"role": "head" | "part" |
+#: "join", "part": <id>}`.
+FANOUT_PARAM = "fanout"
+#: The metric a head call answers with when it wants to be fanned out.
+FANOUT_METRIC = "fanOut"
+
+
+@dataclass(frozen=True)
+class FanOutPart:
+    """One piece: its id, and the paths under `checkpoint/` that are its result.
+
+    `collect` is explicit rather than "whatever came back" because every part also carries
+    the shared members (`FanOut.share`) and its own live snapshots, and copying those home
+    from N parts at once would have them overwrite one another.
+    """
+
+    id: str
+    collect: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class FanOut:
+    """What a head call asks for: pieces, how many at once, and what each piece needs.
+
+    `share` names the paths under the stage's `checkpoint/` every part starts with (for
+    blocks, the prior and the plan); `parts` are in the order to start them -- longest
+    first, so a queue longer than `parallel` does not leave the biggest piece for last.
+    """
+
+    parts: tuple[FanOutPart, ...]
+    parallel: int
+    share: tuple[str, ...] = ()
+
+    def to_json(self) -> str:
+        return json.dumps(
+            {
+                "parts": [{"id": p.id, "collect": list(p.collect)} for p in self.parts],
+                "parallel": self.parallel,
+                "share": list(self.share),
+            },
+            sort_keys=True,
+        )
+
+    @staticmethod
+    def parse(text: object) -> FanOut | None:
+        """The spec in a head call's metrics, or None when it is absent or unreadable."""
+        if not isinstance(text, str):
+            return None
+        try:
+            document = json.loads(text)
+            parts = tuple(
+                FanOutPart(str(entry["id"]), tuple(str(c) for c in entry.get("collect") or ()))
+                for entry in document["parts"]
+            )
+            parallel = int(document.get("parallel") or 1)
+            share = tuple(str(s) for s in document.get("share") or ())
+        except (ValueError, KeyError, TypeError, AttributeError):
+            return None
+        ids = [part.id for part in parts]
+        if not parts or len(set(ids)) != len(ids):
+            return None
+        return FanOut(parts=parts, parallel=max(1, parallel), share=share)
+
+
+def fanout_role(params: Mapping[str, Any]) -> tuple[str | None, str | None]:
+    """(role, part id) from a request's params; (None, None) when no runner fans out."""
+    value = params.get(FANOUT_PARAM)
+    if not isinstance(value, Mapping):
+        return None, None
+    role = value.get("role")
+    part = value.get("part")
+    return (
+        str(role) if role in ("head", "part", "join") else None,
+        None if part is None else str(part),
+    )
 
 
 @dataclass(frozen=True)

@@ -10,7 +10,7 @@
 # Each variant is a full photo-reconstruct run (normalize and pose included), one after
 # another. Budget, from the runs this capture has had: ~10 min of pose on cpu4 and
 # ~30 min of 30k-step training on an L4 each -- about $0.45 and 45 minutes a variant,
-# so the ten below are roughly $4.50 and 7-8 hours of queue. `--only NAME` runs a subset.
+# so the thirteen runs below are roughly $6 and ~10 hours of queue. `--only NAME` runs a subset.
 #
 # Every key here is on the phone's whitelist (apps/api/app/api/v1/phone.py
 # PHONE_OPTIONS); anything else is refused by name before a job is made.
@@ -73,6 +73,16 @@ variants:
   # keeps about fps-8's 173 frames on this capture and matches or beats its LPIPS.
   - name: viewpoint
     params: {normalize: {select: viewpoint, fps: 15}}
+
+  # Two and four images a training step (gsplat's `batch_size`, sqrt(batch) learning
+  # rates), on a half and a quarter of the steps, so the same images are trained on. The
+  # question is only speed per image on the L4 at equal quality: compare `trainSeconds`
+  # and PSNR/LPIPS with `baseline` (training is 86% of a run's cost).
+  - name: batch-2
+    params: {train: {batch_size: 2}}
+
+  - name: batch-4
+    params: {train: {batch_size: 4}}
 
   # Everything at once (bilateral grid rather than app_opt: they model the same drift).
   - name: all-of-the-recipe

@@ -28,6 +28,7 @@ import numpy as np
 import pytest
 from PIL import Image
 
+import gaussian_budget
 import gaussians
 import progress
 import sfm
@@ -579,6 +580,7 @@ def test_the_quality_switches_reach_the_trainer_with_the_presets_semantics(
         "poseOpt": False,
         "appOpt": False,
         "bilateralGrid": False,
+        "batchSize": 1,
         "variant": "3dgs",
         "initFrom": "sfm",
     }
@@ -880,3 +882,71 @@ def test_a_support_mask_crops_training_to_whatever_shape_the_data_has(tmp_path: 
     # Nothing from the unsupported side survives, beyond the mask's own margin.
     assert float(trained.xyz[:, 0].min()) >= 0.5 - 3 * mask.voxel
     assert document["roi"]["gaussiansKept"] == trained.count
+
+
+# --- batch_size: images per step, the same images in all ---------------------------------
+
+
+def test_a_batch_is_passed_to_the_trainer_and_divides_the_schedule() -> None:
+    """v1.5.3 scales the learning rates by sqrt(batch) and leaves the step count alone, so
+    the schedule is divided here: 4 images a step for a quarter of the steps."""
+    argv = training.gsplat_argv("p", Path("t"), Path("d"), Path("r"), batch_size=4)
+    at = argv.index("--batch_size")
+    assert argv[at + 1] == "4"
+    assert "--batch_size" not in training.gsplat_argv("p", Path("t"), Path("d"), Path("r"))
+    assert training.batch_steps_scaler(1.0, 4) == 0.25
+    assert training.batch_steps_scaler(0.1, 4) == 0.025
+    assert training.batch_steps_scaler(0.8, 1) == 0.8
+    assert training.scaled_steps(30_000, training.batch_steps_scaler(1.0, 3)) * 3 == 29_997
+    assert training.check_batch_size(2.0) == 2
+    for bad in (0, 9, True, "two", 1.5):
+        with pytest.raises(ValueError, match="batch_size must be"):
+            training.check_batch_size(bad)
+
+
+def test_a_batched_run_trains_the_same_images_in_fewer_steps(tmp_path: Path) -> None:
+    workdir = Workdir.create(tmp_path / "run")
+    seed_inputs(workdir)
+
+    execute(train_recipe(stand_in_params(batch_size=4)), workdir, RunnerSet(cpu=LocalRunner()))
+
+    cfg = json.loads((workdir.work_dir("train") / "gsplat" / "cfg.yml").read_text())
+    assert cfg["batch_size"] == 4 and cfg["steps_scaler"] == 0.25
+    assert cfg["max_steps"] == 75  # 300 steps of one image -> 75 of four
+    document = json.loads((workdir.out_dir("train") / "train_metrics.json").read_text())
+    assert document["settings"]["batchSize"] == 4
+    assert document["settings"]["scheduleScale"] == 0.25
+    step = json.loads(workdir.step_path("train").read_text())["metrics"]
+    assert step["stepsMax"] == 75 and step["batchSize"] == 4
+    assert "4 images a step -> 75 steps" in workdir.log_path("train").read_text()
+
+
+def test_a_batch_and_the_depth_loss_are_refused_together(tmp_path: Path) -> None:
+    workdir = Workdir.create(tmp_path / "run")
+    seed_inputs(workdir)
+
+    with pytest.raises(Exception, match="cannot go together"):
+        execute(
+            train_recipe(stand_in_params(batch_size=2, depth_loss=True)),
+            workdir,
+            RunnerSet(cpu=LocalRunner()),
+        )
+
+
+def test_a_batch_holds_that_many_frames_in_the_memory_model() -> None:
+    """Rasterising four frames a step leaves room for fewer gaussians beside them."""
+
+    def ceiling(images_per_step: int) -> int | None:
+        budget = gaussian_budget.plan(
+            500_000,
+            model=Path("unread"),
+            train_size=(1600, 1200),
+            pixel_scale=1.0,
+            images_per_step=images_per_step,
+        )
+        assert budget is not None
+        return budget.memory_ceiling
+
+    assert ceiling(1) == gaussian_budget.memory_ceiling(1600 * 1200)
+    assert ceiling(4) == gaussian_budget.memory_ceiling(4 * 1600 * 1200)
+    assert (ceiling(4) or 0) < (ceiling(1) or 0)

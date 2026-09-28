@@ -37,6 +37,13 @@ variants:
     repeat: 2
     params: {train: {blocks: 2}}
 
+  # The blocks in turn, in one call -- the 2.3 h / $1.73 run -- as the control for
+  # `blocks-2`, whose blocks now train on two L4s at once (one call each). Expected: the
+  # same billed seconds and quality, and ~37 min (the shorter block) less wall time;
+  # the step's `fanOutWallS`, `fanOutBilledByPart` and `billedS` say what happened.
+  - name: blocks-2-serial
+    params: {train: {blocks: 2, block_parallel: 1}}
+
   # Per-image exposure correction in every block (gsplat's bilateral grid: H3DGS App. C.2's
   # per-image affine, per cell of a 16x16x8 grid); against its own whole run, since the
   # grid alone changed nothing measurable on this capture.

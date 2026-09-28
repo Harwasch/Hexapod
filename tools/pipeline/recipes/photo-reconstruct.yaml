@@ -191,12 +191,21 @@ stages:
       #     to the sphere and the trained splat to 1.5 radii.
       #   blocks: auto        -- the default without being written: a capture whose budget
       #     is more than one GPU trains (the raw count over the smaller of the memory
-      #     ceiling and budget_max) trains as blocks, one after another on the same L4,
-      #     from the Preview's splat, and is merged into one trained.ply (blocks.py). A
-      #     number forces that many -- `blocks: 2` on the spool against `blocks: 1` is the
-      #     seam test. `block_epsilon` (0.05) is the camera test's 1 - SSIM threshold;
-      #     `bilateral_grid: true` is its per-image exposure correction (a 16x16x8 grid of
-      #     the 3x4 affine H3DGS App. C.2 fits per image, discarded at export).
+      #     ceiling and budget_max) trains as blocks from the Preview's splat, and is
+      #     merged into one trained.ply (blocks.py). A number forces that many --
+      #     `blocks: 2` on the spool against `blocks: 1` is the seam test. The blocks
+      #     train on `block_parallel` (4) L4s at once, one call each (CloudRunner fans the
+      #     stage out): the spool's two blocks took 2,530 s + 2,207 s one after another,
+      #     2.3 h and $1.73, where at once they end with the longer for the same GPU-seconds.
+      #     `block_parallel: 1` trains them in turn. Each block's schedule is the whole
+      #     run's rule on its own frames (`block_schedule: frames`; `share`, its share of
+      #     the run's steps, is opt-in). `block_epsilon` (0.05) is the camera test's
+      #     1 - SSIM threshold; `bilateral_grid: true` is its per-image exposure correction
+      #     (a 16x16x8 grid of the 3x4 affine H3DGS App. C.2 fits per image, discarded at
+      #     export).
+      #   batch_size: 2       -- images per step (gsplat's sqrt(batch) learning rates), on
+      #     half the steps so the images trained on are the same. Unmeasured on the L4;
+      #     not with depth_loss.
       #
       # psnr, ssim and lpips in train_metrics.json are on gsplat's held-out split: every
       # 8th registered frame, never trained on (`heldOut` there says how many).

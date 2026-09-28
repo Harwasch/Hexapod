@@ -275,6 +275,40 @@ def test_a_phone_may_ask_for_blocks_to_compare_a_capture_whole_and_in_blocks(
     assert job is not None and job.params == chosen
 
 
+def test_a_phone_may_ask_how_blocks_train_and_how_many_images_a_step_sees(
+    client: TestClient, db: Session
+) -> None:
+    """The efficiency experiments: blocks at once (`block_parallel`, 1 for the serial
+    control), each block's schedule rule (`block_schedule`), and gsplat's `batch_size`."""
+    mine = client.post("/api/v1/phone/captures", json={}, headers=PHONE).json()["capture"]
+    uploaded(db, mine["id"])
+    url = f"/api/v1/phone/captures/{mine['id']}/process"
+
+    def start(params: dict[str, object]) -> Response:
+        return client.post(
+            url, json={"recipe": "photo-reconstruct", "params": params}, headers=PHONE
+        )
+
+    for refused in (
+        {"train": {"block_parallel": 0}},
+        {"train": {"block_parallel": 32}},
+        {"train": {"block_schedule": "half"}},
+        {"train": {"batch_size": 0}},
+        {"train": {"batch_size": 16}},
+        {"train": {"batch_size": True}},
+    ):
+        response = start(refused)
+        assert response.status_code == 409, (refused, response.text)
+
+    chosen = {
+        "train": {"blocks": 2, "block_parallel": 1, "block_schedule": "share", "batch_size": 2}
+    }
+    ok = start(chosen)
+    assert ok.status_code == 202, ok.text
+    job = db.get(Job, uuid.UUID(ok.json()["id"]))
+    assert job is not None and job.params == chosen
+
+
 def test_a_quality_tier_scales_the_measured_budget_within_bounds(
     client: TestClient, db: Session
 ) -> None:

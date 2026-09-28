@@ -124,10 +124,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--app_opt", action="store_true")
     parser.add_argument("--use_bilateral_grid", action="store_true")
     parser.add_argument("--packed", action="store_true")
+    parser.add_argument("--batch_size", type=int, default=1)
     # Not gsplat's: how this stand-in is told to behave like a reclaimed machine.
     parser.add_argument("--ckpt-every", type=int, default=100)
     parser.add_argument("--die-at", type=int, default=None)
     parser.add_argument("--die-marker", type=Path, default=None)
+    # Die only when the dataset holds an image whose name contains this: one block of a
+    # block run, the others untouched (their datasets are the same frames, renamed).
+    parser.add_argument("--die-if-image", default=None)
     # A provider reclaiming a box kills the container's main process, not just the
     # trainer inside it -- which for `SubprocessAdapter` is `run_stage.py`, this
     # process's parent. Opt-in, and passed by exactly one test, because under
@@ -184,6 +188,7 @@ def main(argv: list[str] | None = None) -> int:
         "app_opt": args.app_opt,
         "use_bilateral_grid": args.use_bilateral_grid,
         "packed": args.packed,
+        "batch_size": args.batch_size,
         "image_scale": image_scale(args.data_dir),
     }
     (args.result_dir / "cfg.yml").write_text(json.dumps(resolved) + "\n", encoding="utf-8")
@@ -223,7 +228,10 @@ def main(argv: list[str] | None = None) -> int:
                 args.gaussians,
                 seed=step,
             )
-        if args.die_at is not None and step == args.die_at and not died.exists():
+        doomed = args.die_if_image is None or any(
+            args.die_if_image in path.name for path in images.iterdir()
+        )
+        if args.die_at is not None and step == args.die_at and doomed and not died.exists():
             died.write_text("1", encoding="utf-8")
             sys.stdout.write(f"stand-in: the machine is being taken back at step {step}" + "\n")
             sys.stdout.flush()

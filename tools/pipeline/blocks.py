@@ -38,16 +38,44 @@ validating the machinery on a capture that fits one GPU (the spool at `blocks: 2
    are concatenated into one PLY by a chunked writer, so `quality`, `place` and `package`
    read one `trained.ply` as always.
 
-**On Modal.** One stage attempt -- one Modal call, as for every stage -- loops the blocks
-inside the container. That is what `CloudRunner` already retries and checkpoints: a
-finished block's cropped splat and its record go into `checkpoint/blocks/`, which the
-remote syncs on an interval and the next attempt gets back, so a preemption re-runs only
-the block that was cut short (gsplat's trainer cannot resume one). A call per block would
-have needed the executor to fan a stage out into a variable number of stages, which
-nothing in the plan, the worker's step rows or the attempt ledger knows how to do. The
-cost is the Modal function's 6 h timeout: before starting another block the stage checks
-it has time for one more as long as the longest so far, and otherwise ends the attempt
-(`BlocksYieldError`) after the checkpoint has synced; the worker's retry resumes it.
+**On Modal: one GPU per block, at once.** Measured on the spool forced to 2 blocks, one
+after another on one L4: a 7,500-step coarse pass (no Preview existed), then block 1 in
+2,530 s and block 2 in 2,207 s -- 2.3 h and $1.73, against ~1 h and $0.67 for the scene
+whole, at the same quality (26.42 dB / LPIPS 0.1056 merged, 26.39 / 0.1088 whole). Modal
+bills per GPU-second, so the same blocks on N GPUs at once cost the same seconds and end
+when the longest does. `cloud.CloudRunner` fans the stage out (`contracts.FanOut`):
+
+1. *head* -- the stage's usual call. The prior (or the coarse pass) and the camera test's
+   renders happen here, once, and the plan goes into `checkpoint/blocks/plan.json`. With
+   more than one block left to train and `block_parallel` above 1, it answers with one
+   part per block instead of training them; otherwise (one left, or `block_parallel: 1`)
+   it trains and merges here, as before.
+2. *part* -- one block per call, `block_parallel` (4) at a time, each on its own
+   checkpoint key with the prior and the plan. Its cropped splat and its record
+   (`blocks/block_NNN/`, `blocks/block_NNN.json`) are what come home. A part that fails or
+   is preempted runs again alone while the rest carry on.
+3. *join* -- every block home: the merge, the evaluation and the held-out error, which
+   write the stage's outputs.
+
+A finished block is never trained again: the head of a later attempt lists only the blocks
+with no record. Every call is priced in the attempt ledger, so the stage's cost is the sum.
+Expected on the spool: the 2.3 h less the shorter block's 2,207 s, about 1.7 h, for the
+same ~$1.7 plus two more container starts and dataset copies (a few cents); with a
+Preview's prior there is no coarse pass either.
+
+Without a fanning runner (`LocalRunner`, `block_parallel: 1`) one call loops the blocks,
+bounded by the Modal function's 6 h timeout: before starting another block the
+stage checks it has time for one more as long as the longest so far, and otherwise ends
+the attempt (`BlocksYieldError`) after the checkpoint has synced; the worker's retry
+resumes it.
+
+**Each block's schedule follows its own data** (`block_schedule`, the param of the same
+name): the single run's rule, `training.schedule_scale` -- linear in the frame count up to
+`schedule_full_at`, never below `schedule_floor` -- applied to the frames the block trains
+on, so a block that sees few cameras trains proportionally shorter; the gaussian factor
+and the convergence stop then apply per block as they do to a whole run. A block that sees
+every frame (the spool's: its 156 training cameras in both blocks) keeps the run's schedule
+exactly.
 """
 
 from __future__ import annotations
@@ -78,10 +106,12 @@ import live
 import sfm
 import training
 from captures_bridge import read_ply
-from contracts import MetricValue, StageContext
+from contracts import FANOUT_PARAM, FanOut, FanOutPart, MetricValue, StageContext
 from support_mask import SupportMask
 
 __all__ = [
+    "BLOCK_PARALLEL",
+    "BLOCK_SCHEDULES",
     "BLOCK_TRAINER",
     "BLOCK_VIEWS",
     "PRIOR_DIR",
@@ -91,13 +121,19 @@ __all__ = [
     "Prior",
     "Settings",
     "block_count",
+    "block_schedule",
+    "fan_out",
+    "finished",
     "gpu_cap",
     "load_prior",
     "merge_plys",
     "parse_blocks",
+    "part_index",
+    "pending",
     "prepare",
     "save_prior",
     "train",
+    "train_part",
 ]
 
 F32 = npt.NDArray[np.float32]
@@ -140,8 +176,27 @@ ATTEMPT_BUDGET_S = 5 * 3600.0
 SYNC_WAIT_S = 75.0
 #: Rows a checkpoint file of a finished block holds (`write_parts`): ~31 MB at SH degree 3.
 PART_ROWS = 131_072
-#: Params that pace an attempt without changing what a block trains.
-RUNTIME_PARAMS = frozenset({"block_attempt_budget_s", "block_sync_wait_s", "live"})
+#: Params that pace an attempt without changing what a block trains -- including how many
+#: blocks train at once and which call of a fan-out this is, so that neither can make a
+#: finished block look like another plan's.
+RUNTIME_PARAMS = frozenset(
+    {"block_attempt_budget_s", "block_sync_wait_s", "live", "block_parallel", FANOUT_PARAM}
+)
+
+#: Blocks trained at once when the runner fans out (`block_parallel`). Four L4s: the spool's
+#: two blocks and a large scene's first four at once, well under a Modal workspace's GPU
+#: concurrency limit even with a couple of runs training together; a scene of more blocks
+#: queues the rest, longest first. `cloud.CloudRunner(max_parallel=)` is the deployment's
+#: own ceiling over this.
+BLOCK_PARALLEL = 4
+
+#: How a block's schedule follows its data (`block_schedule`):
+#:   frames  the single run's rule (`training.schedule_scale`) on the block's own frames;
+#:   share   the run's schedule times the block's share of the frames -- each frame visited
+#:           as often as in the whole run, so the blocks add up to about one run's steps.
+#:           Opt-in: nothing has measured a block trained that short;
+#:   full    every block the run's whole schedule (before this rule existed).
+BLOCK_SCHEDULES = ("frames", "share", "full")
 
 #: The two scripts run with the trainer's interpreter, beside this file.
 BLOCK_TRAINER = Path(__file__).resolve().parent / "block_trainer.py"
@@ -555,6 +610,19 @@ class Settings:
     params: Mapping[str, Any] = field(default_factory=dict)
     #: When this attempt's block work began (a coarse pass counts against its budget).
     started: float = field(default_factory=time.monotonic)
+    #: What the run's own schedule was worked out from, for each block's (`block_schedule`):
+    #: its frame count, the recipe's `schedule_full_at` and `schedule_floor`, and whether
+    #: the run named its `schedule_scale` (which, as for a whole run, the frame rule leaves
+    #: alone).
+    images: int = 0
+    schedule_full_at: int | None = None
+    schedule_floor: float = 0.25
+    schedule_requested: bool = False
+    block_schedule: str = "frames"
+    #: Images per training step (`training.gsplat_argv`'s `batch_size`).
+    batch_size: int = 1
+    #: Blocks at once when the runner fans out (`BLOCK_PARALLEL`); 1 trains them in turn.
+    parallel: int = BLOCK_PARALLEL
 
 
 @dataclass(frozen=True)
@@ -658,14 +726,22 @@ def _write_json_atomic(path: Path, document: Mapping[str, Any], scratch: Path) -
 # --- deciding the blocks ---------------------------------------------------------------
 
 
-def prepare(ctx: StageContext, settings: Settings) -> Plan | None:
+def prepare(ctx: StageContext, settings: Settings, *, role: str | None = None) -> Plan | None:
     """The prior, the partition and each block's cameras -- or None when, after the
-    minimum-cameras rule, one block is all there is (then the single run trains)."""
+    minimum-cameras rule, one block is all there is (then the single run trains).
+
+    `role` is the call's part in a fan-out (`contracts.fanout_role`). A `part` or a `join`
+    never plans: it runs on the plan and prior the head call made in this same attempt,
+    and refuses rather than re-plan (which would re-render every camera on each GPU and
+    could disagree with the plan the other blocks trained on)."""
     work = ctx.work_dir / "blocks"
     work.mkdir(parents=True, exist_ok=True)
     state_dir = _state_dir(ctx)
+    follower = role in ("part", "join")
     prior, why = load_prior(ctx.checkpoint_dir, settings.poses)
     if prior is None:
+        if follower:
+            raise ValueError(f"blocks: this {role} call was given no prior: {why}")
         ctx.log(f"blocks: {why}; training a coarse whole-scene pass first")
         prior = _coarse_prior(ctx, settings, work / "coarse")
     ctx.log(
@@ -674,14 +750,21 @@ def prepare(ctx: StageContext, settings: Settings) -> Plan | None:
     )
     fingerprint = _fingerprint(settings, prior)
     # A fresh run (attempt 1, which a person's retry also resets to) starts over; a later
-    # attempt resumes only what this same plan finished.
-    if ctx.attempt == 1 and state_dir.exists():
+    # attempt resumes only what this same plan finished. Only the head decides that: the
+    # parts and the join of attempt 1 carry on from what its head left.
+    if ctx.attempt == 1 and not follower and state_dir.exists():
         shutil.rmtree(state_dir)
     existing = _read_json(state_dir / _PLAN)
     if existing is not None and existing.get("fingerprint") == fingerprint:
         plan = Plan.from_dict(existing)
-        ctx.log(f"blocks: attempt {ctx.attempt} resumes the plan an earlier attempt made")
+        if not follower:
+            ctx.log(f"blocks: attempt {ctx.attempt} resumes the plan an earlier attempt made")
         return plan if plan.partition.count > 1 else None
+    if follower:
+        raise ValueError(
+            f"blocks: this {role} call's checkpoint holds no plan for these params, poses "
+            f"and prior; only the head call plans"
+        )
     if state_dir.exists():
         shutil.rmtree(state_dir)
     plan = _plan(ctx, settings, prior, fingerprint, work)
@@ -902,6 +985,7 @@ def _coarse_prior(ctx: StageContext, settings: Settings, work: Path) -> Prior:
     if result.exists():
         shutil.rmtree(result)
     result.mkdir(parents=True)
+    scaler = training.batch_steps_scaler(training.check_schedule_scale(scale), settings.batch_size)
     argv = training.gsplat_argv(
         settings.python,
         settings.trainer,
@@ -909,13 +993,14 @@ def _coarse_prior(ctx: StageContext, settings: Settings, work: Path) -> Prior:
         result,
         strategy="mcmc",
         max_steps=settings.full_iterations,
-        steps_scaler=training.check_schedule_scale(scale),
+        steps_scaler=scaler,
         cap_max=cap,
         antialiased=bool(settings.switches.get("antialiased")),
+        batch_size=settings.batch_size,
         extra=settings.extra,
     )
     ctx.log(
-        f"blocks: coarse pass: {training.scaled_steps(settings.full_iterations, scale)} steps "
+        f"blocks: coarse pass: {training.scaled_steps(settings.full_iterations, scaler)} steps "
         f"at {max_side} px, at most {cap} gaussians"
     )
     ctx.run(argv)
@@ -945,15 +1030,88 @@ class BlockRun:
     written: int
 
 
+def finished(ctx: StageContext, plan: Plan) -> dict[str, Any]:
+    """The records of this plan's blocks that are trained and still in `checkpoint/`,
+    by block index (as a string). A block's record sits beside its splat, one file each,
+    so blocks trained on different machines at once never write the same file; a run
+    checkpointed before that (one `state.json`) is still read."""
+    state_dir = _state_dir(ctx)
+    done: dict[str, Any] = {}
+    legacy = _read_json(state_dir / _STATE)
+    if legacy is not None and legacy.get("fingerprint") == plan.fingerprint:
+        done.update({str(k): v for k, v in dict(legacy.get("blocks") or {}).items()})
+    for index in range(plan.partition.count):
+        record = _read_json(_record_path(state_dir, index))
+        if record is not None and record.get("fingerprint") == plan.fingerprint:
+            done[str(index)] = record
+    return {k: v for k, v in done.items() if (state_dir / _block_dir(int(k))).is_dir()}
+
+
+def pending(ctx: StageContext, plan: Plan) -> list[int]:
+    """The blocks of `plan` still to train."""
+    done = finished(ctx, plan)
+    return [index for index in range(plan.partition.count) if str(index) not in done]
+
+
+def part_id(index: int) -> str:
+    return f"b{index}"
+
+
+def part_index(part: str | None, plan: Plan) -> int:
+    """The block a `part` call trains, from the id `fan_out` gave it."""
+    try:
+        index = int(str(part).removeprefix("b"))
+    except ValueError:
+        raise ValueError(f"blocks: {part!r} is not a block part") from None
+    if not 0 <= index < plan.partition.count:
+        raise ValueError(f"blocks: part {part!r} is outside the plan's {plan.partition.count}")
+    return index
+
+
+def fan_out(settings: Settings, plan: Plan, todo: Sequence[int]) -> FanOut:
+    """One part per block still to train, the one expected to take longest first.
+
+    Longest first because the stage ends when the last block does: with more blocks than
+    `parallel`, starting the long ones early is what keeps the tail short (the classic
+    longest-processing-time rule). Expected work is the block's steps -- its schedule
+    (`block_schedule`) -- times its gaussians in the prior, the two things a step's cost
+    and the number of steps grow with.
+    """
+    frames = plan.assigned.sum(axis=0)
+
+    def work(index: int) -> float:
+        scale, _ = block_schedule(settings, int(frames[index]), len(plan.names))
+        return scale * max(1, plan.gaussians[index] if index < len(plan.gaussians) else 1)
+
+    order = sorted(todo, key=lambda index: (-work(index), index))
+    parts = tuple(
+        FanOutPart(
+            id=part_id(index),
+            collect=(f"{STATE_DIR}/{_block_dir(index)}", f"{STATE_DIR}/{_block_dir(index)}.json"),
+        )
+        for index in order
+    )
+    return FanOut(
+        parts=parts, parallel=settings.parallel, share=(PRIOR_DIR, f"{STATE_DIR}/{_PLAN}")
+    )
+
+
+def train_part(ctx: StageContext, settings: Settings, plan: Plan, index: int) -> dict[str, Any]:
+    """One block, alone: what a `part` call of a fan-out does. Its splat and record land in
+    `checkpoint/blocks/`, which is all that comes home; nothing is written to `out/`."""
+    prior, why = load_prior(ctx.checkpoint_dir, settings.poses)
+    if prior is None:
+        raise ValueError(f"blocks: the prior this plan was made from is gone: {why}")
+    uv_prior = plan.partition.project(prior.xyz)
+    work = ctx.work_dir / "blocks"
+    return _train_block(ctx, settings, plan, prior, uv_prior, index, work / f"b{index}")
+
+
 def train(ctx: StageContext, settings: Settings, plan: Plan, trained_ply: Path) -> BlockRun:
     """Train every block not already finished, merge them into `trained_ply`, measure."""
     started = settings.started
-    state_dir = _state_dir(ctx)
     work = ctx.work_dir / "blocks"
-    state = _read_json(state_dir / _STATE) or {}
-    if state.get("fingerprint") != plan.fingerprint:
-        state = {"version": _STATE_VERSION, "fingerprint": plan.fingerprint, "blocks": {}}
-    done: dict[str, Any] = dict(state.get("blocks") or {})
+    done = finished(ctx, plan)
     prior, why = load_prior(ctx.checkpoint_dir, settings.poses)
     if prior is None:
         raise ValueError(f"blocks: the prior this plan was made from is gone: {why}")
@@ -963,10 +1121,10 @@ def train(ctx: StageContext, settings: Settings, plan: Plan, trained_ply: Path) 
     trained_here = 0
     for index in range(plan.partition.count):
         key = str(index)
-        if key in done and (state_dir / _block_dir(index)).is_dir():
+        if key in done:
             ctx.log(
                 f"blocks: block {index + 1} of {plan.partition.count} finished in an "
-                f"earlier attempt; skipped"
+                f"earlier call; not trained again"
             )
             continue
         longest = max((float(r.get("seconds") or 0.0) for r in done.values()), default=0.0)
@@ -985,13 +1143,56 @@ def train(ctx: StageContext, settings: Settings, plan: Plan, trained_ply: Path) 
         record = _train_block(ctx, settings, plan, prior, uv_prior, index, work / f"b{index}")
         done[key] = record
         trained_here += 1
-        state["blocks"] = done
-        _write_json_atomic(state_dir / _STATE, state, work)
     return _merge_and_measure(ctx, settings, plan, done, trained_ply, work, started)
 
 
 def _block_dir(index: int) -> str:
     return f"block_{index:03d}"
+
+
+def _record_path(state_dir: Path, index: int) -> Path:
+    return state_dir / f"{_block_dir(index)}.json"
+
+
+def block_schedule(settings: Settings, frames: int, of: int) -> tuple[float, str]:
+    """A block's schedule scale, before its gaussian factor, and the rule that set it.
+
+    `frames` are the posed frames the block is given (training and held out, as a whole
+    run counts its dataset's), `of` the run's. Under `frames`, the default, it is the
+    whole run's rule on the block: `training.schedule_scale(frames,
+    full_at=schedule_full_at, floor=schedule_floor)`, carried as a ratio to the run's own
+    (`settings.images`) so that a Refine's `init_schedule_scale` is shortened alike. A run
+    that named its `schedule_scale` keeps it, as a whole run does; and a block given every
+    frame keeps the run's schedule exactly -- the spool's two blocks, each with all 156
+    training cameras, train what they did before. `share` scales by `frames / of` instead;
+    `full` is the run's schedule for every block. Never below `schedule_floor` of the full
+    schedule, unless the run itself is (a Preview's 0.1).
+
+    With the recipe's `schedule_full_at: 60` and the 50-frame minimum a block must have
+    (`block_maths.MIN_IMAGES`), `frames` shortens only a block of 50-59 frames, by at most
+    a sixth: the rule was set for small captures, and a block of a big scene is not one.
+    `share` is the rule that shrinks a big scene's blocks -- to the steps each frame gets
+    in the whole run -- and is opt-in until a GPU run has measured its quality.
+    """
+    mode = settings.block_schedule
+    run = settings.steps_scaler
+    if mode == "full" or of <= 0 or frames >= of:
+        return run, "the run's (the block sees every frame)" if frames >= of else "the run's"
+    if mode == "frames":
+        full_at = settings.schedule_full_at
+        if settings.schedule_requested or not full_at:
+            given = "schedule_scale given" if settings.schedule_requested else "no schedule_full_at"
+            return run, f"the run's ({given})"
+        floor = settings.schedule_floor
+        mine = training.schedule_scale(frames, full_at=full_at, floor=floor)
+        whole = training.schedule_scale(max(settings.images, of), full_at=full_at, floor=floor)
+        ratio = mine / whole if whole > 0 else 1.0
+        rule = f"{frames} frames against the full schedule at {full_at}"
+    else:
+        ratio = frames / of
+        rule = f"{frames} of the run's {of} frames"
+    scale = max(round(run * ratio, 4), min(run, settings.schedule_floor))
+    return scale, rule
 
 
 def write_parts(directory: Path, columns: Mapping[str, Any], names: Sequence[str]) -> int:
@@ -1036,6 +1237,7 @@ def _block_cap(
         floor=max(1, budget.floor // max(1, settings.count)),
         budget_max=budget.budget_max,
         gpu_memory_gb=budget.gpu_memory_gb,
+        images_per_step=settings.batch_size,
     )
     return (None if block_budget is None else block_budget.cap), block_budget
 
@@ -1101,12 +1303,16 @@ def _train_block(
             logit_opacity=prior.logit_opacity[ring_mask],
             f_dc=prior.f_dc[ring_mask],
         )
-    # The schedule: the single run's, lengthened for a bigger block budget as it would be.
-    scaler = settings.steps_scaler
+    # The schedule: the single run's rule on this block's own frames (`block_schedule`),
+    # lengthened for a bigger block budget as a whole run's would be, and divided by the
+    # images a step sees (`batch_size`) so the images trained on stay the same.
+    scaler, schedule_rule = block_schedule(settings, len(names), len(plan.names))
+    data_scale = scaler
     factor = 1.0
     if settings.converge and settings.strategy == "mcmc" and cap is not None:
         factor = gaussian_budget.schedule_factor(cap)
         scaler = round(scaler * factor, 4)
+    scaler = training.batch_steps_scaler(scaler, settings.batch_size)
     iterations = training.scaled_steps(settings.full_iterations, scaler)
     refine_stop = convergence.REFINE_STOP_ITER.get(settings.strategy)
     extra_evals = (
@@ -1135,6 +1341,7 @@ def _train_block(
         bilateral_grid=bool(settings.switches.get("bilateral_grid")),
         live_steps=live_steps,
         eval_steps=extra_evals,
+        batch_size=settings.batch_size,
         # The block's own held-out frames (block_maths.val_order).
         extra=[*settings.extra, "--test_every", str(every)],
     )
@@ -1149,7 +1356,9 @@ def _train_block(
         f"blocks: block {index + 1} of {total}: {len(train_names)} training frames "
         f"({int(plan.inside[:, index].sum())} standing in it), {len(val_names)} held out "
         f"(test_every {every}); cap {cap}; {applied.seeded} prior gaussians seeded, "
-        f"{int(ring_mask.sum())} frozen in the ring; {iterations} steps"
+        f"{int(ring_mask.sum())} frozen in the ring; schedule {data_scale:g} "
+        f"({schedule_rule}) -> {iterations} steps"
+        + ("" if settings.batch_size == 1 else f" of {settings.batch_size} images")
     )
     began = time.monotonic()
     with live.SplatWatch(
@@ -1187,7 +1396,8 @@ def _train_block(
         result, "", trainer=f"gsplat:{settings.trainer.name}", requested_iterations=iterations
     )
     report = convergence.read_report(result) if extra_evals else None
-    return {
+    record: dict[str, Any] = {
+        "fingerprint": plan.fingerprint,
         "index": index,
         "cells": list(part.blocks[index]),
         "rect": list(part.rect(index)),
@@ -1200,7 +1410,10 @@ def _train_block(
         "capMax": cap,
         "budget": None if block_budget is None else block_budget.to_dict(),
         "scheduleScale": scaler,
+        "scheduleData": data_scale,
+        "scheduleRule": schedule_rule,
         "scheduleFactor": factor,
+        "batchSize": settings.batch_size,
         "stepsMax": iterations,
         "stepsRun": metrics.iterations,
         "stoppedEarly": bool(report and report.get("stoppedEarly")),
@@ -1217,6 +1430,10 @@ def _train_block(
         "seconds": round(seconds, 1),
         "attempt": ctx.attempt,
     }
+    # After the splat is in place: a block with a splat and no record is trained again,
+    # never merged half-written.
+    _write_json_atomic(_record_path(_state_dir(ctx), index), record, work)
+    return record
 
 
 def trainer_argv(
@@ -1287,7 +1504,10 @@ def _merge_and_measure(
     # a later run does not carry gigabytes of finished blocks back and forth.
     for directory in directories:
         shutil.rmtree(directory, ignore_errors=True)
-    records = [dict(done[str(i)]) for i in range(plan.partition.count)]
+    records = [
+        {k: v for k, v in dict(done[str(i)]).items() if k != "fingerprint"}
+        for i in range(plan.partition.count)
+    ]
     seconds = sum(float(r.get("seconds") or 0.0) for r in records)
     # A block's share of the training time: the GPU is priced per stage (the attempt
     # ledger, outside this container), so a block's cost is the stage's times this.
@@ -1326,6 +1546,7 @@ def _merge_and_measure(
         "blockGaussians": ",".join(str(r["gaussiansKept"]) for r in records),
         "blockCaps": ",".join(str(r["capMax"]) for r in records),
         "blockSteps": ",".join(str(r["stepsRun"]) for r in records),
+        "blockSchedules": ",".join(str(r.get("scheduleScale")) for r in records),
         "blockSeconds": ",".join(str(r["seconds"]) for r in records),
         "blockEpsilon": plan.epsilon,
         "blockCameraTest": plan.method,

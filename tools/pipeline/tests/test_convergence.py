@@ -202,6 +202,32 @@ def test_a_flat_tail_is_stopped_by_the_trainers_own_save(tmp_path: Path) -> None
     assert step["metrics"]["stepsMax"] == 1_500
 
 
+def test_a_batch_stops_at_the_same_point_of_its_images_in_half_the_steps(
+    tmp_path: Path,
+) -> None:
+    """Two images a step: `--steps_scaler` is halved, and with it -- by the trainer's own
+    `adjust_steps` -- densification's end and every evaluation step, while the wrapper
+    multiplies its window by the same scaler. The unscaled `--eval_steps` the stage passes
+    are the ones a batch of one gets; the stop lands at half the steps, where the same
+    number of images have been trained on."""
+    workdir, document = run(
+        tmp_path, converge_params(batch_size=2, extra_args=["--plateau-at", "0.84"])
+    )
+    single_dir, single = run(tmp_path / "one", converge_params(extra_args=["--plateau-at", "0.84"]))
+
+    batched, one = document["convergence"], single["convergence"]
+    assert batched["stepsMax"] == 750 and one["stepsMax"] == 1_500
+    assert batched["refineStopIter"] == 625 and one["refineStopIter"] == 1_250
+    assert batched["stoppedEarly"] is True
+    assert batched["hook"]["windowSteps"] == one["hook"]["windowSteps"] // 2
+    assert abs(2 * batched["stepsRun"] - one["stepsRun"]) <= 30  # one evaluation apart
+    log = workdir.log_path("train").read_text()
+    evals = log.split("--eval_steps ")[1].split(" --")[0]
+    single_log = single_dir.log_path("train").read_text()
+    assert evals == single_log.split("--eval_steps ")[1].split(" --")[0]
+    assert "--steps_scaler 0.025" in log and "--batch_size 2" in log
+
+
 def test_a_rising_tail_runs_its_whole_schedule(tmp_path: Path) -> None:
     _workdir, document = run(tmp_path, converge_params())
 

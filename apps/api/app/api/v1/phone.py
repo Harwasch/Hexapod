@@ -116,6 +116,16 @@ PHONE_OPTIONS: dict[str, dict[str, dict[str, Rule]]] = {
             "blocks": RangeOr(1, 16, frozenset({"auto"})),
             "block_epsilon": (0.0, 0.5),
             "block_ring": FLAG,
+            # How many blocks train at once, one GPU each (1: in turn, in one call -- the
+            # control for the spool's 2.3 h serial run), and how each block's schedule
+            # follows its frames: the whole run's rule (`frames`), the block's share of the
+            # run's steps (`share`), or every block the whole schedule (`full`).
+            "block_parallel": (1, 8),
+            "block_schedule": frozenset({"frames", "share", "full"}),
+            # Images per training step, with gsplat's sqrt(batch) learning rates and the
+            # schedule divided by it (the same images seen); for measuring whether a batch
+            # trains faster per image on the L4. Refused with depth_loss by the stage.
+            "batch_size": (1, 8),
         },
         # The quality bar: what is kept, and whether this run is a preview or a refine.
         "quality": {"bar": frozenset(QUALITY_BARS), "mode": frozenset(QUALITY_MODES)},

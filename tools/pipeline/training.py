@@ -443,6 +443,7 @@ def gsplat_argv(
     eval_steps: Sequence[int] = (),
     extra: Sequence[str] = (),
     packed: bool = True,
+    batch_size: int = 1,
 ) -> list[str]:
     """The command line, built in one place so a test can read it without a GPU.
 
@@ -542,6 +543,25 @@ def gsplat_argv(
     trainer sparsifies them (`grad[gaussian_ids]`), and both optimisers keep their two
     moments dense. Either can be tried per run through `extra_args` once a GPU run has
     measured it against the default.
+
+    And `batch_size` (v1.5.3 `Config.batch_size`, default 1): images a step renders and
+    averages the loss over. The trainer scales every optimiser's learning rate by
+    `sqrt(batch_size)` and Adam's eps by `1/sqrt` (`create_splats_with_optimizers`, and
+    the pose, appearance and bilateral-grid optimisers alike) -- and nothing else: it does
+    **not** shorten the schedule, so a batch of 4 over 30k steps would see 4x the images.
+    The caller therefore divides `steps_scaler` by it (`batch_steps_scaler`), the way the
+    trainer's own docstring runs 4 GPUs ("effectively 4x batch size so run 4x less
+    steps": `--steps_scaler 0.25`). Because `adjust_steps` scales the refine window, the
+    SH interval and every save/ply/eval step by that same factor, densification and the
+    held-out evaluations stay where they were in images seen -- and `converge_trainer.py`
+    reads the scaled `refine_stop_iter` and multiplies its window by `cfg.steps_scaler`, so
+    the convergence rule follows the shorter step count with no change of its own.
+    Incompatible, and refused by the stage: `depth_loss` (each image carries its own
+    number of SfM points, which the DataLoader's default collate cannot stack), and frames
+    of different sizes (the same collate). The `absgrad` assert people meet is
+    `rasterization`'s `assert not distributed` -- multi-GPU only, never this trainer's
+    single process. The raster memory grows with the images a step renders, which
+    `gaussian_budget.memory_ceiling` counts when given the batch.
     """
     steps = str(max_steps)
     argv = [
@@ -571,6 +591,8 @@ def gsplat_argv(
     ]
     if steps_scaler != 1.0:
         argv += ["--steps_scaler", f"{steps_scaler:g}"]
+    if batch_size != 1:
+        argv += ["--batch_size", str(check_batch_size(batch_size))]
     if cap_max is not None:
         if strategy != "mcmc":
             raise ValueError(
@@ -649,6 +671,37 @@ def check_schedule_scale(value: float) -> float:
             f"the full schedule to run, and below {low:g} a run is initialisation only"
         )
     return value
+
+
+#: The largest `batch_size` taken. gsplat's own benchmarks train at 1; a batch past a
+#: handful holds that many full-size renders and their gradients at once, which an L4's
+#: 24 GB does not have room for at 1600 px beside a budget of millions.
+MAX_BATCH_SIZE = 8
+
+
+def check_batch_size(value: object) -> int:
+    """A requested `batch_size`, or a refusal naming the range it must be in."""
+    if isinstance(value, float) and value.is_integer():
+        value = int(value)  # JSON params arrive as 2.0 as readily as 2
+    if isinstance(value, bool) or not isinstance(value, int | str):
+        raise ValueError(f"batch_size must be an integer from 1 to {MAX_BATCH_SIZE}, not {value!r}")
+    try:
+        number = int(value)
+    except ValueError:
+        raise ValueError(
+            f"batch_size must be an integer from 1 to {MAX_BATCH_SIZE}, not {value!r}"
+        ) from None
+    if not 1 <= number <= MAX_BATCH_SIZE:
+        raise ValueError(f"batch_size must be an integer from 1 to {MAX_BATCH_SIZE}, not {value!r}")
+    return number
+
+
+def batch_steps_scaler(steps_scaler: float, batch_size: int) -> float:
+    """`steps_scaler` for a batch of `batch_size` images a step: divided by it, so the
+    images trained on -- steps x batch -- stay what the schedule meant (`gsplat_argv`).
+    Rounded to 4 places as the gaussian factor is; unchanged at 1."""
+    size = check_batch_size(batch_size)
+    return steps_scaler if size == 1 else round(steps_scaler / size, 4)
 
 
 def scaled_steps(max_steps: int, steps_scaler: float) -> int:

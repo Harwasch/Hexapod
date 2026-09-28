@@ -23,10 +23,12 @@ from PIL import Image
 
 import block_maths
 import blocks
+import convergence
 import gaussian_budget
 import gaussians
 import sfm
 import synthetic_scene
+import training
 from adapters import LocalTransfer, SubprocessAdapter
 from captures_bridge import read_ply
 from cloud import AttemptLedger, CloudRunner, Placement
@@ -555,7 +557,7 @@ def test_forced_two_blocks_train_one_after_another_and_merge(tmp_path: Path) -> 
     assert step["metrics"]["blockCameraTest"] == "render"
     # The finished blocks' splats leave the checkpoint once merged; the plan stays.
     left = sorted(p.name for p in (workdir.checkpoint_dir("train") / blocks.STATE_DIR).iterdir())
-    assert left == ["plan.json", "state.json"]
+    assert left == ["block_000.json", "block_001.json", "plan.json"]
     # A block run leaves the prior it used, not its own merged splat, for the next one.
     prior, _ = blocks.load_prior(workdir.checkpoint_dir("train"), workdir.input_path("poses"))
     assert prior is not None and prior.meta["source"] == "test"
@@ -571,16 +573,17 @@ def test_a_block_run_resumes_after_the_blocks_it_finished(tmp_path: Path) -> Non
     with pytest.raises(StageFailedError, match="1 of 2 blocks trained"):
         run_blocks(workdir, hurried, attempt=1)
 
-    state = json.loads((workdir.checkpoint_dir("train") / "blocks" / "state.json").read_text())
-    assert sorted(state["blocks"]) == ["0"]
-    assert (workdir.checkpoint_dir("train") / "blocks" / "block_000" / "part_0000.ply").is_file()
+    state = workdir.checkpoint_dir("train") / "blocks"
+    assert json.loads((state / "block_000.json").read_text())["index"] == 0
+    assert not (state / "block_001.json").exists()
+    assert (state / "block_000" / "part_0000.ply").is_file()
     log_before = workdir.log_path("train").read_text()
 
     # The budget is pacing, not substance: changing it keeps the finished block.
     document = run_blocks(workdir, block_params(), attempt=2)
 
     log = workdir.log_path("train").read_text()[len(log_before) :]
-    assert "block 1 of 2 finished in an earlier attempt; skipped" in log
+    assert "block 1 of 2 finished in an earlier call; not trained again" in log
     assert log.count("/blocks/b0/dataset") == 0 and log.count("/blocks/b1/dataset") >= 1
     assert "resumes the plan" in log
     assert [block["attempt"] for block in document["blocks"]["blocks"]] == [1, 2]
@@ -602,7 +605,9 @@ def test_finished_blocks_come_back_through_the_cloud_seam_and_are_not_retrained(
     seed_walk(workdir)
     seed_prior(workdir, tmp_path / "scratch")
     gpu = {"tier": "l4", "preemptible": True}
-    hurried = block_params(block_attempt_budget_s=0, block_sync_wait_s=0.5)
+    # One call looping the blocks (`block_parallel: 1`): the path a runner that does not
+    # fan out takes, and the one the 5 h in-attempt budget still bounds.
+    hurried = block_params(block_attempt_budget_s=0, block_sync_wait_s=0.5, block_parallel=1)
 
     with pytest.raises(RemoteStageError):
         execute(
@@ -619,12 +624,16 @@ def test_finished_blocks_come_back_through_the_cloud_seam_and_are_not_retrained(
 
     document = json.loads((workdir.out_dir("train") / "train_metrics.json").read_text())
     assert [block["attempt"] for block in document["blocks"]["blocks"]] == [1, 2]
-    assert "finished in an earlier attempt; skipped" in workdir.log_path("train").read_text()
+    assert "finished in an earlier call; not trained again" in workdir.log_path("train").read_text()
     ledger = AttemptLedger.read(workdir.attempts_path("train"))
     assert [entry.state for entry in ledger.entries] == ["failed", "succeeded"]
     # The merged blocks' splats are gone from the checkpoint that came home.
     home = workdir.checkpoint_dir("train") / "blocks"
-    assert sorted(p.name for p in home.iterdir()) == ["plan.json", "state.json"]
+    assert sorted(p.name for p in home.iterdir()) == [
+        "block_000.json",
+        "block_001.json",
+        "plan.json",
+    ]
 
 
 def test_a_fresh_run_never_reuses_an_earlier_runs_blocks(tmp_path: Path) -> None:
@@ -638,7 +647,7 @@ def test_a_fresh_run_never_reuses_an_earlier_runs_blocks(tmp_path: Path) -> None
 
     assert [block["attempt"] for block in document["blocks"]["blocks"]] == [1, 1]
     assert (
-        "earlier attempt; skipped"
+        "earlier call; not trained again"
         not in workdir.log_path("train").read_text().split("cameras.bin")[-1]
     )
 
@@ -737,3 +746,233 @@ def test_the_block_wrapper_hands_the_trainer_its_argv_unchanged() -> None:
         "/d",
     ]
     assert sys.executable
+
+
+# --- one GPU per block: the fan-out through the cloud seam ------------------------------
+
+GPU = {"tier": "l4", "preemptible": True}
+
+
+def cloud_runner(tmp_path: Path) -> CloudRunner:
+    transfer = LocalTransfer(tmp_path / "bucket")
+    adapter = SubprocessAdapter(transfer, tmp_path / "sandbox", rates={"l4": Rate(0.80, "test")})
+    return CloudRunner(
+        Placement((adapter,)), transfer, poll_interval_s=0.02, checkpoint_every_s=0.05
+    )
+
+
+def test_blocks_fan_out_one_call_each_and_merge_to_what_one_call_trains(tmp_path: Path) -> None:
+    """The head plans (prior, partition, the camera test's renders, once), each block
+    trains in a process of its own, and the join merges: the same `trained.ply`, byte for
+    byte, as the one call that trains them in turn -- the fan-out moves the work, it does
+    not change it."""
+    serial = Workdir.create(tmp_path / "serial")
+    seed_walk(serial)
+    seed_prior(serial, tmp_path / "scratch-serial")
+    run_blocks(serial, block_params())
+
+    workdir = Workdir.create(tmp_path / "run")
+    seed_walk(workdir)
+    seed_prior(workdir, tmp_path / "scratch")
+    execute(train_recipe(block_params(), gpu=GPU), workdir, RunnerSet.cloud(cloud_runner(tmp_path)))
+
+    trained = (workdir.out_dir("train") / "trained.ply").read_bytes()
+    assert trained == (serial.out_dir("train") / "trained.ply").read_bytes()
+    entries = AttemptLedger.read(workdir.attempts_path("train")).entries
+    assert entries[0].part == "" and entries[-1].part == "join"
+    assert sorted(entry.part for entry in entries[1:-1]) == ["b0", "b1"]
+    assert all(entry.state == "succeeded" for entry in entries)
+    log = workdir.log_path("train").read_text()
+    # The camera test ran once, in the head; each block's dataset was built by its part.
+    assert log.count("stand-in: 48 frames x 2 blocks, scripted") == 1
+    assert "[b0] " in log and "[b1] " in log
+    assert "2 of 2 blocks to train, 2 at a time on their own GPUs" in log
+    document = json.loads((workdir.out_dir("train") / "train_metrics.json").read_text())
+    assert [block["index"] for block in document["blocks"]["blocks"]] == [0, 1]
+    step = json.loads(workdir.step_path("train").read_text())["metrics"]
+    assert step["fanOutParts"] == 2 and step["fanOutPeak"] == 2
+    assert step["billedS"] == pytest.approx(sum(e.billed_s for e in entries), abs=1e-2)
+    home = workdir.checkpoint_dir("train") / "blocks"
+    assert sorted(p.name for p in home.iterdir()) == [
+        "block_000.json",
+        "block_001.json",
+        "plan.json",
+    ]
+
+
+def test_a_block_that_fails_is_trained_again_alone(tmp_path: Path) -> None:
+    """Block 2's trainer dies once (its dataset holds the walk's last frame, block 1's
+    does not); the runner resubmits that block while block 1 is left as it finished."""
+    workdir = Workdir.create(tmp_path / "run")
+    seed_walk(workdir)
+    seed_prior(workdir, tmp_path / "scratch")
+    die = ["--die-at", "5", "--die-if-image", "frame_0047", "--die-marker", str(tmp_path / "x")]
+    params = block_params(extra_args=["--ckpt-every", "100", "--gaussians", "64", *die])
+
+    execute(train_recipe(params, gpu=GPU), workdir, RunnerSet.cloud(cloud_runner(tmp_path)))
+
+    entries = AttemptLedger.read(workdir.attempts_path("train")).entries
+    calls = [(entry.part, entry.state) for entry in entries]
+    assert calls.count(("b1", "failed")) == 1 and calls.count(("b1", "succeeded")) == 1
+    assert [state for part, state in calls if part == "b0"] == ["succeeded"]
+    assert calls[-1] == ("join", "succeeded")
+    document = json.loads((workdir.out_dir("train") / "train_metrics.json").read_text())
+    assert len(document["blocks"]["blocks"]) == 2
+
+
+def test_the_head_of_a_later_attempt_trains_only_the_blocks_still_missing(
+    tmp_path: Path,
+) -> None:
+    """Block 1 finished in an attempt that then ended; the next attempt's head sees its
+    record and trains the one left in place -- a single block is not worth a fan-out."""
+    workdir = Workdir.create(tmp_path / "run")
+    seed_walk(workdir)
+    seed_prior(workdir, tmp_path / "scratch")
+    with pytest.raises(StageFailedError):
+        run_blocks(workdir, block_params(block_attempt_budget_s=0, block_sync_wait_s=0))
+
+    execute(
+        train_recipe(block_params(), gpu=GPU),
+        workdir,
+        RunnerSet.cloud(cloud_runner(tmp_path)),
+        attempts={"train": 2},
+    )
+
+    entries = AttemptLedger.read(workdir.attempts_path("train")).entries
+    assert [entry.part for entry in entries] == [""]
+    log = workdir.log_path("train").read_text()
+    assert "block 1 of 2 finished in an earlier call; not trained again" in log
+    document = json.loads((workdir.out_dir("train") / "train_metrics.json").read_text())
+    assert [block["attempt"] for block in document["blocks"]["blocks"]] == [1, 2]
+
+
+def test_block_parallel_one_keeps_a_block_run_to_one_call(tmp_path: Path) -> None:
+    workdir = Workdir.create(tmp_path / "run")
+    seed_walk(workdir)
+    seed_prior(workdir, tmp_path / "scratch")
+
+    execute(
+        train_recipe(block_params(block_parallel=1), gpu=GPU),
+        workdir,
+        RunnerSet.cloud(cloud_runner(tmp_path)),
+    )
+
+    entries = AttemptLedger.read(workdir.attempts_path("train")).entries
+    assert [entry.part for entry in entries] == [""]
+
+
+def test_a_part_never_plans(tmp_path: Path) -> None:
+    """Without the plan the head made, a part refuses rather than re-render every camera
+    on its own GPU and perhaps disagree with the plan the other blocks trained on."""
+    workdir = Workdir.create(tmp_path / "run")
+    seed_walk(workdir)
+    seed_prior(workdir, tmp_path / "scratch")
+
+    with pytest.raises(StageFailedError, match="only the head call plans"):
+        run_blocks(workdir, block_params(fanout={"role": "part", "part": "b0"}))
+
+
+# --- each block's schedule follows its own frames ---------------------------------------
+
+
+def settings_for(images: int, **overrides: Any) -> blocks.Settings:
+    values: dict[str, Any] = {
+        "frames": Path("f"),
+        "poses": Path("p"),
+        "dataset": Path("d"),
+        "region": None,
+        "budget": None,
+        "frame_size": None,
+        "pixel_scale": None,
+        "strategy": "mcmc",
+        "full_iterations": 30_000,
+        "steps_scaler": 1.0,
+        "data_factor": 1,
+        "trainer": Path("t"),
+        "python": "py",
+        "switches": {},
+        "extra": (),
+        "converge": False,
+        "rule": convergence.Rule(),
+        "live": False,
+        "up": None,
+        "requested": 2,
+        "count": 2,
+        "reason": "given",
+        "images": images,
+        "schedule_full_at": 60,
+        "schedule_floor": 0.25,
+    }
+    values.update(overrides)
+    return blocks.Settings(**values)
+
+
+def test_a_block_that_sees_every_frame_keeps_the_runs_schedule_exactly() -> None:
+    """The spool at `blocks: 2`: each block trained on all 156 training cameras (178 posed
+    frames), so each keeps the whole schedule it had -- under every rule."""
+    for mode in blocks.BLOCK_SCHEDULES:
+        settings = settings_for(178, block_schedule=mode)
+        assert blocks.block_schedule(settings, 178, 178)[0] == 1.0
+    refine = settings_for(178, steps_scaler=0.5)
+    assert blocks.block_schedule(refine, 178, 178)[0] == 0.5
+
+
+def test_a_block_with_few_frames_gets_the_whole_run_rule_on_its_own_frames() -> None:
+    settings = settings_for(48, steps_scaler=0.8)  # 48 frames of 60: the run's 0.8
+    scale, rule = blocks.block_schedule(settings, 30, 48)
+    assert scale == pytest.approx(0.5)  # 30 of 60, as a 30-frame capture would get
+    assert "30 frames" in rule
+    # Above `schedule_full_at` the rule gives every block the full schedule, as it gives
+    # every capture that size: the 50-frame minimum keeps blocks near it.
+    big = settings_for(600)
+    assert blocks.block_schedule(big, 150, 600)[0] == 1.0
+    assert blocks.block_schedule(big, 55, 600)[0] == pytest.approx(0.92)
+    # The floor: never below `schedule_floor`, as for a capture.
+    assert blocks.block_schedule(settings, 5, 48)[0] == pytest.approx(0.25)
+    # A named schedule_scale is kept, as a whole run keeps it.
+    named = settings_for(48, steps_scaler=0.6, schedule_requested=True)
+    assert blocks.block_schedule(named, 30, 48)[0] == 0.6
+
+
+def test_the_share_rule_gives_a_block_its_share_of_the_runs_steps() -> None:
+    settings = settings_for(600, block_schedule="share")
+    assert blocks.block_schedule(settings, 200, 600)[0] == pytest.approx(0.3333)
+    assert blocks.block_schedule(settings, 60, 600)[0] == pytest.approx(0.25)  # the floor
+    preview = settings_for(600, block_schedule="share", steps_scaler=0.1)
+    assert blocks.block_schedule(preview, 60, 600)[0] == pytest.approx(0.1)  # never raised
+    full = settings_for(600, block_schedule="full")
+    assert blocks.block_schedule(full, 60, 600)[0] == 1.0
+
+
+def test_each_block_trains_its_own_frames_share_of_the_schedule(tmp_path: Path) -> None:
+    """48 frames with the full schedule at 60: the run gets 0.8 of it, and each block the
+    rule's value for the frames it was given, in its steps and in the trainer's argv."""
+    workdir = Workdir.create(tmp_path / "run")
+    seed_walk(workdir)
+    seed_prior(workdir, tmp_path / "scratch")
+
+    document = run_blocks(workdir, block_params(schedule_full_at=60, block_epsilon=0.4))
+
+    log = workdir.log_path("train").read_text()
+    for block in document["blocks"]["blocks"]:
+        frames = block["cameras"]["train"] + block["cameras"]["val"]
+        assert frames < 48
+        expected = training.schedule_scale(frames, full_at=60, floor=0.25)
+        assert block["scheduleData"] == pytest.approx(expected, abs=1e-4)
+        assert block["stepsMax"] == training.scaled_steps(300, block["scheduleScale"])
+        assert f"--steps_scaler {block['scheduleScale']:g}" in log
+
+
+def test_blocks_given_every_frame_train_the_runs_schedule(tmp_path: Path) -> None:
+    """The spool's case, end to end: the camera test hands every frame to both blocks,
+    and both train exactly the single run's steps."""
+    workdir = Workdir.create(tmp_path / "run")
+    seed_walk(workdir)
+    seed_prior(workdir, tmp_path / "scratch")
+
+    document = run_blocks(workdir, block_params(schedule_full_at=60, block_epsilon=-1.0))
+
+    for block in document["blocks"]["blocks"]:
+        assert block["cameras"]["train"] + block["cameras"]["val"] == 48
+        assert block["scheduleScale"] == 0.8
+        assert block["stepsMax"] == training.scaled_steps(300, 0.8)

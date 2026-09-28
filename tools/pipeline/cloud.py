@@ -29,6 +29,21 @@ Preemption is not an error path. The flow is:
 
 and a stage that keeps losing its box moves to the reliable provider rather than being
 retried on the cheap one until the cheap one has cost more (`Placement`).
+
+**Fanning out.** A stage may split into pieces that each want a machine of their own
+(`contracts.FanOut`; block training is the one that does). The runner, not the stage and
+not the provider, runs them: the head call answers with the pieces, the runner submits
+them concurrently -- at most `parallel` at once -- through the same adapter, polls them
+all from this one thread, retries a piece that failed or was preempted on its own while
+the others carry on, brings each finished piece's result home into `checkpoint/`, and
+then makes the join call that writes the stage's outputs. Every call is a line in the
+attempt ledger, so what a stage cost is still the sum of what was billed, pieces included.
+
+It is here rather than inside a GPU container because a container that spawns the pieces
+and waits for them is a GPU billed to wait, and rather than on a CPU orchestrator in
+Modal because retrying, falling back to another provider, pricing and the checkpoint all
+already live in this runner: a second orchestrator would need its own copy of each, and
+its children's billed seconds would never reach `attempts.json`.
 """
 
 from __future__ import annotations
@@ -36,13 +51,24 @@ from __future__ import annotations
 import json
 import shutil
 import time
+from collections import deque
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal, Protocol, cast, runtime_checkable
 
+import live
+import progress
 from artifacts import ArtifactDecl, checksum_of
-from contracts import MetricValue, StageContext, StageOutcome
+from contracts import (
+    FANOUT_METRIC,
+    FANOUT_PARAM,
+    FanOut,
+    FanOutPart,
+    MetricValue,
+    StageContext,
+    StageOutcome,
+)
 from errors import NoRunnerError, PreemptedError, RemoteStageError
 from plan import PlannedStage
 from providers import Rate
@@ -110,6 +136,18 @@ class StageKeys:
         uploaded once and the second stage finds it already there.
         """
         return f"{self.root}/transfer/{workdir_relative}"
+
+    def part_checkpoint(self, part: str) -> str:
+        """One fanned-out piece's own checkpoint key. A sibling of the stage's, never under
+        it: every running piece syncs its `checkpoint/` wholesale, and N of them sharing a
+        key would each replace what the others had synced."""
+        return f"{self.stage}/parts/{part}/checkpoint"
+
+    def part_outputs(self, part: str) -> str:
+        return f"{self.stage}/parts/{part}/out"
+
+    def part_root(self, part: str) -> str:
+        return f"{self.stage}/parts/{part}"
 
 
 @dataclass(frozen=True)
@@ -289,9 +327,13 @@ class Attempt:
     usd: float | None = None
     rate_source: str = ""
     detail: str = ""
+    #: Which call of a fanned-out attempt this was: a piece's id, or `join`. Empty for the
+    #: stage's own (head) call, so a stage that never fans out writes the ledger it always
+    #: did. Several entries share one `attempt` number when an attempt fanned out.
+    part: str = ""
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        document: dict[str, Any] = {
             "attempt": self.attempt,
             "provider": self.provider,
             "tier": self.tier,
@@ -301,6 +343,9 @@ class Attempt:
             "rateSource": self.rate_source,
             "detail": self.detail,
         }
+        if self.part:
+            document["part"] = self.part
+        return document
 
     @staticmethod
     def from_dict(document: Mapping[str, Any]) -> Attempt:
@@ -315,6 +360,7 @@ class Attempt:
             usd=None if usd is None else float(usd),
             rate_source=str(document.get("rateSource", "")),
             detail=str(document.get("detail", "")),
+            part=str(document.get("part", "")),
         )
 
 
@@ -492,6 +538,21 @@ class CloudRunner(BaseRunner):
         max_pending_s: float = 30 * 60.0,
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
+        #: Offer the head call a fan-out (`contracts.FANOUT_PARAM`). Off only for a
+        #: deployment whose remote image predates the protocol -- which ignores the param
+        #: and runs the stage whole anyway, so leaving it on costs nothing there either.
+        fan_out: bool = True,
+        #: The most pieces of one stage in flight at once, whatever the stage asks for:
+        #: the deployment's ceiling. Modal caps a workspace's concurrent GPUs by plan, and
+        #: a piece beyond the cap queues as `pending` -- where `max_pending_s` would cancel
+        #: it after thirty minutes -- so this should stay under that cap divided by the
+        #: number of runs the worker may have training at once.
+        max_parallel: int = 8,
+        #: Calls a piece gets within one attempt before the attempt gives up on it. A
+        #: preempted or failed piece is retried alone while the others keep running; one
+        #: that fails every time is a bug, and the attempt then ends (after the others
+        #: finish, so their work is kept) for the worker's own retry to resume.
+        part_attempts: int = 3,
     ) -> None:
         self._placement = placement
         self._transfer = transfer
@@ -501,9 +562,13 @@ class CloudRunner(BaseRunner):
         self._max_pending_s = max_pending_s
         self._clock = clock
         self._sleep = sleep
+        self._fan_out = fan_out
+        self._max_parallel = max(1, max_parallel)
+        self._part_attempts = max(1, part_attempts)
 
     def _invoke(self, stage: PlannedStage, context: StageContext) -> StageOutcome:
         ledger = AttemptLedger.read(context.attempts_path)
+        first = len(ledger.entries)
         adapter = self._placement.adapter_for(ledger.preemptions)
         keys = StageKeys.of(context)
         tier = context.gpu_tier or "cpu"
@@ -515,7 +580,49 @@ class CloudRunner(BaseRunner):
         self._stage_in(stage, context, keys)
         staged_s = time.monotonic() - staging
         context.log(f"cloud: inputs and checkpoint staged in {staged_s:.1f} s")
-        request = StageRequest(
+        params = dict(context.params)
+        if self._fan_out:
+            params[FANOUT_PARAM] = {"role": "head"}
+        adapter, poll = self._call(stage, context, keys, tier, params)
+        fanned: dict[str, MetricValue] = {}
+        spec = FanOut.parse((poll.metrics or {}).get(FANOUT_METRIC)) if self._fan_out else None
+        if spec is not None:
+            fanned = self._fan_out_parts(stage, context, keys, tier, spec)
+            # Every piece's result is in `checkpoint/` now; the join call starts from it.
+            sent = self._transfer.put(keys.checkpoint, context.checkpoint_dir)
+            context.log(f"cloud: sent {sent} byte(s) of checkpoint for the join")
+            joined = {**context.params, FANOUT_PARAM: {"role": "join"}}
+            adapter, poll = self._call(stage, context, keys, tier, joined, part="join")
+            for part in spec.parts:
+                self._transfer.delete(keys.part_root(part.id))
+        fetching = time.monotonic()
+        moved = self._transfer.get(keys.outputs, context.out_dir)
+        back_s = time.monotonic() - fetching
+        context.log(
+            f"cloud: {moved} byte(s) of output(s) came back from {adapter.name!r} in {back_s:.1f} s"
+        )
+        ledger = AttemptLedger.read(context.attempts_path)
+        metrics = self._metrics(ledger.entries[first:], ledger, poll)
+        metrics.update(fanned)
+        # The worker's side of the transfer, beside the remote's own (`remote*S`): with
+        # `billedS` they account for a remote stage's wall time end to end.
+        metrics["stageInS"] = round(staged_s, 2)
+        metrics["outputsBackS"] = round(back_s, 2)
+        return StageOutcome(metrics=metrics, summary=poll.summary)
+
+    def _request(
+        self,
+        stage: PlannedStage,
+        context: StageContext,
+        keys: StageKeys,
+        tier: str,
+        params: Mapping[str, Any],
+        *,
+        checkpoint_key: str,
+        outputs_key: str,
+        produces: tuple[ArtifactDecl, ...],
+    ) -> StageRequest:
+        return StageRequest(
             recipe=context.recipe,
             run_id=context.run_id,
             stage_id=context.stage_id,
@@ -523,19 +630,44 @@ class CloudRunner(BaseRunner):
             attempt=context.attempt,
             tier=tier,
             preemptible=bool(stage.gpu and stage.gpu.preemptible),
-            params=dict(context.params),
+            params=dict(params),
             inputs={name: keys.input(path) for name, path in stage.inputs.items()},
-            produces=stage.impl.produces,
+            produces=produces,
+            checkpoint_key=checkpoint_key,
+            outputs_key=outputs_key,
+            checkpoint_every_s=self._checkpoint_every_s,
+        )
+
+    def _call(
+        self,
+        stage: PlannedStage,
+        context: StageContext,
+        keys: StageKeys,
+        tier: str,
+        params: Mapping[str, Any],
+        *,
+        part: str = "",
+    ) -> tuple[ProviderAdapter, Poll]:
+        """One call on the stage's own checkpoint key: the head, or a fan-out's join.
+        Raises unless it succeeded, having brought the checkpoint home and recorded it."""
+        ledger = AttemptLedger.read(context.attempts_path)
+        adapter = self._placement.adapter_for(ledger.preemptions)
+        request = self._request(
+            stage,
+            context,
+            keys,
+            tier,
+            params,
             checkpoint_key=keys.checkpoint,
             outputs_key=keys.outputs,
-            checkpoint_every_s=self._checkpoint_every_s,
+            produces=stage.impl.produces,
         )
         handle = adapter.submit(request)
         poll = self._watch(adapter, handle, context)
         # Whatever the remote last synced comes home before anything else is decided, so
         # the next attempt resumes from it. Disable this and a preempted stage restarts.
         self._restore_checkpoint(context)
-        entry = self._record(adapter, context, tier, poll, ledger)
+        entry = self._record(adapter, context, tier, poll, ledger, part=part)
         if poll.state == "preempted":
             raise PreemptedError(
                 context.recipe, context.stage_id, context.attempt, adapter.name, entry.billed_s
@@ -544,18 +676,200 @@ class CloudRunner(BaseRunner):
             raise RemoteStageError(
                 context.recipe, context.stage_id, context.impl, adapter.name, poll.detail
             )
-        fetching = time.monotonic()
-        moved = self._transfer.get(keys.outputs, context.out_dir)
-        back_s = time.monotonic() - fetching
+        return adapter, poll
+
+    # --- fanning out -----------------------------------------------------------------
+
+    def _fan_out_parts(
+        self,
+        stage: PlannedStage,
+        context: StageContext,
+        keys: StageKeys,
+        tier: str,
+        spec: FanOut,
+    ) -> dict[str, MetricValue]:
+        """Run every piece, at most `parallel` at once; raise if any is lost for good.
+
+        One thread polls them all: the adapters' `poll` does not block (Modal's is a
+        zero-timeout `get`), so N pieces cost N polls a round, not N threads. A piece that
+        ends in anything but success is resubmitted alone, up to `part_attempts` calls;
+        a piece that runs out of calls does not stop the others, because each finished
+        piece is kept in `checkpoint/` and the next attempt starts only what is missing.
+        """
+        parallel = min(spec.parallel, self._max_parallel)
         context.log(
-            f"cloud: {moved} byte(s) of output(s) came back from {adapter.name!r} in {back_s:.1f} s"
+            f"cloud: fanning out {len(spec.parts)} part(s) of stage {context.stage_id!r}, "
+            f"{parallel} at a time ({', '.join(p.id for p in spec.parts)})"
         )
-        metrics = self._metrics(entry, ledger.append(entry), poll)
-        # The worker's side of the transfer, beside the remote's own (`remote*S`): with
-        # `billedS` they account for a remote stage's wall time end to end.
-        metrics["stageInS"] = round(staged_s, 2)
-        metrics["outputsBackS"] = round(back_s, 2)
-        return StageOutcome(metrics=metrics, summary=poll.summary)
+        queue: deque[FanOutPart] = deque(spec.parts)
+        calls: dict[str, int] = {part.id: 0 for part in spec.parts}
+        billed: dict[str, float] = {part.id: 0.0 for part in spec.parts}
+        running: dict[str, _PartRun] = {}
+        lost: dict[str, tuple[ProviderAdapter, Poll]] = {}
+        tail = _FanOutLog(context)
+        started = self._clock()
+        peak = 0
+        try:
+            while queue or running:
+                while queue and len(running) < parallel:
+                    part = queue.popleft()
+                    calls[part.id] += 1
+                    running[part.id] = self._submit_part(
+                        stage, context, keys, tier, spec, part, calls[part.id]
+                    )
+                peak = max(peak, len(running))
+                for part_id, run in list(running.items()):
+                    poll = self._poll_part(run, context, tail)
+                    if poll.state not in TERMINAL:
+                        continue
+                    del running[part_id]
+                    tail.finished(part_id)
+                    if poll.state == "succeeded":
+                        poll = self._collect_part(context, keys, run.part, poll)
+                    entry = self._record(
+                        run.adapter,
+                        context,
+                        tier,
+                        poll,
+                        AttemptLedger.read(context.attempts_path),
+                        part=part_id,
+                    )
+                    billed[part_id] += entry.billed_s
+                    if poll.state == "succeeded":
+                        continue
+                    if calls[part_id] < self._part_attempts:
+                        context.log(
+                            f"cloud: part {part_id} {poll.state} on call {calls[part_id]} of "
+                            f"{self._part_attempts}; resubmitting it alone"
+                        )
+                        # To the front: a piece that has already cost a call is the one
+                        # most likely to decide when the whole stage ends.
+                        queue.appendleft(run.part)
+                    else:
+                        lost[part_id] = (run.adapter, poll)
+                if queue or running:
+                    self._sleep(self._poll_interval_s)
+        except BaseException:
+            # Whatever stops the loop -- a cancelled job, the worker shutting down -- stops
+            # paying for every piece still out there, not just the one being polled.
+            for run in running.values():
+                run.adapter.cancel(run.handle)
+            raise
+        wall = self._clock() - started
+        total = sum(billed.values())
+        context.log(
+            f"cloud: {len(spec.parts) - len(lost)} of {len(spec.parts)} part(s) finished in "
+            f"{wall:.0f} s of wall time, {total:.0f} s billed across them "
+            f"({', '.join(f'{k} {v:.0f} s' for k, v in billed.items())})"
+        )
+        if lost:
+            detail = "; ".join(
+                f"part {part_id} {poll.state} on {adapter.name!r}: {poll.detail or 'no detail'}"
+                for part_id, (adapter, poll) in lost.items()
+            )
+            adapter = next(iter(lost.values()))[0]
+            if all(poll.state == "preempted" for _, poll in lost.values()):
+                raise PreemptedError(
+                    context.recipe,
+                    context.stage_id,
+                    context.attempt,
+                    adapter.name,
+                    sum(billed[part_id] for part_id in lost),
+                )
+            raise RemoteStageError(
+                context.recipe, context.stage_id, context.impl, adapter.name, detail
+            )
+        return {
+            "fanOutParts": len(spec.parts),
+            "fanOutParallel": parallel,
+            "fanOutPeak": peak,
+            "fanOutCalls": sum(calls.values()),
+            "fanOutWallS": round(wall, 1),
+            "fanOutBilledS": round(total, 3),
+            "fanOutBilledByPart": ",".join(f"{k}:{v:.1f}" for k, v in billed.items()),
+        }
+
+    def _submit_part(
+        self,
+        stage: PlannedStage,
+        context: StageContext,
+        keys: StageKeys,
+        tier: str,
+        spec: FanOut,
+        part: FanOutPart,
+        call: int,
+    ) -> _PartRun:
+        """The shared members of `checkpoint/` onto the piece's own key, then submit it.
+
+        Rebuilt for every call, so a retry never starts from what a lost call left there.
+        """
+        bundle = context.work_dir / "fanout" / part.id
+        if bundle.exists():
+            shutil.rmtree(bundle)
+        bundle.mkdir(parents=True)
+        for member in spec.share:
+            _copy_member(context.checkpoint_dir / member, bundle / member)
+        checkpoint = keys.part_checkpoint(part.id)
+        self._transfer.delete(checkpoint)
+        if any(bundle.iterdir()):
+            self._transfer.put(checkpoint, bundle)
+        params = {**context.params, FANOUT_PARAM: {"role": "part", "part": part.id}}
+        request = self._request(
+            stage,
+            context,
+            keys,
+            tier,
+            params,
+            checkpoint_key=checkpoint,
+            outputs_key=keys.part_outputs(part.id),
+            produces=(),
+        )
+        adapter = self._placement.adapter_for(AttemptLedger.read(context.attempts_path).preemptions)
+        handle = adapter.submit(request)
+        context.log(f"cloud: part {part.id} submitted to {adapter.name!r} (call {call})")
+        return _PartRun(part=part, adapter=adapter, handle=handle, started=self._clock())
+
+    def _poll_part(self, run: _PartRun, context: StageContext, tail: _FanOutLog) -> Poll:
+        poll = run.adapter.poll(run.handle)
+        lines = run.adapter.logs(run.handle, since=run.cursor)
+        run.cursor += len(lines)
+        for line in lines:
+            tail.line(run.part.id, line)
+        if poll.state in TERMINAL:
+            return poll
+        return self._overdue(run.adapter, run.handle, poll, self._clock() - run.started)
+
+    def _collect_part(
+        self, context: StageContext, keys: StageKeys, part: FanOutPart, poll: Poll
+    ) -> Poll:
+        """A finished piece's result, from its key into the stage's `checkpoint/`.
+
+        Only the paths it declared (`FanOutPart.collect`), each replaced whole. A result
+        that did not come back makes the call a failure: the piece claimed to finish and
+        there is nothing for the join to use, so it runs again.
+        """
+        incoming = context.work_dir / "fanout" / f"{part.id}.incoming"
+        if incoming.exists():
+            shutil.rmtree(incoming)
+        self._transfer.get(keys.part_checkpoint(part.id), incoming)
+        missing = [member for member in part.collect if not (incoming / member).exists()]
+        if missing:
+            shutil.rmtree(incoming, ignore_errors=True)
+            return replace(
+                poll,
+                state="failed",
+                detail=f"part {part.id} finished but its {', '.join(missing)} did not come back",
+            )
+        for member in part.collect:
+            target = context.checkpoint_dir / member
+            if target.is_dir() and not target.is_symlink():
+                shutil.rmtree(target)
+            elif target.exists():
+                target.unlink()
+            target.parent.mkdir(parents=True, exist_ok=True)
+            (incoming / member).rename(target)
+        shutil.rmtree(incoming, ignore_errors=True)
+        return poll
 
     # --- the pieces, each of which a test can reach --------------------------------
 
@@ -651,33 +965,41 @@ class CloudRunner(BaseRunner):
                 cursor = self._tail(adapter, handle, context, cursor)
                 if poll.state in TERMINAL:
                     return poll
-                waited = self._clock() - started
-                if poll.state == "pending" and waited >= self._max_pending_s:
-                    adapter.cancel(handle)
-                    return replace(
-                        poll,
-                        state="failed",
-                        detail=(
-                            f"the stage never started on {adapter.name!r}: still pending "
-                            f"after {self._max_pending_s:.0f}s, so it was cancelled. "
-                            f"A container that crashes on start (check the provider's "
-                            f"logs for this app) or no {handle.tier} capacity"
-                        ),
-                    )
-                if waited >= self._max_wait_s:
-                    adapter.cancel(handle)
-                    return replace(
-                        poll,
-                        state="failed",
-                        detail=(
-                            f"the stage was still {poll.state} after {self._max_wait_s:.0f}s "
-                            f"on {adapter.name!r} and was cancelled"
-                        ),
-                    )
+                poll = self._overdue(adapter, handle, poll, self._clock() - started)
+                if poll.state in TERMINAL:
+                    return poll
                 self._sleep(self._poll_interval_s)
         except BaseException:
             adapter.cancel(handle)
             raise
+
+    def _overdue(
+        self, adapter: ProviderAdapter, handle: RemoteHandle, poll: Poll, waited: float
+    ) -> Poll:
+        """`poll`, or a cancelled failure when the call has pended or run too long."""
+        if poll.state == "pending" and waited >= self._max_pending_s:
+            adapter.cancel(handle)
+            return replace(
+                poll,
+                state="failed",
+                detail=(
+                    f"the stage never started on {adapter.name!r}: still pending "
+                    f"after {self._max_pending_s:.0f}s, so it was cancelled. "
+                    f"A container that crashes on start (check the provider's "
+                    f"logs for this app) or no {handle.tier} capacity"
+                ),
+            )
+        if waited >= self._max_wait_s:
+            adapter.cancel(handle)
+            return replace(
+                poll,
+                state="failed",
+                detail=(
+                    f"the stage was still {poll.state} after {self._max_wait_s:.0f}s "
+                    f"on {adapter.name!r} and was cancelled"
+                ),
+            )
+        return poll
 
     @staticmethod
     def _tail(
@@ -695,8 +1017,10 @@ class CloudRunner(BaseRunner):
         tier: str,
         poll: Poll,
         ledger: AttemptLedger,
+        *,
+        part: str = "",
     ) -> Attempt:
-        """Price this attempt and write it down, whatever state it ended in."""
+        """Price this call and write it down, whatever state it ended in."""
         rate = adapter.rate(tier)
         entry = Attempt(
             attempt=context.attempt,
@@ -707,9 +1031,13 @@ class CloudRunner(BaseRunner):
             usd=None if rate is None else rate.usd_for(poll.billed_s),
             rate_source="" if rate is None else rate.source,
             detail=poll.detail,
+            part=part,
         )
         ledger.append(entry).write(context.attempts_path)
-        billed = f"cloud: {poll.state}; billed {entry.billed_s:.1f}s on {adapter.name!r} ({tier})"
+        which = f" (part {part})" if part else ""
+        billed = (
+            f"cloud: {poll.state}{which}; billed {entry.billed_s:.1f}s on {adapter.name!r} ({tier})"
+        )
         if rate is None or entry.usd is None:
             context.log(
                 f"{billed}; no rate is recorded for that tier, so this attempt is counted "
@@ -722,27 +1050,98 @@ class CloudRunner(BaseRunner):
         return entry
 
     @staticmethod
-    def _metrics(entry: Attempt, ledger: AttemptLedger, poll: Poll) -> dict[str, MetricValue]:
+    def _metrics(
+        calls: Sequence[Attempt], ledger: AttemptLedger, poll: Poll
+    ) -> dict[str, MetricValue]:
         """This attempt's facts and the stage's running totals, on the successful step.
 
         The totals are the point: `billedS` alone would say the successful attempt took
-        eleven minutes and say nothing about the two preempted attempts before it.
+        eleven minutes and say nothing about the two preempted attempts before it. An
+        attempt that fanned out made several calls, some at the same time; `billedS` and
+        `costUsd` are their sum, because each was billed for its own GPU-seconds.
         """
         metrics: dict[str, MetricValue] = dict(poll.metrics or {})
-        metrics["provider"] = entry.provider
-        metrics["tier"] = entry.tier
-        metrics["billedS"] = round(entry.billed_s, 3)
+        metrics.pop(FANOUT_METRIC, None)
+        last = calls[-1]
+        metrics["provider"] = last.provider
+        metrics["tier"] = last.tier
+        metrics["billedS"] = round(sum(call.billed_s for call in calls), 3)
         metrics["stageBilledS"] = round(ledger.billed_s, 3)
         metrics["preemptions"] = ledger.preemptions
-        if entry.usd is not None:
-            metrics["costUsd"] = round(entry.usd, 6)
-            metrics["rateSource"] = entry.rate_source
+        priced = [call.usd for call in calls if call.usd is not None]
+        if priced:
+            metrics["costUsd"] = round(sum(priced), 6)
+            metrics["rateSource"] = next(c.rate_source for c in calls if c.usd is not None)
         stage_usd = ledger.usd
         if stage_usd is not None:
             metrics["stageCostUsd"] = round(stage_usd, 6)
         if ledger.unpriced_s > 0:
             metrics["unpricedS"] = round(ledger.unpriced_s, 3)
         return metrics
+
+
+@dataclass
+class _PartRun:
+    """One call of one fanned-out piece, in flight."""
+
+    part: FanOutPart
+    adapter: ProviderAdapter
+    handle: RemoteHandle
+    started: float
+    cursor: int = 0
+
+
+@dataclass
+class _FanOutLog:
+    """The pieces' logs, interleaved into the stage's, each line tagged with its piece.
+
+    Two kinds of line are read by the worker off the stage log, newest first, and N pieces
+    printing them at once would make each flicker between pieces. So:
+
+    * a progress line (`progress.parse`, the trainer's tqdm) is kept only from the piece
+      that is furthest *behind*: the stage ends when the slowest piece does, so that is
+      the bar and the time remaining a person should see;
+    * a live splat (`live.parse_line`) is kept only when it is at least as far along as
+      the most advanced piece's -- the viewer shows the best-trained block of the scene
+      rather than jumping between blocks. The others are logged without the tag.
+    """
+
+    context: StageContext
+    done_share: dict[str, float] = field(default_factory=dict)
+    live_share: dict[str, float] = field(default_factory=dict)
+
+    def line(self, part: str, line: str) -> None:
+        tagged = f"[{part}] {line}"
+        reading = progress.parse(line)
+        if reading is not None and reading.total > 0:
+            self.done_share[part] = reading.done / reading.total
+            if self.done_share[part] > min(self.done_share.values()):
+                return
+        parsed = live.parse_line(line)
+        if parsed is not None and parsed[0] == "splat":
+            payload = parsed[1]
+            share = float(payload.get("step") or 0) / max(1.0, float(payload.get("total") or 1))
+            best = max(self.live_share.values(), default=0.0)
+            self.live_share[part] = share
+            if share < best:
+                self.context.log(
+                    f"[{part}] live: a snapshot at step {payload.get('step')} of "
+                    f"{payload.get('total')} is not shown; another block is further along"
+                )
+                return
+        self.context.log(tagged)
+
+    def finished(self, part: str) -> None:
+        self.done_share.pop(part, None)
+
+
+def _copy_member(source: Path, target: Path) -> None:
+    """A file or a directory under `checkpoint/`, copied; nothing if it is not there."""
+    if source.is_dir():
+        shutil.copytree(source, target)
+    elif source.is_file():
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
 
 
 def _digest_key(key: str) -> str:

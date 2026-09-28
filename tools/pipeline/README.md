@@ -438,7 +438,7 @@ What this decided, in `recipes/photo-reconstruct.yaml`:
   **`sharpness-windowed`**, the sharpest of each of 100 equal stretches, so that the cut
   cannot lose a whole blurred side the way global top-K could. (Since recipe v9 that is
   a photo set's rule only: a video's frames are chosen by camera motion, `select:
-  viewpoint` -- the sharpest of each window of ~10% of the view or ~1 deg of viewpoint,
+viewpoint` -- the sharpest of each window of ~10% of the view or ~1 deg of viewpoint,
   as many as the capture covers, up to `keep_video` -- see `keyframes.py`. Frame size is
   `max_side: auto`, 1600 unless the capture measurably holds more; `resolution.py`.)
 - **4096 features at 1600 px** instead of the stage's 8192 at 2400: the same 50/50 in 62%
@@ -531,6 +531,84 @@ memory model at the budget it chose; `trainSeconds` for a 1.5-2M budget on the L
 the last sixth of a schedule, so a curve still rising at the end says the maximum, not
 the rule, is what binds; and `[benchmark:recipe]` against `[benchmark:recipe-500k]`.
 
+## Blocks, one GPU each
+
+A budget more than one GPU trains (`blocks: auto`), or `blocks: <n>`, trains the scene as
+blocks and merges them into one `trained.ply` (`blocks.py` has the recipe and its sources).
+Measured on the L4 with the spool forced to 2 blocks: quality matched the whole run
+(26.42 dB / LPIPS 0.1056 merged, 26.39 / 0.1088 whole), but one call trained the blocks in
+turn -- a 7.5k-step coarse pass, then 2,530 s and 2,207 s of blocks -- for 2.3 h and
+$1.73 against ~1 h and $0.67 whole. Modal bills per GPU-second, so the blocks now train
+**at once, one GPU each**, which costs the same seconds and ends with the longest block.
+
+`CloudRunner` does the fanning out (`contracts.FanOut`), because it already owns what a
+piece of work on a GPU needs -- retries, preemption, fallback, the checkpoint and the
+attempt ledger. One stage attempt is three kinds of call through the same adapter:
+
+| call     | runs                                                        | writes                        |
+| -------- | ----------------------------------------------------------- | ----------------------------- |
+| head     | the prior (or coarse pass) and the camera test, **once**    | `checkpoint/blocks/plan.json` |
+| part × N | one block each, `block_parallel` (4) at once, longest first | `blocks/block_NNN/` + `.json` |
+| join     | merge, merged evaluation, held-out error                    | the stage's outputs           |
+
+A part runs on its own checkpoint key (the prior and the plan copied onto it), so N parts
+syncing at once never overwrite one another; only the paths it declares come home. A part
+that fails or is preempted is resubmitted alone (`part_attempts`, 3 calls) while the others
+carry on; one that never succeeds ends the attempt only after the rest have finished, and
+the next attempt's head lists only the blocks with no record -- a finished block is never
+trained twice, and with a single block left the head trains it itself. Every call is an
+entry in `attempts.json` (`part`: the block, or `join`), so `billedS`, `costUsd` and
+`run_cost` are sums over concurrent calls; `fanOutWallS`, `fanOutBilledByPart` and
+`fanOutPeak` are on the step. In the stage log each part's lines carry `[bN]`; the progress
+bar follows the slowest block (the stage ends when it does) and the live viewer the most
+advanced block's snapshot.
+
+No GPU waits on another: the head returns before the parts start and the join starts after
+they end. That is why the fan-out is not a GPU container spawning children, nor a Modal CPU
+function orchestrating them (`cpu4`): the first bills a GPU to wait, and the second would
+need its own retries, fallback and pricing, and its children's seconds would never reach
+the ledger. `block_parallel` is capped by `CloudRunner(max_parallel=8)`: keep that under
+the Modal workspace's GPU concurrency limit divided by the runs the worker trains at once,
+since a part queued beyond the limit sits `pending` and is cancelled after `max_pending_s`.
+`block_parallel: 1` (or a runner that does not fan out, such as `LocalRunner`) trains the
+blocks in turn in one call, as before, bounded by the 5 h in-attempt budget.
+
+**Expected, not yet measured.** The spool at 2 blocks: 2.3 h less the shorter block
+(2,207 s), about **1.7 h**, for the same ~$1.73 plus two container starts and dataset
+copies (a few cents) -- and with a Preview's prior, no coarse pass either. A large scene of
+4 blocks of ~45 min each: head + 45 min + join instead of head + 3 h + join (and no 5 h
+yield), for the same GPU-seconds.
+
+**Each block's schedule follows its own frames** (`block_schedule`). `frames`, the
+default, is the single run's rule -- `training.schedule_scale`, linear in frames up to
+`schedule_full_at` (60), never below `schedule_floor` -- applied to the frames the block
+is given, then the block's own gaussian factor and convergence stop, as for a whole run.
+A block given every frame keeps the run's schedule exactly: the spool's two blocks (all
+156 training cameras each) are unchanged. With the recipe's 60 and the 50-frame minimum a
+block must have, `frames` shortens only a block of 50-59 frames; `share` (the run's
+schedule times the block's share of the frames, so each frame is visited about as often
+as in the whole run) is what would shrink a large scene's blocks, and is opt-in until a
+GPU run has measured it. `full` is every block the whole schedule.
+
+**Validate on the GPU**: the spool at `blocks: 2` (and `block_parallel: 1` as the
+control) -- `fanOutWallS`, the two parts' `billedS` against the serial 2,530 s / 2,207 s,
+PSNR/LPIPS against 26.42 / 0.1056; then a large capture at `blocks: 4` with
+`block_schedule: share` against `frames`.
+
+### Batched steps (`batch_size`)
+
+`batch_size: B` (1-8, default 1) trains B images a step. gsplat v1.5.3 scales every
+learning rate by `sqrt(B)` and Adam's eps by `1/sqrt(B)` but does not shorten the
+schedule, so the stage divides `--steps_scaler` by B: the same images trained on, in B
+times fewer steps. The refine window, SH interval and evaluation steps are scaled by the
+trainer with it, and `converge_trainer.py` scales its window by `cfg.steps_scaler`, so
+the convergence stop follows the shorter run unchanged. Refused with `depth_loss` (a
+batch of per-frame SfM point lists does not collate); frames must share one size; the
+`absgrad` assert in `rasterization` is multi-GPU only. The memory model counts B frames
+of raster memory, so the budget's ceiling -- and with it `blocks: auto` -- accounts for
+it. Whether B > 1 is faster per image on an L4 is exactly what is not yet measured:
+`batch_size: 2` and `4` on the spool against 1, comparing `trainSeconds` and PSNR/LPIPS.
+
 ## Optimised parents (`optimise_lod`)
 
 `package` merges each parent tile from its subtree by Hierarchical 3DGS's moment matching;
@@ -589,11 +667,11 @@ micrometre). Peak memory (`VmHWM`), measured by `tests/memory_probe.py` in a pro
 (synthetic orbit, 16 cameras, held-out arrays):
 
 | gaussians | whole-splat quality + place | chunked quality + place + thumbnail + ground |
-| --- | --- | --- |
-| 250k | 114 MB | 162 MB |
-| 1M | 328 MB | 184 MB |
-| 4M | 1,067 MB | 182 MB |
-| 8M | fails under a 1.5 GB limit | 193 MB, 81 s |
+| --------- | --------------------------- | -------------------------------------------- |
+| 250k      | 114 MB                      | 162 MB                                       |
+| 1M        | 328 MB                      | 184 MB                                       |
+| 4M        | 1,067 MB                    | 182 MB                                       |
+| 8M        | fails under a 1.5 GB limit  | 193 MB, 81 s                                 |
 
 Lane 1 on a phone's SH3 upload (gsplat's 59-float rows), `normalize` + `thumbnail` +
 `ground_samples`: 711 MB whole against 139 MB chunked at 1M gaussians, 1,386 MB against
