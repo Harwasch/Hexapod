@@ -11,14 +11,22 @@ This is the Python half of ``deriveMotionSidecar`` in ``packages/world/src/motio
 the TypeScript test ``motionParams.test.ts`` re-derives the committed synthetic-tree sidecar and
 compares it field by field, so the two cannot drift. The rules and their sources:
 
+- limbs: at every joint the child carrying the most tips continues the axis (straightest on a
+  tie, no angle limit — an extracted skeleton zigzags); a limb whose frequency would exceed
+  ``MODE_MAX_HZ`` (4 Hz, chosen) is a twig that rides its parent limb's oscillator unbent;
 - branch frequency ``f = 2.55 * L**-0.59`` Hz (Coder 2000, via Habel, Kusternig & Wimmer,
-  "Physically Guided Animation of Trees", EG 2009, eq. 17), ``L`` the branch length in metres;
+  "Physically Guided Animation of Trees", EG 2009, eq. 17), ``L`` the limb's chord in metres
+  (Habel states no unit and the primary, UGA FOR00-24, was not retrievable; only metres agrees
+  with measured whole-tree frequencies);
 - whole-tree frequency ``f0 = 2.4 / sqrt(H)`` (simple pendulum, Jackson et al. 2021,
   Biogeosciences 18, 4059; the constant is an estimate read off their Fig. 2a);
 - whole-tree damping 0.086 in leaf, 0.039 leafless (Jackson et al. 2019, J. R. Soc. Interface);
 - limb damping rising to 0.15 with leaf load (UNVERIFIED prior);
-- every branch bends the same angle (elastic similarity), spread over its joints by length, so
-  no radius is read — ``skeleton.py``'s woody radius is a resolution limit on most crown nodes.
+- every limb bends the same angle (elastic similarity) times ``min(1, f_tree/f)^(1/3)`` (the
+  resonant response to a -5/3 wind spectrum; estimate), spread over its joints by length, so no
+  radius is read — ``skeleton.py``'s woody radius is a resolution limit on most crown nodes;
+- leaf flutter 6 mm at 10 m/s at the tips, on wavelengths of 4-10 leaf sizes, the leaf size no
+  smaller than 5 cm however fine the capture's splats (estimates).
 
 Usage::
 
@@ -49,15 +57,16 @@ TREE_DAMPING_WINTER = 0.039
 LIMB_DAMPING_MAX = 0.15
 DAMPING_LEVELS = 3
 MIN_BRANCH_LENGTH_M = 0.05
-CONTINUATION_MAX_ANGLE_RAD = 35 * math.pi / 180
-CONTINUATION_MIN_SHARE = 0.5
+MODE_MAX_HZ = 4.0
+RESPONSE_EXPONENT = 1 / 3
 REFERENCE_SPEED_MPS = 10
 TREE_BEND_REF_RAD = 0.02
 BRANCH_BEND_REF_RAD = 0.05
-FLUTTER_REF_M = 0.012
+FLUTTER_REF_M = 0.006
 FLUTTER_REACH_M = 0.5
 FLUTTER_CUT = 0.05
 DEFAULT_LEAF_SIZE_M = 0.06
+MIN_LEAF_SIZE_M = 0.05
 
 DEFAULT_SIDECAR_WIND = {
     "meanSpeedMps": 5,
@@ -70,10 +79,20 @@ DEFAULT_SIDECAR_WIND = {
 #: Where every number came from. Must equal ALLOMETRIC_PROVENANCE in motionParams.ts.
 ALLOMETRIC_PROVENANCE = {
     "branchFrequency": {
-        "rule": "f = 2.55 * L^-0.59 Hz, L = branch length in metres (unit not stated in the source)",
-        "source": "Coder 2000, via Habel, Kusternig & Wimmer, Physically Guided Animation of "
-        "Trees, EG 2009, eq. 17",
+        "rule": "f = 2.55 * L^-0.59 Hz, L = limb chord (attachment to far end) in metres; unit "
+        "not stated by Habel, primary not retrieved; metres because only then does it agree "
+        "with whole-tree data (6 m: 0.89 Hz vs 2.4/sqrt(H) = 0.98; in feet 0.44)",
+        "source": "Coder 2000, Sway frequency in tree stems, UGA FOR00-24, via Habel, "
+        "Kusternig & Wimmer, Physically Guided Animation of Trees, EG 2009, eq. 17",
         "status": "cited",
+    },
+    "limbGrouping": {
+        "rule": "each joint continues into its child with the most tips (straightest on a tie), "
+        "no angle limit; limbs ringing above 4 Hz (chord < 0.47 m) are twigs that ride their "
+        "parent limb with no bend of their own",
+        "source": "da Vinci's rule for the main axis; the 4 Hz cut is chosen (sway above ~4 Hz "
+        "reads as vibration)",
+        "status": "estimate",
     },
     "leaflessFrequency": {
         "rule": "leafless branches ~2.5x eq. 17",
@@ -110,8 +129,11 @@ ALLOMETRIC_PROVENANCE = {
         "status": "cited",
     },
     "bendGains": {
-        "rule": "tree lean 0.02 rad, every branch 0.05 rad at 10 m/s, spread over joints by length",
-        "source": "elastic similarity (McMahon & Kronauer 1976) for the spread; magnitudes chosen",
+        "rule": "tree lean 0.02 rad, a limb 0.05 rad * min(1, f_tree/f)^(1/3) at 10 m/s, "
+        "spread over its joints by segment length",
+        "source": "elastic similarity (McMahon & Kronauer 1976) for the spread; f^(-1/3): RMS "
+        "resonant response to a -5/3 inertial-subrange spectrum (Kolmogorov 1941; Kaimal et "
+        "al. 1972), applied to the whole bend; magnitudes chosen",
         "status": "estimate",
     },
     "turbulence": {
@@ -120,10 +142,11 @@ ALLOMETRIC_PROVENANCE = {
         "status": "estimate",
     },
     "leafFlutter": {
-        "rule": "advected field, wavelengths 4-10 leaf sizes, carried at 0.3 U; 12 mm at 10 m/s "
-        "at the tips",
+        "rule": "advected field, wavelengths 4-10 leaf sizes (leaf size >= 5 cm), carried at "
+        "0.3 U; 6 mm at 10 m/s at the tips",
         "source": "Habel et al. EG 2009 sec. 7.2 (min wavelength >= 4x leaf size, advected by "
-        "-W t)",
+        "-W t); Tadrist et al. 2018, J. R. Soc. Interface 15: 20180010 (flutter dominates only "
+        "at low wind, branch buffeting above); amplitudes and the 5 cm floor chosen",
         "status": "estimate",
     },
 }
@@ -165,7 +188,11 @@ def branch_structure(rig: dict) -> dict:
             tips[i] += tips[kid]
             through = segment[kid] + reach[kid]
             reach[i] = max(reach[i], through)
-    cos_limit = math.cos(CONTINUATION_MAX_ANGLE_RAD)
+    # The axis continues into the child that carries the most of the crown — the most tips, since
+    # by da Vinci's rule a limb's cross-section follows what it carries — and the straightest of
+    # those on a tie. There is no angle limit: an extracted skeleton zigzags (a median 56 deg
+    # turn per joint on the Minnetonka rig), and an unbranched chain is one limb however much it
+    # wanders. The v1 rule (35 deg, half the longest sibling) cut that rig into 150 "branches".
     continuation = [-1] * count
     for i, node in enumerate(nodes):
         kids = children[i]
@@ -175,40 +202,54 @@ def branch_structure(rig: dict) -> dict:
         incoming = (
             _unit(parent["position"], node["position"]) if parent is not None else None
         ) or [0.0, 0.0, 1.0]
-        longest = max(segment[kid] + reach[kid] for kid in kids)
         best = -1
-        best_cos = cos_limit
+        best_tips = -1
+        best_cos = -2.0
         for kid in kids:
-            out = _unit(node["position"], nodes[kid]["position"])
-            if out is None:
-                continue
-            if segment[kid] + reach[kid] < CONTINUATION_MIN_SHARE * longest:
-                continue
+            out = _unit(node["position"], nodes[kid]["position"]) or incoming
             c = out[0] * incoming[0] + out[1] * incoming[1] + out[2] * incoming[2]
-            if c > best_cos:
+            if tips[kid] > best_tips or (tips[kid] == best_tips and c > best_cos):
+                best_tips = tips[kid]
                 best_cos = c
                 best = kid
         continuation[i] = best
-    branch = [0] * count
-    branch_length: dict[int, float] = {}
+    # Limbs: maximal chains of continuations, each named by its first joint.
+    limb = [0] * count
+    path_length: dict[int, float] = {}
+    last: dict[int, int] = {}
     for i in range(1, count):
         p = nodes[i]["parent"]
-        base = branch[p] if p > 0 and continuation[p] == i else i
-        branch[i] = base
-        branch_length[base] = branch_length.get(base, 0.0) + segment[i]
+        base = limb[p] if p > 0 and continuation[p] == i else i
+        limb[i] = base
+        path_length[base] = path_length.get(base, 0.0) + segment[i]
+        last[base] = i  # topological order: a chain's far end is its highest index
+    # A limb's length is its chord, attachment joint to far end: the zigzag of an extracted
+    # chain is extraction noise, and summing it would make every limb look longer than it is.
+    chord = {
+        base: _distance(nodes[nodes[base]["parent"]]["position"], nodes[end]["position"])
+        for base, end in last.items()
+    }
     tree_branch = continuation[0] if count else -1
-    if tree_branch < 0 and count:
-        longest = -1.0
-        for kid in children[0]:
-            length = segment[kid] + reach[kid]
-            if length > longest:
-                longest = length
-                tree_branch = kid
+    # Twigs: limbs too short to ring below MODE_MAX_HZ ride their parent limb's oscillator
+    # rigidly and move only by leaf flutter. Limbs on the root join the trunk's mode.
+    branch = [0] * count
+    twig = [False] * count
+    for i in range(1, count):
+        base = limb[i]
+        if base != tree_branch and branch_frequency_hz(chord[base]) > MODE_MAX_HZ:
+            twig[i] = True
+            attach = nodes[base]["parent"]
+            branch[i] = branch[attach] if attach > 0 else tree_branch
+        else:
+            branch[i] = base
     return {
         "continuation": continuation,
+        "limb": limb,
         "branch": branch,
+        "twig": twig,
         "segment": segment,
-        "branch_length": branch_length,
+        "path_length": path_length,
+        "branch_length": chord,
         "tips": tips,
         "reach": reach,
         "tree_branch": tree_branch,
@@ -221,6 +262,14 @@ def branch_frequency_hz(length_m: float) -> float:
 
 def tree_frequency_hz(height_m: float) -> float:
     return PENDULUM_COEFFICIENT / math.sqrt(max(height_m, 0.5))
+
+
+def limb_bend_rad(frequency_hz: float, tree_frequency: float) -> float:
+    """A limb's total bend at the reference speed: ``BRANCH_BEND_REF_RAD`` scaled by
+    ``min(1, f_tree / f)^(1/3)`` — the resonant response to a -5/3 (inertial-subrange) wind
+    spectrum, relative to the whole tree's mode."""
+    ratio = min(1.0, tree_frequency / frequency_hz) if frequency_hz > 0 else 1.0
+    return BRANCH_BEND_REF_RAD * math.pow(ratio, RESPONSE_EXPONENT)
 
 
 def limb_damping(tips: int, max_tips: int) -> float:
@@ -263,34 +312,39 @@ def derive_sidecar(
     top = max(node["position"][2] - root_z for node in nodes)
     height = top if tree_height_m is None else tree_height_m
     tree = structure["tree_branch"]
-    max_tips = max(
-        (structure["tips"][base] for base in structure["branch_length"] if base != tree), default=0
-    )
+    tree_hz = tree_frequency_hz(height)
+    modes = {structure["branch"][i] for i in range(1, len(nodes))}
+    max_tips = max((structure["tips"][base] for base in modes if base != tree), default=0)
     columns: dict[str, list[float]] = {
         key: []
         for key in ("branch", "mode", "share", "frequencyHz", "damping", "gainRad", "flutterM")
     }
     for i in range(len(nodes)):
         if i == 0:
-            values = (0, 0, 0, round_to(tree_frequency_hz(height), 4), TREE_DAMPING_SUMMER, 0, 0)
+            values = (0, 0, 0, round_to(tree_hz, 4), TREE_DAMPING_SUMMER, 0, 0)
         else:
             base = structure["branch"][i]
             is_tree = base == tree
-            length = structure["branch_length"].get(base, 0.0)
-            share = structure["segment"][i] / length if length > 0 else 0.0
+            frequency = (
+                tree_hz if is_tree else branch_frequency_hz(structure["branch_length"][base])
+            )
+            # A twig rides its limb: same oscillator, no bend of its own.
+            path = structure["path_length"][base]
+            share = 0.0 if structure["twig"][i] or not path > 0 else structure["segment"][i] / path
+            bend = TREE_BEND_REF_RAD if is_tree else limb_bend_rad(frequency, tree_hz)
             weight = math.exp(-structure["reach"][i] / FLUTTER_REACH_M)
             values = (
                 base,
                 0 if is_tree else 1,
                 round_to(share, 6),
-                round_to(tree_frequency_hz(height) if is_tree else branch_frequency_hz(length), 4),
+                round_to(frequency, 4),
                 round_to(
                     TREE_DAMPING_SUMMER
                     if is_tree
                     else limb_damping(structure["tips"][base], max_tips),
                     4,
                 ),
-                round_to((TREE_BEND_REF_RAD if is_tree else BRANCH_BEND_REF_RAD) * share, 7),
+                round_to(bend * share, 7),
                 0 if weight < FLUTTER_CUT else round_to(FLUTTER_REF_M * weight, 6),
             )
         for key, value in zip(columns, values, strict=True):
@@ -341,7 +395,9 @@ def sidecar_for(
     size = leaf_size_m
     if size is None and positions is not None and log_scales is not None:
         estimate = estimate_leaf_size(positions, log_scales, rig, draft["nodes"]["flutterM"])
-        size = None if estimate is None else round_to(estimate, 4)
+        # A splat is a piece of a leaf, not a leaf: a fine capture's foliage splats are 2 cm
+        # (Minnetonka), and wavelengths of 4-10 of those, advected at 0.3 U, flicker at 10-20 Hz.
+        size = None if estimate is None else max(round_to(estimate, 4), MIN_LEAF_SIZE_M)
     return derive_sidecar(
         rig,
         tree_height_m=height,

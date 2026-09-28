@@ -18,6 +18,7 @@ import {
   branchStructure,
   createLivingMotion,
   deriveMotionSidecar,
+  MODE_MAX_HZ,
   MOTION_EVIDENCE_LADDER,
   parseMotionSidecar,
   parseRig,
@@ -100,13 +101,25 @@ describe("the allometric rules", () => {
     });
   });
 
-  it("splits the synthetic tree into a trunk and one branch per limb", () => {
+  it("splits the synthetic tree into a trunk and one limb per axis, twigs riding their limb", () => {
     const structure = branchStructure(syntheticTreeRig());
-    const bases = new Set(structure.branch.slice(1));
+    const limbs = new Set(structure.limb.slice(1));
     expect(structure.treeBranch).toBe(1);
-    // 12 primaries, 36 secondaries, 108 twigs; the middle child of each fork continues its
-    // parent, so 12 + 24 + 72 limbs start a branch, plus the trunk.
-    expect(bases.size).toBe(108);
+    // 12 primaries, 36 secondaries, 108 twigs; the middle child of each fork (equal tips, the
+    // straightest) continues its parent, so 12 + 24 + 72 limbs start, plus the trunk.
+    expect(limbs.size).toBe(108);
+    const modes = new Set(structure.branch.slice(1));
+    // The shortest twigs (chord < 0.47 m) ring above 4 Hz and fold into their limb's mode.
+    expect(modes.size).toBeLessThan(limbs.size);
+    for (const base of modes) {
+      if (base === structure.treeBranch) continue;
+      expect(branchFrequencyHz(structure.branchLengthM.get(base) ?? 0)).toBeLessThanOrEqual(
+        MODE_MAX_HZ,
+      );
+    }
+    structure.twig.forEach((twig, i) => {
+      if (twig) expect(structure.branch[i]).not.toBe(structure.limb[i]);
+    });
   });
 
   it("spreads each branch's bend over its joints, summing to one", () => {
