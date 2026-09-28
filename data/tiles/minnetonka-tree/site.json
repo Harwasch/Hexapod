@@ -1,7 +1,7 @@
 {
  "slug": "minnetonka-tree",
  "name": "Minnetonka tree (real capture, Living Survey)",
- "description": "A photogrammetric reconstruction of a real tree: a Gaussian splat trained on 655 drone photographs of one mature deciduous tree in Minnetonka, Minnesota, flown by Matthew Guertin on 20 July 2020 in still air (Single Tree -- High-Density Photogrammetry Dataset, CC BY 4.0). Its skeleton was extracted from the splat's geometry alone. The motion is simulated: nothing here recorded this tree moving; the sway is the Living Survey's wind model driving that skeleton.",
+ "description": "A photogrammetric reconstruction of a real tree: a Gaussian splat trained on 655 drone photographs of one mature deciduous tree in Minnetonka, Minnesota, taken by Matthew Guertin on 20 July 2020 in still air (Single Tree -- High-Density Photogrammetry Dataset, CC BY 4.0). Its skeleton was extracted from the splat's geometry alone. The motion is simulated: nothing here recorded this tree moving; the sway is the Living Survey's wind model driving that skeleton.",
  "boundary": [
   [
    -93.425903,
@@ -91,8 +91,8 @@
    "name": "Gaussian splat (photogrammetric)",
    "path": "splat/tileset.json",
    "ground_sample_distance_m": 0.0023,
-   "point_spacing_m": 0.009,
-   "description": "400,000 gaussians of one tree, a single tile, rigged with 200 skeleton nodes; about 2 mm per pixel of the 1600 px training frames, estimated from how close the cameras came to the crown",
+   "point_spacing_m": 0.0055,
+   "description": "1,065,182 gaussians of one tree as a level-of-detail tileset of 22 tiles (the viewer draws as many as its detail budget allows), rigged with 200 skeleton nodes; about 2.3 mm per pixel of the 1600 px training frames, estimated from how close the cameras came to the crown",
    "maximum_screen_space_error": 1,
    "clamp_to_ground": true,
    "default": true,
