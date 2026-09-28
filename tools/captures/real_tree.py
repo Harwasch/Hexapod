@@ -307,9 +307,9 @@ def crown_radius(
     the camera ring: where the drone flew round the tree, what is inside the ring above
     2.5 m is the crown. 98th percentile of their distance, plus 0.3 m.
 
-    Where it flew under the crown instead (Minnetonka: hover passes 2.7-4 m from the trunk,
-    looking up), the ring is inside the crown and would cut it off, so the search is never
-    narrower than `CROWN_SEARCH_M`."""
+    A flight tight round the crown puts the ring close to its edge (Minnetonka: ring p10
+    3.2 m, crown 2.7 m), and one partly under it puts the ring inside; so the search is never
+    narrower than `CROWN_SEARCH_M`, and the radius is still capped at the search."""
     ring = None
     if cameras is not None and len(cameras):
         ring = float(np.percentile(np.hypot(cameras[:, 0], cameras[:, 1]), 10))
