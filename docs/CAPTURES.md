@@ -398,6 +398,14 @@ order of magnitude inside the bars, where the published model is at 12° and 78�
 fail `heightSpan` (0.1 m of barometric height), as they should: a scale needs photos at more
 than one height, and the full capture spans 1.3–7.9 m.
 
+A second run took photos 120–215 across three tiers (5.0, 5.6 and 6.4 m; 2.07 GB streamed;
+83 of 95 registered, 49 min on the same shared cores). There the **barometric fit leaves
+3.7 cm RMS** of height unexplained (correlation 0.93, two flights), the two estimates of up
+agree to 0.87°, pitch is off by 0.56° / 0.68° and the compass by 0.9° / 2.4°. It fails only
+`heightSpan` (1.4 m, against the 2 m bar). The cameras come out on a ring 3.2–4.1 m from the
+axis they look at — a small tree, flown close. So the method holds on the real photos; the
+scale of the whole capture is the one number only the real run can give.
+
 **The trunk is the cross-check, and the override.** `real_tree.py` measures the trunk in
 three slabs 0.3–1.2 m above the lawn: a trunk is a hollow shell of splats, so its
 cross-section is a ring, found by RANSAC over three-point circles and refined by least squares,
