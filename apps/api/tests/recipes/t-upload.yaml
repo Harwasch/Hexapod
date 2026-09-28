@@ -1,0 +1,8 @@
+# The capture's upload is fetched into the workdir before the first stage, as Lane 1's
+# and Lane 2's real recipes have it: what the slow-download lease test runs.
+name: t-upload
+version: 1
+description: One quick stage over a seeded upload.
+inputs: [upload]
+stages:
+  - { id: one, impl: t_first }

@@ -12,22 +12,28 @@ repeated where the code is:
 
 So `SKIP LOCKED` selects exactly one row and the `UPDATE` around it **commits
 immediately**. Holding the job afterwards is a matter of pushing `lease_expires_at`
-forward (:func:`heartbeat`), not of holding a lock. Every timestamp here comes from
-`now()` on the database rather than from a worker's clock, so two workers cannot disagree
-about whether a lease has lapsed.
+forward (:func:`heartbeat`), not of holding a lock. Every timestamp here comes from the
+database's clock rather than from a worker's, so two workers cannot disagree about whether
+a lease has lapsed -- and from `statement_timestamp()`, not `now()`, because `now()` is
+when the *transaction* began, and a supervisor's session can hold one open for as long as
+a download takes (see :func:`_clock`).
 """
 
 from __future__ import annotations
 
 import enum
+import logging
+import threading
 import uuid
 from datetime import datetime
 
 from sqlalchemy import ColumnElement, and_, func, or_, select, update
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.models import Job
 from app.models.enums import RunStatus
+
+log = logging.getLogger("app.worker")
 
 
 def claimable(now: datetime | None = None) -> ColumnElement[bool]:
@@ -40,7 +46,7 @@ def claimable(now: datetime | None = None) -> ColumnElement[bool]:
     `now` is for tests that want to reason about a fixed moment. The worker passes
     nothing and gets the database's clock.
     """
-    moment: ColumnElement[datetime] | datetime = func.now() if now is None else now
+    moment: ColumnElement[datetime] | datetime = _clock() if now is None else now
     return or_(
         Job.status == RunStatus.NOT_STARTED,
         and_(
@@ -53,11 +59,26 @@ def claimable(now: datetime | None = None) -> ColumnElement[bool]:
     )
 
 
+def _clock() -> ColumnElement[datetime]:
+    """The database's time at the start of the statement being run.
+
+    Not `now()`, which is the start of the *transaction*. A heartbeat is one `UPDATE` on
+    a session that may have opened its transaction long before: the supervisor reads the
+    job, then downloads the capture -- a multi-gigabyte video, minutes -- and its first
+    heartbeat after that, in the same transaction, wrote `now() + lease` as a lease that
+    had already run out. It reported HELD, and a second slot polling the queue could claim
+    the job a moment later -- half of what dead-lettered two-slot jobs on 2026-09-27
+    (`LeaseKeeper` says the other half; `test_a_heartbeat_renews_from_when_it_runs...`).
+    """
+    clock: ColumnElement[datetime] = func.statement_timestamp()
+    return clock
+
+
 def _expiry(lease_s: float) -> ColumnElement[datetime]:
-    """`now() + lease`, computed in the database. `make_interval` rather than string
-    interpolation, so the lease is a bound parameter like everything else."""
+    """`statement_timestamp() + lease`, computed in the database. `make_interval` rather
+    than string interpolation, so the lease is a bound parameter like everything else."""
     interval = func.make_interval(0, 0, 0, 0, 0, 0, lease_s)
-    expiry: ColumnElement[datetime] = func.now() + interval
+    expiry: ColumnElement[datetime] = _clock() + interval
     return expiry
 
 
@@ -133,6 +154,99 @@ def heartbeat(db: Session, job_id: uuid.UUID, *, worker_id: str, lease_s: float)
     status = db.scalar(select(Job.status).where(Job.id == job_id))
     db.commit()
     return Heartbeat.CANCELLED if status is RunStatus.CANCELLED else Heartbeat.LOST
+
+
+def holder(db: Session, job_id: uuid.UUID) -> str:
+    """Who has a job now and in what state, for the log line of a slot that lost it."""
+    found = db.execute(
+        select(Job.status, Job.claimed_by, Job.lease_expires_at).where(Job.id == job_id)
+    ).one_or_none()
+    db.commit()
+    if found is None:
+        return "status=missing"
+    status, owner, expiry = found
+    return f"status={status.value} claimed_by={owner} lease_expires_at={expiry}"
+
+
+class LeaseKeeper:
+    """Keeps one job's lease alive from a thread of its own, for as long as it is held.
+
+    The supervisor's loop beats the lease every `poll_s` -- when it is in the loop. It is
+    also the thread that fetches the capture before the first stage and uploads every
+    finished stage's artifacts and log before it writes the step's row, and for a
+    multi-gigabyte video or normalize's hundred frames going to R2 that is longer than
+    the lease. With one worker on the machine nothing else was polling, so the lapse
+    went unseen. With two slots in one process the other slot polls every `idle_s`,
+    finds the lease lapsed within a second, claims the job and runs its stage again as
+    the next attempt -- and the two slots take it from each other until the stage has
+    "been attempted 3 times": the 2026-09-27 dead-letters, which
+    `tests/test_worker_concurrency.py` reproduces with slow uploads and a slow download.
+
+    So the lease no longer depends on what the supervising thread happens to be doing.
+    This renews it on its own session every `interval_s`, which makes the lease mean
+    what A0 wanted from it -- *this worker process is alive and still has the job* --
+    while the supervisor's own heartbeat stays what notices a cancel or a loss. It needs
+    no care at the end: the renewal is conditional on `claimed_by` and `in-progress`, so
+    a finished, cancelled, released or reclaimed job is never renewed, and on the first
+    renewal that finds it so this thread stops.
+
+    A frozen process freezes this thread with it (SIGSTOP, a wedged host) and a killed
+    one takes it along, so a worker that has really gone still loses the job after one
+    lease, exactly as before. What it does not do is give up a job whose supervisor is
+    alive but stuck -- an upload that never returns -- which the heartbeat never did
+    either for a recipe process that is stuck; a cancel still stops that one.
+    """
+
+    def __init__(
+        self,
+        sessions: sessionmaker[Session],
+        job_id: uuid.UUID,
+        *,
+        worker_id: str,
+        lease_s: float,
+        interval_s: float,
+    ) -> None:
+        self._sessions = sessions
+        self._job_id = job_id
+        self._worker_id = worker_id
+        self._lease_s = lease_s
+        self._interval_s = interval_s
+        self._done = threading.Event()
+        self._thread = threading.Thread(
+            target=self._run, name=f"lease-{worker_id}-{job_id}", daemon=True
+        )
+
+    def __enter__(self) -> LeaseKeeper:
+        self._thread.start()
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self._done.set()
+        self._thread.join()
+
+    def _run(self) -> None:
+        db = self._sessions()
+        try:
+            while not self._done.wait(self._interval_s):
+                try:
+                    beat = heartbeat(
+                        db, self._job_id, worker_id=self._worker_id, lease_s=self._lease_s
+                    )
+                except Exception:
+                    # A dropped connection is the next renewal's problem, not the job's:
+                    # the lease has two more intervals to run before anyone may take it.
+                    log.warning(
+                        "lease renewal failed: job=%s holder=%s",
+                        self._job_id,
+                        self._worker_id,
+                        exc_info=True,
+                    )
+                    db.rollback()
+                    continue
+                if beat is not Heartbeat.HELD:
+                    return
+        finally:
+            db.close()
 
 
 def release(db: Session, job_id: uuid.UUID, *, worker_id: str) -> None:

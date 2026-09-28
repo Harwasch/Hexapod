@@ -2,9 +2,10 @@
 
 A slot is exactly what a whole worker used to be: it claims one job, supervises it to a
 terminal status (its own `JobSupervisor`, its own database session, its own recipe
-process, its own heartbeat on its own lease) and then claims the next. `WORKER_CONCURRENCY`
-slots run side by side in one process, each a thread, so a machine whose jobs spend most
-of their time waiting on a GPU somewhere else is not idle while a second capture queues.
+process, its own lease kept alive by a `claim.LeaseKeeper` thread of its own) and then
+claims the next. `WORKER_CONCURRENCY` slots run side by side in one process, each a
+thread, so a machine whose jobs spend most of their time waiting on a GPU somewhere else
+is not idle while a second capture queues.
 
 What keeps that correct is that nothing about a job is shared between slots:
 
@@ -83,7 +84,12 @@ class Worker:
         db = self._sessions()
         try:
             job = claim_next(db, worker_id=resolved.worker_id, lease_s=resolved.lease_s)
-            return job.id if job is not None else None
+            if job is None:
+                return None
+            # With `runner.JobSupervisor`'s "lost job" line, what tells a reclaim from a
+            # first claim in the logs: the same job id claimed a second time.
+            log.info("worker %s: claimed job %s (%s)", resolved.worker_id, job.id, job.recipe)
+            return job.id
         finally:
             db.close()
 

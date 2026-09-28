@@ -130,8 +130,9 @@ own recipe process, claim the next -- and nothing about a job is shared between 
 - each slot claims with its own id, `host:pid/<n>` (one slot keeps the plain `host:pid`),
   so `claimed_by`, the heartbeat and `_still_ours` behave exactly as between two separate
   workers: a lease one slot let lapse and another reclaimed is *lost* to the first;
-- each job's lease is renewed by its own slot's heartbeat, and a cancel is seen by that
-  heartbeat and stops that job's recipe process only;
+- each job's lease is renewed by a `claim.LeaseKeeper` thread of its own, for as long as
+  its supervisor holds it, and a cancel is seen by that slot's heartbeat and stops that
+  job's recipe process only;
 - SIGTERM sets one stop flag: every slot stops its own recipe process and clears its own
   lease, so every job is claimable at once;
 - `--max-jobs` counts across slots, and a slot reserves its place before claiming.
@@ -139,6 +140,25 @@ own recipe process, claim the next -- and nothing about a job is shared between 
 `tests/test_worker_concurrency.py` runs two 30-second jobs in two slots against Postgres:
 both run at once under distinct owners, both leases advance past their length, a cancel
 stops one while the other keeps running, and a stop hands the survivor back.
+
+**Why the lease has a thread of its own (the 2026-09-27 dead-letters).** With N = 2 on
+Fly, jobs were taken by the other slot every ~40-60 s and dead-lettered with "stage
+'normalize' has been attempted 3 times" though nothing had failed. The heartbeat in
+`_supervise` was the only thing renewing the lease, and the supervising thread also
+downloads the capture before the first stage (`_seed`) and uploads each finished stage's
+artifacts and log before recording it (`_apply`; normalize's ~100 frames to R2) -- each
+longer than the 30 s lease. The first heartbeat after the download was worse than late: it
+ran in the transaction the supervisor's earlier reads had opened, and `now()` is the start
+of the transaction, so it wrote a lease that had already run out and reported HELD. With
+one slot nothing else was polling and none of it showed. With two, the idle slot (polling
+every `idle_s`) claimed the job the moment its lease lapsed, re-ran the stage as the next
+attempt -- A6 wiping the `out/` the first slot was still uploading -- and the two traded it
+until the attempt budget was spent. Now `claim.LeaseKeeper` renews the lease every
+`min(poll_s, lease_s / 3)` from its own thread and session whatever the supervisor is
+doing, and every lease is `statement_timestamp() + lease_s`. The tests with slow uploads
+and a slow download in `test_worker_concurrency.py` reproduce the failure without either.
+A reclaim leaves two lines in the worker's log: "claimed job <id>" a second time for the
+same id, and "lost job <id> mid-run: ... claimed_by=<slot>" from the slot that lost it.
 
 **What N the 2 GB machine can take** is a memory question -- the slots' threads only
 wait, and the GPU and CPU-heavy stages (`pose`, `train`, `quality`) run on Modal. Measured

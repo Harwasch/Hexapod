@@ -8,7 +8,9 @@ The shape, and why:
 * the supervisor's loop *is* the heartbeat. Every `poll_s` it renews `lease_expires_at`,
   re-reads `jobs.status` to see whether somebody cancelled, and drains whatever the child
   has reported since the last tick. One loop, three jobs, no threads except the one that
-  reads the child's stdout;
+  reads the child's stdout -- and `claim.LeaseKeeper`, which renews the lease as well, so
+  that it does not lapse while this loop is away downloading the capture or uploading a
+  finished stage (the 2026-09-27 two-slot dead-letters; see the worker README);
 * every write commits. The panel is polling `GET /jobs`, and a step row that only lands
   when the run is over is not a live stage list. It also keeps the worker from holding a
   transaction open across a stage, which is what A0 measured pinning the vacuum horizon.
@@ -145,18 +147,28 @@ class JobSupervisor:
     # --- the outer loop: attempts ------------------------------------------------
 
     def run(self, job_id: uuid.UUID, *, stop: threading.Event | None = None) -> Terminal:
-        db = self._sessions()
-        try:
-            return self._run(db, job_id, stop)
-        except Exception as error:
-            # One job must not take the worker down. A bucket that has gone away, a
-            # workdir on a full disk, a bug here -- the job says what happened and the
-            # loop goes on to the next one. A person can retry it from the panel, which
-            # is the same affordance a dead-lettered job gets.
-            log.exception("worker %s: job %s failed in the supervisor", self._id, job_id)
-            return self._report_supervisor_failure(job_id, error)
-        finally:
-            db.close()
+        # The lease is renewed from its own thread for the whole supervision, not only
+        # from the heartbeat in `_supervise`: this thread also downloads the capture and
+        # uploads every finished stage, each for longer than a lease (`claim.LeaseKeeper`).
+        with claim.LeaseKeeper(
+            self._sessions,
+            job_id,
+            worker_id=self._config.worker_id,
+            lease_s=self._config.lease_s,
+            interval_s=min(self._config.poll_s, self._config.lease_s / 3),
+        ):
+            db = self._sessions()
+            try:
+                return self._run(db, job_id, stop)
+            except Exception as error:
+                # One job must not take the worker down. A bucket that has gone away, a
+                # workdir on a full disk, a bug here -- the job says what happened and the
+                # loop goes on to the next one. A person can retry it from the panel,
+                # which is the same affordance a dead-lettered job gets.
+                log.exception("worker %s: job %s failed in the supervisor", self._id, job_id)
+                return self._report_supervisor_failure(job_id, error)
+            finally:
+                db.close()
 
     def _report_supervisor_failure(self, job_id: uuid.UUID, error: Exception) -> Terminal:
         """Record the failure on a session of its own: the one that raised may be unusable."""
@@ -259,6 +271,7 @@ class JobSupervisor:
                 )
                 is not claim.Heartbeat.HELD
             ):
+                self._log_lost(db, job.id)
                 return "lost"
 
     # --- one child process --------------------------------------------------------
@@ -322,6 +335,8 @@ class JobSupervisor:
                     # way the child must stop now, not at the end of its stage.
                     _stop(process, self._config.terminate_grace_s)
                     state.outcome = "cancelled" if beat is claim.Heartbeat.CANCELLED else "lost"
+                    if beat is claim.Heartbeat.LOST:
+                        self._log_lost(db, job.id)
                     return state
                 if current is not None:
                     self._report_progress(db, current, workdir_root)
@@ -552,6 +567,12 @@ class JobSupervisor:
             "unpriced" if total.usd is None else f"${total.usd:.4f}",
         )
 
+    def _log_lost(self, db: Session, job_id: uuid.UUID) -> None:
+        """The line that says a job was taken from under this slot, and by whom."""
+        log.warning(
+            "worker %s: lost job %s mid-run: %s", self._id, job_id, claim.holder(db, job_id)
+        )
+
     def _still_ours(self, db: Session, job: Job) -> bool:
         db.refresh(job)
         return job.status is RunStatus.IN_PROGRESS and job.claimed_by == self._config.worker_id
@@ -616,7 +637,7 @@ class JobSupervisor:
     def _seed(self, db: Session, job: Job, inputs: tuple[str, ...], workdir_root: Path) -> None:
         """Put the capture's uploaded bytes where the recipe says its inputs live.
 
-        Skipped when the directory is already populated, so a reclaimed or retried job
+        A file already in the workdir is not fetched again, so a reclaimed or retried job
         does not download a 12 GB video again. Streamed to disk, not read into memory:
         the worker machine has 2 GB and an iPhone video is routinely larger than that,
         and a whole-object read of one killed the worker before the first stage ran.
@@ -624,16 +645,21 @@ class JobSupervisor:
         work = Workdir.create(workdir_root)
         capture = db.get(Capture, job.capture_id)
         for name in inputs:
-            target = work.input_path(name)
-            if target.is_dir() and any(target.iterdir()):
-                continue
             if name != "upload" or capture is None:
                 continue
+            target = work.input_path(name)
             target.mkdir(parents=True, exist_ok=True)
             for source in capture.files:
                 if source.status is not UploadStatus.COMPLETE:
                     continue
-                self._storage.download_file(source.storage_key, target / Path(source.filename).name)
+                # File by file, not "the directory has something in it": a worker that
+                # stopped between two files, or mid-file (`download_file` writes beside
+                # the target and renames), left a directory that is not empty and not
+                # complete, and a resume that skipped it ran the recipe on half a capture.
+                path = target / Path(source.filename).name
+                if path.is_file():
+                    continue
+                self._storage.download_file(source.storage_key, path)
 
     def _completed_stages(self, db: Session, job_id: uuid.UUID, workdir_root: Path) -> set[str]:
         """Stages that may be skipped: complete in the database **and** still on disk."""

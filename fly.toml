@@ -87,11 +87,22 @@ kill_timeout = "30s"
   API_PHONE_KEY_HASH = "pbkdf2_sha256$200000$540675f0b3538e6c6a46379620b09ccc$7ba333cf98f74da149cc1c88daabf29645f265100c8f51f75fa36fb90b91816b"
   WORKER_RUNNER = "cloud"
   WORKER_CLOUD_PROVIDERS = "modal"
-  # Jobs supervised at once. 1 until the two-slot failure seen on 2026-09-27 is explained:
-  # with "2", jobs on this machine were reclaimed by the second slot every ~40-60 s while
-  # their first stage was still running, and dead-lettered after three "attempts". The
-  # same case passes locally (tests/test_worker_concurrency.py, idle slot), so the cause
-  # is something only this machine does -- read the worker's logs before raising it.
+  # Jobs supervised at once. With "2" on 2026-09-27, jobs were reclaimed by the other slot
+  # every ~40-60 s and dead-lettered after "stage 'normalize' has been attempted 3 times".
+  # Cause (reproduced in tests; the Fly logs were not read): the lease was renewed only by
+  # the supervising thread's heartbeat, and that same thread downloads the capture before
+  # the first stage and uploads every finished stage (normalize's ~100 frames to R2)
+  # before it records it -- each longer than the 30 s lease. Worse, its first heartbeat
+  # after the download ran in a transaction opened before it, and `now()` + lease was
+  # already past. One slot: nobody else was polling, so the lapse went unseen. Two: the
+  # idle slot polls every 2 s, took the job, re-ran the stage as the next attempt (wiping
+  # the out/ the first slot was still uploading), and the two slots traded it until the
+  # budget ran out. Fixed in app/worker/claim.py: a per-job LeaseKeeper thread renews the
+  # lease whatever the supervisor is doing, and a lease is computed from
+  # statement_timestamp(), not now(). Guarded by tests/test_worker_concurrency.py (slow
+  # uploads, slow download) and tests/test_worker.py. Still "1" here until "2" has been
+  # validated in production; the worker README says why 2 fits the 2 GB machine. If it
+  # recurs, look for a second "claimed job <id>" and "lost job" in the worker's logs.
   WORKER_CONCURRENCY = "1"
 
 [processes]
