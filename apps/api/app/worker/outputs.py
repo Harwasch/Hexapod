@@ -130,15 +130,16 @@ def upload_artifact(
                 return None
             for member in sorted(p for p in source.rglob("*") if p.is_file()):
                 relative = member.relative_to(source).as_posix()
-                storage.put_object(
+                storage.upload_file(
                     f"{key}/{relative}",
-                    member.read_bytes(),
+                    member,
                     _content_type(member, "application/octet-stream"),
                 )
         else:
             if not source.is_file():
                 return None
-            storage.put_object(key, source.read_bytes(), ref.content_type)
+            # Streamed from disk: a trained splat can be larger than the worker's memory.
+            storage.upload_file(key, source, ref.content_type)
     except StorageUnavailableError:
         return None
     return UploadedArtifact(

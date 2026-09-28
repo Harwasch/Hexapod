@@ -152,6 +152,24 @@ def test_a_download_streams_to_a_file_rather_than_into_memory(
     assert target.read_bytes() == body
 
 
+def test_an_upload_streams_from_a_file_rather_than_from_memory(
+    storage: S3Storage, tmp_path: Path
+) -> None:
+    """The worker's artifact path for a trained splat larger than its memory: over 8 MB,
+    so boto3 sends it as a multipart upload read from disk."""
+    body = os.urandom(9 * 1024 * 1024 + 5)
+    source = tmp_path / "trained.ply"
+    source.write_bytes(body)
+
+    stored = storage.upload_file("runs/j/train/trained.ply", source, "application/octet-stream")
+
+    assert stored.size == len(body)
+    assert storage.get_object("runs/j/train/trained.ply") == body
+    head = storage.head_object("runs/j/train/trained.ply")
+    assert head is not None and head.content_type == "application/octet-stream"
+    assert stored.etag == head.etag
+
+
 def test_head_object_returns_none_when_absent(storage: S3Storage) -> None:
     assert storage.head_object("nope/missing.txt") is None
 
@@ -279,6 +297,7 @@ def test_null_storage_raises_from_every_method() -> None:
         lambda: null.put_object("k", b"x", "text/plain"),
         lambda: null.get_object("k"),
         lambda: null.download_file("k", Path("never-written")),
+        lambda: null.upload_file("k", Path("never-read"), "text/plain"),
         lambda: null.head_object("k"),
         lambda: null.list_objects("p/"),
         lambda: null.delete_object("k"),

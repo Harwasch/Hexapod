@@ -35,6 +35,9 @@ class NullStorage:
     def put_object(self, key: str, data: bytes, content_type: str) -> StoredObject:
         raise StorageUnavailableError(_UNAVAILABLE)
 
+    def upload_file(self, key: str, source: Path, content_type: str) -> StoredObject:
+        raise StorageUnavailableError(_UNAVAILABLE)
+
     def get_object(self, key: str) -> bytes:
         raise StorageUnavailableError(_UNAVAILABLE)
 

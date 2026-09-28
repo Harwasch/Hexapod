@@ -100,6 +100,13 @@ class ObjectStorage(Protocol):
 
     def put_object(self, key: str, data: bytes, content_type: str) -> StoredObject: ...
 
+    def upload_file(self, key: str, source: Path, content_type: str) -> StoredObject:
+        """Stream a file to an object, never holding it in memory: `put_object`'s mirror
+        of `download_file`. A trained splat is ~248 B a gaussian with its SH rest -- 2 GB
+        at the 8M the L4's budget allows -- which `put_object(read_bytes())` would load
+        whole into a 2 GB worker."""
+        ...
+
     def get_object(self, key: str) -> bytes: ...
 
     def download_file(self, key: str, target: Path) -> int:

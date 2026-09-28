@@ -121,15 +121,15 @@ class ObjectStoreTransfer:
         if source.is_dir():
 
             def one(member: Path) -> int:
-                data = member.read_bytes()
                 relative = member.relative_to(source).as_posix()
-                self.storage.put_object(f"{target}/{relative}", data, "application/octet-stream")
-                return len(data)
+                self.storage.upload_file(f"{target}/{relative}", member, "application/octet-stream")
+                return member.stat().st_size
 
             return sum(_parallel(one, sorted(p for p in source.rglob("*") if p.is_file())))
-        data = source.read_bytes()
-        self.storage.put_object(target, data, "application/octet-stream")
-        return len(data)
+        # Streamed from disk, as `get` is: a stage's input can be a trained splat larger
+        # than the worker's memory (`canonical.ply` for `optimise_lod`, ~2 GB at 8M).
+        self.storage.upload_file(target, source, "application/octet-stream")
+        return source.stat().st_size
 
     def get(self, key: str, target: Path) -> int:
         root = self._key(key)
