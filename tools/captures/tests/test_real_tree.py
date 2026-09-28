@@ -16,6 +16,7 @@ import numpy as np
 import pytest
 
 import real_tree
+import rig_tiles
 import skeleton
 import splat_tiles
 from synthetic_tree import generate_splats, synthetic_tree_rig, write_ply
@@ -172,16 +173,38 @@ def test_the_floater_rule_is_run_until_the_packer_would_drop_nothing(tmp_path: P
     assert stats["dropped"] == 0
 
 
-def test_the_cap_keeps_the_splats_that_contribute_most() -> None:
-    count = 10
-    data = {
-        "opacity": np.linspace(-3, 3, count).astype(np.float32),
-        **{f"scale_{i}": np.full(count, -3.0, dtype=np.float32) for i in range(3)},
-        "x": np.zeros(count, dtype=np.float32),
+def test_there_is_no_splat_count_to_cut_to() -> None:
+    """m0 cut 1.07M isolated splats to 400k by opacity x area, which kept the big ones and
+    dropped the fine ones. The count is now the viewer's, spent on tiles at runtime."""
+    assert not hasattr(real_tree, "cap_splats") and not hasattr(real_tree, "DEFAULT_MAX_SPLATS")
+
+
+def test_a_capture_descriptor_is_refused_by_what_it_lacks() -> None:
+    assert real_tree.check_capture(dict(CAPTURE)) == CAPTURE
+    lacking = {k: v for k, v in CAPTURE.items() if k not in ("latitude", "licenseName")}
+    with pytest.raises(ValueError, match="latitude, licenseName"):
+        real_tree.check_capture(lacking)
+
+
+def test_the_days_the_site_says_it_was_flown() -> None:
+    both = {"2020-07-18": 204, "2020-07-20": 451}
+    assert real_tree.flight_days(both, "2020-07-20") == ("on 18 and 20 July 2020", "2020-07-20")
+    assert real_tree.flight_days({"2020-07-18": 204}, "2020-07-20") == (
+        "on 18 July 2020",
+        "2020-07-18",
+    )
+    assert real_tree.flight_days(None, "2020-07-20") == ("on 20 July 2020", "2020-07-20")
+    assert real_tree.flight_days({"2020-06-30": 1, "2020-07-01": 1}, "")[0] == (
+        "on 30 June 2020 and 1 July 2020"
+    )
+    meta = {
+        "The_Tree-0001.jpg": {"taken": "2020-07-18T10:00:00"},
+        "The_Tree-0002.jpg": {"taken": "2020-07-20T09:00:00"},
+        "The_Tree-0003.jpg": {"taken": "2020-07-20T09:00:05"},
+        "The_Tree-0004.jpg": {"taken": None},
     }
-    keep = real_tree.cap_splats(data, 4)
-    assert keep.sum() == 4 and keep[-4:].all()
-    assert real_tree.cap_splats(data, 0).all() and real_tree.cap_splats(data, 50).all()
+    assert real_tree.days_of(meta) == {"2020-07-18": 1, "2020-07-20": 2}
+    assert real_tree.days_of({}) is None and real_tree.days_of(None) is None
 
 
 def tree_on_a_lawn(seed: int = 11) -> tuple[dict[str, np.ndarray], dict, float]:
@@ -230,6 +253,29 @@ def into_model_frame(metric: dict[str, np.ndarray], matrix: np.ndarray) -> dict[
     return real_tree.transform_splats(splat_dict(metric), np.linalg.inv(matrix))
 
 
+#: A capture descriptor as `real_tree.py --capture` reads it: everything about the capture
+#: that is not in its splat or its poses. (The Minnetonka tree's is
+#: `infra/modal/minnetonka.py describe`; nothing in real_tree.py is about it.)
+CAPTURE = {
+    "slug": "a-street-tree",
+    "name": "A street tree (real capture)",
+    "subject": "one street tree in a test",
+    "photos": "drone photographs",
+    "capturedBy": "A. Pilot",
+    "conditions": "in still air",
+    "dataset": "A Test Dataset, CC BY 4.0",
+    "latitude": 44.944565,
+    "longitude": -93.425903,
+    "geoidUndulationM": -27.6,
+    "attribution": "A. Pilot",
+    "attributionUrl": "https://example.org/pilot",
+    "licenseName": "CC-BY-4.0",
+    "licenseUrl": "https://creativecommons.org/licenses/by/4.0/",
+    "sourceUrl": "https://example.org/dataset",
+    "captured": "2020-07-20",
+}
+
+
 def frame_for(matrix: np.ndarray, metres_per_unit: float) -> dict:
     cameras = []
     for tier, (height, radius) in enumerate(((4.9, 9.0), (6.4, 9.5), (1.4, 7.0))):
@@ -243,6 +289,7 @@ def frame_for(matrix: np.ndarray, metres_per_unit: float) -> dict:
         "metresPerUnit": metres_per_unit,
         "camerasM": cameras,
         "focalPx": 1174.0,
+        "imageSize": [1600, 1066],
         "takeoffMslM": 282.0,
     }
 
@@ -277,8 +324,17 @@ def built(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, dict, float]:
         ply,
         out,
         frame_for(matrix, metres_per_unit),
-        train={"psnr": 24.3},
-        pose={"registered": 108},
+        CAPTURE,
+        # m1's shape: trained at twice the posed frames' size, on two days' photos.
+        train={
+            "psnr": 24.3,
+            "registered": 108,
+            "frameSize": [3200, 2132],
+            "days": {"2020-07-18": 40, "2020-07-20": 68},
+        },
+        pose={"registered": 120},
+        # Small leaves, so ~8k splats make a real hierarchy (the default is 100k a leaf).
+        tile_gaussians=1500,
     )
     return out, report, trunk_radius
 
@@ -292,25 +348,87 @@ def test_the_tree_is_measured_isolated_and_stands_up(built: tuple[Path, dict, fl
     assert report["uprightness"]["upright"] and report["uprightness"]["crownToBase"] >= 3
     assert report["crown"]["radiusM"] < 6.0  # the hedge at 6.5 m and the street tree are out
     iso = report["isolation"]
-    assert 7000 < iso["keptAfterCap"] <= 9000  # the tree, less its bottom 20 cm and haze
+    assert 7000 < iso["kept"] <= 9000  # the tree, less its bottom 20 cm and haze
+    assert report["rig"]["splats"] == iso["kept"]  # every isolated splat, no cap
     assert report["rig"]["nodes"] > 10
     assert report["gsdM"] is not None and 0.001 < report["gsdM"] < 0.01
 
 
-def test_the_rig_describes_exactly_the_one_tile_the_viewer_will_decode(
+def test_the_gsd_is_at_the_size_the_splat_trained_at(tmp_path: Path) -> None:
+    """frame.json's focal is the posed frames' (1600 px); trained on frames twice that
+    size, a training pixel is half as big, and the site says which size it means."""
+    metric, _, _ = tree_on_a_lawn(seed=14)
+    matrix = np.eye(4)
+    matrix[:3, :3] = 0.41 * random_rotation(6)
+    ply = tmp_path / "trained.ply"
+    write_model_ply(ply, into_model_frame(metric, matrix))
+    frame = frame_for(matrix, 0.41)
+    posed = real_tree.build(ply, tmp_path / "a", frame, CAPTURE, tile=False)
+    doubled = real_tree.build(
+        ply, tmp_path / "b", frame, CAPTURE, train={"frameSize": [3200, 2132]}, tile=False
+    )
+    assert (posed["trainFramePx"], doubled["trainFramePx"]) == (1600, 3200)
+    assert doubled["gsdM"] == pytest.approx(posed["gsdM"] / 2, rel=1e-6)
+    site = json.loads((tmp_path / "b" / "site.json").read_text())
+    assert "of the 3200 px training frames" in site["assets"][0]["description"]
+
+
+def _sorted_rows(positions: np.ndarray) -> np.ndarray:
+    bits = np.ascontiguousarray(positions, dtype="<f4").view("<u4").reshape(-1, 3)
+    return bits[np.lexsort(bits.T[::-1])]
+
+
+def test_every_isolated_splat_is_a_leaf_of_a_stamped_lod_tileset(
     built: tuple[Path, dict, float],
 ) -> None:
+    """LOD by default: the leaves hold every isolated splat once, merged parents above
+    them, and the rig carries every tile's checksum with its motion sidecar beside it --
+    what apps/web/src/cesium/splatTiles.ts needs to move a multi-tile tileset."""
     out, report, _ = built
     tileset = json.loads((out / "splat" / "tileset.json").read_text())
-    assert "children" not in tileset["root"]  # single tile: the deformer's condition
+    assert tileset["root"].get("children"), "a hierarchy, not one tile"
+    assert report["tiles"]["tiles"] == len(rig_tiles.tile_uris(tileset)) > 1
+    assert report["tiles"]["parentGaussians"] > 0
     rig = json.loads((out / "source" / "rig.json").read_text())
     assert skeleton.rig_issues(rig) == []
+    assert rig["tileChecksums"] == rig_tiles.tile_checksums(out / "splat")
+    assert (out / "source" / rig["motion"]).is_file()
+    motion = json.loads((out / "source" / rig["motion"]).read_text())
+    assert motion["rigChecksum"] == rig["canonicalChecksum"]
     positions = np.frombuffer((out / "source" / "positions.f32").read_bytes(), dtype="<f4")
-    assert tileset["root"]["extras"]["gaussians"] == positions.size // 3 == report["rig"]["splats"]
-    assert "{nodes}" not in rig["sourceNote"] and "CC BY 4.0" in rig["sourceNote"]
-    xyz = positions.reshape(-1, 3).astype(np.float64)
-    assert real_tree.uprightness(xyz)["upright"]
+    canonical = positions.reshape(-1, 3)
+    assert len(canonical) == report["rig"]["splats"]
+    leaves: list[np.ndarray] = []
+
+    def walk(tile: dict) -> None:
+        if not tile.get("children"):
+            leaves.append(rig_tiles.tile_positions(out / "splat" / tile["content"]["uri"]))
+        for child in tile.get("children", []):
+            walk(child)
+
+    walk(tileset["root"])
+    assert np.array_equal(_sorted_rows(np.concatenate(leaves)), _sorted_rows(canonical))
+    assert "{nodes}" not in rig["sourceNote"] and CAPTURE["sourceUrl"] in rig["sourceNote"]
+    assert real_tree.uprightness(canonical.astype(np.float64))["upright"]
     assert not (out / "source" / "isolated.ply").exists()
+
+
+def test_one_tile_is_still_a_choice(tmp_path: Path) -> None:
+    metric, _, _ = tree_on_a_lawn(seed=13)
+    matrix = np.eye(4)
+    matrix[:3, :3] = 0.41 * random_rotation(5)
+    ply = tmp_path / "trained.ply"
+    write_model_ply(ply, into_model_frame(metric, matrix))
+    out = tmp_path / "out"
+    report = real_tree.build(ply, out, frame_for(matrix, 0.41), CAPTURE, tile_gaussians=None)
+    tileset = json.loads((out / "splat" / "tileset.json").read_text())
+    assert "children" not in tileset["root"] and report["tiles"]["tiles"] == 1
+    rig = json.loads((out / "source" / "rig.json").read_text())
+    assert rig["tileChecksums"] == [rig["canonicalChecksum"]]
+
+
+def asset_description(site: dict) -> str:
+    return str(site["assets"][0]["description"])
 
 
 def test_site_json_is_the_capture_shape_the_seeder_reads(built: tuple[Path, dict, float]) -> None:
@@ -325,22 +443,27 @@ def test_site_json_is_the_capture_shape_the_seeder_reads(built: tuple[Path, dict
     asset_keys = set().union(*(a.keys() for e in entries for a in e["assets"])) | {"rig"}
     (asset,) = site["assets"]
     assert set(asset) <= asset_keys | {"point_spacing_m", "ground_sample_distance_m"}
-    assert site["slug"] == "minnetonka-tree"
-    assert site["attribution"] == "Matthew Guertin"
+    assert site["slug"] == CAPTURE["slug"] and site["name"] == CAPTURE["name"]
+    assert site["attribution"] == CAPTURE["attribution"]
+    assert site["attribution_url"] == CAPTURE["attributionUrl"]
     assert site["license_name"] == "CC-BY-4.0"
     assert site["license_url"] == "https://creativecommons.org/licenses/by/4.0/"
-    assert site["source_url"] == "https://github.com/Matt1Up/tree-photogrammetry-dataset"
+    assert site["source_url"] == CAPTURE["sourceUrl"]
     assert site["captured"] == "2020-07-20"
-    assert site["images"] == 108
+    assert site["images"] == 108  # what it trained on, not the 120 the poses registered
     assert "photogrammetric reconstruction of a real tree" in site["description"]
     assert "motion is simulated" in site["description"]
+    assert "on 18 and 20 July 2020 in still air" in site["description"]
+    assert "one street tree in a test" in site["description"]
+    assert "level-of-detail tileset" in asset_description(site)
+    assert "3200 px training frames" in asset_description(site)
     assert asset["representation"] == "gaussian-splat"
     assert asset["path"] == "splat/tileset.json" and asset["rig"] == "../source/rig.json"
     assert asset["ground_sample_distance_m"] > 0 and asset["clamp_to_ground"] is True
     assert site["boundary"][0] == site["boundary"][-1] and len(site["boundary"]) == 17
     lon, lat, height = site["center"]
     assert (lat, lon) == pytest.approx((44.944565, -93.425903))
-    assert height == pytest.approx(282.0 + real_tree.GEOID_UNDULATION_M, abs=0.1)
+    assert height == pytest.approx(282.0 + CAPTURE["geoidUndulationM"], abs=0.1)
     assert "24.30 dB" in site["pipeline"]
 
 
@@ -355,10 +478,12 @@ def test_a_measured_trunk_can_set_the_scale(tmp_path: Path) -> None:
     frame = frame_for(matrix, wrong)
     frame["camerasM"] = (np.asarray(frame["camerasM"]) * wrong / 0.41).tolist()
     report = real_tree.build(
-        ply, tmp_path / "out", frame, trunk_diameter_m=2 * trunk_radius, tile=False
+        ply, tmp_path / "out", frame, CAPTURE, trunk_diameter_m=2 * trunk_radius, tile=False
     )
     assert report["scale"]["method"] == "trunk"
     assert report["scale"]["metresPerUnit"] == pytest.approx(0.41, rel=0.2)
     assert report["trunk"]["diameterScaledM"] == pytest.approx(2 * trunk_radius, abs=1e-3)
     with pytest.raises(ValueError, match="not both"):
-        real_tree.build(ply, tmp_path / "x", frame, metres_per_unit=0.4, trunk_diameter_m=0.3)
+        real_tree.build(
+            ply, tmp_path / "x", frame, CAPTURE, metres_per_unit=0.4, trunk_diameter_m=0.3
+        )

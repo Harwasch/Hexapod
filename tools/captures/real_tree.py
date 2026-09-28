@@ -1,9 +1,12 @@
 """A trained splat of a real tree to a Living Survey site: metres, one tree, a rig, site.json.
 
-The post-train half of the Minnetonka tree (docs/CAPTURES.md "The real tree"; the GPU half
-is tools/pipeline/experiments/minnetonka.py and infra/modal/minnetonka.py). CPU only, and
-every step writes what it measured into ``source/real_tree.json`` so a human can check it
-without re-running anything:
+The post-train step for any standing tree captured by a camera orbit whose photos carry
+gravity and height (the pose gate's ``frame.json``). Nothing here is about one capture:
+where the tree is, what it is and whose it is come in a capture descriptor
+(``--capture``; the Minnetonka tree's is ``infra/modal/minnetonka.py describe``, and its
+GPU half is tools/pipeline/experiments/minnetonka.py -- docs/CAPTURES.md "The real
+tree"). CPU only, and every step writes what it measured into ``source/real_tree.json`` so
+a human can check it without re-running anything:
 
 1. **Into metres.** The trained PLY is in the pose set's own frame. ``frame.json`` (the
    pose gate's output) holds the similarity into metres, east/north/up: up from the gimbal
@@ -23,23 +26,44 @@ without re-running anything:
 4. **Isolate** the tree: a cylinder of the crown's radius about the trunk (from the splats
    above head height inside the camera ring, or ``--crown-radius-m``), everything
    ``--ground-clearance-m`` above the ground, opaque, not isolated haze -- and then the
-   packer's own floater rule, run to a fixed point so the packer drops nothing (the rig's
-   checksum is over exactly the splats written).
-5. **At most** ``--max-splats`` (400k, the viewer's Standard Detail budget): a single tile
-   cannot be trimmed by the viewer's budget, so the tile itself has to fit it. The least
-   significant splats go first (opacity x projected area).
-6. **Rig** with ``skeleton.extract`` -- single tile (``tile_gaussians=None``), because the
-   Living Survey deformer refuses anything else until M5 -- and the deformer's own
-   ``upright`` refusal checked here first (``uprightness``, a port of ``treeUprightness``
-   in apps/web/src/cesium/splatFrames.ts).
-7. **site.json**, the shape ``build_site.py`` writes and ``app.seed.captures`` reads, with
+   packer's own floater rule, run to a fixed point so the packer drops nothing (every
+   isolated splat reaches a leaf, and the rig is over exactly those).
+5. **Every isolated splat is kept.** There is no count here: how many are *drawn* is the
+   viewer's detail budget, spent on level-of-detail tiles at runtime. (m0 cut its 1.07M to
+   the 400k a single tile could carry, by opacity x area -- which keeps the biggest
+   gaussians and drops the fine ones, so close up the tree was blobs.)
+6. **Rig** with ``skeleton.extract`` on all of them (1M splats: ~30 s, 0.8 GB), the
+   deformer's own ``upright`` refusal checked here first (``uprightness``, a port of
+   ``treeUprightness`` in apps/web/src/cesium/splatFrames.ts).
+7. **Level-of-detail tiles** by ``splat_tiles.convert`` (an octree of at most
+   ``--tile-gaussians`` a leaf, REPLACE refinement with merged parents), and the rig
+   stamped with every tile's checksum (``rig_tiles.stamp``, ``tileChecksums``) in place,
+   beside its ``motion.json``: the Living Survey deformer moves a multi-tile tileset only
+   when each selected tile digests into that set (apps/web/src/cesium/splatTiles.ts).
+8. **site.json**, the shape ``build_site.py`` writes and ``app.seed.captures`` reads, with
    the splat asset's ``rig: ../source/rig.json``.
 
 Usage::
 
     uv run python real_tree.py trained.ply ../../data/tiles/minnetonka-tree \\
-        --frame frame.json [--train train.json] [--pose pose.json] \\
-        [--trunk-diameter-m 0.35 | --metres-per-unit 0.41] [--crown-radius-m 4.5]
+        --frame frame.json --capture capture.json [--train train.json] [--pose pose.json] \\
+        [--meta meta.json] [--trunk-diameter-m 0.35 | --metres-per-unit 0.41] \\
+        [--crown-radius-m 4.5]
+
+**The thresholds, and why each is general.** Every one is either dimensionless or a
+property of trees and of the ground they stand on, not of one capture:
+
+* ``TRUNK_SLABS_M``: forestry measures a stem at breast height (1.3 m, DBH); the slabs
+  stay under it, where a single-stemmed tree is still one stem, and above 0.3 m, over the
+  grass and the root flare. A multi-stemmed shrub has no ring there and the step says so.
+* ``TRUNK_SEARCH_M``: an orbit's cameras converge on its subject, so the stem is near the
+  axis they look at; 2.5 m is the slack for an orbit centred on a leaning tree's crown.
+* ``RING_*``: dimensionless -- how much of the circle is covered, how many splats, how many
+  times denser than chance.
+* ``CROWN_SEARCH_M``, ``CROWN_ABOVE_M``: the crown is what stands above head height within
+  a mature tree's reach of its stem, or within the camera ring if that is wider.
+* ``SURFACE_OPACITY``: half-opaque is surface; ``--ground-clearance-m`` (0.2 m) is mown
+  grass, and a meadow wants more.
 """
 
 from __future__ import annotations
@@ -52,17 +76,11 @@ from typing import Any
 
 import numpy as np
 
+import rig_tiles
 import skeleton
 import splat_tiles
 from build_site import write_site_document
 from synthetic_tree import write_ply
-
-SLUG = "minnetonka-tree"
-LATITUDE = 44.944565
-LONGITUDE = -93.425903
-#: EGM2008 geoid height near Minneapolis, approximately (+-2 m). Only the site's recorded
-#: centre height uses it: the splat asset is clamped to the viewer's terrain.
-GEOID_UNDULATION_M = -27.6
 
 #: Where the trunk is measured: slabs above the ground, metres. Below the first limbs of a
 #: mature street tree, above the mown grass and whatever is at its foot.
@@ -76,17 +94,57 @@ RING_MIN_INLIERS = 20
 RING_MIN_CONTRAST = 4.0
 #: The narrowest crown search, metres from the trunk: a mature tree's crown radius.
 CROWN_SEARCH_M = 8.0
+#: What stands this far above the ground inside the search is crown: head height.
+CROWN_ABOVE_M = 2.5
 #: Opaque enough to be surface: what the ground and trunk measurements count.
 SURFACE_OPACITY = 0.5
-#: The viewer's Standard Detail budget (apps/web/src/lib/detail.ts DEFAULT_SPLAT_BUDGET).
-DEFAULT_MAX_SPLATS = 400_000
+#: The trained PLY's columns this step uses. The degree-1..3 SH (`f_rest_*`, 45 of a
+#: gaussian's 62 floats) are dropped on read: the tiles carry degree 0, and at several
+#: million gaussians the rest is gigabytes the runner would hold for nothing.
+COLUMNS = (
+    "x",
+    "y",
+    "z",
+    "f_dc_0",
+    "f_dc_1",
+    "f_dc_2",
+    "opacity",
+    "scale_0",
+    "scale_1",
+    "scale_2",
+    "rot_0",
+    "rot_1",
+    "rot_2",
+    "rot_3",
+)
 
-ATTRIBUTION = "Matthew Guertin"
-ATTRIBUTION_URL = "https://mattguertin.com"
-LICENSE_NAME = "CC-BY-4.0"
-LICENSE_URL = "https://creativecommons.org/licenses/by/4.0/"
-SOURCE_URL = "https://github.com/Matt1Up/tree-photogrammetry-dataset"
-CAPTURED = "2020-07-20"
+#: What a capture descriptor (``--capture``) must say; ``conditions`` and ``pipeline`` may
+#: be left out. See ``experiments.minnetonka.capture_descriptor`` for one.
+CAPTURE_FIELDS = (
+    "slug",
+    "name",
+    "subject",
+    "photos",
+    "capturedBy",
+    "dataset",
+    "latitude",
+    "longitude",
+    "geoidUndulationM",
+    "attribution",
+    "attributionUrl",
+    "licenseName",
+    "licenseUrl",
+    "sourceUrl",
+    "captured",
+)
+
+
+def check_capture(capture: dict[str, Any]) -> dict[str, Any]:
+    """The descriptor, refused by name when a field is missing."""
+    missing = [name for name in CAPTURE_FIELDS if capture.get(name) in (None, "")]
+    if missing:
+        raise ValueError(f"the capture descriptor lacks {', '.join(missing)}")
+    return capture
 
 
 # ------------------------------------------------------------------------------ into metres
@@ -157,6 +215,19 @@ def transform_splats(data: dict[str, np.ndarray], matrix: Any) -> dict[str, np.n
     for i in range(4):
         out[f"rot_{i}"] = composed[:, i].astype(np.float32)
     return out
+
+
+def read_columns(ply: Path) -> dict[str, np.ndarray]:
+    """`COLUMNS` of a trained PLY, read in windows so the rest is never held."""
+    layout = splat_tiles.ply_layout(ply)
+    parts: dict[str, list[np.ndarray]] = {name: [] for name in COLUMNS}
+    for _, chunk in splat_tiles.iter_ply_rows(layout, COLUMNS):
+        for name, column in chunk.items():
+            parts[name].append(column)
+    return {
+        name: np.concatenate(columns) if columns else np.zeros(0, np.float32)
+        for name, columns in parts.items()
+    }
 
 
 def take(data: dict[str, np.ndarray], keep: np.ndarray) -> dict[str, np.ndarray]:
@@ -315,9 +386,11 @@ def crown_radius(
         ring = float(np.percentile(np.hypot(cameras[:, 0], cameras[:, 1]), 10))
     reach = np.hypot(xyz[:, 0], xyz[:, 1])
     limit = max(0.9 * ring, CROWN_SEARCH_M) if ring else CROWN_SEARCH_M
-    crown = (xyz[:, 2] > 2.5) & (opacity >= SURFACE_OPACITY) & (reach <= limit)
+    crown = (xyz[:, 2] > CROWN_ABOVE_M) & (opacity >= SURFACE_OPACITY) & (reach <= limit)
     if crown.sum() < 50:
-        raise ValueError(f"only {int(crown.sum())} opaque splats above 2.5 m inside {limit:.1f} m")
+        raise ValueError(
+            f"only {int(crown.sum())} opaque splats above {CROWN_ABOVE_M} m inside {limit:.1f} m"
+        )
     radius = float(np.percentile(reach[crown], 98)) + 0.3
     return {"radiusM": round(min(radius, limit), 3), "cameraRingP10M": ring, "searchM": limit}
 
@@ -372,25 +445,6 @@ def floater_fixpoint(xyz: np.ndarray, rounds: int = 10) -> np.ndarray:
     return keep
 
 
-def significance(data: dict[str, np.ndarray]) -> np.ndarray:
-    """Opacity x projected area: what a splat contributes to a picture, roughly."""
-    opacity = splat_tiles.sigmoid(data["opacity"].astype(np.float64))
-    log_volume = sum(data[f"scale_{i}"].astype(np.float64) for i in range(3))
-    return opacity * np.exp(2.0 / 3.0 * log_volume)
-
-
-def cap_splats(data: dict[str, np.ndarray], limit: int) -> np.ndarray:
-    """The `limit` most significant splats, in their original order (stable ties)."""
-    count = len(data["x"])
-    keep = np.ones(count, dtype=bool)
-    if limit <= 0 or count <= limit:
-        return keep
-    order = np.argsort(-significance(data), kind="stable")
-    keep[:] = False
-    keep[order[:limit]] = True
-    return keep
-
-
 def uprightness(xyz: np.ndarray) -> dict[str, Any]:
     """`treeUprightness` (apps/web/src/cesium/splatFrames.ts), the deformer's `upright`
     refusal, on the positions it will see: crown spread over base spread, 90th-percentile
@@ -427,8 +481,7 @@ def _offset_lonlat(lat: float, lon: float, east: float, north: float) -> tuple[f
 
 def site_document(
     *,
-    lat: float,
-    lon: float,
+    capture: dict[str, Any],
     ground_ellipsoid_m: float | None,
     crown_m: float,
     height_m: float,
@@ -438,7 +491,10 @@ def site_document(
     spacing_m: float,
     nodes: int,
     trained: dict[str, Any] | None,
+    tiles: int | None = None,
+    train_px: int | None = None,
 ) -> dict[str, Any]:
+    lat, lon = float(capture["latitude"]), float(capture["longitude"])
     ring = []
     for k in range(17):
         angle = 2 * math.pi * (k % 16) / 16
@@ -447,36 +503,44 @@ def site_document(
         ring.append([round(x, 7), round(y, 7)])
     height = ground_ellipsoid_m if ground_ellipsoid_m is not None else 0.0
     bookmark_lon, bookmark_lat = _offset_lonlat(lat, lon, 0.0, -max(18.0, 2.5 * height_m))
-    photos_text = f"{photos} drone photographs" if photos else "drone photographs"
+    photos_text = f"{photos} {capture['photos']}" if photos else str(capture["photos"])
     psnr = (trained or {}).get("psnr")
+    flown, captured = flight_days((trained or {}).get("days"), str(capture["captured"]))
+    conditions = f" {capture['conditions']}" if capture.get("conditions") else ""
     gsd_text = (
-        f"about {gsd_m * 1000:.0f} mm per pixel of the 1600 px training frames, estimated from "
-        f"how close the cameras came to the crown"
+        f"about {gsd_m * 1000:.1f} mm per pixel of the "
+        + (f"{train_px} px " if train_px else "")
+        + "training frames, estimated from how close the cameras came to the crown"
         if gsd_m
         else None
     )
+    packing = (
+        f"a level-of-detail tileset of {tiles} tiles (the viewer draws as many as its "
+        "detail budget allows)"
+        if tiles and tiles > 1
+        else "a single tile"
+    )
     return {
-        "slug": SLUG,
-        "name": "Minnetonka tree (real capture, Living Survey)",
+        "slug": capture["slug"],
+        "name": capture["name"],
         "description": (
             "A photogrammetric reconstruction of a real tree: a Gaussian splat trained on "
-            f"{photos_text} of one mature deciduous tree in Minnetonka, Minnesota, flown by "
-            "Matthew Guertin on 20 July 2020 in still air (Single Tree -- High-Density "
-            "Photogrammetry Dataset, CC BY 4.0). Its skeleton was extracted from the splat's "
-            "geometry alone. The motion is simulated: nothing here recorded this tree moving; "
-            "the sway is the Living Survey's wind model driving that skeleton."
+            f"{photos_text} of {capture['subject']}, taken by {capture['capturedBy']} "
+            f"{flown}{conditions} ({capture['dataset']}). Its skeleton was extracted from the "
+            "splat's geometry alone. The motion is simulated: nothing here recorded this tree "
+            "moving; the sway is the Living Survey's wind model driving that skeleton."
         ),
         "boundary": ring,
         "center": [round(lon, 7), round(lat, 7), round(height, 2)],
-        "attribution": ATTRIBUTION,
-        "attribution_url": ATTRIBUTION_URL,
-        "license_name": LICENSE_NAME,
-        "license_url": LICENSE_URL,
-        "source_url": SOURCE_URL,
-        "captured": CAPTURED,
+        "attribution": capture["attribution"],
+        "attribution_url": capture["attributionUrl"],
+        "license_name": capture["licenseName"],
+        "license_url": capture["licenseUrl"],
+        "source_url": capture["sourceUrl"],
+        "captured": captured,
         "pipeline": (
-            "tools/pipeline pose (COLMAP) + train (gsplat MCMC) on Modal via "
-            "infra/modal/minnetonka.py; tools/captures/real_tree.py + skeleton.py"
+            (f"{capture['pipeline']}; " if capture.get("pipeline") else "")
+            + "tools/captures/real_tree.py + skeleton.py"
             + (f"; held-out PSNR {psnr:.2f} dB" if isinstance(psnr, int | float) else "")
         ),
         "images": photos,
@@ -488,7 +552,7 @@ def site_document(
                 "ground_sample_distance_m": round(gsd_m, 4) if gsd_m else None,
                 "point_spacing_m": round(spacing_m, 4),
                 "description": (
-                    f"{splats:,} gaussians of one tree, a single tile, rigged with {nodes} "
+                    f"{splats:,} gaussians of one tree as {packing}, rigged with {nodes} "
                     "skeleton nodes" + (f"; {gsd_text}" if gsd_text else "")
                 ),
                 "maximum_screen_space_error": 1,
@@ -509,6 +573,51 @@ def site_document(
     }
 
 
+_MONTHS = (
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+)
+
+
+def flight_days(days: Any, captured: str) -> tuple[str, str]:
+    """("on 18 and 20 July 2020", "2020-07-20") from train.json's `days` -- photo counts
+    by `YYYY-MM-DD`, the days the splat was trained on -- and the descriptor's `captured`
+    without them. The date returned is the last day: the latest state of the tree."""
+    dates = sorted(d for d in (days or {}) if isinstance(d, str) and len(d) == 10 and d[4] == "-")
+    if not dates:
+        dates = [captured]
+    parts = [(int(d[:4]), int(d[5:7]), int(d[8:])) for d in dates]
+    if len({(y, m) for y, m, _ in parts}) == 1:
+        year, month, _ = parts[0]
+        numbers = [str(day) for _, _, day in parts]
+        joined = (
+            numbers[0] if len(numbers) == 1 else ", ".join(numbers[:-1]) + " and " + numbers[-1]
+        )
+        return f"on {joined} {_MONTHS[month - 1]} {year}", dates[-1]
+    spelled = [f"{day} {_MONTHS[month - 1]} {year}" for year, month, day in parts]
+    return "on " + ", ".join(spelled[:-1]) + " and " + spelled[-1], dates[-1]
+
+
+def days_of(meta: dict[str, Any] | None) -> dict[str, int] | None:
+    """Photo counts by day out of meta.json (`taken` per frame), or None."""
+    counts: dict[str, int] = {}
+    for value in (meta or {}).values():
+        taken = value.get("taken") if isinstance(value, dict) else None
+        if isinstance(taken, str) and len(taken) >= 10 and taken[4] == "-" and taken[7] == "-":
+            counts[taken[:10]] = counts.get(taken[:10], 0) + 1
+    return dict(sorted(counts.items())) or None
+
+
 def ground_sample_distance(
     cameras: np.ndarray | None, tree_xyz: np.ndarray, focal_px: float | None
 ) -> float | None:
@@ -526,6 +635,7 @@ def build(
     ply: Path,
     out_dir: Path,
     frame: dict[str, Any],
+    capture: dict[str, Any],
     *,
     train: dict[str, Any] | None = None,
     pose: dict[str, Any] | None = None,
@@ -533,14 +643,21 @@ def build(
     trunk_diameter_m: float | None = None,
     crown_radius_m: float | None = None,
     ground_clearance_m: float = 0.2,
-    max_splats: int = DEFAULT_MAX_SPLATS,
-    lat: float = LATITUDE,
-    lon: float = LONGITUDE,
+    tile_gaussians: int | None = splat_tiles.TILE_GAUSSIANS,
     tile: bool = True,
+    photo_days: dict[str, int] | None = None,
 ) -> dict[str, Any]:
-    """Everything in the module docstring, in order; returns (and writes) the report."""
+    """Everything in the module docstring, in order; returns (and writes) the report.
+
+    `tile_gaussians` is the packer's leaf size, not a total: every isolated splat is
+    written whatever it is (`None` packs one tile, which the deformer also moves).
+    `photo_days` (photo counts by day, from meta.json) says when the photos were taken
+    for a train.json that does not record it (m0's)."""
     if metres_per_unit is not None and trunk_diameter_m is not None:
         raise ValueError("give --metres-per-unit or --trunk-diameter-m, not both")
+    check_capture(capture)
+    lat, lon = float(capture["latitude"]), float(capture["longitude"])
+    geoid = float(capture["geoidUndulationM"])
     matrix = np.asarray(frame["matrix"], dtype=np.float64)
     fitted_scale = float(frame["metresPerUnit"])
     report: dict[str, Any] = {
@@ -557,7 +674,7 @@ def build(
     if cameras is not None and metres_per_unit is not None:
         cameras = cameras * (metres_per_unit / fitted_scale)
 
-    data = transform_splats(splat_tiles.read_ply(ply), matrix)
+    data = transform_splats(read_columns(ply), matrix)
     report["trained"] = len(data["x"])
     xyz = positions(data)
     opacity = splat_tiles.sigmoid(data["opacity"].astype(np.float64))
@@ -615,12 +732,9 @@ def build(
     settled = floater_fixpoint(xyz[index])
     region[index[~settled]] = False
     tree_data = take(data, region)
-    capped = cap_splats(tree_data, max_splats)
-    tree_data = take(tree_data, capped)
+    del data, xyz, opacity
     report["isolation"] = {
-        "inRegion": int(region.sum()),
-        "keptAfterCap": int(capped.sum()),
-        "maxSplats": max_splats,
+        "kept": int(region.sum()),
         "groundClearanceM": ground_clearance_m,
     }
     tree_xyz = positions(tree_data)
@@ -647,13 +761,16 @@ def build(
             "quat_wxyz": np.stack([tree_data[f"rot_{i}"] for i in range(4)], axis=1),
         },
     )
-    # pose.json (COLMAP's run) says how many registered; prepare.json how many were fetched.
-    photos = (pose or {}).get("registered") or (pose or {}).get("photos")
+    # train.json says how many posed photos the splat trained on (fewer when it trained on
+    # one day's); pose.json how many registered; prepare.json how many were fetched.
+    photos = (
+        (train or {}).get("registered")
+        or (pose or {}).get("registered")
+        or (pose or {}).get("photos")
+    )
     takeoff_msl = frame.get("takeoffMslM")
     # frame.json's z = 0 is the take-off; the splat's ground is `ground` above it.
-    ground_ellipsoid = (
-        None if takeoff_msl is None else float(takeoff_msl) + ground + GEOID_UNDULATION_M
-    )
+    ground_ellipsoid = None if takeoff_msl is None else float(takeoff_msl) + ground + geoid
     rig_report = skeleton.extract(
         isolated,
         out_dir,
@@ -665,31 +782,74 @@ def build(
         ground_percentile=0.0,
         denoise_k=0,
         source_note=(
-            f"geometric skeleton extraction from a gsplat reconstruction of the Minnetonka "
-            f"tree ({SOURCE_URL}, CC BY 4.0): {{nodes}} nodes over {len(tree_xyz):,} splats "
+            f"geometric skeleton extraction from a gsplat reconstruction of "
+            f"{capture['subject']} ({capture['sourceUrl']}, {capture['licenseName']}): "
+            f"{{nodes}} nodes over {len(tree_xyz):,} splats "
             "(tools/captures/real_tree.py, skeleton.py)"
         ),
-        tile=tile,
+        # Tiled below, as level of detail: extract's own tiling is one tile.
+        tile=False,
     )
+    isolated.unlink()
     rig_path = source / "rig.json"
     rig = json.loads(rig_path.read_text(encoding="utf-8"))
-    if "{nodes}" in rig.get("sourceNote", ""):
-        rig["sourceNote"] = rig["sourceNote"].replace("{nodes}", str(len(rig["nodes"])))
-        rig_path.write_text(json.dumps(rig, separators=(",", ":")) + "\n", encoding="utf-8")
-    isolated.unlink()
+    rig["sourceNote"] = rig.get("sourceNote", "").replace("{nodes}", str(len(rig["nodes"])))
     report["rig"] = rig_report
-    gsd = ground_sample_distance(cameras, tree_xyz, frame.get("focalPx"))
+    if tile:
+        stats = splat_tiles.convert(
+            source / "splat.ply",
+            out_dir / "splat",
+            lat,
+            lon,
+            ground_ellipsoid or 0.0,
+            opacity_min=0.02,
+            tile_gaussians=tile_gaussians,
+        )
+        if stats["dropped"] != 0:
+            # Every isolated splat is in the rig's canonical set, and the leaves must hold
+            # them all; the floater fix-point above is what makes this hold.
+            raise SystemExit(
+                f"the tiler dropped {stats['dropped']} of the isolated splats; the leaves "
+                "would not be the rig's splats"
+            )
+        # Every tile's identity for the deformer, in place: `motion.json` is already
+        # beside this rig, where its relative pointer says.
+        rig = rig_tiles.stamp(rig, out_dir / "splat")
+        report["tiles"] = {
+            "tiles": stats["tiles"],
+            "depth": stats["depth"],
+            "tileGaussians": tile_gaussians,
+            "leafGaussians": stats["gaussians"],
+            "parentGaussians": stats["parent_gaussians"],
+            "storageOverhead": stats["storage_overhead"],
+            "tileChecksums": len(rig["tileChecksums"]),
+        }
+        rig_report["tileset"] = str(out_dir / "splat" / "tileset.json")
+        rig_report["extent_m"] = stats["extent_m"]
+    rig_path.write_text(json.dumps(rig, separators=(",", ":")) + "\n", encoding="utf-8")
+    # frame.json's focal is in the posed frames' pixels; the splat may have trained on
+    # frames of another size (poses adopted from a run on the same photos at another size).
+    trained_size = (train or {}).get("frameSize")
+    posed_size = frame.get("imageSize")
+    focal = frame.get("focalPx")
+    train_px = None
+    if trained_size and posed_size and focal:
+        focal = float(focal) * float(trained_size[0]) / float(posed_size[0])
+        train_px = int(max(trained_size))
+    elif posed_size:
+        train_px = int(max(posed_size))
+    gsd = ground_sample_distance(cameras, tree_xyz, focal)
     report["gsdM"] = gsd
+    report["trainFramePx"] = train_px
     report["placement"] = {
         "lat": lat,
         "lon": lon,
         "groundEllipsoidM": ground_ellipsoid,
-        "geoidUndulationM": GEOID_UNDULATION_M,
+        "geoidUndulationM": geoid,
         "clampToGround": True,
     }
     document = site_document(
-        lat=lat,
-        lon=lon,
+        capture=capture,
         ground_ellipsoid_m=ground_ellipsoid,
         crown_m=radius,
         height_m=float(rig_report["height_m"]),
@@ -698,7 +858,9 @@ def build(
         gsd_m=gsd,
         spacing_m=float(rig_report["spacing_m"]),
         nodes=int(rig_report["nodes"]),
-        trained=train,
+        trained={**(train or {}), "days": (train or {}).get("days") or photo_days},
+        tiles=(report.get("tiles") or {}).get("tiles"),
+        train_px=train_px,
     )
     write_site_document(out_dir, document)
     (source / "real_tree.json").write_text(json.dumps(report, indent=1) + "\n", encoding="utf-8")
@@ -710,6 +872,12 @@ def main() -> None:
     parser.add_argument("ply", type=Path, help="the trainer's PLY, in the pose set's frame")
     parser.add_argument("out_dir", type=Path)
     parser.add_argument("--frame", type=Path, required=True, help="the pose gate's frame.json")
+    parser.add_argument(
+        "--capture",
+        type=Path,
+        required=True,
+        help="the capture descriptor: slug, place, subject, attribution (CAPTURE_FIELDS)",
+    )
     parser.add_argument("--train", type=Path, help="train.json, for the site's pipeline line")
     parser.add_argument("--pose", type=Path, help="pose.json or prepare.json: the photo count")
     scale = parser.add_mutually_exclusive_group()
@@ -717,9 +885,13 @@ def main() -> None:
     scale.add_argument("--trunk-diameter-m", type=float, help="scale to a measured trunk")
     parser.add_argument("--crown-radius-m", type=float)
     parser.add_argument("--ground-clearance-m", type=float, default=0.2)
-    parser.add_argument("--max-splats", type=int, default=DEFAULT_MAX_SPLATS)
-    parser.add_argument("--lat", type=float, default=LATITUDE)
-    parser.add_argument("--lon", type=float, default=LONGITUDE)
+    parser.add_argument(
+        "--tile-gaussians",
+        type=int,
+        default=splat_tiles.TILE_GAUSSIANS,
+        help="the level-of-detail packer's leaf size (0: one tile); not a total",
+    )
+    parser.add_argument("--meta", type=Path, help="meta.json: which days the photos were taken")
     parser.add_argument("--allow-failed-gate", action="store_true")
     args = parser.parse_args()
 
@@ -734,15 +906,15 @@ def main() -> None:
         args.ply,
         args.out_dir,
         frame,
+        check_capture(json.loads(args.capture.read_text(encoding="utf-8"))),
         train=optional(args.train),
         pose=optional(args.pose),
         metres_per_unit=args.metres_per_unit,
         trunk_diameter_m=args.trunk_diameter_m,
         crown_radius_m=args.crown_radius_m,
         ground_clearance_m=args.ground_clearance_m,
-        max_splats=args.max_splats,
-        lat=args.lat,
-        lon=args.lon,
+        tile_gaussians=args.tile_gaussians or None,
+        photo_days=days_of(optional(args.meta)),
     )
     print(json.dumps(report, indent=1))
 
