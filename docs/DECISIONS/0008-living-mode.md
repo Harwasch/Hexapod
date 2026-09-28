@@ -181,3 +181,51 @@ in the Teacher B design); running it is a separate licence question, answered be
 - **For the Minnetonka rig** the extractor's output is enough: nothing reads a radius. What it
   needs is a measured height (`motion_params.py --tree-height`; isolation trims the base, 8.5 % on
   the synthetic tree) and a leaf size (estimated from foliage splats, or `--leaf-size`).
+
+## Addendum (2026-09-28): limbs, not joints; a band, not a formula; skinned splats
+
+The first real tree (Minnetonka, 6.0 m, a 200-joint extracted rig) looked like it was
+"vibrating very quickly". Measured, the cause was the parameters and the binding, not the model:
+
+- **The rig's joints were read as branches.** The 35° continuation rule could not survive an
+  extracted skeleton that zigzags (median 56° turn per joint), so 200 joints became 150
+  oscillators, 121 of them one joint 0.2–0.7 m long, at 2–10 Hz, each with the full 0.05 rad and
+  compounding down 22-joint chains: tip RMS 16 cm at the default wind, 63 % of tip speed above
+  4 Hz, displacement spectral centroid 2.4 Hz.
+- **Every splat followed one joint rigidly**, so neighbouring splats on different joints differed
+  by 9 mm at the median and 186 mm at p99 (pairs < 1.7 cm apart): the crown sheared at every
+  Voronoi boundary.
+
+What changed, every rule general (read from the rig's geometry, never fitted to a tree) and
+tagged in the sidecar's provenance:
+
+| Rule                                                                                                                                              | Basis                                                                                                                                                                                                                                                                                                   | Status                          |
+| ------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------- |
+| At each joint the child carrying the most tips continues the axis; no angle limit                                                                 | da Vinci's rule                                                                                                                                                                                                                                                                                         | estimate                        |
+| A limb's length `L` is its **span**: the farthest its subtree reaches from its attachment                                                         | beam scaling `f ~ D/L²`, `D ~ L^1.37–1.38` holds for whole branches (Rodriguez, de Langre & Moulia 2008)                                                                                                                                                                                                | cited                           |
+| `f = 2.55·L^-0.59`, metres                                                                                                                        | Coder 2000 via Habel 2009 eq. 17; unit not in Habel, primary (UGA FOR00-24) not retrievable; only metres agrees with whole-tree data (6 m: 0.89 Hz vs 0.98 Hz from `2.4/√H`; feet: 0.44 Hz)                                                                                                             | cited, unit inferred            |
+| Modes ring in `[f0, 3·f0]`: a limb eq. 17 puts above `3·f0` is a **twig** (rides the limb it hangs from, no bend of its own, leaf flutter only)   | Rodriguez 2008: a 7.9 m walnut's first 25 modes in 1.4–2.6 Hz; branch modes 2.5–3 Hz over 1–1.5 Hz fundamentals                                                                                                                                                                                         | estimate from cited data        |
+| At most third-order limbs get a mode                                                                                                              | SpeedTree 1–2 branch levels, Pivot Painter 2 ≤ 4; many-part rigs are not identifiable from video (Chen & Lou 2026)                                                                                                                                                                                      | design choice                   |
+| A limb's bend `∝ (f0/f)^0.305`, i.e. tip deflection `∝ 1/f²`                                                                                      | sub-resonant response `(F/m)/(2πf)²` (Habel eq. 15) with `L` from eq. 17, at equal drag per unit mass                                                                                                                                                                                                   | estimate                        |
+| Leaf flutter 6 mm at 10 m/s (was 12), leaf size ≥ 5 cm                                                                                            | a splat is a piece of a leaf: 2 cm splats put the advected field at 9–22 Hz; now 4–9 Hz. Tadrist et al. 2018: flutter dominates only at low wind                                                                                                                                                        | estimate                        |
+| Joint `i` hinges at its **parent's** rest position                                                                                                | a limb's first segment must bend; a one-joint limb must move                                                                                                                                                                                                                                            | design choice                   |
+| Every splat blends its 4 nearest joints, modified Shepard weights (radius at the 5th), linear blend skinning in displacement form, 10-bit weights | Franke & Nielson 1980 (continuous weights); LBS over DQS because no joint twists about its limb, bends are hundredths of a radian (LBS shrink `≈ Δθ²/8`, sub-mm), splat covariances are not rotated on either path, and LBS is linear in the per-node texels (Kavan et al. 2008: 33 vs 42 instructions) | cited method, parameters chosen |
+
+Measured on the Minnetonka rig at the default wind (6.3 m/s; `living.test.ts`, before → after):
+24 modes at 0.98–2.91 Hz (150 at 0.98–10.05 Hz); tip RMS median 16.4 → 3.7 cm; share of tip speed
+above 4 Hz 0.63 → 0.10; displacement spectral centroid 2.44 → 0.99 Hz; limb tip deflection
+`∝ f^-1.67` across its 23 limbs; seam p99 186 → 2.8 mm (and a skinned seam shrinks with the probe
+spacing, a rigid one does not). The synthetic tree: 47 modes at 0.94–2.82 Hz (was 107 at
+1.67–4.97 Hz). The sidecar format is unchanged (v1); old sidecars load and move under the new
+hinge and skinning.
+
+Costs: binding is ~1.2× the nearest-node search (400,000 splats: ~0.4 s against ~0.3 s here;
+a 1,500-gaussian LOD tile ~1.2 ms warm, 2.6 ms cold). The vertex shader fetches `1 + 4k` texels
+for `k` weighted joints (3.4 on average on the Minnetonka tree, so ~15) where the rigid binding
+fetched 5, plus the unchanged flutter lookups. The CPU fallback's per-splat blend is ~5× the rigid
+transform (12,000 splats: 0.8 against 0.15 ms).
+
+Still for a person on real hardware: whether 3–4 cm of tip sway at the default wind reads as a
+tree in a moderate breeze (the magnitudes `0.02`/`0.05 rad` at 10 m/s remain estimates), whether
+4–9 Hz, 2–3 mm leaf flutter reads as leaves or as noise, and the GPU cost of ~15 fetches per
+vertex at a million splats.

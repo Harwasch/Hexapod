@@ -6,8 +6,11 @@
  * `t` is read out of a precomputed **spectral motion texture** along a straight, irrationally
  * sloped trajectory (`spectral.ts`, after Habel, Kusternig & Wimmer, EG 2009), so the signal has
  * the oscillator's stationary response spectrum, never repeats, and needs no previous frame.
- * Parent motion is carried to children exactly as `deform` does: each joint rotates about its own
- * rest position and then takes its parent's transform.
+ * Parent motion is carried to children as `deform` does — each joint's local rotation, then its
+ * parent's transform — with one difference: joint `i` is a hinge at its **parent's** rest
+ * position, so its rotation bends the segment `parent → i` and everything beyond it. (`deform`
+ * pivots each joint about itself, which leaves every limb's first segment rigid and a
+ * single-joint limb unable to bend at all.)
  *
  * ```text
  * U_i(t)   = U · (1 + gust(t − x_i/U))                          gust convected at the mean speed
@@ -17,8 +20,9 @@
  * s_b(t)   = T_ζb( p0_b + v_b·t ),  |v_b| = f_b · λ             texture, trajectory, speed
  * ```
  *
- * `r_i` is the joint's rotation vector: a mean lean about `d_i × ŵ` (the limb's own direction
- * crossed with downwind, so a limb pointing downwind is not bent by it — Habel eqs. 18–19) plus
+ * `r_i` is the joint's rotation vector: a mean lean about `d_i × ŵ` (the limb's own direction —
+ * its chord, attachment to far end, shared by all its joints so it bends in one plane — crossed
+ * with downwind, so a limb pointing downwind is not bent by it — Habel eqs. 18–19) plus
  * turbulent sway about the two axes across the limb. `g_i` is the joint's share of its branch's
  * bend; `α`, `β` are the along/across turbulence ratios.
  *
@@ -183,7 +187,7 @@ interface SeasonRuntime {
 export interface LivingMotion {
   readonly rig: MotionRig;
   readonly sidecar: MotionSidecar;
-  /** Per node: unit direction of the limb it bends (towards its continuation, else from parent). */
+  /** Per node: unit direction of the limb it lies on — the limb's chord, attachment to far end. */
   readonly limbDirection: readonly Vec3[];
   /** @internal memoised per season. */
   readonly seasons: Map<Season, SeasonRuntime>;
@@ -198,11 +202,17 @@ export function createLivingMotion(rig: MotionRig, sidecar: MotionSidecar): Livi
   if (issues.length > 0)
     throw new Error(`motion sidecar does not fit this rig:\n  ${issues.join("\n  ")}`);
   const structure = branchStructure(rig);
+  // Topological order: a limb's far end is its highest-indexed joint.
+  const far = new Map<number, number>();
+  rig.nodes.forEach((_, i) => {
+    if (i > 0) far.set(structure.limb[i] ?? i, i);
+  });
   const limbDirection = rig.nodes.map((node, i): Vec3 => {
-    const next = structure.continuation[i] ?? -1;
-    const from = next >= 0 ? node.position : rig.nodes[node.parent]?.position;
-    const to = next >= 0 ? rig.nodes[next]?.position : node.position;
-    if (from === undefined || to === undefined) return [0, 0, 1];
+    if (i === 0) return [0, 0, 1];
+    const base = structure.limb[i] ?? i;
+    const from = rig.nodes[rig.nodes[base]?.parent ?? 0]?.position;
+    const to = rig.nodes[far.get(base) ?? i]?.position ?? node.position;
+    if (from === undefined) return [0, 0, 1];
     const d = subtract(to, from);
     const length = Math.hypot(d[0], d[1], d[2]);
     return length > 0 ? [d[0] / length, d[1] / length, d[2] / length] : [0, 0, 1];
@@ -405,7 +415,8 @@ export function livingTransforms(
     ];
     const local = rotationFromVector(r, nodeAngleLimit(node));
     const parent = transforms[node.parent] ?? IDENTITY_TRANSFORM;
-    const pivot = node.position;
+    // A hinge at the joint this segment hangs from.
+    const pivot = rig.nodes[node.parent]?.position ?? node.position;
     const pivotOffset = subtract(pivot, quatRotate(local, pivot));
     transforms.push({
       rotation: quatMultiply(parent.rotation, local),
@@ -512,9 +523,11 @@ export function livingMaxDisplacement(motion: LivingMotion, wind: LivingWind): n
     while (cursor > 0) {
       const joint = rig.nodes[cursor];
       if (joint === undefined) break;
-      const dx = node.position[0] - joint.position[0];
-      const dy = node.position[1] - joint.position[1];
-      const dz = node.position[2] - joint.position[2];
+      // Each joint's rotation pivots at its parent's rest position.
+      const pivot = rig.nodes[joint.parent]?.position ?? joint.position;
+      const dx = node.position[0] - pivot[0];
+      const dy = node.position[1] - pivot[1];
+      const dz = node.position[2] - pivot[2];
       bound += (angles[cursor] ?? 0) * Math.hypot(dx, dy, dz);
       cursor = joint.parent;
     }

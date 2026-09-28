@@ -14,8 +14,9 @@
  *
  * - **identity** — the tile's un-baked positions digest into `rig.tileChecksums` (or, for a
  *   single-tile rig, `canonicalChecksum`), bit-exactly, or the deformer refuses;
- * - **binding** — each gaussian's rig node is its nearest node (`assignSplatsToNodes`),
- *   leaves and merged parents alike, so a parent rides the limb its own centre sits on;
+ * - **binding** — each gaussian's four nearest rig nodes and their blend weights
+ *   (`skinSplatsToNodes`), leaves and merged parents alike, so a parent rides the limb its own
+ *   centre sits on and neighbouring gaussians bound to different joints move continuously;
  * - **flutter identity** — a key from the snapped position (`positionKeys`), so the same
  *   gaussian shimmers the same whichever tile carries it.
  *
@@ -28,7 +29,15 @@
  * longer follow a re-extracted rig without re-packaging every tile.
  */
 
-import { assignSplatsToNodes, checksumPositions, positionKeys, type MotionRig } from "@twin/world";
+import {
+  checksumPositions,
+  concatSkins,
+  positionKeys,
+  skinPrimary,
+  skinSplatsToNodes,
+  type MotionRig,
+  type SplatSkin,
+} from "@twin/world";
 
 import {
   invertAffine,
@@ -167,8 +176,10 @@ export interface TileBinding {
   readonly checksum: string;
   /** Immutable. The rig's frame, recovered from the baked positions. */
   readonly canonicalLocal: Float32Array;
-  /** Rig node per gaussian, from its own position. */
+  /** Nearest rig node per gaussian, from its own position: slot 0 of `skin`. */
   readonly assignment: Uint16Array;
+  /** Four nodes and blend weights per gaussian, from its own position. */
+  readonly skin: SplatSkin;
   /** Flutter identity per gaussian, from its own position. */
   readonly flutterKeys: Uint32Array;
   /** Largest disagreement between our re-bake and the engine's baked positions, metres. */
@@ -228,13 +239,15 @@ export function bindTile(
       checksum,
     };
   }
+  const skin = skinSplatsToNodes(canonicalLocal, rig);
   return {
     kind: "bound",
     binding: {
       bake: Array.from(bake),
       checksum,
       canonicalLocal,
-      assignment: assignSplatsToNodes(canonicalLocal, rig),
+      assignment: skinPrimary(skin),
+      skin,
       flutterKeys: positionKeys(canonicalLocal),
       bakeResidualM,
     },
@@ -282,6 +295,7 @@ export interface SnapshotBinding {
   /** Immutable. Rig-frame positions of every splat. */
   readonly canonicalLocal: Float32Array;
   readonly assignment: Uint16Array;
+  readonly skin: SplatSkin;
   readonly flutterKeys: Uint32Array;
   /** The bake matrix every tile shares, or `undefined` when they differ. */
   readonly commonBake: Mat4 | undefined;
@@ -316,6 +330,7 @@ export function aggregateBindings(
       tiles: joined,
       canonicalLocal: only.binding.canonicalLocal,
       assignment: only.binding.assignment,
+      skin: only.binding.skin,
       flutterKeys: only.binding.flutterKeys,
       commonBake,
       bakeResidualM,
@@ -329,11 +344,17 @@ export function aggregateBindings(
     assignment.set(tile.binding.assignment, tile.start);
     flutterKeys.set(tile.binding.flutterKeys, tile.start);
   }
+  const skin = concatSkins(
+    joined.map((tile) => tile.binding.skin),
+    joined.map((tile) => tile.start),
+    numSplats,
+  );
   return {
     numSplats,
     tiles: joined,
     canonicalLocal,
     assignment,
+    skin,
     flutterKeys,
     commonBake,
     bakeResidualM,

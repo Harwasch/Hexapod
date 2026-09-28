@@ -15,15 +15,24 @@
  *   part `L` (texels 0–2, for rotating flutter into the baked frame), the flutter axis table
  *   (texels 4–515, two per axis) and — from texel 520, ten texels — the **flutter frame**: which
  *   kind of flutter this frame carries, and for Living Mode's advected field its per-frame
- *   lookup maps (below). From row 1, four texels per rig node: the node's affine transform **in
- *   the baked frame**, `[M | T]` as three rows, and its flutter texel — the legacy field's four
- *   coefficients, or the advected field's amplitude in `x`. `M = L·R·L⁻¹` and
- *   `T = b − M·b + L·t` for `B = (L, b)` and the node's local `(R, t)`, so
- *   `M·p_b + T = B·(R·B⁻¹·p_b + t)` — the CPU path's arithmetic, folded per node. Re-uploaded
- *   every moving frame: a row per 256 nodes (16 KB for this tree) plus the flutter frame's ten
- *   texels (160 B).
- * - **binding** (RG32UI, addressed like the attribute texture). Per splat: its rig node and its
- *   flutter hash (`flutterHash(positionKey)`). Uploaded once per snapshot.
+ *   lookup maps (below). From row 1, four texels per rig node: the node's **displacement**
+ *   affine in the baked frame, `[D | T]` as three rows, and its flutter texel — the legacy
+ *   field's four coefficients, or the advected field's amplitude in `x`. `D = L·(R − I)·L⁻¹`
+ *   and `T = L·t − D·b` for `B = (L, b)` and the node's local `(R, t)`, so
+ *   `p_b + D·p_b + T = B·(R·B⁻¹·p_b + t)` — the CPU path's arithmetic, folded per node, and a
+ *   node at rest is four texels of exact zeros. Re-uploaded every moving frame: a row per 256
+ *   nodes (16 KB for this tree) plus the flutter frame's ten texels (160 B).
+ * - **binding** (RGBA32UI, addressed like the attribute texture). Per splat: its skin's four
+ *   nodes (16 bits each, `r` and `g`), the last three of their weights (10 bits each, `b`; the
+ *   first is `1023` less their sum) and its
+ *   flutter hash (`flutterHash(positionKey)`, `a`). Uploaded once per snapshot.
+ *
+ * **Skinning** (`skin.ts`): each splat moves by `Σ_k (w_k/1023)·(D_k·p_b + T_k)`, the blend of
+ * up to four nodes' displacements, and flutters by the same blend of their flutter texels —
+ * linear blend skinning, so the displacement field is continuous across the joints' Voronoi
+ * boundaries and a limb bends as a curve. Per vertex that is one binding fetch and four texel
+ * fetches per weighted node (1 + 4·k, k ≤ 4; 3.4 on average on the Minnetonka tree) where the
+ * rigid binding was 1 + 4, plus the flutter lookups.
  * - **leaf flutter** (RGBA32F, `n × n`). Living Mode's periodic flutter motion texture
  *   (`leafFlutter.ts`), which depends on the sidecar seed alone, so it is uploaded once per
  *   seed. Packed for bilinear gathering: texel `(x, y)` holds `T[x, y]`, `T[x+1, y]`,
@@ -59,9 +68,13 @@ import {
   flutterHash,
   IDENTITY_TRANSFORM,
   isAdvectedFlutter,
+  SKIN_INFLUENCES,
+  SKIN_WEIGHT_TOTAL,
+  skinCount,
   type FlutterField,
   type MotionTexture,
   type NodeTransform,
+  type SplatSkin,
 } from "@twin/world";
 
 import { invertAffine, type Mat4 } from "./splatFrames";
@@ -104,7 +117,8 @@ export interface OwnedTexture extends SplatTexture {
 /** How textures are made. The real one (`splatGpuTextures.ts`) wraps `Renderer/Texture`. */
 export interface MotionTextureFactory {
   createFloat(context: unknown, width: number, height: number, data: Float32Array): OwnedTexture;
-  createUintPairs(context: unknown, width: number, height: number, data: Uint32Array): OwnedTexture;
+  /** An `RGBA32UI` texture: four `uint`s a texel. */
+  createUintQuads(context: unknown, width: number, height: number, data: Uint32Array): OwnedTexture;
   /** `ShaderDestination.VERTEX`. */
   readonly vertexDestination: number;
 }
@@ -130,10 +144,10 @@ export function writeMotionHeader(out: Float32Array, bake: Mat4): void {
 }
 
 /**
- * Every node's baked-frame affine rows and flutter texel, into the motion texture's node rows.
- * A node flagged still in `nodeMoves` is written as the exact identity with no flutter, which
- * the shader recognises and leaves alone. The flutter texel is the legacy field's four
- * coefficients, or — for an advected field — the node's amplitude in `x`.
+ * Every node's baked-frame displacement rows and flutter texel, into the motion texture's node
+ * rows. A node flagged still in `nodeMoves` is written as exact zeros, which the shader skips.
+ * The flutter texel is the legacy field's four coefficients, or — for an advected field — the
+ * node's amplitude in `x`.
  */
 export function writeNodeRows(
   out: Float32Array,
@@ -146,7 +160,8 @@ export function writeNodeRows(
   const advected = isAdvectedFlutter(flutter);
   const coefficients = flutter.still || advected ? undefined : flutterCoefficients(flutter);
   const amplitudes = advected && !flutter.still ? flutter.amplitudeM : undefined;
-  // L and L⁻¹ row-major (element (r, c) at r * 3 + c), b as a vector; scratch for R, L·R, M.
+  // L and L⁻¹ row-major (element (r, c) at r * 3 + c), b as a vector; scratch for R − I,
+  // L·(R − I) and D.
   const l = MATRIX_SCRATCH.subarray(0, 9);
   const li = MATRIX_SCRATCH.subarray(9, 18);
   const rot = MATRIX_SCRATCH.subarray(18, 27);
@@ -165,23 +180,21 @@ export function writeNodeRows(
     const base = (NODE_TEXEL_BASE + n * TEXELS_PER_NODE) * FLOATS_PER_TEXEL;
     if ((nodeMoves[n] ?? 0) === 0) {
       out.fill(0, base, base + TEXELS_PER_NODE * FLOATS_PER_TEXEL);
-      out[base] = 1;
-      out[base + 5] = 1;
-      out[base + 10] = 1;
       continue;
     }
     const transform = transforms[n] ?? IDENTITY_TRANSFORM;
     const [x, y, z, w] = transform.rotation;
-    rot[0] = 1 - 2 * (y * y + z * z);
+    // R − I, written from the quaternion so a small bend keeps its precision.
+    rot[0] = -2 * (y * y + z * z);
     rot[1] = 2 * (x * y - z * w);
     rot[2] = 2 * (x * z + y * w);
     rot[3] = 2 * (x * y + z * w);
-    rot[4] = 1 - 2 * (x * x + z * z);
+    rot[4] = -2 * (x * x + z * z);
     rot[5] = 2 * (y * z - x * w);
     rot[6] = 2 * (x * z - y * w);
     rot[7] = 2 * (y * z + x * w);
-    rot[8] = 1 - 2 * (x * x + y * y);
-    // M = L·R·L⁻¹
+    rot[8] = -2 * (x * x + y * y);
+    // D = L·(R − I)·L⁻¹
     multiply3(l, rot, lr);
     multiply3(lr, li, m);
     const [t0, t1, t2] = transform.translation;
@@ -189,14 +202,15 @@ export function writeNodeRows(
       const m0 = m[i * 3] ?? 0;
       const m1 = m[i * 3 + 1] ?? 0;
       const m2 = m[i * 3 + 2] ?? 0;
-      // T = b − M·b + L·t
       out[base + i * 4] = m0;
       out[base + i * 4 + 1] = m1;
       out[base + i * 4 + 2] = m2;
+      // T = L·t − D·b
       out[base + i * 4 + 3] =
-        (i === 0 ? b0 : i === 1 ? b1 : b2) -
-        (m0 * b0 + m1 * b1 + m2 * b2) +
-        ((l[i * 3] ?? 0) * t0 + (l[i * 3 + 1] ?? 0) * t1 + (l[i * 3 + 2] ?? 0) * t2);
+        (l[i * 3] ?? 0) * t0 +
+        (l[i * 3 + 1] ?? 0) * t1 +
+        (l[i * 3 + 2] ?? 0) * t2 -
+        (m0 * b0 + m1 * b1 + m2 * b2);
     }
     if (amplitudes !== undefined) {
       out[base + 12] = amplitudes[n] ?? 0;
@@ -307,22 +321,30 @@ function multiply3(a: Float64Array, b: Float64Array, out: Float64Array): void {
 }
 
 /**
- * Per-splat binding words in the attribute texture's addressing: `(node, flutterHash)` at
- * texel `(i & rowMask, i >> rowShift)` of a `splatsPerRow`-wide texture.
+ * Per-splat binding words in the attribute texture's addressing, at texel
+ * `(i & rowMask, i >> rowShift)` of a `splatsPerRow`-wide `RGBA32UI` texture: skin nodes 0 and
+ * 1 in `r` (low and high 16 bits), nodes 2 and 3 in `g`, the weights of nodes 1–3 in `b` (ten
+ * bits each, node 1 lowest; node 0's is the remainder of 1023) and the flutter hash in `a`.
  */
 export function bindingTexels(
-  assignment: Uint16Array,
+  skin: SplatSkin,
   flutterKeys: Uint32Array,
   layout: SplatTextureLayout,
 ): { width: number; height: number; data: Uint32Array } {
   const width = layout.splatsPerRow;
   const height = layout.height;
-  const data = new Uint32Array(width * height * 2);
-  const count = Math.min(layout.numSplats, assignment.length, flutterKeys.length);
+  const data = new Uint32Array(width * height * 4);
+  const count = Math.min(layout.numSplats, skinCount(skin), flutterKeys.length);
+  const { nodes, weights } = skin;
   for (let i = 0; i < count; i += 1) {
     const texel = (i >>> layout.rowShift) * width + (i & layout.rowMask);
-    data[texel * 2] = assignment[i] ?? 0;
-    data[texel * 2 + 1] = flutterHash(flutterKeys[i] ?? 0);
+    const at = i * SKIN_INFLUENCES;
+    data[texel * 4] = ((nodes[at] ?? 0) | ((nodes[at + 1] ?? 0) << 16)) >>> 0;
+    data[texel * 4 + 1] = ((nodes[at + 2] ?? 0) | ((nodes[at + 3] ?? 0) << 16)) >>> 0;
+    data[texel * 4 + 2] =
+      ((weights[at + 1] ?? 0) | ((weights[at + 2] ?? 0) << 10) | ((weights[at + 3] ?? 0) << 20)) >>>
+      0;
+    data[texel * 4 + 3] = flutterHash(flutterKeys[i] ?? 0);
   }
   return { width, height, data };
 }
@@ -371,25 +393,45 @@ vec3 splatVertexMotion(uint splatIndex, vec3 position) {
     }
     uint rowMask = uint(u_splatRowMask);
     uint rowShift = uint(u_splatRowShift);
-    uvec2 binding = texelFetch(
+    uvec4 binding = texelFetch(
         u_splatMotionBinding,
         ivec2(int(splatIndex & rowMask), int(splatIndex >> rowShift)),
         0
-    ).rg;
-    int base = ${String(NODE_TEXEL_BASE)} + int(binding.r) * ${String(TEXELS_PER_NODE)};
-    vec4 r0 = splatMotionTexel(base);
-    vec4 r1 = splatMotionTexel(base + 1);
-    vec4 r2 = splatMotionTexel(base + 2);
-    vec4 c = splatMotionTexel(base + 3);
-    if (r0 == vec4(1.0, 0.0, 0.0, 0.0) && r1 == vec4(0.0, 1.0, 0.0, 0.0) &&
-        r2 == vec4(0.0, 0.0, 1.0, 0.0) && c == vec4(0.0)) {
+    );
+    // Linear blend skinning in displacement form: a node at rest is all zeros and adds nothing.
+    vec3 delta = vec3(0.0);
+    vec4 c = vec4(0.0);
+    bool moves = false;
+    for (int k = 0; k < ${String(SKIN_INFLUENCES)}; k++) {
+        uint q = k == 0
+            ? ${String(SKIN_WEIGHT_TOTAL)}u - ((binding.b & 1023u) + ((binding.b >> 10u) & 1023u) + ((binding.b >> 20u) & 1023u))
+            : (binding.b >> uint(10 * (k - 1))) & 1023u;
+        if (q == 0u) {
+            continue;
+        }
+        uint word = k < 2 ? binding.r : binding.g;
+        uint node = (word >> uint(16 * (k & 1))) & 65535u;
+        int base = ${String(NODE_TEXEL_BASE)} + int(node) * ${String(TEXELS_PER_NODE)};
+        vec4 r0 = splatMotionTexel(base);
+        vec4 r1 = splatMotionTexel(base + 1);
+        vec4 r2 = splatMotionTexel(base + 2);
+        vec4 f = splatMotionTexel(base + 3);
+        if (r0 == vec4(0.0) && r1 == vec4(0.0) && r2 == vec4(0.0) && f == vec4(0.0)) {
+            continue;
+        }
+        moves = true;
+        float w = float(q) / ${SKIN_WEIGHT_TOTAL.toFixed(1)};
+        delta += w * vec3(
+            dot(r0.xyz, position) + r0.w,
+            dot(r1.xyz, position) + r1.w,
+            dot(r2.xyz, position) + r2.w
+        );
+        c += w * f;
+    }
+    if (!moves) {
         return position;
     }
-    vec3 moved = vec3(
-        dot(r0.xyz, position) + r0.w,
-        dot(r1.xyz, position) + r1.w,
-        dot(r2.xyz, position) + r2.w
-    );
+    vec3 moved = position + delta;
     if (c != vec4(0.0) && splatMotionTexel(${String(FLUTTER_FRAME_TEXEL)}).x > 0.5) {
         // Living Mode's advected field, looked up at the canonical (fetched) position.
         vec3 wind = vec3(
@@ -403,7 +445,7 @@ vec3 splatVertexMotion(uint splatIndex, vec3 position) {
             dot(splatMotionTexel(${String(FLUTTER_FRAME_TEXEL + 3)}).xyz, wind)
         );
     } else if (c != vec4(0.0)) {
-        uint h = binding.g;
+        uint h = binding.a;
         float p1 = float(h & 1023u) * SPLAT_MOTION_PHASE_STEP;
         float p2 = float((h >> 10u) & 1023u) * SPLAT_MOTION_PHASE_STEP;
         int axis = ${String(AXIS_TEXEL_BASE)} + int((h >> 20u) & 255u) * 2;
@@ -427,7 +469,9 @@ vec3 splatVertexMotion(uint splatIndex, vec3 position) {
  */
 export function evaluateSplatMotion(
   motion: Float32Array,
-  node: number,
+  /** The splat's four skin nodes and integer weights (summing to 1023). */
+  nodes: ArrayLike<number>,
+  weights: ArrayLike<number>,
   hash: number,
   position: readonly [number, number, number],
   /** The leaf-flutter texture as uploaded ({@link packFlutterTexture}), for an advected frame. */
@@ -435,21 +479,36 @@ export function evaluateSplatMotion(
 ): [number, number, number] {
   const texel = (index: number): number[] =>
     [0, 1, 2, 3].map((k) => motion[index * FLOATS_PER_TEXEL + k] ?? 0);
-  const base = NODE_TEXEL_BASE + node * TEXELS_PER_NODE;
-  const [r0, r1, r2, c] = [texel(base), texel(base + 1), texel(base + 2), texel(base + 3)];
-  const rows = [r0, r1, r2] as number[][];
-  const still =
-    rows.every((row, i) => row.every((v, j) => v === (j === i ? 1 : 0))) &&
-    (c ?? []).every((v) => v === 0);
-  if (still) return [position[0], position[1], position[2]];
-  const out = rows.map(
-    (row) =>
-      (row[0] ?? 0) * position[0] +
-      (row[1] ?? 0) * position[1] +
-      (row[2] ?? 0) * position[2] +
-      (row[3] ?? 0),
-  ) as [number, number, number];
-  const flutters = (c ?? []).some((v) => v !== 0);
+  const delta = [0, 0, 0];
+  const c = [0, 0, 0, 0];
+  let moves = false;
+  for (let k = 0; k < SKIN_INFLUENCES; k += 1) {
+    const q = weights[k] ?? 0;
+    if (q === 0) continue;
+    const base = NODE_TEXEL_BASE + (nodes[k] ?? 0) * TEXELS_PER_NODE;
+    const rows = [texel(base), texel(base + 1), texel(base + 2)];
+    const f = texel(base + 3);
+    if (rows.every((row) => row.every((v) => v === 0)) && f.every((v) => v === 0)) continue;
+    moves = true;
+    const w = q / SKIN_WEIGHT_TOTAL;
+    rows.forEach((row, r) => {
+      delta[r] =
+        (delta[r] ?? 0) +
+        w *
+          ((row[0] ?? 0) * position[0] +
+            (row[1] ?? 0) * position[1] +
+            (row[2] ?? 0) * position[2] +
+            (row[3] ?? 0));
+    });
+    for (let j = 0; j < 4; j += 1) c[j] = (c[j] ?? 0) + w * (f[j] ?? 0);
+  }
+  if (!moves) return [position[0], position[1], position[2]];
+  const out: [number, number, number] = [
+    position[0] + (delta[0] ?? 0),
+    position[1] + (delta[1] ?? 0),
+    position[2] + (delta[2] ?? 0),
+  ];
+  const flutters = c.some((v) => v !== 0);
   if (flutters && (texel(FLUTTER_FRAME_TEXEL)[0] ?? 0) > 0.5) {
     const size = flutterTexture?.size ?? 1;
     const data = flutterTexture?.data ?? new Float32Array(4);
@@ -473,7 +532,7 @@ export function evaluateSplatMotion(
       const row = FLUTTER_FRAME_TEXEL + 4 + j * 2;
       return sample(affine(texel(row)), affine(texel(row + 1)));
     });
-    const amplitude = c?.[0] ?? 0;
+    const amplitude = c[0] ?? 0;
     for (let r = 0; r < 3; r += 1) {
       const cRow = texel(FLUTTER_FRAME_TEXEL + 1 + r);
       out[r] =
@@ -490,8 +549,8 @@ export function evaluateSplatMotion(
     const axis = AXIS_TEXEL_BASE + ((hash >>> 20) & 255) * 2;
     const a = texel(axis);
     const b = texel(axis + 1);
-    const wave1 = (c?.[0] ?? 0) * Math.cos(p1) + (c?.[1] ?? 0) * Math.sin(p1);
-    const wave2 = (c?.[2] ?? 0) * Math.cos(p2) + (c?.[3] ?? 0) * Math.sin(p2);
+    const wave1 = (c[0] ?? 0) * Math.cos(p1) + (c[1] ?? 0) * Math.sin(p1);
+    const wave2 = (c[2] ?? 0) * Math.cos(p2) + (c[3] ?? 0) * Math.sin(p2);
     const local = [0, 1, 2].map((k) => wave1 * (a[k] ?? 0) + wave2 * (b[k] ?? 0));
     for (let r = 0; r < 3; r += 1) {
       const lRow = texel(r);
@@ -576,11 +635,11 @@ export class SplatGpuMotion implements SplatVertexMotion {
     primitive.vertexMotion = this;
   }
 
-  /** Binds a snapshot: its generation, and every splat's node and flutter hash. */
+  /** Binds a snapshot: its generation, and every splat's skin and flutter hash. */
   bind(
     generation: number,
     layout: SplatTextureLayout,
-    assignment: Uint16Array,
+    skin: SplatSkin,
     flutterKeys: Uint32Array,
     bake: Mat4,
   ): boolean {
@@ -594,7 +653,7 @@ export class SplatGpuMotion implements SplatVertexMotion {
     };
     this.#active = false;
     this.#headerWritten = false;
-    this.#pendingBinding = bindingTexels(assignment, flutterKeys, layout);
+    this.#pendingBinding = bindingTexels(skin, flutterKeys, layout);
     this.#ensureTextures();
     return true;
   }
@@ -744,7 +803,7 @@ export class SplatGpuMotion implements SplatVertexMotion {
     if (pending !== undefined) {
       // A new texture per snapshot: its size follows the snapshot's splat count.
       this.#bindingTexture?.destroy();
-      this.#bindingTexture = this.#factory.createUintPairs(
+      this.#bindingTexture = this.#factory.createUintQuads(
         context,
         pending.width,
         pending.height,
@@ -752,7 +811,7 @@ export class SplatGpuMotion implements SplatVertexMotion {
       );
       this.#pendingBinding = undefined;
     } else if (this.#bindingTexture === undefined || this.#bindingTexture.isDestroyed()) {
-      this.#bindingTexture = this.#factory.createUintPairs(context, 1, 1, new Uint32Array(2));
+      this.#bindingTexture = this.#factory.createUintQuads(context, 1, 1, new Uint32Array(4));
     }
     if (this.#flutterTexture === undefined || this.#flutterTexture.isDestroyed()) {
       // A placeholder until an advected field arrives; the shader never samples it before.

@@ -23,6 +23,7 @@ import {
   livingWindFromSettings,
   loadLivingMotion,
   positionKeys,
+  skinSplatsToNodes,
   type LivingMotion,
   type MotionRig,
   type Season,
@@ -170,6 +171,8 @@ describe("the GPU path under Living Mode", () => {
       // The deformer binds the splats as an independent reading of the rig does.
       const assignment = assignSplatsToNodes(canonical, test.rig);
       expect(deformer.assignment).toEqual(assignment);
+      const skin = skinSplatsToNodes(canonical, test.rig);
+      expect(deformer.skin).toEqual(skin);
       const keys = positionKeys(canonical);
       const count = canonical.length / 3;
 
@@ -204,8 +207,17 @@ describe("the GPU path under Living Mode", () => {
           undefined,
           living.flutter,
           keys,
+          skin,
         );
-        const swayOnly = deformPositions(canonical, assignment, living.transforms);
+        const swayOnly = deformPositions(
+          canonical,
+          assignment,
+          living.transforms,
+          undefined,
+          undefined,
+          undefined,
+          skin,
+        );
         const cpu = transformPositions(moved, test.bake, new Float32Array(moved.length));
         const cpuSway = transformPositions(swayOnly, test.bake, new Float32Array(moved.length));
         let worst = 0;
@@ -214,7 +226,8 @@ describe("the GPU path under Living Mode", () => {
           const rest = primitive._positions.subarray(i * 3, i * 3 + 3);
           const gpu = evaluateSplatMotion(
             motionData,
-            assignment[i] ?? 0,
+            skin.nodes.subarray(i * 4, i * 4 + 4),
+            skin.weights.subarray(i * 4, i * 4 + 4),
             flutterHash(keys[i] ?? 0),
             [rest[0] ?? 0, rest[1] ?? 0, rest[2] ?? 0],
             packed,

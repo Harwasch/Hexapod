@@ -8,6 +8,7 @@ export * from "./modes";
 export * from "./motionParams";
 export * from "./noise";
 export * from "./rig";
+export * from "./skin";
 export * from "./spectral";
 export * from "./vec";
 export * from "./wind";

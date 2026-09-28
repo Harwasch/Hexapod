@@ -267,8 +267,8 @@ instead derived per tile, from that tile's own positions (`splatTiles.ts`):
 - **identity** — the tile's un-baked positions must digest, bit-exactly, into `rig.tileChecksums`
   (stamped offline by `tools/captures/rig_tiles.py` from the SPZ blocks; the single-tile case is
   the same rule with one digest, `canonicalChecksum`);
-- **binding** — each gaussian's node is its nearest rig node, the rule the single-tile deformer
-  always used, so a merged parent rides the limb its own centre sits on;
+- **binding** — each gaussian's four nearest rig nodes and their blend weights (`skin.ts`,
+  below), from its own position, so a merged parent rides the limb its own centre sits on;
 - **flutter identity** — a hash of the snapped canonical position (`positionKeys` in
   `@twin/world`) instead of the splat index, so the same gaussian shimmers the same whichever
   tile carries it, and a parent coincident with a leaf moves exactly as the leaf does.
@@ -299,6 +299,32 @@ The binding cost shows up as a hitch when many new tiles arrive at once: the lar
 re-derivation, with most of its 26 tiles new, took 1.2–1.8 s in the browser (binding plus the
 per-snapshot binding texture). Tiles that stay loaded are not re-bound (e2e: zooming back in
 re-derives with zero new bindings, 3.7 ms), so it is paid per tile load, not per LOD switch.
+
+### Skinning: four joints a splat, not one
+
+Until 2026-09 every gaussian followed its one nearest node rigidly. A joint's transform rotates
+about a pivot and carries its parent's, so two neighbouring splats on either side of the Voronoi
+boundary between two joints were moved by two different rigid motions: the displacement field
+jumped by the joint's bend times the lever arm, and a limb bent as a chain of sticks. On the
+Minnetonka tree at the default wind, splat pairs under 1.7 cm apart on different joints differed
+by 9 mm at the median and 186 mm at p99.
+
+Now each gaussian blends its **four nearest nodes** with modified Shepard weights (Franke &
+Nielson 1980, radius at the fifth node), so the weights — and the displacement field — are
+continuous everywhere, including where the set of four changes, and a limb bends as a curve.
+The blend is linear (`x + Σ w·(D·x + t)`, `D = R − I`): no joint of the model twists about its
+own limb and bends are hundredths of a radian, so LBS's shrink is sub-millimetre, and a joint at
+rest contributes exact zeros, so calm still restores the measured bytes. Weights are 10-bit
+integers summing to 1023, identical on the CPU and GPU paths. The same weights blend each
+node's flutter amplitude. After: p50 0.16 mm, p99 2.8 mm, and a skinned seam shrinks in
+proportion to the probe spacing where a rigid one does not (`living.test.ts`).
+
+The search is exact (slot 0 is `assignSplatsToNodes`' answer bit for bit): a grid over the
+splats whose cells carry, built on first use and cached per rig, every node that can be among
+any of the cell's points' five nearest. Measured here: ~0.4 s for the Minnetonka tree's 400,000
+splats against ~0.3 s for the nearest node alone, ~1.2 ms for a 1,500-gaussian LOD tile (2.6 ms
+cold). Per vertex the shader fetches the binding texel plus four texels per weighted node — 3.4
+nodes on average on that tree, so ~15 fetches where the rigid binding made 5.
 
 ### The GPU path
 
@@ -771,6 +797,11 @@ the pipeline runs end to end and nothing more.
    here). None of that is measurable on
    SwiftShader, and it is what decides whether the flag comes off.
 
+6. **Does the Minnetonka tree now sway rather than vibrate?** Measured, its tips moved at a
+   spectral centroid of 2.4 Hz with 63 % of their speed above 4 Hz; they now move at 1.0 Hz with
+   10 %, 3–4 cm RMS at the default wind (ADR 0008, 2026-09 addendum). Whether that amplitude and
+   the 2–3 mm, 4–9 Hz leaf flutter read as a tree in a breeze is a judgement for eyes.
+
 Then the one that matters most: run `skeleton.py` on a real scanned tree and see whether a rig
 inferred from geometry alone moves it convincingly. Everything above is demonstrable on a fixture
 whose topology is known by construction, which is exactly the condition the extractor will not have
@@ -836,6 +867,8 @@ Worth writing down, because the fixture is tidy in ways a real extraction will n
 | ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
 | `packages/world` (`@twin/world`)                                                   | the pure motion model: rig, gust field, resonant modes, per-splat flutter, `deform`, metrics                     |
 | `packages/world/src/living.ts`, `spectral.ts`, `leafFlutter.ts`, `motionParams.ts` | Living Mode ([ADR 0008](DECISIONS/0008-living-mode.md)): modal model, motion textures, advected flutter, sidecar |
+| `packages/world/src/skin.ts`                                                       | four-node skinning weights (modified Shepard) and the exact search                                               |
+| `packages/world/fixtures/minnetonka/`                                              | the Minnetonka skeleton as a test fixture (CC BY 4.0, Matthew Guertin)                                           |
 | `tools/captures/motion_params.py`                                                  | writes `motion.json` beside a rig (called by `synthetic_tree.py` and `skeleton.py`)                              |
 | `apps/web/e2e/livingCompare.spec.ts`                                               | blind A/B clips, legacy against Living Mode (`LIVING_COMPARE=1`)                                                 |
 | `tools/captures/synthetic_tree.py`                                                 | the procedural tree and its ground-truth labels                                                                  |

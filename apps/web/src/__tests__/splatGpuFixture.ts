@@ -38,7 +38,7 @@ export function fakeFactory(): MotionTextureFactory & { made: FakeOwnedTexture[]
     made.push(texture);
     return texture;
   };
-  return { createFloat: make, createUintPairs: make, vertexDestination: 0, made };
+  return { createFloat: make, createUintQuads: make, vertexDestination: 0, made };
 }
 
 /** The tiled primitive, with the patch's accessor. */

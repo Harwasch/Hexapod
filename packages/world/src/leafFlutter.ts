@@ -27,6 +27,7 @@
  */
 
 import { type FlutterField } from "./flutter";
+import { SKIN_INFLUENCES, SKIN_WEIGHT_TOTAL, skinCount, type SplatSkin } from "./skin";
 import { sampleTexture, trajectoryDirection, type MotionTexture } from "./spectral";
 
 /** The flutter field of one frame: per-node amplitude plus what every splat needs to look up. */
@@ -167,10 +168,16 @@ export function applyAdvectedFlutter(
   assignment: Uint16Array,
   field: AdvectedFlutterField,
   count: number,
+  /** Blends each splat's amplitude over its skin's nodes; `assignment` is then not read. */
+  skin?: SplatSkin,
 ): void {
   if (field.still) return;
   const amplitudes = field.amplitudeM;
-  const limit = Math.min(count, assignment.length, Math.floor(target.length / 3));
+  const limit = Math.min(
+    count,
+    skin === undefined ? assignment.length : skinCount(skin),
+    Math.floor(target.length / 3),
+  );
   // `advectedFlutterUnit`, written out for the per-splat loop: the advection is folded into
   // each map's offset once per frame and the bilinear sample is inlined. Same arithmetic up to
   // float association; `living.test.ts` pins the two together.
@@ -222,8 +229,23 @@ export function applyAdvectedFlutter(
     const d = data[yb + xb] ?? 0;
     return (a + (b - a) * tx) * (1 - ty) + (c + (d - c) * tx) * ty;
   };
+  const skinNodes = skin?.nodes;
+  const skinWeights = skin?.weights;
+  const influences = SKIN_INFLUENCES;
+  const scale = 1 / SKIN_WEIGHT_TOTAL;
   for (let i = 0; i < limit; i += 1) {
-    const amplitude = amplitudes[assignment[i] ?? 0] ?? 0;
+    let amplitude = 0;
+    if (skinNodes === undefined || skinWeights === undefined) {
+      amplitude = amplitudes[assignment[i] ?? 0] ?? 0;
+    } else {
+      // `blendedAmplitude`, inlined.
+      const at = i * influences;
+      for (let j = 0; j < influences; j += 1) {
+        const q = skinWeights[at + j] ?? 0;
+        if (q !== 0) amplitude += q * (amplitudes[skinNodes[at + j] ?? 0] ?? 0);
+      }
+      amplitude *= scale;
+    }
     if (amplitude === 0) continue;
     const base = i * 3;
     const x = positions[base] ?? 0;
@@ -238,4 +260,16 @@ export function applyAdvectedFlutter(
     target[base + 1] = (target[base + 1] ?? 0) + amplitude * (along * ey - across * ex);
     target[base + 2] = (target[base + 2] ?? 0) + amplitude * up;
   }
+}
+
+/** `Σ_k (w_k/1023)·A[node_k]`: a splat's flutter amplitude under its skin. */
+export function blendedAmplitude(skin: SplatSkin, i: number, amplitudes: Float64Array): number {
+  const at = i * SKIN_INFLUENCES;
+  let sum = 0;
+  for (let k = 0; k < SKIN_INFLUENCES; k += 1) {
+    const q = skin.weights[at + k] ?? 0;
+    if (q === 0) continue;
+    sum += q * (amplitudes[skin.nodes[at + k] ?? 0] ?? 0);
+  }
+  return sum / SKIN_WEIGHT_TOTAL;
 }

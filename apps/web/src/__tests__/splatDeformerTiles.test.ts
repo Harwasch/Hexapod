@@ -25,6 +25,7 @@ import {
   maxDisplacement,
   maxFlutterAmplitude,
   positionKeys,
+  skinSplatsToNodes,
   type FlutterField,
   type NodeTransform,
   type WindSettings,
@@ -122,6 +123,7 @@ function reference(
     undefined,
     field,
     positionKeys(p),
+    skinSplatsToNodes(p, lodRig),
   );
   const baked = transformPositions(moved, lodBake, new Float32Array(3));
   return [baked[0] ?? 0, baked[1] ?? 0, baked[2] ?? 0];
@@ -433,7 +435,7 @@ describe("the GPU path", () => {
     const binding = factory.made.find((t) => t.initial instanceof Uint32Array && t.width > 1);
     expect(binding).toBeDefined();
     const motion = deformer.gpuMotion?.motionData ?? new Float32Array(0);
-    const assignment = deformer.assignment ?? new Uint16Array(0);
+    const skin = deformer.skin ?? { nodes: new Uint16Array(0), weights: new Uint16Array(0) };
     const keys = deformer.flutterKeys ?? new Uint32Array(0);
     let start = 0;
     let worst = 0;
@@ -442,11 +444,13 @@ describe("the GPU path", () => {
       for (let j = 0; j < local.length / 3; j += 1) {
         const i = start + j;
         const rest = primitive._positions.subarray(i * 3, i * 3 + 3);
-        const gpu = evaluateSplatMotion(motion, assignment[i] ?? 0, flutterHash(keys[i] ?? 0), [
-          rest[0] ?? 0,
-          rest[1] ?? 0,
-          rest[2] ?? 0,
-        ]);
+        const gpu = evaluateSplatMotion(
+          motion,
+          skin.nodes.subarray(i * 4, i * 4 + 4),
+          skin.weights.subarray(i * 4, i * 4 + 4),
+          flutterHash(keys[i] ?? 0),
+          [rest[0] ?? 0, rest[1] ?? 0, rest[2] ?? 0],
+        );
         const cpu = reference(local, j, transforms, field);
         worst = Math.max(worst, ...gpu.map((v, k) => Math.abs(v - (cpu[k] ?? 0))));
       }
