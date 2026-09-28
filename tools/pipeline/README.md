@@ -476,6 +476,25 @@ COLMAP was 192 s (extract 3.7, match 121, map 67). Two changes aim at the rest:
   What is left of `billedS` after those is container start and queueing. The next real
   run is what attributes the 110 s; nothing here measured it.
 
+### `colmap: "4.2"`: the pose stage on COLMAP 4.2
+
+`pose` runs apt's COLMAP 3.9.1. `{"pose": {"colmap": "4.2"}}` runs extraction, matching
+and incremental mapping on COLMAP 4.2 instead, through the `pycolmap==4.2.0` wheel the CPU
+image already carries for `mapper: global` (`colmap4.py`): no second COLMAP build, and
+the same matching plan, exhaustive fallback, mapper seeds and `poses.json` -- whose
+`version` says which COLMAP ran, beside a new `meanReprojectionErrorPx` for both. 4.2
+reads a faiss vocabulary tree, not 3.9.1's FLANN one, so the image carries the faiss build
+of the same 32K-word tree at `$COLMAP4_VOCAB_TREE`, and pairs a video's frames the way
+3.9.1 does (4.2's own `quadratic_overlap` drops the linear window; `colmap4._matching`).
+The poses artifact stays 3.9.1's three files, which 3.9.1's `model_aligner` reads.
+
+On the rendered orbits (4 cores, `colmap4.py` has the table) 4.2 matched 1.35-5x and
+mapped 2-2.3x faster, with pose error within run-to-run noise of 3.9.1's: 87 frames at 1600x1200, sequential with
+loop closure and the recipe's settings, 475 s -> 294 s (match 255 -> 189 s, map
+193 -> 83 s), 87/87 both. The spool's 179 frames spent 266 s matching and 323 s mapping
+on 3.9.1; whether 4.2 saves the same there is **unmeasured**. 3.9.1 stays the default until
+it is.
+
 ## Refine from the preview
 
 The phone's Refine re-runs `train` in the preview's workdir with `init_from: preview`

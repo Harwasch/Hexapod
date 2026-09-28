@@ -245,11 +245,25 @@ VOCAB_TREE_URL = (
 VOCAB_TREE_SHA256 = "d37d8f19ee0a49705c4c0b06967a08cedfed5cf86519eada3271497256732bc2"
 VOCAB_TREE = "/opt/colmap/vocab_tree_flickr100K_words32K.bin"
 
+#: The same Flickr100K 32K-word tree in the faiss format COLMAP 3.11+ reads, for
+#: `colmap: "4.2"` (`colmap4.py`): 4.x cannot load the FLANN file above, and pycolmap's
+#: wheel is built without the download its default tree (256K words) would need. The
+#: same vocabulary size as 3.9.1's, so an A/B compares versions rather than trees. From
+#: the same 3.11.1 release; downloaded 2026-09-28, 9,477,067 bytes.
+VOCAB_TREE_FAISS_URL = (
+    "https://github.com/colmap/colmap/releases/download/3.11.1/"
+    "vocab_tree_faiss_flickr100K_words32K.bin"
+)
+VOCAB_TREE_FAISS_SHA256 = "921e894b7d81f5cf223df824a02b9932660cddf00a815c93fc7c0bd690fc639e"
+VOCAB_TREE_FAISS = "/opt/colmap/vocab_tree_faiss_flickr100K_words32K.bin"
+
 #: The pose stage's global mapper (`mapper: global`): GLOMAP as COLMAP 4 ships it, from
 #: pycolmap's prebuilt manylinux wheel (CPython 3.10-3.14, glibc >= 2.28; this image is
 #: 24.04, glibc 2.39) rather than a from-source COLMAP 4 build. About 135 MB unpacked, and
-#: seconds to install. Extraction and matching stay on apt's 3.9.1; `global_sfm.py` says
-#: why and what was measured. Pinned to the version `global_sfm.PYCOLMAP_VERSION` names.
+#: seconds to install. Extraction and matching stay on apt's 3.9.1 unless a run asks for
+#: `colmap: "4.2"`, which runs all three steps on this wheel (`colmap4.py`);
+#: `global_sfm.py` says why and what was measured. Pinned to the version
+#: `global_sfm.PYCOLMAP_VERSION` names.
 PYCOLMAP = "pycolmap==4.2.0"
 
 #: The CPU box's image: what `pose` needs and nothing a GPU does. Ubuntu 24.04 because
@@ -266,6 +280,8 @@ cpu_image = (
         f"mkdir -p {Path(VOCAB_TREE).parent}",
         f"curl -fsSL --retry 3 -o {VOCAB_TREE} {VOCAB_TREE_URL}",
         f"echo '{VOCAB_TREE_SHA256}  {VOCAB_TREE}' | sha256sum -c -",
+        f"curl -fsSL --retry 3 -o {VOCAB_TREE_FAISS} {VOCAB_TREE_FAISS_URL}",
+        f"echo '{VOCAB_TREE_FAISS_SHA256}  {VOCAB_TREE_FAISS}' | sha256sum -c -",
     )
     .pip_install(*IMAGE_PACKAGES, PYCOLMAP)
     .env(
@@ -273,6 +289,7 @@ cpu_image = (
             "QT_QPA_PLATFORM": "offscreen",
             "PYTHONUNBUFFERED": "1",
             "COLMAP_VOCAB_TREE": VOCAB_TREE,
+            "COLMAP4_VOCAB_TREE": VOCAB_TREE_FAISS,
         }
     )
     .add_local_dir(LOCAL_CAPTURES, CAPTURES_DIR, ignore=_IGNORE, copy=True)
@@ -287,6 +304,11 @@ cpu_image = (
         f"cd {PIPELINE_DIR} && python -c 'import pycolmap, global_sfm; "
         f"assert pycolmap.__version__ == global_sfm.PYCOLMAP_VERSION, pycolmap.__version__; "
         f'assert hasattr(pycolmap, "global_mapping")\'',
+        # And `colmap: "4.2"` can build every option it sets on this wheel, and finds its
+        # faiss tree the way the stage will.
+        f"cd {PIPELINE_DIR} && python colmap4.py self-check --vocab-tree {VOCAB_TREE_FAISS}",
+        f"cd {PIPELINE_DIR} && python -c 'import colmap4; assert colmap4.vocab_tree_path(), "
+        f'"no faiss vocabulary tree at $COLMAP4_VOCAB_TREE"\'',
     )
 )
 

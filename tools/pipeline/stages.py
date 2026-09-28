@@ -37,6 +37,7 @@ import PIL
 import PIL.Image
 
 import blocks
+import colmap4
 import convergence
 import exif
 import gaussian_budget
@@ -752,6 +753,13 @@ def colmap(ctx: StageContext) -> StageOutcome:
     the why and the measurements) before any incremental seed, on the first matches; a
     result under `min_registered_fraction` falls back to the incremental mapper on the
     same database, and `poses.json`'s `mapper` records which one made the model kept.
+
+    `colmap: "4.2"` runs extraction, matching and incremental mapping on COLMAP 4.2
+    through pycolmap (`colmap4.py`) instead of apt's 3.9.1 CLI, with everything else --
+    the plan, the fallbacks, the seeds, `poses.json` -- unchanged, so the two can be
+    compared on one capture. 3.9.1 stays the default until that comparison decides;
+    `poses.json`'s `version` is the COLMAP that ran. A run that asks for 4.2 where there
+    is no pycolmap fails rather than quietly running 3.9.1.
     """
     frames = ctx.input(FRAMES.name)
     out = ctx.output(POSES.name)
@@ -759,11 +767,24 @@ def colmap(ctx: StageContext) -> StageOutcome:
     mapper = str(ctx.param("mapper", "incremental"))
     if mapper not in ("incremental", "global"):
         raise ValueError(f"mapper must be incremental or global, not {mapper!r}")
+    engine = str(ctx.param("colmap", "3.9"))
+    if engine not in colmap4.VERSIONS:
+        raise ValueError(f"colmap must be one of {', '.join(colmap4.VERSIONS)}, not {engine!r}")
+    four = engine == "4.2"
+    interpreter = colmap4.python()
     images = sorted(p for p in frames.iterdir() if p.is_file())
     if not images:
         raise ValueError(f"the frames artifact at {frames} is empty")
     source_format = _source_format(ctx)
-    vocab_tree = sfm.vocab_tree_path(ctx.param("vocab_tree"))
+    colmap_version = colmap4.version(interpreter) if four else None
+    if four and colmap_version is None:
+        raise ValueError(
+            f"colmap: 4.2 needs pycolmap=={global_sfm.PYCOLMAP_VERSION} in {interpreter} (the "
+            f"Modal CPU image has it; elsewhere set ${global_sfm.PYTHON_ENV}); not "
+            f"falling back to 3.9.1, which would make a 4.2 run that is not one"
+        )
+    # 4.2 reads a faiss tree, 3.9.1 a FLANN one (colmap4.py); each has its own variable.
+    vocab_tree = (colmap4.vocab_tree_path if four else sfm.vocab_tree_path)(ctx.param("vocab_tree"))
     rematches = max(0, int(ctx.param("rematches", 1)))
     plan = sfm.matching_plan(
         requested,
@@ -772,7 +793,8 @@ def colmap(ctx: StageContext) -> StageOutcome:
         rematches=rematches,
     )
     ctx.log(
-        f"colmap: matcher={requested}, frames from {source_format or 'an unknown source'}, "
+        f"colmap {colmap_version or '3.9'}: matcher={requested}, "
+        f"frames from {source_format or 'an unknown source'}, "
         f"vocabulary tree {vocab_tree or 'absent'}; plan: "
         + " -> ".join(
             f"{step.matcher}{' (loop)' if step.loop_detection else ''}"
@@ -798,18 +820,19 @@ def colmap(ctx: StageContext) -> StageOutcome:
     if sparse.exists():
         shutil.rmtree(sparse)
     sparse.mkdir(parents=True)
+    extraction: dict[str, Any] = {
+        "camera_model": str(ctx.param("camera_model", "SIMPLE_RADIAL")),
+        "camera_params": params,
+        "max_image_size": int(ctx.param("max_image_size", 2400)),
+        "max_features": int(ctx.param("max_features", 8192)),
+        "first_octave": _optional_int(ctx.param("first_octave")),
+        "num_threads": threads,
+    }
     timed(
         "extract",
-        sfm.feature_extractor_argv(
-            database,
-            frames,
-            camera_model=str(ctx.param("camera_model", "SIMPLE_RADIAL")),
-            camera_params=params,
-            max_image_size=int(ctx.param("max_image_size", 2400)),
-            max_features=int(ctx.param("max_features", 8192)),
-            first_octave=_optional_int(ctx.param("first_octave")),
-            num_threads=threads,
-        ),
+        colmap4.extract_argv(interpreter, database, frames, **extraction)
+        if four
+        else sfm.feature_extractor_argv(database, frames, **extraction),
     )
     passes_run: list[dict[str, object]] = []
     pairs = [0]
@@ -817,15 +840,16 @@ def colmap(ctx: StageContext) -> StageOutcome:
     def match(step: sfm.MatchPass) -> None:
         if step.clear:
             sfm.clear_matches(database)
+        how: dict[str, Any] = {
+            "overlap": _optional_int(ctx.param("sequential_overlap")),
+            "vocab_tree": vocab_tree if step.loop_detection else None,
+            "num_threads": threads,
+        }
         timed(
             "match",
-            sfm.matcher_argv(
-                database,
-                step.matcher,
-                overlap=_optional_int(ctx.param("sequential_overlap")),
-                vocab_tree=vocab_tree if step.loop_detection else None,
-                num_threads=threads,
-            ),
+            colmap4.match_argv(interpreter, database, step.matcher, **how)
+            if four
+            else sfm.matcher_argv(database, step.matcher, **how),
         )
         tried, verified = sfm.count_pairs(database)
         pairs[0] = tried
@@ -869,18 +893,18 @@ def colmap(ctx: StageContext) -> StageOutcome:
         else:
             # Cameras as they are solved, for the live viewer (`live.MapperWatch`).
             snapshots = ctx.work_dir / "snapshots" / into.name
+            how: dict[str, Any] = {
+                "refine_focal_length": focal_prior is None,
+                "random_seed": seed,
+                "num_threads": threads,
+                "snapshot_path": snapshots if watch else None,
+                "snapshot_every": live.snapshot_every(len(images)),
+            }
             with live.MapperWatch(snapshots, ctx.log, frames=len(images), enabled=watch):
                 ctx.run(
-                    sfm.mapper_argv(
-                        database,
-                        frames,
-                        into,
-                        refine_focal_length=focal_prior is None,
-                        random_seed=seed,
-                        num_threads=threads,
-                        snapshot_path=snapshots if watch else None,
-                        snapshot_every=live.snapshot_every(len(images)),
-                    )
+                    colmap4.map_argv(interpreter, database, frames, into, **how)
+                    if four
+                    else sfm.mapper_argv(database, frames, into, **how)
                 )
             seconds["map"] += time.monotonic() - began
         found = _largest_model(into)
@@ -927,9 +951,13 @@ def colmap(ctx: StageContext) -> StageOutcome:
     if watch:
         live.emit_model(ctx.log, out, frames=len(images), final=True)
     focal = model.cameras[0].focal_px if model.cameras else 0.0
+    version = colmap_version or sfm.colmap_version()
     document: dict[str, object] = {
         "tool": "colmap",
-        "version": sfm.colmap_version(),
+        # The COLMAP that extracted, matched and mapped: apt's 3.9.1 CLI, or 4.2 through
+        # pycolmap (`colmap: "4.2"`, colmap4.py). What an A/B of the two reads first.
+        "version": version,
+        "colmap": {"requested": engine, "via": "pycolmap" if four else "cli"},
         "matcher": matcher,
         # Which mapper made the model kept: `global` is pycolmap's GLOMAP pipeline
         # (global_sfm.py), tried first when asked, with the incremental one behind it.
@@ -960,6 +988,8 @@ def colmap(ctx: StageContext) -> StageOutcome:
         "mapperAttempts": tries,
         "points3D": model.points3d,
         "meanTrackLength": round(model.mean_track_length, 3),
+        # The mean of the points' own errors, as COLMAP's model_analyzer reports it.
+        "meanReprojectionErrorPx": round(model.mean_reprojection_error, 4),
         "cameras": [camera.to_dict() for camera in model.cameras],
         "images": [image.to_dict() for image in model.images],
         "focal": {
@@ -1011,6 +1041,7 @@ def colmap(ctx: StageContext) -> StageOutcome:
         "registeredFraction": round(fraction, 4),
         "points3D": model.points3d,
         "meanTrackLength": round(model.mean_track_length, 3),
+        "meanReprojectionErrorPx": round(model.mean_reprojection_error, 4),
         "focalPx": round(focal, 3),
         "focalPrior": focal_prior is not None,
         "matcher": matcher,
@@ -1020,6 +1051,7 @@ def colmap(ctx: StageContext) -> StageOutcome:
         "matchS": round(seconds["match"], 1),
         "mapS": round(seconds["map"], 1),
         "mapper": mapper_used,
+        "colmap": version,
     }
     if "global" in seconds:
         metrics["globalMapS"] = round(seconds["global"], 1)

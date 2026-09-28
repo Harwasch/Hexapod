@@ -82,8 +82,13 @@ PHONE_OPTIONS: dict[str, dict[str, dict[str, Rule]]] = {
         # Which mapper solves the cameras: COLMAP's incremental one (the recipe's
         # default) or GLOMAP's global one (tools/pipeline/global_sfm.py), which falls
         # back to incremental when it registers too few frames. For comparing the two on
-        # real captures before either becomes the default.
-        "pose": {"mapper": frozenset({"incremental", "global"})},
+        # real captures before either becomes the default. And which COLMAP extracts,
+        # matches and maps: apt's 3.9.1 (the recipe's default) or 4.2 through pycolmap
+        # (tools/pipeline/colmap4.py), for the same comparison of versions.
+        "pose": {
+            "mapper": frozenset({"incremental", "global"}),
+            "colmap": frozenset({"3.9", "4.2"}),
+        },
         # The training schedule (`training.schedule_scale`) and the gaussian cap; then the
         # preview's and Refine's knobs: a forced schedule scale, the training image size,
         # the region to train inside (COLMAP frame, from a preview's quality stage), and
