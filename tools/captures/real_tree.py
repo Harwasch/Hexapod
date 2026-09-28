@@ -74,6 +74,8 @@ TRUNK_SEARCH_M = 2.5
 RING_MIN_ARC = 0.5
 RING_MIN_INLIERS = 20
 RING_MIN_CONTRAST = 4.0
+#: The narrowest crown search, metres from the trunk: a mature tree's crown radius.
+CROWN_SEARCH_M = 8.0
 #: Opaque enough to be surface: what the ground and trunk measurements count.
 SURFACE_OPACITY = 0.5
 #: The viewer's Standard Detail budget (apps/web/src/lib/detail.ts DEFAULT_SPLAT_BUDGET).
@@ -169,14 +171,29 @@ def positions(data: dict[str, np.ndarray]) -> np.ndarray:
 
 
 def ground_height(
-    xyz: np.ndarray, opacity: np.ndarray, radius: float, bin_m: float = 0.05
+    xyz: np.ndarray,
+    opacity: np.ndarray,
+    radius: float,
+    bin_m: float = 0.05,
+    *,
+    below: float | None = None,
 ) -> float:
     """The densest thin layer of opaque splats within `radius` of the axis, in the lower
-    half of what is there: a lawn is a sheet, and a sheet is the histogram's spike."""
+    half of what is there: a lawn is a sheet, and a sheet is the histogram's spike.
+
+    `below` is a height the ground must be under -- the lowest camera, since the drone did
+    not fly underground. Without it a thick trunk can out-count the lawn: on the Minnetonka
+    tree (m0) the densest layer was 3.5 m up the trunk, above the drone's low hover pass, and
+    the "trunk" then measured was the 2.1 m fork where the limbs part."""
     near = (np.hypot(xyz[:, 0], xyz[:, 1]) <= radius) & (opacity >= SURFACE_OPACITY)
+    if below is not None:
+        near &= xyz[:, 2] < below
     z = xyz[near, 2]
     if z.size < 50:
-        raise ValueError(f"only {z.size} opaque splats within {radius:g} m of the axis")
+        where = f"within {radius:g} m of the axis"
+        if below is not None:
+            where += f" below {below:.2f} m (the lowest camera)"
+        raise ValueError(f"only {z.size} opaque splats {where}")
     lo, hi = float(np.percentile(z, 0.5)), float(np.percentile(z, 50))
     edges = np.arange(lo, hi + bin_m, bin_m)
     if edges.size < 3:
@@ -287,13 +304,17 @@ def crown_radius(
     xyz: np.ndarray, opacity: np.ndarray, cameras: np.ndarray | None
 ) -> dict[str, Any]:
     """How far the crown reaches from the trunk, from the splats above head height inside
-    the camera ring: the drone flew round the tree, not into it, so what is inside the
-    ring above 2.5 m is the crown. 98th percentile of their distance, plus 0.3 m."""
+    the camera ring: where the drone flew round the tree, what is inside the ring above
+    2.5 m is the crown. 98th percentile of their distance, plus 0.3 m.
+
+    Where it flew under the crown instead (Minnetonka: hover passes 2.7-4 m from the trunk,
+    looking up), the ring is inside the crown and would cut it off, so the search is never
+    narrower than `CROWN_SEARCH_M`."""
     ring = None
     if cameras is not None and len(cameras):
         ring = float(np.percentile(np.hypot(cameras[:, 0], cameras[:, 1]), 10))
     reach = np.hypot(xyz[:, 0], xyz[:, 1])
-    limit = 0.9 * ring if ring else 8.0
+    limit = max(0.9 * ring, CROWN_SEARCH_M) if ring else CROWN_SEARCH_M
     crown = (xyz[:, 2] > 2.5) & (opacity >= SURFACE_OPACITY) & (reach <= limit)
     if crown.sum() < 50:
         raise ValueError(f"only {int(crown.sum())} opaque splats above 2.5 m inside {limit:.1f} m")
@@ -545,7 +566,8 @@ def build(
 
     report["profileAboutFrameAxis"] = profile(xyz, opacity, cameras)
     try:
-        ground = ground_height(xyz, opacity, TRUNK_SEARCH_M * 2)
+        lowest_camera = float(cameras[:, 2].min()) if cameras is not None else None
+        ground = ground_height(xyz, opacity, TRUNK_SEARCH_M * 2, below=lowest_camera)
         trunk = measure_trunk(xyz, opacity, ground)
         report["groundM"] = round(ground, 4)
         report["trunk"] = trunk

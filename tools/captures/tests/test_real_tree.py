@@ -132,6 +132,22 @@ def test_the_ground_is_the_lawn_not_the_lowest_splat() -> None:
     assert real_tree.ground_height(xyz, np.ones(len(xyz)), 5.0) == pytest.approx(0.62, abs=0.03)
 
 
+def test_the_ground_is_below_the_lowest_camera_even_under_a_thick_trunk() -> None:
+    """m0: a 1 m-thick trunk out-counted the lawn 3.5 m up it. The drone hovered 1.1 m
+    above the lawn, so the lowest camera rules that layer out."""
+    rng = np.random.default_rng(5)
+    lawn = np.column_stack([rng.uniform(-5, 5, (3000, 2)), rng.normal(0.0, 0.03, 3000)])
+    angle = rng.uniform(0, 2 * np.pi, 40000)
+    height = np.where(
+        rng.uniform(size=40000) < 0.5, rng.normal(3.5, 0.02, 40000), rng.uniform(0, 5, 40000)
+    )
+    trunk = np.column_stack([0.5 * np.cos(angle), 0.5 * np.sin(angle), height])
+    xyz = np.vstack([lawn, trunk])
+    opacity = np.ones(len(xyz))
+    assert real_tree.ground_height(xyz, opacity, 5.0) == pytest.approx(3.5, abs=0.05)
+    assert real_tree.ground_height(xyz, opacity, 5.0, below=1.1) == pytest.approx(0.0, abs=0.05)
+
+
 def test_the_floater_rule_is_run_until_the_packer_would_drop_nothing(tmp_path: Path) -> None:
     rng = np.random.default_rng(5)
     body = rng.normal(0, 1.0, (4000, 3))
