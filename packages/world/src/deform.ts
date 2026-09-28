@@ -277,6 +277,8 @@ export function deformPositions(
   transforms: readonly NodeTransform[],
   out?: Float32Array,
   flutter?: FlutterField,
+  /** Per-splat flutter identity (`positionKeys`); the splat index when omitted. */
+  flutterKeys?: Uint32Array,
 ): Float32Array {
   if (out === positions)
     throw new Error("deformPositions: canonical positions must not be the output");
@@ -331,6 +333,6 @@ export function deformPositions(
   // Flutter in a second pass rather than inside the loop above: the two terms are independent,
   // and kept apart each loop stays small enough for the JIT to hold in registers. Fused, the
   // same arithmetic measured 8.1 ms a frame at 150k splats where split it is 2.7 ms.
-  if (flutter !== undefined) applyFlutter(target, assignment, flutter, count);
+  if (flutter !== undefined) applyFlutter(target, assignment, flutter, count, flutterKeys);
   return target;
 }

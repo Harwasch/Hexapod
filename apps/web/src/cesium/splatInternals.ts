@@ -1,34 +1,44 @@
 /**
  * Every CesiumJS internal the Living Survey depends on, declared once, in one place.
  *
- * **Version: CesiumJS 1.145 / `@cesium/engine` 26.3.0.** None of this is in `Cesium.d.ts` — a
- * grep for `GaussianSplatPrimitive`, `GaussianSplatTextureGenerator` or
- * `Cesium3DTileset.gaussianSplatPrimitive` finds nothing — and none of it is public API. The
- * splat subsystem is churning (about twenty changelog entries across recent releases), so the
- * honest thing is to name the dependency explicitly rather than spread `as` casts across the
- * feature. When an upgrade breaks it, it breaks here.
+ * **Version: CesiumJS 1.145 / `@cesium/engine` 26.3.0, with `patches/@cesium__engine@26.3.0.patch`.**
+ * None of this is in `Cesium.d.ts` — a grep for `GaussianSplatPrimitive`,
+ * `GaussianSplatTextureGenerator` or `Cesium3DTileset.gaussianSplatPrimitive` finds nothing — and
+ * none of it is public API. The splat subsystem is churning (about twenty changelog entries
+ * across recent releases), so the honest thing is to name the dependency explicitly rather than
+ * spread `as` casts across the feature. When an upgrade breaks it, it breaks here.
  *
- * What we rely on, and where it lives in the engine source:
+ * What we rely on, and where it lives in the engine source (line numbers are the patched file):
  *
  * | Internal | Source | Why |
  * | --- | --- | --- |
  * | `Cesium3DTileset.gaussianSplatPrimitive` | `Cesium3DTileset.js` | the primitive for a splat tileset |
- * | `primitive._positions` | `GaussianSplatPrimitive.js:431` | baked positions, the deformation base |
+ * | `primitive._positions` | `GaussianSplatPrimitive.js:431` | baked positions of every selected tile, aggregated |
  * | `primitive._numSplats` | `:437` | how many of them |
  * | `primitive._splatRowMask` / `_splatRowShift` | `:445-446` | texel addressing, matching `u_splatRowMask`/`u_splatRowShift` |
- * | `primitive.gaussianSplatTexture` | `:439` | the attribute texture we write |
- * | `primitive._snapshot.generation` | `:1955`, `:1039`, `:1766` | monotonic rebuild counter |
- * | `primitive._rootTransform` | `:1233` | ENU frame of the tileset, for the frame assertion |
- * | `primitive.selectedTileLength` | `:1974` | tiles aggregated into the snapshot |
- * | `tile.content._lastSplatTransform` | `:1411` | the bake matrix `B`, for un-baking to the rig's frame |
- * | `GaussianSplatTextureGenerator.generateFromAttributes` | exported at `cesium/Source/Cesium.js:638` | the interception point |
+ * | `primitive.gaussianSplatTexture` | `:439` | the attribute texture the CPU path writes |
+ * | `primitive._snapshot.generation` | `:2009` | monotonic rebuild counter |
+ * | `primitive._rootTransform` | `:1835` | ENU frame of the tileset, for the frame assertion |
+ * | `primitive._selectedTileSet` | `:2029` | the tiles the latest snapshot aggregated, **in aggregation order** |
+ * | `primitive._pendingSnapshot` | `:2008` | a rebuild in flight, whose tiles `_selectedTileSet` already names |
+ * | `tile.content._lastSplatTransform` | `:1444` | the bake matrix `B`, per tile, for un-baking to the rig's frame |
+ * | `tile.content.positions` / `pointsLength` | `GaussianSplat3DTileContent.js:177,362` | a tile's baked positions, and its count |
+ * | `primitive.vertexMotion` | **patch** | the vertex-shader motion hook the GPU path installs |
+ * | `GaussianSplatTextureGenerator.generateFromAttributes` | exported at `cesium/Source/Cesium.js:638` | the CPU path's interception point |
+ *
+ * **The aggregation order is the whole of multi-tile support.** A snapshot is
+ * `concat(tile.content.positions for tile of tileset._selectedTiles)`, and `_selectedTileSet` is
+ * `new Set(tileset._selectedTiles)` taken at the same moment — so iterating it gives the tiles in
+ * the order their splats appear in `_positions`. It is refreshed when a rebuild *starts*, so it
+ * describes the committed snapshot only while `_pendingSnapshot` is undefined; `snapshotTiles`
+ * (`splatTiles.ts`) waits otherwise, and checks sampled positions against every tile besides.
  *
  * What we deliberately do **not** touch: `tile.content.positions`, `primitive._positions`,
  * `snapshot.positions` and the glTF POSITION array are read-only to us, forever.
  * `transformTile` rewrites `tile.content.positions` in place from the pristine glTF attribute,
  * so a write there would make a deformation permanent and compound it across every rebuild,
  * silently destroying the measured geometry. The only things we write are our own staging
- * buffer and the GPU texture.
+ * buffer, the attribute texture (CPU path) and our own textures (GPU path).
  */
 
 import type { Cesium3DTileset } from "cesium";
@@ -36,12 +46,12 @@ import type { Cesium3DTileset } from "cesium";
 import type { Mat4 } from "./splatFrames";
 
 /**
- * The subset of `Renderer/Texture` we call. Structural on purpose: `Texture` is not exported
- * from the barrel either, and a structural type is what lets a unit test supply a fake.
+ * The subset of `Renderer/Texture` we call. Structural on purpose: `Texture` is not declared in
+ * `Cesium.d.ts`, and a structural type is what lets a unit test supply a fake.
  */
 export interface SplatTexture {
   copyFrom(options: {
-    source: { width: number; height: number; arrayBufferView: Uint32Array };
+    source: { width: number; height: number; arrayBufferView: Uint32Array | Float32Array };
     xOffset?: number;
     yOffset?: number;
   }): void;
@@ -61,12 +71,31 @@ export interface SplatTileContent {
    * re-baking. Un-baking by its inverse is what recovers the rig's local ENU frame.
    */
   readonly _lastSplatTransform?: Mat4;
+  /** This tile's splat count. */
+  readonly pointsLength?: number;
+  /** This tile's baked positions: the slice of `_positions` it contributed. Never written. */
+  readonly positions?: Float32Array;
 }
 
-/** The tile fields we read. `children` is how single-tile-ness is asserted. */
+/** The tile fields we read. */
 export interface SplatTile {
   readonly children?: readonly SplatTile[];
   readonly content?: SplatTileContent;
+}
+
+/** What the patched engine calls on each draw-command build. See `splatGpuMotion.ts`. */
+export interface SplatVertexMotion {
+  addToShader(
+    shaderBuilder: SplatShaderBuilder,
+    uniformMap: Record<string, () => unknown>,
+    context: unknown,
+  ): void;
+}
+
+/** The subset of `Renderer/ShaderBuilder` the hook uses. */
+export interface SplatShaderBuilder {
+  addUniform(type: string, identifier: string, destination?: number): void;
+  addVertexLines(lines: string | readonly string[]): void;
 }
 
 /** The primitive fields we read. All optional: none of them exist for the first few frames. */
@@ -76,7 +105,9 @@ export interface SplatPrimitive {
   readonly _splatRowMask?: number;
   readonly _splatRowShift?: number;
   readonly _snapshot?: SplatSnapshot;
+  readonly _pendingSnapshot?: unknown;
   readonly _rootTransform?: Mat4;
+  readonly _selectedTileSet?: ReadonlySet<SplatTile>;
   readonly selectedTileLength?: number;
   /**
    * Re-read on every write, never cached. The draw command's uniform closes over the texture
@@ -84,6 +115,9 @@ export interface SplatPrimitive {
    * change, so a held reference becomes a write into a destroyed texture.
    */
   readonly gaussianSplatTexture?: SplatTexture;
+  /** Present (as an accessor, initially `undefined`) only on the patched engine. */
+  vertexMotion?: SplatVertexMotion;
+  isDestroyed?(): boolean;
 }
 
 /** The shape `SplatDeformer` works against — a real `Cesium3DTileset`, or a test double. */
@@ -95,31 +129,18 @@ export interface SplatTilesetLike {
 /**
  * Views a `Cesium3DTileset` as the internals above.
  *
- * One cast, here, instead of everywhere. `Cesium3DTileset` and `SplatTilesetLike` have no
- * declared overlap, so it goes through `unknown`.
+ * One place, instead of everywhere. Every field above is optional and `Cesium3DTileset.root`'s
+ * declared shape (`children`, `content.pointsLength`) fits `SplatTile`, so no cast is needed —
+ * which is also why nothing here can be trusted to exist and every read is checked.
  */
 export function splatTilesetOf(tileset: Cesium3DTileset): SplatTilesetLike {
-  return tileset as unknown as SplatTilesetLike;
-}
-
-/** The bake matrix `B` for a single-tile splat tileset, or `undefined` before it is baked. */
-export function bakeTransformOf(tileset: SplatTilesetLike): Mat4 | undefined {
-  const transform = tileset.root?.content?._lastSplatTransform;
-  return transform?.length === 16 ? transform : undefined;
+  return tileset;
 }
 
 /**
- * Whether the tileset is the single-tile kind this prototype is restricted to.
- *
- * Splat snapshots aggregate over *selected* tiles, so a splat's index is stable only while tile
- * selection is. The Living Survey tools ask `splat_tiles.py` for a single tile
- * (`tile_gaussians=None`), where indices are stable; a pipeline capture past one tile's budget is
- * a level-of-detail hierarchy, and there the rig assignment would silently point at different
- * splats between frames.
- * Returns `undefined` while the root is not loaded yet, which is a wait, not a refusal.
+ * Whether this primitive carries the patch's `vertexMotion` hook. On the unpatched engine the
+ * property does not exist at all; on the patched one it is an accessor on the prototype.
  */
-export function isSingleTile(tileset: SplatTilesetLike): boolean | undefined {
-  const root = tileset.root;
-  if (root === undefined) return undefined;
-  return (root.children?.length ?? 0) === 0;
+export function hasVertexMotionHook(primitive: SplatPrimitive): boolean {
+  return "vertexMotion" in primitive;
 }

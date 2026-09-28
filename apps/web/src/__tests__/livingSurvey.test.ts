@@ -407,8 +407,9 @@ describe("a site that leaves", () => {
 describe("refusals", () => {
   it("toasts a permanent refusal, retires the deformer and never retries", async () => {
     const harness = await attached();
-    // A snapshot that now aggregates two tiles: splat indices are no longer stable.
-    harness.primitive.selectedTileLength = 2;
+    // A rebuilt snapshot whose placement cannot be undone: the measured pose could not be
+    // guaranteed, so the refusal is permanent.
+    harness.tileset.root.content._lastSplatTransform = new Array<number>(16).fill(0);
     harness.primitive._snapshot = { generation: 2 };
     harness.manager.setWind(BREEZE);
     harness.tick(3);

@@ -37,6 +37,8 @@ export interface SceneManagerOptions {
   ionToken: string | undefined;
   /** Initial camera in degrees / metres. */
   home?: { longitude: number; latitude: number; height: number };
+  /** Living Survey motion on the GPU (`VITE_SPLAT_GPU_MOTION`); CPU when off or unavailable. */
+  splatGpuMotion?: boolean;
 }
 
 /**
@@ -143,7 +145,9 @@ export class CesiumSceneManager {
       this.clipping,
       this.performance,
     );
-    this.living = new LivingSurveyManager(this.viewer, this.events, this.sites, this.performance);
+    this.living = new LivingSurveyManager(this.viewer, this.events, this.sites, this.performance, {
+      gpuMotion: options.splatGpuMotion === true,
+    });
     this.selection = new SelectionManager(
       this.viewer,
       this.events,

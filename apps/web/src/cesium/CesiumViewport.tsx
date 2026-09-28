@@ -21,7 +21,10 @@ export function CesiumViewport() {
     setStatus("initializing");
     let manager: CesiumSceneManager | null = null;
     try {
-      manager = new CesiumSceneManager(container, { ionToken: env.ionAccessToken });
+      manager = new CesiumSceneManager(container, {
+        ionToken: env.ionAccessToken,
+        splatGpuMotion: env.splatGpuMotion,
+      });
       registry.set(manager);
       if (env.isDev) window.__twin = manager;
     } catch (error) {

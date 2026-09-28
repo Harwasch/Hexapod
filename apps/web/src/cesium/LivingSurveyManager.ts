@@ -49,6 +49,8 @@ import {
 import { rigUrlFor } from "./livingRigs";
 import type { PerformanceManager } from "./PerformanceManager";
 import type { SiteManager } from "./SiteManager";
+import type { MotionTextureFactory } from "./splatGpuMotion";
+import { cesiumMotionTextures } from "./splatGpuTextures";
 import { splatTilesetOf } from "./splatInternals";
 import { SplatDeformer, type DeformerReason, type DeformerStatus } from "./SplatDeformer";
 import type { SceneEvents } from "./types";
@@ -87,14 +89,14 @@ const STALLED_CLOCK_TICKS = 120;
  * `no-capture`) are the ordinary first few frames after a tile loads and must never toast.
  */
 const REFUSAL_BODY: Readonly<Record<DeformerReason, string | null>> = {
-  "multi-tile":
-    "This capture is tiled into more than one node, so splat indices are not stable and the rig cannot be trusted to move the right points.",
   layout:
     "The splat texture's addressing parameters are not self-consistent on this device, so the tree would be written into the wrong texels.",
   frame:
     "This capture's frame is not east-north-up, so the motion model cannot tell which way is up.",
   upright: "These points do not read as a standing tree, so the rig does not describe them.",
   checksum: "These are not the splats the motion rig was built for.",
+  // Also a waiting reason: a level-of-detail snapshot mid-rebuild. Never a toast.
+  tiles: null,
   bake: "The capture's placement could not be undone exactly, so the measured pose could not be guaranteed.",
   internal: "The deformer hit an unexpected error and stopped.",
   // Waiting reasons. Normal for the first frames after load; never a toast.
@@ -104,6 +106,14 @@ const REFUSAL_BODY: Readonly<Record<DeformerReason, string | null>> = {
   "no-bake-transform": null,
   "no-capture": null,
 };
+
+export interface LivingSurveyOptions {
+  /**
+   * Evaluate motion in the splat vertex shader (engine patch) instead of rewriting the
+   * attribute texture from the CPU. See `splatGpuMotion.ts`.
+   */
+  readonly gpuMotion?: boolean;
+}
 
 /** Everything held for one deformed asset. Dropped whole when its site unloads. */
 interface LivingEntry {
@@ -140,17 +150,26 @@ export class LivingSurveyManager {
   #reportedStall = false;
   #published: LivingSurveyStatus | null = null;
   #destroyed = false;
+  /** The GPU motion path's texture factory, when that path is switched on. */
+  readonly #gpu: MotionTextureFactory | undefined;
 
   constructor(
     viewer: Viewer,
     events: Emitter<SceneEvents>,
     sites: SiteManager,
     performance: PerformanceManager,
+    options: LivingSurveyOptions = {},
   ) {
     this.#viewer = viewer;
     this.#events = events;
     this.#sites = sites;
     this.#performance = performance;
+    // Behind a flag (`VITE_SPLAT_GPU_MOTION`) until it has been looked at on real hardware;
+    // the CPU path stays the fallback for an unpatched engine or a snapshot it cannot take.
+    this.#gpu = options.gpuMotion === true ? cesiumMotionTextures() : undefined;
+    if (options.gpuMotion === true && this.#gpu === undefined) {
+      log.warn("GPU splat motion requested but unavailable in this CesiumJS build; using CPU");
+    }
     this.#unsubscribe.push(
       // Attach and detach timing, from SiteManager's own per-asset events: `attachTileset`
       // reports "ready", `disposeHandle` reports "idle" as a distant site is unloaded by
@@ -290,7 +309,7 @@ export class LivingSurveyManager {
     const tileset = this.#sites.tilesetFor(candidate.siteId, "gaussian-splat");
     if (tileset === null || this.#entries.has(assetId)) return;
 
-    const deformer = new SplatDeformer({ tileset: splatTilesetOf(tileset), rig });
+    const deformer = new SplatDeformer({ tileset: splatTilesetOf(tileset), rig, gpu: this.#gpu });
     this.#entries.set(assetId, {
       siteId: candidate.siteId,
       siteSlug: candidate.slug,

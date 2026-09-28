@@ -320,7 +320,11 @@ def test_committed_lod_fixture_matches_the_packer(tmp_path: Path) -> None:
     source = REPO_ROOT / "data" / "tiles" / "synthetic-tree" / "source" / "splat.ply"
     splat_tiles.convert(source, tmp_path / "lod", 28.0389, -82.6966, 0.0, 0.02, 1500)
     fresh = {path.name: path.read_bytes() for path in (tmp_path / "lod").iterdir()}
-    committed = {path.name: path.read_bytes() for path in LOD_FIXTURE.iterdir()}
+    # rig.json sits beside the tiles (renderConfig.rigUrl resolves relative to the tileset)
+    # but is not the packer's: rig_tiles.py stamps it, and test_rig_tiles.py pins it.
+    committed = {
+        path.name: path.read_bytes() for path in LOD_FIXTURE.iterdir() if path.name != "rig.json"
+    }
     assert sorted(fresh) == sorted(committed)
     assert fresh == committed
     tileset = json.loads(fresh["tileset.json"])

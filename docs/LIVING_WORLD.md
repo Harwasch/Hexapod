@@ -277,8 +277,11 @@ flowchart TB
   PLY→3D-Tiles converter is UNVERIFIED (its repo is not reachable).
 - **Animated objects.** Each tree is its own tileset, with a coarse root and a leaf containing
   the full dynamic splats. Its Gaussians are removed from the static tileset. This keeps splat
-  indices stable per object, which the deformer requires. Today the deformer **refuses multi-tile**
-  tilesets, so it must learn to attach per leaf content. That is custom work.
+  motion cost proportional to the object. Since M5 the deformer **no longer needs** single-tile
+  tilesets: it binds each selected tile's gaussians by position and follows REPLACE swaps
+  ([LIVING_SURVEY.md](LIVING_SURVEY.md#multi-tile-tilesets-and-the-gpu-path),
+  [ADR 0007](DECISIONS/0007-splat-vertex-motion-hook.md)), so an object tileset may itself be a
+  level-of-detail hierarchy with merged parents.
 - **Temporal LOD.** Bases are stored sorted by energy, so truncating K is the LOD. The update rate
   drops with distance, and `setAnimating` already keeps the performance ladder honest.
 - **Motion sidecar.** `motion.json/bin` is referenced from `renderConfig.motionUrl`. The KHR
@@ -290,8 +293,8 @@ What Cesium supports today, and what is custom:
 | Need                                  | Today in 1.145/1.146                          | Custom work                                                                                                     |
 | ------------------------------------- | --------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
 | Static splat LOD, clipping into globe | yes (ADR 0003)                                | own tiler, if ion is not used                                                                                   |
-| Splat motion                          | **no** (`customShader` does not reach splats) | ADR 0006 texture rewrite, extended to soft skinning and multi-tile                                              |
-| Motion for >~200 k splats per view    | —                                             | CPU cost is 5 ms per 150 k splats (Node): plan an engine patch adding a VS motion hook, with Spark as prior art |
+| Splat motion                          | **no** (`customShader` does not reach splats) | ADR 0006 texture rewrite; multi-tile since M5 (per-tile binding, ADR 0007); soft skinning still to do           |
+| Motion for >~200 k splats per view    | —                                             | M5: an engine patch adds a VS motion hook (ADR 0007), behind `VITE_SPLAT_GPU_MOTION`; per-frame CPU is per node |
 | Water surface                         | yes: glTF mesh + `CustomShader`               | flow-map shader                                                                                                 |
 | Vehicles and people                   | yes: glTF + sampled positions / CZML          | agent simulation off-browser                                                                                    |
 | Replay/living time                    | yes: `Clock`, `JulianDate`, timeline          | map capture window to clock; badge switches Observed → Simulated                                                |
@@ -380,6 +383,7 @@ gantt
 | M2        | the timeline scrubs the recorded window; the badge reads Observed; held-out camera metrics are in `eval.json`                                                       |
 | M3        | living mode runs ≥ 1 h with no visible period; it beats the static and loop controls on extrapolation statistics                                                    |
 | M4        | measurable held-out gain under the canopy, with every "never overrides" gate green                                                                                  |
+| M5        | a REPLACE tileset with merged parents moves and restores exactly through tile swaps; motion per frame no longer scales with splats (GPU hook). **Built 2026-09-28** |
 
 **Compute** (_estimates_; unmeasured here). Rates are Modal list prices read 2026-09-23: A100-80GB
 $2.50/h, L40S $1.95/h, H100 $3.95/h.
@@ -404,7 +408,9 @@ $2.50/h, L40S $1.95/h, H100 $3.95/h.
 3. **The Cesium runtime is internal and single-tile.** The splat internals are undeclared and
    churn every release, the deformer refuses multi-tile, CPU motion scales linearly, and draw
    order goes stale. Mitigation: per-object tilesets, energy-truncated bases, and a planned engine
-   patch or upstream contribution for a splat vertex-shader motion hook.
+   patch or upstream contribution for a splat vertex-shader motion hook. **M5 status:** multi-tile
+   and the vertex-shader hook are built (a pnpm patch, ADR 0007, GPU path behind a flag); draw
+   order is still stale by design; the GPU path's cost on real hardware is unmeasured.
 
 **Week 1:**
 
