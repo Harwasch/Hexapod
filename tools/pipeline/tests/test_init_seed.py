@@ -73,14 +73,14 @@ def test_a_finished_run_leaves_a_seed_of_its_visible_gaussians(tmp_path: Path) -
     assert "left a 64-gaussian seed" in workdir.log_path("train").read_text()
 
 
-def test_a_refine_starts_from_the_preview_on_half_the_schedule(tmp_path: Path) -> None:
+def test_a_refine_starts_from_the_preview_on_the_full_schedule(tmp_path: Path) -> None:
     workdir = Workdir.create(tmp_path / "run")
 
     document = preview_then(workdir, init_from="preview")
 
     assert document["settings"]["initFrom"] == "preview"
     assert document["settings"]["scheduleScale"] == init_seed.DEFAULT_SCHEDULE_SCALE
-    assert document["requestedIterations"] == 150  # 300 x 0.5
+    assert document["requestedIterations"] == 300  # 300 x 1.0
     init = document["init"]
     assert init["from"] == "preview"
     assert init["seedGaussians"] == 400
@@ -96,7 +96,8 @@ def test_a_refine_starts_from_the_preview_on_half_the_schedule(tmp_path: Path) -
     # The poses artifact is untouched.
     assert len(sfm.read_points3d(workdir.input_path("poses") / "points3D.bin")) == SFM_POINTS
     log = workdir.log_path("train").read_text()
-    assert "init_from=preview" in log and "--steps_scaler 0.5" in log
+    # The full schedule: gsplat is not asked to scale it at all.
+    assert "init_from=preview" in log and "--steps_scaler" not in log
 
 
 def test_the_seed_travels_to_the_gpu_box_and_back_through_the_cloud_seam(
@@ -123,7 +124,7 @@ def test_the_seed_travels_to_the_gpu_box_and_back_through_the_cloud_seam(
 
     document = json.loads((workdir.out_dir("train") / "train_metrics.json").read_text())
     assert document["init"]["seedGaussians"] == 64
-    assert document["requestedIterations"] == 150
+    assert document["requestedIterations"] == 300
 
 
 def test_the_seed_is_cropped_to_the_support_mask_like_the_sfm_points(tmp_path: Path) -> None:

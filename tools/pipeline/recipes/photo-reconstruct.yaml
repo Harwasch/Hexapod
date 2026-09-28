@@ -164,7 +164,7 @@ stages:
       #   Refine:  {schedule_scale: 1.0}
       #     The whole schedule even for a capture under `schedule_full_at` frames. The
       #     phone's Refine also sets `init_from: preview`: start from the preview's own
-      #     splat (init_seed.py) on `init_schedule_scale` (0.5) of the schedule instead.
+      #     splat (init_seed.py) on `init_schedule_scale` (1.0) of the schedule instead.
       #   A phone's quality tier scales the budget: `density_scale` 0.5 (Quick), 1
       #   (Standard), 2 (Best).
       #

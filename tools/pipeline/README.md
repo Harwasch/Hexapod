@@ -483,7 +483,7 @@ The phone's Refine re-runs `train` in the preview's workdir with `init_from: pre
 its visible gaussians -- in its `checkpoint/`, which a re-run keeps and `CloudRunner`
 carries to the GPU box. The Refine appends that seed, cropped to the support mask, to
 COLMAP's points (with empty tracks, so the depth loss keeps its real observations), and
-trains `init_schedule_scale` (0.5) of the schedule, because gsplat's `sfm` init turns
+trains `init_schedule_scale` (1.0: measured better than 0.5 on the spool, 25.85 vs 25.11 dB) of the schedule, because gsplat's `sfm` init turns
 exactly those points into its starting gaussians. A seed trained against other poses is
 refused by fingerprint and the run trains from COLMAP's points on its own schedule.
 

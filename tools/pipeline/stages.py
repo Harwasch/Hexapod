@@ -1184,8 +1184,9 @@ def gsplat(ctx: StageContext) -> StageOutcome:
       each into a small SPZ under `checkpoint/live/` for the live viewer (`live.py`).
       Only those land in `checkpoint/`, and the full intermediate PLYs are deleted.
     * `init_from: preview` starts from the splat the previous run of this stage left in
-      `checkpoint/` (a phone's Refine sets it), on `init_schedule_scale` (0.5) of the
-      schedule; with no usable seed it says why and trains as it would have.
+      `checkpoint/` (a phone's Refine sets it), on `init_schedule_scale` (1.0, the full
+      schedule, measured best) of the schedule; with no usable seed it says why and trains
+      as it would have.
       `init_seed.py` has the reasoning.
     * `cap_max: auto` sizes MCMC's gaussian cap to the capture: its supported surface in
       finest-view pixels, from the pose stage's sparse model, times `gaussian_density`

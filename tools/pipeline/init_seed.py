@@ -80,12 +80,14 @@ _VERSION = 1
 #: Gaussians fainter than this are not seeded: MCMC would relocate them first thing.
 MIN_OPACITY = 0.1
 
-#: The schedule a Refine runs when it starts from a seed: half of the full one. The
-#: position learning rate still decays over the (halved) run and MCMC still refines on
-#: the halved window; what is skipped is the first half of the search for surfaces the
-#: preview already did. Not measured on a GPU -- see the README's Refine notes for what
-#: the first run should compare.
-DEFAULT_SCHEDULE_SCALE = 0.5
+#: The schedule a Refine runs when it starts from a seed: the full one. Measured on the
+#: spool capture (179 frames, L4, 2026-09-28; all three Refines cropped to the same
+#: preview support mask): from the preview on half the schedule 25.11 dB / LPIPS 0.147;
+#: from COLMAP's points on the full one 25.79 / 0.133; from the preview on the full one
+#: 25.85 / 0.125 -- the best of the three, for $0.48 with the preview against $0.75. Half
+#: a schedule skipped too much of MCMC's refinement; the seed's head start is worth
+#: keeping, not cashing in as fewer steps.
+DEFAULT_SCHEDULE_SCALE = 1.0
 
 #: Of the seed points outside a region, one in this many is kept -- the rule
 #: `training.crop_initial_points` applies to COLMAP's points, for the same reason.
