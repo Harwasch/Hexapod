@@ -534,7 +534,9 @@ describe("the measured geometry is never written to", () => {
       const word = positionWordOffset(Math.floor(i / 3), layout) + (i % 3);
       expect(Object.is(bitsToFloat32(upload?.words[word] ?? 0), baked[i])).toBe(true);
     }
-  });
+    // A thousand CPU frames of four-node skinning over 12,000 splats: ~4.5 s here, ~3.5 s with
+    // the rigid binding. The ceiling is for slower CI runners, not a budget.
+  }, 20_000);
 });
 
 describe("markMovingNodes", () => {

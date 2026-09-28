@@ -17,7 +17,7 @@ type TextureConstructor = new (options: Record<string, unknown>) => OwnedTexture
 interface Barrel {
   Texture?: TextureConstructor;
   Sampler?: { NEAREST?: unknown };
-  PixelFormat?: { RGBA?: number; RG_INTEGER?: number };
+  PixelFormat?: { RGBA?: number; RGBA_INTEGER?: number };
   PixelDatatype?: { FLOAT?: number; UNSIGNED_INT?: number };
   ShaderDestination?: { VERTEX?: number };
 }
@@ -28,7 +28,7 @@ export function cesiumMotionTextures(): MotionTextureFactory | undefined {
   const Texture = barrel.Texture;
   const nearest = barrel.Sampler?.NEAREST;
   const rgba = barrel.PixelFormat?.RGBA;
-  const rgInteger = barrel.PixelFormat?.RG_INTEGER;
+  const rgbaInteger = barrel.PixelFormat?.RGBA_INTEGER;
   const float = barrel.PixelDatatype?.FLOAT;
   const unsignedInt = barrel.PixelDatatype?.UNSIGNED_INT;
   const vertex = barrel.ShaderDestination?.VERTEX;
@@ -36,7 +36,7 @@ export function cesiumMotionTextures(): MotionTextureFactory | undefined {
     typeof Texture !== "function" ||
     nearest === undefined ||
     rgba === undefined ||
-    rgInteger === undefined ||
+    rgbaInteger === undefined ||
     float === undefined ||
     unsignedInt === undefined ||
     vertex === undefined
@@ -64,8 +64,8 @@ export function cesiumMotionTextures(): MotionTextureFactory | undefined {
   return {
     createFloat: (context, width, height, data) =>
       create(context, width, height, data, rgba, float),
-    createUintPairs: (context, width, height, data) =>
-      create(context, width, height, data, rgInteger, unsignedInt),
+    createUintQuads: (context, width, height, data) =>
+      create(context, width, height, data, rgbaInteger, unsignedInt),
     vertexDestination: vertex,
   };
 }

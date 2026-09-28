@@ -22,6 +22,7 @@ import { applyFlutter, type FlutterField } from "./flutter";
 import { applyAdvectedFlutter, isAdvectedFlutter } from "./leafFlutter";
 import { nodeModes, turbulentLoad, type NodeMode } from "./modes";
 import { nodeAngleLimit, type MotionRig, type SkeletonNode } from "./rig";
+import { SKIN_INFLUENCES, SKIN_WEIGHT_TOTAL, skinCount, type SplatSkin } from "./skin";
 import {
   add,
   cross,
@@ -280,9 +281,16 @@ export function deformPositions(
   flutter?: FlutterField,
   /** Per-splat flutter identity (`positionKeys`); the splat index when omitted. */
   flutterKeys?: Uint32Array,
+  /**
+   * Smooth skinning (`skinSplatsToNodes`): each splat blends up to four nodes' motion, and
+   * `assignment` is not read. Omitted, every splat moves rigidly with its assigned node.
+   */
+  skin?: SplatSkin,
 ): Float32Array {
   if (out === positions)
     throw new Error("deformPositions: canonical positions must not be the output");
+  if (skin !== undefined)
+    return deformSkinned(positions, skin, transforms, out, flutter, flutterKeys);
   const count = Math.min(Math.floor(positions.length / 3), assignment.length);
   const target = out ?? new Float32Array(positions.length);
 
@@ -342,6 +350,106 @@ export function deformPositions(
     if (isAdvectedFlutter(flutter))
       applyAdvectedFlutter(target, positions, assignment, flutter, count);
     else applyFlutter(target, assignment, flutter, count, flutterKeys);
+  }
+  return target;
+}
+
+/**
+ * Per-node displacement affines `x ↦ D·x + t`, `D = R − I`, twelve numbers a node, row-major
+ * `D` then `t`. `D` is written from the quaternion directly (`−2(y² + z²)`, not `R₀₀ − 1`), so
+ * a small bend keeps its precision; the identity gives zeros, so a node at rest adds nothing.
+ */
+export function nodeDisplacementAffines(transforms: readonly NodeTransform[]): Float64Array {
+  const out = new Float64Array(transforms.length * 12);
+  transforms.forEach((transform, n) => {
+    const [x, y, z, w] = transform.rotation;
+    const o = n * 12;
+    out[o] = -2 * (y * y + z * z);
+    out[o + 1] = 2 * (x * y - z * w);
+    out[o + 2] = 2 * (x * z + y * w);
+    out[o + 3] = 2 * (x * y + z * w);
+    out[o + 4] = -2 * (x * x + z * z);
+    out[o + 5] = 2 * (y * z - x * w);
+    out[o + 6] = 2 * (x * z - y * w);
+    out[o + 7] = 2 * (y * z + x * w);
+    out[o + 8] = -2 * (x * x + y * y);
+    out[o + 9] = transform.translation[0];
+    out[o + 10] = transform.translation[1];
+    out[o + 11] = transform.translation[2];
+  });
+  return out;
+}
+
+/**
+ * The skinned form of {@link deformPositions}: `x + Σ_k (w_k/1023)·(D_k·x + t_k)` — linear blend
+ * skinning in displacement form (see `skin.ts`). A splat whose every weighted node is at rest
+ * gets exactly `x` back, because each such node's `D` and `t` are zeros.
+ */
+/** What the flutter passes are handed in place of an assignment when they read the skin. */
+const NO_ASSIGNMENT = new Uint16Array(0);
+
+function deformSkinned(
+  positions: Float32Array,
+  skin: SplatSkin,
+  transforms: readonly NodeTransform[],
+  out: Float32Array | undefined,
+  flutter: FlutterField | undefined,
+  flutterKeys: Uint32Array | undefined,
+): Float32Array {
+  const count = Math.min(Math.floor(positions.length / 3), skinCount(skin));
+  const target = out ?? new Float32Array(positions.length);
+  const affine = nodeDisplacementAffines(transforms);
+  // Bounds-checked once per node, so the reads below cannot miss.
+  const limit = transforms.length * 12;
+  const { nodes, weights } = skin;
+  // Imported bindings copied to locals: under a module transform (vitest) each read of one is a
+  // property access on the module object, and this loop runs a million times a frame.
+  const influences = SKIN_INFLUENCES;
+  const total = SKIN_WEIGHT_TOTAL;
+  const scale = 1 / total;
+  for (let i = 0; i < count; i += 1) {
+    const base = i * 3;
+    const vx = positions[base] ?? 0;
+    const vy = positions[base + 1] ?? 0;
+    const vz = positions[base + 2] ?? 0;
+    let dx = 0;
+    let dy = 0;
+    let dz = 0;
+    const at = i * influences;
+    for (let k = 0; k < influences; k += 1) {
+      const q = weights[at + k] ?? 0;
+      if (q === 0) continue;
+      const o = (nodes[at + k] ?? 0) * 12;
+      if (o >= limit) continue;
+      const w = q === total ? 1 : q * scale;
+      dx +=
+        w *
+        ((affine[o] ?? 0) * vx +
+          (affine[o + 1] ?? 0) * vy +
+          (affine[o + 2] ?? 0) * vz +
+          (affine[o + 9] ?? 0));
+      dy +=
+        w *
+        ((affine[o + 3] ?? 0) * vx +
+          (affine[o + 4] ?? 0) * vy +
+          (affine[o + 5] ?? 0) * vz +
+          (affine[o + 10] ?? 0));
+      dz +=
+        w *
+        ((affine[o + 6] ?? 0) * vx +
+          (affine[o + 7] ?? 0) * vy +
+          (affine[o + 8] ?? 0) * vz +
+          (affine[o + 11] ?? 0));
+    }
+    target[base] = vx + dx;
+    target[base + 1] = vy + dy;
+    target[base + 2] = vz + dz;
+  }
+  // Flutter amplitude is blended by the same weights, so it has no seams either.
+  if (flutter !== undefined) {
+    if (isAdvectedFlutter(flutter))
+      applyAdvectedFlutter(target, positions, NO_ASSIGNMENT, flutter, count, skin);
+    else applyFlutter(target, NO_ASSIGNMENT, flutter, count, flutterKeys, skin);
   }
   return target;
 }

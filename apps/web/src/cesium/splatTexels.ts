@@ -22,6 +22,8 @@
  * while still producing a picture.
  */
 
+import { bindingCount, markMovingSplats, type SplatBinding } from "@twin/world";
+
 /** Words per texel in an RGBA32UI texture. */
 const WORDS_PER_TEXEL = 4;
 /** Texels per splat: one position texel, one covariance/colour texel. */
@@ -185,7 +187,7 @@ export function fullRowRange(layout: SplatTextureLayout): SplatRowRange {
 }
 
 /**
- * The smallest band of rows containing every splat whose node moves.
+ * The smallest band of rows containing every splat whose node — or any node of its skin — moves.
  *
  * `nodeMoves[n]` is non-zero when node `n`'s transform is not the identity. Returns `undefined`
  * when nothing moves, which is how a zero-wind frame skips its upload entirely and leaves an
@@ -196,15 +198,16 @@ export function fullRowRange(layout: SplatTextureLayout): SplatRowRange {
  * tree at 8192-wide texels the whole tree is one or two rows anyway.
  */
 export function rowRangeForMovingNodes(
-  assignment: Uint16Array,
+  binding: SplatBinding,
   nodeMoves: Uint8Array,
   layout: SplatTextureLayout,
 ): SplatRowRange | undefined {
-  const count = Math.min(assignment.length, layout.numSplats);
+  const count = Math.min(bindingCount(binding), layout.numSplats);
   let firstRow = Number.POSITIVE_INFINITY;
   let lastRow = -1;
+  const moving = markMovingSplats(binding, nodeMoves, new Uint8Array(count));
   for (let i = 0; i < count; i += 1) {
-    if ((nodeMoves[assignment[i] ?? 0] ?? 0) === 0) continue;
+    if (moving[i] === 0) continue;
     const row = i >>> layout.rowShift;
     if (row < firstRow) firstRow = row;
     if (row > lastRow) lastRow = row;

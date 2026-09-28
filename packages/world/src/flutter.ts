@@ -44,6 +44,7 @@
 import { hash32 } from "./noise";
 import { nodeModes, nodeNaturalFrequencyHz } from "./modes";
 import { type MotionRig } from "./rig";
+import { SKIN_INFLUENCES, SKIN_WEIGHT_TOTAL, skinCount, type SplatSkin } from "./skin";
 import { clamp, softLimit, VEC3_ZERO, type Vec3 } from "./vec";
 import { gustDelaySeconds, maxWindMagnitude, windAt, type WindSettings } from "./wind";
 
@@ -327,9 +328,15 @@ export function applyFlutter(
   field: FlutterField,
   count: number,
   keys?: Uint32Array,
+  /** Blends each splat's coefficients over its skin's nodes; `assignment` is then not read. */
+  skin?: SplatSkin,
 ): void {
   if (field.still) return;
   const coefficients = flutterCoefficients(field);
+  if (skin !== undefined) {
+    blendCoefficients(skin, coefficients, count, keys, target);
+    return;
+  }
   const amplitudes = field.amplitudeM;
   const limit = Math.min(
     count,
@@ -372,6 +379,70 @@ export function applyFlutter(
       (target[base + 2] ?? 0) +
       wave1 * (AXIS_TABLE[axis + 2] ?? 1) +
       wave2 * (AXIS_TABLE[axis + 5] ?? 0);
+  }
+}
+
+/**
+ * {@link applyFlutter} under a skin: each splat's four coefficients are the weighted blend of
+ * its nodes' (`Σ_k (w_k/1023)·c[node_k]`) — the waveform is linear in them, so this is the
+ * blend of the nodes' shimmer — and the rest is the same per-splat hash and table reads.
+ */
+function blendCoefficients(
+  skin: SplatSkin,
+  coefficients: Float64Array,
+  count: number,
+  keys: Uint32Array | undefined,
+  target: Float32Array,
+): void {
+  const limit = Math.min(
+    count,
+    skinCount(skin),
+    Math.floor(target.length / 3),
+    keys === undefined ? Number.POSITIVE_INFINITY : keys.length,
+  );
+  // Module bindings copied to locals: see `deformSkinned`.
+  const influences = SKIN_INFLUENCES;
+  const scale = 1 / SKIN_WEIGHT_TOTAL;
+  const seed = FLUTTER_SEED;
+  const phaseMask = PHASE_MASK;
+  const axisMask = AXIS_MASK;
+  const phases = PHASE_TABLE;
+  const axes = AXIS_TABLE;
+  const { nodes, weights } = skin;
+  for (let i = 0; i < limit; i += 1) {
+    let c0 = 0;
+    let c1 = 0;
+    let c2 = 0;
+    let c3 = 0;
+    const at = i * influences;
+    for (let k = 0; k < influences; k += 1) {
+      const q = weights[at + k] ?? 0;
+      if (q === 0) continue;
+      const w = q * scale;
+      const c = (nodes[at + k] ?? 0) * 4;
+      c0 += w * (coefficients[c] ?? 0);
+      c1 += w * (coefficients[c + 1] ?? 0);
+      c2 += w * (coefficients[c + 2] ?? 0);
+      c3 += w * (coefficients[c + 3] ?? 0);
+    }
+    if (c0 === 0 && c1 === 0 && c2 === 0 && c3 === 0) continue;
+    const key = keys === undefined ? i : (keys[i] ?? 0);
+    // `hash32`, written out as `applyFlutter` does.
+    const h0 = (Math.imul(seed | 0, 0x9e3779b1) ^ (key | 0)) >>> 0;
+    const h1 = Math.imul(h0 ^ (h0 >>> 16), 0x85ebca6b) >>> 0;
+    const h2 = Math.imul(h1 ^ (h1 >>> 13), 0xc2b2ae35) >>> 0;
+    const h = (h2 ^ (h2 >>> 16)) >>> 0;
+    const p1 = (h & phaseMask) * 2;
+    const p2 = ((h >>> 10) & phaseMask) * 2;
+    const axis = ((h >>> 20) & axisMask) * 6;
+    const wave1 = c0 * (phases[p1] ?? 1) + c1 * (phases[p1 + 1] ?? 0);
+    const wave2 = c2 * (phases[p2] ?? 1) + c3 * (phases[p2 + 1] ?? 0);
+    const base = i * 3;
+    target[base] = (target[base] ?? 0) + wave1 * (axes[axis] ?? 0) + wave2 * (axes[axis + 3] ?? 0);
+    target[base + 1] =
+      (target[base + 1] ?? 0) + wave1 * (axes[axis + 1] ?? 0) + wave2 * (axes[axis + 4] ?? 0);
+    target[base + 2] =
+      (target[base + 2] ?? 0) + wave1 * (axes[axis + 2] ?? 1) + wave2 * (axes[axis + 5] ?? 0);
   }
 }
 

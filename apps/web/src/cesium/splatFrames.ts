@@ -22,6 +22,8 @@
  * was built for" and "this is approximately tree-shaped".
  */
 
+import { bindingCount, markMovingSplats, type SplatBinding } from "@twin/world";
+
 /** A 4×4 matrix in CesiumJS's column-major order: element `(row r, column c)` is `m[c * 4 + r]`. */
 export type Mat4 = ArrayLike<number>;
 
@@ -334,7 +336,7 @@ export function treeUprightness(local: Float32Array): TreeUprightness {
 /**
  * Produces the baked positions a frame should upload.
  *
- * A splat whose node is at rest is copied straight from `canonicalBaked` — the engine's own
+ * A splat whose nodes are all at rest is copied straight from `canonicalBaked` — the engine's own
  * bytes — rather than re-baked. That is what makes zero wind *exactly* the measured pose: the
  * re-bake is numerically faithful but not guaranteed bit-identical, and "returns to where it was
  * measured" is a claim this feature should be able to make without an epsilon.
@@ -344,7 +346,8 @@ export function treeUprightness(local: Float32Array): TreeUprightness {
 export function resolveBakedPositions(
   displacedLocal: Float32Array,
   canonicalBaked: Float32Array,
-  assignment: Uint16Array,
+  /** What each splat follows: a nearest-node assignment, or a skin (`skinSplatsToNodes`). */
+  binding: SplatBinding,
   nodeMoves: Uint8Array,
   matrix: Mat4,
   out: Float32Array,
@@ -356,12 +359,13 @@ export function resolveBakedPositions(
     Math.floor(displacedLocal.length / 3),
     Math.floor(canonicalBaked.length / 3),
     Math.floor(out.length / 3),
-    assignment.length,
+    bindingCount(binding),
   );
   const scratch: MutableVec3 = [0, 0, 0];
+  const moving = markMovingSplats(binding, nodeMoves, new Uint8Array(count));
   for (let i = 0; i < count; i += 1) {
     const base = i * 3;
-    if ((nodeMoves[assignment[i] ?? 0] ?? 0) === 0) {
+    if (moving[i] === 0) {
       out[base] = canonicalBaked[base] ?? 0;
       out[base + 1] = canonicalBaked[base + 1] ?? 0;
       out[base + 2] = canonicalBaked[base + 2] ?? 0;

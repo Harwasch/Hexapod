@@ -27,6 +27,8 @@ import {
   advectedFlutterUnit,
   applyTransform,
   assignSplatsToNodes,
+  BRANCH_BEND_REF_RAD,
+  branchStructure,
   createLivingMotion,
   deform,
   deformPositions,
@@ -38,10 +40,12 @@ import {
   livingFrame,
   livingMaxDisplacement,
   livingTransforms,
+  MODE_BAND,
   NO_GUSTS,
   parseMotionSidecar,
   parseRig,
   prepareLivingMotion,
+  skinSplatsToNodes,
   syntheticTreeRig,
   treeFrequencyHz,
   type LivingMotion,
@@ -659,5 +663,289 @@ describe("cost per frame (CPU)", () => {
     );
     // A generous ceiling: this is a regression tripwire, not a frame budget.
     expect(living).toBeLessThan(40);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// A real, fragmented skeleton: the Minnetonka tree's extracted rig (packages/world/fixtures,
+// CC BY 4.0, Matthew Guertin). Nothing is fitted to it; it is the case the v1 rules failed on.
+// ---------------------------------------------------------------------------------------------
+
+const realRig = parseRig(
+  readFileSync(fileURLToPath(new URL("../fixtures/minnetonka/rig.json", import.meta.url)), "utf8"),
+);
+/** The tree's measured height (real_tree.py's splat extent), not a tuned number. */
+const REAL_HEIGHT_M = 6;
+const realSidecar = deriveMotionSidecar(realRig, { treeHeightM: REAL_HEIGHT_M });
+const realMotion = createLivingMotion(realRig, realSidecar);
+prepareLivingMotion(realMotion);
+
+function childCounts(target: MotionRig): number[] {
+  const counts = target.nodes.map(() => 0);
+  target.nodes.forEach((node) => {
+    if (node.parent >= 0) counts[node.parent] = (counts[node.parent] ?? 0) + 1;
+  });
+  return counts;
+}
+
+/** Displacement PSD (Hann window, one segment) summed over the three axes. */
+function displacementPsd(
+  axes: readonly Float64Array[],
+  fs: number,
+): { psd: Float64Array; df: number } {
+  const n = axes[0]?.length ?? 0;
+  let size = 1;
+  while (size < n) size <<= 1;
+  const psd = new Float64Array(size / 2);
+  for (const signal of axes) {
+    const re = new Float64Array(size);
+    const im = new Float64Array(size);
+    let mean = 0;
+    for (const v of signal) mean += v;
+    mean /= n;
+    for (let i = 0; i < n; i += 1)
+      re[i] = ((signal[i] ?? 0) - mean) * (0.5 - 0.5 * Math.cos((2 * Math.PI * i) / n));
+    fft(re, im);
+    for (let k = 0; k < size / 2; k += 1)
+      psd[k] = (psd[k] ?? 0) + (re[k] ?? 0) ** 2 + (im[k] ?? 0) ** 2;
+  }
+  return { psd, df: fs / size };
+}
+
+describe("a fragmented real skeleton rings in a tree's band", () => {
+  it("groups the Minnetonka rig into a few limbs, every mode within [f0, 3·f0]", () => {
+    const f0 = treeFrequencyHz(REAL_HEIGHT_M);
+    const tips = childCounts(realRig).filter((c) => c === 0).length;
+    const modes = new Set(realSidecar.nodes.branch.slice(1));
+    const frequencies = [...modes].map((b) => realSidecar.nodes.frequencyHz[b] ?? 0);
+    const joints = realRig.nodes.length;
+    console.info(
+      `MEASURED Minnetonka rig: ${joints} joints, ${tips} tips, ${modes.size} modes (v1 rules: 150), ` +
+        `frequencies ${Math.min(...frequencies).toFixed(2)}-${Math.max(...frequencies).toFixed(2)} Hz ` +
+        `(v1: 0.98-10.05 Hz), f0 ${f0.toFixed(2)} Hz`,
+    );
+    // No more oscillators than the crown has tips: a mode is a limb, not a joint.
+    expect(modes.size).toBeLessThanOrEqual(tips);
+    for (const f of frequencies) {
+      expect(f).toBeGreaterThanOrEqual(f0 - 1e-4);
+      expect(f).toBeLessThanOrEqual(MODE_BAND * f0 + 1e-4);
+    }
+    // No joint bends by a whole limb's worth unless it is the whole limb.
+    realSidecar.nodes.gainRad.forEach((g) => expect(g).toBeLessThanOrEqual(BRANCH_BEND_REF_RAD));
+  });
+
+  it("moves its tips as sway, not vibration: spectral centroid ≤ 1.5 Hz, < 20 % of speed above 4 Hz", () => {
+    const fs = 30;
+    const frames = fs * 60;
+    const tips = childCounts(realRig)
+      .map((c, i) => (c === 0 ? i : -1))
+      .filter((i) => i >= 0);
+    const tracks = tips.map(() => [
+      new Float64Array(frames),
+      new Float64Array(frames),
+      new Float64Array(frames),
+    ]);
+    for (let k = 0; k < frames; k += 1) {
+      const transforms = livingTransforms(realMotion, 500 + k / fs, windAt(6.3));
+      tips.forEach((tip, j) => {
+        const d = displacementOf(transforms, tip, realRig);
+        for (let c = 0; c < 3; c += 1) (tracks[j]?.[c] as Float64Array)[k] = d[c] ?? 0;
+      });
+    }
+    const centroids: number[] = [];
+    const fast: number[] = [];
+    for (const track of tracks) {
+      const { psd, df } = displacementPsd(track, fs);
+      let power = 0;
+      let moment = 0;
+      let speed = 0;
+      let fastSpeed = 0;
+      for (let k = 1; k < psd.length; k += 1) {
+        const f = k * df;
+        if (f < 0.2) continue;
+        const p = psd[k] ?? 0;
+        power += p;
+        moment += f * p;
+        speed += p * f * f;
+        if (f > 4) fastSpeed += p * f * f;
+      }
+      centroids.push(moment / power);
+      fast.push(fastSpeed / speed);
+    }
+    const median = (xs: number[]): number => [...xs].sort((a, b) => a - b)[xs.length >> 1] ?? 0;
+    console.info(
+      `MEASURED Minnetonka tips at 6.3 m/s: displacement spectral centroid median ${median(centroids).toFixed(2)} Hz ` +
+        `(v1 rules: 2.41), share of velocity power above 4 Hz median ${median(fast).toFixed(3)}, ` +
+        `worst ${Math.max(...fast).toFixed(3)} (v1: 0.555, 0.834)`,
+    );
+    expect(median(centroids)).toBeLessThanOrEqual(1.5);
+    expect(Math.max(...fast)).toBeLessThan(0.2);
+  });
+});
+
+describe("amplitude falls with frequency", () => {
+  it("gives a stiffer limb a smaller tip deflection: slope of log δ on log f ≤ −1", () => {
+    // Each mode limb's own deflection: where its far end is, less where its attachment's
+    // motion alone would carry it.
+    const structure = branchStructure(realRig);
+    const tree = structure.treeBranch;
+    const limbs = [...new Set(realSidecar.nodes.branch.slice(1))].filter((b) => b !== tree);
+    // Topological order: a limb's far end is its highest-indexed joint.
+    const ends = new Map<number, number>();
+    realRig.nodes.forEach((_, i) => {
+      const base = structure.limb[i] ?? i;
+      if (i > 0 && limbs.includes(base)) ends.set(base, i);
+    });
+    const fs = 20;
+    const frames = fs * 120;
+    const sums = new Map<number, number>(limbs.map((b) => [b, 0]));
+    for (let k = 0; k < frames; k += 1) {
+      const transforms = livingTransforms(realMotion, 900 + k / fs, windAt(6.3, false));
+      for (const base of limbs) {
+        const end = ends.get(base) ?? base;
+        const attach = realRig.nodes[base]?.parent ?? 0;
+        const p = realRig.nodes[end]?.position ?? [0, 0, 0];
+        const moved = applyTransform(transforms[end] ?? IDENTITY_TRANSFORM, p);
+        const carried = applyTransform(transforms[attach] ?? IDENTITY_TRANSFORM, p);
+        const d2 =
+          (moved[0] - carried[0]) ** 2 +
+          (moved[1] - carried[1]) ** 2 +
+          (moved[2] - carried[2]) ** 2;
+        sums.set(base, (sums.get(base) ?? 0) + d2);
+      }
+    }
+    const xs = limbs.map((b) => Math.log(realSidecar.nodes.frequencyHz[b] ?? 1));
+    const ys = limbs.map((b) => Math.log(Math.sqrt((sums.get(b) ?? 0) / frames)));
+    const mx = xs.reduce((a, b) => a + b, 0) / xs.length;
+    const my = ys.reduce((a, b) => a + b, 0) / ys.length;
+    let num = 0;
+    let den = 0;
+    xs.forEach((x, i) => {
+      num += (x - mx) * ((ys[i] ?? 0) - my);
+      den += (x - mx) ** 2;
+    });
+    const slope = num / den;
+    console.info(
+      `MEASURED Minnetonka limbs: RMS own tip deflection ∝ f^${slope.toFixed(2)} over ${limbs.length} limbs (quasi-static law: f^-2)`,
+    );
+    expect(slope).toBeLessThanOrEqual(-1);
+  });
+});
+
+describe("skinned splats have no seams", () => {
+  /** Probe lines beside every segment, `step` apart, running past both joints. */
+  function probeLines(target: MotionRig, step = 0.002): Float32Array {
+    const points: number[] = [];
+    target.nodes.forEach((node, i) => {
+      if (i === 0) return;
+      const a = target.nodes[node.parent]?.position ?? node.position;
+      const b = node.position;
+      const d: Vec3 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+      const length = Math.hypot(d[0], d[1], d[2]);
+      if (!(length > 0)) return;
+      // An offset across the segment, 3 cm: through the bark and foliage around the joint.
+      const helper: Vec3 = Math.abs(d[2]) < 0.9 * length ? [0, 0, 1] : [1, 0, 0];
+      const across: Vec3 = [
+        d[1] * helper[2] - d[2] * helper[1],
+        d[2] * helper[0] - d[0] * helper[2],
+        d[0] * helper[1] - d[1] * helper[0],
+      ];
+      const al = Math.hypot(across[0], across[1], across[2]);
+      const steps = Math.ceil((1.5 * length) / step);
+      for (let s = 0; s <= steps; s += 1) {
+        const t = -0.25 + (1.5 * s) / steps;
+        for (let c = 0; c < 3; c += 1)
+          points.push((a[c] ?? 0) + (d[c] ?? 0) * t + ((across[c] ?? 0) / al) * 0.03);
+      }
+      points.push(Number.NaN, Number.NaN, Number.NaN); // a break between lines
+    });
+    return Float32Array.from(points);
+  }
+
+  it.each([
+    ["the synthetic tree", rig, motion],
+    ["the Minnetonka rig", realRig, realMotion],
+  ] as const)(
+    "keeps the displacement field continuous across node boundaries: %s",
+    (_, target, model) => {
+      const frame = livingFrame(model, 321.5, windAt(10));
+      /** Largest displacement difference between consecutive probes on different nodes. */
+      const jumps = (step: number): { rigid: number; skinned: number; boundaries: number } => {
+        const probes = probeLines(target, step);
+        const assignment = assignSplatsToNodes(probes, target);
+        const rigid = deformPositions(probes, assignment, frame.transforms);
+        const skinned = deformPositions(
+          probes,
+          assignment,
+          frame.transforms,
+          undefined,
+          undefined,
+          undefined,
+          skinSplatsToNodes(probes, target),
+        );
+        const out = { rigid: 0, skinned: 0, boundaries: 0 };
+        for (let i = 1; i < probes.length / 3; i += 1) {
+          if (!Number.isFinite(probes[i * 3] ?? Number.NaN)) continue;
+          if (!Number.isFinite(probes[(i - 1) * 3] ?? Number.NaN)) continue;
+          if (assignment[i] === assignment[i - 1]) continue;
+          out.boundaries += 1;
+          const jump = (field: Float32Array): number => {
+            let sq = 0;
+            for (let c = 0; c < 3; c += 1) {
+              const a = (field[i * 3 + c] ?? 0) - (probes[i * 3 + c] ?? 0);
+              const b = (field[(i - 1) * 3 + c] ?? 0) - (probes[(i - 1) * 3 + c] ?? 0);
+              sq += (a - b) ** 2;
+            }
+            return Math.sqrt(sq);
+          };
+          out.rigid = Math.max(out.rigid, jump(rigid));
+          out.skinned = Math.max(out.skinned, jump(skinned));
+        }
+        return out;
+      };
+      const coarse = jumps(0.002);
+      const fine = jumps(0.0005);
+      console.info(
+        `MEASURED seams at 10 m/s, ${coarse.boundaries} node boundaries crossed: probes 2 mm apart, ` +
+          `rigid jumps up to ${(coarse.rigid * 1000).toFixed(2)} mm, skinned ${(coarse.skinned * 1000).toFixed(3)} mm; ` +
+          `0.5 mm apart, rigid ${(fine.rigid * 1000).toFixed(2)} mm, skinned ${(fine.skinned * 1000).toFixed(3)} mm`,
+      );
+      expect(coarse.boundaries).toBeGreaterThan(100);
+      // A seam is a jump that does not shrink with the spacing; a continuous field's difference
+      // does, in proportion. Quartering the spacing leaves the rigid binding's worst jump where
+      // it was and cuts the skinned one to about a quarter (float32 rounding aside).
+      expect(fine.rigid).toBeGreaterThan(0.5 * coarse.rigid);
+      expect(fine.skinned).toBeLessThan(0.4 * coarse.skinned);
+      expect(coarse.skinned).toBeLessThan(coarse.rigid / 20);
+    },
+  );
+
+  it("restores the canonical positions exactly at calm, skinned", () => {
+    const probes = probeLines(realRig);
+    const clean = probes.filter((v) => Number.isFinite(v));
+    const skin = skinSplatsToNodes(clean, realRig);
+    const assignment = assignSplatsToNodes(clean, realRig);
+    const windy = livingFrame(realMotion, 77, windAt(12));
+    const moved = deformPositions(
+      clean,
+      assignment,
+      windy.transforms,
+      undefined,
+      windy.flutter,
+      undefined,
+      skin,
+    );
+    expect(moved).not.toEqual(clean);
+    const calm = livingFrame(realMotion, 78, windAt(0));
+    const restored = deformPositions(
+      clean,
+      assignment,
+      calm.transforms,
+      undefined,
+      calm.flutter,
+      undefined,
+      skin,
+    );
+    expect(Array.from(restored)).toEqual(Array.from(clean));
   });
 });

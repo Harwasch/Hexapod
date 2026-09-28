@@ -12,3 +12,6 @@ playwright-report
 docs/plan.svg
 # Generated tile data (tools/captures)
 data/tiles
+# Derived capture fixtures (compact JSON, written by tools)
+packages/world/fixtures/*.json
+packages/world/fixtures/**/*.json

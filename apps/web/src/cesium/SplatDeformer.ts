@@ -32,7 +32,7 @@
  * snapshot is the selected tiles' splats concatenated, and which tiles are selected changes
  * with the camera. So identity, rig binding and flutter identity are all derived per tile from
  * that tile's own positions (`splatTiles.ts`) and concatenated in snapshot order; a merged
- * parent binds to the node nearest its own centre exactly as a leaf gaussian does.
+ * parent binds to the four nodes nearest its own centre exactly as a leaf gaussian does.
  *
  * **Refuse rather than mislead.** Before its first write it checks that the root frame really
  * is east-north-up, that the tree stands along local +Z, and — bit-exactly, per tile — that
@@ -49,9 +49,11 @@ import {
   deformPositions,
   FLUTTER_STILL,
   rigTileChecksums,
+  skinSlice,
   type FlutterField,
   type MotionRig,
   type NodeTransform,
+  type SplatSkin,
 } from "@twin/world";
 
 import { createLogger } from "@/lib/log";
@@ -269,9 +271,14 @@ export class SplatDeformer {
     return this.#attachment?.binding.canonicalLocal;
   }
 
-  /** Which rig node each splat of the current snapshot belongs to. Treat as immutable. */
+  /** Each splat's nearest rig node in the current snapshot (slot 0 of its skin). Immutable. */
   get assignment(): Uint16Array | undefined {
     return this.#attachment?.binding.assignment;
+  }
+
+  /** The nodes and blend weights each splat of the current snapshot follows. Immutable. */
+  get skin(): SplatSkin | undefined {
+    return this.#attachment?.binding.skin;
   }
 
   /** Each splat's flutter identity in the current snapshot. Treat as immutable. */
@@ -494,7 +501,7 @@ export class SplatDeformer {
       const bake = binding.commonBake;
       if (gpu === undefined || bake === undefined) return this.#wait("internal");
       gpu.install(primitive);
-      if (!gpu.bind(generation, layout, binding.assignment, binding.flutterKeys, bake)) {
+      if (!gpu.bind(generation, layout, binding.skin, binding.flutterKeys, bake)) {
         this.#refuse("bake", "the shared bake transform is singular");
         return undefined;
       }
@@ -569,8 +576,9 @@ export class SplatDeformer {
       cpu.displacedLocal,
       flutter,
       binding.flutterKeys,
+      binding.skin,
     );
-    // Per tile, each through its own bake matrix. Splats whose node is at rest get the
+    // Per tile, each through its own bake matrix. Splats whose nodes are all at rest get the
     // engine's own bytes back, which is what makes calm exact.
     for (const tile of binding.tiles) {
       const from = tile.start * 3;
@@ -578,7 +586,7 @@ export class SplatDeformer {
       resolveBakedPositions(
         cpu.displacedLocal.subarray(from, to),
         cpu.canonicalBaked.subarray(from, to),
-        binding.assignment.subarray(tile.start, tile.start + tile.count),
+        skinSlice(binding.skin, tile.start, tile.count),
         attachment.nodeMoves,
         tile.bake,
         cpu.displacedBaked.subarray(from, to),
@@ -588,7 +596,7 @@ export class SplatDeformer {
 
     // Returning to rest has to repaint whatever the last frame moved, not what this one does.
     const range = moving
-      ? (rowRangeForMovingNodes(binding.assignment, attachment.nodeMoves, attachment.layout) ??
+      ? (rowRangeForMovingNodes(binding.skin, attachment.nodeMoves, attachment.layout) ??
         fullRowRange(attachment.layout))
       : (this.#lastRange ?? fullRowRange(attachment.layout));
 
