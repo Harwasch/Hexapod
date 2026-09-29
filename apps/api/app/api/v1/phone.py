@@ -145,6 +145,10 @@ PHONE_OPTIONS: dict[str, dict[str, dict[str, Rule]]] = {
             "up_axis": frozenset({"", "z", "-z", "y", "-y", "x", "-x"}),
             "heading_deg": (-360, 360),
         },
+        # A splat file carries no location, and a desktop browser often shares none, so
+        # without these a phone-key upload of a .ply landed at (0, 0). They override the
+        # capture's own fix for manual_placement (worker/params.py: job params win).
+        "georeference": {"lat": (-90, 90), "lon": (-180, 180), "height": (-500, 9000)},
     },
 }
 

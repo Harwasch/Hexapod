@@ -1,7 +1,7 @@
 import type { CaptureQuality } from "@twin/contracts";
 import { describe, expect, it } from "vitest";
 
-import { DEFAULTS, paramsFor, previewParamsFor } from "@/upload/options";
+import { DEFAULTS, paramsFor, parsePlace, previewParamsFor } from "@/upload/options";
 import {
   COVERAGE_TIP_IDS,
   forecast,
@@ -185,6 +185,25 @@ describe("preview and refine parameters", () => {
         normalize: { up_axis: "", heading_deg: 0 },
       });
     }
+  });
+
+  it("a typed place becomes the splat's georeference; an empty or bad one sends none", () => {
+    expect(paramsFor("splat-ingest", { ...DEFAULTS, place: "46.134, -123.881" })).toEqual({
+      normalize: { up_axis: "", heading_deg: 0 },
+      georeference: { lat: 46.134, lon: -123.881 },
+    });
+    for (const place of ["", "46.134", "north, west", "91, 0", "0, 181", "1, 2, 3"]) {
+      expect(paramsFor("splat-ingest", { ...DEFAULTS, place }).georeference).toBeUndefined();
+    }
+    expect(
+      paramsFor("photo-reconstruct", { ...DEFAULTS, place: "46, -123" }).georeference,
+    ).toBeUndefined();
+  });
+
+  it("reads a place with commas, spaces or semicolons, in decimal degrees", () => {
+    expect(parsePlace(" 46.134 -123.881 ")).toEqual({ lat: 46.134, lon: -123.881 });
+    expect(parsePlace("-33.9;151.2")).toEqual({ lat: -33.9, lon: 151.2 });
+    expect(parsePlace("46°N 123°W")).toBeNull();
   });
 
   it("a splat file has no preview and no quality bar", () => {

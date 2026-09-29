@@ -199,12 +199,42 @@ def test_a_phone_sets_only_the_options_it_is_allowed(client: TestClient, db: Ses
         assert response.status_code == 409, (refused, response.text)
     assert start({"normalize": {"up_axis": "sideways"}}, "splat-ingest").status_code == 409
     assert start({"package": {"max_gaussians": 800_000}}, "splat-ingest").status_code == 409
+    # A splat file's place: a range each, and nothing else on the georeference stage.
+    for refused_place in (
+        {"lat": 91},
+        {"lon": -181},
+        {"lat": "north"},
+        {"lat": True},
+        {"uncertainty_m": 0},
+    ):
+        response = start({"georeference": refused_place}, "splat-ingest")
+        assert response.status_code == 409, (refused_place, response.text)
+    assert start({"georeference": {"lat": 46.134}}, "photo-reconstruct").status_code == 409
 
     chosen = {
         "normalize": {"max_side": 2400},
         "train": {"schedule_floor": 1.0, "cap_max": 1_000_000},
     }
     ok = start(chosen)
+    assert ok.status_code == 202, ok.text
+    job = db.get(Job, uuid.UUID(ok.json()["id"]))
+    assert job is not None and job.params == chosen
+
+
+def test_a_splat_upload_can_be_placed_by_hand(client: TestClient, db: Session) -> None:
+    """A .ply carries no location and a desktop browser often shares none: the phone key
+    may send `georeference` lat/lon/height for splat-ingest, and the job keeps them."""
+    mine = client.post("/api/v1/phone/captures", json={}, headers=PHONE).json()["capture"]
+    uploaded(db, mine["id"])
+    chosen = {
+        "normalize": {"up_axis": "-y", "heading_deg": 0},
+        "georeference": {"lat": 46.134, "lon": -123.881, "height": 5},
+    }
+    ok = client.post(
+        f"/api/v1/phone/captures/{mine['id']}/process",
+        json={"recipe": "splat-ingest", "params": chosen},
+        headers=PHONE,
+    )
     assert ok.status_code == 202, ok.text
     job = db.get(Job, uuid.UUID(ok.json()["id"]))
     assert job is not None and job.params == chosen

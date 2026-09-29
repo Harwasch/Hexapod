@@ -144,6 +144,8 @@ export interface Options {
   videoFps: (typeof VIDEO_FPS)[number]["value"];
   upAxis: (typeof UP_AXIS)[number]["value"];
   headingDeg: number;
+  /** Where a splat file goes, as "lat, lon", when this device cannot say ("" = use its fix). */
+  place: string;
   detail: (typeof DETAIL)[number]["value"];
 }
 
@@ -154,6 +156,7 @@ export const DEFAULTS: Options = {
   videoFps: "",
   upAxis: "",
   headingDeg: 0,
+  place: "",
   detail: "400000",
 };
 
@@ -185,7 +188,14 @@ export const PREVIEW_TRAIN = { schedule_scale: 0.1, cap_max: 200_000, train_max_
  */
 export function paramsFor(recipe: Recipe, options: Options): StageParams {
   if (recipe === "splat-ingest") {
-    return { normalize: { up_axis: options.upAxis, heading_deg: options.headingDeg } };
+    const params: StageParams = {
+      normalize: { up_axis: options.upAxis, heading_deg: options.headingDeg },
+    };
+    // A splat file carries no location. The phone's own fix is used when there is one;
+    // a typed place wins over it, and is the only way a desktop upload gets placed.
+    const place = parsePlace(options.place);
+    if (place) params.georeference = place;
+    return params;
   }
   const normalize: Record<string, number | string> = {
     max_side: options.photoSize === "auto" ? "auto" : Number(options.photoSize),
@@ -209,6 +219,22 @@ export function previewParamsFor(recipe: Recipe, options: Options): StageParams 
   const params = paramsFor(recipe, options);
   if (recipe === "splat-ingest") return params;
   return { ...params, train: { ...PREVIEW_TRAIN }, quality: { mode: "preview", bar: options.bar } };
+}
+
+/**
+ * "46.134, -123.881" (or space-separated) as a latitude and longitude, or null when the
+ * text is empty or not a valid pair. Decimal degrees only: north and east positive.
+ */
+export function parsePlace(text: string): { lat: number; lon: number } | null {
+  const parts = text
+    .trim()
+    .split(/[\s,;]+/)
+    .filter(Boolean);
+  if (parts.length !== 2) return null;
+  const [lat, lon] = parts.map(Number) as [number, number];
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+  if (lat < -90 || lat > 90 || lon < -180 || lon > 180) return null;
+  return { lat, lon };
 }
 
 /** One line for the panel's closed state, e.g. "Standard · 1600 px · Standard detail". */
@@ -345,10 +371,43 @@ export function mountOptions(root: HTMLDetailsElement): OptionsPanel {
     changed();
   });
   heading.append(headingLegend, headingInput);
+  const place = document.createElement("fieldset");
+  const placeLegend = document.createElement("legend");
+  placeLegend.textContent = "Where it is (latitude, longitude)";
+  const placeInput = document.createElement("input");
+  placeInput.type = "text";
+  placeInput.inputMode = "decimal";
+  placeInput.id = "place";
+  placeInput.placeholder = "46.134, -123.881";
+  placeInput.value = options.place;
+  placeInput.className = "number";
+  placeInput.setAttribute(
+    "aria-label",
+    "Where it is, as latitude and longitude in decimal degrees. Empty uses this device's location.",
+  );
+  const placeHint = document.createElement("small");
+  const showPlaceHint = (): void => {
+    const text = placeInput.value.trim();
+    placeHint.textContent =
+      text === ""
+        ? "Empty: this device's location, if it shares one."
+        : parsePlace(text)
+          ? "Placed here instead of this device's location."
+          : "Not a place yet: two numbers, e.g. 46.134, -123.881.";
+  };
+  placeInput.addEventListener("change", () => {
+    options.place = placeInput.value.trim();
+    showPlaceHint();
+    changed();
+  });
+  placeInput.addEventListener("input", showPlaceHint);
+  showPlaceHint();
+  place.append(placeLegend, placeInput, placeHint);
   splat.append(
     groupTitle("For splat files"),
     segmented("upAxis", "Which way is up in the file", UP_AXIS, options, changed),
     heading,
+    place,
   );
 
   const detail = document.createElement("div");
