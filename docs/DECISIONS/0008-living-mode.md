@@ -229,3 +229,85 @@ Still for a person on real hardware: whether 3–4 cm of tip sway at the default
 tree in a moderate breeze (the magnitudes `0.02`/`0.05 rad` at 10 m/s remain estimates), whether
 4–9 Hz, 2–3 mm leaf flutter reads as leaves or as noise, and the GPU cost of ~15 fetches per
 vertex at a million splats.
+
+## Addendum (2026-09-29): the wind has a spectrum, and it moves with the wind speed
+
+After the limb fix the Minnetonka tree read "a lot better, but still somewhat animatronic or
+jittery — especially at low wind, where I would expect more of a gentle swaying". Measured on the
+code before this change, the cause was the forcing, not the tree:
+
+- **The response spectrum's shape did not depend on the wind.** Each limb read a motion texture
+  whose spectrum was its oscillator's response to _flat_ forcing, placed at its own frequency; the
+  wind only scaled it (`(1 + f/U)^(−5/6)` at the limb's frequency, then `U²`). Every limb rang at
+  its resonance at every speed: over the Minnetonka rig's 23 limbs, the median own-tip spectral
+  centroid was 0.64·f_n at 2 m/s and 0.69·f_n at 16 m/s, and 40–41 % of the variance lay within
+  `[0.8, 1.25]·f_n` at every speed. Real response is `|H(f)|²·S_wind(f; U)`, and the wind's
+  energy sits at `f ≈ 0.15·U/L` with `L` ≈ 35 m near a 6 m tree — 0.008 Hz at 2 m/s — so at low
+  wind a limb follows the gusts quasi-statically and barely rings.
+- **The gusts were scripted**: a SpeedTree-style `sin²` bump, +35 % every ~20 s, the same shape
+  every time, on top of a steady lean.
+- **Neighbouring limbs moved independently** (one texture trajectory each), where a gust front
+  crosses a crown at `U` and moves neighbours together at low frequency.
+
+What changed (`packages/world/src/turbulence.ts`, `living.ts`), every rule general and tagged in
+the sidecar's provenance:
+
+| Rule                                                                                                                                                                                                                                                       | Basis                                                                                                                                                                                                                                          | Status                                   |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------- |
+| Turbulence intensity `I = 1/ln(z/z0)` and length scale `L = 300·(z/200)^(0.67 + 0.05 ln z0)` at the tree's height `z = H`, held at `z_min`                                                                                                                 | EN 1991-1-4:2005+A1:2010 eqs. 4.7 (`k_I = c0 = 1`) and B.1; `z_s = h` for a structure outside its Fig. 6.1 (§6.3.1)                                                                                                                            | cited (read at the source)               |
+| Terrain category III, `z0 = 0.3 m`, `z_min = 5 m`                                                                                                                                                                                                          | EN Table 4.1: "villages, suburban terrain, permanent forest"                                                                                                                                                                                   | estimate (the category is chosen)        |
+| Wind spectrum `S_L(f_L) = 6.8·f_L/(1 + 10.2·f_L)^(5/3)`, `f_L = f·L/U`                                                                                                                                                                                     | EN eq. B.2                                                                                                                                                                                                                                     | cited                                    |
+| Background `B² = 1/(1 + 0.9·((b + h)/L)^0.63)`, `b`, `h` the extent of what the oscillator carries, from the rig                                                                                                                                           | EN eq. B.3                                                                                                                                                                                                                                     | cited                                    |
+| Resonance `R² = π²/(2δ)·S_L(f_n)·R_h(η_h)·R_b(η_b)`, `R(η) = 1/η − (1 − e^(−2η))/(2η²)`, `η = 4.6·(h or b)·f_L/L`                                                                                                                                          | EN eqs. B.6–B.8                                                                                                                                                                                                                                | cited                                    |
+| Aerodynamic damping `ζ_a = 2π·f_n·x_s/U`, `x_s` the limb's static tip deflection at `U` (its gains and the rig)                                                                                                                                            | EN eq. F.18 with `c_f·ρ·b/m_e = 2·x_s·(2πn)²/U²`; James & Haritos 2010 saw branch damping rise with sway amplitude and put it down to drag                                                                                                     | cited formula, estimated inputs          |
+| Sway RMS `2I·√(B²φ + R²)` of the mean lean along the wind, `0.75·I·(…)` across                                                                                                                                                                             | EN eq. 6.3 (`2I` is the linearised drag); `σ_v/σ_u = 0.75` kept from the previous 0.6 : 0.8 (IEC 61400-1's 0.8 could not be read at the source)                                                                                                | cited / estimate                         |
+| The background is a **frozen field** of 320 random Fourier modes with the EN spectrum along the wind, carried at `U`; each oscillator reads it at the centroid of what it carries, through a `ζ = 1/√2` low-pass at `f_n` (`φ` above: the share it passes) | Taylor's frozen turbulence, as Habel 2009 §7.2 advects the leaf field; along-wind wavenumbers stratified `∝ √(k1·F(k1))` in `log k1`, the other two from the isotropic field's conditional; the low-pass is the flattest second-order response | method cited, sampling a design choice   |
+| Fluctuations slower than 10 minutes are changes of the mean, high-passed out                                                                                                                                                                               | EN B.2(3): the mean wind is a 600 s average                                                                                                                                                                                                    | cited                                    |
+| The resonant channel is the existing flat-forced texture at `f_n`, scaled by `R`                                                                                                                                                                           | its variance is the white-noise integral `R²` stands for                                                                                                                                                                                       | method                                   |
+| Limb damping 0.045 → 0.106 with `√(tip share)` (was 0.086 → 0.15, unverified); the tree's 0.086 summer, 0.039 winter unchanged                                                                                                                             | James & Haritos 2010 pluck tests: single branches 3.5–4.5 % at small amplitude, the tree with its branches 10.6 % (sub-branches as tuned mass dampers)                                                                                         | cited endpoints, estimated interpolation |
+| Scripted gust envelope off (`gust.strength: 0` in new sidecars); leaf flutter amplitude follows its branch's own gusts, `× (1 + 2I·B·u)`                                                                                                                   | the spectrum already holds the gusts; the drag on leaves follows the same `(U + u)²`                                                                                                                                                           | design choice                            |
+
+Measured on the Minnetonka rig (`living.test.ts`; its 23 limbs' own-tip deflection, 600 s at
+10 Hz, medians):
+
+| wind   | centroid / f_n, before → after | variance within `[0.8, 1.25]·f_n` | variance below `f_n/2` |
+| ------ | ------------------------------ | --------------------------------- | ---------------------- |
+| 2 m/s  | 0.64 → 0.058                   | 0.40 → 0.008                      | 0.38 → 0.98            |
+| 6 m/s  | 0.67 → 0.10                    | 0.41 → 0.024                      | 0.35 → 0.95            |
+| 12 m/s | 0.68 → 0.18                    | 0.41 → 0.055                      | 0.34 → 0.88            |
+| 16 m/s | 0.69 → 0.19                    | 0.41 → 0.060                      | 0.34 → 0.88            |
+
+The model's own resonant share `R²/(B² + R²)` is 0.005, 0.021, 0.064, 0.098 and 0.125 at 2, 4,
+8, 12 and 16 m/s. The resonance is always a peak at `f_n` (a lightly damped limb has one at any
+wind); its prominence roughly doubles from 2 to 12 m/s. At 12 m/s every synthetic-tree branch's
+velocity-spectrum peak is within 4.3 % of its model frequency, and the trunk's within 0.5 % of
+`2.4/√H`. Two Minnetonka limbs 2.35 m apart along a 4 m/s wind move with a 0.573 s lag against a
+predicted 0.581 s (`Δx/U` plus their filters' group delays), coherence 0.93 at 0.02–0.2 Hz and
+0.48 at 0.8–1.6 Hz. The mean deflection goes as `U^1.97`, the fluctuation about it as `U^2.08`,
+the extra because `R²` grows with the wind. No autocorrelation above 0.17 from 10 s to an hour
+over three hours of motion.
+
+Kept: calm is the identity by value; the output is a pure function of `(t, wind, seed, rig)` (the
+field and a per-bearing phase table are memoised, invisibly); the displacement bound is still
+proven (the background is soft-clipped at 3σ of the raw field); the GPU path is untouched — it
+consumes per-node transforms and the flutter field, both still computed on the CPU. Transforms
+cost 0.30 ms a frame on the Minnetonka rig against 0.22 ms before, and a whole frame 0.33 ms
+either way, since its two halves now share one evaluation. The sidecar stays v1: it gains an
+optional `wind.lengthScaleM`, and a sidecar without one takes `L` from EN eq. B.1 at its height;
+older sidecars (sway ratios 0.8/0.6, gusts on, the old damping) load and move under the new
+forcing with their own numbers until regenerated.
+
+Not settled, and worth saying:
+
+- **The resonant texture's bandwidth is the structural damping only.** `R²` includes the
+  aerodynamic damping, but a limb's texture is built once per damping class, so its peak is
+  narrower than `ζ_s + ζ_a` would make it at high wind.
+- **Resonance that grows with the wind is what EN's procedure gives**, and field data are mixed:
+  Jackson et al. 2021 find the tree spectrum's slope flat above 3–4 m/s and cite Schindler & Mohr
+  2018, whose four Scots pines' oscillatory component _diminished_ with wind. The aerodynamic
+  damping tempers the rise here; it does not reverse it.
+- **The frozen field is a line spectrum.** 320 modes put 3–6 lines in each ±10 % band a limb
+  sways in; they blend over a 30 s look, and a 20-minute spectrum resolves them.
+- **The amplitudes are still the previous addendum's estimates** (0.02 / 0.05 rad at 10 m/s). At
+  2 m/s a Minnetonka limb's own tip now moves ~1.4 mm RMS, slowly. Whether that reads as gentle
+  swaying or as too little is for eyes.

@@ -2,33 +2,40 @@
  * Living Mode, phase 1: stateless modal wind animation of a rigged tree from its skeleton alone.
  *
  * Every rig joint belongs to one **branch** (see `branchStructure`), and every branch is one damped
- * harmonic oscillator — the trunk's is the whole-tree pendulum mode. What a branch does at time
- * `t` is read out of a precomputed **spectral motion texture** along a straight, irrationally
- * sloped trajectory (`spectral.ts`, after Habel, Kusternig & Wimmer, EG 2009), so the signal has
- * the oscillator's stationary response spectrum, never repeats, and needs no previous frame.
- * Parent motion is carried to children as `deform` does — each joint's local rotation, then its
- * parent's transform — with one difference: joint `i` is a hinge at its **parent's** rest
- * position, so its rotation bends the segment `parent → i` and everything beyond it. (`deform`
- * pivots each joint about itself, which leaves every limb's first segment rigid and a
- * single-joint limb unable to bend at all.)
+ * harmonic oscillator — the trunk's is the whole-tree pendulum mode. Parent motion is carried to
+ * children as `deform` does — each joint's local rotation, then its parent's transform — with one
+ * difference: joint `i` is a hinge at its **parent's** rest position, so its rotation bends the
+ * segment `parent → i` and everything beyond it.
+ *
+ * What a branch does is its buffeting response to the wind, in two parts (`turbulence.ts`,
+ * after EN 1991-1-4 Annex B):
  *
  * ```text
- * U_i(t)   = U · (1 + gust(t − x_i/U))                          gust convected at the mean speed
- * q_i(t)   = (U_i(t) / U_ref)²                                  drag: deflection ∝ U²
- * a_b      = (1 + f_b/U)^(−5/6)                                 Simiu–Scanlan shape at f_b, √
- * r_i(t)   = g_i · q_i(t) · [ d_i × ŵ  +  α·a_b·s1_b(t)·e1_i  +  β·a_b·s2_b(t)·e2_i ]
- * s_b(t)   = T_ζb( p0_b + v_b·t ),  |v_b| = f_b · λ             texture, trajectory, speed
+ * q        = (U/U_ref)² · (1 + gust(t − x_i/U))²       drag: mean deflection ∝ U² (no gust by default)
+ * u_b(t)   = LowPass_fb[ T(x_b − U·t·ŵ) ]              background: the frozen field at the branch,
+ *                                                     through its static compliance up to f_b
+ * s_b(t)   = T_ζb(p0_b + v_b·t),  |v_b| = f_b·λ        resonance: a narrow band at f_b (texture)
+ * a_b      = 2I · (B_b·u_b(t) + R_b(U)·s_b(t))          along-wind sway, EN 1991-1-4 eq. 6.3
+ * c_b      = 0.75I · (B_b·v_b(t) + R_b(U)·s'_b(t))      across-wind sway
+ * r_i(t)   = g_i · q · [ d_i × ŵ + a_b·e1_i + c_b·e2_i ]
  * ```
+ *
+ * `T` is a frozen turbulence field whose spectrum along the wind is EN eq. B.2, advected at the
+ * mean speed; `B²` (eq. B.3) and `R²` (eq. B.6, with the aerodynamic damping of F.18) weigh its
+ * slow part against the resonance. The spectrum's energy sits at `f ≈ 0.15·U/L`, `L` ≈ 35 m for a
+ * 6 m tree, so at 2 m/s a branch follows the gusts almost quasi-statically — slowly, in step with
+ * its neighbours, a gust reaching the downwind side `Δx/U` later — and its resonance is a few per
+ * cent of the motion; the resonance grows with the wind, as `S_L(f_b)` and the admittances do.
  *
  * `r_i` is the joint's rotation vector: a mean lean about `d_i × ŵ` (the limb's own direction —
  * its chord, attachment to far end, shared by all its joints so it bends in one plane — crossed
  * with downwind, so a limb pointing downwind is not bent by it — Habel eqs. 18–19) plus
  * turbulent sway about the two axes across the limb. `g_i` is the joint's share of its branch's
- * bend; `α`, `β` are the along/across turbulence ratios.
+ * bend.
  *
  * **Pure.** The output is a function of `(t, wind, sidecar seed, rig)` and nothing else. The
- * textures and trajectories are memoised, which is not observable. At `U = 0` every rotation is
- * the identity *by value*, so calm restores the canonical bytes exactly.
+ * textures, trajectories and field are memoised, which is not observable. At `U = 0` every
+ * rotation is the identity *by value*, so calm restores the canonical bytes exactly.
  */
 
 import { IDENTITY_TRANSFORM, type NodeTransform } from "./deform";
@@ -56,6 +63,17 @@ import {
   unitUniform,
   type MotionTexture,
 } from "./spectral";
+import {
+  backgroundResponse,
+  BACKGROUND_SOFT_CLIP,
+  buffetingFactors,
+  frozenTurbulence,
+  turbulenceLengthScaleM,
+  turbulenceClock,
+  turbulencePhases,
+  type BuffetingFactors,
+  type FrozenTurbulence,
+} from "./turbulence";
 import {
   add,
   quatMultiply,
@@ -183,14 +201,145 @@ interface SeasonRuntime {
   readonly flutterLookups: Float64Array;
 }
 
+/** Where and how big each oscillator is: what the wind field and the admittances need. */
+interface OscillatorGeometry {
+  /** Where it reads the wind: the centroid of every joint it carries. */
+  readonly samplePoint: Vec3;
+  /** Horizontal and vertical extent of what it carries, metres (EN 1991-1-4's `b` and `h`). */
+  readonly widthM: number;
+  readonly heightM: number;
+  /** Static tip deflection of its own bend at the reference speed, metres. */
+  readonly staticTipM: number;
+}
+
+/** One branch's sway at one instant, in units of the mean lean. */
+interface BranchSway {
+  readonly along: number;
+  readonly across: number;
+  /** The background's along-wind part alone: the gust the branch's leaves feel. */
+  readonly gust: number;
+}
+
 /** A rig, its sidecar, and everything derived from them once. Immutable after construction. */
 export interface LivingMotion {
   readonly rig: MotionRig;
   readonly sidecar: MotionSidecar;
   /** Per node: unit direction of the limb it lies on — the limb's chord, attachment to far end. */
   readonly limbDirection: readonly Vec3[];
+  /** Turbulent length scale the wind is read at, metres: the sidecar's, or EN eq. B.1's. */
+  readonly lengthScaleM: number;
+  /** @internal the frozen turbulence field. */
+  readonly field: FrozenTurbulence;
+  /** @internal per branch base: where it reads the wind and how big it is. */
+  readonly oscillators: ReadonlyMap<number, OscillatorGeometry>;
   /** @internal memoised per season. */
   readonly seasons: Map<Season, SeasonRuntime>;
+  /** @internal the last frame's branch sway, so a frame's two halves share one evaluation. */
+  readonly lastSway: { key: string; sway: ReadonlyMap<number, BranchSway> | undefined };
+  /** @internal the field's phases at every oscillator for the last bearing. */
+  readonly lastPhases: { bearing: number; phases: ReadonlyMap<number, Float64Array> };
+}
+
+/** The frozen field's phases at every oscillator's sample point, for this wind direction. */
+function pointPhases(motion: LivingMotion, downwind: Vec3): ReadonlyMap<number, Float64Array> {
+  const bearing = Math.atan2(downwind[0], downwind[1]);
+  if (Object.is(motion.lastPhases.bearing, bearing)) return motion.lastPhases.phases;
+  const phases = new Map<number, Float64Array>();
+  for (const [base, geometry] of motion.oscillators)
+    phases.set(
+      base,
+      turbulencePhases(motion.field, geometry.samplePoint, downwind, motion.lengthScaleM),
+    );
+  motion.lastPhases.bearing = bearing;
+  motion.lastPhases.phases = phases;
+  return phases;
+}
+
+/**
+ * Every oscillator's geometry: the joints it carries (its own and everything hanging from it),
+ * their centroid and extent, and the static tip deflection of its own bend.
+ */
+function oscillatorGeometry(
+  rig: MotionRig,
+  sidecar: MotionSidecar,
+): Map<number, OscillatorGeometry> {
+  const nodes = rig.nodes;
+  const branchOf = sidecar.nodes.branch;
+  interface Accumulator {
+    readonly sum: [number, number, number];
+    count: number;
+    readonly min: [number, number, number];
+    readonly max: [number, number, number];
+    readonly members: number[];
+  }
+  const acc = new Map<number, Accumulator>();
+  const grow = (base: number, p: Vec3, member: number): void => {
+    let a = acc.get(base);
+    if (a === undefined) {
+      a = {
+        sum: [0, 0, 0],
+        count: 0,
+        min: [p[0], p[1], p[2]],
+        max: [p[0], p[1], p[2]],
+        members: [],
+      };
+      acc.set(base, a);
+    }
+    for (let c = 0; c < 3; c += 1) {
+      a.min[c] = Math.min(a.min[c] ?? 0, p[c] ?? 0);
+      a.max[c] = Math.max(a.max[c] ?? 0, p[c] ?? 0);
+    }
+    if (member >= 0) {
+      a.sum[0] += p[0];
+      a.sum[1] += p[1];
+      a.sum[2] += p[2];
+      a.count += 1;
+      a.members.push(member);
+    }
+  };
+  for (let i = 1; i < nodes.length; i += 1) {
+    const p = nodes[i]?.position ?? [0, 0, 0];
+    // Every oscillator this joint rides: its own, then the one its oscillator hangs from, ...
+    let base = branchOf[i] ?? 0;
+    while (base > 0) {
+      grow(base, p, i);
+      const attach = nodes[base]?.parent ?? 0;
+      grow(base, nodes[attach]?.position ?? p, -1);
+      base = attach > 0 ? (branchOf[attach] ?? 0) : 0;
+    }
+  }
+  const out = new Map<number, OscillatorGeometry>();
+  for (const [base, a] of acc) {
+    const samplePoint: Vec3 = [a.sum[0] / a.count, a.sum[1] / a.count, a.sum[2] / a.count];
+    const attach = nodes[nodes[base]?.parent ?? 0]?.position ?? samplePoint;
+    // The tip: the carried joint farthest from the attachment.
+    let tip = samplePoint;
+    let far = -1;
+    for (const m of a.members) {
+      const p = nodes[m]?.position ?? samplePoint;
+      const r = Math.hypot(p[0] - attach[0], p[1] - attach[1], p[2] - attach[2]);
+      if (r > far) {
+        far = r;
+        tip = p;
+      }
+    }
+    // Its own joints' bends, each pivoting at its parent, carry the tip this far.
+    let staticTipM = 0;
+    for (const m of a.members) {
+      if ((branchOf[m] ?? 0) !== base) continue;
+      const gain = sidecar.nodes.gainRad[m] ?? 0;
+      if (gain === 0) continue;
+      const pivot = nodes[nodes[m]?.parent ?? 0]?.position ?? attach;
+      staticTipM += gain * Math.hypot(tip[0] - pivot[0], tip[1] - pivot[1], tip[2] - pivot[2]);
+    }
+    out.set(base, {
+      samplePoint,
+      widthM: Math.max(a.max[0] - a.min[0], a.max[1] - a.min[1]),
+      heightM: a.max[2] - a.min[2],
+      staticTipM,
+    });
+  }
+  return out;
 }
 
 /**
@@ -217,7 +366,20 @@ export function createLivingMotion(rig: MotionRig, sidecar: MotionSidecar): Livi
     const length = Math.hypot(d[0], d[1], d[2]);
     return length > 0 ? [d[0] / length, d[1] / length, d[2] / length] : [0, 0, 1];
   });
-  return { rig, sidecar, limbDirection, seasons: new Map() };
+  // Sidecars written before the length scale was recorded get EN eq. B.1 at their height.
+  const lengthScaleM = sidecar.wind.lengthScaleM ?? turbulenceLengthScaleM(sidecar.treeHeightM);
+  const field = frozenTurbulence(sidecar.seed);
+  return {
+    rig,
+    sidecar,
+    limbDirection,
+    lengthScaleM,
+    field,
+    oscillators: oscillatorGeometry(rig, sidecar),
+    seasons: new Map(),
+    lastSway: { key: "", sway: undefined },
+    lastPhases: { bearing: Number.NaN, phases: new Map() },
+  };
 }
 
 /** Parses a sidecar and binds it to its rig in one step. */
@@ -298,10 +460,84 @@ function sampleAt(texture: MotionTexture, path: Trajectory, t: number): number {
   return sampleTexture(texture, path.x0 + path.vx * t, path.y0 + path.vy * t);
 }
 
-/** Square root of the Simiu–Scanlan spectrum's shape at `f`: `(1 + f/U)^(−5/6)`. */
-export function spectralShape(frequencyHz: number, speedMps: number): number {
-  if (!(speedMps > 0)) return 0;
-  return Math.pow(1 + frequencyHz / speedMps, -5 / 6);
+/** One branch's buffeting under one wind (EN 1991-1-4 Annex B). */
+export interface BranchBuffeting extends BuffetingFactors {
+  readonly base: number;
+  readonly frequencyHz: number;
+  /** Structural damping ratio of the branch this season. */
+  readonly damping: number;
+}
+
+function branchFactors(
+  motion: LivingMotion,
+  branch: BranchRuntime,
+  wind: LivingWind,
+): BuffetingFactors {
+  const geometry = motion.oscillators.get(branch.base);
+  const ratio = wind.speedMps / motion.sidecar.referenceSpeedMps;
+  return buffetingFactors(
+    branch.frequencyHz,
+    branch.damping,
+    geometry?.widthM ?? 0,
+    geometry?.heightM ?? 0,
+    (geometry?.staticTipM ?? 0) * ratio * ratio,
+    wind.speedMps,
+    motion.lengthScaleM,
+  );
+}
+
+/**
+ * What every branch's sway is made of under this wind: its background `B²`, resonance `R²` and
+ * aerodynamic damping. `R²/(B² + R²)` is the share of the sway at the branch's own frequency.
+ */
+export function livingBuffeting(motion: LivingMotion, wind: LivingWind): BranchBuffeting[] {
+  const runtime = seasonRuntime(motion, wind.season);
+  return [...runtime.branches.values()].map((branch) => ({
+    base: branch.base,
+    frequencyHz: branch.frequencyHz,
+    damping: branch.damping,
+    ...branchFactors(motion, branch, wind),
+  }));
+}
+
+/** Every branch's sway at `t`. Memoised for the last frame, so a frame's two halves share it. */
+function branchSway(
+  motion: LivingMotion,
+  t: number,
+  wind: LivingWind,
+): ReadonlyMap<number, BranchSway> {
+  const key = `${t}|${wind.speedMps}|${wind.bearingDeg}|${wind.season}`;
+  if (motion.lastSway.key === key && motion.lastSway.sway !== undefined)
+    return motion.lastSway.sway;
+  const { sidecar } = motion;
+  const runtime = seasonRuntime(motion, wind.season);
+  const w = downwindOf(wind.bearingDeg);
+  const alongRatio = sidecar.wind.turbulence.along;
+  const acrossRatio = sidecar.wind.turbulence.across;
+  const background = new Float64Array(2);
+  const sway = new Map<number, BranchSway>();
+  // The field carried downwind to time t: every branch reads it at its own point.
+  const clock = turbulenceClock(motion.field, motion.lengthScaleM, wind.speedMps, t);
+  const phases = pointPhases(motion, w);
+  for (const branch of runtime.branches.values()) {
+    const factors = branchFactors(motion, branch, wind);
+    const b = Math.sqrt(factors.background2);
+    const r = Math.sqrt(factors.resonance2);
+    background[0] = 0;
+    background[1] = 0;
+    const at = phases.get(branch.base);
+    if (at !== undefined) backgroundResponse(at, clock, branch.frequencyHz, background);
+    const gust = alongRatio * b * (background[0] ?? 0);
+    sway.set(branch.base, {
+      along: gust + alongRatio * r * sampleAt(branch.texture, branch.along, t),
+      across:
+        acrossRatio * (b * (background[1] ?? 0) + r * sampleAt(branch.texture, branch.across, t)),
+      gust,
+    });
+  }
+  motion.lastSway.key = key;
+  motion.lastSway.sway = sway;
+  return sway;
 }
 
 function downwindOf(bearingDeg: number): Vec3 {
@@ -372,21 +608,11 @@ export function livingTransforms(
     return transforms;
   }
   const time = Number.isFinite(t) ? t : 0;
-  const runtime = seasonRuntime(motion, wind.season);
   const w = downwindOf(wind.bearingDeg);
   const q = new Float64Array(count);
   loadFactors(motion, time, wind, q);
-  const alongRatio = sidecar.wind.turbulence.along;
-  const acrossRatio = sidecar.wind.turbulence.across;
-  // One read per branch per frame, shared by every joint of the branch.
-  const sway = new Map<number, [number, number]>();
-  for (const branch of runtime.branches.values()) {
-    const shape = spectralShape(branch.frequencyHz, wind.speedMps);
-    sway.set(branch.base, [
-      alongRatio * shape * sampleAt(branch.texture, branch.along, time),
-      acrossRatio * shape * sampleAt(branch.texture, branch.across, time),
-    ]);
-  }
+  // One evaluation per branch per frame, shared by every joint of the branch.
+  const sway = branchSway(motion, time, wind);
   for (let i = 0; i < count; i += 1) {
     const node = rig.nodes[i];
     const gain = sidecar.nodes.gainRad[i] ?? 0;
@@ -400,7 +626,9 @@ export function livingTransforms(
     }
     const d = motion.limbDirection[i] ?? [0, 0, 1];
     const [e1, e2] = crossAxes(d, w);
-    const [s1, s2] = sway.get(sidecar.nodes.branch[i] ?? i) ?? [0, 0];
+    const own = sway.get(sidecar.nodes.branch[i] ?? i);
+    const s1 = own?.along ?? 0;
+    const s2 = own?.across ?? 0;
     const k = gain * (q[i] ?? 0);
     // Mean lean: d × ŵ, whose length is the sine between limb and wind.
     const lean: Vec3 = [
@@ -460,11 +688,15 @@ export function livingFlutter(
   const time = Number.isFinite(t) ? t : 0;
   const q = new Float64Array(count);
   loadFactors(motion, time, wind, q);
+  // The leaves feel the gusts their branch feels: the background's along-wind part, the same
+  // `2I·B·u` that sways the wood, raising and lowering the drag on them.
+  const sway = branchSway(motion, time, wind);
   let still = true;
   for (let i = 0; i < count; i += 1) {
     const reference = (sidecar.nodes.flutterM[i] ?? 0) * seasonScale;
     if (reference === 0) continue;
-    const amplitude = softLimit(reference * (q[i] ?? 0), FLUTTER_SATURATION * reference);
+    const gust = Math.max(0, 1 + (sway.get(sidecar.nodes.branch[i] ?? i)?.gust ?? 0));
+    const amplitude = softLimit(reference * (q[i] ?? 0) * gust, FLUTTER_SATURATION * reference);
     if (amplitude === 0) continue;
     amplitudeM[i] = amplitude;
     still = false;
@@ -487,8 +719,9 @@ export function livingFrame(
 // ---------------------------------------------------------------------------------------------
 
 /**
- * The largest local rotation each joint can reach under this wind, radians. Exact bound: the
- * lean is at most 1, each texture read at most its `maxAbs`, the gust at most `maxGust`.
+ * The largest local rotation each joint can reach under this wind, radians. A proven bound: the
+ * lean is at most 1, each background read at most `BACKGROUND_SOFT_CLIP`, each texture read at
+ * most its `maxAbs`, the gust at most `maxGust`.
  */
 export function livingMaxNodeAngles(motion: LivingMotion, wind: LivingWind): number[] {
   const { rig, sidecar } = motion;
@@ -500,10 +733,18 @@ export function livingMaxNodeAngles(motion: LivingMotion, wind: LivingWind): num
     const gain = sidecar.nodes.gainRad[i] ?? 0;
     if (node.parent < 0 || gain === 0) return 0;
     const branch = runtime.branches.get(sidecar.nodes.branch[i] ?? i);
-    const shape = branch === undefined ? 0 : spectralShape(branch.frequencyHz, wind.speedMps);
-    const peak = branch?.texture.maxAbs ?? 0;
     const turbulence = sidecar.wind.turbulence;
-    const raw = gain * qMax * (1 + shape * peak * (turbulence.along + turbulence.across));
+    let sway = 0;
+    if (branch !== undefined) {
+      // The background is soft-clipped to BACKGROUND_SOFT_CLIP; the resonance is a texture read.
+      const factors = branchFactors(motion, branch, wind);
+      const peak =
+        Math.sqrt(factors.background2) * BACKGROUND_SOFT_CLIP +
+        Math.sqrt(factors.resonance2) * branch.texture.maxAbs;
+      sway = peak * (turbulence.along + turbulence.across);
+    }
+    // Lean is at most 1; the sway axes are perpendicular to it, so this over-counts, safely.
+    const raw = gain * qMax * (1 + sway);
     return softLimit(raw, nodeAngleLimit(node));
   });
 }
