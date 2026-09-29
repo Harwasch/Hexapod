@@ -68,6 +68,10 @@ const FLOOR_CHECK_MIN_INTERVAL_MS = 1500;
 const ROLL_TOLERANCE_RAD = 0.0005;
 /** Largest correction the floor check applies; more than this is a mis-sample, not the ground. */
 const MAX_FLOOR_LIFT_M = 40;
+/** Wheel events closer than this belong to one gesture. */
+const WHEEL_GESTURE_MS = 250;
+/** A cursor that moved less than this (Manhattan pixels) is still over the same point. */
+const WHEEL_SAME_POINT_PX = 4;
 const IDLE_POSE_REFRESH_MS = 3000;
 /** Below this bounding radius a fly-to may arrive closer than the site floor of 30 m. */
 const OBJECT_ARRIVAL_RADIUS_M = 30;
@@ -122,6 +126,7 @@ export class CameraController {
   private passKeyEnabled = true;
   /** Where the camera last was that the collision check accepted. */
   private lastGood: Cartesian3 | null = null;
+  private wheelOcclusion: { x: number; y: number; at: number; occluded: boolean } | null = null;
   private hinted = false;
 
   constructor(
@@ -320,8 +325,7 @@ export class CameraController {
     if (!ray) return;
     const hit = collider.raycast(ray);
     if (!hit) return;
-    const solid = this.solidPick(scratchWindow);
-    if (solid && Cartesian3.distance(camera.positionWC, solid) < hit.distance) return;
+    if (this.occludedAt(scratchWindow, hit.distance)) return;
     event.preventDefault();
     event.stopPropagation();
     const pixels = event.deltaMode === 1 ? event.deltaY * 33 : event.deltaY;
@@ -338,6 +342,30 @@ export class CameraController {
     this.lastGood = Cartesian3.clone(camera.positionWC, this.lastGood ?? undefined);
     this.scene.requestRender();
   };
+
+  /**
+   * Whether something solid (the depth buffer, the terrain) is nearer than the splat under
+   * the cursor. The depth read is a pick pass and a GPU read-back, so it is made once per
+   * wheel gesture at a point, not per notch: zooming along the ray scales both distances
+   * alike, so the answer holds until the cursor moves or the wheel rests.
+   */
+  private occludedAt(window: Cartesian2, splatDistance: number): boolean {
+    const now = performance.now();
+    const last = this.wheelOcclusion;
+    if (
+      last &&
+      now - last.at < WHEEL_GESTURE_MS &&
+      Math.abs(last.x - window.x) + Math.abs(last.y - window.y) < WHEEL_SAME_POINT_PX
+    ) {
+      last.at = now;
+      return last.occluded;
+    }
+    const solid = this.solidPick(window);
+    const occluded =
+      solid !== null && Cartesian3.distance(this.viewer.camera.positionWC, solid) < splatDistance;
+    this.wheelOcclusion = { x: window.x, y: window.y, at: now, occluded };
+    return occluded;
+  }
 
   /** The depth buffer's or the terrain's point under the cursor: what Cesium's zoom aims at. */
   private solidPick(window: Cartesian2): Cartesian3 | null {
@@ -397,6 +425,9 @@ export class CameraController {
     this.lastFloorCheckAt = now;
     const camera = this.viewer.camera;
     if (!Matrix4.equals(camera.transform, Matrix4.IDENTITY)) return;
+    // Over a scan the splats' own solids keep the camera off them every frame (the guard in
+    // preRender), with no read-back: nothing to check here.
+    if (this.overSplatSurface()) return;
     const carto = Cartographic.clone(camera.positionCartographic, scratchCarto);
     let surface: number | undefined;
     try {
@@ -419,6 +450,20 @@ export class CameraController {
       duration: 0.35,
       easingFunction: EasingFunction.QUADRATIC_OUT,
     });
+  }
+
+  /** Whether a splat's solids lie straight below the camera, within a floor correction. */
+  private overSplatSurface(): boolean {
+    const collider = this.collider;
+    if (!collider?.active) return false;
+    const camera = this.viewer.camera;
+    const down = this.scene.globe.ellipsoid.geodeticSurfaceNormal(
+      camera.positionWC,
+      new Cartesian3(),
+    );
+    Cartesian3.negate(down, down);
+    const ray = new Ray(Cartesian3.clone(camera.positionWC), down);
+    return collider.raycast(ray, MAX_FLOOR_LIFT_M * 10) !== null;
   }
 
   /**

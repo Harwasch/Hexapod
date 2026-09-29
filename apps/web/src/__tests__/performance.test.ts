@@ -121,6 +121,18 @@ describe("buildLadder", () => {
     expect(baseResolutionScale("ultra", 2)).toBe(1);
     expect(baseResolutionScale("performance", 2)).toBe(1);
   });
+
+  it("caps balanced's short side: 4K on a desktop, 1080 on a phone", () => {
+    // A 1440 CSS px tall window at 2x: 2160 device px at the 1.5 ratio cap, so no further cut.
+    expect(baseResolutionScale("balanced", 2, 1440)).toBe(0.75);
+    // A 4K-class 2400 CSS px short side at 1x would render 2400: capped to 2160.
+    expect(baseResolutionScale("balanced", 1, 2400)).toBeCloseTo(0.9);
+    // A phone, 430 CSS px wide at 3x: 1290 device px, 645 at the ratio cap -- under 1080.
+    expect(baseResolutionScale("balanced", 3, 430, true)).toBe(0.5);
+    // A tablet, 1024 CSS px short side at 2x: 1536 at the ratio cap, capped to 1080.
+    expect(baseResolutionScale("balanced", 2, 1024, true)).toBeCloseTo(1080 / 2048);
+    expect(baseResolutionScale("ultra", 2, 1024, true)).toBe(1);
+  });
 });
 
 describe("frameEvidence / frameWeight", () => {

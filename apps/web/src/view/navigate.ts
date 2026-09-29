@@ -6,7 +6,8 @@
  * the middle of the scan and dollies towards it, so in a site rather than an object the
  * camera passes through whatever is between, and a close look at anything off-centre means
  * orbiting the empty middle. A splat writes no depth, so there is nothing to pick either.
- * The collision grid (lib/occupancy.ts), built from the tiles on screen (spz.ts), gives:
+ * The scan's collision -- packaged with it (lib/collision.ts), or for older scans built from
+ * the tiles on screen (lib/occupancy.ts, spz.ts) -- gives:
  *
  * - **Orbit around what is in the middle of the view.** When a drag or pinch starts, the
  *   target moves along the view line to the first surface there (Google Maps' rule: the
@@ -24,6 +25,7 @@
 import * as THREE from "three";
 import type { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 
+import { PrecomputedSolids, type BrickGrid, type Solids } from "@/lib/collision";
 import { SplatOccupancy } from "@/lib/occupancy";
 
 import type { SpzPoints } from "./spz";
@@ -32,7 +34,9 @@ import type { SpzPoints } from "./spz";
 const WHEEL_STEP = 0.75;
 
 export class ScanNavigation {
-  readonly grid = new SplatOccupancy();
+  /** Built from the tiles on screen, until (or unless) the packaged grid arrives. */
+  private readonly runtime = new SplatOccupancy();
+  private solids: Solids = this.runtime;
   private passThrough = false;
   private readonly lastGood = new THREE.Vector3();
   private hasGood = false;
@@ -72,20 +76,30 @@ export class ScanNavigation {
     });
   }
 
+  /**
+   * The scan's packaged collision (hexapod.collision): exact at full resolution, and no
+   * building here. From then on the tiles' own splats are not needed for collision.
+   */
+  usePackaged(grid: BrickGrid): void {
+    this.solids = new PrecomputedSolids(grid);
+    this.runtime.clear();
+  }
+
   /** How close the camera may come to the finest surfaces on screen (metres). */
   get clearance(): number {
-    return this.grid.clearance;
+    return this.solids.clearance;
   }
 
   /** A tile went on screen: its splats become surfaces. */
   show(key: unknown, points: SpzPoints | undefined): void {
     if (!points) return;
-    this.grid.add(key, points.positions, 0, points.count, (i) => points.alphas[i] ?? 0);
+    if (this.solids !== this.runtime) return;
+    this.runtime.add(key, points.positions, 0, points.count, (i) => points.alphas[i] ?? 0);
   }
 
   /** A tile came off screen. */
   hide(key: unknown): void {
-    this.grid.remove(key);
+    this.runtime.remove(key);
   }
 
   /** The first surface along a world-space ray, as a distance, or null. */
@@ -93,7 +107,7 @@ export class ScanNavigation {
     this.toLocal.copy(this.scan.matrixWorld).invert();
     const o = origin.clone().applyMatrix4(this.toLocal);
     const d = direction.clone().transformDirection(this.toLocal);
-    return this.grid.raycast([o.x, o.y, o.z], [d.x, d.y, d.z], far);
+    return this.solids.raycast([o.x, o.y, o.z], [d.x, d.y, d.z], far);
   }
 
   /** Once a frame, after the controls moved the camera: undo any move into a surface. */
@@ -101,7 +115,7 @@ export class ScanNavigation {
     // A pinch stops at the finest surfaces' clearance, which follows what is drawn.
     this.controls.minDistance = this.clearance;
     const position = this.camera.position;
-    if (!this.hasGood || this.passThrough || this.grid.sourceKeys.length === 0) {
+    if (!this.hasGood || this.passThrough || this.solids.empty) {
       this.lastGood.copy(position);
       this.hasGood = true;
       return;
@@ -110,7 +124,7 @@ export class ScanNavigation {
     this.toLocal.copy(this.scan.matrixWorld).invert();
     const from = this.lastGood.clone().applyMatrix4(this.toLocal);
     const to = position.clone().applyMatrix4(this.toLocal);
-    const swept = this.grid.sweep([from.x, from.y, from.z], [to.x, to.y, to.z]);
+    const swept = this.solids.sweep([from.x, from.y, from.z], [to.x, to.y, to.z]);
     if (swept.blocked) {
       position.fromArray(swept.position).applyMatrix4(this.scan.matrixWorld);
     }

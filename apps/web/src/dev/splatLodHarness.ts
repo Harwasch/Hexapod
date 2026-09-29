@@ -28,6 +28,7 @@ import {
   type Scene,
 } from "cesium";
 
+import { installSplatDecoder } from "@/cesium/splatDecoder";
 import { incrementalSplats, splatTilesetOf } from "@/cesium/splatInternals";
 
 /** The incremental state the harness waits on (patched GaussianSplatPrimitive). */
@@ -51,6 +52,8 @@ export interface SplatLodHarnessOptions {
   readonly incremental?: boolean;
   /** The level-of-detail tileset again, packed with spherical harmonics. */
   readonly shUrl?: string;
+  /** Decode SPZ in the app's workers (splatDecoder.ts), as the globe does. */
+  readonly workerDecode?: boolean;
 }
 
 export interface SplatLodView {
@@ -112,6 +115,7 @@ export async function startSplatLodHarness(
     contextOptions: { webgl: { preserveDrawingBuffer: true } },
   });
   const { scene } = widget;
+  if (options.workerDecode) installSplatDecoder();
   scene.globe.show = false;
   if (scene.skyBox) scene.skyBox.show = false;
   if (scene.skyAtmosphere) scene.skyAtmosphere.show = false;

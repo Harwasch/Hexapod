@@ -37,95 +37,49 @@ interface Contribution {
   weights: number[];
 }
 
-export class OccupancyGrid {
-  private readonly weight = new Map<number, number>();
-  private readonly sources = new Map<unknown, Contribution>();
-
-  /** `cell` is the edge in metres; the grid spans ±65 536 cells around the frame origin. */
-  constructor(readonly cell: number) {}
-
-  /** Number of solid cells (for diagnostics and tests). */
-  get solidCells(): number {
-    let solid = 0;
-    this.weight.forEach((value) => (solid += value >= SOLID ? 1 : 0));
-    return solid;
-  }
-
-  has(source: unknown): boolean {
-    return this.sources.has(source);
-  }
-
-  /** Every source added and not removed. */
-  get sourceKeys(): unknown[] {
-    return [...this.sources.keys()];
-  }
-
-  /**
-   * Adds `count` splats: centres at `positions[(start + i) * 3 ..]`, opacity from
-   * `opacity(start + i)` in [0, 1]. Replaces what `source` added before, if anything.
-   */
-  add(
-    source: unknown,
-    positions: ArrayLike<number>,
-    start: number,
-    count: number,
-    opacity: (index: number) => number,
-  ): void {
-    this.remove(source);
-    const own = new Map<number, number>();
-    const inverse = 1 / this.cell;
-    for (let i = start; i < start + count; i++) {
-      const alpha = opacity(i);
-      if (!(alpha >= MIN_OPACITY)) continue;
-      const x = positions[i * 3] ?? Number.NaN;
-      const y = positions[i * 3 + 1] ?? Number.NaN;
-      const z = positions[i * 3 + 2] ?? Number.NaN;
-      const key = this.keyOf(
-        Math.floor(x * inverse),
-        Math.floor(y * inverse),
-        Math.floor(z * inverse),
-      );
-      if (key === null) continue;
-      own.set(key, (own.get(key) ?? 0) + alpha);
-    }
-    const contribution: Contribution = { keys: [], weights: [] };
-    own.forEach((value, key) => {
-      contribution.keys.push(key);
-      contribution.weights.push(value);
-      this.weight.set(key, (this.weight.get(key) ?? 0) + value);
-    });
-    this.sources.set(source, contribution);
-  }
-
-  /** Takes back what `source` added. */
-  remove(source: unknown): void {
-    const contribution = this.sources.get(source);
-    if (!contribution) return;
-    contribution.keys.forEach((key, i) => {
-      const left = (this.weight.get(key) ?? 0) - (contribution.weights[i] ?? 0);
-      if (left > 1e-6) this.weight.set(key, left);
-      else this.weight.delete(key);
-    });
-    this.sources.delete(source);
-  }
-
-  clear(): void {
-    this.weight.clear();
-    this.sources.clear();
-  }
-
-  private keyOf(ix: number, iy: number, iz: number): number | null {
-    const x = ix + OFFSET;
-    const y = iy + OFFSET;
-    const z = iz + OFFSET;
-    if (!(x >= 0 && x < SPAN && y >= 0 && y < SPAN && z >= 0 && z < SPAN)) return null;
-    return (x * SPAN + y) * SPAN + z;
-  }
+/**
+ * Solid voxels and the three questions navigation asks of them -- the first surface along a
+ * ray, the nearest surface to a point, and how far a sphere may move -- whatever holds the
+ * voxels: a grid built from splats at run time (OccupancyGrid) or one precomputed when the
+ * scan was packaged (BrickGrid). Cell `(ix, iy, iz)` spans `origin + [i, i + 1) * cell`.
+ */
+export abstract class VoxelSolids {
+  abstract readonly cell: number;
+  readonly origin: Vec3 = [0, 0, 0];
 
   /** Whether the cell with these indices is solid. */
-  solidAt(ix: number, iy: number, iz: number): boolean {
-    const key = this.keyOf(ix, iy, iz);
-    return key !== null && (this.weight.get(key) ?? 0) >= SOLID;
+  abstract solidAt(ix: number, iy: number, iz: number): boolean;
+
+  /** An inclusive box of cell indices holding every solid cell, or null when none is. */
+  abstract solidBounds(): { lo: Vec3; hi: Vec3 } | null;
+
+  /**
+   * The part of a ray (unit `d`) inside the solid cells' box, as [skip, until] distances,
+   * or null when it misses the box within `maxDistance`. Starts a cell short of the box,
+   * so the walk's first cell -- which never counts -- is outside it.
+   */
+  protected clipToSolids(start: Vec3, d: Vec3, maxDistance: number): [number, number] | null {
+    const bounds = this.solidBounds();
+    if (bounds === null) return null;
+    let enter = 0;
+    let exit = maxDistance;
+    for (let k = 0; k < 3; k++) {
+      const lo = (bounds.lo[k] ?? 0) * this.cell + (this.origin[k] ?? 0);
+      const hi = ((bounds.hi[k] ?? 0) + 1) * this.cell + (this.origin[k] ?? 0);
+      const o = start[k] ?? 0;
+      const dk = d[k] ?? 0;
+      if (Math.abs(dk) < 1e-12) {
+        if (o < lo || o > hi) return null;
+        continue;
+      }
+      let t0 = (lo - o) / dk;
+      let t1 = (hi - o) / dk;
+      if (t0 > t1) [t0, t1] = [t1, t0];
+      enter = Math.max(enter, t0);
+      exit = Math.min(exit, t1);
+      if (enter > exit) return null;
+    }
+    return [Math.max(0, enter - this.cell), Math.min(maxDistance, exit + this.cell)];
   }
 
   /**
@@ -133,11 +87,23 @@ export class OccupancyGrid {
    * (Amanatides & Woo's voxel walk: every cell the ray crosses, in order, none skipped).
    * `direction` need not be unit length; the answer is in its units times its length.
    */
-  raycast(origin: Vec3, direction: Vec3, maxDistance: number): number | null {
+  raycast(start: Vec3, direction: Vec3, maxDistance: number): number | null {
     const length = Math.hypot(direction[0], direction[1], direction[2]);
     if (!(length > 0)) return null;
     const d: Vec3 = [direction[0] / length, direction[1] / length, direction[2] / length];
     const cell = this.cell;
+    // Only the stretch of the ray inside the box that holds every solid cell is walked: a ray
+    // from far away, or one that misses the scan, costs a few divisions instead of thousands
+    // of empty cells.
+    const clip = this.clipToSolids(start, d, maxDistance);
+    if (clip === null) return null;
+    const [skip, until] = clip;
+    const origin: Vec3 = [
+      start[0] - this.origin[0] + d[0] * skip,
+      start[1] - this.origin[1] + d[1] * skip,
+      start[2] - this.origin[2] + d[2] * skip,
+    ];
+    const reach = until - skip;
     const index: Vec3 = [
       Math.floor(origin[0] / cell),
       Math.floor(origin[1] / cell),
@@ -168,10 +134,10 @@ export class OccupancyGrid {
     for (let guard = 0; guard < 1_000_000; guard++) {
       const axis = next[0] < next[1] ? (next[0] < next[2] ? 0 : 2) : next[1] < next[2] ? 1 : 2;
       const travelled = next[axis] ?? Number.POSITIVE_INFINITY;
-      if (travelled > maxDistance) return null;
+      if (travelled > reach) return null;
       index[axis] = (index[axis] ?? 0) + (step[axis] ?? 0);
       next[axis] = travelled + (delta[axis] ?? 0);
-      if (this.solidAt(index[0], index[1], index[2])) return travelled;
+      if (this.solidAt(index[0], index[1], index[2])) return travelled + skip;
     }
     return null;
   }
@@ -180,10 +146,21 @@ export class OccupancyGrid {
    * The nearest solid cell within `radius` of `point`: how far its box is, and the unit
    * direction from it to the point (the way out). Null when nothing is that close.
    */
-  nearest(point: Vec3, radius: number): { distance: number; away: Vec3 } | null {
+  nearest(world: Vec3, radius: number): { distance: number; away: Vec3 } | null {
     const cell = this.cell;
-    const lo = point.map((v) => Math.floor((v - radius) / cell)) as Vec3;
-    const hi = point.map((v) => Math.floor((v + radius) / cell)) as Vec3;
+    const point: Vec3 = [
+      world[0] - this.origin[0],
+      world[1] - this.origin[1],
+      world[2] - this.origin[2],
+    ];
+    const bounds = this.solidBounds();
+    if (bounds === null) return null;
+    const lo = point.map((v, k) =>
+      Math.max(Math.floor((v - radius) / cell), bounds.lo[k] ?? 0),
+    ) as Vec3;
+    const hi = point.map((v, k) =>
+      Math.min(Math.floor((v + radius) / cell), bounds.hi[k] ?? 0),
+    ) as Vec3;
     let best = Number.POSITIVE_INFINITY;
     let away: Vec3 = [0, 0, 1];
     for (let ix = lo[0]; ix <= hi[0]; ix++) {
@@ -270,6 +247,121 @@ export class OccupancyGrid {
     }
     // Unobstructed, arrive exactly: steps summed in floating point drift by an ulp or two.
     return blocked ? { position, blocked } : { position: [...to], blocked };
+  }
+}
+
+export class OccupancyGrid extends VoxelSolids {
+  private readonly weight = new Map<number, number>();
+  private readonly sources = new Map<unknown, Contribution>();
+  /** A box around every cell ever added; it only grows (removal is rare and a loose box is
+   *  still correct, just less of a shortcut). */
+  private bounds: { lo: Vec3; hi: Vec3 } | null = null;
+
+  /** `cell` is the edge in metres; the grid spans ±65 536 cells around the frame origin. */
+  constructor(readonly cell: number) {
+    super();
+  }
+
+  /** Sources added and not removed. */
+  get size(): number {
+    return this.sources.size;
+  }
+
+  solidBounds(): { lo: Vec3; hi: Vec3 } | null {
+    return this.sources.size === 0 ? null : this.bounds;
+  }
+
+  /** Number of solid cells (for diagnostics and tests). */
+  get solidCells(): number {
+    let solid = 0;
+    this.weight.forEach((value) => (solid += value >= SOLID ? 1 : 0));
+    return solid;
+  }
+
+  has(source: unknown): boolean {
+    return this.sources.has(source);
+  }
+
+  /** Every source added and not removed. */
+  get sourceKeys(): unknown[] {
+    return [...this.sources.keys()];
+  }
+
+  /**
+   * Adds `count` splats: centres at `positions[(start + i) * 3 ..]`, opacity from
+   * `opacity(start + i)` in [0, 1]. Replaces what `source` added before, if anything.
+   */
+  add(
+    source: unknown,
+    positions: ArrayLike<number>,
+    start: number,
+    count: number,
+    opacity: (index: number) => number,
+  ): void {
+    this.remove(source);
+    const own = new Map<number, number>();
+    const inverse = 1 / this.cell;
+    for (let i = start; i < start + count; i++) {
+      const alpha = opacity(i);
+      if (!(alpha >= MIN_OPACITY)) continue;
+      const x = positions[i * 3] ?? Number.NaN;
+      const y = positions[i * 3 + 1] ?? Number.NaN;
+      const z = positions[i * 3 + 2] ?? Number.NaN;
+      const ix = Math.floor(x * inverse);
+      const iy = Math.floor(y * inverse);
+      const iz = Math.floor(z * inverse);
+      const key = this.keyOf(ix, iy, iz);
+      if (key === null) continue;
+      if (this.bounds === null) this.bounds = { lo: [ix, iy, iz], hi: [ix, iy, iz] };
+      else {
+        const { lo, hi } = this.bounds;
+        if (ix < lo[0]) lo[0] = ix;
+        if (iy < lo[1]) lo[1] = iy;
+        if (iz < lo[2]) lo[2] = iz;
+        if (ix > hi[0]) hi[0] = ix;
+        if (iy > hi[1]) hi[1] = iy;
+        if (iz > hi[2]) hi[2] = iz;
+      }
+      own.set(key, (own.get(key) ?? 0) + alpha);
+    }
+    const contribution: Contribution = { keys: [], weights: [] };
+    own.forEach((value, key) => {
+      contribution.keys.push(key);
+      contribution.weights.push(value);
+      this.weight.set(key, (this.weight.get(key) ?? 0) + value);
+    });
+    this.sources.set(source, contribution);
+  }
+
+  /** Takes back what `source` added. */
+  remove(source: unknown): void {
+    const contribution = this.sources.get(source);
+    if (!contribution) return;
+    contribution.keys.forEach((key, i) => {
+      const left = (this.weight.get(key) ?? 0) - (contribution.weights[i] ?? 0);
+      if (left > 1e-6) this.weight.set(key, left);
+      else this.weight.delete(key);
+    });
+    this.sources.delete(source);
+  }
+
+  clear(): void {
+    this.weight.clear();
+    this.sources.clear();
+    this.bounds = null;
+  }
+
+  private keyOf(ix: number, iy: number, iz: number): number | null {
+    const x = ix + OFFSET;
+    const y = iy + OFFSET;
+    const z = iz + OFFSET;
+    if (!(x >= 0 && x < SPAN && y >= 0 && y < SPAN && z >= 0 && z < SPAN)) return null;
+    return (x * SPAN + y) * SPAN + z;
+  }
+
+  solidAt(ix: number, iy: number, iz: number): boolean {
+    const key = this.keyOf(ix, iy, iz);
+    return key !== null && (this.weight.get(key) ?? 0) >= SOLID;
   }
 }
 
@@ -390,7 +482,7 @@ export class SplatOccupancy {
   /** The cell sizes in use, finest first. */
   get cells(): number[] {
     return [...this.levels.entries()]
-      .filter(([, level]) => level.sourceKeys.length > 0)
+      .filter(([, level]) => level.size > 0)
       .map(([cell]) => cell)
       .sort((a, b) => a - b);
   }
@@ -404,7 +496,7 @@ export class SplatOccupancy {
   raycast(origin: Vec3, direction: Vec3, maxDistance: number): number | null {
     let best: number | null = null;
     for (const level of this.levels.values()) {
-      if (level.sourceKeys.length === 0) continue;
+      if (level.size === 0) continue;
       const t = level.raycast(origin, direction, best ?? maxDistance);
       if (t !== null && (best === null || t < best)) best = t;
     }
@@ -415,7 +507,7 @@ export class SplatOccupancy {
   distance(point: Vec3, radius: number): number | null {
     let best: number | null = null;
     for (const level of this.levels.values()) {
-      if (level.sourceKeys.length === 0) continue;
+      if (level.size === 0) continue;
       const hit = level.nearest(point, radius);
       if (hit && (best === null || hit.distance < best)) best = hit.distance;
     }
@@ -426,7 +518,7 @@ export class SplatOccupancy {
     let position: Vec3 = [...to];
     let blocked = false;
     for (const [cell, level] of this.levels) {
-      if (level.sourceKeys.length === 0) continue;
+      if (level.size === 0) continue;
       const swept = level.sweep(from, position, clearanceOf(cell));
       if (swept.blocked) {
         blocked = true;

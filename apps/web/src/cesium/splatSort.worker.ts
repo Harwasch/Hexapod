@@ -13,11 +13,21 @@ interface Snapshot {
   generation: number;
   positions: Float32Array;
   count: number;
+  /** Slot mode: positions arrive a range at a time (`write`), and stay until overwritten. */
+  slots: boolean;
 }
 
 type SortRequest =
   | { kind: "snapshot"; owner: number; generation: number; positions: Float32Array; count: number }
-  | { kind: "sort"; owner: number; id: number; generation: number; eye: [number, number, number] }
+  | { kind: "write"; owner: number; capacity: number; start: number; positions: Float32Array }
+  | {
+      kind: "sort";
+      owner: number;
+      id: number;
+      generation: number;
+      count: number;
+      eye: [number, number, number];
+    }
   | { kind: "forget"; owner: number };
 
 const snapshots = new Map<number, Snapshot>();
@@ -28,7 +38,22 @@ self.onmessage = (event: MessageEvent<SortRequest>): void => {
       generation: request.generation,
       positions: request.positions,
       count: request.count,
+      slots: false,
     });
+    return;
+  }
+  if (request.kind === "write") {
+    let snapshot = snapshots.get(request.owner);
+    if (snapshot?.slots !== true || snapshot.positions.length !== request.capacity * 3) {
+      snapshot = {
+        generation: -1,
+        positions: new Float32Array(request.capacity * 3),
+        count: 0,
+        slots: true,
+      };
+      snapshots.set(request.owner, snapshot);
+    }
+    snapshot.positions.set(request.positions, request.start * 3);
     return;
   }
   if (request.kind === "forget") {
@@ -36,10 +61,18 @@ self.onmessage = (event: MessageEvent<SortRequest>): void => {
     return;
   }
   const snapshot = snapshots.get(request.owner);
-  if (snapshot?.generation !== request.generation) {
+  // Slot mode sorts whatever is written, up to the high-water mark the request names; a
+  // snapshot must be the one the request was made for.
+  const usable =
+    snapshot !== undefined &&
+    (snapshot.slots
+      ? request.count * 3 <= snapshot.positions.length
+      : snapshot.generation === request.generation);
+  if (!usable) {
     self.postMessage({ id: request.id, order: null });
     return;
   }
-  const order = backToFront(snapshot.positions, snapshot.count, request.eye);
+  const count = snapshot.slots ? request.count : snapshot.count;
+  const order = backToFront(snapshot.positions, count, request.eye);
   self.postMessage({ id: request.id, order }, { transfer: [order.buffer] });
 };

@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@sparkjsdev/spark": "2.2.0",
+    "@spz-loader/core": "0.3.1",
     "@tanstack/react-query": "^5.102.8",
     "@twin/contracts": "workspace:*",
     "@twin/geo": "workspace:*",

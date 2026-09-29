@@ -9,10 +9,10 @@ const north = { heading: 0, pitch: 0 };
 /** Flat ground at 0, with an optional box of height `h` for y in [ya, yb]. */
 function world(box?: { ya: number; yb: number; h: number }, ledge?: number): MoveWorld {
   return {
-    groundBelow: (_x, y, fromZ) => {
+    groundBelow: (_x, y, fromZ, depth) => {
       let g = ledge !== undefined && y > ledge ? -2 : 0;
       if (box && y >= box.ya && y <= box.yb && box.h <= fromZ) g = Math.max(g, box.h);
-      return g <= fromZ ? g : null;
+      return g <= fromZ && fromZ - g <= depth ? g : null;
     },
     sweep: (_from, to) => to,
   };

@@ -61,6 +61,7 @@ export class LayerManager {
   private fallbackBasemap: ImageryLayer | null = null;
   private worldTilesetId: string | null = null;
   private worldTilesetRef: Cesium3DTileset | null = null;
+  private worldFrozen = false;
   private worldSse = 16;
   private worldPixelRatio = 1;
   private performance: PerformanceManager | null = null;
@@ -233,6 +234,20 @@ export class LayerManager {
     this.scene.requestRender();
   }
 
+  /**
+   * Holds the world tileset at the tiles it last selected: no traversal, requests or loads
+   * (Cesium's `debugFreezeFrame`), while the view is inside a splat scan. In a trace of the
+   * globe, the world went on fetching a thousand tiles (33 MB) and processing them on the main
+   * thread while the camera walked through a scan that covered the screen.
+   */
+  setWorldFrozen(frozen: boolean): void {
+    this.worldFrozen = frozen;
+    const tileset = this.worldTileset;
+    if (!tileset || tileset.debugFreezeFrame === frozen) return;
+    tileset.debugFreezeFrame = frozen;
+    this.scene.requestRender();
+  }
+
   /** Google Photorealistic tileset when loaded (drives the world mode + clipping). */
   get worldTileset(): Cesium3DTileset | null {
     // A direct reference: the entry's handle is assigned only after the async load returns,
@@ -349,6 +364,7 @@ export class LayerManager {
       if (source.type === "google-photorealistic") {
         this.worldTilesetId = layer.id;
         this.worldTilesetRef = created;
+        created.debugFreezeFrame = this.worldFrozen;
         this.clipping.setWorldTileset(created);
         this.applyWorldScreenSpaceError(this.worldSse, this.worldPixelRatio);
         // The idle refinement waits for the world's tiles too, and its memory counts.

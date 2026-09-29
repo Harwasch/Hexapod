@@ -22,6 +22,8 @@
  * just its root either way.
  */
 
+import { collisionMetaOf, type CollisionMeta } from "@/lib/collision";
+
 export type Refine = "ADD" | "REPLACE";
 
 /** A tile's bounding sphere in the tileset's own frame (the root transform's, east/north/up). */
@@ -43,6 +45,8 @@ export interface TileNode {
 export interface TileTree {
   refine: Refine;
   root: TileNode;
+  /** The packaged collision grid the root declares (hexapod.collision), if any. */
+  collision?: CollisionMeta | null;
 }
 
 /** One step of loading an ADD tileset: fetch `add` and show it (`remove` stays empty). */
@@ -95,7 +99,11 @@ export function parseTileset(document: unknown): TileTree {
   };
   const parsed = node(root);
   if (!parsed.uri) throw new Error("The scan's tileset names no content.");
-  return { refine: root.refine === "ADD" ? "ADD" : "REPLACE", root: parsed };
+  return {
+    refine: root.refine === "ADD" ? "ADD" : "REPLACE",
+    root: parsed,
+    collision: collisionMetaOf((root as { extras?: unknown }).extras),
+  };
 }
 
 function numbers(value: unknown, length: number): number[] | null {

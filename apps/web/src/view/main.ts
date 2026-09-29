@@ -19,7 +19,9 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 
 import type { Capture, Site, SiteSummary } from "@twin/contracts";
 
+import { loadCollision } from "@/lib/collision";
 import { deviceSplatBudget } from "@/lib/detail";
+import { tileUrl } from "@/lib/tileProxy";
 
 import { parseCoverage } from "./coverage";
 import { spzFromGlb } from "./glb";
@@ -140,7 +142,8 @@ async function splatTileset(site: Site): Promise<{ url: string; tree: TileTree }
     (candidate) => candidate.representation === "gaussian-splat",
   )?.source;
   if (source?.type !== "3d-tiles-url") throw new Error("This site has no splat scan to show.");
-  return { url: source.url, tree: parseTileset(await json<unknown>(source.url)) };
+  const url = await tileUrl(source.url);
+  return { url, tree: parseTileset(await json<unknown>(url)) };
 }
 
 /**
@@ -157,13 +160,18 @@ async function tileMesh(tilesetUrl: string, tile: TileNode): Promise<SplatMesh> 
   const mesh = new SplatMesh({ fileBytes: bytes, fileType: SplatFileType.SPZ, lod: true });
   // The tile's own splat centres, for the collision grid (navigate.ts); a tile whose centres
   // cannot be read is still drawn, it just is not a surface.
-  const [points] = await Promise.all([spzPoints(bytes).catch(() => undefined), mesh.initialized]);
+  const [points] = await Promise.all([
+    readPoints ? spzPoints(bytes).catch(() => undefined) : undefined,
+    mesh.initialized,
+  ]);
   if (points) pointsOf.set(mesh, points);
   return mesh;
 }
 
 /** Each loaded tile's splat centres and opacities (spz.ts). */
 const pointsOf = new WeakMap<SplatMesh, SpzPoints>();
+/** Whether tiles' centres are read for collision: not when the scan brings its own grid. */
+let readPoints = true;
 
 /**
  * A box around where most of the splats are. Percentiles rather than min/max because
@@ -312,6 +320,15 @@ async function showScan(siteId: string): Promise<void> {
     // The splats as surfaces: orbit about what is in the middle of the view, wheel to what is
     // under the cursor, never through anything unless Space is held (navigate.ts).
     navigation = new ScanNavigation(scan, camera, controls, renderer.domElement);
+    const collision = tileset.tree.collision;
+    readPoints = !collision;
+    if (collision) {
+      // The packaged grid replaces the one built from tiles; until it arrives (or if it does
+      // not), the tiles' own splats stand in.
+      loadCollision(tileset.url, collision)
+        .then((grid) => navigation?.usePackaged(grid))
+        .catch(() => undefined);
+    }
     navigation.show(root, pointsOf.get(mesh));
     // A zoom goes towards what is under the finger, not the middle of the scan: in a site
     // rather than an object, that is the only way to get close to anything but the centre.

@@ -29,6 +29,7 @@ import { ExploreController } from "@/cesium/ExploreController";
 import { SplatCollider } from "@/cesium/SplatCollider";
 import { createSiteTileset } from "@/cesium/providers/tiles";
 import { SplatMotionGate } from "@/cesium/splatMotionGate";
+import { installSplatDecoder } from "@/cesium/splatDecoder";
 import { installSplatSorter } from "@/cesium/splatSorter";
 import type { SceneEvents } from "@/cesium/types";
 
@@ -96,6 +97,7 @@ export async function startCollisionHarness(
   const camera = new CameraController(viewer, events);
   const gate = new SplatMotionGate(scene, events);
   installSplatSorter();
+  installSplatDecoder();
   const collider = new SplatCollider(scene, () => gate.holding);
   camera.setCollider(collider);
   const explore = new ExploreController(viewer, events);

@@ -20,6 +20,7 @@ import { Emitter } from "@/lib/emitter";
 import { createSiteTileset } from "@/cesium/providers/tiles";
 import { splatTilesetOf } from "@/cesium/splatInternals";
 import { SplatMotionGate } from "@/cesium/splatMotionGate";
+import { installSplatDecoder } from "@/cesium/splatDecoder";
 import { installSplatSorter } from "@/cesium/splatSorter";
 import type { SceneEvents } from "@/cesium/types";
 
@@ -76,6 +77,7 @@ export async function startNavigationHarness(
   if (options.motionFirst) {
     new SplatMotionGate(scene, events);
     installSplatSorter();
+    installSplatDecoder();
   } else {
     // The engine as it was: every selected splat re-aggregated on each change, frustum only.
     const patched = tileset as unknown as {

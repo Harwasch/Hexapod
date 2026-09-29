@@ -6,8 +6,9 @@
  * Why replace the engine's WASM sort: it orders by view depth, so every half degree of
  * turning asks for a new sort, and every sort copies all positions on the main thread to send
  * them. By distance, turning needs none (the engine patch then re-sorts only when the camera
- * has moved a centimetre); and the positions go to the worker once per snapshot generation,
- * so a sort request is the eye alone.
+ * has moved a centimetre); and the positions go to the worker once -- per written slot range
+ * for an incremental primitive, per snapshot generation otherwise -- so a sort request is
+ * the eye and a count.
  */
 
 import * as CesiumBarrel from "cesium";
@@ -26,6 +27,8 @@ interface SortParameters {
 
 type SortHook = ((parameters: SortParameters) => Promise<Uint32Array> | undefined) & {
   sortByDistance?: boolean;
+  /** Incremental primitives: a slot range's positions, once, when written. */
+  write?: (owner: object, capacity: number, start: number, positions: Float32Array) => void;
 };
 
 interface PrimitiveModule {
@@ -46,7 +49,20 @@ export function installSplatSorter(): () => void {
   const worker = new Worker(new URL("./splatSort.worker.ts", import.meta.url), {
     type: "module",
   });
-  const owners = new WeakMap<object, { id: number; generation: number; pending: number }>();
+  const owners = new WeakMap<
+    object,
+    { id: number; generation: number; pending: number; slots: boolean }
+  >();
+  const ownerOf = (
+    primitive: object,
+  ): { id: number; generation: number; pending: number; slots: boolean } => {
+    let owner = owners.get(primitive);
+    if (!owner) {
+      owner = { id: nextOwner++, generation: -1, pending: 0, slots: false };
+      owners.set(primitive, owner);
+    }
+    return owner;
+  };
   const waiting = new Map<number, (order: Uint32Array | null) => void>();
   let nextOwner = 1;
   let nextRequest = 1;
@@ -58,13 +74,11 @@ export function installSplatSorter(): () => void {
   worker.onerror = (event) => log.warn("sort worker failed", { message: event.message });
 
   const hook: SortHook = (parameters) => {
-    let owner = owners.get(parameters.owner);
-    if (!owner) {
-      owner = { id: nextOwner++, generation: -1, pending: 0 };
-      owners.set(parameters.owner, owner);
-    }
+    const owner = ownerOf(parameters.owner);
     if (owner.pending >= MAX_PENDING) return undefined;
-    if (owner.generation !== parameters.generation) {
+    // An incremental primitive's positions came as slot writes; others' come whole, once per
+    // snapshot generation.
+    if (!owner.slots && owner.generation !== parameters.generation) {
       // A new snapshot: its positions, once (copied, since the engine keeps its own).
       const positions = parameters.positions.slice(0, parameters.count * 3);
       worker.postMessage(
@@ -94,11 +108,20 @@ export function installSplatSorter(): () => void {
         owner: current.id,
         id,
         generation: parameters.generation,
+        count: parameters.count,
         eye: parameters.eye,
       });
     });
   };
   hook.sortByDistance = true;
+  hook.write = (primitive, capacity, start, positions) => {
+    const owner = ownerOf(primitive);
+    owner.slots = true;
+    const copy = positions.slice();
+    worker.postMessage({ kind: "write", owner: owner.id, capacity, start, positions: copy }, [
+      copy.buffer,
+    ]);
+  };
   module.sortHook = hook;
   return () => {
     if (module.sortHook === hook) module.sortHook = undefined;

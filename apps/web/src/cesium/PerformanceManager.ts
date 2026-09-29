@@ -1,5 +1,6 @@
 import type { PostProcessStage, Scene, Viewer } from "cesium";
 
+import { isHandheld } from "@/lib/detail";
 import type { Emitter } from "@/lib/emitter";
 import { QUALITY_SSE, type QualityPreset } from "@/state/settings";
 
@@ -65,16 +66,33 @@ export function restMsaaFor(preset: QualityPreset): number {
   return preset === "performance" ? 1 : preset === "balanced" ? 2 : 4;
 }
 
+/** Balanced renders the canvas's short side at most this many device pixels while moving:
+ *  4K on a desktop, 1080 on a phone or tablet, whose GPUs have a fraction of the fill rate
+ *  for the same pixel density (SuperSplat's viewer caps its pixel ratio for the same reason). */
+export const MAX_SHORT_SIDE_PX = { desktop: 2160, handheld: 1080 } as const;
+
 /**
  * Base resolution scale for a preset on a screen with `devicePixelRatio`: a 2× display
  * renders four times the pixels of a 1× one, which is where most of a frame goes on an
- * integrated GPU. Balanced caps the effective ratio; ultra keeps every device pixel;
- * performance renders at CSS pixels through `useBrowserRecommendedResolution`.
+ * integrated GPU, and every gaussian is blended per pixel it covers. Balanced caps the
+ * effective ratio and the short side (`MAX_SHORT_SIDE_PX`, given the canvas's short side in
+ * CSS pixels); ultra keeps every device pixel; performance renders at CSS pixels through
+ * `useBrowserRecommendedResolution`.
  */
-export function baseResolutionScale(preset: QualityPreset, devicePixelRatio: number): number {
+export function baseResolutionScale(
+  preset: QualityPreset,
+  devicePixelRatio: number,
+  shortSideCss = 0,
+  handheld = false,
+): number {
   if (preset !== "balanced") return 1;
   const ratio = Math.max(1, devicePixelRatio || 1);
-  return Math.min(1, BALANCED_MAX_PIXEL_RATIO / ratio);
+  let scale = Math.min(1, BALANCED_MAX_PIXEL_RATIO / ratio);
+  if (shortSideCss > 0) {
+    const cap = handheld ? MAX_SHORT_SIDE_PX.handheld : MAX_SHORT_SIDE_PX.desktop;
+    scale = Math.min(scale, cap / (shortSideCss * ratio));
+  }
+  return scale;
 }
 /** Idle refinement only proceeds while tileset memory is below this share of its budget. */
 const REFINE_MEMORY_RATIO = 0.7;
@@ -272,6 +290,7 @@ interface LadderStep {
 export class PerformanceManager {
   private readonly scene: Scene;
   private readonly frameTimestamps: number[] = [];
+  private readonly motionFrameListeners = new Set<(intervalMs: number) => void>();
   private inputs: QualityInputs = {
     preset: "balanced",
     manualScreenSpaceError: null,
@@ -367,6 +386,8 @@ export class PerformanceManager {
     this.colorGrade = createColorGradeStage();
     this.scene.postProcessStages.add(this.colorGrade);
     this.timer = setInterval(() => this.evaluate(), 500);
+    window.addEventListener("resize", this.onResize);
+    this.unsubscribe.push(() => window.removeEventListener("resize", this.onResize));
     this.events.emit("performance", {
       gpu: this.gpu,
       webgl2: this.webgl2,
@@ -421,6 +442,12 @@ export class PerformanceManager {
   }
 
   /** Registers a group's memory use against its cache budget. */
+  /** Called with each motion frame's interval (ms): what a gesture costs, frame by frame. */
+  addMotionFrameListener(listener: (intervalMs: number) => void): () => void {
+    this.motionFrameListeners.add(listener);
+    return () => this.motionFrameListeners.delete(listener);
+  }
+
   addMemorySource(group: TilesetGroup, source: () => { bytes: number; budget: number }): void {
     this.groups[group].memorySources.push(source);
   }
@@ -478,7 +505,7 @@ export class PerformanceManager {
     // recommended (CSS pixel) resolution; the others use native device pixels until the
     // ladder proves the machine cannot keep up.
     this.viewer.useBrowserRecommendedResolution = inputs.preset === "performance";
-    this.baseScale = baseResolutionScale(inputs.preset, window.devicePixelRatio || 1);
+    this.baseScale = this.currentBaseScale();
     this.ladder = buildLadder(inputs.preset);
     this.level = 0;
     this.slowMotionMs = 0;
@@ -487,6 +514,25 @@ export class PerformanceManager {
     this.applyLevel();
     this.evaluate("configured");
   }
+
+  private currentBaseScale(): number {
+    const canvas = this.viewer.canvas;
+    const shortSide = Math.min(canvas.clientWidth, canvas.clientHeight);
+    return baseResolutionScale(
+      this.inputs.preset,
+      window.devicePixelRatio || 1,
+      shortSide,
+      isHandheld(),
+    );
+  }
+
+  /** The canvas changed size (a rotated phone, a resized window): re-derive the base scale. */
+  private readonly onResize = (): void => {
+    const next = this.currentBaseScale();
+    if (Math.abs(next - this.baseScale) < 0.01) return;
+    this.baseScale = next;
+    if (!this.sharpened) this.applyLevel();
+  };
 
   /** Loading state per tileset group; a group's walk waits only for its own tiles. */
   reportLoading(group: TilesetGroup, pending: number, processing: number): void {
@@ -614,6 +660,7 @@ export class PerformanceManager {
     if (weight.judged) {
       this.motionFrameMs.push(dt);
       if (this.motionFrameMs.length > 600) this.motionFrameMs.shift();
+      for (const listener of this.motionFrameListeners) listener(dt);
     }
     // Evidence for the ladder comes from every frame that carries any, so three short
     // slow drags count as much as one long one.

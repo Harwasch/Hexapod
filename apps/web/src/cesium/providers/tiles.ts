@@ -8,6 +8,7 @@ import {
 import type { Layer, SiteAsset } from "@twin/contracts";
 
 import { deviceSplatBudget } from "@/lib/detail";
+import { tileUrl } from "@/lib/tileProxy";
 
 import { focusSplats, incrementalSplats, keepOffscreenSplats } from "../splatInternals";
 
@@ -73,7 +74,7 @@ export async function createSiteTileset(
   }
   const tileset = await (asset.source.type === "cesium-ion"
     ? Cesium3DTileset.fromIonAssetId(asset.source.assetId, options)
-    : Cesium3DTileset.fromUrl(asset.source.url, options));
+    : Cesium3DTileset.fromUrl(await tileUrl(asset.source.url), options));
   // A splat is drawn from one snapshot of its selected tiles, held while the camera moves
   // (splatMotionGate.ts); out-of-view tiles stay in it, coarse, so turning shows no hole.
   // Detail goes to what is in the middle of the view first (focusSplats).
@@ -99,7 +100,7 @@ export async function createLayerTileset(layer: Layer): Promise<TilesetType | MV
     case "cesium-ion-3d-tiles":
       return Cesium3DTileset.fromIonAssetId(source.assetId, options);
     case "3d-tiles-url":
-      return Cesium3DTileset.fromUrl(source.url, options);
+      return Cesium3DTileset.fromUrl(await tileUrl(source.url), options);
     case "google-photorealistic":
       // The world tileset's detail is driven by the PerformanceManager (see LayerManager);
       // the floor under the camera comes from a depth sample at rest, never from

@@ -17,6 +17,7 @@ import type { Footprint, Representation, Site, SiteAsset, SiteSummary } from "@t
 import { boundingRadiusM, centerOf, circleFootprint, haversineDistance } from "@twin/geo";
 
 import { detailScreenSpaceScale, deviceSplatBudget } from "@/lib/detail";
+import { AdaptiveSplatBudget } from "@/lib/splatBudget";
 import type { Emitter } from "@/lib/emitter";
 import { createLogger, describeError } from "@/lib/log";
 import { timed } from "@/lib/timing";
@@ -107,10 +108,6 @@ interface ActiveSite {
   engaged: boolean;
 }
 
-/** Splat tiles kept loaded, drawn or not, up to this many times the drawn budget: a look
- *  back or a zoom out finds them still there. */
-const CACHE_FACTOR = 2;
-
 /**
  * Loads a site's reality models into the world when they are useful (fly-to or
  * proximity), switches representations without moving the camera, and keeps
@@ -132,6 +129,8 @@ export class SiteManager {
   private readonly splatDetail = deviceSplatBudget();
   /** The same choice as a factor on splat screen-space error. */
   private readonly splatDetailScale = detailScreenSpaceScale(this.splatDetail);
+  /** What a view may draw, below that ceiling, from motion frame times (lib/splatBudget.ts). */
+  private readonly splatBudget = new AdaptiveSplatBudget(this.splatDetail);
   private pixelRatio = 1;
   /** Ground metres per pixel at the view centre when the errors were last applied. */
   private metersPerPixel = Number.POSITIVE_INFINITY;
@@ -155,10 +154,16 @@ export class SiteManager {
     // Splats are budgeted by count, against the Detail choice (splatCount.ts): the group's
     // pressure is the higher of the two ratios.
     // Drawn, not loaded: what the budget limits is what a frame draws. Tiles only cached
-    // (turned away from, or replaced by their children) are trimmed separately, past twice
-    // the budget, so a view is never coarsened for splats it is not drawing.
+    // (turned away from, or replaced by their children) are the tileset cache's to trim, so
+    // a view is never coarsened for splats it is not drawing.
     this.performance.addMemorySource("sites", () =>
-      splatMemory(this.splatsDrawn(), this.splatDetail),
+      splatMemory(this.splatsDrawn(), this.splatBudget.budget),
+    );
+    this.unsubscribe.push(
+      this.performance.addMotionFrameListener((intervalMs) => {
+        if (!this.splatBudget.frame(intervalMs, this.splatsDrawn())) return;
+        log.info("splat budget", { budget: this.splatBudget.budget, ceiling: this.splatDetail });
+      }),
     );
     const calibrationTimer = setInterval(() => this.refreshCalibration(), CALIBRATION_TICK_MS);
     this.unsubscribe.push(
@@ -572,15 +577,10 @@ export class SiteManager {
       const splats = new SplatCount();
       handle.splats = splats;
       handle.unsubscribe.push(
-        tileset.tileLoad.addEventListener((tile: Cesium3DTile) => {
-          splats.load(tile);
-          // Past the point where the PerformanceManager would coarsen, first drop what the
-          // last frame did not select (REPLACE parents their children now stand in for,
-          // tiles turned away from), as Cesium's cache would if it could see splat bytes;
-          // only what is still over after that costs detail. Unloads happen next frame.
-          // Not sooner: a trimmed parent must load again before a zoom out can show it.
-          if (this.splatsLoaded() > this.splatDetail * CACHE_FACTOR) this.trimSplats();
-        }),
+        // Loaded splats are counted for the budget; which tiles go when memory runs short is
+        // the tileset cache's choice (least recently used), now that splat tiles report
+        // their bytes (engine patch, GaussianSplat3DTileContent.geometryByteLength).
+        tileset.tileLoad.addEventListener((tile: Cesium3DTile) => splats.load(tile)),
         tileset.tileUnload.addEventListener((tile: Cesium3DTile) => splats.unload(tile)),
       );
     }
@@ -605,12 +605,13 @@ export class SiteManager {
     );
   }
 
-  /** Memory held by the visible site tilesets against their configured cache budget. */
+  /** Memory held by the visible site tilesets against their configured cache budget. Splat
+   *  tilesets are budgeted by what they draw instead (splatMemory); their cache holds more. */
   private memoryUsage(): { bytes: number; budget: number } {
     const { cacheBytes, maximumCacheOverflowBytes } = tileCacheBudget();
     let bytes = 0;
     for (const { handle } of this.handles()) {
-      if (handle.tileset?.show) bytes += handle.tileset.totalMemoryUsageInBytes;
+      if (handle.tileset?.show && !handle.splats) bytes += handle.tileset.totalMemoryUsageInBytes;
     }
     return { bytes, budget: cacheBytes + maximumCacheOverflowBytes };
   }
@@ -623,21 +624,6 @@ export class SiteManager {
       total += splatTilesetOf(handle.tileset).gaussianSplatPrimitive?._numSplats ?? 0;
     }
     return total;
-  }
-
-  /** Gaussians loaded across the visible splat tilesets: one view, one Detail budget. */
-  private splatsLoaded(): number {
-    let total = 0;
-    for (const { handle } of this.handles()) {
-      if (handle.tileset?.show && handle.splats) total += handle.splats.total;
-    }
-    return total;
-  }
-
-  private trimSplats(): void {
-    for (const { handle } of this.handles()) {
-      if (handle.splats && handle.tileset) handle.tileset.trimLoadedTiles();
-    }
   }
 
   /**
@@ -897,6 +883,18 @@ export class SiteManager {
     const moved = Math.abs(Math.log(metersPerPixel / this.appliedMetersPerPixel));
     if (moved > CALIBRATION_STEP || !Number.isFinite(moved))
       this.applyScreenSpaceError(this.screenSpaceError, this.pixelRatio);
+  }
+
+  /** Whether the camera is inside a shown splat scan's bounds: the scan is the whole view. */
+  insideSplatScan(): boolean {
+    const cameraPosition = this.viewer.camera.positionWC;
+    for (const { handle } of this.handles()) {
+      const tileset = handle.tileset;
+      if (!tileset?.show || !handle.splats) continue;
+      const sphere = tileset.boundingSphere;
+      if (Cartesian3.distance(cameraPosition, sphere.center) < sphere.radius) return true;
+    }
+    return false;
   }
 
   /** Object scale while the camera is within reach of a hand-sized loaded model. */

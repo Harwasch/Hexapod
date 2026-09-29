@@ -9,10 +9,12 @@
  * the camera inside a wall.
  *
  * Each grid is in its primitive's east/north/up frame (`_rootTransform`), where the snapshot's
- * positions are baked; world points are converted at the edges. It follows the committed
+ * positions are baked; world points are converted at the edges. A scan packaged with a
+ * collision file (hexapod.collision, lib/collision.ts) uses that instead: exact, at full
+ * resolution, and no work here. For a scan packaged before those, the grid follows the committed
  * snapshot tile by tile (`snapshotTiles`): a tile swapped out takes back its cells, a tile
  * swapped in adds its own, so the grid is fine where the view is fine and merged where it is
- * coarse. The work is done a few milliseconds a frame, and never while the camera moves
+ * coarse. The work is one tile a frame, and never while the camera moves
  * (camera first: the splat motion gate's `holding`).
  */
 
@@ -25,34 +27,45 @@ import {
   type Scene,
 } from "cesium";
 
+import { PrecomputedSolids, collisionMetaOf, loadCollision, type Solids } from "@/lib/collision";
+import { createLogger } from "@/lib/log";
 import { SplatOccupancy, type Vec3 } from "@/lib/occupancy";
 
-import type { SplatPrimitive } from "./splatInternals";
+import type { SplatPrimitive, SplatTile } from "./splatInternals";
 import { snapshotTiles } from "./splatTiles";
 
-/** Main-thread milliseconds a frame spent adding tiles to grids, at rest. */
-const BUDGET_MS = 4;
+const log = createLogger("splat-collider");
+
+/** Run-time fallback: tiles added to a grid per frame, at rest (one tile can be 80k splats). */
+const TILES_PER_FRAME = 1;
 /** A move longer than this in one frame is a jump (a bookmark, a search), not a motion. */
 const JUMP_M = 50;
 
 interface Tracked {
-  grid: SplatOccupancy;
+  /** What navigation asks: the packaged grid, or one built from the drawn splats. */
+  solids: Solids;
   /** Local east/north/up to world, and back. */
   toWorld: Matrix4;
   toLocal: Matrix4;
   /** World bounding sphere of the tileset, for a quick "nowhere near" test. */
   bounds: BoundingSphere;
-  generation: number;
-  /** Tiles still to add: their content key, splat range. */
-  queue: { key: unknown; start: number; count: number }[];
-  positions: Float32Array | undefined;
-  colors: Uint8Array | undefined;
+  /** Run-time fallback only (a scan packaged before collision files). */
+  runtime?: {
+    grid: SplatOccupancy;
+    generation: number;
+    /** Tiles still to add: their content key, splat range. */
+    queue: { key: unknown; start: number; count: number }[];
+    positions: Float32Array | undefined;
+    colors: Uint8Array | undefined;
+  };
 }
 
 interface SplatTilesetShape {
   gaussianSplatPrimitive?: SplatPrimitive;
   boundingSphere: BoundingSphere;
   show: boolean;
+  root?: SplatTile & { extras?: unknown; computedTransform?: Matrix4 };
+  resource?: { url: string };
 }
 
 const scratchA = new Cartesian3();
@@ -64,6 +77,9 @@ function toVec(c: Cartesian3): Vec3 {
 
 export class SplatCollider {
   private readonly tracked = new Map<SplatTilesetShape, Tracked>();
+  /** Tilesets whose packaged collision is being fetched, or failed (then run-time). */
+  private readonly loading = new Set<SplatTilesetShape>();
+  private readonly noPackage = new WeakSet<SplatTilesetShape>();
   private readonly off: () => void;
 
   /** `holding` says the camera is moving: no grid work then. */
@@ -76,18 +92,35 @@ export class SplatCollider {
 
   /** Whether any splat has a grid with something in it. */
   get active(): boolean {
-    for (const entry of this.tracked.values()) if (entry.grid.sourceKeys.length > 0) return true;
+    for (const entry of this.tracked.values()) if (!entry.solids.empty) return true;
     return false;
   }
 
-  /** Per tileset: the cell sizes in use, tiles and solid cells, and tiles still queued. */
-  describe(): { cells: number[]; tiles: number; solidCells: number; queued: number }[] {
-    return [...this.tracked.values()].map((entry) => ({
-      cells: entry.grid.cells,
-      tiles: entry.grid.sourceKeys.length,
-      solidCells: entry.grid.solidCells,
-      queued: entry.queue.length,
-    }));
+  /** Per tileset: packaged or run-time, and what the grid holds. */
+  describe(): {
+    source: "packaged" | "runtime";
+    cells: number[];
+    tiles: number;
+    solidCells: number;
+    queued: number;
+  }[] {
+    return [...this.tracked.values()].map((entry) =>
+      entry.runtime
+        ? {
+            source: "runtime",
+            cells: entry.runtime.grid.cells,
+            tiles: entry.runtime.grid.sourceKeys.length,
+            solidCells: entry.runtime.grid.solidCells,
+            queued: entry.runtime.queue.length,
+          }
+        : {
+            source: "packaged",
+            cells: [(entry.solids as PrecomputedSolids).grid.cell],
+            tiles: 0,
+            solidCells: (entry.solids as PrecomputedSolids).grid.solidCells,
+            queued: 0,
+          },
+    );
   }
 
   /** Metres from `world` to the nearest splat surface within `radius`, or null. */
@@ -95,7 +128,7 @@ export class SplatCollider {
     let best: number | null = null;
     for (const entry of this.near(world, radius)) {
       const local = toVec(Matrix4.multiplyByPoint(entry.toLocal, world, scratchA));
-      const d = entry.grid.distance(local, radius);
+      const d = entry.solids.distance(local, radius);
       if (d !== null && (best === null || d < best)) best = d;
     }
     return best;
@@ -105,7 +138,7 @@ export class SplatCollider {
   clearance(world: Cartesian3): number {
     let clearance = 0;
     for (const entry of this.near(world, 0)) {
-      clearance = Math.max(clearance, entry.grid.clearance);
+      clearance = Math.max(clearance, entry.solids.clearance);
     }
     return clearance;
   }
@@ -114,10 +147,10 @@ export class SplatCollider {
   raycast(ray: Ray, maxDistance = 5_000): { point: Cartesian3; distance: number } | null {
     let best: { point: Cartesian3; distance: number } | null = null;
     for (const [tileset, entry] of this.tracked) {
-      if (!tileset.show || entry.grid.sourceKeys.length === 0) continue;
+      if (!tileset.show || entry.solids.empty) continue;
       const origin = Matrix4.multiplyByPoint(entry.toLocal, ray.origin, scratchA);
       const direction = Matrix4.multiplyByPointAsVector(entry.toLocal, ray.direction, scratchB);
-      const t = entry.grid.raycast(toVec(origin), toVec(direction), maxDistance);
+      const t = entry.solids.raycast(toVec(origin), toVec(direction), maxDistance);
       if (t === null || (best && t >= best.distance)) continue;
       const point = Cartesian3.add(
         ray.origin,
@@ -141,7 +174,7 @@ export class SplatCollider {
     for (const entry of this.near(to, JUMP_M)) {
       const a = toVec(Matrix4.multiplyByPoint(entry.toLocal, from, scratchA));
       const b = toVec(Matrix4.multiplyByPoint(entry.toLocal, position, scratchB));
-      const swept = entry.grid.sweep(a, b);
+      const swept = entry.solids.sweep(a, b);
       if (!swept.blocked) continue;
       blocked = true;
       position = Matrix4.multiplyByPoint(
@@ -156,7 +189,7 @@ export class SplatCollider {
   private near(world: Cartesian3, margin: number): Tracked[] {
     const found: Tracked[] = [];
     for (const [tileset, entry] of this.tracked) {
-      if (!tileset.show || entry.grid.sourceKeys.length === 0) continue;
+      if (!tileset.show || entry.solids.empty) continue;
       const reach = entry.bounds.radius + margin;
       if (Cartesian3.distanceSquared(world, entry.bounds.center) <= reach * reach) {
         found.push(entry);
@@ -169,30 +202,83 @@ export class SplatCollider {
     const seen = new Set<SplatTilesetShape>();
     for (const tileset of splatTilesets(this.scene.primitives)) {
       seen.add(tileset);
+      if (this.packaged(tileset)) continue;
       this.follow(tileset);
     }
     for (const tileset of [...this.tracked.keys()]) {
       if (!seen.has(tileset)) this.tracked.delete(tileset);
     }
     if (this.holding()) return;
-    const until = performance.now() + BUDGET_MS;
+    let budget = TILES_PER_FRAME;
     for (const entry of this.tracked.values()) {
-      while (entry.queue.length > 0 && performance.now() < until) {
-        const next = entry.queue.shift();
-        const { positions, colors } = entry;
+      const runtime = entry.runtime;
+      if (!runtime) continue;
+      while (runtime.queue.length > 0 && budget > 0) {
+        const next = runtime.queue.shift();
+        const { positions, colors } = runtime;
         if (!next || !positions || !colors) break;
-        entry.grid.add(
+        runtime.grid.add(
           next.key,
           positions,
           next.start,
           next.count,
           (i) => (colors[i * 4 + 3] ?? 0) / 255,
         );
+        budget -= 1;
       }
     }
   }
 
-  /** Brings a tileset's grid in step with its committed snapshot's tiles. */
+  /**
+   * A tileset whose root declares a packaged collision file (hexapod.collision) uses it:
+   * fetched once, in the tileset's own frame. True while it is loading or loaded; false when
+   * the tileset has none (or it failed), and the run-time grid takes over.
+   */
+  private packaged(tileset: SplatTilesetShape): boolean {
+    if (this.noPackage.has(tileset)) return false;
+    const entry = this.tracked.get(tileset);
+    if (entry && !entry.runtime) {
+      // Follow a moved tileset (a placement edit): the file is in the root's frame.
+      const transform = tileset.root?.computedTransform;
+      if (transform && !Matrix4.equalsEpsilon(entry.toWorld, transform, 1e-9)) {
+        Matrix4.clone(transform, entry.toWorld);
+        Matrix4.inverseTransformation(transform, entry.toLocal);
+        BoundingSphere.clone(tileset.boundingSphere, entry.bounds);
+      }
+      return true;
+    }
+    if (this.loading.has(tileset)) return true;
+    const meta = collisionMetaOf(tileset.root?.extras);
+    const url = tileset.resource?.url;
+    const transform = tileset.root?.computedTransform;
+    if (!meta || !url || !transform) {
+      this.noPackage.add(tileset);
+      return false;
+    }
+    this.loading.add(tileset);
+    loadCollision(url, meta)
+      .then((grid) => {
+        this.loading.delete(tileset);
+        const toWorld = Matrix4.clone(tileset.root?.computedTransform ?? transform);
+        this.tracked.set(tileset, {
+          solids: new PrecomputedSolids(grid),
+          toWorld,
+          toLocal: Matrix4.inverseTransformation(toWorld, new Matrix4()),
+          bounds: BoundingSphere.clone(tileset.boundingSphere),
+        });
+        this.scene.requestRender();
+      })
+      .catch((error: unknown) => {
+        this.loading.delete(tileset);
+        this.noPackage.add(tileset);
+        log.warn("collision file did not load; building from splats", {
+          message: error instanceof Error ? error.message : String(error),
+        });
+      });
+    return true;
+  }
+
+  /** Brings a tileset's run-time grid in step with its committed snapshot's tiles. */
   private follow(tileset: SplatTilesetShape): void {
     const primitive = tileset.gaussianSplatPrimitive;
     const root = primitive?._rootTransform;
@@ -205,34 +291,33 @@ export class SplatCollider {
     }
     let entry = this.tracked.get(tileset);
     const toWorld = Matrix4.fromArray(Array.from(root));
-    if (!entry || !Matrix4.equalsEpsilon(entry.toWorld, toWorld, 1e-9)) {
+    if (!entry?.runtime || !Matrix4.equalsEpsilon(entry.toWorld, toWorld, 1e-9)) {
       // A new tileset, or one moved (a placement edit re-bakes every position): start over.
+      const grid = new SplatOccupancy();
       entry = {
-        grid: new SplatOccupancy(),
+        solids: grid,
         toWorld,
         toLocal: Matrix4.inverseTransformation(toWorld, new Matrix4()),
         bounds: BoundingSphere.clone(tileset.boundingSphere),
-        generation: -1,
-        queue: [],
-        positions: undefined,
-        colors: undefined,
+        runtime: { grid, generation: -1, queue: [], positions: undefined, colors: undefined },
       };
       this.tracked.set(tileset, entry);
     }
-    if (entry.generation === generation) return;
+    const runtime = entry.runtime;
+    if (!runtime || runtime.generation === generation) return;
     const tiles = snapshotTiles(tileset, primitive, positions, numSplats);
     if (tiles.kind !== "tiles") return;
-    entry.generation = generation;
-    entry.positions = positions;
-    entry.colors = colors;
+    runtime.generation = generation;
+    runtime.positions = positions;
+    runtime.colors = colors;
     BoundingSphere.clone(tileset.boundingSphere, entry.bounds);
-    const now = new Set(tiles.tiles.map((tile) => tile.content));
-    for (const key of entry.grid.sourceKeys) {
-      if (!now.has(key as (typeof tiles.tiles)[number]["content"])) entry.grid.remove(key);
+    const now = new Set<unknown>(tiles.tiles.map((tile) => tile.content));
+    for (const key of runtime.grid.sourceKeys) {
+      if (!now.has(key)) runtime.grid.remove(key);
     }
     // New tiles, and every tile whose range moved (the queue reads the new arrays).
-    entry.queue = tiles.tiles
-      .filter((tile) => !entry.grid.has(tile.content))
+    runtime.queue = tiles.tiles
+      .filter((tile) => !runtime.grid.has(tile.content))
       .map((tile) => ({ key: tile.content, start: tile.start, count: tile.count }));
   }
 

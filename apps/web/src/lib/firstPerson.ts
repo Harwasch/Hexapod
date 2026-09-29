@@ -29,8 +29,13 @@ export interface MoveInput {
 }
 
 export interface MoveWorld {
-  /** Height of the ground under (x, y), searched from `fromZ` down; null when none is known. */
-  groundBelow(x: number, y: number, fromZ: number): number | null;
+  /**
+   * Height of the first surface under (x, y), searched from `fromZ` down at most `depth`
+   * metres; null when there is none that close. The walker asks once a frame, and only as
+   * far as it could fall in a frame or two: a long probe through fine voxels is what cost
+   * this a seventh of the main thread in a trace.
+   */
+  groundBelow(x: number, y: number, fromZ: number, depth: number): number | null;
   /** Where a body moving from `from` to `to` may go (collision with sliding). */
   sweep(from: Vec3, to: Vec3): Vec3;
 }
@@ -161,17 +166,15 @@ export function step(
   // Horizontal first, at knee height would be a capsule; one sphere at the eye plus the step
   // test below is the model: the sweep stops walls, the ground test takes kerbs.
   const moved = world.sweep(state.position, [x + vx * clampedDt, y + vy * clampedDt, z]);
-  let [nx, ny] = moved;
-  // Anything under the eye that rises more than a step above the feet is an obstacle the eye
-  // cleared but the legs cannot (a low wall, a bench): stay.
-  const underEye = world.groundBelow(nx, ny, z);
-  if (underEye !== null && onGround && underEye > z - eye + step) {
-    nx = x;
-    ny = y;
-    vx = 0;
-    vy = 0;
+  const [nx, ny] = moved;
+  // One probe from the eye down, a little past where the feet could be next frame. Anything
+  // it meets more than a step above the feet is an obstacle the eye cleared but the legs
+  // cannot (a low wall, a bench): stay where you were.
+  const reach = eye + step + 1 + Math.abs(vz) * 0.1;
+  const ground = world.groundBelow(nx, ny, z, reach);
+  if (ground !== null && onGround && ground > z - eye + step) {
+    return { position: [x, y, z], velocity: [0, 0, vz], onGround };
   }
-  const ground = world.groundBelow(nx, ny, z - eye + step);
   let nz = z + vz * clampedDt;
   const falling = vz <= 0;
   // Walking down a slope or off a kerb keeps the feet on the ground; a drop of more than a
@@ -185,11 +188,9 @@ export function step(
     if (onGround && Math.abs(target - nz) > step) nz = target;
     vz = 0;
     onGround = true;
-  } else if (ground === null && onGround) {
-    // No ground known here (off the scan, terrain not loaded): stay level rather than fall.
-    nz = z;
-    vz = 0;
   } else {
+    // Nothing underfoot within reach: a ledge, so fall (the explore controller hovers a
+    // walker that has fallen for long, off the edge of everything).
     onGround = false;
   }
   return { position: [nx, ny, nz], velocity: [vx, vy, vz], onGround };

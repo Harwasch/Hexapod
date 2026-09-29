@@ -45,6 +45,7 @@ const HARNESS_HTML = `<!doctype html>
         lodUrl: "/fixture-tiles/synthetic-tree-lod/tileset.json",
         fullUrl: "/fixture-tiles/synthetic-tree/splat/tileset.json",
         incremental: new URLSearchParams(location.search).get("incremental") === "1",
+        workerDecode: new URLSearchParams(location.search).get("decode") === "worker",
         shUrl: "/fixture-tiles/synthetic-tree-sh/tileset.json",
       });
     </script>
@@ -64,7 +65,10 @@ interface ShView extends View {
   meanRgb: [number, number, number];
 }
 
-async function openHarness(page: Page, incremental = false): Promise<void> {
+/** `incremental` runs the level-of-detail primitive in slot mode; `workerDecode` decodes SPZ in
+ *  the app's workers (splatDecoder.ts) rather than CesiumJS's main-thread loader. Production
+ *  does both. */
+async function openHarness(page: Page, incremental = false, workerDecode = false): Promise<void> {
   await page.route("**/fixture-tiles/**", (route) => {
     const relative = new URL(route.request().url()).pathname.replace(/^.*\/fixture-tiles\//, "");
     if (relative.includes("..")) return route.abort();
@@ -78,7 +82,10 @@ async function openHarness(page: Page, incremental = false): Promise<void> {
     route.fulfill({ status: 200, contentType: "text/html", body: HARNESS_HTML }),
   );
   await page.route(/https:\/\/(api|assets|tile)\.cesium\.com\/.*/, (route) => route.abort());
-  await page.goto(`/__splat-lod${incremental ? "?incremental=1" : ""}`);
+  const query = new URLSearchParams();
+  if (incremental) query.set("incremental", "1");
+  if (workerDecode) query.set("decode", "worker");
+  await page.goto(`/__splat-lod?${query.toString()}`);
   await page.waitForFunction(() => "__splatLod" in window, undefined, { timeout: 60_000 });
 }
 
@@ -116,7 +123,8 @@ for (const incremental of [false, true]) {
     page,
   }, testInfo) => {
     test.setTimeout(300_000);
-    await openHarness(page, incremental);
+    // The incremental run is production's configuration, worker decoding included.
+    await openHarness(page, incremental, incremental);
     const leaves = JSON.parse(
       readFileSync(resolve(TILES, "synthetic-tree-lod/tileset.json"), "utf8"),
     ) as { root: unknown };
@@ -171,7 +179,8 @@ test("an SH-3 tileset loads at degree 3 and its colour turns with the view", asy
   page,
 }, testInfo) => {
   test.setTimeout(300_000);
-  await openHarness(page);
+  // Decoded in the app's workers, which lay the coefficients out for the loader themselves.
+  await openHarness(page, false, true);
   // 20 m: merged parents and leaves together, so both carry their SH through to the screen.
   const range = 20;
   const views: Record<string, ShView> = {};

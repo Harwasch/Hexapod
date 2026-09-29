@@ -31,6 +31,8 @@ const LOOK_DEG_PER_PX_AT_120 = 0.15;
 const MAX_PITCH = CesiumMath.toRadians(89);
 /** How far down a ground is searched for under the walker (metres). */
 const GROUND_SEARCH_M = 200;
+/** Falling longer than this (seconds) with nothing below turns walking into hovering. */
+const MAX_FALL_S = 2.5;
 /** Moves that change the camera less than this (metres) are not rendered. */
 const STILL_M = 1e-5;
 
@@ -92,6 +94,7 @@ export class ExploreController {
   private state: MoveState = { position: [0, 0, 0], velocity: [0, 0, 0], onGround: false };
   private heading = 0;
   private pitch = 0;
+  private airborneS = 0;
   /** Local east/north/up metres to world, and back, fixed where exploring began. */
   private readonly toWorld = new Matrix4();
   private readonly toLocal = new Matrix4();
@@ -160,7 +163,7 @@ export class ExploreController {
     this.pitch = CesiumMath.clamp(camera.pitch, -MAX_PITCH, MAX_PITCH);
     this.state = { position: [0, 0, 0], velocity: [0, 0, 0], onGround: false };
     // Start on the ground when it is close below; from high up, fly down to it.
-    const ground = this.world().groundBelow(0, 0, 0);
+    const ground = this.world().groundBelow(0, 0, 0, GROUND_SEARCH_M);
     this.mode = ground !== null && -ground < WALK.eyeHeight * 6 ? "walk" : "fly";
     if (this.mode === "walk" && ground !== null) {
       this.state.position = [0, 0, ground + WALK.eyeHeight];
@@ -299,7 +302,7 @@ export class ExploreController {
     const local = (x: number, y: number, z: number): Cartesian3 =>
       Matrix4.multiplyByPoint(this.toWorld, new Cartesian3(x, y, z), new Cartesian3());
     return {
-      groundBelow: (x, y, fromZ) => {
+      groundBelow: (x, y, fromZ, depth) => {
         const from = local(x, y, fromZ);
         const down = Matrix4.multiplyByPointAsVector(
           this.toWorld,
@@ -307,14 +310,14 @@ export class ExploreController {
           new Cartesian3(),
         );
         // The scan's own ground first: it is what you see, wherever it was placed.
-        const hit = this.collider?.raycast(new Ray(from, down), GROUND_SEARCH_M);
+        const hit = this.collider?.raycast(new Ray(from, down), depth);
         if (hit) return fromZ - hit.distance;
         if (!this.scene.globe.show) return null;
         const carto = Cartographic.fromCartesian(from);
         const terrain = this.scene.globe.getHeight(carto);
         if (terrain === undefined) return null;
-        const depth = carto.height - terrain;
-        return depth >= 0 && depth < GROUND_SEARCH_M ? fromZ - depth : null;
+        const below = carto.height - terrain;
+        return below >= 0 && below <= depth ? fromZ - below : null;
       },
       sweep: (from, to) => {
         if (!this.collider?.active || this.cameraController?.passingThrough) return to;
@@ -341,6 +344,9 @@ export class ExploreController {
       small,
       this.pace,
     );
+    // Fallen for a while with nothing underneath (walked off the edge of the scan): hover.
+    this.airborneS = this.state.onGround || this.mode === "fly" ? 0 : this.airborneS + dt;
+    if (this.airborneS > MAX_FALL_S) this.setMode("fly");
     const [x, y, z] = this.state.position;
     if (Math.hypot(x - before[0], y - before[1], z - before[2]) < STILL_M) return;
     this.apply();

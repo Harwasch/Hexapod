@@ -1,8 +1,8 @@
 /**
  * The globe's memory budget for gaussian-splat tilesets, counted in splats rather than bytes.
  *
- * CesiumJS 1.145 cannot budget splat tilesets by bytes: `GaussianSplat3DTileContent` reports
- * `geometryByteLength` 0, and its `texturesByteLength` is a share of the one aggregate
+ * Unpatched, CesiumJS 1.145 cannot budget splat tilesets by bytes: `GaussianSplat3DTileContent`
+ * reports `geometryByteLength` 0, and its `texturesByteLength` is a share of the one aggregate
  * texture spread over the *selected* tiles (Source/Scene/GaussianSplat3DTileContent.js). What
  * a loaded splat tile really holds -- its decoded attributes and the root-frame copies of
  * positions, rotations and scales it keeps for rebuilds (`_positions`, `_rotations`,
@@ -14,8 +14,9 @@
  * The budget is the phone's Detail choice (lib/detail.ts): the gaussians a view may hold at
  * once. SiteManager reports the count as a memory source, so the PerformanceManager holds
  * idle refinement at 70% of it and coarsens past 125% (its REFINE_MEMORY_RATIO and
- * MEMORY_PRESSURE_RATIO); and past 125% SiteManager first trims the tiles the last frame did
- * not select -- the trim Cesium's own cache would have made had it seen the bytes.
+ * MEMORY_PRESSURE_RATIO). Which loaded tiles go is the tileset cache's choice: the engine
+ * patch has splat tiles report their real bytes, so `cacheBytes` trims the least recently
+ * used, as for any other tileset.
  */
 
 /**

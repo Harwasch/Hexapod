@@ -30,6 +30,7 @@ import { SiteManager } from "./SiteManager";
 import { installSplatTextureInterception } from "./splatCapture";
 import { SplatCollider } from "./SplatCollider";
 import { SplatMotionGate } from "./splatMotionGate";
+import { installSplatDecoder } from "./splatDecoder";
 import { installSplatSorter } from "./splatSorter";
 import type { Geocoder, SceneEvents } from "./types";
 import type { TokenState } from "@/state/viewer";
@@ -67,6 +68,7 @@ export class CesiumSceneManager {
   readonly splatGate: SplatMotionGate;
   readonly collider: SplatCollider;
   private readonly uninstallSplatSorter: () => void;
+  private readonly uninstallSplatDecoder: () => void;
   readonly sites: SiteManager;
   readonly living: LivingSurveyManager;
   readonly selection: SelectionManager;
@@ -80,6 +82,7 @@ export class CesiumSceneManager {
   private geocoderInstance: Geocoder;
   private destroyed = false;
   private interactionMode: "select" | "measure" | "explore" = "select";
+  private exploring = false;
   private pickingGround = false;
   private renderRecoveries = 0;
   private readonly unsubscribe: (() => void)[] = [];
@@ -149,6 +152,7 @@ export class CesiumSceneManager {
     this.performance = new PerformanceManager(this.viewer, this.events);
     this.splatGate = new SplatMotionGate(this.viewer.scene, this.events);
     this.uninstallSplatSorter = installSplatSorter();
+    this.uninstallSplatDecoder = installSplatDecoder();
     this.collider = new SplatCollider(this.viewer.scene, () => this.splatGate.holding);
     this.camera.setCollider(this.collider);
     this.performance.addScreenSpaceErrorSink("world", (sse, pixelRatio) =>
@@ -181,13 +185,21 @@ export class CesiumSceneManager {
       this.events.on("camera", (pose) => {
         const splat = this.sites.activeRepresentation === "gaussian-splat";
         this.performance.setGradeSuppressed(splat && pose.altitude < SCAN_GRADE_ALTITUDE_M);
+        // Inside a scan, the world around it stays as it was (LayerManager.setWorldFrozen).
+        this.layers.setWorldFrozen(splat && this.sites.insideSplatScan());
       }),
     );
-    // While the map waits for "the ground you mean", selection keeps its hands off the click.
+    // While the map waits for "the ground you mean", selection keeps its hands off the click;
+    // while exploring (walk or fly, from the toolbar or F) it does no hover picks either: each
+    // is a render pass and a GPU read-back, and the pointer is the look.
     this.unsubscribe.push(
+      this.events.on("explore", (on) => {
+        this.exploring = on;
+        this.selection.setEnabled(this.selectionWanted());
+      }),
       this.events.on("ground-pick-mode", (on) => {
         this.pickingGround = on;
-        this.selection.setEnabled(this.interactionMode === "select" && !on);
+        this.selection.setEnabled(this.selectionWanted());
         if (on) this.viewer.canvas.style.cursor = "crosshair";
       }),
     );
@@ -330,10 +342,14 @@ export class CesiumSceneManager {
     };
   }
 
+  private selectionWanted(): boolean {
+    return this.interactionMode === "select" && !this.pickingGround && !this.exploring;
+  }
+
   /** Measuring and exploring take over the pointer; selection yields. */
   setInteractionMode(mode: "select" | "measure" | "explore"): void {
     this.interactionMode = mode;
-    this.selection.setEnabled(mode === "select" && !this.pickingGround);
+    this.selection.setEnabled(this.selectionWanted());
     if (mode !== "measure") this.measurement.stop();
     if (mode !== "explore") this.explore.exit();
   }
@@ -357,6 +373,7 @@ export class CesiumSceneManager {
     this.sites.destroy();
     this.collider.destroy();
     this.uninstallSplatSorter();
+    this.uninstallSplatDecoder();
     this.splatGate.destroy();
     this.performance.destroy();
     this.layers.destroy();
