@@ -12,23 +12,32 @@
  * over each loaded mesh in a worker and, every frame, draws at most its splat budget, chosen
  * by screen size across every mesh at once (SparkRenderer.ts `driveLod`, one
  * `traverseLodTrees` call over all instances). The phone's Detail choice is that budget
- * (main.ts). What is left here is what to *download*: all of it when it fits, since then a
- * close look shows everything the scan has; otherwise the finest cut that fits `loadBudget`,
- * refined where the error is largest first. Each tile's gaussian count is in its
- * `extras.gaussians`, so nothing is fetched to decide.
+ * (main.ts). What is left is what to *download*: this module reads the tree (each tile's
+ * gaussian count is in its `extras.gaussians` and its bounds in its `boundingVolume`, so
+ * nothing is fetched to decide), and stream.ts picks the cut from where the camera is.
  *
  * Tilesets packed before merged parents are ADD (a parent holds a thinned subset, drawn under
- * its children): there, tiles are only ever added. A single-tile tileset -- anything packed
- * before the hierarchy, and the committed tree -- is one step either way.
+ * its children): there, tiles are only ever added, in the static order `planAdditive` gives.
+ * A single-tile tileset -- anything packed before the hierarchy, and the committed tree -- is
+ * just its root either way.
  */
 
 export type Refine = "ADD" | "REPLACE";
+
+/** A tile's bounding sphere in the tileset's own frame (the root transform's, east/north/up). */
+export interface Sphere {
+  center: [number, number, number];
+  radius: number;
+}
 
 export interface TileNode {
   uri: string;
   gaussians: number;
   geometricError: number;
   children: TileNode[];
+  /** Absent when the tileset gives none this page reads (a `region`): such a tile is always
+   *  treated as in view and at distance zero, so it is refined first rather than never. */
+  bounds?: Sphere | null;
 }
 
 export interface TileTree {
@@ -36,7 +45,7 @@ export interface TileTree {
   root: TileNode;
 }
 
-/** One step of loading: fetch `add`, show it, then drop `remove` (the tile it replaces). */
+/** One step of loading an ADD tileset: fetch `add` and show it (`remove` stays empty). */
 export interface LoadStep {
   add: TileNode[];
   remove: TileNode[];
@@ -54,6 +63,7 @@ export interface LoadStep {
 export const LOAD_FACTOR = 4;
 
 interface RawTile {
+  boundingVolume?: { box?: unknown; sphere?: unknown };
   content?: { uri?: unknown };
   geometricError?: unknown;
   extras?: { gaussians?: unknown };
@@ -80,11 +90,39 @@ export function parseTileset(document: unknown): TileTree {
       gaussians: typeof gaussians === "number" ? gaussians : Number.POSITIVE_INFINITY,
       geometricError: typeof error === "number" ? error : 0,
       children: Array.isArray(raw.children) ? (raw.children as RawTile[]).map(node) : [],
+      bounds: sphereOf(raw.boundingVolume),
     };
   };
   const parsed = node(root);
   if (!parsed.uri) throw new Error("The scan's tileset names no content.");
   return { refine: root.refine === "ADD" ? "ADD" : "REPLACE", root: parsed };
+}
+
+function numbers(value: unknown, length: number): number[] | null {
+  if (!Array.isArray(value) || value.length !== length) return null;
+  return value.every((item) => typeof item === "number" && Number.isFinite(item))
+    ? (value as number[])
+    : null;
+}
+
+/**
+ * A 3D Tiles bounding volume as a sphere: a `sphere` as it is; a `box` (centre, then three
+ * half-axis vectors) as the sphere through its corners, whose radius is the length of the
+ * three half-axes added -- sqrt of the sum of their squared lengths when they are orthogonal,
+ * as 3D Tiles boxes are. A `region` (radians and metres on the ellipsoid) is left out: the
+ * pipeline never writes one for a splat.
+ */
+export function sphereOf(volume: RawTile["boundingVolume"]): Sphere | null {
+  const sphere = numbers(volume?.sphere, 4);
+  if (sphere) {
+    const [x, y, z, r] = sphere as [number, number, number, number];
+    return { center: [x, y, z], radius: Math.abs(r) };
+  }
+  const box = numbers(volume?.box, 12);
+  if (!box) return null;
+  let squared = 0;
+  for (let i = 3; i < 12; i++) squared += (box[i] ?? 0) ** 2;
+  return { center: [box[0] ?? 0, box[1] ?? 0, box[2] ?? 0], radius: Math.sqrt(squared) };
 }
 
 /** Every tile of the tree, and the gaussians of the scan itself: its leaves under REPLACE
@@ -103,42 +141,14 @@ export function countTiles(tree: TileTree): { tiles: number; gaussians: number }
 }
 
 /**
- * The downloads, in order, holding at most `budget` gaussians once each step is done -- apart
- * from the root, which is loaded whatever it holds.
- *
- * REPLACE: start from the root and repeatedly replace the loaded tile with the largest
- * geometric error by its children, while the swap keeps the total within the budget; a swap
- * that does not fit is skipped, and smaller ones after it may still fill the gap. Each step's
- * children are shown together and only then is their parent dropped -- the rule CesiumJS's
- * base traversal applies (Cesium3DTilesetBaseTraversal.js: a REPLACE tile refines only once
- * all its children are loaded), so the scan never has a hole while it streams.
- *
- * ADD: the tiles themselves, root first, then coarsest-region-first: a tile's priority is its
- * parent's error, so a parent always comes before its children.
+ * The downloads of an ADD tileset (packed before merged parents: a parent holds a thinned
+ * subset, drawn under its children), in order, holding at most `budget` gaussians apart from
+ * the root, which is loaded whatever it holds: root first, then coarsest region first -- a
+ * tile's priority is its parent's error, so a parent always comes before its children. A
+ * REPLACE tileset streams with the view instead (stream.ts).
  */
-export function planLoads(tree: TileTree, budget: number): LoadStep[] {
-  return tree.refine === "ADD" ? planAdd(tree.root, budget) : planReplace(tree.root, budget);
-}
-
-function planReplace(root: TileNode, budget: number): LoadStep[] {
-  const steps: LoadStep[] = [{ add: [root], remove: [] }];
-  let spent = Number.isFinite(root.gaussians) ? root.gaussians : 0;
-  // The loaded tiles that could still be refined, largest error first; ties to the earlier.
-  const open: { tile: TileNode; order: number }[] = [{ tile: root, order: 0 }];
-  let order = 1;
-  while (open.length > 0) {
-    open.sort((a, b) => b.tile.geometricError - a.tile.geometricError || a.order - b.order);
-    const next = open.shift();
-    if (!next || next.tile.children.length === 0) continue;
-    const { tile } = next;
-    const children = tile.children.reduce((sum, child) => sum + child.gaussians, 0);
-    const after = spent - (Number.isFinite(tile.gaussians) ? tile.gaussians : 0) + children;
-    if (!Number.isFinite(children) || after > budget) continue;
-    spent = after;
-    steps.push({ add: tile.children, remove: [tile] });
-    for (const child of tile.children) open.push({ tile: child, order: order++ });
-  }
-  return steps;
+export function planAdditive(tree: TileTree, budget: number): LoadStep[] {
+  return planAdd(tree.root, budget);
 }
 
 function planAdd(root: TileNode, budget: number): LoadStep[] {
@@ -176,16 +186,4 @@ function planAdd(root: TileNode, budget: number): LoadStep[] {
     spent += Number.isFinite(tile.gaussians) ? tile.gaussians : 0;
   }
   return steps;
-}
-
-/** The gaussians loaded once every step has run: what the plan costs the phone. */
-export function plannedGaussians(steps: LoadStep[]): number {
-  const loaded = new Set<TileNode>();
-  for (const step of steps) {
-    step.remove.forEach((tile) => loaded.delete(tile));
-    step.add.forEach((tile) => loaded.add(tile));
-  }
-  let total = 0;
-  loaded.forEach((tile) => (total += Number.isFinite(tile.gaussians) ? tile.gaussians : 0));
-  return total;
 }

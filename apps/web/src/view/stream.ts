@@ -1,0 +1,375 @@
+/**
+ * View-dependent streaming of a scan's REPLACE tileset in the scan viewer: which tiles to
+ * draw from where the camera is, and how to get from what is on screen to that.
+ *
+ * The viewer used to plan one static cut: the finest cut that fit `LOAD_FACTOR` times the
+ * Detail budget, refined wherever the geometric error was largest, whatever the camera did.
+ * A small scan fits whole, so that was fine; a 22.6M-gaussian site gets 1.6M spread evenly
+ * over 150 m, and walking up to one bench shows the same coarse splats as the overview.
+ *
+ * Now the cut follows the camera, the way CesiumJS traverses 3D Tiles
+ * (Cesium3DTilesetTraversal: a tile refines while its screen-space error is above the
+ * maximum), with two differences a phone needs:
+ *
+ * - **A gaussian budget, spent on the largest error first.** The same greedy as the static
+ *   plan, ordered by *screen* error instead of geometric error, so the budget goes where the
+ *   camera is looking and close by; refinement stops early once every tile is under
+ *   `TARGET_ERROR_PX`, since there is nothing left to see.
+ * - **Full coverage, coarse where unseen.** Cesium draws only tiles in the frustum; turning
+ *   the camera then shows a hole until the new tiles arrive. Here a tile out of view stays
+ *   in the cut at a coarse level (its error weighted down by `OFFSCREEN_WEIGHT`, not
+ *   dropped), so every direction always shows the scene -- blurry at first, then sharp: the
+ *   Google Maps behaviour of motion first, detail after.
+ *
+ * Getting there never leaves a hole: a tile is swapped for its children only once all of
+ * them have arrived, and descendants are swapped back for an ancestor only once it has
+ * (Cesium's base-traversal rule, as the static plan used). Loaded tiles no longer wanted are
+ * kept, least recently used first out, up to a cache budget, so looking back is instant; the
+ * ancestors of what is drawn are never let go, so zooming out never waits.
+ */
+
+import type { Sphere, TileNode, TileTree } from "./tiles";
+
+/** Where the camera is and what it sees, in the tileset's own frame. */
+export interface View {
+  eye: [number, number, number];
+  /** Screen height in pixels over 2 tan(fovy / 2): pixels per metre at one metre away. */
+  projection: number;
+  /** Whether a tile's sphere is at least partly inside the view frustum. */
+  visible(bounds: Sphere): boolean;
+}
+
+/** Refinement stops once every tile's error on screen is under this many CSS pixels. */
+export const TARGET_ERROR_PX = 2;
+/** A tile out of view refines as if its error were this fraction of what it is: turning
+ *  around shows the scene coarse rather than a hole, without spending the budget behind. */
+export const OFFSCREEN_WEIGHT = 0.15;
+
+/** The screen-space error of drawing `tile` instead of what is under it, in pixels. */
+export function screenError(tile: TileNode, view: View): number {
+  if (tile.geometricError <= 0) return 0;
+  const bounds = tile.bounds;
+  if (!bounds) return Number.MAX_VALUE;
+  const [x, y, z] = view.eye;
+  const [cx, cy, cz] = bounds.center;
+  const centre = Math.hypot(x - cx, y - cy, z - cz);
+  // Inside a tile's sphere the error is as large as it gets; a floor proportional to the tile
+  // keeps a camera at its very centre from dividing by zero.
+  const distance = Math.max(centre - bounds.radius, bounds.radius * 1e-3, 1e-6);
+  return (tile.geometricError * view.projection) / distance;
+}
+
+/** How much refining `tile` is worth now: its screen error, weighted down when unseen. */
+export function priority(tile: TileNode, view: View): number {
+  const error = screenError(tile, view);
+  return !tile.bounds || view.visible(tile.bounds) ? error : error * OFFSCREEN_WEIGHT;
+}
+
+/**
+ * The cut to draw from `view`: the root, then repeatedly the tile with the largest priority
+ * swapped for its children while that keeps the cut within `budget` gaussians (a swap that
+ * does not fit is skipped, and smaller ones may still), until every tile left is under
+ * `targetErrorPx`. The root is in it whatever it holds.
+ */
+export function chooseCut(
+  tree: TileTree,
+  view: View,
+  budget: number,
+  targetErrorPx = TARGET_ERROR_PX,
+): { tiles: Set<TileNode>; gaussians: number } {
+  const { root } = tree;
+  const cut = new Set<TileNode>([root]);
+  let spent = Number.isFinite(root.gaussians) ? root.gaussians : 0;
+  const open: { tile: TileNode; value: number }[] = [{ tile: root, value: priority(root, view) }];
+  while (open.length > 0) {
+    let best = 0;
+    for (let i = 1; i < open.length; i++) {
+      if ((open[i]?.value ?? 0) > (open[best]?.value ?? 0)) best = i;
+    }
+    const [next] = open.splice(best, 1);
+    if (!next) break;
+    if (next.value <= targetErrorPx) break;
+    const { tile } = next;
+    if (tile.children.length === 0) continue;
+    const children = tile.children.reduce((sum, child) => sum + child.gaussians, 0);
+    const own = Number.isFinite(tile.gaussians) ? tile.gaussians : 0;
+    if (!Number.isFinite(children) || spent - own + children > budget) continue;
+    spent += children - own;
+    cut.delete(tile);
+    for (const child of tile.children) {
+      cut.add(child);
+      open.push({ tile: child, value: priority(child, view) });
+    }
+  }
+  return { tiles: cut, gaussians: spent };
+}
+
+/** One change to what is drawn: `add` goes on screen in the same frame `remove` comes off. */
+export interface Swap {
+  add: TileNode[];
+  remove: TileNode[];
+}
+
+/** Each tile's parent, the root's null. */
+export function parents(tree: TileTree): Map<TileNode, TileNode | null> {
+  const parent = new Map<TileNode, TileNode | null>([[tree.root, null]]);
+  const visit = (tile: TileNode): void => {
+    for (const child of tile.children) {
+      parent.set(child, tile);
+      visit(child);
+    }
+  };
+  visit(tree.root);
+  return parent;
+}
+
+/**
+ * From `shown` towards `desired` without a hole: the swaps whose tiles are all loaded, and
+ * the tiles still missing, in no particular order. A shown tile above the desired cut swaps
+ * for its children once all of them are loaded (one level a step; the next step goes on); a
+ * shown tile below it swaps back, with every shown tile under the same desired ancestor, once
+ * that ancestor is loaded. Each root-to-leaf path meets both cuts exactly once, so every
+ * shown tile is one or the other, or in `desired` already.
+ */
+export function nextSwaps(
+  parentOf: Map<TileNode, TileNode | null>,
+  shown: ReadonlySet<TileNode>,
+  desired: ReadonlySet<TileNode>,
+  isLoaded: (tile: TileNode) => boolean,
+): { swaps: Swap[]; missing: TileNode[] } {
+  const above = new Set<TileNode>();
+  for (const tile of desired) {
+    let up = parentOf.get(tile) ?? null;
+    while (up && !above.has(up)) {
+      above.add(up);
+      up = parentOf.get(up) ?? null;
+    }
+  }
+  const swaps: Swap[] = [];
+  const missing = new Set<TileNode>();
+  const coarsened = new Map<TileNode, TileNode[]>();
+  for (const tile of shown) {
+    if (desired.has(tile)) continue;
+    if (above.has(tile)) {
+      const absent = tile.children.filter((child) => !isLoaded(child));
+      if (absent.length === 0) swaps.push({ add: tile.children, remove: [tile] });
+      else absent.forEach((child) => missing.add(child));
+      continue;
+    }
+    let up = parentOf.get(tile) ?? null;
+    while (up && !desired.has(up)) up = parentOf.get(up) ?? null;
+    if (!up) continue;
+    const under = coarsened.get(up);
+    if (under) under.push(tile);
+    else coarsened.set(up, [tile]);
+  }
+  for (const [ancestor, under] of coarsened) {
+    if (isLoaded(ancestor)) swaps.push({ add: [ancestor], remove: under });
+    else missing.add(ancestor);
+  }
+  return { swaps, missing: [...missing] };
+}
+
+/** What the streamer asks of the page: fetch a tile, put it on screen or take it off. */
+export interface StreamHost<M> {
+  load(tile: TileNode): Promise<M>;
+  show(tile: TileNode, mesh: M): void;
+  hide(tile: TileNode, mesh: M): void;
+  dispose(mesh: M): void;
+  /** A tile failed to load; it is not asked for again, and what covers it stays. */
+  failed?(tile: TileNode, error: unknown): void;
+}
+
+export interface StreamOptions {
+  /** Most gaussians the desired cut may hold. */
+  budget: number;
+  /** Most gaussians kept loaded, drawn or not; at least `budget`. */
+  cacheBudget: number;
+  /** Tiles fetched at once. */
+  concurrency: number;
+  targetErrorPx?: number;
+}
+
+/**
+ * Drives a REPLACE tileset towards the cut the current view wants: call `update(view)` as the
+ * camera moves (it is cheap: a few hundred tiles), and again when `onArrival` says a tile came.
+ */
+export class TileStreamer<M> {
+  private readonly parentOf: Map<TileNode, TileNode | null>;
+  private readonly loaded = new Map<TileNode, M>();
+  private readonly used = new Map<TileNode, number>();
+  private readonly inFlight = new Set<TileNode>();
+  private readonly broken = new Set<TileNode>();
+  private readonly shown = new Set<TileNode>();
+  private desired = new Set<TileNode>();
+  private clock = 0;
+  private stopped = false;
+  /** Called when a fetch finishes, so the page can run `update` again. */
+  onArrival: (() => void) | null = null;
+
+  constructor(
+    private readonly tree: TileTree,
+    private readonly host: StreamHost<M>,
+    private readonly options: StreamOptions,
+  ) {
+    this.parentOf = parents(tree);
+  }
+
+  /** A tile already loaded and drawn by the page (the root, used to frame the camera). */
+  adopt(tile: TileNode, mesh: M): void {
+    this.loaded.set(tile, mesh);
+    this.shown.add(tile);
+    this.used.set(tile, ++this.clock);
+  }
+
+  /** The tiles on screen. */
+  get drawn(): TileNode[] {
+    return [...this.shown];
+  }
+
+  /** Gaussians on screen. */
+  get drawnGaussians(): number {
+    let total = 0;
+    this.shown.forEach((tile) => (total += Number.isFinite(tile.gaussians) ? tile.gaussians : 0));
+    return total;
+  }
+
+  /** Whether anything is still to fetch for the last view. */
+  get busy(): boolean {
+    return this.inFlight.size > 0;
+  }
+
+  /** Moves the drawn tiles towards what `view` wants; returns whether anything changed. */
+  update(view: View): boolean {
+    if (this.stopped) return false;
+    const { budget, targetErrorPx } = this.options;
+    this.desired = chooseCut(this.tree, view, budget, targetErrorPx).tiles;
+    const isLoaded = (tile: TileNode): boolean => this.loaded.has(tile);
+    let changed = false;
+    let missing: TileNode[] = [];
+    // A swap can make the next one possible (children already cached from an earlier look),
+    // so swap until nothing more can; the depth of the tree bounds it.
+    for (let pass = 0; pass < 32; pass++) {
+      if (this.shown.size === 0) {
+        const { root } = this.tree;
+        if (isLoaded(root)) this.apply({ add: [root], remove: [] });
+        else missing = [root];
+        if (!isLoaded(root)) break;
+      }
+      const next = nextSwaps(this.parentOf, this.shown, this.desired, isLoaded);
+      missing = next.missing;
+      if (next.swaps.length === 0) break;
+      next.swaps.forEach((swap) => this.apply(swap));
+      changed = true;
+    }
+    for (const tile of this.shown) this.used.set(tile, ++this.clock);
+    for (const tile of this.desired) if (this.loaded.has(tile)) this.used.set(tile, this.clock);
+    this.fetch(missing, view);
+    this.evict();
+    return changed;
+  }
+
+  /** Disposes everything and ignores fetches still on their way. */
+  stop(): void {
+    this.stopped = true;
+    for (const [tile, mesh] of this.loaded) {
+      if (this.shown.has(tile)) this.host.hide(tile, mesh);
+      this.host.dispose(mesh);
+    }
+    this.loaded.clear();
+    this.shown.clear();
+  }
+
+  private apply(swap: Swap): void {
+    for (const tile of swap.add) {
+      const mesh = this.loaded.get(tile);
+      if (mesh === undefined) continue;
+      this.host.show(tile, mesh);
+      this.shown.add(tile);
+    }
+    for (const tile of swap.remove) {
+      const mesh = this.loaded.get(tile);
+      if (mesh !== undefined) this.host.hide(tile, mesh);
+      this.shown.delete(tile);
+    }
+  }
+
+  /** Starts the most needed fetches: by their parent's priority (what a refine buys). */
+  private fetch(missing: TileNode[], view: View): void {
+    const wanted = missing.filter((tile) => !this.inFlight.has(tile) && !this.broken.has(tile));
+    const worth = (tile: TileNode): number => {
+      const parent = this.parentOf.get(tile);
+      return parent ? priority(parent, view) : Number.MAX_VALUE;
+    };
+    wanted.sort((a, b) => worth(b) - worth(a));
+    for (const tile of wanted) {
+      if (this.inFlight.size >= this.options.concurrency) break;
+      this.inFlight.add(tile);
+      this.host.load(tile).then(
+        (mesh) => {
+          this.inFlight.delete(tile);
+          if (this.stopped) {
+            this.host.dispose(mesh);
+            return;
+          }
+          this.loaded.set(tile, mesh);
+          this.used.set(tile, ++this.clock);
+          this.onArrival?.();
+        },
+        (error: unknown) => {
+          this.inFlight.delete(tile);
+          this.broken.add(tile);
+          if (!this.stopped) {
+            this.host.failed?.(tile, error);
+            this.onArrival?.();
+          }
+        },
+      );
+    }
+  }
+
+  private depth(tile: TileNode): number {
+    let depth = 0;
+    for (let up = this.parentOf.get(tile); up; up = this.parentOf.get(up)) depth += 1;
+    return depth;
+  }
+
+  /**
+   * Finest first, then least recently used, until the cache fits: a coarse tile is a small
+   * download that covers a lot, so it is the last to go. Never a drawn or wanted tile, nor an
+   * ancestor of a drawn one: those are what a step back or a zoom out swaps to, and merged
+   * parents are an eighth or less of what they stand for, so keeping them all costs little
+   * and makes coarsening instant.
+   */
+  private evict(): void {
+    let total = 0;
+    this.loaded.forEach((_mesh, tile) => (total += gaussiansOf(tile)));
+    if (total <= this.options.cacheBudget) return;
+    const kept = new Set<TileNode>();
+    for (const tile of this.shown) {
+      let up = this.parentOf.get(tile) ?? null;
+      while (up && !kept.has(up)) {
+        kept.add(up);
+        up = this.parentOf.get(up) ?? null;
+      }
+    }
+    const spare = [...this.loaded.keys()]
+      .filter((tile) => !this.shown.has(tile) && !this.desired.has(tile) && !kept.has(tile))
+      .sort(
+        (a, b) =>
+          this.depth(b) - this.depth(a) || (this.used.get(a) ?? 0) - (this.used.get(b) ?? 0),
+      );
+    for (const tile of spare) {
+      if (total <= this.options.cacheBudget) break;
+      const mesh = this.loaded.get(tile);
+      if (mesh !== undefined) this.host.dispose(mesh);
+      this.loaded.delete(tile);
+      this.used.delete(tile);
+      total -= gaussiansOf(tile);
+    }
+  }
+}
+
+function gaussiansOf(tile: TileNode): number {
+  return Number.isFinite(tile.gaussians) ? tile.gaussians : 0;
+}

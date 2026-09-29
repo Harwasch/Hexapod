@@ -152,7 +152,7 @@ test("a merged-parent scan swaps each parent for its children, as far as Detail 
     },
   };
   const fetched = await serveTileset(page, tileset);
-  // "Light", chosen on the phone page: Spark draws 200k and the viewer downloads up to 4x.
+  // "Light", chosen on the phone page: Spark draws 200k and the viewer holds up to 4x.
   await page.addInitScript(() => {
     window.localStorage.setItem("twin.phoneOptions.v3", JSON.stringify({ detail: "200000" }));
   });
@@ -161,18 +161,13 @@ test("a merged-parent scan swaps each parent for its children, as far as Detail 
 
   await page.goto(`/view.html#${SITE}`);
 
-  await expect(page.locator("#scan-date")).toContainText("530,000 of 1,100,000 splats loaded", {
+  await expect(page.locator("#scan-date")).toContainText("530,000 of 1,100,000 splats", {
     timeout: 30_000,
   });
   // The root alone, then all its children -- and the root is gone once they are up.
   // splat_1's leaves (600k for its 30k) would pass 800k, so it stays merged.
-  expect(fetched).toEqual([
-    "tileset.json",
-    "splat.glb",
-    "splat_1.glb",
-    "splat_3.glb",
-    "splat_02.glb",
-  ]);
+  expect(fetched.slice(0, 2)).toEqual(["tileset.json", "splat.glb"]);
+  expect(fetched.slice(2).sort()).toEqual(["splat_02.glb", "splat_1.glb", "splat_3.glb"]);
   await expect(page.locator("#viewer")).toHaveAttribute(
     "data-tiles",
     "splat_1.glb splat_3.glb splat_02.glb",
@@ -180,6 +175,79 @@ test("a merged-parent scan swaps each parent for its children, as far as Detail 
   await expect(page.locator("#viewer-status")).toContainText("Drag to turn");
   expect(errors).toEqual([]);
 });
+
+test("a large scan streams with the camera: finer where it looks, coarse elsewhere", async ({
+  page,
+}) => {
+  // Two regions 60 m apart, each a merged parent over two 300k leaves: 1.2M in all, more
+  // than Light's 800k, so only one region can be fine at a time.
+  const box = (x: number, half: number): number[] => [x, 0, 0, half, 0, 0, 0, half, 0, 0, 0, 4];
+  const at = (x: number, half: number, entry: Tile): Tile => ({
+    ...entry,
+    boundingVolume: { box: box(x, half) },
+  });
+  const tileset = {
+    asset: { version: "1.1" },
+    geometricError: 40,
+    root: {
+      refine: "REPLACE",
+      ...at(0, 45, {
+        ...tile("splat.glb", 20_000, 4, [
+          at(
+            -30,
+            12,
+            tile("splat_0.glb", 40_000, 0.5, [
+              at(-36, 6, tile("splat_0-0.glb", 300_000, 0)),
+              at(-24, 6, tile("splat_0-1.glb", 300_000, 0)),
+            ]),
+          ),
+          at(
+            30,
+            12,
+            tile("splat_1.glb", 40_000, 0.5, [
+              at(24, 6, tile("splat_1-0.glb", 300_000, 0)),
+              at(36, 6, tile("splat_1-1.glb", 300_000, 0)),
+            ]),
+          ),
+        ]),
+      }),
+    },
+  };
+  await serveTileset(page, tileset);
+  await page.addInitScript(() => {
+    window.localStorage.setItem("twin.phoneOptions.v3", JSON.stringify({ detail: "200000" }));
+  });
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto(`/view.html#${SITE}`);
+  const viewer = page.locator("#viewer");
+  // From the overview both regions are merged: 80k of 1.2M.
+  await expect(viewer).toHaveAttribute("data-tiles", "splat_0.glb splat_1.glb", {
+    timeout: 30_000,
+  });
+  // Walk up to the west region: it refines, the east one stays merged -- in the cut, so
+  // turning round shows it at once.
+  await page.evaluate(() => (window as unknown as ViewerDebug).__viewer.lookAt([-30, 0, 2], 8));
+  await expect(viewer).toHaveAttribute(
+    "data-tiles",
+    /^(?=.*splat_0-0\.glb)(?=.*splat_0-1\.glb)(?=.*splat_1\.glb)(?!.*splat_1-)/,
+    { timeout: 30_000 },
+  );
+  // And across to the east one: the west region goes back to its merged parent (still
+  // loaded, so at once), the east one refines.
+  await page.evaluate(() => (window as unknown as ViewerDebug).__viewer.lookAt([30, 0, 2], 8));
+  await expect(viewer).toHaveAttribute(
+    "data-tiles",
+    /^(?=.*splat_1-0\.glb)(?=.*splat_1-1\.glb)(?=.*splat_0\.glb)(?!.*splat_0-)/,
+    { timeout: 30_000 },
+  );
+  expect(errors).toEqual([]);
+});
+
+/** What view.html exposes for tests: the camera, moved to look at a scan point. */
+interface ViewerDebug {
+  __viewer: { lookAt(target: [number, number, number], distance: number): void };
+}
 
 test("a scan packed before merged parents still loads additively", async ({ page }) => {
   const tileset = {

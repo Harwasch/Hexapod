@@ -24,12 +24,12 @@ import { splatBudget } from "@/lib/detail";
 import { parseCoverage } from "./coverage";
 import { spzFromGlb } from "./glb";
 import { showLive } from "./live";
+import { TileStreamer, type View } from "./stream";
 import {
   LOAD_FACTOR,
   countTiles,
   parseTileset,
-  planLoads,
-  plannedGaussians,
+  planAdditive,
   type TileNode,
   type TileTree,
 } from "./tiles";
@@ -236,15 +236,18 @@ async function showScan(siteId: string): Promise<void> {
     renderer.setSize(window.innerWidth, window.innerHeight);
   };
   window.addEventListener("resize", resize);
+  // Tiles keep arriving after the first one is on screen; leaving the scan stops them.
+  let streaming: Streaming | null = null;
   renderer.setAnimationLoop(() => {
     controls.update();
+    streaming?.frame();
     renderer.render(scene, camera);
   });
-  // Tiles keep arriving after the first one is on screen; leaving the scan stops them.
   let alive = true;
   active = {
     stop: () => {
       alive = false;
+      streaming?.stop();
       window.removeEventListener("resize", resize);
       renderer.setAnimationLoop(null);
       controls.dispose();
@@ -259,23 +262,20 @@ async function showScan(siteId: string): Promise<void> {
     el("scan-date").textContent = date(site.createdAt);
     document.title = site.name;
 
-    // A scan is a level-of-detail tileset holding every gaussian. This phone downloads all
-    // of it, or the finest cut of it that fits LOAD_FACTOR times its Detail budget
-    // (tiles.ts), and Spark's LoD decides what of that to draw each frame. The root comes
-    // first and is shown on its own -- the whole scan, merged coarse -- and each later step
-    // swaps a tile for its children once all of them have arrived.
+    // A scan is a level-of-detail tileset holding every gaussian. The root comes first and
+    // is shown on its own -- the whole scan, merged coarse -- and frames the camera. After
+    // that a REPLACE scan streams with the view (stream.ts): finer where the camera looks
+    // and is close, coarse elsewhere, within LOAD_FACTOR times the Detail budget, and Spark's
+    // LoD decides what of that to draw each frame. An ADD scan (packed before merged
+    // parents) keeps the static plan: its parents are drawn under their children anyway.
     const tileset = await splatTileset(site);
-    const steps = planLoads(tileset.tree, budget * LOAD_FACTOR);
     const scan = new THREE.Group();
     // The pipeline's splats are east/north/up with z up (see splat_tiles.py, whose glTF
     // node matrix makes the same turn for Cesium); three.js is y-up.
     scan.rotation.x = -Math.PI / 2;
     scene.add(scan);
-    const [first, ...rest] = steps;
-    const root = first?.add[0];
-    if (!root) throw new Error("The scan's tileset names no content.");
+    const root = tileset.tree.root;
     const mesh = await tileMesh(tileset.url, root);
-    const shown = new Map<TileNode, SplatMesh>([[root, mesh]]);
     scan.add(mesh);
     scan.updateMatrixWorld(true);
     section.dataset.tiles = root.uri;
@@ -292,58 +292,177 @@ async function showScan(siteId: string): Promise<void> {
     controls.target.copy(center);
     const lookFrom = new THREE.Vector3(0, 0.45, 1).normalize().multiplyScalar(distance);
     camera.position.copy(center).add(lookFrom);
-    camera.near = size / 1000;
+    // Close enough to put the camera a hand's width from a bench in a 150 m site: the near
+    // plane is what clips a close look, and a splat has no depth to fight over.
+    camera.near = size / 20_000;
     camera.far = size * 100;
     camera.updateProjectionMatrix();
-    controls.minDistance = size * 0.05;
+    controls.minDistance = size / 5_000;
     controls.maxDistance = distance * 4;
+    // A zoom goes towards what is under the finger, not the middle of the scan: in a site
+    // rather than an object, that is the only way to get close to anything but the centre.
+    controls.zoomToCursor = true;
+    // For the page's tests (and a console): put the camera `distance` from a point given in
+    // the scan's own east/north/up metres, looking at it as the first view does.
+    (window as unknown as { __viewer?: unknown }).__viewer = {
+      lookAt: (target: [number, number, number], range: number) => {
+        controls.autoRotate = false;
+        controls.target.set(...target).applyMatrix4(scan.matrixWorld);
+        camera.position.copy(controls.target).add(lookFrom.clone().setLength(range));
+        controls.update();
+      },
+    };
     offerCoverage(site, scene, scan, size);
     status.textContent = "Drag to turn · pinch to zoom · two fingers to move";
     window.setTimeout(() => {
       status.hidden = true;
     }, 4_000);
 
-    // One tile at a time: a tile is 1-2 MB, and a phone's connection and decoder are better
-    // spent finishing one than starting four. A step's tiles go on screen together, and
-    // only then does the tile they replace come off.
+    const whole = countTiles(tileset.tree).gaussians;
+    const show = (tile: TileNode, more: SplatMesh): void => {
+      // Tiles arriving while Coverage is on come in faded like the rest.
+      more.opacity = mesh.opacity;
+      scan.add(more);
+    };
+    if (tileset.tree.refine === "REPLACE") {
+      if (!alive) return;
+      streaming = streamWithView(
+        tileset,
+        scan,
+        camera,
+        renderer,
+        budget,
+        { root, mesh },
+        show,
+        (drawn) => {
+          // What is on screen, for the page's tests: a REPLACE parent is gone once its
+          // children are up.
+          section.dataset.tiles = drawn.tiles.map((tile) => tile.uri).join(" ");
+          section.dataset.gaussians = String(drawn.gaussians);
+          el("scan-date").textContent =
+            drawn.gaussians < whole
+              ? `${date(site.createdAt)} · ${drawn.gaussians.toLocaleString("en-US")} of ` +
+                `${whole.toLocaleString("en-US")} splats · finer where you look`
+              : date(site.createdAt);
+        },
+      );
+      return;
+    }
+
+    // ADD: one tile at a time, root first, then coarsest region first (tiles.ts).
+    const [, ...rest] = planAdditive(tileset.tree, budget * LOAD_FACTOR);
+    const shown = new Map<TileNode, SplatMesh>([[root, mesh]]);
     for (const step of rest) {
-      const arrived: [TileNode, SplatMesh][] = [];
       for (const tile of step.add) {
-        if (!alive) break;
-        arrived.push([tile, await tileMesh(tileset.url, tile)]);
-      }
-      if (!alive) {
-        arrived.forEach(([, more]) => more.dispose());
-        return;
-      }
-      for (const [tile, more] of arrived) {
-        more.opacity = mesh.opacity;
-        scan.add(more);
+        if (!alive) return;
+        const more = await tileMesh(tileset.url, tile);
+        if (!alive) {
+          more.dispose();
+          return;
+        }
+        show(tile, more);
         shown.set(tile, more);
       }
-      for (const tile of step.remove) {
-        const gone = shown.get(tile);
-        if (!gone) continue;
-        scan.remove(gone);
-        gone.dispose();
-        shown.delete(tile);
-      }
-      // What is on screen, for the page's tests: a REPLACE parent is gone once its children
-      // are up.
       section.dataset.tiles = [...shown.keys()].map((tile) => tile.uri).join(" ");
-    }
-    const loaded = plannedGaussians(steps);
-    const whole = countTiles(tileset.tree).gaussians;
-    if (whole > loaded) {
-      el("scan-date").textContent =
-        `${date(site.createdAt)} · ${loaded.toLocaleString("en-US")} of ` +
-        `${whole.toLocaleString("en-US")} splats loaded · more with Detail on the phone page`;
     }
   } catch (error) {
     // Also after the first tile is up: a later one failing leaves what arrived on screen.
     status.hidden = false;
     status.textContent = error instanceof Error ? error.message : "The scan could not be shown.";
   }
+}
+
+interface Streaming {
+  /** Once a frame, before rendering: re-plans when the camera moved or a tile arrived. */
+  frame(): void;
+  stop(): void;
+}
+
+/** How often the cut is re-planned while the camera keeps moving. */
+const REPLAN_MS = 150;
+/** Tiles fetched at once: enough to keep a connection busy, few enough that the nearest
+ *  ones are not queued behind a dozen others when the camera turns. */
+const FETCHES_AT_ONCE = 3;
+/** Loaded tiles kept beyond what is drawn, so a look back needs no download. */
+const CACHE_FACTOR = 1.5;
+
+/**
+ * Streams a REPLACE scan with the camera (stream.ts): the cut follows the view within
+ * LOAD_FACTOR times the Detail budget. Re-planning is a pass over a few hundred tiles, so it
+ * runs at most every REPLAN_MS and only when the camera moved or a tile arrived; fetching
+ * and decoding happen off the frame (fetch, then Spark's worker), so the camera never waits
+ * for them -- what is on screen stays until what replaces it is ready.
+ */
+function streamWithView(
+  tileset: { url: string; tree: TileTree },
+  scan: THREE.Group,
+  camera: THREE.PerspectiveCamera,
+  renderer: THREE.WebGLRenderer,
+  budget: number,
+  first: { root: TileNode; mesh: SplatMesh },
+  show: (tile: TileNode, mesh: SplatMesh) => void,
+  report: (drawn: { tiles: TileNode[]; gaussians: number }) => void,
+): Streaming {
+  const streamer = new TileStreamer<SplatMesh>(
+    tileset.tree,
+    {
+      load: (tile) => tileMesh(tileset.url, tile),
+      show,
+      hide: (_tile, mesh) => scan.remove(mesh),
+      dispose: (mesh) => mesh.dispose(),
+      failed: (tile) => console.warn(`Tile ${tile.uri} did not load; its parent stays.`),
+    },
+    {
+      budget: budget * LOAD_FACTOR,
+      cacheBudget: budget * LOAD_FACTOR * CACHE_FACTOR,
+      concurrency: FETCHES_AT_ONCE,
+    },
+  );
+  streamer.adopt(first.root, first.mesh);
+  const frustum = new THREE.Frustum();
+  const matrix = new THREE.Matrix4();
+  const toScan = new THREE.Matrix4();
+  const sphere = new THREE.Sphere();
+  const eye = new THREE.Vector3();
+  const lastPose = new THREE.Matrix4();
+  let arrived = true;
+  let lastPlan = 0;
+  streamer.onArrival = () => {
+    arrived = true;
+  };
+  const view = (): View => {
+    scan.updateMatrixWorld();
+    camera.updateMatrixWorld();
+    toScan.copy(scan.matrixWorld).invert();
+    eye.copy(camera.position).applyMatrix4(toScan);
+    frustum.setFromProjectionMatrix(
+      matrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse),
+    );
+    const height = renderer.domElement.clientHeight || window.innerHeight;
+    return {
+      eye: [eye.x, eye.y, eye.z],
+      projection: height / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2))),
+      visible: (bounds) => {
+        sphere.center.set(...bounds.center).applyMatrix4(scan.matrixWorld);
+        sphere.radius = bounds.radius;
+        return frustum.intersectsSphere(sphere);
+      },
+    };
+  };
+  return {
+    frame: () => {
+      const now = performance.now();
+      const moved = !lastPose.equals(camera.matrixWorld);
+      if (!(arrived || moved) || now - lastPlan < REPLAN_MS) return;
+      lastPlan = now;
+      arrived = false;
+      lastPose.copy(camera.matrixWorld);
+      if (streamer.update(view()) || moved) {
+        report({ tiles: streamer.drawn, gaussians: streamer.drawnGaussians });
+      }
+    },
+    stop: () => streamer.stop(),
+  };
 }
 
 /**
