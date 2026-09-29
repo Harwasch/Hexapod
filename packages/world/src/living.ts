@@ -27,6 +27,14 @@
  * its neighbours, a gust reaching the downwind side `Δx/U` later — and its resonance is a few per
  * cent of the motion; the resonance grows with the wind, as `S_L(f_b)` and the admittances do.
  *
+ * **Many plants, one wind.** A forest rig (`rig.plants`, `tools/captures/scene_plants.py`) is
+ * one rig with a root per plant: every root is an anchor, every plant's trunk its own
+ * whole-plant mode, and one frozen field — read at the tallest plant's length scale — sways
+ * them all, so a gust crosses the yard from plant to plant at the mean speed. What differs per
+ * plant is read from the sidecar's `plants`: the turbulence intensity and length scale at its
+ * own height, which set how hard it sways against its mean lean and how much of the gust
+ * spectrum reaches it. The per-frame work is per joint and per oscillator, never per plant.
+ *
  * `r_i` is the joint's rotation vector: a mean lean about `d_i × ŵ` (the limb's own direction —
  * its chord, attachment to far end, shared by all its joints so it bends in one plane — crossed
  * with downwind, so a limb pointing downwind is not bent by it — Habel eqs. 18–19) plus
@@ -232,6 +240,15 @@ export interface LivingMotion {
   readonly field: FrozenTurbulence;
   /** @internal per branch base: where it reads the wind and how big it is. */
   readonly oscillators: ReadonlyMap<number, OscillatorGeometry>;
+  /**
+   * @internal per node: the along- and across-wind sway ratios and the length scale of the
+   * plant it belongs to — the sidecar's own for a single-plant rig.
+   */
+  readonly plantWind: {
+    readonly along: Float64Array;
+    readonly across: Float64Array;
+    readonly lengthScaleM: Float64Array;
+  };
   /** @internal memoised per season. */
   readonly seasons: Map<Season, SeasonRuntime>;
   /** @internal the last frame's branch sway, so a frame's two halves share one evaluation. */
@@ -265,6 +282,8 @@ function oscillatorGeometry(
 ): Map<number, OscillatorGeometry> {
   const nodes = rig.nodes;
   const branchOf = sidecar.nodes.branch;
+  // A branch base that is itself a root is an anchor: it carries no oscillator.
+  const oscillates = (base: number): boolean => base > 0 && (nodes[base]?.parent ?? -1) >= 0;
   interface Accumulator {
     readonly sum: [number, number, number];
     count: number;
@@ -301,7 +320,7 @@ function oscillatorGeometry(
     const p = nodes[i]?.position ?? [0, 0, 0];
     // Every oscillator this joint rides: its own, then the one its oscillator hangs from, ...
     let base = branchOf[i] ?? 0;
-    while (base > 0) {
+    while (oscillates(base)) {
       grow(base, p, i);
       const attach = nodes[base]?.parent ?? 0;
       grow(base, nodes[attach]?.position ?? p, -1);
@@ -369,12 +388,24 @@ export function createLivingMotion(rig: MotionRig, sidecar: MotionSidecar): Livi
   // Sidecars written before the length scale was recorded get EN eq. B.1 at their height.
   const lengthScaleM = sidecar.wind.lengthScaleM ?? turbulenceLengthScaleM(sidecar.treeHeightM);
   const field = frozenTurbulence(sidecar.seed);
+  const count = rig.nodes.length;
+  const plantWind = {
+    along: new Float64Array(count).fill(sidecar.wind.turbulence.along),
+    across: new Float64Array(count).fill(sidecar.wind.turbulence.across),
+    lengthScaleM: new Float64Array(count).fill(lengthScaleM),
+  };
+  for (const plant of sidecar.plants ?? []) {
+    plantWind.along.fill(plant.turbulence.along, plant.nodeStart, plant.nodeEnd);
+    plantWind.across.fill(plant.turbulence.across, plant.nodeStart, plant.nodeEnd);
+    plantWind.lengthScaleM.fill(plant.lengthScaleM, plant.nodeStart, plant.nodeEnd);
+  }
   return {
     rig,
     sidecar,
     limbDirection,
     lengthScaleM,
     field,
+    plantWind,
     oscillators: oscillatorGeometry(rig, sidecar),
     seasons: new Map(),
     lastSway: { key: "", sway: undefined },
@@ -417,7 +448,8 @@ function seasonRuntime(motion: LivingMotion, season: Season): SeasonRuntime {
   const branches = new Map<number, BranchRuntime>();
   const seed = sidecar.seed;
   sidecar.nodes.branch.forEach((base, i) => {
-    if (i === 0 || branches.has(base)) return;
+    // A root is an anchor, never an oscillator: node 0, and every plant's root in a forest.
+    if (i === 0 || branches.has(base) || (motion.rig.nodes[i]?.parent ?? -1) < 0) return;
     const isTree = sidecar.nodes.mode[i] === 0;
     const summerHz = sidecar.nodes.frequencyHz[i] ?? 1;
     const summerZeta = sidecar.nodes.damping[i] ?? 0.1;
@@ -482,7 +514,7 @@ function branchFactors(
     geometry?.heightM ?? 0,
     (geometry?.staticTipM ?? 0) * ratio * ratio,
     wind.speedMps,
-    motion.lengthScaleM,
+    motion.plantWind.lengthScaleM[branch.base] ?? motion.lengthScaleM,
   );
 }
 
@@ -512,8 +544,7 @@ function branchSway(
   const { sidecar } = motion;
   const runtime = seasonRuntime(motion, wind.season);
   const w = downwindOf(wind.bearingDeg);
-  const alongRatio = sidecar.wind.turbulence.along;
-  const acrossRatio = sidecar.wind.turbulence.across;
+  const { along: alongOf, across: acrossOf } = motion.plantWind;
   const background = new Float64Array(2);
   const sway = new Map<number, BranchSway>();
   // The field carried downwind to time t: every branch reads it at its own point.
@@ -527,6 +558,8 @@ function branchSway(
     background[1] = 0;
     const at = phases.get(branch.base);
     if (at !== undefined) backgroundResponse(at, clock, branch.frequencyHz, background);
+    const alongRatio = alongOf[branch.base] ?? sidecar.wind.turbulence.along;
+    const acrossRatio = acrossOf[branch.base] ?? sidecar.wind.turbulence.across;
     const gust = alongRatio * b * (background[0] ?? 0);
     sway.set(branch.base, {
       along: gust + alongRatio * r * sampleAt(branch.texture, branch.along, t),
@@ -733,7 +766,10 @@ export function livingMaxNodeAngles(motion: LivingMotion, wind: LivingWind): num
     const gain = sidecar.nodes.gainRad[i] ?? 0;
     if (node.parent < 0 || gain === 0) return 0;
     const branch = runtime.branches.get(sidecar.nodes.branch[i] ?? i);
-    const turbulence = sidecar.wind.turbulence;
+    const turbulence = {
+      along: motion.plantWind.along[i] ?? sidecar.wind.turbulence.along,
+      across: motion.plantWind.across[i] ?? sidecar.wind.turbulence.across,
+    };
     let sway = 0;
     if (branch !== undefined) {
       // The background is soft-clipped to BACKGROUND_SOFT_CLIP; the resonance is a texture read.

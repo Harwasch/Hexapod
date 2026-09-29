@@ -549,6 +549,102 @@ Two things only a human on real hardware can check, as before: that the splat ti
 rather than a generic sway — headless GL here is SwiftShader, and the stale draw order the
 sorter cannot see needs a human eye.
 
+## Every plant in a capture
+
+`real_tree.py` and `skeleton.py` rig **one** tree that is the whole tileset. A capture of a park
+— the next one is an upload of Fort Clatsop National Historical Park: low shrubs, leafy trees,
+bare trunks ("snags"), lawn, paths, a fort — is many plants beside things that must never move.
+`scene_plants.py` is the scene step for it: geometry and colour only, every threshold derived
+from the capture or cited, nothing about any one place. It takes a metric, east-north-up splat —
+`canonical.ply`, as `splat-ingest` and `photo-reconstruct` leave it — and the tiles the
+`package` stage packed from it, and writes beside the tiles:
+
+| File          | What it is                                                                                                                                                  |
+| ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `rig.json`    | one **forest rig**: a static anchor, then each plant's joints as a run with its own root (`plants`); stamped with every tile's checksum like `rig_tiles.py` |
+| `motion.json` | the Living Mode sidecar for every plant (`hexapod.motion` v1, plus each plant's height and wind)                                                            |
+| `plants.json` | the **plant binding**: per tile checksum, which plant each gaussian belongs to, or none                                                                     |
+| `scene.json`  | classes, plants (stem, height, crown polygon and radius, rig), every threshold with its source, and — on a synthetic scene — the score                      |
+| `ground.f32`  | the ground model: terrain heights on the grid `scene.json` describes                                                                                        |
+| `classes.u8`  | the class of every PLY row: tree, shrub, snag, grass/low, ground, other-static                                                                              |
+
+**How it decides**, in order (each rule's source is in `scene.json`'s `thresholds` and in
+[ADR 0008's multi-plant addendum](DECISIONS/0008-living-mode.md)):
+
+1. **Ground** — the lowest splat of every cell (the cell that holds 8 splats on average,
+   `splat_ground`'s own minimum), then the highest surface below all of them whose slope never
+   exceeds the capture's own cell-to-cell slope, median + 3σ (Vosselman's slope-based filter).
+   Heights above it; the ground layer is median + 3σ of the heights where it rests.
+2. **Green** — ExG on chromatic coordinates, split by Otsu on this capture's own histogram.
+3. **Objects** — everything above the ground layer, linked at 4.5× the point spacing where
+   each splat stands (skeleton.py's factor, made local), kept where it reaches the FAO's 0.5 m.
+   Tree tops are local maxima within half Popescu & Wynne's crown width for their height; a
+   piece that does not reach the ground joins the plant that holds it up.
+4. **Classes** — leafy (a majority green) and ≥ 5 m a tree, 0.5–5 m a shrub; not leafy, tree
+   height and narrower than half a live crown a snag; anything else still. A plant owns what
+   stands under its foliage.
+5. **Rigs** — skeleton.py's banded skeleton for a tree dense enough for it (splats per metre of
+   height at least those of the thinnest cloud its recovery is tested on); a few-bone crown rig
+   for the rest and for every shrub; a snag's trunk axis for a snag.
+
+**Scored on a yard where the answer is known.** `synthetic_yard.py` builds three leafy trees
+(one sparse), five shrubs of 0.6–2 m, two snags, a building, a lawn and a path, and writes the
+class and plant of every splat; `tests/test_scene_plants.py` scores the step against it and
+checks the committed fixture (`data/tiles/synthetic-yard/splat`, 15 tiles, 43,337 gaussians)
+is byte-identical to a fresh run:
+
+```bash
+cd tools/captures
+uv run python synthetic_yard.py ../../data/tiles/synthetic-yard   # regenerates, and scores
+```
+
+| Measure                       | Synthetic yard                                                       |
+| ----------------------------- | -------------------------------------------------------------------- |
+| per-class IoU over splats     | tree 0.998, shrub 0.992, snag 0.984, grass/low 0.985                 |
+|                               | ground 0.930, other-static 0.859                                     |
+| instances found / true        | trees 3 / 3, shrubs 5 / 5, snags 2 / 2                               |
+| height error, mean and max    | 0.04 m, 0.16 m (stems within 0.07 m)                                 |
+| rigs                          | 2 skeleton trees, 1 crown tree, 5 crown shrubs, 2 trunks: 406 joints |
+| at half the density           | trees and snags exact; two shrubs 36 cm apart merge                  |
+| on ground sloping 8 % and 5 % | every plant found                                                    |
+| scene step, 43k splats        | about 1 s, plus the packer's plan for the binding                    |
+| nine yards, 390k splats       | 90 of 90 plants, 12 s and 0.4 GB peak with the tiles packed          |
+
+### Running it on an uploaded capture
+
+Not yet done on any real capture. The capture's `canonical.ply` is served by the API
+(`GET /api/v1/captures/{id}/splat.ply` redirects to a signed URL) and its tiles are public, so:
+
+```bash
+cd tools/captures
+# 1. The splat and the tiles its run published. Refuses a capture whose scale was never
+#    resolved (scaleSource "unresolved") unless --assume-metric: every threshold is in metres.
+uv run python fetch_capture.py <capture-id> work/ [--api https://twin-api.fly.dev] [--assume-metric]
+# 2. The scene step, checked against those tiles: it replays the packer's plan over the PLY
+#    and refuses if any published tile does not hold exactly the gaussians the plan puts there.
+uv run python scene_plants.py work/canonical.ply --tiles work/tiles --out work/living
+# 3. Read work/living/scene.json: the classes, the plants, Otsu's effectiveness.
+```
+
+Without the published tiles, `scene_plants.py canonical.ply --out work/splat --lat … --lon …`
+re-packs them with the `package` stage's own parameters (100,000 a tile, opacity 0.02); the
+packer is deterministic, so the checksums are those of the published tiles.
+
+**Publishing** puts `rig.json`, `motion.json` and `plants.json` beside the published
+`tileset.json` and points the splat asset at the rig (`renderConfig.rigUrl: "rig.json"`,
+`PATCH /api/v1/assets/{id}` with the write token); the viewer then attaches the forest like any
+rig, and refuses it if a tile's checksum is missing from the binding. The workflow does all of
+it: `.github/workflows/living-plants.yml`, dispatched with the capture's id (or a commit carrying
+`[plants|capture=<uuid>]`), keeps everything as the `living-plants` artifact with the classes and
+plants in the job summary, and publishes only when asked (`publish`, or `|publish` in the token).
+
+**What to expect to go wrong on a real park**, and what the report says about it: Otsu can split
+two greens in a capture that is almost all vegetation (read `thresholds.exgThreshold`'s
+`effectiveness`); a bank steeper than the capture's own slope statistics reads as an object; a
+canopy seen only from above has no stems to root its crown lobes, so wide crowns may split; a
+leafless deciduous tree and a flagpole are classified as what their colour and shape say (still,
+and a snag).
+
 ## What `site.json` records
 
 A capture's `site.json` is what the seeder builds its site from: boundary (convex hull of

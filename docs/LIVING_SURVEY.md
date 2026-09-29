@@ -447,6 +447,57 @@ If a person on real hardware finds the artifact objectionable, the cheap fix is 
 few frames from CPU-evaluated positions of a subsample, or of the whole set in a worker; it
 belongs in the engine patch, not in `_positions`.
 
+## Many plants in one tileset
+
+A capture of a park is many plants beside buildings, paths and lawn, in one level-of-detail
+tileset. [ADR 0008's multi-plant addendum](DECISIONS/0008-living-mode.md) has the decision and
+the sources; this is how the pieces fit.
+
+**The rig is a forest.** `tools/captures/scene_plants.py` finds the plants (ground, greenness,
+instances — [CAPTURES.md](CAPTURES.md#every-plant-in-a-capture)) and writes one rig for the
+tileset: node 0 is a **static anchor**, then each plant's joints as a contiguous run whose first
+node is that plant's root. `rig.plants` lists the runs (`id`, `class`, `nodeStart`, `nodeEnd`);
+`validateRig` holds every joint to its own plant (a parent earlier in the same run) and every
+joint outside a run to being an anchor. `living.ts` treats every root as node 0 was treated: an
+anchor whose transform is the identity by value and which carries no oscillator; each plant's
+trunk is its own whole-plant mode. The sidecar's optional `plants` carries each plant's height,
+turbulence ratios and length scale, so a 1 m shrub feels EN 1991-1-4's turbulence at its height
+(held at `z_min` = 5 m) and a 12 m tree at its own, while one frozen field — at the tallest
+plant's length scale — carries the gusts across all of them.
+
+**The binding says which splat is which plant.** For one tree every splat in the tileset is the
+tree, and binding from position alone is right (above). In a scene the joints nearest a brick
+are a crown's, so which splat belongs to which plant — or to none — is what the scene step
+measured, and it travels with the tiles: `plants.json`, the rig's `binding`, per tile **keyed by
+the tile's checksum** — the same digest that proves the tile's identity — as run-length pairs of
+labels in the tile's own gaussian order (0 static, `k` plant `k − 1`). `bindTile` looks the tile
+up after proving it, refuses a tile the binding does not list, and skins with
+`skinSplatsToPlants`: a static gaussian gets the anchor with weight 1023, a plant's gaussian
+exactly what `skinSplatsToNodes` gives it against that plant's joints alone. Merged parents were
+labelled offline by replaying the packer's plan: a parent is a plant's only if every original
+merged into it is.
+
+**Static is pinned, not merely still.** `SplatDeformer` pins every anchor (`pinStaticNodes`,
+after `markMovingNodes`), whatever transform or flutter the motion model hands it — the legacy
+model, which knows nothing of plants, included. On the CPU path a splat whose weighted nodes are
+all at rest gets the engine's own bytes back (`resolveBakedPositions`); on the GPU path the
+anchor's node rows are four texels of exact zeros and the shader returns the fetched position
+untouched. `SplatDeformer.staticAudit()` checks it splat by splat over a live snapshot — the
+buffer the CPU path uploaded, or the shader's transcription over the GPU path's motion texture —
+and `e2e/livingSurveyYard.spec.ts` asserts zero static splats moved on both paths, near and far,
+every frame. A forest rig without its binding is refused (`binding`), and the upright check is
+not applied to a forest: a scene is not a standing tree.
+
+**What it costs.** Binding is per tile load: 0.75 µs a gaussian warm in Node, 1.7 µs cold in
+the browser (43,337 gaussians of the synthetic yard in 74 ms, reported by the deformer as
+`lastBoundTiles`, `lastBoundSplats`, `lastBindMs`). The per-frame model is per joint and per
+oscillator: 0.8 ms for the yard's 406 joints; 11–15 ms for 200 plants and 8,101 joints (forty
+of them skeleton trees); 4.4 ms for 203 shrubs and snags on 2,031 joints — most of it each
+oscillator reading the 320-mode frozen field. Evaluating only the plants the current snapshot
+references is the obvious next step for a large park. The GPU path's per-frame upload is the
+node rows (512 KB at 8,101 joints); its per-frame `apply` on the yard measured 0.15 ms in the
+browser, the CPU path's 0.59 ms.
+
 ## How the tree moves: resonant modes, a gust field, and per-splat flutter
 
 Three layers, each answering a defect the one before it could not:
@@ -906,6 +957,8 @@ Worth writing down, because the fixture is tidy in ways a real extraction will n
 | `apps/web/src/cesium/LivingSurveyManager.ts`                                                        | wind, the tick, attach/detach as sites load                                                                                              |
 | `apps/web/src/state/living.ts`                                                                      | wind state and status, and the staleness yardstick                                                                                       |
 | `apps/web/src/features/living/SimulatedBadge.tsx`                                                   | the ambient label                                                                                                                        |
+| `tools/captures/scene_plants.py`, `synthetic_yard.py`, `fetch_capture.py`                           | the scene step (ground, classes, plants, forest rig, plant binding), its scored yard, and fetching an upload for it                      |
+| `packages/world/src/plantBinding.ts`                                                                | the plant binding: parsing, per-tile labels, skinning to a plant's own joints                                                            |
 | `tools/captures/rig_tiles.py`                                                                       | stamps a rig with a level-of-detail tileset's per-tile checksums                                                                         |
 | `patches/@cesium__engine@26.3.0.patch`                                                              | the `vertexMotion` hook (and the unrelated terrain-fill guard)                                                                           |
 

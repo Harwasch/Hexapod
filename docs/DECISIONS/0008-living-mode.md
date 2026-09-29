@@ -311,3 +311,105 @@ Not settled, and worth saying:
 - **The amplitudes are still the previous addendum's estimates** (0.02 / 0.05 rad at 10 m/s). At
   2 m/s a Minnetonka limb's own tip now moves ~1.4 mm RMS, slowly. Whether that reads as gentle
   swaying or as too little is for eyes.
+
+## Addendum (2026-09-29): many plants in one tileset — trees, shrubs, snags, and everything else still
+
+The next real capture is an outdoor splat of a park (Fort Clatsop National Historical Park, an
+upload through `splat-ingest`): low shrubs, leafy trees, bare trunks without branches or leaves
+("snags"), paths, lawn and buildings, all in one level-of-detail tileset. Every rule so far was
+for one tree that is the whole tileset. What changed, none of it tuned to that park — every
+threshold is derived from the capture or cited, and `tools/captures/scene_plants.py` writes each
+one, with its source, into the `thresholds` of the `scene.json` beside the tiles.
+
+**A scene step finds the plants**, from geometry and colour only (the scene-understanding plan's
+"Path B"): a ground surface, a class per splat, plant instances.
+
+| Rule                                                                                                                                                                                                                           | Basis                                                                                                          | Status                              |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
+| Ground: the highest surface below every cell's lowest splat whose slope never exceeds S (a point is ground when nothing within d lies more than S·d below it); S = median + 3σ (MAD) of the capture's own adjacent-cell slopes | Vosselman 2000, slope-based filtering (IAPRS 33(B3)); 3σ clipping                                              | cited method, derived bound         |
+| Ground cell: the plan cell holding 8 splats on average                                                                                                                                                                         | the pipeline's `splat_ground` `min_points`                                                                     | derived                             |
+| Ground layer: median + 3σ of heights above the surface where it rests, floored at the point spacing                                                                                                                            | robust clipping                                                                                                | derived                             |
+| Green: ExG = 2g − r − b on chromatic coordinates above the Otsu threshold of the capture's own histogram (VARI reported beside it)                                                                                             | Woebbecke et al. 1995; Otsu 1979; Gitelson et al. 2002                                                         | cited                               |
+| Shrub 0.5–5 m, tree ≥ 5 m                                                                                                                                                                                                      | FAO FRA 2020 Terms and Definitions                                                                             | cited                               |
+| Objects: splats above the ground layer, linked within 4.5× the **local** point spacing of either splat (12 neighbours); an object reaches 0.5 m with at least 8 splats                                                         | skeleton.py's link factor and cluster size, made local so a scene of many densities neither welds nor shatters | derived                             |
+| Tree tops: local maxima within CW(H)/2, CW = 2.51503 + 0.00901 H² (mixed stands), at tree heights only; marker-controlled watershed of the canopy height                                                                       | Popescu & Wynne 2004, PE&RS 70(5)                                                                              | cited (search summary, not the PDF) |
+| A plant stands on the ground: an object with no splat within 0.5 m of it joins the rooted object under its hull (narrower than itself), else the nearest one closer than its own size                                          | physical; guards the window's over-segmentation of wide crowns, and trunks a capture leaves sparse             | design choice                       |
+| Leafy: a majority of the instance's splats green. Snag: tree height, not leafy, plan spread < CW(H)/2 (lost ≥ ¾ of the width a live crown of that height has). Anything else not leafy stays still                             | majority vote; Popescu & Wynne for the live crown                                                              | chosen rules on cited inputs        |
+| A plant owns what stands under its foliage: the plan hull of its green splats. A wall a crown touches stays still                                                                                                              | —                                                                                                              | design choice                       |
+| Rig: skeleton.py's banded skeleton when the instance has ≥ 464 splats per metre of height (12,000 ÷ 4 over 6.46 m, the thinnest cloud its recovery is tested on); a crown rig otherwise                                        | `tests/test_skeleton.py`, the quarter-density test                                                             | derived                             |
+
+**Motion per class**, on the existing allometric rules (`motion_params.py`), plant by plant:
+
+| Class      | Rig                                                                                                                 | Motion                                                                                                                                                                                                                                                                               | Status        |
+| ---------- | ------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------- |
+| leafy tree | skeleton (dense) or crown rig                                                                                       | the limb model above, unchanged                                                                                                                                                                                                                                                      | as above      |
+| shrub      | crown rig: a stem through crown base and centroid to top, one two-joint limb per quarter of the crown (≤ 12 joints) | the same laws at its height: `f0 = 2.4/√H`, 2–3 Hz for 0.6–2 m (extrapolated below the 4.7 m of Jackson's trees; de Langre 2019 puts plant frequencies between about 1 and 10 Hz from wheat to trees); the same bend angles on a short lever, so a small swing; flutter at every tip | estimate      |
+| snag       | trunk: the ground and each quarter of its height                                                                    | the trunk mode alone, its bend × `D/(D + CW(H)/2)` — its frontal area against a crowned tree's of the same height (deflection linear in drag, drag linear in frontal area; the crown over the upper half and equal drag coefficients are estimates) — and **no flutter**             | estimate      |
+| static     | one anchor node                                                                                                     | identity, pinned by the deformer on both paths whatever the model says                                                                                                                                                                                                               | design choice |
+
+**One rig, one sidecar, one binding per tileset.** The rig is a _forest rig_: node 0 a static
+anchor, then each plant's joints as a contiguous run whose first node is that plant's root
+(`rig.plants`: id, class, `[nodeStart, nodeEnd)`), every root an anchor. The motion sidecar
+stays `hexapod.motion` **version 1**: per-node columns as before (branch indices into the whole
+rig), plus an optional `plants` array — each plant's height and the EN 1991-1-4 turbulence
+ratios and length scale at _its own_ height — while one frozen field, read at the tallest
+plant's length scale, sways them all: one wind, gusts crossing the yard at the mean speed. Old
+sidecars load unchanged. The **plant binding** (`plants.json`, `hexapod.plants` v1) is new: per
+tile, keyed by the tile's checksum, run-length pairs of plant labels in the tile's gaussian
+order — 0 static, `k` plant `k − 1`. It is computed by replaying the packer's own plan
+(`splat_tiles.prepare`): a leaf's labels are its rows', and a merged parent takes a plant's
+label only when **every** original merged into it is that plant's. This departs from the
+multi-tile rule "bind from position at load" (LIVING_SURVEY.md): for one tree nothing else is in
+the tileset, but in a scene which splat is a plant is a measurement that position cannot
+recover, so it travels with the tiles and is proven per tile.
+
+**Runtime.** A splat labelled static is bound with weight 1 to the anchor, which the deformer
+pins (`pinStaticNodes`): the CPU path writes the engine's own bytes back for it, the GPU path's
+node rows are exact zeros and the shader returns the fetched position — bit-exact, not merely
+still. A plant's splat is skinned to its four nearest joints _of that plant_
+(`skinSplatsToPlants`: exactly `skinSplatsToNodes` on the plant's own joints). A forest rig
+without its binding is refused (`binding`), and so is a tile its binding does not list
+(`checksum`). The upright check is not applied to a forest (a scene is not a standing tree); the
+frame check stands.
+
+**Measured** on the synthetic yard (`tools/captures/synthetic_yard.py`: three leafy trees of 7,
+9.8 and 11.9 m — the last at a quarter of the others' density — five shrubs of 0.6–2 m, two snags
+of 7 and 10 m, a building, lawn and a path; 43,337 splats in 15 tiles):
+
+- per-class IoU over splats: tree 0.998, shrub 0.992, snag 0.984, grass/low 0.985, ground
+  0.930, other-static 0.859; instances 3 of 3 trees, 5 of 5 shrubs, 2 of 2 snags; height error
+  mean 0.04 m, max 0.16 m; stems within 0.07 m. At half the density trees and snags are exact,
+  two shrubs 36 cm apart merge (four point spacings, inside the link) and shrub IoU is 0.88; on
+  ground sloping 8 % and 5 % every instance is found.
+- rigs: 406 joints (skeleton trees of 154 and 169, a crown tree and five crown shrubs of 12, two
+  snags of 5); rig 63.5 KB, sidecar 24.5 KB, binding 2.4 KB for 43k gaussians.
+- whole-plant frequencies: trees 0.70–0.90 Hz, shrubs 1.7–3.0 Hz, snags 0.76–0.91 Hz. Top
+  deflection at 6.3 m/s, mean over ten minutes: trees 2.7–7.0 cm, shrubs 0.4–1.2 cm, snags
+  0.8–1.1 cm; at 12 m/s trees 9.6–24 cm, shrubs 1.3–4.0 cm, snags 2.7–3.8 cm.
+- static splats: 17,808 of the near view's 43,337; none moved, checked splat by splat on both
+  paths, in unit tests and in the browser (`e2e/livingSurveyYard.spec.ts`).
+
+**Cost.** Binding a tile: 0.75 µs a gaussian warm in Node (15 tiles, 47k gaussians, 36 ms), 1.7
+µs cold in the browser (43k gaussians in 74 ms). Per frame the model is per joint and per
+oscillator, never per plant: 406 joints 0.8 ms; 200 plants (the yard twenty times, forty of
+them skeleton trees) 8,101 joints 11–15 ms; 203 shrubs and snags, 2,031 joints, 4.4 ms (Node, a
+shared 4-core machine). Most of it is each oscillator reading the 320-mode frozen field. The GPU
+path's per-frame upload is the node rows: 32 rows of 1,024 texels at 8,101 joints, 512 KB.
+
+Not settled, and worth saying:
+
+- **The per-frame cost of a large park.** Fifteen milliseconds of main thread for 200 plants is
+  too much beside everything else a frame does. The next step is to evaluate only the plants whose
+  joints the current snapshot's splats reference (a far view draws merged parents bound to few
+  plants), or to move the model to a worker; neither is done.
+- **Greenness is one threshold per capture.** A capture that is nearly all vegetation — dark
+  conifers over bright lawn — could put Otsu's split between the two greens; the report carries
+  Otsu's effectiveness and the VARI agreement so a reader can see it. A leafless deciduous tree is
+  neither leafy nor narrow: it stays still (conservative, and wrong in winter).
+- **The ground under a closed canopy seen only from above** is interpolated by the slope bound
+  from wherever ground was seen; a bank steeper than the capture's own slope statistics reads as
+  an object. Tall non-green poles pass the snag rule and sway about a centimetre.
+- **Crowns wider than Popescu & Wynne's average** would over-segment without the rooting rule, and
+  a canopy seen only from above has no stems for that rule to use: it keeps its tops as they are.
+- **No real capture has been through it.** The workflow that runs it on an upload exists
+  (`.github/workflows/living-plants.yml`); it has not been run.
