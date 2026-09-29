@@ -67,11 +67,37 @@ export interface SkeletonNode {
   readonly maxAngleRad?: number;
 }
 
+/** What kind of plant a forest rig's plant is (`tools/captures/scene_plants.py`). */
+export type PlantClass = "tree" | "shrub" | "snag";
+
+export const PLANT_CLASSES: readonly PlantClass[] = ["tree", "shrub", "snag"];
+
+/**
+ * One plant of a **forest rig**: a rig for a whole scene, one root per plant.
+ *
+ * A capture of a park is many plants beside buildings, paths and lawn. Its rig holds every
+ * plant's joints, each plant a contiguous run `[nodeStart, nodeEnd)` whose first node is that
+ * plant's root (parent `-1`) and whose other nodes hang from nodes of the same run. Every node
+ * outside all runs is a **static anchor** (parent `-1`, no plant): the splats bound to it never
+ * move, whatever the wind and whatever the motion model, because the deformer pins it
+ * (`SplatDeformer`). Which splat belongs to which plant is not geometric — a wall beside a
+ * crown is not the crown's — so it travels in the binding sidecar the rig points at
+ * (`bindingPath`, `plantBinding.ts`), and a splat is skinned only to its own plant's joints.
+ */
+export interface RigPlant {
+  readonly id: string;
+  readonly class: PlantClass;
+  readonly nodeStart: number;
+  readonly nodeEnd: number;
+}
+
 /** A complete rig. Round-trips losslessly through `JSON.stringify` / `JSON.parse`. */
 export interface MotionRig {
   /**
-   * Nodes in topological order: `nodes[i].parent < i` always, and `nodes[0]` is the sole root.
-   * The root is the anchor — its transform is exactly identity at every time and every wind.
+   * Nodes in topological order: `nodes[i].parent < i` always, and `nodes[0]` is a root.
+   * A root is an anchor — its transform is exactly identity at every time and every wind.
+   * A single-plant rig has exactly one root, `nodes[0]`; a forest rig (`plants`) has one per
+   * plant plus its static anchors.
    */
   readonly nodes: readonly SkeletonNode[];
   /**
@@ -103,6 +129,42 @@ export interface MotionRig {
    * not there. See `motionParams.ts` and docs/DECISIONS/0008-living-mode.md.
    */
   readonly motionPath?: string;
+  /**
+   * The plants of a forest rig, in order (JSON key `plants`). Absent for a single-plant rig.
+   * See {@link RigPlant}.
+   */
+  readonly plants?: readonly RigPlant[];
+  /**
+   * Where a forest rig's per-splat plant binding sits, relative to the rig file (JSON key
+   * `binding`): which gaussian of every tile belongs to which plant, and which to none. A
+   * forest rig without one does not move: without it a wall would be skinned to the crown
+   * beside it. See `plantBinding.ts`.
+   */
+  readonly bindingPath?: string;
+}
+
+/** Whether `rig` is a forest rig: many plants in one rig, with static anchors. */
+export function isForestRig(rig: MotionRig): boolean {
+  return rig.plants !== undefined;
+}
+
+/**
+ * Per node, `1` for a static anchor — a node of a forest rig outside every plant, whose
+ * splats never move — and `0` otherwise. All zeros for a single-plant rig.
+ */
+export function staticAnchors(rig: MotionRig): Uint8Array {
+  const out = new Uint8Array(rig.nodes.length);
+  const plants = rig.plants;
+  if (plants === undefined) return out;
+  out.fill(1);
+  for (const plant of plants) out.fill(0, plant.nodeStart, plant.nodeEnd);
+  return out;
+}
+
+/** The first static anchor of a forest rig — where static splats are bound — or -1. */
+export function staticAnchorNode(rig: MotionRig): number {
+  if (rig.plants === undefined) return -1;
+  return staticAnchors(rig).indexOf(1);
 }
 
 /** The angular limit in force for a node, radians. */
@@ -184,6 +246,40 @@ export function validateRig(rig: MotionRig): string[] {
       issues.push("tileChecksums must all be checksumPositions digests (fnv1a32:<n>:<hex8>)");
     }
   }
+  // Read loosely: this is what stands between parsed JSON and the typed value.
+  const rawPlants: unknown = rig.plants;
+  const plants: readonly RigPlant[] | undefined = Array.isArray(rawPlants)
+    ? (rawPlants as readonly RigPlant[])
+    : undefined;
+  /** Per node, the index of its plant in a forest rig, or -1. */
+  const owner = new Int32Array(nodes.length).fill(-1);
+  if (rawPlants !== undefined) {
+    if (plants === undefined) {
+      issues.push("plants, when present, must be an array");
+    } else {
+      plants.forEach((plant, k) => {
+        const { nodeStart: start, nodeEnd: end } = plant;
+        if (typeof plant.id !== "string" || plant.id.length === 0)
+          issues.push(`plant ${k}: empty id`);
+        if (!PLANT_CLASSES.includes(plant.class))
+          issues.push(`plant ${k}: class must be tree, shrub or snag`);
+        if (
+          !Number.isInteger(start) ||
+          !Number.isInteger(end) ||
+          start < 1 ||
+          end <= start ||
+          end > nodes.length
+        ) {
+          issues.push(`plant ${k}: node range [${start}, ${end}) is not inside the rig`);
+          return;
+        }
+        for (let i = start; i < end; i += 1) {
+          if ((owner[i] ?? -1) >= 0) issues.push(`node ${i} belongs to two plants`);
+          owner[i] = k;
+        }
+      });
+    }
+  }
   const seenIds = new Set<string>();
   for (let i = 0; i < nodes.length; i += 1) {
     const node = nodes[i];
@@ -195,10 +291,24 @@ export function validateRig(rig: MotionRig): string[] {
     if (typeof node.id !== "string" || node.id.length === 0) issues.push(`${where}: empty id`);
     if (seenIds.has(node.id)) issues.push(`${where}: duplicate id`);
     seenIds.add(node.id);
+    const plant = rawPlants === undefined ? -1 : (owner[i] ?? -1);
+    const start = plant >= 0 ? (plants?.[plant]?.nodeStart ?? -1) : -1;
     if (i === 0) {
       if (node.parent !== -1) issues.push(`${where}: the first node must be the root (parent -1)`);
-    } else if (!Number.isInteger(node.parent) || node.parent < 0 || node.parent >= i) {
-      issues.push(`${where}: parent ${node.parent} must be an earlier index (topological order)`);
+    } else if (plants !== undefined && plant < 0) {
+      if (node.parent !== -1) issues.push(`${where}: a node outside every plant must be an anchor`);
+    } else if (plants !== undefined && i === start) {
+      if (node.parent !== -1) issues.push(`${where}: a plant's first node must be its root`);
+    } else if (
+      !Number.isInteger(node.parent) ||
+      node.parent < Math.max(0, start) ||
+      node.parent >= i
+    ) {
+      issues.push(
+        `${where}: parent ${node.parent} must be an earlier index (topological order)${
+          plants === undefined ? "" : " of its own plant"
+        }`,
+      );
     }
     if (!isVec3(node.position)) issues.push(`${where}: position must be three finite numbers`);
     if (!Number.isFinite(node.radius) || node.radius < 0)
@@ -212,18 +322,28 @@ export function validateRig(rig: MotionRig): string[] {
       issues.push(`${where}: maxAngleRad, when present, must be > 0`);
     }
   }
-  const motionPath = rig.motionPath;
-  if (
-    motionPath !== undefined &&
-    (typeof motionPath !== "string" ||
-      motionPath.length === 0 ||
-      motionPath.includes("..") ||
-      motionPath.startsWith("/") ||
-      motionPath.includes(":"))
-  ) {
+  if (!isSidePath(rig.motionPath)) {
     issues.push("motion, when present, must be a relative path beside the rig");
   }
+  if (!isSidePath(rig.bindingPath)) {
+    issues.push("binding, when present, must be a relative path beside the rig");
+  }
+  if (rig.bindingPath !== undefined && plants === undefined) {
+    issues.push("binding is a forest rig's: a rig with a binding must list its plants");
+  }
   return issues;
+}
+
+/** Whether `path` is absent or a plain relative path beside the rig: no `..`, no scheme. */
+function isSidePath(path: string | undefined): boolean {
+  return (
+    path === undefined ||
+    (typeof path === "string" &&
+      path.length > 0 &&
+      !path.includes("..") &&
+      !path.startsWith("/") &&
+      !path.includes(":"))
+  );
 }
 
 /** Throws with every problem listed, or returns the rig unchanged. */
@@ -253,6 +373,17 @@ export function serializeRig(rig: MotionRig): string {
       return out;
     }),
     ...(rig.motionPath === undefined ? {} : { motion: rig.motionPath }),
+    ...(rig.plants === undefined
+      ? {}
+      : {
+          plants: rig.plants.map((plant) => ({
+            id: plant.id,
+            class: plant.class,
+            nodeStart: plant.nodeStart,
+            nodeEnd: plant.nodeEnd,
+          })),
+        }),
+    ...(rig.bindingPath === undefined ? {} : { binding: rig.bindingPath }),
   });
 }
 
@@ -312,9 +443,32 @@ export function parseRig(text: string): MotionRig {
       ? base
       : { ...base, tileChecksums: rawTiles.map((value) => asString(value)) };
   const motion = root.motion;
-  if (motion === undefined) return assertValidRig(rig);
-  if (typeof motion !== "string") throw new Error("motion rig: motion must be a string path");
-  return assertValidRig({ ...rig, motionPath: motion });
+  if (motion !== undefined && typeof motion !== "string")
+    throw new Error("motion rig: motion must be a string path");
+  const binding = root.binding;
+  if (binding !== undefined && typeof binding !== "string")
+    throw new Error("motion rig: binding must be a string path");
+  const rawPlants = root.plants;
+  if (rawPlants !== undefined && !Array.isArray(rawPlants))
+    throw new Error("motion rig: plants must be an array");
+  const plants = (rawPlants as unknown[] | undefined)?.map((raw, k): RigPlant => {
+    const plant = asRecord(raw, `plants[${k}]`);
+    const klass = plant.class;
+    if (!PLANT_CLASSES.includes(klass as PlantClass))
+      throw new Error(`motion rig: plants[${k}].class is not a known plant class`);
+    return {
+      id: asString(plant.id),
+      class: klass as PlantClass,
+      nodeStart: asNumber(plant.nodeStart),
+      nodeEnd: asNumber(plant.nodeEnd),
+    };
+  });
+  return assertValidRig({
+    ...rig,
+    ...(motion === undefined ? {} : { motionPath: motion }),
+    ...(plants === undefined ? {} : { plants }),
+    ...(binding === undefined ? {} : { bindingPath: binding }),
+  });
 }
 
 /**

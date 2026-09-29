@@ -30,12 +30,14 @@ import { JulianDate, type Viewer } from "cesium";
 import {
   createLivingMotion,
   deform,
+  isForestRig,
   flutterField,
   livingFrame,
   livingMaxDisplacement,
   livingWindFromSettings,
   maxDisplacement,
   parseMotionSidecar,
+  parsePlantBinding,
   parseRig,
   prepareLivingMotion,
   sortStaleness,
@@ -44,6 +46,7 @@ import {
   type LivingMotion,
   type MotionRig,
   type NodeTransform,
+  type PlantBinding,
   type WindSettings,
 } from "@twin/world";
 
@@ -113,6 +116,8 @@ const REFUSAL_BODY: Readonly<Record<DeformerReason, string | null>> = {
   // Also a waiting reason: a level-of-detail snapshot mid-rebuild. Never a toast.
   tiles: null,
   bake: "The capture's placement could not be undone exactly, so the measured pose could not be guaranteed.",
+  binding:
+    "This capture's plants came without the binding that keeps everything else still, so nothing moves.",
   internal: "The deformer hit an unexpected error and stopped.",
   // Waiting reasons. Normal for the first frames after load; never a toast.
   "no-primitive": null,
@@ -483,6 +488,7 @@ export class LivingSurveyManager {
       return;
     }
     const motion = await this.#loadMotion(rig, candidate);
+    const plantBinding = await this.#loadBinding(rig, candidate);
     this.#pending.delete(assetId);
     if (this.#destroyed) return;
     // The site may have unloaded while the rig was in flight.
@@ -493,6 +499,7 @@ export class LivingSurveyManager {
       tileset: splatTilesetOf(tileset),
       rig,
       gpu: this.#factory(),
+      ...(plantBinding === undefined ? {} : { plantBinding }),
     });
     this.#entries.set(assetId, {
       siteId: candidate.siteId,
@@ -510,6 +517,7 @@ export class LivingSurveyManager {
     log.info("motion rig attached", {
       site: candidate.slug,
       nodes: rig.nodes.length,
+      plants: rig.plants?.length ?? 1,
       motionEvidence: motion?.sidecar.motionEvidence ?? "legacy",
     });
     this.#afterEntriesChanged();
@@ -534,6 +542,31 @@ export class LivingSurveyManager {
       return motion;
     } catch (error) {
       log.warn("motion sidecar could not be loaded; using the legacy model", {
+        site: candidate.slug,
+        url,
+        error: describeError(error),
+      });
+      return undefined;
+    }
+  }
+
+  /**
+   * A forest rig's plant binding (`plants.json`), when the rig points at one. Unlike a missing
+   * sidecar this has no fallback: without it a wall would be skinned to the crown beside it,
+   * so the deformer refuses the rig (reason `binding`) and nothing moves.
+   */
+  async #loadBinding(
+    rig: MotionRig,
+    candidate: { slug: string; rigUrl: string },
+  ): Promise<PlantBinding | undefined> {
+    if (!isForestRig(rig) || rig.bindingPath === undefined) return undefined;
+    const url = new URL(rig.bindingPath, candidate.rigUrl).toString();
+    try {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return parsePlantBinding(await response.text(), rig);
+    } catch (error) {
+      log.warn("plant binding could not be loaded; the forest stays still", {
         site: candidate.slug,
         url,
         error: describeError(error),

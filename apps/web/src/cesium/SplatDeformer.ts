@@ -40,6 +40,14 @@
  * these are the splats the rig was built for. On any failure it writes nothing, ever, and says
  * why. A tree that does not move is honest; a tree whose wrong splats move is not.
  *
+ * **What is not a plant never moves.** A forest rig (`rig.plants`: a whole capture's plants in
+ * one rig) binds every gaussian its plant binding marks static to a static anchor node, and this
+ * class pins every such anchor at rest, frame after frame, whatever transform or flutter the
+ * motion model hands it: on the CPU path a pinned splat gets the engine's own bytes back, on
+ * the GPU path its node rows are exact zeros and the shader returns the fetched position. A
+ * plant's gaussians are skinned to its own joints only (`skinSplatsToPlants`), so a crown
+ * cannot drag the wall beside it. A forest rig without its binding is refused.
+ *
  * **Rebuilds re-derive, they do not re-apply.** A snapshot rebuilds when the camera changes the
  * tile selection, and when `SiteManager.clampToGround` sets `tileset.modelMatrix` after an
  * asynchronous terrain sample. Each rebuild derives a new attachment from the new snapshot;
@@ -49,12 +57,17 @@
 import {
   deformPositions,
   FLUTTER_STILL,
+  flutterHash,
   IDENTITY_TRANSFORM,
+  isForestRig,
   rigTileChecksums,
+  SKIN_INFLUENCES,
   skinSlice,
+  staticAnchors,
   type FlutterField,
   type MotionRig,
   type NodeTransform,
+  type PlantBinding,
   type SplatSkin,
 } from "@twin/world";
 
@@ -68,7 +81,7 @@ import {
   treeUprightness,
   type TreeUprightness,
 } from "./splatFrames";
-import { SplatGpuMotion, type MotionTextureFactory } from "./splatGpuMotion";
+import { evaluateSplatMotion, SplatGpuMotion, type MotionTextureFactory } from "./splatGpuMotion";
 import { hasVertexMotionHook, type SplatPrimitive, type SplatTilesetLike } from "./splatInternals";
 import {
   createStagingBuffer,
@@ -128,6 +141,8 @@ export type DeformerReason =
   | "checksum"
   /** A bake matrix is singular, or re-baking does not reproduce the engine's positions. */
   | "bake"
+  /** A forest rig came without the plant binding that keeps what is not a plant still. */
+  | "binding"
   /** A bug in this class. Reported rather than thrown, because it runs inside `preUpdate`. */
   | "internal";
 
@@ -180,6 +195,32 @@ export interface DeformerStatus {
    */
   readonly observedChecksum?: string;
   readonly uprightness?: TreeUprightness;
+  /** A forest rig's plants; 0 for a single-plant rig. */
+  readonly plants: number;
+  /** Splats of the current snapshot bound to a pinned static anchor. */
+  readonly staticSplats: number;
+  /** Tiles bound by the most recent derivation (tiles reused from the cache excluded). */
+  readonly lastBoundTiles: number;
+  /** Gaussians in those tiles. */
+  readonly lastBoundSplats: number;
+  /** Milliseconds those tiles took to prove and bind, all together. */
+  readonly lastBindMs: number;
+}
+
+/**
+ * Whether the static splats of the current frame are exactly their canonical bytes, as the
+ * deformer last drew them: for tests and the harness. Nothing here is on a per-frame path.
+ */
+export interface StaticAudit {
+  readonly motion: DeformerMotion;
+  readonly staticSplats: number;
+  /** Static splats drawn anywhere but their canonical bytes. Zero, or something is wrong. */
+  readonly staticMoved: number;
+  /** Static splats whose skin weights a node that is not pinned. Zero by construction. */
+  readonly staticUnpinned: number;
+  /** Plant splats drawn somewhere else than canonical: that they move at all. */
+  readonly plantMoved: number;
+  readonly plantSplats: number;
 }
 
 /**
@@ -204,6 +245,8 @@ export interface SplatDeformerOptions {
    * frame on the CPU path.
    */
   readonly gpu?: MotionTextureFactory;
+  /** A forest rig's plant binding (`plants.json`). Required when the rig lists plants. */
+  readonly plantBinding?: PlantBinding;
 }
 
 /** The CPU path's per-snapshot buffers. */
@@ -222,6 +265,8 @@ interface Attachment {
   /** The engine's own array, kept only to notice when it is swapped. Never written. */
   readonly enginePositions: Float32Array;
   readonly numSplats: number;
+  /** Splats bound to a pinned static anchor. */
+  readonly staticSplats: number;
   readonly layout: SplatTextureLayout;
   readonly binding: SnapshotBinding;
   readonly motion: DeformerMotion;
@@ -235,6 +280,13 @@ export class SplatDeformer {
   readonly #tileset: SplatTilesetLike;
   readonly #rig: MotionRig;
   readonly #accepted: ReadonlySet<string>;
+  readonly #plantBinding: PlantBinding | undefined;
+  /** Per node, 1 for a static anchor, which is held at rest whatever the model says. */
+  readonly #pinned: Uint8Array;
+  readonly #forest: boolean;
+  #lastBoundTiles = 0;
+  #lastBoundSplats = 0;
+  #lastBindMs = 0;
   readonly #cache = new TileBindingCache();
   #gpuFactory: MotionTextureFactory | undefined;
   #gpu: SplatGpuMotion | undefined;
@@ -256,6 +308,9 @@ export class SplatDeformer {
     this.#rig = options.rig;
     this.#accepted = rigTileChecksums(options.rig);
     this.#gpuFactory = options.gpu;
+    this.#plantBinding = options.plantBinding;
+    this.#forest = isForestRig(options.rig);
+    this.#pinned = staticAnchors(options.rig);
   }
 
   get status(): DeformerStatus {
@@ -284,6 +339,81 @@ export class SplatDeformer {
       bakeResidualM: attachment?.binding.bakeResidualM ?? Number.NaN,
       observedChecksum: this.#observedChecksum,
       uprightness: this.#uprightness,
+      plants: this.#rig.plants?.length ?? 0,
+      staticSplats: attachment?.staticSplats ?? 0,
+      lastBoundTiles: this.#lastBoundTiles,
+      lastBoundSplats: this.#lastBoundSplats,
+      lastBindMs: this.#lastBindMs,
+    };
+  }
+
+  /**
+   * Checks, splat by splat, that every static splat of the current snapshot was last drawn at
+   * its canonical bytes: on the CPU path from the buffer the last write uploaded, on the GPU
+   * path by evaluating the shader's transcription over the motion texture it was given.
+   */
+  staticAudit(): StaticAudit | undefined {
+    const attachment = this.#attachment;
+    const labels = attachment?.binding.plantLabels;
+    if (attachment === undefined || labels === undefined) return undefined;
+    const { skin, flutterKeys } = attachment.binding;
+    const baked = attachment.enginePositions;
+    let staticSplats = 0;
+    let staticMoved = 0;
+    let staticUnpinned = 0;
+    let plantMoved = 0;
+    let plantSplats = 0;
+    const motionData = this.#gpu?.motionData;
+    for (let i = 0; i < attachment.numSplats; i += 1) {
+      const isStatic = (labels[i] ?? 0) === 0;
+      if (isStatic) {
+        staticSplats += 1;
+        for (let k = 0; k < SKIN_INFLUENCES; k += 1) {
+          const at = i * SKIN_INFLUENCES + k;
+          if ((skin.weights[at] ?? 0) > 0 && (this.#pinned[skin.nodes[at] ?? 0] ?? 0) === 0)
+            staticUnpinned += 1;
+        }
+      } else {
+        plantSplats += 1;
+      }
+      let drawn: readonly [number, number, number];
+      const rest: [number, number, number] = [
+        baked[i * 3] ?? 0,
+        baked[i * 3 + 1] ?? 0,
+        baked[i * 3 + 2] ?? 0,
+      ];
+      if (attachment.motion === "cpu") {
+        const out = attachment.cpu?.displacedBaked;
+        drawn =
+          out === undefined || !this.#displaced
+            ? rest
+            : [out[i * 3] ?? 0, out[i * 3 + 1] ?? 0, out[i * 3 + 2] ?? 0];
+      } else {
+        drawn =
+          motionData === undefined || !this.#displaced
+            ? rest
+            : evaluateSplatMotion(
+                motionData,
+                skin.nodes.subarray(i * SKIN_INFLUENCES, (i + 1) * SKIN_INFLUENCES),
+                skin.weights.subarray(i * SKIN_INFLUENCES, (i + 1) * SKIN_INFLUENCES),
+                flutterHash(flutterKeys[i] ?? 0),
+                rest,
+              );
+      }
+      const same =
+        Object.is(Math.fround(drawn[0]), rest[0]) &&
+        Object.is(Math.fround(drawn[1]), rest[1]) &&
+        Object.is(Math.fround(drawn[2]), rest[2]);
+      if (isStatic && !same) staticMoved += 1;
+      if (!isStatic && !same) plantMoved += 1;
+    }
+    return {
+      motion: attachment.motion,
+      staticSplats,
+      staticMoved,
+      staticUnpinned,
+      plantMoved,
+      plantSplats,
     };
   }
 
@@ -496,6 +626,11 @@ export class SplatDeformer {
       return undefined;
     }
 
+    if (this.#forest && this.#plantBinding === undefined) {
+      this.#refuse("binding", "a forest rig needs its plant binding, and none was given");
+      return undefined;
+    }
+
     const listed = snapshotTiles(this.#tileset, primitive, positions, numSplats);
     if (listed.kind === "wait") {
       return this.#wait(listed.reason === "no-bake-transform" ? "no-bake-transform" : "tiles");
@@ -525,6 +660,9 @@ export class SplatDeformer {
     }
 
     const bindings: TileBinding[] = [];
+    let boundTiles = 0;
+    let boundSplats = 0;
+    let bindMs = 0;
     for (const tile of tiles) {
       const cached = this.#cache.get(tile);
       if (cached !== undefined) {
@@ -532,7 +670,14 @@ export class SplatDeformer {
         continue;
       }
       const baked = positions.subarray(tile.start * 3, (tile.start + tile.count) * 3);
-      const result = bindTile(baked, tile.bake, this.#rig, this.#accepted, BAKE_RESIDUAL_LIMIT_M);
+      const result = bindTile(
+        baked,
+        tile.bake,
+        this.#rig,
+        this.#accepted,
+        BAKE_RESIDUAL_LIMIT_M,
+        this.#plantBinding,
+      );
       if (result.kind === "refused") {
         this.#observedChecksum = result.checksum;
         this.#refuse(result.reason, result.detail);
@@ -540,11 +685,19 @@ export class SplatDeformer {
       }
       this.#cache.set(tile, result.binding);
       bindings.push(result.binding);
+      boundTiles += 1;
+      boundSplats += tile.count;
+      bindMs += result.binding.bindMs;
     }
+    this.#lastBoundTiles = boundTiles;
+    this.#lastBoundSplats = boundSplats;
+    this.#lastBindMs = bindMs;
     const binding = aggregateBindings(tiles, bindings, numSplats);
     this.#observedChecksum = tiles.length === 1 ? bindings[0]?.checksum : undefined;
 
-    if (this.#uprightness === undefined || !this.#uprightness.upright) {
+    // A forest is a scene, not a standing tree: the frame check above stands for "up", and the
+    // scene step measured every plant's height against its own ground.
+    if (!this.#forest && (this.#uprightness === undefined || !this.#uprightness.upright)) {
       const uprightness = treeUprightness(binding.canonicalLocal);
       // A single-tile rig is decided on its one tile, as it always was.
       if (numSplats >= UPRIGHT_MIN_SPLATS || this.#rig.tileChecksums === undefined) {
@@ -574,10 +727,14 @@ export class SplatDeformer {
       this.#gpu?.deactivate();
     }
 
+    let staticSplats = 0;
+    const labels = binding.plantLabels;
+    if (labels !== undefined) for (const label of labels) if (label === 0) staticSplats += 1;
     return {
       generation,
       enginePositions: positions,
       numSplats,
+      staticSplats,
       layout,
       binding,
       motion,
@@ -608,7 +765,11 @@ export class SplatDeformer {
     transforms: readonly NodeTransform[],
     flutter: FlutterField,
   ): void {
-    const moving = markMovingNodes(attachment.nodeMoves, transforms, flutter);
+    const moving = pinStaticNodes(
+      attachment.nodeMoves,
+      this.#pinned,
+      markMovingNodes(attachment.nodeMoves, transforms, flutter),
+    );
 
     // Nothing moves and nothing is displaced: an idle scene stays idle.
     if (!moving && !this.#displaced) return;
@@ -711,6 +872,25 @@ function isCurrent(attachment: Attachment, primitive: SplatPrimitive): boolean {
 function sameBake(a: ArrayLike<number>, b: ArrayLike<number>): boolean {
   for (let i = 0; i < 16; i += 1) if (a[i] !== b[i]) return false;
   return true;
+}
+
+/**
+ * Holds every pinned node (`pinned[n] = 1`, a forest rig's static anchors) at rest in
+ * `nodeMoves`, and says whether anything still moves. `moving` is what `markMovingNodes` said
+ * before the pins: when nothing moved, nothing is re-read.
+ */
+export function pinStaticNodes(
+  nodeMoves: Uint8Array,
+  pinned: Uint8Array,
+  moving: boolean,
+): boolean {
+  if (!moving) return false;
+  let any = false;
+  for (let n = 0; n < nodeMoves.length; n += 1) {
+    if ((pinned[n] ?? 0) !== 0) nodeMoves[n] = 0;
+    else if ((nodeMoves[n] ?? 0) !== 0) any = true;
+  }
+  return any;
 }
 
 /**

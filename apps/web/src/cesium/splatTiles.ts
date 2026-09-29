@@ -23,6 +23,13 @@
  * and a snapshot's arrays are those per-tile results concatenated in the snapshot's own tile
  * order. A tile that stays loaded across selections is bound once (`TileBindingCache`).
  *
+ * **A forest rig** (many plants, `rig.plants`) adds one thing a position cannot say: which
+ * plant a gaussian belongs to, or none. That comes from the rig's plant binding
+ * (`plants.json`, `plantBinding.ts` in `@twin/world`), keyed by the same per-tile checksum
+ * that proves the tile's identity: a tile whose digest has no entry is refused, a gaussian
+ * labelled static is bound to the rig's pinned anchor and never moves, and a plant's gaussian
+ * is skinned to that plant's joints only (`skinSplatsToPlants`).
+ *
  * Why at load time and not packaged per tile: see `docs/LIVING_SURVEY.md`, "Multi-tile
  * tilesets" — binding measured 2–3 µs a gaussian here, which a sidecar would trade for bytes
  * on the wire, a second format to keep in step with the rig, and a binding that could no
@@ -32,10 +39,13 @@
 import {
   checksumPositions,
   concatSkins,
+  plantLabels,
   positionKeys,
   skinPrimary,
   skinSplatsToNodes,
+  skinSplatsToPlants,
   type MotionRig,
+  type PlantBinding,
   type SplatSkin,
 } from "@twin/world";
 
@@ -184,6 +194,13 @@ export interface TileBinding {
   readonly flutterKeys: Uint32Array;
   /** Largest disagreement between our re-bake and the engine's baked positions, metres. */
   readonly bakeResidualM: number;
+  /**
+   * For a forest rig: each gaussian's plant label from the binding — 0 static, `k` plant
+   * `k - 1` of `rig.plants`. Absent for a single-plant rig.
+   */
+  readonly plantLabels?: Uint16Array;
+  /** Milliseconds this tile took to prove and bind: the per-tile binding cost. */
+  readonly bindMs: number;
 }
 
 /** Why a tile cannot be bound. Both are permanent: the splats or the placement are wrong. */
@@ -211,7 +228,9 @@ export function bindTile(
   rig: MotionRig,
   accepted: ReadonlySet<string>,
   residualLimitM: number,
+  plants?: PlantBinding,
 ): BindResult {
+  const started = performance.now();
   const inverse = invertAffine(bake);
   if (inverse === undefined) {
     return { kind: "refused", reason: "bake", detail: "the tile's bake transform is singular" };
@@ -239,7 +258,23 @@ export function bindTile(
       checksum,
     };
   }
-  const skin = skinSplatsToNodes(canonicalLocal, rig);
+  let labels: Uint16Array | undefined;
+  if (rig.plants !== undefined) {
+    labels = plants === undefined ? undefined : plantLabels(plants, checksum);
+    if (labels?.length !== canonicalLocal.length / 3) {
+      return {
+        kind: "refused",
+        reason: "checksum",
+        detail: `the plant binding has no entry for tile ${checksum}`,
+        checksum,
+      };
+    }
+  }
+  const skin =
+    labels === undefined
+      ? skinSplatsToNodes(canonicalLocal, rig)
+      : skinSplatsToPlants(canonicalLocal, rig, labels);
+  const flutterKeys = positionKeys(canonicalLocal);
   return {
     kind: "bound",
     binding: {
@@ -248,8 +283,10 @@ export function bindTile(
       canonicalLocal,
       assignment: skinPrimary(skin),
       skin,
-      flutterKeys: positionKeys(canonicalLocal),
+      flutterKeys,
       bakeResidualM,
+      ...(labels === undefined ? {} : { plantLabels: labels }),
+      bindMs: performance.now() - started,
     },
   };
 }
@@ -297,6 +334,8 @@ export interface SnapshotBinding {
   readonly assignment: Uint16Array;
   readonly skin: SplatSkin;
   readonly flutterKeys: Uint32Array;
+  /** A forest rig's plant label per splat (0 static); absent for a single-plant rig. */
+  readonly plantLabels: Uint16Array | undefined;
   /** The bake matrix every tile shares, or `undefined` when they differ. */
   readonly commonBake: Mat4 | undefined;
   /** The worst tile's residual. */
@@ -332,6 +371,7 @@ export function aggregateBindings(
       assignment: only.binding.assignment,
       skin: only.binding.skin,
       flutterKeys: only.binding.flutterKeys,
+      plantLabels: only.binding.plantLabels,
       commonBake,
       bakeResidualM,
     };
@@ -339,10 +379,14 @@ export function aggregateBindings(
   const canonicalLocal = new Float32Array(numSplats * 3);
   const assignment = new Uint16Array(numSplats);
   const flutterKeys = new Uint32Array(numSplats);
+  const labelled = joined.some((tile) => tile.binding.plantLabels !== undefined);
+  const plantLabelsAll = labelled ? new Uint16Array(numSplats) : undefined;
   for (const tile of joined) {
     canonicalLocal.set(tile.binding.canonicalLocal, tile.start * 3);
     assignment.set(tile.binding.assignment, tile.start);
     flutterKeys.set(tile.binding.flutterKeys, tile.start);
+    if (plantLabelsAll !== undefined && tile.binding.plantLabels !== undefined)
+      plantLabelsAll.set(tile.binding.plantLabels, tile.start);
   }
   const skin = concatSkins(
     joined.map((tile) => tile.binding.skin),
@@ -356,6 +400,7 @@ export function aggregateBindings(
     assignment,
     skin,
     flutterKeys,
+    plantLabels: plantLabelsAll,
     commonBake,
     bakeResidualM,
   };

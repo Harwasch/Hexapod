@@ -34,16 +34,18 @@ import {
   livingFrame,
   livingWindFromSettings,
   loadLivingMotion,
+  parsePlantBinding,
   parseRig,
   prepareLivingMotion,
   type FlutterField,
   type LivingMotion,
   type MotionRig,
   type NodeTransform,
+  type PlantBinding,
   type WindSettings,
 } from "@twin/world";
 
-import { SplatDeformer, type DeformerStatus } from "@/cesium/SplatDeformer";
+import { SplatDeformer, type DeformerStatus, type StaticAudit } from "@/cesium/SplatDeformer";
 import { installSplatTextureInterception } from "@/cesium/splatCapture";
 import { splatCaptureCount } from "@/cesium/splatCaptureRegistry";
 import { cesiumMotionTextures } from "@/cesium/splatGpuTextures";
@@ -109,6 +111,11 @@ export interface LivingSurveyHarness {
    * per frame, upload submit included, for views too large to render many frames of here.
    */
   measureApply(count: number, t0: number, wind: WindSettings): { mean: number; max: number };
+  /**
+   * A forest rig's static splats, checked one by one against their canonical bytes as the last
+   * frame drew them (`SplatDeformer.staticAudit`); `null` for a single-plant rig.
+   */
+  staticAudit(): StaticAudit | null;
 }
 
 export interface HarnessStatus extends DeformerStatus {
@@ -194,6 +201,15 @@ export async function startLivingSurveyHarness(
     return { transforms: deform(rig, t, wind), flutter: flutterField(rig, t, wind) };
   }
 
+  // A forest rig's plant binding: which gaussians are which plant, and which are nothing.
+  let plantBinding: PlantBinding | undefined;
+  if (rig.bindingPath !== undefined) {
+    const url = new URL(rig.bindingPath, new URL(options.rigUrl, window.location.href));
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`binding: HTTP ${String(response.status)}`);
+    plantBinding = parsePlantBinding(await response.text(), rig);
+  }
+
   const tileset = await Cesium3DTileset.fromUrl(options.tilesetUrl, {
     maximumScreenSpaceError: options.maximumScreenSpaceError ?? 1,
     // The traversal site tilesets use for splats (providers/tiles.ts): REPLACE, no skipping.
@@ -214,7 +230,12 @@ export async function startLivingSurveyHarness(
   const wantGpu = options.gpu !== false;
   const gpu = wantGpu ? cesiumMotionTextures() : undefined;
   if (wantGpu && gpu === undefined) throw new Error("no GPU motion textures");
-  const deformer = new SplatDeformer({ tileset: internals, rig, gpu });
+  const deformer = new SplatDeformer({
+    tileset: internals,
+    rig,
+    gpu,
+    ...(plantBinding === undefined ? {} : { plantBinding }),
+  });
 
   async function step(
     t: number,
@@ -268,6 +289,9 @@ export async function startLivingSurveyHarness(
   return {
     step,
     status,
+    staticAudit(): StaticAudit | null {
+      return deformer.staticAudit() ?? null;
+    },
     applyOnly(t: number, wind: WindSettings): DeformerStatus {
       const { transforms, flutter } = frameAt(t, wind);
       return deformer.apply(transforms, flutter);

@@ -137,6 +137,28 @@ export interface SidecarNodes {
   readonly flutterM: readonly number[];
 }
 
+/**
+ * One plant of a forest rig's sidecar (`tools/captures/scene_plants.py`): the per-node columns
+ * already carry each plant's own frequencies, damping and gains, so what is left per plant is
+ * what the wind needs to know about it — how tall it is, so the turbulence it feels is taken
+ * at its own height (EN 1991-1-4 eqs. 4.7 and B.1), and which rig the evidence supported.
+ * Optional in the format: a single-plant sidecar has none, and a sidecar written before
+ * forests loads unchanged.
+ */
+export interface SidecarPlant {
+  readonly id: string;
+  readonly class: string;
+  /** `skeleton` (skeleton.py), `crown` (a few-bone crown rig) or `trunk` (a snag's axis). */
+  readonly rig: string;
+  readonly nodeStart: number;
+  readonly nodeEnd: number;
+  readonly heightM: number;
+  /** Sway RMS along and across the mean lean at the plant's height (`2I`, `0.75I`). */
+  readonly turbulence: { readonly along: number; readonly across: number };
+  /** EN 1991-1-4 eq. B.1 at the plant's height, metres: its admittances are read at it. */
+  readonly lengthScaleM: number;
+}
+
 export interface ProvenanceEntry {
   readonly rule: string;
   readonly source: string;
@@ -165,6 +187,11 @@ export interface MotionSidecar {
     };
   };
   readonly nodes: SidecarNodes;
+  /**
+   * A forest rig's plants, when the sidecar covers many (`SidecarPlant`). The top-level
+   * `treeHeightM` is then the tallest plant's, at which the one shared wind field is read.
+   */
+  readonly plants?: readonly SidecarPlant[];
   readonly provenance: Readonly<Record<string, ProvenanceEntry>>;
   readonly generator: string;
 }
@@ -452,6 +479,9 @@ export function branchStructure(rig: MotionRig): BranchStructure {
     }
     continuation[i] = best;
   }
+  // A node whose parent is a root starts a limb, as node 0's children do: the roots are the
+  // anchors (node 0 of a tree; each plant's first node and the static anchors of a forest).
+  const inner = (i: number): boolean => i >= 0 && (nodes[i]?.parent ?? -1) >= 0;
   const limb = new Array<number>(count).fill(0);
   const pathLengthM = new Map<number, number>();
   const last = new Map<number, number>();
@@ -459,20 +489,32 @@ export function branchStructure(rig: MotionRig): BranchStructure {
     const node = nodes[i];
     if (node === undefined) continue;
     const p = node.parent;
-    const base = p > 0 && continuation[p] === i ? (limb[p] ?? i) : i;
+    if (p < 0) {
+      limb[i] = i;
+      continue;
+    }
+    const base = inner(p) && continuation[p] === i ? (limb[p] ?? i) : i;
     limb[i] = base;
     pathLengthM.set(base, (pathLengthM.get(base) ?? 0) + (segmentM[i] ?? 0));
     // Topological order: a chain's far end is its highest index.
     last.set(base, i);
   }
   const treeBranch = continuation[0] ?? -1;
+  // Every root's continuation is a whole-plant limb: the trunk of its tree.
+  const trunks = new Set<number>();
+  nodes.forEach((node, i) => {
+    const c = continuation[i] ?? -1;
+    if (node.parent < 0 && c >= 0) trunks.add(c);
+  });
   // Branching order: the trunk is 0, a limb on it 1, a limb on that 2, ...
   const order = new Array<number>(count).fill(0);
   for (let i = 1; i < count; i += 1) {
     const base = limb[i] ?? i;
-    if (i === base && base !== treeBranch) {
+    if ((nodes[i]?.parent ?? -1) < 0) {
+      order[i] = 0;
+    } else if (i === base && !trunks.has(base)) {
       const attach = nodes[base]?.parent ?? 0;
-      order[i] = attach > 0 ? (order[limb[attach] ?? 0] ?? 0) + 1 : 1;
+      order[i] = inner(attach) ? (order[limb[attach] ?? 0] ?? 0) + 1 : 1;
     } else {
       order[i] = order[base] ?? 0;
     }
@@ -485,7 +527,7 @@ export function branchStructure(rig: MotionRig): BranchStructure {
   for (let i = 1; i < count; i += 1) {
     const here = nodes[i]?.position ?? [0, 0, 0];
     let cursor = i;
-    while (cursor > 0) {
+    while (inner(cursor)) {
       const base = limb[cursor] ?? cursor;
       const attach = nodes[base]?.parent ?? 0;
       const reach = distance(nodes[attach]?.position ?? here, here);
@@ -720,6 +762,41 @@ export function validateMotionSidecar(sidecar: MotionSidecar, rig?: MotionRig): 
     sidecar.nodes.damping.forEach((z, i) => {
       if (!(z > 0 && z < 1)) issues.push(`node ${i}: damping must be in (0, 1)`);
     });
+  }
+  const plants = (raw as { plants?: unknown }).plants;
+  if (plants !== undefined) {
+    if (!Array.isArray(plants)) {
+      issues.push("plants, when present, must be an array");
+    } else {
+      (plants as SidecarPlant[]).forEach((plant, k) => {
+        const start = plant.nodeStart;
+        const end = plant.nodeEnd;
+        if (
+          !Number.isInteger(start) ||
+          !Number.isInteger(end) ||
+          start < 0 ||
+          end <= start ||
+          end > count
+        )
+          issues.push(`plants[${k}]: node range [${start}, ${end}) is not inside the sidecar`);
+        if (!(Number.isFinite(plant.heightM) && plant.heightM > 0))
+          issues.push(`plants[${k}]: heightM must be > 0`);
+        if (!(Number.isFinite(plant.lengthScaleM) && plant.lengthScaleM > 0))
+          issues.push(`plants[${k}]: lengthScaleM must be > 0`);
+        const along = plant.turbulence?.along;
+        const across = plant.turbulence?.across;
+        if (!(Number.isFinite(along) && Number.isFinite(across)))
+          issues.push(`plants[${k}]: turbulence must be two numbers`);
+        const own = rig?.plants?.[k];
+        if (
+          rig !== undefined &&
+          (own?.nodeStart !== start || own.nodeEnd !== end || own.id !== plant.id)
+        )
+          issues.push(`plants[${k}]: does not match the rig's plant ${k}`);
+      });
+      if (rig !== undefined && (rig.plants?.length ?? 0) !== plants.length)
+        issues.push(`the rig has ${rig.plants?.length ?? 0} plants, the sidecar ${plants.length}`);
+    }
   }
   if (rig !== undefined) {
     if (rig.nodes.length !== count)
