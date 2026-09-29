@@ -587,6 +587,13 @@ from the capture or cited, nothing about any one place. It takes a metric, east-
    height at least those of the thinnest cloud its recovery is tested on); a few-bone crown rig
    for the rest and for every shrub; a snag's trunk axis for a snag.
 
+**A large capture is analysed on a sample.** Above `ANALYSIS_MAX_SPLATS` (4 million) kept
+splats, steps 1–5 run on a seeded uniform random sample of that many — uniform, so every
+region keeps its relative density and every density-relative radius scales with it — and every
+other splat takes the class and plant of its nearest analysed splat, so the binding still labels
+every gaussian. `scene.json` says so (`keptSplats`, `analysedSplats`, `analysis`, and each
+plant's `boundSplats` beside its analysed `splats`); `--max-analysed 0` analyses everything.
+
 **Scored on a yard where the answer is known.** `synthetic_yard.py` builds three leafy trees
 (one sparse), five shrubs of 0.6–2 m, two snags, a building, a lawn and a path, and writes the
 class and plant of every splat; `tests/test_scene_plants.py` scores the step against it and
@@ -609,10 +616,11 @@ uv run python synthetic_yard.py ../../data/tiles/synthetic-yard   # regenerates,
 | on ground sloping 8 % and 5 % | every plant found                                                    |
 | scene step, 43k splats        | about 1 s, plus the packer's plan for the binding                    |
 | nine yards, 390k splats       | 90 of 90 plants, 12 s and 0.4 GB peak with the tiles packed          |
+| a 22.6 M-splat phone capture  | 3 min and 2.2 GB peak on 4 cores (4 M analysed), binding included    |
 
 ### Running it on an uploaded capture
 
-Not yet done on any real capture. The capture's `canonical.ply` is served by the API
+The capture's `canonical.ply` is served by the API
 (`GET /api/v1/captures/{id}/splat.ply` redirects to a signed URL) and its tiles are public, so:
 
 ```bash

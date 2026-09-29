@@ -192,7 +192,103 @@ def test_a_sloping_yard_finds_the_same_plants(yard: Path, tmp_path: Path) -> Non
     assert score["heightErrorMaxM"] <= 0.3
 
 
+def test_a_sampled_analysis_labels_every_splat_as_the_full_one_does(
+    yard: Path, tmp_path: Path, scene: dict
+) -> None:
+    """A capture over ``ANALYSIS_MAX_SPLATS`` is analysed on a uniform sample and the rest take
+    their nearest analysed splat's labels: forced here with a cap of three quarters of the
+    yard, the same plants are found and nearly every splat gets the full analysis's labels."""
+    labels = _truth(yard)
+    kept = scene["keptSplats"]
+    cap = kept * 3 // 4
+    report = sp.build(
+        yard / "source" / "splat.ply",
+        tmp_path,
+        tiles_dir=yard / "splat",
+        opacity_min=0.02,
+        tile_gaussians=6000,
+        truth=labels,
+        max_analysed=cap,
+    )
+    assert not scene["analysis"]["subsampled"] and scene["analysedSplats"] == kept
+    assert report["analysis"]["subsampled"] and report["analysedSplats"] == cap
+    assert report["keptSplats"] == kept and sum(report["classCounts"].values()) == kept
+    found = {name: c["found"] for name, c in report["score"]["instances"].items()}
+    assert found["tree"] == 3 and found["snag"] == 2
+    # The two shrubs 36 cm apart are a gap a thinner cloud may not resolve (as at half density).
+    assert found["shrub"] in (4, 5)
+    for name in ("tree", "snag"):
+        assert report["score"]["classIoU"][name] >= 0.9, name
+    # Every kept splat has a class, and it is the full analysis's for all but a few.
+    fresh = np.frombuffer((tmp_path / "classes.u8").read_bytes(), dtype=np.uint8)
+    full = np.frombuffer((yard / "splat" / "classes.u8").read_bytes(), dtype=np.uint8)
+    keep = sp.read_capture(yard / "source" / "splat.ply", 0.02)["keep"]
+    assert fresh.size == full.size == keep.size
+    assert float(np.mean(fresh[keep] == full[keep])) >= 0.97
+    moving = np.isin(fresh[keep], sp.PLANT_CLASSES)
+    assert float(np.mean(moving == np.isin(full[keep], sp.PLANT_CLASSES))) >= 0.97
+    # Every gaussian of every tile is bound, and the plants hold what the classes say.
+    binding = json.loads((tmp_path / "plants.json").read_text(encoding="utf-8"))
+    for checksum, runs in binding["tiles"].items():
+        assert sum(runs[1::2]) == int(checksum.split(":")[1])
+    assert sum(p["boundSplats"] for p in report["plants"]) == int(moving.sum())
+    assert all(p["boundSplats"] >= p["splats"] for p in report["plants"])
+
+
+def test_labels_reach_every_splat_from_the_nearest_analysed_one() -> None:
+    rng = np.random.default_rng(8)
+    xyz = rng.uniform(0, 10, (5000, 3)).astype(np.float32)
+    xyz[1] = xyz[0]  # coincident: each keeps its own label when both are analysed
+    sample = sp.analysis_sample(xyz.shape[0], 1000, seed=4)
+    assert sample is not None and sample.size == 1000 and np.all(np.diff(sample) > 0)
+    assert np.array_equal(sample, sp.analysis_sample(xyz.shape[0], 1000, seed=4))
+    assert sp.analysis_sample(xyz.shape[0], 5000, seed=4) is None
+    assert sp.analysis_sample(xyz.shape[0], None, seed=4) is None
+    sample = np.union1d(sample, [0, 1])
+    analysed = xyz[sample].astype(np.float64)
+    own = np.arange(sample.size)
+    (label,) = sp.propagate(analysed, xyz, sample, own)
+    assert label.shape == (5000,)
+    assert np.array_equal(label[sample], own)
+    distance = np.linalg.norm(xyz[:, None, :] - analysed[None, :, :], axis=2)
+    assert np.allclose(distance[np.arange(5000), label], distance.min(axis=1), rtol=0, atol=1e-6)
+
+
 # ------------------------------------------------------------------------- the rules
+
+
+def test_tree_tops_are_those_of_a_full_raster_filter_per_radius() -> None:
+    """The candidate search finds exactly the tops one maximum filter per radius finds."""
+    from scipy import ndimage
+
+    def reference(chm: np.ndarray, cell: float) -> np.ndarray:
+        filled = np.where(np.isfinite(chm), chm, -np.inf)
+        tall = filled >= sp.FAO_TREE_MIN_M
+        crown = np.where(tall, sp.popescu_wynne_crown_m(np.where(tall, filled, 0.0)), 0.0)
+        radius_cells = np.ceil(crown / 2.0 / cell).astype(np.int64)
+        tops = np.zeros(chm.shape, dtype=bool)
+        for r in np.unique(radius_cells[tall]):
+            highest = ndimage.maximum_filter(
+                filled, footprint=sp._disk(int(r)), mode="constant", cval=-np.inf
+            )
+            tops |= tall & (radius_cells == r) & (filled >= highest)
+        return tops
+
+    rng = np.random.default_rng(12)
+    for _ in range(40):
+        shape = tuple(int(v) for v in rng.integers(1, 40, 2))
+        chm = ndimage.gaussian_filter(rng.uniform(0, 20, shape), float(rng.uniform(0, 3)))
+        chm = np.round(chm * 2) / 2  # plateaus of equal maxima
+        chm[rng.random(shape) < 0.2] = np.nan
+        cell = float(rng.choice([0.25, 0.5, 1.0]))
+        expected = reference(chm, cell)
+        found = sp._tree_tops(chm, cell)
+        # One cell per plateau of tops: the same plateaus, one of each.
+        labels, count = ndimage.label(expected, structure=np.ones((3, 3)))
+        assert int(found.sum()) == (count if count > 1 else int(expected.sum()))
+        assert np.all(expected[found])
+        if count > 1:
+            assert sorted(np.unique(labels[found]).tolist()) == list(range(1, count + 1))
 
 
 def test_otsu_splits_two_populations_between_them() -> None:

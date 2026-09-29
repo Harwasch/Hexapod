@@ -19,6 +19,10 @@ nothing (``plants.json``; apps/web ``splatTiles.ts`` reads it).
 Nothing is tuned to a capture. Every threshold is derived from the capture itself or cited:
 
 =========================  ===================================================================
+analysed splats            all kept splats up to ``ANALYSIS_MAX_SPLATS`` (4 M); beyond it a
+                           seeded uniform sample of that many, which keeps every region's
+                           relative density, and every other splat takes its nearest analysed
+                           splat's class and plant
 ground cell                the plan spacing at which a cell holds ``GROUND_CELL_POINTS`` (8)
                            splats on average: splat_ground's own ``min_points``
 ground surface             the highest surface below every cell's lowest splat whose slope
@@ -111,6 +115,9 @@ MIN_CLUSTER_POINTS = 8
 LINK_NEIGHBOURS = 12
 #: Splats a neighbour query handles at once, so memory stays flat in the capture's size.
 QUERY_CHUNK = 1 << 20
+#: Threads a neighbour query uses: all of them. Each point's answer is computed on its own,
+#: so the result is the same whatever the count.
+QUERY_WORKERS = -1
 #: Splats of an unrooted piece sampled when measuring its gap to the others (evenly).
 GAP_SAMPLE = 1 << 16
 
@@ -147,6 +154,31 @@ STATIC_NODE_ID = "static"
 
 PLANTS_FORMAT = "hexapod.plants"
 PLANTS_VERSION = 1
+
+#: The most splats ``analyse`` and ``plant_rigs`` see; a capture with more kept splats is
+#: analysed on a uniform random sample of this many (seeded, so a run is reproducible), and
+#: every other kept splat takes the class and plant of its nearest analysed splat
+#: (``propagate``), so the binding still labels every gaussian of every tile.
+#:
+#: Why a sample, and why this many. Two steps of the analysis grow faster than the capture:
+#: the ground relaxation (``slope_envelope``: a raster whose cells, and the sweeps across it,
+#: grow with the density) and joining unrooted objects (``_assemble``: pieces times objects).
+#: Measured on a 22,577,243-splat phone capture on a 4-core, 16 GB machine: the analysis
+#: took 11 s on 1 M of its splats, 60 s / 1.7 GB peak on 4 M, and 185 s / 2.9 GB on 8 M
+#: (ground 77 s, joining 17 s -- each about four times its cost at 4 M), so all 22.6 M
+#: would be several times that again. With 4 M the whole step on that capture -- reading,
+#: analysis, labels carried to every splat, and the binding's replay of the packer over all
+#: of them -- took 3 minutes at 2.2 GB peak: room to spare on a 16 GB, 4-core CI runner.
+#:
+#: Why a *uniform* sample. Every radius of the analysis is a multiple of the density where a
+#: splat stands (``local_spacing``, the ground cell, the link): uniform thinning scales every
+#: region's density by the same factor, so dense and sparse parts keep their relative
+#: density and those radii scale with it -- which is what the half-density test of the yard
+#: checks. A spatial (voxel) thinning would flatten the density the adaptive spacing reads.
+#: What does change is absolute counts: a plant needs ``MIN_CLUSTER_POINTS`` sampled splats,
+#: and ``splatsPerM`` (the skeleton's evidence bar) is counted over the splats the skeleton
+#: is actually given, which are the sampled ones.
+ANALYSIS_MAX_SPLATS = 4_000_000
 
 #: The ``package`` stage's parameters (tools/pipeline/recipes/splat-ingest.yaml), so tiles
 #: re-packed here are byte-identical to the ones the pipeline published.
@@ -386,11 +418,11 @@ def local_spacing(points: np.ndarray, tree: cKDTree | None = None) -> np.ndarray
     nearest = np.empty(count)
     for start in range(0, count, QUERY_CHUNK):
         stop = min(start + QUERY_CHUNK, count)
-        nearest[start:stop] = tree.query(points[start:stop], k=2)[0][:, 1]
+        nearest[start:stop] = tree.query(points[start:stop], k=2, workers=QUERY_WORKERS)[0][:, 1]
     out = np.empty(count)
     for start in range(0, count, QUERY_CHUNK):
         stop = min(start + QUERY_CHUNK, count)
-        _, index = tree.query(points[start:stop], k=k)
+        _, index = tree.query(points[start:stop], k=k, workers=QUERY_WORKERS)
         out[start:stop] = np.median(nearest[index], axis=1)
     return out
 
@@ -409,7 +441,7 @@ def _components(points: np.ndarray, spacing: np.ndarray) -> np.ndarray:
     # In windows, the edges as 32-bit indices: a few million splats stay under a gigabyte.
     for start in range(0, count, QUERY_CHUNK):
         stop = min(start + QUERY_CHUNK, count)
-        distance, index = tree.query(points[start:stop], k=k)
+        distance, index = tree.query(points[start:stop], k=k, workers=QUERY_WORKERS)
         rows = np.repeat(np.arange(start, stop, dtype=np.int32), k)
         cols = index.reshape(-1).astype(np.int32)
         reach = LINK_FACTOR * np.maximum(spacing[rows], spacing[cols])
@@ -425,21 +457,42 @@ def _components(points: np.ndarray, spacing: np.ndarray) -> np.ndarray:
     return labels.astype(np.int64)
 
 
+def _disk(radius: int) -> np.ndarray:
+    """The cells within ``radius`` cells of the centre of a ``2 radius + 1`` square."""
+    yy, xx = np.mgrid[-radius : radius + 1, -radius : radius + 1]
+    return (xx * xx + yy * yy) <= radius * radius
+
+
 def _tree_tops(chm: np.ndarray, cell: float) -> np.ndarray:
-    """Cells that are the highest within half a crown width CW(H) of themselves, H >= 5 m."""
+    """Cells that are the highest within half a crown width CW(H) of themselves, H >= 5 m.
+
+    Every window is at least one cell in radius, and a disk of radius one is the cell and its
+    four edge neighbours, which every larger disk contains: so only a cell at least as high as
+    those four can be a top, and only those candidates are tested against their own disk.
+    Exactly what filtering the whole raster once per radius finds, without the cost of it --
+    the raster's cells and a window's cells both grow with the capture's density, and a
+    full-raster filter per radius took minutes at a million splats.
+    """
     filled = np.where(np.isfinite(chm), chm, -np.inf)
     tall = filled >= FAO_TREE_MIN_M
     if not tall.any():
         return np.zeros(chm.shape, dtype=bool)
     crown = np.where(tall, popescu_wynne_crown_m(np.where(tall, filled, 0.0)), 0.0)
     radius_cells = np.ceil(crown / 2.0 / cell).astype(np.int64)
+    near = ndimage.maximum_filter(filled, footprint=_disk(1), mode="constant", cval=-np.inf)
     tops = np.zeros(chm.shape, dtype=bool)
-    for radius in np.unique(radius_cells[tall]):
-        r = int(radius)
-        yy, xx = np.mgrid[-r : r + 1, -r : r + 1]
-        disk = (xx * xx + yy * yy) <= r * r
-        highest = ndimage.maximum_filter(filled, footprint=disk, mode="constant", cval=-np.inf)
-        tops |= tall & (radius_cells == radius) & (filled >= highest)
+    disks: dict[int, np.ndarray] = {}
+    nx, ny = chm.shape
+    for i, j in np.argwhere(tall & (filled >= near)):
+        r = max(int(radius_cells[i, j]), 1)
+        disk = disks.get(r)
+        if disk is None:
+            disk = disks[r] = _disk(r)
+        i0, i1 = max(i - r, 0), min(i + r + 1, nx)
+        j0, j1 = max(j - r, 0), min(j + r + 1, ny)
+        # Outside the raster is -inf (the filter's constant mode): never higher.
+        window = filled[i0:i1, j0:j1][disk[i0 - i + r : i1 - i + r, j0 - j + r : j1 - j + r]]
+        tops[i, j] = filled[i, j] >= window.max()
     # A plateau of equal maxima is one top: keep one cell per connected patch of them.
     labels, count = ndimage.label(tops, structure=np.ones((3, 3)))
     if count <= 1:
@@ -608,6 +661,7 @@ def _assemble(instances: list[Instance], xyz: np.ndarray, height: np.ndarray) ->
             target[u] = find(best)
     everything = np.flatnonzero(owner >= 0)
     tree = cKDTree(xyz[everything])
+    roots: np.ndarray | None = None
     for u in sorted(np.flatnonzero(~rooted).tolist(), key=lambda i: groups[i].size):
         if find(u) != u:
             continue
@@ -616,8 +670,13 @@ def _assemble(instances: list[Instance], xyz: np.ndarray, height: np.ndarray) ->
         # Evenly sampled when large: a sampled gap is never smaller than the true one, so a
         # piece joins less readily, never more.
         sample = points[:: max(1, points.shape[0] // GAP_SAMPLE)]
-        distance, index = tree.query(sample, k=min(2 * LINK_NEIGHBOURS, everything.size))
-        roots = np.asarray([find(i) for i in range(count)], dtype=np.int64)
+        distance, index = tree.query(
+            sample, k=min(2 * LINK_NEIGHBOURS, everything.size), workers=QUERY_WORKERS
+        )
+        # Every object's root, recomputed only after a join: once per piece made it quadratic
+        # in the number of objects.
+        if roots is None:
+            roots = np.asarray([find(i) for i in range(count)], dtype=np.int64)
         others = roots[owner[everything[index]]]
         foreign = (others != u) & np.isfinite(distance)
         if not foreign.any():
@@ -626,6 +685,7 @@ def _assemble(instances: list[Instance], xyz: np.ndarray, height: np.ndarray) ->
         gap = float(distance.reshape(-1)[flat])
         if gap < size:
             target[u] = int(others.reshape(-1)[flat])
+            roots = None
     merged: dict[int, list[np.ndarray]] = {}
     for i in range(count):
         merged.setdefault(find(i), []).append(groups[i])
@@ -1338,6 +1398,37 @@ def score(
 CAPTURE_COLUMNS = ("x", "y", "z", "f_dc_0", "f_dc_1", "f_dc_2", "scale_0", "scale_1", "scale_2")
 
 
+def analysis_sample(count: int, max_splats: int | None, seed: int) -> np.ndarray | None:
+    """Which of ``count`` kept splats are analysed: ``None`` for all of them, else the sorted
+    indices of a uniform random sample of ``max_splats`` (``ANALYSIS_MAX_SPLATS``), seeded."""
+    if max_splats is None or count <= max_splats:
+        return None
+    if max_splats < 1:
+        raise ValueError(f"max_splats must be at least 1, not {max_splats}")
+    rng = np.random.default_rng(seed)
+    return np.sort(rng.choice(count, size=max_splats, replace=False))
+
+
+def propagate(
+    analysed_xyz: np.ndarray, xyz: np.ndarray, sample: np.ndarray, *values: np.ndarray
+) -> list[np.ndarray]:
+    """Each of ``values`` (per analysed splat) carried to every splat of ``xyz``: the value of
+    its nearest analysed splat, and an analysed splat's own value on itself.
+
+    ``sample[k]`` is the row of ``xyz`` the k-th analysed splat is. Queried in windows of
+    ``QUERY_CHUNK``, so memory beyond the answers stays flat in the capture's size.
+    """
+    tree = cKDTree(analysed_xyz)
+    nearest = np.empty(xyz.shape[0], dtype=np.int64)
+    for start in range(0, xyz.shape[0], QUERY_CHUNK):
+        stop = min(start + QUERY_CHUNK, xyz.shape[0])
+        chunk = np.asarray(xyz[start:stop], dtype=np.float64)
+        nearest[start:stop] = tree.query(chunk, k=1, workers=QUERY_WORKERS)[1]
+    # Coincident splats tie; an analysed one keeps its own answer whichever the tree picks.
+    nearest[sample] = np.arange(sample.size)
+    return [np.asarray(v)[nearest] for v in values]
+
+
 def read_capture(ply: Path, opacity_min: float) -> dict[str, np.ndarray]:
     """The columns the step reads, every row, in windows; and ``keep``: the rows the packer
     keeps (``splat_tiles._filter_rows``: finite, opaque enough, not a far floater)."""
@@ -1363,9 +1454,18 @@ def build(
     tile_gaussians: int | None = PACKAGE_TILE_GAUSSIANS,
     seed: int = 1,
     truth: dict | None = None,
+    max_analysed: int | None = ANALYSIS_MAX_SPLATS,
+    timings_in_report: bool = False,
 ) -> dict:
-    """Analyse, rig, bind and write: rig.json, motion.json, plants.json, scene.json beside the tiles."""
+    """Analyse, rig, bind and write: rig.json, motion.json, plants.json, scene.json beside the tiles.
+
+    More than ``max_analysed`` kept splats are analysed on a seeded uniform sample of that many
+    (``ANALYSIS_MAX_SPLATS``; ``None`` analyses all), and the rest take their nearest analysed
+    splat's class and plant. ``timings_in_report`` writes the wall-clock timings into
+    scene.json too; off by default, so two runs over the same bytes write the same files.
+    """
     started = time.perf_counter()
+    timings: dict[str, float] = {}
     if tiles_dir is None:
         tiles_dir = out_dir
         splat_tiles.convert(
@@ -1375,15 +1475,36 @@ def build(
     data = read_capture(ply, opacity_min)
     keep = data["keep"]
     rows = np.flatnonzero(keep)
-    xyz = np.stack([data["x"], data["y"], data["z"]], axis=1)[keep].astype(np.float64)
+    kept = int(rows.size)
+    # float32 for every kept splat (the PLY's own values); float64 only for the analysed ones.
+    xyz_kept = np.stack([data["x"][rows], data["y"][rows], data["z"][rows]], axis=1)
+    sample = analysis_sample(kept, max_analysed, seed)
+    analysed_rows = rows if sample is None else rows[sample]
+    xyz = xyz_kept.astype(np.float64) if sample is None else xyz_kept[sample].astype(np.float64)
     rgb = np.clip(
-        0.5 + splat_tiles.SH_C0 * np.stack([data[f"f_dc_{k}"] for k in range(3)], axis=1)[keep],
+        0.5 + splat_tiles.SH_C0 * np.stack([data[f"f_dc_{k}"][analysed_rows] for k in range(3)], 1),
         0.0,
         1.0,
     )
-    log_scales = np.stack([data[f"scale_{k}"] for k in range(3)], axis=1)[keep].astype(np.float64)
+    log_scales = np.stack([data[f"scale_{k}"][analysed_rows] for k in range(3)], 1).astype(
+        np.float64
+    )
+    del data
+    timings["readS"] = time.perf_counter() - started
     analysis = analyse(xyz, rgb)
+    del rgb
+    timings.update({f"analyse.{k}": v for k, v in analysis.timings.items()})
+    mark = time.perf_counter()
     rigs, size = plant_rigs(analysis, xyz, log_scales, seed=seed)
+    del log_scales
+    timings["rigsS"] = time.perf_counter() - mark
+    mark = time.perf_counter()
+    if sample is None:
+        klass_kept, plant_kept = analysis.klass, analysis.plant
+    else:
+        klass_kept, plant_kept = propagate(xyz, xyz_kept, sample, analysis.klass, analysis.plant)
+    del xyz_kept
+    timings["propagateS"] = time.perf_counter() - mark
     rig, sidecar = forest(
         rigs,
         size,
@@ -1393,14 +1514,17 @@ def build(
             f"({sum(1 for p in rigs if p.instance.klass == TREE)} trees, "
             f"{sum(1 for p in rigs if p.instance.klass == SHRUB)} shrubs, "
             f"{sum(1 for p in rigs if p.instance.klass == SNAG)} snags) over "
-            f"{xyz.shape[0]:,} splats (tools/captures/scene_plants.py)"
+            f"{kept:,} splats (tools/captures/scene_plants.py)"
         ),
     )
     labels_by_row = np.zeros(int(keep.size), dtype=np.int64)
-    labels_by_row[rows] = analysis.plant.astype(np.int64) + 1
+    labels_by_row[rows] = plant_kept.astype(np.int64) + 1
+    mark = time.perf_counter()
     binding, checksums = plant_binding(
         tiles_dir, ply, labels_by_row, opacity_min=opacity_min, tile_gaussians=tile_gaussians
     )
+    del labels_by_row
+    timings["bindingS"] = time.perf_counter() - mark
     rig = rig_tiles.stamp(rig, tiles_dir)
     rig["canonicalChecksum"] = checksums["splat.glb"]
     rig["motion"] = "motion.json"
@@ -1435,15 +1559,29 @@ def build(
     }
     (out_dir / "ground.f32").write_bytes(analysis.ground.heights.astype("<f4").tobytes())
     classes_by_row = np.full(int(keep.size), STATIC, dtype=np.uint8)
-    classes_by_row[rows] = analysis.klass
+    classes_by_row[rows] = klass_kept
     (out_dir / "classes.u8").write_bytes(classes_by_row.tobytes())
-    class_counts = {name: int((analysis.klass == k).sum()) for k, name in enumerate(CLASSES)}
+    class_counts = {
+        name: int(n) for name, n in zip(CLASSES, np.bincount(klass_kept, minlength=len(CLASSES)))
+    }
+    bound = np.bincount(plant_kept.astype(np.int64) + 1, minlength=len(rigs) + 1)[1:]
     report: dict = {
         "format": "hexapod.scene",
         "version": 1,
         "generator": "tools/captures/scene_plants.py",
         "splats": int(keep.size),
-        "analysedSplats": int(rows.size),
+        "keptSplats": kept,
+        "analysedSplats": int(xyz.shape[0]),
+        "analysis": {
+            "subsampled": sample is not None,
+            "maxSplats": max_analysed,
+            "rule": (
+                f"a uniform random sample (seed {seed}) of the kept splats; every other kept "
+                "splat takes its nearest analysed splat's class and plant"
+                if sample is not None
+                else "every kept splat"
+            ),
+        },
         "classes": list(CLASSES),
         "classCounts": class_counts,
         "ground": {
@@ -1467,11 +1605,12 @@ def build(
                 "greenFraction": round(p.instance.green_fraction, 4),
                 "spreadM": round(p.instance.spread_m, 3),
                 "splats": int(p.instance.members.size),
+                "boundSplats": int(bound[k]),
                 "splatsPerM": round(p.instance.splats_per_m, 1),
                 "nodes": len(p.rig["nodes"]),
                 "f0Hz": p.sidecar["nodes"]["frequencyHz"][0],
             }
-            for p in rigs
+            for k, p in enumerate(rigs)
         ],
         "rejectedObjects": analysis.rejected,
         "rig": {
@@ -1482,15 +1621,16 @@ def build(
         },
     }
     if truth is not None:
-        truth_class = np.asarray(truth["class"], dtype=np.int64)[rows]
-        truth_instance = np.asarray(truth["instance"], dtype=np.int64)[rows]
+        truth_class = np.asarray(truth["class"], dtype=np.int64)[analysed_rows]
+        truth_instance = np.asarray(truth["instance"], dtype=np.int64)[analysed_rows]
         report["score"] = score(analysis, truth_class, truth_instance, truth["instances"])
+    timings["totalS"] = time.perf_counter() - started
+    timings_s = {k: round(v, 3) for k, v in timings.items()}
+    # Wall-clock is written only when asked: two runs over the same bytes write the same files.
+    if timings_in_report:
+        report["timingsS"] = timings_s
     (out_dir / "scene.json").write_text(json.dumps(report, indent=1) + "\n", encoding="utf-8")
-    # Wall-clock is reported, never written: two runs over the same bytes write the same files.
-    report["timingsS"] = {
-        **{k: round(v, 3) for k, v in analysis.timings.items()},
-        "totalS": round(time.perf_counter() - started, 3),
-    }
+    report["timingsS"] = timings_s
     return report
 
 
@@ -1512,6 +1652,17 @@ def main() -> None:
     parser.add_argument("--opacity-min", type=float, default=PACKAGE_OPACITY_MIN)
     parser.add_argument("--tile-gaussians", type=int, default=PACKAGE_TILE_GAUSSIANS)
     parser.add_argument("--truth", type=Path, default=None, help="labels.json of a synthetic scene")
+    parser.add_argument(
+        "--max-analysed",
+        type=int,
+        default=ANALYSIS_MAX_SPLATS,
+        help="analyse a seeded uniform sample of at most this many kept splats; 0 for all",
+    )
+    parser.add_argument(
+        "--no-timings",
+        action="store_true",
+        help="keep wall-clock timings out of scene.json, so reruns write identical bytes",
+    )
     args = parser.parse_args()
     out = args.out or args.tiles
     if out is None:
@@ -1527,8 +1678,12 @@ def main() -> None:
         opacity_min=args.opacity_min,
         tile_gaussians=args.tile_gaussians,
         truth=truth,
+        max_analysed=args.max_analysed or None,
+        timings_in_report=not args.no_timings,
     )
-    summary = {k: report[k] for k in ("classCounts", "rig", "timingsS")}
+    summary = {
+        k: report[k] for k in ("keptSplats", "analysedSplats", "classCounts", "rig", "timingsS")
+    }
     summary["plants"] = [(p["id"], p["rig"], p["heightM"], p["nodes"]) for p in report["plants"]]
     if "score" in report:
         summary["score"] = {
