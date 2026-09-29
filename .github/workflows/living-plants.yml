@@ -116,12 +116,18 @@ jobs:
           import json, os
           scene = json.load(open(os.environ["RUNNER_TEMP"] + "/work/living/scene.json"))
           print("## Scene step\n")
+          print(f"Analysed {scene['analysedSplats']:,} of {scene['keptSplats']:,} kept splats "
+                f"({scene['analysis']['rule']}).\n")
+          if "timingsS" in scene:
+              print("Seconds: " + ", ".join(f"{k} {v:g}" for k, v in scene["timingsS"].items()) + "\n")
           print("| class | splats |\n| --- | ---: |")
           for name, count in scene["classCounts"].items():
               print(f"| {name} | {count:,} |")
-          print("\n| plant | rig | height m | splats | joints |\n| --- | --- | ---: | ---: | ---: |")
+          print("\n| plant | rig | height m | splats analysed | splats bound | joints |")
+          print("| --- | --- | ---: | ---: | ---: | ---: |")
           for p in scene["plants"]:
-              print(f"| {p['id']} | {p['rig']} | {p['heightM']} | {p['splats']:,} | {p['nodes']} |")
+              print(f"| {p['id']} | {p['rig']} | {p['heightM']} | {p['splats']:,} "
+                    f"| {p['boundSplats']:,} | {p['nodes']} |")
           print(f"\nRig: {scene['rig']['nodes']} joints over {scene['rig']['tiles']} tiles.")
           PY
       - uses: actions/upload-artifact@v4

@@ -3,7 +3,13 @@
  "version": 1,
  "generator": "tools/captures/scene_plants.py",
  "splats": 43337,
+ "keptSplats": 43337,
  "analysedSplats": 43337,
+ "analysis": {
+  "subsampled": false,
+  "maxSplats": 4000000,
+  "rule": "every kept splat"
+ },
  "classes": [
   "tree",
   "shrub",
@@ -214,6 +220,7 @@
    "greenFraction": 0.6612,
    "spreadM": 2.591,
    "splats": 6987,
+   "boundSplats": 6987,
    "splatsPerM": 993.0,
    "nodes": 154,
    "f0Hz": 0.9048
@@ -342,6 +349,7 @@
    "greenFraction": 0.6607,
    "spreadM": 3.578,
    "splats": 8992,
+   "boundSplats": 8992,
    "splatsPerM": 913.6,
    "nodes": 169,
    "f0Hz": 0.765
@@ -422,6 +430,7 @@
    "greenFraction": 0.6596,
    "spreadM": 4.451,
    "splats": 2591,
+   "boundSplats": 2591,
    "splatsPerM": 218.6,
    "nodes": 12,
    "f0Hz": 0.6972
@@ -578,6 +587,7 @@
    "greenFraction": 0.9211,
    "spreadM": 0.9,
    "splats": 697,
+   "boundSplats": 697,
    "splatsPerM": 624.8,
    "nodes": 12,
    "f0Hz": 2.2723
@@ -714,6 +724,7 @@
    "greenFraction": 0.9271,
    "spreadM": 1.108,
    "splats": 892,
+   "boundSplats": 892,
    "splatsPerM": 640.2,
    "nodes": 12,
    "f0Hz": 2.0332
@@ -878,6 +889,7 @@
    "greenFraction": 0.9212,
    "spreadM": 1.413,
    "splats": 1294,
+   "boundSplats": 1294,
    "splatsPerM": 662.4,
    "nodes": 12,
    "f0Hz": 1.7172
@@ -1006,6 +1018,7 @@
    "greenFraction": 0.9259,
    "spreadM": 0.799,
    "splats": 594,
+   "boundSplats": 594,
    "splatsPerM": 651.2,
    "nodes": 12,
    "f0Hz": 2.5128
@@ -1098,6 +1111,7 @@
    "greenFraction": 0.9293,
    "spreadM": 0.668,
    "splats": 396,
+   "boundSplats": 396,
    "splatsPerM": 628.2,
    "nodes": 12,
    "f0Hz": 3.0227
@@ -1142,6 +1156,7 @@
    "greenFraction": 0.0085,
    "spreadM": 0.393,
    "splats": 1294,
+   "boundSplats": 1294,
    "splatsPerM": 185.4,
    "nodes": 5,
    "f0Hz": 0.9084
@@ -1194,6 +1209,7 @@
    "greenFraction": 0.0039,
    "spreadM": 0.46,
    "splats": 1792,
+   "boundSplats": 1792,
    "splatsPerM": 179.9,
    "nodes": 5,
    "f0Hz": 0.7605
