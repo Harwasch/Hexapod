@@ -119,6 +119,7 @@ export class CameraController {
   private collider: SplatCollider | null = null;
   /** Space held: the camera passes through splat surfaces instead of stopping at them. */
   private passThrough = false;
+  private passKeyEnabled = true;
   /** Where the camera last was that the collision check accepted. */
   private lastGood: Cartesian3 | null = null;
   private hinted = false;
@@ -227,13 +228,22 @@ export class CameraController {
     this.lastGood = null;
   }
 
+  /**
+   * Space passes through surfaces on the map; while exploring it jumps instead, so the
+   * explore controller turns this off for its duration.
+   */
+  setPassKeyEnabled(enabled: boolean): void {
+    this.passKeyEnabled = enabled;
+    if (!enabled) this.passThrough = false;
+  }
+
   /** Whether Space is held to pass through surfaces. */
   get passingThrough(): boolean {
     return this.passThrough;
   }
 
   private readonly onPassKey = (event: KeyboardEvent): void => {
-    if (event.code !== "Space") return;
+    if (event.code !== "Space" || !this.passKeyEnabled) return;
     if (event.type === "keyup") {
       this.passThrough = false;
       return;

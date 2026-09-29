@@ -27,6 +27,7 @@
  * | `primitive.vertexMotion` | **patch** | the vertex-shader motion hook the GPU path installs |
  * | `primitive.holdRebuilds` | **patch** | no new snapshot while the camera moves (`splatMotionGate.ts`) |
  * | `tileset.selectOffscreen` | **patch** (`Cesium3DTilesetBaseTraversal.js`) | a refining tile's out-of-view children drawn coarse |
+ * | `tileset.focusWeight` / `focusConeRadians` | **patch** (`Cesium3DTile.js`) | detail spent on the centre of the view first |
  * | `scene.frameState.splatDecodesAllowed` | **patch** (`GltfSpzLoader.js`) | SPZ decodes that may start this frame |
  * | `GaussianSplatTextureGenerator.generateFromAttributes` | exported at `cesium/Source/Cesium.js:638` | the CPU path's interception point |
  *
@@ -171,4 +172,21 @@ export function splatFrameStateOf(scene: Scene): SplatFrameState {
  */
 export function keepOffscreenSplats(tileset: Cesium3DTileset): void {
   (tileset as unknown as { selectOffscreen: boolean }).selectOffscreen = true;
+}
+
+/** How much less detail the edge of the view gets than its centre (0..1). */
+export const SPLAT_FOCUS_WEIGHT = 0.6;
+/** Half-angle around the view direction that keeps full detail (about 11 degrees). */
+export const SPLAT_FOCUS_CONE_RAD = 0.2;
+
+/**
+ * Spends a splat tileset's detail where the person looks (patched `Cesium3DTile`
+ * `getScreenSpaceError`): full detail within a cone around the view direction, less toward
+ * the edges, so under a budget the thing in the middle of the view refines first. Distance is
+ * already in the error (a near tile's error is larger), so near and central come first.
+ */
+export function focusSplats(tileset: Cesium3DTileset): void {
+  const patched = tileset as unknown as { focusWeight: number; focusConeRadians: number };
+  patched.focusWeight = SPLAT_FOCUS_WEIGHT;
+  patched.focusConeRadians = SPLAT_FOCUS_CONE_RAD;
 }

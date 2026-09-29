@@ -48,3 +48,39 @@ export function splatBudget(): number {
 export function detailScreenSpaceScale(budget: number): number {
   return Math.sqrt(DEFAULT_SPLAT_BUDGET / Math.max(1, budget));
 }
+
+/** Splats a desktop draws at Standard, by the memory it reports (`navigator.deviceMemory`,
+ *  Chromium only; absent means a desktop browser that does not say, taken as 8 GB). */
+const DESKTOP_BUDGETS: [minGb: number, splats: number][] = [
+  [8, 3_000_000],
+  [4, 1_500_000],
+  [0, 800_000],
+];
+
+/** Whether this looks like a phone or tablet: a coarse pointer and a small screen. */
+export function isHandheld(): boolean {
+  try {
+    const coarse = window.matchMedia("(pointer: coarse)").matches;
+    return coarse && Math.min(window.screen.width, window.screen.height) < 900;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The gaussians this device draws at once. The Detail choice was made for phones (400k at
+ * Standard); a desktop's GPU draws several times that -- the web splat viewers show millions
+ * -- and holding a large scan to a phone's budget is what kept a close look blurry. So a
+ * desktop scales its own budget by the same choice: Light, Standard and Full are half, one
+ * and two times its Standard.
+ */
+export function deviceSplatBudget(): number {
+  const detail = splatBudget();
+  if (isHandheld()) return detail;
+  const memory =
+    (typeof navigator !== "undefined"
+      ? (navigator as Navigator & { deviceMemory?: number }).deviceMemory
+      : undefined) ?? 8;
+  const standard = DESKTOP_BUDGETS.find(([minGb]) => memory >= minGb)?.[1] ?? 800_000;
+  return Math.round(standard * (detail / DEFAULT_SPLAT_BUDGET));
+}

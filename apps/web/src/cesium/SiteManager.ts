@@ -16,7 +16,7 @@ import {
 import type { Footprint, Representation, Site, SiteAsset, SiteSummary } from "@twin/contracts";
 import { boundingRadiusM, centerOf, circleFootprint, haversineDistance } from "@twin/geo";
 
-import { detailScreenSpaceScale, splatBudget } from "@/lib/detail";
+import { detailScreenSpaceScale, deviceSplatBudget } from "@/lib/detail";
 import type { Emitter } from "@/lib/emitter";
 import { createLogger, describeError } from "@/lib/log";
 import { timed } from "@/lib/timing";
@@ -24,14 +24,11 @@ import { timed } from "@/lib/timing";
 import type { CameraController } from "./CameraController";
 import type { ClippingManager } from "./ClippingManager";
 import { isIonAuthError, isIonNotFound } from "./ion";
-import {
-  MEMORY_PRESSURE_RATIO,
-  devicePixelError,
-  type PerformanceManager,
-} from "./PerformanceManager";
+import { devicePixelError, type PerformanceManager } from "./PerformanceManager";
 import { groundAt, measuredClamp, type MeasuredGround } from "./placement";
 import { createSiteTileset, tileCacheBudget } from "./providers/tiles";
 import { SPLAT_BYTES_ESTIMATE, SplatCount, splatMemory } from "./splatCount";
+import { splatTilesetOf } from "./splatInternals";
 import type { SceneEvents } from "./types";
 
 const log = createLogger("sites");
@@ -110,6 +107,10 @@ interface ActiveSite {
   engaged: boolean;
 }
 
+/** Splat tiles kept loaded, drawn or not, up to this many times the drawn budget: a look
+ *  back or a zoom out finds them still there. */
+const CACHE_FACTOR = 2;
+
 /**
  * Loads a site's reality models into the world when they are useful (fly-to or
  * proximity), switches representations without moving the camera, and keeps
@@ -127,8 +128,8 @@ export class SiteManager {
   private nearId: string | null = null;
   private objectScale = false;
   private screenSpaceError = 16;
-  /** The phone's Detail choice: the gaussians a view may hold at once, read once. */
-  private readonly splatDetail = splatBudget();
+  /** The gaussians this device draws at once (lib/detail.ts), read once. */
+  private readonly splatDetail = deviceSplatBudget();
   /** The same choice as a factor on splat screen-space error. */
   private readonly splatDetailScale = detailScreenSpaceScale(this.splatDetail);
   private pixelRatio = 1;
@@ -153,8 +154,11 @@ export class SiteManager {
     this.performance.addMemorySource("sites", () => this.memoryUsage());
     // Splats are budgeted by count, against the Detail choice (splatCount.ts): the group's
     // pressure is the higher of the two ratios.
+    // Drawn, not loaded: what the budget limits is what a frame draws. Tiles only cached
+    // (turned away from, or replaced by their children) are trimmed separately, past twice
+    // the budget, so a view is never coarsened for splats it is not drawing.
     this.performance.addMemorySource("sites", () =>
-      splatMemory(this.splatsLoaded(), this.splatDetail),
+      splatMemory(this.splatsDrawn(), this.splatDetail),
     );
     const calibrationTimer = setInterval(() => this.refreshCalibration(), CALIBRATION_TICK_MS);
     this.unsubscribe.push(
@@ -575,7 +579,7 @@ export class SiteManager {
           // tiles turned away from), as Cesium's cache would if it could see splat bytes;
           // only what is still over after that costs detail. Unloads happen next frame.
           // Not sooner: a trimmed parent must load again before a zoom out can show it.
-          if (this.splatsLoaded() > this.splatDetail * MEMORY_PRESSURE_RATIO) this.trimSplats();
+          if (this.splatsLoaded() > this.splatDetail * CACHE_FACTOR) this.trimSplats();
         }),
         tileset.tileUnload.addEventListener((tile: Cesium3DTile) => splats.unload(tile)),
       );
@@ -609,6 +613,16 @@ export class SiteManager {
       if (handle.tileset?.show) bytes += handle.tileset.totalMemoryUsageInBytes;
     }
     return { bytes, budget: cacheBytes + maximumCacheOverflowBytes };
+  }
+
+  /** Gaussians drawn across the visible splat tilesets: what their snapshots hold. */
+  private splatsDrawn(): number {
+    let total = 0;
+    for (const { handle } of this.handles()) {
+      if (!handle.tileset?.show || !handle.splats) continue;
+      total += splatTilesetOf(handle.tileset).gaussianSplatPrimitive?._numSplats ?? 0;
+    }
+    return total;
   }
 
   /** Gaussians loaded across the visible splat tilesets: one view, one Detail budget. */

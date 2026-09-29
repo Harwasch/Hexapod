@@ -7,7 +7,7 @@ import {
 
 import type { Layer, SiteAsset } from "@twin/contracts";
 
-import { keepOffscreenSplats } from "../splatInternals";
+import { focusSplats, keepOffscreenSplats } from "../splatInternals";
 
 export interface TilesetQuality {
   maximumScreenSpaceError: number;
@@ -70,7 +70,11 @@ export async function createSiteTileset(
     : Cesium3DTileset.fromUrl(asset.source.url, options));
   // A splat is drawn from one snapshot of its selected tiles, held while the camera moves
   // (splatMotionGate.ts); out-of-view tiles stay in it, coarse, so turning shows no hole.
-  if (asset.representation === "gaussian-splat") keepOffscreenSplats(tileset);
+  // Detail goes to what is in the middle of the view first (focusSplats).
+  if (asset.representation === "gaussian-splat") {
+    keepOffscreenSplats(tileset);
+    focusSplats(tileset);
+  }
   return tileset;
 }
 

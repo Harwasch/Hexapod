@@ -1,8 +1,67 @@
+diff --git a/Source/Scene/Cesium3DTile.js b/Source/Scene/Cesium3DTile.js
+index b69a982b5dfeaa2bd97393aa4cd26298a902a42a..d0d78f75328d63217c41750f5f6e40de680e3f9c 100644
+--- a/Source/Scene/Cesium3DTile.js
++++ b/Source/Scene/Cesium3DTile.js
+@@ -963,6 +963,14 @@ Cesium3DTile.prototype.getScreenSpaceError = function (
+       const dynamicError = CesiumMath.fog(distance, density) * factor;
+       error -= dynamicError;
+     }
++    // Hexapod patch: `tileset.focusWeight` (0..1) spends detail where the person looks. A
++    // tile within `focusConeRadians` of the view direction keeps its error; one toward the
++    // edge of the view has it scaled down, to (1 - focusWeight) at the edge, so under a
++    // detail budget the centre of the view refines first and the periphery last.
++    const focusWeight = tileset.focusWeight;
++    if (focusWeight > 0 && error > 0) {
++      error *= focusFactor(this, frameState, focusWeight, tileset.focusConeRadians);
++    }
+   }
+ 
+   error /= frameState.pixelRatio;
+@@ -970,6 +978,39 @@ Cesium3DTile.prototype.getScreenSpaceError = function (
+   return error;
+ };
+ 
++const scratchFocusDirection = new Cartesian3();
++
++/**
++ * Hexapod patch: the focus factor of a tile, 1 within the cone around the view direction,
++ * falling linearly to (1 - weight) at the edge of the view, from the angle between the view
++ * direction and the nearest point of the tile's bounding sphere.
++ * @private
++ */
++function focusFactor(tile, frameState, weight, cone) {
++  const camera = frameState.camera;
++  const sphere = tile.boundingSphere;
++  const toCenter = Cartesian3.subtract(
++    sphere.center,
++    camera.positionWC,
++    scratchFocusDirection,
++  );
++  const distance = Cartesian3.magnitude(toCenter);
++  if (distance <= sphere.radius) {
++    return 1.0;
++  }
++  const cosine = Cartesian3.dot(toCenter, camera.directionWC) / distance;
++  const angle =
++    Math.acos(CesiumMath.clamp(cosine, -1.0, 1.0)) -
++    Math.asin(Math.min(1.0, sphere.radius / distance));
++  const frustum = camera.frustum;
++  const edge = defined(frustum.fov) ? frustum.fov * 0.5 : CesiumMath.PI_OVER_FOUR;
++  if (angle <= cone) {
++    return 1.0;
++  }
++  const t = CesiumMath.clamp((angle - cone) / Math.max(edge - cone, 1e-3), 0.0, 1.0);
++  return 1.0 - weight * t;
++}
++
+ /**
+  * @private
+  * @param {Cesium3DTileset} tileset
 diff --git a/Source/Scene/Cesium3DTileset.js b/Source/Scene/Cesium3DTileset.js
-index 45e8741d148b8c7569ab89d3ffab2b89c76f5f3f..c986f32e05d8c74188d938920c0ab6d3cc1eff13 100644
+index 45e8741d148b8c7569ab89d3ffab2b89c76f5f3f..4a613d7d61db728ffbb585aab4954dd167bc00a3 100644
 --- a/Source/Scene/Cesium3DTileset.js
 +++ b/Source/Scene/Cesium3DTileset.js
-@@ -857,6 +857,15 @@ function Cesium3DTileset(options) {
+@@ -857,6 +857,29 @@ function Cesium3DTileset(options) {
     */
    this.loadSiblings = options.loadSiblings ?? false;
  
@@ -14,6 +73,20 @@ index 45e8741d148b8c7569ab89d3ffab2b89c76f5f3f..c986f32e05d8c74188d938920c0ab6d3
 +   * @default false
 +   */
 +  this.selectOffscreen = false;
++
++  /**
++   * Hexapod patch: how much less detail the edge of the view gets than its centre, 0..1
++   * (see Cesium3DTile.getScreenSpaceError). 0 is Cesium's uniform error.
++   * @type {number}
++   * @default 0
++   */
++  this.focusWeight = 0.0;
++
++  /**
++   * Hexapod patch: the half-angle around the view direction that keeps full detail.
++   * @type {number}
++   */
++  this.focusConeRadians = 0.2;
 +
    this._clippingPlanes = undefined;
    if (defined(options.clippingPlanes)) {

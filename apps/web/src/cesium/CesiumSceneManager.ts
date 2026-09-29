@@ -179,6 +179,7 @@ export class CesiumSceneManager {
     );
     this.explore = new ExploreController(this.viewer, this.events);
     this.explore.setCollider(this.collider);
+    this.explore.setCameraController(this.camera);
     this.keyboard = new KeyboardNavigator(this.viewer, this.camera);
     this.debug = new DebugManager(this.viewer, this.sites, (enabled) =>
       this.clipping.setEnabled(enabled),
