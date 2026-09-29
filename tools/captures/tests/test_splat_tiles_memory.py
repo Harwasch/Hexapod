@@ -1,9 +1,12 @@
 """The packer's memory does not grow with the splat it packs (splat_tiles.convert, "Out of core").
 
-A trained splat is a 3DGS PLY of 62 floats a gaussian (248 bytes, with the SH rest the
-tiles never carry): 8M of them is a 2 GB file, and the worker that packages it has 2 GB
+A trained splat is a 3DGS PLY of 62 floats a gaussian (248 bytes, with its SH degree 3,
+which the tiles carry): 8M of them is a 2 GB file, and the worker that packages it has 2 GB
 in all. So `convert` reads the PLY in windows and sorts through disk, and what it holds for
-the whole scan is a few arrays of 8-16 bytes a gaussian.
+the whole scan is a few arrays of 8-16 bytes a gaussian. Carrying the SH (as the bytes SPZ
+will hold) makes each sorted record 109 bytes rather than 64, and the windows and buckets
+shrink to match, so the peak barely moves: 1.5M gaussians at ~210 MB with SH degree 3,
+~207 MB without.
 
 Measured in a child process, by its own peak resident set (`VmHWM`), which counts the
 pages of every window it maps as well as everything numpy allocates. Not `ru_maxrss`: Linux
