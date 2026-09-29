@@ -1,0 +1,193 @@
+name: Collision backfill
+
+# A collision grid for a capture published before the packer wrote one (tools/captures
+# splat_tiles.py, `COLLISION_FORMAT`). Opt-in, and never run by default.
+#
+# * **What it does.** `build`: fetches the capture's canonical.ply (the API's
+#   /captures/{id}/splat.ply redirect) and its published tileset.json, runs
+#   `splat_tiles.py collision` -- the same collision.bin `convert` now writes beside the
+#   tiles -- and adds `root.extras.collision` to that tileset.json, and keeps both as an
+#   artifact to review. `publish` (only when asked): puts collision.bin and the updated
+#   tileset.json beside the published tiles, at the tileset's own URL. The asset's URL does
+#   not change, so nothing in the API is touched.
+# * **Identity is checked, not assumed.** The backfill refuses unless the tileset's leaves
+#   hold exactly as many gaussians as the PLY keeps at `opacity_min` (the package stage's
+#   parameter; 0.02 unless the run set another), and the build refuses unless the new
+#   tileset.json differs from the published one by `root.extras.collision` alone.
+# * **How to run it.** `workflow_dispatch` once this file is on the default branch; before
+#   that, push a commit whose message carries `[collision|capture=<uuid>]`, adding
+#   `|publish` to publish and `|opacity_min=<value>` for a run packed with another value.
+#   A re-run of the capture through the API after the worker is deployed with the new
+#   packer does the same without this workflow, at the cost of re-packing every tile.
+#
+# Secrets, for `publish` only: CLOUDFLARE_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY;
+# variables R2_PUBLIC_BUCKET (or R2_BUCKET), R2_PUBLIC_URL, TWIN_API_URL.
+
+on:
+  push:
+    branches: [claude/funny-carson-937ydv]
+  workflow_dispatch:
+    inputs:
+      capture:
+        description: "The capture's id (a UUID)"
+        type: string
+        required: true
+      publish:
+        description: "Publish collision.bin and the updated tileset.json beside the tiles"
+        type: boolean
+        default: false
+      opacity_min:
+        description: "The package stage's opacity_min for this capture's run"
+        type: string
+        default: "0.02"
+
+jobs:
+  plan:
+    name: What to run
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      contains(github.event.head_commit.message, '[collision|')
+    runs-on: ubuntu-latest
+    outputs:
+      capture: ${{ steps.plan.outputs.capture }}
+      publish: ${{ steps.plan.outputs.publish }}
+      opacity_min: ${{ steps.plan.outputs.opacity_min }}
+    steps:
+      # Read as data, validated here, never interpolated into a shell line.
+      - id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          MESSAGE: ${{ github.event.head_commit.message }}
+          CAPTURE: ${{ inputs.capture }}
+          PUBLISH: ${{ inputs.publish }}
+          OPACITY_MIN: ${{ inputs.opacity_min }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import os, re
+          options = {"capture": "", "publish": "false", "opacity_min": "0.02"}
+          if os.environ["EVENT"] == "workflow_dispatch":
+              for name in options:
+                  options[name] = os.environ.get(name.upper(), "") or options[name]
+          else:
+              found = re.search(r"\[collision([^\]]*)\]", os.environ.get("MESSAGE", ""))
+              for part in (found.group(1) if found else "").split("|")[1:]:
+                  name, _, value = part.partition("=")
+                  if name not in options:
+                      raise SystemExit(f"unknown option {name!r} in the [collision] token")
+                  options[name] = value if value else "true"
+          uuid = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+          valid = {"capture": uuid, "publish": r"true|false", "opacity_min": r"0?\.[0-9]+|0"}
+          for name, pattern in valid.items():
+              if not re.fullmatch(pattern, options[name]):
+                  raise SystemExit(f"{name}={options[name]!r} is not {pattern}")
+          for name, value in options.items():
+              print(f"{name}={value}")
+          PY
+          cat "$GITHUB_OUTPUT"
+
+  build:
+    name: collision.bin from the capture's splat
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      CAPTURE: ${{ needs.plan.outputs.capture }}
+      OPACITY_MIN: ${{ needs.plan.outputs.opacity_min }}
+      TWIN_API_URL: ${{ vars.TWIN_API_URL || 'https://twin-api.fly.dev' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: The capture's splat and its published tileset
+        working-directory: tools/captures
+        run: |
+          uv sync --frozen
+          # --assume-metric: the grid is in the tiles' own frame whatever the units are.
+          uv run python fetch_capture.py "$CAPTURE" "$RUNNER_TEMP/work" --api "$TWIN_API_URL" \
+            --assume-metric
+          mkdir -p "$RUNNER_TEMP/out"
+          cp "$RUNNER_TEMP/work/tiles/tileset.json" "$RUNNER_TEMP/out/tileset.json"
+          cp "$RUNNER_TEMP/work/capture.json" "$RUNNER_TEMP/out/capture.json"
+      - name: The grid, and the tileset that declares it
+        working-directory: tools/captures
+        run: |
+          uv run python splat_tiles.py collision "$RUNNER_TEMP/work/canonical.ply" \
+            "$RUNNER_TEMP/out" --tileset "$RUNNER_TEMP/out/tileset.json" \
+            --opacity-min "$OPACITY_MIN" | tee "$RUNNER_TEMP/out/collision.json"
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json, os
+          temp = os.environ["RUNNER_TEMP"]
+          before = json.load(open(f"{temp}/work/tiles/tileset.json"))
+          after = json.load(open(f"{temp}/out/tileset.json"))
+          extras = after["root"]["extras"].pop("collision")
+          before["root"].get("extras", {}).pop("collision", None)
+          if before != after:
+              raise SystemExit("the new tileset.json differs by more than extras.collision")
+          size = os.path.getsize(f"{temp}/out/collision.bin")
+          print("## Collision grid\n")
+          print(f"cell {extras['cell']} m, origin {extras['origin']}, {extras['bricks']:,} "
+                f"bricks, {extras['solidCells']:,} solid cells, {size:,} bytes gzipped.")
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: collision
+          path: |
+            ${{ runner.temp }}/out/
+          if-no-files-found: error
+
+  publish:
+    name: Publish it beside the tiles
+    needs: [plan, build]
+    if: needs.plan.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      OBJECT_STORAGE_ENDPOINT_URL: https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
+      OBJECT_STORAGE_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY_ID }}
+      OBJECT_STORAGE_SECRET_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      OBJECT_STORAGE_PUBLIC_BUCKET: ${{ vars.R2_PUBLIC_BUCKET || format('{0}-public', vars.R2_BUCKET || 'twin-assets') }}
+      OBJECT_STORAGE_PUBLIC_URL: ${{ vars.R2_PUBLIC_URL }}
+    steps:
+      - name: The secrets this job needs
+        run: |
+          missing=""
+          for name in OBJECT_STORAGE_ACCESS_KEY OBJECT_STORAGE_SECRET_KEY OBJECT_STORAGE_PUBLIC_URL; do
+            if [ -z "${!name:-}" ]; then missing="$missing $name"; fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::missing:$missing. See docs/DEPLOYMENT.md."
+            exit 1
+          fi
+      - uses: actions/download-artifact@v4
+        with:
+          name: collision
+          path: out
+      - uses: astral-sh/setup-uv@v6
+      - name: collision.bin, then the tileset.json that names it
+        run: |
+          uv run --with boto3 python - <<'PY'
+          import json, os
+          import boto3
+          meta = json.load(open("out/capture.json"))
+          tileset_url = meta["asset"]["source"]["url"]
+          public = os.environ["OBJECT_STORAGE_PUBLIC_URL"].rstrip("/") + "/"
+          if not tileset_url.startswith(public):
+              raise SystemExit(f"{tileset_url} is not under the public bucket's URL {public}")
+          prefix = tileset_url[len(public):].rsplit("/", 1)[0]
+          s3 = boto3.client(
+              "s3",
+              endpoint_url=os.environ["OBJECT_STORAGE_ENDPOINT_URL"],
+              aws_access_key_id=os.environ["OBJECT_STORAGE_ACCESS_KEY"],
+              aws_secret_access_key=os.environ["OBJECT_STORAGE_SECRET_KEY"],
+              region_name="auto",
+          )
+          bucket = os.environ["OBJECT_STORAGE_PUBLIC_BUCKET"]
+          # The grid first: a tileset.json naming a file not there yet would be a 404 to
+          # every client that loads it in between.
+          for name, kind in (("collision.bin", "application/octet-stream"),
+                             ("tileset.json", "application/json")):
+              s3.upload_file(f"out/{name}", bucket, f"{prefix}/{name}",
+                             ExtraArgs={"ContentType": kind})
+              print(f"{bucket}/{prefix}/{name} ({kind})")
+          PY

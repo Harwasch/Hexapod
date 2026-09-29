@@ -103,6 +103,19 @@ def test_a_published_tileset_is_the_whole_directory(buckets: Publisher) -> None:
     assert keys_in(buckets.public) == {f"{TILES}/tileset.json", f"{TILES}/0/0.glb"}
 
 
+def test_the_collision_grid_beside_the_tiles_is_published_as_it_was_stored(
+    buckets: Publisher,
+) -> None:
+    """A splat tileset's `collision.bin` (the web clients' collision grid) sits beside
+    `tileset.json`, so publishing the directory publishes it, content type and all."""
+    seed_a_run(buckets)
+    buckets.private.put_object(f"{TILES}/collision.bin", b"\x1f\x8b", "application/octet-stream")
+    buckets.publish_tree(TILES, f"{TILES}/tileset.json")
+    head = buckets.public.head_object(f"{TILES}/collision.bin")
+    assert head is not None and head.content_type == "application/octet-stream"
+    assert buckets.public.get_object(f"{TILES}/collision.bin") == b"\x1f\x8b"
+
+
 def test_nothing_else_the_run_produced_is_published(buckets: Publisher) -> None:
     """The whole point, stated as the thing that must not happen.
 

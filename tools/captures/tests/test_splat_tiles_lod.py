@@ -271,7 +271,9 @@ def test_tileset_json_names_exactly_the_tiles_written(packed: tuple[Path, dict, 
     assert len(set(uris)) == len(uris)
     assert tileset["root"]["content"]["uri"] == "splat.glb"
     written = sorted(path.name for path in out.iterdir())
-    assert written == sorted([*uris, "tileset.json"]), "and no working files are left behind"
+    # Beside the tiles, the collision grid the root tile declares (test_splat_tiles_collision).
+    collision = tileset["root"]["extras"]["collision"]["uri"]
+    assert written == sorted([*uris, "tileset.json", collision]), "and no working files left"
 
 
 def test_a_small_scan_is_one_tile_in_ply_order(tmp_path: Path) -> None:
@@ -280,6 +282,7 @@ def test_a_small_scan_is_one_tile_in_ply_order(tmp_path: Path) -> None:
     stats = splat_tiles.convert(ply, tmp_path / "splat", 0.0, 0.0, 0.0)
     assert stats["tiles"] == 1 and stats["parent_gaussians"] == 0
     assert sorted(path.name for path in (tmp_path / "splat").iterdir()) == [
+        "collision.bin",
         "splat.glb",
         "tileset.json",
     ]

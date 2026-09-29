@@ -57,6 +57,8 @@ _TILE_TYPES = {
     ".ply": "application/octet-stream",
     ".f32": "application/octet-stream",
     ".spz": "application/octet-stream",
+    # A splat tileset's collision grid (tools/captures splat_tiles `COLLISION_FORMAT`).
+    ".bin": "application/octet-stream",
 }
 
 

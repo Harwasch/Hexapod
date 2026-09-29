@@ -44,7 +44,11 @@ def test_every_recipe_ends_in_a_registration(name: str, tmp_path: Path) -> None:
     # Both lanes converge: same canonical splat, same tileset, same registration.
     assert {"canonical.ply", "splat", "georef.json", "registration.json"} <= set(result.by_name)
     tiles = workdir.root / result.artifact("splat").path
-    assert sorted(entry.name for entry in tiles.iterdir()) == ["splat.glb", "tileset.json"]
+    assert sorted(entry.name for entry in tiles.iterdir()) == [
+        "collision.bin",
+        "splat.glb",
+        "tileset.json",
+    ]
 
 
 def test_photo_reconstruct_sends_pose_train_quality_and_optimise_lod_off_the_worker() -> None:

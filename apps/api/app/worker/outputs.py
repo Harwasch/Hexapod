@@ -91,7 +91,18 @@ class UploadedArtifact:
     content_type: str
 
 
+#: Member types stated rather than guessed. `mimetypes` reads the host's own tables
+#: (/etc/mime.types and friends) on top of Python's, so a guess can differ between the
+#: worker image and a developer's machine. `collision.bin` is the packer's gzip-compressed
+#: collision grid (tools/captures splat_tiles `COLLISION_FORMAT`): the web clients fetch
+#: it and inflate it themselves, so it goes out as opaque bytes.
+_MEMBER_TYPES = {".bin": "application/octet-stream"}
+
+
 def _content_type(path: Path, fallback: str) -> str:
+    stated = _MEMBER_TYPES.get(path.suffix.lower())
+    if stated is not None:
+        return stated
     guessed, _ = mimetypes.guess_type(path.name)
     return guessed or fallback
 
