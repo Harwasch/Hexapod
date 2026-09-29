@@ -12,8 +12,12 @@ real capture. What that would take, and why it did not happen here, is in
 **Living Mode (2026-09-28, [ADR 0008](DECISIONS/0008-living-mode.md)).** A rig whose
 `rig.json` points at a `motion.json` sidecar now moves under a stateless modal model built from
 the skeleton alone — per-branch oscillators at `2.55·L^-0.59` Hz, a whole-tree pendulum mode at
-`2.4/√H`, measured tree damping, a Simiu–Scanlan wind with gusts and `U²` drag, and leaf flutter
-as a field advected with the wind — labelled `motionEvidence: "allometric"` in the Inspector.
+`2.4/√H`, measured tree and branch damping, `U²` drag, and leaf flutter as a field advected with
+the wind — labelled `motionEvidence: "allometric"` in the Inspector. Since 2026-09-29 the wind is
+EN 1991-1-4 turbulence: a frozen gust field with the Eurocode spectrum carried through the crown
+at the mean speed, which each limb follows quasi-statically below its frequency, plus a resonance
+whose share grows with the wind (`R²` of EN Annex B) — so a light wind is slow, coherent sway and
+a strong one shows each limb ringing ([ADR 0008](DECISIONS/0008-living-mode.md), second addendum).
 The synthetic tree carries one. The model described below, from "How the tree moves" on, is now
 the **legacy** model: the fallback for a rig without a sidecar and the control arm of the blind
 comparison. The mechanism (canonical never written, calm exact, idle idle) is unchanged.
@@ -812,6 +816,14 @@ the pipeline runs end to end and nothing more.
    spectral centroid of 2.4 Hz with 63 % of their speed above 4 Hz; they now move at 1.0 Hz with
    10 %, 3–4 cm RMS at the default wind (ADR 0008, 2026-09 addendum). Whether that amplitude and
    the 2–3 mm, 4–9 Hz leaf flutter read as a tree in a breeze is a judgement for eyes.
+7. **Does a light wind now read as gentle sway?** It was still "somewhat animatronic or jittery,
+   especially at low wind": every limb rang at its own frequency at every speed (own-tip
+   centroid 0.64·f_n at 2 m/s, 40 % of the variance at resonance). With the wind a spectrum that
+   moves with its speed, a limb at 2 m/s follows the gusts (centroid 0.06·f_n, 98 % of its
+   variance below f_n/2, ~1 % at resonance), neighbours move together with the gust front's
+   delay, and the resonance comes up with the wind (5–6 % of the variance at 12–16 m/s). Whether
+   ~1.4 mm of slow limb motion at 2 m/s is gentle swaying or too little, and whether the ringing
+   at 12 m/s reads as a tree in a strong wind, is for eyes (ADR 0008, second addendum).
 
 Then the one that matters most: run `skeleton.py` on a real scanned tree and see whether a rig
 inferred from geometry alone moves it convincingly. Everything above is demonstrable on a fixture
@@ -874,28 +886,28 @@ Worth writing down, because the fixture is tidy in ways a real extraction will n
 
 ## Where the code is
 
-| Piece                                                                              | What it holds                                                                                                    |
-| ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `packages/world` (`@twin/world`)                                                   | the pure motion model: rig, gust field, resonant modes, per-splat flutter, `deform`, metrics                     |
-| `packages/world/src/living.ts`, `spectral.ts`, `leafFlutter.ts`, `motionParams.ts` | Living Mode ([ADR 0008](DECISIONS/0008-living-mode.md)): modal model, motion textures, advected flutter, sidecar |
-| `packages/world/src/skin.ts`                                                       | four-node skinning weights (modified Shepard) and the exact search                                               |
-| `packages/world/fixtures/minnetonka/`                                              | the Minnetonka skeleton as a test fixture (CC BY 4.0, Matthew Guertin)                                           |
-| `tools/captures/motion_params.py`                                                  | writes `motion.json` beside a rig (called by `synthetic_tree.py` and `skeleton.py`)                              |
-| `apps/web/e2e/livingCompare.spec.ts`                                               | blind A/B clips, legacy against Living Mode (`LIVING_COMPARE=1`)                                                 |
-| `tools/captures/synthetic_tree.py`                                                 | the procedural tree and its ground-truth labels                                                                  |
-| `tools/captures/skeleton.py`                                                       | skeleton extraction from a 3DGS PLY, scored against that truth                                                   |
-| `apps/web/src/cesium/splatCapture.ts`                                              | the interception that captures the packed buffer                                                                 |
-| `apps/web/src/cesium/splatInternals.ts`                                            | every CesiumJS internal this depends on, declared once, versioned                                                |
-| `apps/web/src/cesium/splatTexels.ts`, `splatFrames.ts`                             | pure texel addressing and frame arithmetic                                                                       |
-| `apps/web/src/cesium/splatTiles.ts`                                                | which tile each aggregated splat came from; per-tile identity and binding, cached                                |
-| `apps/web/src/cesium/splatGpuMotion.ts`                                            | the GPU path: motion and binding textures, the shader function, its TS transcription                             |
-| `apps/web/src/cesium/splatGpuTextures.ts`                                          | `Renderer/Texture` from the barrel, for the GPU path                                                             |
-| `apps/web/src/cesium/SplatDeformer.ts`                                             | attach, validate, refuse, write — per snapshot, CPU or GPU                                                       |
-| `apps/web/src/cesium/LivingSurveyManager.ts`                                       | wind, the tick, attach/detach as sites load                                                                      |
-| `apps/web/src/state/living.ts`                                                     | wind state and status, and the staleness yardstick                                                               |
-| `apps/web/src/features/living/SimulatedBadge.tsx`                                  | the ambient label                                                                                                |
-| `tools/captures/rig_tiles.py`                                                      | stamps a rig with a level-of-detail tileset's per-tile checksums                                                 |
-| `patches/@cesium__engine@26.3.0.patch`                                             | the `vertexMotion` hook (and the unrelated terrain-fill guard)                                                   |
+| Piece                                                                                               | What it holds                                                                                                                            |
+| --------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `packages/world` (`@twin/world`)                                                                    | the pure motion model: rig, gust field, resonant modes, per-splat flutter, `deform`, metrics                                             |
+| `packages/world/src/living.ts`, `turbulence.ts`, `spectral.ts`, `leafFlutter.ts`, `motionParams.ts` | Living Mode ([ADR 0008](DECISIONS/0008-living-mode.md)): modal model, EN 1991-1-4 gust field, motion textures, advected flutter, sidecar |
+| `packages/world/src/skin.ts`                                                                        | four-node skinning weights (modified Shepard) and the exact search                                                                       |
+| `packages/world/fixtures/minnetonka/`                                                               | the Minnetonka skeleton as a test fixture (CC BY 4.0, Matthew Guertin)                                                                   |
+| `tools/captures/motion_params.py`                                                                   | writes `motion.json` beside a rig (called by `synthetic_tree.py` and `skeleton.py`)                                                      |
+| `apps/web/e2e/livingCompare.spec.ts`                                                                | blind A/B clips, legacy against Living Mode (`LIVING_COMPARE=1`)                                                                         |
+| `tools/captures/synthetic_tree.py`                                                                  | the procedural tree and its ground-truth labels                                                                                          |
+| `tools/captures/skeleton.py`                                                                        | skeleton extraction from a 3DGS PLY, scored against that truth                                                                           |
+| `apps/web/src/cesium/splatCapture.ts`                                                               | the interception that captures the packed buffer                                                                                         |
+| `apps/web/src/cesium/splatInternals.ts`                                                             | every CesiumJS internal this depends on, declared once, versioned                                                                        |
+| `apps/web/src/cesium/splatTexels.ts`, `splatFrames.ts`                                              | pure texel addressing and frame arithmetic                                                                                               |
+| `apps/web/src/cesium/splatTiles.ts`                                                                 | which tile each aggregated splat came from; per-tile identity and binding, cached                                                        |
+| `apps/web/src/cesium/splatGpuMotion.ts`                                                             | the GPU path: motion and binding textures, the shader function, its TS transcription                                                     |
+| `apps/web/src/cesium/splatGpuTextures.ts`                                                           | `Renderer/Texture` from the barrel, for the GPU path                                                                                     |
+| `apps/web/src/cesium/SplatDeformer.ts`                                                              | attach, validate, refuse, write — per snapshot, CPU or GPU                                                                               |
+| `apps/web/src/cesium/LivingSurveyManager.ts`                                                        | wind, the tick, attach/detach as sites load                                                                                              |
+| `apps/web/src/state/living.ts`                                                                      | wind state and status, and the staleness yardstick                                                                                       |
+| `apps/web/src/features/living/SimulatedBadge.tsx`                                                   | the ambient label                                                                                                                        |
+| `tools/captures/rig_tiles.py`                                                                       | stamps a rig with a level-of-detail tileset's per-tile checksums                                                                         |
+| `patches/@cesium__engine@26.3.0.patch`                                                              | the `vertexMotion` hook (and the unrelated terrain-fill guard)                                                                           |
 
 Rig authoring and scoring are documented in [CAPTURES.md](CAPTURES.md#the-synthetic-tree); the
 mechanism decisions are [ADR 0006](DECISIONS/0006-splat-texture-rewrite.md) and

@@ -22,7 +22,12 @@ compares it field by field, so the two cannot drift. The rules and their sources
 - whole-tree frequency ``f0 = 2.4 / sqrt(H)`` (simple pendulum, Jackson et al. 2021,
   Biogeosciences 18, 4059; the constant is an estimate read off their Fig. 2a);
 - whole-tree damping 0.086 in leaf, 0.039 leafless (Jackson et al. 2019, J. R. Soc. Interface);
-- limb damping rising to 0.15 with leaf load (UNVERIFIED prior);
+- limb damping rising from 0.045 to 0.106 with the limb's share of leaf tips (James & Haritos
+  2010, AEES conference: single branches 3.5-4.5 %, the tree with its branches 10.6 %);
+- wind: turbulence intensity ``1/ln(H/z0)`` and length scale ``300 (H/200)^(0.67 + 0.05 ln z0)``
+  at the tree's height, terrain category III (EN 1991-1-4:2005 eqs. 4.7, B.1, Table 4.1); sway
+  RMS ``2 I`` along the wind (eq. 6.3), ``0.75 I`` across (estimate); no scripted gust envelope,
+  since the turbulence spectrum (eq. B.2) the runtime reads carries the gusts;
 - every limb bends the same angle (elastic similarity) times ``min(1, f0/f)^0.305``, so its tip
   deflection falls as 1/f^2 like a sub-resonant oscillator's (estimate), spread over its joints
   by length, so no
@@ -56,8 +61,9 @@ LEAFLESS_FREQUENCY_SCALE = 2.5
 PENDULUM_COEFFICIENT = 2.4
 TREE_DAMPING_SUMMER = 0.086
 TREE_DAMPING_WINTER = 0.039
-LIMB_DAMPING_MAX = 0.15
-DAMPING_LEVELS = 3
+LIMB_DAMPING_MIN = 0.045
+LIMB_DAMPING_MAX = 0.106
+DAMPING_LEVELS = 2
 MIN_BRANCH_LENGTH_M = 0.05
 MODE_BAND = 3.0
 MAX_BRANCH_ORDER = 3
@@ -71,13 +77,46 @@ FLUTTER_CUT = 0.05
 DEFAULT_LEAF_SIZE_M = 0.06
 MIN_LEAF_SIZE_M = 0.05
 
-DEFAULT_SIDECAR_WIND = {
-    "meanSpeedMps": 5,
-    "bearingDeg": 0,
-    "gust": {"strength": 0.35, "variance": 0.3, "frequencyPerMin": 3, "durationS": 5},
-    "turbulence": {"along": 0.8, "across": 0.6},
-    "canopyAdvection": 0.3,
-}
+# EN 1991-1-4:2005+A1:2010: terrain category III (Table 4.1), eqs. 4.7 and B.1. Mirrors
+# packages/world/src/turbulence.ts.
+TERRAIN_ROUGHNESS_M = 0.3
+TERRAIN_MIN_HEIGHT_M = 5.0
+LENGTH_SCALE_REF_M = 300.0
+LENGTH_SCALE_REF_HEIGHT_M = 200.0
+LATERAL_TURBULENCE_RATIO = 0.75
+
+#: The scripted gust envelope, off: the turbulence spectrum carries the gusts. Kept in the format.
+DEFAULT_GUST = {"strength": 0, "variance": 0.3, "frequencyPerMin": 3, "durationS": 5}
+
+
+def turbulence_intensity(height_m: float) -> float:
+    """EN 1991-1-4 eq. 4.7 with k_I = c0 = 1: ``1 / ln(z / z0)``, held below ``z_min``."""
+    z = max(height_m, TERRAIN_MIN_HEIGHT_M)
+    return 1 / math.log(z / TERRAIN_ROUGHNESS_M)
+
+
+def turbulence_length_scale_m(height_m: float) -> float:
+    """EN 1991-1-4 eq. B.1: ``300 (z / 200)^(0.67 + 0.05 ln z0)``, held below ``z_min``."""
+    z = max(height_m, TERRAIN_MIN_HEIGHT_M)
+    alpha = 0.67 + 0.05 * math.log(TERRAIN_ROUGHNESS_M)
+    return LENGTH_SCALE_REF_M * math.pow(z / LENGTH_SCALE_REF_HEIGHT_M, alpha)
+
+
+def default_sidecar_wind(tree_height_m: float) -> dict:
+    """Wind defaults for a tree this tall. Mirrors ``defaultSidecarWind`` in motionParams.ts."""
+    intensity = turbulence_intensity(tree_height_m)
+    return {
+        "meanSpeedMps": 5,
+        "bearingDeg": 0,
+        "gust": DEFAULT_GUST,
+        "turbulence": {
+            "along": round_to(2 * intensity, 4),
+            "across": round_to(LATERAL_TURBULENCE_RATIO * intensity, 4),
+        },
+        "canopyAdvection": 0.3,
+        "lengthScaleM": round_to(turbulence_length_scale_m(tree_height_m), 2),
+    }
+
 
 #: Where every number came from. Must equal ALLOMETRIC_PROVENANCE in motionParams.ts.
 ALLOMETRIC_PROVENANCE = {
@@ -119,21 +158,35 @@ ALLOMETRIC_PROVENANCE = {
         "status": "cited",
     },
     "limbDamping": {
-        "rule": "zeta rises from 0.086 to 0.15 with sqrt(limb leaf tips / largest limb's), "
-        "in 3 steps",
-        "source": "Habel et al. EG 2009 sec. 5.4 citing Moore & Maguire 2004: large leafy "
-        "branches near critical damping",
-        "status": "unverified",
+        "rule": "zeta rises from 0.045 to 0.106 with sqrt(limb leaf tips / largest limb's), "
+        "in 2 steps; aerodynamic damping 2 pi f x_s / U added at run time",
+        "source": "James & Haritos 2010, The Role of Branches in the Dynamic Response "
+        "Characteristics of Trees, AEES conference, Table 1 (single branches 3.5-4.5 % at small "
+        "amplitude, 7.5 % at large; the tree with its branches 10.6 %); EN 1991-1-4:2005 eq. F.18 "
+        "for the aerodynamic part; the interpolation by tip share is chosen",
+        "status": "estimate",
     },
     "windSpectrum": {
-        "rule": "P(f) shape (1 + f/U)^(-5/3), applied at each branch's own frequency",
-        "source": "Simiu & Scanlan 1986 as used by Habel et al. EG 2009, eq. 14",
+        "rule": "S_L(f_L) = 6.8 f_L / (1 + 10.2 f_L)^(5/3), f_L = f L / U, as a frozen field of "
+        "random Fourier modes advected at U; each limb follows it through its static compliance, "
+        "low-passed at its own frequency; resonance R^2 = pi^2/(2 delta) S_L(f_n) R_h R_b on top; "
+        "background B^2 = 1/(1 + 0.9 ((b + h)/L)^0.63)",
+        "source": "EN 1991-1-4:2005+A1:2010 Annex B, eqs. B.2, B.3, B.6-B.8; frozen turbulence "
+        "(Taylor's hypothesis) as in Habel et al. EG 2009 sec. 7.2",
         "status": "cited",
     },
     "dragScaling": {
-        "rule": "deflection proportional to U^2",
-        "source": "Jackson et al. 2021 (deflection fitted linear in squared wind speed)",
+        "rule": "mean deflection proportional to U^2; fluctuation 2 I sqrt(B^2 + R^2) of it",
+        "source": "Jackson et al. 2021 (deflection fitted linear in squared wind speed); "
+        "EN 1991-1-4:2005 eq. 6.3",
         "status": "cited",
+    },
+    "turbulenceScale": {
+        "rule": "I = 1/ln(H/z0), L = 300 (H/200)^(0.67 + 0.05 ln z0), H held at >= z_min; "
+        "terrain category III (z0 = 0.3 m, z_min = 5 m)",
+        "source": "EN 1991-1-4:2005+A1:2010 eqs. 4.7 (k_I = c0 = 1) and B.1, Table 4.1; the "
+        "category is chosen for a garden or park tree",
+        "status": "estimate",
     },
     "bendGains": {
         "rule": "tree lean 0.02 rad, a limb 0.05 rad * min(1, f0/f)^(2 - 1/0.59) at 10 m/s, "
@@ -144,8 +197,10 @@ ALLOMETRIC_PROVENANCE = {
         "status": "estimate",
     },
     "turbulence": {
-        "rule": "sway RMS 0.8 along / 0.6 across the mean lean; gusts +35% every ~20 s",
-        "source": "chosen; SpeedTree-style gust parameters",
+        "rule": "sway RMS 2 I along / 0.75 I across the mean lean (2 I from the linearised "
+        "drag); no scripted gust envelope",
+        "source": "EN 1991-1-4:2005 eq. 6.3 for 2 I; the across ratio is chosen (the previous "
+        "0.6 : 0.8)",
         "status": "estimate",
     },
     "leafFlutter": {
@@ -315,7 +370,7 @@ def limb_bend_rad(frequency_hz: float, tree_frequency: float) -> float:
 def limb_damping(tips: int, max_tips: int) -> float:
     share = math.sqrt(min(1.0, max(0.0, tips / max_tips))) if max_tips > 0 else 0.0
     level = math.floor(share * DAMPING_LEVELS + 0.5) / DAMPING_LEVELS
-    return TREE_DAMPING_SUMMER + (LIMB_DAMPING_MAX - TREE_DAMPING_SUMMER) * level
+    return LIMB_DAMPING_MIN + (LIMB_DAMPING_MAX - LIMB_DAMPING_MIN) * level
 
 
 def estimate_leaf_size(
@@ -403,7 +458,7 @@ def derive_sidecar(
         "treeHeightM": round_to(height, 4),
         "leafSizeM": leaf_size_m,
         "referenceSpeedMps": REFERENCE_SPEED_MPS,
-        "wind": DEFAULT_SIDECAR_WIND,
+        "wind": default_sidecar_wind(height),
         "seasons": {
             "winter": {
                 "dampingScale": round_to(TREE_DAMPING_WINTER / TREE_DAMPING_SUMMER, 4),

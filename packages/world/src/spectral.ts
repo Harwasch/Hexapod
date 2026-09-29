@@ -183,9 +183,11 @@ const ROLL_OFF_END = 2.8;
  * texel), and its derivative. `|H(k/ρ0)|²` — the oscillator's response to a force that is flat
  * over the oscillator's own band — rolled off above `2·ρ0`.
  *
- * Flat forcing is the narrow-band reading of the wind spectrum: `motion.ts` multiplies each
- * branch by the Simiu–Scanlan spectrum's value *at that branch's own frequency*, which is exact
- * as ζ → 0 and is what lets one texture serve every branch of a damping class.
+ * Flat forcing is the narrow-band reading of the wind spectrum, exact as ζ → 0, and is what lets
+ * one texture serve every branch of a damping class. It is the **resonant** part of a branch's
+ * motion only: `living.ts` scales it by EN 1991-1-4's `R` (the wind spectrum's value at the
+ * branch's own frequency, the admittances, the damping) and adds the quasi-static response to
+ * the gust field of `turbulence.ts`, which is where the wind spectrum's shape lives.
  */
 function branchSpectrum(k: number, rho0: number, zeta: number): { value: number; slope: number } {
   const r = k / rho0;

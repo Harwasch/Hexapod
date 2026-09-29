@@ -27,6 +27,7 @@ import {
   serializeRig,
   syntheticTreeRig,
   treeFrequencyHz,
+  turbulenceLengthScaleM,
   validateMotionSidecar,
   type MotionSidecar,
 } from "./index";
@@ -137,14 +138,43 @@ describe("the allometric rules", () => {
     for (const sum of sums.values()) expect(sum).toBeCloseTo(1, 4);
   });
 
-  it("damps the tree at 8.6 % and big leafy limbs more, never less", () => {
-    const sidecar = deriveMotionSidecar(syntheticTreeRig());
+  it("damps the tree at 8.6 %, limbs in the measured branch range, bigger limbs never less", () => {
+    const tree = syntheticTreeRig();
+    const sidecar = deriveMotionSidecar(tree);
+    const { tips } = branchStructure(tree);
     sidecar.nodes.damping.forEach((zeta, i) => {
-      expect(zeta).toBeGreaterThanOrEqual(0.086);
-      expect(zeta).toBeLessThanOrEqual(0.15);
-      if (sidecar.nodes.mode[i] === 0) expect(zeta).toBe(0.086);
+      if (sidecar.nodes.mode[i] === 0) {
+        expect(zeta).toBe(0.086);
+        return;
+      }
+      // James & Haritos 2010: single branches 3.5-4.5 %, the tree with its branches 10.6 %.
+      expect(zeta).toBeGreaterThanOrEqual(0.045);
+      expect(zeta).toBeLessThanOrEqual(0.106);
     });
+    // A limb carrying more is damped no less (its sub-branches are tuned mass dampers on it).
+    const limbs = [...new Set(sidecar.nodes.branch.slice(1))].filter(
+      (b) => sidecar.nodes.mode[b] === 1,
+    );
+    for (const a of limbs)
+      for (const b of limbs)
+        if ((tips[a] ?? 0) > (tips[b] ?? 0))
+          expect(sidecar.nodes.damping[a] ?? 0).toBeGreaterThanOrEqual(
+            sidecar.nodes.damping[b] ?? 0,
+          );
+    // Quantised, so branches share motion textures.
     expect(new Set(sidecar.nodes.damping).size).toBeLessThanOrEqual(4);
+  });
+
+  it("derives the wind from the tree's height (EN 1991-1-4, terrain category III)", () => {
+    const sidecar = deriveMotionSidecar(syntheticTreeRig(), { treeHeightM: 6 });
+    // I = 1/ln(6/0.3) = 0.334; L = 300 (6/200)^(0.67 + 0.05 ln 0.3) = 35.4 m.
+    expect(sidecar.wind.turbulence.along).toBeCloseTo(2 / Math.log(20), 4);
+    expect(sidecar.wind.turbulence.across).toBeCloseTo(0.75 / Math.log(20), 4);
+    expect(sidecar.wind.lengthScaleM).toBeCloseTo(35.36, 2);
+    expect(sidecar.wind.gust.strength).toBe(0);
+    // Below z_min = 5 m the intensity and scale are held at 5 m.
+    const low = deriveMotionSidecar(syntheticTreeRig(), { treeHeightM: 3 });
+    expect(low.wind.turbulence.along).toBeCloseTo(2 / Math.log(5 / 0.3), 4);
   });
 
   it("does not read a single radius", () => {
@@ -174,6 +204,23 @@ describe("validation", () => {
     expect(() => parseMotionSidecar(JSON.stringify({ ...committed, version: 2 }))).toThrow(
       /version/,
     );
+  });
+
+  it("loads a sidecar written before the length scale was recorded, and refuses a bad one", () => {
+    // The format before this field: wind without `lengthScaleM`, old sway ratios and gusts.
+    const { lengthScaleM: _dropped, ...oldWind } = committed.wind;
+    const old = {
+      ...committed,
+      wind: {
+        ...oldWind,
+        gust: { strength: 0.35, variance: 0.3, frequencyPerMin: 3, durationS: 5 },
+        turbulence: { along: 0.8, across: 0.6 },
+      },
+    };
+    const motion = createLivingMotion(rig, parseMotionSidecar(JSON.stringify(old), rig));
+    expect(motion.lengthScaleM).toBeCloseTo(turbulenceLengthScaleM(committed.treeHeightM), 10);
+    const bad = { ...committed, wind: { ...committed.wind, lengthScaleM: -1 } };
+    expect(validateMotionSidecar(bad).join()).toMatch(/lengthScaleM/);
   });
 
   it("orders the evidence ladder strongest first", () => {

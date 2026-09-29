@@ -41,10 +41,17 @@
  * - **Whole-tree damping** ζ = 0.086 in leaf, 0.039 leafless — pull-and-release tests on four
  *   broadleaves (Jackson et al. 2019, J. R. Soc. Interface 16: 20190116): 8.6 ± 2.2 % summer,
  *   3.9 ± 1.3 % winter.
- * - **Branch damping rising toward large leafy limbs**, 0.086 → 0.15 with the limb's share of
- *   leaf tips. **UNVERIFIED prior**: Habel (citing Moore & Maguire 2004) says large branches with
- *   many sub-branches and leaves sit "close to the critically damped case"; 0.15 is chosen so a
- *   limb's resonance stays visible, not from a measurement.
+ * - **Branch damping rising with what a limb carries**, 0.045 → 0.106 with the limb's share of
+ *   leaf tips — pluck tests on a tree's branches one by one (James & Haritos 2010, AEES 2010
+ *   conference, Table 1 and text): single branches 3.5–4.5 % at small amplitude (up to 7.5 % at
+ *   large), the tree with its branches 10.6 %, because sub-branches act as tuned mass dampers on
+ *   what they hang from. The endpoints are measured; the interpolation by tip share is an estimate. Aerodynamic damping,
+ *   which grows with the wind, is added at run time (`turbulence.ts`, EN 1991-1-4 eq. F.18).
+ * - **Wind** (`turbulence.ts`): turbulence intensity `1/ln(H/z0)` and length scale
+ *   `300·(H/200)^(0.67 + 0.05 ln z0)` at the tree's height, terrain category III (EN 1991-1-4:2005
+ *   eqs. 4.7, B.1, Table 4.1); the sway RMS is `2·I` along the wind (eq. 6.3's linearised drag)
+ *   and `0.75·I` across it (estimate). The explicit gust envelope is off: the turbulence
+ *   spectrum (eq. B.2) carries the gusts.
  * - **Bend per limb**: elastic similarity (McMahon & Kronauer 1976) — every limb deflects by
  *   the same angle whatever its length — times `min(1, f0/f)^0.305`, so that its tip deflection
  *   falls as `1/f²` as a sub-resonant oscillator's does ({@link RESPONSE_EXPONENT}), spread over
@@ -54,6 +61,11 @@
  */
 
 import { type MotionRig } from "./rig";
+import {
+  LATERAL_TURBULENCE_RATIO,
+  turbulenceIntensity,
+  turbulenceLengthScaleM,
+} from "./turbulence";
 import { distance, type Vec3 } from "./vec";
 
 export const MOTION_SIDECAR_FORMAT = "hexapod.motion";
@@ -99,6 +111,12 @@ export interface SidecarWind {
   readonly turbulence: { readonly along: number; readonly across: number };
   /** In-canopy advection speed of the leaf-flutter field, as a fraction of the mean speed. */
   readonly canopyAdvection: number;
+  /**
+   * Turbulent length scale at the tree's height, metres (EN 1991-1-4 eq. B.1): where the wind
+   * spectrum's energy sits, `f ≈ 0.15·U/L`. Absent in sidecars written before it existed; the
+   * runtime then derives it from `treeHeightM` the same way.
+   */
+  readonly lengthScaleM?: number;
 }
 
 /** Per-node columns. Every array has one entry per rig node, in rig order. */
@@ -165,10 +183,15 @@ export const PENDULUM_COEFFICIENT = 2.4;
 /** Jackson et al. (2019): 8.6 ± 2.2 % in leaf, 3.9 ± 1.3 % leafless. */
 export const TREE_DAMPING_SUMMER = 0.086;
 export const TREE_DAMPING_WINTER = 0.039;
-/** UNVERIFIED prior: the damping of the largest leafy limb. */
-export const LIMB_DAMPING_MAX = 0.15;
+/**
+ * Damping of the smallest and the largest leafy limb: a single branch (3.5–4.5 % at small
+ * amplitude) and a stem carrying its branches (10.6 %), from pluck tests (James & Haritos 2010,
+ * AEES conference, Table 1).
+ */
+export const LIMB_DAMPING_MIN = 0.045;
+export const LIMB_DAMPING_MAX = 0.106;
 /** Damping levels between the two: `LEVELS + 1` distinct values, so textures can be shared. */
-export const DAMPING_LEVELS = 3;
+export const DAMPING_LEVELS = 2;
 /** Shortest branch length used in eq. (17), metres: caps a stub's frequency near 14 Hz. */
 export const MIN_BRANCH_LENGTH_M = 0.05;
 /**
@@ -206,13 +229,33 @@ export const FLUTTER_REACH_M = 0.5;
 /** Below this share of `FLUTTER_REF_M` a node does not flutter at all. */
 export const FLUTTER_CUT = 0.05;
 
-export const DEFAULT_SIDECAR_WIND: SidecarWind = {
-  meanSpeedMps: 5,
-  bearingDeg: 0,
-  gust: { strength: 0.35, variance: 0.3, frequencyPerMin: 3, durationS: 5 },
-  turbulence: { along: 0.8, across: 0.6 },
-  canopyAdvection: 0.3,
+/**
+ * SpeedTree-style gust envelope, **off**: the EN 1991-1-4 turbulence spectrum the runtime reads
+ * already holds the gusts, and a scripted bump on top of it would count them twice. Kept in the
+ * format (a `strength` above 0 still adds it) so older sidecars load unchanged.
+ */
+export const DEFAULT_GUST: GustSettings = {
+  strength: 0,
+  variance: 0.3,
+  frequencyPerMin: 3,
+  durationS: 5,
 };
+
+/** The wind defaults for a tree `treeHeightM` tall: EN 1991-1-4 turbulence at its height. */
+export function defaultSidecarWind(treeHeightM: number): SidecarWind {
+  const intensity = turbulenceIntensity(treeHeightM);
+  return {
+    meanSpeedMps: 5,
+    bearingDeg: 0,
+    gust: DEFAULT_GUST,
+    turbulence: {
+      along: roundTo(2 * intensity, 4),
+      across: roundTo(LATERAL_TURBULENCE_RATIO * intensity, 4),
+    },
+    canopyAdvection: 0.3,
+    lengthScaleM: roundTo(turbulenceLengthScaleM(treeHeightM), 2),
+  };
+}
 
 /** The synthetic tree's leaf size, metres: its leaf discs are 2–5 cm half-widths. */
 export const DEFAULT_LEAF_SIZE_M = 0.06;
@@ -255,20 +298,28 @@ export const ALLOMETRIC_PROVENANCE: Readonly<Record<string, ProvenanceEntry>> = 
     status: "cited",
   },
   limbDamping: {
-    rule: "zeta rises from 0.086 to 0.15 with sqrt(limb leaf tips / largest limb's), in 3 steps",
+    rule: "zeta rises from 0.045 to 0.106 with sqrt(limb leaf tips / largest limb's), in 2 steps; aerodynamic damping 2 pi f x_s / U added at run time",
     source:
-      "Habel et al. EG 2009 sec. 5.4 citing Moore & Maguire 2004: large leafy branches near critical damping",
-    status: "unverified",
+      "James & Haritos 2010, The Role of Branches in the Dynamic Response Characteristics of Trees, AEES conference, Table 1 (single branches 3.5-4.5 % at small amplitude, 7.5 % at large; the tree with its branches 10.6 %); EN 1991-1-4:2005 eq. F.18 for the aerodynamic part; the interpolation by tip share is chosen",
+    status: "estimate",
   },
   windSpectrum: {
-    rule: "P(f) shape (1 + f/U)^(-5/3), applied at each branch's own frequency",
-    source: "Simiu & Scanlan 1986 as used by Habel et al. EG 2009, eq. 14",
+    rule: "S_L(f_L) = 6.8 f_L / (1 + 10.2 f_L)^(5/3), f_L = f L / U, as a frozen field of random Fourier modes advected at U; each limb follows it through its static compliance, low-passed at its own frequency; resonance R^2 = pi^2/(2 delta) S_L(f_n) R_h R_b on top; background B^2 = 1/(1 + 0.9 ((b + h)/L)^0.63)",
+    source:
+      "EN 1991-1-4:2005+A1:2010 Annex B, eqs. B.2, B.3, B.6-B.8; frozen turbulence (Taylor's hypothesis) as in Habel et al. EG 2009 sec. 7.2",
     status: "cited",
   },
   dragScaling: {
-    rule: "deflection proportional to U^2",
-    source: "Jackson et al. 2021 (deflection fitted linear in squared wind speed)",
+    rule: "mean deflection proportional to U^2; fluctuation 2 I sqrt(B^2 + R^2) of it",
+    source:
+      "Jackson et al. 2021 (deflection fitted linear in squared wind speed); EN 1991-1-4:2005 eq. 6.3",
     status: "cited",
+  },
+  turbulenceScale: {
+    rule: "I = 1/ln(H/z0), L = 300 (H/200)^(0.67 + 0.05 ln z0), H held at >= z_min; terrain category III (z0 = 0.3 m, z_min = 5 m)",
+    source:
+      "EN 1991-1-4:2005+A1:2010 eqs. 4.7 (k_I = c0 = 1) and B.1, Table 4.1; the category is chosen for a garden or park tree",
+    status: "estimate",
   },
   bendGains: {
     rule: "tree lean 0.02 rad, a limb 0.05 rad * min(1, f0/f)^(2 - 1/0.59) at 10 m/s, spread over its joints by segment length",
@@ -277,8 +328,8 @@ export const ALLOMETRIC_PROVENANCE: Readonly<Record<string, ProvenanceEntry>> = 
     status: "estimate",
   },
   turbulence: {
-    rule: "sway RMS 0.8 along / 0.6 across the mean lean; gusts +35% every ~20 s",
-    source: "chosen; SpeedTree-style gust parameters",
+    rule: "sway RMS 2 I along / 0.75 I across the mean lean (2 I from the linearised drag); no scripted gust envelope",
+    source: "EN 1991-1-4:2005 eq. 6.3 for 2 I; the across ratio is chosen (the previous 0.6 : 0.8)",
     status: "estimate",
   },
   leafFlutter: {
@@ -525,7 +576,7 @@ export function limbBendRad(frequencyHz: number, treeFrequency: number): number 
 export function limbDamping(tips: number, maxTips: number): number {
   const share = maxTips > 0 ? Math.sqrt(Math.min(1, Math.max(0, tips / maxTips))) : 0;
   const level = Math.round(share * DAMPING_LEVELS) / DAMPING_LEVELS;
-  return TREE_DAMPING_SUMMER + (LIMB_DAMPING_MAX - TREE_DAMPING_SUMMER) * level;
+  return LIMB_DAMPING_MIN + (LIMB_DAMPING_MAX - LIMB_DAMPING_MIN) * level;
 }
 
 /** Rounds to a fixed number of significant decimals, so both languages emit the same JSON. */
@@ -602,7 +653,7 @@ export function deriveMotionSidecar(rig: MotionRig, options: DeriveOptions = {})
     treeHeightM: roundTo(treeHeightM, 4),
     leafSizeM: options.leafSizeM ?? DEFAULT_LEAF_SIZE_M,
     referenceSpeedMps: REFERENCE_SPEED_MPS,
-    wind: options.wind ?? DEFAULT_SIDECAR_WIND,
+    wind: options.wind ?? defaultSidecarWind(treeHeightM),
     seasons: {
       winter: {
         dampingScale: roundTo(TREE_DAMPING_WINTER / TREE_DAMPING_SUMMER, 4),
@@ -645,6 +696,9 @@ export function validateMotionSidecar(sidecar: MotionSidecar, rig?: MotionRig): 
     const value = sidecar[key];
     if (!(Number.isFinite(value) && value > 0)) issues.push(`${key} must be > 0`);
   }
+  const lengthScale = (raw.wind as { lengthScaleM?: unknown } | undefined)?.lengthScaleM;
+  if (lengthScale !== undefined && !(typeof lengthScale === "number" && lengthScale > 0))
+    issues.push("wind.lengthScaleM must be > 0 when present");
   const count = sidecar.nodeCount;
   for (const column of NODE_COLUMNS) {
     const values = sidecar.nodes[column] as readonly unknown[] | undefined;

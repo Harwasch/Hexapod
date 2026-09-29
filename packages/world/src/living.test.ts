@@ -4,10 +4,16 @@
  *
  * | criterion                                   | pass when                                   |
  * | ------------------------------------------- | ------------------------------------------- |
- * | each branch rings at its model frequency    | local-bend PSD peak within ±10 % of `f_b`   |
- * | the whole tree follows the height law       | trunk PSD peak within ±10 % of `2.4/√H`     |
- * | deflection is drag                          | RMS deflection ∝ `U^n`, `n = 2 ± 0.2`       |
+ * | each branch rings at its model frequency    | 12 m/s: velocity-PSD peak within ±10 % of   |
+ * |                                             | `f_b`, standing out of the gusts' background |
+ * | the whole tree follows the height law       | same, trunk top, `2.4/√H`                   |
+ * | deflection is drag                          | mean ∝ `U^(2 ± 0.1)`; fluctuation `U^2–2.5` |
  * | it never repeats                            | no autocorrelation > 0.2 from 10 s to 1 h   |
+ * | gentle at low wind                          | 2 m/s: limb centroid < 0.3·f_n, ≥ 80 % of   |
+ * |                                             | its variance below f_n/2 (the gust band)    |
+ * | resonant at high wind                       | resonant share rises with U; peak at 12 m/s |
+ * | a gust crosses the crown                    | downwind limb lags by Δx/U ± 0.1 s, and the |
+ * |                                             | pair is coherent at low frequency           |
  * | the crown moves in patches                  | flutter corr. at 4ℓ < ½ of that at 0.5ℓ     |
  * | calm is the measurement                     | identity by value, flutter still            |
  * | same clock, same frame                      | bit-identical output for the same `t`       |
@@ -37,6 +43,7 @@ import {
   flutterField,
   IDENTITY_TRANSFORM,
   livingFlutter,
+  livingBuffeting,
   livingFrame,
   livingMaxDisplacement,
   livingTransforms,
@@ -176,6 +183,102 @@ function maxAutocorrelation(
   return { value, lagS };
 }
 
+const DEG = Math.PI / 180;
+
+function median(xs: readonly number[]): number {
+  return [...xs].sort((a, b) => a - b)[xs.length >> 1] ?? 0;
+}
+
+/**
+ * The lag, seconds, by which `b` follows `a`: the peak of their cross-correlation within
+ * `±maxLagS`, refined by a parabola through the peak and its neighbours.
+ */
+function bestLag(a: Float64Array, b: Float64Array, fs: number, maxLagS: number): number {
+  const n = Math.min(a.length, b.length);
+  const mean = (x: Float64Array): number => x.reduce((s, v) => s + v, 0) / x.length;
+  const ma = mean(a);
+  const mb = mean(b);
+  const maxLag = Math.round(maxLagS * fs);
+  const values: number[] = [];
+  for (let lag = -maxLag; lag <= maxLag; lag += 1) {
+    let sum = 0;
+    for (let k = Math.max(0, -lag); k < Math.min(n, n - lag); k += 1)
+      sum += ((a[k] ?? 0) - ma) * ((b[k + lag] ?? 0) - mb);
+    values.push(sum / (n - Math.abs(lag)));
+  }
+  let best = 0;
+  values.forEach((v, i) => {
+    if (v > (values[best] ?? -Infinity)) best = i;
+  });
+  const y0 = values[best - 1] ?? values[best] ?? 0;
+  const y1 = values[best] ?? 0;
+  const y2 = values[best + 1] ?? values[best] ?? 0;
+  const denominator = y0 - 2 * y1 + y2;
+  const offset = denominator !== 0 ? (0.5 * (y0 - y2)) / denominator : 0;
+  return (best - maxLag + offset) / fs;
+}
+
+/**
+ * Magnitude-squared coherence `|S_ab|² / (S_aa·S_bb)` of `a` and `b` (Welch, Hann, 50 %
+ * overlap), averaged over the bins of each of two frequency bands.
+ */
+function bandCoherence(
+  a: Float64Array,
+  b: Float64Array,
+  fs: number,
+  segment: number,
+  lowBand: readonly [number, number],
+  highBand: readonly [number, number],
+): { low: number; high: number } {
+  const half = segment / 2;
+  const saa = new Float64Array(half);
+  const sbb = new Float64Array(half);
+  const sre = new Float64Array(half);
+  const sim = new Float64Array(half);
+  const mean = (x: Float64Array): number => x.reduce((s, v) => s + v, 0) / x.length;
+  const ma = mean(a);
+  const mb = mean(b);
+  for (let start = 0; start + segment <= a.length; start += half) {
+    const ar = new Float64Array(segment);
+    const ai = new Float64Array(segment);
+    const br = new Float64Array(segment);
+    const bi = new Float64Array(segment);
+    for (let i = 0; i < segment; i += 1) {
+      const w = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / segment);
+      ar[i] = ((a[start + i] ?? 0) - ma) * w;
+      br[i] = ((b[start + i] ?? 0) - mb) * w;
+    }
+    fft(ar, ai);
+    fft(br, bi);
+    for (let k = 0; k < half; k += 1) {
+      const xr = ar[k] ?? 0;
+      const xi = ai[k] ?? 0;
+      const yr = br[k] ?? 0;
+      const yi = bi[k] ?? 0;
+      saa[k] = (saa[k] ?? 0) + xr * xr + xi * xi;
+      sbb[k] = (sbb[k] ?? 0) + yr * yr + yi * yi;
+      // conj(X)·Y
+      sre[k] = (sre[k] ?? 0) + xr * yr + xi * yi;
+      sim[k] = (sim[k] ?? 0) + xr * yi - xi * yr;
+    }
+  }
+  const df = fs / segment;
+  // Per-bin coherence, then averaged over the band: summing cross-spectra over a band first
+  // would let the delay's phase ramp cancel them, and read a delay as incoherence.
+  const coherence = ([lo, hi]: readonly [number, number]): number => {
+    let sum = 0;
+    let bins = 0;
+    for (let k = Math.max(1, Math.ceil(lo / df)); k <= Math.floor(hi / df); k += 1) {
+      const cr = sre[k] ?? 0;
+      const ci = sim[k] ?? 0;
+      sum += (cr * cr + ci * ci) / ((saa[k] ?? 0) * (sbb[k] ?? 0));
+      bins += 1;
+    }
+    return sum / bins;
+  };
+  return { low: coherence(lowBand), high: coherence(highBand) };
+}
+
 /** The local rotation of node `i` (relative to its parent) as a rotation vector. */
 function localRotationVector(
   transforms: readonly NodeTransform[],
@@ -220,115 +323,196 @@ const TREE_BASE = sidecar.nodes.branch.find((b, i) => i > 0 && sidecar.nodes.mod
 
 // ---------------------------------------------------------------------------------------------
 
-describe("each branch rings at its model frequency", () => {
-  it("puts every branch's local-bend spectral peak within ±10 % of f = 2.55·L^-0.59", () => {
-    const fs = 16;
-    const seconds = 900;
-    const frames = fs * seconds;
-    const wind = windAt(8, false);
-    const bases = BRANCH_BASES.filter((b) => b !== TREE_BASE);
-    const signals = bases.map(() => [
-      new Float64Array(frames),
-      new Float64Array(frames),
-      new Float64Array(frames),
-    ]);
-    for (let k = 0; k < frames; k += 1) {
-      const transforms = livingTransforms(motion, 500 + k / fs, wind);
-      bases.forEach((b, j) => {
-        const r = localRotationVector(transforms, b, rig.nodes[b]?.parent ?? -1);
-        const s = signals[j];
-        if (s === undefined) return;
-        (s[0] as Float64Array)[k] = r[0];
-        (s[1] as Float64Array)[k] = r[1];
-        (s[2] as Float64Array)[k] = r[2];
-      });
+/**
+ * Where a spectrum's resonance sits near `fn`, and how far it stands out: the peak of the
+ * *velocity* spectrum `f²·S` within `[0.5, 2]·fn` (a displacement spectrum falls steeply
+ * through the band, the quasi-static gusts dominating its low end; the velocity spectrum of the
+ * background alone peaks at about `0.55·fn`, so a peak at `fn` is the resonance's), and the
+ * **prominence**: mean PSD over `[0.9, 1.1]·fn` over the geometric mean of the flanks
+ * `[0.6, 0.75]·fn` and `[1.35, 1.6]·fn`. A monotonically falling background gives ≤ 1.
+ */
+function resonancePeak(
+  psd: Float64Array,
+  df: number,
+  fn: number,
+): { peakHz: number; prominence: number } {
+  const band = (lo: number, hi: number): number => {
+    let sum = 0;
+    let n = 0;
+    for (let k = Math.max(1, Math.ceil(lo / df)); k <= Math.floor(hi / df); k += 1) {
+      sum += psd[k] ?? 0;
+      n += 1;
     }
+    return n > 0 ? sum / n : 0;
+  };
+  const velocity = psd.map((v, k) => v * (k * df) ** 2);
+  const at = peakHz(velocity, df, 0.5 * fn, 2 * fn);
+  const prominence =
+    band(0.9 * fn, 1.1 * fn) / Math.sqrt(band(0.6 * fn, 0.75 * fn) * band(1.35 * fn, 1.6 * fn));
+  return { peakHz: at, prominence };
+}
+
+/** The local-bend PSD (three axes summed) of each branch base, at one wind. */
+function branchBendPsd(
+  target: LivingMotion,
+  bases: readonly number[],
+  wind: LivingWind,
+  fs: number,
+  seconds: number,
+  segment: number,
+): { psd: Float64Array; df: number }[] {
+  const frames = fs * seconds;
+  const signals = bases.map(() => [
+    new Float64Array(frames),
+    new Float64Array(frames),
+    new Float64Array(frames),
+  ]);
+  for (let k = 0; k < frames; k += 1) {
+    const transforms = livingTransforms(target, 500 + k / fs, wind);
+    bases.forEach((b, j) => {
+      const r = localRotationVector(transforms, b, target.rig.nodes[b]?.parent ?? -1);
+      for (let c = 0; c < 3; c += 1) (signals[j]?.[c] as Float64Array)[k] = r[c] ?? 0;
+    });
+  }
+  return signals.map((axes) => {
+    const parts = axes.map((s) => welch(s, segment, fs));
+    const df = parts[0]?.df ?? 1;
+    const psd = new Float64Array(parts[0]?.psd.length ?? 0);
+    for (const part of parts) part.psd.forEach((v, k) => (psd[k] = (psd[k] ?? 0) + v));
+    return { psd, df };
+  });
+}
+
+describe("each branch rings at its model frequency — when the wind is strong enough", () => {
+  it("puts every branch's resonance within ±10 % of f = 2.55·L^-0.59 at 12 m/s, standing out", () => {
+    // The resonance is EN 1991-1-4's R² on top of the gusts' background B²; at 12 m/s it is
+    // 7-15 % of a limb's sway, but narrow, so it stands well clear of the background at f_n.
+    const bases = BRANCH_BASES.filter((b) => b !== TREE_BASE);
+    const spectra = branchBendPsd(motion, bases, windAt(12, false), 16, 900, 2048);
     const errors: number[] = [];
+    const prominences: number[] = [];
     bases.forEach((b, j) => {
       const model = sidecar.nodes.frequencyHz[b] ?? 0;
-      const parts = (signals[j] ?? []).map((s) => welch(s, 2048, fs));
-      const df = parts[0]?.df ?? 1;
-      const psd = new Float64Array(parts[0]?.psd.length ?? 0);
-      for (const part of parts) part.psd.forEach((v, k) => (psd[k] = (psd[k] ?? 0) + v));
-      const peak = peakHz(psd, df, 0.3, 7.5);
-      errors.push(peak / model - 1);
+      const { psd, df } = spectra[j] ?? { psd: new Float64Array(0), df: 1 };
+      const { peakHz, prominence } = resonancePeak(psd, df, model);
+      errors.push(peakHz / model - 1);
+      prominences.push(prominence);
     });
     const worst = errors.reduce((a, e) => (Math.abs(e) > Math.abs(a) ? e : a), 0);
     const mean = errors.reduce((a, e) => a + e, 0) / errors.length;
     console.info(
-      `MEASURED branch PSD peak vs model: ${bases.length} branches, mean ${(mean * 100).toFixed(1)} %, worst ${(worst * 100).toFixed(1)} %`,
+      `MEASURED 12 m/s branch resonance vs model: ${bases.length} branches, mean ${(mean * 100).toFixed(1)} %, ` +
+        `worst ${(worst * 100).toFixed(1)} %; prominence min ${Math.min(...prominences).toFixed(2)}, ` +
+        `median ${median(prominences).toFixed(2)}`,
     );
     expect(Math.abs(worst)).toBeLessThanOrEqual(0.1);
+    expect(Math.min(...prominences)).toBeGreaterThan(1.5);
   });
 });
 
 describe("the whole tree follows the pendulum law", () => {
-  it.each([6, 15])("puts a %s m tree's trunk peak within ±10 % of 2.4/√H", (heightM) => {
-    const tree = heightM === 6 ? rig : syntheticTreeRig({ heightM });
-    const treeSidecar = heightM === 6 ? sidecar : deriveMotionSidecar(tree);
-    const treeMotion: LivingMotion = heightM === 6 ? motion : createLivingMotion(tree, treeSidecar);
-    // The top of the trunk chain moves with the whole-tree mode alone.
-    let top = 1;
-    tree.nodes.forEach((node, i) => {
-      if (i > 0 && treeSidecar.nodes.mode[i] === 0 && node.band === "trunk") top = i;
-    });
-    const fs = 8;
-    const frames = fs * 1200;
-    const along = new Float64Array(frames);
-    const across = new Float64Array(frames);
-    for (let k = 0; k < frames; k += 1) {
-      const d = displacementOf(livingTransforms(treeMotion, 200 + k / fs, windAt(8)), top, tree);
-      along[k] = d[0];
-      across[k] = d[1];
-    }
-    const a = welch(along, 4096, fs);
-    const c = welch(across, 4096, fs);
-    const psd = a.psd.map((v, k) => v + (c.psd[k] ?? 0));
-    const law = treeFrequencyHz(treeSidecar.treeHeightM);
-    const peak = peakHz(psd, a.df, 0.15, 3);
-    console.info(
-      `MEASURED whole-tree peak, H = ${treeSidecar.treeHeightM} m: ${peak.toFixed(3)} Hz vs 2.4/√H = ${law.toFixed(3)} Hz (${((peak / law - 1) * 100).toFixed(1)} %)`,
-    );
-    expect(Math.abs(peak / law - 1)).toBeLessThanOrEqual(0.1);
-  });
+  it.each([6, 15])(
+    "puts a %s m tree's trunk resonance within ±10 % of 2.4/√H at 12 m/s",
+    (heightM) => {
+      const tree = heightM === 6 ? rig : syntheticTreeRig({ heightM });
+      const treeSidecar = heightM === 6 ? sidecar : deriveMotionSidecar(tree);
+      const treeMotion: LivingMotion =
+        heightM === 6 ? motion : createLivingMotion(tree, treeSidecar);
+      // The top of the trunk chain moves with the whole-tree mode alone.
+      let top = 1;
+      tree.nodes.forEach((node, i) => {
+        if (i > 0 && treeSidecar.nodes.mode[i] === 0 && node.band === "trunk") top = i;
+      });
+      const fs = 8;
+      const frames = fs * 1200;
+      const along = new Float64Array(frames);
+      const across = new Float64Array(frames);
+      for (let k = 0; k < frames; k += 1) {
+        const d = displacementOf(livingTransforms(treeMotion, 200 + k / fs, windAt(12)), top, tree);
+        along[k] = d[0];
+        across[k] = d[1];
+      }
+      const a = welch(along, 4096, fs);
+      const c = welch(across, 4096, fs);
+      const psd = a.psd.map((v, k) => v + (c.psd[k] ?? 0));
+      const law = treeFrequencyHz(treeSidecar.treeHeightM);
+      const { peakHz, prominence } = resonancePeak(psd, a.df, law);
+      console.info(
+        `MEASURED whole-tree resonance at 12 m/s, H = ${treeSidecar.treeHeightM} m: ${peakHz.toFixed(3)} Hz vs 2.4/√H = ${law.toFixed(3)} Hz (${((peakHz / law - 1) * 100).toFixed(1)} %), prominence ${prominence.toFixed(2)}`,
+      );
+      expect(Math.abs(peakHz / law - 1)).toBeLessThanOrEqual(0.1);
+      expect(prominence).toBeGreaterThan(1);
+    },
+  );
 });
 
 describe("deflection is drag", () => {
-  it("scales RMS deflection as U^(2 ± 0.2) from 2 to 10 m/s", () => {
-    const speeds = [2, 4, 6, 8, 10];
+  /**
+   * The mean deflection is the drag's: `∝ U²` (Jackson et al. 2021). The fluctuation about it is
+   * `2·I·√(B² + R²)` of the mean (EN 1991-1-4 eq. 6.3): `I` and `B²` do not depend on the
+   * speed, `R²` grows with it (more of the spectrum reaches the limb's frequency, and the
+   * admittances open up), so the RMS fluctuation grows a little faster than `U²` — and never
+   * slower, less the quasi-static share lost above the limb's frequency.
+   */
+  it("scales the mean deflection as U^(2 ± 0.1) and its fluctuation as U^2 to U^2.5, 2 to 12 m/s", () => {
+    const speeds = [2, 4, 6, 8, 12];
     const tip = highestNode(rig);
     const fs = 10;
-    const frames = fs * 300;
-    const rms = speeds.map((u) => {
-      let sum = 0;
+    const frames = fs * 600;
+    const means: number[] = [];
+    const fluctuations: number[] = [];
+    for (const u of speeds) {
+      const sum = [0, 0, 0];
+      const track: Vec3[] = [];
       for (let k = 0; k < frames; k += 1) {
         const d = displacementOf(livingTransforms(motion, 3000 + k / fs, windAt(u)), tip);
-        sum += d[0] ** 2 + d[1] ** 2 + d[2] ** 2;
+        track.push(d);
+        sum[0] = (sum[0] ?? 0) + d[0];
+        sum[1] = (sum[1] ?? 0) + d[1];
+        sum[2] = (sum[2] ?? 0) + d[2];
       }
-      return Math.sqrt(sum / frames);
-    });
-    const xs = speeds.map(Math.log);
-    const ys = rms.map(Math.log);
-    const mx = xs.reduce((a, b) => a + b, 0) / xs.length;
-    const my = ys.reduce((a, b) => a + b, 0) / ys.length;
-    let num = 0;
-    let den = 0;
-    xs.forEach((x, i) => {
-      num += (x - mx) * ((ys[i] ?? 0) - my);
-      den += (x - mx) ** 2;
-    });
-    const exponent = num / den;
+      const mean: Vec3 = [(sum[0] ?? 0) / frames, (sum[1] ?? 0) / frames, (sum[2] ?? 0) / frames];
+      let variance = 0;
+      for (const d of track)
+        variance += (d[0] - mean[0]) ** 2 + (d[1] - mean[1]) ** 2 + (d[2] - mean[2]) ** 2;
+      means.push(Math.hypot(mean[0], mean[1], mean[2]));
+      fluctuations.push(Math.sqrt(variance / frames));
+    }
+    const slope = (ys: number[]): number => {
+      const xs = speeds.map(Math.log);
+      const ls = ys.map(Math.log);
+      const mx = xs.reduce((a, b) => a + b, 0) / xs.length;
+      const my = ls.reduce((a, b) => a + b, 0) / ls.length;
+      let num = 0;
+      let den = 0;
+      xs.forEach((x, i) => {
+        num += (x - mx) * ((ls[i] ?? 0) - my);
+        den += (x - mx) ** 2;
+      });
+      return num / den;
+    };
+    const meanExponent = slope(means);
+    const fluctuationExponent = slope(fluctuations);
     console.info(
-      `MEASURED RMS tip deflection ${speeds.map((u, i) => `${u} m/s ${((rms[i] ?? 0) * 100).toFixed(2)} cm`).join(", ")}; fitted exponent ${exponent.toFixed(3)}`,
+      `MEASURED tip: mean ${speeds.map((u, i) => `${u} m/s ${((means[i] ?? 0) * 100).toFixed(2)} cm`).join(", ")} → U^${meanExponent.toFixed(3)}; ` +
+        `RMS fluctuation ${speeds.map((u, i) => `${u} m/s ${((fluctuations[i] ?? 0) * 100).toFixed(2)} cm`).join(", ")} → U^${fluctuationExponent.toFixed(3)}`,
     );
-    expect(Math.abs(exponent - 2)).toBeLessThanOrEqual(0.2);
+    expect(Math.abs(meanExponent - 2)).toBeLessThanOrEqual(0.1);
+    expect(fluctuationExponent).toBeGreaterThanOrEqual(1.9);
+    expect(fluctuationExponent).toBeLessThanOrEqual(2.5);
   });
 });
 
 describe("it never repeats", () => {
+  /**
+   * A real gusty wind is correlated with itself over its integral time scale, `≈ 1.7·L/U` for
+   * the EN 1991-1-4 spectrum (`S_L(0)/4`): 7 s at 8 m/s for a 6 m tree's 37 m scale. The test
+   * looks from 10 s — more than that — to an hour, over three hours of motion, so that what it
+   * would catch is a loop, not the wind's own memory or the estimator's noise at an hour's lag.
+   */
   it("has no autocorrelation peak above 0.2 at lags from 10 s to 1 h", () => {
     const fs = 2;
-    const seconds = 7200;
+    const seconds = 3 * 3600;
     const frames = fs * seconds;
     const wind = windAt(8);
     const tip = highestNode(rig);
@@ -772,7 +956,6 @@ describe("a fragmented real skeleton rings in a tree's band", () => {
       centroids.push(moment / power);
       fast.push(fastSpeed / speed);
     }
-    const median = (xs: number[]): number => [...xs].sort((a, b) => a - b)[xs.length >> 1] ?? 0;
     console.info(
       `MEASURED Minnetonka tips at 6.3 m/s: displacement spectral centroid median ${median(centroids).toFixed(2)} Hz ` +
         `(v1 rules: 2.41), share of velocity power above 4 Hz median ${median(fast).toFixed(3)}, ` +
@@ -829,6 +1012,226 @@ describe("amplitude falls with frequency", () => {
       `MEASURED Minnetonka limbs: RMS own tip deflection ∝ f^${slope.toFixed(2)} over ${limbs.length} limbs (quasi-static law: f^-2)`,
     );
     expect(slope).toBeLessThanOrEqual(-1);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Gentle at low wind, resonant at high wind: the response spectrum is |H|²·S_wind(f; U)
+// ---------------------------------------------------------------------------------------------
+
+/** Mode limbs of the Minnetonka rig (not the trunk) and each one's far end. */
+function realLimbs(): { base: number; end: number; fn: number }[] {
+  const structure = branchStructure(realRig);
+  const tree = structure.treeBranch;
+  const limbs = [...new Set(realSidecar.nodes.branch.slice(1))].filter((b) => b !== tree);
+  const ends = new Map<number, number>();
+  realRig.nodes.forEach((_, i) => {
+    const base = structure.limb[i] ?? i;
+    if (i > 0 && limbs.includes(base)) ends.set(base, i);
+  });
+  return limbs.map((base) => ({
+    base,
+    end: ends.get(base) ?? base,
+    fn: realSidecar.nodes.frequencyHz[base] ?? 1,
+  }));
+}
+
+/**
+ * Each limb's own tip deflection — where its far end is, less where its attachment's motion
+ * alone would carry it — as three axis tracks.
+ */
+function ownTipTracks(
+  limbs: readonly { base: number; end: number }[],
+  wind: LivingWind,
+  fs: number,
+  seconds: number,
+  start = 900,
+): Float64Array[][] {
+  const frames = Math.round(fs * seconds);
+  const tracks = limbs.map(() => [
+    new Float64Array(frames),
+    new Float64Array(frames),
+    new Float64Array(frames),
+  ]);
+  for (let k = 0; k < frames; k += 1) {
+    const transforms = livingTransforms(realMotion, start + k / fs, wind);
+    limbs.forEach(({ base, end }, j) => {
+      const attach = realRig.nodes[base]?.parent ?? 0;
+      const p = realRig.nodes[end]?.position ?? [0, 0, 0];
+      const moved = applyTransform(transforms[end] ?? IDENTITY_TRANSFORM, p);
+      const carried = applyTransform(transforms[attach] ?? IDENTITY_TRANSFORM, p);
+      for (let c = 0; c < 3; c += 1)
+        (tracks[j]?.[c] as Float64Array)[k] = (moved[c] ?? 0) - (carried[c] ?? 0);
+    });
+  }
+  return tracks;
+}
+
+/** Welch PSD summed over axes. */
+function axesPsd(axes: readonly Float64Array[], fs: number, segment: number) {
+  const parts = axes.map((s) => welch(s, segment, fs));
+  const df = parts[0]?.df ?? 1;
+  const psd = new Float64Array(parts[0]?.psd.length ?? 0);
+  for (const part of parts) part.psd.forEach((v, k) => (psd[k] = (psd[k] ?? 0) + v));
+  return { psd, df };
+}
+
+/** Share of a PSD's variance in `[lo, hi]`, of all above the 10-minute mean's frequency. */
+function bandShare(psd: Float64Array, df: number, lo: number, hi: number): number {
+  let total = 0;
+  let inside = 0;
+  for (let k = 1; k < psd.length; k += 1) {
+    const f = k * df;
+    if (f < 1 / 600) continue;
+    total += psd[k] ?? 0;
+    if (f >= lo && f <= hi) inside += psd[k] ?? 0;
+  }
+  return inside / total;
+}
+
+function centroidHz(psd: Float64Array, df: number): number {
+  let power = 0;
+  let moment = 0;
+  for (let k = 1; k < psd.length; k += 1) {
+    const f = k * df;
+    if (f < 1 / 600) continue;
+    power += psd[k] ?? 0;
+    moment += f * (psd[k] ?? 0);
+  }
+  return moment / power;
+}
+
+describe("gentle at low wind, resonant at high wind", () => {
+  const limbs = realLimbs();
+  const speeds = [2, 4, 8, 12, 16];
+  const fs = 10;
+  const spectra = new Map<number, { psd: Float64Array; df: number }[]>();
+  const spectraAt = (u: number): { psd: Float64Array; df: number }[] => {
+    const cached = spectra.get(u);
+    if (cached !== undefined) return cached;
+    const out = ownTipTracks(limbs, windAt(u), fs, 600).map((axes) => axesPsd(axes, fs, 2048));
+    spectra.set(u, out);
+    return out;
+  };
+
+  it("follows the gusts at 2 m/s: every limb's own-tip centroid below 0.3·f_n, ≥ 80 % below f_n/2", () => {
+    // EN 1991-1-4's spectrum puts its energy at f ≈ 0.15·U/L — 0.008 Hz at 2 m/s for L = 35 m —
+    // and the limb follows it through its static compliance: slow, with little ringing.
+    const at2 = spectraAt(2);
+    const ratios: number[] = [];
+    const shares: number[] = [];
+    limbs.forEach(({ fn }, j) => {
+      const { psd, df } = at2[j] ?? { psd: new Float64Array(0), df: 1 };
+      ratios.push(centroidHz(psd, df) / fn);
+      shares.push(bandShare(psd, df, 0, 0.5 * fn));
+    });
+    console.info(
+      `MEASURED Minnetonka limbs at 2 m/s (${limbs.length}): own-tip spectral centroid / f_n median ${median(ratios).toFixed(3)}, ` +
+        `worst ${Math.max(...ratios).toFixed(3)} (the flat-forced texture before: 0.64 at 2 m/s, 0.69 at 16); share below f_n/2 median ${median(shares).toFixed(3)}, worst ${Math.min(...shares).toFixed(3)}`,
+    );
+    expect(Math.max(...ratios)).toBeLessThan(0.3);
+    expect(Math.min(...shares)).toBeGreaterThanOrEqual(0.8);
+  });
+
+  it("grows its resonance with the wind: the resonant share rises monotonically, 2 to 16 m/s", () => {
+    // Model: R²/(B² + R²) per branch (EN eqs. B.3, B.6). Measured: the share of each limb's
+    // own-tip variance within [0.8, 1.25]·f_n.
+    const modelShares = speeds.map((u) =>
+      livingBuffeting(realMotion, windAt(u)).map(
+        (b) => b.resonance2 / (b.background2 + b.resonance2),
+      ),
+    );
+    for (let s = 1; s < speeds.length; s += 1)
+      (modelShares[s] ?? []).forEach((share, j) =>
+        expect(share).toBeGreaterThan(modelShares[s - 1]?.[j] ?? 1),
+      );
+    const measured = speeds.map((u) =>
+      median(
+        spectraAt(u).map(({ psd, df }, j) =>
+          bandShare(psd, df, 0.8 * (limbs[j]?.fn ?? 1), 1.25 * (limbs[j]?.fn ?? 1)),
+        ),
+      ),
+    );
+    console.info(
+      `MEASURED Minnetonka resonant share: model R²/(B²+R²) median ${speeds.map((u, s) => `${u} m/s ${median(modelShares[s] ?? []).toFixed(3)}`).join(", ")}; ` +
+        `measured own-tip variance in [0.8, 1.25]·f_n (before: 0.40-0.41 at every wind) median ${speeds.map((u, s) => `${u} m/s ${(measured[s] ?? 0).toFixed(3)}`).join(", ")}`,
+    );
+    for (let s = 1; s < speeds.length; s += 1)
+      expect(measured[s] ?? 0).toBeGreaterThan(measured[s - 1] ?? 1);
+  });
+
+  it("shows its resonant peak at f_n growing out of the gusts from 2 to 12 m/s", () => {
+    // A lightly damped limb shows a peak at f_n at any wind — |H(f_n)|² = 1/(4ζ²) — but at
+    // 2 m/s the eddies that size are much smaller than the limb and average out over it (EN's
+    // admittances R_h·R_b ≈ 0.02), so the peak is low and holds ~1 % of the motion; by 12 m/s
+    // the admittances have opened ten-fold and the peak stands out.
+    const prominence = (u: number): number[] =>
+      spectraAt(u).map(({ psd, df }, j) => resonancePeak(psd, df, limbs[j]?.fn ?? 1).prominence);
+    const low = prominence(2);
+    const high = prominence(12);
+    console.info(
+      `MEASURED Minnetonka own-tip prominence at f_n: 2 m/s median ${median(low).toFixed(2)} (max ${Math.max(...low).toFixed(2)}), ` +
+        `12 m/s median ${median(high).toFixed(2)} (min ${Math.min(...high).toFixed(2)})`,
+    );
+    expect(median(high)).toBeGreaterThan(1.5 * median(low));
+    expect(Math.min(...high)).toBeGreaterThan(1.5);
+  });
+});
+
+describe("a gust crosses the crown as a front", () => {
+  /**
+   * The wind is a frozen field carried downwind at U (Taylor's hypothesis): two limbs read it
+   * at their own points, so the downwind one sees the upwind one's gust `Δx/U` later (plus the
+   * difference of their low-passes' group delays, `√2/(2π·f_n)` each), and they move together
+   * at low frequency — long gusts are bigger than the crown — and apart at high.
+   */
+  it("delays the downwind limb by Δx/U and keeps neighbours coherent at low frequency", () => {
+    const u = 4;
+    const bearingDeg = 30;
+    const w: Vec3 = [Math.sin(bearingDeg * DEG), Math.cos(bearingDeg * DEG), 0];
+    const limbs = realLimbs();
+    // The pair farthest apart along the wind among limbs within 0.5 m of each other across it
+    // and vertically, with frequencies within 15 % (so their own filters barely differ).
+    let best: [number, number] = [0, 1];
+    let bestGap = -1;
+    limbs.forEach((a, i) =>
+      limbs.forEach((b, j) => {
+        const pa = realMotion.oscillators.get(a.base)?.samplePoint ?? [0, 0, 0];
+        const pb = realMotion.oscillators.get(b.base)?.samplePoint ?? [0, 0, 0];
+        const d: Vec3 = [pb[0] - pa[0], pb[1] - pa[1], pb[2] - pa[2]];
+        const along = d[0] * w[0] + d[1] * w[1];
+        const across = Math.hypot(d[0] * w[1] - d[1] * w[0], d[2]);
+        if (across < 0.5 && Math.abs(b.fn / a.fn - 1) < 0.15 && along > bestGap) {
+          bestGap = along;
+          best = [i, j];
+        }
+      }),
+    );
+    const pair = [limbs[best[0]], limbs[best[1]]].filter((l) => l !== undefined);
+    expect(pair.length).toBe(2);
+    const fs = 20;
+    const tracks = ownTipTracks(pair, { ...windAt(u), bearingDeg }, fs, 1200, 400);
+    // Along-wind component of each limb's own tip.
+    const series = tracks.map((axes) => {
+      const n = axes[0]?.length ?? 0;
+      const out = new Float64Array(n);
+      for (let k = 0; k < n; k += 1)
+        out[k] = (axes[0]?.[k] ?? 0) * w[0] + (axes[1]?.[k] ?? 0) * w[1];
+      return out;
+    });
+    const [a, b] = series as [Float64Array, Float64Array];
+    const lag = bestLag(a, b, fs, 3);
+    const delay = (fn: number): number => Math.SQRT2 / (2 * Math.PI * fn);
+    const expected = bestGap / u + delay(pair[1]?.fn ?? 1) - delay(pair[0]?.fn ?? 1);
+    const { low, high } = bandCoherence(a, b, fs, 1024, [0.02, 0.2], [0.8, 1.6]);
+    console.info(
+      `MEASURED gust front at ${u} m/s: limbs ${pair[0]?.base} → ${pair[1]?.base}, ${bestGap.toFixed(2)} m apart along the wind; ` +
+        `lag ${lag.toFixed(3)} s vs Δx/U + Δτ = ${expected.toFixed(3)} s; coherence ${low.toFixed(3)} at 0.02-0.2 Hz, ${high.toFixed(3)} at 0.8-1.6 Hz`,
+    );
+    expect(bestGap).toBeGreaterThan(0.5);
+    expect(Math.abs(lag - expected)).toBeLessThan(0.1);
+    expect(low).toBeGreaterThan(0.8);
+    expect(high).toBeLessThan(low);
   });
 });
 

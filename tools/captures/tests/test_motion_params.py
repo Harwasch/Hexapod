@@ -9,6 +9,7 @@ of a skeleton ``skeleton.py`` *extracted*, which is what a real capture will han
 from __future__ import annotations
 
 import json
+import math
 from collections import defaultdict
 from pathlib import Path
 
@@ -77,6 +78,28 @@ def test_coder_law_and_rounding_match_javascript() -> None:
     # Math.round is half-up; Python's round() is banker's. The sidecar must use the former.
     assert motion_params.round_to(0.00005, 4) == 0.0001
     assert motion_params.round_to(2.5, 0) == 3
+
+
+def test_wind_is_en_1991_1_4_at_the_tree_height() -> None:
+    """Terrain category III (z0 = 0.3 m, z_min = 5 m): I = 1/ln(z/z0) (eq. 4.7) and
+    L = 300 (z/200)^(0.67 + 0.05 ln z0) (eq. B.1), held below z_min. The same numbers as
+    motionParams.test.ts asserts for the TypeScript twin."""
+    wind = motion_params.default_sidecar_wind(6.0)
+    assert wind["turbulence"]["along"] == pytest.approx(2 / math.log(20), abs=1e-4)
+    assert wind["turbulence"]["across"] == pytest.approx(0.75 / math.log(20), abs=1e-4)
+    assert wind["lengthScaleM"] == pytest.approx(35.36, abs=0.01)
+    assert wind["gust"]["strength"] == 0
+    low = motion_params.default_sidecar_wind(3.0)
+    assert low["turbulence"]["along"] == pytest.approx(2 / math.log(5 / 0.3), abs=1e-4)
+    assert _sidecar()["wind"] == motion_params.default_sidecar_wind(_sidecar()["treeHeightM"])
+
+
+def test_limb_damping_spans_the_measured_branch_range() -> None:
+    """James & Haritos 2010: single branches 3.5-4.5 %, the tree with its branches 10.6 %."""
+    assert motion_params.limb_damping(1, 100) == pytest.approx(motion_params.LIMB_DAMPING_MIN)
+    assert motion_params.limb_damping(100, 100) == pytest.approx(motion_params.LIMB_DAMPING_MAX)
+    values = [motion_params.limb_damping(t, 100) for t in range(101)]
+    assert values == sorted(values)
 
 
 @pytest.fixture(scope="module")
