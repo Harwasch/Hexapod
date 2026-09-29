@@ -1,3 +1,7 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { gunzipSync } from "node:zlib";
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -82,5 +86,35 @@ describe("packaged collision", () => {
 
   it("refuses a payload that does not match its declaration", () => {
     expect(() => parseCollision(new Uint8Array(70), meta(1))).toThrow(/bytes for 1 bricks/);
+  });
+});
+
+describe("the packager's own file", () => {
+  it("parses the fixture tree's collision.bin to the counts its tileset declares", () => {
+    const folder = resolve(__dirname, "../../../../data/tiles/synthetic-tree/splat");
+    const tileset = JSON.parse(readFileSync(resolve(folder, "tileset.json"), "utf8")) as {
+      root: { extras?: unknown };
+    };
+    const meta = collisionMetaOf(tileset.root.extras);
+    if (!meta) throw new Error("the fixture declares no collision grid");
+    const grid = parseCollision(gunzipSync(readFileSync(resolve(folder, meta.uri))), meta);
+    expect(grid.solidCells).toBe(meta.solidCells);
+    expect(grid.empty).toBe(false);
+    // A ray straight down onto a solid cell meets it, from above its column's top solid.
+    const bounds = grid.solidBounds();
+    if (!bounds) throw new Error("no bounds");
+    let solid: [number, number, number] | null = null;
+    for (let ix = bounds.lo[0]; ix <= bounds.hi[0] && !solid; ix++)
+      for (let iy = bounds.lo[1]; iy <= bounds.hi[1] && !solid; iy++)
+        for (let iz = bounds.hi[2]; iz >= bounds.lo[2] && !solid; iz--)
+          if (grid.solidAt(ix, iy, iz)) solid = [ix, iy, iz];
+    if (!solid) throw new Error("no solid cell");
+    const [ox, oy, oz] = meta.origin;
+    const x = ox + (solid[0] + 0.5) * meta.cell;
+    const y = oy + (solid[1] + 0.5) * meta.cell;
+    const top = oz + (bounds.hi[2] + 2) * meta.cell;
+    const hit = grid.raycast([x, y, top], [0, 0, -1], 1000);
+    expect(hit).not.toBeNull();
+    expect(top - (hit ?? 0)).toBeCloseTo(oz + (solid[2] + 1) * meta.cell, 6);
   });
 });

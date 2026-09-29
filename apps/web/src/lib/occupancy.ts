@@ -371,8 +371,6 @@ export const SPLATS_PER_CELL = 3;
 /** Cell edges tried, as powers of two metres: 4 mm to 32 m. */
 const MIN_CELL_EXP = -8;
 const MAX_CELL_EXP = 5;
-/** Splats sampled per tile to size its cell. */
-const SIZING_SAMPLE = 20_000;
 /** The camera keeps this many of a level's cells from a solid one, within these bounds (m). */
 export const CLEARANCE_CELLS = 1.5;
 const MIN_CLEARANCE_M = 0.005;
@@ -392,34 +390,44 @@ export function cellFor(
   count: number,
   opacity: (index: number) => number,
 ): number {
-  const stride = Math.max(1, Math.floor(count / SIZING_SAMPLE));
-  const sample: number[] = [];
-  for (let i = start; i < start + count; i += stride) {
+  // Every splat, not a sample: a strided sample scaled back up by its stride overstates the
+  // count per cell at fine sizes (most sampled splats sit alone in a cell), so a large tile
+  // always came out at the finest cell. The packager counts every splat the same way
+  // (tools/captures/splat_tiles.py), so the two agree.
+  const kept: number[] = [];
+  for (let i = start; i < start + count; i++) {
     if (!(opacity(i) >= MIN_OPACITY)) continue;
     const x = positions[i * 3];
     const y = positions[i * 3 + 1];
     const z = positions[i * 3 + 2];
     if (x === undefined || y === undefined || z === undefined) continue;
     if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;
-    sample.push(x, y, z);
+    kept.push(x, y, z);
   }
-  const n = sample.length / 3;
+  const n = kept.length / 3;
   if (n === 0) return 2 ** MAX_CELL_EXP;
-  // A stride thins the sample: each sampled splat stands for `stride`, so the per-cell count
-  // at full density is the sampled one times it.
-  for (let exp = MIN_CELL_EXP; exp < MAX_CELL_EXP; exp++) {
+  const dense = (exp: number): boolean => {
     const inverse = 2 ** -exp;
     const cells = new Set<string>();
     for (let i = 0; i < n; i++) {
       cells.add(
-        `${String(Math.floor((sample[i * 3] ?? 0) * inverse))},${String(
-          Math.floor((sample[i * 3 + 1] ?? 0) * inverse),
-        )},${String(Math.floor((sample[i * 3 + 2] ?? 0) * inverse))}`,
+        `${String(Math.floor((kept[i * 3] ?? 0) * inverse))},${String(
+          Math.floor((kept[i * 3 + 1] ?? 0) * inverse),
+        )},${String(Math.floor((kept[i * 3 + 2] ?? 0) * inverse))}`,
       );
     }
-    if ((n * stride) / cells.size >= SPLATS_PER_CELL) return 2 ** exp;
+    return n / cells.size >= SPLATS_PER_CELL;
+  };
+  // Splats per occupied cell only grow with the cell, so the smallest dense size is found by
+  // bisection: a handful of passes rather than one per size.
+  let lo = MIN_CELL_EXP;
+  let hi = MAX_CELL_EXP;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (dense(mid)) hi = mid;
+    else lo = mid + 1;
   }
-  return 2 ** MAX_CELL_EXP;
+  return 2 ** lo;
 }
 
 /**

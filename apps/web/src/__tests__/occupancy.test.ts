@@ -129,6 +129,15 @@ describe("sizing cells to the splats", () => {
     expect(cellFor(sparse, 0, sparse.length / 3, opaque)).toBe(0.25);
   });
 
+  it("sizes a large tile by its real density, not a thinned sample's", () => {
+    // 1 cm spacing over 3.2 x 3.2 m: 102,400 splats. 2^-6 m cells hold ~2.4, 2^-5 m ~9.8.
+    // A strided sample scaled by its stride read about the stride per cell at any size and
+    // gave the finest cell, 4 mm.
+    const wall1cm: number[] = [];
+    for (let y = 0; y < 320; y++) for (let z = 0; z < 320; z++) wall1cm.push(0, y * 0.01, z * 0.01);
+    expect(cellFor(wall1cm, 0, wall1cm.length / 3, opaque)).toBe(2 ** -5);
+  });
+
   it("keeps a sparse tile a surface a ray cannot slip through", () => {
     const occupancy = new SplatOccupancy();
     const sparse: number[] = [];
