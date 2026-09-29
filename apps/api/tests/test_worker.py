@@ -390,6 +390,66 @@ def test_the_register_stage_describes_and_the_worker_registers(
     assert json.loads(storage.get_object(f"runs/{job.id}/package/splat/tileset.json"))
 
 
+def test_long_uploads_and_publishing_hold_no_transaction_open(
+    db: Session,
+    sessions: sessionmaker[Session],
+    storage: S3Storage,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Uploading a stage's outputs and copying the tileset to the public bucket take
+    minutes on a large capture. A session left idle in a transaction that long is killed
+    by the database (Neon's idle-in-transaction timeout), and the registration after it
+    then failed: seen on a 22.7M-gaussian, 514-tile upload. So during both, no session
+    may be idle in a transaction -- checked in Postgres itself, not by trusting code."""
+    from sqlalchemy import create_engine, text
+
+    from app.worker import outputs, registration
+
+    probe = create_engine(TEST_DATABASE_URL)
+    seen: list[tuple[str, int]] = []
+
+    def idle_in_transaction() -> int:
+        with probe.connect() as connection:
+            return int(
+                connection.execute(
+                    text(
+                        "SELECT count(*) FROM pg_stat_activity WHERE datname = "
+                        "current_database() AND pid <> pg_backend_pid() AND "
+                        "state LIKE 'idle in transaction%'"
+                    )
+                ).scalar_one()
+            )
+
+    real_upload, real_publish = outputs.upload_artifact, registration._publish_tileset
+
+    def upload(*args: object, **kwargs: object) -> object:
+        seen.append(("upload", idle_in_transaction()))
+        return real_upload(*args, **kwargs)  # type: ignore[arg-type]
+
+    def publish(*args: object, **kwargs: object) -> object:
+        seen.append(("publish", idle_in_transaction()))
+        return real_publish(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(outputs, "upload_artifact", upload)
+    monkeypatch.setattr(registration, "_publish_tileset", publish)
+
+    capture = make_capture(db, slug="large")
+    job = queue_job(db, capture, "t-ingest")
+    session = sessions()
+    assert claim_next(session, worker_id="worker-a", lease_s=30) is not None
+    session.close()
+    db.commit()  # the test's own session holds nothing either
+
+    try:
+        assert run_job(sessions, storage, job.id, config(tmp_path)) == "complete"
+    finally:
+        probe.dispose()
+    assert any(kind == "publish" for kind, _ in seen), seen
+    assert any(kind == "upload" for kind, _ in seen), seen
+    assert [entry for entry in seen if entry[1] != 0] == [], seen
+
+
 def test_a_stage_that_fails_every_time_dead_letters_and_says_why(
     db: Session, sessions: sessionmaker[Session], storage: S3Storage, tmp_path: Path
 ) -> None:

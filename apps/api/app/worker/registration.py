@@ -330,23 +330,32 @@ def _publish_object(
     return publish.publish_object(artifact_key(job_id, stage_id, key_suffix))
 
 
-def register(
-    db: Session,
+@dataclass(frozen=True)
+class Published:
+    """What `publish_outputs` copied to the public bucket: each URL, or None."""
+
+    tileset: str | None
+    thumbnail: str | None
+    coverage: str | None
+
+
+def publish_outputs(
     storage: ObjectStorage,
     *,
     publish: Publisher | None = None,
-    capture: Capture,
     job_id: uuid.UUID,
     registration: Registration,
     tiles_stage_id: str | None,
     thumbnail_stage_id: str | None = None,
     coverage_stage_id: str | None = None,
-) -> uuid.UUID | None:
-    """Create (or keep) the capture's site, and mark the capture complete.
+) -> Published:
+    """Copy the run's browser-facing outputs to the public bucket. No database here.
 
-    Returns the site id, or None when there was nothing registerable — a run under the
-    stub runner with no bucket configured produces no tileset to point a viewer at, and
-    saying so is better than a site with a dead asset on it.
+    This is object-store I/O proportional to the tileset, minutes for a large capture
+    (514 tiles took ~8 min on the worker), so the caller runs it with **no transaction
+    open**: a session left idle in a transaction that long is killed by the database's
+    idle-in-transaction timeout, and the registration after it then fails on a dead
+    connection. That is exactly what a 22.7M-gaussian upload hit.
     """
     # With no publisher the private bucket is also the public one, which is the
     # single-bucket behaviour every caller had before the split; see app/worker/publish.py.
@@ -383,6 +392,43 @@ def register(
         )
     except PublishError:
         coverage = None
+    return Published(tileset=url, thumbnail=thumbnail, coverage=coverage)
+
+
+def register(
+    db: Session,
+    storage: ObjectStorage,
+    *,
+    publish: Publisher | None = None,
+    capture: Capture,
+    job_id: uuid.UUID,
+    registration: Registration,
+    tiles_stage_id: str | None,
+    thumbnail_stage_id: str | None = None,
+    coverage_stage_id: str | None = None,
+    published: Published | None = None,
+) -> uuid.UUID | None:
+    """Create (or keep) the capture's site, and mark the capture complete.
+
+    Returns the site id, or None when there was nothing registerable — a run under the
+    stub runner with no bucket configured produces no tileset to point a viewer at, and
+    saying so is better than a site with a dead asset on it.
+
+    Pass `published` (from `publish_outputs`, run first with no transaction open) so that
+    this does only database work; without it the copy happens here, inside whatever
+    transaction the session holds, which is only safe for small outputs.
+    """
+    if published is None:
+        published = publish_outputs(
+            storage,
+            publish=publish,
+            job_id=job_id,
+            registration=registration,
+            tiles_stage_id=tiles_stage_id,
+            thumbnail_stage_id=thumbnail_stage_id,
+            coverage_stage_id=coverage_stage_id,
+        )
+    url, thumbnail, coverage = published.tileset, published.thumbnail, published.coverage
     if capture.site_id is None:
         assets: list[AssetBase] = []
         if url is not None:

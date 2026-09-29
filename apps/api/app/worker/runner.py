@@ -398,6 +398,9 @@ class JobSupervisor:
                 impl=event.impl,
                 attempt=event.attempt,
             )
+            # Uploads are minutes for a large stage (a 514-tile package): end the
+            # transaction first so the session is not left idle inside one.
+            _end_transaction(db)
             uploaded = [
                 result
                 for ref in refs
@@ -441,12 +444,31 @@ class JobSupervisor:
     # --- terminal states ----------------------------------------------------------
 
     def _finish_complete(self, db: Session, job: Job, state: _RunState) -> Terminal:
+        ref = state.ref("registration.json")
+        document = (
+            registration.Registration.read(self._config.workdir_for(job.id) / ref.path)
+            if ref is not None
+            else None
+        )
+        published = None
+        if document is not None:
+            # Copy to the public bucket first, with no transaction open: for a large
+            # capture it takes minutes, and a session idle in a transaction that long is
+            # killed by the database (see registration.publish_outputs).
+            _end_transaction(db)
+            published = registration.publish_outputs(
+                self._storage,
+                publish=self._publish,
+                job_id=job.id,
+                registration=document,
+                tiles_stage_id=state.stage_producing("splat"),
+                thumbnail_stage_id=state.stage_producing("thumbnail.jpg"),
+                coverage_stage_id=state.stage_producing("coverage_enu.ply"),
+            )
         if not self._still_ours(db, job):
             return "lost"
         capture = db.get(Capture, job.capture_id)
-        ref = state.ref("registration.json")
-        if capture is not None and ref is not None:
-            document = registration.Registration.read(self._config.workdir_for(job.id) / ref.path)
+        if capture is not None and document is not None:
             registration.register(
                 db,
                 self._storage,
@@ -457,6 +479,7 @@ class JobSupervisor:
                 tiles_stage_id=state.stage_producing("splat"),
                 thumbnail_stage_id=state.stage_producing("thumbnail.jpg"),
                 coverage_stage_id=state.stage_producing("coverage_enu.ply"),
+                published=published,
             )
         elif capture is not None:
             # A recipe with no `register` stage still finished; the capture is processed
@@ -760,3 +783,16 @@ def _stop(process: subprocess.Popen[str], grace_s: float) -> None:
     except subprocess.TimeoutExpired:
         process.kill()
         process.wait()
+
+
+def _end_transaction(db: Session) -> None:
+    """Commit whatever the session holds so it is not idle in a transaction.
+
+    Called before long object-store I/O. Neon (like any Postgres with
+    `idle_in_transaction_session_timeout`) terminates a connection left idle inside a
+    transaction, and the next statement on it then fails. Committing here writes nothing
+    the step would not have written anyway: every change made so far is already meant
+    to be durable.
+    """
+    if db.in_transaction():
+        db.commit()
