@@ -12,12 +12,16 @@ why). A scan within one tile's budget is one tile, as before. The packer reads t
 windows and sorts through disk, so its memory does not grow with the file. The glTF node
 carries the z-up to y-up swap the same way Cesium's own sample tilesets do. A trained PLY's
 spherical harmonics (`f_rest_*`, up to degree 3) ride along in every tile, so the view-
-dependent colour the trainer learned is drawn (see `convert`).
+dependent colour the trainer learned is drawn (see `convert`). Beside the tiles goes
+`collision.bin`, the scan's solid cells for the web clients' camera collision and picking,
+declared on the root tile (`COLLISION_FORMAT`).
 
 Usage:
     python splat_tiles.py splat.ply out_dir --lat 46.84 --lon -91.99 --height 0
         [--opacity-min 0.02] [--tile-gaussians 100000] [--parents lod_parents.npz]
         [--sh-degree 0-3]
+    python splat_tiles.py collision splat.ply out_dir [--tileset out_dir/tileset.json]
+        [--opacity-min 0.02]
 """
 
 from __future__ import annotations
@@ -28,11 +32,13 @@ import hashlib
 import json
 import math
 import struct
+import sys
 import tempfile
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 
@@ -1556,6 +1562,8 @@ class Prepared:
     store: SortedStore
     edge: float
     sh_degree: int = 0
+    #: The PLY rows kept (`_filter_rows`): what the leaves hold, and the collision grid is of.
+    keep: np.ndarray | None = None
 
 
 @contextmanager
@@ -1600,7 +1608,7 @@ def prepare(
     with tempfile.TemporaryDirectory(prefix=".splat_tiles-", dir=work_dir) as scratch:
         store = _sort_to_disk(layout, keep, rank, Path(scratch), sh_degree)
         del rank
-        yield Prepared(layout, count, pmin, pmax, codes, root, store, edge, sh_degree)
+        yield Prepared(layout, count, pmin, pmax, codes, root, store, edge, sh_degree, keep)
 
 
 def hierarchy(
@@ -1753,6 +1761,391 @@ class ParentOverrides:
             )
 
 
+# ------------------------------------------------------------------------- collision grid
+
+#: What the web clients collide with and cast rays against, precomputed here so they load
+#: it instead of building one on the main thread (a Chrome trace of the globe put that work
+#: at ~20% of main-thread time). A splat writes no depth, so neither CesiumJS nor Spark can
+#: pick it; its own centres are the geometry (apps/web src/lib/occupancy.ts says why).
+#:
+#: **Format `hexapod.collision` v1.** `collision.bin` beside `tileset.json`, gzip (mtime 0).
+#: Decompressed: one 76-byte record per brick of 8 x 8 x 8 cells that holds any solid cell,
+#: sorted by (bz, by, bx): int32 bx, by, bz, little-endian, then a 64-byte bitmask. A point
+#: p is in cell `i = floor((p - origin) / cell)` per axis, of brick `i >> 3`, at local
+#: `(lx, ly, lz) = i & 7`, bit `n = lx + 8 ly + 64 lz`, set when `mask[n >> 3] >> (n & 7) & 1`.
+#: The root tile's `extras.collision` carries `cell`, `origin` and the counts (`collision_extras`),
+#: all in the tileset's local east/north/up metres -- the frame the SPZ positions are in.
+COLLISION_FORMAT = "hexapod.collision"
+COLLISION_VERSION = 1
+COLLISION_URI = "collision.bin"
+COLLISION_BRICK = 8
+COLLISION_RECORD = np.dtype([("brick", "<i4", (3,)), ("mask", "u1", (COLLISION_BRICK**3 // 8,))])
+
+#: The runtime grid's two constants (apps/web src/lib/occupancy.ts `SOLID`, `MIN_OPACITY`):
+#: a cell is solid when the opacities of the splats centred in it sum to `COLLISION_SOLID`,
+#: counting only splats at least `COLLISION_MIN_OPACITY` opaque. One opaque splat is
+#: enough, a faint floater is not, and a surface of many translucent ones adds up.
+COLLISION_SOLID = 0.6
+COLLISION_MIN_OPACITY = 0.2
+COLLISION_RULE = (
+    f"solid where the opacities of the splats centred in the cell, counting splats at least "
+    f"{COLLISION_MIN_OPACITY:g} opaque, sum to at least {COLLISION_SOLID:g}"
+)
+
+#: Opacities are summed in fixed point, 2^-32 a step, so a cell's sum is exact whatever
+#: order it is added in: the same PLY read in other windows (`CHUNK_BYTES`) must give the
+#: same bytes, and a float sum a hair either side of `COLLISION_SOLID` would not.
+_COLLISION_FIXED = float(1 << 32)
+_COLLISION_SOLID_FIXED = math.ceil(COLLISION_SOLID * _COLLISION_FIXED)
+
+#: The cell is sized from the data as the runtime sizes a tile's (occupancy.ts `cellFor`):
+#: the smallest power of two metres, from 2^-8 (4 mm) up, at which the splats that count
+#: average `COLLISION_SPLATS_PER_CELL` to an occupied cell -- dense enough that neighbouring
+#: cells on a surface are all occupied, so a ray cannot pass between specks -- and 2^5 m
+#: (32 m) when none is.
+COLLISION_SPLATS_PER_CELL = 3
+COLLISION_CELL_EXPONENTS = (-8, 5)
+
+#: ...and never finer than this many cells along the site's longest axis (rounded up to a
+#: power of two). The solid cells of a surface grow as its area over the cell squared, so a
+#: whole site at the millimetres its densest patch could carry would be hundreds of millions
+#: of cells; 4096 a side keeps a site to a few MB wherever it is dense. Fort Clatsop (22.6M
+#: gaussians over ~150 m) packs at 2^-5 m: 3.69M solid cells in 501k bricks, 4.9 MB of
+#: gzip. A 16 m tree is floored at 4 mm and its density decides (the synthetic tree:
+#: 12.5 cm). The camera stays 1.5 cells off a surface (occupancy.ts `CLEARANCE_CELLS`), so
+#: a coarser cell is a slightly wider berth, not a hole.
+COLLISION_MAX_CELLS = 4096
+
+#: The site's extent for `COLLISION_MAX_CELLS`: the largest axis of the kept splats' box
+#: between these percentiles, so a few far splats the floater radius let through do not
+#: coarsen the whole grid. Measured on a strided sample of at most ~2x `COLLISION_SAMPLE`.
+COLLISION_BOUNDS_PERCENTILES = (0.5, 99.5)
+COLLISION_SAMPLE = 1 << 18
+
+#: Cell indices are packed 21 bits an axis while the grid is built (2^21 cells of 4 mm is
+#: 8 km); bricks, 18 bits an axis, then a cell's 9 bits, sort in the file's order.
+_AXIS_BITS = 21
+_AXIS_MASK = (1 << _AXIS_BITS) - 1
+_BRICK_BITS = _AXIS_BITS - 3
+
+
+@dataclass(frozen=True)
+class CollisionGrid:
+    """Solid cells of a scan: `cells` (n, 3) int64 indices, in the file's order."""
+
+    cell: float
+    origin: tuple[float, float, float]
+    cells: np.ndarray
+    #: Splats that counted: kept, and at least `COLLISION_MIN_OPACITY` opaque.
+    splats: int = 0
+
+    @property
+    def solid(self) -> set[tuple[int, int, int]]:
+        return {(int(x), int(y), int(z)) for x, y, z in self.cells}
+
+    def cell_of(self, points: np.ndarray) -> np.ndarray:
+        """The cell index of each point (n, 3), by the format's own rule."""
+        origin = np.asarray(self.origin, dtype=np.float64)
+        return np.floor((np.asarray(points, np.float64) - origin) / self.cell).astype(np.int64)
+
+
+def _power_of_two_at_least(value: float) -> float:
+    """The smallest power of two >= `value` (> 0), exactly."""
+    mantissa, exponent = math.frexp(value)
+    return math.ldexp(1.0, exponent - 1 if mantissa == 0.5 else exponent)
+
+
+def _pack_cells(index: np.ndarray) -> np.ndarray:
+    return (index[:, 2] << (2 * _AXIS_BITS)) | (index[:, 1] << _AXIS_BITS) | index[:, 0]
+
+
+def _unpack_cells(keys: np.ndarray) -> np.ndarray:
+    return np.stack(
+        [keys & _AXIS_MASK, (keys >> _AXIS_BITS) & _AXIS_MASK, keys >> (2 * _AXIS_BITS)], axis=1
+    )
+
+
+def _coarsen_cells(keys: np.ndarray, shift: int, offset: np.ndarray | None = None) -> np.ndarray:
+    """Packed cells `shift` sizes coarser (a cell is 2^shift of them a side), less `offset`."""
+    out = np.zeros_like(keys)
+    for axis in range(3):
+        index = ((keys >> (axis * _AXIS_BITS)) & _AXIS_MASK) >> shift
+        if offset is not None:
+            index -= int(offset[axis])
+        out |= index << (axis * _AXIS_BITS)
+    return out
+
+
+def _reduce_cells(keys: np.ndarray, sums: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """One row per distinct key, ascending, its fixed-point opacities added.
+
+    Hand it arrays nothing else holds (fresh concatenations, say): each is dropped as soon
+    as its sorted copy exists, which is what keeps a merge of millions of cells small.
+    """
+    if keys.size == 0:
+        return keys, sums
+    order = np.argsort(keys, kind="stable")
+    keys = keys[order]
+    sums = sums[order]
+    del order
+    starts = np.flatnonzero(np.r_[True, keys[1:] != keys[:-1]])
+    return keys[starts], np.add.reduceat(sums, starts)
+
+
+def collision_grid(layout: PlyLayout, keep: np.ndarray) -> CollisionGrid:
+    """The solid cells of the rows `keep` selects -- the gaussians the leaves hold.
+
+    Two passes over the PLY in windows (`iter_ply_rows`), holding one row per occupied
+    cell and never the scan: the first finds the site's extent (`COLLISION_MAX_CELLS`) and
+    the lowest counted centre; the second adds every counted splat into its cell at the
+    finest size the extent allows. The cell size (`COLLISION_SPLATS_PER_CELL`) is then
+    counted exactly at each size from those cells -- each is a union of finer ones, so no
+    further pass is needed -- rather than estimated from a sample: a sample of 1 in k
+    splats occupies up to k times too few cells at sizes the data does not fill, which is
+    why a stride-scaled estimate always reads the finest size once k reaches the target.
+    The opacity sums coarsen the same way, exactly (`_COLLISION_FIXED`). Fort Clatsop's
+    22.6M gaussians (a 1.27 GB PLY) are 5.6M occupied cells at the finest size: 0.54 GB
+    at the peak and 7 s, under the 1.1 GB `_filter_rows` already takes of the same scan
+    (so `convert`'s peak is unchanged), and ~19 s more to write the file (`encode_collision`).
+    """
+    stride = max(1, layout.count // COLLISION_SAMPLE)
+    low = np.full(3, np.inf)
+    high = np.full(3, -np.inf)
+    sample: list[np.ndarray] = []
+    counted = 0
+    columns = ("x", "y", "z", "opacity")
+    for start, chunk in iter_ply_rows(layout, columns):
+        size = chunk["x"].size
+        kept = keep[start : start + size]
+        xyz = np.stack([chunk["x"], chunk["y"], chunk["z"]], axis=1).astype(np.float64)
+        sample.append(xyz[kept & (np.arange(start, start + size) % stride == 0)])
+        solid = kept & (sigmoid(chunk["opacity"].astype(np.float64)) >= COLLISION_MIN_OPACITY)
+        if solid.any():
+            low = np.minimum(low, xyz[solid].min(axis=0))
+            high = np.maximum(high, xyz[solid].max(axis=0))
+            counted += int(solid.sum())
+    top = math.ldexp(1.0, COLLISION_CELL_EXPONENTS[1])
+    kept_sample = np.concatenate(sample) if sample else np.zeros((0, 3))
+    extent = 0.0
+    if kept_sample.shape[0]:
+        lo, hi = np.percentile(kept_sample, COLLISION_BOUNDS_PERCENTILES, axis=0)
+        extent = float((hi - lo).max())
+    del sample, kept_sample
+    floor = _power_of_two_at_least(extent / COLLISION_MAX_CELLS) if extent > 0 else 0.0
+    fine = max(math.ldexp(1.0, COLLISION_CELL_EXPONENTS[0]), floor)
+    if counted == 0:
+        return CollisionGrid(max(top, fine), (0.0, 0.0, 0.0), np.zeros((0, 3), np.int64), 0)
+    # Every candidate cell is a power of two no larger than max(32 m, fine), so an origin on
+    # that many bricks is on a brick boundary of every one of them.
+    align = COLLISION_BRICK * max(top, fine)
+    base = np.floor(low / align) * align
+    while float((high - base).max()) / fine >= _AXIS_MASK:
+        fine *= 2  # Kilometres of 4 mm cells: only a degenerate scan gets here.
+        align = COLLISION_BRICK * max(top, fine)
+        base = np.floor(low / align) * align
+
+    keys = np.zeros(0, np.int64)
+    sums = np.zeros(0, np.int64)
+    pending: list[tuple[np.ndarray, np.ndarray]] = []
+    waiting = 0
+    for start, chunk in iter_ply_rows(layout, columns):
+        kept = keep[start : start + chunk["x"].size]
+        alpha = sigmoid(chunk["opacity"].astype(np.float64))
+        solid = kept & (alpha >= COLLISION_MIN_OPACITY)
+        xyz = np.stack([chunk["x"], chunk["y"], chunk["z"]], axis=1)[solid].astype(np.float64)
+        index = np.floor((xyz - base) / fine).astype(np.int64)
+        pending.append(
+            _reduce_cells(
+                _pack_cells(index), np.round(alpha[solid] * _COLLISION_FIXED).astype(np.int64)
+            )
+        )
+        waiting += pending[-1][0].size
+        # Folded in whenever what waits reaches half what is held: each merge sorts at
+        # most 1.5x the cells, and the cells are held about twice over at the most.
+        if waiting > max(keys.size // 2, 1 << 21):
+            parts = [(keys, sums), *pending]
+            keys = sums = np.zeros(0, np.int64)
+            pending, waiting = [], 0
+            keys, sums = _reduce_cells(
+                np.concatenate([part[0] for part in parts]),
+                np.concatenate([part[1] for part in parts]),
+            )
+            del parts
+    if pending:
+        parts = [(keys, sums), *pending]
+        del pending
+        keys, sums = _reduce_cells(
+            np.concatenate([part[0] for part in parts]),
+            np.concatenate([part[1] for part in parts]),
+        )
+        del parts
+
+    # Sizes finer than `fine` are not counted: the answer is at least `fine` anyway, and
+    # splats per occupied cell only grow with the cell, so the first size that reaches the
+    # target is the one the runtime's search from 2^-8 would find, floored.
+    cell = max(top, fine)
+    occupied = keys
+    exponent = round(math.log2(fine))
+    for level in range(exponent, COLLISION_CELL_EXPONENTS[1]):
+        if counted / occupied.size >= COLLISION_SPLATS_PER_CELL:
+            cell = math.ldexp(1.0, level)
+            break
+        occupied = np.unique(_coarsen_cells(occupied, 1))
+    del occupied
+    shift = round(math.log2(cell / fine))
+    origin = np.floor(low / (COLLISION_BRICK * cell)) * (COLLISION_BRICK * cell)
+    offset = np.round((origin - base) / cell).astype(np.int64)
+    if shift or offset.any():
+        keys, sums = _reduce_cells(_coarsen_cells(keys, shift, offset), sums)
+    solid_cells = _unpack_cells(keys[sums >= _COLLISION_SOLID_FIXED])
+    del keys, sums
+    corner = (float(origin[0]), float(origin[1]), float(origin[2]))
+    return CollisionGrid(cell, corner, _brick_order(solid_cells), counted)
+
+
+def _brick_keys(cells: np.ndarray) -> np.ndarray:
+    """Each cell's place in the file: brick (bz, by, bx), then its bit."""
+    brick = cells >> 3
+    local = cells & 7
+    bit = local[:, 0] + 8 * local[:, 1] + 64 * local[:, 2]
+    packed = (brick[:, 2] << (2 * _BRICK_BITS)) | (brick[:, 1] << _BRICK_BITS) | brick[:, 0]
+    return (packed << 9) | bit
+
+
+def _brick_order(cells: np.ndarray) -> np.ndarray:
+    return cells[np.argsort(_brick_keys(cells), kind="stable")]
+
+
+def encode_collision(cells: np.ndarray) -> tuple[bytes, int]:
+    """Solid cell indices (n, 3), all >= 0, as `collision.bin`, and how many bricks it holds."""
+    cells = np.asarray(cells, dtype=np.int64).reshape(-1, 3)
+    if cells.size and (cells.min() < 0 or cells.max() > _AXIS_MASK):
+        raise ValueError(f"cell indices must be 0..{_AXIS_MASK}; origin is the grid's min corner")
+    keys = np.unique(_brick_keys(cells))
+    if keys.size == 0:
+        return gzip.compress(b"", compresslevel=9, mtime=0), 0
+    brick_keys = keys >> 9
+    bit = keys & 511
+    starts = np.flatnonzero(np.r_[True, brick_keys[1:] != brick_keys[:-1]])
+    records = np.zeros(starts.size, dtype=COLLISION_RECORD)
+    packed = brick_keys[starts]
+    mask = (1 << _BRICK_BITS) - 1
+    records["brick"] = np.stack(
+        [packed & mask, (packed >> _BRICK_BITS) & mask, packed >> (2 * _BRICK_BITS)], axis=1
+    ).astype(np.int32)
+    # Each byte of a mask gathers distinct bits, so their sum is their OR.
+    byte = np.repeat(np.arange(starts.size), np.diff(np.r_[starts, keys.size])) * 64 + (bit >> 3)
+    firsts = np.flatnonzero(np.r_[True, byte[1:] != byte[:-1]])
+    flat = records["mask"].reshape(-1)
+    flat[byte[firsts]] = np.add.reduceat((1 << (bit & 7)).astype(np.uint8), firsts)
+    records["mask"] = flat.reshape(-1, 64)
+    # Level 9: every viewer downloads this and the packer writes it once. On Fort Clatsop's
+    # 38 MB of records, 4.86 MB in 15 s against 5.14 MB in 1.4 s at level 6.
+    return gzip.compress(records.tobytes(), compresslevel=9, mtime=0), int(starts.size)
+
+
+def decode_collision(blob: bytes) -> np.ndarray:
+    """`collision.bin` back to solid cell indices (n, 3), in the file's order."""
+    raw = gzip.decompress(blob)
+    if len(raw) % COLLISION_RECORD.itemsize:
+        raise SplatFormatError(
+            f"collision data is {len(raw)} bytes, not a whole number of "
+            f"{COLLISION_RECORD.itemsize}-byte bricks"
+        )
+    records = np.frombuffer(raw, dtype=COLLISION_RECORD)
+    bits = np.unpackbits(records["mask"], axis=1, bitorder="little")
+    brick, n = np.nonzero(bits)
+    local = np.stack([n & 7, (n >> 3) & 7, n >> 6], axis=1)
+    return records["brick"][brick].astype(np.int64) * COLLISION_BRICK + local
+
+
+def collision_extras(grid: CollisionGrid, bricks: int) -> dict[str, object]:
+    """The root tile's `extras.collision`: how to read `collision.bin`."""
+    return {
+        "format": COLLISION_FORMAT,
+        "version": COLLISION_VERSION,
+        "uri": COLLISION_URI,
+        "cell": grid.cell,
+        "origin": list(grid.origin),
+        "brick": COLLISION_BRICK,
+        "bricks": bricks,
+        "solidCells": int(grid.cells.shape[0]),
+        "rule": COLLISION_RULE,
+    }
+
+
+def write_collision(grid: CollisionGrid, out_dir: Path) -> dict[str, object]:
+    """`collision.bin` in `out_dir`; returns the `extras.collision` that describes it."""
+    blob, bricks = encode_collision(grid.cells)
+    (out_dir / COLLISION_URI).write_bytes(blob)
+    return collision_extras(grid, bricks)
+
+
+def read_collision(path: Path) -> CollisionGrid:
+    """A `collision.bin`, with the cell and origin its `tileset.json` (beside it) declares.
+
+    `path` may be the `collision.bin`, the `tileset.json` or the directory holding both.
+    The counts the tileset states are checked against the file.
+    """
+    folder = path if path.is_dir() else path.parent
+    tileset = json.loads((folder / "tileset.json").read_text(encoding="utf-8"))
+    extras = tileset["root"].get("extras", {}).get("collision")
+    if not extras or extras.get("format") != COLLISION_FORMAT:
+        raise SplatFormatError(f"{folder / 'tileset.json'} declares no {COLLISION_FORMAT}")
+    if extras.get("version") != COLLISION_VERSION or extras.get("brick") != COLLISION_BRICK:
+        raise SplatFormatError(
+            f"{COLLISION_FORMAT} version {extras.get('version')} with bricks of "
+            f"{extras.get('brick')}; this reads version {COLLISION_VERSION}, {COLLISION_BRICK}"
+        )
+    blob = (folder / extras["uri"]).read_bytes()
+    cells = decode_collision(blob)
+    bricks = len(gzip.decompress(blob)) // COLLISION_RECORD.itemsize
+    if bricks != extras["bricks"] or cells.shape[0] != extras["solidCells"]:
+        raise SplatFormatError(
+            f"{extras['uri']} holds {bricks} bricks and {cells.shape[0]} solid cells; "
+            f"the tileset says {extras['bricks']} and {extras['solidCells']}"
+        )
+    x, y, z = (float(value) for value in extras["origin"])
+    return CollisionGrid(float(extras["cell"]), (x, y, z), cells)
+
+
+def build_collision(
+    ply: Path, out_dir: Path, opacity_min: float = 0.02, tileset: Path | None = None
+) -> dict[str, object]:
+    """`collision.bin` for a scan already packed, and its `extras.collision`.
+
+    The rows are the ones `convert` keeps (`_filter_rows` with the same `opacity_min`), so
+    this is the file `convert` would have written beside the tiles -- which is how a
+    tileset published before the grid existed gets one. With `tileset`, that
+    `tileset.json` gains the `extras.collision` too, after checking its leaves hold exactly
+    as many gaussians as this PLY keeps: a grid built from another PLY, or with another
+    `opacity_min`, would be solid where nothing is drawn.
+    """
+    layout = ply_layout(ply)
+    keep, _ = _filter_rows(layout, opacity_min)
+    document = None
+    if tileset is not None:
+        document = json.loads(tileset.read_text(encoding="utf-8"))
+        leaves, stack = 0, [document["root"]]
+        while stack:
+            tile = stack.pop()
+            if tile.get("children"):
+                stack.extend(tile["children"])
+            else:
+                leaves += int(tile.get("extras", {}).get("gaussians", -1))
+        if leaves != int(keep.sum()):
+            raise SplatFormatError(
+                f"{tileset} holds {leaves} gaussians in its leaves and {ply.name} keeps "
+                f"{int(keep.sum())} at opacity_min {opacity_min:g}: not the PLY it was packed from"
+            )
+    out_dir.mkdir(parents=True, exist_ok=True)
+    extras = write_collision(collision_grid(layout, keep), out_dir)
+    if tileset is not None and document is not None:
+        document["root"].setdefault("extras", {})["collision"] = extras
+        tileset.write_text(json.dumps(document, indent=1), encoding="utf-8")
+    return extras
+
+
 def convert(
     ply: Path,
     out_dir: Path,
@@ -1826,6 +2219,14 @@ def convert(
     Sec. 5.1) for exactly this PLY and these parameters; each parent tile draws them in
     place of its merge, and nothing else changes (`write_tiles`). A set built for another
     PLY or other parameters is refused before anything is written (`ParentOverrideError`).
+
+    **Collision grid.** Beside the tiles, `collision.bin`: every leaf gaussian's centre
+    added into a voxel grid, and the cells that come out solid by the web runtime's own
+    rule, in the format `COLLISION_FORMAT` describes and declared on the root tile's
+    `extras.collision`. The web clients load it instead of building one per tile on the
+    main thread. Two more windowed passes over the PLY once the tiles are written, holding
+    a row per occupied cell (`collision_grid`); `build_collision` writes the same file for
+    a tileset packed before it existed.
     """
     if sh_degree is not None and not 0 <= sh_degree <= SH_MAX_DEGREE:
         raise ValueError(f"sh_degree caps the SH bands at 0 to {SH_MAX_DEGREE}, not {sh_degree}")
@@ -1840,6 +2241,12 @@ def convert(
     with prepare(ply, opacity_min, tile_gaussians, work, degree) as tree:
         replaced = write_tiles(tree.root, tree.codes, tree.store, out_dir, tree.edge, parents)
     root, layout, count, pmin, pmax = tree.root, tree.layout, tree.count, tree.pmin, tree.pmax
+    keep = tree.keep
+    assert keep is not None
+    del tree  # the Morton codes, 8 bytes a gaussian, are not needed past the tiles
+    grid = collision_grid(layout, keep)
+    del keep
+    collision = write_collision(grid, out_dir)
 
     def node(tile: Tile) -> dict[str, object]:
         entry: dict[str, object] = {
@@ -1879,6 +2286,9 @@ def convert(
         # Refinement is stated once, on the root; every tile below inherits it.
         "root": {"transform": enu_to_ecef(lat, lon, height), "refine": "REPLACE", **node(root)},
     }
+    # What the web clients collide with: the leaves' gaussians as solid cells, precomputed
+    # (see `COLLISION_FORMAT`). On the root, so a viewer has it before any tile loads.
+    tileset["root"]["extras"]["collision"] = collision
     (out_dir / "tileset.json").write_text(json.dumps(tileset, indent=1), encoding="utf-8")
     leaves = sum(tile.count for tile in tiles if not tile.children)
     parent_count = sum(tile.count for tile in tiles if tile.children)
@@ -1896,10 +2306,39 @@ def convert(
         "optimised_parent_gaussians": replaced,
         # The SH degree every tile carries: the PLY's, or `sh_degree` if that is lower.
         "sh_degree": degree,
+        # The collision grid (`collision.bin`): its cell (m), bricks and solid cells.
+        "collision_cell_m": grid.cell,
+        "collision_bricks": cast(int, collision["bricks"]),
+        "collision_solid_cells": int(grid.cells.shape[0]),
     }
 
 
+def collision_main(argv: list[str]) -> None:
+    """`collision`: the grid alone, for a tileset packed (and published) before it existed."""
+    parser = argparse.ArgumentParser(
+        prog="splat_tiles.py collision",
+        description="Write collision.bin for a splat PLY, and optionally declare it on the "
+        "tileset.json packed from that PLY (the one convert would have written).",
+    )
+    parser.add_argument("ply", type=Path)
+    parser.add_argument("out_dir", type=Path)
+    parser.add_argument(
+        "--tileset",
+        type=Path,
+        default=None,
+        help="tileset.json to add root.extras.collision to (checked against the PLY first)",
+    )
+    parser.add_argument("--opacity-min", type=float, default=0.02)
+    args = parser.parse_args(argv)
+    extras = build_collision(args.ply, args.out_dir, args.opacity_min, args.tileset)
+    size = (args.out_dir / COLLISION_URI).stat().st_size
+    print(json.dumps({**extras, "bytes": size}))
+
+
 def main() -> None:
+    if sys.argv[1:2] == ["collision"]:
+        collision_main(sys.argv[2:])
+        return
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("ply", type=Path)
     parser.add_argument("out_dir", type=Path)

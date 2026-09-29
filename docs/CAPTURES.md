@@ -120,6 +120,16 @@ uv run python -m app.seed.publish --slug <slug>
   octree of at most 100k a tile (refine ADD, each parent an even subset of what is under it,
   geometric error the cell size that subset was spread at), so a small scan is one tile and a
   big one is a hierarchy the viewer draws as much of as its budget allows.
+- **Collision grid.** Beside the tiles, `collision.bin` (`hexapod.collision` v1, declared on
+  the root tile's `extras.collision`): the scan's solid cells by the web runtime's own rule
+  (a cell is solid when the splats of opacity ≥ 0.2 centred in it sum to ≥ 0.6), so the globe
+  and the scan viewer load it instead of building a grid on the main thread. The format,
+  the cell-size rule and why are in `splat_tiles.py` (`COLLISION_FORMAT`). Fort Clatsop's
+  22.6M gaussians come out at 3.125 cm cells, 3.69M solid cells in 501k bricks, 4.9 MB. A
+  tileset published before the grid existed gets one from the PLY it was packed from:
+  `splat_tiles.py collision canonical.ply tiles/ --tileset tiles/tileset.json`, or
+  `.github/workflows/collision-backfill.yml`, which does that for an uploaded capture and
+  (only when asked) puts both files beside its published tiles.
 
 ## The synthetic tree
 

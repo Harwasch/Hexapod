@@ -12,6 +12,7 @@ pulled in this environment; every other moving part is the real one.
 
 from __future__ import annotations
 
+import gzip
 import json
 import struct
 import uuid
@@ -328,6 +329,26 @@ def test_every_artifact_the_plan_asks_for_reaches_the_bucket_with_a_row(
     ground = json.loads(storage.get_object(by_kind[ArtifactKind.GROUND_SAMPLES].storage_key))
     assert ground["origin"]["lat"] == pytest.approx(LAT)
     assert ground["samples"]
+
+
+def test_the_collision_grid_goes_up_beside_the_tiles_as_opaque_bytes(
+    db: Session, sessions: sessionmaker[Session], storage: S3Storage, tmp_path: Path
+) -> None:
+    """`collision.bin` (tools/captures splat_tiles `COLLISION_FORMAT`) is in the tileset's
+    directory, so the whole-directory publish carries it; the root tile declares it; and it
+    is served as `application/octet-stream`, the gzip being the client's to inflate."""
+    capture = _uploaded_capture(db, storage)
+
+    job = _run(db, sessions, storage, capture, tmp_path)
+
+    tiles = f"runs/{job.id}/package/splat"
+    tileset = json.loads(storage.get_object(f"{tiles}/tileset.json"))
+    collision = tileset["root"]["extras"]["collision"]
+    assert collision["format"] == "hexapod.collision" and collision["version"] == 1
+    head = storage.head_object(f"{tiles}/{collision['uri']}")
+    assert head is not None and head.content_type == "application/octet-stream"
+    raw = gzip.decompress(storage.get_object(f"{tiles}/{collision['uri']}"))
+    assert len(raw) == 76 * collision["bricks"] and collision["solidCells"] > 0
 
 
 def test_the_thumbnail_endpoint_finally_has_something_to_point_at(

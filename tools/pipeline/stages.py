@@ -146,11 +146,14 @@ SPLAT_TILES = ArtifactDecl(
     content_type="inode/directory",
     summary="the level-of-detail 3D Tiles tileset the console and the viewer render",
     # Pinned to what tools/captures/splat_tiles.convert() writes for every scan: the
-    # tileset and its root tile. A scan within one tile's budget (the stub, the committed
-    # tree) is exactly these two; a bigger one adds `splat_<octant path>.glb` children,
-    # which `tileset.json` names and tests/test_captures_bridge.py checks it names all of.
-    required_members=("tileset.json", "splat.glb"),
-    stub_members=("tileset.json", "splat.glb"),
+    # tileset, its root tile and the collision grid the web clients load (`collision.bin`,
+    # declared on the root tile's `extras.collision`). A scan within one tile's budget (the
+    # stub, the committed tree) is exactly these three; a bigger one adds
+    # `splat_<octant path>.glb` children, which `tileset.json` names and
+    # tests/test_captures_bridge.py checks it names all of. The whole directory is
+    # published (app/worker/registration.py `_publish_tileset`), so all of it is served.
+    required_members=("tileset.json", "splat.glb", "collision.bin"),
+    stub_members=("tileset.json", "splat.glb", "collision.bin"),
 )
 THUMBNAIL = ArtifactDecl(
     "thumbnail.jpg",
@@ -2679,7 +2682,9 @@ def splat_tiles(ctx: StageContext) -> StageOutcome:
     so this stage's memory does not grow with the scan (8M gaussians: under 1.5 GB).
 
     `SPLAT_TILES.required_members` still pins `tileset.json` and the root tile
-    `splat.glb`, which every tileset has; child tiles are named by `tileset.json`. The
+    `splat.glb`, which every tileset has, and now `collision.bin`, the solid cells the web
+    clients collide with (tools/captures splat_tiles `COLLISION_FORMAT`), which spares them
+    building a grid on the main thread; child tiles are named by `tileset.json`. The
     fixture byte-identity gate (tools/captures tests/test_synthetic_tree.py) still covers
     what it writes: the committed tree is one tile, and its `splat.glb` did not change by
     a byte when merged parents arrived -- only `tileset.json`'s `refine` did.
