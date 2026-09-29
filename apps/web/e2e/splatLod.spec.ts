@@ -9,6 +9,12 @@
  * does. Thinned parents failed exactly this: one unenlarged gaussian per cell left the gaps
  * between them see-through from afar.
  *
+ * `data/tiles/synthetic-tree-sh` is the same tree and tiles packed with spherical harmonics
+ * degree 3 (tools/captures/tests/test_splat_tiles_sh.py writes it): a degree-1 tint that makes
+ * every gaussian redder seen looking east, bluer looking west and greener looking north. It
+ * must load in CesiumJS at `sphericalHarmonicsDegree === 3`, every tile and the primitive, and
+ * its colour must turn with the view against the same tiles without SH.
+ *
  * Headless GL here is SwiftShader, so the screenshots (attached to the report) are a record
  * that the path runs, not a judgement of how it looks; coverage is counted, not eyeballed.
  */
@@ -39,6 +45,7 @@ const HARNESS_HTML = `<!doctype html>
         lodUrl: "/fixture-tiles/synthetic-tree-lod/tileset.json",
         fullUrl: "/fixture-tiles/synthetic-tree/splat/tileset.json",
         incremental: new URLSearchParams(location.search).get("incremental") === "1",
+        shUrl: "/fixture-tiles/synthetic-tree-sh/tileset.json",
       });
     </script>
   </body>
@@ -48,6 +55,13 @@ interface View {
   tiles: string[];
   gaussians: number;
   coverage: number;
+}
+
+interface ShView extends View {
+  tileDegrees: number[];
+  primitiveDegree: number;
+  shTexture: boolean;
+  meanRgb: [number, number, number];
 }
 
 async function openHarness(page: Page, incremental = false): Promise<void> {
@@ -76,6 +90,22 @@ async function view(page: Page, range: number, full: boolean): Promise<View> {
     },
     [range, full] as const,
   )) as View;
+}
+
+async function shView(
+  page: Page,
+  heading: number,
+  range: number,
+  which: "sh" | "lod",
+): Promise<ShView> {
+  return (await page.evaluate(
+    async ([h, r, w]) => {
+      const harness = (window as unknown as { __splatLod: Record<string, unknown> }).__splatLod;
+      const call = harness.shView as (h: number, r: number, w: string) => Promise<unknown>;
+      return await call(h, r, w);
+    },
+    [heading, range, which] as const,
+  )) as ShView;
 }
 
 // Both ways the patched engine draws a splat: re-aggregating every selected tile into one
@@ -136,3 +166,51 @@ for (const incremental of [false, true]) {
     expect(results["50"]?.lod.gaussians).toBeLessThan(results["5"]?.lod.gaussians ?? 0);
   });
 }
+
+test("an SH-3 tileset loads at degree 3 and its colour turns with the view", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(300_000);
+  await openHarness(page);
+  // 20 m: merged parents and leaves together, so both carry their SH through to the screen.
+  const range = 20;
+  const views: Record<string, ShView> = {};
+  for (const which of ["sh", "lod"] as const) {
+    for (const heading of [0, 90, 180, 270]) {
+      const key = `${which}-${String(heading)}`;
+      views[key] = await shView(page, heading, range, which);
+      await page.screenshot({ path: testInfo.outputPath(`${key}.png`) });
+    }
+  }
+  writeFileSync(testInfo.outputPath("sh-views.json"), JSON.stringify(views, null, 1));
+
+  for (const heading of [0, 90, 180, 270]) {
+    const sh = views[`sh-${String(heading)}`];
+    const plain = views[`lod-${String(heading)}`];
+    if (!sh || !plain) throw new Error(`no view at ${String(heading)}`);
+    // Degree 3 in every drawn tile and in the primitive, which built its SH texture; the
+    // same tree without SH is degree 0 throughout. Same tiles either way: SH is not planned on.
+    expect(sh.tiles.length).toBeGreaterThan(1);
+    expect(sh.tileDegrees).toEqual(sh.tiles.map(() => 3));
+    expect(sh.primitiveDegree).toBe(3);
+    expect(sh.shTexture).toBe(true);
+    expect(plain.tileDegrees).toEqual(plain.tiles.map(() => 0));
+    expect(plain.primitiveDegree).toBe(0);
+    expect(sh.tiles).toEqual(plain.tiles);
+  }
+  // The tint, against the same view without SH: redder than blue looking east (90), bluer
+  // looking west (270), greener looking north (0) and less green looking south (180). Signs
+  // and axes both: a y/z mix-up in the SH frame would lose the green, an x flip swap red/blue.
+  const shift = (heading: number, channel: (rgb: [number, number, number]) => number): number => {
+    const sh = views[`sh-${String(heading)}`]?.meanRgb ?? [0, 0, 0];
+    const plain = views[`lod-${String(heading)}`]?.meanRgb ?? [0, 0, 0];
+    return channel(sh) - channel(plain);
+  };
+  const redOverBlue = ([r, , b]: [number, number, number]): number => r - b;
+  const green = ([, g]: [number, number, number]): number => g;
+  expect(shift(90, redOverBlue)).toBeGreaterThan(50);
+  expect(shift(270, redOverBlue)).toBeLessThan(-50);
+  expect(shift(0, green)).toBeGreaterThan(30);
+  expect(shift(180, green)).toBeLessThan(-30);
+  expect(Math.abs(shift(0, redOverBlue))).toBeLessThan(Math.abs(shift(90, redOverBlue)) / 2);
+});

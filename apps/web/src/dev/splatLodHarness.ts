@@ -9,6 +9,11 @@
  * does, with no holes where a parent was dropped before its children arrived or where merged
  * coarse splats fail to fill what they stand for?
  *
+ * With `shUrl`, it also answers whether CesiumJS draws a tileset's spherical harmonics
+ * (splat_tiles.py packs a trained PLY's `f_rest_*` into every tile): the degree each drawn
+ * tile and the primitive ended at, whether the SH texture was built, and the splat's mean
+ * colour from a given heading -- which moves with the heading only if the bands are evaluated.
+ *
  * Loaded dynamically by the spec; nothing imports it, so it never reaches the production
  * bundle. Headless GL is SwiftShader: coverage is a fair measure there, looks are not.
  */
@@ -44,6 +49,8 @@ export interface SplatLodHarnessOptions {
   readonly fullUrl: string;
   /** Run the level-of-detail tileset's primitive in incremental mode (patched engine). */
   readonly incremental?: boolean;
+  /** The level-of-detail tileset again, packed with spherical harmonics. */
+  readonly shUrl?: string;
 }
 
 export interface SplatLodView {
@@ -55,9 +62,31 @@ export interface SplatLodView {
   readonly coverage: number;
 }
 
+export interface SplatShView extends SplatLodView {
+  /** `content.sphericalHarmonicsDegree` of each drawn tile, in `tiles` order. */
+  readonly tileDegrees: number[];
+  /** The degree the primitive draws at (CesiumJS takes the first selected tile's). */
+  readonly primitiveDegree: number;
+  /** Whether the primitive built its SH texture. */
+  readonly shTexture: boolean;
+  /** Mean 0-255 RGB of the pixels that are not background. */
+  readonly meanRgb: [number, number, number];
+}
+
 export interface SplatLodHarness {
   /** Frames the tileset from `rangeM` metres and settles; `full` shows the one-tile splat. */
   view(rangeM: number, full: boolean): Promise<SplatLodView>;
+  /**
+   * Frames the SH tileset (`sh`) or the level-of-detail one (`lod`, no SH) looking along
+   * `headingDeg` (0 north, 90 east) from `rangeM` metres, and settles.
+   */
+  shView(headingDeg: number, rangeM: number, which: "sh" | "lod"): Promise<SplatShView>;
+}
+
+/** The SH internals read here (CesiumJS 1.145 GaussianSplatPrimitive.js; not in Cesium.d.ts). */
+interface ShPrimitive {
+  readonly _sphericalHarmonicsDegree?: number;
+  readonly sphericalHarmonicsTexture?: unknown;
 }
 
 const BACKGROUND = "#10141a";
@@ -95,16 +124,19 @@ export async function startSplatLodHarness(
   const lod = await Cesium3DTileset.fromUrl(options.lodUrl, settings);
   if (options.incremental) incrementalSplats(lod, 0);
   const full = await Cesium3DTileset.fromUrl(options.fullUrl, settings);
-  scene.primitives.add(lod);
-  scene.primitives.add(full);
+  const sh = options.shUrl ? await Cesium3DTileset.fromUrl(options.shUrl, settings) : undefined;
+  const tilesets = [lod, full, ...(sh ? [sh] : [])];
 
   let drawn: Cesium3DTile[] = [];
   const seen: Cesium3DTile[] = [];
   const collect = (tile: Cesium3DTile): void => {
     seen.push(tile);
   };
-  lod.tileVisible.addEventListener(collect);
-  full.tileVisible.addEventListener(collect);
+  for (const tileset of tilesets) {
+    tileset.show = false;
+    scene.primitives.add(tileset);
+    tileset.tileVisible.addEventListener(collect);
+  }
   scene.postRender.addEventListener(() => {
     drawn = seen.splice(0);
   });
@@ -114,74 +146,107 @@ export async function startSplatLodHarness(
     return typeof value === "number" ? value : 0;
   };
 
-  function coverage(): number {
+  const uriOf = (tile: Cesium3DTile): string => {
+    const url = (tile.content as { url?: string }).url ?? "";
+    return url.slice(url.lastIndexOf("/") + 1).split("?")[0] ?? url;
+  };
+
+  /** Share of the canvas that is not background, and the mean colour of what is. */
+  function pixels(): { coverage: number; meanRgb: [number, number, number] } {
     const canvas = scene.canvas;
     const copy = document.createElement("canvas");
     copy.width = canvas.width;
     copy.height = canvas.height;
     const context = copy.getContext("2d");
-    if (!context) return 0;
+    if (!context) return { coverage: 0, meanRgb: [0, 0, 0] };
     context.drawImage(canvas, 0, 0);
-    const pixels = context.getImageData(0, 0, copy.width, copy.height).data;
+    const data = context.getImageData(0, 0, copy.width, copy.height).data;
     const background = Color.fromCssColorString(BACKGROUND);
     const [r, g, b] = [background.red, background.green, background.blue].map((c) => c * 255);
     let covered = 0;
-    for (let i = 0; i < pixels.length; i += 4) {
-      const d =
-        Math.abs((pixels[i] ?? 0) - (r ?? 0)) +
-        Math.abs((pixels[i + 1] ?? 0) - (g ?? 0)) +
-        Math.abs((pixels[i + 2] ?? 0) - (b ?? 0));
-      if (d > 24) covered += 1;
+    let [sumR, sumG, sumB] = [0, 0, 0];
+    for (let i = 0; i < data.length; i += 4) {
+      const [pr, pg, pb] = [data[i] ?? 0, data[i + 1] ?? 0, data[i + 2] ?? 0];
+      const d = Math.abs(pr - (r ?? 0)) + Math.abs(pg - (g ?? 0)) + Math.abs(pb - (b ?? 0));
+      if (d > 24) {
+        covered += 1;
+        sumR += pr;
+        sumG += pg;
+        sumB += pb;
+      }
     }
-    return covered / (pixels.length / 4);
+    const n = Math.max(covered, 1);
+    return { coverage: covered / (data.length / 4), meanRgb: [sumR / n, sumG / n, sumB / n] };
+  }
+
+  /** Shows `tileset` alone, looking along `headingDeg`, and waits until it has settled. */
+  async function settle(
+    tileset: Cesium3DTileset,
+    headingDeg: number,
+    rangeM: number,
+  ): Promise<Cesium3DTile[]> {
+    for (const each of tilesets) each.show = each === tileset;
+    scene.camera.lookAt(
+      tileset.boundingSphere.center,
+      new HeadingPitchRange(CesiumMath.toRadians(headingDeg), CesiumMath.toRadians(-12), rangeM),
+    );
+    // Settled: every selected tile loaded, the primitive rebuilt over exactly them, and the
+    // selection unchanged for a few frames (the primitive waits two stable frames before a
+    // rebuild, GaussianSplatPrimitive.js DEFAULT_STABLE_FRAMES, then sorts in a worker).
+    let key = "";
+    let stable = 0;
+    for (let frame = 0; frame < 400 && stable < 6; frame += 1) {
+      await nextFrame(scene);
+      const next = drawn.map(uriOf).join(" ");
+      const primitive = splatTilesetOf(tileset).gaussianSplatPrimitive;
+      const splats = primitive?._numSplats ?? -1;
+      const wanted = drawn.reduce((sum, tile) => sum + counted(tile), 0);
+      // Incremental: the drawn tiles hold exactly the slots, nothing is in flight or waiting
+      // to be zeroed, and the sort on screen is of the latest slots.
+      const probe = primitive as IncrementalProbe | undefined;
+      const inc = probe?._incremental;
+      const settled =
+        inc === undefined
+          ? splats === wanted
+          : inc.batch === undefined &&
+            inc.pendingRemovals.length === 0 &&
+            inc.sortedGeneration >= (probe?._splatDataGeneration ?? 0) &&
+            probe?._tileSlots?.size === drawn.length &&
+            drawn.every((tile) => probe._tileSlots?.has(tile));
+      const ready = tileset.tilesLoaded && drawn.length > 0 && settled;
+      stable = ready && next === key ? stable + 1 : 0;
+      key = next;
+    }
+    await nextFrame(scene);
+    return drawn;
   }
 
   return {
     async view(rangeM: number, showFull: boolean): Promise<SplatLodView> {
-      lod.show = !showFull;
-      full.show = showFull;
-      const tileset = showFull ? full : lod;
-      const bounds = tileset.boundingSphere;
-      scene.camera.lookAt(
-        bounds.center,
-        new HeadingPitchRange(CesiumMath.toRadians(35), CesiumMath.toRadians(-12), rangeM),
-      );
-      // Settled: every selected tile loaded, the primitive rebuilt over exactly them, and the
-      // selection unchanged for a few frames (the primitive waits two stable frames before a
-      // rebuild, GaussianSplatPrimitive.js DEFAULT_STABLE_FRAMES, then sorts in a worker).
-      let key = "";
-      let stable = 0;
-      for (let frame = 0; frame < 400 && stable < 6; frame += 1) {
-        await nextFrame(scene);
-        const uris = drawn.map((tile) => (tile.content as { url?: string }).url ?? "");
-        const next = uris.join(" ");
-        const primitive = splatTilesetOf(tileset).gaussianSplatPrimitive;
-        const splats = primitive?._numSplats ?? -1;
-        const wanted = drawn.reduce((sum, tile) => sum + counted(tile), 0);
-        // Incremental: the drawn tiles hold exactly the slots, nothing is in flight or waiting
-        // to be zeroed, and the sort on screen is of the latest slots.
-        const probe = primitive as IncrementalProbe | undefined;
-        const inc = probe?._incremental;
-        const settled =
-          inc === undefined
-            ? splats === wanted
-            : inc.batch === undefined &&
-              inc.pendingRemovals.length === 0 &&
-              inc.sortedGeneration >= (probe?._splatDataGeneration ?? 0) &&
-              probe?._tileSlots?.size === drawn.length &&
-              drawn.every((tile) => probe._tileSlots?.has(tile));
-        const ready = tileset.tilesLoaded && drawn.length > 0 && settled;
-        stable = ready && next === key ? stable + 1 : 0;
-        key = next;
-      }
-      await nextFrame(scene);
+      const tiles = await settle(showFull ? full : lod, 35, rangeM);
       return {
-        tiles: drawn.map((tile) => {
-          const url = (tile.content as { url?: string }).url ?? "";
-          return url.slice(url.lastIndexOf("/") + 1).split("?")[0] ?? url;
-        }),
-        gaussians: drawn.reduce((sum, tile) => sum + counted(tile), 0),
-        coverage: coverage(),
+        tiles: tiles.map(uriOf),
+        gaussians: tiles.reduce((sum, tile) => sum + counted(tile), 0),
+        coverage: pixels().coverage,
+      };
+    },
+    async shView(headingDeg: number, rangeM: number, which: "sh" | "lod"): Promise<SplatShView> {
+      const tileset = which === "sh" ? sh : lod;
+      if (!tileset) throw new Error("The harness was started without shUrl.");
+      const tiles = await settle(tileset, headingDeg, rangeM);
+      const primitive = splatTilesetOf(tileset).gaussianSplatPrimitive as ShPrimitive | undefined;
+      const { coverage, meanRgb } = pixels();
+      return {
+        tiles: tiles.map(uriOf),
+        gaussians: tiles.reduce((sum, tile) => sum + counted(tile), 0),
+        coverage,
+        tileDegrees: tiles.map(
+          (tile) =>
+            (tile.content as { sphericalHarmonicsDegree?: number }).sphericalHarmonicsDegree ?? -1,
+        ),
+        primitiveDegree: primitive?._sphericalHarmonicsDegree ?? -1,
+        shTexture: primitive?.sphericalHarmonicsTexture !== undefined,
+        meanRgb,
       };
     },
   };

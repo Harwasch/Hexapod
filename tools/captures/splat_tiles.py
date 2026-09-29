@@ -10,11 +10,14 @@ exactly once, in a leaf: an adaptive octree splits wherever a tile would hold mo
 by Hierarchical 3DGS's moment matching -- and refinement is REPLACE (see `convert` for
 why). A scan within one tile's budget is one tile, as before. The packer reads the PLY in
 windows and sorts through disk, so its memory does not grow with the file. The glTF node
-carries the z-up to y-up swap the same way Cesium's own sample tilesets do.
+carries the z-up to y-up swap the same way Cesium's own sample tilesets do. A trained PLY's
+spherical harmonics (`f_rest_*`, up to degree 3) ride along in every tile, so the view-
+dependent colour the trainer learned is drawn (see `convert`).
 
 Usage:
     python splat_tiles.py splat.ply out_dir --lat 46.84 --lon -91.99 --height 0
         [--opacity-min 0.02] [--tile-gaussians 100000] [--parents lod_parents.npz]
+        [--sh-degree 0-3]
 """
 
 from __future__ import annotations
@@ -28,7 +31,7 @@ import struct
 import tempfile
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import numpy as np
@@ -296,6 +299,97 @@ SPZ_VERSION = 2
 SPZ_FRACTIONAL_BITS = 12
 SPZ_COLOR_SCALE = 0.15
 
+# ------------------------------------------------------------- spherical harmonics (SH)
+
+#: SH coefficients per colour channel above the DC term, by degree: 0, 3, 8, 15
+#: (nianticlabs/spz `dimForDegree`). Degree 3 is the most any viewer here draws: CesiumJS
+#: 1.145 evaluates bands 1-3 (PrimitiveGaussianSplatVS.glsl `evaluateSH`), Spark 2.2 the
+#: same, and nianticlabs/spz warns that degree 4 in a version-2 file is unreadable by the
+#: loaders these tiles are for. A PLY with a fourth band packs its first three.
+SH_DIMS = (0, 3, 8, 15)
+SH_MAX_DEGREE = 3
+
+#: Bits kept of each SH byte, as nianticlabs/spz packs by default (`DEFAULT_SH1_BITS`,
+#: `DEFAULT_SH_REST_BITS`): 5 for the degree-1 coefficients, 4 for degrees 2 and 3. The
+#: dropped low bits are zeros a reader never needs to know about -- the byte still means
+#: `(b - 128) / 128` -- and zeros are what gzip compresses away.
+SPZ_SH1_BITS = 5
+SPZ_SH_REST_BITS = 4
+
+
+def sh_degree_for_dim(dim: int) -> int:
+    """nianticlabs/spz `degreeForDim`, stopped at `SH_MAX_DEGREE`: the degree whose bands
+    fit in `dim` coefficients a channel (a PLY with 10 a channel is degree 2, its extra
+    two ignored, exactly as spz's own PLY loader reads it)."""
+    return max(degree for degree, need in enumerate(SH_DIMS) if need <= dim)
+
+
+def ply_sh_degree(layout: PlyLayout) -> int:
+    """The SH degree a trained PLY carries in its `f_rest_*` properties; 0 without them.
+
+    3DGS trainers (Inria, gsplat's exporter, OpenSplat) write the rest of the SH as
+    `f_rest_0..f_rest_{3K-1}`, channel-major: all K of red, then green, then blue.
+    """
+    rest = [name for name in layout.names if name.startswith("f_rest_")]
+    if not rest:
+        return 0
+    if sorted(rest) != sorted(f"f_rest_{i}" for i in range(len(rest))) or len(rest) % 3:
+        raise SplatFormatError(
+            f"{layout.path.name}: its {len(rest)} f_rest_* properties are not f_rest_0.."
+            f"f_rest_{{3K-1}} (K coefficients for each of red, green and blue)"
+        )
+    return sh_degree_for_dim(len(rest) // 3)
+
+
+def ply_sh_columns(layout: PlyLayout, degree: int) -> tuple[str, ...]:
+    """The `f_rest_*` names of the first `degree` bands, in SPZ's order: coefficient-major,
+    colour innermost (`sh1n1_r, sh1n1_g, sh1n1_b, sh10_r, ...`), so the columns read in this
+    order reshape straight to (n, coefficients, 3). The PLY is channel-major, K a channel
+    (`ply_sh_degree`); nianticlabs/spz `loadSplatFromPly` reorders the same way."""
+    stride = sum(1 for name in layout.names if name.startswith("f_rest_")) // 3
+    return tuple(f"f_rest_{c * stride + j}" for j in range(SH_DIMS[degree]) for c in range(3))
+
+
+def _round_half_away(values: np.ndarray) -> np.ndarray:
+    """C's `std::round`: halves away from zero (numpy's `round` sends them to even)."""
+    return np.trunc(values + np.copysign(0.5, values))
+
+
+def quantize_sh(sh_rest: np.ndarray) -> np.ndarray:
+    """SH coefficients (n, K, 3) to SPZ bytes, exactly as nianticlabs/spz `quantizeSH` does.
+
+    `q = round(x * 128) + 128`, then rounded to the centre of its bucket of `2^(8 - bits)`
+    (`(q + bucket / 2) / bucket * bucket`, integers) and clamped to a byte -- so 0 always
+    lands on 128, and the top bucket clamps to 255. Degree-1 coefficients (the first three)
+    keep `SPZ_SH1_BITS`, the rest `SPZ_SH_REST_BITS`. A coefficient that is not finite is
+    written as 0 (spz's own cast would be undefined).
+    """
+    return _quantize_sh(sh_rest, _sh_buckets(sh_rest.shape[1])[None, :, None])
+
+
+def _sh_buckets(dim: int) -> np.ndarray:
+    """The bucket of each of `dim` coefficients: `2^(8 - bits)`, degree 1 first."""
+    bucket = np.full(dim, 1 << (8 - SPZ_SH_REST_BITS), dtype=np.int16)
+    bucket[: SH_DIMS[1]] = 1 << (8 - SPZ_SH1_BITS)
+    return bucket
+
+
+def _quantize_sh(values: np.ndarray, bucket: int | np.ndarray) -> np.ndarray:
+    x = np.nan_to_num(values.astype(np.float32), nan=0.0, posinf=0.0, neginf=0.0)
+    # Past +/-2 every coefficient clamps to 0 or 255 anyway; held to +/-4, x * 128 and its
+    # rounding are exact in float32 and the rest fits an int16.
+    q = _round_half_away(np.clip(x, -4.0, 4.0) * np.float32(128.0)).astype(np.int16) + 128
+    return np.clip((q + bucket // 2) // bucket * bucket, 0, 255).astype(np.uint8)
+
+
+def unquantize_sh(sh_bytes: np.ndarray) -> np.ndarray:
+    """SPZ SH bytes back to coefficients, as nianticlabs/spz `unquantizeSH`: `(b - 128) / 128`.
+
+    `quantize_sh` of the result gives the same bytes back: every byte it writes is a bucket
+    centre (or the 255 its top bucket clamps to), which re-quantises to itself.
+    """
+    return (sh_bytes.astype(np.float32) - 128.0) / 128.0
+
 
 def pack_spz(
     positions: np.ndarray,
@@ -303,11 +397,22 @@ def pack_spz(
     opacity_logit: np.ndarray,
     log_scales: np.ndarray,
     quat_xyzw: np.ndarray,
+    sh_rest: np.ndarray | None = None,
 ) -> bytes:
     """SPZ version 2 (nianticlabs/spz): 24-bit fixed-point positions, byte alphas, colours,
-    log-scales and the xyz of a w-positive quaternion, gzip-compressed after a 16-byte header."""
+    log-scales and the xyz of a w-positive quaternion, gzip-compressed after a 16-byte header.
+
+    `sh_rest`, (n, K, 3) with K one of 3/8/15, adds SH degree 1-3: the header's degree
+    byte says which, and a byte a coefficient follows the rotations, coefficient-major and
+    colour innermost (`quantize_sh`). Without it the output is what it always was, degree 0.
+    """
     count = positions.shape[0]
-    header = struct.pack("<IIIBBBB", SPZ_MAGIC, SPZ_VERSION, count, 0, SPZ_FRACTIONAL_BITS, 0, 0)
+    degree = 0 if sh_rest is None else SH_DIMS.index(sh_rest.shape[1])
+    if sh_rest is not None and sh_rest.shape != (count, SH_DIMS[degree], 3):
+        raise ValueError(f"sh_rest must be (n, K, 3) for n = {count}, not {sh_rest.shape}")
+    header = struct.pack(
+        "<IIIBBBB", SPZ_MAGIC, SPZ_VERSION, count, degree, SPZ_FRACTIONAL_BITS, 0, 0
+    )
     fixed = np.round(positions * (1 << SPZ_FRACTIONAL_BITS)).astype(np.int32).reshape(-1)
     fixed_u = fixed.astype(np.uint32)
     pos_bytes = np.stack(
@@ -326,6 +431,7 @@ def pack_spz(
         + colors.reshape(-1).tobytes()
         + scales.reshape(-1).tobytes()
         + rotations.reshape(-1).tobytes()
+        + (b"" if sh_rest is None else quantize_sh(sh_rest).tobytes())
     )
     # mtime pinned so the same splat packs to the same bytes (git sees no change).
     return gzip.compress(raw, compresslevel=6, mtime=0)
@@ -339,7 +445,8 @@ def pack_spz(
 SPZ_ALPHA_EPS = 0.25 / 255.0
 
 #: Position (3 x 24-bit), alpha, colour, log-scale and rotation bytes, per gaussian, in
-#: version 2. Version 3 stores a fourth rotation byte (see `_smallest_three`).
+#: version 2. Version 3 stores a fourth rotation byte (see `_smallest_three`). SH bytes,
+#: when there are any, follow all of these: 3 x `SH_DIMS[degree]` a gaussian.
 SPZ_BYTES_PER_GAUSSIAN = 19
 
 #: The gzip-framed versions this reads. 2 stores a quaternion's first three components as
@@ -349,7 +456,7 @@ SPZ_BYTES_PER_GAUSSIAN = 19
 SPZ_READABLE_VERSIONS = (2, 3)
 
 
-def unpack_spz(blob: bytes) -> dict[str, np.ndarray]:
+def unpack_spz(blob: bytes, sh: bool = False) -> dict[str, np.ndarray]:
     """The inverse of `pack_spz`: a `.spz` file back to the arrays `convert` consumes.
 
     Scaniverse exports `.spz` natively and it is the format this module already writes,
@@ -364,7 +471,9 @@ def unpack_spz(blob: bytes) -> dict[str, np.ndarray]:
     has one version 3 among twenty-eight. The layout of the rotation bytes is the only
     difference, and it is read here exactly as nianticlabs/spz's
     `unpackQuaternionSmallestThree` does. Spherical-harmonic bytes after the rotations
-    are not read -- `canonical.ply` carries the DC term only.
+    are read only when `sh` is asked for -- `canonical.ply` carries the DC term only --
+    and come back as the PLY's `f_rest_*` (channel-major, `(b - 128) / 128` as spz's
+    `unquantizeSH`), so `unpack -> PLY -> pack` carries them through.
 
     Nothing here converts axes. SPZ's specification says the stream is right/up/back
     unless an extension says otherwise, and every public sample checked disagreed with
@@ -383,7 +492,7 @@ def unpack_spz(blob: bytes) -> dict[str, np.ndarray]:
         raise SplatFormatError(f"not an SPZ file: it does not gunzip ({error})") from error
     if len(raw) < 16:
         raise SplatFormatError("not an SPZ file: fewer than 16 bytes after decompression")
-    magic, version, count, _sh, fractional_bits, _flags, _reserved = struct.unpack_from(
+    magic, version, count, sh_degree, fractional_bits, _flags, _reserved = struct.unpack_from(
         "<IIIBBBB", raw, 0
     )
     if magic != SPZ_MAGIC:
@@ -401,7 +510,10 @@ def unpack_spz(blob: bytes) -> dict[str, np.ndarray]:
     # log-scales and three (or four) rotation bytes, after a 16-byte header. The
     # committed fixture is 16 + 19 * 12000 = 228,016 bytes, which is the denominator in
     # A0 #4's "one byte in 228,016".
-    wanted = 16 + per_gaussian * count
+    if sh and sh_degree > SH_MAX_DEGREE:
+        raise SplatFormatError(f"SPZ SH degree {sh_degree} is not supported; this reads 0-3")
+    sh_bytes = 3 * SH_DIMS[sh_degree] * count if sh else 0
+    wanted = 16 + per_gaussian * count + sh_bytes
     if len(raw) < wanted:
         raise SplatFormatError(
             f"SPZ is truncated: {count} gaussians need {wanted} bytes and it has {len(raw)}"
@@ -432,6 +544,15 @@ def unpack_spz(blob: bytes) -> dict[str, np.ndarray]:
     columns = {f"f_dc_{i}": sh0[:, i] for i in range(3)}
     columns.update({f"scale_{i}": log_scales[:, i] for i in range(3)})
     columns.update({f"rot_{i + 1}": quat_xyz[:, i].astype(np.float32) for i in range(3)})
+    if sh_bytes:
+        dim = SH_DIMS[sh_degree]
+        start = 16 + per_gaussian * count
+        coefficients = np.frombuffer(raw, dtype=np.uint8, count=sh_bytes, offset=start)
+        rest = (coefficients.reshape(count, dim, 3).astype(np.float32) - 128.0) / 128.0
+        # Back to the PLY's channel-major f_rest_{c * K + j}.
+        columns.update(
+            {f"f_rest_{c * dim + j}": rest[:, j, c] for c in range(3) for j in range(dim)}
+        )
     return {
         "x": xyz[:, 0],
         "y": xyz[:, 1],
@@ -471,9 +592,36 @@ def _smallest_three(rotations: np.ndarray) -> np.ndarray:
     return out.astype(np.float32)
 
 
-def build_glb(count: int, pmin: list[float], pmax: list[float], spz: bytes) -> bytes:
-    """One point primitive whose attributes live in the SPZ block, as Cesium's tilers write."""
+def sh_attributes(degree: int) -> list[str]:
+    """The glTF attribute names of SH bands 1..`degree`, as KHR_gaussian_splatting names
+    them: `KHR_gaussian_splatting:SH_DEGREE_{l}_COEF_{n}`, n = 0..2l.
+
+    They are how CesiumJS 1.145 learns a tile's degree -- not from the SPZ header, which it
+    only reads once the tile is decoded: `GaussianSplat3DTileContent`
+    `degreeAndCoefFromAttributes` *counts* the attributes whose name holds `SH_DEGREE_`
+    (3, 8 or 15 give degree 1, 2 or 3; any other count is degree 0), and each one is filled
+    from the decoded SPZ at `base[l - 1] + 3n` (`GltfVertexBufferLoader` `processSpz`). So
+    there is no `SH_DEGREE_0_COEF_0` here -- the DC term is `COLOR_0` -- because a fourth,
+    ninth or sixteenth such attribute would turn SH off.
+    """
+    return [
+        f"KHR_gaussian_splatting:SH_DEGREE_{band}_COEF_{n}"
+        for band in range(1, degree + 1)
+        for n in range(2 * band + 1)
+    ]
+
+
+def build_glb(
+    count: int, pmin: list[float], pmax: list[float], spz: bytes, sh_degree: int = 0
+) -> bytes:
+    """One point primitive whose attributes live in the SPZ block, as Cesium's tilers write.
+
+    `sh_degree` declares the SPZ's SH bands as attributes (`sh_attributes`), each a float
+    VEC3 accessor with no buffer view of its own, like every other attribute here. Degree
+    0 writes exactly the JSON it always did.
+    """
     padded = spz + b"\x00" * ((4 - len(spz) % 4) % 4)
+    names = sh_attributes(sh_degree)
     gltf = {
         "asset": {"version": "2.0", "generator": "twin splat_tiles"},
         "extensionsUsed": [
@@ -500,6 +648,7 @@ def build_glb(count: int, pmin: list[float], pmax: list[float], spz: bytes) -> b
                             "COLOR_0": 1,
                             "KHR_gaussian_splatting:SCALE": 2,
                             "KHR_gaussian_splatting:ROTATION": 3,
+                            **{name: 4 + index for index, name in enumerate(names)},
                         },
                         "extensions": {
                             "KHR_gaussian_splatting": {
@@ -518,6 +667,7 @@ def build_glb(count: int, pmin: list[float], pmax: list[float], spz: bytes) -> b
             {"componentType": 5121, "normalized": True, "count": count, "type": "VEC4"},
             {"componentType": 5126, "count": count, "type": "VEC3"},
             {"componentType": 5126, "count": count, "type": "VEC4"},
+            *({"componentType": 5126, "count": count, "type": "VEC3"} for _ in names),
         ],
         "bufferViews": [{"buffer": 0, "byteOffset": 0, "byteLength": len(spz)}],
         "buffers": [{"byteLength": len(padded)}],
@@ -582,6 +732,30 @@ MERGED_OPACITY_MAX = 0.99
 #: colour across neighbours instead of filling gaps.
 MERGED_INFLATE_MAX = 2.0
 
+#: Merged parents carry their merged SH bands -- the same weighted mean as the DC colour
+#: (`merge_cells`), of the bands their members are drawn with -- rather than zeros.
+#:
+#: Whether a parent has SH *at all* is not a choice: CesiumJS 1.145 draws a tileset as one
+#: primitive whose SH degree is the first selected tile's, and it concatenates the SH of
+#: only the tiles that have any (GaussianSplatPrimitive.js `aggregateShData`), so a parent
+#: of degree 0 drawn beside degree-3 leaves would shift every later tile's coefficients onto
+#: the wrong splats, or switch SH off for the whole view. Every tile of a tileset has the
+#: leaves' degree. The choice is what the parent's coefficients are, and zeros are nearly
+#: free (a constant byte 128 gzips to nothing) where the merge's cost something -- measured
+#: on nianticlabs/spz's two SH-3 samples, packed at the default budget:
+#:
+#: | sample (gaussians, parents)  | parents, zero SH | parents, merged SH | whole tileset |
+#: | ---------------------------- | ---------------- | ------------------ | ------------- |
+#: | hornedlizard (786k, 49k)     | 0.79 MB          | 1.12 MB            | 18.9 MB       |
+#: | racoonfamily (932k, 64k)     | 1.00 MB          | 1.52 MB            | 25.2 MB       |
+#:
+#: 2% of the tileset, for parents that change colour with the view as their children do.
+#: SH is linear in its coefficients, so a merged parent's colour from any direction is the
+#: weighted mean of its children's from that direction; with zeros it is their mean over
+#: all directions, and every refinement from parent to children would visibly shift colour
+#: wherever the capture has view-dependent shine.
+PARENTS_CARRY_SH = True
+
 #: Records of the Morton-ordered working copy `convert` spills to disk: what a tile needs of
 #: a gaussian, float32 as the PLY had it, plus the row it came from (tiles keep PLY order).
 RECORD = np.dtype(
@@ -594,12 +768,39 @@ RECORD = np.dtype(
         ("rot", "<f4", (4,)),
     ]
 )
-_BUCKET = np.dtype([("pos", "<i8"), *[(name, RECORD.fields[name][0]) for name in RECORD.names]])
 
-#: Records one bucket of the external sort holds, and so what putting one in order costs:
-#: 512k records are 36 MB read back and 32 MB of sorted block. A scan below this is one
-#: bucket; 8M gaussians are 16.
+
+def record_dtype(sh_degree: int) -> np.dtype:
+    """`RECORD`, plus the SH bands above the DC term when the tiles carry them: (K, 3) a
+    gaussian, in SPZ's coefficient-major order (`ply_sh_columns`), already quantised to the
+    bytes SPZ will hold (`quantize_sh`).
+
+    Bytes, not the PLY's float32s, because they are all a leaf ever writes -- quantising is
+    per coefficient, so a leaf's SPZ is the same either way -- and a parent is better merged
+    from the SH its children are *drawn* with, as their sizes are (`gaussian_moments` clips
+    them to what SPZ holds). And a quarter the size: degree 3 makes a record 109 bytes
+    rather than 64, where float32s would make it 244, and the sorted working copy of an 8M
+    trained splat 0.9 GB rather than 2 GB, on a worker volume that holds the PLY beside it.
+    """
+    if sh_degree == 0:
+        return RECORD
+    return np.dtype([*RECORD.descr, ("sh", "u1", (SH_DIMS[sh_degree], 3))])
+
+
+def _bucket_dtype(record: np.dtype) -> np.dtype:
+    return np.dtype([("pos", "<i8"), *[(name, record.fields[name][0]) for name in record.names]])
+
+
+#: Records one bucket of the external sort holds -- of `RECORD`s; a record carrying SH is
+#: bigger and a bucket holds proportionally fewer (`_bucket_records`), so what putting one
+#: in order costs stays the same: 512k records are 36 MB read back and 32 MB of sorted block.
+#: A scan below this is one bucket; 8M gaussians are 16 (26 with SH degree 3).
 BUCKET_RECORDS = 1 << 19
+
+
+def _bucket_records(record: np.dtype) -> int:
+    return max(1, BUCKET_RECORDS * RECORD.itemsize // record.itemsize)
+
 
 PLY_COLUMNS = (
     "x",
@@ -830,8 +1031,9 @@ class Moments:
 
     `weight` is H3DGS's unnormalised w = opacity x surface (s0 s1 + s0 s2 + s1 s2) -- for a
     merged cell, the sum of its members' -- `mean` and `cov` (xx, xy, xz, yy, yz, zz) the
-    weighted first and central second moments, `colour` the weighted SH DC term. `key` is
-    each row's cell at the level it was merged to, ascending.
+    weighted first and central second moments, `colour` the weighted SH DC term and `sh`
+    the weighted higher SH bands, flattened to (n, 3K) -- (n, 0) when the tiles carry none.
+    `key` is each row's cell at the level it was merged to, ascending.
 
     The weights add, so merging merged cells is merging their gaussians: a cell's weight is
     exactly its members' sum (the opacity cut in `to_gaussians` touches only what is
@@ -847,6 +1049,7 @@ class Moments:
     mean: np.ndarray
     cov: np.ndarray
     colour: np.ndarray
+    sh: np.ndarray
 
     def __len__(self) -> int:
         return int(self.key.size)
@@ -861,7 +1064,7 @@ class Moments:
         return Moments(*(getattr(self, name)[index] for name in _MOMENT_FIELDS))
 
 
-_MOMENT_FIELDS = ("key", "weight", "mean", "cov", "colour")
+_MOMENT_FIELDS = ("key", "weight", "mean", "cov", "colour", "sh")
 
 
 def _surface(scales: np.ndarray) -> np.ndarray:
@@ -939,6 +1142,11 @@ def gaussian_moments(records: np.ndarray, keys: np.ndarray) -> Moments:
         mean=records["xyz"].astype(np.float64),
         cov=cov3[:, [0, 0, 0, 1, 1, 2], [0, 1, 2, 1, 2, 2]],
         colour=records["f_dc"].astype(np.float64),
+        sh=(
+            unquantize_sh(records["sh"]).reshape(len(records), -1).astype(np.float64)
+            if "sh" in (records.dtype.names or ())
+            else np.zeros((len(records), 0))
+        ),
     )
 
 
@@ -947,8 +1155,10 @@ def merge_cells(moments: Moments) -> Moments:
 
     With w_i normalised within the cell (ClusterMerger.cpp, `weights[i] / weight_sum`):
     mean mu_p = sum w_i mu_i (Eq. 3), covariance Sigma_p = sum w_i (Sigma_i + (mu_i - mu_p)
-    (mu_i - mu_p)^T) (Eq. 4), SH (here the DC term) sum w_i c_i -- and the unnormalised
-    weight sum is kept, so the result merges again exactly. Rows must be sorted by key;
+    (mu_i - mu_p)^T) (Eq. 4), SH sum w_i c_i -- the DC term and every higher band alike --
+    and the unnormalised weight sum is kept, so the result merges again exactly. SH is
+    linear in its coefficients, so a merged gaussian's view-dependent colour is, from every
+    direction, the weighted mean of its members' colours from that direction. Rows must be sorted by key;
     each cell is a contiguous run, so this is one `reduceat` per moment and no loop.
     """
     if len(moments) == 0:
@@ -960,12 +1170,17 @@ def merge_cells(moments: Moments) -> Moments:
     total = np.add.reduceat(w, starts)
     mean = np.add.reduceat(w[:, None] * moments.mean, starts) / total[:, None]
     colour = np.add.reduceat(w[:, None] * moments.colour, starts) / total[:, None]
+    sh = (
+        np.add.reduceat(w[:, None] * moments.sh, starts) / total[:, None]
+        if moments.sh.shape[1]
+        else np.zeros((starts.size, 0))
+    )
     # Deviations from the cell's own mean, not raw second moments: E[xx^T] - mu mu^T would
     # cancel catastrophically for centimetre cells a hundred metres from the origin.
     d = moments.mean - mean[run]
     spread = d[:, [0, 0, 0, 1, 1, 2]] * d[:, [0, 1, 2, 1, 2, 2]]
     cov = np.add.reduceat(w[:, None] * (moments.cov + spread), starts) / total[:, None]
-    return Moments(key[starts], total, mean, cov, colour)
+    return Moments(key[starts], total, mean, cov, colour, sh)
 
 
 def coarsen(moments: Moments, levels: int) -> Moments:
@@ -973,7 +1188,12 @@ def coarsen(moments: Moments, levels: int) -> Moments:
     if levels <= 0:
         return moments
     shifted = Moments(
-        moments.key >> (3 * levels), moments.weight, moments.mean, moments.cov, moments.colour
+        moments.key >> (3 * levels),
+        moments.weight,
+        moments.mean,
+        moments.cov,
+        moments.colour,
+        moments.sh,
     )
     return merge_cells(shifted)
 
@@ -987,6 +1207,8 @@ class Gaussians:
     opacity_logit: np.ndarray
     log_scales: np.ndarray
     quat_xyzw: np.ndarray
+    #: SH bands above the DC term, (n, K, 3) coefficient-major; None for degree 0.
+    sh_rest: np.ndarray | None = None
 
     @property
     def reach(self) -> np.ndarray:
@@ -1031,6 +1253,11 @@ def to_gaussians(moments: Moments) -> Gaussians:
         opacity_logit=np.log(opacity / (1 - opacity)).astype(np.float32),
         log_scales=np.log(scales).astype(np.float32),
         quat_xyzw=quat[:, [1, 2, 3, 0]].astype(np.float32),
+        sh_rest=(
+            moments.sh.reshape(len(moments), -1, 3).astype(np.float32)
+            if moments.sh.shape[1]
+            else None
+        ),
     )
 
 
@@ -1042,6 +1269,7 @@ def records_gaussians(records: np.ndarray) -> Gaussians:
         opacity_logit=records["opacity"],
         log_scales=records["scale"],
         quat_xyzw=records["rot"][:, [1, 2, 3, 0]],
+        sh_rest=unquantize_sh(records["sh"]) if "sh" in (records.dtype.names or ()) else None,
     )
 
 
@@ -1058,14 +1286,15 @@ class SortedStore:
     every read and write is sequential.
     """
 
-    def __init__(self, path: Path, count: int) -> None:
+    def __init__(self, path: Path, count: int, dtype: np.dtype = RECORD) -> None:
         self.path = path
         self.count = count
+        self.dtype = dtype
 
     def read(self, start: int, stop: int) -> np.ndarray:
         with self.path.open("rb") as handle:
-            handle.seek(start * RECORD.itemsize)
-            return np.fromfile(handle, dtype=RECORD, count=stop - start)
+            handle.seek(start * self.dtype.itemsize)
+            return np.fromfile(handle, dtype=self.dtype, count=stop - start)
 
     def read_ranges(self, ranges: list[tuple[int, int]]) -> np.ndarray:
         return np.concatenate([self.read(start, stop) for start, stop in ranges])
@@ -1104,24 +1333,34 @@ def _filter_rows(layout: PlyLayout, opacity_min: float) -> tuple[np.ndarray, np.
     return keep, centres[near]
 
 
-def _sort_to_disk(layout: PlyLayout, keep: np.ndarray, rank: np.ndarray, work: Path) -> SortedStore:
-    """Every kept row as a `RECORD` at its Morton position, in a file under `work`.
+def _sort_to_disk(
+    layout: PlyLayout, keep: np.ndarray, rank: np.ndarray, work: Path, sh_degree: int = 0
+) -> SortedStore:
+    """Every kept row as a record (`record_dtype`) at its Morton position, in a file under
+    `work`, with its first `sh_degree` SH bands.
 
     `rank[k]` is the sorted position of the k-th kept row. Buckets are ranges of positions,
     so a bucket in order is a stretch of the store in order.
     """
     count = int(rank.size)
-    buckets = max(1, -(-count // BUCKET_RECORDS))
+    record = record_dtype(sh_degree)
+    bucket_dtype = _bucket_dtype(record)
+    per_bucket = _bucket_records(record)
+    sh_columns = ply_sh_columns(layout, sh_degree)
+    buckets = max(1, -(-count // per_bucket))
     paths = [work / f"bucket-{index}.bin" for index in range(buckets)]
     handles = [path.open("wb") for path in paths]
     try:
         seen = 0
-        for start, chunk in iter_ply_rows(layout, PLY_COLUMNS):
+        # Windows narrower when SH is read too, so the float32 columns held at once stay
+        # what the fourteen without it are: 59 columns of a window, not of 64 MiB of rows.
+        window = max(1, CHUNK_BYTES * len(PLY_COLUMNS) // len(PLY_COLUMNS + sh_columns))
+        for start, chunk in iter_ply_rows(layout, PLY_COLUMNS + sh_columns, window):
             good = keep[start : start + chunk["x"].size]
             rows = start + np.flatnonzero(good)
             positions = rank[seen : seen + rows.size]
             seen += rows.size
-            out = np.empty(rows.size, dtype=_BUCKET)
+            out = np.empty(rows.size, dtype=bucket_dtype)
             out["pos"] = positions
             out["row"] = rows
             out["xyz"] = np.stack([chunk[n][good] for n in ("x", "y", "z")], axis=1)
@@ -1129,7 +1368,11 @@ def _sort_to_disk(layout: PlyLayout, keep: np.ndarray, rank: np.ndarray, work: P
             out["opacity"] = chunk["opacity"][good]
             out["scale"] = np.stack([chunk[f"scale_{i}"][good] for i in range(3)], axis=1)
             out["rot"] = np.stack([chunk[f"rot_{i}"][good] for i in range(4)], axis=1)
-            which = positions // BUCKET_RECORDS
+            sh_buckets = _sh_buckets(SH_DIMS[sh_degree])
+            for index, name in enumerate(sh_columns):
+                j, c = divmod(index, 3)
+                out["sh"][:, j, c] = _quantize_sh(chunk[name][good], sh_buckets[j])
+            which = positions // per_bucket
             order = np.argsort(which, kind="stable")
             edges = np.searchsorted(which[order], np.arange(buckets + 1))
             for index in range(buckets):
@@ -1139,14 +1382,14 @@ def _sort_to_disk(layout: PlyLayout, keep: np.ndarray, rank: np.ndarray, work: P
     finally:
         for handle in handles:
             handle.close()
-    store = SortedStore(work / "sorted.bin", count)
+    store = SortedStore(work / "sorted.bin", count, record)
     with store.path.open("wb") as sink:
         for index, path in enumerate(paths):
-            part = np.fromfile(path, dtype=_BUCKET)
+            part = np.fromfile(path, dtype=bucket_dtype)
             path.unlink()
-            block = np.empty(part.size, dtype=RECORD)
-            slots = part["pos"] - index * BUCKET_RECORDS
-            for name in RECORD.names:
+            block = np.empty(part.size, dtype=record)
+            slots = part["pos"] - index * per_bucket
+            for name in record.names:
                 block[name][slots] = part[name]
             sink.write(block.tobytes())
     return store
@@ -1173,11 +1416,13 @@ def _box(low: np.ndarray, high: np.ndarray) -> list[float]:
 
 def _write_tile(out_dir: Path, tile: Tile, gaussians: Gaussians) -> None:
     xyz = gaussians.xyz
-    spz = pack_spz(
-        xyz, gaussians.sh0, gaussians.opacity_logit, gaussians.log_scales, gaussians.quat_xyzw
-    )
+    g = gaussians
+    spz = pack_spz(xyz, g.sh0, g.opacity_logit, g.log_scales, g.quat_xyzw, g.sh_rest)
+    degree = 0 if g.sh_rest is None else SH_DIMS.index(g.sh_rest.shape[1])
     (out_dir / tile.uri).write_bytes(
-        build_glb(int(xyz.shape[0]), xyz.min(axis=0).tolist(), xyz.max(axis=0).tolist(), spz)
+        build_glb(
+            int(xyz.shape[0]), xyz.min(axis=0).tolist(), xyz.max(axis=0).tolist(), spz, degree
+        )
     )
     tile.count = int(xyz.shape[0])
 
@@ -1239,6 +1484,8 @@ def build_tiles(root: Tile, codes: np.ndarray, store: SortedStore, edge: float, 
         merged = Moments.concat(parts)
         merged = merge_cells(merged.take(np.argsort(merged.key, kind="stable")))
         gaussians = to_gaussians(merged)
+        if gaussians.sh_rest is not None and not PARENTS_CARRY_SH:
+            gaussians.sh_rest = np.zeros_like(gaussians.sh_rest)
         tile.count = int(gaussians.xyz.shape[0])
         cell = edge / (1 << tile.level)
         width = 2.0 * float(np.median(np.exp(gaussians.log_scales.astype(np.float64).max(axis=1))))
@@ -1277,7 +1524,9 @@ def write_tiles(
         if keys is not None and parents is not None:
             better = parents.take(tile.uri, keys)
             if better is not None:
-                gaussians = better
+                # Optimised parents are optimised in DC colour only (lod_optimise.py); the
+                # higher bands stay the merge's, cell for cell (`take` checked the cells).
+                gaussians = replace(better, sh_rest=gaussians.sh_rest)
                 replaced += int(keys.size)
         _write_tile(out_dir, tile, gaussians)
 
@@ -1306,19 +1555,29 @@ class Prepared:
     root: Tile
     store: SortedStore
     edge: float
+    sh_degree: int = 0
 
 
 @contextmanager
 def prepare(
-    ply: Path, opacity_min: float, tile_gaussians: int | None, work_dir: Path
+    ply: Path,
+    opacity_min: float,
+    tile_gaussians: int | None,
+    work_dir: Path,
+    sh_degree: int = 0,
 ) -> Iterator[Prepared]:
-    """Filter, sort and plan `ply` exactly as `convert` does, the sorted copy in `work_dir`.
+    """Filter, sort and plan `ply` exactly as `convert` does, the sorted copy in `work_dir`
+    carrying the PLY's first `sh_degree` SH bands (which it must have).
 
     Deterministic: the same PLY and parameters give the same tree, cell for cell -- which
     is what lets a parent be optimised on one machine and written on another
-    (`ParentOverrides`).
+    (`ParentOverrides`). SH plays no part in the tree: it is carried, never planned on.
     """
     layout = ply_layout(ply)
+    if not 0 <= sh_degree <= ply_sh_degree(layout):
+        raise SplatFormatError(
+            f"{ply.name} carries SH degree {ply_sh_degree(layout)}; {sh_degree} was asked for"
+        )
     keep, centres = _filter_rows(layout, opacity_min)
     count = int(centres.shape[0])
     pmin = centres.min(axis=0)
@@ -1339,9 +1598,9 @@ def prepare(
     root = plan_tree(codes, tile_gaussians)
     work_dir.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=".splat_tiles-", dir=work_dir) as scratch:
-        store = _sort_to_disk(layout, keep, rank, Path(scratch))
+        store = _sort_to_disk(layout, keep, rank, Path(scratch), sh_degree)
         del rank
-        yield Prepared(layout, count, pmin, pmax, codes, root, store, edge)
+        yield Prepared(layout, count, pmin, pmax, codes, root, store, edge, sh_degree)
 
 
 def hierarchy(
@@ -1504,6 +1763,7 @@ def convert(
     tile_gaussians: int | None = TILE_GAUSSIANS,
     work_dir: Path | None = None,
     parents: ParentOverrides | None = None,
+    sh_degree: int | None = None,
 ) -> dict[str, float | int]:
     """Every gaussian that passes the filters, as a level-of-detail tileset.
 
@@ -1543,18 +1803,41 @@ def convert(
     working files go in `work_dir` (by default a temporary directory beside `out_dir`, on
     the same disk rather than in a RAM-backed /tmp) and are removed afterwards.
 
+    **Spherical harmonics.** Every tile carries the SH bands the PLY has (`f_rest_*`,
+    degree 1-3), or the first `sh_degree` of them: SPZ bytes quantised exactly as
+    nianticlabs/spz does (`quantize_sh`), declared to glTF as `SH_DEGREE_l_COEF_n`
+    attributes (`sh_attributes`), which is how CesiumJS finds them. Leaves carry the
+    originals, parents the merge's (`PARENTS_CARRY_SH`), and every tile the same degree,
+    which CesiumJS requires. They are evaluated in the PLY's own frame -- the frame the SPZ
+    positions are in, which Cesium maps the view direction back into
+    (GaussianSplatPrimitive.js `_shInverseRotation`) -- so a PLY that was rotated after
+    training must have had its SH rotated with it. Measured on nianticlabs/spz's SH-3
+    samples (786k and 932k gaussians), degree 3 makes the tileset 1.6-1.7x the bytes of
+    degree 0 (degree 1: 1.17-1.20x, degree 2: 1.36-1.44x), not the 3.4x of the raw bytes:
+    quantised SH is mostly near zero and compresses well. Packing takes ~3x as long
+    (786k gaussians: 3.0 s at degree 0, 8.4 s at 3), most of it gzip. A PLY without `f_rest_*` packs
+    to exactly the bytes it always did -- which is every `canonical.ply` today: the
+    pipeline's normalise/place stages drop `f_rest_*` and rotate only positions and
+    quaternions (tools/pipeline gaussians.py), so its captures stay degree 0 until those
+    stages keep the bands and rotate them too.
+
     **Optimised parents.** `parents`, when given, are parent gaussians optimised against
     the capture's photos on the GPU (tools/pipeline lod_optimise.py, Hierarchical 3DGS
     Sec. 5.1) for exactly this PLY and these parameters; each parent tile draws them in
     place of its merge, and nothing else changes (`write_tiles`). A set built for another
     PLY or other parameters is refused before anything is written (`ParentOverrideError`).
     """
+    if sh_degree is not None and not 0 <= sh_degree <= SH_MAX_DEGREE:
+        raise ValueError(f"sh_degree caps the SH bands at 0 to {SH_MAX_DEGREE}, not {sh_degree}")
     if parents is not None:
         why = parents.mismatch(ply, opacity_min, tile_gaussians)
         if why:
             raise ParentOverrideError(why)
+    carried = ply_sh_degree(ply_layout(ply))
+    degree = carried if sh_degree is None else min(sh_degree, carried)
     out_dir.mkdir(parents=True, exist_ok=True)
-    with prepare(ply, opacity_min, tile_gaussians, work_dir or out_dir.parent) as tree:
+    work = work_dir or out_dir.parent
+    with prepare(ply, opacity_min, tile_gaussians, work, degree) as tree:
         replaced = write_tiles(tree.root, tree.codes, tree.store, out_dir, tree.edge, parents)
     root, layout, count, pmin, pmax = tree.root, tree.layout, tree.count, tree.pmin, tree.pmax
 
@@ -1611,6 +1894,8 @@ def convert(
         # How many of those were optimised against the photos (`ParentOverrides`); 0
         # when none were given.
         "optimised_parent_gaussians": replaced,
+        # The SH degree every tile carries: the PLY's, or `sh_degree` if that is lower.
+        "sh_degree": degree,
     }
 
 
@@ -1634,6 +1919,13 @@ def main() -> None:
         default=None,
         help="optimised parents (lod_parents.npz) to draw in place of the merged ones",
     )
+    parser.add_argument(
+        "--sh-degree",
+        type=int,
+        choices=range(SH_MAX_DEGREE + 1),
+        default=None,
+        help="most SH bands the tiles carry (0-3); default: all the PLY's f_rest_* has",
+    )
     args = parser.parse_args()
     stats = convert(
         args.ply,
@@ -1644,6 +1936,7 @@ def main() -> None:
         args.opacity_min,
         args.tile_gaussians or None,
         parents=ParentOverrides.load(args.parents) if args.parents else None,
+        sh_degree=args.sh_degree,
     )
     print(json.dumps(stats))
 
