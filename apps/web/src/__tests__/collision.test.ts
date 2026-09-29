@@ -1,12 +1,13 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { gunzipSync } from "node:zlib";
+import { gunzipSync, gzipSync } from "node:zlib";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   PrecomputedSolids,
   collisionMetaOf,
+  loadCollision,
   parseCollision,
   type CollisionMeta,
 } from "@/lib/collision";
@@ -116,5 +117,36 @@ describe("the packager's own file", () => {
     const hit = grid.raycast([x, y, top], [0, 0, -1], 1000);
     expect(hit).not.toBeNull();
     expect(top - (hit ?? 0)).toBeCloseTo(oz + (solid[2] + 1) * meta.cell, 6);
+  });
+});
+
+describe("fetching a collision file", () => {
+  it("resolves it beside a tileset addressed relative to the page", async () => {
+    const { raw, bricks } = payload([[1, 2, 3]]);
+    const meta: CollisionMeta = {
+      format: "hexapod.collision",
+      version: 1,
+      uri: "collision.bin",
+      cell: 0.5,
+      origin: [0, 0, 0],
+      brick: 8,
+      bricks,
+    };
+    const body = gzipSync(raw);
+    const fetched: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) => {
+        fetched.push(url);
+        return Promise.resolve(new Response(body));
+      }),
+    );
+    try {
+      const grid = await loadCollision("/fixture-tiles/tree/tileset.json", meta);
+      expect(fetched).toEqual([`${location.origin}/fixture-tiles/tree/collision.bin`]);
+      expect(grid.solidAt(1, 2, 3)).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

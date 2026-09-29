@@ -133,13 +133,17 @@ export function parseCollision(raw: Uint8Array, meta: CollisionMeta): BrickGrid 
 }
 
 async function gunzip(bytes: ArrayBuffer): Promise<Uint8Array> {
-  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"));
+  const body = new Response(bytes).body;
+  if (!body) throw new Error("collision: empty response body");
+  const stream = body.pipeThrough(new DecompressionStream("gzip"));
   return new Uint8Array(await new Response(stream).arrayBuffer());
 }
 
-/** Fetches and parses a scan's collision file, `meta.uri` relative to its tileset. */
+/** Fetches and parses a scan's collision file, `meta.uri` relative to its tileset (whose own
+ *  URL may be relative to the page, as a same-origin path is). */
 export async function loadCollision(tilesetUrl: string, meta: CollisionMeta): Promise<BrickGrid> {
-  const response = await fetch(new URL(meta.uri, tilesetUrl).toString());
+  const base = new URL(tilesetUrl, globalThis.location?.href);
+  const response = await fetch(new URL(meta.uri, base).toString());
   if (!response.ok) throw new Error(`collision answered ${String(response.status)}`);
   return parseCollision(await gunzip(await response.arrayBuffer()), meta);
 }
