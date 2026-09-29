@@ -75,7 +75,7 @@
  "center": [
   -93.425903,
   44.944565,
-  254.6
+  254.59
  ],
  "attribution": "Matthew Guertin",
  "attribution_url": "https://mattguertin.com",
@@ -83,16 +83,16 @@
  "license_url": "https://creativecommons.org/licenses/by/4.0/",
  "source_url": "https://github.com/Matt1Up/tree-photogrammetry-dataset",
  "captured": "2020-07-20",
- "pipeline": "tools/pipeline pose (COLMAP) + train (gsplat MCMC) on Modal via infra/modal/minnetonka.py; tools/captures/real_tree.py + skeleton.py; held-out PSNR 23.23 dB",
+ "pipeline": "tools/pipeline pose (COLMAP) + train (gsplat MCMC) on Modal via infra/modal/minnetonka.py; tools/captures/real_tree.py + skeleton.py; held-out PSNR 22.54 dB",
  "images": 655,
  "assets": [
   {
    "representation": "gaussian-splat",
    "name": "Gaussian splat (photogrammetric)",
    "path": "splat/tileset.json",
-   "ground_sample_distance_m": 0.0023,
-   "point_spacing_m": 0.0055,
-   "description": "1,065,182 gaussians of one tree as a level-of-detail tileset of 22 tiles (the viewer draws as many as its detail budget allows), rigged with 200 skeleton nodes; about 2.3 mm per pixel of the 1600 px training frames, estimated from how close the cameras came to the crown",
+   "ground_sample_distance_m": 0.0015,
+   "point_spacing_m": 0.0045,
+   "description": "2,221,311 gaussians of one tree as a level-of-detail tileset of 50 tiles (the viewer draws as many as its detail budget allows), rigged with 200 skeleton nodes; about 1.5 mm per pixel of the 2400 px training frames, estimated from how close the cameras came to the crown",
    "maximum_screen_space_error": 1,
    "clamp_to_ground": true,
    "default": true,
@@ -103,7 +103,7 @@
   "name": "The tree",
   "longitude": -93.425903,
   "latitude": 44.944403,
-  "height": 258.6,
+  "height": 258.59,
   "heading": 0.0,
   "pitch": -8.0,
   "is_default": true
