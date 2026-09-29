@@ -275,24 +275,39 @@ def branch_structure(rig: dict) -> dict:
                 best_cos = c
                 best = kid
         continuation[i] = best
-    # Limbs: maximal chains of continuations, each named by its first joint.
+
+    # Limbs: maximal chains of continuations, each named by its first joint. A node whose
+    # parent is a root starts a limb, as node 0's children do: the roots are the anchors (node
+    # 0 of a tree; each plant's first node and the static anchors of a forest rig).
+    def inner(i: int) -> bool:
+        return i >= 0 and nodes[i]["parent"] >= 0
+
     limb = [0] * count
     path_length: dict[int, float] = {}
     last: dict[int, int] = {}
     for i in range(1, count):
         p = nodes[i]["parent"]
-        base = limb[p] if p > 0 and continuation[p] == i else i
+        if p < 0:
+            limb[i] = i
+            continue
+        base = limb[p] if inner(p) and continuation[p] == i else i
         limb[i] = base
         path_length[base] = path_length.get(base, 0.0) + segment[i]
         last[base] = i  # topological order: a chain's far end is its highest index
     tree_branch = continuation[0] if count else -1
+    # Every root's continuation is a whole-plant limb: the trunk of its tree.
+    trunks = {
+        continuation[i] for i, n in enumerate(nodes) if n["parent"] < 0 and continuation[i] >= 0
+    }
     # Branching order: the trunk is 0, a limb on it 1, a limb on that 2, ...
     order = [0] * count
     for i in range(1, count):
         base = limb[i]
-        if i == base and base != tree_branch:
+        if nodes[i]["parent"] < 0:
+            order[i] = 0
+        elif i == base and base not in trunks:
             attach = nodes[base]["parent"]
-            order[i] = order[limb[attach]] + 1 if attach > 0 else 1
+            order[i] = order[limb[attach]] + 1 if inner(attach) else 1
         else:
             order[i] = order[base]
     # A limb's length is its span: the farthest any joint of its subtree (its axis and all that
@@ -302,7 +317,7 @@ def branch_structure(rig: dict) -> dict:
     span: dict[int, float] = {base: 0.0 for base in last}
     for i in range(1, count):
         cursor = i
-        while cursor > 0:
+        while inner(cursor):
             base = limb[cursor]
             attach = nodes[base]["parent"]
             reach_m = _distance(nodes[attach]["position"], nodes[i]["position"])

@@ -17,7 +17,9 @@ digest up in this set (apps/web/src/cesium/splatTiles.ts).
 Only identity is packaged. Which rig node a gaussian follows is *not* written here: the
 runtime binds every gaussian, leaf or merged parent, to its nearest node from its own
 position, once per tile load (docs/LIVING_SURVEY.md, "Multi-tile tilesets", has the costs
-that decided it).
+that decided it). A forest rig -- many plants in one tileset (``scene_plants.py``) -- is the
+exception: which *plant* a gaussian belongs to, or none, is a measurement position cannot
+recover, so it travels in ``plants.json``, keyed by these same per-tile checksums.
 
 Usage:
     python rig_tiles.py tileset_dir rig.json [--out tileset_dir/rig.json]
