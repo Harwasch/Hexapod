@@ -38,6 +38,7 @@ const HARNESS_HTML = `<!doctype html>
         container: document.getElementById("viewer"),
         lodUrl: "/fixture-tiles/synthetic-tree-lod/tileset.json",
         fullUrl: "/fixture-tiles/synthetic-tree/splat/tileset.json",
+        incremental: new URLSearchParams(location.search).get("incremental") === "1",
       });
     </script>
   </body>
@@ -49,7 +50,7 @@ interface View {
   coverage: number;
 }
 
-async function openHarness(page: Page): Promise<void> {
+async function openHarness(page: Page, incremental = false): Promise<void> {
   await page.route("**/fixture-tiles/**", (route) => {
     const relative = new URL(route.request().url()).pathname.replace(/^.*\/fixture-tiles\//, "");
     if (relative.includes("..")) return route.abort();
@@ -59,11 +60,11 @@ async function openHarness(page: Page): Promise<void> {
       body: readFileSync(resolve(TILES, relative)),
     });
   });
-  await page.route("**/__splat-lod", (route) =>
+  await page.route("**/__splat-lod*", (route) =>
     route.fulfill({ status: 200, contentType: "text/html", body: HARNESS_HTML }),
   );
   await page.route(/https:\/\/(api|assets|tile)\.cesium\.com\/.*/, (route) => route.abort());
-  await page.goto("/__splat-lod");
+  await page.goto(`/__splat-lod${incremental ? "?incremental=1" : ""}`);
   await page.waitForFunction(() => "__splatLod" in window, undefined, { timeout: 60_000 });
 }
 
@@ -77,56 +78,61 @@ async function view(page: Page, range: number, full: boolean): Promise<View> {
   )) as View;
 }
 
-test("a merged-parent REPLACE tileset has no holes at 50, 20 and 5 m", async ({
-  page,
-}, testInfo) => {
-  test.setTimeout(300_000);
-  await openHarness(page);
-  const leaves = JSON.parse(
-    readFileSync(resolve(TILES, "synthetic-tree-lod/tileset.json"), "utf8"),
-  ) as { root: unknown };
-  const errors = new Map<string, number>();
-  const walk = (tile: {
-    content: { uri: string };
-    geometricError: number;
-    children?: unknown[];
-  }): void => {
-    errors.set(tile.content.uri, tile.geometricError);
-    (tile.children as (typeof tile)[] | undefined)?.forEach(walk);
-  };
-  walk(leaves.root as Parameters<typeof walk>[0]);
+// Both ways the patched engine draws a splat: re-aggregating every selected tile into one
+// snapshot, and incremental slots (a tile uploaded alone into its own range, the ranges of
+// the tiles it replaced zeroed once it is drawn).
+for (const incremental of [false, true]) {
+  test(`a merged-parent REPLACE tileset has no holes at 50, 20 and 5 m${incremental ? " (incremental)" : ""}`, async ({
+    page,
+  }, testInfo) => {
+    test.setTimeout(300_000);
+    await openHarness(page, incremental);
+    const leaves = JSON.parse(
+      readFileSync(resolve(TILES, "synthetic-tree-lod/tileset.json"), "utf8"),
+    ) as { root: unknown };
+    const errors = new Map<string, number>();
+    const walk = (tile: {
+      content: { uri: string };
+      geometricError: number;
+      children?: unknown[];
+    }): void => {
+      errors.set(tile.content.uri, tile.geometricError);
+      (tile.children as (typeof tile)[] | undefined)?.forEach(walk);
+    };
+    walk(leaves.root as Parameters<typeof walk>[0]);
 
-  const results: Record<string, { lod: View; full: View }> = {};
-  for (const range of [50, 20, 5]) {
-    const lod = await view(page, range, false);
-    await page.screenshot({ path: testInfo.outputPath(`replace-${String(range)}m.png`) });
-    const full = await view(page, range, true);
-    await page.screenshot({ path: testInfo.outputPath(`full-${String(range)}m.png`) });
-    results[String(range)] = { lod, full };
-    // Covered where the full splat is: within 10% of its coverage, never a fraction of it.
-    expect(full.coverage).toBeGreaterThan(0.001);
-    expect(lod.coverage / full.coverage, `at ${String(range)} m`).toBeGreaterThan(0.9);
-  }
-  writeFileSync(testInfo.outputPath("views.json"), JSON.stringify(results, null, 1));
-
-  // REPLACE, and refined by distance: far away mostly merged parents, near the leaves; no
-  // parent ever drawn with one of its own descendants. (At 50 m in a 1280x720 view the root
-  // has already given way to its children -- merged octants, and one packed leaf.)
-  const far = results["50"]?.lod.tiles ?? [];
-  expect(far.filter((uri) => (errors.get(uri) ?? 0) > 0).length).toBeGreaterThan(far.length / 2);
-  const near = results["5"]?.lod.tiles ?? [];
-  expect(near.length).toBeGreaterThan(1);
-  expect(near.some((uri) => errors.get(uri) === 0)).toBe(true);
-  for (const [range, { lod }] of Object.entries(results)) {
-    for (const uri of lod.tiles) {
-      const stem = uri.replace(/\.glb$/, "");
-      const ancestorDrawn = lod.tiles.some(
-        (other) => other !== uri && stem.startsWith(other.replace(/\.glb$/, "") + "-"),
-      );
-      expect(ancestorDrawn, `${uri} drawn with an ancestor at ${range} m`).toBe(false);
-      if (uri !== "splat.glb") expect(lod.tiles, `root with ${uri}`).not.toContain("splat.glb");
+    const results: Record<string, { lod: View; full: View }> = {};
+    for (const range of [50, 20, 5]) {
+      const lod = await view(page, range, false);
+      await page.screenshot({ path: testInfo.outputPath(`replace-${String(range)}m.png`) });
+      const full = await view(page, range, true);
+      await page.screenshot({ path: testInfo.outputPath(`full-${String(range)}m.png`) });
+      results[String(range)] = { lod, full };
+      // Covered where the full splat is: within 10% of its coverage, never a fraction of it.
+      expect(full.coverage).toBeGreaterThan(0.001);
+      expect(lod.coverage / full.coverage, `at ${String(range)} m`).toBeGreaterThan(0.9);
     }
-  }
-  // Fewer gaussians far away than near: the merged levels are what distance buys.
-  expect(results["50"]?.lod.gaussians).toBeLessThan(results["5"]?.lod.gaussians ?? 0);
-});
+    writeFileSync(testInfo.outputPath("views.json"), JSON.stringify(results, null, 1));
+
+    // REPLACE, and refined by distance: far away mostly merged parents, near the leaves; no
+    // parent ever drawn with one of its own descendants. (At 50 m in a 1280x720 view the root
+    // has already given way to its children -- merged octants, and one packed leaf.)
+    const far = results["50"]?.lod.tiles ?? [];
+    expect(far.filter((uri) => (errors.get(uri) ?? 0) > 0).length).toBeGreaterThan(far.length / 2);
+    const near = results["5"]?.lod.tiles ?? [];
+    expect(near.length).toBeGreaterThan(1);
+    expect(near.some((uri) => errors.get(uri) === 0)).toBe(true);
+    for (const [range, { lod }] of Object.entries(results)) {
+      for (const uri of lod.tiles) {
+        const stem = uri.replace(/\.glb$/, "");
+        const ancestorDrawn = lod.tiles.some(
+          (other) => other !== uri && stem.startsWith(other.replace(/\.glb$/, "") + "-"),
+        );
+        expect(ancestorDrawn, `${uri} drawn with an ancestor at ${range} m`).toBe(false);
+        if (uri !== "splat.glb") expect(lod.tiles, `root with ${uri}`).not.toContain("splat.glb");
+      }
+    }
+    // Fewer gaussians far away than near: the merged levels are what distance buys.
+    expect(results["50"]?.lod.gaussians).toBeLessThan(results["5"]?.lod.gaussians ?? 0);
+  });
+}

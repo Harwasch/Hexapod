@@ -19,7 +19,7 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 
 import type { Capture, Site, SiteSummary } from "@twin/contracts";
 
-import { splatBudget } from "@/lib/detail";
+import { deviceSplatBudget } from "@/lib/detail";
 
 import { parseCoverage } from "./coverage";
 import { spzFromGlb } from "./glb";
@@ -223,11 +223,11 @@ async function showScan(siteId: string): Promise<void> {
     0.01,
     5000,
   );
-  // The phone's Detail choice is Spark's splat budget: its LoD draws at most this many a
-  // frame, the merged coarse splats far away and the originals close up, across every tile
-  // loaded (lib/detail.ts; SparkRenderer `lodSplatCount`, whose own default -- 1-1.5M on a
-  // phone -- would ignore the choice).
-  const budget = splatBudget();
+  // This device's splat budget is Spark's: its LoD draws at most this many a frame, the
+  // merged coarse splats far away and the originals close up, across every tile loaded
+  // (lib/detail.ts -- the phone's Detail choice on a phone, several million on a desktop;
+  // SparkRenderer `lodSplatCount`).
+  const budget = deviceSplatBudget();
   scene.add(new SparkRenderer({ renderer, lodSplatCount: budget }));
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
@@ -409,6 +409,9 @@ const REPLAN_MS = 150;
 /** Tiles fetched at once: enough to keep a connection busy, few enough that the nearest
  *  ones are not queued behind a dozen others when the camera turns. */
 const FETCHES_AT_ONCE = 3;
+/** Most gaussians streamed in at once, whatever the budget: a desktop's 3M draw budget times
+ *  LOAD_FACTOR would hold 12M, which is past what Spark's LoD trees want in memory. */
+const MAX_STREAMED = 6_000_000;
 /** Loaded tiles kept beyond what is drawn, so a look back needs no download. */
 const CACHE_FACTOR = 1.5;
 
@@ -442,8 +445,8 @@ function streamWithView(
       failed: (tile) => console.warn(`Tile ${tile.uri} did not load; its parent stays.`),
     },
     {
-      budget: budget * LOAD_FACTOR,
-      cacheBudget: budget * LOAD_FACTOR * CACHE_FACTOR,
+      budget: Math.min(budget * LOAD_FACTOR, MAX_STREAMED),
+      cacheBudget: Math.min(budget * LOAD_FACTOR, MAX_STREAMED) * CACHE_FACTOR,
       concurrency: FETCHES_AT_ONCE,
     },
   );

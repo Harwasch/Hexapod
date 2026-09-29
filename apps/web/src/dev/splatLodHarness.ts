@@ -23,7 +23,18 @@ import {
   type Scene,
 } from "cesium";
 
-import { splatTilesetOf } from "@/cesium/splatInternals";
+import { incrementalSplats, splatTilesetOf } from "@/cesium/splatInternals";
+
+/** The incremental state the harness waits on (patched GaussianSplatPrimitive). */
+interface IncrementalProbe {
+  _incremental?: {
+    batch?: unknown;
+    pendingRemovals: unknown[];
+    sortedGeneration: number;
+  };
+  _splatDataGeneration?: number;
+  _tileSlots?: ReadonlyMap<unknown, unknown>;
+}
 
 export interface SplatLodHarnessOptions {
   readonly container: HTMLElement;
@@ -31,6 +42,8 @@ export interface SplatLodHarnessOptions {
   readonly lodUrl: string;
   /** The same gaussians as one tile: what "no holes" is measured against. */
   readonly fullUrl: string;
+  /** Run the level-of-detail tileset's primitive in incremental mode (patched engine). */
+  readonly incremental?: boolean;
 }
 
 export interface SplatLodView {
@@ -80,6 +93,7 @@ export async function startSplatLodHarness(
   // keeps skipLevelOfDetail off for them): the base traversal quoted in splat_tiles.convert.
   const settings = { maximumScreenSpaceError: 16, skipLevelOfDetail: false };
   const lod = await Cesium3DTileset.fromUrl(options.lodUrl, settings);
+  if (options.incremental) incrementalSplats(lod, 0);
   const full = await Cesium3DTileset.fromUrl(options.fullUrl, settings);
   scene.primitives.add(lod);
   scene.primitives.add(full);
@@ -141,9 +155,22 @@ export async function startSplatLodHarness(
         await nextFrame(scene);
         const uris = drawn.map((tile) => (tile.content as { url?: string }).url ?? "");
         const next = uris.join(" ");
-        const splats = splatTilesetOf(tileset).gaussianSplatPrimitive?._numSplats ?? -1;
+        const primitive = splatTilesetOf(tileset).gaussianSplatPrimitive;
+        const splats = primitive?._numSplats ?? -1;
         const wanted = drawn.reduce((sum, tile) => sum + counted(tile), 0);
-        const ready = tileset.tilesLoaded && drawn.length > 0 && splats === wanted;
+        // Incremental: the drawn tiles hold exactly the slots, nothing is in flight or waiting
+        // to be zeroed, and the sort on screen is of the latest slots.
+        const probe = primitive as IncrementalProbe | undefined;
+        const inc = probe?._incremental;
+        const settled =
+          inc === undefined
+            ? splats === wanted
+            : inc.batch === undefined &&
+              inc.pendingRemovals.length === 0 &&
+              inc.sortedGeneration >= (probe?._splatDataGeneration ?? 0) &&
+              probe?._tileSlots?.size === drawn.length &&
+              drawn.every((tile) => probe._tileSlots?.has(tile));
+        const ready = tileset.tilesLoaded && drawn.length > 0 && settled;
         stable = ready && next === key ? stable + 1 : 0;
         key = next;
       }

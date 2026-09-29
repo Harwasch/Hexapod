@@ -25,9 +25,11 @@ import type { SiteAsset } from "@twin/contracts";
 import { Emitter } from "@/lib/emitter";
 
 import { CameraController } from "@/cesium/CameraController";
+import { ExploreController } from "@/cesium/ExploreController";
 import { SplatCollider } from "@/cesium/SplatCollider";
 import { createSiteTileset } from "@/cesium/providers/tiles";
 import { SplatMotionGate } from "@/cesium/splatMotionGate";
+import { installSplatSorter } from "@/cesium/splatSorter";
 import type { SceneEvents } from "@/cesium/types";
 
 export interface CollisionHarness {
@@ -47,8 +49,19 @@ export interface CollisionHarness {
   drive(stepM: number, frames: number, sideways?: number): Promise<number | null>;
   /** What the collider holds, and what the splat primitive draws. */
   debug(): unknown;
+  /** How close the camera is to the nearest splat surface, as a share of its clearance
+   *  there (null: nothing within twice the clearance). */
+  clearanceRatio(): number | null;
   /** The camera's world position. */
   eye(): [number, number, number];
+  /** First-person exploring, as the console's G key starts it. */
+  explore: {
+    enter(): void;
+    exit(): void;
+    mode(): string;
+    heading(): number;
+    height(): number;
+  };
   /** The toasts raised so far (titles). */
   toasts: string[];
 }
@@ -82,8 +95,12 @@ export async function startCollisionHarness(
   events.on("toast", (toast) => toasts.push(toast.title));
   const camera = new CameraController(viewer, events);
   const gate = new SplatMotionGate(scene, events);
+  installSplatSorter();
   const collider = new SplatCollider(scene, () => gate.holding);
   camera.setCollider(collider);
+  const explore = new ExploreController(viewer, events);
+  explore.setCollider(collider);
+  explore.setCameraController(camera);
   const asset = {
     representation: "gaussian-splat",
     source: { type: "3d-tiles-url", url: tilesetUrl },
@@ -126,6 +143,20 @@ export async function startCollisionHarness(
       selected: (tileset as unknown as { _selectedTiles: unknown[] })._selectedTiles.length,
       holding: gate.holding,
     }),
+    explore: {
+      enter: () => explore.enter(),
+      exit: () => explore.exit(),
+      mode: () => explore.status.mode,
+      heading: () => viewer.camera.heading,
+      height: () => viewer.camera.positionCartographic.height,
+    },
+    clearanceRatio: () => {
+      const position = viewer.camera.positionWC;
+      const clearance = collider.clearance(position);
+      if (clearance <= 0) return null;
+      const d = collider.distanceToSurface(position, clearance * 2);
+      return d === null ? null : d / clearance;
+    },
     eye: () => {
       const p = viewer.camera.positionWC;
       return [p.x, p.y, p.z];

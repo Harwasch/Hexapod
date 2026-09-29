@@ -20,12 +20,14 @@ import { Emitter } from "@/lib/emitter";
 import { createSiteTileset } from "@/cesium/providers/tiles";
 import { splatTilesetOf } from "@/cesium/splatInternals";
 import { SplatMotionGate } from "@/cesium/splatMotionGate";
+import { installSplatSorter } from "@/cesium/splatSorter";
 import type { SceneEvents } from "@/cesium/types";
 
 export interface NavigationHarnessOptions {
   readonly container: HTMLElement;
   readonly tilesetUrl: string;
-  /** The motion gate and off-screen selection on (as the console runs), or both off. */
+  /** The console's splat settings (motion gate, off-screen selection, focus, incremental
+   *  slots), or the engine as it was. */
   readonly motionFirst: boolean;
 }
 
@@ -71,8 +73,20 @@ export async function startNavigationHarness(
   tileset.show = true;
   scene.primitives.add(tileset);
   const events = new Emitter<SceneEvents>();
-  if (options.motionFirst) new SplatMotionGate(scene, events);
-  else (tileset as unknown as { selectOffscreen: boolean }).selectOffscreen = false;
+  if (options.motionFirst) {
+    new SplatMotionGate(scene, events);
+    installSplatSorter();
+  } else {
+    // The engine as it was: every selected splat re-aggregated on each change, frustum only.
+    const patched = tileset as unknown as {
+      selectOffscreen: boolean;
+      splatIncremental: boolean;
+      focusWeight: number;
+    };
+    patched.selectOffscreen = false;
+    patched.splatIncremental = false;
+    patched.focusWeight = 0;
+  }
   let tilesLoaded = 0;
   tileset.tileLoad.addEventListener(() => (tilesLoaded += 1));
   const centre = BoundingSphere.clone(tileset.boundingSphere);

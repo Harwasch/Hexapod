@@ -495,6 +495,10 @@ export class LivingSurveyManager {
     const tileset = this.#sites.tilesetFor(candidate.siteId, "gaussian-splat");
     if (tileset === null || this.#entries.has(assetId)) return;
 
+    // A rigged site draws from the aggregated snapshot the deformer was built and verified
+    // on (the CPU path rewrites it from a captured packed buffer, and the measured-bytes
+    // checks read that capture); incremental slots are for scans that stand still.
+    this.#aggregate(candidate.siteId);
     const deformer = new SplatDeformer({
       tileset: splatTilesetOf(tileset),
       rig,
@@ -773,6 +777,19 @@ export class LivingSurveyManager {
       });
     }
     return { wind, animating: wind.strength > 0 && ready, sites };
+  }
+
+  /** Takes a site's splat primitive out of incremental mode, now and for its lifetime. */
+  #aggregate(siteId: string): void {
+    const tileset = this.#sites.tilesetFor(siteId, "gaussian-splat");
+    if (tileset === null) return;
+    // Before the primitive exists (no tile loaded yet), the tileset's setting decides.
+    (tileset as unknown as { splatIncremental: boolean }).splatIncremental = false;
+    const primitive = splatTilesetOf(tileset).gaussianSplatPrimitive;
+    if (primitive?.incremental) {
+      primitive.incremental = false;
+      this.#viewer.scene.requestRender();
+    }
   }
 
   /** Emits the `living` event, but only when something a listener could see has changed. */

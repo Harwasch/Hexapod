@@ -316,6 +316,7 @@ export class PerformanceManager {
   private nearSite = false;
   private readonly timer: ReturnType<typeof setInterval>;
   private readonly colorGrade: PostProcessStage;
+  private gradeSuppressed = false;
   private readonly unsubscribe: (() => void)[] = [];
   private readonly gpu: string | null;
   private readonly webgl2: boolean;
@@ -446,11 +447,28 @@ export class PerformanceManager {
     return { bytes, budget };
   }
 
+  /**
+   * The colour grade suits the world's flat textures seen from above, not a photographic
+   * scan: +18% saturation on splats that already carry the scene's real colour reads as
+   * lurid green foliage. So it is off while a splat scan fills the view (SiteManager / the
+   * scene manager say when), and one cheap full-screen pass otherwise; performance skips it
+   * with the rest.
+   */
+  setGradeSuppressed(suppressed: boolean): void {
+    if (this.gradeSuppressed === suppressed) return;
+    this.gradeSuppressed = suppressed;
+    this.applyGrade();
+    this.scene.requestRender();
+  }
+
+  private applyGrade(): void {
+    this.colorGrade.enabled = this.inputs.preset !== "performance" && !this.gradeSuppressed;
+  }
+
   configure(inputs: QualityInputs): void {
     this.inputs = inputs;
     const bounds = QUALITY_SSE[inputs.preset];
-    // The colour grade is one cheap full-screen pass; performance skips it with the rest.
-    this.colorGrade.enabled = inputs.preset !== "performance";
+    this.applyGrade();
     for (const group of GROUPS) {
       this.groups[group].sse = inputs.manualScreenSpaceError ?? bounds.base;
       this.applySse(group);

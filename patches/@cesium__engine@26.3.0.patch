@@ -58,10 +58,10 @@ index b69a982b5dfeaa2bd97393aa4cd26298a902a42a..d0d78f75328d63217c41750f5f6e40de
   * @private
   * @param {Cesium3DTileset} tileset
 diff --git a/Source/Scene/Cesium3DTileset.js b/Source/Scene/Cesium3DTileset.js
-index 45e8741d148b8c7569ab89d3ffab2b89c76f5f3f..4a613d7d61db728ffbb585aab4954dd167bc00a3 100644
+index 45e8741d148b8c7569ab89d3ffab2b89c76f5f3f..bc4c438d068f34be933a7fad563ac766672f42d9 100644
 --- a/Source/Scene/Cesium3DTileset.js
 +++ b/Source/Scene/Cesium3DTileset.js
-@@ -857,6 +857,29 @@ function Cesium3DTileset(options) {
+@@ -857,6 +857,38 @@ function Cesium3DTileset(options) {
     */
    this.loadSiblings = options.loadSiblings ?? false;
  
@@ -87,6 +87,15 @@ index 45e8741d148b8c7569ab89d3ffab2b89c76f5f3f..4a613d7d61db728ffbb585aab4954dd1
 +   * @type {number}
 +   */
 +  this.focusConeRadians = 0.2;
++
++  /**
++   * Hexapod patch: the splat primitive this tileset creates runs in incremental mode
++   * (GaussianSplatPrimitive.incremental), sized first for this many splats.
++   * @type {boolean}
++   */
++  this.splatIncremental = false;
++  /** @type {number} */
++  this.splatIncrementalCapacity = 0;
 +
    this._clippingPlanes = undefined;
    if (defined(options.clippingPlanes)) {
@@ -134,10 +143,71 @@ index 244a96d542be90b917ffdfb87fbe9249280fde00..9d807584de8563fe2c55879d615ac64c
      const stoppedRefining = !tile._refines && parentRefines;
  
 diff --git a/Source/Scene/GaussianSplatPrimitive.js b/Source/Scene/GaussianSplatPrimitive.js
-index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..2f5aeea910f5bb49c3ea91e9ec2336b32bf33254 100644
+index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..a765906c01c9c1105498050763fbd0861acfc4b3 100644
 --- a/Source/Scene/GaussianSplatPrimitive.js
 +++ b/Source/Scene/GaussianSplatPrimitive.js
-@@ -1070,9 +1070,48 @@ function GaussianSplatPrimitive(options) {
+@@ -174,6 +174,49 @@ const DEFAULT_SORT_MIN_POSITION_DELTA = 1.0;
+  * @returns {boolean} Whether a new steady sort should begin.
+  * @private
+  */
++// Hexapod patch: an application sorter. `GaussianSplatPrimitive.sortHook`, when set, is called
++// instead of the engine's WASM sorter for the steady sorts of a committed snapshot, with the
++// positions (not copied: the hook keeps what it needs per `generation`), their count, and
++// the camera in the positions' frame; it returns a promise of back-to-front indexes, or
++// undefined when it cannot sort now. A hook that sorts by distance to the eye
++// (`sortByDistance`) makes the order independent of where the camera looks, so turning
++// the view needs no new sort -- only moving does.
++const scratchSortInverse = new Matrix4();
++const scratchSortEye = new Cartesian3();
++function sortSplats(primitive, modelView, frameState) {
++  const hook = GaussianSplatPrimitive.sortHook;
++  if (defined(hook)) {
++    const toLocal = Matrix4.inverseTransformation(
++      primitive._rootTransform,
++      scratchSortInverse,
++    );
++    const eye = Matrix4.multiplyByPoint(
++      toLocal,
++      frameState.camera.positionWC,
++      scratchSortEye,
++    );
++    return hook({
++      owner: primitive,
++      positions: primitive._positions,
++      count: primitive._numSplats,
++      generation: primitive._splatDataGeneration,
++      eye: [eye.x, eye.y, eye.z],
++    });
++  }
++  return GaussianSplatSorter.radixSortIndexes({
++    primitive: {
++      positions: new Float32Array(primitive._positions),
++      modelView: Float32Array.from(modelView),
++      count: primitive._numSplats,
++    },
++    sortType: "Index",
++  });
++}
++
++// Hexapod patch: with a distance-sorting hook, the camera moving this far (metres) is what
++// calls for a new sort; turning does not.
++const DISTANCE_SORT_MIN_POSITION_DELTA = 0.01;
++
+ function shouldStartSteadySort(primitive, frameState) {
+   const framesSinceLastSort =
+     primitive._lastSteadySortFrameNumber >= 0
+@@ -201,6 +244,10 @@ function shouldStartSteadySort(primitive, frameState) {
+     camera.positionWC,
+     primitive._lastSteadySortCameraPosition,
+   );
++  const hook = GaussianSplatPrimitive.sortHook;
++  if (defined(hook) && hook.sortByDistance === true) {
++    return positionDelta >= DISTANCE_SORT_MIN_POSITION_DELTA;
++  }
+   if (positionDelta >= DEFAULT_SORT_MIN_POSITION_DELTA) {
+     return true;
+   }
+@@ -1070,9 +1117,63 @@ function GaussianSplatPrimitive(options) {
     * @private
     */
    this._splatBudgetSSEScale = 1.0;
@@ -151,6 +221,21 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..2f5aeea910f5bb49c3ea91e9ec2336b3
 +   * @type {boolean}
 +   */
 +  this.holdRebuilds = false;
++  /**
++   * Hexapod patch: incremental mode. Instead of re-aggregating and re-uploading every
++   * selected splat whenever the selection changes, each tile gets a slot range in one
++   * persistent attribute texture; a tile that arrives is packed and uploaded alone, one that
++   * leaves has its range zeroed (the vertex shader discards zero-size splats) once the tiles
++   * replacing it are drawn. The cost of a level-of-detail change is the size of the change.
++   * @type {boolean}
++   */
++  this.incremental = options.tileset?.splatIncremental === true;
++  /**
++   * Hexapod patch: splats the incremental texture is first sized for (it grows if needed).
++   * @type {number}
++   */
++  this.incrementalCapacity = options.tileset?.splatIncrementalCapacity ?? 0;
++  this._incremental = undefined;
  }
  
  Object.defineProperties(GaussianSplatPrimitive.prototype, {
@@ -186,7 +271,15 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..2f5aeea910f5bb49c3ea91e9ec2336b3
    /**
     * Indicates whether the primitive is ready for use.
     * @memberof GaussianSplatPrimitive.prototype
-@@ -1577,6 +1616,17 @@ GaussianSplatPrimitive.buildGSplatDrawCommand = function (
+@@ -1149,6 +1250,7 @@ GaussianSplatPrimitive.prototype._wrappedUpdate = function (frameState) {
+  * @private
+  */
+ GaussianSplatPrimitive.prototype.destroy = function () {
++  resetIncremental(this);
+   this._positions = undefined;
+   this._rotations = undefined;
+   this._scales = undefined;
+@@ -1577,6 +1679,17 @@ GaussianSplatPrimitive.buildGSplatDrawCommand = function (
    renderResources.instanceCount = instanceCount;
    renderResources.count = 4;
    renderResources.primitiveType = PrimitiveType.TRIANGLE_STRIP;
@@ -204,7 +297,495 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..2f5aeea910f5bb49c3ea91e9ec2336b3
    shaderBuilder.addVertexLines(GaussianSplatVS);
    shaderBuilder.addFragmentLines(GaussianSplatFS);
    const shaderProgram = shaderBuilder.buildShaderProgram(frameState.context);
-@@ -1689,6 +1739,16 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
+@@ -1670,6 +1783,487 @@ GaussianSplatPrimitive.buildGSplatDrawCommand = function (
+   primitive._drawCommand = command;
+ };
+ 
++// ---- Hexapod patch: incremental mode ---------------------------------------------------
++//
++// One persistent attribute texture (and SH texture) with a slot range per tile. A batch adds
++// the tiles newly selected -- each packed on its own by the texture generator's worker and
++// uploaded into its range with texSubImage2D -- and, once every tile it adds is drawn,
++// zeroes the ranges of the tiles it replaced. Zeroed splats have no size, and the vertex
++// shader discards splats under 2 px before reading anything else, so a hole in the slots
++// draws nothing. `_positions`, `_colors`, `_numSplats` (the high-water mark), and
++// `_selectedTileSet` (in slot order, with `_tileSlots` giving each tile's range) describe
++// the slots, so everything that reads a snapshot keeps working.
++
++// The engine's own packer, taken before any application wraps the module export.
++const generateTileTexture = GaussianSplatTextureGenerator.generateFromAttributes;
++
++// Most splats one batch adds, at rest and while the camera moves (holdRebuilds).
++const INCREMENTAL_BATCH_SPLATS = 600000;
++const INCREMENTAL_MOVING_BATCH_SPLATS = 150000;
++// The texture starts at this many times the first selection, if the application asked for
++// less; when a batch finds no room the slots start over at 1.5x.
++const INCREMENTAL_INITIAL_FACTOR = 2;
++const INCREMENTAL_GROWTH = 1.5;
++
++function tileSplatAttributes(tile) {
++  const content = tile.content;
++  const colorAttribute = ModelUtility.getAttributeBySemantic(
++    content.gltfPrimitive,
++    VertexAttributeSemantic.COLOR,
++  );
++  const colors = defined(colorAttribute.typedArray)
++    ? colorAttribute.typedArray
++    : colorAttribute;
++  return {
++    count: content.pointsLength,
++    positions: content.positions,
++    scales: content.scales,
++    rotations: content.rotations,
++    colors: colors,
++    shDegree: content.sphericalHarmonicsDegree,
++    shData: content.packedSphericalHarmonicsData,
++  };
++}
++
++function createIncremental(primitive, frameState, tiles) {
++  const context = frameState.context;
++  const tileset = primitive._tileset;
++  const maxTex = ContextLimits.maximumTextureSize;
++  const splatsPerRow = maxTex / 2;
++  let total = 0;
++  for (const tile of tiles) {
++    total += tile.content.pointsLength;
++  }
++  const wanted = Math.max(
++    primitive.incrementalCapacity,
++    total * INCREMENTAL_INITIAL_FACTOR,
++    splatsPerRow,
++  );
++  const rows = Math.min(maxTex, Math.ceil(wanted / splatsPerRow));
++  const capacity = rows * splatsPerRow;
++
++  primitive._rootTransform = Transforms.eastNorthUpToFixedFrame(
++    tileset.boundingSphere.center,
++  );
++  const first = tiles[0];
++  const shFwd = Matrix4.multiplyTransformation(
++    first.computedTransform,
++    primitive._axisCorrectionMatrix,
++    scratchMatrix4C,
++  );
++  Matrix4.multiplyTransformation(
++    shFwd,
++    first.content.worldTransform ?? Matrix4.IDENTITY,
++    shFwd,
++  );
++  Matrix4.getRotation(
++    Matrix4.inverse(shFwd, shFwd),
++    primitive._shInverseRotation,
++  );
++
++  const texture = new Texture({
++    context: context,
++    width: maxTex,
++    height: rows,
++    preMultiplyAlpha: false,
++    skipColorSpaceConversion: true,
++    pixelFormat: PixelFormat.RGBA_INTEGER,
++    pixelDatatype: PixelDatatype.UNSIGNED_INT,
++    flipY: false,
++    sampler: Sampler.NEAREST,
++  });
++
++  let shDegree = first.content.sphericalHarmonicsDegree ?? 0;
++  let shTexture;
++  let shDims = 0;
++  let shSplatsPerRow = 0;
++  if (shDegree > 0) {
++    shDims = first.content.sphericalHarmonicsCoefficientCount / 3;
++    shSplatsPerRow = Math.floor(maxTex / shDims);
++    const shRows = Math.ceil(capacity / shSplatsPerRow);
++    if (shRows <= maxTex) {
++      shTexture = new Texture({
++        context: context,
++        width: maxTex,
++        height: shRows,
++        preMultiplyAlpha: false,
++        skipColorSpaceConversion: true,
++        pixelFormat: PixelFormat.RG_INTEGER,
++        pixelDatatype: PixelDatatype.UNSIGNED_INT,
++        flipY: false,
++        sampler: Sampler.NEAREST,
++      });
++    } else {
++      shDegree = 0;
++    }
++  }
++
++  const inc = {
++    capacity: capacity,
++    splatsPerRow: splatsPerRow,
++    texture: texture,
++    shTexture: shTexture,
++    shDegree: shDegree,
++    shDims: shDims,
++    shSplatsPerRow: shSplatsPerRow,
++    positions: new Float32Array(capacity * 3),
++    colors: new Uint8Array(capacity * 4),
++    // Free ranges, sorted by start and merged.
++    free: [{ start: 0, count: capacity }],
++    // Every tile holding a range: tile -> { start, count }.
++    slots: new Map(),
++    // Tiles whose data is uploaded (drawn once a sort includes them).
++    live: new Set(),
++    batch: undefined,
++    // Tiles to zero once a sort of at least `removalGeneration` is drawn.
++    pendingRemovals: [],
++    removalGeneration: 0,
++    highWater: 0,
++    zeros: undefined,
++    // The data generation the drawn sort was made from.
++    sortedGeneration: -1,
++  };
++
++  primitive.gaussianSplatTexture = texture;
++  primitive.sphericalHarmonicsTexture = shTexture;
++  primitive._sphericalHarmonicsDegree = shDegree;
++  primitive._splatRowMask = splatsPerRow - 1;
++  primitive._splatRowShift = Math.log2(splatsPerRow);
++  primitive._hasGaussianSplatTexture = true;
++  primitive._splatBudgetSSEScale = 1.0;
++  publishIncremental(primitive, inc);
++  return inc;
++}
++
++function resetIncremental(primitive) {
++  const inc = primitive._incremental;
++  if (!defined(inc)) {
++    return;
++  }
++  primitive._incremental = undefined;
++  if (primitive.gaussianSplatTexture === inc.texture) {
++    primitive.gaussianSplatTexture = undefined;
++  }
++  if (primitive.sphericalHarmonicsTexture === inc.shTexture) {
++    primitive.sphericalHarmonicsTexture = undefined;
++  }
++  inc.texture.destroy();
++  if (defined(inc.shTexture)) {
++    inc.shTexture.destroy();
++  }
++  primitive._tileSlots = undefined;
++  primitive._selectedTileSet = new Set();
++  primitive._drawCommand = undefined;
++  primitive._indexes = undefined;
++  primitive._numSplats = 0;
++  primitive._hasGaussianSplatTexture = false;
++  primitive._activeSort = undefined;
++  primitive._sorterPromise = undefined;
++  primitive._sorterState = GaussianSplatSortingState.IDLE;
++}
++
++function allocateSlot(inc, count) {
++  const free = inc.free;
++  for (let i = 0; i < free.length; i++) {
++    const range = free[i];
++    if (range.count >= count) {
++      const slot = { start: range.start, count: count };
++      range.start += count;
++      range.count -= count;
++      if (range.count === 0) {
++        free.splice(i, 1);
++      }
++      return slot;
++    }
++  }
++  return undefined;
++}
++
++function releaseSlot(inc, slot) {
++  const free = inc.free;
++  let i = 0;
++  while (i < free.length && free[i].start < slot.start) {
++    i++;
++  }
++  free.splice(i, 0, { start: slot.start, count: slot.count });
++  // Merge with the neighbours.
++  if (i + 1 < free.length && free[i].start + free[i].count === free[i + 1].start) {
++    free[i].count += free[i + 1].count;
++    free.splice(i + 1, 1);
++  }
++  if (i > 0 && free[i - 1].start + free[i - 1].count === free[i].start) {
++    free[i - 1].count += free[i].count;
++    free.splice(i, 1);
++  }
++}
++
++// Writes `count` splats of packed data at slot `start` of a texture whose rows hold
++// `splatsPerRow` splats of `texelsPerSplat` texels, `components` uint32 each: whole rows in
++// one rectangle, the partial rows at either end in their own.
++function writeSplatRange(
++  texture,
++  splatsPerRow,
++  texelsPerSplat,
++  components,
++  start,
++  count,
++  data,
++) {
++  const perSplat = texelsPerSplat * components;
++  let i = 0;
++  while (i < count) {
++    const index = start + i;
++    const row = Math.floor(index / splatsPerRow);
++    const column = index % splatsPerRow;
++    let n;
++    let height;
++    if (column === 0 && count - i >= splatsPerRow) {
++      height = Math.floor((count - i) / splatsPerRow);
++      n = height * splatsPerRow;
++    } else {
++      height = 1;
++      n = Math.min(splatsPerRow - column, count - i);
++    }
++    const width = height === 1 ? n * texelsPerSplat : splatsPerRow * texelsPerSplat;
++    texture.copyFrom({
++      source: {
++        width: width,
++        height: height,
++        arrayBufferView: data.subarray(i * perSplat, (i + n) * perSplat),
++      },
++      xOffset: column * texelsPerSplat,
++      yOffset: row,
++    });
++    i += n;
++  }
++}
++
++function zeroSlot(inc, slot) {
++  const perSplat = 8;
++  const needed = slot.count * perSplat;
++  if (!defined(inc.zeros) || inc.zeros.length < needed) {
++    inc.zeros = new Uint32Array(needed);
++  }
++  writeSplatRange(
++    inc.texture,
++    inc.splatsPerRow,
++    2,
++    4,
++    slot.start,
++    slot.count,
++    inc.zeros,
++  );
++}
++
++// The slots as the rest of the engine (and the application) reads a snapshot.
++function publishIncremental(primitive, inc) {
++  let highWater = 0;
++  const ordered = [];
++  for (const tile of inc.live) {
++    const slot = inc.slots.get(tile);
++    ordered.push([tile, slot]);
++    highWater = Math.max(highWater, slot.start + slot.count);
++  }
++  ordered.sort((a, b) => a[1].start - b[1].start);
++  inc.highWater = highWater;
++  primitive._numSplats = highWater;
++  primitive._positions = inc.positions.subarray(0, highWater * 3);
++  primitive._colors = inc.colors.subarray(0, highWater * 4);
++  primitive._selectedTileSet = new Set(ordered.map((entry) => entry[0]));
++  primitive._tileSlots = new Map(ordered);
++  primitive.selectedTileLength = ordered.length;
++  primitive._splatDataGeneration++;
++  primitive._snapshot = {
++    generation: primitive._splatDataGeneration,
++    numSplats: highWater,
++    incremental: true,
++  };
++  // The next sort runs even if the camera has not moved.
++  primitive._hasLastSteadySortCameraPosition = false;
++}
++
++function incrementalStep(primitive, frameState) {
++  const tileset = primitive._tileset;
++  const tiles = tileset._selectedTiles;
++  let inc = primitive._incremental;
++  if (!defined(inc)) {
++    if (tiles.length === 0) {
++      return;
++    }
++    inc = primitive._incremental = createIncremental(
++      primitive,
++      frameState,
++      tiles,
++    );
++  }
++
++  const batch = inc.batch;
++  if (defined(batch)) {
++    if (batch.waiting > 0) {
++      return;
++    }
++    // Every tile of the batch is uploaded: they are drawn from the next sort on, and what
++    // they replace goes once that sort is on screen.
++    inc.batch = undefined;
++    for (const tile of batch.adds) {
++      if (inc.slots.has(tile)) {
++        inc.live.add(tile);
++      }
++    }
++    publishIncremental(primitive, inc);
++    for (const tile of batch.removes) {
++      inc.pendingRemovals.push(tile);
++    }
++    inc.removalGeneration = primitive._splatDataGeneration;
++    return;
++  }
++  if (tiles.length === 0) {
++    return;
++  }
++
++  const wanted = new Set(tiles);
++  const limit = primitive.holdRebuilds
++    ? INCREMENTAL_MOVING_BATCH_SPLATS
++    : INCREMENTAL_BATCH_SPLATS;
++  const adds = [];
++  let pending = 0;
++  let added = 0;
++  for (const tile of tiles) {
++    if (inc.slots.has(tile)) {
++      continue;
++    }
++    pending++;
++    const count = tile.content.pointsLength;
++    if (adds.length > 0 && added + count > limit) {
++      continue;
++    }
++    adds.push(tile);
++    added += count;
++  }
++  // A tile leaves only in the batch that completes what replaces it, so a capped batch never
++  // opens a hole; until then old and new overlap, which reads as a moment's extra density.
++  const removes = [];
++  if (adds.length === pending) {
++    for (const tile of inc.live) {
++      if (!wanted.has(tile) && !inc.pendingRemovals.includes(tile)) {
++        removes.push(tile);
++      }
++    }
++  }
++  if (adds.length === 0 && removes.length === 0) {
++    return;
++  }
++
++  const current = { adds: adds, removes: removes, waiting: 0 };
++  for (const tile of adds) {
++    const count = tile.content.pointsLength;
++    const slot = allocateSlot(inc, count);
++    if (!defined(slot)) {
++      // No room: start over, bigger. Every selected tile is added again.
++      primitive.incrementalCapacity = Math.ceil(
++        Math.max(inc.capacity, inc.highWater + added) * INCREMENTAL_GROWTH,
++      );
++      resetIncremental(primitive);
++      return;
++    }
++    GaussianSplatPrimitive.transformTile(tile);
++    const attributes = tileSplatAttributes(tile);
++    const promise = generateTileTexture({
++      attributes: {
++        positions: new Float32Array(attributes.positions),
++        scales: new Float32Array(attributes.scales),
++        rotations: new Float32Array(attributes.rotations),
++        colors: new Uint8Array(attributes.colors),
++      },
++      count: count,
++    });
++    if (!defined(promise)) {
++      // The worker is busy: this tile waits for a later batch.
++      releaseSlot(inc, slot);
++      continue;
++    }
++    inc.slots.set(tile, slot);
++    current.waiting++;
++    promise
++      .then((generated) => {
++        if (primitive._incremental !== inc || primitive.isDestroyed()) {
++          return;
++        }
++        if (inc.slots.get(tile) === slot) {
++          writeSplatRange(
++            inc.texture,
++            inc.splatsPerRow,
++            2,
++            4,
++            slot.start,
++            count,
++            generated.data,
++          );
++          inc.positions.set(
++            attributes.positions.subarray(0, count * 3),
++            slot.start * 3,
++          );
++          inc.colors.set(attributes.colors.subarray(0, count * 4), slot.start * 4);
++          if (
++            inc.shDegree > 0 &&
++            attributes.shDegree === inc.shDegree &&
++            defined(attributes.shData)
++          ) {
++            writeSplatRange(
++              inc.shTexture,
++              inc.shSplatsPerRow,
++              inc.shDims,
++              2,
++              slot.start,
++              count,
++              attributes.shData,
++            );
++          }
++        }
++        current.waiting--;
++      })
++      .catch(() => {
++        if (primitive._incremental !== inc) {
++          return;
++        }
++        if (inc.slots.get(tile) === slot) {
++          inc.slots.delete(tile);
++          releaseSlot(inc, slot);
++        }
++        current.waiting--;
++      });
++  }
++  current.adds = adds.filter((tile) => inc.slots.has(tile));
++  inc.batch = current;
++}
++
++function incrementalAfterSort(primitive, sortedGeneration) {
++  const inc = primitive._incremental;
++  if (defined(inc)) {
++    inc.sortedGeneration = Math.max(inc.sortedGeneration, sortedGeneration);
++  }
++  if (
++    !defined(inc) ||
++    inc.pendingRemovals.length === 0 ||
++    sortedGeneration < inc.removalGeneration
++  ) {
++    return;
++  }
++  const removals = inc.pendingRemovals;
++  inc.pendingRemovals = [];
++  for (const tile of removals) {
++    const slot = inc.slots.get(tile);
++    if (!defined(slot)) {
++      continue;
++    }
++    zeroSlot(inc, slot);
++    inc.slots.delete(tile);
++    inc.live.delete(tile);
++    releaseSlot(inc, slot);
++  }
++  publishIncremental(primitive, inc);
++}
++
+ /**
+  * Updates the Gaussian splat primitive for the current frame.
+  * This method checks if the primitive needs to be updated based on the current frame state,
+@@ -1689,14 +2283,32 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
      return;
    }
  
@@ -221,7 +802,36 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..2f5aeea910f5bb49c3ea91e9ec2336b3
    if (this._drawCommand) {
      frameState.commandList.push(this._drawCommand);
    }
-@@ -1740,10 +1800,16 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
+ 
+   if (tileset._modelMatrixChanged) {
++    // Hexapod patch: every baked position moves; the incremental slots start over.
++    resetIncremental(this);
+     this._dirty = true;
+     return;
+   }
++  // Hexapod patch: incremental mode switched off (a CPU deformer needs the aggregated
++  // layout): drop the slots and build a full snapshot.
++  if (!this.incremental && defined(this._incremental)) {
++    resetIncremental(this);
++    this._dirty = true;
++  }
+   const hasRootTransform = defined(this._rootTransform);
+ 
+   if (frameState.passes.pick === true) {
+@@ -1712,6 +2324,12 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
+   }
+ 
+   if (this._sorterState === GaussianSplatSortingState.IDLE) {
++    // Hexapod patch: incremental mode replaces the snapshot rebuild below.
++    if (this.incremental && !defined(this._pendingSnapshot)) {
++      incrementalStep(this, frameState);
++      this._needsSnapshotRebuild = false;
++      this._dirty = false;
++    }
+     const selectedTilesChanged =
+       tileset._selectedTiles.length !== 0 &&
+       haveSelectedTilesChanged(this, tileset._selectedTiles);
+@@ -1740,11 +2358,20 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
      } else {
        this._snapshotRebuildStallFrames = 0;
      }
@@ -238,8 +848,85 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..2f5aeea910f5bb49c3ea91e9ec2336b3
 +        (isStable ||
 +          this._snapshotRebuildStallFrames >= DEFAULT_MAX_SNAPSHOT_STALL_FRAMES));
      const hasPendingWork =
++      // Hexapod patch: slots published and not yet sorted.
++      (defined(this._incremental) &&
++        this._incremental.sortedGeneration < this._splatDataGeneration) ||
        this._dirty ||
        this._needsSnapshotRebuild ||
+       selectedTilesChanged ||
+@@ -1759,6 +2386,7 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
+     }
+ 
+     if (
++      !this.incremental &&
+       tileset._selectedTiles.length !== 0 &&
+       this._needsSnapshotRebuild &&
+       allowRebuild
+@@ -2055,6 +2683,10 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
+     if (!hasRootTransform) {
+       return;
+     }
++    // Hexapod patch: nothing uploaded yet in incremental mode, nothing to sort.
++    if (defined(this._incremental) && !(this._numSplats > 0)) {
++      return;
++    }
+ 
+     Matrix4.clone(camera.viewMatrix, this._prevViewMatrix);
+     Matrix4.multiply(camera.viewMatrix, this._rootTransform, scratchMatrix4A);
+@@ -2071,14 +2703,7 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
+         dataGeneration: dataGeneration,
+         expectedCount: expectedCount,
+       };
+-      const rawPromise = GaussianSplatSorter.radixSortIndexes({
+-        primitive: {
+-          positions: new Float32Array(this._positions),
+-          modelView: Float32Array.from(scratchMatrix4A),
+-          count: this._numSplats,
+-        },
+-        sortType: "Index",
+-      });
++      const rawPromise = sortSplats(this, scratchMatrix4A, frameState);
+       this._sorterPromise = rawPromise;
+       if (defined(rawPromise)) {
+         markSteadySortStart(this, frameState);
+@@ -2105,14 +2730,7 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
+         dataGeneration: dataGeneration,
+         expectedCount: expectedCount,
+       };
+-      const rawPromise = GaussianSplatSorter.radixSortIndexes({
+-        primitive: {
+-          positions: new Float32Array(this._positions),
+-          modelView: Float32Array.from(scratchMatrix4A),
+-          count: this._numSplats,
+-        },
+-        sortType: "Index",
+-      });
++      const rawPromise = sortSplats(this, scratchMatrix4A, frameState);
+       this._sorterPromise = rawPromise;
+       if (defined(rawPromise)) {
+         markSteadySortStart(this, frameState);
+@@ -2133,6 +2751,10 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
+   } else if (this._sorterState === GaussianSplatSortingState.SORTED) {
+     //update the draw command if sorted
+     GaussianSplatPrimitive.buildGSplatDrawCommand(this, frameState);
++    // Hexapod patch: the tiles a batch replaced leave once the batch's tiles are drawn.
++    if (defined(this._incremental) && defined(this._activeSort)) {
++      incrementalAfterSort(this, this._activeSort.dataGeneration);
++    }
+     this._sorterState = GaussianSplatSortingState.IDLE; //reset state for next frame
+     this._dirty = false;
+     this._sorterPromise = undefined; //reset promise for next frame
+@@ -2144,4 +2766,10 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
+   this._dirty = false;
+ };
+ 
++/**
++ * Hexapod patch: the application's steady-sort function, or undefined for the engine's own.
++ * @type {Function|undefined}
++ */
++GaussianSplatPrimitive.sortHook = undefined;
++
+ export default GaussianSplatPrimitive;
 diff --git a/Source/Scene/GltfSpzLoader.js b/Source/Scene/GltfSpzLoader.js
 index d0381fd52b5b7116fdaa337a93125d36a50e01cd..7ac90f56426b23cb3800dc935235979bcd7970d1 100644
 --- a/Source/Scene/GltfSpzLoader.js

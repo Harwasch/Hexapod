@@ -111,12 +111,58 @@ function bakeOf(content: SplatTileContent | undefined): Mat4 | undefined {
  * at its range in `_positions`. A disagreement is a wait, not a refusal — it means the
  * bookkeeping is between two snapshots, not that the splats are the wrong ones.
  */
+/**
+ * The tiles of an incremental primitive, from their slot ranges: each must lie inside the
+ * high-water mark and have its own baked positions where its slots are (sampled, bit for
+ * bit), as in the aggregated case. Ranges need not touch: a freed range draws nothing.
+ */
+function slotTiles(
+  slots: NonNullable<SplatPrimitive["_tileSlots"]>,
+  positions: Float32Array,
+  numSplats: number,
+): SnapshotTilesResult {
+  if (slots.size === 0) return { kind: "wait", reason: "tiles", detail: "no tiles selected" };
+  const tiles: SnapshotTile[] = [];
+  for (const [tile, slot] of slots) {
+    const content = tile.content;
+    const bake = bakeOf(content);
+    if (bake === undefined) {
+      return { kind: "wait", reason: "no-bake-transform", detail: "a tile is not baked yet" };
+    }
+    const own = content?.positions;
+    const count = content?.pointsLength ?? slot.count;
+    if (count !== slot.count || slot.start + slot.count > numSplats) {
+      return { kind: "wait", reason: "tiles", detail: "a tile's slots and count disagree" };
+    }
+    if (own !== undefined) {
+      const step = Math.max(1, Math.floor(count / SAMPLED_SPLATS));
+      for (let i = 0; i < count; i += step) {
+        for (let k = 0; k < 3; k += 1) {
+          if (!sameBits(own, i * 3 + k, positions, (slot.start + i) * 3 + k)) {
+            return {
+              kind: "wait",
+              reason: "tiles",
+              detail: "a tile's positions are not where its slots are",
+            };
+          }
+        }
+      }
+    }
+    tiles.push({ content: content ?? tile, start: slot.start, count, bake });
+  }
+  tiles.sort((a, b) => a.start - b.start);
+  return { kind: "tiles", tiles };
+}
+
 export function snapshotTiles(
   tileset: SplatTilesetLike,
   primitive: SplatPrimitive,
   positions: Float32Array,
   numSplats: number,
 ): SnapshotTilesResult {
+  // Incremental mode (patched engine): each tile says where its slots are.
+  const slots = primitive._tileSlots;
+  if (slots !== undefined) return slotTiles(slots, positions, numSplats);
   const selected = primitive._selectedTileSet;
   let list: SplatTile[];
   if (selected !== undefined) {

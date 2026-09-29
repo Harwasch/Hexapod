@@ -131,3 +131,65 @@ test("a wheel over a splat zooms to its surface and stops short of it", async ({
   expect(left).toBeLessThan(0.5);
   expect(await nav(page, (n) => n.distanceToCentre())).toBeGreaterThan(12 - surface - 0.5);
 });
+
+interface Explore {
+  explore: {
+    enter(): void;
+    exit(): void;
+    mode(): string;
+    heading(): number;
+    height(): number;
+  };
+  distanceToCentre(): number;
+  hitAhead(): number | null;
+  clearanceRatio(): number | null;
+  place(range: number, headingDeg?: number): void;
+}
+
+test("explore: WASD flies toward the tree and stops at it, Space rises, F walks, drag looks", async ({
+  page,
+}) => {
+  test.setTimeout(400_000);
+  await open(page);
+  const run = <T>(fn: (n: Explore) => T): Promise<T> =>
+    page.evaluate(`(${fn.toString()})(window.__nav)`);
+  await run((n) => n.place(12));
+  // Nothing to stand on here (the globe is hidden, the tree has no ground): it starts flying.
+  await run((n) => n.explore.enter());
+  expect(await run((n) => n.explore.mode())).toBe("fly");
+  // Space rises when flying (out in the open, before meeting the tree).
+  const low = await run((n) => n.explore.height());
+  // Held two seconds: 4 m/s, less under SwiftShader's slow frames (each step is at most 0.1 s,
+  // so a slow machine moves slower rather than jumping).
+  await page.keyboard.down("Space");
+  await page.waitForTimeout(2000);
+  await page.keyboard.up("Space");
+  expect(await run((n) => n.explore.height())).toBeGreaterThan(low + 0.5);
+  const start = await run((n) => n.distanceToCentre());
+  // Held until it has come 3 m in (real time, so SwiftShader's slow frames only make it
+  // longer), then it meets the crown: stopped at it or sliding round it, never inside its
+  // clearance.
+  await page.keyboard.down("KeyW");
+  await expect
+    .poll(() => run((n) => n.distanceToCentre()), { timeout: 60_000 })
+    .toBeLessThan(start - 3);
+  await page.waitForTimeout(3000);
+  await page.keyboard.up("KeyW");
+  const ratio = await run((n) => n.clearanceRatio());
+  if (ratio !== null) expect(ratio).toBeGreaterThan(0.8);
+  // F switches to walking (and back).
+  await page.keyboard.press("KeyF");
+  expect(await run((n) => n.explore.mode())).toBe("walk");
+  await page.keyboard.press("KeyF");
+  expect(await run((n) => n.explore.mode())).toBe("fly");
+  // Dragging turns the view.
+  const before = await run((n) => n.explore.heading());
+  const size = page.viewportSize() ?? { width: 1280, height: 720 };
+  await page.mouse.move(size.width / 2, size.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(size.width / 2 + 200, size.height / 2, { steps: 5 });
+  await page.mouse.up();
+  const after = await run((n) => n.explore.heading());
+  expect(Math.abs(after - before)).toBeGreaterThan(0.05);
+  await run((n) => n.explore.exit());
+});

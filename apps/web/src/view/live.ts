@@ -17,7 +17,7 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 
 import type { LiveCameras, LiveState } from "@twin/contracts";
 
-import { splatBudget } from "@/lib/detail";
+import { deviceSplatBudget } from "@/lib/detail";
 
 import {
   decodeCameras,
@@ -132,8 +132,8 @@ export function showLive(captureId: string): { stop: () => void } {
     0.01,
     5000,
   );
-  // The phone's Detail choice is Spark's splat budget here too (see main.ts).
-  const budget = splatBudget();
+  // This device's splat budget is Spark's here too (see main.ts).
+  const budget = deviceSplatBudget();
   scene.add(new SparkRenderer({ renderer, lodSplatCount: budget }));
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;

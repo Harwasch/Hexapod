@@ -29,6 +29,7 @@
  * | `tileset.selectOffscreen` | **patch** (`Cesium3DTilesetBaseTraversal.js`) | a refining tile's out-of-view children drawn coarse |
  * | `tileset.focusWeight` / `focusConeRadians` | **patch** (`Cesium3DTile.js`) | detail spent on the centre of the view first |
  * | `scene.frameState.splatDecodesAllowed` | **patch** (`GltfSpzLoader.js`) | SPZ decodes that may start this frame |
+ * | `tileset.splatIncremental` / `primitive.incremental` / `_tileSlots` | **patch** | a tile uploads alone into its own slot range |
  * | `GaussianSplatTextureGenerator.generateFromAttributes` | exported at `cesium/Source/Cesium.js:638` | the CPU path's interception point |
  *
  * **The aggregation order is the whole of multi-tile support.** A snapshot is
@@ -126,6 +127,17 @@ export interface SplatPrimitive {
   vertexMotion?: SplatVertexMotion;
   /** Patched engine: while true, the committed snapshot stays and no rebuild starts. */
   holdRebuilds?: boolean;
+  /**
+   * Patched engine: incremental mode -- each tile holds a slot range of one persistent
+   * texture instead of a place in a re-aggregated snapshot. Switching it off rebuilds in full.
+   */
+  incremental?: boolean;
+  /**
+   * Patched engine, incremental mode: each drawn tile's slot range. Ranges need not be
+   * contiguous with each other (a freed range draws nothing), so `_numSplats` is the high-water
+   * mark, not the sum.
+   */
+  readonly _tileSlots?: ReadonlyMap<SplatTile, { readonly start: number; readonly count: number }>;
   isDestroyed?(): boolean;
 }
 
@@ -189,4 +201,19 @@ export function focusSplats(tileset: Cesium3DTileset): void {
   const patched = tileset as unknown as { focusWeight: number; focusConeRadians: number };
   patched.focusWeight = SPLAT_FOCUS_WEIGHT;
   patched.focusConeRadians = SPLAT_FOCUS_CONE_RAD;
+}
+
+/**
+ * Has a splat tileset's primitive run in incremental mode (patched engine): a level-of-detail
+ * change costs the size of the change -- the tiles that arrive are packed and uploaded alone,
+ * the ones that leave are zeroed -- instead of re-packing and re-uploading every selected
+ * splat (measured ~265 ms of main thread per 1.25M). `capacity` sizes the persistent texture.
+ */
+export function incrementalSplats(tileset: Cesium3DTileset, capacity: number): void {
+  const patched = tileset as unknown as {
+    splatIncremental: boolean;
+    splatIncrementalCapacity: number;
+  };
+  patched.splatIncremental = true;
+  patched.splatIncrementalCapacity = Math.max(0, Math.round(capacity));
 }

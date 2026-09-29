@@ -25,7 +25,8 @@ const capture = {
   status: "complete",
 };
 
-test.use({ viewport: { width: 390, height: 844 } });
+// A phone: the viewer budgets splats by device (lib/detail.ts), and these tests count them.
+test.use({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
 
 test.beforeEach(async ({ page }) => {
   await page.route(

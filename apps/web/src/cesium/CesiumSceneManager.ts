@@ -30,6 +30,7 @@ import { SiteManager } from "./SiteManager";
 import { installSplatTextureInterception } from "./splatCapture";
 import { SplatCollider } from "./SplatCollider";
 import { SplatMotionGate } from "./splatMotionGate";
+import { installSplatSorter } from "./splatSorter";
 import type { Geocoder, SceneEvents } from "./types";
 import type { TokenState } from "@/state/viewer";
 
@@ -47,6 +48,9 @@ export interface SceneManagerOptions {
   splatGpuMotion?: boolean;
 }
 
+/** Below this altitude over a splat site the view is the scan, shown ungraded. */
+const SCAN_GRADE_ALTITUDE_M = 400;
+
 /**
  * The single owner of the CesiumJS viewer. React talks to this object through
  * a context; it never touches Cesium primitives directly. Construct once,
@@ -62,6 +66,7 @@ export class CesiumSceneManager {
   readonly performance: PerformanceManager;
   readonly splatGate: SplatMotionGate;
   readonly collider: SplatCollider;
+  private readonly uninstallSplatSorter: () => void;
   readonly sites: SiteManager;
   readonly living: LivingSurveyManager;
   readonly selection: SelectionManager;
@@ -143,6 +148,7 @@ export class CesiumSceneManager {
     this.layers = new LayerManager(this.viewer, this.events, this.clipping);
     this.performance = new PerformanceManager(this.viewer, this.events);
     this.splatGate = new SplatMotionGate(this.viewer.scene, this.events);
+    this.uninstallSplatSorter = installSplatSorter();
     this.collider = new SplatCollider(this.viewer.scene, () => this.splatGate.holding);
     this.camera.setCollider(this.collider);
     this.performance.addScreenSpaceErrorSink("world", (sse, pixelRatio) =>
@@ -169,6 +175,14 @@ export class CesiumSceneManager {
     this.measurement = new MeasurementManager(this.viewer, this.events);
     this.mission = new MissionManager(this.viewer, this.events, this.camera);
     this.areas = new AreaEditor(this.viewer, this.events);
+    this.unsubscribe.push(
+      // A photographic scan close up is shown in its own colours (PerformanceManager
+      // setGradeSuppressed): within a few hundred metres of a splat site that is on screen.
+      this.events.on("camera", (pose) => {
+        const splat = this.sites.activeRepresentation === "gaussian-splat";
+        this.performance.setGradeSuppressed(splat && pose.altitude < SCAN_GRADE_ALTITUDE_M);
+      }),
+    );
     // While the map waits for "the ground you mean", selection keeps its hands off the click.
     this.unsubscribe.push(
       this.events.on("ground-pick-mode", (on) => {
@@ -342,6 +356,7 @@ export class CesiumSceneManager {
     this.living.destroy();
     this.sites.destroy();
     this.collider.destroy();
+    this.uninstallSplatSorter();
     this.splatGate.destroy();
     this.performance.destroy();
     this.layers.destroy();
