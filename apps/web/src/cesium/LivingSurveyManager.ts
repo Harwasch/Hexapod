@@ -51,6 +51,7 @@ import type { Emitter } from "@/lib/emitter";
 import { createLogger, describeError } from "@/lib/log";
 import {
   REFERENCE_GAUSSIAN_SCALE_M,
+  type LivingCpuReason,
   type LivingSiteStatus,
   type LivingSurveyStatus,
 } from "@/state/living";
@@ -61,7 +62,12 @@ import type { SiteManager } from "./SiteManager";
 import type { MotionTextureFactory } from "./splatGpuMotion";
 import { cesiumMotionTextures } from "./splatGpuTextures";
 import { splatTilesetOf } from "./splatInternals";
-import { SplatDeformer, type DeformerReason, type DeformerStatus } from "./SplatDeformer";
+import {
+  SplatDeformer,
+  type DeformerMotion,
+  type DeformerReason,
+  type DeformerStatus,
+} from "./SplatDeformer";
 import type { SceneEvents } from "./types";
 
 const log = createLogger("living-survey");
@@ -118,10 +124,94 @@ const REFUSAL_BODY: Readonly<Record<DeformerReason, string | null>> = {
 
 export interface LivingSurveyOptions {
   /**
-   * Evaluate motion in the splat vertex shader (engine patch) instead of rewriting the
-   * attribute texture from the CPU. See `splatGpuMotion.ts`.
+   * Whether this build lets motion run in the splat vertex shader (the engine patch's hook,
+   * `splatGpuMotion.ts`) at all. Default true; `VITE_SPLAT_GPU_MOTION=0` turns it off for every
+   * viewer. Where it is allowed, the viewer's "Motion on GPU" setting decides
+   * ({@link LivingSurveyManager.setGpuMotion}), and the CPU path stays the fallback for an
+   * unpatched engine or a snapshot the shader cannot take.
    */
   readonly gpuMotion?: boolean;
+  /**
+   * The GPU path's texture factory. Defaults to CesiumJS's own (`cesiumMotionTextures`);
+   * `null` means "unavailable". A seam for tests.
+   */
+  readonly motionTextures?: MotionTextureFactory | null;
+}
+
+/** What decides whether a site may use the GPU path, before the deformer has its own say. */
+export interface GpuMotionGate {
+  /** The build allows it (`VITE_SPLAT_GPU_MOTION`). */
+  readonly allowed: boolean;
+  /** The viewer wants it (the "Motion on GPU" setting). */
+  readonly wanted: boolean;
+  /** This CesiumJS build exports what the texture factory needs. */
+  readonly available: boolean;
+}
+
+/**
+ * Which path a site is on and, when it is the CPU, the first reason why — the build, then the
+ * viewer, then the engine, then the snapshot. Pure, so the fallback order is testable.
+ */
+export function livingMotionPath(
+  status: Pick<DeformerStatus, "motion" | "cpuReason">,
+  gate: GpuMotionGate,
+): { motionPath: DeformerMotion; cpuReason: LivingCpuReason | null } {
+  if (status.motion === "gpu") return { motionPath: "gpu", cpuReason: null };
+  const cpuReason: LivingCpuReason = !gate.allowed
+    ? "build"
+    : !gate.wanted
+      ? "switched-off"
+      : !gate.available || status.cpuReason !== "mixed-bake"
+        ? "engine"
+        : "mixed-bake";
+  return { motionPath: "cpu", cpuReason };
+}
+
+/** Animated frames the motion cost is averaged over: about a second at 60 Hz. */
+export const MOTION_COST_WINDOW = 60;
+
+/**
+ * How often the cost readout is republished, milliseconds. The cost changes every frame, and
+ * the `living` event must not: it drives React, and a per-frame store update would cost more
+ * than the GPU path it is measuring.
+ */
+const MOTION_COST_PUBLISH_MS = 500;
+
+/** A mean over the last `size` samples. */
+export class RollingMean {
+  readonly #values: Float64Array;
+  #count = 0;
+  #next = 0;
+  #sum = 0;
+
+  constructor(size: number) {
+    this.#values = new Float64Array(Math.max(1, size));
+  }
+
+  push(value: number): void {
+    const size = this.#values.length;
+    if (this.#count === size) this.#sum -= this.#values[this.#next] ?? 0;
+    else this.#count += 1;
+    this.#values[this.#next] = value;
+    this.#sum += value;
+    this.#next = (this.#next + 1) % size;
+  }
+
+  /** The mean, or null before the first sample. */
+  get mean(): number | null {
+    return this.#count === 0 ? null : this.#sum / this.#count;
+  }
+
+  clear(): void {
+    this.#count = 0;
+    this.#next = 0;
+    this.#sum = 0;
+  }
+}
+
+/** Rounded for display and for change detection: hundredths of a millisecond. */
+function roundMs(value: number | null): number | null {
+  return value === null ? null : Math.round(value * 100) / 100;
 }
 
 /** Everything held for one deformed asset. Dropped whole when its site unloads. */
@@ -137,6 +227,13 @@ interface LivingEntry {
   readonly motion: LivingMotion | undefined;
   readonly deformer: SplatDeformer;
   status: DeformerStatus;
+  /** Model plus write, per animated frame. */
+  readonly motionCost: RollingMean;
+  /** The write alone. */
+  readonly applyCost: RollingMean;
+  /** What was last published of the two, so the event fires only when the readout changes. */
+  motionMs: number | null;
+  applyMs: number | null;
 }
 
 /**
@@ -171,8 +268,14 @@ export class LivingSurveyManager {
   #reportedStall = false;
   #published: LivingSurveyStatus | null = null;
   #destroyed = false;
-  /** The GPU motion path's texture factory, when that path is switched on. */
+  /** The GPU motion path's texture factory, when this CesiumJS build can make one. */
   readonly #gpu: MotionTextureFactory | undefined;
+  /** The build allows the GPU path (`VITE_SPLAT_GPU_MOTION`). */
+  readonly #gpuAllowed: boolean;
+  /** The viewer wants it (the persisted "Motion on GPU" setting). On unless switched off. */
+  #gpuWanted = true;
+  /** `performance.now()` after which the cost readout may next be republished. */
+  #nextCostPublish = 0;
 
   constructor(
     viewer: Viewer,
@@ -185,11 +288,17 @@ export class LivingSurveyManager {
     this.#events = events;
     this.#sites = sites;
     this.#performance = performance;
-    // Behind a flag (`VITE_SPLAT_GPU_MOTION`) until it has been looked at on real hardware;
-    // the CPU path stays the fallback for an unpatched engine or a snapshot it cannot take.
-    this.#gpu = options.gpuMotion === true ? cesiumMotionTextures() : undefined;
-    if (options.gpuMotion === true && this.#gpu === undefined) {
-      log.warn("GPU splat motion requested but unavailable in this CesiumJS build; using CPU");
+    // The GPU path by default: its per-frame main-thread cost is per rig node, where the CPU
+    // path's is per splat — about 70 ms a frame for a million-splat tree. The CPU path stays
+    // the fallback for an unpatched engine, a snapshot the shader cannot take, a build that
+    // forces it, and a viewer who switches the GPU path off to compare.
+    this.#gpuAllowed = options.gpuMotion !== false;
+    this.#gpu =
+      options.motionTextures === undefined
+        ? cesiumMotionTextures()
+        : (options.motionTextures ?? undefined);
+    if (this.#gpuAllowed && this.#gpu === undefined) {
+      log.warn("GPU splat motion unavailable in this CesiumJS build; using CPU");
     }
     this.#unsubscribe.push(
       // Attach and detach timing, from SiteManager's own per-asset events: `attachTileset`
@@ -229,6 +338,47 @@ export class LivingSurveyManager {
     // Dropping to calm must still reach the GPU: the deformer owes one restoring write, and
     // without a frame to do it in the tree would stay bent at whatever the last gust left.
     if (this.#entries.size > 0) this.#viewer.scene.requestRender();
+  }
+
+  /** What decides whether a site may use the GPU path. */
+  get gpuMotion(): GpuMotionGate {
+    return {
+      allowed: this.#gpuAllowed,
+      wanted: this.#gpuWanted,
+      available: this.#gpu !== undefined,
+    };
+  }
+
+  /**
+   * The viewer's "Motion on GPU" setting: `false` puts every site on the CPU path, for an A/B
+   * comparison or on hardware where the shader path misbehaves.
+   *
+   * Every deformer switches in place (`SplatDeformer.setGpu`): it first restores the measured
+   * pose through the path it is leaving — the CPU path's restoring write, or the GPU hook
+   * uninstalled — so nothing displaced is left behind, then re-derives on the new path at the
+   * next tick. The cost readout starts over, so it never averages the two paths together.
+   */
+  setGpuMotion(enabled: boolean): void {
+    if (this.#destroyed || enabled === this.#gpuWanted) return;
+    this.#gpuWanted = enabled;
+    const factory = this.#factory();
+    for (const entry of this.#entries.values()) {
+      entry.deformer.setGpu(factory);
+      entry.status = entry.deformer.status;
+      entry.motionCost.clear();
+      entry.applyCost.clear();
+      entry.motionMs = null;
+      entry.applyMs = null;
+    }
+    log.info("motion path switched", { gpu: factory !== undefined });
+    this.#publish();
+    // The frame that shows the restore, and the first frame on the new path.
+    if (this.#entries.size > 0) this.#viewer.scene.requestRender();
+  }
+
+  /** The texture factory deformers get: the GPU path when build, viewer and engine all allow. */
+  #factory(): MotionTextureFactory | undefined {
+    return this.#gpuAllowed && this.#gpuWanted ? this.#gpu : undefined;
   }
 
   /** Chooses the motion model; see {@link LivingMotionModel}. */
@@ -339,7 +489,11 @@ export class LivingSurveyManager {
     const tileset = this.#sites.tilesetFor(candidate.siteId, "gaussian-splat");
     if (tileset === null || this.#entries.has(assetId)) return;
 
-    const deformer = new SplatDeformer({ tileset: splatTilesetOf(tileset), rig, gpu: this.#gpu });
+    const deformer = new SplatDeformer({
+      tileset: splatTilesetOf(tileset),
+      rig,
+      gpu: this.#factory(),
+    });
     this.#entries.set(assetId, {
       siteId: candidate.siteId,
       siteSlug: candidate.slug,
@@ -348,6 +502,10 @@ export class LivingSurveyManager {
       motion,
       deformer,
       status: deformer.status,
+      motionCost: new RollingMean(MOTION_COST_WINDOW),
+      applyCost: new RollingMean(MOTION_COST_WINDOW),
+      motionMs: null,
+      applyMs: null,
     });
     log.info("motion rig attached", {
       site: candidate.slug,
@@ -443,9 +601,18 @@ export class LivingSurveyManager {
       // Two terms, computed once per rig per frame: where every node is, and how hard every
       // node's splats are shimmering. Both are pure functions of the same `(rig, t, wind)`, so
       // the frame stays reproducible from the clock alone.
+      const started = performance.now();
       const frame = this.#frame(entry, t, wind);
+      const modelled = performance.now();
       const status = entry.deformer.apply(frame.transforms, frame.flutter);
+      const written = performance.now();
       entry.status = status;
+      // The readout's samples: animated frames only, so calm (which costs nothing) does not
+      // dilute the figure the two paths are compared on.
+      if (status.displaced) {
+        entry.motionCost.push(written - started);
+        entry.applyCost.push(written - modelled);
+      }
       if (status.displaced) displaced = true;
       if (
         status.phase !== before.phase ||
@@ -458,10 +625,29 @@ export class LivingSurveyManager {
     // measured pose. Never otherwise: at rest the deformer writes nothing at all.
     if (displaced || this.#wasDisplaced) this.#viewer.scene.requestRender();
     this.#wasDisplaced = displaced;
+    // Twice a second at most, and only when a rounded figure moved: see MOTION_COST_PUBLISH_MS.
+    if (displaced && this.#refreshCosts()) phaseChanged = true;
     // Phase changes are rare and one-shot — attaching, refusing, a snapshot rebuild — so this
     // is not per-frame work even though it is reached from a per-frame listener.
     if (phaseChanged) this.#settlePhases();
   };
+
+  /** Copies the rolling means into the published readout when due. True when one changed. */
+  #refreshCosts(): boolean {
+    const now = performance.now();
+    if (now < this.#nextCostPublish) return false;
+    this.#nextCostPublish = now + MOTION_COST_PUBLISH_MS;
+    let changed = false;
+    for (const entry of this.#entries.values()) {
+      const motionMs = roundMs(entry.motionCost.mean);
+      const applyMs = roundMs(entry.applyCost.mean);
+      if (motionMs === entry.motionMs && applyMs === entry.applyMs) continue;
+      entry.motionMs = motionMs;
+      entry.applyMs = applyMs;
+      changed = true;
+    }
+    return changed;
+  }
 
   /**
    * Notices a scene clock that has stopped advancing while wind is on.
@@ -528,11 +714,15 @@ export class LivingSurveyManager {
    */
   #snapshot(): LivingSurveyStatus {
     const wind = this.#wind;
+    const gate = this.gpuMotion;
     const sites: LivingSiteStatus[] = [];
     let ready = false;
     for (const entry of this.#entries.values()) {
       if (entry.status.phase === "ready") ready = true;
       sites.push({
+        ...livingMotionPath(entry.status, gate),
+        motionMs: entry.motionMs,
+        applyMs: entry.applyMs,
         siteId: entry.siteId,
         siteSlug: entry.siteSlug,
         assetId: entry.assetId,
@@ -576,7 +766,11 @@ function sameStatus(a: LivingSurveyStatus, b: LivingSurveyStatus): boolean {
       site.numSplats === other.numSplats &&
       site.displaced === other.displaced &&
       site.motionEvidence === other.motionEvidence &&
-      site.maxDisplacementM === other.maxDisplacementM
+      site.maxDisplacementM === other.maxDisplacementM &&
+      site.motionPath === other.motionPath &&
+      site.cpuReason === other.cpuReason &&
+      site.motionMs === other.motionMs &&
+      site.applyMs === other.applyMs
     );
   });
 }

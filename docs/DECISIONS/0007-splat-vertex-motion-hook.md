@@ -40,9 +40,11 @@ draw-command build, and a rebuild-before-push when the hook changes. The GPU pat
 (`splatGpuMotion.ts`) uploads per-node affine rows and flutter coefficients (16 KB for a 214-node
 rig) and a per-snapshot binding texture; per-frame CPU work no longer depends on the splat count.
 
-It sits behind `VITE_SPLAT_GPU_MOTION` until it has been looked at on real hardware, with the CPU
-path as the fallback for an unpatched engine or a snapshot whose tiles do not share one bake
-matrix.
+It sat behind `VITE_SPLAT_GPU_MOTION` until it had been looked at on real hardware. It is now the
+default (the CPU path cost the million-splat Minnetonka tree roughly 70 ms a frame, which read as
+stutter), with the CPU path as the fallback for an unpatched engine or a snapshot whose tiles do
+not share one bake matrix. `VITE_SPLAT_GPU_MOTION=false` remains as a build-wide kill switch, and
+each viewer can turn it off in Settings ("Motion on GPU") to compare the paths.
 
 **Living Mode on the GPU path** (addendum, same date). Living Mode's leaf flutter (ADR 0008) is an
 advected field looked up at each splat's canonical position, not per-node coefficients, so the

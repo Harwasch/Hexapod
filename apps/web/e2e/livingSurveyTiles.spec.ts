@@ -76,6 +76,7 @@ interface Status {
   phase: string;
   reason?: string;
   motion: string;
+  cpuReason?: string;
   numSplats: number;
   numSplatsLoaded: number;
   tiles: number;
@@ -108,9 +109,10 @@ async function call<T>(page: Page, method: string, ...args: unknown[]): Promise<
 const WIND = { strength: 1, bearingDeg: 250 };
 const CALM = { strength: 0, bearingDeg: 250 };
 
+// The app's default first: the GPU path under Living Mode. The CPU path is the fallback.
 const VARIANTS: readonly Variant[] = [
-  { gpu: false, living: true },
   { gpu: true, living: true },
+  { gpu: false, living: true },
   { gpu: true, living: false },
 ];
 
@@ -128,6 +130,9 @@ for (const variant of VARIANTS) {
     expect(near.phase).toBe("ready");
     expect(near.reason).toBeUndefined();
     expect(near.motion).toBe(gpu ? "gpu" : "cpu");
+    // Every tile of a splat_tiles.py tileset shares one bake, so only the caller's choice puts
+    // it on the CPU path: never a silent fallback.
+    expect(near.cpuReason).toBe(gpu ? undefined : "no-factory");
     expect(near.tiles).toBeGreaterThan(1);
     expect(near.tiles).toBe(near.selectedTiles);
     expect(near.numSplats).toBe(near.numSplatsLoaded);

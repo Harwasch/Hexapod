@@ -9,9 +9,15 @@ import {
 } from "@twin/ui";
 
 import { env } from "@/app/env";
-import { DEFAULT_WIND_STRENGTH, useLiving } from "@/state/living";
+import {
+  CPU_REASON_TEXT,
+  DEFAULT_WIND_STRENGTH,
+  useLiving,
+  type LivingSiteStatus,
+} from "@/state/living";
 import { QUALITY_SSE, useSettings } from "@/state/settings";
 import { useUi } from "@/state/ui";
+import { useViewer } from "@/state/viewer";
 
 function Row({
   label,
@@ -33,6 +39,45 @@ function Row({
         {hint && <div className="setting__hint">{hint}</div>}
       </div>
       {control}
+    </div>
+  );
+}
+
+/** One site's path, and why when it is the CPU. */
+function pathLabel(site: LivingSiteStatus): string {
+  if (site.motionPath === "gpu") return "GPU";
+  return site.cpuReason === null ? "CPU" : `CPU (${CPU_REASON_TEXT[site.cpuReason]})`;
+}
+
+/**
+ * Which path each rigged site animates on, and what that costs the main thread per frame —
+ * the numbers to compare when "Motion on GPU" is flipped. Beside them, the scene's own frame
+ * time: a path that costs 70 ms a frame is a frame rate of 14 whatever the GPU does.
+ *
+ * Rolling means over animated frames only (`MOTION_COST_WINDOW`), so the figure appears once
+ * the wind has blown for a moment and starts over when the path is switched. The shader's own
+ * time is spent on the GPU and is in the scene frame time, not in the motion figure.
+ */
+function MotionReadout({ sites }: { sites: readonly LivingSiteStatus[] }) {
+  const perf = useViewer((s) => s.performance);
+  if (sites.length === 0) return null;
+  return (
+    <div className="setting__hint" data-testid="living-motion-readout" style={{ paddingBottom: 8 }}>
+      {sites.map((site) => (
+        <div key={site.assetId} data-testid="living-motion-site">
+          {`${site.siteSlug}: ${pathLabel(site)}`}
+          {site.phase !== "ready"
+            ? ` · ${site.phase}`
+            : site.motionMs === null
+              ? " · no animated frames yet"
+              : ` · motion ${site.motionMs.toFixed(2)} ms/frame (write ${(site.applyMs ?? 0).toFixed(2)})`}
+        </div>
+      ))}
+      <div data-testid="living-frame-time">
+        {perf.rendering
+          ? `Scene frame ${perf.frameTimeMs.toFixed(1)} ms (${Math.round(perf.fps)} fps)`
+          : "Scene idle"}
+      </div>
     </div>
   );
 }
@@ -65,6 +110,8 @@ function WindSection() {
   const status = useLiving((s) => s.status);
   const setWind = useLiving((s) => s.setWind);
   const reducedMotion = useSettings((s) => s.reducedMotion);
+  const gpuMotion = useSettings((s) => s.livingGpuMotion);
+  const setSettings = useSettings((s) => s.set);
   const site = status.sites.find((s) => s.phase === "ready");
   const on = wind.strength > 0;
   return (
@@ -89,6 +136,24 @@ function WindSection() {
           />
         }
       />
+      <Row
+        id="gpu-motion-label"
+        label="Motion on GPU"
+        hint={
+          env.splatGpuMotion
+            ? "Moves the splats in the vertex shader; off moves them on the CPU, to compare"
+            : "This build keeps motion on the CPU (VITE_SPLAT_GPU_MOTION)"
+        }
+        control={
+          <GlassSwitch
+            aria-labelledby="gpu-motion-label"
+            checked={env.splatGpuMotion && gpuMotion}
+            disabled={!env.splatGpuMotion}
+            onCheckedChange={(livingGpuMotion) => setSettings({ livingGpuMotion })}
+          />
+        }
+      />
+      <MotionReadout sites={status.sites} />
       {on && !reducedMotion && (
         <>
           <Row

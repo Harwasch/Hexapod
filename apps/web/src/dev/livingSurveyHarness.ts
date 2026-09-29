@@ -55,7 +55,10 @@ export interface LivingSurveyHarnessOptions {
   readonly tilesetUrl: string;
   /** The matching `rig.json`. */
   readonly rigUrl: string;
-  /** Evaluate motion in the vertex shader (engine patch) rather than rewriting the texture. */
+  /**
+   * Evaluate motion in the vertex shader (engine patch) rather than rewriting the texture.
+   * Default true, as in the app; `false` drives the CPU path.
+   */
   readonly gpu?: boolean;
   /** Default 1, which keeps a single-tile capture fully refined; a LOD tree wants Cesium's 16. */
   readonly maximumScreenSpaceError?: number;
@@ -208,8 +211,9 @@ export async function startLivingSurveyHarness(
   frame(bounds.radius * (options.rangeRadii ?? 3.2));
 
   const internals = splatTilesetOf(tileset);
-  const gpu = options.gpu === true ? cesiumMotionTextures() : undefined;
-  if (options.gpu === true && gpu === undefined) throw new Error("no GPU motion textures");
+  const wantGpu = options.gpu !== false;
+  const gpu = wantGpu ? cesiumMotionTextures() : undefined;
+  if (wantGpu && gpu === undefined) throw new Error("no GPU motion textures");
   const deformer = new SplatDeformer({ tileset: internals, rig, gpu });
 
   async function step(

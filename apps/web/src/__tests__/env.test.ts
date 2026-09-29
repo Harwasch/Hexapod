@@ -21,6 +21,18 @@ describe("readEnv", () => {
     expect(env.devToolsEnabled).toBe(false);
   });
 
+  it("allows GPU splat motion unless the build switches it off", () => {
+    const read = (value?: string) =>
+      readEnv({ DEV: false, VITE_SPLAT_GPU_MOTION: value } as unknown as ImportMetaEnv)
+        .splatGpuMotion;
+    expect(read()).toBe(true);
+    expect(read("")).toBe(true);
+    expect(read("1")).toBe(true);
+    expect(read("true")).toBe(true);
+    expect(read("0")).toBe(false);
+    expect(read("false")).toBe(false);
+  });
+
   it("defaults to no token and dev tools on in development", () => {
     const env = readEnv({ DEV: true } as unknown as ImportMetaEnv);
     expect(env.ionAccessToken).toBeUndefined();

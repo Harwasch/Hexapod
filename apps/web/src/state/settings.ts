@@ -25,6 +25,17 @@ export interface SettingsState {
   devToolsOpen: boolean;
   exploreSpeed: number;
   /**
+   * Living Survey motion in the splat vertex shader ("Motion on GPU"). On by default; off puts
+   * every rigged site on the CPU path, for comparing the two or for hardware where the shader
+   * path misbehaves. A build can still force the CPU path (`VITE_SPLAT_GPU_MOTION=0`), and a
+   * site falls back to it on its own when the engine or its tiles cannot take the shader path.
+   *
+   * Persisted, unlike the wind (`state/living.ts`): this is how the device renders, not what
+   * the scene shows — both paths draw the same motion, so an old choice cannot make a survey
+   * silently animate.
+   */
+  livingGpuMotion: boolean;
+  /**
    * The API's shared write token (`API_WRITE_TOKEN`), entered once in the UI.
    *
    * It lives here, beside the other preferences, and deliberately not in a `VITE_`
@@ -56,6 +67,7 @@ const defaults = {
   ionTokenNoticeDismissed: false,
   devToolsOpen: false,
   exploreSpeed: 4,
+  livingGpuMotion: true,
   writeToken: "",
 };
 
