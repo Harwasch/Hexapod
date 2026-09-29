@@ -21,8 +21,10 @@ import { metersPerPixel, scaleBandForAltitude } from "@twin/geo";
 import type { CameraPose } from "@/state/viewer";
 
 import type { Emitter } from "@/lib/emitter";
+import { isTyping } from "@/lib/hotkeys";
 import { throttle } from "@/lib/throttle";
 
+import type { SplatCollider } from "./SplatCollider";
 import type { SceneEvents } from "./types";
 
 export interface FlyOptions {
@@ -69,6 +71,9 @@ const MAX_FLOOR_LIFT_M = 40;
 const IDLE_POSE_REFRESH_MS = 3000;
 /** Below this bounding radius a fly-to may arrive closer than the site floor of 30 m. */
 const OBJECT_ARRIVAL_RADIUS_M = 30;
+/** Each wheel notch (100 px of delta) toward a splat under the cursor closes this share of
+ *  the distance that is left; farther than the clearance, never closer. */
+const SURFACE_ZOOM_STEP = 0.75;
 /** Arrival tilt for fly-tos: mostly looking at the ground, still showing facades. */
 const DEFAULT_ARRIVAL_PITCH = -45;
 /** A flight that arcs at least this far above both of its ends looks straight down at the top. */
@@ -111,6 +116,12 @@ export class CameraController {
   private pointerHeld = false;
   private lastFloorCheckAt = 0;
   private lastSurfaceHeight: number | undefined;
+  private collider: SplatCollider | null = null;
+  /** Space held: the camera passes through splat surfaces instead of stopping at them. */
+  private passThrough = false;
+  /** Where the camera last was that the collision check accepted. */
+  private lastGood: Cartesian3 | null = null;
+  private hinted = false;
 
   constructor(
     private readonly viewer: Viewer,
@@ -145,7 +156,22 @@ export class CameraController {
     canvas.addEventListener("contextmenu", preventDefault);
     window.addEventListener("pointermove", this.onOrbitMove);
     window.addEventListener("pointerup", this.onOrbitEnd);
+    // Capture, on the canvas's container: a wheel over a splat is handled here before
+    // Cesium's own zoom (which listens on the canvas) ever sees it.
+    const container = viewer.container as HTMLElement;
+    container.addEventListener("wheel", this.onSurfaceWheel, { capture: true, passive: false });
+    window.addEventListener("keydown", this.onPassKey);
+    window.addEventListener("keyup", this.onPassKey);
+    window.addEventListener("blur", this.onPassBlur);
+    const removeGuard = this.scene.preRender.addEventListener(this.guard);
     this.unsubscribe.push(
+      () => {
+        container.removeEventListener("wheel", this.onSurfaceWheel, { capture: true });
+        window.removeEventListener("keydown", this.onPassKey);
+        window.removeEventListener("keyup", this.onPassKey);
+        window.removeEventListener("blur", this.onPassBlur);
+        removeGuard();
+      },
       () => {
         canvas.removeEventListener("pointerdown", this.onPointerHeld);
         window.removeEventListener("pointerup", this.onPointerReleased);
@@ -189,6 +215,142 @@ export class CameraController {
         this.settleTimers.add(floorTimer);
       }),
     );
+  }
+
+  /**
+   * The splats as surfaces (SplatCollider): the cursor's pick and the orbit pivot land on
+   * them, a wheel toward one stops short of it, and the camera cannot move into one --
+   * unless Space is held, to pass through to what is on the other side.
+   */
+  setCollider(collider: SplatCollider | null): void {
+    this.collider = collider;
+    this.lastGood = null;
+  }
+
+  /** Whether Space is held to pass through surfaces. */
+  get passingThrough(): boolean {
+    return this.passThrough;
+  }
+
+  private readonly onPassKey = (event: KeyboardEvent): void => {
+    if (event.code !== "Space") return;
+    if (event.type === "keyup") {
+      this.passThrough = false;
+      return;
+    }
+    // Space in a field types a space, and on a focused button presses it: leave both be.
+    const target = event.target;
+    if (isTyping(target)) return;
+    if (target instanceof HTMLElement && target.closest("button, a, [role='button']")) return;
+    event.preventDefault();
+    this.passThrough = true;
+  };
+
+  private readonly onPassBlur = (): void => {
+    this.passThrough = false;
+  };
+
+  /**
+   * Once a frame, before drawing: a camera that moved into a splat surface is put back at
+   * the surface, sliding along it (SplatCollider.resolve). Every way the camera moves --
+   * Cesium's drag, pinch and inertia, the orbit here, the keyboard, explore mode -- comes
+   * through here, so one check covers them all. Flights and jumps are left alone, and so is
+   * everything while Space is held.
+   */
+  private readonly guard = (): void => {
+    const camera = this.viewer.camera;
+    const position = camera.positionWC;
+    const flying = (camera as unknown as { _currentFlight?: unknown })._currentFlight !== undefined;
+    if (
+      !this.collider?.active ||
+      this.passThrough ||
+      flying ||
+      !Matrix4.equals(camera.transform, Matrix4.IDENTITY) ||
+      !this.lastGood
+    ) {
+      this.lastGood = Cartesian3.clone(position, this.lastGood ?? undefined);
+      return;
+    }
+    if (Cartesian3.equalsEpsilon(position, this.lastGood, 0, 1e-7)) return;
+    const { position: allowed, blocked } = this.collider.resolve(this.lastGood, position);
+    if (blocked) {
+      Cartesian3.clone(allowed, camera.position);
+      this.hintPassThrough();
+    }
+    Cartesian3.clone(allowed, this.lastGood);
+  };
+
+  /** The first time a surface stops the camera, say how to go through it. Once a session. */
+  private hintPassThrough(): void {
+    if (this.hinted) return;
+    this.hinted = true;
+    this.events.emit("toast", {
+      id: "pass-through",
+      tone: "info",
+      title: "Hold Space to pass through",
+      body: "The camera stops at scanned surfaces. Hold Space while you move to go through one.",
+    });
+  }
+
+  /**
+   * Wheel toward a splat under the cursor: along the ray through the cursor (so the point
+   * stays under it), each notch closing a share of the distance left, never nearer than
+   * the clearance -- or through it with Space held. Anything else (the ground, a mesh, a
+   * splat behind something solid) is left to Cesium's zoom.
+   */
+  private readonly onSurfaceWheel = (event: WheelEvent): void => {
+    const collider = this.collider;
+    if (!collider?.active || !this.scene.screenSpaceCameraController.enableInputs) return;
+    if (event.target !== this.viewer.canvas) return;
+    const rect = this.viewer.canvas.getBoundingClientRect();
+    scratchWindow.x = event.clientX - rect.left;
+    scratchWindow.y = event.clientY - rect.top;
+    const camera = this.viewer.camera;
+    const ray = camera.getPickRay(scratchWindow, scratchRay);
+    if (!ray) return;
+    const hit = collider.raycast(ray);
+    if (!hit) return;
+    const solid = this.solidPick(scratchWindow);
+    if (solid && Cartesian3.distance(camera.positionWC, solid) < hit.distance) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const pixels = event.deltaMode === 1 ? event.deltaY * 33 : event.deltaY;
+    const notches = CesiumMath.clamp(pixels / 100, -3, 3);
+    const next = hit.distance * Math.pow(SURFACE_ZOOM_STEP, -notches);
+    const clearance = collider.clearance(hit.point);
+    let step = hit.distance - next;
+    if (!this.passThrough) step = Math.min(step, hit.distance - clearance);
+    // Passing through: at the surface already, a notch carries the camera past it.
+    else if (notches < 0 && hit.distance - next < clearance * 4) step = hit.distance + clearance;
+    if (Math.abs(step) < 1e-6) return;
+    camera.move(ray.direction, step);
+    // A deliberate move toward a surface is not a collision to undo.
+    this.lastGood = Cartesian3.clone(camera.positionWC, this.lastGood ?? undefined);
+    this.scene.requestRender();
+  };
+
+  /** The depth buffer's or the terrain's point under the cursor: what Cesium's zoom aims at. */
+  private solidPick(window: Cartesian2): Cartesian3 | null {
+    const candidates: Cartesian3[] = [];
+    if (this.scene.pickPositionSupported) {
+      const depth = this.scene.pickPosition(window, new Cartesian3());
+      if (depth) candidates.push(depth);
+    }
+    const ray = this.viewer.camera.getPickRay(window, new Ray());
+    const ground = ray ? this.scene.globe.pick(ray, this.scene, new Cartesian3()) : undefined;
+    if (ground) candidates.push(ground);
+    let best: Cartesian3 | null = null;
+    let bestDistance = Number.POSITIVE_INFINITY;
+    for (const candidate of candidates) {
+      const height = Cartographic.fromCartesian(candidate, undefined, scratchCarto).height;
+      if (height < PLAUSIBLE_HEIGHT_M[0] || height > PLAUSIBLE_HEIGHT_M[1]) continue;
+      const distance = Cartesian3.distance(this.viewer.camera.positionWC, candidate);
+      if (distance < bestDistance) {
+        best = candidate;
+        bestDistance = distance;
+      }
+    }
+    return best;
   }
 
   get isMoving(): boolean {
@@ -385,7 +547,10 @@ export class CameraController {
     return Ray.getPoint(ray, Math.max(distance, 1), new Cartesian3());
   }
 
-  /** Depth pick, then terrain pick, both rejected when they land on a placeholder tile. */
+  /**
+   * Depth pick, terrain pick and splat pick (splats write no depth: SplatCollider), the
+   * nearest that is not on a placeholder tile.
+   */
   private plausiblePick(window: Cartesian2): Cartesian3 | null {
     const candidates: Cartesian3[] = [];
     if (this.scene.pickPositionSupported) {
@@ -395,6 +560,8 @@ export class CameraController {
     const ray = this.viewer.camera.getPickRay(window, scratchRay);
     const ground = ray ? this.scene.globe.pick(ray, this.scene, new Cartesian3()) : undefined;
     if (ground) candidates.push(ground);
+    const splat = ray ? this.collider?.raycast(ray) : undefined;
+    if (splat) candidates.push(splat.point);
     const cameraPosition = this.viewer.camera.positionWC;
     let best: Cartesian3 | null = null;
     let bestDistance = Number.POSITIVE_INFINITY;

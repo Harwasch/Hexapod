@@ -24,6 +24,8 @@ import { splatBudget } from "@/lib/detail";
 import { parseCoverage } from "./coverage";
 import { spzFromGlb } from "./glb";
 import { showLive } from "./live";
+import { ScanNavigation } from "./navigate";
+import { spzPoints, type SpzPoints } from "./spz";
 import { TileStreamer, type View } from "./stream";
 import {
   LOAD_FACTOR,
@@ -153,9 +155,15 @@ async function tileMesh(tilesetUrl: string, tile: TileNode): Promise<SplatMesh> 
   if (!response.ok) throw new Error(`The scan's data answered ${String(response.status)}.`);
   const bytes = spzFromGlb(await response.arrayBuffer());
   const mesh = new SplatMesh({ fileBytes: bytes, fileType: SplatFileType.SPZ, lod: true });
-  await mesh.initialized;
+  // The tile's own splat centres, for the collision grid (navigate.ts); a tile whose centres
+  // cannot be read is still drawn, it just is not a surface.
+  const [points] = await Promise.all([spzPoints(bytes).catch(() => undefined), mesh.initialized]);
+  if (points) pointsOf.set(mesh, points);
   return mesh;
 }
+
+/** Each loaded tile's splat centres and opacities (spz.ts). */
+const pointsOf = new WeakMap<SplatMesh, SpzPoints>();
 
 /**
  * A box around where most of the splats are. Percentiles rather than min/max because
@@ -238,8 +246,10 @@ async function showScan(siteId: string): Promise<void> {
   window.addEventListener("resize", resize);
   // Tiles keep arriving after the first one is on screen; leaving the scan stops them.
   let streaming: Streaming | null = null;
+  let navigation: ScanNavigation | null = null;
   renderer.setAnimationLoop(() => {
     controls.update();
+    navigation?.frame();
     streaming?.frame();
     renderer.render(scene, camera);
   });
@@ -248,6 +258,7 @@ async function showScan(siteId: string): Promise<void> {
     stop: () => {
       alive = false;
       streaming?.stop();
+      navigation?.dispose();
       window.removeEventListener("resize", resize);
       renderer.setAnimationLoop(null);
       controls.dispose();
@@ -297,8 +308,11 @@ async function showScan(siteId: string): Promise<void> {
     camera.near = size / 20_000;
     camera.far = size * 100;
     camera.updateProjectionMatrix();
-    controls.minDistance = size / 5_000;
     controls.maxDistance = distance * 4;
+    // The splats as surfaces: orbit about what is in the middle of the view, wheel to what is
+    // under the cursor, never through anything unless Space is held (navigate.ts).
+    navigation = new ScanNavigation(scan, camera, controls, renderer.domElement);
+    navigation.show(root, pointsOf.get(mesh));
     // A zoom goes towards what is under the finger, not the middle of the scan: in a site
     // rather than an object, that is the only way to get close to anything but the centre.
     controls.zoomToCursor = true;
@@ -309,8 +323,15 @@ async function showScan(siteId: string): Promise<void> {
         controls.autoRotate = false;
         controls.target.set(...target).applyMatrix4(scan.matrixWorld);
         camera.position.copy(controls.target).add(lookFrom.clone().setLength(range));
+        navigation?.jumped();
         controls.update();
       },
+      /** Metres from the camera to a point in the scan's own east/north/up metres. */
+      distanceTo: (point: [number, number, number]) =>
+        camera.position.distanceTo(new THREE.Vector3(...point).applyMatrix4(scan.matrixWorld)),
+      /** Metres to the first surface straight ahead, or null. */
+      hitAhead: () =>
+        navigation?.raycast(camera.position, camera.getWorldDirection(new THREE.Vector3())) ?? null,
     };
     offerCoverage(site, scene, scan, size);
     status.textContent = "Drag to turn · pinch to zoom · two fingers to move";
@@ -323,6 +344,11 @@ async function showScan(siteId: string): Promise<void> {
       // Tiles arriving while Coverage is on come in faded like the rest.
       more.opacity = mesh.opacity;
       scan.add(more);
+      navigation?.show(tile, pointsOf.get(more));
+    };
+    const hide = (tile: TileNode, gone: SplatMesh): void => {
+      scan.remove(gone);
+      navigation?.hide(tile);
     };
     if (tileset.tree.refine === "REPLACE") {
       if (!alive) return;
@@ -333,7 +359,7 @@ async function showScan(siteId: string): Promise<void> {
         renderer,
         budget,
         { root, mesh },
-        show,
+        { show, hide },
         (drawn) => {
           // What is on screen, for the page's tests: a REPLACE parent is gone once its
           // children are up.
@@ -400,15 +426,18 @@ function streamWithView(
   renderer: THREE.WebGLRenderer,
   budget: number,
   first: { root: TileNode; mesh: SplatMesh },
-  show: (tile: TileNode, mesh: SplatMesh) => void,
+  display: {
+    show: (tile: TileNode, mesh: SplatMesh) => void;
+    hide: (tile: TileNode, mesh: SplatMesh) => void;
+  },
   report: (drawn: { tiles: TileNode[]; gaussians: number }) => void,
 ): Streaming {
   const streamer = new TileStreamer<SplatMesh>(
     tileset.tree,
     {
       load: (tile) => tileMesh(tileset.url, tile),
-      show,
-      hide: (_tile, mesh) => scan.remove(mesh),
+      show: display.show,
+      hide: display.hide,
       dispose: (mesh) => mesh.dispose(),
       failed: (tile) => console.warn(`Tile ${tile.uri} did not load; its parent stays.`),
     },

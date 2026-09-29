@@ -28,6 +28,8 @@ import { FallbackGeocoder, IonGeocoder, NominatimGeocoder } from "./providers/ge
 import { SelectionManager } from "./SelectionManager";
 import { SiteManager } from "./SiteManager";
 import { installSplatTextureInterception } from "./splatCapture";
+import { SplatCollider } from "./SplatCollider";
+import { SplatMotionGate } from "./splatMotionGate";
 import type { Geocoder, SceneEvents } from "./types";
 import type { TokenState } from "@/state/viewer";
 
@@ -58,6 +60,8 @@ export class CesiumSceneManager {
   readonly clipping: ClippingManager;
   readonly layers: LayerManager;
   readonly performance: PerformanceManager;
+  readonly splatGate: SplatMotionGate;
+  readonly collider: SplatCollider;
   readonly sites: SiteManager;
   readonly living: LivingSurveyManager;
   readonly selection: SelectionManager;
@@ -138,6 +142,9 @@ export class CesiumSceneManager {
     this.clipping = new ClippingManager(scene);
     this.layers = new LayerManager(this.viewer, this.events, this.clipping);
     this.performance = new PerformanceManager(this.viewer, this.events);
+    this.splatGate = new SplatMotionGate(this.viewer.scene, this.events);
+    this.collider = new SplatCollider(this.viewer.scene, () => this.splatGate.holding);
+    this.camera.setCollider(this.collider);
     this.performance.addScreenSpaceErrorSink("world", (sse, pixelRatio) =>
       this.layers.applyWorldScreenSpaceError(sse, pixelRatio),
     );
@@ -171,6 +178,7 @@ export class CesiumSceneManager {
       }),
     );
     this.explore = new ExploreController(this.viewer, this.events);
+    this.explore.setCollider(this.collider);
     this.keyboard = new KeyboardNavigator(this.viewer, this.camera);
     this.debug = new DebugManager(this.viewer, this.sites, (enabled) =>
       this.clipping.setEnabled(enabled),
@@ -332,6 +340,8 @@ export class CesiumSceneManager {
     this.selection.destroy();
     this.living.destroy();
     this.sites.destroy();
+    this.collider.destroy();
+    this.splatGate.destroy();
     this.performance.destroy();
     this.layers.destroy();
     this.clipping.destroy();

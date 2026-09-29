@@ -7,6 +7,8 @@ import {
 
 import type { Layer, SiteAsset } from "@twin/contracts";
 
+import { keepOffscreenSplats } from "../splatInternals";
+
 export interface TilesetQuality {
   maximumScreenSpaceError: number;
 }
@@ -63,9 +65,13 @@ export async function createSiteTileset(
       maximumAttenuation: shading?.maximumAttenuation ?? undefined,
     };
   }
-  return asset.source.type === "cesium-ion"
+  const tileset = await (asset.source.type === "cesium-ion"
     ? Cesium3DTileset.fromIonAssetId(asset.source.assetId, options)
-    : Cesium3DTileset.fromUrl(asset.source.url, options);
+    : Cesium3DTileset.fromUrl(asset.source.url, options));
+  // A splat is drawn from one snapshot of its selected tiles, held while the camera moves
+  // (splatMotionGate.ts); out-of-view tiles stay in it, coarse, so turning shows no hole.
+  if (asset.representation === "gaussian-splat") keepOffscreenSplats(tileset);
+  return tileset;
 }
 
 /** Loads a catalog 3D layer (ion tileset, tileset URL, MVT or Google Photorealistic). */

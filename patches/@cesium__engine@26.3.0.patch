@@ -1,8 +1,70 @@
+diff --git a/Source/Scene/Cesium3DTileset.js b/Source/Scene/Cesium3DTileset.js
+index 45e8741d148b8c7569ab89d3ffab2b89c76f5f3f..c986f32e05d8c74188d938920c0ab6d3cc1eff13 100644
+--- a/Source/Scene/Cesium3DTileset.js
++++ b/Source/Scene/Cesium3DTileset.js
+@@ -857,6 +857,15 @@ function Cesium3DTileset(options) {
+    */
+   this.loadSiblings = options.loadSiblings ?? false;
+ 
++  /**
++   * Hexapod patch: with the base (non-skip) traversal, a refining REPLACE tile's loaded
++   * children outside the view are selected too, unrefined, so a view held while the camera
++   * turns has no holes. Off by default: it draws more.
++   * @type {boolean}
++   * @default false
++   */
++  this.selectOffscreen = false;
++
+   this._clippingPlanes = undefined;
+   if (defined(options.clippingPlanes)) {
+     ClippingPlaneCollection.setOwner(
+diff --git a/Source/Scene/Cesium3DTilesetBaseTraversal.js b/Source/Scene/Cesium3DTilesetBaseTraversal.js
+index 244a96d542be90b917ffdfb87fbe9249280fde00..9d807584de8563fe2c55879d615ac64ca54bf298 100644
+--- a/Source/Scene/Cesium3DTilesetBaseTraversal.js
++++ b/Source/Scene/Cesium3DTilesetBaseTraversal.js
+@@ -114,15 +114,20 @@ function updateAndPushChildren(tile, stack, frameState) {
+   let minIndex = -1;
+   let minimumPriority = Number.MAX_VALUE;
+ 
++  // Hexapod patch: `tileset.selectOffscreen` keeps a refining REPLACE tile's out-of-view
++  // children in the selection (coarse: they never refine further, see executeTraversal).
++  // They are loaded before the parent refines anyway; without this they are simply not
++  // drawn, and a splat snapshot held while the camera turns shows a hole where they were.
++  const keepOffscreen = checkRefines && tileset.selectOffscreen === true;
+   for (let i = 0; i < children.length; ++i) {
+     const child = children[i];
+-    if (child.isVisible) {
++    if (child.isVisible || (keepOffscreen && child.contentAvailable)) {
+       stack.push(child);
+       if (child._foveatedFactor < minimumPriority) {
+         minIndex = i;
+         minimumPriority = child._foveatedFactor;
+       }
+-      anyChildrenVisible = true;
++      anyChildrenVisible = anyChildrenVisible || child.isVisible;
+     } else if (checkRefines || tileset.loadSiblings) {
+       // Keep non-visible children loaded since they are still needed before the parent can refine.
+       // Or loadSiblings is true so always load tiles regardless of visibility.
+@@ -205,9 +210,11 @@ function executeTraversal(root, frameState) {
+     const parent = tile.parent;
+     const parentRefines = !defined(parent) || parent._refines;
+ 
+-    tile._refines = canTraverse(tile)
+-      ? updateAndPushChildren(tile, stack, frameState) && parentRefines
+-      : false;
++    // Hexapod patch: an out-of-view tile pushed by `selectOffscreen` is drawn as it is.
++    tile._refines =
++      canTraverse(tile) && tile.isVisible
++        ? updateAndPushChildren(tile, stack, frameState) && parentRefines
++        : false;
+ 
+     const stoppedRefining = !tile._refines && parentRefines;
+ 
 diff --git a/Source/Scene/GaussianSplatPrimitive.js b/Source/Scene/GaussianSplatPrimitive.js
-index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..ab3c383ba29ed811c1420f13d86d37e0ad65f576 100644
+index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..2f5aeea910f5bb49c3ea91e9ec2336b32bf33254 100644
 --- a/Source/Scene/GaussianSplatPrimitive.js
 +++ b/Source/Scene/GaussianSplatPrimitive.js
-@@ -1070,9 +1070,42 @@ function GaussianSplatPrimitive(options) {
+@@ -1070,9 +1070,48 @@ function GaussianSplatPrimitive(options) {
     * @private
     */
    this._splatBudgetSSEScale = 1.0;
@@ -10,6 +72,12 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..ab3c383ba29ed811c1420f13d86d37e0
 +  // Hexapod patch (patches/@cesium__engine@26.3.0.patch): see `vertexMotion` below.
 +  this._vertexMotion = undefined;
 +  this._vertexMotionDirty = false;
++  /**
++   * Hexapod patch: when true, no new snapshot is built (the committed one keeps drawing and
++   * re-sorting); set by the application while the camera moves.
++   * @type {boolean}
++   */
++  this.holdRebuilds = false;
  }
  
  Object.defineProperties(GaussianSplatPrimitive.prototype, {
@@ -45,7 +113,7 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..ab3c383ba29ed811c1420f13d86d37e0
    /**
     * Indicates whether the primitive is ready for use.
     * @memberof GaussianSplatPrimitive.prototype
-@@ -1577,6 +1610,17 @@ GaussianSplatPrimitive.buildGSplatDrawCommand = function (
+@@ -1577,6 +1616,17 @@ GaussianSplatPrimitive.buildGSplatDrawCommand = function (
    renderResources.instanceCount = instanceCount;
    renderResources.count = 4;
    renderResources.primitiveType = PrimitiveType.TRIANGLE_STRIP;
@@ -63,7 +131,7 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..ab3c383ba29ed811c1420f13d86d37e0
    shaderBuilder.addVertexLines(GaussianSplatVS);
    shaderBuilder.addFragmentLines(GaussianSplatFS);
    const shaderProgram = shaderBuilder.buildShaderProgram(frameState.context);
-@@ -1689,6 +1733,16 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
+@@ -1689,6 +1739,16 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
      return;
    }
  
@@ -80,6 +148,47 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..ab3c383ba29ed811c1420f13d86d37e0
    if (this._drawCommand) {
      frameState.commandList.push(this._drawCommand);
    }
+@@ -1740,10 +1800,16 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
+     } else {
+       this._snapshotRebuildStallFrames = 0;
+     }
++    // Hexapod patch: while `holdRebuilds` is set (the camera is moving) the committed
++    // snapshot stays and only its steady re-sort runs. A rebuild re-aggregates and re-uploads
++    // every selected splat on the main thread (~100-250 ms for a million), which is what made
++    // a moving camera hitch each time a new level of detail arrived. The first snapshot is
++    // still built, so a tileset that comes into view mid-flight appears.
+     const allowRebuild =
+-      isStable ||
+       isBootstrap ||
+-      this._snapshotRebuildStallFrames >= DEFAULT_MAX_SNAPSHOT_STALL_FRAMES;
++      (!this.holdRebuilds &&
++        (isStable ||
++          this._snapshotRebuildStallFrames >= DEFAULT_MAX_SNAPSHOT_STALL_FRAMES));
+     const hasPendingWork =
+       this._dirty ||
+       this._needsSnapshotRebuild ||
+diff --git a/Source/Scene/GltfSpzLoader.js b/Source/Scene/GltfSpzLoader.js
+index d0381fd52b5b7116fdaa337a93125d36a50e01cd..7ac90f56426b23cb3800dc935235979bcd7970d1 100644
+--- a/Source/Scene/GltfSpzLoader.js
++++ b/Source/Scene/GltfSpzLoader.js
+@@ -234,6 +234,17 @@ class GltfSpzLoader extends ResourceLoader {
+       }
+     }
+ 
++    // Hexapod patch: SPZ decodes on the main thread (spz-loader's WASM), tens of
++    // milliseconds a tile. The application may cap how many start in a frame through
++    // `frameState.splatDecodesAllowed` (a number, decremented here), so a moving camera
++    // decodes a trickle rather than a burst; undefined means no cap.
++    if (defined(frameState) && typeof frameState.splatDecodesAllowed === "number") {
++      if (frameState.splatDecodesAllowed <= 0) {
++        return false;
++      }
++      frameState.splatDecodesAllowed -= 1;
++    }
++
+     const decodePromise = loadSpz(this._bufferViewTypedArray, {
+       unpackOptions: { coordinateSystem: "UNSPECIFIED" },
+     });
 diff --git a/Source/Scene/TerrainFillMesh.js b/Source/Scene/TerrainFillMesh.js
 index c5d264395fc522ecc29717e57ff159aa4ed3cfd1..f7b22ea41aac67be450cf0e49db7d5195f64d2a4 100644
 --- a/Source/Scene/TerrainFillMesh.js

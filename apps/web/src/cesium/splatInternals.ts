@@ -14,6 +14,7 @@
  * | --- | --- | --- |
  * | `Cesium3DTileset.gaussianSplatPrimitive` | `Cesium3DTileset.js` | the primitive for a splat tileset |
  * | `primitive._positions` | `GaussianSplatPrimitive.js:431` | baked positions of every selected tile, aggregated |
+ * | `primitive._colors` | `:434` | their RGBA; alpha is what `SplatCollider` calls solid |
  * | `primitive._numSplats` | `:437` | how many of them |
  * | `primitive._splatRowMask` / `_splatRowShift` | `:445-446` | texel addressing, matching `u_splatRowMask`/`u_splatRowShift` |
  * | `primitive.gaussianSplatTexture` | `:439` | the attribute texture the CPU path writes |
@@ -24,6 +25,9 @@
  * | `tile.content._lastSplatTransform` | `:1444` | the bake matrix `B`, per tile, for un-baking to the rig's frame |
  * | `tile.content.positions` / `pointsLength` | `GaussianSplat3DTileContent.js:177,362` | a tile's baked positions, and its count |
  * | `primitive.vertexMotion` | **patch** | the vertex-shader motion hook the GPU path installs |
+ * | `primitive.holdRebuilds` | **patch** | no new snapshot while the camera moves (`splatMotionGate.ts`) |
+ * | `tileset.selectOffscreen` | **patch** (`Cesium3DTilesetBaseTraversal.js`) | a refining tile's out-of-view children drawn coarse |
+ * | `scene.frameState.splatDecodesAllowed` | **patch** (`GltfSpzLoader.js`) | SPZ decodes that may start this frame |
  * | `GaussianSplatTextureGenerator.generateFromAttributes` | exported at `cesium/Source/Cesium.js:638` | the CPU path's interception point |
  *
  * **The aggregation order is the whole of multi-tile support.** A snapshot is
@@ -41,7 +45,7 @@
  * buffer, the attribute texture (CPU path) and our own textures (GPU path).
  */
 
-import type { Cesium3DTileset } from "cesium";
+import type { Cesium3DTileset, Scene } from "cesium";
 
 import type { Mat4 } from "./splatFrames";
 
@@ -101,6 +105,8 @@ export interface SplatShaderBuilder {
 /** The primitive fields we read. All optional: none of them exist for the first few frames. */
 export interface SplatPrimitive {
   readonly _positions?: Float32Array;
+  /** The committed snapshot's colours, RGBA bytes per splat (alpha is opacity). */
+  readonly _colors?: Uint8Array;
   readonly _numSplats?: number;
   readonly _splatRowMask?: number;
   readonly _splatRowShift?: number;
@@ -117,6 +123,8 @@ export interface SplatPrimitive {
   readonly gaussianSplatTexture?: SplatTexture;
   /** Present (as an accessor, initially `undefined`) only on the patched engine. */
   vertexMotion?: SplatVertexMotion;
+  /** Patched engine: while true, the committed snapshot stays and no rebuild starts. */
+  holdRebuilds?: boolean;
   isDestroyed?(): boolean;
 }
 
@@ -143,4 +151,24 @@ export function splatTilesetOf(tileset: Cesium3DTileset): SplatTilesetLike {
  */
 export function hasVertexMotionHook(primitive: SplatPrimitive): boolean {
   return "vertexMotion" in primitive;
+}
+
+/** The frame-state field the patched SPZ loader reads. */
+export interface SplatFrameState {
+  /** SPZ decodes that may still start this frame; undefined for no cap. */
+  splatDecodesAllowed?: number;
+}
+
+/** `scene.frameState` -- declared `@private` in the engine, absent from `Cesium.d.ts`. */
+export function splatFrameStateOf(scene: Scene): SplatFrameState {
+  return (scene as unknown as { frameState: SplatFrameState }).frameState;
+}
+
+/**
+ * Has a splat tileset's traversal keep out-of-view children of a refining tile, coarse
+ * (patched `Cesium3DTilesetBaseTraversal`): the snapshot then covers the whole scan, so one
+ * held while the camera turns has no holes. See `splatMotionGate.ts`.
+ */
+export function keepOffscreenSplats(tileset: Cesium3DTileset): void {
+  (tileset as unknown as { selectOffscreen: boolean }).selectOffscreen = true;
 }

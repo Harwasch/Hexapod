@@ -221,7 +221,10 @@ test("a large scan streams with the camera: finer where it looks, coarse elsewhe
   page.on("pageerror", (error) => errors.push(error.message));
   await page.goto(`/view.html#${SITE}`);
   const viewer = page.locator("#viewer");
-  // From the overview both regions are merged: 80k of 1.2M.
+  await expect(page.locator("#viewer-status")).toContainText("Drag to turn", { timeout: 30_000 });
+  // From the overview, straight above and far back (the slow spin stopped, so the view holds
+  // still), both regions are merged: 80k of 1.2M.
+  await page.evaluate(() => (window as unknown as ViewerDebug).__viewer.lookAt([0, 0, 0], 400));
   await expect(viewer).toHaveAttribute("data-tiles", "splat_0.glb splat_1.glb", {
     timeout: 30_000,
   });
@@ -246,8 +249,45 @@ test("a large scan streams with the camera: finer where it looks, coarse elsewhe
 
 /** What view.html exposes for tests: the camera, moved to look at a scan point. */
 interface ViewerDebug {
-  __viewer: { lookAt(target: [number, number, number], distance: number): void };
+  __viewer: {
+    lookAt(target: [number, number, number], distance: number): void;
+    hitAhead(): number | null;
+    distanceTo(point: [number, number, number]): number;
+  };
 }
+
+test("a wheel over the scan zooms to its surface and stops there; Space goes through", async ({
+  page,
+}) => {
+  // The committed tree: a crown about 8 m across, centred some 3.3 m up.
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto(`/view.html#${SITE}`);
+  await expect(page.locator("#viewer-status")).toContainText("Drag to turn", { timeout: 30_000 });
+  const debug = (): Promise<number | null> =>
+    page.evaluate(() => (window as unknown as ViewerDebug).__viewer.hitAhead());
+  await page.evaluate(() => (window as unknown as ViewerDebug).__viewer.lookAt([0, 0, 3.3], 12));
+  const surface = await debug();
+  expect(surface).not.toBeNull();
+  const size = page.viewportSize() ?? { width: 390, height: 844 };
+  await page.mouse.move(size.width / 2, size.height / 2);
+  for (let i = 0; i < 25; i++) await page.mouse.wheel(0, -100);
+  await page.waitForTimeout(300);
+  const left = (await debug()) ?? Number.NaN;
+  // Up against the crown -- centimetres, the clearance -- and not through it.
+  expect(left).toBeGreaterThan(0);
+  expect(left).toBeLessThan(0.3);
+  // Held Space: the next notches carry the camera through the surface, towards the middle.
+  const centre = (): Promise<number> =>
+    page.evaluate(() => (window as unknown as ViewerDebug).__viewer.distanceTo([0, 0, 3.3]));
+  const outside = await centre();
+  await page.keyboard.down("Space");
+  for (let i = 0; i < 3; i++) await page.mouse.wheel(0, -100);
+  await page.keyboard.up("Space");
+  await page.waitForTimeout(300);
+  expect(await centre()).toBeLessThan(outside - left);
+  expect(errors).toEqual([]);
+});
 
 test("a scan packed before merged parents still loads additively", async ({ page }) => {
   const tileset = {

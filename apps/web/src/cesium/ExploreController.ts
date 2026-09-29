@@ -1,7 +1,8 @@
-import { Cartographic, Math as CesiumMath, type Scene, type Viewer } from "cesium";
+import { Cartographic, Math as CesiumMath, Ray, type Scene, type Viewer } from "cesium";
 
 import type { Emitter } from "@/lib/emitter";
 
+import type { SplatCollider } from "./SplatCollider";
 import type { SceneEvents } from "./types";
 
 const KEYS = new Set([
@@ -18,6 +19,11 @@ const KEYS = new Set([
   "arrowright",
 ]);
 const MIN_CLEARANCE_M = 0.3;
+/** Near a scanned surface the walk slows to about this many seconds from reaching it, so a
+ *  close look is fine-grained and an approach eases in (never below `SLOWEST_M_S`). */
+const SECONDS_TO_SURFACE = 1.2;
+const SLOWEST_M_S = 0.25;
+const scratchRay = new Ray();
 
 /**
  * Close-range free-flight ("Explore mode"): WASD/QE motion, drag-to-look,
@@ -33,12 +39,18 @@ export class ExploreController {
   private looking = false;
   private lastPointer: { x: number; y: number } | null = null;
   private removeTick: (() => void) | null = null;
+  private collider: SplatCollider | null = null;
 
   constructor(
     private readonly viewer: Viewer,
     private readonly events: Emitter<SceneEvents>,
   ) {
     this.scene = viewer.scene;
+  }
+
+  /** Scanned surfaces ahead slow the walk (SplatCollider); the camera controller stops it. */
+  setCollider(collider: SplatCollider | null): void {
+    this.collider = collider;
   }
 
   get isActive(): boolean {
@@ -167,7 +179,7 @@ export class ExploreController {
     if (this.pressed.size === 0) return;
     const camera = this.viewer.camera;
     const boost = this.pressed.has("shift") ? 3 : 1;
-    const step = this.speed * boost * dt;
+    const step = this.pace(this.speed * boost) * dt;
     if (this.pressed.has("w") || this.pressed.has("arrowup")) camera.moveForward(step);
     if (this.pressed.has("s") || this.pressed.has("arrowdown")) camera.moveBackward(step);
     if (this.pressed.has("a") || this.pressed.has("arrowleft")) camera.moveLeft(step);
@@ -176,6 +188,17 @@ export class ExploreController {
     if (this.pressed.has("q")) camera.moveDown(step);
     this.keepAboveGround();
     this.scene.requestRender();
+  }
+
+  /** `speed`, slowed near a splat surface in the view direction. */
+  private pace(speed: number): number {
+    if (!this.collider?.active) return speed;
+    const camera = this.viewer.camera;
+    scratchRay.origin = camera.positionWC;
+    scratchRay.direction = camera.directionWC;
+    const hit = this.collider.raycast(scratchRay, speed * SECONDS_TO_SURFACE);
+    if (!hit) return speed;
+    return Math.max(SLOWEST_M_S, Math.min(speed, hit.distance / SECONDS_TO_SURFACE));
   }
 
   private keepAboveGround(): void {
