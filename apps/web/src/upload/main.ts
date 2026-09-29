@@ -287,7 +287,7 @@ async function uploadOne(
       post<UploadWindow>(
         upload.token,
         `${base}/${fileId}/parts`,
-        { fromPartNumber: progress.parts.length + 1 },
+        { firstPartNumber: progress.parts.length + 1 },
         opts,
       ),
     );
@@ -315,7 +315,7 @@ async function uploadOne(
     if (window.nextPartNumber === null || window.nextPartNumber === undefined) break;
     const from = window.nextPartNumber;
     window = await persist(ui, () =>
-      post<UploadWindow>(upload.token, `${base}/${fileId}/parts`, { fromPartNumber: from }, opts),
+      post<UploadWindow>(upload.token, `${base}/${fileId}/parts`, { firstPartNumber: from }, opts),
     );
     if (window.parts.length === 0) break;
   }

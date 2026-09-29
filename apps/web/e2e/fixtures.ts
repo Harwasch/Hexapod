@@ -594,10 +594,17 @@ export async function mockApi(page: Page, options: MockOptions = {}): Promise<Ca
         return json(file);
       }
       if (fileId && fileAction === "/parts") {
-        const body = request.postDataJSON() as { firstPartNumber: number };
-        state.presigns.push(body.firstPartNumber);
+        const body = request.postDataJSON() as Record<string, unknown>;
+        // As strict as the API's CaptureFilePartsRequest (extra="forbid"): an unknown key
+        // is a 422 there, so it must be one here too.
+        const unknown = Object.keys(body).filter((k) => k !== "firstPartNumber" && k !== "count");
+        if (unknown.length > 0 || typeof body.firstPartNumber !== "number") {
+          return json({ detail: `unexpected parts request: ${JSON.stringify(body)}` }, 422);
+        }
+        const firstPartNumber = body.firstPartNumber;
+        state.presigns.push(firstPartNumber);
         const file = capture.files.find((f) => String(f.id) === fileId)!;
-        return json(uploadWindow(String(file.id), Number(file.partsTotal), body.firstPartNumber));
+        return json(uploadWindow(String(file.id), Number(file.partsTotal), firstPartNumber));
       }
       if (fileId && fileAction === "/abort") {
         const file = capture.files.find((f) => String(f.id) === fileId)!;

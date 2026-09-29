@@ -144,6 +144,88 @@ test.describe("the phone upload page", () => {
     expect(puts).toEqual(["/part-1", "/part-2"]);
   });
 
+  test("a file longer than one window asks for the next window the way the API expects", async ({
+    page,
+  }) => {
+    // The API presigns 32 parts at a time and its request schema forbids unknown keys, so
+    // a misnamed field only shows on files over ~256 MB. The mock is as strict as it is.
+    const puts: string[] = [];
+    const windows: unknown[] = [];
+    const part = (n: number) => ({ partNumber: n, url: `https://storage.example/part-${n}` });
+    await page.route("**/api/v1/captures/*/files", async (route) => {
+      await route.fulfill({
+        status: 201,
+        contentType: "application/json",
+        body: JSON.stringify({
+          file: { id: FILE_ID, captureId: CAPTURE_ID, filename: "scene.ply", partsTotal: 3 },
+          upload: {
+            uploadId: "u-1",
+            storageKey: `captures/${CAPTURE_ID}/source/${FILE_ID}/scene.ply`,
+            partSize: 8,
+            partsTotal: 3,
+            nextPartNumber: 3,
+            expiresIn: 3600,
+            parts: [part(1), part(2)],
+          },
+        }),
+      });
+    });
+    await page.route("**/api/v1/captures/*/files/*/parts", async (route) => {
+      const body = route.request().postDataJSON() as Record<string, unknown>;
+      windows.push(body);
+      const keys = Object.keys(body).filter((k) => k !== "firstPartNumber" && k !== "count");
+      if (keys.length > 0 || body.firstPartNumber !== 3) {
+        await route.fulfill({ status: 422, contentType: "application/json", body: "{}" });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          uploadId: "u-1",
+          storageKey: `captures/${CAPTURE_ID}/source/${FILE_ID}/scene.ply`,
+          partSize: 8,
+          partsTotal: 3,
+          nextPartNumber: null,
+          expiresIn: 3600,
+          parts: [part(3)],
+        }),
+      });
+    });
+    await page.route("https://storage.example/**", async (route) => {
+      puts.push(new URL(route.request().url()).pathname);
+      await route.fulfill({
+        status: 200,
+        headers: {
+          ETag: '"etag-x"',
+          "access-control-allow-origin": "*",
+          "access-control-expose-headers": "ETag",
+        },
+        body: "",
+      });
+    });
+    await page.route("**/api/v1/captures/*/files/*/complete", async (route) => {
+      const body = route.request().postDataJSON() as { parts: { partNumber: number }[] };
+      expect(body.parts.map((p) => p.partNumber)).toEqual([1, 2, 3]);
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ id: FILE_ID, status: "complete" }),
+      });
+    });
+
+    await page.goto(`/upload.html#${token(soon())}`);
+    await page.locator("#file").setInputFiles({
+      name: "clip.mov",
+      mimeType: "video/quicktime",
+      buffer: Buffer.alloc(24, 7),
+    });
+
+    await expect(page.locator("#status")).toContainText("on its way", { timeout: 20_000 });
+    expect(windows).toEqual([{ firstPartNumber: 3 }]);
+    expect(puts).toEqual(["/part-1", "/part-2", "/part-3"]);
+  });
+
   test("several photos upload one after another into the same capture", async ({ page }) => {
     const registered: string[] = [];
     const completed: string[] = [];
