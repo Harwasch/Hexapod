@@ -23,7 +23,13 @@ import type { WindSettings } from "@twin/world";
 
 import { CesiumSceneManager } from "@/cesium/CesiumSceneManager";
 import { LIVING_EPOCH_ISO, type LivingMotionModel } from "@/cesium/LivingSurveyManager";
-import { splatCaptureCount } from "@/cesium/splatCaptureRegistry";
+import {
+  digestSplatPositions,
+  findSplatCapture,
+  splatCaptureCount,
+} from "@/cesium/splatCaptureRegistry";
+import { splatTilesetOf, type SplatPrimitive } from "@/cesium/splatInternals";
+import { positionWordOffset, splatTextureLayout } from "@/cesium/splatTexels";
 import type { LivingSurveyStatus } from "@/state/living";
 
 export interface LivingSceneHarnessOptions {
@@ -39,6 +45,38 @@ export interface LivingSceneHarnessOptions {
   readonly rigUrl?: string | null;
   readonly longitude: number;
   readonly latitude: number;
+  /** The build's `VITE_SPLAT_GPU_MOTION`, as `CesiumSceneManager` takes it. Default true. */
+  readonly splatGpuMotion?: boolean;
+}
+
+/**
+ * The attribute texture read back from the GPU, against the packed buffer the engine uploaded
+ * into it. `mismatches` counts words that differ from the engine's own bytes (zero padding
+ * included), so 0 is "exactly the measured pose" and anything else is displaced positions.
+ */
+export interface TextureReadback {
+  readonly words: number;
+  readonly mismatches: number;
+  /** Mismatching words that are splat positions, as against other attribute words. */
+  readonly positionMismatches: number;
+  /** A GL error or a missing capture, when the comparison could not be made at all. */
+  readonly error: string | null;
+}
+
+/**
+ * Whether a manager's per-tick `requestRender()` is honoured in the same animation frame.
+ *
+ * `Scene.render` raises `preUpdate` *before* it decides whether to render, from
+ * `_renderRequested`, so a request made in the tick is this frame's — unless something
+ * between the two consumed or ignored it. `requestedAfterTick` counts ticks that ended with the
+ * flag set; `renderedAfterRequest` those of them that went on to render. `meanTickMs` is the
+ * mean interval between ticks, which is the animation frame interval.
+ */
+export interface CadenceProbe {
+  readonly ticks: number;
+  readonly requestedAfterTick: number;
+  readonly renderedAfterRequest: number;
+  readonly meanTickMs: number;
 }
 
 /**
@@ -67,6 +105,14 @@ export interface LivingSceneHarness {
   /** Moves the scene clock to `t` seconds after the Living Survey epoch. */
   setTime(t: number): void;
   setWind(wind: WindSettings): void;
+  /** The viewer's "Motion on GPU" setting. */
+  setGpuMotion(enabled: boolean): void;
+  /** Whether the patched primitive currently carries a motion hook. */
+  hookInstalled(): boolean;
+  /** The attribute texture, read back and compared with the engine's own packed bytes. */
+  readAttributeTexture(): TextureReadback;
+  /** Watches `n` ticks and reports whether each tick's render request was a rendered frame. */
+  cadence(n: number, timeoutMs?: number): Promise<CadenceProbe>;
   /** Living Mode's sidecar model (`auto`) or the legacy nine-sine model, for comparison clips. */
   setMotionModel(model: LivingMotionModel): void;
   status(): LivingSurveyStatus & { captures: number };
@@ -194,6 +240,7 @@ export async function startLivingSceneHarness(
   const scene = new CesiumSceneManager(options.container, {
     ionToken: undefined,
     home: { longitude: options.longitude, latitude: options.latitude, height: 40 },
+    splatGpuMotion: options.splatGpuMotion,
   });
   const viewer = scene.viewer;
   const gl = viewer.scene;
@@ -226,14 +273,28 @@ export async function startLivingSceneHarness(
   let renderRequests = 0;
   let livingRequests = 0;
   let atTickStart = 0;
+  // The cadence probe's state (see `CadenceProbe`).
+  const internals = gl as unknown as { _renderRequested?: boolean };
+  let probing = false;
+  let requestedAfterTick = 0;
+  let renderedAfterRequest = 0;
+  let awaitingRender = false;
+  let lastTickAt: number | null = null;
+  const tickIntervals: number[] = [];
   // First listener on preUpdate, so it runs before the manager's tick (Cesium raises listeners
   // in registration order, and the manager registers its own only once a site attaches).
   gl.preUpdate.addEventListener(() => {
     ticks += 1;
     atTickStart = renderRequests;
+    awaitingRender = false;
+    const now = performance.now();
+    if (probing && lastTickAt !== null) tickIntervals.push(now - lastTickAt);
+    lastTickAt = now;
   });
   gl.postRender.addEventListener(() => {
     renders += 1;
+    if (awaitingRender) renderedAfterRequest += 1;
+    awaitingRender = false;
   });
   const requestRender = gl.requestRender.bind(gl);
   gl.requestRender = () => {
@@ -245,6 +306,11 @@ export async function startLivingSceneHarness(
   function armLivingRequestCounter(): void {
     closeBracket?.();
     closeBracket = gl.preUpdate.addEventListener(() => {
+      // A request from inside the manager's tick, still pending when the tick ends.
+      if (probing && renderRequests > atTickStart && internals._renderRequested === true) {
+        requestedAfterTick += 1;
+        awaitingRender = true;
+      }
       livingRequests += renderRequests - atTickStart;
     });
   }
@@ -323,7 +389,108 @@ export async function startLivingSceneHarness(
     });
   }
 
+  function splatPrimitive(): SplatPrimitive | undefined {
+    const tileset = scene.sites.tilesetFor(SITE_ID, "gaussian-splat");
+    return tileset === null ? undefined : splatTilesetOf(tileset).gaussianSplatPrimitive;
+  }
+
+  /**
+   * Reads the RGBA32UI attribute texture back through a framebuffer of our own, and compares
+   * it word for word with the packed buffer the engine uploaded into it (the interception's
+   * capture, zero-padded to the texture as the engine pads it). Restores the framebuffer
+   * binding Cesium had, so its cached GL state stays true.
+   */
+  function readAttributeTexture(): TextureReadback {
+    const fail = (error: string): TextureReadback => ({
+      words: 0,
+      mismatches: -1,
+      positionMismatches: -1,
+      error,
+    });
+    const primitive = splatPrimitive();
+    const positions = primitive?._positions;
+    const numSplats = primitive?._numSplats ?? 0;
+    const texture = primitive?.gaussianSplatTexture as
+      { _texture?: WebGLTexture; _width?: number; _height?: number } | undefined;
+    if (positions === undefined || texture?._texture === undefined) return fail("no texture");
+    const capture = findSplatCapture(numSplats, digestSplatPositions(positions, numSplats));
+    if (capture === undefined) return fail("no capture");
+    const context = (gl as unknown as { context: { _gl: WebGL2RenderingContext } }).context;
+    const webgl = context._gl;
+    const width = texture._width ?? 0;
+    const height = texture._height ?? 0;
+    const previous = webgl.getParameter(webgl.FRAMEBUFFER_BINDING) as WebGLFramebuffer | null;
+    const framebuffer = webgl.createFramebuffer();
+    const words = new Uint32Array(width * height * 4);
+    try {
+      webgl.bindFramebuffer(webgl.FRAMEBUFFER, framebuffer);
+      webgl.framebufferTexture2D(
+        webgl.FRAMEBUFFER,
+        webgl.COLOR_ATTACHMENT0,
+        webgl.TEXTURE_2D,
+        texture._texture,
+        0,
+      );
+      const status = webgl.checkFramebufferStatus(webgl.FRAMEBUFFER);
+      if (status !== webgl.FRAMEBUFFER_COMPLETE) return fail(`framebuffer ${String(status)}`);
+      webgl.readPixels(0, 0, width, height, webgl.RGBA_INTEGER, webgl.UNSIGNED_INT, words);
+      const error = webgl.getError();
+      if (error !== webgl.NO_ERROR) return fail(`readPixels ${String(error)}`);
+    } finally {
+      webgl.bindFramebuffer(webgl.FRAMEBUFFER, previous);
+      webgl.deleteFramebuffer(framebuffer);
+    }
+    const layout = splatTextureLayout(
+      numSplats,
+      primitive?._splatRowMask ?? 0,
+      primitive?._splatRowShift ?? 0,
+    );
+    const isPosition = new Uint8Array(words.length);
+    for (let splat = 0; splat < numSplats; splat += 1) {
+      const offset = positionWordOffset(splat, layout);
+      isPosition[offset] = 1;
+      isPosition[offset + 1] = 1;
+      isPosition[offset + 2] = 1;
+    }
+    let mismatches = 0;
+    let positionMismatches = 0;
+    for (let i = 0; i < words.length; i += 1) {
+      if (words[i] === (capture.data[i] ?? 0)) continue;
+      mismatches += 1;
+      if (isPosition[i] === 1) positionMismatches += 1;
+    }
+    return { words: words.length, mismatches, positionMismatches, error: null };
+  }
+
+  function cadence(n: number, timeoutMs = 120_000): Promise<CadenceProbe> {
+    requestedAfterTick = 0;
+    renderedAfterRequest = 0;
+    tickIntervals.length = 0;
+    probing = true;
+    return waitTicks(n, timeoutMs)
+      .then(() => ({
+        ticks: n,
+        requestedAfterTick,
+        renderedAfterRequest,
+        meanTickMs:
+          tickIntervals.length === 0
+            ? 0
+            : tickIntervals.reduce((sum, ms) => sum + ms, 0) / tickIntervals.length,
+      }))
+      .finally(() => {
+        probing = false;
+      });
+  }
+
   return {
+    setGpuMotion(enabled: boolean): void {
+      scene.living.setGpuMotion(enabled);
+    },
+    hookInstalled(): boolean {
+      return splatPrimitive()?.vertexMotion !== undefined;
+    },
+    readAttributeTexture,
+    cadence,
     setTime(t: number): void {
       viewer.clock.currentTime = JulianDate.addSeconds(
         JulianDate.fromIso8601(LIVING_EPOCH_ISO),

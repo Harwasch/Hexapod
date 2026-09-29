@@ -37,7 +37,11 @@ export interface SceneManagerOptions {
   ionToken: string | undefined;
   /** Initial camera in degrees / metres. */
   home?: { longitude: number; latitude: number; height: number };
-  /** Living Survey motion on the GPU (`VITE_SPLAT_GPU_MOTION`); CPU when off or unavailable. */
+  /**
+   * Whether this build allows Living Survey motion on the GPU (`VITE_SPLAT_GPU_MOTION`, default
+   * true). Where allowed, `living.setGpuMotion` — the viewer's setting — decides; the CPU path
+   * is the fallback either way when the engine or a snapshot cannot take the shader path.
+   */
   splatGpuMotion?: boolean;
 }
 
@@ -146,7 +150,7 @@ export class CesiumSceneManager {
       this.performance,
     );
     this.living = new LivingSurveyManager(this.viewer, this.events, this.sites, this.performance, {
-      gpuMotion: options.splatGpuMotion === true,
+      gpuMotion: options.splatGpuMotion !== false,
     });
     this.selection = new SelectionManager(
       this.viewer,

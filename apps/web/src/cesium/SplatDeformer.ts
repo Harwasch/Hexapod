@@ -8,15 +8,16 @@
  * the pure modules beside it (`splatTexels.ts`, `splatFrames.ts`, `splatTiles.ts`,
  * `splatGpuMotion.ts`), which is why almost all of this is testable without a GPU.
  *
- * Two ways to put a frame on screen, chosen per snapshot:
+ * Two ways to put a frame on screen, chosen per snapshot (the reason for a CPU choice is in
+ * `status.cpuReason`, and `setGpu` switches a live deformer between them):
  *
- * - **CPU** (default): recompute every displaced splat from the canonical copy and re-upload
- *   the attribute-texture rows they occupy. Linear in the splat count, and it needs the packed
- *   buffer the interception captured (`splatCapture.ts`).
- * - **GPU** (with a `gpu` texture factory, on the patched engine): upload per-node transforms
- *   only and let the vertex shader apply them (`splatGpuMotion.ts`). Needs every selected tile
- *   to share one bake matrix, which every `splat_tiles.py` tileset does; a snapshot that does
- *   not falls back to the CPU path.
+ * - **CPU** (without a `gpu` factory, and the fallback): recompute every displaced splat from
+ *   the canonical copy and re-upload the attribute-texture rows they occupy. Linear in the
+ *   splat count, and it needs the packed buffer the interception captured (`splatCapture.ts`).
+ * - **GPU** (with a `gpu` texture factory, on the patched engine; the app's default): upload
+ *   per-node transforms only and let the vertex shader apply them (`splatGpuMotion.ts`). Needs
+ *   every selected tile to share one bake matrix, which every `splat_tiles.py` tileset does; a
+ *   snapshot that does not falls back to the CPU path.
  *
  * Four rules it exists to enforce:
  *
@@ -48,6 +49,7 @@
 import {
   deformPositions,
   FLUTTER_STILL,
+  IDENTITY_TRANSFORM,
   rigTileChecksums,
   skinSlice,
   type FlutterField,
@@ -132,6 +134,16 @@ export type DeformerReason =
 /** How a frame reaches the screen. */
 export type DeformerMotion = "cpu" | "gpu";
 
+/**
+ * Why an attachment is on the CPU path.
+ *
+ * - `no-factory`: the deformer was given no GPU texture factory — the caller chose the CPU path
+ *   (a setting, a build flag) or this CesiumJS build does not export what the factory needs.
+ * - `no-hook`: the primitive does not carry the engine patch's `vertexMotion` hook.
+ * - `mixed-bake`: the snapshot's tiles do not share one bake matrix, which the shader needs.
+ */
+export type DeformerCpuReason = "no-factory" | "no-hook" | "mixed-bake";
+
 /** Everything the manager and the HUD need to know, and nothing they have to guess. */
 export interface DeformerStatus {
   readonly phase: DeformerPhase;
@@ -143,6 +155,8 @@ export interface DeformerStatus {
   readonly tileBindings: number;
   /** Which path the current attachment writes through. */
   readonly motion: DeformerMotion;
+  /** Why `motion` is `cpu`; absent on the GPU path. See {@link DeformerCpuReason}. */
+  readonly cpuReason?: DeformerCpuReason;
   /** `primitive._snapshot.generation` the current attachment was derived from. */
   readonly generation: number;
   /** Times the snapshot rebuilt and the attachment was re-derived from a new base. */
@@ -211,6 +225,7 @@ interface Attachment {
   readonly layout: SplatTextureLayout;
   readonly binding: SnapshotBinding;
   readonly motion: DeformerMotion;
+  readonly cpuReason: DeformerCpuReason | undefined;
   readonly cpu: CpuBuffers | undefined;
   readonly nodeMoves: Uint8Array;
   readonly geodeticAlignment: number;
@@ -221,7 +236,7 @@ export class SplatDeformer {
   readonly #rig: MotionRig;
   readonly #accepted: ReadonlySet<string>;
   readonly #cache = new TileBindingCache();
-  readonly #gpuFactory: MotionTextureFactory | undefined;
+  #gpuFactory: MotionTextureFactory | undefined;
   #gpu: SplatGpuMotion | undefined;
   #attachment: Attachment | undefined;
   #phase: DeformerPhase = "waiting";
@@ -252,6 +267,12 @@ export class SplatDeformer {
       tiles: attachment?.binding.tiles.length ?? 0,
       tileBindings: this.#cache.bound,
       motion: attachment?.motion ?? (this.#gpuFactory === undefined ? "cpu" : "gpu"),
+      cpuReason:
+        attachment !== undefined
+          ? attachment.cpuReason
+          : this.#gpuFactory === undefined
+            ? "no-factory"
+            : undefined,
       generation: attachment?.generation ?? -1,
       rederivations: this.#rederivations,
       uploads: this.#uploads,
@@ -336,6 +357,52 @@ export class SplatDeformer {
     this.#cache.clear();
   }
 
+  /**
+   * Switches the motion path: a GPU texture factory, or `undefined` for the CPU path.
+   *
+   * The measured pose is put back first, through the path being left, so nothing displaced is
+   * left behind on it: on the CPU path that is the ordinary restoring write — every row the
+   * last frame moved, rewritten from the canonical bytes, exactly as a drop to calm does it —
+   * and on the GPU path it is uninstalling the hook, after which the engine rebuilds its draw
+   * command without it and draws the attribute texture it never stopped holding. The next
+   * `apply` derives a new attachment on the new path. Tile bindings do not depend on the path
+   * and are kept, so a switch costs no re-binding.
+   */
+  setGpu(factory: MotionTextureFactory | undefined): void {
+    if (factory === this.#gpuFactory) return;
+    this.#gpuFactory = factory;
+    if (this.#phase === "refused" || this.#phase === "detached") return;
+    try {
+      this.#restore();
+    } catch (error) {
+      // Never leave a switch half done: the hook still goes and the attachment is re-derived.
+      log.warn("restoring the measured pose before a path switch failed", {
+        error: String(error),
+      });
+    }
+    this.#gpu?.destroy();
+    this.#gpu = undefined;
+    this.#attachment = undefined;
+    this.#lastRange = undefined;
+    this.#displaced = false;
+    this.#phase = "waiting";
+    this.#reason = "no-snapshot";
+  }
+
+  /**
+   * Writes the measured pose through the current attachment, when it is displaced and its
+   * snapshot is still the committed one. A snapshot that has rebuilt since is already at rest —
+   * the engine packed its texture afresh — and the old rows must not be written into it.
+   */
+  #restore(): void {
+    const attachment = this.#attachment;
+    if (attachment === undefined || !this.#displaced) return;
+    const primitive = this.#tileset.gaussianSplatPrimitive;
+    if (primitive === undefined || !isCurrent(attachment, primitive)) return;
+    const rest = new Array<NodeTransform>(this.#rig.nodes.length).fill(IDENTITY_TRANSFORM);
+    this.#write(attachment, rest, FLUTTER_STILL);
+  }
+
   #refuse(reason: DeformerReason, detail: string): void {
     this.#phase = "refused";
     this.#reason = reason;
@@ -377,15 +444,7 @@ export class SplatDeformer {
     }
 
     const current = this.#attachment;
-    if (
-      current?.generation === generation &&
-      current.enginePositions === positions &&
-      current.numSplats === numSplats &&
-      current.layout.rowMask === rowMask &&
-      current.layout.rowShift === rowShift
-    ) {
-      return current;
-    }
+    if (current !== undefined && isCurrent(current, primitive)) return current;
 
     const started = performance.now();
     const next = this.#derive(primitive, positions, numSplats, rowMask, rowShift, generation);
@@ -446,10 +505,15 @@ export class SplatDeformer {
     const sharedBake =
       first !== undefined &&
       tiles.every((tile) => tile.bake.length === 16 && sameBake(tile.bake, first.bake));
-    const motion: DeformerMotion =
-      this.#gpuFactory !== undefined && hasVertexMotionHook(primitive) && sharedBake
-        ? "gpu"
-        : "cpu";
+    const cpuReason: DeformerCpuReason | undefined =
+      this.#gpuFactory === undefined
+        ? "no-factory"
+        : !hasVertexMotionHook(primitive)
+          ? "no-hook"
+          : !sharedBake
+            ? "mixed-bake"
+            : undefined;
+    const motion: DeformerMotion = cpuReason === undefined ? "gpu" : "cpu";
 
     // Cheap and first on the CPU path: without the packed buffer there is nothing to stage
     // into, and the binding below is work we would otherwise repeat every frame while waiting.
@@ -517,6 +581,7 @@ export class SplatDeformer {
       layout,
       binding,
       motion,
+      cpuReason,
       cpu:
         motion === "cpu" && packed !== undefined
           ? {
@@ -627,6 +692,20 @@ export class SplatDeformer {
     this.#phase = "ready";
     this.#reason = undefined;
   }
+}
+
+/**
+ * Whether `attachment` was derived from the primitive's committed snapshot: same generation,
+ * same engine array, same count and addressing.
+ */
+function isCurrent(attachment: Attachment, primitive: SplatPrimitive): boolean {
+  return (
+    attachment.generation === (primitive._snapshot?.generation ?? -1) &&
+    attachment.enginePositions === primitive._positions &&
+    attachment.numSplats === (primitive._numSplats ?? 0) &&
+    attachment.layout.rowMask === (primitive._splatRowMask ?? 0) &&
+    attachment.layout.rowShift === (primitive._splatRowShift ?? 0)
+  );
 }
 
 function sameBake(a: ArrayLike<number>, b: ArrayLike<number>): boolean {

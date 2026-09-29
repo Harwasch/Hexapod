@@ -28,7 +28,7 @@
  * through the deformer's own flag instead of through pixels.
  */
 
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { expect, test, type Page } from "@playwright/test";
@@ -45,7 +45,8 @@ const CONTENT_TYPES: Record<string, string> = {
   ".glb": "model/gltf-binary",
 };
 
-const HARNESS_HTML = `<!doctype html>
+/** `splatGpuMotion` is the build flag: omitted, the app's default (GPU); `false` forces CPU. */
+const harnessHtml = (splatGpuMotion?: boolean): string => `<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
@@ -65,13 +66,14 @@ const HARNESS_HTML = `<!doctype html>
         slug: "synthetic-tree",
         longitude: ${LONGITUDE},
         latitude: ${LATITUDE},
+        ${splatGpuMotion === undefined ? "" : `splatGpuMotion: ${String(splatGpuMotion)},`}
       });
       document.title = "Living Survey scene harness ready";
     </script>
   </body>
 </html>`;
 
-async function openHarness(page: Page): Promise<void> {
+async function openHarness(page: Page, splatGpuMotion?: boolean): Promise<void> {
   await page.route("**/fixture-tiles/**", (route) => {
     const url = new URL(route.request().url());
     const relative = url.pathname.replace(/^.*\/fixture-tiles\//, "");
@@ -87,7 +89,7 @@ async function openHarness(page: Page): Promise<void> {
   // The rig the manager goes looking for: `livingRigs.ts` resolves `../source/rig.json` against
   // the tileset URL, which is exactly where the capture pipeline puts it on disk.
   await page.route("**/__living-scene", (route) =>
-    route.fulfill({ status: 200, contentType: "text/html", body: HARNESS_HTML }),
+    route.fulfill({ status: 200, contentType: "text/html", body: harnessHtml(splatGpuMotion) }),
   );
   await page.route(/https:\/\/(api|assets|tile)\.cesium\.com\/.*/, (route) => route.abort());
   await page.goto("/__living-scene");
@@ -121,9 +123,36 @@ interface Status {
     motionEvidence: string | null;
     maxDisplacementM: number;
     sortStaleness: number;
+    motionPath: string;
+    cpuReason: string | null;
+    motionMs: number | null;
+    applyMs: number | null;
   }[];
   captures: number;
 }
+
+interface Readback {
+  words: number;
+  mismatches: number;
+  positionMismatches: number;
+  error: string | null;
+}
+
+interface Cadence {
+  ticks: number;
+  requestedAfterTick: number;
+  renderedAfterRequest: number;
+  meanTickMs: number;
+}
+
+/**
+ * The two paths the scene can run: the default (the build allows the GPU and the viewer has not
+ * switched it off), and a build that forces the CPU (`VITE_SPLAT_GPU_MOTION=0`).
+ */
+const PATHS = [
+  { name: "GPU (default)", flag: undefined, path: "gpu", cpuReason: null },
+  { name: "CPU (build flag)", flag: false, path: "cpu", cpuReason: "build" },
+] as const;
 
 /** Calls one harness method in the page and returns its result. */
 async function call<T>(page: Page, method: string, ...args: unknown[]): Promise<T> {
@@ -140,100 +169,174 @@ async function call<T>(page: Page, method: string, ...args: unknown[]): Promise<
 }
 
 test.describe("Living Survey: the scene", () => {
-  test("wind moves the tree, calm restores it, and idle stays idle", async ({ page }) => {
+  for (const variant of PATHS) {
+    test(`wind moves the tree, calm restores it, and idle stays idle — ${variant.name}`, async ({
+      page,
+    }, testInfo) => {
+      test.setTimeout(300_000);
+      await openHarness(page, variant.flag);
+      await page.waitForFunction(() => "__livingScene" in window, undefined, { timeout: 90_000 });
+
+      await call(page, "waitUntilReady", 150_000);
+      const ready = await call<Status>(page, "status");
+      // Attached through the real SiteManager, from a rig found beside the tileset, using a
+      // packed buffer the interception saw because it was installed at scene construction.
+      expect(ready.sites).toHaveLength(1);
+      expect(ready.sites[0]?.phase).toBe("ready");
+      expect(ready.sites[0]?.reason).toBeUndefined();
+      expect(ready.sites[0]?.motionPath).toBe(variant.path);
+      expect(ready.sites[0]?.cpuReason).toBe(variant.cpuReason);
+      expect(ready.sites[0]?.numSplats).toBe(12000);
+      expect(ready.sites[0]?.siteSlug).toBe("synthetic-tree");
+      // The rig points at its Living Mode sidecar (ADR 0008), fetched beside it: the modal model
+      // drives this tree, and the status says how much evidence stands behind it.
+      expect(ready.sites[0]?.motionEvidence).toBe("allometric");
+      expect(ready.captures).toBeGreaterThan(0);
+      // Wind starts at 0 and the first thing anyone sees is the measurement.
+      expect(ready.wind.strength).toBe(0);
+      expect(ready.animating).toBe(false);
+
+      await call(page, "setTime", 0);
+      const measured = await call<string>(page, "grabFrameHash");
+
+      // Wind up. Two different scene times must give two different frames, and both must differ
+      // from the measured one — the motion is real, and it is driven by the scene clock.
+      const wind = { strength: 0.6, bearingDeg: 250 };
+      await call(page, "setWind", wind);
+      await call(page, "setTime", 4);
+      const blownA = await call<string>(page, "grabFrameHash");
+      await call(page, "setTime", 9);
+      const blownB = await call<string>(page, "grabFrameHash");
+
+      expect(blownA).not.toBe(measured);
+      expect(blownB).not.toBe(measured);
+      expect(blownB).not.toBe(blownA);
+
+      const blowing = await call<Status>(page, "status");
+      expect(blowing.animating).toBe(true);
+      expect(blowing.sites[0]?.displaced).toBe(true);
+      expect(blowing.sites[0]?.maxDisplacementM).toBeGreaterThan(0.1);
+      expect(blowing.sites[0]?.sortStaleness).toBeGreaterThan(1);
+
+      // A frame keeps being asked for, every tick, while the wind blows.
+      const gusting = await call<Counts>(page, "counts");
+      const stillGusting = await call<Counts>(page, "waitTicks", 6, 120_000);
+      expect(stillGusting.livingRequests - gusting.livingRequests).toBeGreaterThanOrEqual(5);
+      // …and each is this frame's: `preUpdate` runs before `Scene.render` decides whether to draw,
+      // so a request made in the tick renders in the same animation frame. Nothing drops it.
+      const cadence = await call<Cadence>(page, "cadence", 6, 120_000);
+      expect(cadence.requestedAfterTick).toBeGreaterThanOrEqual(5);
+      expect(cadence.renderedAfterRequest).toBe(cadence.requestedAfterTick);
+      // The readout the settings sheet shows: this path's main-thread cost per animated frame.
+      const costed = await call<Status>(page, "status");
+      expect(costed.sites[0]?.motionMs).not.toBeNull();
+      expect(costed.sites[0]?.motionMs ?? -1).toBeGreaterThanOrEqual(costed.sites[0]?.applyMs ?? 0);
+      // SwiftShader numbers: an order of magnitude, not a GPU's.
+      writeFileSync(
+        testInfo.outputPath("cadence.json"),
+        JSON.stringify({ path: variant.path, cadence, site: costed.sites[0] }, null, 1),
+      );
+
+      // A snapshot is of the survey, not of the simulation. The live frames at these two scene
+      // times differ (asserted above); the pictures `snapshot()` takes at the same two times are
+      // both of a tree standing at its measured pose, because `holdMeasuredPose` pins it for the
+      // captured frame.
+      //
+      // That is asserted on the deformer's own flag, read from inside the captured frame, and
+      // **not** by comparing the two pictures. Comparing them was this test's first form and it
+      // failed about one run in three, on this machine, from the artifact this whole file warns
+      // about at the top: the splat sorter runs asynchronously off canonical positions the
+      // deformer never touches, so two frames holding identical positions can still be drawn in
+      // different orders and differ pixel for pixel. Draw order is not a function of the pose, so
+      // pixel equality was never a decidable statement about the pose. The flag is — and the
+      // failure that actually matters, a snapshot catching the tree mid-gust, sets it.
+      await call(page, "setTime", 4);
+      const heldA = await call<SnapshotProbe>(page, "snapshotProbe");
+      await call(page, "setTime", 9);
+      const heldB = await call<SnapshotProbe>(page, "snapshotProbe");
+      expect(heldA.displacedDuringCapture).toBe(false);
+      expect(heldB.displacedDuringCapture).toBe(false);
+      // …and there really was a picture: the flag above would read "not displaced" just as
+      // happily if `snapshot()` had failed and returned nothing at all.
+      expect(heldA.hash).not.toBe(NO_IMAGE);
+      expect(heldB.hash).not.toBe(NO_IMAGE);
+      // And the hold is a photograph, not a change in the weather.
+      expect((await call<Status>(page, "status")).wind.strength).toBe(wind.strength);
+
+      // Calm. The deformer owes one restoring write, and after that the scene must go quiet:
+      // ticks keep coming, renders stop. Three ticks of slack for the restore, then twelve ticks
+      // in which nothing at all may be asked for.
+      await call(page, "setWind", { strength: 0, bearingDeg: 250 });
+      const restoring = await call<Counts>(page, "waitTicks", 3, 120_000);
+      const idle = await call<Counts>(page, "waitTicks", 12, 120_000);
+      expect(idle.ticks - restoring.ticks).toBeGreaterThanOrEqual(12);
+      expect(idle.livingRequests - restoring.livingRequests).toBe(0);
+
+      const rested = await call<Status>(page, "status");
+      expect(rested.animating).toBe(false);
+      expect(rested.sites[0]?.displaced).toBe(false);
+      expect(rested.sites[0]?.phase).toBe("ready");
+
+      // Destroy releases the tick and stops reporting; nothing is left listening.
+      const probeBefore = await call<{ preUpdate: number }>(page, "probe");
+      await call(page, "destroyLiving");
+      const probeAfter = await call<{ preUpdate: number }>(page, "probe");
+      expect(probeAfter.preUpdate).toBe(probeBefore.preUpdate - 1);
+      expect((await call<Status>(page, "status")).sites).toHaveLength(0);
+    });
+  }
+
+  test("switching Motion on GPU mid-gust leaves the exact measured bytes behind", async ({
+    page,
+  }) => {
     test.setTimeout(300_000);
     await openHarness(page);
     await page.waitForFunction(() => "__livingScene" in window, undefined, { timeout: 90_000 });
-
     await call(page, "waitUntilReady", 150_000);
-    const ready = await call<Status>(page, "status");
-    // Attached through the real SiteManager, from a rig found beside the tileset, using a
-    // packed buffer the interception saw because it was installed at scene construction.
-    expect(ready.sites).toHaveLength(1);
-    expect(ready.sites[0]?.phase).toBe("ready");
-    expect(ready.sites[0]?.reason).toBeUndefined();
-    expect(ready.sites[0]?.numSplats).toBe(12000);
-    expect(ready.sites[0]?.siteSlug).toBe("synthetic-tree");
-    // The rig points at its Living Mode sidecar (ADR 0008), fetched beside it: the modal model
-    // drives this tree, and the status says how much evidence stands behind it.
-    expect(ready.sites[0]?.motionEvidence).toBe("allometric");
-    expect(ready.captures).toBeGreaterThan(0);
-    // Wind starts at 0 and the first thing anyone sees is the measurement.
-    expect(ready.wind.strength).toBe(0);
-    expect(ready.animating).toBe(false);
+    expect((await call<Status>(page, "status")).sites[0]?.motionPath).toBe("gpu");
+    // Read back from the GPU: at rest, the attribute texture is the engine's own upload.
+    const atRest = await call<Readback>(page, "readAttributeTexture");
+    expect(atRest.error).toBeNull();
+    expect(atRest.words).toBeGreaterThan(12000 * 8);
+    expect(atRest.mismatches).toBe(0);
 
-    await call(page, "setTime", 0);
-    const measured = await call<string>(page, "grabFrameHash");
-
-    // Wind up. Two different scene times must give two different frames, and both must differ
-    // from the measured one — the motion is real, and it is driven by the scene clock.
+    // Off: the viewer's switch, mid-gust. The CPU path moves the splats by rewriting the texture…
     const wind = { strength: 0.6, bearingDeg: 250 };
     await call(page, "setWind", wind);
     await call(page, "setTime", 4);
-    const blownA = await call<string>(page, "grabFrameHash");
-    await call(page, "setTime", 9);
-    const blownB = await call<string>(page, "grabFrameHash");
+    await call(page, "waitTicks", 3, 120_000);
+    expect(await call<boolean>(page, "hookInstalled")).toBe(true);
+    await call(page, "setGpuMotion", false);
+    expect(await call<boolean>(page, "hookInstalled")).toBe(false);
+    await call(page, "setTime", 5);
+    await call(page, "waitTicks", 3, 120_000);
+    const cpu = await call<Status>(page, "status");
+    expect(cpu.sites[0]?.motionPath).toBe("cpu");
+    expect(cpu.sites[0]?.cpuReason).toBe("switched-off");
+    expect(cpu.sites[0]?.displaced).toBe(true);
+    const displaced = await call<Readback>(page, "readAttributeTexture");
+    expect(displaced.positionMismatches).toBeGreaterThan(0);
+    // …and never anything but positions.
+    expect(displaced.mismatches).toBe(displaced.positionMismatches);
 
-    expect(blownA).not.toBe(measured);
-    expect(blownB).not.toBe(measured);
-    expect(blownB).not.toBe(blownA);
+    // On again, still mid-gust: the texture is the engine's bytes again, word for word, before
+    // the shader takes over — and the shader never writes it.
+    await call(page, "setGpuMotion", true);
+    const restored = await call<Readback>(page, "readAttributeTexture");
+    expect(restored.error).toBeNull();
+    expect(restored.mismatches).toBe(0);
+    await call(page, "setTime", 6);
+    await call(page, "waitTicks", 4, 120_000);
+    const gpu = await call<Status>(page, "status");
+    expect(gpu.sites[0]?.motionPath).toBe("gpu");
+    expect(gpu.sites[0]?.displaced).toBe(true);
+    expect(await call<boolean>(page, "hookInstalled")).toBe(true);
+    expect((await call<Readback>(page, "readAttributeTexture")).mismatches).toBe(0);
 
-    const blowing = await call<Status>(page, "status");
-    expect(blowing.animating).toBe(true);
-    expect(blowing.sites[0]?.displaced).toBe(true);
-    expect(blowing.sites[0]?.maxDisplacementM).toBeGreaterThan(0.1);
-    expect(blowing.sites[0]?.sortStaleness).toBeGreaterThan(1);
-
-    // A frame keeps being asked for, every tick, while the wind blows.
-    const gusting = await call<Counts>(page, "counts");
-    const stillGusting = await call<Counts>(page, "waitTicks", 6, 120_000);
-    expect(stillGusting.livingRequests - gusting.livingRequests).toBeGreaterThanOrEqual(5);
-
-    // A snapshot is of the survey, not of the simulation. The live frames at these two scene
-    // times differ (asserted above); the pictures `snapshot()` takes at the same two times are
-    // both of a tree standing at its measured pose, because `holdMeasuredPose` pins it for the
-    // captured frame.
-    //
-    // That is asserted on the deformer's own flag, read from inside the captured frame, and
-    // **not** by comparing the two pictures. Comparing them was this test's first form and it
-    // failed about one run in three, on this machine, from the artifact this whole file warns
-    // about at the top: the splat sorter runs asynchronously off canonical positions the
-    // deformer never touches, so two frames holding identical positions can still be drawn in
-    // different orders and differ pixel for pixel. Draw order is not a function of the pose, so
-    // pixel equality was never a decidable statement about the pose. The flag is — and the
-    // failure that actually matters, a snapshot catching the tree mid-gust, sets it.
-    await call(page, "setTime", 4);
-    const heldA = await call<SnapshotProbe>(page, "snapshotProbe");
-    await call(page, "setTime", 9);
-    const heldB = await call<SnapshotProbe>(page, "snapshotProbe");
-    expect(heldA.displacedDuringCapture).toBe(false);
-    expect(heldB.displacedDuringCapture).toBe(false);
-    // …and there really was a picture: the flag above would read "not displaced" just as
-    // happily if `snapshot()` had failed and returned nothing at all.
-    expect(heldA.hash).not.toBe(NO_IMAGE);
-    expect(heldB.hash).not.toBe(NO_IMAGE);
-    // And the hold is a photograph, not a change in the weather.
-    expect((await call<Status>(page, "status")).wind.strength).toBe(wind.strength);
-
-    // Calm. The deformer owes one restoring write, and after that the scene must go quiet:
-    // ticks keep coming, renders stop. Three ticks of slack for the restore, then twelve ticks
-    // in which nothing at all may be asked for.
+    // And calm, after all that, is still the measured pose on both counts.
     await call(page, "setWind", { strength: 0, bearingDeg: 250 });
-    const restoring = await call<Counts>(page, "waitTicks", 3, 120_000);
-    const idle = await call<Counts>(page, "waitTicks", 12, 120_000);
-    expect(idle.ticks - restoring.ticks).toBeGreaterThanOrEqual(12);
-    expect(idle.livingRequests - restoring.livingRequests).toBe(0);
-
-    const rested = await call<Status>(page, "status");
-    expect(rested.animating).toBe(false);
-    expect(rested.sites[0]?.displaced).toBe(false);
-    expect(rested.sites[0]?.phase).toBe("ready");
-
-    // Destroy releases the tick and stops reporting; nothing is left listening.
-    const probeBefore = await call<{ preUpdate: number }>(page, "probe");
-    await call(page, "destroyLiving");
-    const probeAfter = await call<{ preUpdate: number }>(page, "probe");
-    expect(probeAfter.preUpdate).toBe(probeBefore.preUpdate - 1);
-    expect((await call<Status>(page, "status")).sites).toHaveLength(0);
+    await call(page, "waitTicks", 3, 120_000);
+    expect((await call<Status>(page, "status")).sites[0]?.displaced).toBe(false);
+    expect((await call<Readback>(page, "readAttributeTexture")).mismatches).toBe(0);
   });
 });

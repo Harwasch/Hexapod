@@ -356,9 +356,19 @@ t = 5 s and after 1.5 h of advection: worst 1.0 µm, against up to 7 cm of flutt
 emulation of the shader's lookups stays within 3 µm even a day in. Calm and winter write the
 field as still: nothing is sampled.
 
-It is behind `VITE_SPLAT_GPU_MOTION` until someone has looked at it on a GPU. The CPU path
-remains the default and the fallback: on an engine without the hook, or for a snapshot whose
-tiles do not share one bake matrix (`splat_tiles.py` tilesets always do).
+It is the default path. The CPU path is the fallback, per site: on an engine without the hook,
+for a snapshot whose tiles do not share one bake matrix (`splat_tiles.py` tilesets always do),
+when a build sets `VITE_SPLAT_GPU_MOTION=false`, or when the viewer turns **Settings → Living
+survey → Motion on GPU** off (persisted per browser) to compare the two. The switch is made in
+place (`SplatDeformer.setGpu`): the deformer restores the measured pose through the path it is
+leaving — the CPU path's ordinary restoring write, or the hook uninstalled — before the next frame
+derives on the new one, and `e2e/livingSurveyScene.spec.ts` reads the attribute texture back from
+the GPU mid-gust to hold that to the engine's bytes, word for word. Beside the switch, each site's
+path (and why, when it is the CPU) and its main-thread motion cost per animated frame (a rolling
+mean: model plus write, and the write alone), with the scene's frame time for comparison. On the
+CPU path at the Minnetonka tree's million splats that cost is the frame rate: roughly 70 ms of
+skinned `deformPositions` and re-bake a frame when every tile is selected, plus up to 34 MB of
+texture upload (32 bytes a splat; the table below has the 1.9M-splat figures).
 
 Its invariants are structural. Nothing of the engine's is written at all — not the attribute
 texture, not `_positions`. **Calm is exact**: `u_splatMotionActive` is 0 whenever nothing moves and
@@ -789,13 +799,14 @@ the pipeline runs end to end and nothing more.
    cluster its own offset. Splats of one node share a frequency so a cluster ripples rather than
    boils, but whether ~55 independently phased splats read as leaves in wind or as scintillation is
    exactly the kind of question SwiftShader cannot answer and a person can, in one glance.
-5. **Does the GPU path hold up on a GPU?** Build with `VITE_SPLAT_GPU_MOTION=1`: the tree should
+5. **Does the GPU path hold up on a GPU?** It is now the default; flip **Motion on GPU** in
+   Settings to compare against the CPU path, with the readout beside it. The tree should
    look identical to the CPU path (the unit tests hold them within 2e-5 m), Living Mode's leaf
    flutter included, frame time with wind on should barely move from calm at a million splats
    (the advected flutter's scattered fetches from a 16 MB texture are the unmeasured risk), and
    a large tile arriving should not hitch visibly (binding is ~25 ms per 100k-gaussian tile
    here). None of that is measurable on
-   SwiftShader, and it is what decides whether the flag comes off.
+   SwiftShader, and it is what decides whether the GPU path stays the default.
 
 6. **Does the Minnetonka tree now sway rather than vibrate?** Measured, its tips moved at a
    spectral centroid of 2.4 Hz with 63 % of their speed above 4 Hz; they now move at 1.0 Hz with

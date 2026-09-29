@@ -197,6 +197,10 @@ async function publishLiving(app: Page, animating: boolean): Promise<void> {
           rigSourceNote: "synthetic tree, 6.0 m, 33 nodes (tools/captures/synthetic_tree.py)",
           maxDisplacementM: moving ? 0.195 : 0,
           sortStaleness: moving ? 9.7 : 0,
+          motionPath: "gpu",
+          cpuReason: null,
+          motionMs: moving ? 0.42 : null,
+          applyMs: moving ? 0.05 : null,
         },
       ],
     });

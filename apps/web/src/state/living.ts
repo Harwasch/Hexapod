@@ -16,7 +16,7 @@ import {
   type WindSettings,
 } from "@twin/world";
 
-import type { DeformerPhase, DeformerReason } from "@/cesium/SplatDeformer";
+import type { DeformerMotion, DeformerPhase, DeformerReason } from "@/cesium/SplatDeformer";
 
 /**
  * Re-exported from `@twin/world`, where it is derived.
@@ -70,7 +70,38 @@ export interface LivingSiteStatus {
   readonly maxDisplacementM: number;
   /** That displacement in splat radii, against {@link REFERENCE_GAUSSIAN_SCALE_M}. */
   readonly sortStaleness: number;
+  /** Which path puts this site's frames on screen: the splat vertex shader, or CPU rewrites. */
+  readonly motionPath: DeformerMotion;
+  /** Why {@link motionPath} is `cpu`; null on the GPU path. See {@link LivingCpuReason}. */
+  readonly cpuReason: LivingCpuReason | null;
+  /**
+   * Main-thread milliseconds per animated frame for this site — the motion model plus the
+   * deformer's write — as a rolling mean, or null before any frame has moved. The GPU path's
+   * shader time is on the GPU and is not in it; the scene's frame time is.
+   */
+  readonly motionMs: number | null;
+  /** The deformer's write alone (upload submit included), the part the two paths differ in. */
+  readonly applyMs: number | null;
 }
+
+/**
+ * Why a site animates on the CPU path, in the order they are checked.
+ *
+ * - `build`: this build forces the CPU path (`VITE_SPLAT_GPU_MOTION=0`).
+ * - `switched-off`: the viewer turned "Motion on GPU" off.
+ * - `engine`: this CesiumJS build lacks the engine patch's vertex-motion hook, or the texture
+ *   classes the GPU path needs.
+ * - `mixed-bake`: the tiles on screen do not share one placement matrix, which the shader needs.
+ */
+export type LivingCpuReason = "build" | "switched-off" | "engine" | "mixed-bake";
+
+/** What each {@link LivingCpuReason} means, in words for the settings sheet. */
+export const CPU_REASON_TEXT: Readonly<Record<LivingCpuReason, string>> = {
+  build: "forced by this build",
+  "switched-off": "switched off",
+  engine: "GPU hook unavailable",
+  "mixed-bake": "tiles differ in placement",
+};
 
 /** Everything the scene knows about the Living Survey, published whole on every change. */
 export interface LivingSurveyStatus {

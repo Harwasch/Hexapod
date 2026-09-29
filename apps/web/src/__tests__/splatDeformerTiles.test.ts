@@ -514,7 +514,33 @@ describe("the GPU path", () => {
       rig: lodRig,
       gpu: fakeFactory(),
     });
-    expect(deformer.apply(...frameAt(1)).motion).toBe("cpu");
+    const status = deformer.apply(...frameAt(1));
+    expect(status.motion).toBe("cpu");
+    expect(status.cpuReason).toBe("no-hook");
+    expect(primitive.gaussianSplatTexture.copyFrom).toHaveBeenCalled();
+  });
+
+  it("falls back to the CPU path, and says why, for tiles that do not share a bake", () => {
+    const primitive = new FakeHookedPrimitive();
+    const [first, second] = MIDDLE;
+    // The same tree, but the second tile placed by a matrix a quarter metre east: each tile is
+    // self-consistent, so it binds, but no one matrix un-bakes both, which the shader needs.
+    const shifted = [...lodBake];
+    shifted[12] = (shifted[12] ?? 0) + 0.25;
+    commit(primitive, [
+      new FakeTile(first ?? "", lodTiles.get(first ?? "")?.local ?? new Float32Array(0)),
+      new FakeTile(second ?? "", lodTiles.get(second ?? "")?.local ?? new Float32Array(0), shifted),
+    ]);
+    const deformer = new SplatDeformer({
+      tileset: new FakeTiledTileset(primitive),
+      rig: lodRig,
+      gpu: fakeFactory(),
+    });
+    const status = deformer.apply(...frameAt(1));
+    expect(status.phase).toBe("ready");
+    expect(status.motion).toBe("cpu");
+    expect(status.cpuReason).toBe("mixed-bake");
+    expect(primitive.vertexMotion).toBeUndefined();
     expect(primitive.gaussianSplatTexture.copyFrom).toHaveBeenCalled();
   });
 });

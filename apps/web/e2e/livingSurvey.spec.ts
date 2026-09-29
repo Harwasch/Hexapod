@@ -27,8 +27,11 @@ const CONTENT_TYPES: Record<string, string> = {
   ".glb": "model/gltf-binary",
 };
 
-/** The harness page, built here rather than committed: it is scaffolding, not an app route. */
-const HARNESS_HTML = `<!doctype html>
+/**
+ * The harness page, built here rather than committed: it is scaffolding, not an app route.
+ * `gpu` omitted is the app's default path, the vertex shader; `false` is the CPU path.
+ */
+const harnessHtml = (gpu?: boolean): string => `<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
@@ -47,13 +50,14 @@ const HARNESS_HTML = `<!doctype html>
         container,
         tilesetUrl: "/fixture-tiles/splat/tileset.json",
         rigUrl: "/fixture-tiles/source/rig.json",
+        ${gpu === undefined ? "" : `gpu: ${String(gpu)},`}
       });
       document.title = "Living Survey harness ready";
     </script>
   </body>
 </html>`;
 
-async function openHarness(page: Page): Promise<void> {
+async function openHarness(page: Page, gpu?: boolean): Promise<void> {
   // No API and no Ion: the fixture is served straight off disk, which is all a splat tileset
   // needs. S0 established that this is enough to exercise the whole path.
   await page.route("**/fixture-tiles/**", (route) => {
@@ -69,7 +73,7 @@ async function openHarness(page: Page): Promise<void> {
     });
   });
   await page.route("**/__living-survey", (route) =>
-    route.fulfill({ status: 200, contentType: "text/html", body: HARNESS_HTML }),
+    route.fulfill({ status: 200, contentType: "text/html", body: harnessHtml(gpu) }),
   );
   await page.route(/https:\/\/(api|assets|tile)\.cesium\.com\/.*/, (route) => route.abort());
   await page.goto("/__living-survey");
@@ -88,12 +92,49 @@ interface DeformerStatusJson {
   observedChecksum?: string;
   captures: number;
   numSplatsLoaded: number;
+  motion: string;
+  cpuReason?: string;
 }
 
 test.describe("Living Survey: the synthetic tree deforms", () => {
-  test("attaches to the real primitive and moves the splats", async ({ page }, testInfo) => {
+  test("on the default GPU path, moves the splats without writing the texture", async ({
+    page,
+  }) => {
     test.setTimeout(180_000);
     await openHarness(page);
+    await page.waitForFunction(() => "__livingSurvey" in window, undefined, { timeout: 60_000 });
+
+    const result = (await page.evaluate(async () => {
+      const harness = (window as unknown as { __livingSurvey: Record<string, unknown> })
+        .__livingSurvey;
+      await (harness.waitUntilReady as (ms: number) => Promise<unknown>)(90_000);
+      const step = harness.step as (t: number, wind: unknown) => Promise<unknown>;
+      const wind = { strength: 1, bearingDeg: 250 };
+      let blown: unknown;
+      for (let frame = 0; frame < 6; frame += 1) blown = await step(4 + frame * 0.05, wind);
+      const still = { strength: 0, bearingDeg: 250 };
+      const rest = await step(5, still);
+      await step(6, still);
+      return { blown, rest, final: (harness.status as () => unknown)() };
+    })) as { blown: DeformerStatusJson; rest: DeformerStatusJson; final: DeformerStatusJson };
+
+    expect(result.blown.phase).toBe("ready");
+    expect(result.blown.motion).toBe("gpu");
+    expect(result.blown.cpuReason).toBeUndefined();
+    expect(result.blown.displaced).toBe(true);
+    // Per node, not per splat: one motion row for 33 nodes plus the flutter frame, where the CPU
+    // path uploads three texture rows (98,304 words) a frame for this tree.
+    expect(result.blown.lastUploadRows).toBe(1);
+    expect(result.blown.lastUploadWords).toBeLessThanOrEqual(1024 * 4 + 40);
+    expect(result.rest.displaced).toBe(false);
+    expect(result.final.uploads).toBe(result.rest.uploads);
+  });
+
+  test("attaches to the real primitive and moves the splats on the CPU path", async ({
+    page,
+  }, testInfo) => {
+    test.setTimeout(180_000);
+    await openHarness(page, false);
     await page.waitForFunction(() => "__livingSurvey" in window, undefined, { timeout: 60_000 });
 
     const ready = (await page.evaluate(async () => {
@@ -108,6 +149,8 @@ test.describe("Living Survey: the synthetic tree deforms", () => {
     // over the un-baked positions — the gap S2 left open, closed against a real tiled capture.
     expect(ready.phase).toBe("ready");
     expect(ready.reason).toBeUndefined();
+    expect(ready.motion).toBe("cpu");
+    expect(ready.cpuReason).toBe("no-factory");
     expect(ready.numSplats).toBe(12000);
     expect(ready.captures).toBeGreaterThan(0);
     expect(ready.observedChecksum).toBe("fnv1a32:12000:8b008bc0");

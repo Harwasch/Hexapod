@@ -61,4 +61,28 @@ describe("stores", () => {
     expect(useSettings.getState().quality).toBe("balanced");
     expect(useSettings.getState().units).toBe("metric");
   });
+
+  it("puts Living Survey motion on the GPU by default, and persists the viewer's choice", () => {
+    useSettings.getState().reset();
+    expect(useSettings.getState().livingGpuMotion).toBe(true);
+    useSettings.getState().set({ livingGpuMotion: false });
+    const stored = JSON.parse(window.localStorage.getItem("twin.settings.v1") ?? "{}") as {
+      state?: { livingGpuMotion?: boolean };
+    };
+    expect(stored.state?.livingGpuMotion).toBe(false);
+    useSettings.getState().reset();
+    expect(useSettings.getState().livingGpuMotion).toBe(true);
+  });
+
+  it("gives settings stored before the switch existed the GPU default", async () => {
+    // A v2 blob written by an older build: no `livingGpuMotion` key at all.
+    window.localStorage.setItem(
+      "twin.settings.v1",
+      JSON.stringify({ state: { quality: "ultra" }, version: 2 }),
+    );
+    await useSettings.persist.rehydrate();
+    expect(useSettings.getState().quality).toBe("ultra");
+    expect(useSettings.getState().livingGpuMotion).toBe(true);
+    useSettings.getState().reset();
+  });
 });

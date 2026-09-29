@@ -76,6 +76,7 @@ See [`.env.example`](.env.example) for every variable with comments. The importa
 | `VITE_CESIUM_ION_ACCESS_TOKEN` | web   | Browser token (`assets:read`, `geocode`). Empty → CesiumJS evaluation token (dev only). |
 | `VITE_DEFAULT_*_ASSET_ID`      | web   | Your own splat / mesh / point-cloud ion assets for the built-in site (any subset).      |
 | `VITE_ENABLE_PHOTOREALISTIC`   | web   | Google Photorealistic 3D Tiles world, on by default; `false` switches it off.           |
+| `VITE_SPLAT_GPU_MOTION`        | web   | Living Survey motion in the splat shader, on by default; `false` forces the CPU path.   |
 | `DATABASE_URL`                 | api   | PostgreSQL + PostGIS connection.                                                        |
 | `API_CORS_ORIGINS`             | api   | Allowed browser origins.                                                                |
 | `API_WRITE_TOKEN`              | api   | Shared token for every write (`Authorization: Bearer …`). Reads stay open.              |

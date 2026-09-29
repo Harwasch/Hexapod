@@ -302,7 +302,7 @@ What Cesium supports today, and what is custom:
 | ------------------------------------- | --------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
 | Static splat LOD, clipping into globe | yes (ADR 0003)                                | own tiler, if ion is not used                                                                                   |
 | Splat motion                          | **no** (`customShader` does not reach splats) | ADR 0006 texture rewrite; multi-tile since M5 (per-tile binding, ADR 0007); soft skinning still to do           |
-| Motion for >~200 k splats per view    | —                                             | M5: an engine patch adds a VS motion hook (ADR 0007), behind `VITE_SPLAT_GPU_MOTION`; per-frame CPU is per node |
+| Motion for >~200 k splats per view    | —                                             | M5: an engine patch adds a VS motion hook (ADR 0007), now the default (CPU fallback); per-frame CPU is per node |
 | Water surface                         | yes: glTF mesh + `CustomShader`               | flow-map shader                                                                                                 |
 | Vehicles and people                   | yes: glTF + sampled positions / CZML          | agent simulation off-browser                                                                                    |
 | Replay/living time                    | yes: `Clock`, `JulianDate`, timeline          | map capture window to clock; badge switches Observed → Simulated                                                |
