@@ -33,21 +33,30 @@ import shutil
 import urllib.parse
 import urllib.request
 from pathlib import Path
+from typing import Any
 
 DEFAULT_API = "https://twin-api.fly.dev"
 UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 #: Scale sources that give metres (apps/api app/models/enums.py ``ScaleSource``).
 METRIC_SCALE_SOURCES = ("arkit", "exif-gps", "manual")
+#: Cloudflare (the public bucket's r2.dev host) answers 403 to Python's default
+#: ``Python-urllib/3.x`` agent, so every request names this tool instead.
+USER_AGENT = "hexapod-fetch-capture/1"
+
+
+def _open(url: str, timeout: float) -> Any:
+    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    return urllib.request.urlopen(request, timeout=timeout)
 
 
 def _get_json(url: str) -> object:
-    with urllib.request.urlopen(url, timeout=60) as response:
+    with _open(url, 60) as response:
         return json.loads(response.read().decode("utf-8"))
 
 
 def _download(url: str, path: Path) -> int:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with urllib.request.urlopen(url, timeout=600) as response, path.open("wb") as out:
+    with _open(url, 600) as response, path.open("wb") as out:
         shutil.copyfileobj(response, out, length=1 << 20)
     return path.stat().st_size
 
