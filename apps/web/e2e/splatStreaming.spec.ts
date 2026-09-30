@@ -81,6 +81,8 @@ test("a view looked back at is drawn again from what is resident, fetching nothi
   expect(look.settledA).toBeGreaterThan(0);
   expect(look.tileRefetches).toBe(0);
   expect(look.firstFrameShare).toBeGreaterThanOrEqual(0.95);
+  // What was hidden while looking away came back from its slots: nothing re-uploaded.
+  expect(look.textureUploadMB).toBe(0);
   expect(walk.readbacks).toBe(0);
 });
 
