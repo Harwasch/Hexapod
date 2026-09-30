@@ -458,8 +458,16 @@ def _image_size(path: Path) -> list[int]:
         return [int(image.size[0]), int(image.size[1])]
 
 
-def _run_id(step: str) -> str:
-    return f"tree-{step}-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}"
+def _run_workdir(parent: Path, step: str) -> Workdir:
+    """A new run's workdir, named for the second it started; a second run in the same
+    second gets `-2`, `-3`, ... rather than the first one's inputs (linking a frame onto
+    the one already there failed "File exists")."""
+    base = f"tree-{step}-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}"
+    name, n = base, 1
+    while (parent / name).exists():
+        n += 1
+        name = f"{base}-{n}"
+    return Workdir.create(parent / name)
 
 
 def _prepared(args: argparse.Namespace, store: Any, into: Path, name: str) -> Path:
@@ -522,7 +530,7 @@ def cmd_pose(args: argparse.Namespace) -> int:
     if args.from_tag:
         return adopt_poses(args, store)
     driver = _benchmark()
-    workdir = Workdir.create(args.work.resolve() / _run_id("pose"))
+    workdir = _run_workdir(args.work.resolve(), "pose")
     metas = _inputs(args, store, workdir, poses=False)
     overrides: dict[str, Any] = {}
     if args.colmap:
@@ -577,7 +585,7 @@ def cmd_pose(args: argparse.Namespace) -> int:
 def cmd_train(args: argparse.Namespace) -> int:
     driver = _benchmark()
     store = storage(args)
-    workdir = Workdir.create(args.work.resolve() / _run_id("train"))
+    workdir = _run_workdir(args.work.resolve(), "train")
     metas = _inputs(args, store, workdir, poses=True)
     frame_path = fetch_kept(store, args.tag, workdir.root / "frame.json", "frame.json")
     frame = json.loads(frame_path.read_text(encoding="utf-8"))

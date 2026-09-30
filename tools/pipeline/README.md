@@ -643,13 +643,13 @@ with its own wall clock and puts the two together (`cloud.call_phases`).
 1,697 s before its function body ran, then trained 28,786 steps at ~18 it/s; b0 started in
 12 s and trained 29,926 steps at ~3 it/s -- 10,089 s of trainer steps, billed 10,285 s --
 on similar blocks (626k / 605k gaussians, the same 156 cameras, no ring). Both report
-`cold:1` (`containerCall` 1: each was its container's first call), so b0 did *not* run in
+`cold:1` (`containerCall` 1: each was its container's first call), so b0 did _not_ run in
 the head's warm container, and nothing of the head's could have shared it. What was on b0's
 side: its final checkpoint sync, which touches no GPU, took 65 s against b1's 4.4 s. A GPU
 function that asks Modal for no CPU is reserved 0.125 of a core and bursts into what its
 host's other tenants leave, and the trainer is CPU-fed (four DataLoader workers decoding a
 JPEG a step, a Python loop launching each step's kernels), with thread pools sized to the
-*host's* `os.cpu_count()`. So, ranked: a CPU-starved container (most likely); a slow or
+_host's_ `os.cpu_count()`. So, ranked: a CPU-starved container (most likely); a slow or
 throttled GPU; different work (least: same code, cameras and schedule). Changed:
 
 - **Every GPU function reserves 2 cores and 8 GiB** (`infra/modal/app.py`, `GPU_CPU_CORES`,

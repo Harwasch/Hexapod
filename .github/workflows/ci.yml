@@ -286,28 +286,38 @@ jobs:
       TEST_S3_REGION: us-east-1
     steps:
       - uses: actions/checkout@v4
-      # MinIO is a `docker run` rather than a `services:` container because the
-      # minio/minio image needs the `server /data` command, and a service block
-      # has nowhere to put a command -- `options:` maps to `docker create`
-      # flags, which come before the image name. Health-check and teardown are
-      # the same as a service container's; only the declaration differs.
-      # quay.io, not Docker Hub: MinIO deleted minio/minio from Docker Hub on
-      # 2026-09-11, so `docker run minio/minio` fails with "repository does not
-      # exist". Same image and tag, MinIO's own registry.
+      # MinIO built from source at a pinned release. MinIO withdrew every public
+      # image (Docker Hub on 2026-09-11, then quay.io: "unauthorized") and its
+      # binary downloads (dl.min.io answers 410 Gone), so the source, through
+      # Go's module proxy, is what is left. A real server rather than an
+      # emulator because the tests check what S3 refuses (unsigned and tampered
+      # requests, a presigned PUT's content type), which moto accepts. The
+      # binary is cached by release, so the ~3 minute build happens once.
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: false
+      - uses: actions/cache@v4
+        id: minio-cache
+        with:
+          path: ~/minio-bin
+          key: minio-${{ runner.os }}-RELEASE.2025-04-22T22-12-26Z
+      - name: Build MinIO
+        if: steps.minio-cache.outputs.cache-hit != 'true'
+        run: GOBIN="$HOME/minio-bin" go install github.com/minio/minio@RELEASE.2025-04-22T22-12-26Z
       - name: Start MinIO
         run: |
-          docker run -d --name minio \
-            -p 9000:9000 \
-            -e MINIO_ROOT_USER=twin \
-            -e MINIO_ROOT_PASSWORD=twin-secret \
-            quay.io/minio/minio:latest server /data
+          mkdir -p "$RUNNER_TEMP/minio-data"
+          MINIO_ROOT_USER=twin MINIO_ROOT_PASSWORD=twin-secret \
+            nohup "$HOME/minio-bin/minio" server "$RUNNER_TEMP/minio-data" \
+            --address 127.0.0.1:9000 > "$RUNNER_TEMP/minio.log" 2>&1 &
           for _ in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null; then
               echo "MinIO is live"; exit 0
             fi
             sleep 2
           done
-          echo "MinIO did not become healthy"; docker logs minio || true; exit 1
+          echo "MinIO did not become healthy"; cat "$RUNNER_TEMP/minio.log" || true; exit 1
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
@@ -333,10 +343,7 @@ jobs:
       # otherwise fail too and bury the real error under two spurious ones.
       - name: MinIO logs
         if: failure()
-        run: docker logs minio || true
-      - name: Stop MinIO
-        if: always()
-        run: docker rm -f minio || true
+        run: cat "$RUNNER_TEMP/minio.log" || true
 
   image:
     name: Image · API and worker, from the real Dockerfile

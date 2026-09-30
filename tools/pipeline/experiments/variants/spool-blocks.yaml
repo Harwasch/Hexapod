@@ -25,38 +25,38 @@ recipe: photo-reconstruct
 baseline: whole
 
 base:
-  train: {schedule_scale: 1.0}
-  quality: {mode: refine, bar: strict}
+  train: { schedule_scale: 1.0 }
+  quality: { mode: refine, bar: strict }
 
 variants:
   - name: whole
     repeat: 2
-    params: {train: {blocks: 1}}
+    params: { train: { blocks: 1 } }
 
   - name: blocks-2
     repeat: 2
-    params: {train: {blocks: 2}}
+    params: { train: { blocks: 2 } }
 
   # The blocks in turn, in one call -- the 2.3 h / $1.73 run -- as the control for
   # `blocks-2`, whose blocks now train on two L4s at once (one call each). Expected: the
   # same billed seconds and quality, and ~37 min (the shorter block) less wall time;
   # the step's `fanOutWallS`, `fanOutBilledByPart` and `billedS` say what happened.
   - name: blocks-2-serial
-    params: {train: {blocks: 2, block_parallel: 1}}
+    params: { train: { blocks: 2, block_parallel: 1 } }
 
   # Per-image exposure correction in every block (gsplat's bilateral grid: H3DGS App. C.2's
   # per-image affine, per cell of a 16x16x8 grid); against its own whole run, since the
   # grid alone changed nothing measurable on this capture.
   - name: blocks-2-exposure
-    params: {train: {blocks: 2, bilateral_grid: true}}
+    params: { train: { blocks: 2, bilateral_grid: true } }
 
   - name: whole-exposure
-    params: {train: {blocks: 1, bilateral_grid: true}}
+    params: { train: { blocks: 1, bilateral_grid: true } }
 
   # Without the frozen ring (H3DGS's scaffold): what the ring is worth at the seam.
   - name: blocks-2-no-ring
-    params: {train: {blocks: 2, block_ring: false}}
+    params: { train: { blocks: 2, block_ring: false } }
 
   # The camera test's threshold at CityGS V1's own default: fewer cameras per block.
   - name: blocks-2-epsilon-0.08
-    params: {train: {blocks: 2, block_epsilon: 0.08}}
+    params: { train: { blocks: 2, block_epsilon: 0.08 } }

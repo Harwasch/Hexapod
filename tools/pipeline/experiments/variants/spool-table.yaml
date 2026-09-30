@@ -26,9 +26,9 @@ baseline: baseline
 # `select: sharpness-windowed` pins the time-based frame rule these runs were made with;
 # the recipe's own rule is by camera motion since v9, which is the `viewpoint` variant.
 base:
-  normalize: {max_side: 1600, fps: 4, select: sharpness-windowed}
-  train: {schedule_scale: 1.0}
-  quality: {mode: refine, bar: strict}
+  normalize: { max_side: 1600, fps: 4, select: sharpness-windowed }
+  train: { schedule_scale: 1.0 }
+  quality: { mode: refine, bar: strict }
 
 variants:
   # Twice, so the table shows how far two identical runs land apart; a switch whose
@@ -39,55 +39,55 @@ variants:
   # Mip-Splatting's screen-space filter. Trains opacities the renderer must compensate
   # the same way; see the recipe's note before making it a default.
   - name: antialiased
-    params: {train: {antialiased: true}}
+    params: { train: { antialiased: true } }
 
   # A tenth of the MCMC preset's 0.01 opacity regularisation.
   - name: opacity-reg-0.001
-    params: {train: {opacity_reg: 0.001}}
+    params: { train: { opacity_reg: 0.001 } }
 
   # Rendered depth pulled toward each frame's own SfM points.
   - name: depth-loss
-    params: {train: {depth_loss: true}}
+    params: { train: { depth_loss: true } }
 
   # Per-frame pose refinement: phone video poses are rolling-shutter and slightly off.
   - name: pose-opt
-    params: {train: {pose_opt: true}}
+    params: { train: { pose_opt: true } }
 
   # Per-frame colour/exposure correction (bilateral grid); `ccPsnr` is the val split
   # after a colour fit, `psnr` stays the raw number.
   - name: bilateral-grid
-    params: {train: {bilateral_grid: true}}
+    params: { train: { bilateral_grid: true } }
 
   # The same problem through a per-frame appearance embedding instead; the PLY is baked
   # to degree-0 colour, which is all canonical.ply keeps anyway.
   - name: app-opt
-    params: {train: {app_opt: true}}
+    params: { train: { app_opt: true } }
 
   # More frames: 8 fps, and up to 180 of them kept (the recipe keeps 100).
   - name: fps-8
-    params: {normalize: {fps: 8, keep: 180}}
+    params: { normalize: { fps: 8, keep: 180 } }
 
   # Keyframes by camera motion (keyframes.py), the recipe's rule since v9: candidates at
   # 15 a second, a window per 10% of the view or ~1 deg of viewpoint, the sharpest of
   # each. Its frame count is in source_meta.json `viewpoint`; the question is whether it
   # keeps about fps-8's 173 frames on this capture and matches or beats its LPIPS.
   - name: viewpoint
-    params: {normalize: {select: viewpoint, fps: 15}}
+    params: { normalize: { select: viewpoint, fps: 15 } }
 
   # Two and four images a training step (gsplat's `batch_size`, sqrt(batch) learning
   # rates), on a half and a quarter of the steps, so the same images are trained on. The
   # question is only speed per image on the L4 at equal quality: compare `trainSeconds`
   # and PSNR/LPIPS with `baseline` (training is 86% of a run's cost).
   - name: batch-2
-    params: {train: {batch_size: 2}}
+    params: { train: { batch_size: 2 } }
 
   - name: batch-4
-    params: {train: {batch_size: 4}}
+    params: { train: { batch_size: 4 } }
 
   # Everything at once (bilateral grid rather than app_opt: they model the same drift).
   - name: all-of-the-recipe
     params:
-      normalize: {fps: 8, keep: 180}
+      normalize: { fps: 8, keep: 180 }
       train:
         antialiased: true
         opacity_reg: 0.001

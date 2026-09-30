@@ -35,8 +35,9 @@ test that checks the committed tiles are still byte-identical to a fresh run.
 
 Byte-reproducible, like the tree: seeded RNG, positions snapped to the SPZ grid.
 
-Usage:
-    python synthetic_yard.py ../../data/tiles/synthetic-yard [--seed 11] [--tile-gaussians 6000]
+Usage (OpenBLAS pinned as tests/conftest.py pins it, so the bytes are the CPU's own no more):
+    OPENBLAS_CORETYPE=Haswell python synthetic_yard.py ../../data/tiles/synthetic-yard \
+        [--seed 11] [--tile-gaussians 6000]
 """
 
 from __future__ import annotations
