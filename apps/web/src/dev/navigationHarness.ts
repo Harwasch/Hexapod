@@ -150,11 +150,9 @@ export async function startNavigationHarness(
     const patched = tileset as unknown as {
       selectOffscreen: boolean;
       splatIncremental: boolean;
-      focusWeight: number;
     };
     patched.selectOffscreen = false;
     patched.splatIncremental = false;
-    patched.focusWeight = 0;
   }
   // Count the GPU traffic that stalls the main thread, and every tile request.
   const counters = {
@@ -384,7 +382,7 @@ export async function startNavigationHarness(
         intervalMs,
         rebuilds: generation() - generationBefore,
         tilesLoaded: tilesLoaded - loadedBefore,
-        drawn: primitive?._numSplats ?? 0,
+        drawn: primitive?._liveSplats ?? primitive?._numSplats ?? 0,
       };
     },
     async settle(seconds) {

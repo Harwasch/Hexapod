@@ -47,7 +47,7 @@ describe("the globe's splat budget, by count", () => {
         memoryRatio: bytes / budget,
       }).reason;
     };
-    expect(at(100_000)).toBe("idle refinement");
+    expect(at(100_000)).toMatch(/^idle refinement/);
     expect(at(300_000)).toMatch(/^holding/);
     expect(at(520_000)).toMatch(/^memory pressure/);
   });

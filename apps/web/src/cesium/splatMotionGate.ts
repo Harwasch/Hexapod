@@ -72,6 +72,8 @@ export class SplatMotionGate {
   constructor(
     private readonly scene: Scene,
     events: Emitter<SceneEvents>,
+    /** The interface is being used (uiActivity.ts): streaming holds back as for motion. */
+    private readonly interfaceBusy: () => boolean = () => false,
   ) {
     this.off.push(
       events.on("motion", (moving) => {
@@ -99,12 +101,13 @@ export class SplatMotionGate {
     );
     if (state.release) this.releaseAt = now;
     const primitives = splatPrimitives(this.scene.primitives);
-    for (const primitive of primitives) primitive.holdRebuilds = state.hold;
+    const hold = state.hold || this.interfaceBusy();
+    for (const primitive of primitives) primitive.holdRebuilds = hold;
     const wasHeld = this.held;
-    this.held = state.hold;
+    this.held = hold;
     // Request-render mode renders only when asked: a rebuild held back must be asked for
     // once it may run.
-    if (primitives.length > 0 && wasHeld && !state.hold) this.scene.requestRender();
+    if (primitives.length > 0 && wasHeld && !hold) this.scene.requestRender();
   }
 
   destroy(): void {

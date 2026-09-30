@@ -1,67 +1,8 @@
-diff --git a/Source/Scene/Cesium3DTile.js b/Source/Scene/Cesium3DTile.js
-index b69a982b5dfeaa2bd97393aa4cd26298a902a42a..d0d78f75328d63217c41750f5f6e40de680e3f9c 100644
---- a/Source/Scene/Cesium3DTile.js
-+++ b/Source/Scene/Cesium3DTile.js
-@@ -963,6 +963,14 @@ Cesium3DTile.prototype.getScreenSpaceError = function (
-       const dynamicError = CesiumMath.fog(distance, density) * factor;
-       error -= dynamicError;
-     }
-+    // Hexapod patch: `tileset.focusWeight` (0..1) spends detail where the person looks. A
-+    // tile within `focusConeRadians` of the view direction keeps its error; one toward the
-+    // edge of the view has it scaled down, to (1 - focusWeight) at the edge, so under a
-+    // detail budget the centre of the view refines first and the periphery last.
-+    const focusWeight = tileset.focusWeight;
-+    if (focusWeight > 0 && error > 0) {
-+      error *= focusFactor(this, frameState, focusWeight, tileset.focusConeRadians);
-+    }
-   }
- 
-   error /= frameState.pixelRatio;
-@@ -970,6 +978,39 @@ Cesium3DTile.prototype.getScreenSpaceError = function (
-   return error;
- };
- 
-+const scratchFocusDirection = new Cartesian3();
-+
-+/**
-+ * Hexapod patch: the focus factor of a tile, 1 within the cone around the view direction,
-+ * falling linearly to (1 - weight) at the edge of the view, from the angle between the view
-+ * direction and the nearest point of the tile's bounding sphere.
-+ * @private
-+ */
-+function focusFactor(tile, frameState, weight, cone) {
-+  const camera = frameState.camera;
-+  const sphere = tile.boundingSphere;
-+  const toCenter = Cartesian3.subtract(
-+    sphere.center,
-+    camera.positionWC,
-+    scratchFocusDirection,
-+  );
-+  const distance = Cartesian3.magnitude(toCenter);
-+  if (distance <= sphere.radius) {
-+    return 1.0;
-+  }
-+  const cosine = Cartesian3.dot(toCenter, camera.directionWC) / distance;
-+  const angle =
-+    Math.acos(CesiumMath.clamp(cosine, -1.0, 1.0)) -
-+    Math.asin(Math.min(1.0, sphere.radius / distance));
-+  const frustum = camera.frustum;
-+  const edge = defined(frustum.fov) ? frustum.fov * 0.5 : CesiumMath.PI_OVER_FOUR;
-+  if (angle <= cone) {
-+    return 1.0;
-+  }
-+  const t = CesiumMath.clamp((angle - cone) / Math.max(edge - cone, 1e-3), 0.0, 1.0);
-+  return 1.0 - weight * t;
-+}
-+
- /**
-  * @private
-  * @param {Cesium3DTileset} tileset
 diff --git a/Source/Scene/Cesium3DTileset.js b/Source/Scene/Cesium3DTileset.js
-index 45e8741d148b8c7569ab89d3ffab2b89c76f5f3f..bc4c438d068f34be933a7fad563ac766672f42d9 100644
+index 45e8741d148b8c7569ab89d3ffab2b89c76f5f3f..80dc55576379898d22cea0ed4c07c600fba92812 100644
 --- a/Source/Scene/Cesium3DTileset.js
 +++ b/Source/Scene/Cesium3DTileset.js
-@@ -857,6 +857,38 @@ function Cesium3DTileset(options) {
+@@ -857,6 +857,24 @@ function Cesium3DTileset(options) {
     */
    this.loadSiblings = options.loadSiblings ?? false;
  
@@ -73,20 +14,6 @@ index 45e8741d148b8c7569ab89d3ffab2b89c76f5f3f..bc4c438d068f34be933a7fad563ac766
 +   * @default false
 +   */
 +  this.selectOffscreen = false;
-+
-+  /**
-+   * Hexapod patch: how much less detail the edge of the view gets than its centre, 0..1
-+   * (see Cesium3DTile.getScreenSpaceError). 0 is Cesium's uniform error.
-+   * @type {number}
-+   * @default 0
-+   */
-+  this.focusWeight = 0.0;
-+
-+  /**
-+   * Hexapod patch: the half-angle around the view direction that keeps full detail.
-+   * @type {number}
-+   */
-+  this.focusConeRadians = 0.2;
 +
 +  /**
 +   * Hexapod patch: the splat primitive this tileset creates runs in incremental mode
@@ -199,10 +126,10 @@ index db3adac5ab6db91f0fa3d08f1eb69b0837b5be4f..6a92d66292f9e76eccf91f00e6b7a199
     * Gets the amount of memory used by the batch table textures and any binary
     * metadata properties not accounted for in geometryByteLength or
 diff --git a/Source/Scene/GaussianSplatPrimitive.js b/Source/Scene/GaussianSplatPrimitive.js
-index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..1fb86a8a1fefeb0f2591cae5beb9c7e590717586 100644
+index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..76f371b82da476ed9a4f7b4190fd5d98a4ed018e 100644
 --- a/Source/Scene/GaussianSplatPrimitive.js
 +++ b/Source/Scene/GaussianSplatPrimitive.js
-@@ -174,6 +174,49 @@ const DEFAULT_SORT_MIN_POSITION_DELTA = 1.0;
+@@ -174,6 +174,51 @@ const DEFAULT_SORT_MIN_POSITION_DELTA = 1.0;
   * @returns {boolean} Whether a new steady sort should begin.
   * @private
   */
@@ -246,24 +173,29 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..1fb86a8a1fefeb0f2591cae5beb9c7e5
 +}
 +
 +// Hexapod patch: with a distance-sorting hook, the camera moving this far (metres) is what
-+// calls for a new sort; turning does not.
++// calls for a new sort; turning does not. The hook may say how far that is for a primitive
++// (`resortDistance`: a share of the nearest splat's distance -- a step that small reorders
++// only splats nearly equidistant, whose order does not show); otherwise this.
 +const DISTANCE_SORT_MIN_POSITION_DELTA = 0.01;
 +
  function shouldStartSteadySort(primitive, frameState) {
    const framesSinceLastSort =
      primitive._lastSteadySortFrameNumber >= 0
-@@ -201,6 +244,10 @@ function shouldStartSteadySort(primitive, frameState) {
+@@ -201,6 +246,13 @@ function shouldStartSteadySort(primitive, frameState) {
      camera.positionWC,
      primitive._lastSteadySortCameraPosition,
    );
 +  const hook = GaussianSplatPrimitive.sortHook;
 +  if (defined(hook) && hook.sortByDistance === true) {
-+    return positionDelta >= DISTANCE_SORT_MIN_POSITION_DELTA;
++    const threshold = defined(hook.resortDistance)
++      ? hook.resortDistance(primitive)
++      : DISTANCE_SORT_MIN_POSITION_DELTA;
++    return positionDelta >= threshold;
 +  }
    if (positionDelta >= DEFAULT_SORT_MIN_POSITION_DELTA) {
      return true;
    }
-@@ -712,8 +759,14 @@ async function resolveSteadySort(primitive, activeSort, sortPromise) {
+@@ -712,12 +764,20 @@ async function resolveSteadySort(primitive, activeSort, sortPromise) {
      const expectedCount = activeSort?.expectedCount;
      const currentCount = expectedCount;
      const sortedLen = sortedData?.length;
@@ -279,7 +211,13 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..1fb86a8a1fefeb0f2591cae5beb9c7e5
      if (!isActive || isMismatch) {
        if (isActive) {
          primitive._sorterPromise = undefined;
-@@ -1070,9 +1123,63 @@ function GaussianSplatPrimitive(options) {
+         primitive._sorterState = GaussianSplatSortingState.IDLE;
++        // Hexapod patch: sort again without waiting for the camera to move.
++        primitive._hasLastSteadySortCameraPosition = false;
+       }
+       return;
+     }
+@@ -1070,9 +1130,66 @@ function GaussianSplatPrimitive(options) {
     * @private
     */
    this._splatBudgetSSEScale = 1.0;
@@ -308,6 +246,9 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..1fb86a8a1fefeb0f2591cae5beb9c7e5
 +   */
 +  this.incrementalCapacity = options.tileset?.splatIncrementalCapacity ?? 0;
 +  this._incremental = undefined;
++  // Hexapod patch: splats in live incremental slots, and the clock that orders hidden tiles.
++  this._liveSplats = 0;
++  this._hiddenClock = 0;
  }
  
  Object.defineProperties(GaussianSplatPrimitive.prototype, {
@@ -343,7 +284,7 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..1fb86a8a1fefeb0f2591cae5beb9c7e5
    /**
     * Indicates whether the primitive is ready for use.
     * @memberof GaussianSplatPrimitive.prototype
-@@ -1149,6 +1256,7 @@ GaussianSplatPrimitive.prototype._wrappedUpdate = function (frameState) {
+@@ -1149,6 +1266,7 @@ GaussianSplatPrimitive.prototype._wrappedUpdate = function (frameState) {
   * @private
   */
  GaussianSplatPrimitive.prototype.destroy = function () {
@@ -351,7 +292,7 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..1fb86a8a1fefeb0f2591cae5beb9c7e5
    this._positions = undefined;
    this._rotations = undefined;
    this._scales = undefined;
-@@ -1577,6 +1685,17 @@ GaussianSplatPrimitive.buildGSplatDrawCommand = function (
+@@ -1577,6 +1695,17 @@ GaussianSplatPrimitive.buildGSplatDrawCommand = function (
    renderResources.instanceCount = instanceCount;
    renderResources.count = 4;
    renderResources.primitiveType = PrimitiveType.TRIANGLE_STRIP;
@@ -369,7 +310,7 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..1fb86a8a1fefeb0f2591cae5beb9c7e5
    shaderBuilder.addVertexLines(GaussianSplatVS);
    shaderBuilder.addFragmentLines(GaussianSplatFS);
    const shaderProgram = shaderBuilder.buildShaderProgram(frameState.context);
-@@ -1606,10 +1725,22 @@ GaussianSplatPrimitive.buildGSplatDrawCommand = function (
+@@ -1606,10 +1735,22 @@ GaussianSplatPrimitive.buildGSplatDrawCommand = function (
    idxAttr.constant = 0;
    idxAttr.instanceDivisor = 1;
  
@@ -392,7 +333,7 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..1fb86a8a1fefeb0f2591cae5beb9c7e5
      const geometry = new Geometry({
        attributes: {
          screenQuadPosition: new GeometryAttribute({
-@@ -1637,7 +1768,9 @@ GaussianSplatPrimitive.buildGSplatDrawCommand = function (
+@@ -1637,7 +1778,9 @@ GaussianSplatPrimitive.buildGSplatDrawCommand = function (
        .vertexBuffer.copyFromArrayView(primitive._indexes);
    }
  
@@ -403,7 +344,7 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..1fb86a8a1fefeb0f2591cae5beb9c7e5
  
    // The draw command uses rootTransform as its modelMatrix. tileset.modelMatrix
    // is baked into the splat positions by transformTile and must not appear here
-@@ -1670,6 +1803,503 @@ GaussianSplatPrimitive.buildGSplatDrawCommand = function (
+@@ -1670,6 +1813,582 @@ GaussianSplatPrimitive.buildGSplatDrawCommand = function (
    primitive._drawCommand = command;
  };
  
@@ -538,6 +479,10 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..1fb86a8a1fefeb0f2591cae5beb9c7e5
 +    slots: new Map(),
 +    // Tiles whose data is uploaded (drawn once a sort includes them).
 +    live: new Set(),
++    // Hexapod patch: tiles no longer selected whose data stays in its slot, not drawn
++    // (the sorter leaves them out) -> the frame they were hidden, for least-recently-used
++    // eviction. Selected again, they are drawn at once with nothing uploaded.
++    hidden: new Map(),
 +    batch: undefined,
 +    // Tiles to zero once a sort of at least `removalGeneration` is drawn.
 +    pendingRemovals: [],
@@ -584,6 +529,47 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..1fb86a8a1fefeb0f2591cae5beb9c7e5
 +  primitive._activeSort = undefined;
 +  primitive._sorterPromise = undefined;
 +  primitive._sorterState = GaussianSplatSortingState.IDLE;
++}
++
++// Hexapod patch: whether the sorter can leave ranges out of its orders (hide/show). Without
++// it, a tile that leaves is zeroed as before.
++function sorterHides() {
++  const hook = GaussianSplatPrimitive.sortHook;
++  return (
++    defined(hook) &&
++    hook.compacts === true &&
++    defined(hook.hide) &&
++    defined(hook.show) &&
++    defined(hook.release)
++  );
++}
++
++function tellSorter(primitive, inc, name, slot) {
++  const hook = GaussianSplatPrimitive.sortHook;
++  if (defined(hook) && defined(hook[name])) {
++    hook[name](primitive, inc.capacity, slot.start, slot.count);
++  }
++}
++
++// Frees hidden tiles' slots, least recently hidden first, until `count` splats fit.
++function allocateEvicting(primitive, inc, count) {
++  let slot = allocateSlot(inc, count);
++  if (defined(slot) || inc.hidden.size === 0) {
++    return slot;
++  }
++  const byAge = Array.from(inc.hidden.entries()).sort((a, b) => a[1] - b[1]);
++  for (const [tile] of byAge) {
++    const hiddenSlot = inc.slots.get(tile);
++    inc.hidden.delete(tile);
++    inc.slots.delete(tile);
++    tellSorter(primitive, inc, "release", hiddenSlot);
++    releaseSlot(inc, hiddenSlot);
++    slot = allocateSlot(inc, count);
++    if (defined(slot)) {
++      return slot;
++    }
++  }
++  return undefined;
 +}
 +
 +function allocateSlot(inc, count) {
@@ -682,15 +668,24 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..1fb86a8a1fefeb0f2591cae5beb9c7e5
 +// The slots as the rest of the engine (and the application) reads a snapshot.
 +function publishIncremental(primitive, inc) {
 +  let highWater = 0;
++  let live = 0;
 +  const ordered = [];
 +  for (const tile of inc.live) {
 +    const slot = inc.slots.get(tile);
 +    ordered.push([tile, slot]);
 +    highWater = Math.max(highWater, slot.start + slot.count);
++    live += slot.count;
++  }
++  // Hidden tiles keep their slots, so the sorter's range reaches them too.
++  for (const tile of inc.hidden.keys()) {
++    const slot = inc.slots.get(tile);
++    highWater = Math.max(highWater, slot.start + slot.count);
 +  }
 +  ordered.sort((a, b) => a[1].start - b[1].start);
 +  inc.highWater = highWater;
 +  primitive._numSplats = highWater;
++  // Splats drawn (live tiles only): what a budget should count, not the slot range.
++  primitive._liveSplats = live;
 +  primitive._positions = inc.positions.subarray(0, highWater * 3);
 +  primitive._colors = inc.colors.subarray(0, highWater * 4);
 +  primitive._selectedTileSet = new Set(ordered.map((entry) => entry[0]));
@@ -730,13 +725,17 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..1fb86a8a1fefeb0f2591cae5beb9c7e5
 +    // they replace goes once that sort is on screen.
 +    inc.batch = undefined;
 +    for (const tile of batch.adds) {
-+      if (inc.slots.has(tile)) {
++      if (inc.slots.has(tile) && !inc.live.has(tile)) {
 +        inc.live.add(tile);
++        inc.hidden.delete(tile);
++        tellSorter(primitive, inc, "show", inc.slots.get(tile));
 +      }
 +    }
 +    publishIncremental(primitive, inc);
 +    for (const tile of batch.removes) {
-+      inc.pendingRemovals.push(tile);
++      if (!inc.pendingRemovals.includes(tile)) {
++        inc.pendingRemovals.push(tile);
++      }
 +    }
 +    inc.removalGeneration = primitive._splatDataGeneration;
 +    return;
@@ -750,9 +749,16 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..1fb86a8a1fefeb0f2591cae5beb9c7e5
 +    ? INCREMENTAL_MOVING_BATCH_SPLATS
 +    : INCREMENTAL_BATCH_SPLATS;
 +  const adds = [];
++  const reveals = [];
 +  let pending = 0;
 +  let added = 0;
 +  for (const tile of tiles) {
++    // Hexapod patch: a hidden tile's data is still in its slot: drawn again with nothing
++    // uploaded, in this batch whatever its size.
++    if (inc.hidden.has(tile)) {
++      reveals.push(tile);
++      continue;
++    }
 +    if (inc.slots.has(tile)) {
 +      continue;
 +    }
@@ -774,14 +780,17 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..1fb86a8a1fefeb0f2591cae5beb9c7e5
 +      }
 +    }
 +  }
-+  if (adds.length === 0 && removes.length === 0) {
++  if (adds.length === 0 && removes.length === 0 && reveals.length === 0) {
 +    return;
 +  }
 +
 +  const current = { adds: adds, removes: removes, waiting: 0 };
++  let dispatched = 0;
 +  for (const tile of adds) {
 +    const count = tile.content.pointsLength;
-+    const slot = allocateSlot(inc, count);
++    const slot = sorterHides()
++      ? allocateEvicting(primitive, inc, count)
++      : allocateSlot(inc, count);
 +    if (!defined(slot)) {
 +      // No room: start over, bigger. Every selected tile is added again.
 +      primitive.incrementalCapacity = Math.ceil(
@@ -806,6 +815,7 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..1fb86a8a1fefeb0f2591cae5beb9c7e5
 +      releaseSlot(inc, slot);
 +      continue;
 +    }
++    dispatched++;
 +    inc.slots.set(tile, slot);
 +    current.waiting++;
 +    promise
@@ -868,7 +878,12 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..1fb86a8a1fefeb0f2591cae5beb9c7e5
 +        current.waiting--;
 +      });
 +  }
-+  current.adds = adds.filter((tile) => inc.slots.has(tile));
++  current.adds = adds.filter((tile) => inc.slots.has(tile)).concat(reveals);
++  // Hexapod patch: a tile the batch could not dispatch (the texture worker was busy) is not
++  // drawn yet, so nothing it replaces may leave in this batch.
++  if (dispatched < adds.length) {
++    current.removes = [];
++  }
 +  inc.batch = current;
 +}
 +
@@ -886,17 +901,22 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..1fb86a8a1fefeb0f2591cae5beb9c7e5
 +  }
 +  const removals = inc.pendingRemovals;
 +  inc.pendingRemovals = [];
-+  const hook = GaussianSplatPrimitive.sortHook;
++  // Hexapod patch: a tile selected again since it was marked to leave stays.
++  const selected = new Set(primitive._tileset._selectedTiles);
++  const hides = sorterHides();
 +  for (const tile of removals) {
 +    const slot = inc.slots.get(tile);
-+    if (!defined(slot)) {
++    if (!defined(slot) || selected.has(tile) || !inc.live.has(tile)) {
++      continue;
++    }
++    if (hides) {
++      // Hexapod patch: kept in its slot, left out of the order, until the room is needed.
++      inc.live.delete(tile);
++      inc.hidden.set(tile, primitive._hiddenClock++);
++      tellSorter(primitive, inc, "hide", slot);
 +      continue;
 +    }
 +    zeroSlot(inc, slot);
-+    // Hexapod patch: the sorter drops the range from its orders until it is written again.
-+    if (defined(hook) && defined(hook.release)) {
-+      hook.release(primitive, inc.capacity, slot.start, slot.count);
-+    }
 +    inc.slots.delete(tile);
 +    inc.live.delete(tile);
 +    releaseSlot(inc, slot);
@@ -907,7 +927,7 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..1fb86a8a1fefeb0f2591cae5beb9c7e5
  /**
   * Updates the Gaussian splat primitive for the current frame.
   * This method checks if the primitive needs to be updated based on the current frame state,
-@@ -1689,14 +2319,32 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
+@@ -1689,14 +2408,44 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
      return;
    }
  
@@ -924,6 +944,18 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..1fb86a8a1fefeb0f2591cae5beb9c7e5
    if (this._drawCommand) {
      frameState.commandList.push(this._drawCommand);
    }
++  // Hexapod patch: work still in flight (a sort, a batch, tiles waiting to leave) asks for
++  // another frame, so in request-render mode it lands without the camera having to move.
++  const pendingIncremental = this._incremental;
++  if (
++    this._sorterState === GaussianSplatSortingState.SORTING ||
++    this._sorterState === GaussianSplatSortingState.SORTED ||
++    (defined(pendingIncremental) &&
++      (defined(pendingIncremental.batch) ||
++        pendingIncremental.pendingRemovals.length > 0))
++  ) {
++    frameState.afterRender.push(() => true);
++  }
  
    if (tileset._modelMatrixChanged) {
 +    // Hexapod patch: every baked position moves; the incremental slots start over.
@@ -940,7 +972,7 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..1fb86a8a1fefeb0f2591cae5beb9c7e5
    const hasRootTransform = defined(this._rootTransform);
  
    if (frameState.passes.pick === true) {
-@@ -1712,6 +2360,12 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
+@@ -1712,6 +2461,12 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
    }
  
    if (this._sorterState === GaussianSplatSortingState.IDLE) {
@@ -953,7 +985,7 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..1fb86a8a1fefeb0f2591cae5beb9c7e5
      const selectedTilesChanged =
        tileset._selectedTiles.length !== 0 &&
        haveSelectedTilesChanged(this, tileset._selectedTiles);
-@@ -1740,11 +2394,20 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
+@@ -1740,11 +2495,20 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
      } else {
        this._snapshotRebuildStallFrames = 0;
      }
@@ -976,7 +1008,7 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..1fb86a8a1fefeb0f2591cae5beb9c7e5
        this._dirty ||
        this._needsSnapshotRebuild ||
        selectedTilesChanged ||
-@@ -1759,6 +2422,7 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
+@@ -1759,6 +2523,7 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
      }
  
      if (
@@ -984,7 +1016,7 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..1fb86a8a1fefeb0f2591cae5beb9c7e5
        tileset._selectedTiles.length !== 0 &&
        this._needsSnapshotRebuild &&
        allowRebuild
-@@ -2055,6 +2719,10 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
+@@ -2055,6 +2820,10 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
      if (!hasRootTransform) {
        return;
      }
@@ -995,7 +1027,7 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..1fb86a8a1fefeb0f2591cae5beb9c7e5
  
      Matrix4.clone(camera.viewMatrix, this._prevViewMatrix);
      Matrix4.multiply(camera.viewMatrix, this._rootTransform, scratchMatrix4A);
-@@ -2071,14 +2739,7 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
+@@ -2071,14 +2840,7 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
          dataGeneration: dataGeneration,
          expectedCount: expectedCount,
        };
@@ -1011,7 +1043,7 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..1fb86a8a1fefeb0f2591cae5beb9c7e5
        this._sorterPromise = rawPromise;
        if (defined(rawPromise)) {
          markSteadySortStart(this, frameState);
-@@ -2105,14 +2766,7 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
+@@ -2105,14 +2867,7 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
          dataGeneration: dataGeneration,
          expectedCount: expectedCount,
        };
@@ -1027,10 +1059,18 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..1fb86a8a1fefeb0f2591cae5beb9c7e5
        this._sorterPromise = rawPromise;
        if (defined(rawPromise)) {
          markSteadySortStart(this, frameState);
-@@ -2133,6 +2787,10 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
+@@ -2132,7 +2887,18 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
+     return; //still sorting, wait for next frame
    } else if (this._sorterState === GaussianSplatSortingState.SORTED) {
      //update the draw command if sorted
++    const previousCommand = this._drawCommand;
      GaussianSplatPrimitive.buildGSplatDrawCommand(this, frameState);
++    // Hexapod patch: this frame draws the new order, not the command pushed above with the
++    // old instance count against the buffer just refilled.
++    const at = frameState.commandList.indexOf(previousCommand);
++    if (at >= 0 && defined(this._drawCommand)) {
++      frameState.commandList[at] = this._drawCommand;
++    }
 +    // Hexapod patch: the tiles a batch replaced leave once the batch's tiles are drawn.
 +    if (defined(this._incremental) && defined(this._activeSort)) {
 +      incrementalAfterSort(this, this._activeSort.dataGeneration);
@@ -1038,7 +1078,7 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..1fb86a8a1fefeb0f2591cae5beb9c7e5
      this._sorterState = GaussianSplatSortingState.IDLE; //reset state for next frame
      this._dirty = false;
      this._sorterPromise = undefined; //reset promise for next frame
-@@ -2144,4 +2802,10 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
+@@ -2144,4 +2910,10 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
    this._dirty = false;
  };
  
@@ -1050,27 +1090,16 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..1fb86a8a1fefeb0f2591cae5beb9c7e5
 +
  export default GaussianSplatPrimitive;
 diff --git a/Source/Scene/GltfSpzLoader.js b/Source/Scene/GltfSpzLoader.js
-index d0381fd52b5b7116fdaa337a93125d36a50e01cd..a46953930f909d923abc163ce15ec0693cd8b4aa 100644
+index d0381fd52b5b7116fdaa337a93125d36a50e01cd..f7f9cc6d07e7eca31e9d400c280448bc66462e54 100644
 --- a/Source/Scene/GltfSpzLoader.js
 +++ b/Source/Scene/GltfSpzLoader.js
-@@ -234,9 +234,28 @@ class GltfSpzLoader extends ResourceLoader {
+@@ -234,9 +234,17 @@ class GltfSpzLoader extends ResourceLoader {
        }
      }
  
 -    const decodePromise = loadSpz(this._bufferViewTypedArray, {
 -      unpackOptions: { coordinateSystem: "UNSPECIFIED" },
 -    });
-+    // Hexapod patch: SPZ decodes on the main thread (spz-loader's WASM), tens of
-+    // milliseconds a tile. The application may cap how many start in a frame through
-+    // `frameState.splatDecodesAllowed` (a number, decremented here), so a moving camera
-+    // decodes a trickle rather than a burst; undefined means no cap.
-+    if (defined(frameState) && typeof frameState.splatDecodesAllowed === "number") {
-+      if (frameState.splatDecodesAllowed <= 0) {
-+        return false;
-+      }
-+      frameState.splatDecodesAllowed -= 1;
-+    }
-+
 +    // Hexapod patch: `GltfSpzLoader.decodeHook`, when set, decodes instead (the application
 +    // runs spz-loader in a worker). It takes a copy of the SPZ bytes and resolves to the same
 +    // cloud loadSpz returns, optionally with `rgba` (Uint8, 4 per splat) and `shCoefficients`
@@ -1085,7 +1114,7 @@ index d0381fd52b5b7116fdaa337a93125d36a50e01cd..a46953930f909d923abc163ce15ec069
  
      if (!defined(decodePromise)) {
        return false;
-@@ -262,6 +281,13 @@ class GltfSpzLoader extends ResourceLoader {
+@@ -262,6 +270,13 @@ class GltfSpzLoader extends ResourceLoader {
    }
  }
  
@@ -1129,6 +1158,89 @@ index aec35d424e4aacc34b5cdc3b7b9b37034df77434..8c2749f74924f68110a62619b72f353a
      const sphericalHarmonicDegree = gcloudData.shDegree;
      let stride = 0;
      const base = [0, 9, 24];
+diff --git a/Source/Scene/ScreenSpaceCameraController.js b/Source/Scene/ScreenSpaceCameraController.js
+index 5eea95202b28bf079d574a0c92a82f88ddd0d127..602481b6bb35f3f4f9a4d7e1d1f73571fdf0915e 100644
+--- a/Source/Scene/ScreenSpaceCameraController.js
++++ b/Source/Scene/ScreenSpaceCameraController.js
+@@ -1142,6 +1142,56 @@ const pickGlobeScratchRay = new Ray();
+ const scratchDepthIntersection = new Cartesian3();
+ const scratchRayIntersection = new Cartesian3();
+ 
++// Hexapod patch: a depth pick is a render pass and a synchronous GPU read-back, which stalls
++// the main thread for as long as the GPU is busy; zoom3D asked for one every frame of a zoom
++// near the ground. `ScreenSpaceCameraController.pickHook(windowPosition, ray)`, when set, may
++// answer from the CPU (the application's splat solids) and no depth is read; otherwise a
++// depth pick at the same pixel within `DEPTH_PICK_REUSE_MS` is reused -- zooming moves the
++// camera along the ray under the cursor, so the point it found is still the one there.
++const DEPTH_PICK_REUSE_MS = 300;
++const lastDepthPick = {
++  x: Number.NaN,
++  y: Number.NaN,
++  at: 0,
++  hit: false,
++  position: new Cartesian3(),
++};
++
++function depthPick(controller, mousePosition, result) {
++  const scene = controller._scene;
++  const now = performance.now();
++  if (
++    mousePosition.x === lastDepthPick.x &&
++    mousePosition.y === lastDepthPick.y &&
++    now - lastDepthPick.at < DEPTH_PICK_REUSE_MS
++  ) {
++    lastDepthPick.at = now;
++    return lastDepthPick.hit
++      ? Cartesian3.clone(lastDepthPick.position, result)
++      : undefined;
++  }
++  const hook = ScreenSpaceCameraController.pickHook;
++  let position;
++  if (defined(hook)) {
++    const ray = scene.camera.getPickRay(mousePosition, pickHookScratchRay);
++    position = defined(ray) ? hook(mousePosition, ray) : undefined;
++  }
++  if (!defined(position)) {
++    position = scene.pickPositionWorldCoordinates(mousePosition, result);
++  } else {
++    position = Cartesian3.clone(position, result);
++  }
++  lastDepthPick.x = mousePosition.x;
++  lastDepthPick.y = mousePosition.y;
++  lastDepthPick.at = now;
++  lastDepthPick.hit = defined(position);
++  if (defined(position)) {
++    Cartesian3.clone(position, lastDepthPick.position);
++  }
++  return position;
++}
++const pickHookScratchRay = new Ray();
++
+ function pickPosition(controller, mousePosition, result) {
+   const scene = controller._scene;
+   const globe = controller._globe;
+@@ -1149,7 +1199,8 @@ function pickPosition(controller, mousePosition, result) {
+ 
+   let depthIntersection;
+   if (scene.pickPositionSupported) {
+-    depthIntersection = scene.pickPositionWorldCoordinates(
++    depthIntersection = depthPick(
++      controller,
+       mousePosition,
+       scratchDepthIntersection,
+     );
+@@ -3107,4 +3158,11 @@ ScreenSpaceCameraController.prototype.destroy = function () {
+   this._aggregator = this._aggregator && this._aggregator.destroy();
+   return destroyObject(this);
+ };
++/**
++ * Hexapod patch: an application picker consulted before a depth read-back, see depthPick.
++ * @type {((windowPosition: Cartesian2, ray: Ray) => Cartesian3 | undefined) | undefined}
++ * @private
++ */
++ScreenSpaceCameraController.pickHook = undefined;
++
+ export default ScreenSpaceCameraController;
 diff --git a/Source/Scene/TerrainFillMesh.js b/Source/Scene/TerrainFillMesh.js
 index c5d264395fc522ecc29717e57ff159aa4ed3cfd1..f7b22ea41aac67be450cf0e49db7d5195f64d2a4 100644
 --- a/Source/Scene/TerrainFillMesh.js
@@ -1148,7 +1260,7 @@ index c5d264395fc522ecc29717e57ff159aa4ed3cfd1..f7b22ea41aac67be450cf0e49db7d519
    let edgeTiles;
  
 diff --git a/Source/Shaders/PrimitiveGaussianSplatVS.glsl b/Source/Shaders/PrimitiveGaussianSplatVS.glsl
-index 18838d6c4b087d4b2bdcedfd0741d8217fb4900c..685edc091a3c2e428af5a654f58a477da9dbdb20 100644
+index 18838d6c4b087d4b2bdcedfd0741d8217fb4900c..84ba3acc65991d9a016370d9d31c2875a8f8e370 100644
 --- a/Source/Shaders/PrimitiveGaussianSplatVS.glsl
 +++ b/Source/Shaders/PrimitiveGaussianSplatVS.glsl
 @@ -151,6 +151,11 @@ void main() {
@@ -1163,25 +1275,33 @@ index 18838d6c4b087d4b2bdcedfd0741d8217fb4900c..685edc091a3c2e428af5a654f58a477d
  
      vec4 splatViewPos = czm_modelView * vec4(splatPosition.xyz, 1.0);
      vec4 clipPosition = czm_projection * splatViewPos;
-@@ -174,7 +179,15 @@ void main() {
+@@ -164,6 +169,12 @@ void main() {
  
-     vec4 covVectors = calcCovVectors(splatViewPos.xyz, Vrk);
- 
--    if (dot(covVectors.xy, covVectors.xy) < 4.0 && dot(covVectors.zw, covVectors.zw) < 4.0) {
-+    // Hexapod patch: an empty slot (all-zero covariance: incremental mode's freed ranges)
-+    // draws nothing; any other splat is culled only under a pixel of radius on both axes, as
-+    // PlayCanvas's splat renderer does. The engine's 2 px cut removed whole distant surfaces
-+    // seen from the ground, where every splat is small.
+     ivec2 covCoord = ivec2(int(((texIdx & rowMask) << 1) | 1u), int(texIdx >> rowShift));
+     uvec4 covariance = uvec4(texelFetch(u_splatAttributeTexture, covCoord, 0));
++    // Hexapod patch: an empty slot (all-zero covariance) draws nothing; checked before
++    // anything is projected.
 +    if (covariance.x == 0u && covariance.y == 0u && covariance.z == 0u) {
 +        gl_Position = discardVec;
 +        return;
 +    }
+ 
+     gl_Position = clipPosition;
+ 
+@@ -174,7 +185,10 @@ void main() {
+ 
+     vec4 covVectors = calcCovVectors(splatViewPos.xyz, Vrk);
+ 
+-    if (dot(covVectors.xy, covVectors.xy) < 4.0 && dot(covVectors.zw, covVectors.zw) < 4.0) {
++    // Hexapod patch: a splat is culled only under a pixel of radius on both axes, as
++    // PlayCanvas's splat renderer does. The engine's 2 px cut removed whole distant surfaces
++    // seen from the ground, where every splat is small.
 +    if (dot(covVectors.xy, covVectors.xy) < 1.0 && dot(covVectors.zw, covVectors.zw) < 1.0) {
          gl_Position = discardVec;
          return;
      }
 diff --git a/Source/Shaders/PrimitiveGaussianSplatVS.js b/Source/Shaders/PrimitiveGaussianSplatVS.js
-index 0fab5dd6b552ab92efe01e4131204530d02e0374..86ba3201896c83bd0f1390d2be0446c42b4dea21 100644
+index 0fab5dd6b552ab92efe01e4131204530d02e0374..2a8b4ba83c015f1c8018c49e2ab34d096ca65d78 100644
 --- a/Source/Shaders/PrimitiveGaussianSplatVS.js
 +++ b/Source/Shaders/PrimitiveGaussianSplatVS.js
 @@ -152,6 +152,11 @@ void main() {\n\
@@ -1196,19 +1316,27 @@ index 0fab5dd6b552ab92efe01e4131204530d02e0374..86ba3201896c83bd0f1390d2be0446c4
  \n\
      vec4 splatViewPos = czm_modelView * vec4(splatPosition.xyz, 1.0);\n\
      vec4 clipPosition = czm_projection * splatViewPos;\n\
-@@ -175,7 +180,15 @@ void main() {\n\
+@@ -165,6 +170,12 @@ void main() {\n\
  \n\
-     vec4 covVectors = calcCovVectors(splatViewPos.xyz, Vrk);\n\
- \n\
--    if (dot(covVectors.xy, covVectors.xy) < 4.0 && dot(covVectors.zw, covVectors.zw) < 4.0) {\n\
-+    // Hexapod patch: an empty slot (all-zero covariance: incremental mode's freed ranges)\n\
-+    // draws nothing; any other splat is culled only under a pixel of radius on both axes, as\n\
-+    // PlayCanvas's splat renderer does. The engine's 2 px cut removed whole distant surfaces\n\
-+    // seen from the ground, where every splat is small.\n\
+     ivec2 covCoord = ivec2(int(((texIdx & rowMask) << 1) | 1u), int(texIdx >> rowShift));\n\
+     uvec4 covariance = uvec4(texelFetch(u_splatAttributeTexture, covCoord, 0));\n\
++    // Hexapod patch: an empty slot (all-zero covariance) draws nothing; checked before\n\
++    // anything is projected.\n\
 +    if (covariance.x == 0u && covariance.y == 0u && covariance.z == 0u) {\n\
 +        gl_Position = discardVec;\n\
 +        return;\n\
 +    }\n\
+ \n\
+     gl_Position = clipPosition;\n\
+ \n\
+@@ -175,7 +186,10 @@ void main() {\n\
+ \n\
+     vec4 covVectors = calcCovVectors(splatViewPos.xyz, Vrk);\n\
+ \n\
+-    if (dot(covVectors.xy, covVectors.xy) < 4.0 && dot(covVectors.zw, covVectors.zw) < 4.0) {\n\
++    // Hexapod patch: a splat is culled only under a pixel of radius on both axes, as\n\
++    // PlayCanvas's splat renderer does. The engine's 2 px cut removed whole distant surfaces\n\
++    // seen from the ground, where every splat is small.\n\
 +    if (dot(covVectors.xy, covVectors.xy) < 1.0 && dot(covVectors.zw, covVectors.zw) < 1.0) {\n\
          gl_Position = discardVec;\n\
          return;\n\

@@ -367,13 +367,14 @@ export class CameraController {
     return occluded;
   }
 
-  /** The depth buffer's or the terrain's point under the cursor: what Cesium's zoom aims at. */
+  /**
+   * The terrain's point under the cursor, found on the CPU. It used to be the nearer of that
+   * and a depth read-back, but a read-back waits for the GPU to finish its frame -- 100 to
+   * 300 ms of a busy one, on every wheel gesture -- and the question here is only whether
+   * the ground is in front of the splat, which the terrain alone answers.
+   */
   private solidPick(window: Cartesian2): Cartesian3 | null {
     const candidates: Cartesian3[] = [];
-    if (this.scene.pickPositionSupported) {
-      const depth = this.scene.pickPosition(window, new Cartesian3());
-      if (depth) candidates.push(depth);
-    }
     const ray = this.viewer.camera.getPickRay(window, new Ray());
     const ground = ray ? this.scene.globe.pick(ray, this.scene, new Cartesian3()) : undefined;
     if (ground) candidates.push(ground);
@@ -603,20 +604,23 @@ export class CameraController {
   }
 
   /**
-   * Depth pick, terrain pick and splat pick (splats write no depth: SplatCollider), the
-   * nearest that is not on a placeholder tile.
+   * Splat pick (splats write no depth: SplatCollider), terrain pick and -- only when no splat
+   * is under the cursor -- a depth pick, the nearest that is not on a placeholder tile. The
+   * first two run on the CPU; the depth pick waits for the GPU (100 to 300 ms of a busy
+   * frame at every gesture start), so it is kept for meshes and the world, which only depth
+   * describes.
    */
   private plausiblePick(window: Cartesian2): Cartesian3 | null {
     const candidates: Cartesian3[] = [];
-    if (this.scene.pickPositionSupported) {
+    const ray = this.viewer.camera.getPickRay(window, scratchRay);
+    const splat = ray ? this.collider?.raycast(ray) : undefined;
+    if (splat) candidates.push(splat.point);
+    const ground = ray ? this.scene.globe.pick(ray, this.scene, new Cartesian3()) : undefined;
+    if (ground) candidates.push(ground);
+    if (!splat && this.scene.pickPositionSupported) {
       const depth = this.scene.pickPosition(window, new Cartesian3());
       if (depth) candidates.push(depth);
     }
-    const ray = this.viewer.camera.getPickRay(window, scratchRay);
-    const ground = ray ? this.scene.globe.pick(ray, this.scene, new Cartesian3()) : undefined;
-    if (ground) candidates.push(ground);
-    const splat = ray ? this.collider?.raycast(ray) : undefined;
-    if (splat) candidates.push(splat.point);
     const cameraPosition = this.viewer.camera.positionWC;
     let best: Cartesian3 | null = null;
     let bestDistance = Number.POSITIVE_INFINITY;
@@ -735,8 +739,12 @@ export class CameraController {
     const canvas = this.viewer.canvas;
     scratchCenter.x = canvas.clientWidth / 2;
     scratchCenter.y = canvas.clientHeight / 2;
-    // At object scale the thing under the crosshair is the model, not the globe: read the
-    // depth buffer so the mm/px readout describes the object the user is looking at.
+    // At object scale the thing under the crosshair is the model, not the globe: a splat's
+    // solids answer on the CPU; otherwise read the depth buffer (a mesh), so the mm/px
+    // readout describes the object the user is looking at.
+    const centreRay = this.objectScale ? this.viewer.camera.getPickRay(scratchCenter) : undefined;
+    const splatHit = centreRay ? this.collider?.raycast(centreRay) : undefined;
+    if (splatHit) return splatHit.distance;
     if (this.objectScale && this.scene.pickPositionSupported) {
       const picked = this.scene.pickPosition(scratchCenter, scratchPick);
       if (picked) return Cartesian3.distance(this.viewer.camera.positionWC, picked);

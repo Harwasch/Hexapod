@@ -16,7 +16,7 @@ import {
 import type { Footprint, Representation, Site, SiteAsset, SiteSummary } from "@twin/contracts";
 import { boundingRadiusM, centerOf, circleFootprint, haversineDistance } from "@twin/geo";
 
-import { detailScreenSpaceScale, deviceSplatBudget } from "@/lib/detail";
+import { detailScreenSpaceScale, deviceSplatBudget, isHandheld } from "@/lib/detail";
 import { AdaptiveSplatBudget } from "@/lib/splatBudget";
 import type { Emitter } from "@/lib/emitter";
 import { createLogger, describeError } from "@/lib/log";
@@ -106,6 +106,35 @@ interface ActiveSite {
    * edge, is a blemish rather than information.
    */
   engaged: boolean;
+}
+
+/** Splat tiles kept in memory, as a multiple of what the Detail budget draws: the view,
+ *  its coarser ancestors, and what was looked at a moment ago, so looking back finds it. */
+const SPLAT_CACHE_FACTOR = 2.5;
+/** Ceilings on a splat tileset's cache (bytes): a desktop, and a phone or tablet. */
+const SPLAT_CACHE_CEILING = { desktop: 1536 * 1024 * 1024, handheld: 512 * 1024 * 1024 };
+
+/**
+ * A splat tileset's cache, sized once its tiles say what a splat costs in memory. Cesium's
+ * default (the tile cache budget, 384 MB on a desktop) held 1M splats with spherical
+ * harmonics, 4.8M without -- against a 3M budget, so a look around evicted the view just
+ * left and looking back fetched, decoded and uploaded it again.
+ */
+function sizeSplatCache(tileset: Cesium3DTileset, tile: Cesium3DTile, budget: number): void {
+  const content = tile.content as
+    { geometryByteLength?: number; pointsLength?: number } | undefined;
+  const bytes = content?.geometryByteLength ?? 0;
+  const points = content?.pointsLength ?? 0;
+  if (!(bytes > 0 && points > 0)) return;
+  const perSplat = bytes / points;
+  const ceiling = isHandheld() ? SPLAT_CACHE_CEILING.handheld : SPLAT_CACHE_CEILING.desktop;
+  const wanted = Math.min(ceiling, budget * SPLAT_CACHE_FACTOR * perSplat);
+  const floor = tileCacheBudget().cacheBytes;
+  const cacheBytes = Math.round(Math.max(floor, wanted));
+  // Only ever grows: a tile of a coarser level (fewer bytes a splat) must not shrink it back.
+  if (cacheBytes <= tileset.cacheBytes) return;
+  tileset.cacheBytes = cacheBytes;
+  tileset.maximumCacheOverflowBytes = Math.round(cacheBytes / 2);
 }
 
 /**
@@ -580,7 +609,10 @@ export class SiteManager {
         // Loaded splats are counted for the budget; which tiles go when memory runs short is
         // the tileset cache's choice (least recently used), now that splat tiles report
         // their bytes (engine patch, GaussianSplat3DTileContent.geometryByteLength).
-        tileset.tileLoad.addEventListener((tile: Cesium3DTile) => splats.load(tile)),
+        tileset.tileLoad.addEventListener((tile: Cesium3DTile) => {
+          splats.load(tile);
+          sizeSplatCache(tileset, tile, this.splatDetail);
+        }),
         tileset.tileUnload.addEventListener((tile: Cesium3DTile) => splats.unload(tile)),
       );
     }
@@ -621,7 +653,9 @@ export class SiteManager {
     let total = 0;
     for (const { handle } of this.handles()) {
       if (!handle.tileset?.show || !handle.splats) continue;
-      total += splatTilesetOf(handle.tileset).gaussianSplatPrimitive?._numSplats ?? 0;
+      const primitive = splatTilesetOf(handle.tileset).gaussianSplatPrimitive;
+      // Live slots, not the slot range: hidden tiles stay resident but are not drawn.
+      total += primitive?._liveSplats ?? primitive?._numSplats ?? 0;
     }
     return total;
   }

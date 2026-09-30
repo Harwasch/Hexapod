@@ -10,7 +10,7 @@ import type { Layer, SiteAsset } from "@twin/contracts";
 import { deviceSplatBudget } from "@/lib/detail";
 import { tileUrl } from "@/lib/tileProxy";
 
-import { focusSplats, incrementalSplats, keepOffscreenSplats } from "../splatInternals";
+import { incrementalSplats, keepOffscreenSplats } from "../splatInternals";
 
 /** The incremental splat texture starts at this many times the device's splat budget: room
  *  for a batch's arrivals beside what they replace, and for freed ranges not yet reused. */
@@ -77,12 +77,13 @@ export async function createSiteTileset(
     : Cesium3DTileset.fromUrl(await tileUrl(asset.source.url), options));
   // A splat is drawn from one snapshot of its selected tiles, held while the camera moves
   // (splatMotionGate.ts); out-of-view tiles stay in it, coarse, so turning shows no hole.
-  // Detail goes to what is in the middle of the view first (focusSplats).
   // A tile uploads alone into its own slot of one texture, so refining costs the tiles
   // refined, not every splat drawn (incrementalSplats).
   if (asset.representation === "gaussian-splat") {
     keepOffscreenSplats(tileset);
-    focusSplats(tileset);
+    // Walking a scan moves the camera a tile's width in seconds: Cesium's default skips
+    // requests for tiles smaller than 60 frames of travel, which is every fine tile nearby.
+    tileset.cullRequestsWhileMoving = false;
     incrementalSplats(tileset, deviceSplatBudget() * INCREMENTAL_HEADROOM);
   }
   return tileset;

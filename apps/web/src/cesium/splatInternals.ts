@@ -27,8 +27,6 @@
  * | `primitive.vertexMotion` | **patch** | the vertex-shader motion hook the GPU path installs |
  * | `primitive.holdRebuilds` | **patch** | no new snapshot while the camera moves (`splatMotionGate.ts`) |
  * | `tileset.selectOffscreen` | **patch** (`Cesium3DTilesetBaseTraversal.js`) | a refining tile's out-of-view children drawn coarse |
- * | `tileset.focusWeight` / `focusConeRadians` | **patch** (`Cesium3DTile.js`) | detail spent on the centre of the view first |
- * | `scene.frameState.splatDecodesAllowed` | **patch** (`GltfSpzLoader.js`) | SPZ decodes that may start this frame |
  * | `tileset.splatIncremental` / `primitive.incremental` / `_tileSlots` | **patch** | a tile uploads alone into its own slot range |
  * | `GaussianSplatTextureGenerator.generateFromAttributes` | exported at `cesium/Source/Cesium.js:638` | the CPU path's interception point |
  *
@@ -47,7 +45,7 @@
  * buffer, the attribute texture (CPU path) and our own textures (GPU path).
  */
 
-import type { Cesium3DTileset, Scene } from "cesium";
+import type { Cesium3DTileset } from "cesium";
 
 import type { Mat4 } from "./splatFrames";
 
@@ -110,6 +108,8 @@ export interface SplatPrimitive {
   /** The committed snapshot's colours, RGBA bytes per splat (alpha is opacity). */
   readonly _colors?: Uint8Array;
   readonly _numSplats?: number;
+  /** Patch (incremental mode): splats in live slots -- drawn -- as against the slot range. */
+  readonly _liveSplats?: number;
   readonly _splatRowMask?: number;
   readonly _splatRowShift?: number;
   readonly _snapshot?: SplatSnapshot;
@@ -166,17 +166,6 @@ export function hasVertexMotionHook(primitive: SplatPrimitive): boolean {
   return "vertexMotion" in primitive;
 }
 
-/** The frame-state field the patched SPZ loader reads. */
-export interface SplatFrameState {
-  /** SPZ decodes that may still start this frame; undefined for no cap. */
-  splatDecodesAllowed?: number;
-}
-
-/** `scene.frameState` -- declared `@private` in the engine, absent from `Cesium.d.ts`. */
-export function splatFrameStateOf(scene: Scene): SplatFrameState {
-  return (scene as unknown as { frameState: SplatFrameState }).frameState;
-}
-
 /**
  * Has a splat tileset's traversal keep out-of-view children of a refining tile, coarse
  * (patched `Cesium3DTilesetBaseTraversal`): the snapshot then covers the whole scan, so one
@@ -186,27 +175,11 @@ export function keepOffscreenSplats(tileset: Cesium3DTileset): void {
   (tileset as unknown as { selectOffscreen: boolean }).selectOffscreen = true;
 }
 
-/** How much less detail the edge of the view gets than its centre (0..1). */
-export const SPLAT_FOCUS_WEIGHT = 0.6;
-/** Half-angle around the view direction that keeps full detail (about 11 degrees). */
-export const SPLAT_FOCUS_CONE_RAD = 0.2;
-
-/**
- * Spends a splat tileset's detail where the person looks (patched `Cesium3DTile`
- * `getScreenSpaceError`): full detail within a cone around the view direction, less toward
- * the edges, so under a budget the thing in the middle of the view refines first. Distance is
- * already in the error (a near tile's error is larger), so near and central come first.
- */
-export function focusSplats(tileset: Cesium3DTileset): void {
-  const patched = tileset as unknown as { focusWeight: number; focusConeRadians: number };
-  patched.focusWeight = SPLAT_FOCUS_WEIGHT;
-  patched.focusConeRadians = SPLAT_FOCUS_CONE_RAD;
-}
-
 /**
  * Has a splat tileset's primitive run in incremental mode (patched engine): a level-of-detail
  * change costs the size of the change -- the tiles that arrive are packed and uploaded alone,
- * the ones that leave are zeroed -- instead of re-packing and re-uploading every selected
+ * the ones that leave stay resident, undrawn, until their room is needed -- instead of
+ * re-packing and re-uploading every selected
  * splat (measured ~265 ms of main thread per 1.25M). `capacity` sizes the persistent texture.
  */
 export function incrementalSplats(tileset: Cesium3DTileset, capacity: number): void {

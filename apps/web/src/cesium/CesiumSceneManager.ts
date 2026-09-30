@@ -30,8 +30,10 @@ import { SiteManager } from "./SiteManager";
 import { installSplatTextureInterception } from "./splatCapture";
 import { SplatCollider } from "./SplatCollider";
 import { SplatMotionGate } from "./splatMotionGate";
+import { installCameraPickHook } from "./cameraPickHook";
 import { installSplatDecoder } from "./splatDecoder";
 import { installSplatSorter } from "./splatSorter";
+import { UiActivity } from "./uiActivity";
 import type { Geocoder, SceneEvents } from "./types";
 import type { TokenState } from "@/state/viewer";
 
@@ -71,6 +73,8 @@ export class CesiumSceneManager {
   readonly collider: SplatCollider;
   private readonly uninstallSplatSorter: () => void;
   private readonly uninstallSplatDecoder: () => void;
+  private readonly uninstallPickHook: () => void;
+  private readonly uiActivity: UiActivity;
   readonly sites: SiteManager;
   readonly living: LivingSurveyManager;
   readonly selection: SelectionManager;
@@ -155,11 +159,17 @@ export class CesiumSceneManager {
     this.clipping = new ClippingManager(scene);
     this.layers = new LayerManager(this.viewer, this.events, this.clipping);
     this.performance = new PerformanceManager(this.viewer, this.events);
-    this.splatGate = new SplatMotionGate(this.viewer.scene, this.events);
+    // The interface first, then the camera, then streaming (uiActivity.ts).
+    this.uiActivity = new UiActivity(this.viewer.canvas);
+    const interfaceBusy = (): boolean => this.uiActivity.active;
+    this.splatGate = new SplatMotionGate(this.viewer.scene, this.events, interfaceBusy);
     this.uninstallSplatSorter = installSplatSorter();
-    this.uninstallSplatDecoder = installSplatDecoder();
+    this.uninstallSplatDecoder = installSplatDecoder(interfaceBusy);
     this.collider = new SplatCollider(this.viewer.scene, () => this.splatGate.holding);
     this.camera.setCollider(this.collider);
+    // Cesium's own camera control asks the splats' solids before reading depth back from
+    // the GPU (engine patch, ScreenSpaceCameraController.pickHook).
+    this.uninstallPickHook = installCameraPickHook(this.collider);
     this.performance.addScreenSpaceErrorSink("world", (sse, pixelRatio) =>
       this.layers.applyWorldScreenSpaceError(sse, pixelRatio),
     );
@@ -398,6 +408,8 @@ export class CesiumSceneManager {
     this.collider.destroy();
     this.uninstallSplatSorter();
     this.uninstallSplatDecoder();
+    this.uninstallPickHook();
+    this.uiActivity.destroy();
     this.splatGate.destroy();
     this.performance.destroy();
     this.layers.destroy();

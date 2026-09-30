@@ -38,7 +38,7 @@ interface Slot {
   pending: number;
 }
 
-export function installSplatDecoder(): () => void {
+export function installSplatDecoder(interfaceBusy: () => boolean = () => false): () => void {
   const module = loaderModule();
   if (!module || typeof Worker === "undefined") return () => undefined;
   const waiting = new Map<
@@ -67,6 +67,8 @@ export function installSplatDecoder(): () => void {
   }
 
   const hook: DecodeHook = (spz) => {
+    // The interface first (uiActivity.ts): the loader asks again next frame.
+    if (interfaceBusy()) return undefined;
     let slot: Slot | undefined;
     for (const candidate of slots) {
       if (candidate.pending < MAX_PENDING && (!slot || candidate.pending < slot.pending)) {

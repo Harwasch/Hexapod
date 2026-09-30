@@ -6,9 +6,10 @@
  * Why replace the engine's WASM sort: it orders by view depth, so every half degree of
  * turning asks for a new sort, and every sort copies all positions on the main thread to send
  * them. By distance, turning needs none (the engine patch then re-sorts only when the camera
- * has moved a centimetre); and the positions go to the worker once -- per written slot range
- * for an incremental primitive, per snapshot generation otherwise -- so a sort request is
- * the eye and a count.
+ * has moved `resortDistance`); and the positions go to the worker once -- per written slot
+ * range for an incremental primitive, per snapshot generation otherwise -- so a sort request
+ * is the eye and a count. For an incremental primitive the worker also keeps which slots are
+ * drawn (show/hide/release), so a tile that left the view stays resident, out of the order.
  */
 
 import * as CesiumBarrel from "cesium";
@@ -29,10 +30,16 @@ type SortHook = ((parameters: SortParameters) => Promise<Uint32Array> | undefine
   sortByDistance?: boolean;
   /** Incremental primitives: a slot range's positions, once, when written. */
   write?: (owner: object, capacity: number, start: number, positions: Float32Array) => void;
+  /** Incremental primitives: a slot range drawn (its tile went live). */
+  show?: (owner: object, capacity: number, start: number, count: number) => void;
+  /** Incremental primitives: a slot range kept resident but not drawn (its tile left). */
+  hide?: (owner: object, capacity: number, start: number, count: number) => void;
   /** Incremental primitives: a slot range freed; left out of orders until written again. */
   release?: (owner: object, capacity: number, start: number, count: number) => void;
-  /** Orders leave empty slots out, so they may be shorter than the slot count. */
+  /** Orders leave empty and hidden slots out, so they may be shorter than the slot count. */
   compacts?: boolean;
+  /** How far (m) the camera must move before a primitive is sorted again. */
+  resortDistance?: (owner: object) => number;
 };
 
 interface PrimitiveModule {
@@ -47,33 +54,58 @@ function primitiveModule(): PrimitiveModule | undefined {
 /** Sorts in flight per primitive: one at a time, as the engine asks. */
 const MAX_PENDING = 1;
 
+/**
+ * The camera moving this share of the nearest splat's distance calls for a new sort, within
+ * these bounds (m). A step that small changes the order only of splats almost equidistant
+ * from the eye, whose blending order does not show; sorting on every centimetre re-uploaded
+ * the whole order about every third frame of a walk.
+ */
+export const RESORT_SHARE = 0.05;
+export const RESORT_MIN_M = 0.05;
+export const RESORT_MAX_M = 2;
+
+export function resortDistance(nearest: number): number {
+  if (!Number.isFinite(nearest)) return RESORT_MIN_M;
+  return Math.min(RESORT_MAX_M, Math.max(RESORT_MIN_M, nearest * RESORT_SHARE));
+}
+
 export function installSplatSorter(): () => void {
   const module = primitiveModule();
   if (!module || typeof Worker === "undefined") return () => undefined;
   const worker = new Worker(new URL("./splatSort.worker.ts", import.meta.url), {
     type: "module",
   });
-  const owners = new WeakMap<
-    object,
-    { id: number; generation: number; pending: number; slots: boolean }
-  >();
-  const ownerOf = (
-    primitive: object,
-  ): { id: number; generation: number; pending: number; slots: boolean } => {
+  interface Owner {
+    id: number;
+    generation: number;
+    pending: number;
+    slots: boolean;
+    nearest: number;
+  }
+  const owners = new WeakMap<object, Owner>();
+  const ownerOf = (primitive: object): Owner => {
     let owner = owners.get(primitive);
     if (!owner) {
-      owner = { id: nextOwner++, generation: -1, pending: 0, slots: false };
+      owner = {
+        id: nextOwner++,
+        generation: -1,
+        pending: 0,
+        slots: false,
+        nearest: Number.POSITIVE_INFINITY,
+      };
       owners.set(primitive, owner);
     }
     return owner;
   };
-  const waiting = new Map<number, (order: Uint32Array | null) => void>();
+  const waiting = new Map<number, (order: Uint32Array | null, nearest: number | null) => void>();
   let nextOwner = 1;
   let nextRequest = 1;
-  worker.onmessage = (event: MessageEvent<{ id: number; order: Uint32Array | null }>) => {
+  worker.onmessage = (
+    event: MessageEvent<{ id: number; order: Uint32Array | null; nearest: number | null }>,
+  ) => {
     const resolve = waiting.get(event.data.id);
     waiting.delete(event.data.id);
-    resolve?.(event.data.order);
+    resolve?.(event.data.order, event.data.nearest);
   };
   worker.onerror = (event) => log.warn("sort worker failed", { message: event.message });
 
@@ -101,8 +133,9 @@ export function installSplatSorter(): () => void {
     const current = owner;
     current.pending += 1;
     return new Promise<Uint32Array>((resolve) => {
-      waiting.set(id, (order) => {
+      waiting.set(id, (order, nearest) => {
         current.pending -= 1;
+        if (nearest !== null) current.nearest = nearest;
         // A snapshot that changed under the sort answers with no order; an empty one is
         // what the engine takes as "stale, sort again" (a rejection would stop the primitive).
         resolve(order ?? new Uint32Array(0));
@@ -126,12 +159,18 @@ export function installSplatSorter(): () => void {
       copy.buffer,
     ]);
   };
-  hook.release = (primitive, capacity, start, count) => {
-    const owner = ownerOf(primitive);
-    owner.slots = true;
-    worker.postMessage({ kind: "release", owner: owner.id, capacity, start, count });
-  };
+  const range =
+    (kind: "show" | "hide" | "release") =>
+    (primitive: object, capacity: number, start: number, count: number): void => {
+      const owner = ownerOf(primitive);
+      owner.slots = true;
+      worker.postMessage({ kind, owner: owner.id, capacity, start, count });
+    };
+  hook.show = range("show");
+  hook.hide = range("hide");
+  hook.release = range("release");
   hook.compacts = true;
+  hook.resortDistance = (primitive) => resortDistance(ownerOf(primitive).nearest);
   module.sortHook = hook;
   return () => {
     if (module.sortHook === hook) module.sortHook = undefined;

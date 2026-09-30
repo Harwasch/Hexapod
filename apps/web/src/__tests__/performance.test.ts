@@ -26,13 +26,14 @@ const base: QualitySample = {
 };
 
 describe("decideScreenSpaceError", () => {
-  it("refines straight to the preset minimum at rest, at any height", () => {
-    expect(decideScreenSpaceError(base)).toEqual({
+  it("refines straight to the preset minimum at rest, at any height, when it fits", () => {
+    const light = { ...base, memoryRatio: 0.01 };
+    expect(decideScreenSpaceError(light)).toEqual({
       screenSpaceError: 2,
       reason: "idle refinement",
     });
-    expect(decideScreenSpaceError({ ...base, current: 3 }).screenSpaceError).toBe(2);
-    expect(decideScreenSpaceError({ ...base, current: 2 })).toEqual({
+    expect(decideScreenSpaceError({ ...light, current: 3 }).screenSpaceError).toBe(2);
+    expect(decideScreenSpaceError({ ...light, current: 2 })).toEqual({
       screenSpaceError: 2,
       reason: "at finest",
     });
@@ -59,11 +60,41 @@ describe("decideScreenSpaceError", () => {
       decideScreenSpaceError({ ...base, current: 8, memoryRatio: 0.75 }).screenSpaceError,
     ).toBe(8);
     const d = decideScreenSpaceError({ ...base, current: 8, memoryRatio: 1.5 });
-    expect(d.screenSpaceError).toBe(12);
+    // Proportional: 8 * sqrt(1.5 / 0.9).
+    expect(d.screenSpaceError).toBeCloseTo(10.33, 2);
     expect(d.reason).toMatch(/memory pressure/);
     expect(
       decideScreenSpaceError({ ...base, current: 31, memoryRatio: 1.5 }).screenSpaceError,
     ).toBe(32);
+  });
+
+  it("settles a view larger than its budget, instead of swinging finest-coarse-finest", () => {
+    // A scan whose finest level is 8x the budget: the load goes as 1 / error^2.
+    const ratioAt = (sse: number): number => 8 * (2 / sse) ** 2;
+    let sse = 2;
+    const seen: number[] = [];
+    for (let i = 0; i < 12; i++) {
+      sse = decideScreenSpaceError({
+        ...base,
+        current: sse,
+        memoryRatio: ratioAt(sse),
+      }).screenSpaceError;
+      seen.push(sse);
+    }
+    const last = seen.slice(-6);
+    // Converged: the same error from the fourth decision on, the load inside the dead band.
+    expect(new Set(last).size).toBe(1);
+    const ratio = ratioAt(last[0] ?? 0);
+    expect(ratio).toBeGreaterThanOrEqual(0.7);
+    expect(ratio).toBeLessThanOrEqual(1.25);
+  });
+
+  it("refines from coarse toward the budget in one move when the finest would not fit", () => {
+    // At 16 px the view holds 20% of its budget; at the finest (2 px) it would be 1280%.
+    const d = decideScreenSpaceError({ ...base, current: 16, memoryRatio: 0.2 });
+    expect(d.reason).toMatch(/to budget/);
+    // 16 * sqrt(0.2 / 0.9) = 7.5: the error that lands the load on 90%.
+    expect(d.screenSpaceError).toBeCloseTo(7.54, 1);
   });
 
   it("follows bounds shifted by a ladder penalty, coarsening at once when the floor rose", () => {

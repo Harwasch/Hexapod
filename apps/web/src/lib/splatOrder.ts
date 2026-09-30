@@ -12,24 +12,36 @@ let counts = new Uint32Array(BINS);
 let keys = new Uint16Array(0);
 let logs = new Float32Array(0);
 
+export interface SortedSplats {
+  /** Indexes, farthest from the eye first. */
+  order: Uint32Array;
+  /** Distance from the eye to the nearest splat sorted (Infinity when none). */
+  nearest: number;
+}
+
 /**
- * Indexes of `count` splats (xyz in `positions`), farthest from `eye` first. A splat whose
- * position is not finite is an empty slot (splatSort.worker.ts marks freed ranges with NaN)
- * and is left out, so the order can be shorter than `count`.
+ * The back-to-front order of `count` splats (xyz in `positions`). A splat is left out when
+ * `live` says 0 for it (a hidden or freed slot: splatSort.worker.ts) or when its position is
+ * not finite (a slot never written), so the order can be shorter than `count`.
  */
-export function backToFront(
+export function sortBackToFront(
   positions: Float32Array,
   count: number,
   eye: readonly [number, number, number],
-): Uint32Array {
+  live?: Uint8Array,
+): SortedSplats {
   if (keys.length < count) keys = new Uint16Array(count);
   if (logs.length < count) logs = new Float32Array(count);
   if (counts.length !== BINS) counts = new Uint32Array(BINS);
   const [ex, ey, ez] = eye;
   let lo = Number.POSITIVE_INFINITY;
   let hi = Number.NEGATIVE_INFINITY;
-  let live = 0;
+  let kept = 0;
   for (let i = 0; i < count; i++) {
+    if (live !== undefined && live[i] !== 1) {
+      logs[i] = Number.NaN;
+      continue;
+    }
     const dx = (positions[i * 3] ?? 0) - ex;
     const dy = (positions[i * 3 + 1] ?? 0) - ey;
     const dz = (positions[i * 3 + 2] ?? 0) - ez;
@@ -38,7 +50,7 @@ export function backToFront(
     // The range from the stored (float32) values, so every key falls inside it.
     const value = logs[i] ?? Number.NaN;
     if (!Number.isFinite(value)) continue;
-    live++;
+    kept++;
     if (value < lo) lo = value;
     if (value > hi) hi = value;
   }
@@ -60,7 +72,7 @@ export function backToFront(
     counts[k] = running;
     running += c;
   }
-  const order = new Uint32Array(live);
+  const order = new Uint32Array(kept);
   for (let i = 0; i < count; i++) {
     if (!Number.isFinite(logs[i] ?? Number.NaN)) continue;
     const key = keys[i] ?? 0;
@@ -68,5 +80,15 @@ export function backToFront(
     order[at] = i;
     counts[key] = at + 1;
   }
-  return order;
+  // lo is the log of the nearest squared distance.
+  return { order, nearest: kept > 0 ? Math.sqrt(Math.exp(lo)) : Number.POSITIVE_INFINITY };
+}
+
+/** Indexes of `count` splats, farthest from `eye` first (see sortBackToFront). */
+export function backToFront(
+  positions: Float32Array,
+  count: number,
+  eye: readonly [number, number, number],
+): Uint32Array {
+  return sortBackToFront(positions, count, eye).order;
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { backToFront } from "@/lib/splatOrder";
+import { backToFront, sortBackToFront } from "@/lib/splatOrder";
 
 describe("splat draw order", () => {
   it("draws the farthest first, whatever the direction", () => {
@@ -46,5 +46,17 @@ describe("splat draw order", () => {
     const order = backToFront(positions, 5, [0, 0, 0]);
     expect(Array.from(order)).toEqual([2, 4, 0]);
     expect(Array.from(backToFront(new Float32Array(6).fill(NaN), 2, [0, 0, 0]))).toEqual([]);
+  });
+
+  it("draws only shown slots, and says how near the nearest drawn splat is", () => {
+    // Four written slots; the second is hidden (resident, not drawn).
+    const positions = new Float32Array([0, 0, 1, 0, 0, 0.5, 0, 0, 4, 0, 0, 2]);
+    const live = new Uint8Array([1, 0, 1, 1]);
+    const { order, nearest } = sortBackToFront(positions, 4, [0, 0, 0], live);
+    expect(Array.from(order)).toEqual([2, 3, 0]);
+    expect(nearest).toBeCloseTo(1, 5);
+    expect(sortBackToFront(positions, 4, [0, 0, 0], new Uint8Array(4)).nearest).toBe(
+      Number.POSITIVE_INFINITY,
+    );
   });
 });

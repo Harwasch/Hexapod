@@ -99,22 +99,33 @@ const REFINE_MEMORY_RATIO = 0.7;
 /** Extra screen-space error per ladder step once resolution cuts are exhausted. */
 const SSE_PENALTY_STEP = 3;
 
+/** Where the controller aims when it moves: a share of the budget between the line where
+ *  refinement holds (`REFINE_MEMORY_RATIO`) and the pressure line. */
+export const TARGET_MEMORY_RATIO = 0.9;
+
 /**
  * Chooses the next maximum screen-space error. Pure so the policy is unit-testable.
  *
  * Smoothness first: while the camera moves the tile selection is frozen, because every change
  * pops tiles mid-gesture. At rest, memory pressure coarsens (the only thing that ever does,
  * apart from the manager's ladder shifting the bounds), loading holds, and otherwise the
- * scene uses the idle time the way a maps app does: straight to the finest level, at any
- * height, as long as there is memory headroom. Slow frames at rest are tiles arriving, never a
- * reason to coarsen. Nothing returns to the base on its own: finer tiles stay until memory
- * says otherwise, so the next gesture starts from what is already loaded.
+ * scene uses the idle time the way a maps app does. Nothing returns to the base on its own.
+ *
+ * Both directions are proportional, not stepped: what a view loads grows about as the inverse
+ * square of the error (tiles cover area), so the error that lands the load on
+ * `TARGET_MEMORY_RATIO` of its budget is `current * sqrt(ratio / target)`, and one move gets
+ * there. A fixed step overshot: under a budget smaller than the finest level (a 24M-splat
+ * scan, a 3M budget) it went finest (267% of budget), +4 px (30%), finest again -- every swing
+ * dropping the fine tiles and fetching them back. When even the finest level is predicted to
+ * fit, refinement goes straight there, as before: the levels on the way would each be
+ * requested, decoded and thrown away.
  */
 export function decideScreenSpaceError(sample: QualitySample): QualityDecision {
   const { bounds, current, moving, loading, memoryRatio } = sample;
+  const toward = (ratio: number): number => current * Math.sqrt(ratio / TARGET_MEMORY_RATIO);
   if (memoryRatio > MEMORY_PRESSURE_RATIO) {
     return {
-      screenSpaceError: Math.min(bounds.max, current + 4),
+      screenSpaceError: Math.min(bounds.max, Math.max(current + 0.5, toward(memoryRatio))),
       reason: `memory pressure (${Math.round(memoryRatio * 100)}% of budget)`,
     };
   }
@@ -128,11 +139,14 @@ export function decideScreenSpaceError(sample: QualitySample): QualityDecision {
       screenSpaceError: current,
       reason: `holding (${Math.round(memoryRatio * 100)}% of memory budget)`,
     };
-  // Straight to the finest level, the way a maps app streams once the camera stops: the
-  // intermediate levels would each be requested, decoded and thrown away on the way down.
-  const target = Math.min(bounds.max, bounds.min);
-  if (target === current) return { screenSpaceError: current, reason: "at finest" };
-  return { screenSpaceError: target, reason: "idle refinement" };
+  const finest = Math.min(bounds.max, bounds.min);
+  if (finest >= current) return { screenSpaceError: current, reason: "at finest" };
+  const predictedAtFinest = memoryRatio * (current / finest) ** 2;
+  if (predictedAtFinest <= TARGET_MEMORY_RATIO)
+    return { screenSpaceError: finest, reason: "idle refinement" };
+  const target = Math.max(finest, Math.min(current, toward(Math.max(memoryRatio, 0.01))));
+  if (current - target < 0.25) return { screenSpaceError: current, reason: "at budget" };
+  return { screenSpaceError: target, reason: "idle refinement (to budget)" };
 }
 
 /**
