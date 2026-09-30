@@ -21,6 +21,7 @@ import {
   Math as CesiumMath,
   type Cesium3DTile,
 } from "cesium";
+import * as CesiumBarrel from "cesium";
 import type { SiteAsset } from "@twin/contracts";
 
 import { Emitter } from "@/lib/emitter";
@@ -38,6 +39,9 @@ export interface NavigationHarnessOptions {
   /** The console's splat settings (motion gate, off-screen selection, focus, incremental
    *  slots), or the engine as it was. */
   readonly motionFirst: boolean;
+  /** Stream, pack, upload and sort as usual but never draw the splats: under SwiftShader a
+   *  frame of a large scan takes seconds, and what is measured is the main thread's work. */
+  readonly skipDraw?: boolean;
 }
 
 export interface MotionReport {
@@ -77,6 +81,8 @@ export interface LookReport extends Traffic {
   restoreFrames: number | null;
   /** Share of view A's tiles drawn on the first frame back. */
   firstFrameShare: number;
+  /** Share of view A's tiles still drawn just before turning back (looking the other way). */
+  awayShare: number;
 }
 
 export interface WalkReport extends Traffic {
@@ -113,6 +119,24 @@ export async function startNavigationHarness(
     source: { type: "3d-tiles-url", url: options.tilesetUrl },
     renderConfig: {},
   } as unknown as SiteAsset;
+  if (options.skipDraw) {
+    type Update = (
+      this: { _drawCommand?: unknown },
+      frameState: { commandList: unknown[] },
+    ) => void;
+    const prototype = (
+      (CesiumBarrel as unknown as Record<string, unknown>).GaussianSplatPrimitive as
+        { prototype: Record<string, Update | undefined> } | undefined
+    )?.prototype;
+    const update = prototype?.update;
+    if (prototype && update) {
+      prototype.update = function (frameState) {
+        update.call(this, frameState);
+        const at = frameState.commandList.indexOf(this._drawCommand);
+        if (at >= 0) frameState.commandList.splice(at, 1);
+      };
+    }
+  }
   const tileset = await createSiteTileset(asset, { maximumScreenSpaceError: 16 });
   tileset.show = true;
   scene.primitives.add(tileset);
@@ -266,6 +290,12 @@ export async function startNavigationHarness(
       const settledA = gaussiansOf(viewA);
       look(at, 180);
       await settleFor(settleS);
+      const awayTiles = drawnTiles();
+      let awayHit = 0;
+      for (const tile of viewA)
+        if (awayTiles.has(tile))
+          awayHit += (tile.content as { pointsLength?: number } | undefined)?.pointsLength ?? 0;
+      const awayShare = settledA > 0 ? awayHit / settledA : 1;
       const before = traffic();
       // Turn back over half a second, as a person would, then wait for view A to return.
       events.emit("motion", true);
@@ -294,7 +324,14 @@ export async function startNavigationHarness(
         }
         await frame();
       }
-      return { settledA, restoreMs, restoreFrames, firstFrameShare, ...delta(before) };
+      return {
+        settledA,
+        restoreMs,
+        restoreFrames,
+        firstFrameShare,
+        awayShare,
+        ...delta(before),
+      };
     },
     async walk(speed, seconds, eyeM) {
       const at = eye(eyeM);

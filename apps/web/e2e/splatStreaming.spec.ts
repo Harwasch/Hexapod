@@ -30,13 +30,14 @@ interface LookReport extends Traffic {
   restoreMs: number | null;
   restoreFrames: number | null;
   firstFrameShare: number;
+  awayShare: number;
 }
 interface WalkReport extends Traffic {
   updateMs: number[];
   intervalMs: number[];
 }
 
-async function open(page: Page, tilesetUrl: string): Promise<void> {
+async function open(page: Page, tilesetUrl: string, skipDraw = false): Promise<void> {
   await page.route("**/fixture-tiles/**", (route) => {
     const relative = new URL(route.request().url()).pathname.replace(/^.*\/fixture-tiles\//, "");
     if (relative.includes("..")) return route.abort();
@@ -49,7 +50,7 @@ async function open(page: Page, tilesetUrl: string): Promise<void> {
   const html = `<!doctype html><html><body style="margin:0"><div id="v" style="width:100vw;height:100vh"></div>
 <script type="module">
 const h = await import("/src/dev/navigationHarness.ts");
-window.__nav = await h.startNavigationHarness({ container: document.getElementById("v"), tilesetUrl: ${JSON.stringify(tilesetUrl)}, motionFirst: true });
+window.__nav = await h.startNavigationHarness({ container: document.getElementById("v"), tilesetUrl: ${JSON.stringify(tilesetUrl)}, motionFirst: true, skipDraw: ${String(skipDraw)} });
 </script></body></html>`;
   await page.route("**/__nav-stream", (route) =>
     route.fulfill({ status: 200, contentType: "text/html", body: html }),
@@ -96,8 +97,8 @@ test.describe("a real scan", () => {
         headers: { ...response.headers(), "access-control-allow-origin": "*" },
       });
     });
-    await open(page, REAL);
-    const look: LookReport = await page.evaluate(`window.__nav.lookAround(45, 1.6)`);
+    await open(page, REAL, true);
+    const look: LookReport = await page.evaluate(`window.__nav.lookAround(30, 1.6)`);
     const walk: WalkReport = await page.evaluate(`window.__nav.walk(1.4, 12, 1.6)`);
     const report = { look, walk: summary(walk) };
     writeFileSync(testInfo.outputPath("real.json"), JSON.stringify(report, null, 1));
