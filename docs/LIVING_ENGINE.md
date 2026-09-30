@@ -4,6 +4,12 @@ Design, written 2026-09-30 on branch `living-models`. It turns [LIVING_MODELS.md
 into architectures that can be built and tested. Nothing here is built yet unless a table
 says it exists. Constants marked _initial_ are starting values that a named test replaces.
 
+**Status: draft, dynamics engine not locked.** The world-state representation, the evidence
+labels and the tests are proposed for adoption. _What steps the state forward_ is still open:
+hand-built transition models (§2), one learned model over this structured state, or a video
+world model distilled into Gaussians. [WORLD_MODEL_ROUTES.md](WORLD_MODEL_ROUTES.md) sets out
+the routes and a bake-off to decide between them.
+
 ## 1. One engine
 
 All four views run on the same engine. Only the source of its inputs differs.
@@ -277,13 +283,14 @@ clips, anemometer, float test; LIVING_WORLD §8).
 
 ### Static
 
-| ID  | Scenario                                                                                           | Pass                                                                                                                                | Needs            |
-| --- | -------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | ---------------- |
-| S1  | Minnetonka with its low under-canopy tier held out; fill                                           | LPIPS on low-support pixels of held-out views beats no-fill and a naive inpaint; measured ΔPSNR ≥ −0.1 dB; measured bytes identical | GPU (Brev/Modal) |
-| S2  | S1 at `d_max` = 0.5, 1, 2, 4 m                                                                     | produces the curve; `d_max` = the largest distance still beating the baseline                                                       | GPU              |
-| S3  | Canary: a planted measured object the prior would "correct"                                        | it neither moves nor vanishes                                                                                                       | GPU              |
-| S4  | Edge of the footprint                                                                              | zero inferred Gaussians outside the footprint                                                                                       | CPU              |
-| S5  | Enhance: train on ½- and ¼-resolution frames, enhance, compare with full-resolution held-out views | produces the curve; enhance ships only where it wins                                                                                | GPU              |
+| ID  | Scenario                                                                                                                                            | Pass                                                                                                                                | Needs            |
+| --- | --------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | ---------------- |
+| S1  | Minnetonka with its low under-canopy tier held out; fill                                                                                            | LPIPS on low-support pixels of held-out views beats no-fill and a naive inpaint; measured ΔPSNR ≥ −0.1 dB; measured bytes identical | GPU (Brev/Modal) |
+| S2  | S1 at `d_max` = 0.5, 1, 2, 4 m                                                                                                                      | produces the curve; `d_max` = the largest distance still beating the baseline                                                       | GPU              |
+| S3  | Canary: a planted measured object the prior would "correct"                                                                                         | it neither moves nor vanishes                                                                                                       | GPU              |
+| S4  | Edge of the footprint                                                                                                                               | zero inferred Gaussians outside the footprint                                                                                       | CPU              |
+| S5  | Enhance: train on ½- and ¼-resolution frames, enhance, compare with full-resolution held-out views                                                  | produces the curve; enhance ships only where it wins                                                                                | GPU              |
+| S6  | Spool table (phone capture, 179 frames, top under-covered, the app's own "Add frames from above" tip): hold out the frames from above, fill the top | fill on the held-out top beats no-fill; measured bytes identical; a small, real, cheap S1                                           | GPU              |
 
 ### Living
 
