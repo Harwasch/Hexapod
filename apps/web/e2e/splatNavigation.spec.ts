@@ -198,6 +198,8 @@ test("left-drag grabs the ground and pans; Shift-drag and right-drag orbit", asy
   test.setTimeout(300_000);
   await open(page);
   const size = page.viewportSize() ?? { width: 1280, height: 720 };
+  const heading = async (): Promise<number> =>
+    Number(await page.evaluate("window.__nav.heading()"));
   const drag = async (
     from: [number, number],
     to: [number, number],
@@ -219,23 +221,23 @@ test("left-drag grabs the ground and pans; Shift-drag and right-drag orbit", asy
   const grabbed = await page.evaluate(`window.__nav.surfaceAt(${from[0]}, ${from[1]})`);
   expect(grabbed).not.toBeNull();
   // The grabbed point follows the cursor (within a few pixels), and the view does not turn.
-  const headingBefore = await page.evaluate("window.__nav.heading()");
+  const headingBefore = await heading();
   const to: [number, number] = [from[0] + 160, from[1] + 70];
   await drag(from, to);
   await page.waitForTimeout(100);
-  const drawnAt = await page.evaluate(`window.__nav.windowOf(${JSON.stringify(grabbed)})`);
+  const drawnAt: [number, number] = await page.evaluate(
+    `window.__nav.windowOf(${JSON.stringify(grabbed)})`,
+  );
   await release();
   expect(Math.hypot(drawnAt[0] - to[0], drawnAt[1] - to[1])).toBeLessThan(6);
-  expect(Math.abs((await page.evaluate("window.__nav.heading()")) - headingBefore)).toBeLessThan(
-    1e-3,
-  );
+  expect(Math.abs((await heading()) - headingBefore)).toBeLessThan(1e-3);
   // Shift-drag and right-drag orbit: the heading turns.
   await page.waitForTimeout(800);
   for (const options of [{ shift: true }, { button: "right" as const }]) {
-    const before = await page.evaluate("window.__nav.heading()");
+    const before = await heading();
     await drag(from, [from[0] + 200, from[1]], options);
     await release(options);
-    const after = await page.evaluate("window.__nav.heading()");
+    const after = await heading();
     expect(Math.abs(after - before)).toBeGreaterThan(0.2);
   }
 });
