@@ -30,8 +30,13 @@ export class AdaptiveSplatBudget {
   private readonly floor: number;
   private readonly frames: number[] = [];
 
-  constructor(readonly ceiling: number) {
-    this.current = ceiling;
+  /** Starts at `start` (the device budget; the ceiling if not given) and moves between a
+   *  floor and `ceiling` from there. */
+  constructor(
+    readonly ceiling: number,
+    start = ceiling,
+  ) {
+    this.current = Math.min(start, ceiling);
     this.floor = Math.min(ceiling, Math.max(MIN_SPLATS, Math.round(ceiling * FLOOR_SHARE)));
   }
 

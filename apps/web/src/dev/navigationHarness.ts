@@ -99,6 +99,8 @@ export interface PickCost {
   /** `scene.pickAsync`: ms the main thread is held, and ms until the answer arrives. */
   asyncBlockMs: number;
   asyncAnswerMs: number;
+  /** Async picks whose read-back Cesium gave up waiting for (ten frames). */
+  asyncTimeouts: number;
 }
 
 export interface NavigationHarness {
@@ -315,21 +317,29 @@ export async function startNavigationHarness(
       // The asynchronous pick: how long the main thread is held, and when the answer comes.
       const blocks: number[] = [];
       const answers: number[] = [];
+      let asyncTimeouts = 0;
       for (let i = 0; i < 5; i++) {
         scene.render();
         gl.finish();
         const t = performance.now();
         const pending = scene.pickAsync(centre);
         blocks.push(performance.now() - t);
-        await pending;
-        answers.push(performance.now() - t);
+        // Cesium gives up on the read-back's fence after ten frames: a slow software GPU
+        // (CI) can take longer. The app treats that as nothing picked (SelectionManager);
+        // here it is counted, and what is measured is the hold on the main thread.
+        try {
+          await pending;
+          answers.push(performance.now() - t);
+        } catch {
+          asyncTimeouts += 1;
+        }
       }
       const asyncBlockMs = median(blocks);
       const asyncAnswerMs = median(answers);
       tileset.show = false;
       const pickWithoutSplatsMs = picks();
       tileset.show = true;
-      return { pickMs, pickWithoutSplatsMs, asyncBlockMs, asyncAnswerMs };
+      return { pickMs, pickWithoutSplatsMs, asyncBlockMs, asyncAnswerMs, asyncTimeouts };
     },
     async lookAround(settleS, eyeM) {
       const at = eye(eyeM);

@@ -16,7 +16,12 @@ import {
 import type { Footprint, Representation, Site, SiteAsset, SiteSummary } from "@twin/contracts";
 import { boundingRadiusM, centerOf, circleFootprint, haversineDistance } from "@twin/geo";
 
-import { detailScreenSpaceScale, deviceSplatBudget, isHandheld } from "@/lib/detail";
+import {
+  detailScreenSpaceScale,
+  deviceSplatBudget,
+  deviceSplatCeiling,
+  isHandheld,
+} from "@/lib/detail";
 import { AdaptiveSplatBudget } from "@/lib/splatBudget";
 
 import type { SplatRendererKind } from "./scanView/types";
@@ -165,7 +170,8 @@ export class SiteManager {
   /** The same choice as a factor on splat screen-space error. */
   private readonly splatDetailScale = detailScreenSpaceScale(this.splatDetail);
   /** What a view may draw, below that ceiling, from motion frame times (lib/splatBudget.ts). */
-  private readonly splatBudget = new AdaptiveSplatBudget(this.splatDetail);
+  private readonly splatCeiling = deviceSplatCeiling();
+  private readonly splatBudget = new AdaptiveSplatBudget(this.splatCeiling, this.splatDetail);
   private pixelRatio = 1;
   /** Ground metres per pixel at the view centre when the errors were last applied. */
   private metersPerPixel = Number.POSITIVE_INFINITY;
@@ -197,7 +203,7 @@ export class SiteManager {
     this.unsubscribe.push(
       this.performance.addMotionFrameListener((intervalMs) => {
         if (!this.splatBudget.frame(intervalMs, this.splatsDrawn())) return;
-        log.info("splat budget", { budget: this.splatBudget.budget, ceiling: this.splatDetail });
+        log.info("splat budget", { budget: this.splatBudget.budget, ceiling: this.splatCeiling });
       }),
     );
     const calibrationTimer = setInterval(() => this.refreshCalibration(), CALIBRATION_TICK_MS);
@@ -619,7 +625,7 @@ export class SiteManager {
         // their bytes (engine patch, GaussianSplat3DTileContent.geometryByteLength).
         tileset.tileLoad.addEventListener((tile: Cesium3DTile) => {
           splats.load(tile);
-          sizeSplatCache(tileset, tile, this.splatDetail);
+          sizeSplatCache(tileset, tile, this.splatCeiling);
         }),
         tileset.tileUnload.addEventListener((tile: Cesium3DTile) => splats.unload(tile)),
       );

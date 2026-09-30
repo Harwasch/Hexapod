@@ -24,11 +24,13 @@ import {
   type Viewer,
 } from "cesium";
 
-import { deviceSplatBudget, isHandheld } from "@/lib/detail";
+import { deviceSplatBudget, deviceSplatCeiling, isHandheld } from "@/lib/detail";
+import { AdaptiveSplatBudget } from "@/lib/splatBudget";
 import { createLogger } from "@/lib/log";
 import { TileStreamer, type View } from "@/view/stream";
 import { parseTileset, type TileNode } from "@/view/tiles";
 
+import { Handover } from "./handover";
 import { scanPose } from "./pose";
 import type { ScanBackend, ScanPose, SplatRendererKind } from "./types";
 
@@ -44,8 +46,8 @@ export interface ScanTarget {
 const REPLAN_MS = 150;
 /** Tiles fetched at once. */
 const FETCHES_AT_ONCE = 3;
-/** Most gaussians streamed in at once, whatever the budget (as the viewer page). */
-const MAX_STREAMED = 6_000_000;
+/** Most gaussians streamed in at once, whatever the budget. */
+const MAX_STREAMED = 10_000_000;
 /** Loaded tiles kept beyond what is drawn, so a look back needs no download. */
 const CACHE_FACTOR = 1.5;
 
@@ -191,14 +193,26 @@ export class ScanRendererHost {
     if (!response.ok) throw new Error(`The scan's tileset answered ${String(response.status)}.`);
     const tree = parseTileset(await response.json());
     let error: string | null = null;
-    const streamed = Math.min(budget * backend.loadFactor, MAX_STREAMED);
+    // As CesiumJS's splats: the device budget to start, then what motion frame times allow.
+    const adaptive = new AdaptiveSplatBudget(deviceSplatCeiling(), budget);
+    const streamedFor = (drawn: number): number =>
+      Math.min(drawn * backend.loadFactor, MAX_STREAMED);
+    const streamed = streamedFor(adaptive.budget);
+    const handover = new Handover<unknown>({
+      add: (mesh) => backend.add(mesh),
+      remove: (mesh) => backend.remove(mesh),
+      isDrawn: (mesh, sinceMs) => backend.isDrawn(mesh, sinceMs),
+    });
     const streamer = new TileStreamer<unknown>(
       tree,
       {
         load: (tile) => backend.load(url, tile),
-        show: (_tile, mesh) => backend.add(mesh),
-        hide: (_tile, mesh) => backend.remove(mesh),
-        dispose: (mesh) => backend.dispose(mesh),
+        show: (_tile, mesh) => handover.show(mesh, performance.now()),
+        hide: (_tile, mesh) => handover.hide(mesh, performance.now()),
+        dispose: (mesh) => {
+          handover.forget(mesh);
+          backend.dispose(mesh);
+        },
         failed: (tile: TileNode, reason: unknown) => {
           error = reason instanceof Error ? reason.message : String(reason);
           log.warn("scan tile did not load; its parent stays", { tile: tile.uri, error });
@@ -218,6 +232,10 @@ export class ScanRendererHost {
     const scratchCentre = new Cartesian3();
     const scratchSphere = new BoundingSphere();
     let lastPlan = 0;
+    // Motion frames, for the adaptive budget: the camera moved since the last frame.
+    const frameEye = new Cartesian3(Number.NaN, 0, 0);
+    const frameDirection = new Cartesian3();
+    let lastFrameAt = 0;
     let frames = 0;
     let running = true;
     let raf = 0;
@@ -262,6 +280,20 @@ export class ScanRendererHost {
         !Cartesian3.equalsEpsilon(camera.positionWC, lastEye, 0, 1e-3) ||
         !Cartesian3.equalsEpsilon(camera.directionWC, lastDirection, 1e-5);
       const now = performance.now();
+      const motion =
+        !Cartesian3.equalsEpsilon(camera.positionWC, frameEye, 0, 1e-3) ||
+        !Cartesian3.equalsEpsilon(camera.directionWC, frameDirection, 1e-5);
+      Cartesian3.clone(camera.positionWC, frameEye);
+      Cartesian3.clone(camera.directionWC, frameDirection);
+      const drawn = Math.min(streamer.drawnGaussians, adaptive.budget);
+      if (motion && lastFrameAt > 0 && adaptive.frame(now - lastFrameAt, drawn)) {
+        backend.setBudget(adaptive.budget);
+        const next = streamedFor(adaptive.budget);
+        streamer.setBudget(next, next * CACHE_FACTOR);
+        arrived = true;
+        log.info("splat budget", { kind, budget: adaptive.budget });
+      }
+      lastFrameAt = now;
       if ((arrived || moved) && now - lastPlan >= REPLAN_MS) {
         lastPlan = now;
         arrived = false;
@@ -270,6 +302,7 @@ export class ScanRendererHost {
         streamer.update(view(pose));
       }
       backend.render(pose);
+      handover.tick(performance.now());
       frames += 1;
     };
 
@@ -281,7 +314,7 @@ export class ScanRendererHost {
       streamer.stop();
       throw reason;
     }
-    backend.add(root);
+    handover.show(root, performance.now());
     streamer.adopt(tree.root, root);
     raf = requestAnimationFrame(tick);
     log.info("splat renderer started", { kind, tiles: tree.root.uri });

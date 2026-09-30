@@ -165,6 +165,31 @@ describe("the cut the scan viewer draws (REPLACE, merged parents)", () => {
     );
   });
 
+  it("measures a tile's distance to its box, so a tile behind the camera does not win", () => {
+    // Standing between two tiles: inside the sphere around the one behind (its box ends 3 m
+    // away), outside the one ahead. Room for one refinement. By the spheres, the tile behind
+    // was "touching the lens" and took the budget; by the boxes the one in view does.
+    const boxed = (uri: string, centre: number, half: [number, number, number]): TileNode => {
+      const box = [centre, 0, 0, half[0], 0, 0, 0, half[1], 0, 0, 0, half[2]];
+      return {
+        uri,
+        gaussians: 10_000,
+        geometricError: 0.5,
+        bounds: { center: [centre, 0, 0], radius: Math.hypot(...half) },
+        box,
+        children: [tile(`${uri}-a`, 50_000, 0), tile(`${uri}-b`, 50_000, 0)],
+      };
+    };
+    const behind = boxed("behind", -6.25, [3.25, 5, 5]);
+    const ahead = boxed("ahead", 20, [2, 2, 2]);
+    const tree: TileTree = {
+      refine: "REPLACE",
+      root: { ...tile("root", 5_000, 2, [behind, ahead]), bounds: null },
+    };
+    const lookingAhead = viewFrom([0, 0, 0], 1000, (bounds) => bounds.center[0] < 0);
+    expect(cutOf(tree, lookingAhead, 115_000)).toEqual(["ahead-a", "ahead-b", "behind"]);
+  });
+
   it("is always a cut with no holes, and within the budget once past the root", () => {
     for (const budget of [5_000, 50_000, 150_000, 300_000, 420_000, 1_000_000]) {
       for (const eye of [

@@ -19,6 +19,11 @@ interface Decoded {
   error?: string;
 }
 
+/** A new entity counts as drawn this many frames and milliseconds after it was added: the
+ *  unified renderer copies it into its work buffer and sorts in a worker first. */
+const SETTLE_FRAMES = 4;
+const SETTLE_MS = 120;
+
 /** Tiles decoded at once: a quarter of the cores, one to three. */
 function workerCount(): number {
   const cores = navigator.hardwareConcurrency || 4;
@@ -67,11 +72,15 @@ export function createBackend(
     });
 
   const resources = new WeakMap<pc.Entity, pc.GSplatResource>();
+  /** Frames drawn so far, and the frame each entity was added at: PlayCanvas's unified
+   *  renderer takes a new entity into its buffer and sorts it over the next frames. */
+  let framesDrawn = 0;
+  const addedAt = new WeakMap<pc.Entity, number>();
   const target = new pc.Vec3();
   const up = new pc.Vec3();
   let size = { width: 0, height: 0, pixelRatio: 0 };
 
-  return Promise.resolve({
+  const backend: ScanBackend<pc.Entity> = {
     name: "playcanvas",
     loadFactor: 1,
     load: async (tilesetUrl: string, tile: TileNode) => {
@@ -100,7 +109,12 @@ export function createBackend(
       resources.set(entity, resource);
       return entity;
     },
-    add: (entity) => app.root.addChild(entity),
+    add: (entity) => {
+      app.root.addChild(entity);
+      addedAt.set(entity, framesDrawn);
+    },
+    isDrawn: (entity, sinceMs) =>
+      framesDrawn - (addedAt.get(entity) ?? framesDrawn) >= SETTLE_FRAMES && sinceMs >= SETTLE_MS,
     remove: (entity) => {
       if (entity.parent) entity.parent.removeChild(entity);
     },
@@ -135,10 +149,17 @@ export function createBackend(
       camera.lookAt(target, up.set(...pose.up));
       // PlayCanvas draws in its own loop (app.start); the camera is simply where it will look.
     },
+    setBudget: (drawn) => {
+      app.scene.gsplat.splatBudget = drawn;
+    },
     destroy: () => {
       for (const worker of workers) worker.terminate();
       waiting.clear();
       app.destroy();
     },
+  };
+  app.on("frameend", () => {
+    framesDrawn += 1;
   });
+  return Promise.resolve(backend);
 }

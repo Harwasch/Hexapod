@@ -28,7 +28,7 @@
  * ancestors of what is drawn are never let go, so zooming out never waits.
  */
 
-import type { Sphere, TileNode, TileTree } from "./tiles";
+import { boxDistance, type Sphere, type TileNode, type TileTree } from "./tiles";
 
 /** Where the camera is and what it sees, in the tileset's own frame. */
 export interface View {
@@ -45,18 +45,28 @@ export const TARGET_ERROR_PX = 2;
  *  around shows the scene coarse rather than a hole, without spending the budget behind. */
 export const OFFSCREEN_WEIGHT = 0.15;
 
-/** The screen-space error of drawing `tile` instead of what is under it, in pixels. */
+/** Nearer than this (metres, or a twentieth of a small tile) a tile's error stops growing:
+ *  the camera is at or in it, and a closer look shows it no worse. */
+export const NEAR_FLOOR_M = 0.5;
+
+/**
+ * The screen-space error of drawing `tile` instead of what is under it, in pixels, from the
+ * camera's distance to the tile's box (Cesium's measure). The sphere around a box is far
+ * looser: standing in a scan put the camera inside dozens of tiles' spheres, behind it
+ * included, each then scored as if touching the lens -- and they spent the budget before the
+ * tiles in front of it.
+ */
 export function screenError(tile: TileNode, view: View): number {
   if (tile.geometricError <= 0) return 0;
   const bounds = tile.bounds;
   if (!bounds) return Number.MAX_VALUE;
   const [x, y, z] = view.eye;
   const [cx, cy, cz] = bounds.center;
-  const centre = Math.hypot(x - cx, y - cy, z - cz);
-  // Inside a tile's sphere the error is as large as it gets; a floor proportional to the tile
-  // keeps a camera at its very centre from dividing by zero.
-  const distance = Math.max(centre - bounds.radius, bounds.radius * 1e-3, 1e-6);
-  return (tile.geometricError * view.projection) / distance;
+  const outside = tile.box
+    ? boxDistance(tile.box, view.eye)
+    : Math.hypot(x - cx, y - cy, z - cz) - bounds.radius;
+  const floor = Math.max(Math.min(NEAR_FLOOR_M, bounds.radius / 20), 1e-6);
+  return (tile.geometricError * view.projection) / Math.max(outside, floor);
 }
 
 /** How much refining `tile` is worth now: its screen error, weighted down when unseen. */
@@ -210,7 +220,7 @@ export class TileStreamer<M> {
   constructor(
     private readonly tree: TileTree,
     private readonly host: StreamHost<M>,
-    private readonly options: StreamOptions,
+    private options: StreamOptions,
   ) {
     this.parentOf = parents(tree);
   }
@@ -232,6 +242,12 @@ export class TileStreamer<M> {
     let total = 0;
     this.shown.forEach((tile) => (total += Number.isFinite(tile.gaussians) ? tile.gaussians : 0));
     return total;
+  }
+
+  /** A new budget (and cache budget), from the next `update` on. */
+  setBudget(budget: number, cacheBudget: number): void {
+    this.options.budget = budget;
+    this.options.cacheBudget = cacheBudget;
   }
 
   /** Whether anything is still to fetch for the last view. */

@@ -104,6 +104,22 @@ function horizontal(vector: Cartesian3, up: Cartesian3, result: Cartesian3): Car
 }
 const scratchFrame = new Matrix4();
 const scratchCenter = new Cartesian2();
+const scratchGrabRay = new Ray();
+const scratchGrabHit = new Cartesian3();
+const scratchGrabStep = new Cartesian3();
+
+/** Below this camera height a left-drag grabs the point under the cursor and keeps it there
+ *  (Google Maps); above it Cesium's globe spin, which is what a planet-scale drag wants. */
+const GRAB_PAN_MAX_ALTITUDE_M = 30_000;
+/** A drag ray meeting the grabbed plane further than this many times the grab distance (near
+ *  the horizon) is not followed: the ground there moves kilometres per pixel. */
+const GRAB_PAN_MAX_REACH = 25;
+/** Pan inertia after release: the drag's velocity over this window... */
+const PAN_VELOCITY_WINDOW_MS = 80;
+/** ...decays with this time constant (ms), and stops below this speed (fraction of the grab
+ *  distance per second). */
+const PAN_INERTIA_TAU_MS = 220;
+const PAN_INERTIA_MIN_SPEED = 0.05;
 
 /** Owns every camera movement so easing, limits and pose reporting live in one place. */
 export class CameraController {
@@ -117,6 +133,10 @@ export class CameraController {
   private orbitPivot: Cartesian3 | null = null;
   private orbitLast: { x: number; y: number } | null = null;
   private orbitRate = { heading: ORBIT_HEADING_RATE, tilt: ORBIT_TILT_RATE };
+  /** A left-drag pan in progress: the grabbed point and the plane it slides on. */
+  private grab: { point: Cartesian3; normal: Cartesian3; reach: number } | null = null;
+  private panSamples: { at: number; step: Cartesian3 }[] = [];
+  private panInertia = 0;
   private pointerHeld = false;
   private lastFloorCheckAt = 0;
   private lastSurfaceHeight: number | undefined;
@@ -153,15 +173,22 @@ export class CameraController {
     // Tilt and orbit are handled here instead (Google Maps style, around the view centre);
     // Cesium keeps pinch tilt for touch, wheel and pinch zoom, and left-drag pan.
     controller.tiltEventTypes = [CameraEventType.PINCH];
+    // Shift+drag orbits here (Google Maps), so Cesium's free look on Shift+drag goes.
+    controller.lookEventTypes = [];
     controller.zoomEventTypes = [CameraEventType.WHEEL, CameraEventType.PINCH];
     const canvas = viewer.canvas;
     canvas.addEventListener("pointerdown", this.onPointerHeld);
     window.addEventListener("pointerup", this.onPointerReleased);
     window.addEventListener("pointercancel", this.onPointerReleased);
     canvas.addEventListener("pointerdown", this.onOrbitStart);
+    canvas.addEventListener("pointerdown", this.onPanStart);
     canvas.addEventListener("contextmenu", preventDefault);
     window.addEventListener("pointermove", this.onOrbitMove);
     window.addEventListener("pointerup", this.onOrbitEnd);
+    window.addEventListener("pointermove", this.onPanMove);
+    window.addEventListener("pointerup", this.onPanEnd);
+    window.addEventListener("pointercancel", this.onPanEnd);
+    canvas.addEventListener("wheel", this.stopPanInertia, { passive: true });
     // Capture, on the canvas's container: a wheel over a splat is handled here before
     // Cesium's own zoom (which listens on the canvas) ever sees it.
     const container = viewer.container as HTMLElement;
@@ -183,9 +210,15 @@ export class CameraController {
         window.removeEventListener("pointerup", this.onPointerReleased);
         window.removeEventListener("pointercancel", this.onPointerReleased);
         canvas.removeEventListener("pointerdown", this.onOrbitStart);
+        canvas.removeEventListener("pointerdown", this.onPanStart);
         canvas.removeEventListener("contextmenu", preventDefault);
         window.removeEventListener("pointermove", this.onOrbitMove);
         window.removeEventListener("pointerup", this.onOrbitEnd);
+        window.removeEventListener("pointermove", this.onPanMove);
+        window.removeEventListener("pointerup", this.onPanEnd);
+        window.removeEventListener("pointercancel", this.onPanEnd);
+        canvas.removeEventListener("wheel", this.stopPanInertia);
+        this.stopPanInertia();
       },
       // `camera.changed` fires only when position or orientation moved past
       // `percentageChanged`; `moveStart` also fires when the frustum changes, which a canvas
@@ -492,8 +525,8 @@ export class CameraController {
   }
 
   /**
-   * Google Maps mapping: Ctrl+drag, right-drag and middle-drag orbit the point in the middle
-   * of the view (the thing you are looking at), left-drag pans. At object scale a plain
+   * Google Maps mapping: Shift+drag, Ctrl+drag, right-drag and middle-drag orbit the point in
+   * the middle of the view (the thing you are looking at), left-drag pans (onPanStart). At object scale a plain
    * left-drag orbits the point that was clicked, because Cesium's rotation is tuned for a
    * planet and barely turns beside a rock.
    */
@@ -508,7 +541,9 @@ export class CameraController {
   private readonly onOrbitStart = (event: PointerEvent): void => {
     if (!this.scene.screenSpaceCameraController.enableInputs) return;
     const around =
-      event.button === 1 || event.button === 2 || (event.button === 0 && event.ctrlKey);
+      event.button === 1 ||
+      event.button === 2 ||
+      (event.button === 0 && (event.ctrlKey || event.shiftKey));
     if (around) {
       this.orbitPivot = this.pivotAtCenter();
       this.orbitRate = this.objectScale
@@ -539,6 +574,101 @@ export class CameraController {
     this.orbitPivot = null;
     this.orbitLast = null;
   };
+
+  /**
+   * Left-drag pan, Google Maps style: the point under the cursor when the drag starts (a
+   * splat surface, the terrain, a building) stays under the cursor, sliding on the level
+   * plane through it. Cesium's own left-drag spins the globe around the terrain point under
+   * the cursor -- under a splat that is the ground beneath it, or nothing towards the
+   * horizon, where it rotates the whole view -- so near the ground this takes over, and the
+   * planet-scale spin stays for high up. Mouse and pen only; touch keeps Cesium's gestures.
+   */
+  private readonly onPanStart = (event: PointerEvent): void => {
+    this.stopPanInertia();
+    this.grab = null;
+    const controller = this.scene.screenSpaceCameraController;
+    if (event.button !== 0 || this.objectScale) return;
+    if (!controller.enableInputs) return;
+    const plain = !event.ctrlKey && !event.shiftKey && !event.altKey && !event.metaKey;
+    const near = this.pose().altitude < GRAB_PAN_MAX_ALTITUDE_M;
+    scratchWindow.x = event.offsetX;
+    scratchWindow.y = event.offsetY;
+    const point =
+      plain && near && event.pointerType !== "touch" ? this.plausiblePick(scratchWindow) : null;
+    // Decided per gesture, and left as it is after: re-enabling Cesium's spin on release
+    // would hand it the drag's last movement as inertia.
+    controller.enableRotate = !point;
+    if (!point) return;
+    const camera = this.viewer.camera;
+    this.grab = {
+      point,
+      normal: this.scene.globe.ellipsoid.geodeticSurfaceNormal(point, new Cartesian3()),
+      reach: Cartesian3.distance(camera.positionWC, point),
+    };
+    this.panSamples = [];
+  };
+
+  private readonly onPanMove = (event: PointerEvent): void => {
+    const grab = this.grab;
+    if (!grab) return;
+    const rect = this.viewer.canvas.getBoundingClientRect();
+    scratchWindow.x = event.clientX - rect.left;
+    scratchWindow.y = event.clientY - rect.top;
+    const camera = this.viewer.camera;
+    const ray = camera.getPickRay(scratchWindow, scratchGrabRay);
+    if (!ray) return;
+    const facing = Cartesian3.dot(ray.direction, grab.normal);
+    if (Math.abs(facing) < 1e-4) return;
+    const offset = Cartesian3.subtract(grab.point, ray.origin, scratchGrabHit);
+    const t = Cartesian3.dot(offset, grab.normal) / facing;
+    if (t <= 0 || t > grab.reach * GRAB_PAN_MAX_REACH) return;
+    const hit = Ray.getPoint(ray, t, scratchGrabHit);
+    const step = Cartesian3.subtract(grab.point, hit, new Cartesian3());
+    this.movePan(step);
+    const now = performance.now();
+    this.panSamples.push({ at: now, step });
+    while ((this.panSamples[0]?.at ?? now) < now - PAN_VELOCITY_WINDOW_MS) this.panSamples.shift();
+  };
+
+  private readonly onPanEnd = (): void => {
+    const grab = this.grab;
+    this.grab = null;
+    if (!grab) return;
+    const now = performance.now();
+    const recent = this.panSamples.filter((sample) => sample.at >= now - PAN_VELOCITY_WINDOW_MS);
+    this.panSamples = [];
+    const first = recent[0];
+    if (!first || recent.length < 2) return;
+    // Metres per millisecond over the last few moves, then coasting to a stop.
+    const velocity = new Cartesian3();
+    for (const sample of recent) Cartesian3.add(velocity, sample.step, velocity);
+    Cartesian3.divideByScalar(velocity, Math.max(now - first.at, 16), velocity);
+    const minSpeed = (grab.reach * PAN_INERTIA_MIN_SPEED) / 1000;
+    let last = now;
+    const coast = (time: number): void => {
+      const dt = Math.min(time - last, 50);
+      last = time;
+      Cartesian3.multiplyByScalar(velocity, Math.exp(-dt / PAN_INERTIA_TAU_MS), velocity);
+      if (Cartesian3.magnitude(velocity) < minSpeed) {
+        this.panInertia = 0;
+        return;
+      }
+      this.movePan(Cartesian3.multiplyByScalar(velocity, dt, scratchGrabStep));
+      this.panInertia = requestAnimationFrame(coast);
+    };
+    this.panInertia = requestAnimationFrame(coast);
+  };
+
+  private readonly stopPanInertia = (): void => {
+    if (this.panInertia) cancelAnimationFrame(this.panInertia);
+    this.panInertia = 0;
+  };
+
+  private movePan(step: Cartesian3): void {
+    const camera = this.viewer.camera;
+    Cartesian3.add(camera.position, step, camera.position);
+    this.scene.requestRender();
+  }
 
   /**
    * Turns the camera around a pivot, keeping its distance: `headingRad` moves the camera to

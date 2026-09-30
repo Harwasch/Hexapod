@@ -26,7 +26,8 @@ export function createBackend(
   });
   renderer.setClearColor(0x000000, 0);
   const scene = new THREE.Scene();
-  scene.add(new SparkRenderer({ renderer, lodSplatCount: budget }));
+  const spark = new SparkRenderer({ renderer, lodSplatCount: budget });
+  scene.add(spark);
   const camera = new THREE.PerspectiveCamera();
   const target = new THREE.Vector3();
   let size = { width: 0, height: 0, pixelRatio: 0 };
@@ -57,6 +58,15 @@ export function createBackend(
       camera.far = pose.far;
       camera.updateProjectionMatrix();
       renderer.render(scene, camera);
+    },
+    // Spark shows a new mesh once its level-of-detail tree is built and a sort has run: until
+    // then the displayed mapping holds none of its splats.
+    isDrawn: (mesh) =>
+      spark.display.mapping.some(
+        (entry) => (entry.node === mesh || entry.node.parent === mesh) && entry.count > 0,
+      ),
+    setBudget: (drawn) => {
+      spark.lodSplatCount = drawn;
     },
     destroy: () => {
       renderer.setAnimationLoop(null);

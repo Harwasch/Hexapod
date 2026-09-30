@@ -12,12 +12,14 @@
 
 import {
   BoundingSphere,
+  Cartesian2,
   Cartesian3,
   Color,
   HeadingPitchRange,
   Math as CesiumMath,
   Matrix4,
   Ray,
+  SceneTransforms,
   Viewer,
 } from "cesium";
 import type { SiteAsset } from "@twin/contracts";
@@ -55,6 +57,14 @@ export interface CollisionHarness {
   clearanceRatio(): number | null;
   /** The camera's world position. */
   eye(): [number, number, number];
+  /** Puts the camera `range` metres from the centre, `pitchDeg` below level (map view). */
+  lookDown(range: number, pitchDeg: number, headingDeg?: number): void;
+  /** The splat surface under a window position (CSS pixels), or null. */
+  surfaceAt(x: number, y: number): [number, number, number] | null;
+  /** Where a world point is drawn, in window CSS pixels, or null. */
+  windowOf(point: [number, number, number]): [number, number] | null;
+  /** The map camera's heading, radians. */
+  heading(): number;
   /** First-person exploring, as the console's G key starts it. */
   explore: {
     enter(): void;
@@ -163,6 +173,28 @@ export async function startCollisionHarness(
       const p = viewer.camera.positionWC;
       return [p.x, p.y, p.z];
     },
+    lookDown: (range, pitchDeg, headingDeg = 0) => {
+      viewer.camera.lookAt(
+        sphere.center,
+        new HeadingPitchRange(
+          CesiumMath.toRadians(headingDeg),
+          CesiumMath.toRadians(-pitchDeg),
+          range,
+        ),
+      );
+      viewer.camera.lookAtTransform(Matrix4.IDENTITY);
+      camera.setCollider(collider);
+    },
+    surfaceAt: (x, y) => {
+      const ray = viewer.camera.getPickRay(new Cartesian2(x, y));
+      const hit = ray ? collider.raycast(ray) : undefined;
+      return hit ? [hit.point.x, hit.point.y, hit.point.z] : null;
+    },
+    windowOf: (point) => {
+      const at = SceneTransforms.worldToWindowCoordinates(scene, new Cartesian3(...point));
+      return at ? [at.x, at.y] : null;
+    },
+    heading: () => viewer.camera.heading,
     distanceToCentre: () => Cartesian3.distance(viewer.camera.positionWC, sphere.center),
     hitAhead: () =>
       collider.raycast(new Ray(viewer.camera.positionWC, viewer.camera.directionWC))?.distance ??

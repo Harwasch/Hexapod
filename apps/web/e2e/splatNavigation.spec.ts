@@ -193,3 +193,49 @@ test("explore: WASD flies toward the tree and stops at it, Space rises, F walks,
   expect(Math.abs(after - before)).toBeGreaterThan(0.05);
   await run((n) => n.explore.exit());
 });
+
+test("left-drag grabs the ground and pans; Shift-drag and right-drag orbit", async ({ page }) => {
+  test.setTimeout(300_000);
+  await open(page);
+  const size = page.viewportSize() ?? { width: 1280, height: 720 };
+  const drag = async (
+    from: [number, number],
+    to: [number, number],
+    options: { button?: "left" | "right"; shift?: boolean } = {},
+  ): Promise<void> => {
+    await page.mouse.move(...from);
+    if (options.shift) await page.keyboard.down("Shift");
+    await page.mouse.down({ button: options.button ?? "left" });
+    await page.mouse.move(...to, { steps: 8 });
+  };
+  const release = async (options: { button?: "left" | "right"; shift?: boolean } = {}) => {
+    await page.mouse.up({ button: options.button ?? "left" });
+    if (options.shift) await page.keyboard.up("Shift");
+  };
+  // A map view: 35 degrees down onto the tree.
+  await page.evaluate("window.__nav.lookDown(40, 35)");
+  await page.waitForTimeout(500);
+  const from: [number, number] = [size.width / 2, size.height / 2];
+  const grabbed = await page.evaluate(`window.__nav.surfaceAt(${from[0]}, ${from[1]})`);
+  expect(grabbed).not.toBeNull();
+  // The grabbed point follows the cursor (within a few pixels), and the view does not turn.
+  const headingBefore = await page.evaluate("window.__nav.heading()");
+  const to: [number, number] = [from[0] + 160, from[1] + 70];
+  await drag(from, to);
+  await page.waitForTimeout(100);
+  const drawnAt = await page.evaluate(`window.__nav.windowOf(${JSON.stringify(grabbed)})`);
+  await release();
+  expect(Math.hypot(drawnAt[0] - to[0], drawnAt[1] - to[1])).toBeLessThan(6);
+  expect(Math.abs((await page.evaluate("window.__nav.heading()")) - headingBefore)).toBeLessThan(
+    1e-3,
+  );
+  // Shift-drag and right-drag orbit: the heading turns.
+  await page.waitForTimeout(800);
+  for (const options of [{ shift: true }, { button: "right" as const }]) {
+    const before = await page.evaluate("window.__nav.heading()");
+    await drag(from, [from[0] + 200, from[1]], options);
+    await release(options);
+    const after = await page.evaluate("window.__nav.heading()");
+    expect(Math.abs(after - before)).toBeGreaterThan(0.2);
+  }
+});

@@ -35,5 +35,9 @@ export interface ScanBackend<M> {
   remove(mesh: M): void;
   dispose(mesh: M): void;
   render(pose: ScanPose): void;
+  /** Whether `mesh`, added `sinceMs` ago, has been drawn (scanView/handover.ts). */
+  isDrawn(mesh: M, sinceMs: number): boolean;
+  /** The most gaussians it may draw a frame (the adaptive budget moved). */
+  setBudget(drawn: number): void;
   destroy(): void;
 }

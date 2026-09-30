@@ -40,6 +40,9 @@ export interface TileNode {
   /** Absent when the tileset gives none this page reads (a `region`): such a tile is always
    *  treated as in view and at distance zero, so it is refined first rather than never. */
   bounds?: Sphere | null;
+  /** Its `box` bounding volume (centre, then three half-axis vectors), when it has one: how
+   *  far the camera is from the tile, where the sphere around a box is far too loose. */
+  box?: number[] | null;
 }
 
 export interface TileTree {
@@ -95,6 +98,7 @@ export function parseTileset(document: unknown): TileTree {
       geometricError: typeof error === "number" ? error : 0,
       children: Array.isArray(raw.children) ? (raw.children as RawTile[]).map(node) : [],
       bounds: sphereOf(raw.boundingVolume),
+      box: numbers(raw.boundingVolume?.box, 12),
     };
   };
   const parsed = node(root);
@@ -111,6 +115,28 @@ function numbers(value: unknown, length: number): number[] | null {
   return value.every((item) => typeof item === "number" && Number.isFinite(item))
     ? (value as number[])
     : null;
+}
+
+/**
+ * Distance from `point` to an oriented 3D Tiles `box` (centre, three half-axis vectors), 0
+ * inside it: along each axis, how far the point is past the face.
+ */
+export function boxDistance(box: number[], point: readonly [number, number, number]): number {
+  const dx = point[0] - (box[0] ?? 0);
+  const dy = point[1] - (box[1] ?? 0);
+  const dz = point[2] - (box[2] ?? 0);
+  let squared = 0;
+  for (let axis = 0; axis < 3; axis++) {
+    const ux = box[3 + axis * 3] ?? 0;
+    const uy = box[4 + axis * 3] ?? 0;
+    const uz = box[5 + axis * 3] ?? 0;
+    const half = Math.hypot(ux, uy, uz);
+    if (half === 0) continue;
+    const along = Math.abs((dx * ux + dy * uy + dz * uz) / half);
+    const past = along - half;
+    if (past > 0) squared += past * past;
+  }
+  return Math.sqrt(squared);
 }
 
 /**

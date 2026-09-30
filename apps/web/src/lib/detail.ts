@@ -58,6 +58,19 @@ const DESKTOP_BUDGETS: [minGb: number, splats: number][] = [
 ];
 
 /** Whether this looks like a phone or tablet: a coarse pointer and a small screen. */
+/** Desktop views may grow past the device budget to this many times it, while frames stay
+ *  fast (lib/splatBudget.ts): memory sets the budget, but only trying shows what the GPU
+ *  draws smoothly, and a dense scan seen from inside needs about twice the standard 3M. */
+const DESKTOP_GROWTH = 2;
+/** However fast the frames, never more than this. */
+const MAX_SPLAT_CEILING = 8_000_000;
+
+/** The most gaussians this device's views may grow to: the budget itself on a handheld. */
+export function deviceSplatCeiling(): number {
+  const budget = deviceSplatBudget();
+  return isHandheld() ? budget : Math.min(budget * DESKTOP_GROWTH, MAX_SPLAT_CEILING);
+}
+
 export function isHandheld(): boolean {
   try {
     const coarse = window.matchMedia("(pointer: coarse)").matches;
