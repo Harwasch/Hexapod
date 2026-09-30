@@ -2857,6 +2857,7 @@ modal = [
 [package.dev-dependencies]
 dev = [
     { name = "boto3-stubs", extra = ["s3"] },
+    { name = "httpx2" },
     { name = "moto", extra = ["s3"] },
     { name = "mypy" },
     { name = "pip-audit" },
@@ -2893,6 +2894,7 @@ provides-extras = ["modal"]
 [package.metadata.requires-dev]
 dev = [
     { name = "boto3-stubs", extras = ["s3"], specifier = ">=1.40" },
+    { name = "httpx2", specifier = ">=2.13" },
     { name = "moto", extras = ["s3"], specifier = ">=5.0" },
     { name = "mypy", specifier = ">=1.18" },
     { name = "pip-audit", specifier = ">=2.9" },

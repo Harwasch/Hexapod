@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import uuid
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from datetime import UTC, datetime
 
 import pytest
 from fastapi.testclient import TestClient
-from httpx import Response
+from httpx2 import Response
 from sqlalchemy.orm import Session
 
 from app.api.deps import _db
@@ -182,7 +182,7 @@ def test_a_phone_sets_only_the_options_it_is_allowed(client: TestClient, db: Ses
     uploaded(db, mine["id"])
     url = f"/api/v1/phone/captures/{mine['id']}/process"
 
-    def start(params: dict[str, object], recipe: str = "photo-reconstruct") -> Response:
+    def start(params: Mapping[str, object], recipe: str = "photo-reconstruct") -> Response:
         return client.post(url, json={"recipe": recipe, "params": params}, headers=PHONE)
 
     for refused in (
@@ -248,7 +248,7 @@ def test_a_phone_may_turn_on_the_phone_capture_switches(client: TestClient, db: 
     uploaded(db, mine["id"])
     url = f"/api/v1/phone/captures/{mine['id']}/process"
 
-    def start(params: dict[str, object]) -> Response:
+    def start(params: Mapping[str, object]) -> Response:
         return client.post(
             url, json={"recipe": "photo-reconstruct", "params": params}, headers=PHONE
         )
@@ -288,7 +288,7 @@ def test_a_phone_may_ask_for_blocks_to_compare_a_capture_whole_and_in_blocks(
     uploaded(db, mine["id"])
     url = f"/api/v1/phone/captures/{mine['id']}/process"
 
-    def start(params: dict[str, object]) -> Response:
+    def start(params: Mapping[str, object]) -> Response:
         return client.post(
             url, json={"recipe": "photo-reconstruct", "params": params}, headers=PHONE
         )
@@ -319,7 +319,7 @@ def test_a_phone_may_ask_how_blocks_train_and_how_many_images_a_step_sees(
     uploaded(db, mine["id"])
     url = f"/api/v1/phone/captures/{mine['id']}/process"
 
-    def start(params: dict[str, object]) -> Response:
+    def start(params: Mapping[str, object]) -> Response:
         return client.post(
             url, json={"recipe": "photo-reconstruct", "params": params}, headers=PHONE
         )
@@ -354,7 +354,7 @@ def test_a_quality_tier_scales_the_measured_budget_within_bounds(
     uploaded(db, mine["id"])
     url = f"/api/v1/phone/captures/{mine['id']}/process"
 
-    def start(params: dict[str, object]) -> Response:
+    def start(params: Mapping[str, object]) -> Response:
         return client.post(
             url, json={"recipe": "photo-reconstruct", "params": params}, headers=PHONE
         )

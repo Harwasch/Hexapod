@@ -194,7 +194,12 @@ jobs:
           names = sorted(module.FUNCTIONS)
           print("registered:", names)
           assert names, "no per-tier function was registered"
-          assert names == sorted(module.TIERS), f"{names} does not match {module.TIERS}"
+          # One per tier, plus one per `GPU_FALLBACKS` entry: ModalAdapter looks up
+          # `run_stage_<fallback_tier(tier)>` for a fan-out's parts on such a tier, so a
+          # fallback missing here is the same late lookup failure as a missing tier.
+          from modal_adapter import GPU_FALLBACKS, fallback_tier
+          expected = sorted([*module.TIERS, *map(fallback_tier, GPU_FALLBACKS)])
+          assert names == expected, f"{names} does not match {expected}"
           # The worker looks functions up under this name (app/config.py's default
           # WORKER_MODAL_APP); an app deployed under another is a lookup that fails.
           assert module.app.name == "twin-pipeline", module.app.name
@@ -218,7 +223,9 @@ jobs:
           spec = importlib.util.spec_from_file_location("app", "/root-sim/app.py")
           module = importlib.util.module_from_spec(spec)
           spec.loader.exec_module(module)
-          assert sorted(module.FUNCTIONS) == sorted(module.TIERS), module.TIERS
+          from modal_adapter import GPU_FALLBACKS, fallback_tier
+          expected = sorted([*module.TIERS, *map(fallback_tier, GPU_FALLBACKS)])
+          assert sorted(module.FUNCTIONS) == expected, expected
           print("container import ok:", sorted(module.FUNCTIONS))
           PY
 

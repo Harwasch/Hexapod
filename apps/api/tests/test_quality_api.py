@@ -329,7 +329,7 @@ def test_registration_publishes_the_coverage_and_records_the_verdict(
 
 def test_a_region_is_only_passed_on_over_the_poses_it_was_measured_in() -> None:
     plan = plan_recipe(load_recipe("photo-reconstruct"))
-    resolved = {
+    resolved: dict[str, dict[str, Any]] = {
         "train": {"cap_max": 500_000, "roi": {"center": [0, 0, 0], "radius": 1}},
         "quality": {"mode": "refine"},
     }
