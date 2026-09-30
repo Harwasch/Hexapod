@@ -6,9 +6,11 @@
  * managed URL itself: r2.dev answers over HTTP/1.1 only -- six connections per origin, so a
  * scan's hundreds of tiles queue behind each other -- with no Cache-Control, so a browser
  * revalidates or refetches tiles it already has. Here the browser gets HTTP/2 or 3 from the
- * nearest Cloudflare edge, one connection, and a cache lifetime: a year, immutable, for a
- * run's published package (`runs/<id>/...`, never rewritten), and five minutes with a week
- * of stale-while-revalidate for anything else (`sites/<slug>/...` can be republished).
+ * nearest Cloudflare edge, one connection, and a cache lifetime: a year, immutable, for the
+ * binary content of a run's published package (`runs/<id>/...` tiles, written once), and
+ * five minutes with a week of stale-while-revalidate for anything else -- tileset JSON,
+ * which a backfill may rewrite in place (collision-backfill.yml adds `extras.collision`),
+ * and `sites/<slug>/...`, which can be republished.
  *
  * `HEAD /r2/` answers 204 with `X-Tile-Proxy: 1`: the web app routes tiles here only once it
  * has seen that (apps/web/src/lib/tileProxy.ts), so a deployment without this function
@@ -24,8 +26,13 @@ const YEAR_S = 31536000;
 const SHORT_S = 300;
 
 /** @param {string} key */
+function immutable(key) {
+  return key.startsWith("runs/") && !/\.json(\?|$)/.test(key);
+}
+
+/** @param {string} key */
 function cacheControl(key) {
-  return key.startsWith("runs/")
+  return immutable(key)
     ? `public, max-age=${YEAR_S}, immutable`
     : `public, max-age=${SHORT_S}, stale-while-revalidate=604800`;
 }
@@ -53,7 +60,7 @@ export async function onRequest({ request }) {
     const value = request.headers.get(name);
     if (value) headers.set(name, value);
   }
-  const lifetime = key.startsWith("runs/") ? YEAR_S : SHORT_S;
+  const lifetime = immutable(key) ? YEAR_S : SHORT_S;
   const upstream = await fetch(`https://${host}/${key}`, {
     method: request.method,
     headers,
