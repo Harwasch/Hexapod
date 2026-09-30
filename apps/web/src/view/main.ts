@@ -13,7 +13,7 @@
  * watches a capture's run as it happens (live.ts). Reads are open in this API, so the page
  * needs no key.
  */
-import { SparkRenderer, SplatFileType, SplatMesh } from "@sparkjsdev/spark";
+import { SparkRenderer, SplatMesh } from "@sparkjsdev/spark";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 
@@ -24,11 +24,10 @@ import { deviceSplatBudget } from "@/lib/detail";
 import { tileUrl } from "@/lib/tileProxy";
 
 import { parseCoverage } from "./coverage";
-import { spzFromGlb } from "./glb";
 import { showLive } from "./live";
 import { ScanNavigation } from "./navigate";
 import { spzPoints, type SpzPoints } from "./spz";
-import { TileStreamer, type View } from "./stream";
+import { loadSplatTile, streamWithView } from "./sparkStream";
 import {
   LOAD_FACTOR,
   countTiles,
@@ -146,24 +145,12 @@ async function splatTileset(site: Site): Promise<{ url: string; tree: TileTree }
   return { url, tree: parseTileset(await json<unknown>(url)) };
 }
 
-/**
- * One tile as a Spark mesh: the SPZ inside the tile's GLB, handed over as it is, with Spark's
- * level of detail on. `lod: true` has Spark build a merged LoD tree over the tile in a worker
- * ("quick" tiny-lod: 1-3 s per million splats, per Spark's lod-getting-started docs; a 100k
- * tile is a fraction of a second) and draw from it within `SparkRenderer.lodSplatCount`,
- * which is shared by every mesh in the scene.
- */
+/** One tile as a Spark mesh (sparkStream.ts), with its splat centres for the collision grid
+ *  (navigate.ts) when the scan brings no grid of its own. */
 async function tileMesh(tilesetUrl: string, tile: TileNode): Promise<SplatMesh> {
-  const response = await fetch(new URL(tile.uri, tilesetUrl).toString());
-  if (!response.ok) throw new Error(`The scan's data answered ${String(response.status)}.`);
-  const bytes = spzFromGlb(await response.arrayBuffer());
-  const mesh = new SplatMesh({ fileBytes: bytes, fileType: SplatFileType.SPZ, lod: true });
-  // The tile's own splat centres, for the collision grid (navigate.ts); a tile whose centres
-  // cannot be read is still drawn, it just is not a surface.
-  const [points] = await Promise.all([
-    readPoints ? spzPoints(bytes).catch(() => undefined) : undefined,
-    mesh.initialized,
-  ]);
+  const { mesh, bytes } = await loadSplatTile(tilesetUrl, tile);
+  // A tile whose centres cannot be read is still drawn, it just is not a surface.
+  const points = readPoints ? await spzPoints(bytes).catch(() => undefined) : undefined;
   if (points) pointsOf.set(mesh, points);
   return mesh;
 }
@@ -253,7 +240,7 @@ async function showScan(siteId: string): Promise<void> {
   };
   window.addEventListener("resize", resize);
   // Tiles keep arriving after the first one is on screen; leaving the scan stops them.
-  let streaming: Streaming | null = null;
+  let streaming: ReturnType<typeof streamWithView> | null = null;
   let navigation: ScanNavigation | null = null;
   renderer.setAnimationLoop(() => {
     controls.update();
@@ -413,105 +400,6 @@ async function showScan(siteId: string): Promise<void> {
     status.hidden = false;
     status.textContent = error instanceof Error ? error.message : "The scan could not be shown.";
   }
-}
-
-interface Streaming {
-  /** Once a frame, before rendering: re-plans when the camera moved or a tile arrived. */
-  frame(): void;
-  stop(): void;
-}
-
-/** How often the cut is re-planned while the camera keeps moving. */
-const REPLAN_MS = 150;
-/** Tiles fetched at once: enough to keep a connection busy, few enough that the nearest
- *  ones are not queued behind a dozen others when the camera turns. */
-const FETCHES_AT_ONCE = 3;
-/** Most gaussians streamed in at once, whatever the budget: a desktop's 3M draw budget times
- *  LOAD_FACTOR would hold 12M, which is past what Spark's LoD trees want in memory. */
-const MAX_STREAMED = 6_000_000;
-/** Loaded tiles kept beyond what is drawn, so a look back needs no download. */
-const CACHE_FACTOR = 1.5;
-
-/**
- * Streams a REPLACE scan with the camera (stream.ts): the cut follows the view within
- * LOAD_FACTOR times the Detail budget. Re-planning is a pass over a few hundred tiles, so it
- * runs at most every REPLAN_MS and only when the camera moved or a tile arrived; fetching
- * and decoding happen off the frame (fetch, then Spark's worker), so the camera never waits
- * for them -- what is on screen stays until what replaces it is ready.
- */
-function streamWithView(
-  tileset: { url: string; tree: TileTree },
-  scan: THREE.Group,
-  camera: THREE.PerspectiveCamera,
-  renderer: THREE.WebGLRenderer,
-  budget: number,
-  first: { root: TileNode; mesh: SplatMesh },
-  display: {
-    show: (tile: TileNode, mesh: SplatMesh) => void;
-    hide: (tile: TileNode, mesh: SplatMesh) => void;
-  },
-  report: (drawn: { tiles: TileNode[]; gaussians: number }) => void,
-): Streaming {
-  const streamer = new TileStreamer<SplatMesh>(
-    tileset.tree,
-    {
-      load: (tile) => tileMesh(tileset.url, tile),
-      show: display.show,
-      hide: display.hide,
-      dispose: (mesh) => mesh.dispose(),
-      failed: (tile) => console.warn(`Tile ${tile.uri} did not load; its parent stays.`),
-    },
-    {
-      budget: Math.min(budget * LOAD_FACTOR, MAX_STREAMED),
-      cacheBudget: Math.min(budget * LOAD_FACTOR, MAX_STREAMED) * CACHE_FACTOR,
-      concurrency: FETCHES_AT_ONCE,
-    },
-  );
-  streamer.adopt(first.root, first.mesh);
-  const frustum = new THREE.Frustum();
-  const matrix = new THREE.Matrix4();
-  const toScan = new THREE.Matrix4();
-  const sphere = new THREE.Sphere();
-  const eye = new THREE.Vector3();
-  const lastPose = new THREE.Matrix4();
-  let arrived = true;
-  let lastPlan = 0;
-  streamer.onArrival = () => {
-    arrived = true;
-  };
-  const view = (): View => {
-    scan.updateMatrixWorld();
-    camera.updateMatrixWorld();
-    toScan.copy(scan.matrixWorld).invert();
-    eye.copy(camera.position).applyMatrix4(toScan);
-    frustum.setFromProjectionMatrix(
-      matrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse),
-    );
-    const height = renderer.domElement.clientHeight || window.innerHeight;
-    return {
-      eye: [eye.x, eye.y, eye.z],
-      projection: height / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2))),
-      visible: (bounds) => {
-        sphere.center.set(...bounds.center).applyMatrix4(scan.matrixWorld);
-        sphere.radius = bounds.radius;
-        return frustum.intersectsSphere(sphere);
-      },
-    };
-  };
-  return {
-    frame: () => {
-      const now = performance.now();
-      const moved = !lastPose.equals(camera.matrixWorld);
-      if (!(arrived || moved) || now - lastPlan < REPLAN_MS) return;
-      lastPlan = now;
-      arrived = false;
-      lastPose.copy(camera.matrixWorld);
-      if (streamer.update(view()) || moved) {
-        report({ tiles: streamer.drawn, gaussians: streamer.drawnGaussians });
-      }
-    },
-    stop: () => streamer.stop(),
-  };
 }
 
 /**

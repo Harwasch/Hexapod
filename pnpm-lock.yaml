@@ -85,6 +85,9 @@ importers:
       openapi-fetch:
         specifier: ^0.17.0
         version: 0.17.0
+      playcanvas:
+        specifier: 2.22.6
+        version: 2.22.6
       react:
         specifier: ^19.3.0
         version: 19.3.0
@@ -1177,6 +1180,9 @@ packages:
   '@vitest/spy@5.0.0':
     resolution: {integrity: sha512-uy+luWBAPw9XfthoHi5AkfHUnuPYEESjl0p/r+meoBnU8bxg5GDQ3Ey8MjcJ6sqahkL4PFyrvfMJJBw7LbU06g==}
 
+  '@webgpu/types@0.1.74':
+    resolution: {integrity: sha512-lgiI4hbuLcI9unnm2cL/tvCaQU45dp0xcLWJh5uB/9MBGvIA4F8XIk7nSiBeg+K4xWGYwgZKn80LmERI5CxoTA==}
+
   '@zip.js/zip.js@2.15.0':
     resolution: {integrity: sha512-hYAuHAaWjt0axbofaDL5XUlmrQPsBDcK3f45ApZuh6N+8UGVk26GoGdtGDvcvzahsHytTQ6DtBVXwG9IcCMjjQ==}
     engines: {bun: '>=0.7.0', deno: '>=1.0.0', node: '>=18.0.0'}
@@ -2161,6 +2167,10 @@ packages:
   picomatch@4.0.7:
     resolution: {integrity: sha512-qcJu88Q2IWqJsDD529JKMdwGm/dvInW4HvQnRwiH9JtihJvzGOscDtHE3x1pBKeUOTysQ8kVmLnJ2kJu7yhcGA==}
     engines: {node: '>=12'}
+
+  playcanvas@2.22.6:
+    resolution: {integrity: sha512-h5yBfE3jfGYWVEsRp8E3BqcPvpG14wwZUpQiJt+/ePsASaPHbfhtdFbABu5igUTN2k37QBQvfg7H1aCEnw/OFQ==}
+    engines: {node: '>=18.3.0'}
 
   playwright-core@1.63.0:
     resolution: {integrity: sha512-rYCsBF/M5HjUch52bbtVONEFjv6Xu8sm8h72dNlR5bzIE1fvC/bxgspzkjSfU+MweEMmPM8KJebG6nnyxo5mCg==}
@@ -3616,6 +3626,8 @@ snapshots:
 
   '@vitest/spy@5.0.0': {}
 
+  '@webgpu/types@0.1.74': {}
+
   '@zip.js/zip.js@2.15.0': {}
 
   acorn-jsx@5.3.2(acorn@8.18.0):
@@ -4663,6 +4675,11 @@ snapshots:
   picocolors@1.1.1: {}
 
   picomatch@4.0.7: {}
+
+  playcanvas@2.22.6:
+    dependencies:
+      '@types/webxr': 0.5.24
+      '@webgpu/types': 0.1.74
 
   playwright-core@1.63.0: {}
 

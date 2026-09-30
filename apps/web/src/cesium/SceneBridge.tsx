@@ -198,6 +198,12 @@ export function SceneBridge() {
     scene?.explore.setSpeed(exploreSpeed);
   }, [scene, exploreSpeed]);
 
+  // Splat renderer → scene (CesiumJS, Spark or PlayCanvas; cesium/scanView).
+  const splatRenderer = useSettings((s) => s.splatRenderer);
+  useEffect(() => {
+    scene?.setSplatRenderer(splatRenderer);
+  }, [scene, splatRenderer]);
+
   useEffect(() => {
     if (!scene || layerCatalog.isLoading) return;
     const google = layerCatalog.data.find((l) => l.source.type === "google-photorealistic");

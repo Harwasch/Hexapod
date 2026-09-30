@@ -6,6 +6,8 @@ import type { UnitSystem } from "@twin/geo";
 export type ThemeMode = "auto" | "light" | "dark";
 export type QualityPreset = "performance" | "balanced" | "ultra";
 export type WorldMode = "open" | "photorealistic";
+/** Who draws splat scans on the globe (cesium/scanView): CesiumJS, Spark or PlayCanvas. */
+export type SplatRenderer = "cesium" | "spark" | "playcanvas";
 
 export interface SettingsState {
   theme: ThemeMode;
@@ -35,6 +37,12 @@ export interface SettingsState {
    * silently animate.
    */
   livingGpuMotion: boolean;
+  /**
+   * Who draws splat scans: CesiumJS's own splat primitive, or a dedicated splat renderer laid
+   * over the globe -- Spark (three.js) or PlayCanvas (SuperSplat's engine) -- for comparison.
+   * The globe, navigation and tools stay CesiumJS's either way.
+   */
+  splatRenderer: SplatRenderer;
   /**
    * The API's shared write token (`API_WRITE_TOKEN`), entered once in the UI.
    *
@@ -68,6 +76,7 @@ const defaults = {
   devToolsOpen: false,
   exploreSpeed: 4,
   livingGpuMotion: true,
+  splatRenderer: "cesium" as SplatRenderer,
   writeToken: "",
 };
 

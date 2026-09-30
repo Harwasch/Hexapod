@@ -34,6 +34,8 @@ import { installCameraPickHook } from "./cameraPickHook";
 import { installSplatDecoder } from "./splatDecoder";
 import { installSplatSorter } from "./splatSorter";
 import { UiActivity } from "./uiActivity";
+import { ScanRendererHost, type ScanRendererStatus } from "./scanView/ScanRendererHost";
+import type { SplatRendererKind } from "./scanView/types";
 import type { Geocoder, SceneEvents } from "./types";
 import type { TokenState } from "@/state/viewer";
 
@@ -75,6 +77,7 @@ export class CesiumSceneManager {
   private readonly uninstallSplatDecoder: () => void;
   private readonly uninstallPickHook: () => void;
   private readonly uiActivity: UiActivity;
+  private readonly scanRenderer: ScanRendererHost;
   readonly sites: SiteManager;
   readonly living: LivingSurveyManager;
   readonly selection: SelectionManager;
@@ -166,6 +169,7 @@ export class CesiumSceneManager {
     this.uninstallSplatSorter = installSplatSorter();
     this.uninstallSplatDecoder = installSplatDecoder(interfaceBusy);
     this.collider = new SplatCollider(this.viewer.scene, () => this.splatGate.holding);
+    this.scanRenderer = new ScanRendererHost(this.viewer);
     this.camera.setCollider(this.collider);
     // Cesium's own camera control asks the splats' solids before reading depth back from
     // the GPU (engine patch, ScreenSpaceCameraController.pickHook).
@@ -203,6 +207,7 @@ export class CesiumSceneManager {
         this.performance.setGradeSuppressed(splat && pose.altitude < SCAN_GRADE_ALTITUDE_M);
         this.selection.setHoverEnabled(!(splat && pose.altitude < SCAN_GRADE_ALTITUDE_M));
         this.insideScan = splat && this.sites.insideSplatScan();
+        this.updateScanRenderer();
         this.scanAltitude = pose.altitude;
         this.updateScanView();
       }),
@@ -220,6 +225,8 @@ export class CesiumSceneManager {
         this.cameraMoving = moving;
         this.updateScanView();
       }),
+      // A site engaging or changing representation changes what a splat renderer draws.
+      this.events.on("tilesets", () => this.updateScanRenderer()),
       this.events.on("ground-pick-mode", (on) => {
         this.pickingGround = on;
         this.selection.setEnabled(this.selectionWanted());
@@ -371,6 +378,27 @@ export class CesiumSceneManager {
    * flying low -- the scan is its own ground, with no terrain floor under it
    * (ClippingManager.setFloorless).
    */
+  /**
+   * Who draws splat scans: CesiumJS, or a dedicated renderer over the globe (Spark, PlayCanvas;
+   * scanView/ScanRendererHost.ts), for comparison. Everything else stays CesiumJS's.
+   */
+  setSplatRenderer(kind: SplatRendererKind): void {
+    this.sites.setSplatRenderer(kind);
+    this.scanRenderer.setRenderer(kind);
+    this.updateScanRenderer();
+  }
+
+  /** The dedicated splat renderer's state, for the debug panel and tests. */
+  get scanRendererStatus(): ScanRendererStatus {
+    return this.scanRenderer.status();
+  }
+
+  private updateScanRenderer(): void {
+    const target = this.sites.scanTarget();
+    this.scanRenderer.setTarget(target);
+    this.collider.setSolidWhileHidden(target?.tileset ?? null);
+  }
+
   private updateScanView(): void {
     const inside = this.insideScan;
     this.layers.setWorldFrozen(inside && this.cameraMoving);
@@ -411,6 +439,7 @@ export class CesiumSceneManager {
     this.uninstallSplatSorter();
     this.uninstallSplatDecoder();
     this.uninstallPickHook();
+    this.scanRenderer.destroy();
     this.uiActivity.destroy();
     this.splatGate.destroy();
     this.performance.destroy();

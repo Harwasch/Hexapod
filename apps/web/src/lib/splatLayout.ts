@@ -56,3 +56,57 @@ export function shCoefficientsOf(
   }
   return out;
 }
+
+/** The degree-0 spherical-harmonic constant: colour = 0.5 + SH_C0 * dc. */
+export const SH_C0 = 0.28209479177387814;
+/** Coefficients per splat for each SH degree, all bands up to it. */
+const SH_COEFFICIENTS = [0, 3, 8, 15];
+
+export interface DecodedGeometry extends DecodedCloud {
+  positions: Float32Array;
+  scales: Float32Array;
+  rotations: Float32Array;
+}
+
+/**
+ * A decoded SPZ cloud as PlayCanvas's `GSplatData` takes it, in the glTF
+ * KHR_gaussian_splatting convention PlayCanvas reads from glTF (`activated`: linear scale,
+ * opacity after the sigmoid) -- the same values spz-loader gives CesiumJS. Colour goes back to
+ * its degree-0 coefficient (`f_dc`), rotations from xyzw to PlayCanvas's w-first `rot_0..3`,
+ * and higher bands to PLY's `f_rest` order: every coefficient's red, then green, then blue.
+ */
+export function playcanvasProperties(cloud: DecodedGeometry): Record<string, Float32Array> {
+  const n = cloud.numPoints;
+  const out: Record<string, Float32Array> = {};
+  const column = (source: Float32Array, stride: number, offset: number): Float32Array => {
+    const values = new Float32Array(n);
+    for (let i = 0; i < n; i++) values[i] = source[i * stride + offset] ?? 0;
+    return values;
+  };
+  out.x = column(cloud.positions, 3, 0);
+  out.y = column(cloud.positions, 3, 1);
+  out.z = column(cloud.positions, 3, 2);
+  out.rot_0 = column(cloud.rotations, 4, 3);
+  out.rot_1 = column(cloud.rotations, 4, 0);
+  out.rot_2 = column(cloud.rotations, 4, 1);
+  out.rot_3 = column(cloud.rotations, 4, 2);
+  out.scale_0 = column(cloud.scales, 3, 0);
+  out.scale_1 = column(cloud.scales, 3, 1);
+  out.scale_2 = column(cloud.scales, 3, 2);
+  out.opacity = column(cloud.alphas, 1, 0);
+  for (let c = 0; c < 3; c++) {
+    const dc = new Float32Array(n);
+    for (let i = 0; i < n; i++) dc[i] = ((cloud.colors[i * 3 + c] ?? 0.5) - 0.5) / SH_C0;
+    out[`f_dc_${String(c)}`] = dc;
+  }
+  const coefficients = SH_COEFFICIENTS[Math.min(cloud.shDegree, 3)] ?? 0;
+  const stride = coefficients * 3;
+  for (let c = 0; c < 3; c++) {
+    for (let k = 0; k < coefficients; k++) {
+      const values = new Float32Array(n);
+      for (let i = 0; i < n; i++) values[i] = cloud.sh[i * stride + k * 3 + c] ?? 0;
+      out[`f_rest_${String(c * coefficients + k)}`] = values;
+    }
+  }
+  return out;
+}

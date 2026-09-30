@@ -18,6 +18,8 @@ import { boundingRadiusM, centerOf, circleFootprint, haversineDistance } from "@
 
 import { detailScreenSpaceScale, deviceSplatBudget, isHandheld } from "@/lib/detail";
 import { AdaptiveSplatBudget } from "@/lib/splatBudget";
+
+import type { SplatRendererKind } from "./scanView/types";
 import type { Emitter } from "@/lib/emitter";
 import { createLogger, describeError } from "@/lib/log";
 import { timed } from "@/lib/timing";
@@ -149,6 +151,10 @@ export class SiteManager {
   /** Every site currently loaded in the scene, keyed by site id. Sites can overlap (a hand-sized
    *  object registered on top of a campus), so several stay loaded at once. */
   private readonly loaded = new Map<string, ActiveSite>();
+  /** Who draws splat scans: CesiumJS, or a dedicated renderer over the globe
+   *  (scanView/ScanRendererHost.ts) while CesiumJS keeps the tileset, hidden, for its frame
+   *  and its solids. */
+  private splatRenderer: SplatRendererKind = "cesium";
   /** The site the representation switcher, clipping and the HUD refer to. */
   private primaryId: string | null = null;
   private nearId: string | null = null;
@@ -481,7 +487,7 @@ export class SiteManager {
       this.pickAsset(active, active.representation)?.id !== asset.id
     )
       return;
-    tileset.show = active.engaged;
+    tileset.show = active.engaged && this.cesiumDraws(asset);
     if (active.engaged) this.applyClip(active, asset, tileset);
     else this.clipping.setFootprint(active.site.id, null);
     this.events.emit("tilesets", this.activeTilesetLabels());
@@ -521,7 +527,7 @@ export class SiteManager {
     const handle = this.handleFor(entry);
     const tileset = handle?.tileset;
     if (!handle || !tileset) return;
-    tileset.show = engaged;
+    tileset.show = engaged && this.cesiumDraws(handle.asset);
     if (engaged) this.applyClip(entry, handle.asset, tileset);
     else this.clipping.setFootprint(entry.site.id, null);
     log.info(engaged ? "site engaged" : "site disengaged", { site: entry.site.slug });
@@ -552,6 +558,8 @@ export class SiteManager {
           tileset.destroy();
           return null;
         }
+        // Drawn by another renderer: loaded for its frame and solids, never streamed here.
+        if (!this.cesiumDraws(asset)) tileset.preloadWhenHidden = false;
         this.scene.primitives.add(tileset);
         this.attachTileset(handle, tileset, asset);
         return tileset;
@@ -922,13 +930,58 @@ export class SiteManager {
   /** Whether the camera is inside a shown splat scan's bounds: the scan is the whole view. */
   insideSplatScan(): boolean {
     const cameraPosition = this.viewer.camera.positionWC;
-    for (const { handle } of this.handles()) {
+    for (const { entry, handle } of this.handles()) {
       const tileset = handle.tileset;
-      if (!tileset?.show || !handle.splats) continue;
+      // Drawn by CesiumJS (shown) or by a dedicated renderer (engaged, hidden here).
+      if (!tileset || !handle.splats || !(tileset.show || this.scanDrawnElsewhere(entry, handle)))
+        continue;
       const sphere = tileset.boundingSphere;
       if (Cartesian3.distance(cameraPosition, sphere.center) < sphere.radius) return true;
     }
     return false;
+  }
+
+  /** Whether CesiumJS draws this asset itself (anything but a splat, under another renderer). */
+  private cesiumDraws(asset: SiteAsset): boolean {
+    return this.splatRenderer === "cesium" || asset.representation !== "gaussian-splat";
+  }
+
+  private scanDrawnElsewhere(entry: ActiveSite, handle: AssetHandle): boolean {
+    return (
+      this.splatRenderer !== "cesium" &&
+      entry.engaged &&
+      entry.representation === "gaussian-splat" &&
+      this.pickAsset(entry, entry.representation)?.id === handle.asset.id
+    );
+  }
+
+  /**
+   * Chooses who draws splat scans. Another renderer than CesiumJS hides the splat tilesets
+   * (and stops them streaming: nothing is preloaded while hidden), but keeps them loaded for
+   * their frame, placement and packaged solids.
+   */
+  setSplatRenderer(kind: SplatRendererKind): void {
+    if (kind === this.splatRenderer) return;
+    this.splatRenderer = kind;
+    for (const { entry, handle } of this.handles()) {
+      const tileset = handle.tileset;
+      if (!tileset || handle.asset.representation !== "gaussian-splat") continue;
+      tileset.preloadWhenHidden = kind === "cesium";
+      const current = this.pickAsset(entry, entry.representation)?.id === handle.asset.id;
+      tileset.show = current && entry.engaged && this.cesiumDraws(handle.asset);
+    }
+    this.scene.requestRender();
+  }
+
+  /** The engaged splat scan a dedicated renderer should draw, if any. */
+  scanTarget(): { key: string; tileset: Cesium3DTileset } | null {
+    if (this.splatRenderer === "cesium") return null;
+    const active = this.active;
+    if (!active?.engaged || active.representation !== "gaussian-splat") return null;
+    const asset = this.pickAsset(active, active.representation);
+    const handle = asset ? active.handles.get(asset.id) : undefined;
+    if (!asset || !handle?.tileset || handle.tileset.isDestroyed()) return null;
+    return { key: `${active.site.id}:${asset.id}`, tileset: handle.tileset };
   }
 
   /** Object scale while the camera is within reach of a hand-sized loaded model. */

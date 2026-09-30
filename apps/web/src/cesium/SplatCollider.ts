@@ -77,6 +77,7 @@ function toVec(c: Cartesian3): Vec3 {
 
 export class SplatCollider {
   private readonly tracked = new Map<SplatTilesetShape, Tracked>();
+  private solidWhileHidden: object | null = null;
   /** Tilesets whose packaged collision is being fetched, or failed (then run-time). */
   private readonly loading = new Set<SplatTilesetShape>();
   private readonly noPackage = new WeakSet<SplatTilesetShape>();
@@ -147,7 +148,7 @@ export class SplatCollider {
   raycast(ray: Ray, maxDistance = 5_000): { point: Cartesian3; distance: number } | null {
     let best: { point: Cartesian3; distance: number } | null = null;
     for (const [tileset, entry] of this.tracked) {
-      if (!tileset.show || entry.solids.empty) continue;
+      if ((!tileset.show && tileset !== this.solidWhileHidden) || entry.solids.empty) continue;
       const origin = Matrix4.multiplyByPoint(entry.toLocal, ray.origin, scratchA);
       const direction = Matrix4.multiplyByPointAsVector(entry.toLocal, ray.direction, scratchB);
       const t = entry.solids.raycast(toVec(origin), toVec(direction), maxDistance);
@@ -186,10 +187,18 @@ export class SplatCollider {
     return { position, blocked };
   }
 
+  /**
+   * A tileset whose solids count though it is hidden: a scan drawn by another renderer
+   * (scanView/ScanRendererHost.ts) is still walked on and bumped into.
+   */
+  setSolidWhileHidden(tileset: object | null): void {
+    this.solidWhileHidden = tileset;
+  }
+
   private near(world: Cartesian3, margin: number): Tracked[] {
     const found: Tracked[] = [];
     for (const [tileset, entry] of this.tracked) {
-      if (!tileset.show || entry.solids.empty) continue;
+      if ((!tileset.show && tileset !== this.solidWhileHidden) || entry.solids.empty) continue;
       const reach = entry.bounds.radius + margin;
       if (Cartesian3.distanceSquared(world, entry.bounds.center) <= reach * reach) {
         found.push(entry);

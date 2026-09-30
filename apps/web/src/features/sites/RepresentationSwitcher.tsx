@@ -7,13 +7,23 @@ import { GlassPanel, GlassSegmentedControl } from "@twin/ui";
 import { useSite } from "@/api/queries";
 import { useScene } from "@/cesium/SceneContext";
 import { representationLabel } from "@/lib/format";
+import { useSettings, type SplatRenderer } from "@/state/settings";
 import { useSites } from "@/state/sites";
 
 const ORDER: Representation[] = ["gaussian-splat", "mesh", "point-cloud"];
 
+/** Who draws the splat, side by side for comparison (settings `splatRenderer`). */
+const RENDERERS: { value: SplatRenderer; label: string; ariaLabel: string }[] = [
+  { value: "cesium", label: "Cesium", ariaLabel: "Draw splats with CesiumJS" },
+  { value: "spark", label: "Spark", ariaLabel: "Draw splats with Spark" },
+  { value: "playcanvas", label: "PlayCanvas", ariaLabel: "Draw splats with PlayCanvas" },
+];
+
 /** [Splat] [Mesh] [Points] — appears when the camera is near a loaded site. Switching keeps the camera. */
 export function RepresentationSwitcher() {
   const scene = useScene();
+  const splatRenderer = useSettings((s) => s.splatRenderer);
+  const setSettings = useSettings((s) => s.set);
   const activeSiteId = useSites((s) => s.activeSiteId);
   const nearSiteId = useSites((s) => s.nearSiteId);
   const representation = useSites((s) =>
@@ -63,6 +73,15 @@ export function RepresentationSwitcher() {
             />
             {available.length === 1 && (
               <span className="sr-only">Only one representation is available for this site.</span>
+            )}
+            {representation === "gaussian-splat" && (
+              <GlassSegmentedControl
+                aria-label="Splat renderer"
+                data-testid="splat-renderer"
+                value={splatRenderer}
+                onValueChange={(next) => setSettings({ splatRenderer: next })}
+                options={RENDERERS}
+              />
             )}
           </GlassPanel>
         </motion.div>
