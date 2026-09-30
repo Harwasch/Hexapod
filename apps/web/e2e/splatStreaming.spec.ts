@@ -73,9 +73,15 @@ test("a view looked back at is drawn again from what is resident, fetching nothi
 }, testInfo) => {
   test.setTimeout(600_000);
   await open(page, "/fixture-tiles/synthetic-yard/splat/tileset.json");
+  const pick: {
+    pickMs: number;
+    pickWithoutSplatsMs: number;
+    asyncBlockMs: number;
+    asyncAnswerMs: number;
+  } = await page.evaluate(`window.__nav.pickCost(1.6)`);
   const look: LookReport = await page.evaluate(`window.__nav.lookAround(20, 1.6)`);
   const walk: WalkReport = await page.evaluate(`window.__nav.walk(1.4, 6, 1.6)`);
-  const report = { look, walk: summary(walk) };
+  const report = { pick, look, walk: summary(walk) };
   writeFileSync(testInfo.outputPath("yard.json"), JSON.stringify(report, null, 1));
   console.info(JSON.stringify(report, null, 1));
   expect(look.settledA).toBeGreaterThan(0);
@@ -84,6 +90,10 @@ test("a view looked back at is drawn again from what is resident, fetching nothi
   // What was hidden while looking away came back from its slots: nothing re-uploaded.
   expect(look.textureUploadMB).toBe(0);
   expect(walk.readbacks).toBe(0);
+  // A synchronous pick waits for the GPU to finish the splat frame (pickMs, against
+  // pickWithoutSplatsMs); the click path's asynchronous pick holds the main thread for none
+  // of that.
+  expect(pick.asyncBlockMs).toBeLessThan(20);
 });
 
 test.describe("a real scan", () => {

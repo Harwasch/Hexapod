@@ -69,6 +69,24 @@ index 244a96d542be90b917ffdfb87fbe9249280fde00..9d807584de8563fe2c55879d615ac64c
  
      const stoppedRefining = !tile._refines && parentRefines;
  
+diff --git a/Source/Scene/Cesium3DTilesetStatistics.js b/Source/Scene/Cesium3DTilesetStatistics.js
+index 17b094f33ad0c592bd9747a43188e96d604517df..d9ae838556201b70319c6a4d706da1708aff2b6b 100644
+--- a/Source/Scene/Cesium3DTilesetStatistics.js
++++ b/Source/Scene/Cesium3DTilesetStatistics.js
+@@ -187,9 +187,10 @@ Cesium3DTilesetStatistics.clone = function (statistics, result) {
+     statistics.numberOfTilesCulledWithChildrenUnion;
+   result.geometryByteLength = statistics.geometryByteLength;
+   result.texturesByteLength = statistics.texturesByteLength;
+-  result.texturesReferenceCounterById = {
+-    ...statistics.texturesReferenceCounterById,
+-  };
++  // Hexapod patch: the copies (last frame's, each pass's) are compared by their counts only;
++  // copying the map of every loaded texture twice a pass cost a second of main thread over
++  // 30 s with the Google world loaded.
++
+   result.batchTableByteLength = statistics.batchTableByteLength;
+ };
+ export default Cesium3DTilesetStatistics;
 diff --git a/Source/Scene/GaussianSplat3DTileContent.js b/Source/Scene/GaussianSplat3DTileContent.js
 index db3adac5ab6db91f0fa3d08f1eb69b0837b5be4f..6a92d66292f9e76eccf91f00e6b7a19996582f00 100644
 --- a/Source/Scene/GaussianSplat3DTileContent.js
@@ -126,7 +144,7 @@ index db3adac5ab6db91f0fa3d08f1eb69b0837b5be4f..6a92d66292f9e76eccf91f00e6b7a199
     * Gets the amount of memory used by the batch table textures and any binary
     * metadata properties not accounted for in geometryByteLength or
 diff --git a/Source/Scene/GaussianSplatPrimitive.js b/Source/Scene/GaussianSplatPrimitive.js
-index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..76f371b82da476ed9a4f7b4190fd5d98a4ed018e 100644
+index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..7e2f0328c5896ecdb905902dd70b9cb2199cd67e 100644
 --- a/Source/Scene/GaussianSplatPrimitive.js
 +++ b/Source/Scene/GaussianSplatPrimitive.js
 @@ -174,6 +174,51 @@ const DEFAULT_SORT_MIN_POSITION_DELTA = 1.0;
@@ -927,7 +945,20 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..76f371b82da476ed9a4f7b4190fd5d98
  /**
   * Updates the Gaussian splat primitive for the current frame.
   * This method checks if the primitive needs to be updated based on the current frame state,
-@@ -1689,14 +2408,44 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
+@@ -1683,20 +2402,57 @@ GaussianSplatPrimitive.buildGSplatDrawCommand = function (
+ GaussianSplatPrimitive.prototype.update = function (frameState) {
+   const tileset = this._tileset;
+ 
++  // Hexapod patch: splats write no depth and carry no pick ids, so a pick, depth or
++  // offscreen pass (scene.pick, pickPosition, sampleHeight) has nothing to gain from them --
++  // and drawing millions of them there made each pick a second full splat render.
++  if (!frameState.passes.render) {
++    return;
++  }
++
+   releaseRetiredTextures(this, frameState.frameNumber);
+ 
+   if (!tileset.show) {
      return;
    }
  
@@ -972,7 +1003,7 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..76f371b82da476ed9a4f7b4190fd5d98
    const hasRootTransform = defined(this._rootTransform);
  
    if (frameState.passes.pick === true) {
-@@ -1712,6 +2461,12 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
+@@ -1712,6 +2468,12 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
    }
  
    if (this._sorterState === GaussianSplatSortingState.IDLE) {
@@ -985,7 +1016,7 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..76f371b82da476ed9a4f7b4190fd5d98
      const selectedTilesChanged =
        tileset._selectedTiles.length !== 0 &&
        haveSelectedTilesChanged(this, tileset._selectedTiles);
-@@ -1740,11 +2495,20 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
+@@ -1740,11 +2502,20 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
      } else {
        this._snapshotRebuildStallFrames = 0;
      }
@@ -1008,7 +1039,7 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..76f371b82da476ed9a4f7b4190fd5d98
        this._dirty ||
        this._needsSnapshotRebuild ||
        selectedTilesChanged ||
-@@ -1759,6 +2523,7 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
+@@ -1759,6 +2530,7 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
      }
  
      if (
@@ -1016,7 +1047,7 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..76f371b82da476ed9a4f7b4190fd5d98
        tileset._selectedTiles.length !== 0 &&
        this._needsSnapshotRebuild &&
        allowRebuild
-@@ -2055,6 +2820,10 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
+@@ -2055,6 +2827,10 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
      if (!hasRootTransform) {
        return;
      }
@@ -1027,7 +1058,7 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..76f371b82da476ed9a4f7b4190fd5d98
  
      Matrix4.clone(camera.viewMatrix, this._prevViewMatrix);
      Matrix4.multiply(camera.viewMatrix, this._rootTransform, scratchMatrix4A);
-@@ -2071,14 +2840,7 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
+@@ -2071,14 +2847,7 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
          dataGeneration: dataGeneration,
          expectedCount: expectedCount,
        };
@@ -1043,7 +1074,7 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..76f371b82da476ed9a4f7b4190fd5d98
        this._sorterPromise = rawPromise;
        if (defined(rawPromise)) {
          markSteadySortStart(this, frameState);
-@@ -2105,14 +2867,7 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
+@@ -2105,14 +2874,7 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
          dataGeneration: dataGeneration,
          expectedCount: expectedCount,
        };
@@ -1059,7 +1090,7 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..76f371b82da476ed9a4f7b4190fd5d98
        this._sorterPromise = rawPromise;
        if (defined(rawPromise)) {
          markSteadySortStart(this, frameState);
-@@ -2132,7 +2887,18 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
+@@ -2132,7 +2894,18 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
      return; //still sorting, wait for next frame
    } else if (this._sorterState === GaussianSplatSortingState.SORTED) {
      //update the draw command if sorted
@@ -1078,7 +1109,7 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..76f371b82da476ed9a4f7b4190fd5d98
      this._sorterState = GaussianSplatSortingState.IDLE; //reset state for next frame
      this._dirty = false;
      this._sorterPromise = undefined; //reset promise for next frame
-@@ -2144,4 +2910,10 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
+@@ -2144,4 +2917,10 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
    this._dirty = false;
  };
  

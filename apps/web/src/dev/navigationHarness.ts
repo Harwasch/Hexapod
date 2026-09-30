@@ -14,6 +14,7 @@
 
 import {
   BoundingSphere,
+  Cartesian2,
   Cartesian3,
   CesiumWidget,
   Color,
@@ -90,7 +91,19 @@ export interface WalkReport extends Traffic {
   intervalMs: number[];
 }
 
+export interface PickCost {
+  /** Median ms of a `scene.pick` at the centre of the view (a pick pass and a read-back). */
+  pickMs: number;
+  /** The same with the splat tileset hidden: what the rest of the scene costs a pick. */
+  pickWithoutSplatsMs: number;
+  /** `scene.pickAsync`: ms the main thread is held, and ms until the answer arrives. */
+  asyncBlockMs: number;
+  asyncAnswerMs: number;
+}
+
 export interface NavigationHarness {
+  /** From `eyeM` above the centre, what a pick costs against rendering the view. */
+  pickCost(eyeM: number): Promise<PickCost>;
   /** From `eyeM` above the centre, look at heading A, turn 180 degrees, turn back. */
   lookAround(settleS: number, eyeM: number): Promise<LookReport>;
   /** Walks straight ahead from the centre at `speed` m/s for `seconds`. */
@@ -279,6 +292,45 @@ export async function startNavigationHarness(
   };
 
   return {
+    async pickCost(eyeM) {
+      look(eye(eyeM), 0);
+      await settleFor(5);
+      const gl = (scene as unknown as { context: { _gl: WebGL2RenderingContext } }).context._gl;
+      const centre = new Cartesian2(scene.canvas.clientWidth / 2, scene.canvas.clientHeight / 2);
+      const median = (xs: number[]): number =>
+        Math.round(([...xs].sort((a, b) => a - b)[xs.length >> 1] ?? 0) * 10) / 10;
+      // Each pick after a finished frame, so its read-back waits for the pick pass alone.
+      const picks = (): number => {
+        const times: number[] = [];
+        for (let i = 0; i < 5; i++) {
+          scene.render();
+          gl.finish();
+          const t = performance.now();
+          scene.pick(centre);
+          times.push(performance.now() - t);
+        }
+        return median(times);
+      };
+      const pickMs = picks();
+      // The asynchronous pick: how long the main thread is held, and when the answer comes.
+      const blocks: number[] = [];
+      const answers: number[] = [];
+      for (let i = 0; i < 5; i++) {
+        scene.render();
+        gl.finish();
+        const t = performance.now();
+        const pending = scene.pickAsync(centre);
+        blocks.push(performance.now() - t);
+        await pending;
+        answers.push(performance.now() - t);
+      }
+      const asyncBlockMs = median(blocks);
+      const asyncAnswerMs = median(answers);
+      tileset.show = false;
+      const pickWithoutSplatsMs = picks();
+      tileset.show = true;
+      return { pickMs, pickWithoutSplatsMs, asyncBlockMs, asyncAnswerMs };
+    },
     async lookAround(settleS, eyeM) {
       const at = eye(eyeM);
       look(at, 0);

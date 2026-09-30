@@ -191,6 +191,7 @@ export class CesiumSceneManager {
       this.layers,
       this.sites,
     );
+    this.selection.setCollider(this.collider);
     this.measurement = new MeasurementManager(this.viewer, this.events);
     this.mission = new MissionManager(this.viewer, this.events, this.camera);
     this.areas = new AreaEditor(this.viewer, this.events);
@@ -200,6 +201,7 @@ export class CesiumSceneManager {
       this.events.on("camera", (pose) => {
         const splat = this.sites.activeRepresentation === "gaussian-splat";
         this.performance.setGradeSuppressed(splat && pose.altitude < SCAN_GRADE_ALTITUDE_M);
+        this.selection.setHoverEnabled(!(splat && pose.altitude < SCAN_GRADE_ALTITUDE_M));
         this.insideScan = splat && this.sites.insideSplatScan();
         this.scanAltitude = pose.altitude;
         this.updateScanView();
