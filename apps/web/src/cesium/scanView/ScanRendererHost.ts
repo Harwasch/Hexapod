@@ -168,13 +168,27 @@ export class ScanRendererHost {
       canvas.remove();
       throw error;
     }
-    const url = new URL(target.tileset.resource.url, location.href).toString();
-    const response = await fetch(url);
-    if (!response.ok) {
+    try {
+      return await this.run(kind, target, canvas, backend, budget);
+    } catch (error) {
+      // Whatever failed before the first frame leaves nothing behind.
       backend.destroy();
       canvas.remove();
-      throw new Error(`The scan's tileset answered ${String(response.status)}.`);
+      throw error;
     }
+  }
+
+  private async run(
+    kind: Exclude<SplatRendererKind, "cesium">,
+    target: ScanTarget,
+    canvas: HTMLCanvasElement,
+    backend: ScanBackend<unknown>,
+    budget: number,
+  ): Promise<Session> {
+    const { viewer } = this;
+    const url = new URL(target.tileset.resource.url, location.href).toString();
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`The scan's tileset answered ${String(response.status)}.`);
     const tree = parseTileset(await response.json());
     let error: string | null = null;
     const streamed = Math.min(budget * backend.loadFactor, MAX_STREAMED);
@@ -260,7 +274,13 @@ export class ScanRendererHost {
     };
 
     // The root first, as the viewer page: the whole scan, coarse, while the rest streams.
-    const root = await backend.load(url, tree.root);
+    let root: unknown;
+    try {
+      root = await backend.load(url, tree.root);
+    } catch (reason) {
+      streamer.stop();
+      throw reason;
+    }
     backend.add(root);
     streamer.adopt(tree.root, root);
     raf = requestAnimationFrame(tick);
