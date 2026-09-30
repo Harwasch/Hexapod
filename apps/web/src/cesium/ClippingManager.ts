@@ -53,6 +53,7 @@ export class ClippingManager {
   private readonly worldPolygons = new Map<string, ClippingPolygon[]>();
   private enabled = true;
   private photorealistic = false;
+  private floorless: string | null = null;
 
   constructor(private readonly scene: Scene) {
     this.supported = ClippingPolygonCollection.isSupported(scene);
@@ -92,7 +93,7 @@ export class ClippingManager {
       this.removeFrom(this.globeCollection, this.globePolygons, key);
     this.globeCollection.inverse = photorealistic;
     for (const [key, entry] of this.footprints)
-      if (this.globeCarries(entry.targets))
+      if (this.globeCarries(key, entry.targets))
         this.addTo(this.globeCollection, this.globePolygons, key, entry.footprint);
     // In the photorealistic world the globe is never hidden, only clipped away: a hidden
     // globe stops loading, and the terrain and imagery inside a site's outline would then
@@ -110,8 +111,8 @@ export class ClippingManager {
     let south = Number.POSITIVE_INFINITY;
     let east = Number.NEGATIVE_INFINITY;
     let north = Number.NEGATIVE_INFINITY;
-    for (const entry of this.footprints.values()) {
-      if (!this.globeCarries(entry.targets)) continue;
+    for (const [key, entry] of this.footprints) {
+      if (!this.globeCarries(key, entry.targets)) continue;
       for (const polygon of polygonsOf(entry.footprint))
         for (const [lon, lat] of polygon[0] ?? []) {
           if (lon === undefined || lat === undefined) continue;
@@ -131,9 +132,34 @@ export class ClippingManager {
     );
   }
 
-  /** Whether a footprint with these targets belongs in the globe collection for the current world. */
-  private globeCarries(targets: ClipTargets): boolean {
+  /**
+   * Whether a footprint belongs in the globe collection for the current world. A floorless
+   * site (`setFloorless`) never keeps terrain under it: in the photorealistic world it is
+   * left out of the inverse clip, in the open world it is cut like a mesh site.
+   */
+  private globeCarries(key: string, targets: ClipTargets): boolean {
+    if (key === this.floorless) return !this.photorealistic;
     return this.photorealistic ? targets.world : targets.globe;
+  }
+
+  /**
+   * Seen from inside it, a splat scan is its own ground: the terrain kept under it as an
+   * opaque floor (for sparse patches seen from above) sits wherever the elevation model
+   * says, often a metre above the scan's ground, and from eye height it buries that ground
+   * and everything low beyond it. `key` (a site id), or null, has no terrain under it.
+   */
+  setFloorless(key: string | null): void {
+    if (!this.supported || this.floorless === key) return;
+    const previous = this.floorless;
+    this.floorless = key;
+    for (const changed of [previous, key]) {
+      if (changed === null) continue;
+      this.removeFrom(this.globeCollection, this.globePolygons, changed);
+      const entry = this.footprints.get(changed);
+      if (entry && this.globeCarries(changed, entry.targets))
+        this.addTo(this.globeCollection, this.globePolygons, changed, entry.footprint);
+    }
+    this.syncEnabled();
   }
 
   /**
@@ -152,7 +178,7 @@ export class ClippingManager {
       return;
     }
     this.footprints.set(key, { footprint, targets });
-    if (this.globeCarries(targets))
+    if (this.globeCarries(key, targets))
       this.addTo(this.globeCollection, this.globePolygons, key, footprint);
     if (targets.world) this.addTo(this.worldCollection, this.worldPolygons, key, footprint);
     this.syncEnabled();

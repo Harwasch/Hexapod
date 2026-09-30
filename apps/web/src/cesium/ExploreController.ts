@@ -31,6 +31,10 @@ const LOOK_DEG_PER_PX_AT_120 = 0.15;
 const MAX_PITCH = CesiumMath.toRadians(89);
 /** How far down a ground is searched for under the walker (metres). */
 const GROUND_SEARCH_M = 200;
+/** Where the ray straight down finds a gap in a scan's ground, rings of `FOOT_RAYS` rays
+ *  this far out (m) are tried in turn: a foot, not a point, stands on sparse ground. */
+const FOOT_RINGS_M = [0.25, 0.5];
+const FOOT_RAYS = 8;
 /** Falling longer than this (seconds) with nothing below turns walking into hovering. */
 const MAX_FALL_S = 2.5;
 /** Moves that change the camera less than this (metres) are not rendered. */
@@ -298,6 +302,34 @@ export class ExploreController {
   }
 
   /** The ground and walls the walker meets, in the local frame. */
+  /** The scan's ground below a point: the ray straight down, else the highest of rings of
+   *  rays around it (`FOOT_RINGS_M`); null when none meets a splat within `depth`. */
+  private scanGroundBelow(
+    from: Cartesian3,
+    down: Cartesian3,
+    depth: number,
+    local: (x: number, y: number, z: number) => Cartesian3,
+    x: number,
+    y: number,
+    fromZ: number,
+  ): number | null {
+    const collider = this.collider;
+    if (!collider) return null;
+    const centre = collider.raycast(new Ray(from, down), depth);
+    if (centre) return fromZ - centre.distance;
+    for (const radius of FOOT_RINGS_M) {
+      let best: number | null = null;
+      for (let k = 0; k < FOOT_RAYS; k++) {
+        const angle = (k / FOOT_RAYS) * Math.PI * 2;
+        const start = local(x + Math.cos(angle) * radius, y + Math.sin(angle) * radius, fromZ);
+        const hit = collider.raycast(new Ray(start, down), depth);
+        if (hit) best = Math.max(best ?? Number.NEGATIVE_INFINITY, fromZ - hit.distance);
+      }
+      if (best !== null) return best;
+    }
+    return null;
+  }
+
   private world(): MoveWorld {
     const local = (x: number, y: number, z: number): Cartesian3 =>
       Matrix4.multiplyByPoint(this.toWorld, new Cartesian3(x, y, z), new Cartesian3());
@@ -309,9 +341,11 @@ export class ExploreController {
           new Cartesian3(0, 0, -1),
           new Cartesian3(),
         );
-        // The scan's own ground first: it is what you see, wherever it was placed.
-        const hit = this.collider?.raycast(new Ray(from, down), depth);
-        if (hit) return fromZ - hit.distance;
+        // The scan's own ground first: it is what you see, wherever it was placed. Straight
+        // down, then -- where that ray finds a gap (a scan's ground is sparse in places, and
+        // its voxels are centimetres) -- rings a foot's width out, the highest they meet.
+        const ground = this.scanGroundBelow(from, down, depth, local, x, y, fromZ);
+        if (ground !== null) return ground;
         if (!this.scene.globe.show) return null;
         const carto = Cartographic.fromCartesian(from);
         const terrain = this.scene.globe.getHeight(carto);

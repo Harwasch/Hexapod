@@ -51,6 +51,8 @@ export interface SceneManagerOptions {
 
 /** Below this altitude over a splat site the view is the scan, shown ungraded. */
 const SCAN_GRADE_ALTITUDE_M = 400;
+/** Inside a scan and this close to the ground, the scan is the ground: no terrain under it. */
+const SCAN_FLOORLESS_ALTITUDE_M = 30;
 
 /**
  * The single owner of the CesiumJS viewer. React talks to this object through
@@ -83,6 +85,9 @@ export class CesiumSceneManager {
   private destroyed = false;
   private interactionMode: "select" | "measure" | "explore" = "select";
   private exploring = false;
+  private insideScan = false;
+  private scanAltitude = Number.POSITIVE_INFINITY;
+  private cameraMoving = false;
   private pickingGround = false;
   private renderRecoveries = 0;
   private readonly unsubscribe: (() => void)[] = [];
@@ -185,8 +190,9 @@ export class CesiumSceneManager {
       this.events.on("camera", (pose) => {
         const splat = this.sites.activeRepresentation === "gaussian-splat";
         this.performance.setGradeSuppressed(splat && pose.altitude < SCAN_GRADE_ALTITUDE_M);
-        // Inside a scan, the world around it stays as it was (LayerManager.setWorldFrozen).
-        this.layers.setWorldFrozen(splat && this.sites.insideSplatScan());
+        this.insideScan = splat && this.sites.insideSplatScan();
+        this.scanAltitude = pose.altitude;
+        this.updateScanView();
       }),
     );
     // While the map waits for "the ground you mean", selection keeps its hands off the click;
@@ -196,6 +202,11 @@ export class CesiumSceneManager {
       this.events.on("explore", (on) => {
         this.exploring = on;
         this.selection.setEnabled(this.selectionWanted());
+        this.updateScanView();
+      }),
+      this.events.on("motion", (moving) => {
+        this.cameraMoving = moving;
+        this.updateScanView();
       }),
       this.events.on("ground-pick-mode", (on) => {
         this.pickingGround = on;
@@ -340,6 +351,19 @@ export class CesiumSceneManager {
       longitude: CesiumMath.toDegrees(carto.longitude),
       latitude: CesiumMath.toDegrees(carto.latitude),
     };
+  }
+
+  /**
+   * Inside a splat scan: the world around it holds still while the camera moves
+   * (LayerManager.setWorldFrozen) and refines once it stops; and near the ground -- walking,
+   * flying low -- the scan is its own ground, with no terrain floor under it
+   * (ClippingManager.setFloorless).
+   */
+  private updateScanView(): void {
+    const inside = this.insideScan;
+    this.layers.setWorldFrozen(inside && this.cameraMoving);
+    const low = this.exploring || this.scanAltitude < SCAN_FLOORLESS_ALTITUDE_M;
+    this.clipping.setFloorless(inside && low ? (this.sites.activeSite?.id ?? null) : null);
   }
 
   private selectionWanted(): boolean {

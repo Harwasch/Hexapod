@@ -4,7 +4,9 @@
  * Distance, not view depth: an order by distance does not change when the camera turns, only
  * when it moves, so looking around needs no new sort (SuperSplat's viewer sorts the same way).
  * Positions are sent once per snapshot generation and kept here; each sort request carries
- * only the eye, so the main thread no longer copies every position for every sort.
+ * only the eye, so the main thread no longer copies every position for every sort. In slot
+ * mode, freed ranges (`release`) and never-written slots are NaN and left out of the order:
+ * they are neither uploaded nor drawn.
  */
 
 import { backToFront } from "@/lib/splatOrder";
@@ -20,6 +22,7 @@ interface Snapshot {
 type SortRequest =
   | { kind: "snapshot"; owner: number; generation: number; positions: Float32Array; count: number }
   | { kind: "write"; owner: number; capacity: number; start: number; positions: Float32Array }
+  | { kind: "release"; owner: number; capacity: number; start: number; count: number }
   | {
       kind: "sort";
       owner: number;
@@ -42,18 +45,21 @@ self.onmessage = (event: MessageEvent<SortRequest>): void => {
     });
     return;
   }
-  if (request.kind === "write") {
+  if (request.kind === "write" || request.kind === "release") {
     let snapshot = snapshots.get(request.owner);
     if (snapshot?.slots !== true || snapshot.positions.length !== request.capacity * 3) {
+      // Every slot starts empty (NaN): left out of the order until a tile is written there.
       snapshot = {
         generation: -1,
-        positions: new Float32Array(request.capacity * 3),
+        positions: new Float32Array(request.capacity * 3).fill(Number.NaN),
         count: 0,
         slots: true,
       };
       snapshots.set(request.owner, snapshot);
     }
-    snapshot.positions.set(request.positions, request.start * 3);
+    if (request.kind === "write") snapshot.positions.set(request.positions, request.start * 3);
+    else
+      snapshot.positions.fill(Number.NaN, request.start * 3, (request.start + request.count) * 3);
     return;
   }
   if (request.kind === "forget") {

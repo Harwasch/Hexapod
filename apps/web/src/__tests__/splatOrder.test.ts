@@ -39,4 +39,12 @@ describe("splat draw order", () => {
     }
     expect(new Set(a).size).toBe(1000);
   });
+
+  it("leaves empty slots (NaN positions) out of the order", () => {
+    // Slots 1 and 3 are empty: a freed range, a never-written slot.
+    const positions = new Float32Array([0, 0, 1, NaN, NaN, NaN, 0, 0, 5, NaN, NaN, NaN, 0, 0, 3]);
+    const order = backToFront(positions, 5, [0, 0, 0]);
+    expect(Array.from(order)).toEqual([2, 4, 0]);
+    expect(Array.from(backToFront(new Float32Array(6).fill(NaN), 2, [0, 0, 0]))).toEqual([]);
+  });
 });

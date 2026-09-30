@@ -199,7 +199,7 @@ index db3adac5ab6db91f0fa3d08f1eb69b0837b5be4f..6a92d66292f9e76eccf91f00e6b7a199
     * Gets the amount of memory used by the batch table textures and any binary
     * metadata properties not accounted for in geometryByteLength or
 diff --git a/Source/Scene/GaussianSplatPrimitive.js b/Source/Scene/GaussianSplatPrimitive.js
-index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..0c838798508a99767d4d441c981ec01e2b277599 100644
+index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..1fb86a8a1fefeb0f2591cae5beb9c7e590717586 100644
 --- a/Source/Scene/GaussianSplatPrimitive.js
 +++ b/Source/Scene/GaussianSplatPrimitive.js
 @@ -174,6 +174,49 @@ const DEFAULT_SORT_MIN_POSITION_DELTA = 1.0;
@@ -263,7 +263,23 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..0c838798508a99767d4d441c981ec01e
    if (positionDelta >= DEFAULT_SORT_MIN_POSITION_DELTA) {
      return true;
    }
-@@ -1070,9 +1117,63 @@ function GaussianSplatPrimitive(options) {
+@@ -712,8 +759,14 @@ async function resolveSteadySort(primitive, activeSort, sortPromise) {
+     const expectedCount = activeSort?.expectedCount;
+     const currentCount = expectedCount;
+     const sortedLen = sortedData?.length;
++    // Hexapod patch: a hook that `compacts` leaves empty slots out of its order, so the
++    // order may be shorter than the slots it covers (never empty: that still means stale).
++    const compacts = GaussianSplatPrimitive.sortHook?.compacts === true;
+     const isMismatch =
+-      expectedCount !== currentCount || sortedLen !== expectedCount;
++      expectedCount !== currentCount ||
++      (compacts
++        ? !(sortedLen > 0 && sortedLen <= expectedCount)
++        : sortedLen !== expectedCount);
+     if (!isActive || isMismatch) {
+       if (isActive) {
+         primitive._sorterPromise = undefined;
+@@ -1070,9 +1123,63 @@ function GaussianSplatPrimitive(options) {
     * @private
     */
    this._splatBudgetSSEScale = 1.0;
@@ -327,7 +343,7 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..0c838798508a99767d4d441c981ec01e
    /**
     * Indicates whether the primitive is ready for use.
     * @memberof GaussianSplatPrimitive.prototype
-@@ -1149,6 +1250,7 @@ GaussianSplatPrimitive.prototype._wrappedUpdate = function (frameState) {
+@@ -1149,6 +1256,7 @@ GaussianSplatPrimitive.prototype._wrappedUpdate = function (frameState) {
   * @private
   */
  GaussianSplatPrimitive.prototype.destroy = function () {
@@ -335,7 +351,7 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..0c838798508a99767d4d441c981ec01e
    this._positions = undefined;
    this._rotations = undefined;
    this._scales = undefined;
-@@ -1577,6 +1679,17 @@ GaussianSplatPrimitive.buildGSplatDrawCommand = function (
+@@ -1577,6 +1685,17 @@ GaussianSplatPrimitive.buildGSplatDrawCommand = function (
    renderResources.instanceCount = instanceCount;
    renderResources.count = 4;
    renderResources.primitiveType = PrimitiveType.TRIANGLE_STRIP;
@@ -353,7 +369,41 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..0c838798508a99767d4d441c981ec01e
    shaderBuilder.addVertexLines(GaussianSplatVS);
    shaderBuilder.addFragmentLines(GaussianSplatFS);
    const shaderProgram = shaderBuilder.buildShaderProgram(frameState.context);
-@@ -1670,6 +1783,498 @@ GaussianSplatPrimitive.buildGSplatDrawCommand = function (
+@@ -1606,10 +1725,22 @@ GaussianSplatPrimitive.buildGSplatDrawCommand = function (
+   idxAttr.constant = 0;
+   idxAttr.instanceDivisor = 1;
+ 
++  // Hexapod patch: the index buffer is allocated with headroom (half again, or the
++  // incremental capacity) and reused while the order fits. Allocated at exactly the order's
++  // length, it was re-created whenever the count grew -- every sort while tiles stream in --
++  // a fresh multi-megabyte buffer each time.
+   const needsRebuild =
+     !defined(primitive._vertexArray) ||
+     primitive._indexes.length > primitive._vertexArrayLen;
+   if (needsRebuild) {
++    const headroom = Math.max(
++      Math.ceil(primitive._indexes.length * 1.5),
++      primitive._incremental?.capacity ?? 0,
++    );
++    const padded = new Uint32Array(headroom);
++    padded.set(primitive._indexes);
++    idxAttr.typedArray = padded;
++    idxAttr.count = headroom;
+     const geometry = new Geometry({
+       attributes: {
+         screenQuadPosition: new GeometryAttribute({
+@@ -1637,7 +1768,9 @@ GaussianSplatPrimitive.buildGSplatDrawCommand = function (
+       .vertexBuffer.copyFromArrayView(primitive._indexes);
+   }
+ 
+-  primitive._vertexArrayLen = primitive._indexes.length;
++  primitive._vertexArrayLen = primitive._vertexArray
++    .getAttribute(1)
++    .vertexBuffer.sizeInBytes / Uint32Array.BYTES_PER_ELEMENT;
+ 
+   // The draw command uses rootTransform as its modelMatrix. tileset.modelMatrix
+   // is baked into the splat positions by transformTile and must not appear here
+@@ -1670,6 +1803,503 @@ GaussianSplatPrimitive.buildGSplatDrawCommand = function (
    primitive._drawCommand = command;
  };
  
@@ -836,12 +886,17 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..0c838798508a99767d4d441c981ec01e
 +  }
 +  const removals = inc.pendingRemovals;
 +  inc.pendingRemovals = [];
++  const hook = GaussianSplatPrimitive.sortHook;
 +  for (const tile of removals) {
 +    const slot = inc.slots.get(tile);
 +    if (!defined(slot)) {
 +      continue;
 +    }
 +    zeroSlot(inc, slot);
++    // Hexapod patch: the sorter drops the range from its orders until it is written again.
++    if (defined(hook) && defined(hook.release)) {
++      hook.release(primitive, inc.capacity, slot.start, slot.count);
++    }
 +    inc.slots.delete(tile);
 +    inc.live.delete(tile);
 +    releaseSlot(inc, slot);
@@ -852,7 +907,7 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..0c838798508a99767d4d441c981ec01e
  /**
   * Updates the Gaussian splat primitive for the current frame.
   * This method checks if the primitive needs to be updated based on the current frame state,
-@@ -1689,14 +2294,32 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
+@@ -1689,14 +2319,32 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
      return;
    }
  
@@ -885,7 +940,7 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..0c838798508a99767d4d441c981ec01e
    const hasRootTransform = defined(this._rootTransform);
  
    if (frameState.passes.pick === true) {
-@@ -1712,6 +2335,12 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
+@@ -1712,6 +2360,12 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
    }
  
    if (this._sorterState === GaussianSplatSortingState.IDLE) {
@@ -898,7 +953,7 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..0c838798508a99767d4d441c981ec01e
      const selectedTilesChanged =
        tileset._selectedTiles.length !== 0 &&
        haveSelectedTilesChanged(this, tileset._selectedTiles);
-@@ -1740,11 +2369,20 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
+@@ -1740,11 +2394,20 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
      } else {
        this._snapshotRebuildStallFrames = 0;
      }
@@ -921,7 +976,7 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..0c838798508a99767d4d441c981ec01e
        this._dirty ||
        this._needsSnapshotRebuild ||
        selectedTilesChanged ||
-@@ -1759,6 +2397,7 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
+@@ -1759,6 +2422,7 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
      }
  
      if (
@@ -929,7 +984,7 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..0c838798508a99767d4d441c981ec01e
        tileset._selectedTiles.length !== 0 &&
        this._needsSnapshotRebuild &&
        allowRebuild
-@@ -2055,6 +2694,10 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
+@@ -2055,6 +2719,10 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
      if (!hasRootTransform) {
        return;
      }
@@ -940,7 +995,7 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..0c838798508a99767d4d441c981ec01e
  
      Matrix4.clone(camera.viewMatrix, this._prevViewMatrix);
      Matrix4.multiply(camera.viewMatrix, this._rootTransform, scratchMatrix4A);
-@@ -2071,14 +2714,7 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
+@@ -2071,14 +2739,7 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
          dataGeneration: dataGeneration,
          expectedCount: expectedCount,
        };
@@ -956,7 +1011,7 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..0c838798508a99767d4d441c981ec01e
        this._sorterPromise = rawPromise;
        if (defined(rawPromise)) {
          markSteadySortStart(this, frameState);
-@@ -2105,14 +2741,7 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
+@@ -2105,14 +2766,7 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
          dataGeneration: dataGeneration,
          expectedCount: expectedCount,
        };
@@ -972,7 +1027,7 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..0c838798508a99767d4d441c981ec01e
        this._sorterPromise = rawPromise;
        if (defined(rawPromise)) {
          markSteadySortStart(this, frameState);
-@@ -2133,6 +2762,10 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
+@@ -2133,6 +2787,10 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
    } else if (this._sorterState === GaussianSplatSortingState.SORTED) {
      //update the draw command if sorted
      GaussianSplatPrimitive.buildGSplatDrawCommand(this, frameState);
@@ -983,7 +1038,7 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..0c838798508a99767d4d441c981ec01e
      this._sorterState = GaussianSplatSortingState.IDLE; //reset state for next frame
      this._dirty = false;
      this._sorterPromise = undefined; //reset promise for next frame
-@@ -2144,4 +2777,10 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
+@@ -2144,4 +2802,10 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
    this._dirty = false;
  };
  
@@ -1093,7 +1148,7 @@ index c5d264395fc522ecc29717e57ff159aa4ed3cfd1..f7b22ea41aac67be450cf0e49db7d519
    let edgeTiles;
  
 diff --git a/Source/Shaders/PrimitiveGaussianSplatVS.glsl b/Source/Shaders/PrimitiveGaussianSplatVS.glsl
-index 18838d6c4b087d4b2bdcedfd0741d8217fb4900c..dfca6826ab879a99e14534827975224ff960bed3 100644
+index 18838d6c4b087d4b2bdcedfd0741d8217fb4900c..685edc091a3c2e428af5a654f58a477da9dbdb20 100644
 --- a/Source/Shaders/PrimitiveGaussianSplatVS.glsl
 +++ b/Source/Shaders/PrimitiveGaussianSplatVS.glsl
 @@ -151,6 +151,11 @@ void main() {
@@ -1108,8 +1163,25 @@ index 18838d6c4b087d4b2bdcedfd0741d8217fb4900c..dfca6826ab879a99e14534827975224f
  
      vec4 splatViewPos = czm_modelView * vec4(splatPosition.xyz, 1.0);
      vec4 clipPosition = czm_projection * splatViewPos;
+@@ -174,7 +179,15 @@ void main() {
+ 
+     vec4 covVectors = calcCovVectors(splatViewPos.xyz, Vrk);
+ 
+-    if (dot(covVectors.xy, covVectors.xy) < 4.0 && dot(covVectors.zw, covVectors.zw) < 4.0) {
++    // Hexapod patch: an empty slot (all-zero covariance: incremental mode's freed ranges)
++    // draws nothing; any other splat is culled only under a pixel of radius on both axes, as
++    // PlayCanvas's splat renderer does. The engine's 2 px cut removed whole distant surfaces
++    // seen from the ground, where every splat is small.
++    if (covariance.x == 0u && covariance.y == 0u && covariance.z == 0u) {
++        gl_Position = discardVec;
++        return;
++    }
++    if (dot(covVectors.xy, covVectors.xy) < 1.0 && dot(covVectors.zw, covVectors.zw) < 1.0) {
+         gl_Position = discardVec;
+         return;
+     }
 diff --git a/Source/Shaders/PrimitiveGaussianSplatVS.js b/Source/Shaders/PrimitiveGaussianSplatVS.js
-index 0fab5dd6b552ab92efe01e4131204530d02e0374..b4542c2e183d44840cde2a77486de5ef4cfc37d3 100644
+index 0fab5dd6b552ab92efe01e4131204530d02e0374..86ba3201896c83bd0f1390d2be0446c42b4dea21 100644
 --- a/Source/Shaders/PrimitiveGaussianSplatVS.js
 +++ b/Source/Shaders/PrimitiveGaussianSplatVS.js
 @@ -152,6 +152,11 @@ void main() {\n\
@@ -1124,3 +1196,20 @@ index 0fab5dd6b552ab92efe01e4131204530d02e0374..b4542c2e183d44840cde2a77486de5ef
  \n\
      vec4 splatViewPos = czm_modelView * vec4(splatPosition.xyz, 1.0);\n\
      vec4 clipPosition = czm_projection * splatViewPos;\n\
+@@ -175,7 +180,15 @@ void main() {\n\
+ \n\
+     vec4 covVectors = calcCovVectors(splatViewPos.xyz, Vrk);\n\
+ \n\
+-    if (dot(covVectors.xy, covVectors.xy) < 4.0 && dot(covVectors.zw, covVectors.zw) < 4.0) {\n\
++    // Hexapod patch: an empty slot (all-zero covariance: incremental mode's freed ranges)\n\
++    // draws nothing; any other splat is culled only under a pixel of radius on both axes, as\n\
++    // PlayCanvas's splat renderer does. The engine's 2 px cut removed whole distant surfaces\n\
++    // seen from the ground, where every splat is small.\n\
++    if (covariance.x == 0u && covariance.y == 0u && covariance.z == 0u) {\n\
++        gl_Position = discardVec;\n\
++        return;\n\
++    }\n\
++    if (dot(covVectors.xy, covVectors.xy) < 1.0 && dot(covVectors.zw, covVectors.zw) < 1.0) {\n\
+         gl_Position = discardVec;\n\
+         return;\n\
+     }\n\

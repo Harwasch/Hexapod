@@ -104,6 +104,8 @@ export class MissionManager {
   private readonly removeFrame: () => void;
   private lastGoodHeight: number | undefined;
   private readonly heightCache = new Map<string, { height: number; at: number }>();
+  private exploring = false;
+  private readonly removeExplore: () => void;
   private readonly scratchWindow = new Cartesian2();
   private readonly scratchNormal = new Cartesian3();
   private readonly scratchToCamera = new Cartesian3();
@@ -117,6 +119,11 @@ export class MissionManager {
     this.removeFrame = this.scene.postRender.addEventListener(
       () => this.project && this.listeners.size > 0 && this.projectAnchors(),
     );
+    // Walking or flying moves the camera in steps too small for `camera.changed`, so
+    // `isMoving` stays false; a height sample (a render pass) is held off for the duration.
+    this.removeExplore = this.events.on("explore", (on) => {
+      this.exploring = on;
+    });
   }
 
   get current(): Project | null {
@@ -435,7 +442,7 @@ export class MissionManager {
     if (cached && now - cached.at < ttl) return cached.height;
     const carto = Cartographic.fromDegrees(longitude, latitude);
     let fromTileset: number | undefined;
-    if (this.scene.sampleHeightSupported && !this.camera.isMoving) {
+    if (this.scene.sampleHeightSupported && !this.camera.isMoving && !this.exploring) {
       try {
         fromTileset = this.scene.sampleHeight(carto, this.viewer.entities.values);
       } catch {
@@ -497,6 +504,7 @@ export class MissionManager {
 
   destroy(): void {
     this.removeFrame();
+    this.removeExplore();
     this.listeners.clear();
     this.clearEntities();
   }

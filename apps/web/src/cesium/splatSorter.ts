@@ -29,6 +29,10 @@ type SortHook = ((parameters: SortParameters) => Promise<Uint32Array> | undefine
   sortByDistance?: boolean;
   /** Incremental primitives: a slot range's positions, once, when written. */
   write?: (owner: object, capacity: number, start: number, positions: Float32Array) => void;
+  /** Incremental primitives: a slot range freed; left out of orders until written again. */
+  release?: (owner: object, capacity: number, start: number, count: number) => void;
+  /** Orders leave empty slots out, so they may be shorter than the slot count. */
+  compacts?: boolean;
 };
 
 interface PrimitiveModule {
@@ -122,6 +126,12 @@ export function installSplatSorter(): () => void {
       copy.buffer,
     ]);
   };
+  hook.release = (primitive, capacity, start, count) => {
+    const owner = ownerOf(primitive);
+    owner.slots = true;
+    worker.postMessage({ kind: "release", owner: owner.id, capacity, start, count });
+  };
+  hook.compacts = true;
   module.sortHook = hook;
   return () => {
     if (module.sortHook === hook) module.sortHook = undefined;
