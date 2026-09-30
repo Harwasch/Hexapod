@@ -107,11 +107,15 @@ export function parseCollision(raw: Uint8Array, meta: CollisionMeta): BrickGrid 
     const bz = view.getInt32(at + 8, true);
     if (bx < 0 || by < 0 || bz < 0 || bx >= SPAN || by >= SPAN || bz >= SPAN) continue;
     const mask = raw.subarray(at + 12, at + RECORD_BYTES);
-    for (const byte of mask) {
-      let b = byte;
-      while (b) {
-        solid += b & 1;
-        b >>= 1;
+    // The packager declares the count; counting bits is only for a file that does not (38 MB
+    // of masks for Fort Clatsop, a noticeable stall on the main thread).
+    if (meta.solidCells === undefined) {
+      for (const byte of mask) {
+        let b = byte;
+        while (b) {
+          solid += b & 1;
+          b >>= 1;
+        }
       }
     }
     bricks.set((bx * SPAN + by) * SPAN + bz, mask);
@@ -128,7 +132,7 @@ export function parseCollision(raw: Uint8Array, meta: CollisionMeta): BrickGrid 
     [meta.origin[0], meta.origin[1], meta.origin[2]],
     bricks,
     lo && hi ? { lo, hi } : null,
-    solid,
+    meta.solidCells ?? solid,
   );
 }
 

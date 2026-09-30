@@ -100,6 +100,12 @@ describe("the packager's own file", () => {
     if (!meta) throw new Error("the fixture declares no collision grid");
     const grid = parseCollision(gunzipSync(readFileSync(resolve(folder, meta.uri))), meta);
     expect(grid.solidCells).toBe(meta.solidCells);
+    // Counted from the masks themselves (no declared count), the same number.
+    const counted = parseCollision(gunzipSync(readFileSync(resolve(folder, meta.uri))), {
+      ...meta,
+      solidCells: undefined,
+    });
+    expect(counted.solidCells).toBe(meta.solidCells);
     expect(grid.empty).toBe(false);
     // A ray straight down onto a solid cell meets it, from above its column's top solid.
     const bounds = grid.solidBounds();
