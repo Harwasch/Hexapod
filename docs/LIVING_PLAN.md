@@ -10,6 +10,7 @@ Architecture: [SCENE_OBJECTS.md](SCENE_OBJECTS.md). Branch: `living-models`.
 - [ ] A3 Run on the camp, render a colour-by-instance image
 - [~] A4 Viewer: load `instances.json`, hide / highlight by instance, text search (built + unit-tested; needs a browser check with a real file)
 - [ ] A5 Camp in the viewer: search "tent", "tree", "table"; hide vegetation
+- [ ] A6 Segment the pumpkin (phone capture 09-28) and spool (09-26) scans
 
 ## B. Skin
 
@@ -27,6 +28,7 @@ Architecture: [SCENE_OBJECTS.md](SCENE_OBJECTS.md). Branch: `living-models`.
 ## E. Merge
 
 - [ ] E1 Pull in `claude/funny-carson-937ydv` (rendering + UX) after its final push, once A–B1 are merged
+- [ ] E2 After E1: this session owns releases and infrastructure
 
 ## D. Already done (this branch)
 
