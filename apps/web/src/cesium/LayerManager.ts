@@ -16,11 +16,12 @@ import type { Layer } from "@twin/contracts";
 
 import type { Emitter } from "@/lib/emitter";
 import { createLogger, describeError } from "@/lib/log";
+import { withRetry } from "@/lib/retry";
 import { timed } from "@/lib/timing";
 
 import type { ClippingManager } from "./ClippingManager";
 import { devicePixelError, type PerformanceManager } from "./PerformanceManager";
-import { isIonAuthError } from "./ion";
+import { isIonAuthError, isIonNotFound } from "./ion";
 import {
   createImageryProvider,
   createNaturalEarthProvider,
@@ -295,7 +296,18 @@ export class LayerManager {
     entry.generation = generation;
     entry.abort = new AbortController();
     this.events.emit("layer", { id, patch: { loadState: "loading", error: null } });
-    entry.loading = timed("layer.load", () => this.load(entry, entry.abort?.signal), { id })
+    const signal = entry.abort.signal;
+    entry.loading = timed(
+      "layer.load",
+      () =>
+        withRetry(() => this.load(entry, signal), {
+          signal,
+          permanent: (error) => isIonAuthError(error) || isIonNotFound(error),
+          onRetry: (error, attempt) =>
+            log.info("layer retrying", { id, attempt, error: describeError(error) }),
+        }),
+      { id },
+    )
       .then((handle) => {
         if (entry.generation !== generation || !this.entries.has(id)) {
           this.disposeHandle(handle);

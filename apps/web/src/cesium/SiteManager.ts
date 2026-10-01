@@ -27,6 +27,7 @@ import { AdaptiveSplatBudget } from "@/lib/splatBudget";
 import type { SplatRendererKind } from "./scanView/types";
 import type { Emitter } from "@/lib/emitter";
 import { createLogger, describeError } from "@/lib/log";
+import { withRetry } from "@/lib/retry";
 import { timed } from "@/lib/timing";
 
 import type { CameraController } from "./CameraController";
@@ -553,7 +554,15 @@ export class SiteManager {
     this.events.emit("asset", { id: asset.id, patch: { loadState: "loading", error: null } });
     handle.loading = timed(
       "site.asset.load",
-      () => createSiteTileset(asset, { maximumScreenSpaceError: this.screenSpaceError }),
+      () =>
+        withRetry(
+          () => createSiteTileset(asset, { maximumScreenSpaceError: this.screenSpaceError }),
+          {
+            permanent: (error) => isIonAuthError(error) || isIonNotFound(error),
+            onRetry: (error, attempt) =>
+              log.info("asset retrying", { asset: asset.id, attempt, error: describeError(error) }),
+          },
+        ),
       {
         asset: asset.id,
         representation: asset.representation,

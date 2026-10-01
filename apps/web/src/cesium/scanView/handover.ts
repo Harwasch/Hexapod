@@ -18,8 +18,14 @@ export interface HandoverTarget<M> {
   isDrawn(mesh: M, sinceMs: number): boolean;
 }
 
-/** Longest a replaced tile waits for its replacement to draw. */
-export const HANDOVER_MAX_MS = 1500;
+/**
+ * Longest a replaced tile waits for its replacement to draw. Long: Spark builds each new
+ * mesh's level-of-detail tree one at a time, so walking into the middle of a scan queues
+ * dozens and the last are seconds away -- at 1.5 s their parents came off first and the
+ * ground showed black where the world is clipped away under the scan. Waiting costs only a
+ * coarse tile drawn over a fine one for those seconds.
+ */
+export const HANDOVER_MAX_MS = 10_000;
 
 export class Handover<M> {
   /** On screen, not drawn yet: when each was added. */
