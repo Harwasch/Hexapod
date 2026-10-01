@@ -214,6 +214,30 @@ def attribute_scores(
     return {name: p[:, a].astype(np.float32) for a, name in enumerate(banks.names)}
 
 
+class ZeroShotScoring:
+    """`segment_scene.describe` scores tags and properties through these when an embedder
+    has them, so the model's own prompts are used (`TAG_TEMPLATE`, several phrasings and
+    contrasts per property) rather than bare words. Text banks are built once per run."""
+
+    def score_tags(self, embedding: np.ndarray, labels: Sequence[str]) -> np.ndarray:
+        """(n, len(labels)) probabilities: softmax over the labels' prompts."""
+        cache = self.__dict__.setdefault("_banks", {})
+        key = ("tags", tuple(labels))
+        if key not in cache:
+            cache[key] = vocabulary_bank(self, list(labels))
+        logits = TEMPERATURE * np.atleast_2d(embedding) @ cache[key].T
+        logits -= logits.max(axis=1, keepdims=True)
+        e = np.exp(logits)
+        return e / e.sum(axis=1, keepdims=True)
+
+    def score_properties(self, embedding: np.ndarray) -> dict[str, np.ndarray]:
+        """Per property (`ATTRIBUTE_PROMPTS`), (n,) in 0..1."""
+        cache = self.__dict__.setdefault("_banks", {})
+        if "attributes" not in cache:
+            cache["attributes"] = attribute_banks(self)
+        return attribute_scores(np.atleast_2d(embedding), cache["attributes"])
+
+
 # --- small pure helpers ---------------------------------------------------------------------
 
 
@@ -422,7 +446,7 @@ class Sam2Masks:
 
 
 @dataclass
-class SiglipEmbedder:
+class SiglipEmbedder(ZeroShotScoring):
     """SigLIP 2 image and text embeddings (transformers' `AutoModel`), L2-normalised.
 
     On 4 idle CPU cores, base-patch16-224: about 0.13 s an image crop (batches of 32) and
@@ -547,7 +571,7 @@ class ModalSam2Masks:
 
 
 @dataclass
-class ModalSiglipEmbedder:
+class ModalSiglipEmbedder(ZeroShotScoring):
     """`SiglipEmbedder` on a Modal GPU (`SegmentEmbed.embed_images` / `.embed_texts`)."""
 
     model: str = SIGLIP_MODEL

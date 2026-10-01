@@ -1046,15 +1046,27 @@ def describe(
     embedding = _normalise(embedding)
 
     words = list(vocabulary)
-    tag_scores = np.zeros((n, 0))
-    if words:
-        text = np.asarray(embedder.embed_texts(words), np.float64).reshape(len(words), dim)
-        tag_scores = _softmax(LOGIT_SCALE * embedding @ text.T)
     names = list(PROPERTY_PROMPTS)
-    prompts = [p for name in names for p in PROPERTY_PROMPTS[name]]
-    prompt_rows = np.asarray(embedder.embed_texts(prompts), np.float64).reshape(len(prompts), dim)
-    logits = LOGIT_SCALE * (embedding @ prompt_rows.T).reshape(n, len(names), 2)
-    property_scores = _softmax(logits)[:, :, 0]
+    tag_scores = np.zeros((n, 0))
+    # An embedder that scores for itself (segment_models.ZeroShotScoring) uses its own prompts.
+    own_tags = getattr(embedder, "score_tags", None)
+    own_properties = getattr(embedder, "score_properties", None)
+    if words:
+        if own_tags is not None:
+            tag_scores = np.asarray(own_tags(embedding, words), np.float64)
+        else:
+            text = np.asarray(embedder.embed_texts(words), np.float64).reshape(len(words), dim)
+            tag_scores = _softmax(LOGIT_SCALE * embedding @ text.T)
+    if own_properties is not None:
+        scored = own_properties(embedding)
+        property_scores = np.stack([np.asarray(scored[name], np.float64) for name in names], 1)
+    else:
+        prompts = [p for name in names for p in PROPERTY_PROMPTS[name]]
+        prompt_rows = np.asarray(embedder.embed_texts(prompts), np.float64).reshape(
+            len(prompts), dim
+        )
+        logits = LOGIT_SCALE * (embedding @ prompt_rows.T).reshape(n, len(names), 2)
+        property_scores = _softmax(logits)[:, :, 0]
 
     instances: list[Instance] = []
     for k in range(n):
@@ -1367,7 +1379,7 @@ def main() -> None:
         vocabulary = [
             line.strip()
             for line in args.vocabulary.read_text(encoding="utf-8").splitlines()
-            if line.strip()
+            if line.strip() and not line.lstrip().startswith("#")
         ]
     source = load_masks(args.masks) if args.masks else None
     factory = None
