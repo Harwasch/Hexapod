@@ -115,6 +115,17 @@ Written beside the measured tiles; read by the viewer, the skinning step and the
 The measured tileset's `root.extras.instances = { "uri": "instances.json", "count": n }`, so
 the viewer finds it without probing (the same pattern as `viewCones` and `inferredLayers`).
 
+### Fixture and browser checks
+
+`data/tiles/synthetic-yard/instances/` is the committed yard segmented against its own labels
+(`segment_scene.py ... --truth labels.json --tile-gaussians 6000`). It sits beside `splat/`,
+not in it, so the yard tiles stay byte-identical to what the packer writes; the e2e links it
+from the root's extras at request time. `apps/web/e2e/instances.spec.ts` drives the hooks in a
+real CesiumJS (`src/dev/instancesHarness.ts`): hide, hide everything, highlight with and
+without dimming, both primitive modes, and composition with the view cones.
+`e2e/instancesScan.spec.ts` runs the same steps on any segmented scan
+(`INSTANCES_SCAN_DIR=...`) and saves screenshots.
+
 ## 5. Storage by behaviour
 
 | Behaviour                                   | Storage                             | Why                                                                                                                                                     |
