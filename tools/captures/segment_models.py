@@ -42,6 +42,7 @@ from typing import Any
 import numpy as np
 
 import world_model_client as wmc
+from segment_scene import Mask
 
 VOCABULARY_FILE = Path(__file__).resolve().parent / "data" / "open_vocabulary.txt"
 
@@ -132,15 +133,6 @@ ATTRIBUTE_CONTRASTS: dict[str, tuple[str, ...]] = {
         "a photo of a plant, the ground or a building",
     ),
 }
-
-
-@dataclass
-class Mask:
-    """One class-free mask. Same as `segment_scene.Mask`."""
-
-    mask: np.ndarray  # bool (h, w)
-    level: int  # 0 = coarsest granularity (whole object / area); higher = finer
-    score: float  # model confidence 0..1
 
 
 # --- the vocabulary and the prompts ---------------------------------------------------------
