@@ -36,7 +36,7 @@ from __future__ import annotations
 import json
 import math
 import shutil
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
@@ -50,30 +50,41 @@ __all__ = [
     "Conditioning",
     "Filler",
     "InpaintFiller",
+    "clean_mask",
     "condition",
     "drop_and_fill",
     "fill_scan",
     "lift",
+    "link_inferred",
     "make_filler",
     "package_inferred",
     "plan_views",
+    "refine",
 ]
 
 #: A fill that changed the pixels it was not asked to fill by more than this (PSNR) is refused.
 GATE_PSNR_DB = 25.0
+#: Untouched pixels score this rather than infinity, so reports stay JSON.
+GATE_CAP_DB = 99.0
 #: Confidence halves about every this many pixels from the nearest measured pixel.
 CONFIDENCE_PX = 12.0
 #: Below this coverage of what was seen from here, a pixel the scan covers is to be filled.
 SEEN_ALPHA = 0.5
 #: ...and only where the scan does cover it at least this much.
 COVERED_ALPHA = 0.5
+#: Mask speckle smaller than this (pixels) is closed over or opened away.
+MASK_CLEAN_PX = 5
 #: Eye height above the observer points, metres, for camera-free scans.
 EYE_HEIGHT_M = 1.6
 
 
 class Filler(Protocol):
     """Paints the masked pixels of a view. `rgb` (h, w, 3) uint8, `mask` (h, w) bool; returns
-    one or more fills, each (h, w, 3) uint8."""
+    one or more fills, each (h, w, 3) uint8.
+
+    `rgb` is the scan faded by its view cones (masked pixels empty) unless the filler sets
+    `reads_full_render`: then it is the whole scan as rendered from there, unseen side and
+    all -- what an artifact-fixing model (NVIDIA Fixer) is trained to clean."""
 
     name: str
 
@@ -134,7 +145,7 @@ def condition(
     seen = render(splats, camera, opacity_scale=weights)
     full = render(splats, camera)
     if mask is None:
-        mask = (seen.alpha < SEEN_ALPHA) & (full.alpha >= COVERED_ALPHA)
+        mask = clean_mask((seen.alpha < SEEN_ALPHA) & (full.alpha >= COVERED_ALPHA))
     depth = np.where(np.isfinite(full.depth), full.depth, np.nan)
     known = np.isfinite(seen.depth) & (seen.alpha >= SEEN_ALPHA)
     missing = mask & ~np.isfinite(depth)
@@ -144,6 +155,15 @@ def condition(
         depth = np.where(missing, np.exp(filled), depth)
     distance = cv2.distanceTransform((mask | ~known).astype(np.uint8), cv2.DIST_L2, 5)
     return Conditioning(camera, seen, full, mask, depth, distance)
+
+
+def clean_mask(mask: np.ndarray, px: int = MASK_CLEAN_PX) -> np.ndarray:
+    """A mask without the renderer's sampling speckle: closed, then opened, by `px`."""
+    import cv2
+
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (px, px))
+    closed = cv2.morphologyEx(mask.astype(np.uint8), cv2.MORPH_CLOSE, kernel)
+    return cv2.morphologyEx(closed, cv2.MORPH_OPEN, kernel).astype(bool)
 
 
 def plan_views(
@@ -237,16 +257,18 @@ class Filled:
 def fill_views(conds: Sequence[Conditioning], filler: Filler) -> list[Filled]:
     """Each view filled and gated: the first fill whose unmasked pixels kept their render."""
     out = []
+    full = bool(getattr(filler, "reads_full_render", False))
     for cond in conds:
         given = to_u8(cond.seen.rgb)
+        shown = to_u8(cond.full.rgb) if full else given
         best: Filled | None = None
-        for candidate in filler.fill(given, cond.mask):
+        for candidate in filler.fill(shown, cond.mask):
             if candidate.shape != given.shape:
                 import cv2
 
                 candidate = cv2.resize(candidate, (given.shape[1], given.shape[0]))
             kept = cond.seen.alpha >= SEEN_ALPHA
-            score = psnr(candidate, given, kept & ~cond.mask)
+            score = min(psnr(candidate, given, kept & ~cond.mask), GATE_CAP_DB)
             if best is None or score > best.gate_psnr_db:
                 best = Filled(cond, candidate, score, score >= GATE_PSNR_DB)
         assert best is not None
@@ -472,6 +494,47 @@ def package_inferred(
     return evidence
 
 
+def _arrays(splats: Splats) -> dict[str, np.ndarray]:
+    return {
+        "positions": splats.positions,
+        "rotations": splats.rotations,
+        "scales": splats.scales,
+        "colours": splats.colours,
+        "opacities": splats.opacities,
+    }
+
+
+def refine(
+    lifted: Splats,
+    splats: Splats,
+    filled: Sequence[Filled],
+    iterations: int,
+    runner: Callable[[dict], dict],
+) -> tuple[Splats, dict[str, object]]:
+    """The lifted gaussians refined against the accepted views (`distill_fill`), the scan
+    cropped to their neighbourhood and frozen. `runner` takes `distill_fill.run`'s request:
+    `distill_fill.run` itself on this machine, or the `Distill` function on a GPU."""
+    import distill_fill as df
+
+    kept = [f for f in filled if f.accepted]
+    low, high = lifted.positions.min(axis=0), lifted.positions.max(axis=0)
+    margin = 0.25 * float(np.max(high - low)) + 1e-6
+    near = np.all((splats.positions >= low - margin) & (splats.positions <= high + margin), axis=1)
+    request = {
+        "measured": df.pack_scan(_arrays(splats.take(np.flatnonzero(near)))),
+        "init": df.pack_scan(_arrays(lifted)),
+        "views": df.pack_views(
+            [f.conditioning.camera.to_json() for f in kept],
+            np.stack([f.rgb for f in kept]),
+            np.stack([f.conditioning.mask for f in kept]),
+        ),
+        "iterations": iterations,
+    }
+    response = runner(request)
+    out = df.unpack_scan(response["inferred"])
+    return Splats(*(out[k] for k in df.KEYS)), response["report"]
+
+
 def fill_scan(
     splats: Splats,
     grid: vc.ConeGrid,
@@ -485,6 +548,8 @@ def fill_scan(
     height: int = 480,
     stride: int = 2,
     save_dir: Path | None = None,
+    distill_iterations: int = 0,
+    distill_runner: Callable[[dict], dict] | None = None,
 ) -> dict[str, object]:
     """The whole of Teacher B on one scan: views at what its view cones fade (`ring`: from
     outside, the sides never walked to; `near`: from the observers), conditioned, filled,
@@ -529,9 +594,16 @@ def fill_scan(
             "skipped": "no accepted fill",
             "views": per_view,
         }
+    distilled: dict[str, object] | None = None
+    if distill_iterations > 0:
+        import distill_fill
+
+        lifted, distilled = refine(
+            lifted, splats, filled, distill_iterations, distill_runner or distill_fill.run
+        )
     used = [f.conditioning.camera for f in filled if f.accepted]
     evidence = package_inferred(lifted, confidence, used, measured_tileset, out_dir, filler.name)
-    return {**evidence, "perView": per_view}
+    return {**evidence, "perView": per_view, **({"distill": distilled} if distilled else {})}
 
 
 def make_filler(spec: str) -> Filler:
@@ -547,6 +619,36 @@ def make_filler(spec: str) -> Filler:
     return getattr(importlib.import_module(module), name)()
 
 
+def link_inferred(measured_tileset: Path, inferred_tileset: Path) -> list[dict[str, object]]:
+    """Declares an inferred layer on the measured tileset's root (`extras.inferredLayers`,
+    a path relative to it and the layer's evidence), which is how the viewer finds it
+    (apps/web/src/lib/inferred.ts). Linking the same layer again replaces its entry."""
+    import os
+
+    measured = json.loads(measured_tileset.read_text(encoding="utf-8"))
+    inferred = json.loads(inferred_tileset.read_text(encoding="utf-8"))
+    evidence = inferred["root"].get("extras", {}).get("evidence")
+    if not evidence or evidence.get("kind") != "inferred":
+        raise ValueError(f"{inferred_tileset} carries no inferred evidence")
+    uri = Path(os.path.relpath(inferred_tileset, measured_tileset.parent)).as_posix()
+    extras = measured["root"].setdefault("extras", {})
+    layers = [layer for layer in extras.get("inferredLayers", []) if layer.get("uri") != uri]
+    layers.append({"uri": uri, "evidence": evidence})
+    extras["inferredLayers"] = layers
+    measured_tileset.write_text(json.dumps(measured, indent=1), encoding="utf-8")
+    return layers
+
+
+def _distill_runner(where: str) -> Callable[[dict], dict]:
+    if where == "local":
+        import distill_fill
+
+        return distill_fill.run
+    from world_model_client import modal_remote
+
+    return lambda request: modal_remote("Distill", "run", request)
+
+
 def main(argv: list[str] | None = None) -> int:
     import argparse
 
@@ -554,6 +656,9 @@ def main(argv: list[str] | None = None) -> int:
 
     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     sub = parser.add_subparsers(dest="command", required=True)
+    link = sub.add_parser("link", help="declare an inferred layer on its measured tileset")
+    link.add_argument("tileset", type=Path, help="the measured tileset.json")
+    link.add_argument("inferred", type=Path, help="the inferred layer's tileset.json")
     for name in ("drop", "fill"):
         p = sub.add_parser(name)
         p.add_argument("tileset", type=Path, help="the measured tileset.json (with viewcones.bin)")
@@ -569,8 +674,17 @@ def main(argv: list[str] | None = None) -> int:
     )
     sub.choices["fill"].add_argument("out", type=Path, help="the inferred tileset's directory")
     sub.choices["fill"].add_argument("--mode", choices=("ring", "near"), default="ring")
+    sub.choices["fill"].add_argument(
+        "--distill", type=int, default=0, help="refine the lifted fill this many steps"
+    )
+    sub.choices["fill"].add_argument(
+        "--distill-on", choices=("local", "modal"), default="modal", help="where to refine"
+    )
     args = parser.parse_args(argv)
 
+    if args.command == "link":
+        print(json.dumps(link_inferred(args.tileset, args.inferred), indent=1))
+        return 0
     splats = load_tileset(args.tileset)
     grid = vc.cone_grid_from_tileset(args.tileset)
     filler = make_filler(args.filler)
@@ -607,6 +721,8 @@ def main(argv: list[str] | None = None) -> int:
             height=args.height,
             stride=args.stride,
             save_dir=args.save,
+            distill_iterations=args.distill,
+            distill_runner=_distill_runner(args.distill_on) if args.distill else None,
         )
         print(json.dumps(evidence, indent=1))
     return 0

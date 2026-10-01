@@ -163,7 +163,7 @@ class ClipSource(Protocol):
 
     def clips(
         self, stills: Sequence[np.ndarray], cameras: Sequence[Camera], seeds: Sequence[int]
-    ) -> list[list[list[np.ndarray]]]: ...
+    ) -> list[list[np.ndarray]]: ...
 
 
 @dataclass
@@ -204,10 +204,10 @@ class OscillatorClips:
 
     def clips(
         self, stills: Sequence[np.ndarray], cameras: Sequence[Camera], seeds: Sequence[int]
-    ) -> list[list[list[np.ndarray]]]:
+    ) -> list[list[np.ndarray]]:
         del stills  # the stand-in renders the scan itself
         axis = np.asarray(self.wind_axis, np.float64)
-        out: list[list[list[np.ndarray]]] = []
+        out: list[list[np.ndarray]] = []
         for seed in seeds:
             series = self.angles(seed)
             frames_by_camera: list[list[np.ndarray]] = [[] for _ in cameras]
@@ -653,17 +653,36 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--report", type=Path, help="where to write the per-limb report")
     parser.add_argument("--seconds", type=float, default=10.0)
     parser.add_argument("--seeds", type=int, default=3)
+    parser.add_argument(
+        "--source",
+        choices=("oscillator", "wan", "cosmos"),
+        default="oscillator",
+        help="the CPU stand-in, or a video model on Modal (world_model_client.py)",
+    )
+    parser.add_argument("--cameras", type=int, default=3)
+    parser.add_argument("--width", type=int, default=640)
+    parser.add_argument("--height", type=int, default=480)
     args = parser.parse_args(argv)
     rig_doc = json.loads((args.source_dir / "rig.json").read_text())
     prior = json.loads((args.source_dir / rig_doc.get("motion", "motion.json")).read_text())
     splats = load_ply(args.source_dir / "splat.ply")
     rig = Rig(rig_doc, prior)
+    source: ClipSource
+    if args.source == "oscillator":
+        source, name = OscillatorClips(splats, rig, seconds=args.seconds), "oscillator stand-in"
+    else:
+        from world_model_client import VideoClips
+
+        clips = VideoClips(model={"wan": "Wan", "cosmos": "Cosmos"}[args.source])
+        source, name = clips, clips.name
     lesson = teach(
         splats,
         rig_doc,
         prior,
-        OscillatorClips(splats, rig, seconds=args.seconds),
+        source,
+        cameras=cameras_around(rig, count=args.cameras, width=args.width, height=args.height),
         seeds=tuple(range(1, args.seeds + 1)),
+        source_name=name,
     )
     args.out.write_text(json.dumps(lesson.sidecar, indent=1) + "\n", encoding="utf-8")
     if args.report:

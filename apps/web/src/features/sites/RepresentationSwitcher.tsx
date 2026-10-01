@@ -2,11 +2,13 @@ import { Loader2 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 
 import type { Representation } from "@twin/contracts";
-import { GlassPanel, GlassSegmentedControl } from "@twin/ui";
+import { GlassPanel, GlassSegmentedControl, GlassSwitch } from "@twin/ui";
 
 import { useSite } from "@/api/queries";
 import { useScene } from "@/cesium/SceneContext";
 import { representationLabel } from "@/lib/format";
+import { describeEvidence } from "@/lib/inferred";
+import { useInferred } from "@/state/inferred";
 import { useSettings, type SplatRenderer } from "@/state/settings";
 import { useSites } from "@/state/sites";
 
@@ -31,6 +33,11 @@ export function RepresentationSwitcher() {
   );
   const assets = useSites((s) => s.assets);
   const site = useSite(activeSiteId).data;
+  const inferred = useInferred((s) => s.layers);
+  const showInferred = useInferred((s) => s.show);
+  const setShowInferred = useInferred((s) => s.setShow);
+  const shownAsset = site?.assets.find((a) => a.representation === representation);
+  const evidence = shownAsset ? (inferred[shownAsset.id] ?? []) : [];
   const visible = Boolean(site && nearSiteId === activeSiteId);
   const available = ORDER.filter((rep) => site?.assets.some((a) => a.representation === rep));
   const options = ORDER.map((rep) => {
@@ -82,6 +89,20 @@ export function RepresentationSwitcher() {
                 onValueChange={(next) => setSettings({ splatRenderer: next })}
                 options={RENDERERS}
               />
+            )}
+            {representation === "gaussian-splat" && evidence.length > 0 && (
+              <span
+                className="rep-switch__inferred"
+                data-testid="inferred-toggle"
+                title={evidence.map(describeEvidence).join("\n")}
+              >
+                <span id="inferred-label">Inferred fill</span>
+                <GlassSwitch
+                  aria-labelledby="inferred-label"
+                  checked={showInferred}
+                  onCheckedChange={setShowInferred}
+                />
+              </span>
             )}
           </GlassPanel>
         </motion.div>

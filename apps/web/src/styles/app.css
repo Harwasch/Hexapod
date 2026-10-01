@@ -1131,6 +1131,18 @@ body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-close {
   text-overflow: ellipsis;
 }
 
+/* Inferred fill (lib/inferred.ts): labelled as what it is, and switchable off. */
+.rep-switch__inferred {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: var(--text-xs);
+  font-style: italic;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  cursor: help;
+}
+
 /* ---- Nav controls -------------------------------------------------------- */
 .nav-controls {
   display: flex;

@@ -37,6 +37,7 @@ import { groundAt, measuredClamp, type MeasuredGround } from "./placement";
 import { createSiteTileset, tileCacheBudget } from "./providers/tiles";
 import { SPLAT_BYTES_ESTIMATE, SplatCount, splatMemory } from "./splatCount";
 import { splatTilesetOf } from "./splatInternals";
+import { attachInferredLayers } from "./inferredLayers";
 import { attachViewCones } from "./splatViewCones";
 import type { SceneEvents } from "./types";
 
@@ -631,6 +632,8 @@ export class SiteManager {
         tileset.tileUnload.addEventListener((tile: Cesium3DTile) => splats.unload(tile)),
         // What the capture never saw, faded from the views it never had (lib/viewCones.ts).
         attachViewCones(tileset),
+        // What an image model filled in where it never looked, beside it (lib/inferred.ts).
+        attachInferredLayers(tileset, this.scene, asset.id),
       );
     }
     handle.unsubscribe.push(

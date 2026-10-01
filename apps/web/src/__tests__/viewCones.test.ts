@@ -4,7 +4,12 @@ import { gunzipSync } from "node:zlib";
 
 import { describe, expect, it } from "vitest";
 
-import { SplatViewCones, viewConesEnabled, type ViewConeGpu } from "@/cesium/splatViewCones";
+import {
+  SplatViewCones,
+  viewConesEnabled,
+  type SplatVertexVisibility,
+  type ViewConeGpu,
+} from "@/cesium/splatViewCones";
 import type { SplatShaderBuilder } from "@/cesium/splatInternals";
 import {
   cellCount,
@@ -164,7 +169,7 @@ describe("the vertexVisibility hook", () => {
     const { uniforms } = build(hook);
     const tile = { content: {} as { _lastSplatTransform?: number[] } };
     const primitive = {
-      vertexVisibility: undefined as unknown,
+      vertexVisibility: undefined as SplatVertexVisibility | undefined,
       _selectedTileSet: new Set([tile]),
       isDestroyed: () => false,
     };

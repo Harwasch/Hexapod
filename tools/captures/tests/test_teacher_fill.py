@@ -231,3 +231,55 @@ def test_make_filler_names_the_stand_in_and_imports_the_rest() -> None:
     assert isinstance(tf.make_filler("teacher_fill:InpaintFiller"), tf.InpaintFiller)
     with pytest.raises(ValueError):
         tf.make_filler("fixer")
+
+
+def test_refine_sends_the_accepted_views_and_the_scan_near_the_fill() -> None:
+    import distill_fill as df
+
+    camera = Camera.look_at([0.0, -5.0, 1.0], [0.0, 0.0, 1.0], width=40, height=30)
+    h, w = 30, 40
+    mask = np.zeros((h, w), bool)
+    mask[10:20, 10:30] = True
+    depth = np.full((h, w), 5.0)
+    frame = tf.Frame(np.zeros((h, w, 3)), depth, np.ones((h, w)), np.zeros((h, w)), np.ones((h, w)))
+    cond = tf.Conditioning(camera, frame, frame, mask, depth, np.zeros((h, w), np.float32))
+    rgb = np.full((h, w, 3), 90, np.uint8)
+    filled = [tf.Filled(cond, rgb, 40.0, True), tf.Filled(cond, rgb, 10.0, False)]
+    lifted, _ = tf.lift(filled)
+    far = Splats(
+        np.array([[0.0, 0.0, 1.0], [50.0, 0.0, 1.0]]),
+        np.tile([1.0, 0.0, 0.0, 0.0], (2, 1)),
+        np.full((2, 3), 0.05),
+        np.full((2, 3), 0.5),
+        np.full(2, 0.9),
+    )
+    sent: dict = {}
+
+    def runner(request: dict) -> dict:
+        sent.update(request)
+        return {"inferred": request["init"], "report": {"iterations": request["iterations"]}}
+
+    out, report = tf.refine(lifted, far, filled, 7, runner)
+    assert report == {"iterations": 7}
+    assert np.allclose(out.positions, lifted.positions, atol=1e-5)
+    assert len(df.unpack_scan(sent["measured"])["positions"]) == 1  # the far one cropped
+    cameras, images, masks = df.unpack_views(sent["views"])
+    assert len(cameras) == 1 and images.shape == (1, h, w, 3) and masks[0].sum() == mask.sum()
+
+
+def test_link_declares_the_layer_where_the_viewer_looks(tmp_path: Path) -> None:
+    measured = tmp_path / "site" / "splat" / "tileset.json"
+    inferred = tmp_path / "site" / "inferred" / "tileset.json"
+    for path in (measured, inferred):
+        path.parent.mkdir(parents=True)
+    measured.write_text(json.dumps({"root": {"extras": {"viewCones": {}}}}))
+    evidence = {"kind": "inferred", "filler": "x", "views": 2, "gaussians": 9}
+    inferred.write_text(json.dumps({"root": {"extras": {"evidence": evidence}}}))
+    tf.link_inferred(measured, inferred)
+    layers = tf.link_inferred(measured, inferred)  # again: replaced, not doubled
+    assert layers == [{"uri": "../inferred/tileset.json", "evidence": evidence}]
+    root = json.loads(measured.read_text())["root"]
+    assert list(root["extras"]) == ["viewCones", "inferredLayers"]
+    inferred.write_text(json.dumps({"root": {"extras": {}}}))
+    with pytest.raises(ValueError):
+        tf.link_inferred(measured, inferred)
