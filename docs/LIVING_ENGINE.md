@@ -82,13 +82,7 @@ interface Estimate<T> {
   evidence: Evidence;
 }
 type Evidence =
-  | "measured"
-  | "observed"
-  | "estimated"
-  | "fitted"
-  | "simulated"
-  | "inferred"
-  | "scenario";
+  "measured" | "observed" | "estimated" | "fitted" | "simulated" | "inferred" | "scenario";
 interface Instance {
   id: string;
   class: "tree" | "shrub" | "snag" | "grass" | "water" | "rigid" | "static";
