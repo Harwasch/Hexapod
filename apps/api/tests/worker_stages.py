@@ -109,6 +109,7 @@ def t_package(ctx: StageContext) -> StageOutcome:
     (out / "tileset.json").write_text(json.dumps({"asset": {"version": "1.1"}}), encoding="utf-8")
     (out / "splat.glb").write_bytes(b"glTF-ish bytes")
     (out / "collision.bin").write_bytes(b"\x1f\x8b collision-ish bytes")
+    (out / "viewcones.bin").write_bytes(b"\x1f\x8b view-cone-ish bytes")
     return StageOutcome(metrics={"tiles": 1})
 
 

@@ -14,7 +14,8 @@ carries the z-up to y-up swap the same way Cesium's own sample tilesets do. A tr
 spherical harmonics (`f_rest_*`, up to degree 3) ride along in every tile, so the view-
 dependent colour the trainer learned is drawn (see `convert`). Beside the tiles goes
 `collision.bin`, the scan's solid cells for the web clients' camera collision and picking,
-declared on the root tile (`COLLISION_FORMAT`).
+declared on the root tile (`COLLISION_FORMAT`), and `viewcones.bin`, the directions each
+part of it was seen from (`view_cones`), declared beside it.
 
 Usage:
     python splat_tiles.py splat.ply out_dir --lat 46.84 --lon -91.99 --height 0
@@ -22,6 +23,7 @@ Usage:
         [--sh-degree 0-3]
     python splat_tiles.py collision splat.ply out_dir [--tileset out_dir/tileset.json]
         [--opacity-min 0.02]
+    python splat_tiles.py viewcones splat.ply|tileset.json out_dir [--tileset tileset.json]
 """
 
 from __future__ import annotations
@@ -41,6 +43,8 @@ from pathlib import Path
 from typing import cast
 
 import numpy as np
+
+import view_cones
 
 SH_C0 = 0.28209479177387814
 WGS84_A = 6378137.0
@@ -2227,6 +2231,13 @@ def convert(
     main thread. Two more windowed passes over the PLY once the tiles are written, holding
     a row per occupied cell (`collision_grid`); `build_collision` writes the same file for
     a tileset packed before it existed.
+
+    **View cones.** Beside them, `viewcones.bin`: a coarse grid of the directions each part
+    of the scan was seen from, estimated from where its detail is finest (`view_cones`),
+    declared on the root tile's `extras.viewCones`. The globe fades a splat seen from
+    outside its cone, so a scan walked inside a site does not show the overview the backs
+    of what it only saw from within. Two more windowed passes; `view_cones.py` writes the
+    same file for a tileset packed before it existed (from the PLY, or from its leaves).
     """
     if sh_degree is not None and not 0 <= sh_degree <= SH_MAX_DEGREE:
         raise ValueError(f"sh_degree caps the SH bands at 0 to {SH_MAX_DEGREE}, not {sh_degree}")
@@ -2245,8 +2256,10 @@ def convert(
     assert keep is not None
     del tree  # the Morton codes, 8 bytes a gaussian, are not needed past the tiles
     grid = collision_grid(layout, keep)
-    del keep
     collision = write_collision(grid, out_dir)
+    cones = view_cones.cone_grid(layout, keep)
+    del keep
+    seen_from = view_cones.write_view_cones(cones, out_dir)
 
     def node(tile: Tile) -> dict[str, object]:
         entry: dict[str, object] = {
@@ -2288,6 +2301,10 @@ def convert(
     }
     # What the web clients collide with: the leaves' gaussians as solid cells, precomputed
     # (see `COLLISION_FORMAT`). On the root, so a viewer has it before any tile loads.
+    # From where each part of the scan was seen, so a viewer can fade what it never saw
+    # (`view_cones`). On the root too: the shader needs it from the first tile. Before the
+    # collision grid, so a backfill of either one (each appended last) writes these bytes.
+    tileset["root"]["extras"]["viewCones"] = seen_from
     tileset["root"]["extras"]["collision"] = collision
     (out_dir / "tileset.json").write_text(json.dumps(tileset, indent=1), encoding="utf-8")
     leaves = sum(tile.count for tile in tiles if not tile.children)
@@ -2310,6 +2327,10 @@ def convert(
         "collision_cell_m": grid.cell,
         "collision_bricks": cast(int, collision["bricks"]),
         "collision_solid_cells": int(grid.cells.shape[0]),
+        # The view-cone grid (`viewcones.bin`): its cell (m), and the share of gaussians a
+        # viewer fades when seen from where the capture never looked.
+        "view_cones_cell_m": cones.cell,
+        "view_cones_directional_share": cast(float, cones.stats.get("directionalShare", 0.0)),
     }
 
 
@@ -2339,6 +2360,8 @@ def main() -> None:
     if sys.argv[1:2] == ["collision"]:
         collision_main(sys.argv[2:])
         return
+    if sys.argv[1:2] == ["viewcones"]:
+        raise SystemExit(view_cones.main(sys.argv[2:]))
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("ply", type=Path)
     parser.add_argument("out_dir", type=Path)

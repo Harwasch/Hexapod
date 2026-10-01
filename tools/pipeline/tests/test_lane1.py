@@ -91,6 +91,7 @@ def test_a_real_ply_becomes_a_real_tileset(run: Workdir) -> None:
         "collision.bin",
         "splat.glb",
         "tileset.json",
+        "viewcones.bin",
     ]
     assert document["accessors"][0]["count"] == 12_000
     assert "KHR_gaussian_splatting" in document["extensionsRequired"]
@@ -198,7 +199,12 @@ def test_the_registration_carries_the_extent_and_the_manifest(run: Workdir) -> N
     registration = _json(run, "register", "registration.json")
 
     assert registration["slug"] == "orchard-tree"
-    assert registration["artifacts"] == ["collision.bin", "splat.glb", "tileset.json"]
+    assert registration["artifacts"] == [
+        "collision.bin",
+        "splat.glb",
+        "tileset.json",
+        "viewcones.bin",
+    ]
     assert registration["thumbnail"] == "thumbnail.jpg"
     # 6.46 m is the fixture's own top; recentring moved its origin to the capture's base.
     shift = _json(run, "normalize", "source_meta.json")["frame"]["translationM"][2]

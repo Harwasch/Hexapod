@@ -60,6 +60,44 @@
   },
   "extras": {
    "gaussians": 342,
+   "viewCones": {
+    "format": "hexapod.viewcones",
+    "version": 1,
+    "uri": "viewcones.bin",
+    "origin": [
+     0.000488,
+     0.004395,
+     -0.348389
+    ],
+    "cell": 0.336845,
+    "dims": [
+     97,
+     72,
+     37
+    ],
+    "fadeDeg": 20.0,
+    "rule": "observers: cells within 2.5x of the scan's finest detail (the gaussian-weighted 20th percentile of each cell's 25th-percentile middle axis, cells of at least 8); a cell's cone holds 90% of their weight; seen from everywhere within 2.5 cells of them or where they surround it",
+    "gaussians": 43337,
+    "occupiedCells": 10150,
+    "observers": "finest-detail region",
+    "observerPoints": 926,
+    "fineCells": 926,
+    "fineShare": 0.4048,
+    "finestMiddleAxisM": 0.019497,
+    "directionalShare": 0.0423,
+    "observerBox": {
+     "min": [
+      3.537,
+      4.215,
+      0.157
+     ],
+     "max": [
+      29.811,
+      23.078,
+      10.936
+     ]
+    }
+   },
    "collision": {
     "format": "hexapod.collision",
     "version": 1,

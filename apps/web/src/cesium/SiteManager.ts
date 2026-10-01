@@ -37,6 +37,7 @@ import { groundAt, measuredClamp, type MeasuredGround } from "./placement";
 import { createSiteTileset, tileCacheBudget } from "./providers/tiles";
 import { SPLAT_BYTES_ESTIMATE, SplatCount, splatMemory } from "./splatCount";
 import { splatTilesetOf } from "./splatInternals";
+import { attachViewCones } from "./splatViewCones";
 import type { SceneEvents } from "./types";
 
 const log = createLogger("sites");
@@ -628,6 +629,8 @@ export class SiteManager {
           sizeSplatCache(tileset, tile, this.splatCeiling);
         }),
         tileset.tileUnload.addEventListener((tile: Cesium3DTile) => splats.unload(tile)),
+        // What the capture never saw, faded from the views it never had (lib/viewCones.ts).
+        attachViewCones(tileset),
       );
     }
     handle.unsubscribe.push(

@@ -48,6 +48,7 @@ def test_every_recipe_ends_in_a_registration(name: str, tmp_path: Path) -> None:
         "collision.bin",
         "splat.glb",
         "tileset.json",
+        "viewcones.bin",
     ]
 
 

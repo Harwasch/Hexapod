@@ -127,7 +127,9 @@ def test_a_hierarchy_adds_only_the_tiles_its_tileset_names(tmp_path: Path) -> No
     assert tileset["root"]["refine"] == "REPLACE"
     # ...and the collision grid, which the root tile names in its extras.
     assert tileset["root"]["extras"]["collision"]["uri"] == "collision.bin"
-    assert written == {*named, "tileset.json", "collision.bin"}
+    # ...and the view-cone grid, likewise.
+    assert tileset["root"]["extras"]["viewCones"]["uri"] == "viewcones.bin"
+    assert written == {*named, "tileset.json", "collision.bin", "viewcones.bin"}
     # REPLACE: the leaves hold every gaussian once; the parents hold merged stand-ins on top.
     assert sum(tile_count(out / name) for name in leaves) == 600
     assert stats["parent_gaussians"] == sum(tile_count(out / n) for n in named) - 600
