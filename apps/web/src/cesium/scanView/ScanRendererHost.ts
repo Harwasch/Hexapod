@@ -53,8 +53,17 @@ const MAX_STREAMED = 10_000_000;
 const MOTION_RESOLUTION = 0.6;
 const MIN_MOTION_PIXEL_RATIO = 0.75;
 const MOTION_SETTLE_MS = 200;
+/** Most gaussians put on screen per re-plan (~4M a second at REPLAN_MS): tiles that land
+ *  together go up over a few frames instead of all in one. */
+const MAX_SHOWN_PER_UPDATE = 600_000;
+/** The next level of detail within this distance is fetched ahead once the view is served. */
+const PREFETCH_RADIUS_M = 30;
 /** Loaded tiles kept beyond what is drawn, so a look back needs no download. */
 const CACHE_FACTOR = 1.5;
+
+/** Where a scan's package keeps the renderer-native streamed level of detail, beside its
+ *  tileset (PlayCanvas's streamed SOG, written by splat-transform). */
+export const NATIVE_LOD_PATH = "sog/lod-meta.json";
 
 /** What the page's tests and the debug panel read. */
 export interface ScanRendererStatus {
@@ -66,6 +75,8 @@ export interface ScanRendererStatus {
   error: string | null;
   /** The gaussians it may draw now (adaptive), those being fetched, and those held. */
   budget: number;
+  /** Whether the renderer streams the scan's own streamed package (runNative). */
+  native: boolean;
   loading: number;
   cached: number;
 }
@@ -120,6 +131,7 @@ export class ScanRendererHost {
       budget: 0,
       loading: 0,
       cached: 0,
+      native: false,
     };
     return {
       kind: this.kind,
@@ -206,6 +218,10 @@ export class ScanRendererHost {
   ): Promise<Session> {
     const { viewer } = this;
     const url = new URL(target.tileset.resource.url, location.href).toString();
+    if (backend.streamNative) {
+      const native = await this.runNative(kind, target, canvas, backend, url);
+      if (native) return native;
+    }
     const response = await fetch(url);
     if (!response.ok) throw new Error(`The scan's tileset answered ${String(response.status)}.`);
     const tree = parseTileset(await response.json());
@@ -219,6 +235,7 @@ export class ScanRendererHost {
       add: (mesh) => backend.add(mesh),
       remove: (mesh) => backend.remove(mesh),
       isDrawn: (mesh, sinceMs) => backend.isDrawn(mesh, sinceMs),
+      ...(backend.fade ? { fade: backend.fade.bind(backend) } : {}),
     });
     const streamer = new TileStreamer<unknown>(
       tree,
@@ -235,7 +252,13 @@ export class ScanRendererHost {
           log.warn("scan tile did not load; its parent stays", { tile: tile.uri, error });
         },
       },
-      { budget: streamed, cacheBudget: streamed * CACHE_FACTOR, concurrency: FETCHES_AT_ONCE },
+      {
+        budget: streamed,
+        cacheBudget: streamed * CACHE_FACTOR,
+        concurrency: FETCHES_AT_ONCE,
+        maxShownPerUpdate: MAX_SHOWN_PER_UPDATE,
+        prefetchRadiusM: PREFETCH_RADIUS_M,
+      },
     );
     let arrived = true;
     streamer.onArrival = () => {
@@ -364,6 +387,85 @@ export class ScanRendererHost {
         budget: adaptive.budget,
         loading: streamer.loading,
         cached: streamer.loadedGaussians,
+        native: false,
+      }),
+    };
+  }
+
+  /**
+   * The scan in the renderer's own streamed format, when its package has one: the renderer
+   * streams and chooses by itself and this only keeps its camera on Cesium's. Null when the
+   * package has none (older scans), and the tileset is streamed here instead.
+   */
+  private async runNative(
+    kind: Exclude<SplatRendererKind, "cesium">,
+    target: ScanTarget,
+    canvas: HTMLCanvasElement,
+    backend: ScanBackend<unknown>,
+    tilesetUrl: string,
+  ): Promise<Session | null> {
+    const lodUrl = new URL(NATIVE_LOD_PATH, tilesetUrl).toString();
+    const probe = await fetch(lodUrl).catch(() => null);
+    if (!probe?.ok || !backend.streamNative) return null;
+    const stream = await backend.streamNative(lodUrl);
+    const { viewer } = this;
+    const toLocal = new Matrix4();
+    const pixelRatio = Math.min(window.devicePixelRatio || 1, isHandheld() ? 1.5 : 2);
+    const lastEye = new Cartesian3(Number.NaN, 0, 0);
+    const lastDirection = new Cartesian3();
+    let lastMotionAt = 0;
+    let frames = 0;
+    let running = true;
+    let raf = 0;
+    const tick = (): void => {
+      if (!running) return;
+      raf = requestAnimationFrame(tick);
+      const tileset = target.tileset;
+      if (tileset.isDestroyed()) return;
+      Matrix4.inverseTransformation(tileset.root.computedTransform, toLocal);
+      const camera = viewer.camera;
+      const now = performance.now();
+      if (
+        !Cartesian3.equalsEpsilon(camera.positionWC, lastEye, 0, 1e-3) ||
+        !Cartesian3.equalsEpsilon(camera.directionWC, lastDirection, 1e-5)
+      ) {
+        lastMotionAt = now;
+        Cartesian3.clone(camera.positionWC, lastEye);
+        Cartesian3.clone(camera.directionWC, lastDirection);
+      }
+      const moving = now - lastMotionAt < MOTION_SETTLE_MS;
+      backend.render(
+        scanPose(camera, toLocal, {
+          width: viewer.canvas.clientWidth,
+          height: viewer.canvas.clientHeight,
+          pixelRatio: moving
+            ? Math.max(MIN_MOTION_PIXEL_RATIO, pixelRatio * MOTION_RESOLUTION)
+            : pixelRatio,
+        }),
+      );
+      frames += 1;
+    };
+    raf = requestAnimationFrame(tick);
+    log.info("splat renderer streaming natively", { kind, url: lodUrl });
+    return {
+      kind,
+      key: target.key,
+      stop: () => {
+        running = false;
+        cancelAnimationFrame(raf);
+        stream.stop();
+        backend.destroy();
+        canvas.remove();
+      },
+      status: () => ({
+        tiles: 0,
+        gaussians: stream.splats(),
+        frames,
+        error: null,
+        budget: stream.splats(),
+        loading: 0,
+        cached: 0,
+        native: true,
       }),
     };
   }

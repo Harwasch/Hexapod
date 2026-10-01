@@ -166,6 +166,29 @@ export function createBackend(
     setBudget: (drawn) => {
       app.scene.gsplat.splatBudget = drawn;
     },
+    // PlayCanvas's own streamed level of detail -- what superspl.at runs: chunks of a few
+    // hundred thousand splats per level as lossless WebP textures the browser decodes off the
+    // main thread and uploads as they are, chosen against `splatBudget` from the camera.
+    streamNative: async (url) => {
+      const asset = new pc.Asset(url, "gsplat", { url });
+      app.assets.add(asset);
+      await new Promise<void>((resolve, reject) => {
+        asset.once("load", () => resolve());
+        asset.once("error", (error: unknown) => reject(new Error(String(error))));
+        app.assets.load(asset);
+      });
+      const entity = new pc.Entity("scan");
+      entity.addComponent("gsplat", { asset, unified: true });
+      app.root.addChild(entity);
+      return {
+        splats: () => app.scene.gsplat.splatBudget,
+        stop: () => {
+          entity.destroy();
+          app.assets.remove(asset);
+          asset.unload();
+        },
+      };
+    },
     destroy: () => {
       for (const worker of workers) worker.terminate();
       waiting.clear();

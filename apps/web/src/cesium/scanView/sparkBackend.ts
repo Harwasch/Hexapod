@@ -53,6 +53,9 @@ export function createBackend(canvas: HTMLCanvasElement): Promise<ScanBackend<Sp
       spark.display.mapping.some(
         (entry) => (entry.node === mesh || entry.node.parent === mesh) && entry.count > 0,
       ),
+    fade: (mesh, alpha) => {
+      mesh.opacity = alpha;
+    },
     // What is drawn is what the streamer shows; its budget is the draw budget.
     setBudget: () => undefined,
     render: (pose: ScanPose) => {

@@ -376,6 +376,57 @@ describe("streaming towards the cut", () => {
     clock.mockRestore();
   });
 
+  it("puts at most the per-update allowance on screen, and asks for the rest at once", async () => {
+    const { host, arrive } = fakeHost();
+    const streamer = new TileStreamer(site, host, {
+      budget: 1e9,
+      cacheBudget: 1e9,
+      concurrency: 8,
+      maxShownPerUpdate: 150_000,
+    });
+    let asked = 0;
+    streamer.onArrival = () => (asked += 1);
+    streamer.adopt(site.root, "root.glb");
+    const close = viewFrom([-50, 0, 5]);
+    streamer.update(close);
+    await arrive();
+    streamer.update(close);
+    await arrive();
+    asked = 0;
+    // Both regions' leaves are here: 200k each, over a 150k allowance. One region goes (a
+    // swap cannot be split), the other waits for the next update, asked for at once.
+    streamer.update(close);
+    const uris = () => streamer.drawn.map((drawn) => drawn.uri).sort();
+    expect(uris().filter((uri) => uri.endsWith("-a.glb") || uri.endsWith("-b.glb"))).toHaveLength(
+      2,
+    );
+    await new Promise((done) => setTimeout(done, 0));
+    expect(asked).toBeGreaterThan(0);
+    streamer.update(close);
+    expect(uris()).toEqual(["east-a.glb", "east-b.glb", "west-a.glb", "west-b.glb"]);
+  });
+
+  it("fetches the next level near the camera ahead, once the view is served", async () => {
+    const { host, pending, arrive } = fakeHost();
+    const streamer = new TileStreamer(site, host, {
+      budget: 1e9,
+      cacheBudget: 1e9,
+      concurrency: 8,
+      prefetchRadiusM: 45,
+    });
+    streamer.adopt(site.root, "root.glb");
+    // The view wants the two regions; the west one is within the ring, the east one not.
+    const view = viewFrom([-50, 0, 40], 1);
+    streamer.update(view);
+    expect([...pending.keys()].sort()).toEqual(
+      ["east.glb", "west-a.glb", "west-b.glb", "west.glb"].sort(),
+    );
+    await arrive();
+    streamer.update(view);
+    // Fetched ahead, not shown.
+    expect(streamer.drawn.map((drawn) => drawn.uri).sort()).toEqual(["east.glb", "west.glb"]);
+  });
+
   it("keeps the ancestors of what is drawn, so leaving goes back to one at once", async () => {
     const { host, onScreen, disposed, arrive } = fakeHost();
     const streamer = new TileStreamer(site, host, {

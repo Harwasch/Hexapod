@@ -208,6 +208,19 @@ export interface StreamOptions {
   /** Tiles fetched at once. */
   concurrency: number;
   targetErrorPx?: number;
+  /**
+   * Most gaussians put on screen in one update. Tiles that land together otherwise all go up
+   * in one frame (each a GPU upload and a re-sort): a hitch. The rest wait for the next
+   * update, which `onArrival` asks for at once. Unlimited when absent.
+   */
+  maxShownPerUpdate?: number;
+  /**
+   * Prefetch: once nothing the view wants is left to fetch, the next level of detail of the
+   * cut within this many metres of the camera is fetched into the cache, so turning or
+   * stepping there finds it ready -- the ring of a game world loaded around the player.
+   * Off when absent.
+   */
+  prefetchRadiusM?: number;
 }
 
 /**
@@ -218,8 +231,12 @@ export class TileStreamer<M> {
   private readonly parentOf: Map<TileNode, TileNode | null>;
   private readonly loaded = new Map<TileNode, M>();
   private readonly used = new Map<TileNode, number>();
-  /** Fetches under way, and how many updates in a row each has not been wanted. */
-  private readonly inFlight = new Map<TileNode, { abort: AbortController; unwanted: number }>();
+  /** Fetches under way, how many updates in a row each has not been wanted, and whether it
+   *  is a prefetch (fetched for the cache, not for the view). */
+  private readonly inFlight = new Map<
+    TileNode,
+    { abort: AbortController; unwanted: number; prefetch: boolean }
+  >();
   /** Tiles that failed to load: how often, and when to try again. */
   private readonly broken = new Map<TileNode, { failures: number; retryAt: number }>();
   private readonly shown = new Set<TileNode>();
@@ -290,6 +307,9 @@ export class TileStreamer<M> {
     const isLoaded = (tile: TileNode): boolean => this.loaded.has(tile);
     let changed = false;
     let missing: TileNode[] = [];
+    const limit = this.options.maxShownPerUpdate ?? Number.POSITIVE_INFINITY;
+    let room = limit;
+    let deferred = false;
     // A swap can make the next one possible (children already cached from an earlier look),
     // so swap until nothing more can; the depth of the tree bounds it.
     for (let pass = 0; pass < 32; pass++) {
@@ -302,9 +322,23 @@ export class TileStreamer<M> {
       const next = nextSwaps(this.parentOf, this.shown, this.desired, isLoaded);
       missing = next.missing;
       if (next.swaps.length === 0) break;
-      next.swaps.forEach((swap) => this.apply(swap));
-      changed = true;
+      for (const swap of next.swaps) {
+        const adding = swap.add.reduce(
+          (sum, tile) => sum + (this.shown.has(tile) ? 0 : gaussiansOf(tile)),
+          0,
+        );
+        // A swap bigger than the whole allowance still goes, alone: it cannot be split.
+        if (adding > room && room < limit) {
+          deferred = true;
+          continue;
+        }
+        room -= adding;
+        this.apply(swap);
+        changed = true;
+      }
+      if (deferred) break;
     }
+    if (deferred) setTimeout(() => this.onArrival?.(), 0);
     for (const tile of this.shown) this.used.set(tile, ++this.clock);
     for (const tile of this.desired) if (this.loaded.has(tile)) this.used.set(tile, this.clock);
     this.abandon(missing);
@@ -347,9 +381,15 @@ export class TileStreamer<M> {
    */
   private abandon(missing: TileNode[]): void {
     const needed = new Set(missing);
+    const radius = this.options.prefetchRadiusM ?? 0;
     for (const [tile, fetch] of this.inFlight) {
+      if (needed.has(tile)) fetch.prefetch = false;
       fetch.unwanted = needed.has(tile) ? 0 : fetch.unwanted + 1;
-      if (fetch.unwanted >= ABANDON_AFTER_UPDATES) {
+      // A prefetch is never "wanted"; it goes only once the camera has left its ring.
+      const stale = fetch.prefetch
+        ? this.distance(tile) > 2 * radius
+        : fetch.unwanted >= ABANDON_AFTER_UPDATES;
+      if (stale) {
         fetch.abort.abort();
         this.inFlight.delete(tile);
       }
@@ -371,32 +411,68 @@ export class TileStreamer<M> {
     wanted.sort((a, b) => worth(b) - worth(a));
     for (const tile of wanted) {
       if (this.inFlight.size >= this.options.concurrency) break;
-      const abort = new AbortController();
-      this.inFlight.set(tile, { abort, unwanted: 0 });
-      this.host.load(tile, abort.signal).then(
-        (mesh) => {
-          if (abort.signal.aborted || this.stopped) {
-            this.host.dispose(mesh);
-            return;
-          }
-          this.inFlight.delete(tile);
-          this.broken.delete(tile);
-          this.loaded.set(tile, mesh);
-          this.used.set(tile, ++this.clock);
-          this.onArrival?.();
-        },
-        (error: unknown) => {
-          if (abort.signal.aborted) return;
-          this.inFlight.delete(tile);
-          const failures = (this.broken.get(tile)?.failures ?? 0) + 1;
-          this.broken.set(tile, { failures, retryAt: performance.now() + RETRY_FAILED_MS });
-          if (!this.stopped) {
-            this.host.failed?.(tile, error);
-            this.onArrival?.();
-          }
-        },
-      );
+      this.start(tile, false);
     }
+    if (
+      this.inFlight.size < this.options.concurrency &&
+      wanted.every((t) => this.inFlight.has(t))
+    ) {
+      this.prefetch();
+    }
+  }
+
+  /** The next level of the cut near the camera, into the cache, nearest first. */
+  private prefetch(): void {
+    const radius = this.options.prefetchRadiusM;
+    if (!radius) return;
+    let room = this.options.cacheBudget - this.loadedGaussians;
+    for (const fetch of this.inFlight.keys()) room -= gaussiansOf(fetch);
+    const now = performance.now();
+    const candidates: TileNode[] = [];
+    for (const tile of this.desired) {
+      if (tile.children.length === 0 || this.distance(tile) > radius) continue;
+      for (const child of tile.children) {
+        if (this.loaded.has(child) || this.inFlight.has(child)) continue;
+        const broken = this.broken.get(child);
+        if (broken && (broken.failures >= MAX_LOAD_FAILURES || now < broken.retryAt)) continue;
+        candidates.push(child);
+      }
+    }
+    candidates.sort((a, b) => this.distance(a) - this.distance(b));
+    for (const tile of candidates) {
+      if (this.inFlight.size >= this.options.concurrency) break;
+      if (gaussiansOf(tile) > room) break;
+      room -= gaussiansOf(tile);
+      this.start(tile, true);
+    }
+  }
+
+  private start(tile: TileNode, prefetch: boolean): void {
+    const abort = new AbortController();
+    this.inFlight.set(tile, { abort, unwanted: 0, prefetch });
+    this.host.load(tile, abort.signal).then(
+      (mesh) => {
+        if (abort.signal.aborted || this.stopped) {
+          this.host.dispose(mesh);
+          return;
+        }
+        this.inFlight.delete(tile);
+        this.broken.delete(tile);
+        this.loaded.set(tile, mesh);
+        this.used.set(tile, ++this.clock);
+        this.onArrival?.();
+      },
+      (error: unknown) => {
+        if (abort.signal.aborted) return;
+        this.inFlight.delete(tile);
+        const failures = (this.broken.get(tile)?.failures ?? 0) + 1;
+        this.broken.set(tile, { failures, retryAt: performance.now() + RETRY_FAILED_MS });
+        if (!this.stopped) {
+          this.host.failed?.(tile, error);
+          this.onArrival?.();
+        }
+      },
+    );
   }
 
   /** How far the camera is from `tile` (its box, else its sphere); 0 with no camera yet. */

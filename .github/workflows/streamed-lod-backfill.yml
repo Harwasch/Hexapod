@@ -1,0 +1,183 @@
+name: Streamed LOD backfill
+
+# PlayCanvas's streamed level of detail (splat-transform's lod-meta.json and SOG chunks) for a
+# capture already published as 3D Tiles. Opt-in, and never run by default.
+#
+# * **Why.** superspl.at serves scans this way: each level of detail cut into chunks of a few
+#   hundred thousand splats, stored as lossless WebP textures that the browser decodes off
+#   the main thread and the GPU takes as they are; PlayCanvas chooses, fetches and caches the
+#   chunks by itself against a splat budget. A trace of it walking Fort Clatsop held the main
+#   thread 18% of the time at 60-117 fps. The globe's PlayCanvas renderer streams this
+#   package when a scan has one (apps/web/src/cesium/scanView, `NATIVE_LOD_PATH`).
+# * **What it does.** Reads the published tileset.json, takes every leaf tile's SPZ (the leaves
+#   hold every packaged gaussian once, in the tileset's own frame), merges them with
+#   splat-transform, orders them along a Morton curve, halves them four times (uniform
+#   decimation: adaptive decimation of a scan this size wants a GPU), and writes
+#   `sog/lod-meta.json` with the five levels. `publish` (only when asked) puts `sog/` beside
+#   the tileset. The tileset and the asset are untouched.
+# * **How to run it.** `workflow_dispatch` once this file is on the default branch; before
+#   that, push a commit whose message carries `[streamedlod|tileset=<url>]`, adding
+#   `|publish` to publish. The URL must be the tileset's under the public bucket.
+#
+# Secrets, for `publish` only: CLOUDFLARE_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY;
+# variables R2_PUBLIC_BUCKET (or R2_BUCKET), R2_PUBLIC_URL.
+
+on:
+  push:
+    branches: [claude/funny-carson-937ydv]
+  workflow_dispatch:
+    inputs:
+      tileset:
+        description: "The published tileset.json's URL"
+        type: string
+        required: true
+      publish:
+        description: "Publish sog/ beside the tileset"
+        type: boolean
+        default: false
+
+jobs:
+  plan:
+    name: What to run
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      contains(github.event.head_commit.message, '[streamedlod|')
+    runs-on: ubuntu-latest
+    outputs:
+      tileset: ${{ steps.plan.outputs.tileset }}
+      publish: ${{ steps.plan.outputs.publish }}
+    steps:
+      # Read as data, validated here, never interpolated into a shell line.
+      - id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          MESSAGE: ${{ github.event.head_commit.message }}
+          TILESET: ${{ inputs.tileset }}
+          PUBLISH: ${{ inputs.publish }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import os, re
+          options = {"tileset": "", "publish": "false"}
+          if os.environ["EVENT"] == "workflow_dispatch":
+              for name in options:
+                  options[name] = os.environ.get(name.upper(), "") or options[name]
+          else:
+              found = re.search(r"\[streamedlod([^\]]*)\]", os.environ.get("MESSAGE", ""))
+              for part in (found.group(1) if found else "").split("|")[1:]:
+                  name, _, value = part.partition("=")
+                  if name not in options:
+                      raise SystemExit(f"unknown option {name!r} in the [streamedlod] token")
+                  options[name] = value if value else "true"
+          valid = {
+              "tileset": r"https://[A-Za-z0-9.-]+/[A-Za-z0-9._/-]+/tileset\.json",
+              "publish": r"true|false",
+          }
+          for name, pattern in valid.items():
+              if not re.fullmatch(pattern, options[name]):
+                  raise SystemExit(f"{name}={options[name]!r} is not {pattern}")
+          for name, value in options.items():
+              print(f"{name}={value}")
+          PY
+          cat "$GITHUB_OUTPUT"
+
+  build:
+    name: sog/ from the published tiles
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      TILESET: ${{ needs.plan.outputs.tileset }}
+      WORK: ${{ runner.temp }}/work
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: splat-transform (MIT), pinned
+        run: npm install --prefix "$RUNNER_TEMP/st" @playcanvas/splat-transform@3.8.0
+      - name: Every leaf tile's SPZ
+        run: |
+          mkdir -p "$WORK/spz"
+          python3 - <<'PY'
+          import json, os, struct, urllib.request
+          tileset = os.environ["TILESET"]
+          base = tileset.rsplit("/", 1)[0] + "/"
+          work = os.environ["WORK"]
+          get = lambda url: urllib.request.urlopen(
+              urllib.request.Request(url, headers={"User-Agent": "streamed-lod-backfill"})
+          ).read()
+          root = json.loads(get(tileset))["root"]
+          leaves, stack = [], [root]
+          while stack:
+              tile = stack.pop()
+              stack.extend(tile.get("children", []))
+              if not tile.get("children"):
+                  leaves.append(tile)
+          count = 0
+          for tile in leaves:
+              uri = tile["content"]["uri"]
+              data = get(base + uri)
+              length = struct.unpack_from("<I", data, 12)[0]
+              doc = json.loads(data[20 : 20 + length])
+              offset = 20 + length
+              blob = data[offset + 8 : offset + 8 + struct.unpack_from("<I", data, offset)[0]]
+              ext = doc["meshes"][0]["primitives"][0]["extensions"]["KHR_gaussian_splatting"]
+              view = doc["bufferViews"][ext["extensions"]["KHR_gaussian_splatting_compression_spz_2"]["bufferView"]]
+              start = view.get("byteOffset", 0)
+              name = uri.rsplit("/", 1)[-1].removesuffix(".glb")
+              with open(f"{work}/spz/{name}.spz", "wb") as out:
+                  out.write(blob[start : start + view["byteLength"]])
+              count += tile.get("extras", {}).get("gaussians", 0)
+          print(f"{len(leaves)} leaves, {count} gaussians")
+          PY
+      - name: Five levels, then lod-meta.json
+        run: |
+          st() { node "$RUNNER_TEMP/st/node_modules/@playcanvas/splat-transform/bin/cli.mjs" -w -g cpu "$@"; }
+          cd "$WORK"
+          st spz/*.spz full.ply
+          st full.ply -m lod0.ply && rm full.ply spz -rf
+          for level in 1 2 3 4; do st "lod$((level - 1)).ply" --decimate 50% "lod$level.ply"; done
+          mkdir -p out/sog
+          st lod0.ply -l 0 lod1.ply -l 1 lod2.ply -l 2 lod3.ply -l 3 lod4.ply -l 4 out/sog/lod-meta.json
+          du -sh out/sog
+          echo "### sog/ for $TILESET: $(du -sh out/sog | cut -f1), $(find out/sog -type f | wc -l) files" >> "$GITHUB_STEP_SUMMARY"
+      - name: Publish sog/ beside the tileset
+        if: needs.plan.outputs.publish == 'true'
+        env:
+          OBJECT_STORAGE_ENDPOINT_URL: https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
+          OBJECT_STORAGE_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY_ID }}
+          OBJECT_STORAGE_SECRET_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          OBJECT_STORAGE_PUBLIC_BUCKET: ${{ vars.R2_PUBLIC_BUCKET || format('{0}-public', vars.R2_BUCKET || 'twin-assets') }}
+          OBJECT_STORAGE_PUBLIC_URL: ${{ vars.R2_PUBLIC_URL }}
+        run: |
+          python3 -m pip install --quiet boto3
+          python3 - <<'PY'
+          import os
+          import boto3
+          tileset = os.environ["TILESET"]
+          public = os.environ["OBJECT_STORAGE_PUBLIC_URL"].rstrip("/") + "/"
+          if not tileset.startswith(public):
+              raise SystemExit(f"{tileset} is not under the public bucket's URL {public}")
+          prefix = tileset[len(public):].rsplit("/", 1)[0] + "/sog"
+          s3 = boto3.client(
+              "s3",
+              endpoint_url=os.environ["OBJECT_STORAGE_ENDPOINT_URL"],
+              aws_access_key_id=os.environ["OBJECT_STORAGE_ACCESS_KEY"],
+              aws_secret_access_key=os.environ["OBJECT_STORAGE_SECRET_KEY"],
+              region_name="auto",
+          )
+          bucket = os.environ["OBJECT_STORAGE_PUBLIC_BUCKET"]
+          root = os.path.join(os.environ["WORK"], "out", "sog")
+          files = sorted(
+              os.path.relpath(os.path.join(d, f), root)
+              for d, _, names in os.walk(root) for f in names
+          )
+          # The chunks first and lod-meta.json last: a client that finds the index finds
+          # everything it names.
+          files.sort(key=lambda name: name == "lod-meta.json")
+          kinds = {".webp": "image/webp", ".json": "application/json"}
+          for name in files:
+              kind = kinds.get(os.path.splitext(name)[1], "application/octet-stream")
+              s3.upload_file(os.path.join(root, name), bucket, f"{prefix}/{name}",
+                             ExtraArgs={"ContentType": kind})
+          print(f"{len(files)} files to {bucket}/{prefix}/")
+          PY
