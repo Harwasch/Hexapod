@@ -8,7 +8,7 @@ Architecture: [SCENE_OBJECTS.md](SCENE_OBJECTS.md). Branch: `living-models`.
 - [x] A1 Lift masks to splats: views, voting, instances, hierarchy, `instances.json` (synthetic yard: mean IoU 0.87 vs ground truth)
 - [~] A2 Model adapters: SAM 2 masks, SigLIP embeddings, open-vocabulary tags, property scores (CPU now, Modal later)
 - [ ] A3 Run on the camp, render a colour-by-instance image
-- [~] A4 Viewer: load `instances.json`, hide / highlight by instance, text search (built + unit-tested; needs a browser check with a real file)
+- [x] A4 Viewer: load `instances.json`, hide / highlight by instance, text search (checked in a real browser on the spool; e2e on the yard)
 - [ ] A5 Camp in the viewer: search "tent", "tree", "table"; hide vegetation
 - [~] A6 Segment the pumpkin (phone capture 09-28) and spool (09-26) scans — both segmented; pumpkins tagged "pumpkin", spool split well but the vocabulary has no "spool" (needs search by meaning)
 
