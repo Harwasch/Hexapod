@@ -48,6 +48,11 @@ const REPLAN_MS = 150;
 const FETCHES_AT_ONCE = 3;
 /** Most gaussians streamed in at once, whatever the budget. */
 const MAX_STREAMED = 10_000_000;
+/** Resolution while the camera moves, as a share of the resting one (never below
+ *  MIN_MOTION_PIXEL_RATIO), and how long after the last change it counts as resting. */
+const MOTION_RESOLUTION = 0.6;
+const MIN_MOTION_PIXEL_RATIO = 0.75;
+const MOTION_SETTLE_MS = 200;
 /** Loaded tiles kept beyond what is drawn, so a look back needs no download. */
 const CACHE_FACTOR = 1.5;
 
@@ -248,6 +253,7 @@ export class ScanRendererHost {
     const frameEye = new Cartesian3(Number.NaN, 0, 0);
     const frameDirection = new Cartesian3();
     let lastFrameAt = 0;
+    let lastMotionAt = 0;
     let frames = 0;
     let running = true;
     let raf = 0;
@@ -282,11 +288,6 @@ export class ScanRendererHost {
       if (tileset.isDestroyed()) return;
       Matrix4.clone(tileset.root.computedTransform, toWorld);
       Matrix4.inverseTransformation(toWorld, toLocal);
-      const pose = scanPose(viewer.camera, toLocal, {
-        width: viewer.canvas.clientWidth,
-        height: viewer.canvas.clientHeight,
-        pixelRatio,
-      });
       const camera = viewer.camera;
       const moved =
         !Cartesian3.equalsEpsilon(camera.positionWC, lastEye, 0, 1e-3) ||
@@ -297,6 +298,17 @@ export class ScanRendererHost {
         !Cartesian3.equalsEpsilon(camera.directionWC, frameDirection, 1e-5);
       Cartesian3.clone(camera.positionWC, frameEye);
       Cartesian3.clone(camera.directionWC, frameDirection);
+      if (motion) lastMotionAt = now;
+      // Dynamic resolution, as games do: fewer pixels while the view moves (blending splats
+      // is per pixel, and the GPU was what ran out), the full resolution the moment it rests.
+      const moving = now - lastMotionAt < MOTION_SETTLE_MS;
+      const pose = scanPose(viewer.camera, toLocal, {
+        width: viewer.canvas.clientWidth,
+        height: viewer.canvas.clientHeight,
+        pixelRatio: moving
+          ? Math.max(MIN_MOTION_PIXEL_RATIO, pixelRatio * MOTION_RESOLUTION)
+          : pixelRatio,
+      });
       const drawn = Math.min(streamer.drawnGaussians, adaptive.budget);
       // Frames while tiles arrive are slowed by their uploads, not by what is drawn: only a
       // steady view's motion frames say what the GPU can sort and blend.
