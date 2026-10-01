@@ -352,3 +352,30 @@ def test_render_instances(run: dict, tmp_path: Path) -> None:
     h, w = result.views[0].rgb.shape[:2]
     assert pixels.shape == (h, 2 * w, 3)
     assert pixels[:, w:].any()
+
+
+def test_binding_by_position_agrees_with_the_ply_replay(written: Path, run: dict) -> None:
+    """A scan known only by its tiles binds as one known by its PLY: exactly on the leaves,
+    and on nearly every merged parent gaussian."""
+    from scipy.spatial import cKDTree
+
+    from splat_render import load_tileset
+
+    replayed = json.loads((written / "instances.json").read_text(encoding="utf-8"))["tiles"]
+    leaves = load_tileset(written / "tileset.json")
+    nearest = cKDTree(run["splats"].positions).query(leaves.positions)[1]
+    by_position = ss.tile_binding_by_position(
+        written, leaves.positions, run["result"].splat_id[nearest]
+    )
+    assert sorted(by_position) == sorted(replayed)
+
+    def expand(rle: list[int]) -> np.ndarray:
+        return np.repeat(np.asarray(rle[0::2]), np.asarray(rle[1::2]))
+
+    agree = total = 0
+    for checksum, rle in replayed.items():
+        a, b = expand(rle), expand(by_position[checksum])
+        assert a.size == b.size
+        agree += int((a == b).sum())
+        total += a.size
+    assert agree / total > 0.95

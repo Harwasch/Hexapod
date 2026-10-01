@@ -1110,6 +1110,35 @@ def tile_binding(
     return document["tiles"]
 
 
+#: Neighbours a tile's gaussian consults when bound by position: its id only if all agree.
+BIND_NEIGHBOURS = 8
+
+
+def tile_binding_by_position(
+    tiles_dir: Path, positions: np.ndarray, splat_id: np.ndarray
+) -> dict[str, list[int]]:
+    """`tile_binding` for a scan whose source PLY is not at hand: the segmented splats are
+    the tileset's own leaves (`splat_render.load_tileset`), in the tiles' frame, so every
+    tile's gaussian takes the id of the segmented splat at its position. A leaf gaussian is
+    one of them exactly; a merged parent's gaussian takes an id only when all of its
+    `BIND_NEIGHBOURS` nearest share it -- the rule `plants.json` applies to merged cells."""
+    from rig_tiles import tile_positions, tile_uris
+    from synthetic_tree import checksum_positions
+
+    tree = cKDTree(np.asarray(positions, np.float64))
+    ids = np.asarray(splat_id, np.int64)
+    tileset = json.loads((tiles_dir / "tileset.json").read_text(encoding="utf-8"))
+    tiles: dict[str, list[int]] = {}
+    for uri in tile_uris(tileset):
+        at = tile_positions(tiles_dir / uri)
+        distance, index = tree.query(at.astype(np.float64), k=BIND_NEIGHBOURS)
+        near = ids[index]
+        agreed = np.where((near == near[:, :1]).all(axis=1), near[:, 0], 0)
+        labels = np.where(distance[:, 0] == 0.0, near[:, 0], agreed)
+        tiles[checksum_positions(at)] = scene_plants._rle(labels)
+    return dict(sorted(tiles.items()))
+
+
 def _round(values: np.ndarray, digits: int = 4) -> list[float]:
     return [round(float(v), digits) for v in values]
 
@@ -1301,7 +1330,10 @@ def main() -> None:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument(
-        "source", type=Path, help="the scan's PLY (the one the tiles were packed from)"
+        "source",
+        type=Path,
+        help="the scan's PLY (the one the tiles were packed from), or its tileset.json "
+        "(the leaves are the splats, bound to every tile by position)",
     )
     parser.add_argument("tiles", type=Path, help="its tileset directory (tileset.json)")
     parser.add_argument("--masks", default=None, help="module:Class, a MaskSource")
@@ -1319,7 +1351,16 @@ def main() -> None:
     args = parser.parse_args()
     if (args.masks is None) == (args.truth is None):
         parser.error("give exactly one of --masks and --truth")
-    splats, rows, row_count = load_source(args.source, args.opacity_min)
+    from_tiles = args.source.name.endswith(".json")
+    if from_tiles:
+        if args.truth:
+            parser.error("--truth needs the source PLY (labels are per PLY row)")
+        from splat_render import load_tileset
+
+        splats = load_tileset(args.source)
+        rows, row_count = np.arange(len(splats)), len(splats)
+    else:
+        splats, rows, row_count = load_source(args.source, args.opacity_min)
     embedder = load_embedder(args.embedder)
     vocabulary: list[str] = []
     if args.vocabulary:
@@ -1342,15 +1383,18 @@ def main() -> None:
         view_count=args.views,
         source_factory=factory,
     )
-    tiles = tile_binding(
-        args.tiles,
-        args.source,
-        rows,
-        result.splat_id,
-        row_count,
-        opacity_min=args.opacity_min,
-        tile_gaussians=args.tile_gaussians,
-    )
+    if from_tiles:
+        tiles = tile_binding_by_position(args.tiles, splats.positions, result.splat_id)
+    else:
+        tiles = tile_binding(
+            args.tiles,
+            args.source,
+            rows,
+            result.splat_id,
+            row_count,
+            opacity_min=args.opacity_min,
+            tile_gaussians=args.tile_gaussians,
+        )
     document = instances_document(
         result.instances,
         tiles,
