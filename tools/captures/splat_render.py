@@ -32,7 +32,7 @@ from pathlib import Path
 
 import numpy as np
 
-__all__ = ["Camera", "Frame", "Splats", "load_ply", "load_tileset", "render"]
+__all__ = ["Camera", "Frame", "Splats", "load_ply", "load_tileset", "render", "save_ply"]
 
 
 @dataclass(frozen=True)
@@ -192,6 +192,33 @@ def load_tileset(tileset: Path) -> Splats:
     )
 
 
+_PLY_PROPERTIES = (
+    "x", "y", "z", "f_dc_0", "f_dc_1", "f_dc_2", "opacity",
+    "scale_0", "scale_1", "scale_2", "rot_0", "rot_1", "rot_2", "rot_3",
+)  # fmt: skip
+
+
+def save_ply(path: Path, splats: Splats, comment: str = "tools/captures/splat_render.py") -> None:
+    """A binary 3DGS PLY (degree-0 colour) that `splat_tiles.py` packs."""
+    rows = np.zeros(len(splats), dtype=np.dtype([(name, "<f4") for name in _PLY_PROPERTIES]))
+    rows["x"], rows["y"], rows["z"] = splats.positions.T
+    dc = (np.clip(splats.colours, 0, 1) - 0.5) / _SH_C0
+    rows["f_dc_0"], rows["f_dc_1"], rows["f_dc_2"] = dc.T
+    p = np.clip(splats.opacities, 1e-6, 1 - 1e-6)
+    rows["opacity"] = np.log(p / (1 - p))
+    rows["scale_0"], rows["scale_1"], rows["scale_2"] = np.log(np.maximum(splats.scales, 1e-9)).T
+    q = splats.rotations / np.linalg.norm(splats.rotations, axis=1, keepdims=True)
+    rows["rot_0"], rows["rot_1"], rows["rot_2"], rows["rot_3"] = q.T
+    header = (
+        "ply\nformat binary_little_endian 1.0\n"
+        f"comment {comment}\n"
+        f"element vertex {len(splats)}\n"
+        + "".join(f"property float {name}\n" for name in _PLY_PROPERTIES)
+        + "end_header\n"
+    )
+    path.write_bytes(header.encode("ascii") + rows.tobytes())
+
+
 @dataclass
 class Frame:
     rgb: np.ndarray
@@ -278,9 +305,11 @@ def render(
     weight = a * np.exp(before)
     total = h_px * w_px
     colour = splats.colours[index][owner]
-    rgb = np.stack([np.bincount(pixel, weight * colour[:, c], total) for c in range(3)], axis=1)
-    alpha = np.bincount(pixel, weight, total)
-    depth_sum = np.bincount(pixel, weight * depth, total)
+    rgb = np.stack(
+        [np.bincount(pixel, weight * colour[:, c], total) for c in range(3)], axis=1
+    ).astype(np.float64)
+    alpha = np.bincount(pixel, weight, total).astype(np.float64)
+    depth_sum = np.bincount(pixel, weight * depth, total).astype(np.float64)
     rgb += (1.0 - alpha)[:, None] * np.asarray(background)
     label_img = np.full(total, -1, np.int64)
     purity = np.zeros(total)

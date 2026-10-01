@@ -161,6 +161,10 @@ class ConeGrid:
     #: (nz * ny * nx, 4) uint8 texels, x fastest.
     texels: np.ndarray
     stats: dict[str, object] = field(default_factory=dict)
+    #: Where the cones point from: the observer points and their weights (not written to
+    #: the file; the fill teacher places its cameras there).
+    observers: np.ndarray = field(default_factory=lambda: np.zeros((0, 3)))
+    observer_weights: np.ndarray = field(default_factory=lambda: np.zeros(0))
 
 
 Chunk = tuple[np.ndarray, np.ndarray]  # (xyz float64 (n, 3), log middle axis (n,))
@@ -290,7 +294,10 @@ def cone_grid_from_chunks(
     envelope = _min_filter(detail_grid.reshape(shape), ENVELOPE_CELLS).reshape(-1)
     # Only evidence fades: a cell with no judged detail within reach is left alone too.
     everywhere = ~np.isfinite(envelope) | (envelope < finest_for_contrast + math.log(CONTRAST))
-    if observers is None and fine_mask is not None:
+    if observers is not None:
+        # Known cameras are evidence for every cell, however sparse (an inferred layer is).
+        everywhere[:] = False
+    elif fine_mask is not None:
         near = np.zeros(int(np.prod(dims_arr)), bool)
         near[cells[fine_mask]] = True
         everywhere |= _dilate(near.reshape(shape), OMNI_CELLS).reshape(-1)
@@ -320,7 +327,13 @@ def cone_grid_from_chunks(
             "max": [round(float(v), 3) for v in points.max(axis=0)],
         }
     return ConeGrid(
-        (float(origin[0]), float(origin[1]), float(origin[2])), float(cell), dims, texels, stats
+        (float(origin[0]), float(origin[1]), float(origin[2])),
+        float(cell),
+        dims,
+        texels,
+        stats,
+        points,
+        weights,
     )
 
 
