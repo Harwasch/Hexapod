@@ -34,6 +34,8 @@ import { createDataSource, isVectorSource } from "./providers/vector";
 import type { SceneEvents } from "./types";
 
 const log = createLogger("layers");
+/** How often a resting camera inside a scan checks whether the world has finished loading. */
+const WORLD_SETTLE_POLL_MS = 500;
 
 type Handle =
   | { kind: "imagery"; layer: ImageryLayer }
@@ -63,6 +65,9 @@ export class LayerManager {
   private worldTilesetId: string | null = null;
   private worldTilesetRef: Cesium3DTileset | null = null;
   private worldFrozen = false;
+  /** Inside a scan: whether the camera moves, and whether the world has caught up since. */
+  private worldHold = { inside: false, moving: false, settled: false };
+  private worldSettleTimer: ReturnType<typeof setInterval> | null = null;
   private worldSse = 16;
   private worldPixelRatio = 1;
   private performance: PerformanceManager | null = null;
@@ -241,6 +246,39 @@ export class LayerManager {
    * globe, the world went on fetching a thousand tiles (33 MB) and processing them on the main
    * thread while the camera walked through a scan that covered the screen.
    */
+  /**
+   * Inside a splat scan the world is the backdrop, and choosing its tiles was the largest
+   * cost of a frame there (a 17 s trace: ~5.6 s of 10 s of frame work in tileset updates,
+   * 765 world tiles fetched while walking). So inside a scan its selection is frozen --
+   * while the camera moves, and again once it has stopped and the world has finished loading
+   * for the new view. Outside a scan it is never frozen.
+   */
+  holdWorld(inside: boolean, moving: boolean): void {
+    const hold = this.worldHold;
+    if (moving || !inside) hold.settled = false;
+    hold.inside = inside;
+    hold.moving = moving;
+    this.applyWorldHold();
+  }
+
+  private applyWorldHold(): void {
+    const { inside, moving, settled } = this.worldHold;
+    this.setWorldFrozen(inside && (moving || settled));
+    // At rest inside a scan and not yet settled: watch for the world to finish loading.
+    const watching = inside && !moving && !settled;
+    if (watching && !this.worldSettleTimer) {
+      this.worldSettleTimer = setInterval(() => {
+        const tileset = this.worldTileset;
+        if (tileset && !tileset.tilesLoaded) return;
+        this.worldHold.settled = true;
+        this.applyWorldHold();
+      }, WORLD_SETTLE_POLL_MS);
+    } else if (!watching && this.worldSettleTimer) {
+      clearInterval(this.worldSettleTimer);
+      this.worldSettleTimer = null;
+    }
+  }
+
   setWorldFrozen(frozen: boolean): void {
     this.worldFrozen = frozen;
     const tileset = this.worldTileset;
@@ -495,6 +533,8 @@ export class LayerManager {
   }
 
   destroy(): void {
+    if (this.worldSettleTimer) clearInterval(this.worldSettleTimer);
+    this.worldSettleTimer = null;
     for (const entry of this.entries.values()) this.dispose(entry);
     this.entries.clear();
   }

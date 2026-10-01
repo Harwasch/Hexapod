@@ -16,8 +16,15 @@ interface Decoded {
   id: number;
   count?: number;
   properties?: Record<string, Float32Array>;
+  /** The tile's centre: the positions are relative to it (playcanvasTile.worker.ts). */
+  origin?: [number, number, number];
   error?: string;
 }
+
+/** Frames a disposed tile's GPU resource outlives its entity: PlayCanvas's unified renderer
+ *  drops a removed entity from its placements on its next update, and destroying the resource
+ *  first left a placement with none ("Cannot read properties of null (reading 'hasCenters')"). */
+const DESTROY_AFTER_FRAMES = 3;
 
 /** A new entity counts as drawn this many frames and milliseconds after it was added: the
  *  unified renderer copies it into its work buffer and sorts in a worker first. */
@@ -45,6 +52,10 @@ export function createBackend(
   app.setCanvasFillMode(pc.FILLMODE_NONE);
   app.setCanvasResolution(pc.RESOLUTION_AUTO);
   app.scene.gsplat.splatBudget = budget;
+  // Full-precision work buffer rather than the compact one (quantised transforms), and splats
+  // down to a pixel rather than two: the tiles are already the detail the view asked for.
+  (app.scene.gsplat as unknown as { dataFormat: string }).dataFormat = "large";
+  app.scene.gsplat.minPixelSize = 1;
   const camera = new pc.Entity("scan-camera");
   camera.addComponent("camera", { clearColor: new pc.Color(0, 0, 0, 0) });
   app.root.addChild(camera);
@@ -76,6 +87,7 @@ export function createBackend(
    *  renderer takes a new entity into its buffer and sorts it over the next frames. */
   let framesDrawn = 0;
   const addedAt = new WeakMap<pc.Entity, number>();
+  const doomed: { resource: pc.GSplatResource; at: number }[] = [];
   const target = new pc.Vec3();
   const up = new pc.Vec3();
   let size = { width: 0, height: 0, pixelRatio: 0 };
@@ -83,8 +95,9 @@ export function createBackend(
   const backend: ScanBackend<pc.Entity> = {
     name: "playcanvas",
     loadFactor: 1,
-    load: async (tilesetUrl: string, tile: TileNode) => {
+    load: async (tilesetUrl: string, tile: TileNode, signal?: AbortSignal) => {
       const decoded = await decode(new URL(tile.uri, tilesetUrl).toString());
+      signal?.throwIfAborted();
       if (!decoded.properties || decoded.count === undefined) {
         throw new Error(decoded.error ?? "The tile could not be decoded.");
       }
@@ -105,6 +118,7 @@ export function createBackend(
       data.reorderData();
       const resource = new pc.GSplatResource(app.graphicsDevice, data);
       const entity = new pc.Entity(tile.uri);
+      if (decoded.origin) entity.setLocalPosition(...decoded.origin);
       entity.addComponent("gsplat", { resource });
       resources.set(entity, resource);
       return entity;
@@ -121,7 +135,7 @@ export function createBackend(
     dispose: (entity) => {
       const resource = resources.get(entity);
       entity.destroy();
-      resource?.destroy();
+      if (resource) doomed.push({ resource, at: framesDrawn });
     },
     render: (pose: ScanPose) => {
       if (
@@ -160,6 +174,9 @@ export function createBackend(
   };
   app.on("frameend", () => {
     framesDrawn += 1;
+    while (doomed[0] && framesDrawn - doomed[0].at >= DESTROY_AFTER_FRAMES) {
+      doomed.shift()?.resource.destroy();
+    }
   });
   return Promise.resolve(backend);
 }

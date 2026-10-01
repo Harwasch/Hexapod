@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { SH_C0, playcanvasProperties, rgbaOf, shCoefficientsOf } from "@/lib/splatLayout";
+import {
+  SH_C0,
+  centreColumns,
+  playcanvasProperties,
+  rgbaOf,
+  shCoefficientsOf,
+} from "@/lib/splatLayout";
 
 // The engine's own loops (GltfVertexBufferLoader.js processSpz), which the layout replaces.
 function engineRgba(colors: Float32Array, alphas: Float32Array): Uint8Array {
@@ -86,5 +92,19 @@ describe("a decoded cloud laid out for PlayCanvas", () => {
     expect(Array.from(p.f_rest_3 ?? [])).toEqual([1, 10]);
     expect(Array.from(p.f_rest_8 ?? [])).toEqual([8, 17]);
     expect(p.f_rest_9).toBeUndefined();
+  });
+});
+
+describe("centreColumns", () => {
+  it("moves a tile's positions to its middle and says where that is", () => {
+    const columns = {
+      x: new Float32Array([100, 102]),
+      y: new Float32Array([-50, -48]),
+      z: new Float32Array([3, 3]),
+    };
+    expect(centreColumns(columns)).toEqual([101, -49, 3]);
+    expect([...columns.x]).toEqual([-1, 1]);
+    expect([...columns.y]).toEqual([-1, 1]);
+    expect([...columns.z]).toEqual([0, 0]);
   });
 });

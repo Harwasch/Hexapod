@@ -218,7 +218,7 @@ export class ScanRendererHost {
     const streamer = new TileStreamer<unknown>(
       tree,
       {
-        load: (tile) => backend.load(url, tile),
+        load: (tile, signal) => backend.load(url, tile, signal),
         show: (_tile, mesh) => handover.show(mesh, performance.now()),
         hide: (_tile, mesh) => handover.hide(mesh, performance.now()),
         dispose: (mesh) => {

@@ -30,7 +30,8 @@ export interface ScanBackend<M> {
    * LoD trees) is given more than it draws and picks; one without draws all it is given.
    */
   readonly loadFactor: number;
-  load(tilesetUrl: string, tile: TileNode): Promise<M>;
+  /** Fetches and decodes `tile`; `signal` aborts a fetch the view no longer wants. */
+  load(tilesetUrl: string, tile: TileNode, signal?: AbortSignal): Promise<M>;
   add(mesh: M): void;
   remove(mesh: M): void;
   dispose(mesh: M): void;

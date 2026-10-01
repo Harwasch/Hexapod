@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   DEFAULT_SPLAT_BUDGET,
@@ -332,6 +332,48 @@ describe("streaming towards the cut", () => {
     await lap();
     const nearLeaves = fetched.filter((uri) => /^r[0246]-/.test(uri));
     expect(nearLeaves).toEqual([]);
+  });
+
+  it("aborts a fetch the view stops wanting, and tries a failed tile again later", async () => {
+    const signals = new Map<string, AbortSignal>();
+    const failing = new Set<string>(["east.glb"]);
+    let now = 0;
+    const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
+    const host: StreamHost<string> = {
+      load: (chosen, signal) => {
+        if (signal) signals.set(chosen.uri, signal);
+        if (failing.has(chosen.uri)) return Promise.reject(new Error("503"));
+        return new Promise<string>(() => undefined);
+      },
+      show: () => undefined,
+      hide: () => undefined,
+      dispose: () => undefined,
+    };
+    const streamer = new TileStreamer(site, host, {
+      budget: 1e9,
+      cacheBudget: 1e9,
+      concurrency: 8,
+    });
+    streamer.adopt(site.root, "root.glb");
+    const close = viewFrom([-50, 0, 5]);
+    streamer.update(close);
+    await Promise.resolve();
+    expect(signals.get("west.glb")?.aborted).toBe(false);
+    // Far away the root alone is wanted: two updates later the west fetch is dropped.
+    const far = viewFrom([0, 0, 100_000]);
+    streamer.update(far);
+    expect(signals.get("west.glb")?.aborted).toBe(false);
+    streamer.update(far);
+    expect(signals.get("west.glb")?.aborted).toBe(true);
+    // The east tile failed; back close, it is not asked for again at once, but is later.
+    signals.delete("east.glb");
+    streamer.update(close);
+    expect(signals.has("east.glb")).toBe(false);
+    now += 6000;
+    failing.clear();
+    streamer.update(close);
+    expect(signals.has("east.glb")).toBe(true);
+    clock.mockRestore();
   });
 
   it("keeps the ancestors of what is drawn, so leaving goes back to one at once", async () => {

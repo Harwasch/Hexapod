@@ -374,7 +374,7 @@ export class CesiumSceneManager {
 
   /**
    * Inside a splat scan: the world around it holds still while the camera moves
-   * (LayerManager.setWorldFrozen) and refines once it stops; and near the ground -- walking,
+   * (LayerManager.holdWorld) and refines once it stops; and near the ground -- walking,
    * flying low -- the scan is its own ground, with no terrain floor under it
    * (ClippingManager.setFloorless).
    */
@@ -401,7 +401,7 @@ export class CesiumSceneManager {
 
   private updateScanView(): void {
     const inside = this.insideScan;
-    this.layers.setWorldFrozen(inside && this.cameraMoving);
+    this.layers.holdWorld(inside, this.cameraMoving);
     const low = this.exploring || this.scanAltitude < SCAN_FLOORLESS_ALTITUDE_M;
     this.clipping.setFloorless(inside && low ? (this.sites.activeSite?.id ?? null) : null);
   }

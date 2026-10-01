@@ -47,6 +47,13 @@ export const TARGET_ERROR_PX = 2;
  *  dropped (up to 7.4M gaussians a turn in the Fort Clatsop scan); at 0.5, nothing. */
 export const OFFSCREEN_WEIGHT = 0.5;
 
+/** Updates in a row a fetch may go unwanted before it is aborted (~0.3 s at the replan rate). */
+export const ABANDON_AFTER_UPDATES = 2;
+/** A tile that failed is tried again after this long, up to `MAX_LOAD_FAILURES` times: one
+ *  dropped request used to leave its region coarse for the rest of the visit. */
+export const RETRY_FAILED_MS = 5000;
+export const MAX_LOAD_FAILURES = 3;
+
 /** Nearer than this (metres, or a twentieth of a small tile) a tile's error stops growing:
  *  the camera is at or in it, and a closer look shows it no worse. */
 export const NEAR_FLOOR_M = 0.5;
@@ -184,7 +191,8 @@ export function nextSwaps(
 
 /** What the streamer asks of the page: fetch a tile, put it on screen or take it off. */
 export interface StreamHost<M> {
-  load(tile: TileNode): Promise<M>;
+  /** Fetches and decodes `tile`; `signal` aborts it once the view no longer wants it. */
+  load(tile: TileNode, signal?: AbortSignal): Promise<M>;
   show(tile: TileNode, mesh: M): void;
   hide(tile: TileNode, mesh: M): void;
   dispose(mesh: M): void;
@@ -210,8 +218,10 @@ export class TileStreamer<M> {
   private readonly parentOf: Map<TileNode, TileNode | null>;
   private readonly loaded = new Map<TileNode, M>();
   private readonly used = new Map<TileNode, number>();
-  private readonly inFlight = new Set<TileNode>();
-  private readonly broken = new Set<TileNode>();
+  /** Fetches under way, and how many updates in a row each has not been wanted. */
+  private readonly inFlight = new Map<TileNode, { abort: AbortController; unwanted: number }>();
+  /** Tiles that failed to load: how often, and when to try again. */
+  private readonly broken = new Map<TileNode, { failures: number; retryAt: number }>();
   private readonly shown = new Set<TileNode>();
   private desired = new Set<TileNode>();
   private clock = 0;
@@ -297,6 +307,7 @@ export class TileStreamer<M> {
     }
     for (const tile of this.shown) this.used.set(tile, ++this.clock);
     for (const tile of this.desired) if (this.loaded.has(tile)) this.used.set(tile, this.clock);
+    this.abandon(missing);
     this.fetch(missing, view);
     this.evict();
     return changed;
@@ -305,6 +316,8 @@ export class TileStreamer<M> {
   /** Disposes everything and ignores fetches still on their way. */
   stop(): void {
     this.stopped = true;
+    for (const { abort } of this.inFlight.values()) abort.abort();
+    this.inFlight.clear();
     for (const [tile, mesh] of this.loaded) {
       if (this.shown.has(tile)) this.host.hide(tile, mesh);
       this.host.dispose(mesh);
@@ -327,9 +340,30 @@ export class TileStreamer<M> {
     }
   }
 
+  /**
+   * Aborts fetches the view has not wanted for `ABANDON_AFTER_UPDATES` updates in a row: a
+   * camera on the move otherwise kept downloading tiles for where it had been, at the cost of
+   * those for where it is (a game streamer's first rule: cancel what is no longer needed).
+   */
+  private abandon(missing: TileNode[]): void {
+    const needed = new Set(missing);
+    for (const [tile, fetch] of this.inFlight) {
+      fetch.unwanted = needed.has(tile) ? 0 : fetch.unwanted + 1;
+      if (fetch.unwanted >= ABANDON_AFTER_UPDATES) {
+        fetch.abort.abort();
+        this.inFlight.delete(tile);
+      }
+    }
+  }
+
   /** Starts the most needed fetches: by their parent's priority (what a refine buys). */
   private fetch(missing: TileNode[], view: View): void {
-    const wanted = missing.filter((tile) => !this.inFlight.has(tile) && !this.broken.has(tile));
+    const now = performance.now();
+    const wanted = missing.filter((tile) => {
+      if (this.inFlight.has(tile)) return false;
+      const broken = this.broken.get(tile);
+      return !broken || (broken.failures < MAX_LOAD_FAILURES && now >= broken.retryAt);
+    });
     const worth = (tile: TileNode): number => {
       const parent = this.parentOf.get(tile);
       return parent ? priority(parent, view) : Number.MAX_VALUE;
@@ -337,21 +371,25 @@ export class TileStreamer<M> {
     wanted.sort((a, b) => worth(b) - worth(a));
     for (const tile of wanted) {
       if (this.inFlight.size >= this.options.concurrency) break;
-      this.inFlight.add(tile);
-      this.host.load(tile).then(
+      const abort = new AbortController();
+      this.inFlight.set(tile, { abort, unwanted: 0 });
+      this.host.load(tile, abort.signal).then(
         (mesh) => {
-          this.inFlight.delete(tile);
-          if (this.stopped) {
+          if (abort.signal.aborted || this.stopped) {
             this.host.dispose(mesh);
             return;
           }
+          this.inFlight.delete(tile);
+          this.broken.delete(tile);
           this.loaded.set(tile, mesh);
           this.used.set(tile, ++this.clock);
           this.onArrival?.();
         },
         (error: unknown) => {
+          if (abort.signal.aborted) return;
           this.inFlight.delete(tile);
-          this.broken.add(tile);
+          const failures = (this.broken.get(tile)?.failures ?? 0) + 1;
+          this.broken.set(tile, { failures, retryAt: performance.now() + RETRY_FAILED_MS });
           if (!this.stopped) {
             this.host.failed?.(tile, error);
             this.onArrival?.();

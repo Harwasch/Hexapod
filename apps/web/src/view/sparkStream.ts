@@ -22,11 +22,19 @@ import { LOAD_FACTOR, type TileNode, type TileTree } from "./tiles";
 export async function loadSplatTile(
   tilesetUrl: string,
   tile: TileNode,
+  options: { lod?: boolean; extSplats?: boolean; signal?: AbortSignal } = {},
 ): Promise<{ mesh: SplatMesh; bytes: Uint8Array }> {
-  const response = await fetch(new URL(tile.uri, new URL(tilesetUrl, location.href)).toString());
+  const response = await fetch(new URL(tile.uri, new URL(tilesetUrl, location.href)).toString(), {
+    signal: options.signal,
+  });
   if (!response.ok) throw new Error(`The scan's data answered ${String(response.status)}.`);
   const bytes = spzFromGlb(await response.arrayBuffer());
-  const mesh = new SplatMesh({ fileBytes: bytes, fileType: SplatFileType.SPZ, lod: true });
+  const mesh = new SplatMesh({
+    fileBytes: bytes,
+    fileType: SplatFileType.SPZ,
+    lod: options.lod ?? true,
+    extSplats: options.extSplats ?? false,
+  });
   await mesh.initialized;
   return { mesh, bytes };
 }
