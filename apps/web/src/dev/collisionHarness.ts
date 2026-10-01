@@ -80,6 +80,7 @@ export interface CollisionHarness {
 export async function startCollisionHarness(
   container: HTMLElement,
   tilesetUrl: string,
+  options: { hidden?: boolean } = {},
 ): Promise<CollisionHarness> {
   const viewer = new Viewer(container, {
     baseLayer: false,
@@ -119,7 +120,11 @@ export async function startCollisionHarness(
     renderConfig: {},
   } as unknown as SiteAsset;
   const tileset = await createSiteTileset(asset, { maximumScreenSpaceError: 1 });
-  tileset.show = true;
+  // `hidden`: drawn by another splat renderer (scanView) from the start, so CesiumJS never
+  // loads a tile of it -- and its solids must count all the same.
+  tileset.show = !options.hidden;
+  tileset.preloadWhenHidden = false;
+  if (options.hidden) collider.setSolidWhileHidden(tileset);
   scene.primitives.add(tileset);
   const sphere = BoundingSphere.clone(tileset.boundingSphere);
 

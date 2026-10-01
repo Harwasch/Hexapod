@@ -20,7 +20,9 @@ import {
   Cartesian3,
   Intersect,
   Matrix4,
+  type Camera,
   type Cesium3DTileset,
+  type Scene,
   type Viewer,
 } from "cesium";
 
@@ -92,6 +94,54 @@ interface BackendModule {
   createBackend(canvas: HTMLCanvasElement, budget: number): Promise<ScanBackend<unknown>>;
 }
 
+/** Frames in a row the overlay waits for the globe's own while the camera moves. */
+const MAX_WAIT_FOR_GLOBE = 2;
+
+/**
+ * Calls `draw` once a frame, in step with the globe: right after CesiumJS renders (its
+ * `postRender`, so the overlay is drawn from exactly the camera the globe was), and on the
+ * frames it does not (request-render mode: a still camera) from the animation frame. Drawing
+ * only from the animation frame put the overlay a camera pose behind whenever its callback ran
+ * before CesiumJS's -- the order of animation-frame callbacks, which a render-loop restart
+ * (render-error recovery) flips -- and the scan slid on the map as the view moved.
+ */
+function driveWithGlobe(scene: Scene, camera: Camera, draw: () => void): () => void {
+  const eye = new Cartesian3(Number.NaN, 0, 0);
+  const direction = new Cartesian3();
+  let globeDrew = false;
+  let waited = 0;
+  let raf = 0;
+  const drawNow = (): void => {
+    Cartesian3.clone(camera.positionWC, eye);
+    Cartesian3.clone(camera.directionWC, direction);
+    draw();
+  };
+  const removePostRender = scene.postRender.addEventListener(() => {
+    globeDrew = true;
+    waited = 0;
+    drawNow();
+  });
+  const tick = (): void => {
+    raf = requestAnimationFrame(tick);
+    if (globeDrew) {
+      globeDrew = false;
+      return;
+    }
+    const moved =
+      !Cartesian3.equalsEpsilon(camera.positionWC, eye, 0, 1e-3) ||
+      !Cartesian3.equalsEpsilon(camera.directionWC, direction, 1e-5);
+    // Moved, and the globe has not drawn it yet: it will this frame.
+    if (moved && waited++ < MAX_WAIT_FOR_GLOBE) return;
+    waited = 0;
+    drawNow();
+  };
+  raf = requestAnimationFrame(tick);
+  return () => {
+    cancelAnimationFrame(raf);
+    removePostRender();
+  };
+}
+
 function loadBackend(kind: Exclude<SplatRendererKind, "cesium">): Promise<BackendModule> {
   // Each renderer is its own chunk, fetched only when chosen.
   return kind === "spark" ? import("./sparkBackend") : import("./playcanvasBackend");
@@ -104,7 +154,7 @@ export class ScanRendererHost {
   private starting: Promise<void> | null = null;
   private lastError: string | null = null;
 
-  constructor(private readonly viewer: Pick<Viewer, "camera" | "canvas">) {}
+  constructor(private readonly viewer: Pick<Viewer, "camera" | "canvas" | "scene">) {}
 
   get renderer(): SplatRendererKind {
     return this.kind;
@@ -278,8 +328,7 @@ export class ScanRendererHost {
     let lastFrameAt = 0;
     let lastMotionAt = 0;
     let frames = 0;
-    let running = true;
-    let raf = 0;
+    let stopDriving: (() => void) | null = null;
     const pixelRatio = Math.min(window.devicePixelRatio || 1, isHandheld() ? 1.5 : 2);
 
     const view = (pose: ScanPose): View => {
@@ -305,8 +354,6 @@ export class ScanRendererHost {
     };
 
     const tick = (): void => {
-      if (!running) return;
-      raf = requestAnimationFrame(tick);
       const tileset = target.tileset;
       if (tileset.isDestroyed()) return;
       Matrix4.clone(tileset.root.computedTransform, toWorld);
@@ -366,15 +413,14 @@ export class ScanRendererHost {
     }
     handover.show(root, performance.now());
     streamer.adopt(tree.root, root);
-    raf = requestAnimationFrame(tick);
+    stopDriving = driveWithGlobe(viewer.scene, viewer.camera, tick);
     log.info("splat renderer started", { kind, tiles: tree.root.uri });
 
     return {
       kind,
       key: target.key,
       stop: () => {
-        running = false;
-        cancelAnimationFrame(raf);
+        stopDriving?.();
         streamer.stop();
         backend.destroy();
         canvas.remove();
@@ -415,11 +461,7 @@ export class ScanRendererHost {
     const lastDirection = new Cartesian3();
     let lastMotionAt = 0;
     let frames = 0;
-    let running = true;
-    let raf = 0;
     const tick = (): void => {
-      if (!running) return;
-      raf = requestAnimationFrame(tick);
       const tileset = target.tileset;
       if (tileset.isDestroyed()) return;
       Matrix4.inverseTransformation(tileset.root.computedTransform, toLocal);
@@ -445,14 +487,13 @@ export class ScanRendererHost {
       );
       frames += 1;
     };
-    raf = requestAnimationFrame(tick);
+    const stopDriving = driveWithGlobe(viewer.scene, viewer.camera, tick);
     log.info("splat renderer streaming natively", { kind, url: lodUrl });
     return {
       kind,
       key: target.key,
       stop: () => {
-        running = false;
-        cancelAnimationFrame(raf);
+        stopDriving();
         stream.stop();
         backend.destroy();
         canvas.remove();

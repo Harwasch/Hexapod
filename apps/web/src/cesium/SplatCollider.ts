@@ -209,7 +209,13 @@ export class SplatCollider {
 
   private tick(): void {
     const seen = new Set<SplatTilesetShape>();
-    for (const tileset of splatTilesets(this.scene.primitives)) {
+    const tilesets = splatTilesets(this.scene.primitives);
+    // A scan another renderer draws may never have had a tile loaded by CesiumJS (hidden from
+    // the start), so it has no splat primitive to be found by: its packaged solids still count.
+    const hidden = this.solidWhileHidden as
+      (SplatTilesetShape & { isDestroyed?(): boolean }) | null;
+    if (hidden && !hidden.isDestroyed?.() && !tilesets.includes(hidden)) tilesets.push(hidden);
+    for (const tileset of tilesets) {
       seen.add(tileset);
       if (this.packaged(tileset)) continue;
       this.follow(tileset);

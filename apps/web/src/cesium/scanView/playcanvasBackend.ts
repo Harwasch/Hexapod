@@ -59,6 +59,12 @@ export function createBackend(
   const camera = new pc.Entity("scan-camera");
   camera.addComponent("camera", { clearColor: new pc.Color(0, 0, 0, 0) });
   app.root.addChild(camera);
+  // PlayCanvas updates in its own loop (streaming, sorting) but draws only from `render`, in
+  // the same frame and from the same pose as the globe under it. Drawn in its own loop, it ran
+  // before the host set the camera: a pose behind, so the scan slid on the map as the view
+  // moved, and a resize cleared the canvas a frame before anything was drawn on it (a black
+  // flash where the world is clipped away under the scan).
+  app.autoRender = false;
   app.start();
 
   const workers = Array.from(
@@ -161,7 +167,7 @@ export function createBackend(
         pose.eye[2] + pose.direction[2],
       );
       camera.lookAt(target, up.set(...pose.up));
-      // PlayCanvas draws in its own loop (app.start); the camera is simply where it will look.
+      app.render();
     },
     setBudget: (drawn) => {
       app.scene.gsplat.splatBudget = drawn;
