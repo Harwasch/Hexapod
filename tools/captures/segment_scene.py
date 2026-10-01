@@ -195,12 +195,12 @@ SOURCE_COLUMNS = (
 # --------------------------------------------------------------------------- the models
 
 
-@dataclass(frozen=True)
+@dataclass
 class Mask:
     """One class-free mask of a view: which pixels, at which scale, how sure."""
 
     #: (h, w) bool.
-    segmentation: np.ndarray
+    mask: np.ndarray
     #: Scale hint, 0 = coarsest (SAM's whole / part / subpart, or area bins).
     level: int
     score: float = 1.0
@@ -209,6 +209,9 @@ class Mask:
 @runtime_checkable
 class MaskSource(Protocol):
     """Class-free automatic masks of an image at several scales (SAM 2 family)."""
+
+    #: Model id, for reports.
+    name: str
 
     def masks(self, rgb: np.ndarray) -> list[Mask]:
         """`rgb` (h, w, 3) uint8 -> masks of every scale the model gives."""
@@ -219,10 +222,10 @@ class MaskSource(Protocol):
 class Embedder(Protocol):
     """An image-text model with one embedding space (SigLIP / CLIP family).
 
-    Both methods return (n, dim) float arrays, each row L2-normalised; `model` is the model
+    Both methods return (n, dim) float32 arrays, each row L2-normalised; `name` is the model
     id written to `instances.json`."""
 
-    model: str
+    name: str
     dim: int
 
     def embed_images(self, images: list[np.ndarray]) -> np.ndarray:
@@ -246,7 +249,7 @@ class FakeEmbedder:
     Both are projected by fixed seeded matrices into `dim` dimensions. It means nothing; it
     lets the pipeline and the files be tested without a model."""
 
-    model = "fake-colour-histogram"
+    name = "fake-colour-histogram"
 
     def __init__(self, dim: int = 64) -> None:
         self.dim = dim
@@ -258,7 +261,7 @@ class FakeEmbedder:
             q = (np.asarray(image, np.uint8).reshape(-1, 3) // 64).astype(np.int64)
             hist = np.bincount(q[:, 0] * 16 + q[:, 1] * 4 + q[:, 2], minlength=64)
             out[k] = hist / max(int(hist.sum()), 1) @ self._project
-        return _normalise(out)
+        return _normalise(out).astype(np.float32)
 
     def embed_texts(self, texts: list[str]) -> np.ndarray:
         rows = [
@@ -267,7 +270,7 @@ class FakeEmbedder:
             ).standard_normal(self.dim)
             for t in texts
         ]
-        return _normalise(np.asarray(rows).reshape(len(texts), self.dim))
+        return _normalise(np.asarray(rows).reshape(len(texts), self.dim)).astype(np.float32)
 
 
 def _load(spec: str) -> object:
@@ -281,7 +284,7 @@ def load_masks(spec: str) -> MaskSource:
     """`module:Class`, constructed with no arguments (as `teacher_fill.make_filler`)."""
     source = _load(spec)
     if not isinstance(source, MaskSource):
-        raise TypeError(f"{spec} has no masks(rgb) method")
+        raise TypeError(f"{spec} is not a MaskSource (name, masks(rgb))")
     return source
 
 
@@ -289,7 +292,7 @@ def load_embedder(spec: str) -> Embedder:
     """`module:Class`, constructed with no arguments."""
     embedder = _load(spec)
     if not isinstance(embedder, Embedder):
-        raise TypeError(f"{spec} is not an Embedder (model, dim, embed_images, embed_texts)")
+        raise TypeError(f"{spec} is not an Embedder (name, dim, embed_images, embed_texts)")
     return embedder
 
 
@@ -505,6 +508,8 @@ class OracleMasks:
     below 0 are background. Regions under `min_area` pixels are left out, as a mask model
     leaves out specks."""
 
+    name = "oracle"
+
     def __init__(
         self,
         splats: Splats,
@@ -524,18 +529,31 @@ class OracleMasks:
             for level, labels in enumerate(levels):
                 frame = render(splats, camera, labels=np.asarray(labels, np.int64))
                 rgb = np.round(frame.rgb * 255).astype(np.uint8)
-                image = np.where(frame.purity >= min_purity, frame.label, -1)
-                for value in np.unique(image[image >= 0]):
-                    region = (image == value).astype(np.uint8)
-                    if not connected:
-                        if int(region.sum()) >= min_area:
-                            found.append(Mask(region.astype(bool), level, 1.0))
+                image = np.where(frame.purity >= min_purity, frame.label, -1).reshape(-1)
+                h, w = frame.label.shape
+                pixels = np.flatnonzero(image >= 0)
+                if pixels.size == 0:
+                    continue
+                # Group pixels by label once; each label is then cut within its own box.
+                order = pixels[np.argsort(image[pixels], kind="stable")]
+                values = image[order]
+                starts = np.flatnonzero(np.r_[True, values[1:] != values[:-1]])
+                for group in np.split(order, starts[1:]):
+                    if group.size < min_area:
                         continue
-                    n, parts = cv2.connectedComponents(region, 8)
-                    for k in range(1, n):
-                        region = parts == k
-                        if int(region.sum()) >= min_area:
-                            found.append(Mask(region, level, 1.0))
+                    ys, xs = np.divmod(group, w)
+                    y0, x0 = int(ys.min()), int(xs.min())
+                    box = np.zeros((int(ys.max()) - y0 + 1, int(xs.max()) - x0 + 1), np.uint8)
+                    box[ys - y0, xs - x0] = 1
+                    if connected:
+                        n, parts, stats, _ = cv2.connectedComponentsWithStats(box, connectivity=8)
+                        areas = stats[:, cv2.CC_STAT_AREA]
+                    else:
+                        n, parts, areas = 2, box.astype(np.int32), np.array([0, group.size])
+                    for k in np.flatnonzero(areas[1:n] >= min_area) + 1:
+                        region = np.zeros((h, w), bool)
+                        region[y0 : y0 + box.shape[0], x0 : x0 + box.shape[1]] = parts == k
+                        found.append(Mask(region, level, 1.0))
             if rgb is not None:
                 self._masks[_image_key(rgb)] = found
 
@@ -566,7 +584,7 @@ def vote(view: View, masks: Sequence[Mask], n_cells: int, levels: int) -> _Votes
     best_share = np.zeros((levels, n_cells))
     best_score = np.zeros((levels, n_cells))
     for k, mask in enumerate(masks):
-        inside = good & mask.segmentation.reshape(-1)
+        inside = good & np.asarray(mask.mask, bool).reshape(-1)
         share = np.bincount(owner[inside], weight[inside], n_cells)
         share = np.divide(share, seen, out=np.zeros(n_cells), where=seen > 0)
         level = mask.level
@@ -1194,6 +1212,16 @@ class Segmentation:
     views: list[View]
     cell: np.ndarray
     timings: dict[str, float]
+    #: What `lift` was given, so it can be re-run (`relift`).
+    votes: list[_Votes] = field(default_factory=list)
+    cells: tuple[np.ndarray, np.ndarray, np.ndarray, float] | None = None
+
+    def relift(self) -> Lifted:
+        """`lift` again from the same votes (it is deterministic)."""
+        assert self.cells is not None
+        _, centroids, counts, edge = self.cells
+        levels = int(self.lifted.stats["levels"])
+        return lift(self.votes, centroids, counts, edge, levels)
 
 
 def segment(
@@ -1234,7 +1262,16 @@ def segment(
     mark = time.perf_counter()
     instances = describe(lifted, splats, cell, views, embedder, vocabulary)
     timings["describeS"] = time.perf_counter() - mark
-    return Segmentation(lifted.cell_id[cell], instances, lifted, views, cell, timings)
+    return Segmentation(
+        lifted.cell_id[cell],
+        instances,
+        lifted,
+        views,
+        cell,
+        timings,
+        votes,
+        (cell, centroids, counts, edge),
+    )
 
 
 def colour_family(colours: np.ndarray) -> np.ndarray:
@@ -1291,7 +1328,7 @@ def main() -> None:
     if args.truth:
         truth = json.loads(args.truth.read_text(encoding="utf-8"))
         levels = truth_levels(truth, rows, splats.colours)
-        factory = lambda cameras: OracleMasks(splats, levels, cameras)  # noqa: E731
+        factory = lambda cameras: OracleMasks(splats, levels, cameras)
     result = segment(
         splats,
         source,
@@ -1312,9 +1349,9 @@ def main() -> None:
     document = instances_document(
         result.instances,
         tiles,
-        embedding_model=embedder.model,
+        embedding_model=embedder.name,
         dim=int(embedder.dim),
-        vocabulary_model=embedder.model,
+        vocabulary_model=embedder.name,
         vocabulary_size=len(vocabulary),
     )
     out = args.out or args.tiles
