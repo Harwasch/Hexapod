@@ -10,6 +10,10 @@ against each model's own documented entry point; never run on a GPU.**
     Cosmos   nvidia/Cosmos-Predict2.5-2B, post-trained (NVIDIA Open Model License, gated).
              Image2World: still + prompt -> 77 frames at 16 fps. Teacher A's second clip
              source. Its guardrails stay on -- the licence requires them.
+    SegmentMasks / SegmentEmbed
+             facebook/sam2.1-hiera-tiny (Apache-2.0) and google/siglip2-base-patch16-224
+             (Apache-2.0), run by `tools/captures/segment_models.py` itself (copied into
+             the image): class-free masks at three granularities, image/text embeddings.
 
 The request and response of every method are plain dicts of bytes, strings and numbers,
 so the client (`tools/captures/world_model_client.py`) needs `modal` and nothing else from
@@ -325,6 +329,119 @@ class Distill:
         import distill_fill
 
         return distill_fill.run(request)
+
+
+# --- Segmentation (SAM 2.1 masks, SigLIP 2 embeddings) -------------------------------------
+
+#: `tools/captures/segment_models.py` runs here as it runs on a CPU: one implementation.
+CAPTURES = (
+    Path(__file__).resolve().parents[2] / "tools" / "captures"
+    if modal.is_local()
+    else Path("/root")
+)
+
+segment_image = (
+    modal.Image.debian_slim(python_version="3.11")
+    .pip_install(
+        "torch==2.8.0",
+        "torchvision==0.23.0",
+        "transformers>=4.56",
+        "numpy",
+        "pillow",
+        "huggingface_hub>=0.30",
+    )
+    .env({"HF_HOME": HF_HOME})
+    .add_local_file(CAPTURES / "segment_models.py", "/root/segment_models.py")
+    .add_local_file(CAPTURES / "world_model_client.py", "/root/world_model_client.py")
+)
+
+
+def _segment_models():  # noqa: ANN202 - the module, imported where it was copied
+    import sys
+
+    sys.path.insert(0, "/root")
+    import segment_models
+
+    return segment_models
+
+
+@app.cls(
+    image=segment_image,
+    gpu="L4",
+    volumes={"/weights": WEIGHTS},
+    secrets=[HF_SECRET],
+    timeout=1800,
+    scaledown_window=300,
+)
+class SegmentMasks:
+    @modal.enter()
+    def load(self) -> None:
+        self.sm = _segment_models()
+        self.models: dict = {}
+
+    @modal.method()
+    def masks(self, request: dict) -> dict:
+        """`{"images": [png], "model"?, "points_per_side"?}` -> `{"masks": [npz], "model"}`:
+        per image, `segment_models.encode_masks` of `Sam2Masks(...).masks(rgb)`."""
+        import numpy as np
+        from PIL import Image
+
+        sm = self.sm
+        key = (request.get("model", sm.SAM2_MODEL), int(request.get("points_per_side", 32)))
+        if key not in self.models:
+            self.models[key] = sm.Sam2Masks(model=key[0], points_per_side=key[1], device="cuda")
+            self.models[key]._load()
+            WEIGHTS.commit()
+        source = self.models[key]
+        out = []
+        for blob in request["images"]:
+            rgb = np.asarray(Image.open(io.BytesIO(blob)).convert("RGB"), dtype=np.uint8)
+            out.append(sm.encode_masks(source.masks(rgb), rgb.shape[:2]))
+        return {"masks": out, "model": key[0]}
+
+
+@app.cls(
+    image=segment_image,
+    gpu="L4",
+    volumes={"/weights": WEIGHTS},
+    secrets=[HF_SECRET],
+    timeout=1800,
+    scaledown_window=300,
+)
+class SegmentEmbed:
+    @modal.enter()
+    def load(self) -> None:
+        self.sm = _segment_models()
+        self.models: dict = {}
+
+    def _embedder(self, request: dict):  # noqa: ANN202 - a segment_models.SiglipEmbedder
+        name = request.get("model", self.sm.SIGLIP_MODEL)
+        if name not in self.models:
+            self.models[name] = self.sm.SiglipEmbedder(model=name, device="cuda")
+            self.models[name]._load()
+            WEIGHTS.commit()
+        return self.models[name]
+
+    @modal.method()
+    def embed_images(self, request: dict) -> dict:
+        """`{"images": [png], "model"?}` -> `{"embeddings": npz (n, dim) float32, "model"}`."""
+        import numpy as np
+        from PIL import Image
+
+        crops = [
+            np.asarray(Image.open(io.BytesIO(b)).convert("RGB"), dtype=np.uint8)
+            for b in request["images"]
+        ]
+        embedder = self._embedder(request)
+        x = embedder.embed_images(crops)
+        return {"embeddings": self.sm.encode_array(x), "model": embedder.model}
+
+    @modal.method()
+    def embed_texts(self, request: dict) -> dict:
+        """`{"texts": [str], "model"?}` -> `{"embeddings": npz (n, dim) float32, "model"}`."""
+        embedder = self._embedder(request)
+        x = embedder.embed_texts(list(request["texts"]))
+        return {"embeddings": self.sm.encode_array(x), "model": embedder.model}
 
 
 # --- shared --------------------------------------------------------------------------------
