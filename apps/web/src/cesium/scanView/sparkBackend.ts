@@ -28,6 +28,19 @@ export function createBackend(
   const scene = new THREE.Scene();
   const spark = new SparkRenderer({ renderer, lodSplatCount: budget });
   scene.add(spark);
+  // Spark drops a mesh's level-of-detail tree 3 s after the mesh leaves the scene, and
+  // rebuilds it (one mesh at a time, in its worker) when it comes back: turning round to a
+  // view seen a moment ago waited seconds to sharpen. Every mesh the streamer still holds
+  // keeps its tree.
+  const held = new Set<SplatMesh>();
+  const keepTrees = (): void => {
+    const now = performance.now();
+    for (const mesh of held) {
+      const splats = mesh.packedSplats?.lodSplats ?? mesh.extSplats?.lodSplats;
+      const record = splats ? spark.lodIds.get(splats) : undefined;
+      if (record) record.lastTouched = now;
+    }
+  };
   const camera = new THREE.PerspectiveCamera();
   const target = new THREE.Vector3();
   let size = { width: 0, height: 0, pixelRatio: 0 };
@@ -35,10 +48,17 @@ export function createBackend(
   const backend: ScanBackend<SplatMesh> = {
     name: "spark",
     loadFactor: LOAD_FACTOR,
-    load: async (tilesetUrl, tile) => (await loadSplatTile(tilesetUrl, tile)).mesh,
+    load: async (tilesetUrl, tile) => {
+      const { mesh } = await loadSplatTile(tilesetUrl, tile);
+      held.add(mesh);
+      return mesh;
+    },
     add: (mesh) => scene.add(mesh),
     remove: (mesh) => scene.remove(mesh),
-    dispose: (mesh) => mesh.dispose(),
+    dispose: (mesh) => {
+      held.delete(mesh);
+      mesh.dispose();
+    },
     render: (pose: ScanPose) => {
       if (
         pose.width !== size.width ||
@@ -57,6 +77,7 @@ export function createBackend(
       camera.near = pose.near;
       camera.far = pose.far;
       camera.updateProjectionMatrix();
+      keepTrees();
       renderer.render(scene, camera);
     },
     // Spark shows a new mesh once its level-of-detail tree is built and a sort has run: until

@@ -41,9 +41,11 @@ export interface View {
 
 /** Refinement stops once every tile's error on screen is under this many CSS pixels. */
 export const TARGET_ERROR_PX = 2;
-/** A tile out of view refines as if its error were this fraction of what it is: turning
- *  around shows the scene coarse rather than a hole, without spending the budget behind. */
-export const OFFSCREEN_WEIGHT = 0.15;
+/** A tile out of view refines as if its error were this fraction of what it is: the view
+ *  gets the budget first, but what is around the camera stays close to as sharp, so turning
+ *  round finds it loaded. At 0.15 every turn in place re-fetched what the last turn had just
+ *  dropped (up to 7.4M gaussians a turn in the Fort Clatsop scan); at 0.5, nothing. */
+export const OFFSCREEN_WEIGHT = 0.5;
 
 /** Nearer than this (metres, or a twentieth of a small tile) a tile's error stops growing:
  *  the camera is at or in it, and a closer look shows it no worse. */
@@ -213,6 +215,8 @@ export class TileStreamer<M> {
   private readonly shown = new Set<TileNode>();
   private desired = new Set<TileNode>();
   private clock = 0;
+  /** Where the camera was at the last update, for eviction: what is near stays. */
+  private eye: [number, number, number] | null = null;
   private stopped = false;
   /** Called when a fetch finishes, so the page can run `update` again. */
   onArrival: (() => void) | null = null;
@@ -250,6 +254,18 @@ export class TileStreamer<M> {
     this.options.cacheBudget = cacheBudget;
   }
 
+  /** Tiles being fetched now. */
+  get loading(): number {
+    return this.inFlight.size;
+  }
+
+  /** Gaussians loaded, drawn or kept for later. */
+  get loadedGaussians(): number {
+    let total = 0;
+    this.loaded.forEach((_mesh, tile) => (total += gaussiansOf(tile)));
+    return total;
+  }
+
   /** Whether anything is still to fetch for the last view. */
   get busy(): boolean {
     return this.inFlight.size > 0;
@@ -259,6 +275,7 @@ export class TileStreamer<M> {
   update(view: View): boolean {
     if (this.stopped) return false;
     const { budget, targetErrorPx } = this.options;
+    this.eye = view.eye;
     this.desired = chooseCut(this.tree, view, budget, targetErrorPx).tiles;
     const isLoaded = (tile: TileNode): boolean => this.loaded.has(tile);
     let changed = false;
@@ -344,18 +361,26 @@ export class TileStreamer<M> {
     }
   }
 
-  private depth(tile: TileNode): number {
-    let depth = 0;
-    for (let up = this.parentOf.get(tile); up; up = this.parentOf.get(up)) depth += 1;
-    return depth;
+  /** How far the camera is from `tile` (its box, else its sphere); 0 with no camera yet. */
+  private distance(tile: TileNode): number {
+    const eye = this.eye;
+    if (!eye) return 0;
+    if (tile.box) return boxDistance(tile.box, eye);
+    const bounds = tile.bounds;
+    if (!bounds) return 0;
+    const [cx, cy, cz] = bounds.center;
+    return Math.max(0, Math.hypot(eye[0] - cx, eye[1] - cy, eye[2] - cz) - bounds.radius);
   }
 
   /**
-   * Finest first, then least recently used, until the cache fits: a coarse tile is a small
-   * download that covers a lot, so it is the last to go. Never a drawn or wanted tile, nor an
-   * ancestor of a drawn one: those are what a step back or a zoom out swaps to, and merged
-   * parents are an eighth or less of what they stand for, so keeping them all costs little
-   * and makes coarsening instant.
+   * Farthest from the camera first, then least recently used, until the cache fits. Never a
+   * drawn or wanted tile, nor an ancestor of a drawn one: those are what a step back or a zoom
+   * out swaps to, and merged parents are an eighth or less of what they stand for.
+   *
+   * It used to drop the finest tiles first -- but the finest tiles loaded are the ones right
+   * around the camera, which turning away takes off screen and turning back wants again:
+   * spinning in place in the Fort Clatsop scan re-downloaded up to 7.4M gaussians a turn.
+   * Distance keeps what surrounds the camera; it is what any direction will show next.
    */
   private evict(): void {
     let total = 0;
@@ -373,7 +398,7 @@ export class TileStreamer<M> {
       .filter((tile) => !this.shown.has(tile) && !this.desired.has(tile) && !kept.has(tile))
       .sort(
         (a, b) =>
-          this.depth(b) - this.depth(a) || (this.used.get(a) ?? 0) - (this.used.get(b) ?? 0),
+          this.distance(b) - this.distance(a) || (this.used.get(a) ?? 0) - (this.used.get(b) ?? 0),
       );
     for (const tile of spare) {
       if (total <= this.options.cacheBudget) break;

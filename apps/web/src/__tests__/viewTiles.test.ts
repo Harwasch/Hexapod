@@ -166,8 +166,8 @@ describe("the cut the scan viewer draws (REPLACE, merged parents)", () => {
   });
 
   it("measures a tile's distance to its box, so a tile behind the camera does not win", () => {
-    // Standing between two tiles: inside the sphere around the one behind (its box ends 3 m
-    // away), outside the one ahead. Room for one refinement. By the spheres, the tile behind
+    // Standing between two tiles: inside the sphere around the one behind (its box ends 8 m
+    // away), outside the one ahead (10 m). Room for one refinement. By the spheres, the tile behind
     // was "touching the lens" and took the budget; by the boxes the one in view does.
     const boxed = (uri: string, centre: number, half: [number, number, number]): TileNode => {
       const box = [centre, 0, 0, half[0], 0, 0, 0, half[1], 0, 0, 0, half[2]];
@@ -180,8 +180,8 @@ describe("the cut the scan viewer draws (REPLACE, merged parents)", () => {
         children: [tile(`${uri}-a`, 50_000, 0), tile(`${uri}-b`, 50_000, 0)],
       };
     };
-    const behind = boxed("behind", -6.25, [3.25, 5, 5]);
-    const ahead = boxed("ahead", 20, [2, 2, 2]);
+    const behind = boxed("behind", -11.5, [3.5, 8, 8]);
+    const ahead = boxed("ahead", 12, [2, 2, 2]);
     const tree: TileTree = {
       refine: "REPLACE",
       root: { ...tile("root", 5_000, 2, [behind, ahead]), bounds: null },
@@ -269,6 +269,69 @@ describe("streaming towards the cut", () => {
     expect(streamer.drawn.map((drawn) => drawn.uri).sort()).toEqual(
       ["east-a.glb", "east-b.glb", "west-a.glb", "west-b.glb"].sort(),
     );
+  });
+
+  it("turning round in place re-fetches nothing near: the cache keeps what surrounds you", async () => {
+    // Eight regions in a ring round the camera, near (6 m) and far (25 m) in turn, each a
+    // merged parent over two leaves; room to refine about half of them at once.
+    const region = (index: number): TileNode => {
+      const angle = (index * Math.PI) / 4;
+      const range = index % 2 === 0 ? 6 : 25;
+      const centre: [number, number, number] = [
+        Math.cos(angle) * range,
+        Math.sin(angle) * range,
+        0,
+      ];
+      const leaf = (name: string): TileNode => ({
+        ...tile(`r${String(index)}-${name}.glb`, 50_000, 0),
+        bounds: { center: centre, radius: 2 },
+      });
+      return {
+        ...tile(`r${String(index)}.glb`, 10_000, 0.3, [leaf("a"), leaf("b")]),
+        bounds: { center: centre, radius: 2 },
+        box: [...centre, 1.5, 0, 0, 0, 1.5, 0, 0, 0, 1.5],
+      };
+    };
+    const ring: TileTree = {
+      refine: "REPLACE",
+      root: tile("ring.glb", 20_000, 3, [0, 1, 2, 3, 4, 5, 6, 7].map(region)),
+    };
+    const facing = (headingDeg: number): View =>
+      viewFrom([0, 0, 0], 1000, (bounds) => {
+        const bearing = (Math.atan2(bounds.center[1], bounds.center[0]) * 180) / Math.PI;
+        const off = Math.abs(((bearing - headingDeg + 540) % 360) - 180);
+        return off > 50;
+      });
+    const { host, pending, arrive } = fakeHost();
+    const fetched: string[] = [];
+    const counted: StreamHost<string> = {
+      ...host,
+      load: (chosen) => {
+        fetched.push(chosen.uri);
+        return host.load(chosen);
+      },
+    };
+    const budget = 440_000;
+    const streamer = new TileStreamer(ring, counted, {
+      budget,
+      cacheBudget: budget * 1.5,
+      concurrency: 16,
+    });
+    streamer.adopt(ring.root, "ring.glb");
+    const lap = async (): Promise<void> => {
+      for (let heading = 0; heading < 360; heading += 45) {
+        for (let step = 0; step < 4 && (step === 0 || pending.size > 0); step++) {
+          streamer.update(facing(heading));
+          await arrive();
+        }
+        streamer.update(facing(heading));
+      }
+    };
+    await lap();
+    fetched.length = 0;
+    await lap();
+    const nearLeaves = fetched.filter((uri) => /^r[0246]-/.test(uri));
+    expect(nearLeaves).toEqual([]);
   });
 
   it("keeps the ancestors of what is drawn, so leaving goes back to one at once", async () => {

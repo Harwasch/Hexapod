@@ -59,6 +59,10 @@ export interface ScanRendererStatus {
   gaussians: number;
   frames: number;
   error: string | null;
+  /** The gaussians it may draw now (adaptive), those being fetched, and those held. */
+  budget: number;
+  loading: number;
+  cached: number;
 }
 
 interface Session {
@@ -103,7 +107,15 @@ export class ScanRendererHost {
   }
 
   status(): ScanRendererStatus {
-    const inner = this.session?.status() ?? { tiles: 0, gaussians: 0, frames: 0, error: null };
+    const inner = this.session?.status() ?? {
+      tiles: 0,
+      gaussians: 0,
+      frames: 0,
+      error: null,
+      budget: 0,
+      loading: 0,
+      cached: 0,
+    };
     return {
       kind: this.kind,
       active: this.session !== null,
@@ -286,7 +298,10 @@ export class ScanRendererHost {
       Cartesian3.clone(camera.positionWC, frameEye);
       Cartesian3.clone(camera.directionWC, frameDirection);
       const drawn = Math.min(streamer.drawnGaussians, adaptive.budget);
-      if (motion && lastFrameAt > 0 && adaptive.frame(now - lastFrameAt, drawn)) {
+      // Frames while tiles arrive are slowed by their uploads, not by what is drawn: only a
+      // steady view's motion frames say what the GPU can sort and blend.
+      const steady = motion && streamer.loading === 0 && lastFrameAt > 0;
+      if (steady && adaptive.frame(now - lastFrameAt, drawn)) {
         backend.setBudget(adaptive.budget);
         const next = streamedFor(adaptive.budget);
         streamer.setBudget(next, next * CACHE_FACTOR);
@@ -334,6 +349,9 @@ export class ScanRendererHost {
         gaussians: streamer.drawnGaussians,
         frames,
         error,
+        budget: adaptive.budget,
+        loading: streamer.loading,
+        cached: streamer.loadedGaussians,
       }),
     };
   }
