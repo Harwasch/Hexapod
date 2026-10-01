@@ -25,8 +25,9 @@ tests) import without them. They are not in `pyproject.toml`; on a CPU:
         --index https://download.pytorch.org/whl/cpu --index-strategy unsafe-best-match \\
         python -c "import segment_models as sm; print(sm.Sam2Masks().masks(rgb))"
 
-Measured on 4 CPU cores (2026-10-01, transformers 5.18, torch 2.14): see
-`Sam2Masks.__doc__` and `SiglipEmbedder.__doc__`.
+Measured on 4 idle CPU cores (2026-10-01, transformers 5.18, torch 2.14.1+cpu, 640x480
+splat renders): see `Sam2Masks.__doc__` and `SiglipEmbedder.__doc__`. Under a shared,
+oversubscribed CPU, torch's threads spin and everything is 5-30x slower.
 """
 
 from __future__ import annotations
@@ -341,15 +342,20 @@ def _device(device: str | None) -> str:
 class Sam2Masks:
     """SAM 2.1 automatic masks at three granularities (transformers' `Sam2Model`).
 
-    On 4 CPU cores, hiera-tiny, a 640x480 image, 16 points a side: about 4-5 s (the image
-    encoder about 3 s of it at SAM's fixed 1024 input; 768 decoder calls about 1.5 s).
-    `points_per_side=32` is SAM's default and about 4x the decoder time."""
+    On 4 idle CPU cores, hiera-tiny, a 640x480 image: the image encoder (SAM's fixed 1024
+    input) about 1.5 s, then about 0.06 s per point prompt -- the mask decoder's two-way
+    transformer runs over all 64x64 image tokens once per point. So 16 points a side about
+    17 s, 32 a side (SAM's default, `ModalSam2Masks`') about 67 s.
+
+    The thresholds are looser than SAM's automatic generator (0.88 / 0.95): splat renders
+    are noisy, and at SAM's own values a camp view kept a handful of masks; at 0.6 / 0.8
+    the canopies, the roof, the bushes and the ground each came back."""
 
     model: str = SAM2_MODEL
     points_per_side: int = 16
     points_per_batch: int = 64
-    pred_iou_thresh: float = 0.7
-    stability_thresh: float = 0.85
+    pred_iou_thresh: float = 0.6
+    stability_thresh: float = 0.8
     nms_iou: float = 0.7
     #: Smallest mask kept, as a fraction of the image.
     min_area: float = 0.0005
@@ -427,8 +433,8 @@ class Sam2Masks:
 class SiglipEmbedder:
     """SigLIP 2 image and text embeddings (transformers' `AutoModel`), L2-normalised.
 
-    On 4 CPU cores, base-patch16-224: about 0.1 s an image crop (batches of 32) and 0.03 s a
-    text (the 1300-label vocabulary in about 40 s, once per run)."""
+    On 4 idle CPU cores, base-patch16-224: about 0.13 s an image crop (batches of 32) and
+    0.036 s a text (the 1300-label vocabulary in about 47 s, once per run)."""
 
     model: str = SIGLIP_MODEL
     dim: int = 768
