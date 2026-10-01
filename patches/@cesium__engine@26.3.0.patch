@@ -144,7 +144,7 @@ index db3adac5ab6db91f0fa3d08f1eb69b0837b5be4f..6a92d66292f9e76eccf91f00e6b7a199
     * Gets the amount of memory used by the batch table textures and any binary
     * metadata properties not accounted for in geometryByteLength or
 diff --git a/Source/Scene/GaussianSplatPrimitive.js b/Source/Scene/GaussianSplatPrimitive.js
-index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..c51c9a2b81852ae69aa5d054c6f39b4eb4dc78f4 100644
+index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..8998868ccd9477d079e04649b0ad57771e60c1bb 100644
 --- a/Source/Scene/GaussianSplatPrimitive.js
 +++ b/Source/Scene/GaussianSplatPrimitive.js
 @@ -174,6 +174,51 @@ const DEFAULT_SORT_MIN_POSITION_DELTA = 1.0;
@@ -235,7 +235,7 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..c51c9a2b81852ae69aa5d054c6f39b4e
        }
        return;
      }
-@@ -1070,9 +1130,95 @@ function GaussianSplatPrimitive(options) {
+@@ -1070,9 +1130,123 @@ function GaussianSplatPrimitive(options) {
     * @private
     */
    this._splatBudgetSSEScale = 1.0;
@@ -245,6 +245,8 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..c51c9a2b81852ae69aa5d054c6f39b4e
 +  this._vertexMotionDirty = false;
 +  // Hexapod patch: see `vertexVisibility` below. Shares `_vertexMotionDirty` as the rebuild flag.
 +  this._vertexVisibility = undefined;
++  // Hexapod patch: see `vertexColor` below. Shares `_vertexMotionDirty` as the rebuild flag.
++  this._vertexColor = undefined;
 +  /**
 +   * Hexapod patch: when true, no new snapshot is built (the committed one keeps drawing and
 +   * re-sorting); set by the application while the camera moves.
@@ -328,10 +330,36 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..c51c9a2b81852ae69aa5d054c6f39b4e
 +    },
 +  },
 +
++  /**
++   * Hexapod patch: an optional vertex-shader colour hook, so a splat can be tinted (an
++   * object highlighted, the rest dimmed) without writing the attribute texture.
++   *
++   * The same contract as `vertexMotion`: an object with `addToShader(shaderBuilder,
++   * uniformMap, context)`, called every time the draw command is built, that declares its own
++   * uniforms and adds vertex lines defining
++   * `vec4 splatVertexColor(uint splatIndex, vec3 position, vec4 color)`. The vertex shader
++   * calls it last, with the splat's final colour (spherical harmonics and the visibility
++   * weight applied, straight alpha), and draws what it returns.
++   * @memberof GaussianSplatPrimitive.prototype
++   * @type {object|undefined}
++   * @private
++   */
++  vertexColor: {
++    get: function () {
++      return this._vertexColor;
++    },
++    set: function (value) {
++      if (this._vertexColor !== value) {
++        this._vertexColor = value;
++        this._vertexMotionDirty = true;
++      }
++    },
++  },
++
    /**
     * Indicates whether the primitive is ready for use.
     * @memberof GaussianSplatPrimitive.prototype
-@@ -1149,6 +1295,7 @@ GaussianSplatPrimitive.prototype._wrappedUpdate = function (frameState) {
+@@ -1149,6 +1323,7 @@ GaussianSplatPrimitive.prototype._wrappedUpdate = function (frameState) {
   * @private
   */
  GaussianSplatPrimitive.prototype.destroy = function () {
@@ -339,7 +367,7 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..c51c9a2b81852ae69aa5d054c6f39b4e
    this._positions = undefined;
    this._rotations = undefined;
    this._scales = undefined;
-@@ -1577,6 +1724,27 @@ GaussianSplatPrimitive.buildGSplatDrawCommand = function (
+@@ -1577,6 +1752,37 @@ GaussianSplatPrimitive.buildGSplatDrawCommand = function (
    renderResources.instanceCount = instanceCount;
    renderResources.count = 4;
    renderResources.primitiveType = PrimitiveType.TRIANGLE_STRIP;
@@ -363,11 +391,21 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..c51c9a2b81852ae69aa5d054c6f39b4e
 +    );
 +    vertexVisibility.addToShader(shaderBuilder, uniformMap, frameState.context);
 +  }
++  // Hexapod patch: the colour hook, likewise.
++  const vertexColor = primitive._vertexColor;
++  if (defined(vertexColor)) {
++    shaderBuilder.addDefine(
++      "HAS_SPLAT_VERTEX_COLOR",
++      undefined,
++      ShaderDestination.VERTEX,
++    );
++    vertexColor.addToShader(shaderBuilder, uniformMap, frameState.context);
++  }
 +  primitive._vertexMotionDirty = false;
    shaderBuilder.addVertexLines(GaussianSplatVS);
    shaderBuilder.addFragmentLines(GaussianSplatFS);
    const shaderProgram = shaderBuilder.buildShaderProgram(frameState.context);
-@@ -1606,10 +1774,22 @@ GaussianSplatPrimitive.buildGSplatDrawCommand = function (
+@@ -1606,10 +1812,22 @@ GaussianSplatPrimitive.buildGSplatDrawCommand = function (
    idxAttr.constant = 0;
    idxAttr.instanceDivisor = 1;
  
@@ -390,7 +428,7 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..c51c9a2b81852ae69aa5d054c6f39b4e
      const geometry = new Geometry({
        attributes: {
          screenQuadPosition: new GeometryAttribute({
-@@ -1637,7 +1817,9 @@ GaussianSplatPrimitive.buildGSplatDrawCommand = function (
+@@ -1637,7 +1855,9 @@ GaussianSplatPrimitive.buildGSplatDrawCommand = function (
        .vertexBuffer.copyFromArrayView(primitive._indexes);
    }
  
@@ -401,7 +439,7 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..c51c9a2b81852ae69aa5d054c6f39b4e
  
    // The draw command uses rootTransform as its modelMatrix. tileset.modelMatrix
    // is baked into the splat positions by transformTile and must not appear here
-@@ -1670,6 +1852,582 @@ GaussianSplatPrimitive.buildGSplatDrawCommand = function (
+@@ -1670,6 +1890,582 @@ GaussianSplatPrimitive.buildGSplatDrawCommand = function (
    primitive._drawCommand = command;
  };
  
@@ -984,7 +1022,7 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..c51c9a2b81852ae69aa5d054c6f39b4e
  /**
   * Updates the Gaussian splat primitive for the current frame.
   * This method checks if the primitive needs to be updated based on the current frame state,
-@@ -1683,20 +2441,57 @@ GaussianSplatPrimitive.buildGSplatDrawCommand = function (
+@@ -1683,20 +2479,57 @@ GaussianSplatPrimitive.buildGSplatDrawCommand = function (
  GaussianSplatPrimitive.prototype.update = function (frameState) {
    const tileset = this._tileset;
  
@@ -1042,7 +1080,7 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..c51c9a2b81852ae69aa5d054c6f39b4e
    const hasRootTransform = defined(this._rootTransform);
  
    if (frameState.passes.pick === true) {
-@@ -1712,6 +2507,12 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
+@@ -1712,6 +2545,12 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
    }
  
    if (this._sorterState === GaussianSplatSortingState.IDLE) {
@@ -1055,7 +1093,7 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..c51c9a2b81852ae69aa5d054c6f39b4e
      const selectedTilesChanged =
        tileset._selectedTiles.length !== 0 &&
        haveSelectedTilesChanged(this, tileset._selectedTiles);
-@@ -1740,11 +2541,20 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
+@@ -1740,11 +2579,20 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
      } else {
        this._snapshotRebuildStallFrames = 0;
      }
@@ -1078,7 +1116,7 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..c51c9a2b81852ae69aa5d054c6f39b4e
        this._dirty ||
        this._needsSnapshotRebuild ||
        selectedTilesChanged ||
-@@ -1759,6 +2569,7 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
+@@ -1759,6 +2607,7 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
      }
  
      if (
@@ -1086,7 +1124,7 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..c51c9a2b81852ae69aa5d054c6f39b4e
        tileset._selectedTiles.length !== 0 &&
        this._needsSnapshotRebuild &&
        allowRebuild
-@@ -2055,6 +2866,10 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
+@@ -2055,6 +2904,10 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
      if (!hasRootTransform) {
        return;
      }
@@ -1097,7 +1135,7 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..c51c9a2b81852ae69aa5d054c6f39b4e
  
      Matrix4.clone(camera.viewMatrix, this._prevViewMatrix);
      Matrix4.multiply(camera.viewMatrix, this._rootTransform, scratchMatrix4A);
-@@ -2071,14 +2886,7 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
+@@ -2071,14 +2924,7 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
          dataGeneration: dataGeneration,
          expectedCount: expectedCount,
        };
@@ -1113,7 +1151,7 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..c51c9a2b81852ae69aa5d054c6f39b4e
        this._sorterPromise = rawPromise;
        if (defined(rawPromise)) {
          markSteadySortStart(this, frameState);
-@@ -2105,14 +2913,7 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
+@@ -2105,14 +2951,7 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
          dataGeneration: dataGeneration,
          expectedCount: expectedCount,
        };
@@ -1129,7 +1167,7 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..c51c9a2b81852ae69aa5d054c6f39b4e
        this._sorterPromise = rawPromise;
        if (defined(rawPromise)) {
          markSteadySortStart(this, frameState);
-@@ -2132,7 +2933,18 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
+@@ -2132,7 +2971,18 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
      return; //still sorting, wait for next frame
    } else if (this._sorterState === GaussianSplatSortingState.SORTED) {
      //update the draw command if sorted
@@ -1148,7 +1186,7 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..c51c9a2b81852ae69aa5d054c6f39b4e
      this._sorterState = GaussianSplatSortingState.IDLE; //reset state for next frame
      this._dirty = false;
      this._sorterPromise = undefined; //reset promise for next frame
-@@ -2144,4 +2956,10 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
+@@ -2144,4 +2994,10 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
    this._dirty = false;
  };
  
@@ -1330,7 +1368,7 @@ index c5d264395fc522ecc29717e57ff159aa4ed3cfd1..f7b22ea41aac67be450cf0e49db7d519
    let edgeTiles;
  
 diff --git a/Source/Shaders/PrimitiveGaussianSplatVS.glsl b/Source/Shaders/PrimitiveGaussianSplatVS.glsl
-index 18838d6c4b087d4b2bdcedfd0741d8217fb4900c..9a3ad4420cce89e57af320ef68a65681fc120130 100644
+index 18838d6c4b087d4b2bdcedfd0741d8217fb4900c..a6b4e47c68faa457b7b8dc180bd2bbef45856823 100644
 --- a/Source/Shaders/PrimitiveGaussianSplatVS.glsl
 +++ b/Source/Shaders/PrimitiveGaussianSplatVS.glsl
 @@ -151,6 +151,11 @@ void main() {
@@ -1382,7 +1420,7 @@ index 18838d6c4b087d4b2bdcedfd0741d8217fb4900c..9a3ad4420cce89e57af320ef68a65681
          gl_Position = discardVec;
          return;
      }
-@@ -186,6 +209,9 @@ void main() {
+@@ -186,11 +209,18 @@ void main() {
  
      v_vertPos = corner ;
      v_splatColor = vec4(covariance.w & 0xffu, (covariance.w >> 8) & 0xffu, (covariance.w >> 16) & 0xffu, (covariance.w >> 24) & 0xffu) / 255.0;
@@ -1392,8 +1430,18 @@ index 18838d6c4b087d4b2bdcedfd0741d8217fb4900c..9a3ad4420cce89e57af320ef68a65681
  #if defined(HAS_SPHERICAL_HARMONICS)
      vec4 splatWC = czm_inverseView * splatViewPos;
      vec3 viewDirModel = normalize(u_inverseModelRotation * (splatWC.xyz - u_cameraPositionWC.xyz));
+ 
+     v_splatColor.rgb += evaluateSH(texIdx, viewDirModel).rgb;
++#endif
++#if defined(HAS_SPLAT_VERTEX_COLOR)
++    // Optional colour hook (GaussianSplatPrimitive.vertexColor): the splat's final colour.
++    v_splatColor = splatVertexColor(texIdx, splatPosition.xyz, v_splatColor);
+ #endif
+     v_splitDirection = u_splitDirection;
+ }
+\ No newline at end of file
 diff --git a/Source/Shaders/PrimitiveGaussianSplatVS.js b/Source/Shaders/PrimitiveGaussianSplatVS.js
-index 0fab5dd6b552ab92efe01e4131204530d02e0374..93b0799c0433ce741b7b634282baf0f18b20e5e6 100644
+index 0fab5dd6b552ab92efe01e4131204530d02e0374..f036ebb8eef1af3276bd306020dd559c667557b1 100644
 --- a/Source/Shaders/PrimitiveGaussianSplatVS.js
 +++ b/Source/Shaders/PrimitiveGaussianSplatVS.js
 @@ -152,6 +152,11 @@ void main() {\n\
@@ -1445,7 +1493,7 @@ index 0fab5dd6b552ab92efe01e4131204530d02e0374..93b0799c0433ce741b7b634282baf0f1
          gl_Position = discardVec;\n\
          return;\n\
      }\n\
-@@ -187,6 +210,9 @@ void main() {\n\
+@@ -187,11 +210,18 @@ void main() {\n\
  \n\
      v_vertPos = corner ;\n\
      v_splatColor = vec4(covariance.w & 0xffu, (covariance.w >> 8) & 0xffu, (covariance.w >> 16) & 0xffu, (covariance.w >> 24) & 0xffu) / 255.0;\n\
@@ -1455,3 +1503,12 @@ index 0fab5dd6b552ab92efe01e4131204530d02e0374..93b0799c0433ce741b7b634282baf0f1
  #if defined(HAS_SPHERICAL_HARMONICS)\n\
      vec4 splatWC = czm_inverseView * splatViewPos;\n\
      vec3 viewDirModel = normalize(u_inverseModelRotation * (splatWC.xyz - u_cameraPositionWC.xyz));\n\
+ \n\
+     v_splatColor.rgb += evaluateSH(texIdx, viewDirModel).rgb;\n\
++#endif\n\
++#if defined(HAS_SPLAT_VERTEX_COLOR)\n\
++    // Optional colour hook (GaussianSplatPrimitive.vertexColor): the splat's final colour.\n\
++    v_splatColor = splatVertexColor(texIdx, splatPosition.xyz, v_splatColor);\n\
+ #endif\n\
+     v_splitDirection = u_splitDirection;\n\
+ }";

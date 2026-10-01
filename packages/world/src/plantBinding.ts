@@ -35,6 +35,7 @@
 import { type MotionRig } from "./rig";
 import { SKIN_INFLUENCES, SKIN_WEIGHT_TOTAL, skinSplatsToNodes, type SplatSkin } from "./skin";
 import { staticAnchorNode } from "./rig";
+import { decodeRuns, runsLength, tileRunsIssue } from "./tileRuns";
 
 export const PLANT_BINDING_FORMAT = "hexapod.plants";
 export const PLANT_BINDING_VERSION = 1;
@@ -46,8 +47,6 @@ export interface PlantBinding {
   /** Per tile checksum, run-length pairs `[label, count, ...]`. */
   readonly tiles: ReadonlyMap<string, Int32Array>;
 }
-
-const CHECKSUM = /^fnv1a32:(\d+):[0-9a-f]{8}$/;
 
 /** Every problem with a parsed binding document against its rig. Empty means valid. */
 export function validatePlantBinding(raw: unknown, rig: MotionRig): string[] {
@@ -69,31 +68,8 @@ export function validatePlantBinding(raw: unknown, rig: MotionRig): string[] {
     return issues;
   }
   for (const [key, value] of Object.entries(tiles as Record<string, unknown>)) {
-    const match = CHECKSUM.exec(key);
-    if (match === null) {
-      issues.push(`${key}: not a checksumPositions digest`);
-      continue;
-    }
-    if (!Array.isArray(value) || value.length % 2 !== 0) {
-      issues.push(`${key}: runs must be [label, count] pairs`);
-      continue;
-    }
-    let total = 0;
-    for (let i = 0; i < value.length; i += 2) {
-      const label: unknown = value[i];
-      const run: unknown = value[i + 1];
-      if (!Number.isInteger(label) || (label as number) < 0 || (label as number) > count) {
-        issues.push(`${key}: label ${String(label)} is not 0 or a plant`);
-        break;
-      }
-      if (!Number.isInteger(run) || (run as number) <= 0) {
-        issues.push(`${key}: run length ${String(run)} must be a positive integer`);
-        break;
-      }
-      total += run as number;
-    }
-    if (total !== Number(match[1]))
-      issues.push(`${key}: runs cover ${total} gaussians, the tile holds ${match[1] ?? "?"}`);
+    const issue = tileRunsIssue(key, value, count, "a plant");
+    if (issue !== undefined) issues.push(issue);
   }
   const listed = rig.tileChecksums ?? [rig.canonicalChecksum];
   const keys = new Set(Object.keys(tiles));
@@ -121,16 +97,7 @@ export function parsePlantBinding(text: string, rig: MotionRig): PlantBinding {
 export function plantLabels(binding: PlantBinding, checksum: string): Uint16Array | undefined {
   const runs = binding.tiles.get(checksum);
   if (runs === undefined) return undefined;
-  let total = 0;
-  for (let i = 1; i < runs.length; i += 2) total += runs[i] ?? 0;
-  const out = new Uint16Array(total);
-  let at = 0;
-  for (let i = 0; i < runs.length; i += 2) {
-    const run = runs[i + 1] ?? 0;
-    out.fill(runs[i] ?? 0, at, at + run);
-    at += run;
-  }
-  return out;
+  return decodeRuns(runs, new Uint16Array(runsLength(runs)));
 }
 
 /** Per rig, each plant's joints as a rig of their own. Weak: a rig let go takes them with it. */

@@ -143,7 +143,8 @@ export function visibility(
 }
 
 /**
- * The patched engine's `splatVertexVisibility` (`GaussianSplatPrimitive.vertexVisibility`):
+ * The view cones' part of the patched engine's `splatVertexVisibility`
+ * (`GaussianSplatPrimitive.vertexVisibility`, composed by `cesium/splatVisibility.ts`):
  * the splat's cell, clamped to the grid; the camera in the same frame; the fade.
  */
 export const VIEW_CONES_GLSL = `
@@ -156,7 +157,7 @@ vec3 viewConeAxis(vec2 e) {
     return normalize(v);
 }
 
-float splatVertexVisibility(uint splatIndex, vec3 position) {
+float splatViewConeVisibility(uint splatIndex, vec3 position) {
     if (u_viewConeActive < 0.5) {
         return 1.0;
     }

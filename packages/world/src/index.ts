@@ -11,6 +11,7 @@ export * from "./plantBinding";
 export * from "./rig";
 export * from "./skin";
 export * from "./spectral";
+export * from "./tileRuns";
 export * from "./turbulence";
 export * from "./vec";
 export * from "./wind";

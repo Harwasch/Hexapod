@@ -3,7 +3,8 @@
  *
  * The packer writes, beside each tileset, a coarse grid of the directions each part of the
  * scan was seen from (`lib/viewCones.ts`, `tools/captures/view_cones.py`). This installs the
- * engine patch's `vertexVisibility` hook on the tileset's splat primitive: per splat, its
+ * engine patch's `vertexVisibility` hook on the tileset's splat primitive (as one part of its
+ * visibility chain, `splatVisibility.ts`, beside e.g. hidden instances): per splat, its
  * cell's cone against the direction the camera sees it from, a weight on its opacity. Inside
  * the cone nothing changes, so every view the capture had is drawn exactly as before.
  *
@@ -36,26 +37,18 @@ import {
 
 import { invertAffine, type Mat4 } from "./splatFrames";
 import type { OwnedTexture } from "./splatGpuMotion";
+import { splatTilesetOf, type SplatShaderBuilder, type SplatTile } from "./splatInternals";
 import {
-  splatTilesetOf,
-  type SplatPrimitive,
-  type SplatShaderBuilder,
-  type SplatTile,
-} from "./splatInternals";
+  addVisibilityPart,
+  hasVisibilityPart,
+  removeVisibilityPart,
+  type SplatVisibilityPart,
+  type VisibilityPrimitive,
+} from "./splatVisibility";
+
+export type { SplatVertexVisibility, VisibilityPrimitive } from "./splatVisibility";
 
 const log = createLogger("viewCones");
-
-/** What the patched engine calls on each draw-command build (`vertexVisibility`). */
-export interface SplatVertexVisibility {
-  addToShader(
-    shaderBuilder: SplatShaderBuilder,
-    uniformMap: Record<string, () => unknown>,
-    context: unknown,
-  ): void;
-}
-
-/** A primitive of the patched engine, with the visibility accessor. */
-export type VisibilityPrimitive = SplatPrimitive & { vertexVisibility?: SplatVertexVisibility };
 
 /** How the hook makes its texture and uniform values. The real one wraps CesiumJS. */
 export interface ViewConeGpu {
@@ -74,8 +67,11 @@ export function viewConesEnabled(search: string = globalThis.location?.search ??
   return new URLSearchParams(search).get("viewCones") !== "off";
 }
 
-/** The visibility hook for one scan. */
-export class SplatViewCones implements SplatVertexVisibility {
+/** The visibility hook for one scan: a part of its primitive's visibility chain. */
+export class SplatViewCones implements SplatVisibilityPart {
+  readonly visibilityFunction = "splatViewConeVisibility";
+  /** After cheaper parts (a hidden instance is one texel fetch; a cone is two and an acos). */
+  readonly visibilityOrder = 10;
   readonly meta: ViewConesMeta;
   readonly #rows: { data: Uint8Array; height: number };
   readonly #gpu: ViewConeGpu;
@@ -93,7 +89,7 @@ export class SplatViewCones implements SplatVertexVisibility {
     this.#gpu = gpu;
   }
 
-  /** Called by the patched engine on every draw-command build. */
+  /** Called (through the chain) by the patched engine on every draw-command build. */
   addToShader(
     shaderBuilder: SplatShaderBuilder,
     uniformMap: Record<string, () => unknown>,
@@ -125,20 +121,27 @@ export class SplatViewCones implements SplatVertexVisibility {
 
   /** Installs the hook on `primitive`; false when this engine has no `vertexVisibility`. */
   install(primitive: VisibilityPrimitive): boolean {
-    if (!("vertexVisibility" in primitive)) return false;
-    if (this.#primitive === primitive && primitive.vertexVisibility === this) return true;
+    if (this.#primitive === primitive && hasVisibilityPart(primitive, this)) return true;
+    if (this.#primitive && this.#primitive !== primitive) this.uninstall();
+    if (!addVisibilityPart(primitive, this)) return false;
     this.#primitive = primitive;
-    primitive.vertexVisibility = this;
     return true;
+  }
+
+  /** Whether the hook is in its primitive's visibility chain. */
+  get installed(): boolean {
+    return hasVisibilityPart(this.#primitive, this);
+  }
+
+  /** Takes the hook off its primitive, keeping the texture for a later `install`. */
+  uninstall(): void {
+    if (this.#primitive) removeVisibilityPart(this.#primitive, this);
+    this.#primitive = undefined;
   }
 
   /** Takes the hook off its primitive and frees the texture. */
   destroy(): void {
-    const primitive = this.#primitive;
-    if (primitive?.vertexVisibility === this && !primitive.isDestroyed?.()) {
-      primitive.vertexVisibility = undefined;
-    }
-    this.#primitive = undefined;
+    this.uninstall();
     if (this.#texture && !this.#texture.isDestroyed()) this.#texture.destroy();
     this.#texture = undefined;
   }

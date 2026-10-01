@@ -12,6 +12,8 @@ import { useInferred } from "@/state/inferred";
 import { useSettings, type SplatRenderer } from "@/state/settings";
 import { useSites } from "@/state/sites";
 
+import { InstanceSearch } from "./InstanceSearch";
+
 const ORDER: Representation[] = ["gaussian-splat", "mesh", "point-cloud"];
 
 /** Who draws the splat, side by side for comparison (settings `splatRenderer`). */
@@ -103,6 +105,9 @@ export function RepresentationSwitcher() {
                   onCheckedChange={setShowInferred}
                 />
               </span>
+            )}
+            {representation === "gaussian-splat" && shownAsset && (
+              <InstanceSearch assetId={shownAsset.id} />
             )}
           </GlassPanel>
         </motion.div>
