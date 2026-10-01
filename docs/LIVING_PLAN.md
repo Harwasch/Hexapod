@@ -10,7 +10,7 @@ Architecture: [SCENE_OBJECTS.md](SCENE_OBJECTS.md). Branch: `living-models`.
 - [ ] A3 Run on the camp, render a colour-by-instance image
 - [~] A4 Viewer: load `instances.json`, hide / highlight by instance, text search (built + unit-tested; needs a browser check with a real file)
 - [ ] A5 Camp in the viewer: search "tent", "tree", "table"; hide vegetation
-- [ ] A6 Segment the pumpkin (phone capture 09-28) and spool (09-26) scans
+- [~] A6 Segment the pumpkin (phone capture 09-28) and spool (09-26) scans — both segmented; pumpkins tagged "pumpkin", spool split well but the vocabulary has no "spool" (needs search by meaning)
 
 ## B. Skin
 
