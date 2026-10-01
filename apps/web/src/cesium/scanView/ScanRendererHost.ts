@@ -34,7 +34,12 @@ import { parseTileset, type TileNode } from "@/view/tiles";
 
 import { Handover } from "./handover";
 import { scanPose } from "./pose";
-import type { ScanBackend, ScanPose, SplatRendererKind } from "./types";
+import {
+  DEFAULT_SPLAT_RENDERER,
+  type ScanBackend,
+  type ScanPose,
+  type SplatRendererKind,
+} from "./types";
 
 const log = createLogger("scan-renderer");
 
@@ -148,7 +153,7 @@ function loadBackend(kind: Exclude<SplatRendererKind, "cesium">): Promise<Backen
 }
 
 export class ScanRendererHost {
-  private kind: SplatRendererKind = "cesium";
+  private kind: SplatRendererKind = DEFAULT_SPLAT_RENDERER;
   private target: ScanTarget | null = null;
   private session: Session | null = null;
   private starting: Promise<void> | null = null;

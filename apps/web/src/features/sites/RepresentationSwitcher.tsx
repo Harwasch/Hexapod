@@ -14,9 +14,9 @@ const ORDER: Representation[] = ["gaussian-splat", "mesh", "point-cloud"];
 
 /** Who draws the splat, side by side for comparison (settings `splatRenderer`). */
 const RENDERERS: { value: SplatRenderer; label: string; ariaLabel: string }[] = [
-  { value: "cesium", label: "Cesium", ariaLabel: "Draw splats with CesiumJS" },
-  { value: "spark", label: "Spark", ariaLabel: "Draw splats with Spark" },
   { value: "playcanvas", label: "PlayCanvas", ariaLabel: "Draw splats with PlayCanvas" },
+  { value: "spark", label: "Spark", ariaLabel: "Draw splats with Spark" },
+  { value: "cesium", label: "Cesium", ariaLabel: "Draw splats with CesiumJS" },
 ];
 
 /** [Splat] [Mesh] [Points] — appears when the camera is near a loaded site. Switching keeps the camera. */
