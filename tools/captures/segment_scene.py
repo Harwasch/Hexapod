@@ -44,6 +44,11 @@ tree. Splat ids are the deepest instance (leaf-level), as the contract says.
 and a contrast prompt (`PROPERTY_PROMPTS`), so each is a probability on its own and the
 attributes do not compete. `behaviour`: `BEHAVIOUR_RULE`.
 
+**Scale** (2026-10-01, 4 CPUs, other jobs running): the 22.6M-gaussian camp with 8 views
+and random two-level masks -- 998k cells at 0.24 m, 5.7M stage-1 edges; cells 36 s, plan
+19 s, render 52 s per view, votes 4 s, lift 46 s, describe 9 s; peak RSS 7.5 GB (the scan
+held as float64 `Splats` is most of it). Rendering dominates: 24 views is ~21 min.
+
 Usage:
     python segment_scene.py SPLAT.ply TILES_DIR --masks segment_models:Sam2Masks \\
         --embedder segment_models:SiglipEmbedder --vocabulary words.txt \\
