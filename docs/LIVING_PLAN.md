@@ -5,10 +5,10 @@ Architecture: [SCENE_OBJECTS.md](SCENE_OBJECTS.md). Branch: `living-models`.
 
 ## A. Segmentation (camp first)
 
-- [~] A1 Lift masks to splats: views, voting, instances, hierarchy, `instances.json` (tested with oracle masks on the synthetic yard)
+- [x] A1 Lift masks to splats: views, voting, instances, hierarchy, `instances.json` (synthetic yard: mean IoU 0.87 vs ground truth)
 - [~] A2 Model adapters: SAM 2 masks, SigLIP embeddings, open-vocabulary tags, property scores (CPU now, Modal later)
 - [ ] A3 Run on the camp, render a colour-by-instance image
-- [~] A4 Viewer: load `instances.json`, hide / highlight by instance, text search
+- [~] A4 Viewer: load `instances.json`, hide / highlight by instance, text search (built + unit-tested; needs a browser check with a real file)
 - [ ] A5 Camp in the viewer: search "tent", "tree", "table"; hide vegetation
 
 ## B. Skin
