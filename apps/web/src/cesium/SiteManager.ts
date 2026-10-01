@@ -38,6 +38,7 @@ import { createSiteTileset, tileCacheBudget } from "./providers/tiles";
 import { SPLAT_BYTES_ESTIMATE, SplatCount, splatMemory } from "./splatCount";
 import { splatTilesetOf } from "./splatInternals";
 import { attachInferredLayers } from "./inferredLayers";
+import { attachInstances } from "./splatInstances";
 import { attachViewCones } from "./splatViewCones";
 import type { SceneEvents } from "./types";
 
@@ -634,6 +635,7 @@ export class SiteManager {
         attachViewCones(tileset),
         // What an image model filled in where it never looked, beside it (lib/inferred.ts).
         attachInferredLayers(tileset, this.scene, asset.id),
+        attachInstances(tileset, this.scene, asset.id),
       );
     }
     handle.unsubscribe.push(

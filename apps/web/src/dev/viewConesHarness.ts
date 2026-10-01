@@ -122,15 +122,14 @@ export async function startViewConesHarness(options: {
       }
       const target = primitive();
       if (!target) throw new Error("no splat primitive");
-      if (mode === "off") target.vertexVisibility = undefined;
-      else hooks[mode].install(target);
+      for (const hook of Object.values(hooks)) hook.uninstall();
+      if (mode !== "off") hooks[mode].install(target);
       // The draw command is rebuilt on the next render; the sort settles over a few more.
       for (let frame = 0; frame < 30; frame += 1) await nextFrame(scene);
       return { coverage: coverage() };
     },
     installed() {
-      const target = primitive();
-      return target?.vertexVisibility === hooks.file || target?.vertexVisibility === hooks.below;
+      return hooks.file.installed || hooks.below.installed;
     },
   };
 }
