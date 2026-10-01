@@ -379,3 +379,31 @@ def test_binding_by_position_agrees_with_the_ply_replay(written: Path, run: dict
         agree += int((a == b).sum())
         total += a.size
     assert agree / total > 0.95
+
+
+def test_a_cached_run_resumes_with_the_same_result(run: dict, tmp_path: Path) -> None:
+    """Views and masks kept in a cache are reused: a second run asks the mask source for
+    nothing and lifts the same instances."""
+    splats, levels = run["splats"], run["levels"]
+    calls: list[int] = []
+
+    def factory(cameras):
+        oracle = ss.OracleMasks(splats, levels, cameras)
+
+        class Counting:
+            name = oracle.name
+
+            def masks(self, rgb):
+                calls.append(1)
+                return oracle.masks(rgb)
+
+        return Counting()
+
+    cameras = [v.camera for v in run["result"].views][:4]
+    args = {"cameras": cameras, "source_factory": factory, "cache": tmp_path / "cache"}
+    first = ss.segment(splats, None, ss.FakeEmbedder(), VOCABULARY, **args)
+    assert len(calls) == 4
+    second = ss.segment(splats, None, ss.FakeEmbedder(), VOCABULARY, **args)
+    assert len(calls) == 4  # nothing asked again
+    assert np.array_equal(first.splat_id, second.splat_id)
+    assert len(list((tmp_path / "cache").glob("view-*.npz"))) == 4

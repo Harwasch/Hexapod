@@ -1250,6 +1250,54 @@ def collect_votes(
     return [vote(v, m, n_cells, levels) for v, m in zip(views, all_masks)], levels, all_masks
 
 
+def _cache_key(camera: Camera, n_cells: int) -> str:
+    text = json.dumps([camera.to_json(), n_cells], sort_keys=True)
+    return hashlib.sha1(text.encode()).hexdigest()[:16]
+
+
+def cached_view(
+    cache: Path | None, splats: Splats, camera: Camera, cells: np.ndarray, n_cells: int
+) -> View:
+    """`render_view`, kept in `cache` (keyed by the camera and the cell count) so a run that
+    is stopped picks up where it was rather than rendering again."""
+    if cache is None:
+        return render_view(splats, camera, cells)
+    path = cache / f"view-{_cache_key(camera, n_cells)}.npz"
+    if path.exists():
+        with np.load(path) as z:
+            return View(camera, z["rgb"], z["cell"], z["purity"])
+    view = render_view(splats, camera, cells)
+    tmp = path.with_suffix(".tmp.npz")
+    np.savez_compressed(tmp, rgb=view.rgb, cell=view.cell, purity=view.purity)
+    tmp.replace(path)
+    return view
+
+
+def cached_masks(cache: Path | None, view: View, source: MaskSource, n_cells: int) -> list[Mask]:
+    """`source.masks(view.rgb)`, kept in `cache` beside the view (per mask source)."""
+    if cache is None:
+        return source.masks(view.rgb)
+    name = hashlib.sha1(str(getattr(source, "name", "")).encode()).hexdigest()[:8]
+    path = cache / f"masks-{_cache_key(view.camera, n_cells)}-{name}.npz"
+    if path.exists():
+        with np.load(path) as z:
+            return [
+                Mask(m.astype(bool), int(level), float(score))
+                for m, level, score in zip(z["masks"], z["levels"], z["scores"], strict=True)
+            ]
+    masks = source.masks(view.rgb)
+    h, w = view.rgb.shape[:2]
+    tmp = path.with_suffix(".tmp.npz")
+    np.savez_compressed(
+        tmp,
+        masks=np.array([m.mask for m in masks], bool).reshape(len(masks), h, w),
+        levels=np.array([m.level for m in masks], np.int64),
+        scores=np.array([m.score for m in masks], np.float64),
+    )
+    tmp.replace(path)
+    return masks
+
+
 @dataclass
 class Segmentation:
     splat_id: np.ndarray
@@ -1280,10 +1328,15 @@ def segment(
     view_count: int = VIEW_COUNT,
     cells: tuple[np.ndarray, np.ndarray, np.ndarray, float] | None = None,
     source_factory=None,
+    cache: Path | None = None,
+    progress=None,
 ) -> Segmentation:
     """Cells, views, masks, votes, lifting and meaning, for a scan held in memory.
 
-    `source_factory(cameras)` builds a mask source that needs the cameras (`OracleMasks`)."""
+    `source_factory(cameras)` builds a mask source that needs the cameras (`OracleMasks`).
+    `cache`: a directory where each view and its masks are kept as they are made, so a
+    stopped run resumes (views and masks are most of the time on a large scan).
+    `progress(message)` is told as each view is done."""
     timings: dict[str, float] = {}
     mark = time.perf_counter()
     cell, centroids, counts, edge = cells or supervoxels(splats.positions)
@@ -1293,12 +1346,25 @@ def segment(
         cameras = plan_views(splats.positions, view_count, observers=observer_points(splats))
     timings["planS"] = time.perf_counter() - mark
     mark = time.perf_counter()
-    views = render_views(splats, cameras, cell)
+    if cache is not None:
+        cache.mkdir(parents=True, exist_ok=True)
+    n_cells = len(centroids)
+    views = []
+    for k, camera in enumerate(cameras):
+        views.append(cached_view(cache, splats, camera, cell, n_cells))
+        if progress:
+            progress(f"view {k + 1}/{len(cameras)} rendered")
     timings["renderS"] = time.perf_counter() - mark
     mark = time.perf_counter()
     if source is None:
         source = source_factory(cameras)
-    votes, levels, _ = collect_votes(views, source, len(centroids))
+    all_masks = []
+    for k, view in enumerate(views):
+        all_masks.append(cached_masks(cache, view, source, n_cells))
+        if progress:
+            progress(f"view {k + 1}/{len(views)} masked ({len(all_masks[-1])} masks)")
+    levels = max((m.level for masks in all_masks for m in masks), default=0) + 1
+    votes = [vote(v, m, n_cells, levels) for v, m in zip(views, all_masks, strict=True)]
     timings["masksS"] = time.perf_counter() - mark
     mark = time.perf_counter()
     lifted = lift(votes, centroids, counts, edge, levels)
@@ -1356,6 +1422,9 @@ def main() -> None:
     parser.add_argument("--vocabulary", type=Path, default=None, help="one tag per line")
     parser.add_argument("--views", type=int, default=VIEW_COUNT)
     parser.add_argument("--save-dir", type=Path, default=None, help="write the views here")
+    parser.add_argument(
+        "--cache", type=Path, default=None, help="keep views and masks here; a rerun resumes"
+    )
     parser.add_argument("--render-instances", type=Path, default=None, help="a PNG to check")
     parser.add_argument("--out", type=Path, default=None, help="default: the tiles directory")
     parser.add_argument("--opacity-min", type=float, default=scene_plants.PACKAGE_OPACITY_MIN)
@@ -1394,6 +1463,8 @@ def main() -> None:
         vocabulary,
         view_count=args.views,
         source_factory=factory,
+        cache=args.cache,
+        progress=lambda message: print(message, flush=True),
     )
     if from_tiles:
         tiles = tile_binding_by_position(args.tiles, splats.positions, result.splat_id)
