@@ -22,25 +22,32 @@ STORE by behaviour (from properties, not class names)
   │  static, deforms in place ─► spatial tiles + per-splat instance id (+ skin weights)
   │  moves as a whole         ─► its own object tileset, own frame (+ fill the hole it leaves)
   ▼
-SKIN each moving instance: PhysSkin(shape) ─► m weight fields; each field's transform = a handle
+SKIN each moving instance: Simplicits / FreeForm (Kaolin, Apache-2.0) ─► m weight fields;
+  │  each field's transform = a handle (offline, per instance, no training data)
   ▼
 DRIVE the handles
   │  living: wind forces + materials (class prior, refined by the video teacher)
   │  live:   telemetry (a car is 1 rigid handle; a robot its joints)
   │  dream:  world model → handle trajectories
   ▼
-GPU: x' = Σ_j w_j · T_j · x   (one skinning path, the existing vertex hook)
+GPU: x' = x + Σ_j w_j(x) · Z_j · [x; 1]   (one skinning path, the existing vertex hook;
+     signed weights, never normalised; a constant field carries rigid motion)
 ```
 
 ## 2. Terms
 
 - **Handle**: a transform (affine: rotation, scale, shear, translation) that changes over
   time. It is a degree of freedom, not necessarily a point in space.
-- **Skin**: per splat, a weight per handle. A splat's new position is the weighted sum of its
-  handles' transforms applied to its rest position.
-- **PhysSkin** (zju3dv, CVPR 2026; built on NVIDIA Simplicits): predicts the skin of a shape
-  in one pass, trained against elastic energy. It gives _how a shape can bend_. Materials,
-  forces and non-elastic behaviour (walking, flowing) come from data or drivers.
+- **Skin**: per splat, a weight per handle. A splat moves by its rest position plus the
+  weighted sum of its handles' displacements (`Z_j`, rest-relative affine). Weights are
+  signed and do not sum to one; the shader must not normalise or clamp them.
+- **Simplicits / FreeForm** (NVIDIA Kaolin, Apache-2.0): computes a shape's skin offline,
+  per instance, from the shape alone. The FreeForm/RKPM basis needs no network and no
+  training data; MLP Simplicits is trained per object. It gives _how a shape can bend_;
+  materials, forces and non-elastic behaviour come from data or drivers.
+- **PhysSkin** (zju3dv, CVPR 2026) predicts the same kind of skin in one pass, but has no
+  licence (research only), depends on GPL/ShapeNet-trained Michelangelo, and on the
+  synthetic tree folded and either toppled or locked when pinned. Not used (§7).
 - **Video teacher**: fits a few material/forcing numbers per instance (stiffness, damping,
   drag) rather than per-limb frequencies. Per-limb frequencies proved unidentifiable (Wind on
   Trees, arXiv 2609.17810).
@@ -124,7 +131,15 @@ See [LIVING_PLAN.md](LIVING_PLAN.md).
 
 ## 7. Open questions
 
-- PhysSkin's licence is not stated in its repository; Simplicits (Kaolin) is the fallback.
-- Its runtime cost for hundreds of instances in a browser is unmeasured.
-- Trees with thin branches are outside PhysSkin's training data; the synthetic tree is the test.
+- **Skin method, decided 2026-10-01 (step B1):** Kaolin Simplicits with the FreeForm/RKPM
+  basis. On the synthetic tree (CPU) it gave a plausible pinned sway (crown 0.51 m peak,
+  swings back) and the least tearing (edge stretch p99 1.11 vs PhysSkin's 1.25, max 1.35 vs
+  4.30). PhysSkin: no licence; Michelangelo encoder GPL-3.0, weights trained on non-commercial
+  ShapeNet; folded in 2 of 5 deformation trials. Pip Kaolin 0.18 lacks RKPM (vendor it from
+  master until a release has it).
+- Browser runtime: for wind (small strain), linear/modal dynamics with a prefactored
+  `(M/h² + K)`, about 40k flops per object per frame: tens of objects are trivial in JS.
+  Full Neo-Hookean Newton only with few cubature points (Q ≈ 200–300, m ≈ 8–10).
+- Covariances follow the skin's Jacobian, which includes the weights' gradients: store
+  ∇w per splat or drop that term (to measure).
 - SAM 3 / some lifting methods carry their own licences; SAM 2 is Apache-2.0.

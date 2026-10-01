@@ -14,7 +14,7 @@ Architecture: [SCENE_OBJECTS.md](SCENE_OBJECTS.md). Branch: `living-models`.
 
 ## B. Skin
 
-- [~] B1 PhysSkin / Simplicits: licences, dependencies, CPU or GPU run on the synthetic tree
+- [x] B1 Skin method chosen: Kaolin Simplicits/FreeForm (Apache-2.0); PhysSkin rejected (no licence, unstable on the tree)
 - [ ] B2 Skin format in tiles (weights per splat, handles per instance)
 - [ ] B3 GPU skinning path for any instance (generalise the tree rig hook)
 
