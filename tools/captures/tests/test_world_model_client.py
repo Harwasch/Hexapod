@@ -130,6 +130,9 @@ def test_the_client_calls_what_the_app_defines() -> None:
     }
     assert methods["Fixer"] == {"fix"} and methods["Distill"] == {"run"}
     assert methods["Wan"] == {"clip"} and methods["Cosmos"] == {"clip"}
+    # segment_models' Modal clients (ModalSam2Masks, ModalSiglipEmbedder) call these.
+    assert methods["SegmentMasks"] == {"masks"}
+    assert methods["SegmentEmbed"] == {"embed_images", "embed_texts"}
     # The rates the client expects are the rates the app sends.
     assert constants["WAN_FPS"] == wmc.VideoClips(model="Wan", remote=None).fps  # type: ignore[arg-type]
     assert constants["COSMOS_FPS"] == wmc.VideoClips(model="Cosmos", remote=None).fps  # type: ignore[arg-type]
