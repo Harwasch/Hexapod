@@ -219,12 +219,7 @@ describe("per-tile ids (the plants.json encoding, shared)", () => {
     const runs = Int32Array.from([2, 3, 0, 1, 1, 2]);
     expect(runsLength(runs)).toBe(6);
     expect([...decodeRuns(runs, new Uint32Array(6))]).toEqual([2, 2, 2, 0, 1, 1]);
-    const binding = {
-      format: "hexapod.plants",
-      version: 1,
-      plants: [],
-      tiles: new Map([["k", runs]]),
-    };
+    const binding = { plantCount: 2, tiles: new Map([["k", runs]]) };
     expect([...(plantLabels(binding, "k") ?? [])]).toEqual([2, 2, 2, 0, 1, 1]);
     expect(tileRunsIssue("fnv1a32:6:0000abcd", [...runs], 2)).toBeUndefined();
     expect(tileRunsIssue("fnv1a32:6:0000abcd", [...runs], 1, "a plant")).toMatch(
@@ -468,7 +463,7 @@ function fakeScene(
   };
   return {
     primitive,
-    tileset: { gaussianSplatPrimitive: primitive } as SplatTilesetLike,
+    tileset: { gaussianSplatPrimitive: primitive },
     contents,
   };
 }
