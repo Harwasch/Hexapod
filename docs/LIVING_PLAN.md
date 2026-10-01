@@ -24,6 +24,10 @@ Architecture: [SCENE_OBJECTS.md](SCENE_OBJECTS.md). Branch: `living-models`.
 - [ ] C3 Telemetry drives a rigid instance (live)
 - [ ] C4 Movable instances to their own tilesets + fill the hole
 
+## E. Merge
+
+- [ ] E1 Pull in `claude/funny-carson-937ydv` (rendering + UX) after its final push, once A–B1 are merged
+
 ## D. Already done (this branch)
 
 - [x] View cones: fade what a capture never saw
