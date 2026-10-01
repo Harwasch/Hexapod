@@ -11,6 +11,7 @@ import {
   type ViewConeGpu,
 } from "@/cesium/splatViewCones";
 import type { SplatShaderBuilder } from "@/cesium/splatInternals";
+import { visibilityChainOf } from "@/cesium/splatVisibility";
 import {
   cellCount,
   decodeAxis,
@@ -155,7 +156,7 @@ describe("the vertexVisibility hook", () => {
   it("declares its uniforms and the function the patched shader calls", () => {
     const hook = new SplatViewCones(META, new Uint8Array(cellCount(META) * 4), gpu);
     const { lines, uniforms } = build(hook);
-    expect(lines).toContain("float splatVertexVisibility(uint splatIndex, vec3 position)");
+    expect(lines).toContain("float splatViewConeVisibility(uint splatIndex, vec3 position)");
     for (const name of ["u_viewCones", "u_viewConeFromModel", "u_viewConeDims", "u_viewConeFade"]) {
       expect(lines).toContain(name);
       expect(uniforms[name]).toBeTypeOf("function");
@@ -174,7 +175,9 @@ describe("the vertexVisibility hook", () => {
       isDestroyed: () => false,
     };
     expect(hook.install(primitive)).toBe(true);
-    expect(primitive.vertexVisibility).toBe(hook);
+    // In the primitive's visibility chain (splatVisibility.ts), not the slot itself.
+    expect(visibilityChainOf(primitive)?.parts).toEqual([hook]);
+    expect(hook.installed).toBe(true);
     expect(uniforms.u_viewConeActive?.()).toBe(0);
     tile.content._lastSplatTransform = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 10, 0, 0, 1];
     expect(uniforms.u_viewConeActive?.()).toBe(1);
