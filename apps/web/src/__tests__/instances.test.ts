@@ -32,6 +32,8 @@ import {
   matchLabel,
   parseInstances,
   parseQuery,
+  PROMINENCE_FLOOR,
+  prominence,
   quickFilters,
   rankByEmbedding,
   resolveBeside,
@@ -256,12 +258,30 @@ describe("search", () => {
     const results = searchInstances(d.instances, "tree");
     expect(results.map((r) => r.id)).toEqual([2, 3]);
     expect(results[0]?.label).toBe("oak tree");
-    expect(results[0]?.score).toBeCloseTo(0.95 * 0.8, 9);
+    const largest = Math.max(...d.instances.map((i) => i.splats));
+    const oak = d.instances.find((i) => i.id === 2);
+    expect(results[0]?.score).toBeCloseTo(
+      0.95 *
+        0.8 *
+        (PROMINENCE_FLOOR + (1 - PROMINENCE_FLOOR) * prominence(oak?.splats ?? 0, largest)),
+      9,
+    );
     expect(results[0]?.behaviour).toBe("in-place");
     // A lower tag matches too, by its own score.
     expect(searchInstances(d.instances, "car").map((r) => [r.id, r.label])).toEqual([[1, "car"]]);
     expect(searchInstances(d.instances, "")).toEqual([]);
     expect(searchInstances(d.instances, "submarine")).toEqual([]);
+  });
+
+  it("puts the object above a fragment that matches a little better", () => {
+    const base = doc().instances[0];
+    if (!base) throw new Error("fixture");
+    const tag = (label: string, score: number) => [{ label, score }];
+    const object = { ...base, id: 1, splats: 30000, tags: tag("cable spool", 0.5) };
+    const fragment = { ...base, id: 2, splats: 40, tags: tag("cable spool", 0.6) };
+    expect(searchInstances([fragment, object], "spool").map((r) => r.id)).toEqual([1, 2]);
+    expect(prominence(0, 10)).toBe(0);
+    expect(prominence(10, 10)).toBe(1);
   });
 
   it("finds by property name, and filters by value", () => {

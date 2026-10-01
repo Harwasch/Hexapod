@@ -375,6 +375,19 @@ export function instanceLabel(instance: Instance): string {
 }
 
 /**
+ * How much of the scan an instance is, 0..1: its splats on a log scale against the largest
+ * instance's. A query's match is scaled by `PROMINENCE_FLOOR + (1 - PROMINENCE_FLOOR) *
+ * prominence`, so a fragment of a few hundred splats that happens to match well does not bury
+ * the object itself (measured on the spool scan, where fragments took the top hits).
+ */
+export const PROMINENCE_FLOOR = 0.6;
+
+export function prominence(splats: number, largest: number): number {
+  if (largest <= 0 || splats <= 0) return 0;
+  return Math.min(1, Math.log1p(splats) / Math.log1p(largest));
+}
+
+/**
  * Ranks instances for a query. Words match each tag's label (`matchLabel`) weighted by the
  * tag's own score, and property names weighted by the property's value — so "vegetation"
  * finds what scored as vegetation without a class list. Filters must all pass. With filters
@@ -390,6 +403,7 @@ export function searchInstances(
   if (q.terms.length === 0 && q.filters.length === 0) return [];
   const results: (SearchResult & { splats: number })[] = [];
   const sortBy = q.filters.find((f) => f.name !== "behaviour")?.name;
+  const largest = instances.reduce((m, i) => Math.max(m, i.splats), 0);
   for (const instance of instances) {
     if (!q.filters.every((f) => passes(instance, f))) continue;
     let score = 0;
@@ -410,6 +424,7 @@ export function searchInstances(
         }
       }
       if (score <= 0) continue;
+      score *= PROMINENCE_FLOOR + (1 - PROMINENCE_FLOOR) * prominence(instance.splats, largest);
     } else {
       score = sortBy === undefined ? 1 : Math.max(0, Math.min(1, instance.properties[sortBy] ?? 0));
     }
