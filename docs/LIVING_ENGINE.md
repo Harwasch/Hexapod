@@ -176,6 +176,10 @@ cutoff is set where the generative result stops beating the null baseline.
 
 ## 4. Living: what parameters, per object, per scenario
 
+> **Superseded direction (2026-10-01):** per-class rigs and per-limb frequencies are replaced
+> by general segmentation, learned skins (PhysSkin) and fitted materials: see
+> [SCENE_OBJECTS.md](SCENE_OBJECTS.md). This section stays as the record of the parametric design.
+
 The idea that makes it robust: **object properties are learned once; scenarios are inputs.**
 A tree's frequency and damping don't change with the weather. The forcing does, and physics
 carries the forcing into motion. One parameter set therefore covers every wind speed and season
