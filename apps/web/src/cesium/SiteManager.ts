@@ -24,7 +24,9 @@ import {
 } from "@/lib/detail";
 import { AdaptiveSplatBudget } from "@/lib/splatBudget";
 
-import { DEFAULT_SPLAT_RENDERER, type SplatRendererKind } from "./scanView/types";
+import { DEFAULT_SPLAT_RENDERER } from "@/state/settings";
+
+import type { SplatRendererKind } from "./scanView/types";
 import type { Emitter } from "@/lib/emitter";
 import { createLogger, describeError } from "@/lib/log";
 import { withRetry } from "@/lib/retry";

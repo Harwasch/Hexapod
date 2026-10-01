@@ -29,17 +29,13 @@ import {
 import { deviceSplatBudget, deviceSplatCeiling, isHandheld } from "@/lib/detail";
 import { AdaptiveSplatBudget } from "@/lib/splatBudget";
 import { createLogger } from "@/lib/log";
+import { DEFAULT_SPLAT_RENDERER } from "@/state/settings";
 import { TileStreamer, type View } from "@/view/stream";
 import { parseTileset, type TileNode } from "@/view/tiles";
 
 import { Handover } from "./handover";
 import { scanPose } from "./pose";
-import {
-  DEFAULT_SPLAT_RENDERER,
-  type ScanBackend,
-  type ScanPose,
-  type SplatRendererKind,
-} from "./types";
+import type { ScanBackend, ScanPose, SplatRendererKind } from "./types";
 
 const log = createLogger("scan-renderer");
 

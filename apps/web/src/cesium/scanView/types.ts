@@ -3,13 +3,6 @@ import type { TileNode } from "@/view/tiles";
 /** What draws a splat scan on the globe: CesiumJS itself, or a dedicated splat renderer. */
 export type SplatRendererKind = "cesium" | "spark" | "playcanvas";
 
-/**
- * Who draws splat scans unless chosen otherwise: PlayCanvas, streaming a scan's own streamed
- * level of detail as superspl.at does (ScanRendererHost.runNative). CesiumJS still draws a
- * Living Survey scan (its motion is CesiumJS's shader) and every other layer.
- */
-export const DEFAULT_SPLAT_RENDERER: SplatRendererKind = "playcanvas";
-
 /** Cesium's camera in the scan's own east/north/up metres (the frame its splats are in). */
 export interface ScanPose {
   eye: [number, number, number];

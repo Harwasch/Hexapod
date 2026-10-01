@@ -3,13 +3,18 @@ import { persist } from "zustand/middleware";
 
 import type { UnitSystem } from "@twin/geo";
 
-import { DEFAULT_SPLAT_RENDERER } from "@/cesium/scanView/types";
-
 export type ThemeMode = "auto" | "light" | "dark";
 export type QualityPreset = "performance" | "balanced" | "ultra";
 export type WorldMode = "open" | "photorealistic";
 /** Who draws splat scans on the globe (cesium/scanView): CesiumJS, Spark or PlayCanvas. */
 export type SplatRenderer = "cesium" | "spark" | "playcanvas";
+/**
+ * Who draws splat scans unless chosen otherwise: PlayCanvas, streaming a scan's own streamed
+ * level of detail as superspl.at does (scanView/ScanRendererHost.runNative). CesiumJS still
+ * draws a Living Survey scan (its motion is CesiumJS's shader) and every other layer. Here,
+ * not beside the renderers, so pages without the globe (admin.html) never load cesium/.
+ */
+export const DEFAULT_SPLAT_RENDERER: SplatRenderer = "playcanvas";
 
 export interface SettingsState {
   theme: ThemeMode;
