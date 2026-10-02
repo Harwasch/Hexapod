@@ -496,7 +496,7 @@ def main(
     summary: dict = {}
 
     def dump() -> None:  # after every result: a failed run still leaves what it got
-        dump()
+        (folder / "summary.json").write_text(json.dumps(summary, indent=1), encoding="utf-8")
 
     try:
         access = modal.Function.from_name(WORLD_MODELS_APP, "access").remote()
