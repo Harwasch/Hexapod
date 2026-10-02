@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -23,9 +23,12 @@ import {
   type SkinWind,
 } from "./skinWind";
 import { cholesky, symmetricEigen } from "./symmetricEigen";
+import { frozenTurbulence } from "./turbulence";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const YARD_SKIN = resolve(HERE, "../../../data/tiles/synthetic-yard/skin/skin.json");
+/** Numbers this model writes and the Python port (`tools/captures/skin_wind.py`) must match. */
+const PARITY = resolve(HERE, "../../../data/tiles/synthetic-yard/skin/wind_parity.json");
 
 interface FixtureSkin {
   instance: number;
@@ -482,6 +485,88 @@ describe("on the yard's skins", () => {
     const ms = Number(process.hrtime.bigint() - started) / 1e6 / frames;
     console.info(`skin wind: ${ms.toFixed(3)} ms a frame for 30 objects x 14 handles`);
     expect(ms).toBeLessThan(4);
+  });
+});
+
+/** Frames (30 fps from t = 500 s) whose handles the parity reference records. */
+const PARITY_FRAMES = [0, 1, 7, 30, 61, 90, 120];
+
+/**
+ * The reference the Python port is held to (`tools/captures/tests/test_skin_wind.py` reads the
+ * same file): the field, two skins' anchored modes under two materials, and their handles over
+ * four seconds from rest. `UPDATE_SKIN_WIND_PARITY=1` rewrites it after a deliberate change.
+ */
+function parityReference(): Record<string, unknown> {
+  const skins = yardSkins();
+  const field = frozenTurbulence(11, 64);
+  const materials: Record<string, SkinMaterial> = {
+    plant: PLANT,
+    fitted: { stiffness: 2.4, damping: 0.07, drag: 0.04, wind: true, evidence: "fitted-generated" },
+  };
+  const wind = skinWindFromSettings({ strength: 0.1, bearingDeg: 60 });
+  const runs: Record<string, unknown>[] = [];
+  for (const instance of [1, 10]) {
+    const skin = skins.find((s) => s.instance === instance);
+    if (!skin) throw new Error(`no skin ${String(instance)}`);
+    for (const [name, material] of Object.entries(materials)) {
+      const model = skinWindModel(sourceOf(skin), material);
+      if (!model) throw new Error("no model");
+      const oscillator = new SkinWindOscillator(model);
+      const sky = new SkinWindField(11);
+      const handles: Record<string, number[]> = {};
+      for (let k = 0; k <= 120; k += 1) {
+        const t = 500 + k / 30;
+        oscillator.advance(sky, wind, t);
+        if (PARITY_FRAMES.includes(k)) handles[String(k)] = Array.from(oscillator.handles(t));
+      }
+      runs.push({
+        instance,
+        material: name,
+        stiffness: material.stiffness,
+        damping: material.damping,
+        drag: material.drag,
+        modes: model.modes,
+        omega: Array.from(model.omega),
+        anchorResidual: model.anchorResidual,
+        handles,
+      });
+    }
+  }
+  return {
+    note: "written by packages/world/src/skinWind.test.ts (UPDATE_SKIN_WIND_PARITY=1); read by tools/captures/tests/test_skin_wind.py",
+    field: {
+      seed: 11,
+      modes: 64,
+      wavevectors: Array.from(field.wavevectors.slice(0, 12)),
+      amplitudes: Array.from(field.amplitudes.slice(0, 4)),
+      phases: Array.from(field.phases.slice(0, 8)),
+    },
+    wind: { speedMps: wind.speedMps, bearingDeg: wind.bearingDeg, seed: 11, t0: 500, fps: 30 },
+    runs,
+  };
+}
+
+/** Every number in a JSON value, depth first. */
+function numbers(value: unknown, out: number[] = []): number[] {
+  if (typeof value === "number") out.push(value);
+  else if (Array.isArray(value)) for (const v of value) numbers(v, out);
+  else if (value && typeof value === "object")
+    for (const v of Object.values(value)) numbers(v, out);
+  return out;
+}
+
+describe("parity with the Python port", () => {
+  it("still writes the committed reference numbers", () => {
+    const current = parityReference();
+    if (process.env.UPDATE_SKIN_WIND_PARITY === "1")
+      writeFileSync(PARITY, JSON.stringify(current, null, 1) + "\n", "utf8");
+    const committed = numbers(JSON.parse(readFileSync(PARITY, "utf8")));
+    const now = numbers(current);
+    expect(now.length).toBe(committed.length);
+    now.forEach((v, i) => {
+      const reference = committed[i] ?? Number.NaN;
+      expect(Math.abs(v - reference)).toBeLessThanOrEqual(1e-12 * Math.max(1, Math.abs(reference)));
+    });
   });
 });
 

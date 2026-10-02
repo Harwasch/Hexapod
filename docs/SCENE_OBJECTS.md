@@ -311,6 +311,59 @@ vegetation`; `drag = 0.025 · (0.25 + 0.75 · vegetation)`; `evidence: "prior"`.
 `skin/materials.json` turns the wind on for 1, 9 and 10 (its stand-in segmentation reads every
 instance `movable`) and leaves 12 on its prior, still.
 
+A fitted record may also carry a `fit` block (source clip, frames, fps, tracked points,
+signal to noise, loss) for provenance; readers ignore it.
+
+### Video teacher (step C2)
+
+`tools/captures/teacher_materials.py` fits `stiffness`, `damping` and `drag` per instance to a
+clip of the object moving in the wind, by matching what the C1 model would show the camera to
+what the camera saw. The model is `skin_wind.py`, a line-by-line port of `skinWind.ts` (and of
+the turbulence field it reads), held to it by `data/tiles/synthetic-yard/skin/wind_parity.json`:
+numbers `skinWind.test.ts` writes (`UPDATE_SKIN_WIND_PARITY=1`) and both test suites check
+(handles to 1e-9 of their peak).
+
+- **Observe.** The scan rendered from the clip's camera at rest labels the object's pixels
+  (the skin owner per splat). Textured points there are tracked by Lucas-Kanade against frame
+  0 (no drift over minutes), forward-backward checked; the static background's median motion
+  (the camera's) is taken out. Each point is lifted onto the scan by the rest render's depth:
+  its skin weights (nearest skinned splats) and `J`, how a horizontal metre there moves on
+  screen.
+- **Predict.** A point moves on screen by `J Σ_j w_j q_j`, so the mean of the points'
+  spectra is a quadratic form in the handles: a few channels carry it exactly. The wind's
+  realisation is unknown, so the model is driven by an ensemble of the same EN 1991-1-4 field
+  at the clip's mean speed and bearing (other seeds, 320 modes each: the browser's 64 make a
+  line spectrum, a real wind does not); `Φ` and the modal loads do not depend on the
+  material, and the response to any `(c, ζ)` is the integrator's own exact transfer function
+  (one FFT).
+- **Fit.** Welch spectra in log-spaced bands, `mean (log(S(c, ζ, D) + b) − log P)²` with a
+  white tracking floor `b`: a grid over `(c, ζ)` (the prior's `c` / 6 to × 6) with `D`, `b`
+  profiled, then Nelder-Mead with the output bound on. Where the resonances sit gives `c`,
+  their width and the share of motion below them `ζ`, the level `D` (relative to the wind
+  speed given: `--speed` / `--strength`; a clip of an unknown wind fits `D` for the assumed
+  one). Written only when the fitted motion stands 3× above the floor.
+- **Evidence.** `--source real` writes `fitted-real`, `--source generated` (a world-model
+  clip, or this tool's synthetic ones) `fitted-generated`; other records are kept.
+
+**Validation** (the yard, strength 0.5 = 14.1 m/s, bearing 60°, 180 s at 15 fps, 320 × 240;
+the truth 0.8 × the prior's `c`, `ζ` 0.07, 1.3 × its `D`; fitted once from the property prior
+and once from a prior 4× too stiff, a quarter of the drag and `ζ` 0.3 -- both land in the
+same place):
+
+| instance             | true c / ζ / D        | fitted (from the prior)   | error c / ζ / D        |
+| -------------------- | --------------------- | ------------------------- | ---------------------- |
+| 9, snag (7 m)        | 4.87 / 0.070 / 0.0325 | 4.92 / 0.068 / 0.0319     | +0.9% / −3% / −2%      |
+| 1, tree (9.7 m)      | 2.80 / 0.070 / 0.0325 | 2.70 / 0.081 / 0.0339     | −3.6% / +16% / +4%     |
+| 10, shrub (1.9 m)    | 5.43 / 0.070 / 0.0323 | 5.48 / 0.072 / 0.0277     | +0.9% / +3% / −14%     |
+
+The fitted snag replays its clip (same wind realisation) at a correlation of 0.998, the tree
+0.93 (its sway reaches the output bound at this strength), the shrub 0.998. Damping needs a
+continuous wind: a clip under the browser's own 64-mode field still gives `c` (−0.4%) and `D`
+(+4%) but `ζ` 2.6× off, its spectrum being a few lines on the resonance. The tree's 0.17 Hz
+mode wants minutes of footage; a world-model clip of ~5 s (`teacher_materials.py world`, Wan
+or Cosmos on Modal, `huggingface` secret needed) resolves only fast objects.
+`tests/test_teacher_materials.py` runs the snag at 90 s (c within 5%, ζ 35%, D 20%).
+
 ### Fixture and browser checks
 
 `data/tiles/synthetic-yard/skin/` is the yard's tree (instance 1), a snag (9) and two shrubs

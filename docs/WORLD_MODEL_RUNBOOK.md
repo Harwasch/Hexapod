@@ -9,6 +9,7 @@ oscillators for motion). This page covers swapping in the real models on Modal.
 | B: refine       | `distill_fill.torch_rasterize` | gsplat 1.5.3         | `Distill.run` | `teacher_fill.py fill --distill N`  |
 | A: motion       | `OscillatorClips`              | Wan 2.2 TI2V-5B      | `Wan.clip`    | `teacher_motion.py --source wan`    |
 | A: motion (alt) | (same)                         | Cosmos-Predict2.5-2B | `Cosmos.clip` | `teacher_motion.py --source cosmos` |
+| C2: materials   | `teacher_materials.py synth`   | Wan / Cosmos         | `Wan.clip`    | `teacher_materials.py world`        |
 
 Code: `infra/modal/world_models.py` (server), `tools/captures/world_model_client.py`
 (client), `teacher_fill.py`, `teacher_motion.py`, `distill_fill.py`.
@@ -62,6 +63,15 @@ reports, strips and inferred tileset as the `fill` artifact.
    are `fitted`, and their frequencies are plausible (0.2–3 Hz) and differ from the prior.
 5. **Cosmos** (after licences): step 4 with `--source cosmos`. It runs 16 fps × 77 frames,
    so the Welch segment is about 4.8 s.
+
+6. **Materials (C2) from a world-model clip.** Same secret as 4.
+   ```sh
+   uv run --with modal python teacher_materials.py world ../../data/tiles/synthetic-yard/splat \
+     ../../data/tiles/synthetic-yard/skin --instance 10 --model Wan --seeds 4 \
+     --strength 0.1 --bearing 60 --materials /tmp/materials.json --report /tmp/c2.json
+   ```
+   A 5 s clip resolves shrubs (2-8 Hz), not a tree's 0.2 Hz sway; the clip's wind speed is
+   unknown, so `drag` is relative to the `--strength` given. Records are `fitted-generated`.
 
 ## 3. Things that will probably need a fix on first contact
 
