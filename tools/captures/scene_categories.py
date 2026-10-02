@@ -401,7 +401,10 @@ def _heaviest(
 
 
 def instance_categories(
-    instances: Sequence[Mapping[str, object]], labels: Mapping[str, str]
+    instances: Sequence[Mapping[str, object]],
+    labels: Mapping[str, str],
+    *,
+    given: Mapping[int, str] | None = None,
 ) -> dict[int, str]:
     """Per instance id, its category: from its own tags; else from its tagged siblings (most
     splats; a coarse parent is often a mixed region, such as a pumpkin's crop with the hay
@@ -409,11 +412,16 @@ def instance_categories(
     ancestor's (a part is what it is part of); else the category most of its descendants'
     splats are in; else that of the smallest categorised instance whose bounds hold its
     centroid; else `OTHER`. Instances are the `instances.json` records (`id`, `parent`,
-    `tags`, `splats`). The viewer's `assignCategories` is the same rule."""
+    `tags`, `splats`). The viewer's `assignCategories` is the same rule. `given`: categories
+    already decided for some instances (`segment_scene.describe`: tags and a category head),
+    which take the place of their tags' vote."""
     by_id = {int(i["id"]): i for i in instances}
     splats = {k: float(i.get("splats") or 0) for k, i in by_id.items()}  # type: ignore[arg-type]
     own: dict[int, str] = {}
     for i in instances:
+        if given is not None and int(i["id"]) in given:  # type: ignore[call-overload]
+            own[int(i["id"])] = given[int(i["id"])]  # type: ignore[call-overload]
+            continue
         voted = tag_category(i.get("tags") or [], labels)  # type: ignore[arg-type]
         if voted is not None:
             own[int(i["id"])] = voted[0]
