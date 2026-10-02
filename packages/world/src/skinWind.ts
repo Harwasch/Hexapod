@@ -22,9 +22,9 @@
  *   (`SkinMaterial.stiffness`, m/s).
  * - **Load**: a uniform drag `f` drives handle `j` by `M_0j f` (its mean weight). A gust that
  *   varies across the object drives handle `j` by what it feels at its own support centre
- *   beyond the mean: `F_j = g (M_0j a_0 + M_jj (a_j − a_0))`, `a_j = |v_j| v_j` the wind
- *   velocity's square at handle `j`'s support centre (`a_0` at the object's mid-height), `g` the
- *   **drag** gain (1/m). That is the first-order expansion `f(x) ≈ f_0 + Σ_j w_j (f_j − f_0)`
+ *   beyond the mean: `F_j = (D / scale)(M_0j a_0 + M_jj (a_j − a_0))`, `a_j = |v_j| v_j` the
+ *   wind velocity's square at handle `j`'s support centre (`a_0` at the object's mid-height),
+ *   `D` the **drag** number (dimensionless; drag per unit mass falls as `1/size`). That is the first-order expansion `f(x) ≈ f_0 + Σ_j w_j (f_j − f_0)`
  *   with `M` taken diagonal for the learned handles, as the eigenmodes make it.
  *
  * ### The anchor
@@ -62,9 +62,14 @@
 
 import { speedFromStrength } from "./living";
 import type { MotionEvidence } from "./motionParams";
-import { cholesky, backSubstituteTransposed, forwardSubstitute, symmetricEigen } from "./symmetricEigen";
 import {
-  backgroundResponse,
+  cholesky,
+  backSubstituteTransposed,
+  forwardSubstitute,
+  symmetricEigen,
+} from "./symmetricEigen";
+import {
+  BACKGROUND_SOFT_CLIP,
   frozenTurbulence,
   LATERAL_TURBULENCE_RATIO,
   TERRAIN_MIN_HEIGHT_M,
@@ -95,11 +100,13 @@ export const SKIN_RIGID_STIFFENING = 4;
 export const SKIN_BASE_DAMPING = 0.05;
 export const SKIN_FOLIAGE_DAMPING = 0.05;
 /**
- * Drag gain of foliage, 1/m: a handle's acceleration per (m/s)² of wind. Calibrated so the
- * yard's tree crown leans about 0.15 m (rms over its splats ~0.1 m) at the default strength
- * (0.1, 6.3 m/s), and a fully bare object takes a quarter of it.
+ * Drag number of foliage, dimensionless: a handle's acceleration is `drag · |v|v / scale`. Drag
+ * goes with area and mass with volume, so per unit mass it falls as `1/size`; with `ω ∝ 1/size`
+ * that makes the sway a fixed share of an object's size, other things equal. Calibrated so
+ * the yard's 9.7 m tree sways about 0.1 m rms over its splats at the default strength (0.1,
+ * 6.3 m/s); a fully bare object takes a quarter of it.
  */
-export const SKIN_DRAG_PER_M = 0.02;
+export const SKIN_DRAG = 0.025;
 /** Largest damping ratio a record may carry: the exact integrator here is the underdamped one. */
 export const SKIN_MAX_DAMPING = 0.95;
 
@@ -115,7 +122,7 @@ export interface SkinMaterial {
   readonly stiffness: number;
   /** Damping ratio `ζ` of every mode, `0 … SKIN_MAX_DAMPING`. */
   readonly damping: number;
-  /** Drag gain `g`, 1/m: acceleration per (m/s)² of wind. */
+  /** Drag number `D`, dimensionless: acceleration `D · |v|v / scale`. */
   readonly drag: number;
   /** Whether the wind drives it at all. */
   readonly wind: boolean;
@@ -136,7 +143,7 @@ function score(properties: Readonly<Record<string, number>>, name: string): numb
  * - softness `σ = clamp(max(vegetation, elastic) − rigid/2, 0, 1)` (0.5 without properties);
  *   `stiffness = SKIN_WAVE_SPEED_MPS · SKIN_RIGID_STIFFENING^(1 − σ)`.
  * - `damping = SKIN_BASE_DAMPING + SKIN_FOLIAGE_DAMPING · vegetation`.
- * - `drag = SKIN_DRAG_PER_M · (0.25 + 0.75 · vegetation)`: foliage catches the wind.
+ * - `drag = SKIN_DRAG · (0.25 + 0.75 · vegetation)`: foliage catches the wind.
  */
 export function materialPrior(
   properties: Readonly<Record<string, number>> | undefined,
@@ -151,7 +158,7 @@ export function materialPrior(
   return {
     stiffness: SKIN_WAVE_SPEED_MPS * Math.pow(SKIN_RIGID_STIFFENING, 1 - softness),
     damping: SKIN_BASE_DAMPING + SKIN_FOLIAGE_DAMPING * vegetation,
-    drag: SKIN_DRAG_PER_M * (0.25 + 0.75 * vegetation),
+    drag: SKIN_DRAG * (0.25 + 0.75 * vegetation),
     wind: behaviour === "in-place",
     evidence: "prior",
   };
@@ -200,6 +207,7 @@ const FIELD_CUTOFF_HZ = 25;
 /** Anchored modes slower than this share of the first handle's frequency are dropped. */
 const MIN_MODE_RATIO = 0.25;
 const TWELVE = 12;
+const EMPTY = new Float64Array(0);
 
 /** What a skin carries for its dynamics (`skin.json`, SCENE_OBJECTS.md §4). */
 export interface SkinDynamicsSource {
@@ -229,6 +237,7 @@ export interface SkinWindModel {
   /** `Ω_i`, rad/s, ascending. */
   readonly omega: Float64Array;
   readonly damping: number;
+  /** `D / scale`, 1/m: acceleration per (m/s)² of wind. */
   readonly drag: number;
   /** `M_0j`: each handle's mean weight. */
   readonly load: Float64Array;
@@ -296,7 +305,8 @@ export function skinWindModel(
   if (kept === 0) return undefined;
   // B = L⁻ᵀ Y (first `kept` columns): M-orthonormal, so Bᵀ M B = I.
   const yk = new Float64Array(m * kept);
-  for (let i = 0; i < m; i += 1) for (let k = 0; k < kept; k += 1) yk[i * kept + k] = y[i * m + k] ?? 0;
+  for (let i = 0; i < m; i += 1)
+    for (let k = 0; k < kept; k += 1) yk[i * kept + k] = y[i * m + k] ?? 0;
   const b = backSubstituteTransposed(l, m, yk, kept);
   // K, then K_r = Bᵀ K B.
   const k2 = (material.stiffness / source.scale) ** 2;
@@ -353,7 +363,7 @@ export function skinWindModel(
     shapes,
     omega,
     damping: Math.min(SKIN_MAX_DAMPING, Math.max(0, material.damping)),
-    drag: Math.max(0, material.drag),
+    drag: Math.max(0, material.drag) / source.scale,
     load,
     selfMass,
     points,
@@ -373,6 +383,8 @@ export interface SkinWind {
   readonly speedMps: number;
   /** Downwind bearing, degrees clockwise from north. */
   readonly bearingDeg: number;
+  /** Scales the turbulence intensity: 1 (the default) is EN 1991-1-4's, 0 a steady wind. */
+  readonly turbulence?: number;
 }
 
 /** The scene's `WindSettings` as the speed the Living Survey reads them at (`speedFromStrength`). */
@@ -385,13 +397,12 @@ export function skinWindFromSettings(settings: WindSettings): SkinWind {
 
 /**
  * One frozen turbulence field shared by every skin in a scene, so a gust crosses from object to
- * object at the mean speed. Deterministic from its seed; the clocks it advects are cached for a
- * few instants, since every oscillator steps the same grid.
+ * object at the mean speed. Deterministic from its seed.
  */
 export class SkinWindField {
   readonly field: FrozenTurbulence;
   readonly lengthScaleM: number;
-  readonly #clocks = new Map<string, TurbulenceClock>();
+  readonly #frames = new Map<string, SkinWindFrame>();
 
   constructor(
     seed: number,
@@ -408,16 +419,72 @@ export class SkinWindField {
     return turbulencePhases(this.field, point, [Math.sin(b), Math.cos(b), 0], this.lengthScaleM);
   }
 
-  clock(t: number, speedMps: number): TurbulenceClock {
+  /**
+   * The field advected to `t` at `speedMps`, folded for sampling: per mode `P = a·c − b·s` and
+   * `Q = a·s + b·c`, `(a, b)` the mode's weight through the low-pass `backgroundResponse`
+   * applies (at `FIELD_CUTOFF_HZ`) and `(c, s)` its rotor. Cached for a few instants: every
+   * oscillator steps the same grid.
+   */
+  frame(t: number, speedMps: number): SkinWindFrame {
     const key = `${String(t)}|${String(speedMps)}`;
-    let clock = this.#clocks.get(key);
-    if (clock === undefined) {
-      if (this.#clocks.size >= 16) this.#clocks.clear();
-      clock = turbulenceClock(this.field, this.lengthScaleM, speedMps, t);
-      this.#clocks.set(key, clock);
+    let frame = this.#frames.get(key);
+    if (frame === undefined) {
+      if (this.#frames.size >= 16) this.#frames.clear();
+      frame = foldClock(turbulenceClock(this.field, this.lengthScaleM, speedMps, t));
+      this.#frames.set(key, frame);
     }
-    return clock;
+    return frame;
   }
+}
+
+/** A {@link SkinWindField} at one instant: two numbers a mode. */
+export interface SkinWindFrame {
+  readonly p: Float64Array;
+  readonly q: Float64Array;
+}
+
+/** `backgroundResponse`'s per-mode arithmetic, done once for every point. */
+function foldClock(clock: TurbulenceClock): SkinWindFrame {
+  const { frequencies, weights, rotor } = clock;
+  const n = frequencies.length;
+  const p = new Float64Array(n);
+  const q = new Float64Array(n);
+  const twoZeta = 2 * Math.SQRT1_2;
+  for (let j = 0; j < n; j += 1) {
+    const r = (frequencies[j] ?? 0) / FIELD_CUTOFF_HZ;
+    const re = 1 - r * r;
+    const gain = (weights[j] ?? 0) / (re * re + twoZeta * twoZeta * r * r);
+    const a = re * gain;
+    const b = twoZeta * r * gain;
+    const c = rotor[j * 2] ?? 1;
+    const s = rotor[j * 2 + 1] ?? 0;
+    p[j] = a * c - b * s;
+    q[j] = a * s + b * c;
+  }
+  return { p, q };
+}
+
+/**
+ * The field at a point (its `phases`) in units of its rms, along and across the wind, softly
+ * clipped at `BACKGROUND_SOFT_CLIP` as `backgroundResponse` does (and equal to it).
+ */
+export function sampleSkinWind(
+  phases: Float64Array,
+  frame: SkinWindFrame,
+  out: Float64Array,
+): Float64Array {
+  const { p, q } = frame;
+  let along = 0;
+  let across = 0;
+  for (let j = 0; j < p.length; j += 1) {
+    const pj = p[j] ?? 0;
+    const qj = q[j] ?? 0;
+    along += (phases[j * 4] ?? 1) * pj - (phases[j * 4 + 1] ?? 0) * qj;
+    across += (phases[j * 4 + 2] ?? 1) * pj - (phases[j * 4 + 3] ?? 0) * qj;
+  }
+  out[0] = BACKGROUND_SOFT_CLIP * Math.tanh(along / BACKGROUND_SOFT_CLIP);
+  out[1] = BACKGROUND_SOFT_CLIP * Math.tanh(across / BACKGROUND_SOFT_CLIP);
+  return out;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -431,7 +498,12 @@ function transition(omega: number, zeta: number, h: number): [number, number, nu
   const e = Math.exp(-a * h);
   const c = Math.cos(wd * h);
   const s = Math.sin(wd * h);
-  return [e * (c + (a / wd) * s), (e * s) / wd, (-e * omega * omega * s) / wd, e * (c - (a / wd) * s)];
+  return [
+    e * (c + (a / wd) * s),
+    (e * s) / wd,
+    (-e * omega * omega * s) / wd,
+    e * (c - (a / wd) * s),
+  ];
 }
 
 /**
@@ -448,6 +520,7 @@ export class SkinWindOscillator {
   #step: number | undefined;
   #phases: Float64Array[] = [];
   #bearing = Number.NaN;
+  #field: SkinWindField | undefined;
   readonly #force: Float64Array;
   readonly #sample = new Float64Array(2);
 
@@ -488,8 +561,9 @@ export class SkinWindOscillator {
       this.reset();
       return;
     }
-    if (wind.bearingDeg !== this.#bearing) {
+    if (wind.bearingDeg !== this.#bearing || field !== this.#field) {
       this.#bearing = wind.bearingDeg;
+      this.#field = field;
       const p = this.model.points;
       this.#phases = Array.from({ length: this.model.handles }, (_, j) =>
         field.phases([p[j * 3] ?? 0, p[j * 3 + 1] ?? 0, p[j * 3 + 2] ?? 0], wind.bearingDeg),
@@ -541,17 +615,19 @@ export class SkinWindOscillator {
   #forces(field: SkinWindField, wind: SkinWind, t: number): void {
     const model = this.model;
     const { handles: m, modes: r, shapes } = model;
-    const clock = field.clock(t, wind.speedMps);
+    const turbulence = Math.max(0, wind.turbulence ?? 1);
+    const frame = turbulence > 0 ? field.frame(t, wind.speedMps) : undefined;
     const b = wind.bearingDeg * DEG_TO_RAD;
     const de = Math.sin(b);
     const dn = Math.cos(b);
     const u = wind.speedMps;
     this.#force.fill(0);
+    this.#sample.fill(0);
     let a0e = 0;
     let a0n = 0;
     for (let j = 0; j < m; j += 1) {
-      backgroundResponse(this.#phases[j] ?? new Float64Array(0), clock, FIELD_CUTOFF_HZ, this.#sample);
-      const intensity = model.intensity[j] ?? 0;
+      if (frame) sampleSkinWind(this.#phases[j] ?? EMPTY, frame, this.#sample);
+      const intensity = turbulence * (model.intensity[j] ?? 0);
       const along = u * (1 + intensity * (this.#sample[0] ?? 0));
       const across = u * LATERAL_TURBULENCE_RATIO * intensity * (this.#sample[1] ?? 0);
       // Downwind (de, dn); across, 90° clockwise from it: (dn, −de).

@@ -191,7 +191,9 @@ def test_round_trip_and_size_on_the_yard(tmp_path):
     for s in document["skins"]:
         assert len(s["eigenvalues"]) == len(s["support"]) == s["handles"] - 1
         m = s["handles"]
-        assert len(s["dynamics"]["mass"]) == len(s["dynamics"]["anchor"]["gram"]) == m * (m + 1) // 2
+        assert (
+            len(s["dynamics"]["mass"]) == len(s["dynamics"]["anchor"]["gram"]) == m * (m + 1) // 2
+        )
 
 
 def test_dynamics_grams_are_the_weights_moments_and_the_anchor_is_the_base():
