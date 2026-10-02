@@ -66,11 +66,14 @@ FILL_SIZE = (1024, 576)
 #: The public bucket answers Python's default user agent with 403; curl's is let through.
 USER_AGENT = "curl/8.5.0 (hexapod-fill)"
 
-#: Fillers by short name: the CPU stand-in, Fixer, and Fixer shown the render presmoothed.
+#: Fillers by short name: the CPU stand-in, and Fixer at its README's step (250), at 100
+#: and 50, and shown the render presmoothed. Any `teacher_fill.make_filler` spec works too.
 FILLERS = {
     "telea": "telea",
     "fixer": "world_model_client:FixerFiller",
-    "fixer-smooth": "world_model_client:SmoothedFixerFiller",
+    "fixer-t100": "world_model_client:FixerFiller?timestep=100",
+    "fixer-t50": "world_model_client:FixerFiller?timestep=50",
+    "fixer-smooth": "world_model_client:FixerFiller?presmooth_px=1",
 }
 
 # --- Fixer -----------------------------------------------------------------------------------
@@ -375,7 +378,7 @@ def run_job(kind: str, scan: str, filler: str, options: dict) -> dict:
     _remote_classes()
     os.chdir(CAPTURES)
     started = time.time()
-    spec = FILLERS[filler]
+    spec = FILLERS.get(filler, filler)
     files: dict[str, bytes] = {}
     with tempfile.TemporaryDirectory() as work:
         root = Path(work)

@@ -128,21 +128,26 @@ class FixerFiller:
     #: Spread the CPU renderer's point samples over their gaps (normalized convolution, this
     #: sigma in pixels) before Fixer sees the frame: 0 sends the render as it is.
     presmooth_px: float = 0.0
+    #: The diffusion step Fixer denoises from: how far it may move from its input. None is
+    #: the server's (its README's 250); the camp from outside needed about 50.
+    timestep: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.name == "nvidia-fixer":
+            if self.timestep is not None:
+                self.name += f"-t{self.timestep}"
+            if self.presmooth_px > 0:
+                self.name += f"-presmooth{self.presmooth_px:g}"
 
     def fill(self, rgb: np.ndarray, mask: np.ndarray) -> list[np.ndarray]:
         shown = presmooth(rgb, self.presmooth_px) if self.presmooth_px > 0 else rgb
-        response = self.remote("Fixer", "fix", {"images": [encode_png(shown)]})
+        request: dict = {"images": [encode_png(shown)]}
+        if self.timestep is not None:
+            request["timestep"] = int(self.timestep)
+        response = self.remote("Fixer", "fix", request)
         (fixed,) = response["images"]
         out = decode_png(fixed)
         return [_resize(out, rgb.shape[1], rgb.shape[0])]
-
-
-@dataclass
-class SmoothedFixerFiller(FixerFiller):
-    """`FixerFiller` shown the render with its samples spread over their gaps (1 px)."""
-
-    name: str = "nvidia-fixer-presmooth1"
-    presmooth_px: float = 1.0
 
 
 def presmooth(rgb: np.ndarray, sigma: float) -> np.ndarray:

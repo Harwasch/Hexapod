@@ -647,15 +647,27 @@ def fill_scan(
 
 def make_filler(spec: str) -> Filler:
     """`telea` (the CPU stand-in) or `module:Class` -- a GPU filler such as
-    `world_model_client:FixerFiller`, constructed with no arguments."""
+    `world_model_client:FixerFiller` -- constructed with the keyword arguments after a `?`
+    (`world_model_client:FixerFiller?timestep=50`; numbers are parsed as numbers)."""
     if spec == "telea":
         return InpaintFiller()
     import importlib
 
-    module, _, name = spec.partition(":")
+    path, _, query = spec.partition("?")
+    module, _, name = path.partition(":")
     if not name:
-        raise ValueError(f"filler {spec!r}: expected 'telea' or 'module:Class'")
-    return getattr(importlib.import_module(module), name)()
+        raise ValueError(f"filler {spec!r}: expected 'telea' or 'module:Class[?key=value&...]'")
+    kwargs: dict[str, object] = {}
+    for pair in filter(None, query.split("&")):
+        key, _, value = pair.partition("=")
+        try:
+            kwargs[key] = int(value)
+        except ValueError:
+            try:
+                kwargs[key] = float(value)
+            except ValueError:
+                kwargs[key] = value
+    return getattr(importlib.import_module(module), name)(**kwargs)
 
 
 def link_inferred(measured_tileset: Path, inferred_tileset: Path) -> list[dict[str, object]]:

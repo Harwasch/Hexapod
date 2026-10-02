@@ -70,6 +70,21 @@ def test_fixer_is_shown_the_full_render_and_answers_at_its_size() -> None:
     assert filled.accepted  # it changed nothing it was not asked to
 
 
+def test_fixer_sends_its_timestep_and_names_it() -> None:
+    sent: list[dict] = []
+
+    def remote(cls: str, method: str, request: dict) -> dict:
+        sent.append(request)
+        return {"images": request["images"], "model": "fake"}
+
+    rgb = np.full((8, 8, 3), 100, np.uint8)
+    wmc.FixerFiller(remote=remote).fill(rgb, np.zeros((8, 8), bool))
+    filler = wmc.FixerFiller(remote=remote, timestep=50)
+    filler.fill(rgb, np.zeros((8, 8), bool))
+    assert "timestep" not in sent[0] and sent[1]["timestep"] == 50
+    assert filler.name == "nvidia-fixer-t50"
+
+
 def test_video_clips_ask_every_still_once_per_seed_and_resize_back() -> None:
     calls: list[dict] = []
 

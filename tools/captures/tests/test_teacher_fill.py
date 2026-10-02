@@ -267,6 +267,7 @@ def test_fill_scan_fills_the_side_a_capture_never_saw(tmp_path: Path) -> None:
 def test_make_filler_names_the_stand_in_and_imports_the_rest() -> None:
     assert tf.make_filler("telea").name == "opencv-telea"
     assert isinstance(tf.make_filler("teacher_fill:InpaintFiller"), tf.InpaintFiller)
+    assert tf.make_filler("teacher_fill:InpaintFiller?radius=9&name=wide").radius == 9
     with pytest.raises(ValueError):
         tf.make_filler("fixer")
 
