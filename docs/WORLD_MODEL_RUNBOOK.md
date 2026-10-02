@@ -3,25 +3,25 @@
 Everything below runs on the CPU today with stand-ins (Telea inpainting for fill, damped
 oscillators for motion). This page covers swapping in the real models on Modal.
 
-| Teacher | Stand-in (CPU, tested) | GPU model | Modal class | Client |
-|---|---|---|---|---|
-| B: fill | `InpaintFiller` (Telea) | NVIDIA Fixer | `Fixer.fix` | `world_model_client:FixerFiller` |
-| B: refine | `distill_fill.torch_rasterize` | gsplat 1.5.3 | `Distill.run` | `teacher_fill.py fill --distill N` |
-| A: motion | `OscillatorClips` | Wan 2.2 TI2V-5B | `Wan.clip` | `teacher_motion.py --source wan` |
-| A: motion (alt) | (same) | Cosmos-Predict2.5-2B | `Cosmos.clip` | `teacher_motion.py --source cosmos` |
+| Teacher         | Stand-in (CPU, tested)         | GPU model            | Modal class   | Client                              |
+| --------------- | ------------------------------ | -------------------- | ------------- | ----------------------------------- |
+| B: fill         | `InpaintFiller` (Telea)        | NVIDIA Fixer         | `Fixer.fix`   | `world_model_client:FixerFiller`    |
+| B: refine       | `distill_fill.torch_rasterize` | gsplat 1.5.3         | `Distill.run` | `teacher_fill.py fill --distill N`  |
+| A: motion       | `OscillatorClips`              | Wan 2.2 TI2V-5B      | `Wan.clip`    | `teacher_motion.py --source wan`    |
+| A: motion (alt) | (same)                         | Cosmos-Predict2.5-2B | `Cosmos.clip` | `teacher_motion.py --source cosmos` |
 
 Code: `infra/modal/world_models.py` (server), `tools/captures/world_model_client.py`
 (client), `teacher_fill.py`, `teacher_motion.py`, `distill_fill.py`.
 
 ## 1. Credentials
 
-| Need | Where it goes | Why |
-|---|---|---|
-| Modal token | `MODAL_TOKEN_ID` / `MODAL_TOKEN_SECRET` in the shell | deploy and call |
-| Hugging Face token | Modal secret `huggingface` (`HF_TOKEN`) | weights download |
-| HF licence acceptance | huggingface.co, on the token's account | Cosmos only: Cosmos-Predict2.5-2B, Cosmos-Reason1-7B, Cosmos-Guardrail1 (all gated; `harwasch` had none on 2026-10-01) |
-| NGC API key | Modal secret `ngc` (`REGISTRY_USERNAME=$oauthtoken`, `REGISTRY_PASSWORD=<key>`) | Fixer's base container `nvcr.io/nvidia/cosmos/cosmos-predict2-container:1.2` |
-| R2 credentials | already used by `infra/modal/app.py` | only to publish an inferred layer |
+| Need                  | Where it goes                                                                   | Why                                                                                                                    |
+| --------------------- | ------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| Modal token           | `MODAL_TOKEN_ID` / `MODAL_TOKEN_SECRET` in the shell                            | deploy and call                                                                                                        |
+| Hugging Face token    | Modal secret `huggingface` (`HF_TOKEN`)                                         | weights download                                                                                                       |
+| HF licence acceptance | huggingface.co, on the token's account                                          | Cosmos only: Cosmos-Predict2.5-2B, Cosmos-Reason1-7B, Cosmos-Guardrail1 (all gated; `harwasch` had none on 2026-10-01) |
+| NGC API key           | Modal secret `ngc` (`REGISTRY_USERNAME=$oauthtoken`, `REGISTRY_PASSWORD=<key>`) | Fixer's base container `nvcr.io/nvidia/cosmos/cosmos-predict2-container:1.2`                                           |
+| R2 credentials        | already used by `infra/modal/app.py`                                            | only to publish an inferred layer                                                                                      |
 
 ```sh
 modal secret create huggingface HF_TOKEN=hf_...
