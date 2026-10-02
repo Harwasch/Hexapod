@@ -262,6 +262,13 @@ tileset hidden for its frame and solids. The overlay is held to the globe's rule
   views on the way, fetching and abandoning each.
 - **A stopped session lets go of its GPU context** (`WEBGL_lose_context`) and Spark of its
   workers; every session gets a new canvas.
+- **PlayCanvas can draw on WebGPU, as a trial** (`playcanvas-webgpu`, Settings › Advanced or
+  `?renderer=webgpu`; off by default): the same renderer on an asynchronously made WebGPU
+  device, with WGSL ports of the objects' shader and the GPU sort PlayCanvas uses there, which
+  needs one confirming frame per batch of tiles and none at rest. It falls back to WebGL2 when
+  WebGPU is missing, when PlayCanvas starts only its Null device, or when the device is lost,
+  and the developer readouts say which API draws and how fast the last camera motion drew.
+  How to judge it, and when it becomes the default: [WEBGPU_TRIAL.md](WEBGPU_TRIAL.md).
 
 ## Judging performance
 

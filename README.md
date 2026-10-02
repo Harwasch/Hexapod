@@ -134,6 +134,7 @@ Show developer readouts.
 - [docs/COMPARISON.md](docs/COMPARISON.md) — mesh vs point cloud vs Gaussian splat comparison sites and how to benchmark them
 - [docs/MISSION_CONTROL.md](docs/MISSION_CONTROL.md) — robot mission layer: views, overlays, command box, status line, provider seam
 - [docs/CESIUM.md](docs/CESIUM.md) — scene manager, clipping, LOD/adaptive quality, splat internals, tokens, current API notes
+- [docs/WEBGPU_TRIAL.md](docs/WEBGPU_TRIAL.md) — the PlayCanvas WebGPU splat renderer trial: how to switch, what to compare in person, devices, criteria for the default
 - [docs/LIVING_SURVEY.md](docs/LIVING_SURVEY.md) — simulated motion over measured geometry: the mechanism, what is measured vs simulated, and the limits
 - [docs/DATA_MODEL.md](docs/DATA_MODEL.md) — sites, assets, layers, bookmarks, provenance
 - [docs/ADDING_DATA.md](docs/ADDING_DATA.md) — every supported input, validation rules, ion reconstruction
