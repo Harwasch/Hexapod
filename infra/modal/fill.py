@@ -362,8 +362,9 @@ def _get(url: str, timeout: float) -> bytes:
     raise AssertionError("unreachable")
 
 
-def _fetch(url: str, out: Path) -> Path:
-    """The tileset, its leaves and its view cones (what teacher_fill reads)."""
+def _fetch(url: str, out: Path, every: bool = False) -> Path:
+    """The tileset, its leaves and its view cones (what teacher_fill reads); `every`: its
+    merged parents too (what split_objects rewrites)."""
     import concurrent.futures
 
     if not url.startswith("https://"):
@@ -378,9 +379,9 @@ def _fetch(url: str, out: Path) -> Path:
     stack = [document["root"]]
     while stack:
         tile = stack.pop()
-        if tile.get("children"):
-            stack.extend(tile["children"])
-        elif uri := tile.get("content", {}).get("uri"):
+        stack.extend(tile.get("children", []))
+        uri = tile.get("content", {}).get("uri")
+        if uri and (every or not tile.get("children")):
             uris.append(uri)
     if cones := document["root"].get("extras", {}).get("viewCones", {}).get("uri"):
         uris.append(cones)
@@ -484,7 +485,7 @@ def _run_job(kind: str, scan: str, filler: str, options: dict) -> dict:
     files: dict[str, bytes] = {}
     with tempfile.TemporaryDirectory() as work:
         root = Path(work)
-        tileset = _fetch(SCANS[scan], root / "scan")
+        tileset = _fetch(SCANS[scan], root / "scan", every=kind == "split")
         timings = {"fetchS": round(time.time() - started, 1)}
         document = json.loads(tileset.read_text(encoding="utf-8"))
         logs = []
