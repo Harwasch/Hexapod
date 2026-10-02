@@ -83,3 +83,35 @@ reports, strips and inferred tileset as the `fill` artifact.
   in the site bar (hover shows filler, views and confidence), and switchable off.
 - Spool: drop-and-fill scores for Fixer beat Telea in the held-out view.
 - Tree: a `fitted-generated` motion sidecar from Wan clips that the Living Survey plays.
+
+## 5. What happened on the first GPU runs (2026-10-02, branch `wm-fixer`)
+
+Runner: `infra/modal/fill.py` + `.github/workflows/fill.yml` (CI runs 36973559815 …
+36981733755). Each job runs `teacher_fill.py drop|fill` in a CPU container; `Fixer` is a
+class of the same app on an L40S (`world_model_client.LOCAL_CLASSES`), nothing deployed.
+
+- **No NGC, no secrets.** NGC's `cosmos-predict2-container` needs a key (anonymous pull:
+  401). Its environment is cosmos-predict2's own `uv.lock` (commit `661da47` = 1.0.9) on
+  `nvidia/cuda:12.6.3-cudnn-devel-ubuntu24.04`, installed with `uv sync --frozen` into the
+  image's Python 3.10 (`--locked` fails: Modal's PyPI mirror reads as a stale lock). Image
+  builds in a few minutes. `nvidia/Fixer` is not gated. The workspace's only Modal secret
+  is the object-storage one; `huggingface`/`ngc` do not exist.
+- **The model is sound**: every checkpoint key loads (`load.json`), and Fixer's own
+  examples come out cleaned (`fill.py --selftest`).
+- **Our renders are out of its distribution.** The CPU renderer's point-sampled frames
+  (black background, speckle) come back as a blur at the README's timestep 250, and the
+  camp from outside as a uniform textured field whatever the input filter or resolution
+  (`fill.py --probes camp`). At timestep 100 it keeps the layout, at 50 more so
+  (`FixerFiller?timestep=50`). A gsplat-rasterized input is the likely real fix.
+- **Gate.** Fixer re-renders every pixel, so a `reads_full_render` filler is now gated on
+  the blurred (2 px) frame against the render it was shown, at 20 dB
+  (`GATE_FULL_RENDER_PSNR_DB`); an inverted frame still scores under 10.
+- **Drop test** (640x360, 4 views + held-out): yard (0.4 m) held-out psnrFill/psnrHole
+  Telea 20.55/20.57, Fixer t50 20.55/20.57, t250 20.56/20.57; spool (0.15 m) Telea
+  8.92/8.93, Fixer t50 8.89/8.93. Nobody moves the held-out view: the lift puts the fill at
+  the depth seen through the hole (behind the dropped region), so the held-out score does
+  not discriminate fillers yet. In the fill views Fixer beats Telea in most views (yard t250:
+  22.6/22.8/20.1/23.8 vs 22.2/22.6/19.8/23.7 dB).
+- **Camp from outside, Telea**: 500,901 inferred gaussians, 8 views, mean confidence
+  0.42, ~8 min per run. Fixer at 250 and presmoothed: every view refused. Fixer t50/t100
+  with the corrected gate: run 36981733755.
