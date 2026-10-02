@@ -77,7 +77,11 @@ The viewer runs in **request-render mode** (`requestRenderMode: true`,
 manager calls `scene.requestRender()` after mutating the scene. An idle view costs nothing on
 the GPU, and a Gaussian splat is not re-sorted every 16 ms while nobody is touching it. The one
 manager that renders continuously is `LivingSurveyManager`, and only while wind is non-zero: at
-calm it writes nothing and asks for nothing, so an idle survey is as idle as it ever was.
+calm it writes nothing and asks for nothing, so an idle survey is as idle as it ever was. A
+scan drawn by a dedicated splat renderer (PlayCanvas, the default, or Spark) follows the same
+rule on its own canvas: it draws only when something it is drawn from changes, and nothing
+once the scan is in and the camera still (_Dedicated splat renderers_, below). It used to
+redraw the identical frame on every display frame.
 
 `PerformanceManager` counts rendered frames on `postRender` and every 500 ms runs
 `decideScreenSpaceError` (pure, unit-tested) within the active preset's bounds:
@@ -173,7 +177,18 @@ tiles mid-gesture. Ladder evidence comes from every motion frame
 as one long one. The dev panel shows the profile (`full` or `reduced`) and the step taken. Gaussian
 splats never refine below SSE 12 / 8 / 4 (performance / balanced / ultra): they are sorted on
 the CPU every camera change, so their cost grows with splat count far faster than a mesh.
-Tile cache budgets come from `navigator.deviceMemory` (256/384/512 MB + overflow). A per-asset
+Tile cache budgets come from `navigator.deviceMemory` (256/384/512 MB a tileset, + 50%
+overflow; 192 MB on a phone or tablet, or with Save-Data), and every mesh, point-cloud and
+world tileset also shares one device total (`totalTileCacheBudget`: 256 MB on a phone, 384 /
+768 / 1024 MB on a desktop), an equal share each, re-shared as tilesets come and go: CesiumJS
+gives each tileset a cache of its own, and the Google world, a site's mesh and its point cloud
+preloading hidden used to hold three budgets, over a gigabyte on a phone. The sum is a memory
+source of both groups, so the device total coarsens the view like any budget. Splat tilesets
+are budgeted by what they draw instead. A browser that reports no memory (Safari, Firefox) is
+taken as 8 GB on a desktop and as the smallest on a phone. On a phone or tablet, or with
+Save-Data, the world is never asked for finer than 6 CSS pixels of error (`groupBounds`),
+moving or at rest: idle refinement to 2 px fetched the Google world's finest tiles for
+everything in view, for detail a small screen barely shows. A per-asset
 `maximumScreenSpaceError` acts as a quality floor. Manual SSE in Settings › Advanced disables
 adaptation. Mesh coverage clips (the hole cut in the globe under a photogrammetry model) are
 re-derived as tiles arrive but only swapped in at rest.
@@ -201,6 +216,39 @@ Things that are deliberately _not_ done per frame: hover picking waits until the
 rested 120 ms and never runs while the camera moves (each `scene.pick` is a render pass);
 overlay anchors use `globe.getHeight` (a CPU lookup) while moving and call `sampleHeight`
 only at rest, once per anchor every few seconds; the camera pose is throttled to 10 Hz.
+
+## Dedicated splat renderers
+
+A splat scan is drawn by default by PlayCanvas (SuperSplat's engine), or by Spark, on a
+transparent canvas over the globe from Cesium's camera (`cesium/scanView`); CesiumJS keeps the
+tileset hidden for its frame and solids. The overlay is held to the globe's rules:
+
+- **It draws only on change** (`overlayFrames.ts`). A frame is drawn when the globe renders
+  and the overlay's own inputs moved with it (camera, canvas, the globe's resolution, the scan's
+  frame: wind on another site redraws the globe and draws nothing here); when a tile arrives,
+  fails, is deferred or is due for its retry; when the renderer finishes a sort or streams
+  detail (PlayCanvas's `frame:request`, Spark's `onDirty`); on a hide or highlight; when the
+  budget moves; and by deadlines (the full-resolution frame 200 ms after the camera rests, a
+  re-plan the 150 ms throttle held back, a replaced tile's longest wait). A fade draws every
+  frame. A new PlayCanvas tile counts as drawn once a rendered frame reports it sorted
+  (`frame:ready`), and PlayCanvas's own update loop pauses once nothing loads or sorts.
+  Measured on the yard fixture (software GL, `e2e/scanOverlayIdle.spec.ts`): 5 s at rest after
+  loading drew 27 PlayCanvas frames and 27 loop ticks before, none after; Spark 5, then none.
+  `window.__twinStats` (development builds, or `?stats`) counts draws, loop ticks and wakes.
+- **Its resolution is the globe's** (`quality.ts`): never more device pixels per CSS pixel
+  than the globe renders at now (preset, ladder step, sharpened still frame), at most 2 (1.5
+  on a phone), and while moving its own cut (60% of the preset's full ratio, at least 0.75)
+  where that is lower. A 2× display on the performance preset used to blend every splat over
+  four times the globe's pixels. PlayCanvas's smallest kept splat stays half a CSS pixel.
+- **Tile work is budgeted.** Decoding happens in workers (PlayCanvas's Morton reorder too);
+  what must run on the main thread (building a PlayCanvas resource, digesting a Spark tile)
+  runs within 4 ms a frame while the camera moves, 12 ms at rest (`tileWork.ts`). A phone keeps
+  one spherical-harmonic band of a tile.
+- **A flight's destination is fetched ahead** (`prefetchScanDestination`, called as a fly-to
+  starts): the overlay's tileset copy is hidden without preloading, so it used to see only the
+  views on the way, fetching and abandoning each.
+- **A stopped session lets go of its GPU context** (`WEBGL_lose_context`) and Spark of its
+  workers; every session gets a new canvas.
 
 ## Judging performance
 
