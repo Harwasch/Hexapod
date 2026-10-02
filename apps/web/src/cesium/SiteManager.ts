@@ -30,6 +30,7 @@ import type { SplatRendererKind } from "./scanView/types";
 import type { Emitter } from "@/lib/emitter";
 import { createLogger, describeError } from "@/lib/log";
 import { withRetry } from "@/lib/retry";
+import { throttleProgress } from "@/lib/throttle";
 import { timed } from "@/lib/timing";
 
 import type { CameraController } from "./CameraController";
@@ -658,19 +659,27 @@ export class SiteManager {
         attachTelemetry(tileset, this.scene, asset.id),
       );
     }
+    // Loading progress reaches the store at most four times a second (throttleProgress): Cesium
+    // reports it up to once a rendered frame, and every asset patch re-renders whatever reads
+    // the assets (the representation switcher reads them all). The end of loading goes
+    // through at once, and the quality policy hears every report, unthrottled.
+    const reportProgress = throttleProgress((pending, processing) => {
+      const counted = (handle.splats?.total ?? 0) * SPLAT_BYTES_ESTIMATE;
+      this.events.emit("asset", {
+        id: asset.id,
+        patch: {
+          progress: { pending, processing },
+          memoryMb: Math.round(Math.max(tileset.totalMemoryUsageInBytes, counted) / 1048576),
+          screenSpaceError: tileset.maximumScreenSpaceError,
+        },
+      });
+    });
     handle.unsubscribe.push(
       tileset.loadProgress.addEventListener((pending: number, processing: number) => {
         this.performance.reportLoading("sites", pending, processing);
-        const counted = (handle.splats?.total ?? 0) * SPLAT_BYTES_ESTIMATE;
-        this.events.emit("asset", {
-          id: asset.id,
-          patch: {
-            progress: { pending, processing },
-            memoryMb: Math.round(Math.max(tileset.totalMemoryUsageInBytes, counted) / 1048576),
-            screenSpaceError: tileset.maximumScreenSpaceError,
-          },
-        });
+        reportProgress(pending, processing);
       }),
+      () => reportProgress.cancel(),
       tileset.initialTilesLoaded.addEventListener(() => this.camera.refreshPose()),
       tileset.allTilesLoaded.addEventListener(() => this.camera.refreshPose()),
       tileset.tileFailed.addEventListener((detail: { message?: string; url?: string }) => {
