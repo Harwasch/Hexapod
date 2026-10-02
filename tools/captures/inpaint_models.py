@@ -167,6 +167,22 @@ def inpaint(key: str, pipe: Any, request: dict) -> dict:
     }
 
 
+def find_token(environ: dict[str, str] | None = None) -> str | None:
+    """The Hugging Face token: `HF_TOKEN`, or else the first variable a Modal secret put in
+    the environment whose value looks like one (`hf_...`), copied to `HF_TOKEN` so the Hub
+    client finds it. A secret's key is whatever whoever made it chose."""
+    import os
+
+    env = os.environ if environ is None else environ
+    if env.get("HF_TOKEN"):
+        return env["HF_TOKEN"]
+    for name in sorted(env):
+        if env[name].startswith("hf_") and ("HF" in name.upper() or "HUGGING" in name.upper()):
+            env["HF_TOKEN"] = env[name]
+            return env[name]
+    return None
+
+
 def access(token: str | None) -> dict[str, str]:
     """Per repository every model needs: `ok`, or why the token cannot read it (gated and
     not accepted, missing) -- checked without downloading."""

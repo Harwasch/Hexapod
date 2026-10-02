@@ -471,12 +471,12 @@ inpaint_image = (
     .pip_install(
         "torch==2.8.0",
         "diffusers==0.40.0",
-        "transformers>=4.56,<5",
+        "transformers>=5,<6",
         "accelerate>=1.6",
         "sentencepiece",
         "protobuf",
         "safetensors",
-        "huggingface_hub>=0.34",
+        "huggingface_hub>=1.23,<2",
         "pillow",
     )
     .env({"HF_HOME": HF_HOME})
@@ -490,6 +490,7 @@ def _inpaint_models():  # noqa: ANN202 - the module, imported where it was copie
     sys.path.insert(0, "/root")
     import inpaint_models
 
+    inpaint_models.find_token()
     return inpaint_models
 
 

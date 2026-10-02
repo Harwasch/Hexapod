@@ -253,18 +253,20 @@ def _snapshot(repo: str, local: Path, marker: str) -> None:
 
 # --- Generative inpainting, as world_models.InpaintSDXL / InpaintQwen / InpaintFlux --------
 
-HF_SECRET = modal.Secret.from_name("huggingface")
+#: The workspace's Hugging Face secret: `huggingface` by the runbook, but named otherwise in
+#: this workspace (fill.yml finds it by its prefix and passes it here).
+HF_SECRET = modal.Secret.from_name(os.environ.get("HEXAPOD_HF_SECRET", "huggingface"))
 inpaint_image = (
     modal.Image.debian_slim(python_version="3.11")
     .pip_install(
         "torch==2.8.0",
         "diffusers==0.40.0",
-        "transformers>=4.56,<5",
+        "transformers>=5,<6",
         "accelerate>=1.6",
         "sentencepiece",
         "protobuf",
         "safetensors",
-        "huggingface_hub>=0.34",
+        "huggingface_hub>=1.23,<2",
         "pillow",
     )
     .env({"HF_HOME": "/weights/hf"})
@@ -276,6 +278,7 @@ def _inpaint_module():  # noqa: ANN202 - inpaint_models, imported where it was c
     sys.path.insert(0, "/root")
     import inpaint_models
 
+    inpaint_models.find_token()
     return inpaint_models
 
 
@@ -345,7 +348,9 @@ class InpaintFlux:
 def inpaint_access() -> dict[str, str]:
     """Whether the workspace's Hugging Face token can read each inpainting model (the gated
     ones need the licence accepted on its account)."""
-    return _inpaint_module().access(os.environ.get("HF_TOKEN"))
+    im = _inpaint_module()
+    token = im.find_token()
+    return {"token": "found" if token else "missing", **im.access(token)}
 
 
 @app.function(
