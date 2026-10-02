@@ -52,14 +52,21 @@ JobSupervisor._supervise, every poll_s (2 s by default):
   └─ has the child exited?
 ```
 
-Three consequences worth stating:
+Four consequences worth stating:
 
 - **cancellation lands mid-stage.** `POST /jobs/{id}/cancel` sets the status; the next
   heartbeat sees it, signals the child to cancel (SIGUSR2) and SIGKILLs it after
   `terminate_grace_s` (15 s).
   Worst case is one poll interval plus the grace — seconds, not the length of the stage —
-  and a GPU call the stage had out is cancelled with it (below);
+  and a GPU call the stage had out is cancelled with it (below). A cancel that lands
+  while the worker waits `retry_backoff_s` between two attempts is closed out the same way;
 - **a stage that segfaults is a failed step, not a lost worker**;
+- **the supervisor failing does not leave the child behind.** Every tick writes to the
+  database and every finished stage is uploaded, and any of it can raise. The child is
+  stopped before the exception goes anywhere -- a cancel when the job is about to be
+  dead-lettered, a detach when another worker will resume it -- and nothing tidies a
+  workdir while its child is alive. It used to be dead-lettered and tidied under a live
+  recipe process, while the slot claimed another job beside it;
 - **the child has no database and no credentials.** Everything that touches the bucket or
   the session happens in the supervisor, from the events the child sends.
 
@@ -74,6 +81,12 @@ passes. After that the job is claimable by anyone, and the worker that takes it:
 
 - **skips** the stages that are `complete` in the database *and* still have their
   `step.json` in the workdir — their outputs are reused, not recomputed;
+- **finishes** a stage the recipe process finished while the worker was uploading it
+  (`_settle_finished`): its row is still `in-progress`, but its `step.json` proves the
+  attempt finished — the same stage and attempt, written after that attempt started (the
+  recipe process stamps the start, `started_at`), every artifact's checksum matching
+  `out/` — so the upload is redone and the row finished. It used to run again: for
+  `train`, hours of GPU billed twice;
 - **re-runs** the interrupted stage with `attempt` incremented. A6 clears `out/` at the
   start of every attempt and keeps `checkpoint/`, so a half-written output can never be
   mistaken for a produced artifact and a stage that checkpoints resumes rather than
@@ -82,8 +95,9 @@ passes. After that the job is claimable by anyone, and the worker that takes it:
   disk. That is the honest answer; a resume whose inputs are missing is not.
 
 A worker asked to stop politely (SIGTERM, SIGINT) does not wait for the stage to finish:
-it stops the recipe process on its next tick and **clears** the lease instead of leaving
-it to lapse, so the job is claimable at once. That stop is a *detach*, not a failure: the
+it stops the recipe process on its next tick -- or between two objects of an upload, or
+before or after the publish, rather than at fly.toml's 30 s `kill_timeout` -- and
+**clears** the lease instead of leaving it to lapse, so the job is claimable at once. That stop is a *detach*, not a failure: the
 step is marked `detached` and the next worker runs it as the **same attempt**, so a deploy
 spends nothing of the budget.
 
