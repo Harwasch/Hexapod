@@ -97,12 +97,23 @@ All of these are general models; none knows our scenes.
    a coarse parent is often a mixed region -- on the pumpkin scan a 6 m "pumpkin" instance holds
    the hay around the pumpkins, and its untagged parts are hay like their tagged siblings, not
    pumpkin), else its nearest tagged ancestor's (a part is what it is part of), else the
-   category most of the splats below it are in, else Other. An
-   **object** is an instance whose parent is in another category (or that has none), with
+   category most of the splats below it are in, else (a fragment no crop showed, with no
+   tagged relative) the category of the smallest categorised instance whose box holds its
+   centre, else Other. An **object** is an instance whose parent is in another category (or that has none), with
    every descendant reached through its own category: a category is the union of its objects,
    so hiding Ground & soil hides the ground and its untagged bits, not the trees a ground
    region contains. An object is named by its best tag of its own category, else by its
    category ("Trees 3"), never by an id.
+
+   What categories cannot fix is an instance that mixes two things. Measured on the published
+   pumpkin (leaf splats coloured orange, by the instance they carry): 78% are in "Fruit,
+   vegetables & crops", 21% in instances SigLIP described as dirt or bush -- parts of a
+   pumpkin's crop that are half pumpkin, half hay (instance 279: 43% orange, tags dirt 0.06,
+   bush 0.06, pumpkin 0.03) -- and the red pumpkin is instance 4, whose crop SigLIP read as
+   dirt / nest / moss (0.10, 0.08, 0.05), plus 3,900 splats the segmentation left without an
+   instance. Classifying each instance's embedding against the category prompts directly
+   (instead of through its top five labels) is no better there (instance 4: ground 0.20,
+   produce 0.19). Hiding "pumpkins" exactly needs finer segmentation, not another rule here.
 
 ## 4. Data contract (v1)
 

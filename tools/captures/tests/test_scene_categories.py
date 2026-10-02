@@ -137,7 +137,15 @@ def test_instances_take_their_tags_then_siblings_then_ancestors_then_parts() -> 
         # A coarse "oak" region whose untagged part sits beside a lawn part: lawn.
         {"id": 10, "parent": None, "splats": 50, "tags": [{"label": "oak", "score": 0.3}]},
         {"id": 11, "parent": 10, "splats": 20, "tags": []},
-        {"id": 12, "parent": 10, "splats": 80, "tags": [{"label": "lawn", "score": 0.4}]},
+        {
+            "id": 12,
+            "parent": 10,
+            "splats": 80,
+            "tags": [{"label": "lawn", "score": 0.4}],
+            "bounds": {"min": [0, 0, 0], "max": [1, 1, 1]},
+        },
+        # A fragment with no tagged relative, inside the lawn's box: lawn.
+        {"id": 13, "parent": None, "splats": 2, "tags": [], "centroid": [0.5, 0.5, 0.5]},
     ]
     assert sc.instance_categories(instances, LABELS) == {
         1: "trees",
@@ -150,4 +158,5 @@ def test_instances_take_their_tags_then_siblings_then_ancestors_then_parts() -> 
         10: "trees",
         11: "grass",
         12: "grass",
+        13: "grass",
     }

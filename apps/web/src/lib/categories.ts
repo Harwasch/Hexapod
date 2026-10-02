@@ -9,7 +9,8 @@
  * label's category; one with no tags takes what most of its tagged siblings are (a coarse
  * parent is often a mixed region -- a pumpkin's crop with the hay around it -- and a part is
  * more like the parts beside it), else its nearest tagged ancestor's (a part is what it is
- * part of), else what most of the splats below it are, else "Other". It is computed here, so
+ * part of), else what most of the splats below it are, else what the smallest categorised
+ * instance around it is, else "Other". It is computed here, so
  * a scan published before categories existed needs no republish; a file that carries a
  * `category` per instance (newer runs) is taken as it is.
  *
@@ -91,14 +92,16 @@ export function tagCategory(
 }
 
 /** What `assignCategories` reads of an instance (and the file's own `category`, if any). */
-export type CategorisedInstance = Pick<Instance, "id" | "parent" | "tags" | "splats"> & {
-  category?: string | null;
-};
+export type CategorisedInstance = Pick<Instance, "id" | "parent" | "tags" | "splats"> &
+  Partial<Pick<Instance, "bounds" | "centroid">> & {
+    category?: string | null;
+  };
 
 /**
  * Per instance id, its category: the file's own when it names a known one; else its tags'
  * vote (`tagCategory`); else its tagged siblings' (by splats); else its nearest tagged
- * ancestor's; else the category that most of the splats below it are in; else "Other". The same rule as `scene_categories.instance_categories`.
+ * ancestor's; else the category that most of the splats below it are in; else that of the
+ * smallest categorised instance whose bounds hold its centroid; else "Other". The same rule as `scene_categories.instance_categories`.
  */
 export function assignCategories(
   instances: readonly CategorisedInstance[],
@@ -165,7 +168,31 @@ export function assignCategories(
       (id) => out.get(id),
       (id) => byId.get(id)?.splats ?? 0,
     );
-    out.set(instance.id, best ?? OTHER_CATEGORY);
+    if (best !== null) out.set(instance.id, best);
+  }
+  // Fragments with no tagged instance above, beside or below them (a speck the crops never
+  // showed): the category of the smallest categorised instance whose box holds their centre.
+  const placed = instances.filter((i) => out.has(i.id) && i.bounds !== undefined);
+  for (const instance of instances) {
+    if (out.has(instance.id)) continue;
+    const centre = instance.centroid;
+    let best = OTHER_CATEGORY;
+    let smallest = Number.POSITIVE_INFINITY;
+    if (centre) {
+      for (const other of placed) {
+        if (!other.bounds) continue;
+        const [x0, y0, z0] = other.bounds.min;
+        const [x1, y1, z1] = other.bounds.max;
+        const [cx, cy, cz] = centre;
+        if (cx < x0 || cx > x1 || cy < y0 || cy > y1 || cz < z0 || cz > z1) continue;
+        const volume = Math.max(x1 - x0, 1e-6) * Math.max(y1 - y0, 1e-6) * Math.max(z1 - z0, 1e-6);
+        if (volume < smallest) {
+          smallest = volume;
+          best = out.get(other.id) ?? OTHER_CATEGORY;
+        }
+      }
+    }
+    out.set(instance.id, best);
   }
   return out;
 }

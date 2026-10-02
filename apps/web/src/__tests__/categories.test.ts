@@ -96,7 +96,12 @@ describe("assigning categories", () => {
       // A coarse "oak" region whose untagged part sits beside a lawn part: lawn.
       inst(10, null, 50, [["oak", 0.3]]),
       inst(11, 10, 20),
-      inst(12, 10, 80, [["lawn", 0.4]]),
+      {
+        ...inst(12, 10, 80, [["lawn", 0.4]]),
+        bounds: { min: [0, 0, 0] as const, max: [1, 1, 1] as const },
+      },
+      // A fragment with no tagged relative, inside the lawn's box: lawn.
+      { ...inst(13, null, 2), centroid: [0.5, 0.5, 0.5] as const },
     ];
     expect(Object.fromEntries(assignCategories(instances, LABELS))).toEqual({
       1: "trees",
@@ -109,6 +114,7 @@ describe("assigning categories", () => {
       10: "trees",
       11: "grass",
       12: "grass",
+      13: "grass",
     });
   });
 

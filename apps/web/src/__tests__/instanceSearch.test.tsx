@@ -10,7 +10,8 @@ import { useSettings } from "@/state/settings";
 const box = { min: [0, 0, 0], max: [1, 1, 1] };
 /**
  * A small camp: a ground region (1) with a conifer in it (2, whose branch 3 has no tags), a
- * second conifer (4), a picnic table (5) and an untagged speck (6) that nothing describes.
+ * second conifer (4), a picnic table (5) and an untagged speck (6) that nothing describes or
+ * holds.
  */
 const DOC = parseInstances({
   format: "hexapod.instances",
@@ -50,7 +51,8 @@ const DOC = parseInstances({
       properties: { movable: 0.7 },
       behaviour: "movable",
     },
-    { id: 6, bounds: box, splats: 3 },
+    // Away from everything: no box holds it.
+    { id: 6, bounds: { min: [10, 10, 10], max: [11, 11, 11] }, splats: 3 },
   ],
   tiles: {},
 });

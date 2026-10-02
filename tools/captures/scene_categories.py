@@ -407,7 +407,8 @@ def instance_categories(
     splats; a coarse parent is often a mixed region, such as a pumpkin's crop with the hay
     around it, and an untagged part is more like the parts beside it); else its nearest tagged
     ancestor's (a part is what it is part of); else the category most of its descendants'
-    splats are in; else `OTHER`. Instances are the `instances.json` records (`id`, `parent`,
+    splats are in; else that of the smallest categorised instance whose bounds hold its
+    centroid; else `OTHER`. Instances are the `instances.json` records (`id`, `parent`,
     `tags`, `splats`). The viewer's `assignCategories` is the same rule."""
     by_id = {int(i["id"]): i for i in instances}
     splats = {k: float(i.get("splats") or 0) for k, i in by_id.items()}  # type: ignore[arg-type]
@@ -457,8 +458,41 @@ def instance_categories(
             if c not in below:
                 below.add(c)
                 stack.extend(children.get(c, []))
-        out[k] = _heaviest(below, out, splats) or OTHER
+        best = _heaviest(below, out, splats)
+        if best is not None:
+            out[k] = best
+    # Fragments with no tagged instance above, beside or below them (a speck the crops never
+    # showed): the category of the smallest categorised instance whose box holds their centre.
+    orphans = [k for k in by_id if k not in out]
+    placed = {k: _box(by_id[k]) for k in out}
+    for k in orphans:
+        centre = by_id[k].get("centroid")
+        best_volume, best = float("inf"), OTHER
+        if isinstance(centre, Sequence) and len(centre) == 3:
+            for j, box in placed.items():
+                if box is None:
+                    continue
+                lo, hi, volume = box
+                inside = all(lo[a] <= float(centre[a]) <= hi[a] for a in range(3))
+                if inside and volume < best_volume:
+                    best_volume, best = volume, out[j]
+        out[k] = best
     return out
+
+
+def _box(instance: Mapping[str, object]) -> tuple[list[float], list[float], float] | None:
+    """An instance's bounds and their volume, or None without bounds."""
+    bounds = instance.get("bounds")
+    if not isinstance(bounds, Mapping):
+        return None
+    lo, hi = bounds.get("min"), bounds.get("max")
+    if not (isinstance(lo, Sequence) and isinstance(hi, Sequence) and len(lo) == len(hi) == 3):
+        return None
+    lo_f, hi_f = [float(v) for v in lo], [float(v) for v in hi]
+    volume = 1.0
+    for a in range(3):
+        volume *= max(hi_f[a] - lo_f[a], 1e-6)
+    return lo_f, hi_f, volume
 
 
 # ----------------------------------------------------------------------------------- main
