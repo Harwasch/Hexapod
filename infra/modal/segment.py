@@ -68,17 +68,33 @@ image = (
 )
 
 
+#: The public bucket answers Python's default user agent with 403 (Cloudflare's bot rules);
+#: curl's is let through.
+USER_AGENT = "curl/8.5.0 (hexapod-segment)"
+
+
+def _get(url: str, timeout: float) -> bytes:
+    import urllib.error
+    import urllib.request
+
+    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})  # noqa: S310
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310
+            return response.read()
+    except urllib.error.HTTPError as error:
+        # HTTPError does not pickle back to the caller; say what it was instead.
+        raise RuntimeError(f"GET {url}: HTTP {error.code} {error.reason}") from None
+
+
 def _fetch(url: str, out: Path) -> int:
     """The tileset and every tile it names, parents included."""
     import concurrent.futures
-    import urllib.request
 
     out.mkdir(parents=True, exist_ok=True)
     base = url.rsplit("/", 1)[0]
     if not url.startswith("https://"):
         raise ValueError(f"not an https URL: {url}")
-    with urllib.request.urlopen(url, timeout=120) as response:  # noqa: S310 - https only
-        (out / "tileset.json").write_bytes(response.read())
+    (out / "tileset.json").write_bytes(_get(url, 120))
     document = json.loads((out / "tileset.json").read_text(encoding="utf-8"))
     uris: list[str] = []
     stack = [document["root"]]
@@ -90,8 +106,7 @@ def _fetch(url: str, out: Path) -> int:
 
     def get(uri: str) -> None:
         (out / uri).parent.mkdir(parents=True, exist_ok=True)
-        with urllib.request.urlopen(f"{base}/{uri}", timeout=600) as response:  # noqa: S310
-            (out / uri).write_bytes(response.read())
+        (out / uri).write_bytes(_get(f"{base}/{uri}", 600))
 
     with concurrent.futures.ThreadPoolExecutor(16) as pool:
         list(pool.map(get, uris))
