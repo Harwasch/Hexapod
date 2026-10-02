@@ -102,6 +102,36 @@ def test_the_gate_refuses_a_fill_that_repaints_what_it_was_told(
     assert len(lifted) == 0
 
 
+class _FullRender:
+    """A filler shown the full render (as Fixer is): `invert` repaints it, else it softens it,
+    as a model that re-renders the frame does."""
+
+    name = "full"
+    reads_full_render = True
+
+    def __init__(self, invert: bool) -> None:
+        self.invert = invert
+
+    def fill(self, rgb: np.ndarray, mask: np.ndarray) -> list[np.ndarray]:
+        import cv2
+
+        return [255 - rgb if self.invert else cv2.GaussianBlur(rgb, (0, 0), 1.0)]
+
+
+def test_a_full_render_filler_is_gated_on_the_frames_layout(
+    yard: tuple[Splats, vc.ConeGrid], centre: np.ndarray
+) -> None:
+    splats, grid = yard
+    camera = tf.plan_views(grid, centre[None], count=1, width=120, height=90, distance_m=3.0)[0]
+    mask = np.zeros((90, 120), bool)
+    mask[40:50, 55:65] = True
+    cond = tf.condition(splats, camera, None, mask=mask)
+    softened = tf.fill_views([cond], _FullRender(invert=False))[0]
+    repainted = tf.fill_views([cond], _FullRender(invert=True))[0]
+    assert softened.accepted and not repainted.accepted
+    assert repainted.gate_psnr_db < 10.0
+
+
 def test_lift_puts_discs_at_the_scan_depth_facing_the_camera() -> None:
     camera = Camera.look_at([0.0, -5.0, 1.0], [0.0, 0.0, 1.0], width=40, height=30)
     h, w = 30, 40
@@ -237,6 +267,7 @@ def test_fill_scan_fills_the_side_a_capture_never_saw(tmp_path: Path) -> None:
 def test_make_filler_names_the_stand_in_and_imports_the_rest() -> None:
     assert tf.make_filler("telea").name == "opencv-telea"
     assert isinstance(tf.make_filler("teacher_fill:InpaintFiller"), tf.InpaintFiller)
+    assert tf.make_filler("teacher_fill:InpaintFiller?radius=9&name=wide").radius == 9
     with pytest.raises(ValueError):
         tf.make_filler("fixer")
 

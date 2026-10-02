@@ -70,6 +70,21 @@ def test_fixer_is_shown_the_full_render_and_answers_at_its_size() -> None:
     assert filled.accepted  # it changed nothing it was not asked to
 
 
+def test_fixer_sends_its_timestep_and_names_it() -> None:
+    sent: list[dict] = []
+
+    def remote(cls: str, method: str, request: dict) -> dict:
+        sent.append(request)
+        return {"images": request["images"], "model": "fake"}
+
+    rgb = np.full((8, 8, 3), 100, np.uint8)
+    wmc.FixerFiller(remote=remote).fill(rgb, np.zeros((8, 8), bool))
+    filler = wmc.FixerFiller(remote=remote, timestep=50)
+    filler.fill(rgb, np.zeros((8, 8), bool))
+    assert "timestep" not in sent[0] and sent[1]["timestep"] == 50
+    assert filler.name == "nvidia-fixer-t50"
+
+
 def test_video_clips_ask_every_still_once_per_seed_and_resize_back() -> None:
     calls: list[dict] = []
 
@@ -136,3 +151,11 @@ def test_the_client_calls_what_the_app_defines() -> None:
     # The rates the client expects are the rates the app sends.
     assert constants["WAN_FPS"] == wmc.VideoClips(model="Wan", remote=None).fps  # type: ignore[arg-type]
     assert constants["COSMOS_FPS"] == wmc.VideoClips(model="Cosmos", remote=None).fps  # type: ignore[arg-type]
+
+
+def test_presmooth_fills_the_gaps_between_samples_and_leaves_empty_space_dark() -> None:
+    rgb = np.zeros((40, 40, 3), np.uint8)
+    rgb[::2, 0:20:2] = (200, 100, 50)  # samples on every other pixel, left half
+    out = wmc.presmooth(rgb, 1.0)
+    assert out[5:35, 5:15, 0].min() > 100  # the gaps took the samples' colour
+    assert out[:, 30:].max() == 0  # nothing drawn where nothing was

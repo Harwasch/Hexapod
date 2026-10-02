@@ -35,11 +35,21 @@ PLANT_PROMPT = (
 )
 
 
-def modal_remote(cls: str, method: str, request: dict) -> dict:
-    """Calls `cls.method(request)` on the deployed app (needs MODAL_TOKEN_ID/SECRET)."""
-    import modal
+#: GPU classes by name that `modal_remote` calls in place of the deployed app's: set by a
+#: runner already inside a Modal app that defines its own (`infra/modal/fill.py`).
+LOCAL_CLASSES: dict[str, Callable[[], object]] = {}
 
-    instance = modal.Cls.from_name(os.environ.get("HEXAPOD_WORLD_MODELS_APP", APP_NAME), cls)()
+
+def modal_remote(cls: str, method: str, request: dict) -> dict:
+    """Calls `cls.method(request)` on the deployed app (needs MODAL_TOKEN_ID/SECRET), or on
+    the class registered in `LOCAL_CLASSES` under that name."""
+    if cls in LOCAL_CLASSES:
+        instance = LOCAL_CLASSES[cls]()
+    else:
+        import modal
+
+        app = os.environ.get("HEXAPOD_WORLD_MODELS_APP", APP_NAME)
+        instance = modal.Cls.from_name(app, cls)()
     return getattr(instance, method).remote(request)
 
 
@@ -115,11 +125,42 @@ class FixerFiller:
     name: str = "nvidia-fixer"
     reads_full_render: bool = True
 
+    #: Spread the CPU renderer's point samples over their gaps (normalized convolution, this
+    #: sigma in pixels) before Fixer sees the frame: 0 sends the render as it is.
+    presmooth_px: float = 0.0
+    #: The diffusion step Fixer denoises from: how far it may move from its input. None is
+    #: the server's (its README's 250); the camp from outside needed about 50.
+    timestep: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.name == "nvidia-fixer":
+            if self.timestep is not None:
+                self.name += f"-t{self.timestep}"
+            if self.presmooth_px > 0:
+                self.name += f"-presmooth{self.presmooth_px:g}"
+
     def fill(self, rgb: np.ndarray, mask: np.ndarray) -> list[np.ndarray]:
-        response = self.remote("Fixer", "fix", {"images": [encode_png(rgb)]})
+        shown = presmooth(rgb, self.presmooth_px) if self.presmooth_px > 0 else rgb
+        request: dict = {"images": [encode_png(shown)]}
+        if self.timestep is not None:
+            request["timestep"] = int(self.timestep)
+        response = self.remote("Fixer", "fix", request)
         (fixed,) = response["images"]
         out = decode_png(fixed)
         return [_resize(out, rgb.shape[1], rgb.shape[0])]
+
+
+def presmooth(rgb: np.ndarray, sigma: float) -> np.ndarray:
+    """Normalized convolution of a point-sampled render: the covered pixels' colours
+    averaged over the empty (black) pixels near them, so the gaps between samples fill;
+    pixels a few sigmas from any sample stay black."""
+    import cv2
+
+    weight = (rgb.max(axis=2) > 0).astype(np.float32)
+    w = cv2.GaussianBlur(weight, (0, 0), sigma)
+    c = cv2.GaussianBlur(rgb.astype(np.float32) * weight[..., None], (0, 0), sigma)
+    out = np.where(w[..., None] > 1e-4, c / np.maximum(w, 1e-4)[..., None], 0.0)
+    return np.clip(np.round(out), 0, 255).astype(np.uint8)
 
 
 @dataclass

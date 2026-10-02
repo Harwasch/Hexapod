@@ -18,7 +18,8 @@ say so. Every stage runs on the CPU with the image model behind one interface (`
    `InpaintFiller` is the CPU stand-in (OpenCV Telea inpainting); NVIDIA Fixer and Cosmos are
    Fillers run on a GPU (infra/modal/world_models.py);
 4. **gate** -- a fill that changed the unmasked pixels by more than `GATE_PSNR_DB` is
-   refused: it was told what is there and repainted it;
+   refused: it was told what is there and repainted it (a filler that re-renders the whole
+   frame is held to its layout: `GATE_FULL_RENDER_PSNR_DB` on blurred frames);
 5. **lift** (`lift`) -- every `stride`-th masked pixel becomes a flat gaussian facing its
    camera, at the depth the scan has there (or the depth inpainted from around the hole),
    with the filled colour and an opacity scaled by **confidence**: how far the pixel is
@@ -64,6 +65,13 @@ __all__ = [
 
 #: A fill that changed the pixels it was not asked to fill by more than this (PSNR) is refused.
 GATE_PSNR_DB = 25.0
+#: A filler that re-renders the whole frame (`reads_full_render`, NVIDIA Fixer) changes every
+#: pixel's texture -- the CPU renderer's point samples become a photograph's grain -- so it is
+#: gated on the frame's layout instead: both blurred by `GATE_BLUR_PX`, and this PSNR. On
+#: the first GPU runs (spool, pumpkin, yard from outside) Fixer kept the scene at 20-30 dB
+#: blurred and 12-17 dB unblurred; an inverted frame scores under 10 either way.
+GATE_FULL_RENDER_PSNR_DB = 20.0
+GATE_BLUR_PX = 2.0
 #: Untouched pixels score this rather than infinity, so reports stay JSON.
 GATE_CAP_DB = 99.0
 #: Confidence halves about every this many pixels from the nearest measured pixel.
@@ -258,6 +266,7 @@ def fill_views(conds: Sequence[Conditioning], filler: Filler) -> list[Filled]:
     """Each view filled and gated: the first fill whose unmasked pixels kept their render."""
     out = []
     full = bool(getattr(filler, "reads_full_render", False))
+    threshold = GATE_FULL_RENDER_PSNR_DB if full else GATE_PSNR_DB
     for cond in conds:
         given = to_u8(cond.seen.rgb)
         shown = to_u8(cond.full.rgb) if full else given
@@ -268,12 +277,20 @@ def fill_views(conds: Sequence[Conditioning], filler: Filler) -> list[Filled]:
 
                 candidate = cv2.resize(candidate, (given.shape[1], given.shape[0]))
             kept = cond.seen.alpha >= SEEN_ALPHA
-            score = min(psnr(candidate, given, kept & ~cond.mask), GATE_CAP_DB)
+            # Held to what it was shown: the full render, when it reads that.
+            a, b = (_blur(candidate), _blur(shown)) if full else (candidate, given)
+            score = min(psnr(a, b, kept & ~cond.mask), GATE_CAP_DB)
             if best is None or score > best.gate_psnr_db:
-                best = Filled(cond, candidate, score, score >= GATE_PSNR_DB)
+                best = Filled(cond, candidate, score, score >= threshold)
         assert best is not None
         out.append(best)
     return out
+
+
+def _blur(rgb: np.ndarray) -> np.ndarray:
+    import cv2
+
+    return cv2.GaussianBlur(rgb, (0, 0), GATE_BLUR_PX)
 
 
 def _disc_rotations(normals: np.ndarray) -> np.ndarray:
@@ -413,6 +430,8 @@ def drop_and_fill(
         with_fill = (
             to_u8(render(Splats.concat([kept, lifted]), held).rgb) if len(lifted) else without
         )
+        if save_dir is not None:
+            _save_strip(save_dir / "held-out.png", [truth, without, with_fill], hole)
         report.held_out = {
             "maskPx": int(hole.sum()),
             "psnrFill": round(psnr(with_fill, truth, hole), 2),
@@ -443,6 +462,25 @@ def _save_strip(path: Path, images: Sequence[np.ndarray], mask: np.ndarray) -> N
     marked[edge > 0] = (255, 0, 255)
     strip = np.concatenate([images[0], marked, *images[2:]], axis=1)
     Image.fromarray(strip).save(path)
+
+
+def _save_before_after(
+    save_dir: Path, splats: Splats, lifted: Splats, grid: vc.ConeGrid, filled: Sequence[Filled]
+) -> None:
+    """Per accepted view, `after{k}.png`: the scan as the globe draws it from there (faded by
+    its view cones) beside the same with the inferred layer added."""
+    from PIL import Image
+
+    both = Splats.concat([splats, lifted])
+    for k, f in enumerate(filled):
+        if not f.accepted:
+            continue
+        camera = f.conditioning.camera
+        weights = np.concatenate([seen_weights(splats, camera, grid), np.ones(len(lifted))])
+        after = to_u8(render(both, camera, opacity_scale=weights).rgb)
+        strip = np.concatenate([to_u8(f.conditioning.seen.rgb), after], axis=1)
+        save_dir.mkdir(parents=True, exist_ok=True)
+        Image.fromarray(strip).save(save_dir / f"after{k}.png")
 
 
 def package_inferred(
@@ -603,20 +641,34 @@ def fill_scan(
         )
     used = [f.conditioning.camera for f in filled if f.accepted]
     evidence = package_inferred(lifted, confidence, used, measured_tileset, out_dir, filler.name)
+    if save_dir is not None:
+        _save_before_after(save_dir, splats, lifted, grid, filled)
     return {**evidence, "perView": per_view, **({"distill": distilled} if distilled else {})}
 
 
 def make_filler(spec: str) -> Filler:
     """`telea` (the CPU stand-in) or `module:Class` -- a GPU filler such as
-    `world_model_client:FixerFiller`, constructed with no arguments."""
+    `world_model_client:FixerFiller` -- constructed with the keyword arguments after a `?`
+    (`world_model_client:FixerFiller?timestep=50`; numbers are parsed as numbers)."""
     if spec == "telea":
         return InpaintFiller()
     import importlib
 
-    module, _, name = spec.partition(":")
+    path, _, query = spec.partition("?")
+    module, _, name = path.partition(":")
     if not name:
-        raise ValueError(f"filler {spec!r}: expected 'telea' or 'module:Class'")
-    return getattr(importlib.import_module(module), name)()
+        raise ValueError(f"filler {spec!r}: expected 'telea' or 'module:Class[?key=value&...]'")
+    kwargs: dict[str, object] = {}
+    for pair in filter(None, query.split("&")):
+        key, _, value = pair.partition("=")
+        try:
+            kwargs[key] = int(value)
+        except ValueError:
+            try:
+                kwargs[key] = float(value)
+            except ValueError:
+                kwargs[key] = value
+    return getattr(importlib.import_module(module), name)(**kwargs)
 
 
 def link_inferred(measured_tileset: Path, inferred_tileset: Path) -> list[dict[str, object]]:
