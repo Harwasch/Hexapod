@@ -61,6 +61,7 @@ import {
 } from "@/state/living";
 
 import { rigUrlFor } from "./livingRigs";
+import { claimsOf } from "./motionClaims";
 import { describeFromStore, SkinWindDriver } from "./skinWind";
 import type { PerformanceManager } from "./PerformanceManager";
 import type { SiteManager } from "./SiteManager";
@@ -674,7 +675,12 @@ export class LivingSurveyManager {
     for (const [assetId, part] of skins) {
       let driver = this.#skinDrivers.get(assetId);
       if (driver === undefined) {
-        driver = new SkinWindDriver(part, describeFromStore(assetId), this.#skinField);
+        driver = new SkinWindDriver(
+          part,
+          describeFromStore(assetId),
+          this.#skinField,
+          claimsOf(assetId),
+        );
         this.#skinDrivers.set(assetId, driver);
       }
       const tick = driver.tick(t, wind);

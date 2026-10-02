@@ -16,13 +16,13 @@ Code: `infra/modal/world_models.py` (server), `tools/captures/world_model_client
 
 ## 1. Credentials
 
-| Need                  | Where it goes                                                                   | Why                                                                                                                    |
-| --------------------- | ------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| Modal token           | `MODAL_TOKEN_ID` / `MODAL_TOKEN_SECRET` in the shell                            | deploy and call                                                                                                        |
-| Hugging Face token    | Modal secret `huggingface` (`HF_TOKEN`)                                         | Wan, Cosmos weights (Fixer's `nvidia/Fixer` is not gated and needs none); the workspace had no such secret on 2026-10-02 |
-| HF licence acceptance | huggingface.co, on the token's account                                          | Cosmos only: Cosmos-Predict2.5-2B, Cosmos-Reason1-7B, Cosmos-Guardrail1 (all gated; `harwasch` had none on 2026-10-01) |
-| ~~NGC API key~~       | not needed                                                                      | Fixer's NGC container is replaced by the same environment built from cosmos-predict2's `uv.lock` (section 5)            |
-| R2 credentials        | already used by `infra/modal/app.py`                                            | only to publish an inferred layer                                                                                      |
+| Need                  | Where it goes                                        | Why                                                                                                                      |
+| --------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| Modal token           | `MODAL_TOKEN_ID` / `MODAL_TOKEN_SECRET` in the shell | deploy and call                                                                                                          |
+| Hugging Face token    | Modal secret `huggingface` (`HF_TOKEN`)              | Wan, Cosmos weights (Fixer's `nvidia/Fixer` is not gated and needs none); the workspace had no such secret on 2026-10-02 |
+| HF licence acceptance | huggingface.co, on the token's account               | Cosmos only: Cosmos-Predict2.5-2B, Cosmos-Reason1-7B, Cosmos-Guardrail1 (all gated; `harwasch` had none on 2026-10-01)   |
+| ~~NGC API key~~       | not needed                                           | Fixer's NGC container is replaced by the same environment built from cosmos-predict2's `uv.lock` (section 5)             |
+| R2 credentials        | already used by `infra/modal/app.py`                 | only to publish an inferred layer                                                                                        |
 
 ```sh
 modal secret create huggingface HF_TOKEN=hf_...   # for Wan / Cosmos only
@@ -153,3 +153,27 @@ runs the job on an L4 (`run_job_gsplat`). Runs 36992095315 (gsplat), 36994749804
   the hole. Held-out psnrFill/psnrHole (gsplat): yard Telea 16.71/15.56, Fixer t250
   16.53, t100 16.53, t50 16.53; spool Telea 8.05/7.37, Fixer t250 7.52, t100 7.48, t50 7.47.
   Telea is ahead on both; on the spool Fixer's fill views are near the hole's own score.
+
+## 7. Split objects: the pumpkin's hole (2026-10-02, branch `wm-c4`)
+
+`fill.py --jobs split:pumpkin` runs `split_objects.py split` (C4) on the pumpkin scan with
+`--ids 3 --absorb` (the red pumpkin and 40 fragments segmentation left under other ids,
+27,319 leaf gaussians; 2,124 merged parents), gsplat renders (L4), 6 views at 1024x576,
+`--max-scale-m 0.5`, Distill 1500 (L40S). Runs 37028005624, 37029416454, 37029881769.
+
+- **Split**: 4 tiles rewritten (all of them held some of it), instances re-bound, the object a
+  one-tile tileset; the plane under it from 101,974 gaussians around its footprint.
+- **The hole**: the held-out view sees through 91,480 px where it stood, 0.4% covered;
+  after the fill 99.2% (Telea), 99.2% (Fixer t50), 99.2% (t100), 99.2% (t250). Every view
+  passed the gate (Fixer t50 34-39 dB blurred, t100 29-34, t250 25-29).
+- **Fixer is a cleaner, not an inpainter.** Shown the scan with an empty hole, t50 kept it
+  black (the first run). Shown a rough Telea fill of the hole (now `fill_hole`'s input to
+  every filler), t50, t100 and t250 all clean the grass around it and leave the flat Telea
+  colours inside as they were: the fill closes the hole in a plausible ground colour, with
+  no texture, and a red speck of a fragment that stayed behind seeds a red blob in some
+  views. A hole the size of an object wants a generative inpainter (an inpainting diffusion
+  model behind the same `Filler` interface), not Fixer.
+- **Distill 1500** (L40S): masked L1 0.035 -> 0.016 / 0.027 -> 0.006 / 0.040 -> 0.006 in the
+  first three views; 8-22 s.
+- **GPU time**: each job 44-98 s on the L4 (Fixer 36-53 s and Distill 8-22 s of it on
+  L40S calls); about 10 min of L4 wall over the four runs (one a duplicate push).

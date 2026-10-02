@@ -9,6 +9,9 @@
  * and catches the wind) overridden field by field by `materials.json` (what the video teacher
  * fits, `lib/skinMaterials.ts`). In calm every driven skin is handed `null`: the scene is the
  * measured one, pixel for pixel, the same frame the wind drops.
+ *
+ * An instance another driver has claimed (`motionClaims.ts`: telemetry moves it) is not
+ * swayed and not written: its handles are that driver's.
  */
 
 import {
@@ -80,12 +83,19 @@ export class SkinWindDriver {
   readonly #describe: DescribeInstance;
   readonly #field: SkinWindField;
   readonly #skins: Driven[];
+  readonly #claimed: (instanceId: number) => boolean;
   #materials: MaterialTable | undefined;
 
-  constructor(target: SkinWindTarget, describe: DescribeInstance, field: SkinWindField) {
+  constructor(
+    target: SkinWindTarget,
+    describe: DescribeInstance,
+    field: SkinWindField,
+    claimed: (instanceId: number) => boolean = () => false,
+  ) {
     this.target = target;
     this.#describe = describe;
     this.#field = field;
+    this.#claimed = claimed;
     this.#skins = target.doc.skins.map((skin) => ({
       skin,
       traits: undefined,
@@ -94,6 +104,11 @@ export class SkinWindDriver {
       buffer: new Float64Array(skin.handles * 12),
       displaced: false,
     }));
+  }
+
+  /** Whether another driver holds instance `instanceId` (the wind leaves it alone). */
+  claimed(instanceId: number): boolean {
+    return this.#claimed(instanceId);
   }
 
   /** The material instance `instanceId` sways with now, once its traits are known. */
@@ -113,6 +128,12 @@ export class SkinWindDriver {
     for (const d of this.#skins) {
       const traits = this.#describe(d.skin.instance);
       if (refresh || traits !== d.traits || d.material === undefined) this.#resolve(d, traits);
+      if (this.#claimed(d.skin.instance)) {
+        // Another driver writes these handles now: drop the state, write nothing.
+        d.oscillator?.reset();
+        d.displaced = false;
+        continue;
+      }
       const oscillator = d.material?.wind ? d.oscillator : undefined;
       if (oscillator) driven += 1;
       if (calm || !oscillator) {
@@ -137,7 +158,8 @@ export class SkinWindDriver {
   rest(): void {
     for (const d of this.#skins) {
       d.oscillator?.reset();
-      if (d.displaced) this.target.setInstanceHandles(d.skin.instance, null);
+      if (d.displaced && !this.#claimed(d.skin.instance))
+        this.target.setInstanceHandles(d.skin.instance, null);
       d.displaced = false;
     }
   }

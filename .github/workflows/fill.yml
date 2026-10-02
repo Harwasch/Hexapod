@@ -17,6 +17,7 @@ on:
     paths:
       - infra/modal/fill.py
       - tools/captures/teacher_fill.py
+      - tools/captures/split_objects.py
       - tools/captures/splat_render.py
       - tools/captures/tests/test_gsplat_parity.py
       - tools/captures/world_model_client.py
@@ -25,7 +26,7 @@ on:
   workflow_dispatch:
     inputs:
       jobs:
-        description: kind:scan pairs (drop|fill, scans in infra/modal/fill.py)
+        description: kind:scan pairs (drop|fill|split, scans in infra/modal/fill.py)
         type: string
         default: drop:yard,drop:spool,fill:camp
       fillers:
@@ -48,15 +49,15 @@ concurrency:
 env:
   JOBS: ${{ inputs.jobs || 'fill:camp' }}
   # Scans to run fill.py probe on (Fixer on renders prepared several ways); empty: none.
-  PROBES: ''
+  PROBES: ""
   FILLERS: ${{ inputs.fillers || 'telea,fixer-t50' }}
   DISTILL: ${{ inputs.distill || '1500' }}
   RENDERER: ${{ inputs.renderer || 'gsplat' }}
   # Non-empty: also run tests/test_gsplat_parity.py (CPU against gsplat) on a GPU.
-  PARITY: '1'
+  PARITY: "1"
   # Fill jobs: condition without gaussians larger than this (m; 0 = keep all). The camp's
   # edge floaters (scale 0.5-2.7 m) cover most of a gsplat view from outside.
-  MAX_SCALE: '0.5'
+  MAX_SCALE: "0.5"
 
 jobs:
   fill:

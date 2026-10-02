@@ -13,6 +13,10 @@
  * harness clock that moves only when told to, so a frame is a function of the steps taken: the
  * driver for e2e/wind.spec.ts.
  *
+ * With `extras.telemetry` on the root (step C3), the scan's bindings drive their instances
+ * (`cesium/telemetry.ts`) on a harness clock in milliseconds that moves only when told to
+ * (`telemetryAt`): the driver for e2e/telemetry.spec.ts.
+ *
  * Loaded dynamically by the spec; nothing imports it, so it never reaches the production
  * bundle. Headless GL is SwiftShader: pixels are counted, not eyeballed.
  */
@@ -30,13 +34,17 @@ import {
   type Scene,
 } from "cesium";
 
+import { claimsOf } from "@/cesium/motionClaims";
 import { describeFromStore, SkinWindDriver } from "@/cesium/skinWind";
 import { attachInstances, instanceSphere } from "@/cesium/splatInstances";
 import { incrementalSplats, keepOffscreenSplats, splatTilesetOf } from "@/cesium/splatInternals";
 import { motionChainOf } from "@/cesium/splatMotionChain";
 import { attachSkin, skinningOf, type SplatSkinning } from "@/cesium/splatSkin";
+import { installSplatSorter } from "@/cesium/splatSorter";
+import { attachTelemetry, telemetryOf } from "@/cesium/telemetry";
 import { withDescendants } from "@/lib/instances";
 import { HANDLE_FLOATS, rigidHandle } from "@/lib/skin";
+import { SyntheticSource } from "@/lib/telemetrySources";
 import { SkinWindField, WIND_CALM, type WindSettings } from "@twin/world";
 import { useInstances } from "@/state/instances";
 
@@ -93,9 +101,42 @@ export interface SkinHarness {
   /** Calm: every skin handed `null`; waits for the frame. */
   windOff(): Promise<void>;
   /** What the wind driver made of each skin: its material, whether it sways. */
-  windSkins(): { instance: number; wind: boolean; stiffness: number; evidence: string }[];
+  windSkins(): {
+    instance: number;
+    wind: boolean;
+    stiffness: number;
+    evidence: string;
+    claimed: boolean;
+  }[];
   /** A square on screen around a point of skin `instance`'s rest frame (from its origin). */
   pointRect(instance: number, local: [number, number, number], radiusM: number): Rect | null;
+  /** A square on screen around a point of the scan frame (tileset local ENU). */
+  scanRect(point: [number, number, number], radiusM: number): Rect | null;
+  /** Waits until the telemetry bindings are attached. */
+  telemetryReady(): Promise<void>;
+  /** Sets the telemetry clock (ms) and waits for the frame. */
+  telemetryAt(ms: number): Promise<void>;
+  /** Every binding: its state, age, motion path and pose shown (scan frame). */
+  telemetryStatus(): TelemetryStatus[];
+  /** Silences a synthetic source (a dropout), or lets it speak again. */
+  mute(sourceId: string, muted: boolean): void;
+  /** Every bound instance back at rest, tracks emptied, the clock at `ms`. */
+  telemetryReset(ms: number): Promise<void>;
+  /** The rigid part: instances driven, whether it acts, the slot of each id asked for. */
+  rigidInfo(ids: number[]): { driven: number[]; active: boolean; slots: number[] };
+  /** The handles a skinned instance's skin holds now, or null at rest. */
+  skinHandles(instance: number): number[] | null;
+}
+
+export interface TelemetryStatus {
+  instance: number;
+  source: string;
+  state: string;
+  ageMs: number | null;
+  via: string;
+  position: number[] | null;
+  orientation: number[] | null;
+  playoutMs: number;
 }
 
 function nextFrame(scene: Scene): Promise<void> {
@@ -113,7 +154,10 @@ export async function startSkinHarness(options: {
   url: string;
   incremental?: boolean;
   maximumScreenSpaceError?: number;
+  /** The app's distance sorter (`installSplatSorter`), which orders moving groups as drawn. */
+  sorter?: boolean;
 }): Promise<SkinHarness> {
+  if (options.sorter === true) installSplatSorter();
   const widget = new CesiumWidget(options.container, {
     baseLayer: false,
     requestRenderMode: false,
@@ -138,6 +182,8 @@ export async function startSkinHarness(options: {
   scene.primitives.add(tileset);
   attachInstances(tileset, scene, ASSET);
   attachSkin(tileset, scene, ASSET);
+  let telemetryClock = 0;
+  attachTelemetry(tileset, scene, ASSET, { clock: () => telemetryClock });
 
   const settle = async (frames: number): Promise<void> => {
     for (let frame = 0; frame < frames; frame += 1) await nextFrame(scene);
@@ -154,7 +200,12 @@ export async function startSkinHarness(options: {
   let windDriver: SkinWindDriver | undefined;
   let windTickOff: (() => void) | undefined;
   const windDriverFor = (seed: number): SkinWindDriver => {
-    windDriver ??= new SkinWindDriver(part(), describeFromStore(ASSET), new SkinWindField(seed));
+    windDriver ??= new SkinWindDriver(
+      part(),
+      describeFromStore(ASSET),
+      new SkinWindField(seed),
+      claimsOf(ASSET),
+    );
     return windDriver;
   };
 
@@ -392,6 +443,7 @@ export async function startSkinHarness(options: {
           wind: material?.wind ?? false,
           stiffness: material?.stiffness ?? 0,
           evidence: material?.evidence ?? "none",
+          claimed: driver?.claimed(instance) ?? false,
         };
       });
     },
@@ -424,6 +476,76 @@ export async function startSkinHarness(options: {
         width: 2 * radius * ratio,
         height: 2 * radius * ratio,
       };
+    },
+    scanRect(point, radiusM) {
+      const root = tileset.root as { computedTransform?: Matrix4 };
+      if (!root.computedTransform) return null;
+      const world = Matrix4.multiplyByPoint(
+        root.computedTransform,
+        new Cartesian3(point[0], point[1], point[2]),
+        new Cartesian3(),
+      );
+      const centre = SceneTransforms.worldToWindowCoordinates(scene, world, new Cartesian2());
+      const edge = Cartesian3.add(
+        world,
+        Cartesian3.multiplyByScalar(scene.camera.rightWC, radiusM, new Cartesian3()),
+        new Cartesian3(),
+      );
+      const side = SceneTransforms.worldToWindowCoordinates(scene, edge, new Cartesian2());
+      if (!centre || !side) return null;
+      const radius = Math.hypot(side.x - centre.x, side.y - centre.y);
+      const ratio = scene.canvas.width / Math.max(1, scene.canvas.clientWidth);
+      return {
+        x: (centre.x - radius) * ratio,
+        y: (centre.y - radius) * ratio,
+        width: 2 * radius * ratio,
+        height: 2 * radius * ratio,
+      };
+    },
+    async telemetryReady() {
+      for (let frame = 0; frame < 600 && !telemetryOf(ASSET); frame += 1) await nextFrame(scene);
+      if (!telemetryOf(ASSET)) throw new Error("telemetry never attached");
+      await settle(2);
+    },
+    async telemetryAt(ms) {
+      telemetryClock = ms;
+      await settle(4);
+    },
+    telemetryStatus() {
+      return (telemetryOf(ASSET)?.driver.statuses ?? []).map((s) => ({
+        instance: s.instance,
+        source: s.source,
+        state: s.state,
+        ageMs: s.ageMs,
+        via: s.via,
+        position: s.pose ? [...s.pose.position] : null,
+        orientation: s.pose ? [...s.pose.orientation] : null,
+        playoutMs: s.playoutMs,
+      }));
+    },
+    mute(sourceId, muted) {
+      const source = telemetryOf(ASSET)?.sources.get(sourceId);
+      if (!(source instanceof SyntheticSource)) throw new Error(`no synthetic ${sourceId}`);
+      source.muted = muted;
+    },
+    async telemetryReset(ms) {
+      const attached = telemetryOf(ASSET);
+      if (!attached) throw new Error("no telemetry");
+      attached.driver.reset(skinningOf(ASSET), () => telemetryOf(ASSET)?.rigid);
+      telemetryClock = ms;
+      await settle(4);
+    },
+    rigidInfo(ids) {
+      const rigid = telemetryOf(ASSET)?.rigid;
+      return {
+        driven: rigid?.driven ?? [],
+        active: rigid?.active ?? false,
+        slots: ids.map((id) => rigid?.slotOf(id) ?? 0),
+      };
+    },
+    skinHandles(instance) {
+      const handles = skinningOf(ASSET)?.instanceHandles(instance);
+      return handles ? Array.from(handles) : null;
     },
     hooks() {
       const primitive = splatTilesetOf(tileset).gaussianSplatPrimitive;

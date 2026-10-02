@@ -433,6 +433,224 @@ mode wants minutes of footage; a world-model clip of ~5 s (`teacher_materials.py
 or Cosmos on Modal, `huggingface` secret needed) resolves only fast objects.
 `tests/test_teacher_materials.py` runs the snag at 90 s (c within 5%, ζ 35%, D 20%).
 
+### Telemetry on instances (step C3)
+
+Live mode's first driver: a pose stream bound to an instance moves that object rigidly.
+`packages/world/src/telemetry.ts` (frames, rigid motion, the playout track, synthetic paths),
+`apps/web/src/lib/telemetry.ts` (the bindings file, the wire format),
+`lib/telemetrySources.ts` (sources), `cesium/telemetry.ts` (the driver, attached by
+`SiteManager` beside the skin), `cesium/splatRigid.ts` (rigid motion without a skin).
+
+**Bindings: `telemetry.json`**, beside the tiles, declared by `root.extras.telemetry = { "uri",
+"count" }` (the pattern of `instances`, `skin` and `materials`). A separate file for the reason
+`materials.json` is one: a binding is deployment data (which robot is which object) and must
+survive a re-segmentation or skin refit; it is keyed by instance id, so a re-segmentation that
+renumbers instances needs its bindings re-pointed. The loader takes any URL, so the API can
+serve the same document per site when bindings move out of the tiles.
+
+```jsonc
+{
+  "format": "hexapod.telemetry", "version": 1,
+  "sources": {                       // by id
+    "r1":   { "kind": "sse", "url": "https://bridge/r1", "frame": "geodetic" },
+    "yard": { "kind": "websocket", "url": "wss://bridge/fleet" },  // frame defaults to "scan"
+    "loop": { "kind": "synthetic", "frame": "ecef", "rateHz": 2, "delayMs": 40, "jitterMs": 60,
+              "dropouts": [[from, to], ...],                       // source ms, optional
+              "path": { "kind": "circle", "centre": [x, y, z], "radius": 2.5, "periodS": 24,
+                        "phaseDeg": -90 } }  // or { "kind": "polyline", "points", "speedMps" }
+  },
+  "bindings": [
+    {
+      "instance": 8,                 // instances.json id: it and everything below it move
+      "source": "loop",
+      "stream": "R1",                // optional: only readings whose "stream" is this
+      "rest": { "frame": "scan", "position": [x, y, z], "orientation": [x, y, z, w] },
+                                     // the body frame at capture; omitted: the instance's
+                                     // base centre (bounds), level, scan axes
+      "latencyMs": 250,              // playout delay
+      "extrapolateMs": 1000,         // dead reckoning past the newest reading
+      "staleMs": 3000,               // newest reading older than this: stale
+      "stale": "rest",               // "rest": fade back over fadeMs; "freeze": hold
+      "fadeMs": 2000
+    }
+  ]
+}
+```
+
+A synthetic path is written in the scan frame whatever the source's `frame`; the source emits
+its readings in that frame, so the conversions run as they would for a real stream.
+
+**Readings** (the wire format of an SSE or WebSocket source, and what a robot or fleet bridge
+publishes): a JSON message is a reading, an array of them, or `{ "samples": [...] }`; a reading
+is `{ "t", "position", "orientation"?, "headingDeg"?, "pitchDeg"?, "rollDeg"?, "frame"?,
+"stream"? }`. `t` is milliseconds (epoch, the source's clock) or ISO 8601. `position` and
+`orientation` (`[x, y, z, w]`, body → frame) are the body frame's pose in one of three frames:
+`scan` (the tileset's local ENU, what `instances.json` is written in), `ecef` (WGS84 metres),
+`geodetic` (`[lon°, lat°, h]`, orientation body → east-north-up there). Without an
+`orientation`, heading (clockwise from north), pitch (nose up) and roll (right side down) are
+read in the level frame at the position, for a body with x forward, y left, z up. Everything is
+brought into the scan frame through the root's computed transform (its linear part taken as a
+rotation).
+
+**Motion.** The pose shown `P` moves the object by `M = P · rest⁻¹` (`x' = R x + t`). A
+**skinned** instance takes it through its skin's constant handle, `Z_0 = [R − I | t + (R − I)o]`
+about the skin's origin `o`, the elastic handles at rest (exact: `w_0 ≡ 1`, and the covariance
+follows `R`). Any **other** instance takes it through the rigid part of the motion chain
+(`splatRigid.ts`): the scan's per-splat instance ids (shared with hide and highlight), a slot
+per driven instance written at it and every instance below it, and per slot the motion folded
+into the baked frame as a skin handle is (three RGBA32F texels); it gives the chain its linear
+part, so covariances turn with the object. No skin, no new data: any segmented object can be
+driven. A skin that arrives after the readings takes the object over from the rigid part.
+
+**Playout** (`PoseTrack`). The source's clock need not match ours: the offset is the smallest
+`arrival − t` over the last 32 readings (the fastest transport seen), so the time shown is
+`now − offset − latencyMs` in source time. Between readings: linear position, slerp. Past the
+newest: constant velocity and turn rate from the last two (not across a gap over 5 s) for up to
+`extrapolateMs`, then held there. Past `staleMs`: `freeze` holds; `rest` blends the pose back to
+the rest pose over `fadeMs` and then hands the object `null`, the measured frame pixel for
+pixel. Before the first reading the object is at rest; a reading after a fade is live again at
+once. `driver.statuses` gives each binding's state (`none`, `live`, `extrapolated`, `held`,
+`stale`, `rest`), its age and the pose, what a "Observed · n s old" badge reads
+(LIVING_ENGINE.md §1).
+
+**With the wind.** A bound instance, its ancestors and its descendants are claimed
+(`motionClaims.ts`); the wind (`skinWind.ts`) neither sways nor writes a claimed skin, so a
+driven shrub keeps its elastic handles at rest while the tree beside it sways. Overlap between
+two bindings (one instance inside another) gives the deeper one its own slot.
+
+**Sources.** `synthetic` (deterministic, sampled on the driver's clock: the same clock gives the
+same readings, with delay, hashed jitter and dropouts; dev and e2e), `sse` and `websocket` (JSON
+messages, stamped on arrival). All three implement one interface (`TelemetrySource`:
+`subscribe`, optional `pump(now)`); the Fleet tab's machines (`missions/types.ts`, a demo
+provider today) reach a scan the same way once a robot bridge publishes their poses.
+
+**Sorted where drawn.** The splat sorter orders by rest positions; a driven object moves metres
+and turns, so the rigid part tells the sorter (`splatSorter.ts`, `setSortMotion`) each splat's
+slot and each slot's motion. Every sort carries, per slot, the eye moved back by the slot's
+motion (`M⁻¹(eye − t)`): a rigid motion keeps distances, so the rest positions sorted against
+that eye give the moved splats' order exactly, with no positions re-sent. A slot's eye moving as
+far as the camera would have to move calls for a new sort. A skinned object moved by its constant
+handle still sorts at rest (small objects; the same groups could come from the skin ids).
+
+**Renderers.** CesiumJS (its own splat primitive) only, as the skin is. The dedicated renderers
+would need the same rule over the instance ids they already stream for hide and highlight
+(`cesium/scanView/scanInstances.ts`): in PlayCanvas, a per-instance 3×4 motion (a small uniform
+array or texture indexed by a slot per id) applied to centres, and rotations applied to the
+covariances, in the work-buffer modifier that already reads the ids; in Spark, the same in the
+object modifier (dyno), with a motion uniform per driven object. Neither has the skin path yet,
+so a skinned instance would take the rigid path there. Nothing else changes: the driver hands
+each renderer motions, not pixels.
+
+### Split objects (step C4)
+
+`tools/captures/split_objects.py split TILES_DIR OUT_DIR [--ids 3,7] [--absorb]
+[--filler ...] [--renderer cpu|gsplat] [--distill N]` takes chosen instances out of the
+spatial tiles into tilesets of their own and fills the holes they leave, into a **new**
+directory (the input is never written; an output it did not write is refused; the same
+arguments write the same bytes). Default choice: the coarsest `movable` instances with at
+least 500 gaussians and bounds no larger than 8 m; or explicit `--ids` (an id inside another
+chosen one is dropped). `candidates` lists the choice without writing.
+
+```
+OUT_DIR/
+  tileset.json            the scan without the objects; root.extras.objects, .split, and each
+                          fill in .inferredLayers
+  instances.json (+.emb)  re-bound: rewritten tiles under their new checksums, object tiles added
+  <tile>.<digest>.glb     each tile that held any of an object's gaussians, without them
+  <tile>.glb, sidecars    everything else, copied unchanged
+  objects/<id>/           tileset.json + object.glb (+ viewcones.bin): the object, its own frame
+  fills/<id>/             tileset.json + tiles + viewcones.bin: the inferred layer under it
+```
+
+**Root extras** of the split scan:
+
+```jsonc
+"objects": [
+  {
+    "uri": "objects/3/tileset.json",   // relative to the scan's tileset.json
+    "instance": 3,                     // instances.json id (the object is it and its descendants)
+    "origin": [2.0828, 1.8201, -0.0776], // its frame's origin in the scan's local ENU (m), on
+                                       // the 1/4096 m SPZ grid: its bounds' base centre
+    "pose": { "translation": [0, 0, 0], "rotation": [0, 0, 0, 1] }, // where it is drawn
+    "splats": 27319,
+    "fill": "fills/3/tileset.json"     // the inferred layer under it, when one was made
+  }
+],
+"split": { "format": "hexapod.split", "version": 1, "source": "...",
+           "removed": { "leaves": 27319, "parents": 2124 }, "rule": "..." }
+```
+
+- **The object's tileset**: one tile (leaf gaussians only; small objects need no LOD), its
+  positions relative to `origin` -- the same SPZ records shifted by an integer number of grid
+  steps, so the shift is exact -- and its root transform the scan's times `T(origin)`: loaded
+  alone it draws where it was measured. `root.extras.object = { format: "hexapod.object",
+version, instance, ids, origin, frame, scene, fromTiles }` (`ids`: every id its gaussians
+  carry), `root.extras.instances` points at the scan's `instances.json` (`../../`), and its
+  view cones are rebuilt from the scan's observers in its own frame, so they turn with it.
+- **Pose**: a rigid motion about `origin` in the scan's frame, `p -> origin + t + R (p -
+origin)`, `rotation` a unit quaternion `x, y, z, w`. The rest pose is the identity; the
+  viewer (or a driver) sets another at runtime.
+- **The scan's tiles**: a tile that held any of an object's gaussians is rewritten without
+  them, byte for byte what was there minus the removed records (the SPZ is sliced, never
+  re-quantised; `unpack -> pack` would move a rotation byte here and there), under
+  `<stem>.<new checksum digest>.glb` so no cache serves the old tile for the new. A leaf's
+  gaussian goes with the object by its id; a merged parent's by its id when bound, else
+  (merged across ids) when most of its 8 nearest leaves are the object's. Bounding volumes
+  stay as they were (conservative); a tile left empty loses its content.
+- **Bindings**: `instances.json` keeps every instance and drops the replaced tiles' keys; a
+  rewritten tile's runs are its old runs without the removed gaussians, under its new
+  checksum, and each object tile's runs are added -- the same ids, so hide, highlight and
+  search act on the object wherever it is drawn. `skin.json` (when linked) is re-bound the
+  same way (rows of removed gaussians dropped, rows re-packed in checksum order); an object's
+  own skin is not carried into its tileset yet.
+- **The fill** (`teacher_fill.fill_hole`, the drop test for a region gone for good): the
+  surface the object stood on is a plane fitted to the scan around its footprint (2 half
+  sizes out, no higher than its lower quarter; the farthest fifth dropped per round); views
+  look down on where it stood from the observers' side, at least 35° steep, the object half
+  the frame; the mask is the pixels of its silhouette that now **see through** that plane
+  over its footprint (nothing there, or what is there lies 5% beyond it); the empty pixels
+  around (a scan's edge) are painted from the covered ones before the filler sees them;
+  filled, gated as every fill is, lifted onto the plane, opacity by distance from measured
+  pixels scaled to the hole (its middle is not left transparent for being wide), optionally
+  distilled; a held-out view scores how much of what sees through the scan covers before and
+  after. Packaged as an inferred layer (`extras.evidence.hole` = the instance id) and
+  declared in `inferredLayers`, so the viewer labels it inferred like any other.
+- **`--absorb`**: segmentation leaves pieces of an object under other ids (the pumpkin: 40
+  small instances, most of them top-level). With it, every other id with 80% of its leaf
+  gaussians inside the object's box (its 3rd-97th percentiles, padded 5%) and at most a fifth
+  of its size goes with it. Geometry only.
+
+**In the viewer** (`cesium/splitObjects.ts`, `lib/sceneObjects.ts`, `state/sceneObjects.ts`):
+each declared object is loaded beside the scan (as inferred layers are), shown while the scan
+is shown, faded by its own view cones, and drawn under the model matrix `P · S · L · S⁻¹`
+(`P` the scan's model matrix, `S` its root transform, `L = T(origin + t) R T(−origin)`), so
+at rest it is exactly where it was measured and a pose moves it in the scan's frame
+wherever the scan itself was placed. A pose set in the store (`useSceneObjects.setPose(asset,
+instance, pose)`; `null` for the declared one) overrides the declared pose: what C3's
+telemetry driver will call. Hide and highlight: `attachInstances(..., { follower: true })`
+installs the same hooks on the object's primitive from the scan's `instances.json` and the
+scan's store entry, so an object hides, highlights and dims with the ids it carries; search
+and the table stay the scan's; flying to a moved instance follows its pose
+(`setInstanceOffset`). Not yet: the dedicated renderers (PlayCanvas, Spark) draw the scan
+without its split objects, and collision still has the object at rest.
+
+**Validation** (`tests/test_split_objects.py`, the yard with the lawn under one shrub taken
+away, packed in 6000-gaussian tiles, instances from its labels; CPU, Telea): every leaf
+gaussian is in the scan or the object exactly once (the SPZ records compare equal as a
+multiset), each id's count is conserved, every drawn tile and the object tile are bound with
+runs of their length and nothing stale is left, untouched tiles are byte-identical, scene and
+object at rest render as the scan (≤ 1/255), the shrub's footprint, which the held-out view
+sees through (6% covered), is 95% covered after the fill and lifted to within 0.25 m of the
+ground; a second run writes the same bytes, the input is untouched, and a split scan splits
+again. The committed yard's skins re-bind (rows of what stayed equal, the shrub's left).
+
+**On a real scan** (the pumpkin, `fill.py --jobs split:pumpkin`, WORLD_MODEL_RUNBOOK.md §7):
+`--ids 3 --absorb` takes the red pumpkin (27,319 gaussians, 40 fragment ids absorbed) out
+cleanly; the hole, 0.4% covered from a held-out view, is 99% covered after the fill with
+every filler tried, but NVIDIA Fixer (t50-t250) only cleans what it is shown: inside the
+hole it keeps the rough Telea fill's flat colour. A generative inpainter is the next filler
+to try for holes.
+
 ### Fixture and browser checks
 
 `data/tiles/synthetic-yard/skin/` is the yard's tree (instance 1), a snag (9) and two shrubs
@@ -446,6 +664,16 @@ over it (with `skin/materials.json`): the tree's pixels keep changing while its 
 unskinned tree and the undriven shrub stay still; the same clock steps give the same frame;
 calm is the measured frame, pixel for pixel.
 
+`data/tiles/synthetic-yard/telemetry/telemetry.json` binds two synthetic loops: the box
+building (8, unskinned: the rigid part) round a 2.5 m circle, readings in ECEF at 2 Hz with
+delay and jitter; the shrub 10 (skinned and wind-swayed by its material) round a 0.6 m circle,
+geodetic at 5 Hz, set to freeze. `apps/web/e2e/telemetry.spec.ts` drives them in a real
+CesiumJS (`skinHarness.ts`, a harness clock): the pose shown is the path at the playout time
+(within 2 cm), the building's pixels leave its place and arrive where the path is while
+unbound objects stay still, a silent source holds, fades and returns the measured frame
+pixel for pixel, the frozen shrub holds, and with the wind on the bound shrub keeps its elastic
+handles at rest while the tree sways; the same clock gives the same frame.
+
 `data/tiles/synthetic-yard/instances/` is the committed yard segmented against its own labels
 (`segment_scene.py ... --truth labels.json --tile-gaussians 6000`). It sits beside `splat/`,
 not in it, so the yard tiles stay byte-identical to what the packer writes; the e2e links it
@@ -455,6 +683,66 @@ without dimming, both primitive modes, and composition with the view cones.
 `e2e/instancesScan.spec.ts` runs the same steps on any segmented scan
 (`INSTANCES_SCAN_DIR=...`) and saves screenshots.
 
+### Selecting in the scene
+
+The viewer selects objects where they are drawn, not only from the panel. It works the same way
+under every splat renderer (PlayCanvas, Spark, CesiumJS) because picking runs on the CPU over
+the tiles the renderer draws now:
+
+- **Pick sources** (`cesium/sceneSelect/pickSources.ts`). Per asset, the renderer drawing the
+  scan provides its drawn tiles as `PickTile`s. A `PickTile` holds each tile's own positions in
+  the scan's frame (the order and frame its checksum, and so its ids, are keyed by), each
+  splat's largest axis and its opacity.
+  - PlayCanvas keeps these from the worker's decode, before its Morton reorder.
+  - Spark reads them from the SPZ (`spzPickData`).
+  - CesiumJS un-bakes the committed snapshot's tiles (`cesiumPickSource.ts`).
+  - A dedicated renderer registers above CesiumJS, so whichever draws the scan is the one
+    picked from.
+- **Click** (`lib/splatPick.ts`). A ray through the cursor tests the splats as soft spheres. It
+  uses a per-tile index: Morton-ordered blocks of 64 splats, one box each. The hits are
+  composited front to back (`T · α`), so splats behind a solid surface count for almost
+  nothing. Hidden objects' splats let the ray through. The hit splats' leaf ids give the
+  candidates (`lib/sceneSelect.ts`):
+  - the strongest leaf's chain, from the leaf up to the top level;
+  - then the other instances hit near the front.
+
+  The first choice is the smallest instance in the chain that is at least 48 px across on
+  screen.
+
+- **Cycling**. `[` / `]`, Tab / Shift+Tab (from the scene), Alt+wheel or the wheel over the
+  chip move between candidates. Esc clears the selection.
+- **The chip** (`features/sites/SceneSelectChip.tsx`). It sits by the cursor and shows
+  "Tree · 2 of 4": the top tag, else the category, else "Object N". It offers **Hide**, **Show
+  only**, **Fly to**, the brush and **Clear**. The selection is the objects store's highlight:
+  the controller writes it through `useInstances.highlight`, expanded to descendants.
+- **Brush** (`B`, or the chip's brush; `lib/splatPaint.ts`). The camera holds still while you
+  paint. Every drawn splat is projected once, and 3 px cells keep the nearest depth of their
+  fairly solid splats (an approximation of the rendered depth). A splat counts as painted when
+  it is near its cell's front and the cell is under a stroke. Shift adds to the painted area,
+  Alt takes away, and a plain stroke starts again. The match is the instance, at any level,
+  with the best intersection over union. The IoU is weighted by opacity and counts only
+  visible splats, so an object's hidden back does not count against it.
+- **Painted objects** (`lib/customSets.ts`). When the best IoU is below 0.5, the chip offers
+  **Use painted area**. This keeps the exact splats as an object of the viewer's own:
+  - It is stored per scan in this browser (`localStorage`,
+    `hexapod.customObjects.<asset>`) as `{ key, name, tiles: { checksum: [start, length, …] },
+splats, bounds }`.
+  - It is drawn through the same pipeline: `withCustomSets` gives each set an id past the
+    file's (`maxId + 1`, …), relabels its splats in the tile runs, and appends it as a
+    top-level instance. Every renderer reads ids by checksum from that document
+    (`paintedDocOf`, `SplatInstances.setDoc`), so it hides and highlights like any instance.
+  - While the set exists, its splats no longer carry their segmented id.
+
+The controller is `cesium/sceneSelect/SceneSelectController.ts`, and its state is in
+`state/sceneSelect.ts`. Unit tests are in `__tests__/sceneSelect.test.ts`, and
+`e2e/sceneSelect.spec.ts` runs on the yard (`src/dev/sceneSelectHarness.ts`) under PlayCanvas,
+Spark and CesiumJS. The e2e checks that:
+
+- clicking the tree's crown selects the tree or a part of it;
+- `]` goes to the parent and `[` comes back;
+- painting over shrub 10 selects that shrub;
+- **Hide** in the chip removes it from the frame.
+
 ## 5. Storage by behaviour
 
 | Behaviour                                   | Storage                             | Why                                                                                                                                                     |
@@ -463,7 +751,18 @@ without dimming, both primitive modes, and composition with the view cones.
 | in-place (plants, flags, water)             | spatial tiles + id (+ skin weights) | stays inside its tile; pad bounds by maximum displacement                                                                                               |
 | movable (vehicles, robots, people, animals) | own object tileset, own frame       | a moving object leaves its spatial tile's bounds (culling breaks); in its own tileset it moves by one matrix. The hole it leaves is filled by Teacher B |
 
-v1 writes ids and the table only; the split into object tilesets is a later step (§6).
+Segmentation writes the ids and the table; `split_objects.py` (§4, "Split objects") moves
+the movable ones into object tilesets and fills their holes, as a separate step on a copy.
+
+**The behaviour rule needs a size term (A6).** On the pumpkin scan both pumpkins scored
+vegetation 0.85-0.96, movable 0.40-0.47 against static 0.43-0.52, so `in-place` took them,
+though nothing roots them; only fragments (`movable` 0.53-0.65) read movable. Proposed
+(`split_objects.py --select loose`, not yet in `segment_scene.BEHAVIOUR_RULE`): movable also
+when `movable >= 0.4`, `movable >= static - 0.1` and the object is compact (bounds' largest
+side at most 0.4 of the scan's), whatever its vegetation. On the pumpkin it picks both
+pumpkins (2, 3) and four fragments, and not the ground patches (5: 3.8 × 5.2 m) or the dirt
+(`movable` 0.11). Folding it into the rule rewrites every published `instances.json`'s
+behaviours, so it waits for a re-segmentation.
 
 ## 6. Order
 

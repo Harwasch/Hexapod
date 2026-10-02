@@ -34,6 +34,7 @@ import { DEFAULT_SPLAT_RENDERER } from "@/state/settings";
 import { TileStreamer, type View } from "@/view/stream";
 import { parseTileset, type TileNode } from "@/view/tiles";
 
+import { DEDICATED_PRIORITY, registerPickSource } from "../sceneSelect/pickSources";
 import { Handover } from "./handover";
 import { scanPose } from "./pose";
 import { linkScanInstances } from "./scanInstances";
@@ -505,12 +506,27 @@ export class ScanRendererHost {
     const unlinkInstances = target.assetId
       ? linkScanInstances(target.assetId, backend, false)
       : () => undefined;
+    // Scene selection picks from the tiles this renderer draws (cesium/sceneSelect).
+    const unlinkPick =
+      target.assetId && backend.pickTiles
+        ? registerPickSource(
+            target.assetId,
+            {
+              renderer: kind,
+              tiles: () => backend.pickTiles?.() ?? [],
+              toWorld: () =>
+                target.tileset.isDestroyed() ? undefined : target.tileset.root.computedTransform,
+            },
+            DEDICATED_PRIORITY,
+          )
+        : () => undefined;
     log.info("splat renderer started", { kind, tiles: tree.root.uri });
 
     return {
       kind,
       key: target.key,
       stop: () => {
+        unlinkPick();
         unlinkInstances();
         stopDriving?.();
         streamer.stop();
