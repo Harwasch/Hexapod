@@ -119,10 +119,22 @@ that cannot write over the next attempt's checkpoint or outputs. A provider whos
 cannot be re-attached to (`subprocess`, a child of the process going away) is cancelled
 on a detach as well.
 
-One gap is known: a job cancelled in the seconds between a deploy's worker letting go of
-it and the next worker claiming it is never claimed again, so a call that worker left
-running finishes on its own (or at the function's six-hour limit). Its id is on the
-step's row.
+**A job cancelled while no worker holds it** is never claimed again, and until the
+2026-10 review nothing else read its calls: a worker that crashed (thirty seconds of
+lease and a restart), one whose restarts ran out, and one stopped by `fly machine stop`
+(it detaches the call for a successor, exits 0 and stays stopped) all left the GPU
+training for nobody for up to six hours. Now the worker **reaps** (`reaper.py`) when it
+starts and every `reap_every_s` (300 s) after: every call still recorded for a job that
+is over -- in this volume's books, and on the step rows (`metrics.remoteCalls`) -- is
+cancelled by id through its provider's adapter (`CloudRunner.cancel_recorded`), and
+struck off as `metrics.reapedCalls`, so a second pass finds nothing. A job a worker may
+still be closing (its lease run out for less than a lease) is left to it, a cancel that
+fails is tried again on the next pass, and a record older than a day is struck off as
+expired. The API **wakes the worker on a cancel** of a job a worker had claimed
+(`worker_wake.schedule_reap`, after the commit and off the request path, as for an
+enqueue but without the queue check's `/start`), so the start-up pass is what answers it.
+A worker that cancels its own job's call copies the struck-off book onto the row at once,
+so the reaper never cancels anything twice.
 
 ## Giving up: the dead-letter path
 

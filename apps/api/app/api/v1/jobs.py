@@ -46,8 +46,12 @@ def get_job(job_id: uuid.UUID, db: DbSession) -> JobRead:
     dependencies=[RequireWriteToken],
     summary="Cancel a job",
 )
-def cancel_job(job_id: uuid.UUID, db: DbSession) -> JobRead:
-    return job_service.job_to_read(job_service.cancel_job(db, job_id))
+def cancel_job(job_id: uuid.UUID, db: DbSession, background: BackgroundTasks) -> JobRead:
+    job = job_service.cancel_job(db, job_id)
+    # Committed: a worker that had the job may not be there to see it, and is woken to
+    # cancel the GPU call it may have left (worker_wake.schedule_reap).
+    worker_wake.schedule_reap(background, job)
+    return job_service.job_to_read(job)
 
 
 @router.post(

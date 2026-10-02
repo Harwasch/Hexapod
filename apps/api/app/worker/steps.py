@@ -21,6 +21,17 @@ from app.models import Artifact, JobStep
 from app.models.enums import RunStatus
 from app.worker.outputs import UploadedArtifact
 
+#: The step metric that says a stage was interrupted by its worker shutting down, so the
+#: next worker resumes it at the same attempt (`JobSupervisor._attempts`). `start_step`
+#: clears it with the rest of the metrics when the stage runs again.
+DETACHED = "detached"
+#: The step metric holding the stage's remote calls in flight, copied from its `CallBook`
+#: (`JobSupervisor._report_calls`): what a worker without the workdir cancels them by.
+REMOTE_CALLS = "remoteCalls"
+#: Calls of a run that was over, cancelled by id after nobody was left to watch them
+#: (`app.worker.reaper`): id -> when, and how ("cancelled", or "expired" unasked).
+REAPED_CALLS = "reapedCalls"
+
 
 def utcnow() -> datetime:
     return datetime.now(tz=UTC)

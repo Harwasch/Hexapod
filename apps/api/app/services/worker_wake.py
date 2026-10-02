@@ -47,6 +47,14 @@ queued job and pings the check as it always does. What this gives up is the case
 job queued behind a run whose worker then never claims again: that worker's own check
 alerts first. A lookup that fails sends the `/start` anyway: a false alarm is the better
 mistake for a check whose whole job is to be loud.
+
+**A cancel wakes it too** (`schedule_reap`). A job cancelled while no worker held it --
+the worker crashed, ran out of restarts, or was stopped by `fly machine stop` with a GPU
+call left running for a successor -- is never claimed again, so nothing would stop that
+call. The worker's start-up pass cancels it (`app/worker/reaper.py`); this is what
+starts the worker for it, the same way and under the same rules as an enqueue. Only for a
+job a worker had claimed, which is the only kind that can have a call out; and without
+the queue check's `/start`, because nothing was queued and no claim will follow.
 """
 
 from __future__ import annotations
@@ -55,7 +63,7 @@ import logging
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
 from fastapi import BackgroundTasks
@@ -66,6 +74,9 @@ from app.config import Settings, get_settings
 from app.db import get_session_factory
 from app.models import Job
 from app.models.enums import RunStatus
+
+if TYPE_CHECKING:
+    from app.models import Job
 
 # Under `twin`, the API's own logger hierarchy (app/observability.py), so its INFO lines --
 # which machines a queued job started -- are written. As `app.worker_wake` it sat outside
@@ -116,6 +127,32 @@ def after_enqueue(
     look again later if one was found already up. Never raises."""
     resolved = settings or get_settings()
     ping_queue_check(resolved, transport=transport, running=running)
+    wake = wake_workers(resolved, transport=transport)
+    if wake is not None and wake.up:
+        (later or _later)(RECHECK_AFTER_S, lambda: wake_workers(resolved, transport=transport))
+    return wake
+
+
+def schedule_reap(background: BackgroundTasks, job: Job) -> None:
+    """What a route that has just cancelled `job` calls: if a worker had claimed it, wake
+    the worker after the response has gone, so its start-up pass cancels any GPU call
+    the job left behind (`app/worker/reaper.py`). `claimed_at` is kept by a cancel and
+    by a deploy's release, and cleared only by a Retry, so it says exactly that."""
+    if job.claimed_at is not None:
+        background.add_task(after_cancel)
+
+
+def after_cancel(
+    settings: Settings | None = None,
+    *,
+    transport: httpx.BaseTransport | None = None,
+    later: Callable[[float, Callable[[], object]], None] | None = None,
+) -> Wake | None:
+    """Start the stopped worker machines, and look again later if one was found up -- it
+    may have been on its way out. No queue-check ping: a cancel queues nothing. A worker
+    that was up all along cancels the call on its next pass (`WorkerConfig.
+    reap_every_s`). Never raises."""
+    resolved = settings or get_settings()
     wake = wake_workers(resolved, transport=transport)
     if wake is not None and wake.up:
         (later or _later)(RECHECK_AFTER_S, lambda: wake_workers(resolved, transport=transport))

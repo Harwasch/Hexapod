@@ -106,6 +106,11 @@ class WorkerConfig:
     #: it queues a job (`app/services/worker_wake.py`). 0 polls forever, which is what a
     #: worker built directly -- a test, a checkout with nothing to restart it -- gets.
     idle_exit_s: float = 0.0
+    #: How often the worker cancels the calls of runs that are over (`app.worker.reaper`),
+    #: beside the pass it makes when it starts. Slow on purpose: the start-up pass is what
+    #: answers a cancel (the API wakes the worker for it), and this catches the cancel
+    #: that lands while the worker is already up.
+    reap_every_s: float = 300.0
 
     @staticmethod
     def from_settings(settings: Settings | None = None) -> WorkerConfig:

@@ -1161,6 +1161,25 @@ class CloudRunner(BaseRunner):
             return False
         return True
 
+    def cancel_recorded(self, records: Sequence[CallRecord]) -> dict[str, bool]:
+        """Cancel calls known only from their records, by id, from any process.
+
+        What `reap` does for a workdir's books, and what the worker does for a call it
+        knows only from a database row: a job cancelled while no worker was watching it
+        is never claimed again, so nothing would otherwise stop its call
+        (`app/worker/reaper.py`). Each call is re-attached to first where the adapter can
+        be (`Reattachable`: Modal's `FunctionCall.from_id`), which is what makes a cancel
+        by id possible at all. Returns, by call id, whether it was cancelled: False where
+        its provider is not configured here, or the provider refused. Never raises.
+        """
+        outcome: dict[str, bool] = {}
+        for record in records:
+            adapter = self._adapter_named(record.handle.provider)
+            outcome[record.handle.id] = adapter is not None and self._cancel_quietly(
+                adapter, record, None
+            )
+        return outcome
+
     def reap(self, workdir: Workdir, *, keep: str | None) -> list[str]:
         """Cancel every recorded call no stage of this run is about to pick up.
 
@@ -1179,9 +1198,9 @@ class CloudRunner(BaseRunner):
             book = CallBook.read(path)
             if path.parent.name == keep and not book.orphaned:
                 continue
+            outcome = self.cancel_recorded(list(book.calls.values()))
             for record in list(book.calls.values()):
-                adapter = self._adapter_named(record.handle.provider)
-                done = adapter is not None and self._cancel_quietly(adapter, record, None)
+                done = outcome.get(record.handle.id, False)
                 if done:
                     cancelled.append(record.handle.id)
                 _append_log(

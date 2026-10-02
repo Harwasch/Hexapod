@@ -311,6 +311,12 @@ and whose state is `stopped` or `suspended`. Every request has a 5 s timeout, a 
 a warning in the log and never an error to the caller, and with no `FLY_API_TOKEN` the
 whole thing is a no-op — which is what development gets.
 
+A **cancel** of a job a worker had claimed (`POST /jobs/{id}/cancel`, the phone's stop)
+wakes the worker the same way, without the queue check's `/start`: a worker that was not
+there to see the cancel — crashed, out of restarts, or stopped with `fly machine stop` —
+may have left a GPU call running, and the worker cancels the calls of every job that is
+over when it starts (`app/worker/reaper.py`), and every five minutes after.
+
 **The race** is a job committed just as the worker decides to exit. The worker asks the
 queue once more, under the lock every claim takes, immediately before exiting; a job that
 lands after that question finds the machine still `started`, which a start request does not

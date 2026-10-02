@@ -431,7 +431,9 @@ def refine_phone_capture(
     dependencies=[RequirePhoneKey],
     summary="Stop the run in progress over a capture this phone key started",
 )
-def stop_phone_capture(capture_id: uuid.UUID, db: DbSession) -> JobRead:
+def stop_phone_capture(
+    capture_id: uuid.UUID, db: DbSession, background: BackgroundTasks
+) -> JobRead:
     """The phone's Stop button. The same cancel as `POST /jobs/{id}/cancel`, reached with
     the phone key and only for this phone's own captures, so a run that is taking far
     too long can be stopped from the phone that started it."""
@@ -445,7 +447,10 @@ def stop_phone_capture(capture_id: uuid.UUID, db: DbSession) -> JobRead:
     ).first()
     if active is None:
         raise ConflictError("Nothing is running for that capture.")
-    return job_service.job_to_read(job_service.cancel_job(db, active.id))
+    job = job_service.cancel_job(db, active.id)
+    # As for `POST /jobs/{id}/cancel`: wake a worker to cancel any GPU call left running.
+    worker_wake.schedule_reap(background, job)
+    return job_service.job_to_read(job)
 
 
 def _support_mask(storage: ObjectStorage, job_id: uuid.UUID) -> dict[str, object] | None:

@@ -66,6 +66,7 @@ from app.worker.cloud import check_dispatchable
 from app.worker.config import WorkerConfig
 from app.worker.disk import DiskGuard
 from app.worker.pipeline_bridge import recipe_dir
+from app.worker.reaper import Reaper
 from app.worker.runner import JobSupervisor, Terminal
 
 log = logging.getLogger("app.worker")
@@ -174,6 +175,7 @@ class Worker:
             min_free_gb=config.min_free_gb,
             evict_after_days=config.evict_after_days,
         )
+        self._reaper = Reaper(session_factory, storage, config)
 
     @staticmethod
     def from_settings(settings: Settings | None = None) -> Worker:
@@ -240,6 +242,17 @@ class Worker:
         finally:
             db.close()
 
+    def reap_abandoned(self) -> list[str]:
+        """Cancel the remote calls of runs that are over (`app.worker.reaper`): what the
+        worker does when it starts and every `reap_every_s`. Never raises -- a provider
+        that cannot be reached is the next pass's to try again, not a reason to stop
+        claiming -- and returns the ids of the calls it cancelled."""
+        try:
+            return self._reaper.reap()
+        except Exception:
+            log.exception("worker %s: the pass over abandoned remote calls failed", self.worker_id)
+            return []
+
     def run_one(
         self, stop: threading.Event | None = None, *, config: WorkerConfig | None = None
     ) -> Terminal | None:
@@ -278,23 +291,43 @@ class Worker:
                     config.worker_id,
                     ", ".join(sorted(config.recipes)),
                 )
-        if len(configs) == 1:
-            self._slot(configs[0], halt, budget, idle)
+        # The calls of runs that ended while no worker was watching are cancelled now,
+        # before the first claim -- this start may be the API waking the worker for a
+        # cancel, which is the whole of its errand -- and every `reap_every_s` after.
+        self.reap_abandoned()
+        finished = threading.Event()
+        reaping = threading.Thread(
+            target=self._reap_every, args=(halt, finished), name="worker-reaper", daemon=True
+        )
+        reaping.start()
+        try:
+            if len(configs) == 1:
+                self._slot(configs[0], halt, budget, idle)
+                return budget.done
+            threads = [
+                threading.Thread(
+                    target=self._slot,
+                    args=(config, halt, budget, idle),
+                    name=f"worker-slot-{slot}",
+                    daemon=True,
+                )
+                for slot, config in enumerate(configs)
+            ]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
             return budget.done
-        threads = [
-            threading.Thread(
-                target=self._slot,
-                args=(config, halt, budget, idle),
-                name=f"worker-slot-{slot}",
-                daemon=True,
-            )
-            for slot, config in enumerate(configs)
-        ]
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join()
-        return budget.done
+        finally:
+            finished.set()
+            reaping.join(timeout=30)
+
+    def _reap_every(self, halt: threading.Event, finished: threading.Event) -> None:
+        """The reaper's tick, on a thread of its own: a slot may be two hours into a job."""
+        while not finished.wait(self._config.reap_every_s):
+            if halt.is_set():
+                return
+            self.reap_abandoned()
 
     def _slot(
         self, config: WorkerConfig, halt: threading.Event, budget: _Budget, idle: _Idle

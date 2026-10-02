@@ -423,6 +423,25 @@ def test_reap_cancels_every_call_but_the_ones_the_run_resumes(tmp_path: Path) ->
     assert cloud.reap(workdir, keep="train") == [handles["train"].id]
 
 
+def test_a_call_known_only_by_its_record_is_cancelled_by_id_from_another_runner(
+    tmp_path: Path,
+) -> None:
+    """What the worker's reaper does for a cancelled job nobody supervises: a runner that
+    never saw the call re-attaches to it by id and cancels it, and says which it could
+    not -- a provider this deployment no longer has."""
+    adapter = provider(tmp_path)
+    handle = adapter.submit(_request("runs/run/train/checkpoint", "x", attempt=1))
+    stranger = RemoteHandle("fc-elsewhere", "runpod", "a100")
+
+    outcome = runner(adapter, tmp_path).cancel_recorded(
+        [CallRecord(handle, 1.0, 1, None), CallRecord(stranger, 1.0, 1, None)]
+    )
+
+    assert outcome == {handle.id: True, "fc-elsewhere": False}
+    assert adapter.reattached == [handle.id] and adapter.cancelled == [handle.id]
+    assert adapter.poll(handle).state == "failed"
+
+
 # --- each attempt writes to keys of its own ------------------------------------------
 
 

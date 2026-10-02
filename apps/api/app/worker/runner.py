@@ -78,7 +78,7 @@ from app.models import Capture, Job, JobStep
 from app.models.enums import CaptureStatus, RunStatus, UploadStatus
 from app.storage import ObjectStorage
 from app.storage.null import StorageUnavailableError
-from app.worker import alerts, claim, events, outputs, params, registration, retry, steps
+from app.worker import alerts, claim, events, outputs, params, reaper, registration, retry, steps
 from app.worker.child import (
     CANCEL_SIGNAL,
     DETACH_SIGNAL,
@@ -86,7 +86,6 @@ from app.worker.child import (
     load_impl_modules,
     resolve_recipe,
 )
-from app.worker.cloud import build_runners
 from app.worker.config import WorkerConfig
 from app.worker.events import Event
 from app.worker.pipeline_bridge import (
@@ -96,7 +95,6 @@ from app.worker.pipeline_bridge import (
     AttemptLedger,
     CallBook,
     CallRecord,
-    CloudRunner,
     PipelineError,
     Plan,
     RunCost,
@@ -127,12 +125,10 @@ CHILD_STDERR = "recipe-process.stderr.log"
 STDERR_TAIL_LINES = 20
 STDERR_TAIL_CHARS = 2000
 
-#: The step metric that says a stage was interrupted by this worker shutting down, so
-#: the next worker resumes it at the same attempt (`_attempts`). `start_step` clears it
-#: with the rest of the metrics when the stage runs again.
-DETACHED = "detached"
-#: The step metric holding the stage's remote calls in flight (`_report_calls`).
-REMOTE_CALLS = "remoteCalls"
+#: The step metrics that say a stage was stopped for a deploy, and which remote calls it
+#: has in flight (`app.worker.steps`, where they are defined beside the rows).
+DETACHED = steps.DETACHED
+REMOTE_CALLS = steps.REMOTE_CALLS
 
 #: How much of a running stage's log the heartbeat reads: the progress line and the live
 #: viewer's lines are all near the end, and a live-cameras line is up to ~25 kB.
@@ -517,6 +513,11 @@ class JobSupervisor:
                     state.outcome = "cancelled" if beat is claim.Heartbeat.CANCELLED else "lost"
                     if beat is claim.Heartbeat.LOST:
                         self._log_lost(db, job.id)
+                    elif current is not None:
+                        # The call is cancelled and struck from the book by now; the row's
+                        # copy goes with it, or the reaper (`app.worker.reaper`) would
+                        # find a call of a cancelled job and cancel it a second time.
+                        self._report_calls(db, current, workdir_root)
                     return state, current, False
                 if current is not None:
                     self._report_progress(db, current, workdir_root)
@@ -877,7 +878,7 @@ class JobSupervisor:
         # The recipe process cancelled its call when told to; this catches one it could not
         # (killed before it got to it), so a cancelled job leaves no GPU running.
         _end_transaction(db)
-        self._cancel_recorded_calls(workdir_root)
+        self._cancel_recorded_calls(job.id, workdir_root)
         steps.stop_active_steps(db, job.id, RunStatus.CANCELLED)
         db.refresh(job)
         if job.finished_at is None:
@@ -903,7 +904,7 @@ class JobSupervisor:
             return "lost"
         workdir_root = self._config.workdir_for(job.id)
         _end_transaction(db)
-        self._cancel_recorded_calls(workdir_root)
+        self._cancel_recorded_calls(job.id, workdir_root)
         steps.stop_active_steps(db, job.id, RunStatus.ERROR)
         db.refresh(job)
         job.status = RunStatus.ERROR
@@ -1201,15 +1202,17 @@ class JobSupervisor:
                 CallBook(path, calls=calls, orphaned=True).save()
         _end_transaction(db)
 
-    def _cancel_recorded_calls(self, workdir_root: Path) -> None:
+    def _cancel_recorded_calls(self, job_id: uuid.UUID, workdir_root: Path) -> None:
         """Cancel every remote call still written down in the run's workdir, from here.
 
         For a run that is over while a call may not be: dead-lettered after a crash on its
         last attempt, or cancelled after its recipe process was killed before it could
         cancel. Built from the same configuration the recipe process uses, so the same
-        adapters; nothing to do (and nothing built) for a run with no books. Never
-        raises: the job is being closed, and a provider being unreachable must not stop
-        that -- it is logged, and the book stays for whoever looks.
+        adapters; nothing to do (and nothing built) for a run with no books. Each call
+        cancelled is struck from the step rows' copies too. Never raises: the job is
+        being closed, and a provider being unreachable must not stop that -- it is
+        logged, the row keeps its copy of the call, and the reaper (`app.worker.reaper`)
+        tries it again on its next pass.
         """
         workdir = Workdir(workdir_root)
         if self._config.runner != "cloud" or not workdir.stages_dir.is_dir():
@@ -1217,18 +1220,13 @@ class JobSupervisor:
         if not any(workdir.stages_dir.glob(f"*/{CALL_BOOK}")):
             return
         try:
-            runners = build_runners(
-                self._storage,
-                providers=self._config.cloud_providers,
-                sandbox=self._config.sandbox_for(workdir_root.name),
-                impl_modules=self._config.impl_modules,
-                modal_app=self._config.modal_app,
-                transfer_dir=self._config.cloud_transfer_dir,
+            runner = reaper.calls_runner(
+                self._storage, self._config, self._config.sandbox_for(workdir_root.name)
             )
-            if isinstance(runners.gpu, CloudRunner):
-                cancelled = runners.gpu.reap(workdir, keep=None)
-                if cancelled:
-                    log.info("worker %s: cancelled remote call(s) %s", self._id, cancelled)
+            cancelled = runner.reap(workdir, keep=None) if runner is not None else []
+            if cancelled:
+                log.info("worker %s: cancelled remote call(s) %s", self._id, cancelled)
+                reaper.strike_calls(self._sessions, job_id, dict.fromkeys(cancelled, "cancelled"))
         except Exception:
             log.exception("worker %s: could not cancel the remote calls in %s", self._id, workdir)
 
