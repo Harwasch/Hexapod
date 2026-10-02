@@ -15,20 +15,39 @@ gaussians on 15 GB) and a splat's instance is its cell's. Each view is rendered 
 cell id as the label (`splat_render.render(labels=...)`): per pixel the dominant cell and its
 purity, which weights its votes.
 
+**Views** (`plan_views`). `--views` views of the whole scan (rings, and eye-height views
+where it was seen from) and, for a scan wider than one view's footprint, local views that
+scale with its area: a footprint is `view_footprint` (a cell spans `CELL_PX` pixels), the
+scan's footprint is gridded `ANCHORS_PER_FOOTPRINT` times per footprint width, and each
+anchor gets `OBLIQUE_VIEWS` obliques placed by line of sight (under a canopy they go low, in
+the open high) and `EYE_VIEWS` more eye-height views; every local view has a far plane a
+footprint past its target, so it shows what it resolves and not the horizon as specks. At
+most `MAX_VIEWS`. Views render in forked workers (`render_views`: the scan shared
+copy-on-write, `splat_render.SplatIndex` culling what a view cannot reach, the same frames
+as one process) while this process masks and votes each view as it arrives.
+
 **Votes.** In one view, a cell is *in* a mask when at least `MASK_SHARE` of its visible
 (purity-weighted) pixels are; overlapping masks of one level go to the one holding the larger
-share. A cell is *visible* in a view with at least `MIN_VISIBLE_PX` of weight.
+share. A cell is *visible* in a view with at least `MIN_VISIBLE_PX` of weight. A mask over
+more than `MAX_MASK_SHARE` of the view says only that the view is one thing, and does not
+vote.
 
 **Instances, per mask level.** Two cells belong together when, over the views where both are
 visible and at least one is in a mask of that level, they are in the *same* mask in at least
 `MERGE_RATIO` of them (co-occurrence over co-visibility), and in at least `MIN_COVISIBLE`
 views. Stage 1 asks it of spatial neighbours only (each cell's `NEIGHBOURS` nearest within
-`NEIGHBOUR_CELLS` cell edges), so the graph is sparse; its components are fragments. Stage 2
-asks it again of fragments, now of any two that ever shared a mask, wherever they are -- which
-rejoins an object that occlusion or a gap split, without a quadratic pass over cells.
-Fragments below `MIN_INSTANCE_SPLATS` are dropped. Cells no view ever saw (inside a crown,
-under a roof) take their nearest seen cell's labels within `FILL_CELLS` edges; a seen cell in
-no mask keeps 0.
+`NEIGHBOUR_CELLS` cell edges), so the graph is sparse; its components are fragments. It is
+single linkage, so it asks for `STRICT_RATIO` against `STRICT_PRIOR` pseudo-views as well:
+over a million cells, pairs that agree in two views by chance chain across a whole scan (on
+the camp, into one region of 63% of its splats). Stage 2 asks it again of regions as wholes,
+in rounds of mutual-best joins, first of neighbours, then of any two that ever shared a mask,
+wherever they are -- which rejoins an object that occlusion or a gap split, without a
+quadratic pass over cells. It is incremental (`_grow`): a round re-judges only the regions it
+merged and re-scores only their pairs, so its cost follows what changed, not the views.
+Then specks (regions under `MIN_REGION_CELLS` cells) and seen cells in no mask take their
+neighbours' region (`_absorb`), and regions below `MIN_INSTANCE_SPLATS` are dropped. Cells
+no view ever saw (inside a crown, under a roof) take their nearest seen cell's labels within
+`FILL_CELLS` edges.
 
 **Hierarchy.** Levels are the mask model's scale hints (0 = coarsest). The instances of
 level L are refined by those of L+1: a child is the cells of a parent that share one level
@@ -37,17 +56,23 @@ would be its whole parent is not made, nor one below `MIN_INSTANCE_SPLATS`; a sp
 cell has no finer instance keeps its parent's id. `level` in the output is depth in this
 tree. Splat ids are the deepest instance (leaf-level), as the contract says.
 
-**Meaning.** Per instance, crops of the `CROP_VIEWS` views where its splats cover most pixels
+**Meaning.** Instances whose best view gives them `DESCRIBE_MIN_PX` pixels are described;
+smaller ones keep no embedding and no tags (they stay in the hierarchy, with their nearest
+described ancestor's properties). Per instance, crops of the `CROP_VIEWS` views where its splats cover most pixels
 (bounding box padded `CROP_PAD`) are embedded and averaged (`embedding`, L2-normalised).
 `tags`: softmax over the whole vocabulary of `LOGIT_SCALE` x cosine, top `TAGS_TOP_K`.
 `properties`: per attribute, a two-way softmax of `LOGIT_SCALE` x cosine between a positive
 and a contrast prompt (`PROPERTY_PROMPTS`), so each is a probability on its own and the
 attributes do not compete. `behaviour`: `BEHAVIOUR_RULE`.
 
-**Scale** (2026-10-01, 4 CPUs, other jobs running): the 22.6M-gaussian camp with 8 views
-and random two-level masks -- 998k cells at 0.24 m, 5.7M stage-1 edges; cells 36 s, plan
-19 s, render 52 s per view, votes 4 s, lift 46 s, describe 9 s; peak RSS 7.5 GB (the scan
-held as float64 `Splats` is most of it). Rendering dominates: 24 views is ~21 min.
+**Scale** (2026-10-02, Modal L4 + 32 CPUs, `infra/modal/segment.py`): the 22.6M-gaussian
+camp (~110 m across) gets 252 views (24 whole-scan + 228 local); 998k cells at 0.24 m, 5.7M
+stage-1 edges. Cells 29 s, plan 65 s (observers, index, line of sight), render 45 s of
+waiting (24 workers, ~8 s a view each, overlapped with masking), SAM 2.1 masks 695 s (2.8 s
+a view at 32 points a side: now the bulk), votes 11 s, lift 103 s, describe 60 s (1.9k of
+7.3k instances); ~20 min in all. Before (24 views, one render process, the per-view lift):
+render 406 s, lift 81 s, describe 604 s, and one instance held 26% of the scan. A camp view
+renders in 1.6-1.9 GB at most (`RENDER_WORKER_BYTES`).
 
 Usage:
     python segment_scene.py SPLAT.ply TILES_DIR --masks segment_models:Sam2Masks \\
@@ -63,8 +88,10 @@ import hashlib
 import importlib
 import json
 import math
+import os
 import time
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol, runtime_checkable
@@ -76,7 +103,7 @@ from scipy.spatial import cKDTree
 
 import scene_plants
 import splat_tiles
-from splat_render import Camera, Splats, _from_columns, render
+from splat_render import Camera, SplatIndex, Splats, _from_columns, render
 
 __all__ = [
     "Embedder",
@@ -88,6 +115,7 @@ __all__ = [
     "OracleMasks",
     "View",
     "describe",
+    "footprint_anchors",
     "instances_document",
     "lift",
     "link_instances",
@@ -100,6 +128,7 @@ __all__ = [
     "segment",
     "supervoxels",
     "tile_binding",
+    "view_footprint",
     "write_instances",
 ]
 
@@ -120,6 +149,33 @@ OBSERVER_PITCH_DEG = 15.0
 YAW_CANDIDATES = 16
 #: An observer eye needs this much free space (no splat centre nearer), metres.
 OBSERVER_CLEARANCE_M = 0.3
+#: Local views (scans wider than one view): the frame's width at its target holds
+#: `VIEW_WIDTH / CELL_PX` cells, so a cell spans about `CELL_PX` pixels.
+CELL_PX = 4.0
+#: Local view targets: a grid over the scan's footprint, this many per footprint width.
+ANCHORS_PER_FOOTPRINT = 3
+#: A grid bin holds the scan with at least this share of the median occupied bin's sample.
+FOOTPRINT_DENSITY = 0.1
+#: Oblique views per target, alternating between these elevations (degrees).
+OBLIQUE_VIEWS = 4
+OBLIQUE_ELEVATIONS_DEG = (35.0, 55.0, 20.0, 75.0)
+#: ... at these factors of the distance where the frame spans one footprint.
+OBLIQUE_DISTANCES = (1.0, 0.7, 0.5, 1.4)
+#: Line of sight: `OBLIQUE_PROBES` points from the eye to `OBLIQUE_PROBE_FROM` of the way
+#: back towards it from the target; a probe is clear with no sampled splat within
+#: `OBLIQUE_CLEARANCE` of a footprint. The first candidate with `OBLIQUE_CLEAR` of its
+#: probes clear is taken, else the clearest if at least `OBLIQUE_MIN_CLEAR`, else none.
+OBLIQUE_PROBES = 12
+OBLIQUE_PROBE_FROM = 0.25
+OBLIQUE_CLEARANCE = 0.03
+OBLIQUE_CLEAR = 0.9
+OBLIQUE_MIN_CLEAR = 0.6
+#: Extra eye-height observer views per target.
+EYE_VIEWS = 2
+#: What one render worker may hold at its peak (a view of the 22.6M-gaussian camp: < 2 GB).
+RENDER_WORKER_BYTES = 2.5e9
+#: At most this many views in all (rings, observers, local).
+MAX_VIEWS = 480
 #: Splats sampled for the scan's extent and the observers' clearance test (seeded).
 PLAN_SAMPLE = 400_000
 
@@ -139,6 +195,12 @@ MIN_PURITY = 0.5
 MASK_SHARE = 0.5
 #: Stage 1: neighbouring cells join outright when in the same mask in this share of views.
 STRICT_RATIO = 0.9
+#: ... counting this many pseudo-views against them, so two views are not enough: single
+#: linkage over a million cells percolates through any pair that agrees by chance.
+STRICT_PRIOR = 3.0
+#: A mask over more than this share of a view's drawn pixels does not vote: it says the
+#: whole view is one thing, which is no evidence about what in it belongs together.
+MAX_MASK_SHARE = 0.8
 #: Stage 2's far pairs: the largest regions of each mask, at most this many.
 SHARED_REGIONS = 48
 #: Stage 2 stops after this many rounds of mutual-best joins.
@@ -151,11 +213,18 @@ MIN_COVISIBLE = 2
 #: Stage 1's graph: each cell's nearest cells, within this many cell edges.
 NEIGHBOURS = 10
 NEIGHBOUR_CELLS = 3.0
+#: A region of fewer cells is a speck: its cells, and seen cells in no mask, take their
+#: neighbours' region, up to this many steps out (`_absorb`).
+MIN_REGION_CELLS = 8
+ABSORB_ROUNDS = 3
 #: An instance needs at least this many splats.
 MIN_INSTANCE_SPLATS = 30
 #: Cells no view saw take the nearest seen cell's labels within this many cell edges.
 FILL_CELLS = 3.0
 
+#: An instance is described (crops embedded, tags) when its best view gives it at least
+#: this many pixels: SigLIP sees 16-pixel patches of a 224 crop, and a smaller crop is noise.
+DESCRIBE_MIN_PX = 1024
 #: Views an instance is counted as seen in need this many of its pixels.
 MIN_VIEW_PX = 16
 #: Crops embedded per instance: its best views by pixel area.
@@ -388,18 +457,63 @@ def observer_points(splats: Splats) -> np.ndarray:
     return vc.cone_grid_from_chunks(chunks(), chunks(), len(splats)).observers
 
 
+def _farthest(points: np.ndarray, count: int, start: int) -> list[int]:
+    """`count` indices of `points` spread by farthest-point sampling from `start`."""
+    chosen = [start]
+    gaps = np.linalg.norm(points - points[start], axis=1)
+    while len(chosen) < min(count, len(points)):
+        chosen.append(int(gaps.argmax()))
+        gaps = np.minimum(gaps, np.linalg.norm(points - points[chosen[-1]], axis=1))
+    return chosen
+
+
+def view_footprint(edge: float, width: int = VIEW_WIDTH) -> float:
+    """A local view's footprint (the frame's width at its target), metres: `CELL_PX`
+    pixels per cell, so the cells it votes for are resolved."""
+    return width * edge / CELL_PX
+
+
+def footprint_anchors(
+    sample: np.ndarray, lo: np.ndarray, hi: np.ndarray, step: float
+) -> np.ndarray:
+    """Targets for local views: the centres of a `step` grid over the robust box where the
+    scan is (bins with at least `FOOTPRINT_DENSITY` of the median occupied bin's sample),
+    each at its bin's ground (5th percentile of height)."""
+    inside = np.all((sample >= lo) & (sample <= hi), axis=1)
+    pts = sample[inside]
+    if len(pts) == 0:
+        return np.zeros((0, 3))
+    dims = np.maximum(np.ceil((hi[:2] - lo[:2]) / step).astype(np.int64), 1)
+    ij = np.minimum(np.floor((pts[:, :2] - lo[:2]) / step).astype(np.int64), dims - 1)
+    key = ij[:, 0] * dims[1] + ij[:, 1]
+    keys, inverse, counts = np.unique(key, return_inverse=True, return_counts=True)
+    dense = counts >= FOOTPRINT_DENSITY * np.median(counts)
+    order = np.argsort(inverse, kind="stable")
+    groups = np.split(pts[order, 2], np.cumsum(counts)[:-1])
+    out = []
+    for k in np.flatnonzero(dense):
+        i, j = divmod(int(keys[k]), int(dims[1]))
+        ground = float(np.percentile(groups[k], 5))
+        out.append([lo[0] + (i + 0.5) * step, lo[1] + (j + 0.5) * step, ground])
+    return np.asarray(out, np.float64).reshape(-1, 3)
+
+
 def plan_views(
     positions: np.ndarray,
     count: int = VIEW_COUNT,
     *,
     observers: np.ndarray | None = None,
+    edge: float | None = None,
+    solid: np.ndarray | None = None,
+    max_views: int = MAX_VIEWS,
     width: int = VIEW_WIDTH,
     height: int = VIEW_HEIGHT,
     fov_deg: float = VIEW_FOV_DEG,
     up: tuple[float, float, float] = (0.0, 0.0, 1.0),
     eye_height_m: float = 1.6,
 ) -> list[Camera]:
-    """`count` cameras: rings around the scan, and observer-near views.
+    """Cameras: `count` views of the whole scan (rings and observer-near views), plus, for a
+    scan wider than one view's footprint, local views that scale with its area.
 
     The rings (`count - count // 2` views, or all of them with no observers) see every side
     at alternating `RING_ELEVATIONS_DEG`: half from far enough out that the scan's robust
@@ -407,28 +521,52 @@ def plan_views(
     scales, so small things are not specks. Observer views stand `eye_height_m` above
     observer points with `OBSERVER_CLEARANCE_M` of free space, spread by farthest-point
     sampling, `OBSERVER_PITCH_DEG` down, each facing the most of the scan within reach
-    (`YAW_CANDIDATES`) -- the close views of what a walk-in capture saw best. Nothing in it
-    knows the scene."""
+    (`YAW_CANDIDATES`) -- the close views of what a walk-in capture saw best.
+
+    **Local views** (given the cell `edge`): a view's footprint is `view_footprint(edge)`
+    (a cell spans `CELL_PX` pixels). When the robust box is wider than that, the footprint is
+    gridded `ANCHORS_PER_FOOTPRINT` times per footprint width (`footprint_anchors`), and
+    each anchor gets `OBLIQUE_VIEWS` obliques at the distance where the frame spans one
+    footprint (azimuths turned by the golden angle per anchor; the elevation and distance
+    are the first of `OBLIQUE_ELEVATIONS_DEG` x `OBLIQUE_DISTANCES` with a clear line of
+    sight to the target past `solid` (points that block it: the occupied cells' centres;
+    default the sample) -- under a canopy the view goes low, in the open high) and
+    `EYE_VIEWS` more observer views; every local and observer view then has a far plane a
+    footprint beyond its target. At most `max_views` in all (anchors spread by farthest
+    points). Nothing in it knows the scene; small scans get the plain `count` views."""
     sample, lo, hi = _extent(positions)
     centre = (lo + hi) / 2
     up_a = np.asarray(up, np.float64)
-    eyes: list[tuple[np.ndarray, np.ndarray]] = []
+    radius = max(0.5 * float(np.linalg.norm((hi - lo)[:2])), 1e-3)
+    half_fov = math.radians(fov_deg) / 2
+    anchors = np.zeros((0, 3))
+    footprint = math.inf
+    if edge is not None:
+        footprint = view_footprint(edge, width)
+        if float(np.max(hi[:2] - lo[:2])) > footprint:
+            anchors = footprint_anchors(sample, lo, hi, footprint / ANCHORS_PER_FOOTPRINT)
+            per_anchor = OBLIQUE_VIEWS + EYE_VIEWS
+            room = max(0, (max_views - count) // per_anchor)
+            if len(anchors) > room:
+                start = int(np.argmin(np.linalg.norm(anchors[:, :2] - centre[:2], axis=1)))
+                anchors = anchors[np.sort(_farthest(anchors, room, start))]
+        if not len(anchors):
+            footprint = math.inf
+    local = len(anchors) > 0
+    eyes: list[tuple[np.ndarray, np.ndarray, float]] = []
     near: list[np.ndarray] = []
+    tree = cKDTree(sample)
     if observers is not None and len(observers) and count > 1:
         pool = np.asarray(observers, np.float64).reshape(-1, 3) + up_a * eye_height_m
-        clearance = cKDTree(sample).query(pool, k=1)[0]
+        clearance = tree.query(pool, k=1)[0]
         pool = pool[clearance >= OBSERVER_CLEARANCE_M]
         if len(pool):
-            chosen = [int(np.argmin(np.linalg.norm(pool - centre, axis=1)))]
-            gaps = np.linalg.norm(pool - pool[chosen[0]], axis=1)
-            while len(chosen) < min(count // 2, len(pool)):
-                chosen.append(int(gaps.argmax()))
-                gaps = np.minimum(gaps, np.linalg.norm(pool - pool[chosen[-1]], axis=1))
-            near = [pool[k] for k in chosen]
-    ring = count - len(near)
+            start = int(np.argmin(np.linalg.norm(pool - centre, axis=1)))
+            wanted = count // 2 + EYE_VIEWS * len(anchors)
+            near = [pool[k] for k in _farthest(pool, wanted, start)]
+    ring = count - min(len(near), count // 2)
     outer = (ring + 1) // 2
-    radius = max(0.5 * float(np.linalg.norm((hi - lo)[:2])), 1e-3)
-    distance = radius / math.tan(math.radians(fov_deg) / 2)
+    distance = radius / math.tan(half_fov)
     for k in range(ring):
         # Two scales: the whole scan from the outer ring, a half of it from half as far.
         inner = k >= outer
@@ -446,15 +584,49 @@ def plan_views(
         target = centre.copy()
         if inner:
             target[:2] += 0.5 * radius * direction[:2] / max(math.cos(elevation), 1e-9)
-        eyes.append((target + distance * (0.5 if inner else 1.0) * direction, target))
+        eyes.append((target + distance * (0.5 if inner else 1.0) * direction, target, math.inf))
+    if local:
+        reach = footprint / 2 / math.tan(half_fov)
+        golden = math.pi * (3 - math.sqrt(5))
+        sight = tree if solid is None else cKDTree(np.asarray(solid, np.float64))
+        probes = np.linspace(OBLIQUE_PROBE_FROM, 1.0, OBLIQUE_PROBES)
+        n_elev = len(OBLIQUE_ELEVATIONS_DEG)
+        for i, target in enumerate(anchors):
+            for j in range(OBLIQUE_VIEWS):
+                azimuth = 2 * math.pi * j / OBLIQUE_VIEWS + i * golden
+                # Candidates in order of preference: elevations from this view's turn in
+                # the cycle, each at the distances in `OBLIQUE_DISTANCES`.
+                candidates = []
+                for e in range(n_elev):
+                    elevation = math.radians(OBLIQUE_ELEVATIONS_DEG[(i + j + e) % n_elev])
+                    direction = np.array(
+                        [
+                            math.cos(elevation) * math.cos(azimuth),
+                            math.cos(elevation) * math.sin(azimuth),
+                            math.sin(elevation),
+                        ]
+                    )
+                    candidates += [reach * f * direction for f in OBLIQUE_DISTANCES]
+                offsets = np.asarray(candidates)
+                # Line of sight: probes from the eye towards the target, each clear when no
+                # sampled splat is within `OBLIQUE_CLEARANCE` of a footprint.
+                points = target + offsets[:, None, :] * probes[None, ::-1, None]
+                gap = sight.query(points.reshape(-1, 3), k=1)[0].reshape(len(offsets), -1)
+                clear = (gap >= OBLIQUE_CLEARANCE * footprint).mean(axis=1)
+                good = np.flatnonzero(clear >= OBLIQUE_CLEAR)
+                pick = int(good[0]) if good.size else int(np.argmax(clear))
+                if clear[pick] >= OBLIQUE_MIN_CLEAR:
+                    eye = target + offsets[pick]
+                    eyes.append((eye, target, float(np.linalg.norm(offsets[pick])) + footprint))
     pitch = math.radians(OBSERVER_PITCH_DEG)
     yaws = 2 * math.pi * np.arange(YAW_CANDIDATES) / YAW_CANDIDATES
+    within = min(radius, footprint)
     for eye in near:
         # Look where the scan is: the yaw whose wedge holds the most of it within reach.
         offset = sample[:, :2] - eye[:2]
-        reach = np.linalg.norm(offset, axis=1)
+        reach_m = np.linalg.norm(offset, axis=1)
         bearing = np.arctan2(offset[:, 1], offset[:, 0])
-        close = reach <= radius
+        close = reach_m <= within
         held = [
             int(np.sum(close & (np.abs(np.angle(np.exp(1j * (bearing - y)))) <= math.pi / 6)))
             for y in yaws
@@ -463,10 +635,10 @@ def plan_views(
         look = np.array(
             [math.cos(pitch) * math.cos(yaw), math.cos(pitch) * math.sin(yaw), -math.sin(pitch)]
         )
-        eyes.append((eye, eye + look))
+        eyes.append((eye, eye + look, footprint))
     return [
-        Camera.look_at(eye, target, fov_deg=fov_deg, width=width, height=height, up=up)
-        for eye, target in eyes
+        Camera.look_at(eye, target, fov_deg=fov_deg, width=width, height=height, up=up, far=far)
+        for eye, target, far in eyes
     ]
 
 
@@ -483,9 +655,12 @@ class View:
     purity: np.ndarray
 
 
-def render_view(splats: Splats, camera: Camera, cells: np.ndarray) -> View:
-    """The view the pipeline and `OracleMasks` both see (same renderer, same seed)."""
-    frame = render(splats, camera, labels=cells)
+def render_view(
+    splats: Splats, camera: Camera, cells: np.ndarray, index: SplatIndex | None = None
+) -> View:
+    """The view the pipeline and `OracleMasks` both see (same renderer, same seed; `index`
+    only makes it faster)."""
+    frame = render(splats, camera, labels=cells, index=index)
     return View(
         camera,
         np.round(frame.rgb * 255).astype(np.uint8),
@@ -494,8 +669,82 @@ def render_view(splats: Splats, camera: Camera, cells: np.ndarray) -> View:
     )
 
 
-def render_views(splats: Splats, cameras: Sequence[Camera], cells: np.ndarray) -> list[View]:
-    return [render_view(splats, camera, cells) for camera in cameras]
+def render_views(
+    splats: Splats,
+    cameras: Sequence[Camera],
+    cells: np.ndarray,
+    *,
+    index: SplatIndex | None = None,
+    workers: int = 1,
+    cache: Path | None = None,
+) -> Iterator[View]:
+    """The views, in camera order, rendered by `workers` processes. The processes are forked
+    (the scan is shared copy-on-write, not copied), each renders whole views, and the views
+    come back in order as they are done -- the same views as one process makes, so the run
+    is deterministic. The caller can use each view (mask it on a GPU) while the rest render.
+    Fork before anything starts a GPU context; with `workers` 1 or no fork, one process."""
+    import multiprocessing as mp
+
+    n_cells = int(cells.max()) + 1 if cells.size else 0
+    _POOL_STATE.update(
+        splats=splats, cameras=list(cameras), cells=cells, index=index, cache=cache,
+        n_cells=n_cells,
+    )  # fmt: skip
+    try:
+        if workers <= 1 or len(cameras) <= 1 or "fork" not in mp.get_all_start_methods():
+            for k in range(len(cameras)):
+                yield _render_job(k)
+            return
+        # An executor, not a Pool: a worker that dies (out of memory) fails the run
+        # (BrokenProcessPool) rather than leaving it waiting for a view forever.
+        context = mp.get_context("fork")
+        with ProcessPoolExecutor(min(workers, len(cameras)), mp_context=context) as pool:
+            yield from pool.map(_render_job, range(len(cameras)))
+    finally:
+        _POOL_STATE.clear()
+
+
+#: What forked render workers read (set by `render_views` before the fork).
+_POOL_STATE: dict[str, object] = {}
+
+
+def _render_job(k: int) -> View:
+    state = _POOL_STATE
+    cameras = state["cameras"]
+    assert isinstance(cameras, list)
+    return cached_view(
+        state["cache"],  # type: ignore[arg-type]
+        state["splats"],  # type: ignore[arg-type]
+        cameras[k],
+        state["cells"],  # type: ignore[arg-type]
+        int(state["n_cells"]),  # type: ignore[arg-type]
+        state["index"],  # type: ignore[arg-type]
+    )
+
+
+def _memory_room() -> float | None:
+    """Bytes this process's cgroup can still take (cgroup v2), or None if unknown."""
+    try:
+        limit = Path("/sys/fs/cgroup/memory.max").read_text().strip()
+        used = int(Path("/sys/fs/cgroup/memory.current").read_text().strip())
+    except (OSError, ValueError):
+        return None
+    if limit == "max":
+        return None
+    return float(int(limit) - used)
+
+
+def default_workers() -> int:
+    """Processes to render with: the CPUs this process may use, no more than the memory
+    left holds at `RENDER_WORKER_BYTES` each."""
+    try:
+        cpus = len(os.sched_getaffinity(0))
+    except AttributeError:  # not Linux
+        cpus = os.cpu_count() or 1
+    room = _memory_room()
+    if room is not None:
+        cpus = min(cpus, int(room // RENDER_WORKER_BYTES))
+    return max(1, cpus)
 
 
 # ------------------------------------------------------------------------- the oracle
@@ -579,19 +828,25 @@ class _Votes:
 
 
 def vote(view: View, masks: Sequence[Mask], n_cells: int, levels: int) -> _Votes:
-    """Which mask of each level every visible cell of `view` is in (`MASK_SHARE`)."""
+    """Which mask of each level every visible cell of `view` is in (`MASK_SHARE`). Works on
+    the view's own cells, so its cost does not grow with the scan."""
     owner = view.cell.reshape(-1)
     weight = view.purity.reshape(-1).astype(np.float64)
     good = (owner >= 0) & (weight >= MIN_PURITY)
-    seen = np.bincount(owner[good], weight[good], n_cells)
-    visible = np.flatnonzero(seen >= MIN_VISIBLE_PX)
-    best = np.full((levels, n_cells), -1, np.int32)
-    best_share = np.zeros((levels, n_cells))
-    best_score = np.zeros((levels, n_cells))
+    pixels = np.flatnonzero(good)
+    cells, local = np.unique(owner[pixels], return_inverse=True)
+    weight = weight[pixels]
+    m = cells.size
+    seen = np.bincount(local, weight, m)
+    best = np.full((levels, m), -1, np.int32)
+    best_share = np.zeros((levels, m))
+    best_score = np.zeros((levels, m))
     for k, mask in enumerate(masks):
-        inside = good & np.asarray(mask.mask, bool).reshape(-1)
-        share = np.bincount(owner[inside], weight[inside], n_cells)
-        share = np.divide(share, seen, out=np.zeros(n_cells), where=seen > 0)
+        inside = np.asarray(mask.mask, bool).reshape(-1)[pixels]
+        if inside.sum() > MAX_MASK_SHARE * pixels.size:
+            continue  # (nearly) the whole view: says nothing about what is one thing
+        share = np.bincount(local[inside], weight[inside], m)
+        share = np.divide(share, seen, out=np.zeros(m), where=seen > 0)
         level = mask.level
         better = (share >= MASK_SHARE) & (
             (share > best_share[level])
@@ -600,7 +855,19 @@ def vote(view: View, masks: Sequence[Mask], n_cells: int, levels: int) -> _Votes
         best[level, better] = k
         best_share[level, better] = share[better]
         best_score[level, better] = mask.score
-    return _Votes(visible.astype(np.int32), seen[visible].astype(np.float32), best[:, visible])
+    visible = seen >= MIN_VISIBLE_PX
+    return _Votes(
+        cells[visible].astype(np.int32), seen[visible].astype(np.float32), best[:, visible]
+    )
+
+
+def _pad_levels(votes: _Votes, levels: int) -> _Votes:
+    """`votes` with -1 rows for the mask levels its view had none of."""
+    have = votes.masks.shape[0]
+    if have >= levels:
+        return votes
+    pad = np.full((levels - have, votes.cells.size), -1, np.int32)
+    return _Votes(votes.cells, votes.weight, np.concatenate([votes.masks, pad]))
 
 
 def _components(n: int, a: np.ndarray, b: np.ndarray) -> np.ndarray:
@@ -624,45 +891,129 @@ def _cell_graph(centroids: np.ndarray, edge: float) -> tuple[np.ndarray, np.ndar
     return pairs // len(centroids), pairs % len(centroids)
 
 
-def _region_masks(
-    votes: Sequence[_Votes], level: int, region: np.ndarray, n: int
-) -> list[tuple[np.ndarray, np.ndarray]]:
-    """Per view: which regions are visible, and the mask of this level holding `MASK_SHARE`
-    of each one's visible weight (-1: none). A region is judged as a whole, so a few cells
-    that bleed into a neighbour's mask do not carry it with them."""
-    out = []
-    for v in votes:
-        reg = region[v.cells]
-        ok = reg >= 0
-        reg, weight, mask = reg[ok], v.weight[ok].astype(np.float64), v.masks[level][ok]
-        visible = np.bincount(reg, weight, n)
-        best = np.full(n, -1, np.int32)
-        assigned = mask >= 0
-        if assigned.any():
-            n_masks = int(mask.max()) + 1
-            keys, inverse = np.unique(
-                reg[assigned].astype(np.int64) * n_masks + mask[assigned], return_inverse=True
-            )
-            sums = np.bincount(inverse, weight[assigned])
-            kr, km = keys // n_masks, keys % n_masks
-            order = np.lexsort((km, -sums, kr))
-            first = order[np.r_[True, kr[order][1:] != kr[order][:-1]]]
-            strong = sums[first] >= MASK_SHARE * visible[kr[first]]
-            best[kr[first][strong]] = km[first][strong]
-        out.append((visible >= MIN_VISIBLE_PX, best))
-    return out
+@dataclass
+class _Observed:
+    """Every view's votes of one mask level, as flat rows in view order (cells ascending
+    within a view): the visible weight of each in-mask cell, and its mask (-1: none)."""
+
+    cell: np.ndarray  # (e,) int64
+    view: np.ndarray  # (e,) int64
+    weight: np.ndarray  # (e,) float64
+    mask: np.ndarray  # (e,) int64
+    views: int
+    masks: int  # 1 + the largest mask index
 
 
-def _agreement(
-    per_view: Sequence[tuple[np.ndarray, np.ndarray]], a: np.ndarray, b: np.ndarray
-) -> tuple[np.ndarray, np.ndarray]:
-    """Per pair: views in the same mask, and views where both were seen and either masked."""
-    together = np.zeros(a.size, np.int32)
-    both = np.zeros(a.size, np.int32)
-    for visible, best in per_view:
-        informative = visible[a] & visible[b] & ((best[a] >= 0) | (best[b] >= 0))
-        both += informative
-        together += informative & (best[a] == best[b])
+def _observed(votes: Sequence[_Votes], level: int, in_mask: np.ndarray) -> _Observed:
+    cells, views, weights, masks = [], [], [], []
+    for k, v in enumerate(votes):
+        ok = in_mask[v.cells]
+        cells.append(v.cells[ok].astype(np.int64))
+        views.append(np.full(int(ok.sum()), k, np.int64))
+        weights.append(v.weight[ok].astype(np.float64))
+        masks.append(v.masks[level][ok].astype(np.int64))
+    if not cells:
+        z = np.zeros(0, np.int64)
+        return _Observed(z, z, np.zeros(0), z, 0, 1)
+    mask = np.concatenate(masks)
+    return _Observed(
+        np.concatenate(cells),
+        np.concatenate(views),
+        np.concatenate(weights),
+        mask,
+        len(votes),
+        int(mask.max()) + 1 if mask.size else 1,
+    )
+
+
+@dataclass
+class _Seen:
+    """Per (region, view) where the region is visible (`MIN_VISIBLE_PX`): the mask holding
+    `MASK_SHARE` of its visible weight there (-1: none). Rows sorted by region, then view."""
+
+    region: np.ndarray  # (r,) int64
+    view: np.ndarray  # (r,) int64
+    best: np.ndarray  # (r,) int64
+    #: Views in all (keys are region x views_bound + view).
+    views_bound: int
+
+    def rows(self, ids: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """Where each id's rows start, and how many."""
+        start = np.searchsorted(self.region, ids, "left")
+        return start, np.searchsorted(self.region, ids, "right") - start
+
+
+def _seen(obs: _Observed, region: np.ndarray, rows: np.ndarray | None = None) -> _Seen:
+    """`_Seen` of the regions `region` (per cell, -1: none) gives the observed rows `rows`
+    (default: all). A region is judged as a whole, so a few cells that bleed into a
+    neighbour's mask do not carry it with them. Sums run in the rows' order."""
+    cell = obs.cell if rows is None else obs.cell[rows]
+    reg = region[cell]
+    ok = reg >= 0
+    view = (obs.view if rows is None else obs.view[rows])[ok]
+    weight = (obs.weight if rows is None else obs.weight[rows])[ok]
+    mask = (obs.mask if rows is None else obs.mask[rows])[ok]
+    reg = reg[ok]
+    key = reg * obs.views + view
+    keys, inverse = np.unique(key, return_inverse=True)
+    visible = np.bincount(inverse, weight, keys.size)
+    best = np.full(keys.size, -1, np.int64)
+    assigned = mask >= 0
+    if assigned.any():
+        mkeys, minv = np.unique(key[assigned] * obs.masks + mask[assigned], return_inverse=True)
+        sums = np.bincount(minv, weight[assigned], mkeys.size)
+        kr, km = mkeys // obs.masks, mkeys % obs.masks
+        order = np.lexsort((km, -sums, kr))
+        first = order[np.r_[True, kr[order][1:] != kr[order][:-1]]]
+        at = np.searchsorted(keys, kr[first])
+        strong = sums[first] >= MASK_SHARE * visible[at]
+        best[at[strong]] = km[first][strong]
+    keep = visible >= MIN_VISIBLE_PX
+    keys = keys[keep]
+    return _Seen(keys // obs.views, keys % obs.views, best[keep], obs.views)
+
+
+#: Pair rows joined at a time in `_agreement` (bounds its memory).
+JOIN_ROWS = 1 << 24
+
+
+def _agreement(seen: _Seen, a: np.ndarray, b: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Per pair: views in the same mask, and views where both were seen and either masked.
+    A sorted join of the two regions' rows on the view."""
+    together = np.zeros(a.size, np.int64)
+    both = np.zeros(a.size, np.int64)
+    if a.size == 0 or seen.region.size == 0:
+        return together, both
+    sa, la = seen.rows(a)
+    sb, lb = seen.rows(b)
+    cost = np.cumsum(la + lb)
+    lo = 0
+    while lo < a.size:
+        hi = int(np.searchsorted(cost, (cost[lo - 1] if lo else 0) + JOIN_ROWS, "right"))
+        hi = max(hi, lo + 1)
+        part = slice(lo, hi)
+        n_part = hi - lo
+        pair_a = np.repeat(np.arange(n_part), la[part])
+        rows_a = np.repeat(sa[part] - np.cumsum(la[part]) + la[part], la[part]) + np.arange(
+            pair_a.size
+        )
+        pair_b = np.repeat(np.arange(n_part), lb[part])
+        rows_b = np.repeat(sb[part] - np.cumsum(lb[part]) + lb[part], lb[part]) + np.arange(
+            pair_b.size
+        )
+        # Both sides are sorted by (pair, view), so their keys are ascending.
+        key_a = pair_a * seen.views_bound + seen.view[rows_a]
+        key_b = pair_b * seen.views_bound + seen.view[rows_b]
+        at = np.minimum(np.searchsorted(key_b, key_a), max(key_b.size - 1, 0))
+        match = (key_b[at] == key_a) if key_b.size else np.zeros(key_a.size, bool)
+        best_a = seen.best[rows_a[match]]
+        best_b = seen.best[rows_b[at[match]]]
+        informative = (best_a >= 0) | (best_b >= 0)
+        same = informative & (best_a == best_b)
+        owner = pair_a[match]
+        both[part] = np.bincount(owner, informative, n_part)
+        together[part] = np.bincount(owner, same, n_part)
+        lo = hi
     return together, both
 
 
@@ -680,26 +1031,27 @@ def _relabel(region: np.ndarray) -> np.ndarray:
     return out
 
 
-def _shared(
-    per_view: Sequence[tuple[np.ndarray, np.ndarray]],
-    region: np.ndarray,
-    weights: np.ndarray,
-    n: int,
-) -> tuple[np.ndarray, np.ndarray]:
+def _shared(seen: _Seen, size: np.ndarray, n: int) -> tuple[np.ndarray, np.ndarray]:
     """Pairs of regions that were in one mask in some view, wherever they are: the
     `SHARED_REGIONS` largest of each mask (so a mask over thousands of specks stays cheap)."""
-    size = np.bincount(region[region >= 0], weights[region >= 0], n)
+    masked = seen.best >= 0
+    reg, view, best = seen.region[masked], seen.view[masked], seen.best[masked]
+    order = np.lexsort((reg, -size[reg], best, view))
+    reg, view, best = reg[order], view[order], best[order]
+    if reg.size < 2:
+        return np.zeros(0, np.int64), np.zeros(0, np.int64)
+    starts = np.flatnonzero(np.r_[True, (view[1:] != view[:-1]) | (best[1:] != best[:-1])])
+    lengths = np.diff(np.r_[starts, reg.size])
+    rank = np.arange(reg.size) - np.repeat(starts, lengths)
+    held = np.minimum(lengths, SHARED_REGIONS)
     keys: list[np.ndarray] = []
-    for visible, best in per_view:
-        members = np.flatnonzero(visible & (best >= 0))
-        if members.size < 2:
-            continue
-        order = members[np.lexsort((members, -size[members], best[members]))]
-        for group in np.split(order, np.flatnonzero(np.diff(best[order])) + 1):
-            group = np.sort(group[:SHARED_REGIONS])
-            if group.size > 1:
-                i, j = np.triu_indices(group.size, 1)
-                keys.append(group[i] * n + group[j])
+    for g in np.unique(held[held > 1]):
+        # Every mask holding g regions (after the cut): a (k, g) table, ids sorted per row.
+        first = starts[held == g]
+        table = np.sort(reg[first[:, None] + np.arange(g)[None, :]], axis=1)
+        i, j = np.triu_indices(int(g), 1)
+        keys.append((table[:, i] * n + table[:, j]).reshape(-1))
+    del rank
     if not keys:
         return np.zeros(0, np.int64), np.zeros(0, np.int64)
     key = np.unique(np.concatenate(keys))
@@ -707,7 +1059,8 @@ def _shared(
 
 
 def _joins(
-    per_view: Sequence[tuple[np.ndarray, np.ndarray]],
+    together: np.ndarray,
+    both: np.ndarray,
     pa: np.ndarray,
     pb: np.ndarray,
     size: np.ndarray,
@@ -724,7 +1077,6 @@ def _joins(
     best = np.full(n, -1, np.int64)
     if pa.size == 0:
         return np.zeros(0, np.int64), best
-    together, both = _agreement(per_view, pa, pb)
     ok = (both >= MIN_COVISIBLE) & (together >= MERGE_RATIO * both)
     if not ok.any():
         return np.zeros(0, np.int64), best
@@ -755,33 +1107,50 @@ def _grow(
 
     Stage 1: neighbour cells that share a mask in at least `STRICT_RATIO` of their
     informative views join (single linkage, so strict). Stage 2, in rounds: regions are
-    re-judged as wholes (`_region_masks`), every neighbouring pair is scored, and each region
+    re-judged as wholes (`_seen`), every neighbouring pair is scored, and each region
     joins its best partner when that partner is a sink (`_joins`) -- average evidence, never
     a chain through one ambiguous cell. When neighbours are done, pairs that shared a mask
     anywhere are scored too (`_shared`): an object's parts that a gap or another part
-    separates in space. Up to `MAX_ROUNDS`. `weights`: splats per cell."""
+    separates in space. Up to `MAX_ROUNDS`. `weights`: splats per cell.
+
+    Incremental: a region keeps the smallest id of what joined it (so ids keep their order
+    and ties break as with compact ids), only the regions a round changed are re-judged,
+    and only pairs touching them are scored again."""
     n_cells = in_mask.size
+    obs = _observed(votes, level, in_mask)
     region = np.where(in_mask, np.arange(n_cells), -1)
     ca, cb = _pairs(region, a, b, n_cells)
-    together, both = _agreement(_region_masks(votes, level, region, n_cells), ca, cb)
-    keep = (both >= MIN_COVISIBLE) & (together >= STRICT_RATIO * both)
+    together, both = _agreement(_seen(obs, region), ca, cb)
+    keep = (both >= MIN_COVISIBLE) & (together >= STRICT_RATIO * (both + STRICT_PRIOR))
     region = np.where(in_mask, _components(n_cells, ca[keep], cb[keep]), -1)
     region = _relabel(region)
+    n = int(region.max()) + 1 if region.size and region.max() >= 0 else 0
+    if n < 2:
+        return region, 0
+    valid = region >= 0
+    size = np.bincount(region[valid], weights[valid], n).astype(np.float64)
+    seen = _seen(obs, region)
+    pa, pb = _pairs(region, a, b, n)
+    neighbours = pa * n + pb
+    cache_keys = np.zeros(0, np.int64)
+    cache_together = cache_both = np.zeros(0, np.int64)
+    alive = n
     rounds = 0
     far = False
-    while rounds < MAX_ROUNDS:
-        n = int(region.max()) + 1
-        if n < 2:
-            break
-        per_view = _region_masks(votes, level, region, n)
-        pa, pb = _pairs(region, a, b, n)
+    while rounds < MAX_ROUNDS and alive >= 2:
+        keys = neighbours
         if far:
-            fa, fb = _shared(per_view, region, weights, n)
-            key = np.unique(np.concatenate([pa * n + pb, fa * n + fb]))
-            pa, pb = key // n, key % n
-        movers, best = _joins(
-            per_view, pa, pb, np.bincount(region[region >= 0], weights[region >= 0], n)
-        )
+            fa, fb = _shared(seen, size, n)
+            keys = np.union1d(neighbours, fa * n + fb)
+        at = np.minimum(np.searchsorted(cache_keys, keys), max(cache_keys.size - 1, 0))
+        hit = (cache_keys[at] == keys) if cache_keys.size else np.zeros(keys.size, bool)
+        together = np.zeros(keys.size, np.int64)
+        both = np.zeros(keys.size, np.int64)
+        together[hit], both[hit] = cache_together[at[hit]], cache_both[at[hit]]
+        miss = np.flatnonzero(~hit)
+        together[miss], both[miss] = _agreement(seen, keys[miss] // n, keys[miss] % n)
+        cache_keys, cache_together, cache_both = keys, together, both
+        movers, best = _joins(together, both, keys // n, keys % n, size)
         rounds += 1
         if movers.size == 0:
             if far:
@@ -789,8 +1158,63 @@ def _grow(
             far = True  # neighbours are done; now regions that share masks anywhere
             continue
         joined = _components(n, movers, best[movers])
-        region = _relabel(np.where(region >= 0, joined[np.maximum(region, 0)], -1))
-    return region, rounds
+        low = np.full(int(joined.max()) + 1, n, np.int64)
+        np.minimum.at(low, joined, np.arange(n))
+        new = low[joined]
+        count = np.bincount(joined)
+        member = count[joined] > 1
+        alive -= int(member.sum()) - int((count > 1).sum())
+        size = np.bincount(new, size, n)
+        region = np.where(region >= 0, new[np.maximum(region, 0)], -1)
+        # Re-judge the merged regions only; the others' rows stand.
+        changed = np.zeros(n, bool)
+        changed[new[member]] = True
+        of_row = region[obs.cell]
+        fresh = _seen(obs, region, np.flatnonzero((of_row >= 0) & changed[np.maximum(of_row, 0)]))
+        kept = ~member[seen.region]
+        old_keys = seen.region[kept] * obs.views + seen.view[kept]
+        place = np.searchsorted(old_keys, fresh.region * obs.views + fresh.view)
+        seen = _Seen(
+            np.insert(seen.region[kept], place, fresh.region),
+            np.insert(seen.view[kept], place, fresh.view),
+            np.insert(seen.best[kept], place, fresh.best),
+            obs.views,
+        )
+        na, nb = new[neighbours // n], new[neighbours % n]
+        ok = na != nb
+        neighbours = np.unique(np.minimum(na[ok], nb[ok]) * n + np.maximum(na[ok], nb[ok]))
+        stale = member[cache_keys // n] | member[cache_keys % n]
+        cache_keys = cache_keys[~stale]
+        cache_together, cache_both = cache_together[~stale], cache_both[~stale]
+    return _relabel(region), rounds
+
+
+def _absorb(region: np.ndarray, a: np.ndarray, b: np.ndarray, seen: np.ndarray) -> np.ndarray:
+    """Specks and gaps: a seen cell in no region, or in one of fewer than `MIN_REGION_CELLS`
+    cells, takes the region most of its stage-1 neighbours are in (ties: the lower id), for
+    up to `ABSORB_ROUNDS` steps outwards. A mask model leaves slivers between its masks and
+    a few cells that no view resolved; they belong to what surrounds them."""
+    region = region.copy()
+    n = int(region.max()) + 1 if region.size else 0
+    if n == 0:
+        return region
+    cells = np.bincount(region[region >= 0], minlength=n)
+    open_ = seen & ((region < 0) | (cells[np.maximum(region, 0)] < MIN_REGION_CELLS))
+    region[open_] = -1
+    for _ in range(ABSORB_ROUNDS):
+        ra, rb = region[a], region[b]
+        to_a = (ra < 0) & (rb >= 0) & open_[a]
+        to_b = (rb < 0) & (ra >= 0) & open_[b]
+        cell = np.concatenate([a[to_a], b[to_b]])
+        if cell.size == 0:
+            break
+        label = np.concatenate([rb[to_a], ra[to_b]])
+        keys, counts = np.unique(cell * n + label, return_counts=True)
+        kc, kl = keys // n, keys % n
+        order = np.lexsort((kl, -counts, kc))
+        first = order[np.r_[True, kc[order][1:] != kc[order][:-1]]]
+        region[kc[first]] = kl[first]
+    return region
 
 
 @dataclass
@@ -831,6 +1255,7 @@ def lift(
             in_mask[level, v.cells[v.masks[level] >= 0]] = True
     for level in range(levels):
         joined, rounds = _grow(votes, level, in_mask[level], a, b, cell_counts)
+        joined = _absorb(joined, a, b, seen)
         stats[f"level{level}Rounds"] = rounds
         valid = joined >= 0
         size = np.bincount(joined[valid], cell_counts[valid])
@@ -933,17 +1358,13 @@ def _ancestors(parent: np.ndarray) -> list[list[int]]:
 
 
 def _up(values: np.ndarray, parent: np.ndarray, level: np.ndarray, how: str) -> np.ndarray:
-    """Leaf values (instances along axis 0) folded into every ancestor, deepest first."""
+    """Leaf values (instances along axis 0) folded into every ancestor, deepest first (one
+    vectorised step per depth)."""
     out = values.copy()
-    for k in np.argsort(-level, kind="stable"):
-        p = int(parent[k])
-        if p:
-            if how == "sum":
-                out[p - 1] += out[k]
-            elif how == "min":
-                out[p - 1] = np.minimum(out[p - 1], out[k])
-            else:
-                out[p - 1] = np.maximum(out[p - 1], out[k])
+    fold = {"sum": np.add, "min": np.minimum}.get(how, np.maximum)
+    for depth in range(int(level.max()) if level.size else 0, 0, -1):
+        nodes = np.flatnonzero((level == depth) & (parent > 0))
+        fold.at(out, parent[nodes] - 1, out[nodes])
     return out
 
 
@@ -1024,9 +1445,13 @@ def describe(
         boxes[v] = box
     seen_in = (area >= MIN_VIEW_PX).sum(axis=0)
 
+    # Only what a crop can show is described: an instance whose best view gives it fewer
+    # than `DESCRIBE_MIN_PX` pixels (with its children) keeps no embedding and no tags, and
+    # takes its properties from its nearest described ancestor.
+    described = area.max(axis=0) >= DESCRIBE_MIN_PX if len(views) else np.zeros(n, bool)
     crops: list[np.ndarray] = []
     owner_of_crop: list[int] = []
-    for k in range(n):
+    for k in np.flatnonzero(described):
         best = [v for v in np.argsort(-area[:, k], kind="stable")[:CROP_VIEWS] if area[v, k] > 0]
         for v in best:
             image = views[v].rgb
@@ -1068,15 +1493,21 @@ def describe(
         logits = LOGIT_SCALE * (embedding @ prompt_rows.T).reshape(n, len(names), 2)
         property_scores = _softmax(logits)[:, :, 0]
 
+    has_embedding = np.any(embedding != 0, axis=1)
+    # Properties of what was not described: its nearest described ancestor's (parents come
+    # first in id order), else none.
+    source = np.where(has_embedding, np.arange(n), -1)
+    for k in np.argsort(lifted.level, kind="stable"):
+        if source[k] < 0 and lifted.parent[k]:
+            source[k] = source[lifted.parent[k] - 1]
     instances: list[Instance] = []
     for k in range(n):
-        has_embedding = bool(np.any(embedding[k]))
         tags: list[dict[str, object]] = []
-        if words and has_embedding:
+        if words and has_embedding[k]:
             top = np.argsort(-tag_scores[k], kind="stable")[:TAGS_TOP_K]
             tags = [{"label": words[t], "score": round(float(tag_scores[k, t]), 4)} for t in top]
         properties = {
-            name: round(float(property_scores[k, j]) if has_embedding else 0.0, 4)
+            name: round(float(property_scores[source[k], j]) if source[k] >= 0 else 0.0, 4)
             for j, name in enumerate(names)
         }
         instances.append(
@@ -1229,16 +1660,45 @@ def _colours(ids: np.ndarray) -> np.ndarray:
     return np.where((ids > 0)[..., None], rgb, 0.0)
 
 
-def render_instances(splats: Splats, splat_id: np.ndarray, camera: Camera, out: Path) -> np.ndarray:
-    """The scan beside itself coloured by instance id, as a PNG: what a person checks."""
+def render_instances(
+    splats: Splats,
+    splat_id: np.ndarray,
+    camera: Camera | Sequence[Camera],
+    out: Path,
+    index: SplatIndex | None = None,
+) -> np.ndarray:
+    """The scan beside itself coloured by instance id, one row per camera, as a PNG: what a
+    person checks."""
     from PIL import Image
 
-    frame = render(splats, camera, labels=splat_id.astype(np.int64))
-    colour = _colours(np.maximum(frame.label, 0)) * frame.alpha[..., None]
-    image = np.concatenate([frame.rgb, colour], axis=1)
+    rows = []
+    for cam in [camera] if isinstance(camera, Camera) else camera:
+        frame = render(splats, cam, labels=splat_id.astype(np.int64), index=index)
+        colour = _colours(np.maximum(frame.label, 0)) * frame.alpha[..., None]
+        rows.append(np.concatenate([frame.rgb, colour], axis=1))
+    image = np.concatenate(rows, axis=0)
     pixels = np.round(np.clip(image, 0, 1) * 255).astype(np.uint8)
     Image.fromarray(pixels).save(out)
     return pixels
+
+
+def top_level(parent: np.ndarray) -> np.ndarray:
+    """Per id (index 0: none), its level-0 ancestor (parents have lower ids)."""
+    top = np.arange(parent.size + 1)
+    for k in range(1, parent.size + 1):
+        if parent[k - 1]:
+            top[k] = top[parent[k - 1]]
+    return top
+
+
+def check_cameras(views: Sequence[View], count: int = 4) -> list[Camera]:
+    """Cameras for `render_instances`: the first view (the whole scan) and `count - 1` more
+    spread through the plan -- its local views (a far plane) when it has them."""
+    if not views:
+        return []
+    pool = [v.camera for v in views if math.isfinite(v.camera.far)] or [v.camera for v in views[1:]]
+    n = min(count - 1, len(pool))
+    return [views[0].camera] + [pool[(2 * k + 1) * len(pool) // (2 * n)] for k in range(n)]
 
 
 def collect_votes(
@@ -1256,18 +1716,23 @@ def _cache_key(camera: Camera, n_cells: int) -> str:
 
 
 def cached_view(
-    cache: Path | None, splats: Splats, camera: Camera, cells: np.ndarray, n_cells: int
+    cache: Path | None,
+    splats: Splats,
+    camera: Camera,
+    cells: np.ndarray,
+    n_cells: int,
+    index: SplatIndex | None = None,
 ) -> View:
     """`render_view`, kept in `cache` (keyed by the camera and the cell count) so a run that
     is stopped picks up where it was rather than rendering again."""
     if cache is None:
-        return render_view(splats, camera, cells)
+        return render_view(splats, camera, cells, index)
     path = cache / f"view-{_cache_key(camera, n_cells)}.npz"
     if path.exists():
         with np.load(path) as z:
             return View(camera, z["rgb"], z["cell"], z["purity"])
-    view = render_view(splats, camera, cells)
-    tmp = path.with_suffix(".tmp.npz")
+    view = render_view(splats, camera, cells, index)
+    tmp = path.with_suffix(f".{os.getpid()}.tmp.npz")
     np.savez_compressed(tmp, rgb=view.rgb, cell=view.cell, purity=view.purity)
     tmp.replace(path)
     return view
@@ -1330,42 +1795,69 @@ def segment(
     source_factory=None,
     cache: Path | None = None,
     progress=None,
+    workers: int | None = None,
+    max_views: int = MAX_VIEWS,
 ) -> Segmentation:
     """Cells, views, masks, votes, lifting and meaning, for a scan held in memory.
 
     `source_factory(cameras)` builds a mask source that needs the cameras (`OracleMasks`).
     `cache`: a directory where each view and its masks are kept as they are made, so a
     stopped run resumes (views and masks are most of the time on a large scan).
-    `progress(message)` is told as each view is done."""
+    `progress(message)` is told as each view is done. `workers`: render processes
+    (default: the CPUs this process may use)."""
     timings: dict[str, float] = {}
     mark = time.perf_counter()
     cell, centroids, counts, edge = cells or supervoxels(splats.positions)
     timings["cellsS"] = time.perf_counter() - mark
     mark = time.perf_counter()
+    index = SplatIndex.build(splats)
     if cameras is None:
-        cameras = plan_views(splats.positions, view_count, observers=observer_points(splats))
+        cameras = plan_views(
+            splats.positions,
+            view_count,
+            observers=observer_points(splats),
+            edge=edge,
+            solid=centroids,
+            max_views=max_views,
+        )
     timings["planS"] = time.perf_counter() - mark
-    mark = time.perf_counter()
     if cache is not None:
         cache.mkdir(parents=True, exist_ok=True)
     n_cells = len(centroids)
-    views = []
-    for k, camera in enumerate(cameras):
-        views.append(cached_view(cache, splats, camera, cell, n_cells))
+    # Views render in forked workers while this process masks the ones already done (the
+    # mask model's GPU context starts after the fork). Each view's masks become its votes
+    # and are dropped; the views are kept for `describe`.
+    views: list[View] = []
+    view_votes: list[_Votes] = []
+    render_s = masks_s = votes_s = 0.0
+    mark = time.perf_counter()
+    rendered = render_views(
+        splats, cameras, cell, index=index, workers=workers or default_workers(), cache=cache
+    )
+    for k, view in enumerate(rendered):
+        views.append(view)
+        now = time.perf_counter()
+        render_s += now - mark
         if progress:
             progress(f"view {k + 1}/{len(cameras)} rendered")
-    timings["renderS"] = time.perf_counter() - mark
-    mark = time.perf_counter()
-    if source is None:
-        source = source_factory(cameras)
-    all_masks = []
-    for k, view in enumerate(views):
-        all_masks.append(cached_masks(cache, view, source, n_cells))
+        if source is None:
+            source = source_factory(cameras)
+        masks = cached_masks(cache, view, source, n_cells)
+        voted = time.perf_counter()
+        view_levels = max((m.level for m in masks), default=0) + 1
+        view_votes.append(vote(view, masks, n_cells, view_levels))
         if progress:
-            progress(f"view {k + 1}/{len(views)} masked ({len(all_masks[-1])} masks)")
-    levels = max((m.level for masks in all_masks for m in masks), default=0) + 1
-    votes = [vote(v, m, n_cells, levels) for v, m in zip(views, all_masks, strict=True)]
-    timings["masksS"] = time.perf_counter() - mark
+            progress(f"view {k + 1}/{len(cameras)} masked ({len(masks)} masks)")
+        mark = time.perf_counter()
+        masks_s += voted - now
+        votes_s += mark - voted
+    del index
+    levels = max((v.masks.shape[0] for v in view_votes), default=1)
+    votes = [_pad_levels(v, levels) for v in view_votes]
+    # Rendering overlaps masking: renderS is the time spent waiting for views.
+    timings["renderS"] = render_s
+    timings["masksS"] = masks_s
+    timings["votesS"] = votes_s
     mark = time.perf_counter()
     lifted = lift(votes, centroids, counts, edge, levels)
     lifted.stats["cellEdgeM"] = round(edge, 4)
@@ -1420,7 +1912,15 @@ def main() -> None:
         "--embedder", default="segment_scene:FakeEmbedder", help="module:Class, an Embedder"
     )
     parser.add_argument("--vocabulary", type=Path, default=None, help="one tag per line")
-    parser.add_argument("--views", type=int, default=VIEW_COUNT)
+    parser.add_argument(
+        "--views", type=int, default=VIEW_COUNT, help="views of the whole scan (rings, observers)"
+    )
+    parser.add_argument(
+        "--max-views", type=int, default=MAX_VIEWS, help="at most this many with local views"
+    )
+    parser.add_argument(
+        "--workers", type=int, default=None, help="render processes (default: usable CPUs)"
+    )
     parser.add_argument("--save-dir", type=Path, default=None, help="write the views here")
     parser.add_argument(
         "--cache", type=Path, default=None, help="keep views and masks here; a rerun resumes"
@@ -1462,6 +1962,8 @@ def main() -> None:
         embedder,
         vocabulary,
         view_count=args.views,
+        workers=args.workers,
+        max_views=args.max_views,
         source_factory=factory,
         cache=args.cache,
         progress=lambda message: print(message, flush=True),
@@ -1490,6 +1992,10 @@ def main() -> None:
     write_instances(out, document, result.instances)
     if out.resolve() == args.tiles.resolve():
         link_instances(args.tiles / "tileset.json", len(result.instances))
+    if args.cache:
+        (args.cache / "cameras.json").write_text(
+            json.dumps([v.camera.to_json() for v in result.views]), encoding="utf-8"
+        )
     if args.save_dir:
         from PIL import Image
 
@@ -1500,7 +2006,12 @@ def main() -> None:
             json.dumps([v.camera.to_json() for v in result.views], indent=1), encoding="utf-8"
         )
     if args.render_instances:
-        render_instances(splats, result.splat_id, result.views[0].camera, args.render_instances)
+        # Coloured by object (each splat's top-level instance), from a few viewpoints.
+        objects = top_level(result.lifted.parent)[result.splat_id]
+        cameras = check_cameras(result.views)
+        render_instances(
+            splats, objects, cameras, args.render_instances, index=SplatIndex.build(splats)
+        )
     print(
         json.dumps(
             {

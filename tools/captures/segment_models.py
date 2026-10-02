@@ -261,6 +261,14 @@ def point_grid(n_per_side: int) -> np.ndarray:
     return np.stack([x.ravel(), y.ravel()], axis=1)
 
 
+def candidate_levels(areas: np.ndarray, pixels: int, max_area: float) -> tuple[np.ndarray, ...]:
+    """Per candidate (points, k): its level among its point's candidates that are not the
+    whole image, and whether it is one of them (area at most `max_area` of `pixels`). A
+    point whose widest answer is the whole view has its next answer as its whole."""
+    small = areas <= max_area * pixels
+    return granularity_levels(np.where(small, areas, -1)), small
+
+
 def granularity_levels(areas: np.ndarray) -> np.ndarray:
     """`areas` (points, k): the k candidate masks of each point prompt. Their level, by area
     within the point: largest 0 (whole), then 1 (part), ... k-1 (subpart). Ties keep order."""
@@ -309,38 +317,83 @@ def select_masks(
     nms_iou: float,
     min_area: float,
     repeat_iou: float,
+    max_area: float = 1.0,
 ) -> tuple[list[tuple[int, int, int]], list[float]]:
     """From candidate logits (points, k, h, w) and SAM's predicted IoU (points, k): the kept
     `(point, candidate, level)` and their scores, coarsest level first, best score first.
 
-    Per level: thresholds, then NMS by mask IoU. Then a finer mask whose IoU with a kept
-    coarser one is above `repeat_iou` is dropped (a whole with no parts is one mask)."""
+    Candidates over `max_area` of the image are left out before the levels are counted
+    (`candidate_levels`). Per level: thresholds, then NMS by mask IoU. Then a finer mask
+    whose IoU with a kept coarser one is above `repeat_iou` is dropped (a whole with no
+    parts is one mask)."""
     p, k = iou_pred.shape
     binary = logits > 0
     areas = binary.reshape(p, k, -1).sum(axis=2)
-    levels = granularity_levels(areas)
+    pixels = logits.shape[2] * logits.shape[3]
+    levels, small = candidate_levels(areas, pixels, max_area)
     stab = stability(logits.reshape(p * k, *logits.shape[2:])).reshape(p, k)
-    min_px = min_area * logits.shape[2] * logits.shape[3]
-    ok = (iou_pred >= pred_iou_thresh) & (stab >= stability_thresh) & (areas >= min_px)
+    min_px = min_area * pixels
+    ok = (iou_pred >= pred_iou_thresh) & (stab >= stability_thresh) & (areas >= min_px) & small
+    pts, cand = np.nonzero(ok)
+    if pts.size == 0:
+        return [], []
+    flat = binary[pts, cand]
+    return choose_masks(
+        pts,
+        cand,
+        levels[pts, cand],
+        iou_pred[pts, cand],
+        stab[pts, cand],
+        mask_iou(flat, flat),
+        nms_iou=nms_iou,
+        repeat_iou=repeat_iou,
+    )
+
+
+def choose_masks(
+    pts: np.ndarray,
+    cand: np.ndarray,
+    levels: np.ndarray,
+    iou_pred: np.ndarray,
+    stab: np.ndarray,
+    overlap: np.ndarray,
+    *,
+    nms_iou: float,
+    repeat_iou: float,
+) -> tuple[list[tuple[int, int, int]], list[float]]:
+    """`select_masks`' choice among candidates that passed the thresholds: per level
+    (coarsest first) NMS by `overlap` (their mask IoU, (n, n)), then repeats of a kept
+    coarser mask dropped. The heavy part, `overlap`, can come from a GPU."""
     kept: list[tuple[int, int, int]] = []
     scores: list[float] = []
-    kept_masks: list[np.ndarray] = []
-    for level in range(k):
-        pts, cand = np.nonzero(ok & (levels == level))
-        if pts.size == 0:
+    kept_rows: list[int] = []
+    for level in range(int(levels.max()) + 1 if levels.size else 0):
+        rows = np.flatnonzero(levels == level)
+        if rows.size == 0:
             continue
-        masks = binary[pts, cand]
-        score = iou_pred[pts, cand] * stab[pts, cand]
-        chosen = mask_nms(masks, score, nms_iou)
-        if kept_masks and chosen.size:
-            coarser = np.stack(kept_masks)
-            repeat = mask_iou(masks[chosen], coarser).max(axis=1) > repeat_iou
+        score = iou_pred[rows] * stab[rows]
+        order = np.argsort(-score, kind="stable")
+        sub = overlap[np.ix_(rows[order], rows[order])]
+        # Greedy NMS: a mask is kept unless a better kept one overlaps it (IoU is symmetric).
+        keep: list[int] = []
+        suppressed = np.zeros(order.size, bool)
+        for i in range(order.size):
+            if not suppressed[i]:
+                keep.append(i)
+                suppressed |= sub[i] > nms_iou
+        chosen = rows[order[keep]]
+        if kept_rows and chosen.size:
+            repeat = overlap[np.ix_(chosen, kept_rows)].max(axis=1) > repeat_iou
             chosen = chosen[~repeat]
         for c in chosen:
             kept.append((int(pts[c]), int(cand[c]), level))
-            scores.append(float(iou_pred[pts[c], cand[c]]))
-            kept_masks.append(masks[c])
+            scores.append(float(iou_pred[c]))
+            kept_rows.append(int(c))
     return kept, scores
+
+
+#: Torch's CPU threads beside a GPU (pre- and post-processing only).
+GPU_HOST_THREADS = 4
 
 
 def _device(device: str | None) -> str:
@@ -361,20 +414,24 @@ class Sam2Masks:
     On 4 idle CPU cores, hiera-tiny, a 640x480 image: the image encoder (SAM's fixed 1024
     input) about 1.5 s, then about 0.06 s per point prompt -- the mask decoder's two-way
     transformer runs over all 64x64 image tokens once per point. So 16 points a side about
-    17 s, 32 a side (SAM's default, `ModalSam2Masks`') about 67 s.
+    17 s, 32 a side (SAM's default, used here and by `ModalSam2Masks`) about 67 s; on a GPU
+    it is fast either way, and 32 a side finds the small things a large scan is full of.
 
     The thresholds are looser than SAM's automatic generator (0.88 / 0.95): splat renders
     are noisy, and at SAM's own values a camp view kept a handful of masks; at 0.6 / 0.8
     the canopies, the roof, the bushes and the ground each came back."""
 
     model: str = SAM2_MODEL
-    points_per_side: int = 16
-    points_per_batch: int = 64
+    points_per_side: int = 32
+    points_per_batch: int = 128
     pred_iou_thresh: float = 0.6
     stability_thresh: float = 0.8
     nms_iou: float = 0.7
     #: Smallest mask kept, as a fraction of the image.
     min_area: float = 0.0005
+    #: Largest: a candidate over this share of the image is the whole view, not a thing in
+    #: it; its point's next answer is its whole (`candidate_levels`).
+    max_area: float = 0.8
     #: A finer mask this similar to a kept coarser one is the same thing, dropped.
     repeat_iou: float = 0.9
     device: str | None = None
@@ -394,6 +451,9 @@ class Sam2Masks:
             model = Sam2Model.from_pretrained(self.model).to(device).eval()
             if device == "cpu":
                 torch.set_num_threads(max(1, torch.get_num_threads()))
+            else:
+                # The GPU does the work; CPU threads would only contend with the renderers.
+                torch.set_num_threads(GPU_HOST_THREADS)
             self._loaded = (processor, model, device)
         return self._loaded
 
@@ -417,24 +477,52 @@ class Sam2Masks:
                     input_labels=torch.ones(1, pts.shape[0], 1, dtype=torch.long, device=device),
                     multimask_output=True,
                 )
-                logits.append(out.pred_masks[0].float().cpu())
-                ious.append(out.iou_scores[0].float().cpu())
-        low = torch.cat(logits)  # (points, 3, 256, 256)
-        iou_pred = torch.cat(ious).numpy()
-        chosen, scores = select_masks(
-            low.numpy(),
-            iou_pred,
-            pred_iou_thresh=self.pred_iou_thresh,
-            stability_thresh=self.stability_thresh,
+                logits.append(out.pred_masks[0].float())
+                ious.append(out.iou_scores[0].float())
+        low = torch.cat(logits)  # (points, 3, 256, 256), on the model's device
+        iou_pred = torch.cat(ious)
+        p, k = iou_pred.shape
+        # The candidates' statistics on the device (the bulk of the work), the choice on
+        # the CPU: the same as `select_masks` on the whole array.
+        binary = low > 0
+        areas = binary.reshape(p, k, -1).sum(dim=2)
+        inner = (low > 1.0).reshape(p, k, -1).sum(dim=2)  # `stability`, offset 1
+        outer = (low > -1.0).reshape(p, k, -1).sum(dim=2)
+        stab = inner.double() / outer.clamp(min=1).double()
+        areas_np = areas.cpu().numpy()
+        pixels = low.shape[2] * low.shape[3]
+        levels, small = candidate_levels(areas_np, pixels, self.max_area)
+        stab_np = stab.cpu().numpy()
+        iou_np = iou_pred.cpu().numpy()
+        ok = (
+            (iou_np >= self.pred_iou_thresh)
+            & (stab_np >= self.stability_thresh)
+            & (areas_np >= self.min_area * pixels)
+            & small
+        )
+        pts, cand = np.nonzero(ok)
+        if pts.size == 0:
+            return []
+        index = torch.as_tensor(pts, device=low.device), torch.as_tensor(cand, device=low.device)
+        flat = binary[index].reshape(pts.size, -1).float()
+        inter = flat @ flat.T
+        size = flat.sum(dim=1)
+        overlap = (inter / (size[:, None] + size[None, :] - inter).clamp(min=1.0)).cpu().numpy()
+        chosen, scores = choose_masks(
+            pts,
+            cand,
+            levels[pts, cand],
+            iou_np[pts, cand],
+            stab_np[pts, cand],
+            overlap,
             nms_iou=self.nms_iou,
-            min_area=self.min_area,
             repeat_iou=self.repeat_iou,
         )
         if not chosen:
             return []
         pick = torch.stack([low[pt, cd] for pt, cd, _ in chosen])[:, None]
         full = torch.nn.functional.interpolate(pick, size=(h, w), mode="bilinear")[:, 0] > 0
-        full_np = full.numpy()
+        full_np = full.cpu().numpy()
         return [
             Mask(full_np[i], level, float(np.clip(score, 0.0, 1.0)))
             for i, ((_, _, level), score) in enumerate(zip(chosen, scores, strict=True))

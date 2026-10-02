@@ -68,6 +68,11 @@ image = (
 )
 
 
+#: Render processes per container: each holds one view's working set (about 1-2 GB on
+#: the 22.6M-gaussian camp, `segment_scene.RENDER_WORKER_BYTES`) beside the scan they all
+#: share copy-on-write.
+RENDER_WORKERS = 24
+
 #: The public bucket answers Python's default user agent with 403 (Cloudflare's bot rules);
 #: curl's is let through.
 USER_AGENT = "curl/8.5.0 (hexapod-segment)"
@@ -116,16 +121,22 @@ def _fetch(url: str, out: Path) -> int:
 @app.function(
     image=image,
     gpu="L4",
-    cpu=8.0,
-    memory=32768,
+    # Views render in forked processes (RENDER_WORKERS) while the GPU masks them.
+    cpu=32.0,
+    memory=98304,
     volumes={"/weights": WEIGHTS},
     timeout=3 * 3600,
 )
-def segment_scan(name: str, url: str, views: int = 24) -> dict:
-    """Segment one published scan; returns the files (bytes) and the run's summary."""
+def segment_scan(name: str, url: str, views: int = 24, keep_masks: bool = False) -> dict:
+    """Segment one published scan; returns the files (bytes) and the run's summary.
+    `keep_masks`: also return `masks.tar` (every view's masks and the cameras, the
+    `--cache` files that are not views), to lift again elsewhere without a GPU."""
+    import tarfile
+
     started = time.time()
     with tempfile.TemporaryDirectory() as work:
         tiles = Path(work) / "tiles"
+        cache = Path(work) / "cache"
         count = _fetch(url, tiles)
         fetched = time.time() - started
         render = Path(work) / "instances.png"
@@ -145,6 +156,9 @@ def segment_scan(name: str, url: str, views: int = 24) -> dict:
                 str(views),
                 "--render-instances",
                 str(render),
+                "--workers",
+                str(RENDER_WORKERS),
+                *(["--cache", str(cache)] if keep_masks else []),
             ],
             cwd=CAPTURES,
             capture_output=True,
@@ -161,6 +175,13 @@ def segment_scan(name: str, url: str, views: int = 24) -> dict:
         }
         if render.exists():
             files["instances.png"] = render.read_bytes()
+        if keep_masks and cache.exists():
+            tar = Path(work) / "masks.tar"
+            with tarfile.open(tar, "w") as out:
+                for path in sorted(cache.glob("masks-*.npz")) + [cache / "cameras.json"]:
+                    if path.exists():
+                        out.add(path, arcname=path.name)
+            files["masks.tar"] = tar.read_bytes()
         return {
             "name": name,
             "ok": True,
@@ -173,11 +194,16 @@ def segment_scan(name: str, url: str, views: int = 24) -> dict:
 
 
 @app.local_entrypoint()
-def main(names: str = ",".join(SCANS), views: int = 24, out: str = "segment-out") -> None:
+def main(
+    names: str = ",".join(SCANS),
+    views: int = 24,
+    out: str = "segment-out",
+    keep_masks: bool = False,
+) -> None:
     """Segment the named scans in parallel containers; write each result under `out/`."""
     chosen = [n.strip() for n in names.split(",") if n.strip()]
     failed = []
-    for result in segment_scan.starmap([(n, SCANS[n], views) for n in chosen]):
+    for result in segment_scan.starmap([(n, SCANS[n], views, keep_masks) for n in chosen]):
         folder = Path(out) / result["name"]
         folder.mkdir(parents=True, exist_ok=True)
         (folder / "log.txt").write_text(result["log"], encoding="utf-8")

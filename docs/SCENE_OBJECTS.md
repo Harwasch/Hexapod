@@ -57,14 +57,24 @@ GPU: x' = x + Σ_j w_j(x) · Z_j · [x; 1]   (one skinning path, the existing ve
 All of these are general models; none knows our scenes.
 
 1. **Views.** Render the scan from many viewpoints (`splat_render.py`): observer-near views
-   plus a ring, each with per-pixel splat ids (which splats dominate each pixel).
-2. **Masks.** Class-free automatic masks at several scales per view (SAM 2 family).
+   plus a ring, each with per-pixel splat ids (which splats dominate each pixel). A scan wider
+   than one view's footprint (a 0.24 m cell spanning ~4 px: ~30 m on the camp) also gets
+   local views that scale with its area -- obliques per footprint anchor, placed by line of
+   sight, and more eye-height views -- each with a far plane, up to a cap (252 on the camp).
+   They render in forked workers while the GPU masks the ones already done.
+2. **Masks.** Class-free automatic masks at several scales per view (SAM 2 family). A mask
+   over (nearly) the whole view is no evidence of what belongs together and is left out.
 3. **Lift.** Each mask votes for the splats it covers. Splats that co-occur in masks across
    views are merged into instances (a graph whose edge weights are co-occurrence over
    visibility). Scales give the hierarchy: a coarse mask is the parent of the finer ones
-   inside it.
+   inside it. Neighbouring cells first join only on strong evidence (single linkage over a
+   million cells otherwise chains across a scan), then regions join as wholes in rounds;
+   specks and slivers between masks take their neighbours' instance.
 4. **Meaning.** For each instance, crop its best views and embed them with an
    image-text model (SigLIP/CLIP family). Text search is cosine similarity at query time.
+   An instance too small in every view for a useful crop (`DESCRIBE_MIN_PX`) keeps no
+   embedding and no tags (its row in `instances.emb` is zero) and its nearest described
+   ancestor's properties.
 5. **Tags and properties.** Zero-shot against a large open vocabulary (tags) and a short,
    fixed list of _attribute_ prompts (not classes): movable, rigid, elastic/flexible,
    static structure, vegetation, water, vehicle, person/animal. Each property is a
@@ -108,7 +118,8 @@ Written beside the measured tiles; read by the viewer, the skinning step and the
 - `tiles` uses the same checksum keys and run-length encoding as `plants.json`
   (`scene_plants.plant_binding`), so the viewer's existing per-tile binding code applies.
 - Ids are leaf-level (the finest instance). The hierarchy is walked through `parent`.
-- `instances.emb`: `float16`, `count × dim`, row `k` is instance id `k + 1`, L2-normalised.
+- `instances.emb`: `float16`, `count × dim`, row `k` is instance id `k + 1`, L2-normalised; an
+  instance that was not described (no `tags`) has a zero row.
 
 ### Root extras
 

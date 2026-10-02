@@ -179,7 +179,9 @@ def test_behaviour_rule() -> None:
 
 def test_oracle_masks_cover_the_views(run: dict) -> None:
     result = run["result"]
-    assert len(result.views) == VIEWS
+    # The yard is wider than one view's footprint: the whole-scan views plus local ones.
+    assert VIEWS < len(result.views) <= ss.MAX_VIEWS
+    assert sum(np.isfinite(v.camera.far) for v in result.views) > VIEWS
     assert result.lifted.stats["levels"] == 2
     # Every view's cells voted somewhere at the object level.
     for v in result.votes:
@@ -196,6 +198,12 @@ def test_instances_match_the_true_objects(run: dict) -> None:
     plants = [iou for obj, iou in ious.items() if obj < 10]
     assert len(plants) == 10 and min(plants) >= 0.75, ious
     assert (result.splat_id > 0).mean() >= 0.9
+    # The top-level instances that are described hold nearly all of the top level.
+    top = _top(result.lifted.parent)[result.splat_id]
+    sub = np.bincount(top, minlength=len(result.instances) + 1)[1:]
+    tops = [i for i in result.instances if i.level == 0]
+    described = sum(sub[i.id - 1] for i in tops if i.tags)
+    assert described >= 0.95 * sum(sub[i.id - 1] for i in tops)
 
 
 def test_hierarchy_is_consistent(run: dict) -> None:
@@ -235,10 +243,18 @@ def test_instance_records(run: dict) -> None:
         assert inst.splats == total[inst.id]
         assert np.all(inst.bounds_min <= inst.centroid) and np.all(inst.centroid <= inst.bounds_max)
         assert inst.views >= 1
-        assert abs(float(np.linalg.norm(inst.embedding)) - 1) < 1e-6
-        scores = [t["score"] for t in inst.tags]
-        assert len(inst.tags) == ss.TAGS_TOP_K and scores == sorted(scores, reverse=True)
-        assert {t["label"] for t in inst.tags} <= set(VOCABULARY)
+        if inst.tags:
+            assert abs(float(np.linalg.norm(inst.embedding)) - 1) < 1e-6
+            scores = [t["score"] for t in inst.tags]
+            assert len(inst.tags) == ss.TAGS_TOP_K and scores == sorted(scores, reverse=True)
+            assert {t["label"] for t in inst.tags} <= set(VOCABULARY)
+        else:
+            # Too small to describe: no embedding, no tags, its ancestor's properties.
+            assert not np.any(inst.embedding)
+            if inst.parent is None:
+                assert not any(inst.properties.values())
+            else:
+                assert inst.properties == result.instances[inst.parent - 1].properties
         assert list(inst.properties) == list(ss.PROPERTY_PROMPTS)
         assert all(0 <= v <= 1 for v in inst.properties.values())
         assert inst.behaviour == ss.behaviour(inst.properties)
@@ -302,7 +318,10 @@ def test_instances_json_follows_the_contract(written: Path, run: dict) -> None:
         assert len(r["bounds"]["min"]) == len(r["centroid"]) == 3
     emb = np.frombuffer((written / "instances.emb").read_bytes(), "<f2")
     emb = emb.reshape(len(records), 64).astype(np.float32)
-    np.testing.assert_allclose(np.linalg.norm(emb, axis=1), 1, atol=2e-3)
+    described = np.array([bool(r["tags"]) for r in records])
+    assert described.mean() > 0.3
+    np.testing.assert_allclose(np.linalg.norm(emb[described], axis=1), 1, atol=2e-3)
+    assert not emb[~described].any()
     np.testing.assert_allclose(
         emb[0], run["result"].instances[0].embedding.astype(np.float16), atol=0
     )
@@ -352,6 +371,18 @@ def test_render_instances(run: dict, tmp_path: Path) -> None:
     h, w = result.views[0].rgb.shape[:2]
     assert pixels.shape == (h, 2 * w, 3)
     assert pixels[:, w:].any()
+
+
+def test_check_cameras_with_and_without_local_views(run: dict) -> None:
+    views = run["result"].views
+    cams = ss.check_cameras(views)
+    assert len(cams) == 4 and cams[0] is views[0].camera
+    assert all(np.isfinite(c.far) for c in cams[1:])
+    # A small scan's plan has no far planes: the others are spread through its views.
+    whole = [v for v in views if not np.isfinite(v.camera.far)]
+    cams = ss.check_cameras(whole)
+    assert len(cams) == min(4, len(whole)) and len({id(c) for c in cams}) == len(cams)
+    assert ss.check_cameras(whole[:1]) == [whole[0].camera]
 
 
 def test_binding_by_position_agrees_with_the_ply_replay(written: Path, run: dict) -> None:
