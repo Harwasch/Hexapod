@@ -22,8 +22,14 @@ stages:
     # worker sets it from the capture's `upAxis` when somebody knows better. The same for
     # `heading_deg` (the capture's `headingDeg`). `recentre` puts the origin at the
     # footprint's centre and the capture's own ground rather than the exporter's origin.
+    #
+    # `ship_sh_degree`: how many of the upload's own spherical-harmonic bands above DC ship
+    # (0-3; a phone app's gsplat-style PLY or a Scaniverse `.spz` often carries 3), turned
+    # with the splat by the up axis and heading (harmonics.py). 0, as every capture so
+    # far: the DC colour only. An upload with fewer bands ships what it has.
     params:
       recentre: true
+      ship_sh_degree: 0
 
   - id: georeference
     # The only choice here: Lane 1 ingests a finished splat, so there are no frames to

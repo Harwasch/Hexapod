@@ -797,6 +797,84 @@ grows 125 MB) and, with `PIPELINE_BENCH=1`, the 8M run under a 1.5 GB address-sp
 Each stage takes `chunk_gaussians` (2^18 rows by default); nothing it computes depends on
 it.
 
+## Shipping SH (view-dependent colour)
+
+gsplat trains spherical harmonics to degree 3 -- 45 `f_rest_*` of a gaussian's 59 floats
+-- and until `ship_sh_degree` every capture shipped degree 0: one colour from every side.
+The packer and both web renderers already carry and draw SH when a PLY has it; the
+pipeline was dropping it in the middle. **`ship_sh_degree`** (0-3, **0 by default**, so
+nothing changes until it is chosen) is how many bands ship:
+
+| lane | where it is set                  | what carries it                                                                                  |
+| ---- | -------------------------------- | ------------------------------------------------------------------------------------------------ |
+| 2    | `train: {ship_sh_degree: N}`     | `trained.ply` -> `quality`'s `gated.ply` -> `place`'s `canonical.ply` -> `package`'s tiles       |
+| 1    | `normalize: {ship_sh_degree: N}` | the upload's own bands (a gsplat-style PLY, a Scaniverse `.spz`) -> `canonical.ply` -> the tiles |
+
+It is not gsplat's own `--sh_degree` (the degree it trains at, left at its default 3):
+training at 3 and shipping the first N bands is the least-squares best degree-N colour,
+since the bands are orthonormal. The bands are truncated channel-major -- degree 1 of a
+degree-3 file is `f_rest_{0-2, 15-17, 30-32}`, renumbered `f_rest_0-8` -- and written after
+`f_dc_*`, where the trainers put them (`gaussians.ply_properties`; degree 0 is the
+fourteen, byte for byte).
+
+**Turning them.** A gaussian's SH colour is a function of direction in the frame it was
+fitted in, so every stage that turns the splat turns the bands: `place` (COLMAP's frame
+into east/north/up: the EXIF similarity or camera-up levelling, and a heading) and Lane
+1's `normalize` (up axis and heading), both through `gaussians.transform`, which now
+applies `harmonics.rotate` -- each band by the rotation's real Wigner D-matrix in the
+trainers' basis, fitted exactly against Inria's `eval_sh` rather than taken from a
+recurrence whose conventions differ in every source. `tests/test_harmonics.py` holds it to
+the definition for degrees 1, 2 and 3: turn the splat by R and look from R d, and every
+gaussian shows the colour it showed from d (to 2e-6), through `place` and `normalize` as
+well as on arrays; degree 1 is also held to its closed form `P R P^T`, and each band's
+matrices to being an orthogonal representation (D(R1 R2) = D(R1) D(R2)). The recentring
+is a translation and turns nothing; a mirror is refused. Nothing else in the pipeline
+turns a splat: `real_tree.py`'s similarity (the Minnetonka rig step) reads only the
+fourteen, so its tiles stay degree 0 whatever the run shipped.
+
+**Measured as shipped.** `holdout_error.py --sh-degree N` renders the held-out frames at
+the degree `trained.ply` ships, so the per-gaussian error `quality` gates with is the
+error of what is published; `meanPsnrFullSh` (every band trained) sits beside `meanPsnr`
+in `holdout.json`, `train_metrics.json` and `quality.json`, so what the cut costs is
+visible. A block run merges the same truncation into `trained.ply` and measures it the
+same way. `train_metrics.json`'s settings, `place`'s metrics, `source_meta.json` and the
+manifest's `splat.shDegree` (read back off the tiles, as CesiumJS counts their
+attributes) say what shipped.
+
+**What it costs, and choosing.** On disk, from the packer (`splat_tiles.convert`): real
+SH-3 scans (nianticlabs/spz's samples) 1.17-1.20x the tileset bytes at degree 1 and
+1.6-1.7x at degree 3; synthetic 300k-gaussian splats with trained-looking coefficients
+(Laplace, b = 0.03) 1.15x and 1.51x (16.1, 18.5 and 24.4 bytes a gaussian), with larger
+coefficients (b = 0.1) 1.27x and 2.15x; packing 1.6, 2.1 and 3.2 s. `canonical.ply` grows
+from 56 to 92 (degree 1) or 236 (degree 3) bytes a gaussian, read a chunk at a time like
+the rest. What it costs the viewers -- frame rate, GPU memory, load time -- is what has
+not been measured, and what `experiments/sh_compare.py` exists for:
+
+```bash
+# 1. A run of the capture that ships degree 3: jobs.params
+#      {"train": {"ship_sh_degree": 3}}
+#    Raw PLYs with f_rest_* are not kept by a run: gsplat's export is in the training
+#    container's work/, and a block run's parts leave checkpoint/ once merged. So a run at
+#    degree 3 is the source; its canonical.ply is already placed, its SH turned.
+# 2. One site, three ways, as three sites side by side (1.5 scan-widths apart, east):
+cd tools/pipeline
+uv run python experiments/sh_compare.py <run>/stages/place/out/canonical.ply ../../data/tiles \
+  --georef <run>/stages/georeference/out/georef.json --site spool
+#    or from the run's trained.ply (COLMAP's frame), placed by the real place stage:
+#    ... <run>/stages/train/out/trained.ply out/ --georef georef.json --place [--poses poses/]
+# 3. Seed and look: data/tiles/spool-sh{0,1,3}/ each hold splat/ and a site.json.
+cd ../../apps/api && uv run python -m app.seed && cd ../.. && pnpm dev
+```
+
+`sh_compare.json` beside them has, per degree, the tiles, bytes, bytes a gaussian, the ratio
+to degree 0 and the seconds to pack. In the console, with the renderer under comparison
+chosen (settings; PlayCanvas by default, Cesium, Spark): fly to each, read frame rate and
+GPU memory in the developer panel (`D`) with the others out of view, time the first tile
+and the whole tileset in the browser's network panel, and look at shine and colour as the
+view goes round. Then set `ship_sh_degree` in `recipes/photo-reconstruct.yaml` (and
+`splat-ingest.yaml`) to the degree chosen. The site folders are local only
+(`data/tiles/*-sh[0-3]/` is gitignored).
+
 ## Lane 1
 
 ```
@@ -812,8 +890,9 @@ upload/capture.ply ──▶ canonical.ply ──▶ splat/ ──▶ thumbnail.
 OpenSplat, gsplat) or an **`.spz`** — the format Scaniverse exports natively and the one
 `splat_tiles.pack_spz` already writes, so ingesting it is a 38-line inverse and nothing
 else. A PLY that carries `red/green/blue/alpha` instead of `f_dc_*`/`opacity` is converted;
-`f_rest_*` is read and dropped, because `convert` never reads it and carrying it would
-quadruple `canonical.ply` for nothing.
+`f_rest_*` is read and dropped unless the run ships SH (`ship_sh_degree`, 0 by default --
+see [Shipping SH](#shipping-sh-view-dependent-colour)): at degree 3 it would quadruple
+`canonical.ply`, and whether the colour is worth that is still to be chosen.
 
 Everything else **refuses with a message that names the file and the problem** rather than
 producing a splat-shaped nothing: ASCII PLY, a vertex element with list properties, a
@@ -838,9 +917,9 @@ both landed tipped 90 degrees, and `splat_ground` measured "ground" along the ca
 depth, which the viewer's clamp then dutifully rested on the terrain.
 
 `ingest_splat` now turns the file into east/north/up (`gaussians.orient`): positions, each
-gaussian's quaternion (`q' = q_R * q`), and nothing else -- the colour is exactly
-invariant, because `canonical.ply` keeps only the view-independent SH DC term. Which axis
-is up:
+gaussian's quaternion (`q' = q_R * q`), and -- when the run ships them -- the SH bands
+above DC, by the rotation's Wigner D-matrix ([Shipping SH](#shipping-sh-view-dependent-colour));
+the DC colour is exactly invariant. Which axis is up:
 
 | Source                                    | Default | Evidence                                                                                                                                                                   |
 | ----------------------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
