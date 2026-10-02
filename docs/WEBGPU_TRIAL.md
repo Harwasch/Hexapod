@@ -119,6 +119,14 @@ The trial never leaves a scan undrawn (`ScanRendererHost.start`, `createWebgpuBa
   make another WebGPU device on the same canvas; the trial instead replaces the renderer with
   PlayCanvas on WebGL2 on a fresh canvas, which streams the scan again and draws. Later scans
   this visit go straight to WebGL2; choosing the trial again in Settings tries WebGPU again.
+- **The renderer's code did not arrive** (the chunk's download failed: a dropped connection, a
+  new release replacing the files). That says nothing about WebGPU, so it is not held against
+  it: this scan is drawn by PlayCanvas on WebGL2 with the notice _The playcanvas-webgpu
+  renderer's code did not load: …_, and the next scan asks for WebGPU again.
+
+The overlay canvas is tagged with the renderer actually drawing on it
+(`data-scan-renderer="playcanvas"` for a fallback on a fresh canvas) and the API it draws with
+(`data-api`).
 
 ## What changes on WebGPU, in the code
 

@@ -225,6 +225,20 @@ async function loadBackend(kind: Exclude<SplatRendererKind, "cesium">): Promise<
     : playcanvas;
 }
 
+/**
+ * A renderer's module could not be fetched (`loadBackend`'s dynamic import): its chunk did not
+ * arrive, which is the network's doing or a new release's, not the renderer's or the device's.
+ */
+export class BackendLoadError extends Error {
+  constructor(
+    readonly kind: Exclude<SplatRendererKind, "cesium">,
+    readonly reason: unknown,
+  ) {
+    super(`The ${kind} renderer's code did not load: ${describeError(reason)}`);
+    this.name = "BackendLoadError";
+  }
+}
+
 /** A camera pose in Earth-fixed coordinates. */
 export interface CameraPose {
   position: Cartesian3;
@@ -570,12 +584,17 @@ export class ScanRendererHost {
     const create = async (
       module: Exclude<SplatRendererKind, "cesium">,
     ): Promise<{ canvas: HTMLCanvasElement; backend: ScanBackend<unknown> }> => {
-      const canvas = this.overlayCanvas(kind);
+      // Tagged with the back-end actually made, not the one chosen: the WebGPU trial's WebGL2
+      // fallback is PlayCanvas's default renderer, on a canvas of its own.
+      const canvas = this.overlayCanvas(module);
       try {
-        return {
-          canvas,
-          backend: await (await this.backends(module)).createBackend(canvas, budget, hooks),
-        };
+        let loaded: BackendModule;
+        try {
+          loaded = await this.backends(module);
+        } catch (error) {
+          throw new BackendLoadError(module, error);
+        }
+        return { canvas, backend: await loaded.createBackend(canvas, budget, hooks) };
       } catch (error) {
         canvas.remove();
         throw error;
@@ -586,21 +605,34 @@ export class ScanRendererHost {
     // draws it -- the default renderer, on a canvas no WebGPU context ever touched -- and the
     // developer readouts say why.
     let made: { canvas: HTMLCanvasElement; backend: ScanBackend<unknown> } | null = null;
+    /** Why this one session draws with WebGL2 when WebGPU itself was never tried. */
+    let loadNotice: string | null = null;
     if (kind === "playcanvas-webgpu" && this.webgpuFailed === null) {
       try {
         made = await create(kind);
       } catch (error) {
-        this.webgpuFailed = `WebGPU did not start: ${error instanceof Error ? error.message : String(error)}`;
-        log.warn("WebGPU splat renderer did not start; drawing with WebGL2", {
-          error: this.webgpuFailed,
-        });
+        if (error instanceof BackendLoadError) {
+          // The renderer's code did not arrive (a dropped connection, a new release replacing
+          // the chunks): that says nothing about WebGPU, so it is not held against it for the
+          // visit. This session draws with WebGL2, and the next one asks for WebGPU again.
+          loadNotice = `${error.message}; WebGPU is tried again with the next scan`;
+          log.warn("WebGPU splat renderer's code did not load; drawing with WebGL2", {
+            error: error.message,
+          });
+        } else {
+          this.webgpuFailed = `WebGPU did not start: ${describeError(error)}`;
+          log.warn("WebGPU splat renderer did not start; drawing with WebGL2", {
+            error: this.webgpuFailed,
+          });
+        }
       }
     }
     made ??= await create(kind === "playcanvas-webgpu" ? "playcanvas" : kind);
     const { canvas, backend } = made;
     const api = backend.api ?? "webgl2";
     canvas.dataset.api = api;
-    const notice = kind === "playcanvas-webgpu" ? (backend.apiNote ?? this.webgpuFailed) : null;
+    const notice =
+      kind === "playcanvas-webgpu" ? (backend.apiNote ?? this.webgpuFailed ?? loadNotice) : null;
     // A frame that throws retires this session, never the globe (overlayFrames.ts).
     const failed = (error: unknown): void => this.drawFailed(token, kind, target.key, error);
     try {

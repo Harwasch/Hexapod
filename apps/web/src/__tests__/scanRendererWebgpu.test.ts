@@ -81,7 +81,7 @@ interface Rig {
  * A host whose `playcanvas-webgpu` module does `webgpu` (fails to start, or starts a WebGPU or
  * WebGL2 renderer) and whose `playcanvas` module always starts a WebGL2 renderer.
  */
-function rig(webgpu: "fails" | "webgpu" | "webgl2"): Rig {
+function rig(webgpu: "fails" | "webgpu" | "webgl2" | "unfetched"): Rig {
   const made: Rig["made"] = [];
   const module = (name: string, create: () => Fake | Error): BackendModule => ({
     createBackend: (canvas, _budget, hooks) => {
@@ -97,7 +97,7 @@ function rig(webgpu: "fails" | "webgpu" | "webgl2"): Rig {
     "playcanvas-webgpu": module("playcanvas-webgpu", () =>
       webgpu === "fails"
         ? new Error("no adapter")
-        : webgpu === "webgpu"
+        : webgpu === "webgpu" || webgpu === "unfetched"
           ? fake("playcanvas-webgpu", "webgpu")
           : fake("playcanvas-webgpu", "webgl2", "WebGPU unavailable: this browser has no WebGPU"),
     ),
@@ -121,7 +121,13 @@ function rig(webgpu: "fails" | "webgpu" | "webgl2"): Rig {
     resolutionScale: 1,
     useBrowserRecommendedResolution: true,
   };
+  // "unfetched": the WebGPU module's chunk does not arrive the first time it is asked for.
+  let unfetched = webgpu === "unfetched" ? 1 : 0;
   const host = new ScanRendererHost(viewer as never, (kind) => {
+    if (kind === "playcanvas-webgpu" && unfetched > 0) {
+      unfetched -= 1;
+      return Promise.reject(new TypeError("Failed to fetch dynamically imported module"));
+    }
     const chosen = modules[kind];
     return chosen ? Promise.resolve(chosen) : Promise.reject(new Error(kind));
   });
@@ -198,9 +204,35 @@ describe("the PlayCanvas WebGPU trial", () => {
     expect(status.error).toBeNull();
     expect(r.made.map((m) => m.module)).toEqual(["playcanvas"]);
     expect(r.made[0]?.fake.renders.length).toBeGreaterThan(0);
-    // The canvas WebGPU was tried on is gone; the one drawn on is new.
+    // The canvas WebGPU was tried on is gone; the one drawn on is new, and says who drew it.
     expect(r.overlays()).toHaveLength(1);
     expect(r.overlays()[0]).toBe(r.made[0]?.fake.canvas);
+    expect(r.overlays()[0]?.dataset).toMatchObject({ scanRenderer: "playcanvas", api: "webgl2" });
+    // A real failure holds for the visit: the next scan goes straight to WebGL2.
+    r.host.setTarget(r.tileset("b"));
+    await r.run(400);
+    expect(r.made.map((m) => m.module)).toEqual(["playcanvas", "playcanvas"]);
+    r.host.destroy();
+  });
+
+  it("draws with WebGL2 when the WebGPU code did not arrive, and tries WebGPU again next scan", async () => {
+    const r = rig("unfetched");
+    r.host.setRenderer("playcanvas-webgpu");
+    r.host.setTarget(r.tileset("a"));
+    await r.run(400);
+    const status = r.host.status();
+    expect(status).toMatchObject({ kind: "playcanvas-webgpu", active: true, api: "webgl2" });
+    // Said as what it is -- the code did not load -- not as WebGPU failing on this device.
+    expect(status.notice).toContain("code did not load");
+    expect(status.notice).not.toContain("WebGPU did not start");
+    expect(r.made.map((m) => m.module)).toEqual(["playcanvas"]);
+    expect(r.overlays().map((c) => c.dataset.scanRenderer)).toEqual(["playcanvas"]);
+    // A dropped chunk is not held against WebGPU for the visit.
+    r.host.setTarget(r.tileset("b"));
+    await r.run(400);
+    expect(r.made.map((m) => m.module)).toEqual(["playcanvas", "playcanvas-webgpu"]);
+    expect(r.host.status()).toMatchObject({ api: "webgpu", notice: null });
+    expect(r.overlays().map((c) => c.dataset.scanRenderer)).toEqual(["playcanvas-webgpu"]);
     r.host.destroy();
   });
 
