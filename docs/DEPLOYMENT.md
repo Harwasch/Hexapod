@@ -989,9 +989,12 @@ object in the bucket behind. Deleting them is a console job; leaving them is har
   (`app/services/ratelimit.py`): wrong phone keys (each is 200,000 PBKDF2 rounds; a right
   key is never limited), reconciliation, and step-log reads. A refusal is a `429` with
   `Retry-After`. The client is the address in `API_CLIENT_IP_HEADER` (default
-  `Fly-Client-IP`, which Fly's proxy sets on every request); behind anything other than Fly
-  set that header's name, or empty to use the socket address, or the limit is one bucket for
-  everyone. None of it is reachable by the phone page's 10-second polling.
+  `Fly-Client-IP`, which Fly's proxy sets on every request, and which is believed only when
+  `FLY_APP_NAME` says the process is on Fly — anywhere else any client could send it, so
+  the socket address is used); behind another proxy set the header that proxy sets, or
+  empty to use the socket address. An IPv6 client is its /64, since every address in a
+  subscriber's /64 is theirs to rotate through. None of it is reachable by the phone page's
+  10-second polling.
 - The `/r2/` tile proxy fetches from one pinned bucket host and labels what it serves
   itself; see [the tile proxy](#the-r2-tile-proxy-and-the-one-host-it-serves).
 - One queued-or-running job per capture is a partial unique index (migration `0008`), not

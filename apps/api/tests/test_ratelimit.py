@@ -14,6 +14,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from fastapi import Request
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
@@ -31,6 +32,7 @@ from app.services.ratelimit import (
     RateLimited,
     RateLimits,
     TokenBucket,
+    client_key,
 )
 from app.storage import S3Storage, get_storage
 
@@ -59,6 +61,8 @@ def client(db: Session, storage: S3Storage, clock: Clock) -> Iterator[TestClient
     settings = Settings(
         api_write_token=WRITE,
         api_phone_key_hash=phone_key.hash_key(KEY, salt=b"0123456789abcdef", iterations=1000),
+        # On Fly, where `Fly-Client-IP` is Fly's own and is believed (client_key).
+        fly_app_name="twin-api",
     )
     app = create_app(settings)
     app.state.rate_limits = RateLimits(clock=clock)
@@ -117,6 +121,52 @@ def test_the_bucket_forgets_the_least_recent_client_first(clock: Clock) -> None:
     bucket.take("a")
     with pytest.raises(RateLimited):
         bucket.take("c")
+
+
+# --- who the client is -------------------------------------------------------------------
+
+
+def asking(peer: str, headers: dict[str, str] | None = None) -> Request:
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/",
+            "headers": [(k.lower().encode(), v.encode()) for k, v in (headers or {}).items()],
+            "client": (peer, 50000),
+        }
+    )
+
+
+def test_an_ipv6_client_is_its_slash_64() -> None:
+    """Every address in a subscriber's /64 is theirs to send from: keyed per address, a
+    guesser rotating through it had a full bucket on every request."""
+    on_fly = Settings(fly_app_name="twin-api")
+
+    def key(address: str) -> str:
+        return client_key(asking("10.0.0.1", {"Fly-Client-IP": address}), on_fly)
+
+    assert key("2001:db8:1:2::1") == key("2001:db8:1:2:ffff:ffff:ffff:fffe") == "2001:db8:1:2::/64"
+    assert key("2001:db8:1:3::1") != key("2001:db8:1:2::1")
+    assert key("203.0.113.7") == "203.0.113.7" != key("203.0.113.8")
+    # IPv4 carried inside IPv6 is that IPv4 address, not the /64 every such address shares.
+    assert key("::ffff:203.0.113.7") == "203.0.113.7"
+    assert key("not an address") == "not an address"
+    # The socket's peer is read the same way.
+    assert client_key(asking("2001:db8:9::5"), Settings(api_client_ip_header="")) == (
+        "2001:db8:9::/64"
+    )
+
+
+def test_fly_client_ip_is_believed_only_on_fly() -> None:
+    """Off Fly, `Fly-Client-IP` is a header any client may send with a new value each
+    time; the socket's peer is the client there. Another proxy's header, named by the
+    operator, is that operator's word and is believed."""
+    forged = asking("198.51.100.20", {"Fly-Client-IP": "192.0.2.1", "X-Real-IP": "192.0.2.9"})
+    assert client_key(forged, Settings(fly_app_name=None)) == "198.51.100.20"
+    assert client_key(forged, Settings(fly_app_name="twin-api")) == "192.0.2.1"
+    behind_nginx = Settings(fly_app_name=None, api_client_ip_header="X-Real-IP")
+    assert client_key(forged, behind_nginx) == "192.0.2.9"
 
 
 # --- the phone key ---------------------------------------------------------------------

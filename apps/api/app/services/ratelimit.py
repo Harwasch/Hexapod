@@ -25,6 +25,7 @@ app made in a test starts with full ones.
 
 from __future__ import annotations
 
+import ipaddress
 import math
 import threading
 import time
@@ -119,22 +120,52 @@ class RateLimits:
         self.step_log = TokenBucket(STEP_LOG, clock=clock)
 
 
+#: The header Fly's proxy sets on every request, which is `API_CLIENT_IP_HEADER`'s default.
+FLY_CLIENT_IP = "fly-client-ip"
+#: How much of an IPv6 address is one client. A subscriber is routinely handed a whole
+#: /64 -- it is the smallest subnet SLAAC works in -- and every one of its 2^64 addresses
+#: is theirs to send from, so a bucket per address was a fresh bucket per request for
+#: anybody who cared to rotate. An IPv4 address stays one client.
+IPV6_CLIENT_PREFIX = 64
+
+
 def client_key(request: Request, settings: Settings) -> str:
-    """Who is asking, as well as this process can tell.
+    """Who is asking, as well as this process can tell: an IPv4 address, or an IPv6 /64.
 
     Behind Fly every connection arrives from Fly's proxy, so the socket's peer address is
     the same for everyone and a bucket keyed on it would be one bucket for the world.
     Fly puts the real client's address in `Fly-Client-IP` and sets that header itself on
-    every request, so through Fly it cannot be forged. `API_CLIENT_IP_HEADER` names that
-    header; set it empty when the API is not behind a proxy that sets one, because then
-    any client could send it.
+    every request, so through Fly it cannot be forged -- and *only* through Fly: anywhere
+    else it is a header any client may send, with a new value per request, and keying on
+    it there was no limit at all. So the default header is believed only when the process
+    is on Fly (`FLY_APP_NAME`, which Fly sets on every machine and nothing else does), and
+    the socket's peer is the client everywhere else. `API_CLIENT_IP_HEADER` set to another
+    proxy's header is that operator's statement that their proxy sets it, and is believed;
+    set empty, the socket's peer is always the client.
     """
-    header = settings.api_client_ip_header
-    if header:
+    header = settings.api_client_ip_header.strip()
+    believed = bool(header) and (header.lower() != FLY_CLIENT_IP or bool(settings.fly_app_name))
+    if believed:
         forwarded = request.headers.get(header, "").strip()
         if forwarded:
-            return forwarded
-    return request.client.host if request.client is not None else "unknown"
+            return _client_of(forwarded)
+    return _client_of(request.client.host) if request.client is not None else "unknown"
+
+
+def _client_of(address: str) -> str:
+    """An address as the client it stands for: IPv4 as it is, IPv4 inside IPv6 as the
+    IPv4 address it carries, any other IPv6 address as its /64. Anything that is not an
+    address at all is kept as it came, so it is still a key of its own."""
+    try:
+        parsed = ipaddress.ip_address(address)
+    except ValueError:
+        return address
+    if isinstance(parsed, ipaddress.IPv6Address):
+        if parsed.ipv4_mapped is not None:
+            return str(parsed.ipv4_mapped)
+        network = ipaddress.IPv6Network((parsed, IPV6_CLIENT_PREFIX), strict=False)
+        return str(network)
+    return str(parsed)
 
 
 def limits_of(request: Request) -> RateLimits:

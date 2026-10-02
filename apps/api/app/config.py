@@ -93,7 +93,9 @@ class Settings(BaseSettings):
     # The request header holding the real client address, for the per-client rate limits
     # (app/services/ratelimit.py). Fly's proxy sets `Fly-Client-IP` on every request, so
     # behind Fly it cannot be forged; without it every client shares the proxy's address.
-    # Set it empty where nothing in front of the API sets one, or anyone could send it.
+    # The default is believed only on Fly (FLY_APP_NAME set); elsewhere anyone could send
+    # it, and the socket's peer is used. Name another proxy's header to believe that one,
+    # or set it empty to always use the socket's peer. An IPv6 client is its /64.
     api_client_ip_header: str = "Fly-Client-IP"
 
     cesium_ion_server_token: str | None = None
