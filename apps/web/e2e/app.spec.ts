@@ -435,6 +435,11 @@ test.describe("the HUD over the map", () => {
     await expect(switcher).toContainText("Saved views · Blackrock Mesa");
     await expect(switcher.getByTestId("saved-view-Overview")).toBeVisible();
     await expect(switcher.getByRole("textbox", { name: "View name" })).toBeFocused();
+    // Escape from that field closes it and hands the keyboard back to the site's badge.
+    await app.keyboard.press("Escape");
+    await expect(switcher).toHaveCount(0);
+    await expect(app.getByRole("button", { name: /switch site/ })).toBeFocused();
+    await app.keyboard.press("b");
     await expect(switcher.getByRole("link", { name: /Scan gallery/ })).toHaveAttribute(
       "href",
       "/view.html",

@@ -227,6 +227,39 @@ describe("the site switcher", () => {
   });
 });
 
+describe("closing the site switcher with Escape", () => {
+  it("closes from the view-name field `b` focuses, and gives the keyboard back to the badge", async () => {
+    const user = userEvent.setup();
+    useMission.setState({ project, projectsOpen: true });
+    useUi.setState({ switcherFocus: "views" });
+    render(wrap(<ProjectCard />));
+    const field = screen.getByRole("textbox", { name: "View name" });
+    await waitFor(() => expect(field).toHaveFocus());
+    await user.keyboard("{Escape}");
+    expect(useMission.getState().projectsOpen).toBe(false);
+    expect(screen.getByRole("button", { name: /switch site/ })).toHaveFocus();
+  });
+
+  it("closes the switcher, and nothing else the app's Escape would close first", async () => {
+    const user = userEvent.setup();
+    useUi.setState({ switcherFocus: "sites" });
+    useMission.setState({ project, projectsOpen: true });
+    // The app's own Escape (GlobalHotkeys) listens on the window: measuring, say, it would stop
+    // that and leave the switcher open.
+    const appEscape = vi.fn();
+    window.addEventListener("keydown", appEscape);
+    render(wrap(<ProjectCard />));
+    const switcher = screen.getByRole("dialog", { name: "Switch site" });
+    within(switcher)
+      .getByRole("button", { name: /Whole Earth/ })
+      .focus();
+    await user.keyboard("{Escape}");
+    window.removeEventListener("keydown", appEscape);
+    expect(useMission.getState().projectsOpen).toBe(false);
+    expect(appEscape).not.toHaveBeenCalled();
+  });
+});
+
 describe("Plan and Fleet beside the map", () => {
   it("keeps the drawer open when a machine is picked, and the card beside it", () => {
     unbind = bindDockRules();

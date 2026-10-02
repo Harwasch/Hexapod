@@ -111,6 +111,17 @@ export function ProjectCard() {
               aria-label="Switch site"
               id={menuId}
               data-testid="site-switcher"
+              onKeyDown={(event) => {
+                if (event.key !== "Escape") return;
+                // Escape closes it from anywhere inside, the "Name this view" field included
+                // (`b` opens the switcher with the keyboard there), and hands the keyboard back
+                // to the badge. The app's own Escape ignores keys typed into a field, and the
+                // switcher has no close button: from that field, Escape did nothing at all.
+                event.preventDefault();
+                event.stopPropagation();
+                setOpen(false);
+                badge.current?.focus();
+              }}
             >
               <SiteList focus={focusOn === "sites"} onDone={() => setOpen(false)} />
               <ViewList focus={focusOn === "views"} onDone={() => setOpen(false)} />
