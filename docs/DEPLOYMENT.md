@@ -94,6 +94,38 @@ the globe on first load; and `/cesium/*` is _not_ `immutable`, because `vite.con
 copies Cesium's static directories to fixed, unhashed paths, so upgrading the dependency
 changes the contents of URLs that keep their names.
 
+### The `/r2/` tile proxy, and the one host it serves
+
+`functions/r2/[[path]].js` is a Pages Function that serves the public bucket's `r2.dev`
+URL from the web app's own origin, over HTTP/2-3 and with cache lifetimes (r2.dev gives
+HTTP/1.1 and neither). The web app uses it only once `HEAD /r2/` answers `X-Tile-Proxy: 1`
+(`apps/web/src/lib/tileProxy.ts`).
+
+Whatever it answers is served from the origin where the console keeps the write token in
+`localStorage`, so it is locked to exactly what it is for:
+
+- **One host.** `TILE_PROXY_HOST`, in `wrangler.toml`'s `[vars]`, names the public bucket's
+  `pub-<32 hex>.r2.dev` hostname. It is committed empty; `deploy.yml` writes it in before
+  `wrangler pages deploy`, from the `public_bucket_url` input `provision.yml` passes, else
+  the `R2_PUBLIC_URL` variable, else the host of the offline catalog URL. Any other host
+  is a 404 that is never fetched. (It used to fetch _any_ `pub-*.r2.dev` host — every public
+  R2 bucket in the world.)
+- **Our Content-Type, by extension.** `.json`, `.glb`, `.b3dm`, `.pnts`, `.bin`, `.emb`,
+  `.f32`, `.u8`, `.ply`, `.spz`, `.webp`, `.jpg`/`.jpeg`, `.png` — what the bucket actually
+  holds. Anything else, including `.html` and `.svg`, is a 404. The upstream's own
+  Content-Type is never passed through.
+- **`X-Content-Type-Options: nosniff` and `Content-Security-Policy: sandbox; default-src
+'none'`** on every proxied response, so a mislabelled object opened as a page can run
+  nothing.
+
+**Unset is off, not open.** With no `TILE_PROXY_HOST` — a custom domain on the public
+bucket, a dispatch that could not work the host out, a `wrangler pages deploy` run by hand —
+the probe answers 404 without the header, every proxied path is a 404, and the web app
+loads tiles from the bucket's own URL. A custom domain needs no proxy: Cloudflare already
+serves it over HTTP/2 with caching, and the web app only ever routes `r2.dev` hosts here.
+Tiles published under a _previous_ r2.dev host (an older public bucket) are not served
+through the proxy; republish them, or leave the proxy off until they are.
+
 ## API and worker — Fly.io
 
 ```bash

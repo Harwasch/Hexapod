@@ -28,11 +28,28 @@
 # NOT DEPLOYED, and unverified. No `wrangler pages deploy` has been run against this
 # file. wrangler is not a dependency of this repository -- the workflow fetches it with
 # `pnpm dlx` -- and developers.cloudflare.com is unreachable from the environment this
-# was written in, so the three keys below were not checked against current wrangler
-# documentation. If `wrangler pages deploy` rejects this file, deleting it and passing
-# the directory positionally (`wrangler pages deploy apps/web/dist --project-name
-# twin-web`) is the equivalent command that needs no config at all.
+# was written in, so the three keys below and the `[vars]` table were not checked
+# against current wrangler documentation. If `wrangler pages deploy` rejects this file,
+# deleting it and passing the directory positionally (`wrangler pages deploy
+# apps/web/dist --project-name twin-web`) is the equivalent command that needs no config
+# at all -- with TILE_PROXY_HOST then set as a Pages environment variable in the
+# dashboard instead, or left unset, which turns the tile proxy off rather than open.
 
 name = "twin-web"
 pages_build_output_dir = "apps/web/dist"
 compatibility_date = "2026-09-01"
+
+# Environment for the Pages Function. Pages reads `[vars]` from this file, and once it
+# does this file is the source of truth for them: a value set in the dashboard is not.
+#
+# TILE_PROXY_HOST is the one bucket host functions/r2/ will fetch from -- the public
+# bucket's managed `pub-<32 hex>.r2.dev` hostname, never a pattern. Empty, the function
+# answers its probe without `X-Tile-Proxy: 1` and 404s every path, so the web app loads
+# tiles from r2.dev directly: slower, and safe. It is empty here because the hostname is
+# the account's, not the repository's: deploy.yml writes it in just before
+# `wrangler pages deploy`, from the public bucket's URL (provision.yml passes the one it
+# computed; a plain dispatch reads the R2_PUBLIC_URL variable, then the offline catalog's
+# host). A custom domain is not written here at all: Cloudflare already serves one over
+# HTTP/2 with caching, and the web app routes only r2.dev hosts through /r2/.
+[vars]
+TILE_PROXY_HOST = ""

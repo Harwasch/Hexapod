@@ -667,8 +667,8 @@ jobs:
   # The deploy itself is deploy.yml, called rather than copied: there is one description
   # of how this project is deployed, and `fly deploy` and `wrangler pages deploy` live in
   # exactly one file. `secrets: inherit` hands it the same repository secrets it reads on
-  # a dispatch, and the two URLs are values this run computed that a dispatch would have
-  # had to be told.
+  # a dispatch, and the three URLs are values this run computed that a dispatch would have
+  # had to be told. The public bucket's is what pins the /r2/ tile proxy to that bucket.
   deploy:
     name: Deploy
     needs: infra
@@ -678,6 +678,7 @@ jobs:
       target: everything
       api_base_url: ${{ needs.infra.outputs.api_base_url }}
       offline_catalog_url: ${{ needs.infra.outputs.catalog_url }}
+      public_bucket_url: ${{ needs.infra.outputs.public_url }}
     secrets: inherit
 
   # Seeding and publishing run on the runner, not over `fly ssh console`, for a reason
