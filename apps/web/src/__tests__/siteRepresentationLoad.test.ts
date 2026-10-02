@@ -14,6 +14,7 @@ import type { Site, SiteAsset, SiteSummary } from "@twin/contracts";
 import type { CameraController } from "@/cesium/CameraController";
 import type { ClippingManager } from "@/cesium/ClippingManager";
 import type { PerformanceManager } from "@/cesium/PerformanceManager";
+import { createSiteTileset } from "@/cesium/providers/tiles";
 import type * as Tiles from "@/cesium/providers/tiles";
 import { SiteManager } from "@/cesium/SiteManager";
 import type { SceneEvents } from "@/cesium/types";
@@ -151,6 +152,12 @@ describe("a site's load record follows the model shown", () => {
     const { manager, loads } = harness();
     await manager.activate(SITE_ID);
     expect(loads.at(-1)?.phase).toBe("ready");
+    // Each attempt is held to a stall timeout, not a total (tilesetStall.test.ts).
+    expect(vi.mocked(createSiteTileset)).toHaveBeenCalledWith(
+      expect.objectContaining({ representation: "point-cloud" }),
+      expect.anything(),
+      { stallMs: 15_000, what: "yard point-cloud" },
+    );
 
     await manager.setRepresentation("mesh");
     await vi.waitFor(() => expect(loads.at(-1)?.phase).toBe("error"));

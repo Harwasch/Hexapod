@@ -91,10 +91,12 @@ const DISENGAGE_DISTANCE_RADII = 4.5;
 const DETAIL_TIMEOUT_MS = 12_000;
 /**
  * One attempt at creating a site's tileset -- the tile proxy probe, `tileset.json`, ion's
- * endpoint -- must answer within this (ms). A stall used to hold the load forever: withRetry
- * only retries what fails. Now it fails, and the next attempt goes.
+ * endpoint -- fails after this long without an answer or, while a tileset's JSON downloads,
+ * without a new byte (ms; `TilesetDeadlines`). A stall used to hold the load forever: withRetry
+ * only retries what fails. Then it was a total for the attempt, which a large tileset.json on
+ * a slow phone link never met: every retry started the download over and failed the same way.
  */
-const TILESET_ATTEMPT_TIMEOUT_MS = 15_000;
+const TILESET_STALL_MS = 15_000;
 /**
  * A site whose record failed is not fetched again by proximity for this long (ms): the camera
  * moving near it re-checks every 400 ms, and an API that is down would be asked each time.
@@ -1102,11 +1104,10 @@ export class SiteManager {
       () =>
         withRetry(
           () =>
-            withTimeout(
-              createSiteTileset(asset, { maximumScreenSpaceError: this.screenSpaceError }),
-              TILESET_ATTEMPT_TIMEOUT_MS,
-              // An attempt that answers after its deadline made a tileset nobody will add.
-              { what: asset.name, onLate: (late) => late.destroy() },
+            createSiteTileset(
+              asset,
+              { maximumScreenSpaceError: this.screenSpaceError },
+              { stallMs: TILESET_STALL_MS, what: asset.name },
             ),
           {
             permanent: (error) => isIonAuthError(error) || isIonNotFound(error),

@@ -68,3 +68,71 @@ export function withTimeout<T>(
 export function isTimeout(error: unknown): error is TimeoutError {
   return error instanceof TimeoutError;
 }
+
+/** A download stopped making progress: no bytes for `ms`. A stall, so worth a retry too. */
+export class StallError extends TimeoutError {
+  constructor(what: string, ms: number) {
+    super(what, ms);
+    this.message = `${what} stopped arriving for ${String(Math.round(ms / 1000))} s`;
+    this.name = "StallError";
+  }
+}
+
+/**
+ * Fetches a JSON document that may be large and the connection slow, failing only when it
+ * stalls: no answer, or no new bytes, for `stallMs`. A deadline on the whole download is the
+ * wrong question for a big file on a phone -- a 6 MB tileset.json over a slow link takes longer
+ * than any total that also catches a stall quickly, so every retry started over and failed the
+ * same way. Here the deadline moves with every chunk that arrives.
+ *
+ * A refusal is an error whose message carries the status ("Request failed with status 404"),
+ * the shape callers already read (cesium/ion.ts).
+ */
+export async function fetchJsonUnlessStalled(
+  url: string,
+  options: { stallMs: number; what?: string; headers?: Record<string, string> },
+): Promise<unknown> {
+  const what = options.what ?? "The request";
+  const controller = new AbortController();
+  let stalled: StallError | null = null;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const arm = (): void => {
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      stalled = new StallError(what, options.stallMs);
+      controller.abort(stalled);
+    }, options.stallMs);
+  };
+  arm();
+  try {
+    const response = await fetch(url, {
+      headers: { Accept: "application/json,*/*;q=0.01", ...options.headers },
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      throw Object.assign(new Error(`Request failed with status ${String(response.status)}`), {
+        statusCode: response.status,
+      });
+    }
+    if (!response.body) return (await response.json()) as unknown;
+    const reader = response.body.getReader();
+    const chunks: Uint8Array[] = [];
+    for (;;) {
+      arm();
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+    }
+    const bytes = new Uint8Array(chunks.reduce((sum, chunk) => sum + chunk.length, 0));
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.length;
+    }
+    return JSON.parse(new TextDecoder().decode(bytes)) as unknown;
+  } catch (error) {
+    throw stalled ?? error;
+  } finally {
+    clearTimeout(timer);
+  }
+}

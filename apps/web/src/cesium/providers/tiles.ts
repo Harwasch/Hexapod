@@ -1,6 +1,7 @@
 import {
   Cesium3DTileset,
   MVTDataProvider,
+  Resource,
   createGooglePhotorealistic3DTileset,
   type Cesium3DTileset as TilesetType,
 } from "cesium";
@@ -9,6 +10,7 @@ import type { Layer, SiteAsset } from "@twin/contracts";
 
 import { deviceSplatBudget, isHandheld } from "@/lib/detail";
 import { tileUrl } from "@/lib/tileProxy";
+import { fetchJsonUnlessStalled, withTimeout } from "@/lib/timeout";
 
 import { incrementalSplats, keepOffscreenSplats } from "../splatInternals";
 
@@ -169,10 +171,52 @@ const COMMON: Cesium3DTileset.ConstructorOptions = {
   ...tileCacheBudget(),
 };
 
+/**
+ * How long a site's tileset may keep the viewer waiting. Absent, it waits as long as the
+ * network does (the developer harnesses).
+ */
+export interface TilesetDeadlines {
+  /**
+   * No answer, or no new bytes of the tileset's JSON, for this long (ms) fails the attempt.
+   * The JSON may be large and the phone's link slow, so for a tileset at a URL it is a stall
+   * timeout -- the deadline moves while bytes arrive (`fetchJsonUnlessStalled`) -- not a total
+   * that every retry would meet again. Ion's tileset is fetched by CesiumJS itself, with ion's
+   * own token handling, so it keeps a total, per attempt.
+   */
+  stallMs: number;
+  /** Named in the error: the asset's name. */
+  what: string;
+}
+
+/**
+ * A tileset at a URL, with its root JSON fetched here under a stall timeout and handed to
+ * CesiumJS ready-made: `Cesium3DTileset.fromUrl` reads the root through the resource it is
+ * given (`Cesium3DTileset.loadJson` calls `resource.fetchJson()`), and this resource already
+ * has it. Tiles and sub-tilesets are derived resources, new objects that fetch as usual.
+ */
+async function tilesetAtUrl(
+  url: string,
+  options: Cesium3DTileset.ConstructorOptions,
+  deadlines: TilesetDeadlines | undefined,
+): Promise<TilesetType> {
+  if (!deadlines) return Cesium3DTileset.fromUrl(await tileUrl(url), options);
+  const { stallMs, what } = deadlines;
+  const where = await withTimeout(tileUrl(url), stallMs, { what });
+  const json = await fetchJsonUnlessStalled(where, { stallMs, what });
+  const resource = new Resource({ url: where });
+  resource.fetchJson = () => Promise.resolve(json);
+  // With the JSON in hand only a metadata schema, if any, is fetched before it is made.
+  return withTimeout(Cesium3DTileset.fromUrl(resource, options), stallMs, {
+    what,
+    onLate: (late) => late.destroy(),
+  });
+}
+
 /** Loads a site asset (splat, mesh or point cloud) as a 3D Tileset. */
 export async function createSiteTileset(
   asset: SiteAsset,
   quality: TilesetQuality,
+  deadlines?: TilesetDeadlines,
 ): Promise<TilesetType> {
   const options: Cesium3DTileset.ConstructorOptions = {
     ...COMMON,
@@ -199,9 +243,19 @@ export async function createSiteTileset(
       maximumAttenuation: shading?.maximumAttenuation ?? undefined,
     };
   }
+  const fromIon = (assetId: number): Promise<TilesetType> => {
+    const made = Cesium3DTileset.fromIonAssetId(assetId, options);
+    return deadlines
+      ? withTimeout(made, deadlines.stallMs, {
+          what: deadlines.what,
+          // An attempt that answers after its deadline made a tileset nobody will add.
+          onLate: (late) => late.destroy(),
+        })
+      : made;
+  };
   const tileset = await (asset.source.type === "cesium-ion"
-    ? Cesium3DTileset.fromIonAssetId(asset.source.assetId, options)
-    : Cesium3DTileset.fromUrl(await tileUrl(asset.source.url), options));
+    ? fromIon(asset.source.assetId)
+    : tilesetAtUrl(asset.source.url, options, deadlines));
   // A splat is drawn from one snapshot of its selected tiles, held while the camera moves
   // (splatMotionGate.ts); out-of-view tiles stay in it, coarse, so turning shows no hole.
   // A tile uploads alone into its own slot of one texture, so refining costs the tiles

@@ -322,8 +322,9 @@ leaves at once for the best pose known: the authored bookmark when the record is
 (a second visit, the built-in demo), else the catalog summary's centre and size. The kept
 record follows every copy of it the app fetches (`watchSiteRecords`, `SiteManager.updateRecord`),
 so a bookmark saved or deleted is where the next flight goes. The record
-and the model load meanwhile, with deadlines (12 s for the record, 15 s per tileset attempt;
-`lib/timeout.ts`), and Cesium preloads the flight's destination tiles for the site's tileset
+and the model load meanwhile, with deadlines (12 s for the record; for a tileset attempt, 15 s
+without an answer or, while its JSON downloads, without a new byte, so a large tileset.json on
+a slow link is not cut off half-way and started again; `lib/timeout.ts`), and Cesium preloads the flight's destination tiles for the site's tileset
 as soon as it exists (`preloadFlightDestinations`). As better poses arrive (the bookmark with
 the record, the model's bounds once it rests on the ground) the flight is re-pointed without
 a jolt: the new leg's easing leaves at the speed the camera already has and still arrives at
