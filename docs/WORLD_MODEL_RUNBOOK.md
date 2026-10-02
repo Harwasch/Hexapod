@@ -18,16 +18,20 @@ Code: `infra/modal/world_models.py` (server), `tools/captures/world_model_client
 | Need                  | Where it goes                                                                   | Why                                                                                                                    |
 | --------------------- | ------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
 | Modal token           | `MODAL_TOKEN_ID` / `MODAL_TOKEN_SECRET` in the shell                            | deploy and call                                                                                                        |
-| Hugging Face token    | Modal secret `huggingface` (`HF_TOKEN`)                                         | weights download                                                                                                       |
+| Hugging Face token    | Modal secret `huggingface` (`HF_TOKEN`)                                         | Wan, Cosmos weights (Fixer's `nvidia/Fixer` is not gated and needs none); the workspace had no such secret on 2026-10-02 |
 | HF licence acceptance | huggingface.co, on the token's account                                          | Cosmos only: Cosmos-Predict2.5-2B, Cosmos-Reason1-7B, Cosmos-Guardrail1 (all gated; `harwasch` had none on 2026-10-01) |
-| NGC API key           | Modal secret `ngc` (`REGISTRY_USERNAME=$oauthtoken`, `REGISTRY_PASSWORD=<key>`) | Fixer's base container `nvcr.io/nvidia/cosmos/cosmos-predict2-container:1.2`                                           |
+| ~~NGC API key~~       | not needed                                                                      | Fixer's NGC container is replaced by the same environment built from cosmos-predict2's `uv.lock` (section 5)            |
 | R2 credentials        | already used by `infra/modal/app.py`                                            | only to publish an inferred layer                                                                                      |
 
 ```sh
-modal secret create huggingface HF_TOKEN=hf_...
-modal secret create ngc REGISTRY_USERNAME='$oauthtoken' REGISTRY_PASSWORD=nvapi-...
+modal secret create huggingface HF_TOKEN=hf_...   # for Wan / Cosmos only
 modal deploy infra/modal/world_models.py
 ```
+
+Fixer itself runs from CI with nothing but the repository's Modal token: push a `wm-*`
+branch touching `infra/modal/fill.py` (or `teacher_fill.py`, `world_model_client.py`) and
+`.github/workflows/fill.yml` runs `modal run infra/modal/fill.py` and uploads the
+reports, strips and inferred tileset as the `fill` artifact.
 
 ## 2. Order of runs (cheapest proof first)
 

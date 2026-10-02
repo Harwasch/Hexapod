@@ -39,10 +39,10 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  JOBS: ${{ inputs.jobs || 'drop:yard,drop:spool,fill:camp' }}
+  JOBS: ${{ inputs.jobs || 'fill:camp' }}
   # Scans to run fill.py probe on (Fixer on renders prepared several ways); empty: none.
   PROBES: ''
-  FILLERS: ${{ inputs.fillers || 'telea,fixer-t50,fixer-t100' }}
+  FILLERS: ${{ inputs.fillers || 'fixer-t50,fixer-t100' }}
   DISTILL: ${{ inputs.distill || '0' }}
 
 jobs:

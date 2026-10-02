@@ -277,7 +277,8 @@ def fill_views(conds: Sequence[Conditioning], filler: Filler) -> list[Filled]:
 
                 candidate = cv2.resize(candidate, (given.shape[1], given.shape[0]))
             kept = cond.seen.alpha >= SEEN_ALPHA
-            a, b = (_blur(candidate), _blur(given)) if full else (candidate, given)
+            # Held to what it was shown: the full render, when it reads that.
+            a, b = (_blur(candidate), _blur(shown)) if full else (candidate, given)
             score = min(psnr(a, b, kept & ~cond.mask), GATE_CAP_DB)
             if best is None or score > best.gate_psnr_db:
                 best = Filled(cond, candidate, score, score >= threshold)
