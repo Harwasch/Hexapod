@@ -18,6 +18,8 @@ import { sameFocus, type AssetInstances, type Focus, useInstances } from "@/stat
 import { selectedId, useSceneSelect } from "@/state/sceneSelect";
 import { useSettings } from "@/state/settings";
 
+import { MotionRendererNote } from "./MotionRendererNote";
+
 /** Objects listed under an open category before "Show more". */
 export const OBJECT_PAGE = 50;
 
@@ -421,6 +423,7 @@ export function InstancePanel({ assetId }: { assetId: string }) {
           </GlassButton>
         </div>
       )}
+      <MotionRendererNote assetId={assetId} />
       {searching && (
         <div className="objects-panel__bar" role="group" aria-label="Matches">
           <span className="objects-panel__count" role="status" data-testid="instance-count">

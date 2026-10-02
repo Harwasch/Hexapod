@@ -302,7 +302,7 @@ row per 16 skins. A skin at rest costs one fetch; nothing moving costs none. **C
 follow `J = I + Σ_j w_j A_j` through the engine patch's optional `splatVertexJacobian`
 (`J·Σ·Jᵀ`); dropped is the weights' gradient term `Σ_j Z_j[x;1]∇w_jᵀ` -- exact for the
 constant handle, 0.14 at most (against 1 on the diagonal) for the tree's 2% random handles.
-The sorter still orders by rest positions. **Drivers** (C1 wind, C3 telemetry) call
+The sorter still orders by rest positions. PlayCanvas and Spark apply the same skins (C3 "Renderers"). **Drivers** (C1 wind, C3 telemetry) call
 `skinningOf(assetId).setInstanceHandles(instanceId, Z)` with `12·m` numbers (rest frame) per
 frame, or `null` for rest; `skin.json`'s `eigenvalues` and `support` are what a modal wind
 model needs (a handle's stiffness, and where it acts).
@@ -536,14 +536,33 @@ that eye give the moved splats' order exactly, with no positions re-sent. A slot
 far as the camera would have to move calls for a new sort. A skinned object moved by its constant
 handle still sorts at rest (small objects; the same groups could come from the skin ids).
 
-**Renderers.** CesiumJS (its own splat primitive) only, as the skin is. The dedicated renderers
-would need the same rule over the instance ids they already stream for hide and highlight
-(`cesium/scanView/scanInstances.ts`): in PlayCanvas, a per-instance 3×4 motion (a small uniform
-array or texture indexed by a slot per id) applied to centres, and rotations applied to the
-covariances, in the work-buffer modifier that already reads the ids; in Spark, the same in the
-object modifier (dyno), with a motion uniform per driven object. Neither has the skin path yet,
-so a skinned instance would take the rigid path there. Nothing else changes: the driver hands
-each renderer motions, not pixels.
+**Renderers.** All three. The drivers are shared: wind and telemetry write the skin part
+(`setInstanceHandles`) and the rigid part (`setInstanceMotion`) whatever renderer draws the
+scan (CesiumJS keeps the tileset loaded, hidden, under every renderer), and those parts keep
+what was set (`drivenSkins`, `instanceMotions`, each with a `motionVersion`). Under PlayCanvas
+and Spark a `ScanMotionLink` (`cesium/scanView/scanMotion.ts`) reads them once a frame and hands
+the back-end one `ScanMotion` when anything changed: the skin handles folded into the scan's
+frame (`[A | t − A·o]`, 64 texels a skin, the layout CesiumJS uploads), a slot per instance
+id and `[R − I | t]` per slot, and which skins and instances changed. Per splat, the skin id
+and `skin.bin` row are bound by tile checksum exactly as the instance ids are (PlayCanvas: the
+`splatSkin` R32U and `splatWeights` RGBA32U resource streams, in its Morton order, only on
+tiles with skinned splats; Spark: per-tile R32UI / RGBA32UI textures). One shader
+(`SCAN_MOTION_GLSL`) serves both: PlayCanvas's work-buffer modifier, Spark's world modifier
+(a dyno). Neither takes a covariance, only a rotation and scales, so `J·Σ·Jᵀ` with `J = I + Σ
+w_j A_j` (+ the rigid part's) is decomposed again (Jacobi, exact up to float precision; a
+rotation `J` just turns the splat), the same Jacobian CesiumJS draws through. Only the tiles
+holding a changed skin or instance are recopied (PlayCanvas) or regenerated (Spark). Sorting:
+Spark sorts its generated, moved splats; PlayCanvas sorts on the CPU from each resource's
+`centers`, so a tile holding a rigidly moved object has its centres moved the same way and
+`centersVersion` bumped (at most every 100 ms while it moves, at once at rest); a skin's
+sway sorts at rest, as under CesiumJS. Skins and telemetry bind to objects, and a scan with
+objects is always streamed from its 3D Tiles (C4 above), so PlayCanvas's own package never
+has motion to lose. A back-end that cannot move objects (no `setMotion`, or a scan streamed
+without checksums) still reports it: one line in the objects panel and under the wind
+control, "Wind and telemetry need the Cesium renderer", with the reason as its tooltip and a
+"Use Cesium" button (`motionGaps` in `state/instances.ts`, `MotionRendererNote`). Scene
+selection picks a split object where its pose puts it (`pickTiles` returns the placed
+positions); a rigidly or skin-moved object is picked at rest.
 
 ### Split objects (step C4)
 
@@ -641,8 +660,12 @@ telemetry driver will call. Hide and highlight: `attachInstances(..., { follower
 installs the same hooks on the object's primitive from the scan's `instances.json` and the
 scan's store entry, so an object hides, highlights and dims with the ids it carries; search
 and the table stay the scan's; flying to a moved instance follows its pose
-(`setInstanceOffset`). Not yet: the dedicated renderers (PlayCanvas, Spark) draw the scan
-without its split objects, and collision still has the object at rest.
+(`setInstanceOffset`). Under PlayCanvas and Spark (`cesium/scanView/scanObjects.ts`) each
+object's tile is loaded by the back-end like a scan tile (so its ids bind by checksum and hide,
+highlight and rigid motion act on it), drawn beside the scan's tiles under `L · S⁻¹ · O` (its
+pose about `origin`, times its root transform `O` in the scan's frame), placed again whenever
+the store's pose changes. Not yet: collision
+still has the object at rest.
 
 **Validation** (`tests/test_split_objects.py`, the yard with the lawn under one shrub taken
 away, packed in 6000-gaussian tiles, instances from its labels; CPU, Telea): every leaf
@@ -683,6 +706,16 @@ CesiumJS (`skinHarness.ts`, a harness clock): the pose shown is the path at the 
 unbound objects stay still, a silent source holds, fades and returns the measured frame
 pixel for pixel, the frozen shrub holds, and with the wind on the bound shrub keeps its elastic
 handles at rest while the tree sways; the same clock gives the same frame.
+
+`apps/web/e2e/motionRenderers.spec.ts` runs the same checks under PlayCanvas and Spark
+(`skinHarness.ts` with `renderer`, the scan drawn by the dedicated renderer over a hidden
+CesiumJS tileset, frames composited): skins move their objects and nothing else, hidden stays
+hidden, the constant handle lifts a shrub, a scaled shrub stays filled only with the covariance
+following, the wind sways the tree but not its base, replays exactly and calms to the measured
+frame, telemetry moves the building along its path and fades it back to the measured frame
+exactly, and a split object (made at request time from a leaf tile) is drawn at its pose and
+back; with PlayCanvas's own package beside the tiles, a scan with objects is still streamed
+from its tiles and moves (no motion gap).
 
 `data/tiles/synthetic-yard/instances/` is the committed yard segmented against its own labels
 (`segment_scene.py ... --truth labels.json --tile-gaussians 6000`). It sits beside `splat/`,

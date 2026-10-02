@@ -1357,6 +1357,26 @@ body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-close {
   margin: 0;
 }
 
+/* A note that fits one line: its words, then its button. */
+.objects-panel__gap--line {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding-block: 0.15rem;
+}
+
+.objects-panel__gap--line p {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.objects-panel__gap--line .glass-button {
+  flex: none;
+}
+
 /* ---- Nav controls -------------------------------------------------------- */
 .nav-controls {
   display: flex;

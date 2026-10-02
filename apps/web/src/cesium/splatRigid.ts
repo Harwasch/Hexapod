@@ -146,6 +146,9 @@ export class SplatRigidMotion implements SplatMotionPart {
   readonly #slotOf = new Map<number, number>();
   /** Motion by slot, as last set (scan frame). */
   readonly #motions = new Map<number, RigidMotion>();
+  /** Motion by driven instance id, as last set: what any renderer draws (`instanceMotions`). */
+  readonly #byInstance = new Map<number, RigidMotion>();
+  #motionVersion = 0;
   readonly #slots: Uint32Array;
   #poses: Float32Array;
   #slotTexture: OwnedTexture | undefined;
@@ -194,6 +197,20 @@ export class SplatRigidMotion implements SplatMotionPart {
 
   get moving(): boolean {
     return this.#motions.size > 0;
+  }
+
+  /**
+   * Every driven instance's motion now (scan frame), by instance id: what a dedicated splat
+   * renderer applies itself (`scanView/scanMotion.ts`). Everything below a driven instance
+   * moves with it.
+   */
+  get instanceMotions(): ReadonlyMap<number, RigidMotion> {
+    return this.#byInstance;
+  }
+
+  /** Bumped whenever a motion is set or cleared. */
+  get motionVersion(): number {
+    return this.#motionVersion;
   }
 
   /** Whether the shader would act this frame. */
@@ -256,6 +273,8 @@ export class SplatRigidMotion implements SplatMotionPart {
     let slot = this.#slotOf.get(id);
     if (motion === null) {
       if (slot === undefined) return;
+      this.#byInstance.delete(id);
+      this.#motionVersion += 1;
       this.#motions.delete(slot);
       this.#slotOf.delete(id);
       this.#writePose(slot, RIGID_IDENTITY);
@@ -271,6 +290,8 @@ export class SplatRigidMotion implements SplatMotionPart {
       this.#rewriteSlots();
     }
     this.#motions.set(slot, motion);
+    this.#byInstance.set(id, motion);
+    this.#motionVersion += 1;
     this.#writePose(slot, motion);
   }
 
