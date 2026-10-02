@@ -258,7 +258,9 @@ evicts whole workdirs of runs that ended more than `WORKER_EVICT_AFTER_DAYS` (7)
 oldest first, until there is room; a retry of one of those starts over from the upload.
 If there is still no room it does not claim, and logs `NOT CLAIMING` at error level once
 a minute: the job stays queued rather than failing on a full disk after its download.
-A run that is not over is never touched.
+A run that is not over is never touched. The one job it still claims is a run a deploy
+**detached** whose workdir is on this volume (`DiskGuard.resumable_here`): resuming it
+downloads nothing, and its GPU call is running, waiting to be re-attached to.
 
 The supervisor's session also commits before it downloads the capture (`_seed`), as it
 already did before uploads: a session idle in a transaction for the length of a 12 GB

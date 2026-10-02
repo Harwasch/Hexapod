@@ -89,6 +89,7 @@ def claim_next(
     worker_id: str,
     lease_s: float,
     recipes: Collection[str] | None = None,
+    only: ColumnElement[bool] | None = None,
 ) -> Job | None:
     """Take the oldest claimable job, or return None.
 
@@ -105,12 +106,18 @@ def claim_next(
     so the claim stays one statement and a filtered slot and an unfiltered one can no
     more both win a row than two workers can. None means any recipe; an empty set means
     none, and asks the database nothing.
+
+    `only` narrows it further, inside the same select: the disk guard's "a detached run
+    whose workdir is here", which is all a worker short of room still claims
+    (`disk.DiskGuard.resumable_here`).
     """
     if recipes is not None and not recipes:
         return None
     eligible = claimable()
     if recipes is not None:
         eligible = and_(eligible, Job.recipe.in_(sorted(recipes)))
+    if only is not None:
+        eligible = and_(eligible, only)
     candidate = (
         select(Job.id)
         .where(eligible)

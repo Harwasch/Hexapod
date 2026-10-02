@@ -32,6 +32,8 @@ from app.models.enums import RunStatus
 from app.services import jobs as job_service
 from app.storage import S3Storage
 from app.worker import registration, retry
+from app.worker.disk import GB
+from app.worker.loop import Worker
 from app.worker.runner import JobSupervisor
 from tests.test_worker import config, make_capture, queue_job, steps_by_stage, wait_until
 from tests.test_worker_stops import Pings, claimed, in_background, recipe_process, watched
@@ -366,3 +368,55 @@ def test_an_out_of_memory_the_attempt_got_past_does_not_condemn_its_later_failur
     # The same out-of-memory as the attempt's last words is one, with the stage's cap.
     last = retry.classify("RemoteStageError", REMOTE + "CalledProcessError", f"{log}\n{OOM_LINE}")
     assert last == retry.Failure("oom", cap_max=1_000_000)
+
+
+# --------------------------------------------------------------------------------------
+# Short of room, a detached run whose workdir is here is still picked up
+# --------------------------------------------------------------------------------------
+
+
+def detached_job(db: Session, slug: str) -> Job:
+    """A run a deploy let go of mid-train: in progress, no lease, its step detached."""
+    job = queue_job(db, make_capture(db, slug), "t-gpu-slow")
+    job.status = RunStatus.IN_PROGRESS
+    db.add(
+        JobStep(
+            job_id=job.id,
+            stage_id="train",
+            ordinal=1,
+            impl="t_gpu_slow",
+            attempt=1,
+            status=RunStatus.IN_PROGRESS,
+            metrics={"detached": True, "remoteCalls": {"": {"id": "fc-1", "provider": "modal"}}},
+        )
+    )
+    db.commit()
+    return job
+
+
+def test_short_of_room_the_worker_still_re_attaches_to_a_detached_run_whose_workdir_is_here(
+    db: Session,
+    sessions: sessionmaker[Session],
+    storage: S3Storage,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Below `WORKER_MIN_FREE_GB` with nothing left to evict, the worker claimed nothing --
+    including a run a deploy had detached, which needs no download: its inputs are in its
+    workdir and its GPU call is running, waiting to be re-attached to. That one is still
+    claimed; a queued job, and a detached one whose workdir is on another volume (it
+    would start over from the upload), still wait for room."""
+    queued = queue_job(db, make_capture(db, "queued"), "t-three")
+    here = detached_job(db, "here")
+    elsewhere = detached_job(db, "elsewhere")
+    (tmp_path / "runs" / str(here.id) / "inputs").mkdir(parents=True)
+    worker = Worker(sessions, storage, config(tmp_path, min_free_gb=5))
+    monkeypatch.setattr(worker._disk, "free_bytes", lambda: GB)
+
+    assert worker.claim() == here.id
+    assert worker.claim() is None
+
+    db.expire_all()
+    for waiting in (queued, elsewhere):
+        row = db.get(Job, waiting.id)
+        assert row is not None and row.claimed_by is None

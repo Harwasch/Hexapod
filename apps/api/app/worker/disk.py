@@ -23,6 +23,13 @@ If that is still not enough it does not claim, and says so at error level -- onc
 minute, not once a poll -- so the job stays queued (and `QUEUE_CHECK_URL`, if set,
 alerts) instead of failing on a full disk. A run that is not over is never touched: only
 a job whose row says it is complete, failed or cancelled, or a directory no job owns.
+
+**Except a detached run whose workdir is here** (`resumable_here`, the 2026-10 review). A
+deploy that stops the worker mid-train leaves the GPU call running for the next worker
+to re-attach to, the stage's row marked `detached`, and the workdir -- inputs and all --
+on this volume. Resuming it downloads nothing, and refusing it left the call to finish
+for nobody, so it is claimed even when nothing else is. What its outputs need when they
+come home is the same room the run was always going to need.
 """
 
 from __future__ import annotations
@@ -35,12 +42,13 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import ColumnElement, and_, exists, select
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.models import Job
+from app.models import Job, JobStep
 from app.models.enums import RunStatus
 from app.worker.pipeline_bridge import Workdir
+from app.worker.steps import DETACHED
 
 log = logging.getLogger("app.worker")
 
@@ -97,13 +105,39 @@ class DiskGuard:
                 log.error(
                     "worker: NOT CLAIMING -- only %.1f GB free on %s, below the %.1f GB "
                     "WORKER_MIN_FREE_GB, and no finished run older than %s is left to "
-                    "evict. Extend the volume (fly volumes extend) or remove workdirs.",
+                    "evict (a detached run whose workdir is here is still resumed). "
+                    "Extend the volume (fly volumes extend) or remove workdirs.",
                     free / GB,
                     self._root,
                     self._min_free / GB,
                     self._evict_after,
                 )
             return False
+
+    def resumable_here(self) -> ColumnElement[bool] | None:
+        """What a worker short of room may still claim: a run in progress, with a stage
+        a deploy detached (`steps.DETACHED`: its call left running to be re-attached to),
+        whose workdir is on this volume. A condition for `claim.claim_next`'s `only`, or
+        None when no workdir here could be one -- then nothing is claimed at all."""
+        here: list[uuid.UUID] = []
+        if self._root.is_dir():
+            for entry in self._root.iterdir():
+                try:
+                    job_id = uuid.UUID(entry.name)
+                except ValueError:
+                    continue
+                if Workdir(entry).inputs_dir.is_dir():
+                    here.append(job_id)
+        if not here:
+            return None
+        detached = exists(
+            select(JobStep.id).where(
+                JobStep.job_id == Job.id,
+                JobStep.status == RunStatus.IN_PROGRESS,
+                JobStep.metrics.contains({DETACHED: True}),
+            )
+        )
+        return and_(Job.id.in_(here), Job.status == RunStatus.IN_PROGRESS, detached)
 
     def make_room(self) -> list[str]:
         """Tidy every finished run, then evict old ones until there is room. Returns what

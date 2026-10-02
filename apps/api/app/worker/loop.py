@@ -220,11 +220,15 @@ class Worker:
 
         Not when the workdir's volume is short of room (`app.worker.disk`): the job
         stays queued -- an empty claim, as far as the loop is concerned -- rather than
-        failing on a full disk after its download.
+        failing on a full disk after its download. A detached run whose workdir is here
+        is the exception: resuming it downloads nothing, and its GPU call is waiting.
         """
         resolved = config or self._config
+        only = None
         if not self._disk.room_to_claim():
-            return None
+            only = self._disk.resumable_here()
+            if only is None:
+                return None
         db = self._sessions()
         try:
             job = claim_next(
@@ -232,9 +236,17 @@ class Worker:
                 worker_id=resolved.worker_id,
                 lease_s=resolved.lease_s,
                 recipes=resolved.recipes,
+                only=only,
             )
             if job is None:
                 return None
+            if only is not None:
+                log.warning(
+                    "worker %s: short of room, claiming only detached run %s, whose "
+                    "workdir is here, to re-attach to its remote call",
+                    resolved.worker_id,
+                    job.id,
+                )
             # With `runner.JobSupervisor`'s "lost job" line, what tells a reclaim from a
             # first claim in the logs: the same job id claimed a second time.
             log.info("worker %s: claimed job %s (%s)", resolved.worker_id, job.id, job.recipe)
