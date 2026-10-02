@@ -135,6 +135,9 @@ class Fixer:
 
     @modal.method()
     def fix(self, request: dict) -> dict:
+        return self._fix(request)
+
+    def _fix(self, request: dict) -> dict:
         import torch
         from PIL import Image
 
@@ -156,6 +159,17 @@ class Fixer:
         self.calls += len(out)
         self.seconds += time.time() - started
         return {"images": out, "model": f"nvidia/Fixer@{FIXER_COMMIT[:7]}"}
+
+    @modal.method()
+    def examples(self) -> dict[str, bytes]:
+        """The repository's own example renders and what this setup makes of them: the
+        check that the model is sound, apart from what our renders look like."""
+        out = {}
+        for path in sorted(Path("/work/fixer/examples").glob("*.png")):
+            blob = path.read_bytes()
+            out[f"{path.stem}-in.png"] = blob
+            out[f"{path.stem}-out.png"] = self._fix({"images": [blob]})["images"][0]
+        return out
 
 
 def _snapshot(repo: str, local: Path, marker: str) -> None:
@@ -380,9 +394,16 @@ def main(
     views: int = 0,
     distill: int = 0,
     out: str = "fill-out",
+    selftest: bool = False,
 ) -> None:
     """Every `kind:scan` in `jobs` with every filler, in parallel containers; each result
-    under `out/<kind>-<scan>-<filler>/`, and `out/summary.json`."""
+    under `out/<kind>-<scan>-<filler>/`, and `out/summary.json`. `selftest`: also Fixer on
+    its repository's examples, under `out/selftest/`."""
+    if selftest:
+        folder = Path(out) / "selftest"
+        folder.mkdir(parents=True, exist_ok=True)
+        for name, data in Fixer().examples.remote().items():
+            (folder / name).write_bytes(data)
     calls = []
     for job in (j.strip() for j in jobs.split(",") if j.strip()):
         kind, _, scan = job.partition(":")

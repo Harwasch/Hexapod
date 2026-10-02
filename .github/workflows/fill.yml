@@ -64,7 +64,7 @@ jobs:
       - name: modal run infra/modal/fill.py
         run: |
           uv run --with modal==1.5.5 modal run infra/modal/fill.py \
-            --jobs "$JOBS" --fillers "$FILLERS" --distill "$DISTILL" --out fill-out
+            --jobs "$JOBS" --fillers "$FILLERS" --distill "$DISTILL" --out fill-out --selftest
       - uses: actions/upload-artifact@v4
         if: always()
         with:
