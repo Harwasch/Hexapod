@@ -36,8 +36,18 @@
  */
 
 import { checksumPositions } from "@twin/world";
-import { BoundingSphere, Cartesian3, Matrix4, type Cesium3DTileset, type Scene } from "cesium";
-import * as CesiumBarrel from "cesium";
+import {
+  BoundingSphere,
+  Cartesian3,
+  Cartesian4,
+  Matrix4,
+  PixelDatatype,
+  PixelFormat,
+  Sampler,
+  Texture,
+  type Cesium3DTileset,
+  type Scene,
+} from "cesium";
 
 import {
   instancesRefOf,
@@ -645,9 +655,12 @@ interface Barrel {
   Cartesian4?: new (x: number, y: number, z: number, w: number) => unknown;
 }
 
+/** By name, not `import * as`: a namespace read by key keeps every engine export in the bundle. */
+const CESIUM = { Texture, Sampler, PixelFormat, PixelDatatype, Cartesian4 } as unknown as Barrel;
+
 /** The real `InstanceGpu`, or `undefined` when this CesiumJS build lacks what it needs. */
 export function cesiumInstanceGpu(): InstanceGpu | undefined {
-  const barrel = CesiumBarrel as unknown as Barrel;
+  const barrel = CESIUM;
   const { Texture, Cartesian4 } = barrel;
   const nearest = barrel.Sampler?.NEAREST;
   const rgba = barrel.PixelFormat?.RGBA;

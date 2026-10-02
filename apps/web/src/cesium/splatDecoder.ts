@@ -8,7 +8,7 @@
  * but the copy of each tile's compressed bytes.
  */
 
-import * as CesiumBarrel from "cesium";
+import { GltfSpzLoader } from "cesium";
 
 import { createLogger } from "@/lib/log";
 
@@ -21,7 +21,7 @@ interface LoaderModule {
 }
 
 function loaderModule(): LoaderModule | undefined {
-  const candidate = (CesiumBarrel as unknown as Record<string, unknown>).GltfSpzLoader;
+  const candidate = GltfSpzLoader;
   return typeof candidate === "function" ? (candidate as unknown as LoaderModule) : undefined;
 }
 

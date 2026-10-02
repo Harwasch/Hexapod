@@ -22,7 +22,7 @@
  * tileset whose texture was generated first will show `no-capture` until its next rebuild.
  */
 
-import * as CesiumBarrel from "cesium";
+import { GaussianSplatTextureGenerator } from "cesium";
 
 import { createLogger } from "@/lib/log";
 
@@ -52,8 +52,7 @@ interface TextureGeneratorModule {
 
 /** Reads the undeclared `GaussianSplatTextureGenerator` export off the barrel. */
 function textureGeneratorModule(): TextureGeneratorModule | undefined {
-  const barrel = CesiumBarrel as unknown as Record<string, unknown>;
-  const candidate = barrel.GaussianSplatTextureGenerator;
+  const candidate = GaussianSplatTextureGenerator;
   if (typeof candidate !== "function" && typeof candidate !== "object") return undefined;
   if (candidate === null) return undefined;
   const module = candidate as TextureGeneratorModule;

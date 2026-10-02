@@ -5,10 +5,11 @@
  * unit-testable, without loading CesiumJS. `Texture`, `Sampler`, `PixelFormat`,
  * `PixelDatatype` and `ShaderDestination` are all exported from the barrel at runtime
  * (`@cesium/engine/index.js`) but `Texture` and `ShaderDestination` are not declared in
- * `Cesium.d.ts`, so they are read the way `splatCapture.ts` reads the texture generator.
+ * `Cesium.d.ts`; `undeclared.d.ts` declares them `unknown`, and they are narrowed here before
+ * use, the way `splatCapture.ts` narrows the texture generator.
  */
 
-import * as CesiumBarrel from "cesium";
+import { PixelDatatype, PixelFormat, Sampler, ShaderDestination, Texture } from "cesium";
 
 import type { MotionTextureFactory, OwnedTexture } from "./splatGpuMotion";
 
@@ -22,9 +23,18 @@ interface Barrel {
   ShaderDestination?: { VERTEX?: number };
 }
 
+/** By name, not `import * as`: a namespace read by key keeps every engine export in the bundle. */
+const CESIUM = {
+  Texture,
+  Sampler,
+  PixelFormat,
+  PixelDatatype,
+  ShaderDestination,
+} as unknown as Barrel;
+
 /** The factory, or `undefined` when this CesiumJS build does not export what it needs. */
 export function cesiumMotionTextures(): MotionTextureFactory | undefined {
-  const barrel = CesiumBarrel as unknown as Barrel;
+  const barrel = CESIUM;
   const Texture = barrel.Texture;
   const nearest = barrel.Sampler?.NEAREST;
   const rgba = barrel.PixelFormat?.RGBA;

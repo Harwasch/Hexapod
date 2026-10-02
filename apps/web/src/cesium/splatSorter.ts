@@ -25,7 +25,7 @@
  * the garbage collector (`FinalizationRegistry`). Never on hide: slot positions are sent once.
  */
 
-import * as CesiumBarrel from "cesium";
+import { GaussianSplatPrimitive } from "cesium";
 
 import { createLogger } from "@/lib/log";
 
@@ -60,7 +60,7 @@ interface PrimitiveModule {
 }
 
 function primitiveModule(): PrimitiveModule | undefined {
-  const candidate = (CesiumBarrel as unknown as Record<string, unknown>).GaussianSplatPrimitive;
+  const candidate = GaussianSplatPrimitive;
   return typeof candidate === "function" ? (candidate as unknown as PrimitiveModule) : undefined;
 }
 
