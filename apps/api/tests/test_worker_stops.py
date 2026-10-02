@@ -335,10 +335,17 @@ def test_the_recipe_process_hears_a_cancel_as_a_cancel_and_a_shutdown_as_a_detac
     )
     assert wait_until(lambda: running(detached))
     time.sleep(0.5)
+    # A shutdown signalled to the whole process group reaches the recipe process too. It
+    # is the worker's to read, not the recipe process's: nothing stops yet.
+    child = recipe_process()
+    assert child is not None
+    os.kill(child, signal.SIGTERM)
+    time.sleep(0.5)
+    said = workdir_of(detached) / "stages" / "two" / "work" / "stopped-by.txt"
+    assert not said.exists() and running(detached)
     stop.set()
     thread.join(timeout=20)
     assert result == ["lost"]
-    said = workdir_of(detached) / "stages" / "two" / "work" / "stopped-by.txt"
     assert said.read_text() == "DetachRequested"
 
 
@@ -355,9 +362,9 @@ def test_a_stop_that_lands_while_a_call_is_being_written_down_waits_for_it() -> 
 
     with pytest.raises(CancelRequested), interrupts.held():
         interrupts._on_detach(signal.SIGUSR1, None)
-        interrupts._on_cancel(signal.SIGTERM, None)
+        interrupts._on_cancel(signal.SIGUSR2, None)
     with pytest.raises(CancelRequested):
-        interrupts._on_cancel(signal.SIGTERM, None)
+        interrupts._on_cancel(signal.SIGUSR2, None)
 
 
 # --------------------------------------------------------------------------------------

@@ -55,7 +55,8 @@ JobSupervisor._supervise, every poll_s (2 s by default):
 Three consequences worth stating:
 
 - **cancellation lands mid-stage.** `POST /jobs/{id}/cancel` sets the status; the next
-  heartbeat sees it, SIGTERMs the child and SIGKILLs it after `terminate_grace_s` (15 s).
+  heartbeat sees it, signals the child to cancel (SIGUSR2) and SIGKILLs it after
+  `terminate_grace_s` (15 s).
   Worst case is one poll interval plus the grace — seconds, not the length of the stage —
   and a GPU call the stage had out is cancelled with it (below);
 - **a stage that segfaults is a failed step, not a lost worker**;
@@ -98,10 +99,14 @@ stopping the child, and `child.Interrupts` turns it into an exception the pipeli
 
 | why the recipe process stops | signal | what happens to the call |
 | --- | --- | --- |
-| the job was cancelled, or the lease was lost | SIGTERM | cancelled (Modal: containers terminated); what it billed goes into the ledger |
+| the job was cancelled, or the lease was lost | SIGUSR2 | cancelled (Modal: containers terminated); what it billed goes into the ledger |
 | this worker is shutting down (a deploy) | SIGUSR1 | left running, recorded as `detached`; the next worker **re-attaches** (`FunctionCall.from_id`) instead of submitting again, at the same attempt |
 | the process or the worker is killed outright | — | nothing runs; the record is still there and the retry (a new attempt) adopts the call |
 | the workdir is gone (another machine) | — | the call's id is on the step's row (`metrics.remoteCalls`, copied every heartbeat); the next worker writes it back as `orphaned` and the call is cancelled before anything runs |
+
+The recipe process ignores SIGTERM and SIGINT and waits for one of those two: a shutdown
+that signals the whole process group (systemd's default, a terminal's Ctrl-C) would
+otherwise reach it as a cancel and stop the GPU call on every deploy.
 
 The record is `stages/<id>/calls.json` (`CallBook`): written the moment a call is
 submitted — with the stop signal held back until it is — and struck off once the call has

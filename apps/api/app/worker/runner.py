@@ -40,8 +40,8 @@ B1b added one distinction to that loop and one number to the job:
 And the audit after it, four more:
 
 * **a stop says why** (`child.CANCEL_SIGNAL`, `child.DETACH_SIGNAL`). A cancel or a lost
-  lease SIGTERMs the recipe process, which cancels its remote call on the way out; this
-  worker shutting down SIGUSR1s it, which leaves the call running and written down
+  lease signals the recipe process with SIGUSR2, and it cancels its remote call on the way
+  out; this worker shutting down sends SIGUSR1, and the call is left running and written down
   (`cloud.CallBook`), marks the step `detached`, and lets the next worker re-attach to
   it at the *same* attempt -- a deploy spends nothing. The book is copied onto the
   step's row (`metrics.remoteCalls`) on every heartbeat, so a worker on another machine,
@@ -643,7 +643,7 @@ class JobSupervisor:
         Nothing half-written is uploaded, and no `artifacts` row is created for it.
         """
         workdir_root = self._config.workdir_for(job.id)
-        # The recipe process cancelled its call on SIGTERM; this catches one it could not
+        # The recipe process cancelled its call when told to; this catches one it could not
         # (killed before it got to it), so a cancelled job leaves no GPU running.
         self._cancel_recorded_calls(workdir_root)
         steps.stop_active_steps(db, job.id, RunStatus.CANCELLED)

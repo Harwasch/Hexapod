@@ -9,15 +9,22 @@ Why a separate process at all, when the executor is a library call:
   process from it.
 * **Cancellation has to arrive mid-stage.** A thread cannot be interrupted; a process can
   be signalled. `POST /jobs/{id}/cancel` takes effect within one supervisor tick because
-  the supervisor sends SIGTERM and, if that is ignored, SIGKILL.
-* **The signal says why.** SIGTERM is a cancel (the job was cancelled, or the lease was
+  the supervisor signals this process and, if that is ignored, SIGKILLs it.
+* **The signal says why.** SIGUSR2 is a cancel (the job was cancelled, or the lease was
   lost) and SIGUSR1 a detach (the worker is shutting down for a deploy). `Interrupts`
   turns each into the pipeline's `CancelRequested` or `DetachRequested`, raised in the
   main thread wherever it is, and `CloudRunner` answers them differently: a cancel
   cancels the remote call and records what it cost, a detach leaves it running and
-  writes down where it is, for the next worker to re-attach to. Without the handlers
-  the default action of either signal was to die on the spot, and a GPU on Modal kept
-  training for nobody for up to six hours.
+  writes down where it is, for the next worker to re-attach to. Until the 2026-10 audit
+  this process had no handlers and the supervisor sent SIGTERM, whose default action is
+  to die on the spot: a GPU on Modal kept training for nobody for up to six hours.
+
+  SIGTERM and SIGINT themselves are left to the supervisor. A shutdown that signals the
+  whole process group -- systemd's default, a terminal's Ctrl-C -- reaches this process
+  as well as the worker, and read as a cancel it would stop the GPU call on every
+  deploy, the one case where it must be left running. The worker decides, and says which
+  with one of the two signals above; this process ignores the other two (with a Python
+  handler, not SIG_IGN, which the tools it runs would inherit).
 * **A stage that dies does not take the worker with it.** A segfault in a native trainer
   is a failed step, not a lost queue.
 
@@ -67,8 +74,9 @@ from app.worker.pipeline_bridge import (
     plan_recipe,
 )
 
-#: What the supervisor sends for each of the two ways a recipe process is stopped.
-CANCEL_SIGNAL = signal.SIGTERM
+#: What the supervisor sends for each of the two ways a recipe process is stopped. Not
+#: SIGTERM: see the module docstring for why that one is left to the supervisor.
+CANCEL_SIGNAL = signal.SIGUSR2
 DETACH_SIGNAL = signal.SIGUSR1
 
 #: The exit status of a process that stopped because it was asked to.
@@ -174,6 +182,14 @@ class Interrupts:
     def install(self) -> None:
         signal.signal(CANCEL_SIGNAL, self._on_cancel)
         signal.signal(DETACH_SIGNAL, self._on_detach)
+        signal.signal(signal.SIGTERM, self._left_to_the_supervisor)
+        signal.signal(signal.SIGINT, self._left_to_the_supervisor)
+
+    @staticmethod
+    def _left_to_the_supervisor(_signum: int, _frame: FrameType | None) -> None:
+        """A shutdown signalled to the whole group. The worker got it too, and will say
+        whether this is a cancel or a detach; if it is gone, `watch_for_orphaning` ends
+        this process within a second, and SIGKILL is the backstop either way."""
 
     def _on_cancel(self, _signum: int, _frame: FrameType | None) -> None:
         self._stop(CancelRequested())
