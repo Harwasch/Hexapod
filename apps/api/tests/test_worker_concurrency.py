@@ -16,6 +16,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from sqlalchemy import ColumnElement
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import Settings
@@ -173,9 +174,14 @@ def claims(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[tuple[str, uuid.UUI
     guard = threading.Lock()
 
     def recording(
-        db: Session, *, worker_id: str, lease_s: float, recipes: frozenset[str] | None = None
+        db: Session,
+        *,
+        worker_id: str,
+        lease_s: float,
+        recipes: frozenset[str] | None = None,
+        only: ColumnElement[bool] | None = None,
     ) -> Job | None:
-        job = claim_next(db, worker_id=worker_id, lease_s=lease_s, recipes=recipes)
+        job = claim_next(db, worker_id=worker_id, lease_s=lease_s, recipes=recipes, only=only)
         if job is not None:
             with guard:
                 made.append((worker_id, job.id))
