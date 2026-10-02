@@ -15,20 +15,39 @@ gaussians on 15 GB) and a splat's instance is its cell's. Each view is rendered 
 cell id as the label (`splat_render.render(labels=...)`): per pixel the dominant cell and its
 purity, which weights its votes.
 
+**Views** (`plan_views`). `--views` views of the whole scan (rings, and eye-height views
+where it was seen from) and, for a scan wider than one view's footprint, local views that
+scale with its area: a footprint is `view_footprint` (a cell spans `CELL_PX` pixels), the
+scan's footprint is gridded `ANCHORS_PER_FOOTPRINT` times per footprint width, and each
+anchor gets `OBLIQUE_VIEWS` obliques placed by line of sight (under a canopy they go low, in
+the open high) and `EYE_VIEWS` more eye-height views; every local view has a far plane a
+footprint past its target, so it shows what it resolves and not the horizon as specks. At
+most `MAX_VIEWS`. Views render in forked workers (`render_views`: the scan shared
+copy-on-write, `splat_render.SplatIndex` culling what a view cannot reach, the same frames
+as one process) while this process masks and votes each view as it arrives.
+
 **Votes.** In one view, a cell is *in* a mask when at least `MASK_SHARE` of its visible
 (purity-weighted) pixels are; overlapping masks of one level go to the one holding the larger
-share. A cell is *visible* in a view with at least `MIN_VISIBLE_PX` of weight.
+share. A cell is *visible* in a view with at least `MIN_VISIBLE_PX` of weight. A mask over
+more than `MAX_MASK_SHARE` of the view says only that the view is one thing, and does not
+vote.
 
 **Instances, per mask level.** Two cells belong together when, over the views where both are
 visible and at least one is in a mask of that level, they are in the *same* mask in at least
 `MERGE_RATIO` of them (co-occurrence over co-visibility), and in at least `MIN_COVISIBLE`
 views. Stage 1 asks it of spatial neighbours only (each cell's `NEIGHBOURS` nearest within
-`NEIGHBOUR_CELLS` cell edges), so the graph is sparse; its components are fragments. Stage 2
-asks it again of fragments, now of any two that ever shared a mask, wherever they are -- which
-rejoins an object that occlusion or a gap split, without a quadratic pass over cells.
-Fragments below `MIN_INSTANCE_SPLATS` are dropped. Cells no view ever saw (inside a crown,
-under a roof) take their nearest seen cell's labels within `FILL_CELLS` edges; a seen cell in
-no mask keeps 0.
+`NEIGHBOUR_CELLS` cell edges), so the graph is sparse; its components are fragments. It is
+single linkage, so it asks for `STRICT_RATIO` against `STRICT_PRIOR` pseudo-views as well:
+over a million cells, pairs that agree in two views by chance chain across a whole scan (on
+the camp, into one region of 63% of its splats). Stage 2 asks it again of regions as wholes,
+in rounds of mutual-best joins, first of neighbours, then of any two that ever shared a mask,
+wherever they are -- which rejoins an object that occlusion or a gap split, without a
+quadratic pass over cells. It is incremental (`_grow`): a round re-judges only the regions it
+merged and re-scores only their pairs, so its cost follows what changed, not the views.
+Then specks (regions under `MIN_REGION_CELLS` cells) and seen cells in no mask take their
+neighbours' region (`_absorb`), and regions below `MIN_INSTANCE_SPLATS` are dropped. Cells
+no view ever saw (inside a crown, under a roof) take their nearest seen cell's labels within
+`FILL_CELLS` edges.
 
 **Hierarchy.** Levels are the mask model's scale hints (0 = coarsest). The instances of
 level L are refined by those of L+1: a child is the cells of a parent that share one level
@@ -37,7 +56,9 @@ would be its whole parent is not made, nor one below `MIN_INSTANCE_SPLATS`; a sp
 cell has no finer instance keeps its parent's id. `level` in the output is depth in this
 tree. Splat ids are the deepest instance (leaf-level), as the contract says.
 
-**Meaning.** Per instance, crops of the `CROP_VIEWS` views where its splats cover most pixels
+**Meaning.** Instances whose best view gives them `DESCRIBE_MIN_PX` pixels are described;
+smaller ones keep no embedding and no tags (they stay in the hierarchy, with their nearest
+described ancestor's properties). Per instance, crops of the `CROP_VIEWS` views where its splats cover most pixels
 (bounding box padded `CROP_PAD`) are embedded and averaged (`embedding`, L2-normalised).
 `tags`: softmax over the whole vocabulary of `LOGIT_SCALE` x cosine, top `TAGS_TOP_K`.
 `properties`: per attribute, a two-way softmax of `LOGIT_SCALE` x cosine between a positive
