@@ -66,6 +66,7 @@ import math
 import os
 import time
 from collections.abc import Iterator, Sequence
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol, runtime_checkable
@@ -146,6 +147,8 @@ OBLIQUE_CLEAR = 0.9
 OBLIQUE_MIN_CLEAR = 0.6
 #: Extra eye-height observer views per target.
 EYE_VIEWS = 2
+#: What one render worker may hold at its peak (a view of the 22.6M-gaussian camp: < 2 GB).
+RENDER_WORKER_BYTES = 2.5e9
 #: At most this many views in all (rings, observers, local).
 MAX_VIEWS = 480
 #: Splats sampled for the scan's extent and the observers' clearance test (seeded).
@@ -184,6 +187,9 @@ MIN_INSTANCE_SPLATS = 30
 #: Cells no view saw take the nearest seen cell's labels within this many cell edges.
 FILL_CELLS = 3.0
 
+#: An instance is described (crops embedded, tags) when its best view gives it at least
+#: this many pixels: SigLIP sees 16-pixel patches of a 224 crop, and a smaller crop is noise.
+DESCRIBE_MIN_PX = 1024
 #: Views an instance is counted as seen in need this many of its pixels.
 MIN_VIEW_PX = 16
 #: Crops embedded per instance: its best views by pixel area.
@@ -654,8 +660,11 @@ def render_views(
             for k in range(len(cameras)):
                 yield _render_job(k)
             return
-        with mp.get_context("fork").Pool(min(workers, len(cameras))) as pool:
-            yield from pool.imap(_render_job, range(len(cameras)))
+        # An executor, not a Pool: a worker that dies (out of memory) fails the run
+        # (BrokenProcessPool) rather than leaving it waiting for a view forever.
+        context = mp.get_context("fork")
+        with ProcessPoolExecutor(min(workers, len(cameras)), mp_context=context) as pool:
+            yield from pool.map(_render_job, range(len(cameras)))
     finally:
         _POOL_STATE.clear()
 
@@ -678,14 +687,29 @@ def _render_job(k: int) -> View:
     )
 
 
-def default_workers() -> int:
-    """Processes to render with: the CPUs this process may use."""
-    import os
-
+def _memory_room() -> float | None:
+    """Bytes this process's cgroup can still take (cgroup v2), or None if unknown."""
     try:
-        return max(1, len(os.sched_getaffinity(0)))
+        limit = Path("/sys/fs/cgroup/memory.max").read_text().strip()
+        used = int(Path("/sys/fs/cgroup/memory.current").read_text().strip())
+    except (OSError, ValueError):
+        return None
+    if limit == "max":
+        return None
+    return float(int(limit) - used)
+
+
+def default_workers() -> int:
+    """Processes to render with: the CPUs this process may use, no more than the memory
+    left holds at `RENDER_WORKER_BYTES` each."""
+    try:
+        cpus = len(os.sched_getaffinity(0))
     except AttributeError:  # not Linux
-        return max(1, os.cpu_count() or 1)
+        cpus = os.cpu_count() or 1
+    room = _memory_room()
+    if room is not None:
+        cpus = min(cpus, int(room // RENDER_WORKER_BYTES))
+    return max(1, cpus)
 
 
 # ------------------------------------------------------------------------- the oracle
@@ -1139,17 +1163,13 @@ def _ancestors(parent: np.ndarray) -> list[list[int]]:
 
 
 def _up(values: np.ndarray, parent: np.ndarray, level: np.ndarray, how: str) -> np.ndarray:
-    """Leaf values (instances along axis 0) folded into every ancestor, deepest first."""
+    """Leaf values (instances along axis 0) folded into every ancestor, deepest first (one
+    vectorised step per depth)."""
     out = values.copy()
-    for k in np.argsort(-level, kind="stable"):
-        p = int(parent[k])
-        if p:
-            if how == "sum":
-                out[p - 1] += out[k]
-            elif how == "min":
-                out[p - 1] = np.minimum(out[p - 1], out[k])
-            else:
-                out[p - 1] = np.maximum(out[p - 1], out[k])
+    fold = {"sum": np.add, "min": np.minimum}.get(how, np.maximum)
+    for depth in range(int(level.max()) if level.size else 0, 0, -1):
+        nodes = np.flatnonzero((level == depth) & (parent > 0))
+        fold.at(out, parent[nodes] - 1, out[nodes])
     return out
 
 
@@ -1230,9 +1250,13 @@ def describe(
         boxes[v] = box
     seen_in = (area >= MIN_VIEW_PX).sum(axis=0)
 
+    # Only what a crop can show is described: an instance whose best view gives it fewer
+    # than `DESCRIBE_MIN_PX` pixels (with its children) keeps no embedding and no tags, and
+    # takes its properties from its nearest described ancestor.
+    described = area.max(axis=0) >= DESCRIBE_MIN_PX if len(views) else np.zeros(n, bool)
     crops: list[np.ndarray] = []
     owner_of_crop: list[int] = []
-    for k in range(n):
+    for k in np.flatnonzero(described):
         best = [v for v in np.argsort(-area[:, k], kind="stable")[:CROP_VIEWS] if area[v, k] > 0]
         for v in best:
             image = views[v].rgb
@@ -1274,15 +1298,21 @@ def describe(
         logits = LOGIT_SCALE * (embedding @ prompt_rows.T).reshape(n, len(names), 2)
         property_scores = _softmax(logits)[:, :, 0]
 
+    has_embedding = np.any(embedding != 0, axis=1)
+    # Properties of what was not described: its nearest described ancestor's (parents come
+    # first in id order), else none.
+    source = np.where(has_embedding, np.arange(n), -1)
+    for k in np.argsort(lifted.level, kind="stable"):
+        if source[k] < 0 and lifted.parent[k]:
+            source[k] = source[lifted.parent[k] - 1]
     instances: list[Instance] = []
     for k in range(n):
-        has_embedding = bool(np.any(embedding[k]))
         tags: list[dict[str, object]] = []
-        if words and has_embedding:
+        if words and has_embedding[k]:
             top = np.argsort(-tag_scores[k], kind="stable")[:TAGS_TOP_K]
             tags = [{"label": words[t], "score": round(float(tag_scores[k, t]), 4)} for t in top]
         properties = {
-            name: round(float(property_scores[k, j]) if has_embedding else 0.0, 4)
+            name: round(float(property_scores[source[k], j]) if source[k] >= 0 else 0.0, 4)
             for j, name in enumerate(names)
         }
         instances.append(
@@ -1735,6 +1765,10 @@ def main() -> None:
     write_instances(out, document, result.instances)
     if out.resolve() == args.tiles.resolve():
         link_instances(args.tiles / "tileset.json", len(result.instances))
+    if args.cache:
+        (args.cache / "cameras.json").write_text(
+            json.dumps([v.camera.to_json() for v in result.views]), encoding="utf-8"
+        )
     if args.save_dir:
         from PIL import Image
 

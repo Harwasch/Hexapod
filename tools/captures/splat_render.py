@@ -402,7 +402,8 @@ def render(
             index_g.size,
         ]
     )
-    owners, depths, pxs, pys = [], [], [], []
+    # Per sample, kept compact (int32 where it fits): its gaussian, pixel, depth and opacity.
+    owners, pixels, depths, alphas = [], [], [], []
     for g0, g1 in itertools.pairwise(cuts.tolist()):
         counts = n[g0:g1]
         owner = np.repeat(np.arange(g0, g1), counts)
@@ -411,7 +412,7 @@ def render(
         local = local * scales[owner]
         rot = _rotation_matrices(splats.rotations[index_g[g0:g1]])
         world = positions[owner] + np.einsum("nij,nj->ni", rot[owner - g0], local)
-        del local, rot
+        del local, rot, within
         p = (world - camera.centre) @ camera.rotation.T
         del world
         ok = p[:, 2] > 0.02
@@ -419,41 +420,53 @@ def render(
         px = np.floor(camera.focal * p[:, 0] / zs + w_px / 2).astype(np.int64)
         py = np.floor(camera.focal * p[:, 1] / zs + h_px / 2).astype(np.int64)
         ok &= (px >= 0) & (px < w_px) & (py >= 0) & (py < h_px)
-        owners.append(owner[ok])
+        owner = owner[ok]
+        owners.append(owner.astype(np.int32))
+        pixels.append((py[ok] * w_px + px[ok]).astype(np.int32))
         depths.append(p[ok, 2])
-        pxs.append(px[ok])
-        pys.append(py[ok])
-    owner = np.concatenate(owners) if owners else np.zeros(0, np.int64)
+        # A gaussian's opacity spread over the pixels its samples cover (area / n each).
+        per_sample_px = area[owner] / n[owner]
+        alphas.append(
+            np.clip(op[owner] * np.minimum(1.0, 6.0 / np.maximum(per_sample_px, 1e-6)), 0.0, 0.99)
+        )
+        del p, zs, px, py, ok, owner, per_sample_px
+    del positions, scales, op, area, n, first
+    owner = np.concatenate(owners) if owners else np.zeros(0, np.int32)
+    del owners
+    pixel = np.concatenate(pixels) if pixels else np.zeros(0, np.int32)
+    del pixels
     depth = np.concatenate(depths) if depths else np.zeros(0)
-    px = np.concatenate(pxs) if pxs else np.zeros(0, np.int64)
-    py = np.concatenate(pys) if pys else np.zeros(0, np.int64)
-    del owners, depths, pxs, pys
-    # A gaussian's opacity spread over the pixels its samples cover (about area / n each).
-    per_sample_px = area[owner] / n[owner]
-    a = np.clip(op[owner] * np.minimum(1.0, 6.0 / np.maximum(per_sample_px, 1e-6)), 0.0, 0.99)
-    pixel = py * w_px + px
+    del depths
+    a = np.concatenate(alphas) if alphas else np.zeros(0)
+    del alphas
     order = np.lexsort((depth, pixel))
     pixel, a, depth, owner = pixel[order], a[order], depth[order], owner[order]
+    del order
     log_t = np.log1p(-a)
     running = np.cumsum(log_t)
     starts = np.r_[0, np.flatnonzero(np.diff(pixel)) + 1] if pixel.size else np.zeros(0, np.int64)
     group = np.repeat(np.arange(starts.size), np.diff(np.r_[starts, pixel.size]))
     before = running - log_t - (running[starts] - log_t[starts])[group] if pixel.size else running
+    del running, group, starts
     weight = a * np.exp(before)
+    del before, log_t, a
     total = h_px * w_px
-    colour = splats.colours[index_g[owner]]
+    gaussian = index_g[owner]
+    del owner
     rgb = np.stack(
-        [np.bincount(pixel, weight * colour[:, c], total) for c in range(3)], axis=1
+        [np.bincount(pixel, weight * splats.colours[gaussian, c], total) for c in range(3)],
+        axis=1,
     ).astype(np.float64)
     alpha = np.bincount(pixel, weight, total).astype(np.float64)
     depth_sum = np.bincount(pixel, weight * depth, total).astype(np.float64)
+    del depth
     rgb += (1.0 - alpha)[:, None] * np.asarray(background)
     label_img = np.full(total, -1, np.int64)
     purity = np.zeros(total)
     if labels is not None and pixel.size:
         # Per pixel, each label's share of what was composited; the largest wins.
-        sample_labels = np.asarray(labels)[index_g[owner]]
-        key = pixel * (int(sample_labels.max()) + 2) + (sample_labels + 1)
+        sample_labels = np.asarray(labels)[gaussian].astype(np.int64)
+        key = pixel.astype(np.int64) * (int(sample_labels.max()) + 2) + (sample_labels + 1)
         keys, inverse = np.unique(key, return_inverse=True)
         sums = np.bincount(inverse, weight)
         key_pixel = keys // (int(sample_labels.max()) + 2)

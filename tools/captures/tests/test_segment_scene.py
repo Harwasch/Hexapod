@@ -198,6 +198,10 @@ def test_instances_match_the_true_objects(run: dict) -> None:
     plants = [iou for obj, iou in ious.items() if obj < 10]
     assert len(plants) == 10 and min(plants) >= 0.75, ious
     assert (result.splat_id > 0).mean() >= 0.9
+    # Every top-level instance that holds an object is described.
+    for inst in result.instances:
+        if inst.level == 0 and inst.splats >= MIN_OBJECT_SPLATS:
+            assert inst.tags, inst
 
 
 def test_hierarchy_is_consistent(run: dict) -> None:
@@ -237,10 +241,18 @@ def test_instance_records(run: dict) -> None:
         assert inst.splats == total[inst.id]
         assert np.all(inst.bounds_min <= inst.centroid) and np.all(inst.centroid <= inst.bounds_max)
         assert inst.views >= 1
-        assert abs(float(np.linalg.norm(inst.embedding)) - 1) < 1e-6
-        scores = [t["score"] for t in inst.tags]
-        assert len(inst.tags) == ss.TAGS_TOP_K and scores == sorted(scores, reverse=True)
-        assert {t["label"] for t in inst.tags} <= set(VOCABULARY)
+        if inst.tags:
+            assert abs(float(np.linalg.norm(inst.embedding)) - 1) < 1e-6
+            scores = [t["score"] for t in inst.tags]
+            assert len(inst.tags) == ss.TAGS_TOP_K and scores == sorted(scores, reverse=True)
+            assert {t["label"] for t in inst.tags} <= set(VOCABULARY)
+        else:
+            # Too small to describe: no embedding, no tags, its ancestor's properties.
+            assert not np.any(inst.embedding)
+            if inst.parent is None:
+                assert not any(inst.properties.values())
+            else:
+                assert inst.properties == result.instances[inst.parent - 1].properties
         assert list(inst.properties) == list(ss.PROPERTY_PROMPTS)
         assert all(0 <= v <= 1 for v in inst.properties.values())
         assert inst.behaviour == ss.behaviour(inst.properties)
@@ -304,7 +316,10 @@ def test_instances_json_follows_the_contract(written: Path, run: dict) -> None:
         assert len(r["bounds"]["min"]) == len(r["centroid"]) == 3
     emb = np.frombuffer((written / "instances.emb").read_bytes(), "<f2")
     emb = emb.reshape(len(records), 64).astype(np.float32)
-    np.testing.assert_allclose(np.linalg.norm(emb, axis=1), 1, atol=2e-3)
+    described = np.array([bool(r["tags"]) for r in records])
+    assert described.mean() > 0.3
+    np.testing.assert_allclose(np.linalg.norm(emb[described], axis=1), 1, atol=2e-3)
+    assert not emb[~described].any()
     np.testing.assert_allclose(
         emb[0], run["result"].instances[0].embedding.astype(np.float16), atol=0
     )
