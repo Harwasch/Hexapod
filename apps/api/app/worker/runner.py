@@ -335,16 +335,26 @@ class JobSupervisor:
                     job.id,
                     state.failed_stage,
                 )
-            time.sleep(self._config.retry_backoff_s)
-            if (
-                claim.heartbeat(
-                    db,
-                    job.id,
-                    worker_id=self._config.worker_id,
-                    lease_s=self._config.lease_s,
-                )
-                is not claim.Heartbeat.HELD
-            ):
+            # A wait on the stop flag rather than a sleep: a deploy that lands between two
+            # attempts lets go of the job now, as it would have mid-stage. The failed
+            # attempt is already on its row as failed, so the next worker counts the next
+            # attempt from it -- nothing here is a detach.
+            if stop is not None and stop.wait(self._config.retry_backoff_s):
+                claim.release(db, job.id, worker_id=self._config.worker_id)
+                return "lost"
+            if stop is None:
+                time.sleep(self._config.retry_backoff_s)
+            beat = claim.heartbeat(
+                db, job.id, worker_id=self._config.worker_id, lease_s=self._config.lease_s
+            )
+            if beat is claim.Heartbeat.CANCELLED:
+                # Cancelled while it waited to try again. Not "lost": nobody else has the
+                # job, and a cancel is closed out here or nowhere -- the recorded calls
+                # cancelled, `cost_usd` written, the lease cleared, the workdir tidied and
+                # the dead-man's switch told. Reading every not-HELD beat as lost (until
+                # the 2026-10 review) skipped all of that and left the check to alert.
+                return self._finish_cancelled(db, job)
+            if beat is not claim.Heartbeat.HELD:
                 self._log_lost(db, job.id)
                 return "lost"
 
