@@ -1,7 +1,4 @@
-import { Info } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
-
-import { GlassButton } from "@twin/ui";
+import { PHONE_MEDIA, useMediaQuery } from "@/lib/media";
 
 import { NavControls } from "../nav/NavControls";
 import { CreditSlot } from "./CreditSlot";
@@ -9,49 +6,22 @@ import { CreditSlot } from "./CreditSlot";
 /**
  * The bottom-right pill: compass and Earth, then the data credits.
  *
- * On a phone the credits do not fit beside the status line, so they fold behind an (i) that
- * opens them above the bar — every credit and the "Data attribution" dialog are one tap away,
- * and the logos are never removed from the page. Wider screens show them inline and never
- * see the button.
+ * On a phone the credits do not fit in the pill beside the status line, but Cesium ion's and
+ * Google's Photorealistic 3D Tiles terms want them on screen, not behind a button. So there
+ * they leave the pill for a strip of their own, a thin line right-aligned above the status
+ * line (`app.css` gives it its row of the bar): every logo and the "Data attribution" link
+ * stay in view, and the dialog behind that link carries the rest. The container is moved
+ * from one slot to the other, never copied — only one `CreditSlot` is mounted at a time.
  */
 export function MapCorner() {
-  const [creditsOpen, setCreditsOpen] = useState(false);
-  const root = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!creditsOpen) return;
-    const onDown = (event: PointerEvent) => {
-      if (!root.current?.contains(event.target as Node)) setCreditsOpen(false);
-    };
-    const onKey = (event: KeyboardEvent) => event.key === "Escape" && setCreditsOpen(false);
-    document.addEventListener("pointerdown", onDown);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("pointerdown", onDown);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [creditsOpen]);
-
+  const phone = useMediaQuery(PHONE_MEDIA);
   return (
-    <div
-      ref={root}
-      className={`glass glass--strong hud-corner ${creditsOpen ? "is-credits-open" : ""}`}
-      data-testid="map-corner"
-    >
-      <NavControls />
-      <GlassButton
-        iconOnly
-        variant="ghost"
-        size="sm"
-        className="hud-corner__info"
-        aria-label={creditsOpen ? "Hide data credits" : "Data credits"}
-        aria-expanded={creditsOpen}
-        onClick={() => setCreditsOpen(!creditsOpen)}
-        data-testid="credits-toggle"
-      >
-        <Info size={16} aria-hidden="true" />
-      </GlassButton>
-      <CreditSlot popover={creditsOpen} />
-    </div>
+    <>
+      {phone && <CreditSlot className="credit-slot--strip" />}
+      <div className="glass glass--strong hud-corner" data-testid="map-corner">
+        <NavControls />
+        {!phone && <CreditSlot />}
+      </div>
+    </>
   );
 }

@@ -18,10 +18,11 @@ that layer and the seam where real fleet data plugs in.
 ```
 
 On a phone (≤ 640 px) the same parts stack: the site switcher with a search button at the
-top, one bottom sheet (a tool panel, Plan or Fleet, or what is selected), the status line in
-one row with the compass and an (i) for the data credits, and a tab bar — Map, Plan, Fleet,
-More — at the bottom. More holds the four tools; the search button opens the command box full
-screen. Between 641 and 899 px the rail is a row of the four labelled tools above the bar.
+top, one bottom sheet (a tool panel, Plan or Fleet, or what is selected), the data credits
+in a thin strip of their own at the right edge, the status line in one row with the compass,
+and a tab bar — Map, Plan, Fleet, More — at the bottom. More holds the four tools; the search
+button opens the command box full screen. Between 641 and 899 px the rail is a row of the four
+labelled tools above the bar.
 
 - **Site switcher** (`features/mission/ProjectCard`) names the site — one name per site,
   its project's when it has one (`features/sites/siteNames.ts`, `docs/GLOSSARY.md`) — and
@@ -84,7 +85,10 @@ screen. Between 641 and 899 px the rail is a row of the four labelled tools abov
   agent's line up instead of opening thirteen lines over the map.
 - **Bottom right**: compass and Earth share one pill with the data credits. Zoom, top-down and
   explore mode have no on-screen buttons; they are keys (wheel / `+` `-`, `T`, `G`) and
-  command-box actions.
+  command-box actions. On a phone the credits (the Cesium ion logo, Google's logo when
+  Photorealistic 3D Tiles are on, "Data attribution") leave the pill for a strip above the
+  status line: the providers' terms want them on screen, so they never fold behind a button
+  (`MapCorner` moves CesiumJS's own credit container between the two places).
 - **Developer readouts** (altitude, scale band, metres per pixel, the world, the splat
   renderer) and the deployer's "Shared demo map key" note are behind Settings › Advanced ›
   Show developer readouts, off by default. The splat renderer choice (PlayCanvas / Spark /
@@ -241,4 +245,5 @@ Fonts with system fallbacks; the light glass theme is opt-in in Settings.
   beside the drawer, the agent's replies on the status line, the layer favourites, the site
   pin; "interaction" — the command box, `?`, Settings › Advanced; the site switcher.
 - `e2e/layout.spec.ts` — no surfaces overlap at desktop, laptop and phone sizes, and the
-  phone layout (tab bar, More, full-screen search, one-row status, folded credits).
+  phone layout (tab bar, More, full-screen search, one-row status, the credits strip with and
+  without Google's logo).

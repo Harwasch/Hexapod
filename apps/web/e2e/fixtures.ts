@@ -918,6 +918,49 @@ export async function mockApi(page: Page, options: MockOptions = {}): Promise<Ca
   return state;
 }
 
+/**
+ * Shows a credit on screen the way a data provider's would: a CesiumJS `Credit` with
+ * `showOnScreen`, added to the viewer's credit display (`Credit` is reached through the public
+ * `CreditDisplay.cesiumCredit`, as the page has no `Cesium` global).
+ */
+export async function addOnScreenCredit(page: Page, html: string): Promise<void> {
+  await page.evaluate((creditHtml) => {
+    type CreditType = new (html: string, showOnScreen: boolean) => unknown;
+    const viewer = (
+      window as unknown as {
+        __twin: {
+          viewer: {
+            creditDisplay: {
+              constructor: { cesiumCredit: { constructor: CreditType } };
+              addStaticCredit: (credit: unknown) => void;
+            };
+            scene: { requestRender: () => void };
+          };
+        };
+      }
+    ).__twin.viewer;
+    const Credit = viewer.creditDisplay.constructor.cesiumCredit.constructor;
+    viewer.creditDisplay.addStaticCredit(new Credit(creditHtml, true));
+    viewer.scene.requestRender();
+  }, html);
+}
+
+/**
+ * Google's logo in the credits, as Photorealistic 3D Tiles put it there: the HTML of
+ * CesiumJS's `GoogleMaps.getDefaultCredit`, with its image served locally at its real size
+ * (98 × 18), since the tileset itself needs a key and the network.
+ */
+export async function addGoogleCredit(page: Page): Promise<void> {
+  const src = "https://assets.ion.cesium.com/google-credit.png";
+  await page.route(src, (route) =>
+    route.fulfill({
+      contentType: "image/svg+xml",
+      body: '<svg xmlns="http://www.w3.org/2000/svg" width="98" height="18"><text x="0" y="14" font-family="sans-serif" font-size="15" fill="#fff">Google</text></svg>',
+    }),
+  );
+  await addOnScreenCredit(page, `<img alt="Google" src="${src}" style="vertical-align:-6px">`);
+}
+
 export const test = base.extend<{ app: Page }>({
   app: async ({ page }, use) => {
     await mockApi(page);

@@ -9,9 +9,10 @@ import { useScene } from "@/cesium/SceneContext";
  * which is how it ended up over the tool rail and under panels. The providers' terms need
  * it on screen, so instead of chasing it with offsets the element itself is moved into
  * this slot; the layout then gives it space like any other surface. It is moved back on
- * unmount so the viewer can tear down the tree it built.
+ * unmount so the viewer can tear down the tree it built — or so the next slot can take it,
+ * when the layout moves the credits (`MapCorner`).
  */
-export function CreditSlot({ popover = false }: { popover?: boolean }) {
+export function CreditSlot({ className }: { className?: string }) {
   const scene = useScene();
   const slot = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -25,13 +26,11 @@ export function CreditSlot({ popover = false }: { popover?: boolean }) {
       else credits.remove();
     };
   }, [scene]);
-  // Opened over the bar from the phone's (i), it floats like the other popovers.
   return (
     <div
       ref={slot}
-      className="credit-slot"
+      className={className ? `credit-slot ${className}` : "credit-slot"}
       data-testid="credits"
-      data-hud-popover={popover ? "" : undefined}
     />
   );
 }

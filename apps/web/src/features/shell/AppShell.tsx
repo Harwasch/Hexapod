@@ -132,12 +132,12 @@ function SettingsSheetLazy() {
  * - **strip**: controls for what is in view (representation and its load, dates, explore).
  * - **bar**: the status line on the left (fleet, agent, a degraded connection), developer
  *   readouts when they are on, and the compass, Earth and data credits in one pill on the
- *   right.
+ *   right. On a phone the credits take a thin line of their own above the status line.
  * - **tabs**: on a phone only, Map / Plan / Fleet / More along the bottom.
  *
  * Things that float on purpose, over the regions, and close with Escape or a click away: the
  * command box's results, the site switcher, the agent's activity log, and on a phone the More
- * sheet and the folded data credits (`data-hud-popover`).
+ * sheet (`data-hud-popover`).
  *
  * On narrow screens the docks and the drawer collapse into one bottom sheet; `data-sheet`
  * says which was touched last, and that one is shown (`state/layout.ts`).

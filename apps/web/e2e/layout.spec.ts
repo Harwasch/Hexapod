@@ -13,12 +13,13 @@
  * they are not surfaces. Modal sheets are checked separately: they cover the HUD on purpose,
  * behind a scrim, and only have to fit on screen. So do the popovers (`[data-hud-popover]`:
  * the command box's results, the site switcher, the agent's activity log, the phone's More
- * sheet and folded credits): they open over the regions when asked for and close with Escape
- * or a click away, so they are held to the screen's edges but not to the regions'.
+ * sheet): they open over the regions when asked for and close with Escape or a click away,
+ * so they are held to the screen's edges but not to the regions'. The data credits are never
+ * a popover: on a phone they are a strip of their own, held to the same rules as the rest.
  */
 import type { Page } from "@playwright/test";
 
-import { expect, mockApi, test, type MockOptions } from "./fixtures";
+import { addGoogleCredit, expect, mockApi, test, type MockOptions } from "./fixtures";
 
 const VIEWPORTS = [
   { name: "desktop", width: 1440, height: 900 },
@@ -319,7 +320,9 @@ for (const viewport of VIEWPORTS) {
 test.describe("the phone layout", () => {
   test.use({ viewport: { width: 390, height: 844 } });
 
-  test("tab bar, More, full-screen search, one-row status and folded credits", async ({ page }) => {
+  test("tab bar, More, full-screen search, one-row status and the credits strip", async ({
+    page,
+  }) => {
     test.setTimeout(240_000);
     await boot(page, {}, true);
     await loadDemo(page);
@@ -337,15 +340,33 @@ test.describe("the phone layout", () => {
     expect(Math.abs(corner.y - status.y)).toBeLessThan(12);
     await expect(page.getByTestId("nav-north")).toBeVisible();
 
-    // The credits fold behind an (i), and open above the bar with the attribution dialog.
-    const credits = page.getByTestId("credits");
-    await expect(credits).toBeHidden();
-    await page.getByTestId("credits-toggle").click();
-    await expect(credits.locator(".cesium-viewer-bottom")).toBeVisible();
-    await expect(credits.getByRole("button", { name: "Data attribution" })).toBeVisible();
-    await expectNoOverlap(page, "phone credits open");
-    await page.getByTestId("credits-toggle").click();
-    await expect(credits).toBeHidden();
+    // The data credits are on screen with no tap: a strip of their own, one thin line at the
+    // right edge just above the status line, the Cesium ion logo and "Data attribution" in
+    // view, over nothing. Google's logo, when Photorealistic 3D Tiles are on, joins the line.
+    const chip = page.getByTestId("credits").locator(".cesium-viewer-bottom");
+    await expect(chip).toBeVisible();
+    await expect(chip.locator(".cesium-credit-logoContainer img")).toBeVisible();
+    await expect(page.getByRole("button", { name: /credits/i })).toHaveCount(0);
+    const expectStrip = async (label: string) => {
+      const strip = (await chip.boundingBox())!;
+      expect(strip.height).toBeLessThan(30);
+      expect(strip.y + strip.height).toBeLessThanOrEqual(status.y);
+      expect(Math.abs(strip.x + strip.width - (corner.x + corner.width))).toBeLessThan(2);
+      await expectNoOverlap(page, label);
+    };
+    await expectStrip("phone credits strip");
+    await addGoogleCredit(page);
+    await expect(chip.getByRole("img", { name: "Google" })).toBeVisible();
+    await expect
+      .poll(async () => (await chip.getByRole("img", { name: "Google" }).boundingBox())?.width)
+      .toBe(98);
+    await expectStrip("phone credits strip with Google's logo");
+    // "Data attribution" opens the dialog with every credit in full.
+    await chip.getByRole("button", { name: "Data attribution" }).click();
+    const dialog = page.getByRole("dialog", { name: "Data attribution" });
+    await expect(dialog).toBeVisible();
+    await page.getByRole("button", { name: "Close data attribution" }).click();
+    await expect(dialog).toBeHidden();
 
     // More holds the four tools.
     await page.getByTestId("phone-tab-more").click();

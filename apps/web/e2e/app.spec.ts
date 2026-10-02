@@ -420,33 +420,43 @@ test.describe("the HUD over the map", () => {
     await expect(switcher).toHaveCount(0);
   });
 
-  test("attribution stays on screen, and the setup advice is not what is on it", async ({
-    app,
-  }) => {
-    await app.getByTestId("onboarding-explore").click();
-    // Cesium ion's terms and Google Photorealistic 3D Tiles' terms both require the credit
-    // to remain visible. It is a chip in the bottom bar; it is never removed or hidden.
-    const credits = app.getByTestId("credits").locator(".cesium-viewer-bottom");
-    await expect(credits).toBeVisible();
-    await expect(credits.locator(".cesium-credit-logoContainer img")).toBeVisible();
+  for (const viewport of [
+    { name: "desktop", width: 1440, height: 900 },
+    { name: "phone", width: 390, height: 844 },
+  ]) {
+    test.describe(`at ${viewport.name} size`, () => {
+      test.use({ viewport: { width: viewport.width, height: viewport.height } });
 
-    // What must NOT be on screen is CesiumJS's default-token setup advice, which is a
-    // paragraph and inflates the chip into a slab over the globe.
-    await expect(credits).not.toContainText("default ion access token");
-    const box = await credits.boundingBox();
-    expect(box?.height ?? 0).toBeLessThan(48);
+      test("attribution stays on screen, and the setup advice is not what is on it", async ({
+        app,
+      }) => {
+        await app.getByTestId("onboarding-explore").click();
+        // Cesium ion's terms and Google Photorealistic 3D Tiles' terms both require the
+        // credit to remain visible. It is a chip in the bottom bar (on a phone, a strip of its
+        // own above the status line); it is never removed, hidden or folded behind a button.
+        const credits = app.getByTestId("credits").locator(".cesium-viewer-bottom");
+        await expect(credits).toBeVisible();
+        await expect(credits.locator(".cesium-credit-logoContainer img")).toBeVisible();
 
-    // It is demoted, not deleted: the "Data attribution" dialog still carries it, and the
-    // dialog itself is reachable — it is hosted on <body>, over the HUD, not under it.
-    const expand = credits.getByRole("button", { name: "Data attribution" });
-    await expect(expand).toBeVisible();
-    await expand.click();
-    const dialog = app.getByRole("dialog", { name: "Data attribution" });
-    await expect(dialog).toBeVisible();
-    await expect(dialog).toContainText("default ion access token");
-    await app.getByRole("button", { name: "Close data attribution" }).click();
-    await expect(dialog).toBeHidden();
-  });
+        // What must NOT be on screen is CesiumJS's default-token setup advice, which is a
+        // paragraph and inflates the chip into a slab over the globe.
+        await expect(credits).not.toContainText("default ion access token");
+        const box = await credits.boundingBox();
+        expect(box?.height ?? 0).toBeLessThan(48);
+
+        // It is demoted, not deleted: the "Data attribution" dialog still carries it, and the
+        // dialog itself is reachable — it is hosted on <body>, over the HUD, not under it.
+        const expand = credits.getByRole("button", { name: "Data attribution" });
+        await expect(expand).toBeVisible();
+        await expand.click();
+        const dialog = app.getByRole("dialog", { name: "Data attribution" });
+        await expect(dialog).toBeVisible();
+        await expect(dialog).toContainText("default ion access token");
+        await app.getByRole("button", { name: "Close data attribution" }).click();
+        await expect(dialog).toBeHidden();
+      });
+    });
+  }
 
   // Raw `page`, not the `app` fixture: that fixture seeds `twin.settings.v1` on every
   // navigation, which would wipe the dismissal this test reloads to check.

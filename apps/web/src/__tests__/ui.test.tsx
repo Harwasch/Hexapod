@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -18,8 +18,10 @@ import { LayersPanel } from "@/features/layers/LayersPanel";
 import { SettingsSheet } from "@/features/settings/SettingsSheet";
 import { OnboardingCard } from "@/features/onboarding/OnboardingCard";
 import { DevReadouts } from "@/features/shell/DevReadouts";
+import { MapCorner } from "@/features/shell/MapCorner";
 import { StatusLine } from "@/features/mission/StatusLine";
 import { ToolRail } from "@/features/shell/ToolRail";
+import { PHONE_MEDIA } from "@/lib/media";
 import {
   DEFAULT_WIND_STRENGTH,
   LIVING_SURVEY_IDLE,
@@ -596,5 +598,64 @@ describe("SettingsSheet: the wind control", () => {
     // The person's choice is kept; only the scene is forced calm (by SceneBridge).
     expect(useLiving.getState().wind.strength).toBe(DEFAULT_WIND_STRENGTH);
     expect(screen.queryByRole("slider", { name: "Wind strength" })).not.toBeInTheDocument();
+  });
+});
+
+describe("MapCorner", () => {
+  /** `matchMedia` with a phone switch, and the change events a rotation would fire. */
+  function fakeMedia(phone: { matches: boolean }) {
+    const listeners = new Set<() => void>();
+    vi.spyOn(window, "matchMedia").mockImplementation(
+      (query: string) =>
+        ({
+          get matches() {
+            return query === PHONE_MEDIA && phone.matches;
+          },
+          media: query,
+          addEventListener: (_: string, listener: () => void) => listeners.add(listener),
+          removeEventListener: (_: string, listener: () => void) => listeners.delete(listener),
+        }) as unknown as MediaQueryList,
+    );
+    return (matches: boolean) =>
+      act(() => {
+        phone.matches = matches;
+        for (const listener of listeners) listener();
+      });
+  }
+
+  it("moves Cesium's credit container out of the pill into a strip of its own on a phone", () => {
+    // The widget's own container, where CesiumSceneManager leaves it.
+    const viewport = document.createElement("div");
+    const credits = document.createElement("div");
+    credits.className = "cesium-viewer-bottom";
+    viewport.appendChild(credits);
+    document.body.appendChild(viewport);
+    sceneRegistry.set({ viewer: { creditContainer: credits } } as unknown as CesiumSceneManager);
+    const rotate = fakeMedia({ matches: false });
+
+    const { unmount } = render(wrap(<MapCorner />));
+    // Wide: in the pill, beside the compass.
+    expect(screen.getByTestId("map-corner")).toContainElement(credits);
+    expect(credits.parentElement).toBe(screen.getByTestId("credits"));
+
+    // Phone: out of the pill into the strip, the same element (moved, never copied), and no
+    // button to fold it behind — the providers' terms want it on screen.
+    rotate(true);
+    const strip = screen.getByTestId("credits");
+    expect(strip).toHaveClass("credit-slot--strip");
+    expect(screen.getByTestId("map-corner")).not.toContainElement(strip);
+    expect(credits.parentElement).toBe(strip);
+    expect(document.querySelectorAll(".cesium-viewer-bottom")).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: /credits/i })).not.toBeInTheDocument();
+
+    rotate(false);
+    expect(screen.getByTestId("map-corner")).toContainElement(credits);
+
+    // Unmounted, the container goes home so the viewer can tear down what it built.
+    unmount();
+    expect(credits.parentElement).toBe(viewport);
+    viewport.remove();
+    sceneRegistry.set(null);
+    vi.restoreAllMocks();
   });
 });
