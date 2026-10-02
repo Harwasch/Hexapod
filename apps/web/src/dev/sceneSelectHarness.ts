@@ -35,6 +35,8 @@ import { SceneSelectChip } from "@/features/sites/SceneSelectChip";
 import { tileInstanceIds, withDescendants } from "@/lib/instances";
 import { useInstances } from "@/state/instances";
 import { selectedId, useSceneSelect } from "@/state/sceneSelect";
+// The glass styles the chip is drawn with in the app (its buttons are @twin/ui's).
+import "@twin/ui/styles.css";
 
 const BACKGROUND = "#10141a";
 const ASSET = "harness";

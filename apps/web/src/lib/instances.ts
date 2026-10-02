@@ -377,9 +377,9 @@ export function matchLabel(terms: readonly string[], label: string): number {
   return (sum / terms.length) * 0.95;
 }
 
-/** The label an instance is shown by: its top tag, or its id. */
+/** The label a search result goes by: its top tag (the panel names objects by category). */
 export function instanceLabel(instance: Instance): string {
-  return instance.tags[0]?.label ?? `Object ${String(instance.id)}`;
+  return instance.tags[0]?.label ?? "untagged";
 }
 
 /** A splat count, short: 940, 12.3k, 1.2M. */

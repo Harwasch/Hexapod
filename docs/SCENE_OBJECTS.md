@@ -203,6 +203,10 @@ the representation switcher:
   "water"); a typed property filter (`vegetation > 0.5`, `behaviour:movable`) still works but
   has no buttons;
 - one "Reset" whenever anything is hidden or highlighted, with what is hidden in words.
+- selecting in the scene (a click, the cycle keys or the brush; `SceneSelectChip.tsx`) opens
+  that object's category and marks it; clicking an object in the panel selects it in the scene,
+  so the chip offers its actions. The chip names a selection as the panel does (its top tag,
+  else its category, never an id) and shows its actions as icon buttons with tooltips.
 
 The property scores and behaviours are not shown: they drive physics, not browsing (SigLIP's
 "vegetation" scored the pumpkins 0.88 -- true of a gourd, and confusing in a list).

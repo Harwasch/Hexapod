@@ -316,7 +316,7 @@ describe("search", () => {
     expect(withDescendants(d, []).size).toBe(0);
     expect(instanceLabel(d.instances[0] ?? ({} as never))).toBe("pickup truck");
     expect(instanceLabel({ ...(d.instances[0] ?? ({} as never)), tags: [], id: 9 })).toBe(
-      "Object 9",
+      "untagged",
     );
   });
 });

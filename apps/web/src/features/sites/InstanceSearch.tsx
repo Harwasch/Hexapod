@@ -1,5 +1,13 @@
 import { Boxes, ChevronRight, Eye, EyeOff, Search } from "lucide-react";
-import { useId, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from "react";
+import {
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type RefObject,
+} from "react";
 
 import { GlassButton, GlassInput, GlassPopover } from "@twin/ui";
 
@@ -7,6 +15,7 @@ import { useScene } from "@/cesium/SceneContext";
 import { instanceSphere } from "@/cesium/splatInstances";
 import { categoryById, type SceneCategory, type SceneObject } from "@/lib/categories";
 import { sameFocus, type AssetInstances, type Focus, useInstances } from "@/state/instances";
+import { selectedId, useSceneSelect } from "@/state/sceneSelect";
 import { useSettings } from "@/state/settings";
 
 /** Objects listed under an open category before "Show more". */
@@ -135,6 +144,7 @@ function CategoryRow({
   onOpen,
   listRef,
   searching,
+  selected,
 }: {
   assetId: string;
   row: Row;
@@ -143,6 +153,8 @@ function CategoryRow({
   onOpen: (open: boolean) => void;
   listRef: RefObject<HTMLUListElement | null>;
   searching: boolean;
+  /** The object selected in the scene (cesium/sceneSelect), if it is one of this row's. */
+  selected: number | null;
 }) {
   const scene = useScene();
   const toggleFocus = useInstances((s) => s.toggleFocus);
@@ -161,11 +173,26 @@ function CategoryRow({
   const visibility = visibilityOf(entry.hidden, row.members);
   const count = objects.length;
 
+  // The object selected in the scene: listed (past the page if need be) and in view.
+  const selectedAt = selected === null ? -1 : objects.findIndex((o) => o.id === selected);
+  const selectedRef = useRef<HTMLLIElement>(null);
+  const listed = Math.max(shown, Math.ceil((selectedAt + 1) / OBJECT_PAGE) * OBJECT_PAGE);
+  useEffect(() => {
+    if (selectedAt >= 0) selectedRef.current?.scrollIntoView?.({ block: "nearest" });
+  }, [selectedAt, open]);
+
+  /** Highlights the object, selects it in the scene (the chip offers its actions), flies to it. */
   const selectObject = (object: SceneObject): void => {
     const focus: Focus = { kind: "object", id: object.id };
-    const clearing = sameFocus(entry.focus, focus);
+    const clearing = sameFocus(entry.focus, focus) || selected === object.id;
+    const picking = useSceneSelect.getState();
+    if (clearing) {
+      if (selected === object.id) picking.clear();
+      if (sameFocus(entry.focus, focus)) toggleFocus(assetId, focus);
+      return;
+    }
     toggleFocus(assetId, focus);
-    if (clearing) return;
+    picking.select(assetId, [object.id], 1, 0, null);
     const sphere = instanceSphere(assetId, object.id);
     if (sphere && scene) scene.camera.flyToBoundingSphere(sphere, { pitch: -35 });
   };
@@ -220,14 +247,17 @@ function CategoryRow({
       </div>
       {open && (
         <ul id={objectsId} className="objects-panel__objects" aria-label={category.name}>
-          {objects.slice(0, shown).map((object) => {
+          {objects.slice(0, listed).map((object) => {
             const objectVisibility = visibilityOf(entry.hidden, object.members);
-            const lit = sameFocus(entry.focus, { kind: "object", id: object.id });
+            const isSelected = object.id === selected;
+            const lit = isSelected || sameFocus(entry.focus, { kind: "object", id: object.id });
             return (
               <li
                 key={object.id}
+                ref={isSelected ? selectedRef : undefined}
                 className="objects-row objects-row--object"
                 data-hidden={objectVisibility === "hidden" || undefined}
+                data-selected={isSelected || undefined}
               >
                 <div className="objects-row__line">
                   <button
@@ -235,6 +265,7 @@ function CategoryRow({
                     data-row
                     className="objects-row__main"
                     aria-pressed={lit}
+                    aria-current={isSelected || undefined}
                     title={lit ? "Clear the highlight" : `Highlight and go to ${object.name}`}
                     onClick={() => selectObject(object)}
                     onKeyDown={(event) => onRowKey(event, listRef.current)}
@@ -250,14 +281,10 @@ function CategoryRow({
               </li>
             );
           })}
-          {objects.length > shown && (
+          {objects.length > listed && (
             <li className="objects-row objects-row--more">
-              <GlassButton
-                size="sm"
-                variant="ghost"
-                onClick={() => setShown((n) => n + OBJECT_PAGE)}
-              >
-                Show {Math.min(OBJECT_PAGE, objects.length - shown)} more of{" "}
+              <GlassButton size="sm" variant="ghost" onClick={() => setShown(listed + OBJECT_PAGE)}>
+                Show {Math.min(OBJECT_PAGE, objects.length - listed)} more of{" "}
                 {objects.length.toLocaleString()}
               </GlassButton>
             </li>
@@ -322,11 +349,21 @@ export function InstancePanel({ assetId }: { assetId: string }) {
   const [opened, setOpened] = useState<ReadonlySet<string>>(new Set());
   const [closed, setClosed] = useState<ReadonlySet<string>>(new Set());
   const rows = useMemo(() => (entry ? rowsOf(entry) : []), [entry]);
+  // What is selected in the scene, as the object (and category) the panel lists it under.
+  const picked = useSceneSelect((s) => (s.assetId === assetId ? selectedId(s) : null));
+  const pickedObject = picked === null ? null : (entry?.index.objectOf.get(picked) ?? null);
+  const pickedCategory =
+    pickedObject === null ? undefined : entry?.index.objects.get(pickedObject)?.category;
+  /** The scene selection a person closed the category of: it stays closed until the next. */
+  const [dismissed, setDismissed] = useState<number | null>(null);
   if (!entry) return null;
 
   const searching = entry.query.trim() !== "";
-  const isOpen = (id: string): boolean => (searching ? !closed.has(id) : opened.has(id));
+  const pickOpens = (id: string): boolean => id === pickedCategory && dismissed !== pickedObject;
+  const isOpen = (id: string): boolean =>
+    pickOpens(id) || (searching ? !closed.has(id) : opened.has(id));
   const setOpen = (id: string, open: boolean): void => {
+    if (!open && pickOpens(id)) setDismissed(pickedObject);
     const update = (s: ReadonlySet<string>, add: boolean): ReadonlySet<string> => {
       const next = new Set(s);
       if (add) next.add(id);
@@ -418,6 +455,7 @@ export function InstancePanel({ assetId }: { assetId: string }) {
             onOpen={(open) => setOpen(row.category.id, open)}
             listRef={listRef}
             searching={searching}
+            selected={pickedCategory === row.category.id ? pickedObject : null}
           />
         ))}
       </ul>

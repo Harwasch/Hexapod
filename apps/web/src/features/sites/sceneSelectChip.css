@@ -42,3 +42,16 @@
   color: var(--text-secondary, rgba(242, 246, 239, 0.8));
   font-size: var(--text-xs, 12px);
 }
+
+/* The actions: icon buttons (names in tooltips), as the objects panel's eyes. */
+.scene-select-chip__actions {
+  flex-wrap: nowrap;
+  gap: 0.15rem;
+}
+
+.scene-select-chip__divider {
+  width: 1px;
+  height: 1.1rem;
+  margin: 0 0.15rem;
+  background: var(--divider, rgba(255, 255, 255, 0.13));
+}

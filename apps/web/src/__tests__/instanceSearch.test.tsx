@@ -1,10 +1,11 @@
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { InstancePanel, OBJECT_PAGE } from "@/features/sites/InstanceSearch";
 import { parseInstances } from "@/lib/instances";
 import { useInstances } from "@/state/instances";
+import { selectedId, useSceneSelect } from "@/state/sceneSelect";
 import { useSettings } from "@/state/settings";
 
 const box = { min: [0, 0, 0], max: [1, 1, 1] };
@@ -64,6 +65,7 @@ const sorted = (set: ReadonlySet<number> | undefined): number[] =>
 describe("the objects panel", () => {
   beforeEach(() => {
     useInstances.setState({ assets: {}, dimOthers: true, gaps: {} });
+    useSceneSelect.getState().clear();
     if (DOC) useInstances.getState().setTable("scan", DOC);
   });
 
@@ -208,6 +210,28 @@ describe("the objects panel", () => {
     // The category's eye acts on all 80, listed or not.
     await user.click(screen.getByRole("button", { name: "Hide Buildings" }));
     expect(useInstances.getState().assets.camp?.hidden.size).toBe(80);
+  });
+
+  it("follows the scene selection, and selects in the scene from a row", async () => {
+    const user = userEvent.setup();
+    render(<InstancePanel assetId="scan" />);
+    // Picking the branch (3) in the scene opens Trees and marks its object, conifer 1 (2).
+    act(() => useSceneSelect.getState().select("scan", [3, 2], 2, 0, { x: 10, y: 10 }));
+    const trees = screen.getByRole("list", { name: "Trees" });
+    const marked = within(trees).getByRole("button", { name: /^conifer 1/ });
+    expect(marked).toHaveAttribute("aria-current", "true");
+    // Closing it is respected until the next selection.
+    await user.click(screen.getByRole("button", { name: "Collapse Trees" }));
+    expect(screen.queryByRole("list", { name: "Trees" })).not.toBeInTheDocument();
+    // A row selects its object in the scene (the chip then offers its actions)...
+    await user.click(screen.getByRole("button", { name: "Expand Trees" }));
+    await user.click(screen.getByRole("button", { name: /^conifer 2/ }));
+    expect(selectedId(useSceneSelect.getState())).toBe(4);
+    expect(useSceneSelect.getState().assetId).toBe("scan");
+    // ...and a second click clears both.
+    await user.click(screen.getByRole("button", { name: /^conifer 2/ }));
+    expect(selectedId(useSceneSelect.getState())).toBeNull();
+    expect(useInstances.getState().assets.scan?.highlighted.size).toBe(0);
   });
 
   it("says when the renderer cannot hide or highlight, and switches to CesiumJS", async () => {

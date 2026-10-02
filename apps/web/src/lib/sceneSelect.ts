@@ -18,6 +18,7 @@
  * (`customSets.ts`).
  */
 
+import { categoryById } from "./categories";
 import type { Instance, InstancesDoc } from "./instances";
 
 /** A candidate's share of the clicked pixel, below which another instance is not offered. */
@@ -112,13 +113,23 @@ function humanise(name: string): string {
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
-/** What an instance is called: its top tag, else its category, else "Object N". */
-export function selectionLabel(instance: Instance | undefined, id: number): string {
+/**
+ * What an instance is called, as the objects panel names it (lib/categories.ts): its top tag,
+ * else its broad category's name (`category`, a category id, else the file's own), never an id.
+ */
+export function selectionLabel(
+  instance: Instance | undefined,
+  id: number,
+  category?: string,
+): string {
   const tag = instance?.tags[0]?.label;
   if (tag) return humanise(tag);
-  const category = (instance as { category?: unknown } | undefined)?.category;
-  if (typeof category === "string" && category !== "") return humanise(category);
-  return `Object ${String(id)}`;
+  const known = category ?? instance?.category;
+  if (typeof known === "string" && known !== "") {
+    const named = categoryById(known);
+    return named.id === known ? named.name : humanise(known);
+  }
+  return id > 0 ? "Unnamed object" : "Nothing";
 }
 
 /** The chip's text: "Tree · 2 of 4". */

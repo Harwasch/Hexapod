@@ -115,7 +115,7 @@ describe("candidates", () => {
     expect(cycleIndex(0, 0, 1)).toBe(-1);
   });
 
-  it("names a candidate by tag, then category, then id", () => {
+  it("names a candidate by tag, then category, never by id", () => {
     const d = doc();
     expect(selectionLabel(d.byId.get(1), 1)).toBe("Tree");
     // A category, as newer files carry (the objects panel's `Instance.category`).
@@ -123,7 +123,9 @@ describe("candidates", () => {
       typeof selectionLabel
     >[0];
     expect(selectionLabel(trunk, 4)).toBe("Trunk wood");
-    expect(selectionLabel(d.byId.get(2), 2)).toBe("Object 2");
+    // Never an id: the category the objects panel files it under.
+    expect(selectionLabel(d.byId.get(2), 2, "trees")).toBe("Trees");
+    expect(selectionLabel(d.byId.get(2), 2)).toBe("Unnamed object");
     expect(chipText("Tree", 1, 4)).toBe("Tree · 2 of 4");
     expect(chipText("Tree", 0, 1)).toBe("Tree");
   });
