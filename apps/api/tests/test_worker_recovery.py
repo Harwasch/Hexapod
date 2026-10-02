@@ -31,7 +31,7 @@ from app.models import Artifact, Capture, Job, JobStep
 from app.models.enums import RunStatus
 from app.services import jobs as job_service
 from app.storage import S3Storage
-from app.worker import registration
+from app.worker import registration, retry
 from app.worker.runner import JobSupervisor
 from tests.test_worker import config, make_capture, queue_job, steps_by_stage, wait_until
 from tests.test_worker_stops import Pings, claimed, in_background, recipe_process, watched
@@ -333,3 +333,36 @@ def test_a_stop_during_publishing_lets_go_and_the_next_worker_publishes(
     assert registered is not None and registered.site_id is not None
     again = {stage: row.attempt for stage, row in steps_by_stage(db, job.id).items()}
     assert again == finished, "no stage ran again"
+
+
+# --------------------------------------------------------------------------------------
+# A failure is read from what failed, not from everything the attempt logged
+# --------------------------------------------------------------------------------------
+
+REMOTE = "recipe 'r', stage 'train' (impl 'gsplat') failed on 'modal': "
+OOM_LINE = "[b3] torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 2.00 GiB"
+
+
+def test_an_out_of_memory_the_attempt_got_past_does_not_condemn_its_later_failure() -> None:
+    """One piece of a fan-out ran out of memory and was resubmitted alone, and finished;
+    the attempt then failed on something else entirely. The whole attempt's log has the
+    out-of-memory in it, and read that way the failure was "oom": with no cap to lower,
+    not retried at all. The verdict comes from the error and the log's last lines."""
+    log = "\n".join(
+        [
+            "gsplat: cap_max auto -> 1000000; ...",
+            OOM_LINE,
+            "cloud: part b3 failed on call 1 of 3; resubmitting it alone",
+            *[f"[b{n % 4}] step {n} of 3000" for n in range(200)],
+            "cloud: 4 of 4 part(s) finished",
+            "join: merging 4 blocks",
+            "Traceback (most recent call last):",
+            "ValueError: the merged splat has no gaussians inside the support mask",
+        ]
+    )
+    failure = retry.classify("RemoteStageError", REMOTE + "CalledProcessError: exit 1", log)
+    assert failure.kind == "other"
+
+    # The same out-of-memory as the attempt's last words is one, with the stage's cap.
+    last = retry.classify("RemoteStageError", REMOTE + "CalledProcessError", f"{log}\n{OOM_LINE}")
+    assert last == retry.Failure("oom", cap_max=1_000_000)

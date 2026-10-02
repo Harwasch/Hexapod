@@ -149,13 +149,15 @@ resolve on the second either.
 
 **Not every failure gets the whole budget** (`retry.py`). Under a six-hour Modal limit,
 three attempts at a stage that timed out were eighteen GPU-hours. The worker reads each
-failure first — its error, and the failed attempt's own lines of the stage log (the
-recipe process reports where they begin) — and the classes are kept narrow, because a
-retry spent on a failure put in the wrong one is the cheaper mistake:
+failure first — its error, and the end of the failed attempt's own lines of the stage log
+(the recipe process reports where they begin; an out-of-memory the attempt logged and got
+past, such as a fan-out piece resubmitted alone, is not its verdict) — and the classes are
+kept narrow, because a retry spent on a failure put in the wrong one is the cheaper
+mistake:
 
 | failure | what the worker does |
 | --- | --- |
-| CUDA out of memory (`CUDA out of memory`, `OutOfMemoryError` in the attempt's log) | **one** retry, with `cap_max` at 0.7x the cap the attempt's `gsplat: cap_max …` line names, written into `jobs.params[stage]`; a second, or one with no cap to lower, is not retried |
+| CUDA out of memory (`CUDA out of memory`, `OutOfMemoryError` in the error or the attempt's last 50 log lines) | **one** retry, with `cap_max` at 0.7x the cap the attempt's `gsplat: cap_max …` line names, written into `jobs.params[stage]`; a second, or one with no cap to lower, is not retried |
 | out of time (`RemoteTimeoutError`: Modal's `FunctionTimeoutError`, `max_wait_s`, the overdue-trainer deadline) | not retried |
 | a broken recipe or stage contract (`errors.BAD_INPUT_ERRORS`) | not retried |
 | the run reached its dollar cap (`CostCapError`) | not retried |

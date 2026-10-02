@@ -29,6 +29,15 @@ Which attempt's log: the stage log accumulates across attempts, so the superviso
 where it ended when each attempt started (`log_from`) and only what came after is read.
 An out-of-memory in an earlier attempt that was then retried must not condemn a later
 attempt that failed for an unrelated reason.
+
+Nor one earlier in the *same* attempt (the 2026-10 review): a fan-out piece that ran out
+of memory is resubmitted alone and may well finish, and the attempt can then fail on
+something else -- the join, another piece's bug, a transfer -- with the first piece's
+traceback still in its log. So an out-of-memory is read from the failure itself: its
+error, and only the last `OOM_TAIL_LINES` of the attempt's log, which is where the lines
+that say why a call failed are (`CloudRunner` drains them after the verdict, and writes
+one line of its own after them). The cap it trained at is still read from the whole
+attempt, because the budget line is the stage's first.
 """
 
 from __future__ import annotations
@@ -57,6 +66,11 @@ CAP_LINE = re.compile(r"gsplat: cap_max (?:auto -> )?(\d+)")
 #: The cap an out-of-memory retry trains at, as a share of the one that ran out.
 OOM_CAP_SCALE = 0.7
 
+#: How much of the end of a failed attempt's log an out-of-memory is read from: room for
+#: a traceback's message line and the few lines the runner writes after it, and not for
+#: whatever the attempt logged and got past before it failed.
+OOM_TAIL_LINES = 50
+
 #: The provider's own words at the head of a remote stage's failure: `RemoteStageError`'s
 #: `... failed on 'modal': StageContractError: ...`.
 _REMOTE_TYPE = re.compile(r"failed on '[^']+': ([A-Za-z_][A-Za-z0-9_]*)(?::|$)")
@@ -80,7 +94,8 @@ def classify(error_type: str, error: str, log: str) -> Failure:
     """What kind of failure this was, from what the stage raised and what it logged.
 
     `error_type` is the exception's class name as it crossed the line protocol, `error`
-    its message, `log` the failed attempt's part of the stage log.
+    its message, `log` the failed attempt's part of the stage log -- of which only the
+    last `OOM_TAIL_LINES` can make it an out-of-memory.
     """
     if error_type == "CostCapError":
         return Failure("cost-cap")
@@ -89,7 +104,8 @@ def classify(error_type: str, error: str, log: str) -> Failure:
     remote = _REMOTE_TYPE.search(error) if error_type == "RemoteStageError" else None
     if error_type in BAD_INPUT_ERRORS or (remote and remote.group(1) in BAD_INPUT_ERRORS):
         return Failure("bad-input")
-    if any(marker in log or marker in error for marker in OOM_MARKERS):
+    tail = "\n".join(log.splitlines()[-OOM_TAIL_LINES:])
+    if any(marker in tail or marker in error for marker in OOM_MARKERS):
         caps = CAP_LINE.findall(log)
         # The first: the whole stage's budget, before a block run's own per-block lines.
         return Failure("oom", cap_max=int(caps[0]) if caps else None)
