@@ -1,6 +1,12 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
 
-import { useLayers as useLayerCatalog, useSite, useSites as useSiteCatalog } from "@/api/queries";
+import {
+  useLayers as useLayerCatalog,
+  useSite,
+  useSites as useSiteCatalog,
+  watchSiteRecords,
+} from "@/api/queries";
 import { api, ApiError, unwrap } from "@/api/client";
 import { builtinDemoSite } from "@/api/fallback";
 import { anywhereProject } from "@/missions/anywhere";
@@ -114,6 +120,14 @@ export function SceneBridge() {
     }
     void scene.layers.ensureFallbackBasemap();
   }, [scene, layerCatalog.data, layerCatalog.isLoading]);
+
+  // Site records the app fetched (a bookmark saved or deleted refetches its site) → the
+  // records the scene keeps for flights, which a new catalog alone used to refresh.
+  const queryClient = useQueryClient();
+  useEffect(() => {
+    if (!scene) return;
+    return watchSiteRecords(queryClient, (site) => scene.sites.updateRecord(site));
+  }, [scene, queryClient]);
 
   useEffect(() => {
     if (!scene || siteCatalog.isLoading) return;

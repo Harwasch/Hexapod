@@ -325,6 +325,23 @@ export class SiteManager {
     this.checkProximity(true);
   }
 
+  /**
+   * A fresh copy of a site's record, fetched elsewhere in the app (the query cache,
+   * `watchSiteRecords`): a bookmark saved or deleted, the site edited. The records kept for
+   * flights (`details`) and the loaded site's own copy were otherwise cleared only with a new
+   * catalog, and a bookmark changes nothing the catalog list carries -- so the next fly-to used
+   * to leave for a deleted bookmark, or for the footprint of a site that now has one. Every
+   * fly-to used to fetch the record afresh; the copy kept now has to be kept fresh instead.
+   *
+   * A loaded site takes the new bookmarks only: its assets are in the scene as they were
+   * loaded, and swapping them is a reload, not an update.
+   */
+  updateRecord(site: Site): void {
+    this.details.set(site.id, site);
+    const entry = this.loaded.get(site.id);
+    if (entry) entry.site = { ...entry.site, cameraBookmarks: site.cameraBookmarks };
+  }
+
   private get active(): ActiveSite | null {
     return this.primaryId ? (this.loaded.get(this.primaryId) ?? null) : null;
   }

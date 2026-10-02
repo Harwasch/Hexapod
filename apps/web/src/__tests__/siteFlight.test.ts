@@ -229,6 +229,32 @@ describe("SiteManager.flyTo", () => {
     expect(flights).toHaveLength(2);
   });
 
+  it("flies to the bookmarks the app last fetched, not the ones it kept from before", async () => {
+    const { manager, flights } = harness();
+    let fetched = 0;
+    manager.setCatalog([summary], () => {
+      fetched += 1;
+      return Promise.resolve(site());
+    });
+    await manager.flyTo(SITE_ID);
+    expect(flights.at(-1)?.longitude).toBe(BOOKMARK.longitude);
+    // The default view is deleted and another saved as default (the site's query refetched;
+    // the catalog list is unchanged, so no new catalog reaches the scene).
+    const moved = { ...BOOKMARK, id: "c", longitude: LON - 0.003, height: 300 };
+    manager.updateRecord(site([moved]));
+    await manager.flyTo(SITE_ID);
+    expect(flights.at(-1)?.longitude).toBe(moved.longitude);
+    expect(flights.at(-1)?.height).toBe(300);
+    // All of it from what the app fetched: one record request, the first flight's.
+    expect(fetched).toBe(1);
+    // A site not loaded yet leaves for the fresh record at once too.
+    const other = { ...summary, id: "other" };
+    manager.setCatalog([summary, other], () => Promise.reject(new Error("offline")));
+    manager.updateRecord({ ...site([moved]), id: "other" });
+    await manager.flyTo("other");
+    expect(flights.at(-1)?.longitude).toBe(moved.longitude);
+  });
+
   it("flies straight to the bookmark when the record is already known", async () => {
     const { manager, flights } = harness();
     manager.setCatalog([summary], () => Promise.resolve(site()));
@@ -349,6 +375,38 @@ describe("SiteManager.flyTo", () => {
     // Somebody else takes the camera: nothing is fetched for a destination nobody reaches.
     flights[1]?.options.onCancel?.();
     expect(prefetch.cancelled).toBe(2);
+  });
+});
+
+describe("site records reach the scene from the query cache", () => {
+  it("hands over each site record the API answers, and nothing else", async () => {
+    const { QueryClient } = await import("@tanstack/react-query");
+    const { queryKeys, watchSiteRecords } = await import("@/api/queries");
+    const client = new QueryClient();
+    const seen: string[] = [];
+    const stop = watchSiteRecords(client, (record) =>
+      seen.push(`${record.id}:${String(record.cameraBookmarks.length)}`),
+    );
+    // A bookmark saved: the site's query is invalidated and refetched.
+    await client.query({ queryKey: queryKeys.site(SITE_ID), queryFn: () => site() });
+    await client.query({
+      queryKey: queryKeys.site(SITE_ID),
+      queryFn: () => site([BOOKMARK, { ...BOOKMARK, id: "c", isDefault: false }]),
+      staleTime: 0,
+    });
+    // Not a site record: the catalog list, a failed fetch.
+    await client.query({ queryKey: queryKeys.sites, queryFn: () => [summary] });
+    await client
+      .query({
+        queryKey: queryKeys.site("gone"),
+        queryFn: () => Promise.reject(new Error("503")),
+        retry: false,
+      })
+      .catch(() => undefined);
+    expect(seen).toEqual([`${SITE_ID}:1`, `${SITE_ID}:2`]);
+    stop();
+    client.setQueryData(queryKeys.site(SITE_ID), site([]));
+    expect(seen).toHaveLength(2);
   });
 });
 

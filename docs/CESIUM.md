@@ -319,7 +319,9 @@ first — for the site's record (a GET that meets the API's cold start), for the
 (a proxy probe and `tileset.json`, retried up to four times) and, without a bookmark, for the
 model to be clamped to the terrain — and for ever if one of those stalled. Now the first leg
 leaves at once for the best pose known: the authored bookmark when the record is already here
-(a second visit, the built-in demo), else the catalog summary's centre and size. The record
+(a second visit, the built-in demo), else the catalog summary's centre and size. The kept
+record follows every copy of it the app fetches (`watchSiteRecords`, `SiteManager.updateRecord`),
+so a bookmark saved or deleted is where the next flight goes. The record
 and the model load meanwhile, with deadlines (12 s for the record, 15 s per tileset attempt;
 `lib/timeout.ts`), and Cesium preloads the flight's destination tiles for the site's tileset
 as soon as it exists (`preloadFlightDestinations`). As better poses arrive (the bookmark with
