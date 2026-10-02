@@ -6,13 +6,14 @@ name: Fill scans (Modal GPU, NVIDIA Fixer)
 # inferred tilesets as an artifact. Nothing is published. See infra/modal/fill.py and
 # docs/WORLD_MODEL_RUNBOOK.md.
 #
-# On a push to `living-models` (or a `wm-*` working branch) that touches the fill code
+# On a push to a `wm-*` working branch that touches the fill code (not `living-models`,
+# so merges there start no GPU run)
 # (workflow_dispatch only works once this file is on the default branch). The Modal token
 # is the repository's; Fixer needs no other secret.
 
 on:
   push:
-    branches: [living-models, "wm-*"]
+    branches: ["wm-*"]
     paths:
       - infra/modal/fill.py
       - tools/captures/teacher_fill.py
