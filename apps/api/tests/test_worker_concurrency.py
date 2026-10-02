@@ -364,9 +364,10 @@ TEST_RECIPES = Path(__file__).resolve().parent / "recipes"
 def test_a_filtered_claim_takes_the_oldest_job_of_its_recipes_and_nothing_else(
     db: Session, sessions: sessionmaker[Session]
 ) -> None:
-    capture = make_capture(db)
-    training = queue_job(db, capture, "t-slow")
-    ingest = queue_job(db, capture, "t-three")
+    # One capture per job: a capture may hold only one queued-or-running job
+    # (uq_jobs_one_active_per_capture).
+    training = queue_job(db, make_capture(db, slug="paddock-train"), "t-slow")
+    ingest = queue_job(db, make_capture(db, slug="paddock-ingest"), "t-three")
     session = sessions()
     try:
         # An empty set claims nothing, and asks the database nothing.
@@ -435,10 +436,11 @@ def test_a_cpu_only_slot_runs_an_ingest_beside_a_training_run_but_never_a_second
     tmp_path: Path,
     claims: list[tuple[str, uuid.UUID]],
 ) -> None:
-    capture = make_capture(db)
-    training = queue_job(db, capture, "t-slow")
-    ingest = queue_job(db, capture, "t-three")
-    second_training = queue_job(db, capture, "t-slow")
+    # One capture per job: a capture may hold only one queued-or-running job
+    # (uq_jobs_one_active_per_capture).
+    training = queue_job(db, make_capture(db, slug="paddock-train"), "t-slow")
+    ingest = queue_job(db, make_capture(db, slug="paddock-ingest"), "t-three")
+    second_training = queue_job(db, make_capture(db, slug="paddock-train-2"), "t-slow")
     worker = Worker(
         sessions,
         storage,
