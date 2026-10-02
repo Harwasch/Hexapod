@@ -206,3 +206,17 @@ kill_timeout = "30s"
   # is exactly one worker, and a second one would not share this directory. A stopped
   # machine keeps its volume; an idle exit loses nothing in the workdir.
   initial_size = "20gb"
+
+# Restart the worker when it dies -- an OOM kill, a crash at start-up against a database
+# that was briefly away -- rather than leaving the queue with nobody to claim it until
+# someone notices. `on-failure`, not `always`: a worker that exits 0 meant to (it ran out
+# of work and is idling the machine down to save it), and `always` would start it straight
+# back up and undo that. Ten tries, then Fly leaves it stopped; by then the cause is not
+# going away on its own, and WORKER_HEARTBEAT_URL / QUEUE_CHECK_URL are what say so (a run
+# that went quiet, a job queued and never claimed). A job the dead worker held is not
+# lost either way: its lease lapses and the restarted worker resumes it, re-attaching to
+# a GPU call it left running (apps/api/app/worker/README.md).
+[[restart]]
+  policy = "on-failure"
+  retries = 10
+  processes = ["worker"]
