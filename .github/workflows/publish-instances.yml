@@ -1,0 +1,236 @@
+name: Publish instances
+
+# Scene segmentation (instances.json + instances.emb, docs/SCENE_OBJECTS.md §4) published
+# beside a scan's tiles, so the viewer's search / hide / highlight works on the live site.
+# Opt-in, and never run by default.
+#
+# * **What it does.** `build`: takes the `segmentation` artifact of a `segment.yml` run (one
+#   folder per scan, named as in infra/modal/segment.py `SCANS`), fetches each scan's
+#   published tileset and every tile, checks that the binding covers exactly those tiles
+#   (every tile's position checksum is a key, its run lengths add up to its gaussians), adds
+#   `root.extras.instances` (segment_scene.link_instances), and keeps the result as an
+#   artifact to review. It refuses a tileset.json that would change by more than that.
+#   `publish` (only when asked): uploads instances.json and instances.emb first, then the
+#   tileset.json that names them, at the tileset's own URL. Nothing in the API changes.
+# * **How to run it.** `workflow_dispatch` once this file is on the default branch; before
+#   that, push a commit whose message carries `[instances|run=<segment.yml run id>]`,
+#   adding `|scans=camp,spool` to choose scans and `|publish` to publish.
+#
+# Secrets, for `publish` only: CLOUDFLARE_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY;
+# variables R2_PUBLIC_BUCKET (or R2_BUCKET), R2_PUBLIC_URL.
+
+on:
+  push:
+    branches: [living-models]
+  workflow_dispatch:
+    inputs:
+      run:
+        description: "The segment.yml run whose `segmentation` artifact to publish"
+        type: string
+        required: true
+      scans:
+        description: "Comma-separated scan names (infra/modal/segment.py SCANS)"
+        type: string
+        default: spool,pumpkin,camp
+      publish:
+        description: "Publish beside the tiles (otherwise build and review only)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  plan:
+    name: What to run
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      contains(github.event.head_commit.message, '[instances|')
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.plan.outputs.run }}
+      scans: ${{ steps.plan.outputs.scans }}
+      publish: ${{ steps.plan.outputs.publish }}
+    steps:
+      # Read as data, validated here, never interpolated into a shell line.
+      - id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          MESSAGE: ${{ github.event.head_commit.message }}
+          RUN: ${{ inputs.run }}
+          SCANS: ${{ inputs.scans }}
+          PUBLISH: ${{ inputs.publish }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import os, re
+          options = {"run": "", "scans": "spool,pumpkin,camp", "publish": "false"}
+          if os.environ["EVENT"] == "workflow_dispatch":
+              for name in options:
+                  options[name] = os.environ.get(name.upper(), "") or options[name]
+          else:
+              found = re.search(r"\[instances([^\]]*)\]", os.environ.get("MESSAGE", ""))
+              for part in (found.group(1) if found else "").split("|")[1:]:
+                  name, _, value = part.partition("=")
+                  if name not in options:
+                      raise SystemExit(f"unknown option {name!r} in the [instances] token")
+                  options[name] = value if value else "true"
+          valid = {"run": r"[0-9]+", "scans": r"[a-z0-9-]+(,[a-z0-9-]+)*", "publish": r"true|false"}
+          for name, pattern in valid.items():
+              if not re.fullmatch(pattern, options[name]):
+                  raise SystemExit(f"{name}={options[name]!r} is not {pattern}")
+          for name, value in options.items():
+              print(f"{name}={value}")
+          PY
+          cat "$GITHUB_OUTPUT"
+
+  build:
+    name: Bind, link and check each scan
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      SCANS: ${{ needs.plan.outputs.scans }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: segmentation
+          path: ${{ runner.temp }}/segmentation
+          run-id: ${{ needs.plan.outputs.run }}
+          github-token: ${{ github.token }}
+      - name: Each scan's tiles, the binding checked against them, and the link
+        working-directory: tools/captures
+        run: |
+          uv sync --frozen
+          uv run --with modal==1.5.5 python - <<'PY' | tee -a "$GITHUB_STEP_SUMMARY"
+          import importlib.util, json, os, shutil, sys, urllib.request
+          from pathlib import Path
+
+          import numpy as np
+
+          import rig_tiles
+          import segment_scene
+          from synthetic_tree import checksum_positions
+
+          # The scans' URLs and the user agent the bucket accepts, from the segmentation app.
+          spec = importlib.util.spec_from_file_location("segment_app", "../../infra/modal/segment.py")
+          app = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(app)
+          scans, agent = app.SCANS, app.USER_AGENT
+
+          def get(url):
+              request = urllib.request.Request(url, headers={"User-Agent": agent})
+              with urllib.request.urlopen(request, timeout=300) as response:
+                  return response.read()
+
+          temp = Path(os.environ["RUNNER_TEMP"])
+          print("## Instances\n")
+          for name in os.environ["SCANS"].split(","):
+              url = scans[name]
+              src = temp / "segmentation" / name
+              doc = json.loads((src / "instances.json").read_text())
+              tiles = temp / "tiles" / name
+              tiles.mkdir(parents=True)
+              (tiles / "tileset.json").write_bytes(get(url))
+              published = json.loads((tiles / "tileset.json").read_text())
+              base = url.rsplit("/", 1)[0]
+              uris = rig_tiles.tile_uris(published)
+              for uri in uris:
+                  (tiles / uri).parent.mkdir(parents=True, exist_ok=True)
+                  (tiles / uri).write_bytes(get(f"{base}/{uri}"))
+                  positions = rig_tiles.tile_positions(tiles / uri)
+                  runs = doc["tiles"].get(checksum_positions(positions))
+                  if runs is None:
+                      raise SystemExit(f"{name}: {uri} is not in instances.json's binding")
+                  if int(np.sum(runs[1::2])) != positions.shape[0]:
+                      raise SystemExit(f"{name}: {uri}'s runs do not cover its gaussians")
+              if len(doc["tiles"]) != len(set(doc["tiles"])) or len(doc["tiles"]) < len(set(uris)):
+                  raise SystemExit(f"{name}: the binding does not match the tiles")
+              out = temp / "out" / name
+              out.mkdir(parents=True)
+              for file in ("instances.json", "instances.emb"):
+                  shutil.copy(src / file, out / file)
+              shutil.copy(tiles / "tileset.json", out / "tileset.json")
+              segment_scene.link_instances(out / "tileset.json", len(doc["instances"]))
+              after = json.loads((out / "tileset.json").read_text())
+              after["root"]["extras"].pop("instances")
+              before = json.loads((tiles / "tileset.json").read_text())
+              before["root"].get("extras", {}).pop("instances", None)
+              if not before["root"].get("extras"):
+                  before["root"].pop("extras", None)
+                  if not after["root"]["extras"]:
+                      after["root"].pop("extras")
+              if before != after:
+                  raise SystemExit(f"{name}: tileset.json would change by more than extras.instances")
+              (out / "url.txt").write_text(url)
+              top = sum(1 for r in doc["instances"] if r["level"] == 0)
+              print(f"- **{name}**: {len(uris)} tiles bound, {len(doc['instances']):,} instances "
+                    f"({top:,} top-level); {url}")
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: instances
+          path: ${{ runner.temp }}/out/
+          if-no-files-found: error
+
+  publish:
+    name: Publish beside the tiles
+    needs: [plan, build]
+    if: needs.plan.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      OBJECT_STORAGE_ENDPOINT_URL: https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
+      OBJECT_STORAGE_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY_ID }}
+      OBJECT_STORAGE_SECRET_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      OBJECT_STORAGE_PUBLIC_BUCKET: ${{ vars.R2_PUBLIC_BUCKET || format('{0}-public', vars.R2_BUCKET || 'twin-assets') }}
+      OBJECT_STORAGE_PUBLIC_URL: ${{ vars.R2_PUBLIC_URL }}
+    steps:
+      - name: The secrets this job needs
+        run: |
+          missing=""
+          for name in OBJECT_STORAGE_ACCESS_KEY OBJECT_STORAGE_SECRET_KEY OBJECT_STORAGE_PUBLIC_URL; do
+            if [ -z "${!name:-}" ]; then missing="$missing $name"; fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::missing:$missing. See docs/DEPLOYMENT.md."
+            exit 1
+          fi
+      - uses: actions/download-artifact@v4
+        with:
+          name: instances
+          path: out
+      - uses: astral-sh/setup-uv@v6
+      - name: instances.json and instances.emb, then the tileset.json that names them
+        run: |
+          uv run --with boto3 python - <<'PY'
+          import os
+          from pathlib import Path
+          import boto3
+          public = os.environ["OBJECT_STORAGE_PUBLIC_URL"].rstrip("/") + "/"
+          s3 = boto3.client(
+              "s3",
+              endpoint_url=os.environ["OBJECT_STORAGE_ENDPOINT_URL"],
+              aws_access_key_id=os.environ["OBJECT_STORAGE_ACCESS_KEY"],
+              aws_secret_access_key=os.environ["OBJECT_STORAGE_SECRET_KEY"],
+              region_name="auto",
+          )
+          bucket = os.environ["OBJECT_STORAGE_PUBLIC_BUCKET"]
+          for folder in sorted(p for p in Path("out").iterdir() if p.is_dir()):
+              url = (folder / "url.txt").read_text().strip()
+              if not url.startswith(public):
+                  raise SystemExit(f"{url} is not under the public bucket's URL {public}")
+              prefix = url[len(public):].rsplit("/", 1)[0]
+              # The sidecars first: a tileset.json naming files not there yet would be a 404
+              # to every client that loads it in between.
+              for name, kind in (("instances.json", "application/json"),
+                                 ("instances.emb", "application/octet-stream"),
+                                 ("tileset.json", "application/json")):
+                  s3.upload_file(str(folder / name), bucket, f"{prefix}/{name}",
+                                 ExtraArgs={"ContentType": kind})
+                  print(f"{bucket}/{prefix}/{name} ({kind})")
+          PY
