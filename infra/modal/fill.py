@@ -246,7 +246,8 @@ GSPLAT_WHEEL = (
 distill_image = (
     modal.Image.debian_slim(python_version="3.10")
     .pip_install("torch==2.4.1+cu124", index_url="https://download.pytorch.org/whl/cu124")
-    .pip_install("numpy==1.26.4", "ninja", "jaxtyping", "rich", GSPLAT_WHEEL)
+    # gsplat imports `packaging`, which nothing else here installs.
+    .pip_install("numpy==1.26.4", "ninja", "jaxtyping", "rich", "packaging", GSPLAT_WHEEL)
     .add_local_file(LOCAL_CAPTURES / "distill_fill.py", "/root/distill_fill.py")
 )
 
@@ -292,6 +293,7 @@ gsplat_job_image = (
         "ninja",
         "jaxtyping",
         "rich",
+        "packaging",
         GSPLAT_WHEEL,
         "pillow>=10",
         "laspy[lazrs]>=2.5",
