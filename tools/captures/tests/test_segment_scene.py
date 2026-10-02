@@ -373,6 +373,18 @@ def test_render_instances(run: dict, tmp_path: Path) -> None:
     assert pixels[:, w:].any()
 
 
+def test_check_cameras_with_and_without_local_views(run: dict) -> None:
+    views = run["result"].views
+    cams = ss.check_cameras(views)
+    assert len(cams) == 4 and cams[0] is views[0].camera
+    assert all(np.isfinite(c.far) for c in cams[1:])
+    # A small scan's plan has no far planes: the others are spread through its views.
+    whole = [v for v in views if not np.isfinite(v.camera.far)]
+    cams = ss.check_cameras(whole)
+    assert len(cams) == min(4, len(whole)) and len({id(c) for c in cams}) == len(cams)
+    assert ss.check_cameras(whole[:1]) == [whole[0].camera]
+
+
 def test_binding_by_position_agrees_with_the_ply_replay(written: Path, run: dict) -> None:
     """A scan known only by its tiles binds as one known by its PLY: exactly on the leaves,
     and on nearly every merged parent gaussian."""

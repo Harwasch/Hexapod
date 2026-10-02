@@ -1688,11 +1688,13 @@ def top_level(parent: np.ndarray) -> np.ndarray:
 
 
 def check_cameras(views: Sequence[View], count: int = 4) -> list[Camera]:
-    """Cameras for `render_instances`: the first view (the whole scan) and, when there are
-    local views (a far plane), `count - 1` of them spread through the plan."""
-    local = [v.camera for v in views if math.isfinite(v.camera.far)]
-    picks = [local[(2 * k + 1) * len(local) // (2 * (count - 1))] for k in range(count - 1)]
-    return [views[0].camera] + (picks if local else [])
+    """Cameras for `render_instances`: the first view (the whole scan) and `count - 1` more
+    spread through the plan -- its local views (a far plane) when it has them."""
+    if not views:
+        return []
+    pool = [v.camera for v in views if math.isfinite(v.camera.far)] or [v.camera for v in views[1:]]
+    n = min(count - 1, len(pool))
+    return [views[0].camera] + [pool[(2 * k + 1) * len(pool) // (2 * n)] for k in range(n)]
 
 
 def collect_votes(
