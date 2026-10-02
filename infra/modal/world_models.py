@@ -1,5 +1,6 @@
 """World models on Modal GPUs: the three image/video models the teachers call. **Written
-against each model's own documented entry point; never run on a GPU.**
+against each model's own documented entry point; only Fixer has run on a GPU** (its
+image and class as in `infra/modal/fill.py`, which ran it on 2026-10-02).
 
     Fixer    nvidia/Fixer (Apache code, NVIDIA Open Model License weights). One image in,
              one image out: a render with 3DGS artifacts -> a clean one. Teacher B's filler.
@@ -25,19 +26,22 @@ What was checked, 2026-10-01, and what was not:
 * Fixer: the repository at `FIXER_COMMIT` was read; its inference script's functions are
   what `Fixer.fix` calls, and it expects the base model at `/work/models/base/`, which is
   where the weights volume is mounted. The Hub repo `nvidia/Fixer` holds `base/` and
-  `pretrained/` (5.5 GB). Its base container is NGC's
-  `cosmos-predict2-container:1.2`, pulled with the `ngc` secret.
+  `pretrained/` (5.5 GB, not gated). Its own base container is NGC's
+  `cosmos-predict2-container:1.2` (needs an NGC key); the image here builds the same
+  environment from cosmos-predict2's uv.lock on a public CUDA base instead, and on
+  2026-10-02 it loaded every checkpoint key and cleaned Fixer's own examples.
 * Wan: the Hub model card's diffusers recipe, with `WanImageToVideoPipeline` for the
   image-conditioned case; 1280x704 is the 720p size, the aspect following the input.
 * Cosmos: the repository at `COSMOS_COMMIT` was read -- `examples/inference.py` with a
   JSON spec, `--inference-type=image2world --model=2B/post-trained`, output saved at 16 fps.
   The Hugging Face token must have accepted the licences of Cosmos-Predict2.5-2B,
   Cosmos-Reason1-7B and Cosmos-Guardrail1 (it had not, on 2026-10-01).
-* Nothing has been built by Modal or run. Package pins below are the first guess that
-  `modal deploy` proves; the runbook (docs/WORLD_MODEL_RUNBOOK.md) says what to try first.
+* Wan, Cosmos and Distill have not been built by Modal or run. Their package pins are the
+  first guess that `modal deploy` proves; the runbook (docs/WORLD_MODEL_RUNBOOK.md) says
+  what to try first.
 
-Secrets: `huggingface` (HF_TOKEN), `ngc` (REGISTRY_USERNAME=$oauthtoken,
-REGISTRY_PASSWORD=<NGC API key>). Weights are cached in the volume
+Secrets: `huggingface` (HF_TOKEN) for Wan, Cosmos and segmentation; Fixer needs none.
+Weights are cached in the volume
 `hexapod-world-model-weights`, so only the first call downloads.
 
     modal deploy infra/modal/world_models.py

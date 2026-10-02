@@ -162,6 +162,9 @@ class Fixer:
             x = self.fixer.preprocess_image(
                 image.resize((width, height), Image.BILINEAR), self.device, self.dtype
             )
+            # The diffusion step Fixer denoises from (its README runs 250).
+            step = int(request.get("timestep", FIXER_TIMESTEP))
+            self.model.timesteps = torch.tensor([step], device="cuda")
             with torch.no_grad():
                 y = self.fixer.model_inference(
                     self.model, 1, height, width, self.dtype, self.device, x=x
@@ -434,17 +437,6 @@ def run_job(kind: str, scan: str, filler: str, options: dict) -> dict:
         }
 
 
-def _smooth(rgb, alpha, sigma: float):  # noqa: ANN001, ANN202 - arrays
-    """Normalized convolution: the renderer's point samples spread over their gaps."""
-    import cv2
-    import numpy as np
-
-    w = cv2.GaussianBlur(alpha.astype(np.float32), (0, 0), sigma)
-    c = cv2.GaussianBlur((rgb * alpha[..., None]).astype(np.float32), (0, 0), sigma)
-    a = np.clip(w, 0, 1)
-    return np.where(w[..., None] > 1e-4, c / np.maximum(w, 1e-4)[..., None], 0) * a[..., None]
-
-
 @app.function(image=job_image, cpu=8.0, memory=65536, timeout=3600)
 def probe(scan: str) -> dict:
     """Fixer on one scan's renders, prepared several ways: which input it can work with."""
@@ -454,7 +446,7 @@ def probe(scan: str) -> dict:
     import numpy as np
     import teacher_fill as tf
     import view_cones as vc
-    from splat_render import load_tileset, render
+    from splat_render import load_tileset
     from world_model_client import decode_png, encode_png
 
     with tempfile.TemporaryDirectory() as work:
@@ -475,23 +467,25 @@ def probe(scan: str) -> dict:
     files: dict[str, bytes] = {}
     scores: dict[str, dict] = {}
     for k, cam in enumerate(cams):
-        frame = render(splats, cam)
+        cond = tf.condition(splats, cam, grid)
+        frame = cond.full
         raw = tf.to_u8(frame.rgb)
-        half = cv2.resize(raw, (w // 2, h // 2), interpolation=cv2.INTER_AREA)
+        seen = tf.to_u8(cond.seen.rgb)
+        hole = (cond.mask | (cond.seen.alpha < tf.SEEN_ALPHA)).astype(np.uint8) * 255
+        seen_telea = cv2.inpaint(seen, hole, 5, cv2.INPAINT_TELEA)
         variants = {
-            "raw": (raw, FIXER_RESOLUTION),
-            "smooth1": (tf.to_u8(_smooth(frame.rgb, frame.alpha, 1.0)), FIXER_RESOLUTION),
-            "smooth2": (tf.to_u8(_smooth(frame.rgb, frame.alpha, 2.0)), FIXER_RESOLUTION),
-            "blur1.5": (cv2.GaussianBlur(raw, (0, 0), 1.5), FIXER_RESOLUTION),
-            "half": (cv2.resize(half, (w, h), interpolation=cv2.INTER_LINEAR), FIXER_RESOLUTION),
-            "res512": (raw, 512),
-            "res704": (raw, 704),
-            "res960": (raw, 960),
+            "raw": (raw, FIXER_RESOLUTION, FIXER_TIMESTEP),
+            "raw-t100": (raw, FIXER_RESOLUTION, 100),
+            "raw-t50": (raw, FIXER_RESOLUTION, 50),
+            "raw-t400": (raw, FIXER_RESOLUTION, 400),
+            "seen": (seen, FIXER_RESOLUTION, FIXER_TIMESTEP),
+            "seen-telea": (seen_telea, FIXER_RESOLUTION, FIXER_TIMESTEP),
+            "seen-telea-t100": (seen_telea, FIXER_RESOLUTION, 100),
         }
         covered = frame.alpha >= 0.5
         blur = lambda x: cv2.GaussianBlur(x, (0, 0), 2.0)  # noqa: E731
-        for name, (given, resolution) in variants.items():
-            request = {"images": [encode_png(given)], "resolution": resolution}
+        for name, (given, resolution, step) in variants.items():
+            request = {"images": [encode_png(given)], "resolution": resolution, "timestep": step}
             out = decode_png(Fixer().fix.remote(request)["images"][0])
             scores[f"view{k}-{name}"] = {
                 "gate": round(tf.psnr(out, given, covered), 2),
