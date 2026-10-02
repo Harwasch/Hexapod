@@ -1,6 +1,6 @@
 import type { Page } from "@playwright/test";
 
-import { expect, mockApi, test } from "./fixtures";
+import { addOnScreenCredit, expect, mockApi, test } from "./fixtures";
 
 /** Ids of the plan overlay entities the map is drawing (passes, step markers, route). */
 function entityIds(app: Page): Promise<string[]> {
@@ -454,6 +454,38 @@ test.describe("the HUD over the map", () => {
         await expect(dialog).toContainText("default ion access token");
         await app.getByRole("button", { name: "Close data attribution" }).click();
         await expect(dialog).toBeHidden();
+
+        // A provider's linked credit reads in the accent on the glass, in either theme and
+        // when hovered: not the browser's default blue, nor the white and #48b that CesiumJS's
+        // own stylesheet (appended after the app's) would give it.
+        await addOnScreenCredit(
+          app,
+          '<a href="https://www.openstreetmap.org/copyright">© OpenStreetMap contributors</a>',
+        );
+        const link = credits.getByRole("link", { name: "© OpenStreetMap contributors" });
+        await expect(link).toBeVisible();
+        const expectAccent = async () => {
+          const colours = await link.evaluate((el) => {
+            const root = document.documentElement;
+            const probe = document.body.appendChild(document.createElement("span"));
+            probe.style.color = "var(--accent-strong)";
+            const read = () => [getComputedStyle(el).color, getComputedStyle(probe).color];
+            const dark = read();
+            root.dataset.theme = "light";
+            const light = read();
+            delete root.dataset.theme;
+            probe.remove();
+            return { dark, light };
+          });
+          expect(colours.dark[0]).toBe(colours.dark[1]);
+          expect(colours.light[0]).toBe(colours.light[1]);
+          expect(colours.light[1]).not.toBe(colours.dark[1]);
+        };
+        await expectAccent();
+        await link.hover();
+        await expectAccent();
+        const withLink = await credits.boundingBox();
+        expect(withLink?.height ?? 0).toBeLessThan(48);
       });
     });
   }

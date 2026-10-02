@@ -107,6 +107,13 @@ a {
   overflow: hidden;
 }
 
+/* What is inside: CesiumWidget puts its own `.cesium-widget-credits` in the container it is
+   given (CesiumWidget.js, "innerCreditContainer"), and CreditDisplay fills that with the logo,
+   the on-screen credits and "Data attribution". The widget's stylesheet pins that inner box
+   absolutely, hence the !important resets; without them the chip collapses to its padding.
+   CreditDisplay also appends a stylesheet of its own after this file (white links, white
+   visited links, a #48b hover), so the colours below start from the container to outrank it
+   on specificity rather than order. */
 .cesium-viewer-bottom .cesium-widget-credits {
   position: static !important;
   display: flex !important;
@@ -131,7 +138,18 @@ a {
   padding-left: 0.25rem;
 }
 
-.cesium-viewer-bottom .cesium-widget-credits a {
+.cesium-viewer-bottom .cesium-credit-expand-link:hover {
+  color: var(--text-primary);
+}
+
+/* A provider's link reads in the accent, which holds its contrast on the glass in both
+   themes — visited or hovered too, where the engine's white vanishes on the light glass and
+   its #48b hover is dim on the dark one. */
+.cesium-viewer-bottom a,
+.cesium-viewer-bottom a:visited,
+.cesium-viewer-bottom .cesium-credit-wrapper a,
+.cesium-viewer-bottom .cesium-credit-wrapper a:visited,
+.cesium-viewer-bottom .cesium-credit-textContainer a:hover {
   color: var(--accent-strong);
 }
 
