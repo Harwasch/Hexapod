@@ -14,11 +14,12 @@ import { SelectionCard } from "@/features/mission/SelectionCard";
 import { SettingsSheet } from "@/features/settings/SettingsSheet";
 import { PhoneTabBar } from "@/features/shell/PhoneTabBar";
 import { ToolRail } from "@/features/shell/ToolRail";
-import { LOCAL_VIEWS_KEY } from "@/features/bookmarks/savedViews";
+import { LOCAL_VIEWS_KEY, localViewsFor, unsitedViews } from "@/features/bookmarks/savedViews";
 import type { Machine, Project, Zone } from "@/missions/types";
 import { bindDockRules, rightDockBusy, useLayout } from "@/state/layout";
 import { useMission } from "@/state/mission";
 import { useSettings } from "@/state/settings";
+import { useSites } from "@/state/sites";
 import { useUi } from "@/state/ui";
 import { initialCamera, useViewer } from "@/state/viewer";
 
@@ -224,6 +225,46 @@ describe("the site switcher", () => {
     await user.click(within(switcher).getByRole("button", { name: /Add a site/ }));
     expect(useUi.getState()).toMatchObject({ activePanel: "add", addTab: "link" });
     expect(useMission.getState().projectsOpen).toBe(false);
+  });
+});
+
+describe("views saved with no site", () => {
+  const unsited = {
+    id: "local-1",
+    name: "Before any site",
+    longitude: 1,
+    latitude: 2,
+    height: 300,
+    heading: 0,
+    pitch: -45,
+    roll: 0,
+    isDefault: false,
+    siteId: "",
+    createdAt: "2026-10-01T00:00:00.000Z",
+  };
+
+  it("are kept, and listed beside a site's own once a site is current", () => {
+    const elsewhere = { ...unsited, id: "local-2", name: "At the orchard", siteId: "orchard" };
+    expect(unsitedViews([unsited, elsewhere], "yard")).toEqual([unsited]);
+    // With no current site they are the list itself, not a second one.
+    expect(unsitedViews([unsited, elsewhere], null)).toEqual([]);
+    expect(localViewsFor([unsited, elsewhere], null)).toEqual([unsited]);
+  });
+
+  it("show under Other saved views at a site, and can still be deleted there", async () => {
+    const user = userEvent.setup();
+    window.localStorage.setItem(LOCAL_VIEWS_KEY, JSON.stringify([unsited]));
+    useSites.setState({ activeSiteId: "yard" });
+    useMission.setState({ project, projectsOpen: true });
+    render(wrap(<ProjectCard />));
+    const switcher = screen.getByRole("dialog", { name: "Switch site" });
+    const other = within(switcher).getByRole("list", { name: "Other saved views" });
+    expect(within(other).getByTestId("saved-view-Before any site")).toBeInTheDocument();
+    expect(within(switcher).getByText(/None for this site yet/)).toBeInTheDocument();
+    await user.click(within(other).getByRole("button", { name: "Delete Before any site" }));
+    expect(within(switcher).queryByText("Other saved views")).not.toBeInTheDocument();
+    expect(JSON.parse(window.localStorage.getItem(LOCAL_VIEWS_KEY) ?? "[]")).toEqual([]);
+    useSites.setState({ activeSiteId: null });
   });
 });
 

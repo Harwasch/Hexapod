@@ -34,6 +34,16 @@ export function localViewsFor(views: readonly LocalView[], siteId: string | null
 }
 
 /**
+ * The local views saved with no site, to list beside a site's own ("Other saved views"); none
+ * while there is no current site, when they are the list itself. The Bookmarks panel this list
+ * replaced showed every view saved in the browser; filtered by site alone, the ones saved
+ * before any site was visited vanished the moment one was, with no way back to them.
+ */
+export function unsitedViews(views: readonly LocalView[], siteId: string | null): LocalView[] {
+  return siteId ? localViewsFor(views, null) : [];
+}
+
+/**
  * The current site's saved camera views — the site switcher's second list.
  *
  * "Current" is the site the camera is at, or else the site the project was last on (the
@@ -106,6 +116,8 @@ export function useSavedViews() {
   return {
     siteId,
     views,
+    /** Views saved in this browser with no site, while a site is current (`unsitedViews`). */
+    other: unsitedViews(local, siteId),
     save,
     remove: removeView,
     saving: create.isPending,

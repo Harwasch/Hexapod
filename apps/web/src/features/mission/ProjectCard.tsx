@@ -23,7 +23,7 @@ import { useSettings } from "@/state/settings";
 import { useSites } from "@/state/sites";
 import { useUi } from "@/state/ui";
 
-import { useSavedViews } from "../bookmarks/savedViews";
+import { useSavedViews, type SavedView } from "../bookmarks/savedViews";
 import { siteDisplayName, useSiteName } from "../sites/siteNames";
 
 /**
@@ -227,11 +227,17 @@ function ViewList({ focus, onDone }: { focus: boolean; onDone: () => void }) {
   const [name, setName] = useState("");
   const input = useRef<HTMLInputElement>(null);
   const headingId = useId();
+  const otherId = useId();
   const hintId = useId();
 
   useEffect(() => {
     if (focus) input.current?.focus();
   }, [focus]);
+
+  const open = (view: SavedView) => {
+    onDone();
+    scene?.camera.flyToBookmark(view);
+  };
 
   return (
     <section className="mc-project__views" aria-labelledby={headingId}>
@@ -243,40 +249,30 @@ function ViewList({ focus, onDone }: { focus: boolean; onDone: () => void }) {
       {saved.views.length > 0 ? (
         <ul className="mc-project__menu-list" aria-label="Saved views">
           {saved.views.map((view) => (
-            <li key={view.id} className="mc-project__view">
-              <button
-                type="button"
-                className="mc-project__row"
-                onClick={() => {
-                  onDone();
-                  scene?.camera.flyToBookmark(view);
-                }}
-                data-testid={`saved-view-${view.name}`}
-              >
-                <Bookmark size={13} aria-hidden="true" className="mc-muted" />
-                <span className="mc-project__row-text">
-                  <span className="mc-project__row-name">
-                    {view.name}
-                    {view.isDefault && <span className="mc-muted"> · default</span>}
-                  </span>
-                </span>
-              </button>
-              <GlassButton
-                iconOnly
-                size="sm"
-                variant="ghost"
-                aria-label={`Delete ${view.name}`}
-                onClick={() => saved.remove(view)}
-              >
-                <Trash2 size={13} aria-hidden="true" />
-              </GlassButton>
-            </li>
+            <ViewRow key={view.id} view={view} onOpen={open} onRemove={saved.remove} />
           ))}
         </ul>
       ) : (
         <p className="mc-project__note mc-muted">
-          No saved views yet. Save the camera to come back to it.
+          {saved.other.length > 0
+            ? "None for this site yet. Save the camera to come back to it."
+            : "No saved views yet. Save the camera to come back to it."}
         </p>
+      )}
+      {saved.other.length > 0 && (
+        // Saved in this browser before any site was visited: still here, below the site's own.
+        <>
+          <div className="mc-project__menu-head">
+            <span className="mc-eyebrow" id={otherId}>
+              Other saved views
+            </span>
+          </div>
+          <ul className="mc-project__menu-list" aria-labelledby={otherId}>
+            {saved.other.map((view) => (
+              <ViewRow key={view.id} view={view} onOpen={open} onRemove={saved.remove} />
+            ))}
+          </ul>
+        </>
       )}
       <form
         className="mc-project__save"
@@ -313,5 +309,44 @@ function ViewList({ focus, onDone }: { focus: boolean; onDone: () => void }) {
             : "Saved in this browser.")}
       </p>
     </section>
+  );
+}
+
+/** One saved view: open it (fly there), or delete it. */
+function ViewRow({
+  view,
+  onOpen,
+  onRemove,
+}: {
+  view: SavedView;
+  onOpen: (view: SavedView) => void;
+  onRemove: (view: SavedView) => void;
+}) {
+  return (
+    <li className="mc-project__view">
+      <button
+        type="button"
+        className="mc-project__row"
+        onClick={() => onOpen(view)}
+        data-testid={`saved-view-${view.name}`}
+      >
+        <Bookmark size={13} aria-hidden="true" className="mc-muted" />
+        <span className="mc-project__row-text">
+          <span className="mc-project__row-name">
+            {view.name}
+            {view.isDefault && <span className="mc-muted"> · default</span>}
+          </span>
+        </span>
+      </button>
+      <GlassButton
+        iconOnly
+        size="sm"
+        variant="ghost"
+        aria-label={`Delete ${view.name}`}
+        onClick={() => onRemove(view)}
+      >
+        <Trash2 size={13} aria-hidden="true" />
+      </GlassButton>
+    </li>
   );
 }
