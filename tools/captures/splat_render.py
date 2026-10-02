@@ -21,6 +21,10 @@ axis (the coverage-weighted mean of what was composited; `inf` where nothing was
 pixel, summed over its gaussians (-1 where nothing did), and `purity` (h, w): that label's
 share of the pixel's coverage.
 
+`GsplatRenderer` is the same call on a GPU: gsplat's EWA rasteriser (as a viewer draws the
+scan), with the same cameras, coverage and depth, no labels. An image model trained on 3DGS
+renders (NVIDIA Fixer) is shown that, not the point samples (`teacher_fill --renderer`).
+
 Cameras follow the OpenCV convention the rest of the pipeline uses (x right, y down,
 z forward; `K = [[f, 0, cx], [0, f, cy], [0, 0, 1]]`), in the scan's own frame.
 """
@@ -37,6 +41,7 @@ import numpy as np
 __all__ = [
     "Camera",
     "Frame",
+    "GsplatRenderer",
     "SplatIndex",
     "Splats",
     "load_ply",
@@ -484,3 +489,93 @@ def render(
         label_img.reshape(shape),
         purity.reshape(shape),
     )
+
+
+class GsplatRenderer:
+    """`render` on a CUDA GPU with gsplat (`distill_fill.gsplat_frame`): the same camera
+    (pixel centres at +0.5, `K = [[f, 0, w/2], [0, f, h/2], [0, 0, 1]]`), gaussians nearer
+    than 0.05 or past `camera.far` not drawn, a black background, depth the coverage-weighted
+    mean along the view axis (`inf` where nothing was). `label` is -1 and `purity` 0: it is
+    for the teacher's views, not segmentation. The last few scenes' tensors stay on the GPU
+    (`keep`), so the views of one scan upload it once."""
+
+    name = "gsplat"
+
+    def __init__(self, device: str = "cuda", keep: int = 3) -> None:
+        self.device = device
+        self.keep = keep
+        #: (the Splats object, its tensors), most recent last.
+        self._scenes: list[tuple[Splats, dict]] = []
+
+    def _tensors(self, splats: Splats) -> dict:
+        import torch
+
+        for k, (held, tensors) in enumerate(self._scenes):
+            if held is splats:
+                self._scenes.append(self._scenes.pop(k))
+                return tensors
+        del self._scenes[: max(0, len(self._scenes) - self.keep + 1)]
+        t = lambda a: torch.as_tensor(np.asarray(a), dtype=torch.float32, device=self.device)
+        q = splats.rotations / np.maximum(
+            np.linalg.norm(splats.rotations, axis=1, keepdims=True), 1e-12
+        )
+        tensors = {
+            "means": t(splats.positions),
+            "quats": t(q),
+            "scales": t(splats.scales),
+            "opacities": t(splats.opacities),
+            "colours": t(splats.colours),
+        }
+        self._scenes.append((splats, tensors))
+        return tensors
+
+    def __call__(
+        self,
+        splats: Splats,
+        camera: Camera,
+        *,
+        opacity_scale: np.ndarray | None = None,
+        background: tuple[float, float, float] = (0.0, 0.0, 0.0),
+    ) -> Frame:
+        import torch
+
+        from distill_fill import camera_tensors, gsplat_frame
+
+        shape = (camera.height, camera.width)
+        if len(splats) == 0:
+            return Frame(
+                np.zeros(shape + (3,)) + np.asarray(background),
+                np.full(shape, np.inf),
+                np.zeros(shape),
+                np.full(shape, -1, np.int64),
+                np.zeros(shape),
+            )
+        scene = self._tensors(splats)
+        opacities = scene["opacities"]
+        if opacity_scale is not None:
+            scale = torch.as_tensor(np.asarray(opacity_scale), dtype=torch.float32)
+            opacities = opacities * scale.to(self.device)
+        viewmat, K, w, h = camera_tensors(camera.to_json(), torch, self.device)
+        with torch.no_grad():
+            rgb, alpha, depth = gsplat_frame(
+                scene["means"],
+                scene["quats"],
+                scene["scales"],
+                opacities.clamp(0.0, 1.0),
+                scene["colours"],
+                viewmat,
+                K,
+                w,
+                h,
+                near=0.05,
+                far=camera.far if math.isfinite(camera.far) else 1e10,
+            )
+        a = alpha.double().clamp(0.0, 1.0).cpu().numpy()
+        colour = rgb.double().cpu().numpy() + (1.0 - a)[..., None] * np.asarray(background)
+        return Frame(
+            np.clip(colour, 0, 1),
+            np.where(a > 1e-6, depth.double().cpu().numpy(), np.inf),
+            a,
+            np.full(shape, -1, np.int64),
+            np.zeros(shape),
+        )

@@ -125,3 +125,31 @@ class of the same app on an L40S (`world_model_client.LOCAL_CLASSES`), nothing d
 - **Camp from outside, Telea**: 500,901 inferred gaussians, 8 views, mean confidence
   0.42, ~8 min per run. Fixer at 250 and presmoothed: every view refused. Fixer t50/t100
   with the corrected gate: run 36981733755.
+
+## 6. gsplat renders (2026-10-02, branch `wm-gsplat`)
+
+`teacher_fill --renderer gsplat` (`splat_render.GsplatRenderer`, through
+`distill_fill.gsplat_frame`) rasterizes every view on a GPU; `fill.py --renderer gsplat`
+runs the job on an L4 (`run_job_gsplat`). Runs 36992095315 (gsplat), 36994749804
+(+ `--max-scale-m 0.5`, drop-depth fix), 36997466266 (+ Distill 1500).
+
+- **Parity** (`tests/test_gsplat_parity.py`, `fill.py --parity-test`, yard, 8 ring views):
+  depth median 0.5-0.8 % apart, p90 2.5-11 %; gsplat covers 98-99 % of what the CPU covers
+  (IoU 0.70-0.77: it also covers the CPU's speckle gaps); fill masks agree on 98.4-99.8 %
+  of pixels. From inside the yard's canopy they differ by design: the CPU renderer thins any
+  gaussian large on screen to `max_samples` samples, gsplat draws it whole.
+- **What gsplat showed.** From outside, the camp's full render is mostly its edge
+  floaters (scale 0.5-2.7 m, 0.4 % of 22.6 M gaussians), which the CPU renderer had all but
+  hidden. `fill --max-scale-m 0.5` conditions without them; what is left of the unseen side
+  is the surrounding forest's back faces.
+- **Camp from outside, gsplat + max-scale 0.5** (8 views, gate 20 dB blurred): Telea 8/8;
+  Fixer t250 0/8 (11.9-15.9 dB, a grey fog); t100 6/8 (19.4-22.0); t50 8/8 (25.7-27.7, was
+  25.7-26.5 on CPU renders). t50 keeps the layout and cleans the foliage; t250 does not
+  keep it. With Distill 1500 (L40S, ~4 min) Fixer t50's layer is coherent forest, masked L1
+  0.05 -> 0.015 and the measured pixels improve too (outside L1 0.015 -> 0.003); Telea's
+  goes 0.21 -> 0.07 masked but spoils the measured in 4 of 8 views (grey patches).
+- **Drop test** lifts the hole at the depth interpolated from the scan just outside the
+  region (`hole_depth="surround"`, a shell of 2x its half size), not what shows through
+  the hole. Held-out psnrFill/psnrHole (gsplat): yard Telea 16.71/15.56, Fixer t250
+  16.53, t100 16.53, t50 16.53; spool Telea 8.05/7.37, Fixer t250 7.52, t100 7.48, t50 7.47.
+  Telea is ahead on both; on the spool Fixer's fill views are near the hole's own score.

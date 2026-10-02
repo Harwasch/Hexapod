@@ -15,10 +15,16 @@ environment from its `uv.lock` on a public CUDA base (its Dockerfile); `Fixer` u
 then Fixer's Dockerfile lines on top. The weights (`nvidia/Fixer`, not gated) download
 into the shared weights volume once.
 
+**Renderer.** `--renderer cpu` renders the views with `splat_render.render` (numpy point
+samples) in a CPU container; `--renderer gsplat` runs the same job in a GPU container
+(`run_job_gsplat`, an L4) where `splat_render.GsplatRenderer` rasterizes them with gsplat
+-- what a viewer draws, and what Fixer is trained to clean. `--parity-test` runs
+`tools/captures/tests/test_gsplat_parity.py` (CPU against gsplat on the yard) on that GPU.
+
 Run from the repository root (`.github/workflows/fill.yml` does):
 
     modal run infra/modal/fill.py --jobs drop:yard,drop:spool
-    modal run infra/modal/fill.py --jobs fill:camp --distill 1500
+    modal run infra/modal/fill.py --jobs fill:camp --renderer gsplat --distill 1500
 """
 
 from __future__ import annotations
@@ -240,7 +246,8 @@ GSPLAT_WHEEL = (
 distill_image = (
     modal.Image.debian_slim(python_version="3.10")
     .pip_install("torch==2.4.1+cu124", index_url="https://download.pytorch.org/whl/cu124")
-    .pip_install("numpy==1.26.4", "ninja", "jaxtyping", "rich", GSPLAT_WHEEL)
+    # gsplat imports `packaging`, which nothing else here installs.
+    .pip_install("numpy==1.26.4", "ninja", "jaxtyping", "rich", "packaging", GSPLAT_WHEEL)
     .add_local_file(LOCAL_CAPTURES / "distill_fill.py", "/root/distill_fill.py")
 )
 
@@ -275,6 +282,59 @@ job_image = (
         ignore=["**/.venv/**", "**/__pycache__/**", "tests/**", "**/*.pyc"],
     )
 )
+
+#: The same job with gsplat: the Distill image's torch and wheel (cp310), the captures'
+#: dependencies at versions built for numpy 1.26, and the tests (for `--parity-test`).
+gsplat_job_image = (
+    modal.Image.debian_slim(python_version="3.10")
+    .pip_install("torch==2.4.1+cu124", index_url="https://download.pytorch.org/whl/cu124")
+    .pip_install(
+        "numpy==1.26.4",
+        "ninja",
+        "jaxtyping",
+        "rich",
+        "packaging",
+        GSPLAT_WHEEL,
+        "pillow>=10",
+        "laspy[lazrs]>=2.5",
+        "pyproj>=3.6",
+        "scipy>=1.11,<1.16",
+        "opencv-python-headless==4.10.0.84",
+        "pytest>=8",
+    )
+    .env({"HEXAPOD_YARD_TILESET": f"{YARD}/tileset.json"})
+    .add_local_dir(LOCAL_YARD, YARD)
+    .add_local_dir(
+        LOCAL_CAPTURES,
+        CAPTURES,
+        ignore=["**/.venv/**", "**/__pycache__/**", "**/*.pyc"],
+    )
+)
+
+#: Wall seconds spent in each GPU class's calls from this job (cold starts included).
+REMOTE_SECONDS: dict[str, float] = {}
+
+
+class _Timed:
+    """A GPU class whose `.method.remote(...)` calls are timed into `REMOTE_SECONDS`."""
+
+    def __init__(self, name: str, cls: object) -> None:
+        self._name, self._instance = name, cls()  # type: ignore[operator]
+
+    def __getattr__(self, method: str) -> object:
+        bound = getattr(self._instance, method)
+        name = self._name
+
+        class _Call:
+            @staticmethod
+            def remote(*args: object, **kwargs: object) -> object:
+                started = time.time()
+                try:
+                    return bound.remote(*args, **kwargs)
+                finally:
+                    REMOTE_SECONDS[name] = REMOTE_SECONDS.get(name, 0.0) + time.time() - started
+
+        return _Call
 
 
 def _get(url: str, timeout: float) -> bytes:
@@ -330,7 +390,9 @@ def _remote_classes() -> None:
     sys.path.insert(0, CAPTURES)
     import world_model_client
 
-    world_model_client.LOCAL_CLASSES.update(Fixer=Fixer, Distill=Distill)
+    world_model_client.LOCAL_CLASSES.update(
+        Fixer=lambda: _Timed("Fixer", Fixer), Distill=lambda: _Timed("Distill", Distill)
+    )
 
 
 def _teacher_fill(argv: list[str]) -> tuple[int, dict | None, str]:
@@ -375,7 +437,33 @@ def run_job(kind: str, scan: str, filler: str, options: dict) -> dict:
     """One `teacher_fill.py drop|fill` on one scan with one filler (`telea` or `fixer`).
     Returns its report, the strips, and for `fill` the inferred layer (a tar.gz) and the
     measured tileset.json with the layer linked."""
+    return _run_job(kind, scan, filler, options)
+
+
+@app.function(image=gsplat_job_image, gpu="L4", cpu=8.0, memory=65536, timeout=4 * 3600)
+def run_job_gsplat(kind: str, scan: str, filler: str, options: dict) -> dict:
+    """`run_job` with the views rasterized by gsplat on this container's GPU."""
+    return _run_job(kind, scan, filler, {**options, "renderer": "gsplat"})
+
+
+@app.function(image=gsplat_job_image, gpu="L4", cpu=4.0, memory=32768, timeout=3600)
+def parity() -> str:
+    """tests/test_gsplat_parity.py on a GPU: its output (the agreement it measured)."""
+    import subprocess
+
+    os.chdir(CAPTURES)
+    done = subprocess.run(
+        [sys.executable, "-m", "pytest", "-s", "-q", "-rs", "tests/test_gsplat_parity.py"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return f"exit {done.returncode}\n{done.stdout[-20000:]}\n{done.stderr[-5000:]}"
+
+
+def _run_job(kind: str, scan: str, filler: str, options: dict) -> dict:
     _remote_classes()
+    REMOTE_SECONDS.clear()  # a container may run several jobs
     os.chdir(CAPTURES)
     started = time.time()
     spec = FILLERS.get(filler, filler)
@@ -412,11 +500,15 @@ def run_job(kind: str, scan: str, filler: str, options: dict) -> dict:
             out = root / "inferred"
             argv = ["fill", str(tileset), str(out), "--filler", spec]
             argv += ["--views", str(options.get("views", 8)), "--mode", "ring"]
+            if options.get("max_scale_m"):
+                argv += ["--max-scale-m", str(options["max_scale_m"])]
             if options.get("distill"):
                 argv += ["--distill", str(options["distill"]), "--distill-on", "modal"]
         argv += ["--width", str(width), "--height", str(height), "--save", str(save)]
+        argv += ["--renderer", options.get("renderer", "cpu")]
         code, result, log = _teacher_fill(argv)
         timings["teacherS"] = round(time.time() - t, 1)
+        timings.update({f"{k.lower()}S": round(v, 1) for k, v in REMOTE_SECONDS.items()})
         logs.append(log)
         if save.exists():
             files.update({f"strips/{k}": v for k, v in _tree(save).items()})
@@ -509,10 +601,22 @@ def main(
     out: str = "fill-out",
     selftest: bool = False,
     probes: str = "",
+    renderer: str = "cpu",
+    parity_test: bool = False,
+    max_scale_m: float = 0.0,
 ) -> None:
     """Every `kind:scan` in `jobs` with every filler, in parallel containers; each result
     under `out/<kind>-<scan>-<filler>/`, and `out/summary.json`. `selftest`: also Fixer on
-    its repository's examples, under `out/selftest/`."""
+    its repository's examples, under `out/selftest/`. `renderer`: `cpu` or `gsplat` (the
+    jobs on a GPU). `parity_test`: CPU against gsplat on the yard, in `out/parity.txt`.
+    `max_scale_m` (fill jobs, 0 = off): condition without gaussians larger than this."""
+    if renderer not in ("cpu", "gsplat"):
+        raise SystemExit(f"renderer {renderer!r}: cpu or gsplat")
+    if parity_test:
+        Path(out).mkdir(parents=True, exist_ok=True)
+        text = parity.remote()
+        (Path(out) / "parity.txt").write_text(text, encoding="utf-8")
+        sys.stdout.write(f"parity: {text}\n")
     if selftest:
         folder = Path(out) / "selftest"
         folder.mkdir(parents=True, exist_ok=True)
@@ -535,9 +639,12 @@ def main(
         options: dict = {"views": views} if views else {}
         if kind == "fill" and distill:
             options["distill"] = distill
+        if kind == "fill" and max_scale_m > 0:
+            options["max_scale_m"] = max_scale_m
         calls += [(kind, scan, f.strip(), options) for f in fillers.split(",") if f.strip()]
     summary, failed = [], []
-    for result in run_job.starmap(calls, return_exceptions=True):
+    runner = run_job_gsplat if renderer == "gsplat" else run_job
+    for result in runner.starmap(calls, return_exceptions=True):
         if isinstance(result, BaseException):
             failed.append(repr(result))
             sys.stdout.write(f"job raised: {result!r}\n")
