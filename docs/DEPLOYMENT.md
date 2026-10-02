@@ -97,9 +97,12 @@ Build-time environment, all public once the bundle ships:
 `infra/pages/_headers` sets caching and a few conservative security headers. Two notes worth
 keeping: there is no `Content-Security-Policy`, because CesiumJS spawns workers and
 instantiates WebAssembly and a policy written without a browser to test it against breaks
-the globe on first load; and `/cesium/*` is _not_ `immutable`, because `vite.config.ts`
-copies Cesium's static directories to fixed, unhashed paths, so upgrading the dependency
-changes the contents of URLs that keep their names.
+the globe on first load; and `/cesium/*` is `immutable` only because `vite.config.ts` copies
+Cesium's static directories (which are not content-hashed) under a path named for the
+installed version, `/cesium/<version>/`, so upgrading the dependency changes the URLs rather
+than the contents behind them. A patch to the `cesium` package's `Build/` would have to change
+that name too; the engine patch does not touch it. `/fonts/*` (self-hosted, licences beside
+them) is immutable on the same terms: a new cut of a font gets a new file name.
 
 ### The `/r2/` tile proxy, and the one host it serves
 

@@ -1,4 +1,4 @@
-import { cpSync, createReadStream, existsSync, statSync } from "node:fs";
+import { cpSync, createReadStream, existsSync, readFileSync, statSync } from "node:fs";
 import { extname, isAbsolute, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -6,7 +6,25 @@ import react from "@vitejs/plugin-react";
 import { defineConfig, type Plugin } from "vite";
 
 const cesiumSource = fileURLToPath(new URL("./node_modules/cesium/Build/Cesium", import.meta.url));
-const CESIUM_BASE_URL = "/cesium/";
+const cesiumVersion = (
+  JSON.parse(
+    readFileSync(
+      fileURLToPath(new URL("./node_modules/cesium/package.json", import.meta.url)),
+      "utf8",
+    ),
+  ) as { version: string }
+).version;
+/**
+ * Where CesiumJS's static directories are served, and where its workers, WebAssembly and
+ * textures are fetched from at runtime: a path named for the installed version
+ * (`/cesium/1.145.0/`). Those files are not content-hashed, so at a fixed `/cesium/` an
+ * upgrade changed what an old URL returned, and they could only be cached for a day (40-odd
+ * revalidations on the first visit of every day). Named for the version, an upgrade changes
+ * the URLs instead, and infra/pages/_headers marks the whole of `/cesium/*` immutable. The
+ * version alone names the contents: `Build/Cesium` ships prebuilt in the npm package, and the
+ * pnpm patch only touches `@cesium/engine`'s sources. Dev serves the same path.
+ */
+const CESIUM_BASE_URL = `/cesium/${cesiumVersion}/`;
 /**
  * CesiumJS's static build directories the app loads at runtime through CESIUM_BASE_URL. Not
  * `Widgets`: only `@cesium/widgets` reads from it (InfoBox, picker icons), and the scene runs on
@@ -60,7 +78,7 @@ function cesiumDevAssets(): Plugin {
 /**
  * Copies CesiumJS's static build directories into the bundle. A plain recursive copy: a
  * glob-based copy needs forward slashes on Windows and, with this layout, lands nested
- * files under the package path instead of `cesium/<dir>/…`.
+ * files under the package path instead of `cesium/<version>/<dir>/…`.
  */
 function cesiumBuildAssets(): Plugin {
   let outDir = "dist";
@@ -76,7 +94,10 @@ function cesiumBuildAssets(): Plugin {
       for (const dir of CESIUM_STATIC_DIRS) {
         const from = join(cesiumSource, dir);
         if (!existsSync(from)) throw new Error(`CesiumJS build assets not found: ${from}`);
-        cpSync(from, join(outDir, "cesium", dir), { recursive: true, dereference: true });
+        cpSync(from, join(outDir, CESIUM_BASE_URL.slice(1), dir), {
+          recursive: true,
+          dereference: true,
+        });
       }
     },
   };
