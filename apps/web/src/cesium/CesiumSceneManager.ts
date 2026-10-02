@@ -5,8 +5,11 @@ import {
   CesiumWidget,
   Color,
   Math as CesiumMath,
+  Moon,
   RequestScheduler,
   type Scene,
+  SkyBox,
+  Sun,
 } from "cesium";
 
 import { Emitter } from "@/lib/emitter";
@@ -51,12 +54,19 @@ export interface SceneManagerOptions {
    * is the fallback either way when the engine or a snapshot cannot take the shader path.
    */
   splatGpuMotion?: boolean;
+  /**
+   * The stars and the moon, added once the globe has its first tiles (deferNightSky). Default
+   * true; false for a harness that compares frames and must not have the sky arrive mid-run.
+   */
+  nightSky?: boolean;
 }
 
 /** Below this altitude over a splat site the view is the scan, shown ungraded. */
 const SCAN_GRADE_ALTITUDE_M = 400;
 /** Inside a scan and this close to the ground, the scan is the ground: no terrain under it. */
 const SCAN_FLOORLESS_ALTITUDE_M = 30;
+/** The stars wait for the globe's first tiles at most this long (deferNightSky). */
+const NIGHT_SKY_DEADLINE_MS = 5_000;
 
 /**
  * The single owner of the CesiumJS viewer. React talks to this object through
@@ -127,6 +137,9 @@ export class CesiumSceneManager {
       scene3DOnly: true,
       shouldAnimate: true,
       baseLayer: false,
+      // No sky box (and so, from the widget, no sun or moon) yet: deferNightSky adds them once
+      // the globe has its first tiles.
+      skyBox: false,
       // Render only when something changed (camera, tiles, entities, explicit requests).
       // Every manager calls scene.requestRender() after it mutates the scene.
       requestRenderMode: true,
@@ -153,6 +166,9 @@ export class CesiumSceneManager {
     // reporting `no-capture` until that tileset next rebuilds. Idempotent; returns its own
     // uninstaller, which `destroy()` runs with the rest.
     this.unsubscribe.push(installSplatTextureInterception());
+    // The sun is drawn procedurally (no download), so it is there from the first frame.
+    scene.sun = new Sun();
+    if (options.nightSky !== false) this.unsubscribe.push(this.deferNightSky());
     scene.globe.depthTestAgainstTerrain = true;
     scene.globe.enableLighting = false;
     scene.globe.showGroundAtmosphere = true;
@@ -293,6 +309,60 @@ export class CesiumSceneManager {
 
   get geocoder(): Geocoder {
     return this.geocoderInstance;
+  }
+
+  /**
+   * The stars and the moon, once the globe has its first tiles rather than before it.
+   *
+   * The engine's default sky box is six 1024² star maps, 868 kB of JPEG from
+   * `CESIUM_BASE_URL` (plus 18 kB of moon), requested by the widget's constructor -- the
+   * biggest static download of the boot, queued beside the first terrain and imagery tiles
+   * that the opening view is actually waiting for. Deferred, it loads in the first idle moment
+   * after the globe's initial tiles are in (or after `NIGHT_SKY_DEADLINE_MS` regardless), and
+   * the stars appear a moment later on an otherwise identical view.
+   *
+   * Deferring rather than replacing it with a lighter sky, because there is no flash to hide:
+   * until a sky box's textures arrive it draws nothing, so space shows the scene's black
+   * background either way -- exactly what the default showed while those 868 kB downloaded.
+   * Only the ordering changes. Near the ground the atmosphere hides the stars in any case.
+   */
+  private deferNightSky(): () => void {
+    const scene = this.scene;
+    let sawLoading = false;
+    let cancelIdle: (() => void) | undefined;
+    let removeFrame: (() => void) | undefined;
+    const install = (): void => {
+      cancelIdle = undefined;
+      if (this.destroyed || scene.isDestroyed()) return;
+      scene.skyBox = SkyBox.createEarthSkyBox();
+      scene.moon = new Moon();
+      scene.requestRender();
+    };
+    const schedule = (): void => {
+      if (!removeFrame) return;
+      removeFrame();
+      removeFrame = undefined;
+      clearTimeout(deadline);
+      if (typeof requestIdleCallback === "function") {
+        const handle = requestIdleCallback(install, { timeout: 1_000 });
+        cancelIdle = () => cancelIdleCallback(handle);
+      } else {
+        const handle = window.setTimeout(install, 0);
+        cancelIdle = () => clearTimeout(handle);
+      }
+    };
+    removeFrame = scene.postRender.addEventListener(() => {
+      // The first frame reports an empty queue before the globe has asked for anything.
+      if (!scene.globe.tilesLoaded) sawLoading = true;
+      else if (sawLoading) schedule();
+    });
+    const deadline = window.setTimeout(schedule, NIGHT_SKY_DEADLINE_MS);
+    return () => {
+      removeFrame?.();
+      removeFrame = undefined;
+      clearTimeout(deadline);
+      cancelIdle?.();
+    };
   }
 
   /**
