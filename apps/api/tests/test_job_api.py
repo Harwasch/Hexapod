@@ -15,12 +15,16 @@ import boto3
 import pytest
 from fastapi.testclient import TestClient
 from moto import mock_aws
+from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.deps import _db
 from app.main import create_app
 from app.models import Capture, Job, JobStep
 from app.models.enums import CaptureKind, RunStatus
+from app.services import jobs as job_service
+from app.services.errors import ConflictError
 from app.storage import S3Storage, get_storage
 
 BUCKET = "twin-jobs-test"
@@ -131,7 +135,7 @@ def test_retry_refuses_a_stage_the_job_never_had(client: TestClient, db: Session
 
     response = client.post(f"/api/v1/jobs/{job.id}/retry", json={"fromStage": "train"})
 
-    # ValueError -> 422 Invalid input, the same shape every other bad payload gets.
+    # InvalidInputError -> 422 Invalid input, the same shape every other bad payload gets.
     assert response.status_code == 422
     assert "train" in response.json()["detail"]
 
@@ -172,3 +176,55 @@ def test_a_step_with_no_log_is_a_404_not_an_empty_string(client: TestClient, db:
     stray = next(s for s in other.steps if s.stage_id == "normalize")
     assert client.get(f"/api/v1/jobs/{job.id}/steps/{stray.id}/log").status_code == 404
     assert client.get(f"/api/v1/jobs/{uuid.uuid4()}/steps/{stray.id}/log").status_code == 404
+
+
+def test_retry_cannot_make_a_second_active_run_of_a_capture(
+    client: TestClient, db: Session
+) -> None:
+    """Retrying an old run while a newer one of the same capture is queued used to queue
+    both. The partial unique index refuses it, and the refusal is a 409, not a 500."""
+    old = failed_run(db)
+    db.add(Job(capture_id=old.capture_id, recipe="splat-ingest", recipe_version="0.1.0"))
+    db.commit()
+
+    response = client.post(f"/api/v1/jobs/{old.id}/retry", json={})
+
+    assert response.status_code == 409, response.text
+    assert "already has a job queued or running" in response.json()["detail"]
+    db.expire_all()
+    refreshed = db.get(Job, old.id)
+    assert refreshed is not None and refreshed.status is RunStatus.ERROR
+
+
+def test_the_database_holds_one_active_run_per_capture(db: Session) -> None:
+    """The second of a double-click: its SELECT ran before the first INSERT committed, so
+    only the index stands between it and a second run. Replayed here by adding the row
+    the SELECT would have caught, and committing the way `create_job` does."""
+    first = failed_run(db)
+    first.status = RunStatus.IN_PROGRESS
+    db.commit()
+    db.add(Job(capture_id=first.capture_id, recipe="splat-ingest", recipe_version="0.1.0"))
+    with pytest.raises(ConflictError, match="already has a job queued or running"):
+        job_service._commit_active(db, first.capture_id)
+    # Rolled back: the session is usable and the second row is gone.
+    assert db.scalar(select(func.count(Job.id)).where(Job.capture_id == first.capture_id)) == 1
+    # Finished runs are not constrained: a capture keeps its whole history.
+    first.status = RunStatus.COMPLETE
+    db.commit()
+    for _ in range(2):
+        db.add(
+            Job(
+                capture_id=first.capture_id,
+                recipe="splat-ingest",
+                recipe_version="0.1.0",
+                status=RunStatus.CANCELLED,
+            )
+        )
+    db.add(Job(capture_id=first.capture_id, recipe="splat-ingest", recipe_version="0.1.0"))
+    job_service._commit_active(db, first.capture_id)
+
+
+def test_other_integrity_errors_are_not_mistaken_for_the_race(db: Session) -> None:
+    db.add(Job(capture_id=uuid.uuid4(), recipe="splat-ingest", recipe_version="0.1.0"))
+    with pytest.raises(IntegrityError):
+        job_service._commit_active(db, uuid.uuid4())

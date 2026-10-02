@@ -247,10 +247,11 @@ def test_lease_expiry_query_selects_unstarted_and_abandoned_jobs(db: Session) ->
     A7 made this the worker's own predicate rather than a second copy of it: the query
     below is `app.worker.claim.claimable`, so a change to the worker's idea of claimable
     that disagrees with this test fails here."""
-    capture = make_capture(db)
     now = utcnow()
 
     def job(suffix: str, **fields: object) -> Job:
+        # One capture per queued job: a capture runs one job at a time (migration 0008).
+        capture = make_capture(db, slug=f"paddock-{suffix}")
         row = Job(
             capture_id=capture.id, recipe=f"recipe-{suffix}", recipe_version="1.0.0", **fields
         )

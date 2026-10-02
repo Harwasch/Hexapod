@@ -11,10 +11,12 @@ import uuid
 from datetime import UTC, datetime
 
 from sqlalchemy import Select, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from app.models import Job, JobStep
 from app.models.enums import RunStatus, UploadStatus
+from app.models.job import ACTIVE_JOB_INDEX
 from app.schemas.job import JobCreate, JobRead, JobStepLog
 from app.services import recipes as recipe_service
 from app.services.captures import get_capture
@@ -44,6 +46,9 @@ def create_job(db: Session, capture_id: uuid.UUID, payload: JobCreate) -> Job:
         raise ConflictError(
             f"capture {capture.id} has no uploaded files; finish an upload before processing"
         )
+    # The friendly check, which can name the run in the way. It is not the guarantee: two
+    # requests in flight both pass it, and the partial unique index behind `_commit_active`
+    # is what refuses the second.
     running = db.scalar(
         select(Job.id).where(Job.capture_id == capture.id, Job.status.in_(ACTIVE_STATUSES))
     )
@@ -59,9 +64,25 @@ def create_job(db: Session, capture_id: uuid.UUID, payload: JobCreate) -> Job:
         tier=payload.tier,
     )
     db.add(job)
-    db.commit()
+    _commit_active(db, capture.id)
     db.refresh(job)
     return job
+
+
+def _commit_active(db: Session, capture_id: uuid.UUID) -> None:
+    """Commit a change that leaves a job of this capture queued, or answer 409.
+
+    `uq_jobs_one_active_per_capture` (migration 0008) allows one queued-or-running job per
+    capture. Losing the race to it -- the second of a double-click -- is the same conflict
+    the SELECT before it reports, so it gets the same answer rather than a 500.
+    """
+    try:
+        db.commit()
+    except IntegrityError as error:
+        db.rollback()
+        if ACTIVE_JOB_INDEX not in str(error.orig):
+            raise
+        raise ConflictError(f"capture {capture_id} already has a job queued or running") from error
 
 
 def _newest_first() -> Select[tuple[Job]]:
@@ -162,7 +183,9 @@ def retry_job(db: Session, job_id: uuid.UUID, from_stage: str | None = None) -> 
     job.claimed_by = None
     job.claimed_at = None
     job.lease_expires_at = None
-    db.commit()
+    # Re-queueing an old run while a newer one of the same capture is still going would
+    # make two active at once, which the index refuses: a 409, as for a second Process.
+    _commit_active(db, job.capture_id)
     db.refresh(job)
     return job
 

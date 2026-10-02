@@ -105,8 +105,9 @@ def test_two_workers_never_claim_the_same_job(
 ) -> None:
     """`SKIP LOCKED` picks the row; the claim commits immediately. Four workers racing on
     eight jobs must end with eight distinct claims and no job claimed twice."""
-    capture = make_capture(db)
+    # One capture per queued job: a capture runs one job at a time (migration 0008).
     for index in range(8):
+        capture = make_capture(db, slug=f"paddock-{index}")
         db.add(Job(capture_id=capture.id, recipe=f"t-three-{index}", recipe_version="1"))
     db.commit()
 

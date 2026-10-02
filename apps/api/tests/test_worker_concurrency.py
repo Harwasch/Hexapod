@@ -63,9 +63,9 @@ def test_the_setting_reaches_the_worker_and_one_slot_keeps_its_plain_id(tmp_path
 def test_two_slots_run_two_jobs_at_once_each_with_its_own_claim_and_lease(
     db: Session, sessions: sessionmaker[Session], storage: S3Storage, tmp_path: Path
 ) -> None:
-    capture = make_capture(db)
-    first = queue_job(db, capture, "t-slow")
-    second = queue_job(db, capture, "t-slow")
+    # One capture per queued job: a capture runs one job at a time (migration 0008).
+    first = queue_job(db, make_capture(db, slug="paddock-1"), "t-slow")
+    second = queue_job(db, make_capture(db, slug="paddock-2"), "t-slow")
     worker = Worker(sessions, storage, config(tmp_path, concurrency=2))
     stop = threading.Event()
     ran: list[int] = []
@@ -113,8 +113,8 @@ def test_two_slots_run_two_jobs_at_once_each_with_its_own_claim_and_lease(
 def test_two_slots_finish_the_queue_and_max_jobs_counts_across_them(
     db: Session, sessions: sessionmaker[Session], storage: S3Storage, tmp_path: Path
 ) -> None:
-    capture = make_capture(db)
-    jobs = [queue_job(db, capture, "t-three") for _ in range(3)]
+    # One capture per queued job: a capture runs one job at a time (migration 0008).
+    jobs = [queue_job(db, make_capture(db, slug=f"paddock-{i}"), "t-three") for i in range(3)]
     worker = Worker(sessions, storage, config(tmp_path, concurrency=2))
 
     assert worker.run_forever(max_jobs=2) == 2
@@ -264,8 +264,11 @@ def test_two_slots_with_slow_uploads_run_two_jobs_once_each(
     """Two jobs, two slots, every stage's uploads crossing the lease: the slot whose job
     finishes first goes idle and polls while the other is still uploading."""
     _slow_uploads(monkeypatch, storage)
-    capture = make_capture(db)
-    jobs = [queue_job(db, capture, "t-three"), queue_job(db, capture, "t-two")]
+    # One capture per queued job: a capture runs one job at a time (migration 0008).
+    jobs = [
+        queue_job(db, make_capture(db, slug="paddock-1"), "t-three"),
+        queue_job(db, make_capture(db, slug="paddock-2"), "t-two"),
+    ]
     worker = Worker(sessions, storage, config(tmp_path, concurrency=2))
 
     _run_until_settled(worker, db, jobs, timeout=90)
