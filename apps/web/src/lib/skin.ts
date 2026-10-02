@@ -58,6 +58,20 @@ export interface SkinEntry {
   eigenvalues: number[];
   /** Per learned handle (1..m−1). */
   support: SkinSupport[];
+  /** What a modal driver needs (`dynamics`), when the file carries it. */
+  dynamics?: SkinDynamics;
+}
+
+/**
+ * `dynamics` of a skin: the weights' Gram over the object's splats (`mass`) and over its anchor
+ * splats (`anchorGram`), each `m × m` as its upper triangle row by row, `w_0 = 1` included.
+ */
+export interface SkinDynamics {
+  mass: number[];
+  anchorGram: number[];
+  /** How many splats anchor it, and the band above its lowest splat they lie in (metres). */
+  anchorSplats: number;
+  anchorBand: number;
 }
 
 export interface SkinTile {
@@ -117,6 +131,7 @@ function skinOf(raw: unknown): SkinEntry | null {
         radius: finite(s?.radius),
       }))
     : [];
+  const dynamics = dynamicsOf(r.dynamics, handles as number);
   return {
     id: id as number,
     instance: instance as number,
@@ -125,6 +140,28 @@ function skinOf(raw: unknown): SkinEntry | null {
     scale: finite(r.scale, 1),
     eigenvalues,
     support,
+    ...(dynamics ? { dynamics } : {}),
+  };
+}
+
+function upperOf(value: unknown, m: number): number[] | null {
+  if (!Array.isArray(value) || value.length !== (m * (m + 1)) / 2) return null;
+  const out = (value as unknown[]).map((v) => finite(v, Number.NaN));
+  return out.every(Number.isFinite) ? out : null;
+}
+
+/** A skin's `dynamics`, or undefined when absent or not `m × m`. */
+function dynamicsOf(raw: unknown, m: number): SkinDynamics | undefined {
+  const r = raw as { mass?: unknown; anchor?: Record<string, unknown> } | null | undefined;
+  if (typeof r !== "object" || r === null) return undefined;
+  const mass = upperOf(r.mass, m);
+  const anchorGram = upperOf(r.anchor?.gram, m);
+  if (!mass || !anchorGram) return undefined;
+  return {
+    mass,
+    anchorGram,
+    anchorSplats: Math.max(0, Math.round(finite(r.anchor?.splats))),
+    anchorBand: finite(r.anchor?.band),
   };
 }
 

@@ -39,6 +39,7 @@ import { checksumPositions } from "@twin/world";
 import type { Cesium3DTileset, Scene } from "cesium";
 
 import { createLogger } from "@/lib/log";
+import { loadMaterials, materialsRefOf, type MaterialTable } from "@/lib/skinMaterials";
 import {
   HANDLE_FLOATS,
   loadSkin,
@@ -292,6 +293,11 @@ export class SplatSkinning implements SplatMotionPart {
   readonly #unlisted = new Set<string>();
   /** Off draws every splat at rest; the part stays installed. */
   enabled = true;
+  /**
+   * Fitted materials by instance (`materials.json`, `lib/skinMaterials.ts`), once loaded: what
+   * a driver reads over its property priors. Empty while absent.
+   */
+  materials: MaterialTable = new Map();
 
   constructor(doc: SkinDoc, factory: MotionTextureFactory, tileset: SplatTilesetLike) {
     this.doc = doc;
@@ -745,6 +751,23 @@ export function skinningOf(assetId: string): SplatSkinning | undefined {
   return ATTACHED.get(assetId);
 }
 
+/** Every attached skin part, by asset id: what the wind drives. */
+export function attachedSkins(): ReadonlyMap<string, SplatSkinning> {
+  return ATTACHED;
+}
+
+const SKIN_LISTENERS = new Set<() => void>();
+
+/** Calls `listener` whenever a skin part is attached or detached; returns the unsubscriber. */
+export function onSkinsChanged(listener: () => void): () => void {
+  SKIN_LISTENERS.add(listener);
+  return () => SKIN_LISTENERS.delete(listener);
+}
+
+function skinsChanged(): void {
+  for (const listener of [...SKIN_LISTENERS]) listener();
+}
+
 export type LoadSkin = typeof loadSkin;
 
 /**
@@ -771,8 +794,24 @@ export function attachSkin(
   load(url, ref)
     .then((doc) => {
       if (disposed) return;
-      part = new SplatSkinning(doc, factory, splatTilesetOf(tileset));
-      ATTACHED.set(assetId, part);
+      const attached = new SplatSkinning(doc, factory, splatTilesetOf(tileset));
+      part = attached;
+      ATTACHED.set(assetId, attached);
+      skinsChanged();
+      const materials = materialsRefOf((tileset.root as { extras?: unknown } | undefined)?.extras);
+      if (materials) {
+        loadMaterials(url, materials)
+          .then((table) => {
+            if (disposed) return;
+            attached.materials = table;
+            log.info("skin materials attached", { asset: assetId, records: table.size });
+          })
+          .catch((error: unknown) => {
+            log.warn("skin materials did not load; objects sway on their priors", {
+              message: error instanceof Error ? error.message : String(error),
+            });
+          });
+      }
       scene.requestRender();
       log.info("skin attached", {
         asset: assetId,
@@ -791,7 +830,10 @@ export function attachSkin(
     disposed = true;
     offUpdate();
     part?.destroy();
-    if (ATTACHED.get(assetId) === part) ATTACHED.delete(assetId);
+    if (part !== undefined && ATTACHED.get(assetId) === part) {
+      ATTACHED.delete(assetId);
+      skinsChanged();
+    }
     part = undefined;
   };
 }
