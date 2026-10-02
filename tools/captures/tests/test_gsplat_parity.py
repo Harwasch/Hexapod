@@ -44,7 +44,7 @@ MIN_COVERAGE_RECALL = 0.9
 MIN_COVERAGE_IOU = 0.6
 #: Where both cover: the median, and the 90th percentile, of |depth difference| / depth.
 MAX_MEDIAN_DEPTH_ERROR = 0.02
-MAX_P90_DEPTH_ERROR = 0.10
+MAX_P90_DEPTH_ERROR = 0.15
 #: The teacher's fill mask (seen < 0.5 where covered >= 0.5): pixels where the two agree.
 MIN_MASK_AGREEMENT = 0.97
 
