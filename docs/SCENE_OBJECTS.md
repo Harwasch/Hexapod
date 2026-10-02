@@ -149,7 +149,12 @@ splat's ancestor chain owns it (a tree, not each branch), so the skin is smooth 
       "scale": 4.84,               // half its largest extent, metres
       "splats": 8980, "nodes": 600,// fit points and RKPM kernels
       "eigenvalues": [ ... ],      // per learned handle 1..m-1: stiffness (unit box, E = 1)
-      "support": [ { "centre": [x, y, z], "radius": 1.9 }, ... ]  // per learned handle, rest frame
+      "support": [ { "centre": [x, y, z], "radius": 1.9 }, ... ], // per learned handle, rest frame
+      "dynamics": {                // optional (C1): what a modal driver needs
+        "mass": [ ... ],           // M_ij = mean over its splats of w_i w_j (w_0 = 1), m×m upper triangle
+        "anchor": { "source": "base", "splats": 103, "band": 0.968,
+                    "gram": [ ... ] } // G_ij, the same over its anchor splats
+      }
     }
   ],
   "tiles": { "<tile checksum>": { "skins": [skin, count, ...], "row": 0 } },
@@ -187,8 +192,8 @@ splat's ancestor chain owns it (a tree, not each branch), so the skin is smooth 
   switches modes on and off between neighbours and tears; on the yard's objects top-4 is 22–55%
   rms error. Dense int8 is within 1% everywhere measured (yard: 0.5–0.8% rms, ≤ 2.2% max).
 - **Size**: 16 B per skinned splat, nothing for static ones; `skin.json` ~0.4 KB per tile plus
-  ~1.3 KB per skin. The yard fixture: 4 skins, 12,568 rows, `skin.bin` 201 KB, `skin.json`
-  6.5 KB. Everything skinned in the yard would be 727 KB (45k splats; gzip 446 KB) against
+  ~1.3 KB per skin, and its `dynamics` 0.7–2.5 KB (two `m×m` triangles). The yard fixture: 4
+  skins, 12,568 rows, `skin.bin` 201 KB, `skin.json` 12 KB. Everything skinned in the yard would be 727 KB (45k splats; gzip 446 KB) against
   688 KB of splat tiles: the cost is only worth paying for what moves.
 - **Smoothness** (tests on the synthetic tree, int8 weights): random handles at 2% of its
   half-height stretch kNN edges by p99 1.022 (max 1.09), and the deformation's Jacobian stays
@@ -216,6 +221,82 @@ The sorter still orders by rest positions. **Drivers** (C1 wind, C3 telemetry) c
 frame, or `null` for rest; `skin.json`'s `eigenvalues` and `support` are what a modal wind
 model needs (a handle's stiffness, and where it acts).
 
+### Wind on skins (step C1)
+
+`packages/world/src/skinWind.ts` (the model), `apps/web/src/cesium/skinWind.ts` (the driver,
+ticked by `LivingSurveyManager` on the scene clock with the Living Survey's wind control).
+
+- **Coordinates.** Each handle `j` (the constant one included) carries a horizontal
+  translation `q_j`: `Z_j = [0 | q_j]`, so a splat moves by `Σ_j w_j q_j`. Linear parts stay 0
+  (covariances drawn as measured); no vertical motion.
+- **Mass** `M` = `dynamics.mass`. **Stiffness** `K = (c/scale)² diag(0, λ_1 M_11, …)`: the
+  handles are eigenmodes of `H c = λ M c` on the unit box with `E = 1`, so a material of wave
+  speed `c = √(E/ρ)` gives **`ω_j = c·√λ_j / scale`**. `c` is the material's `stiffness`
+  (prior 3.5 m/s for vegetation: the yard's 9.7 m tree, `λ_1` 12.2, `scale` 4.84, has its first
+  handle at 0.40 Hz and its first anchored mode at 0.22 Hz; the 1.9 m shrub 3.7 Hz and 2.7 Hz).
+- **Load.** The Living Survey's wind (`speedFromStrength`, the frozen EN 1991-1-4 turbulence
+  field of `turbulence.ts`, 64 modes, one field for the whole scene so gusts cross from object
+  to object), sampled at each handle's support centre: `v = U((1 + I a)ŵ + 0.75 I b ĉ)`, `I`
+  at the centre's height. Handle `j` is driven by `(D/scale)(M_0j a_0 + M_jj (a_j − a_0))`,
+  `a_j = |v_j|v_j`, `a_0` at mid-height: the mean drag through each handle's mean weight, the
+  gust's variation across the object through each handle's own. `D` is the material's `drag`
+  (dimensionless: drag per unit mass falls as `1/size`, so with `ω ∝ 1/size` an object sways
+  a fixed share of its size; prior 0.025 for foliage, a quarter of it bare).
+- **Anchor.** The eigenmodes are free: alone they move an object's base too. `G y = μ M y`
+  ranks handle-space directions by how much of their motion reaches the anchor splats (`√μ` =
+  rms there over rms of the object); those with `√μ ≤ 0.05` (`ANCHOR_TOLERANCE`) span what the
+  object may do, and `M`, `K` projected onto them and diagonalised give the anchored modes (the
+  constant handle cancels a learned mode at the base). Anchor splats are the **lowest tenth of
+  the object's height** (at least 3 median spacings; `skin_scene.anchor_mask`). Contact with
+  static neighbours was tried first and rejected: a shrub touching the next shrub was anchored
+  up to its top and kept no direction at all. The yard: the tree keeps 12 of its 14 directions
+  (worst `√μ` 0.006), the snag 9 of 12, the 1.9 m shrub 3 of 9, the 1 m shrub 2 of 8. A skin
+  without `dynamics` (written before C1) is not swayed: re-run `skin_scene.py`.
+- **Integration.** Each anchored mode `s̈ + 2ζΩṡ + Ω²s = Φᵀ F` advances by its exact
+  discrete-time solution on a fixed 1/60 s grid (force held over a step, sampled at its middle):
+  unconditionally stable, and the state at a grid time is identical at any frame rate (frames in
+  between interpolate). A jump in scene time over 0.5 s (or back) restarts from the equilibrium;
+  wind turned on starts from rest. Calm hands every skin `null` in the same tick: the measured
+  frame, pixel for pixel. Deterministic given the field's seed (`SKIN_WIND_SEED`).
+- **Bounded.** `ρ = max_j |q_j| / (0.25 r_j)` (`HANDLE_REACH`, `r_j` the support radius; the
+  object's `scale` for the constant handle) and every `q` scaled by `tanh(ρ)/ρ`, one factor
+  for the object so the anchor holds: no handle moves beyond a quarter of its support radius.
+- **Numbers** (yard, default strength 0.1 = 6.3 m/s): the tree sways ~0.11 m rms over its
+  splats, its base's rms motion ≤ 0.4% of that; the snag 2 cm; the shrubs millimetres (their
+  anchored modes are stiff: 2.7–8 Hz). **Cost**: 0.34 ms a frame on the main thread for 30
+  fourteen-handle objects (`skinWind.test.ts`).
+
+### `materials.json` (C1 reads; C2 writes)
+
+Per-instance materials, beside the tiles, declared by `root.extras.materials = { "uri",
+"count" }` (the pattern of `instances` and `skin`). A separate file, not a block of `skin.json`:
+`skin.json` is geometry rewritten by `skin_scene.py`; materials are fitted later by another
+producer (the video teacher) and must survive a skin refit.
+
+```jsonc
+{
+  "format": "hexapod.materials", "version": 1,
+  "materials": [
+    {
+      "instance": 1,        // instances.json id (the skin's owner)
+      "stiffness": 3.5,     // c, m/s: ω_j = c·√λ_j / scale
+      "damping": 0.1,       // ζ of every anchored mode, 0..0.95
+      "drag": 0.025,        // D, dimensionless: a handle's acceleration D·|v|v / scale
+      "wind": true,         // whether the wind drives it at all
+      "evidence": "fitted-real"  // the motion evidence ladder, or "prior"
+    }
+  ]
+}
+```
+
+Every field but `instance` is optional; what a record leaves out comes from the **prior**
+(`materialPrior`, from property scores, never class names): `wind` iff behaviour is
+`in-place` (movable and static objects are not swayed); softness `σ = clamp(max(vegetation,
+elastic) − rigid/2, 0, 1)`, `stiffness = 3.5 · 4^(1−σ)` m/s; `damping = 0.05 + 0.05 ·
+vegetation`; `drag = 0.025 · (0.25 + 0.75 · vegetation)`; `evidence: "prior"`. The yard's
+`skin/materials.json` turns the wind on for 1, 9 and 10 (its stand-in segmentation reads every
+instance `movable`) and leaves 12 on its prior, still.
+
 ### Fixture and browser checks
 
 `data/tiles/synthetic-yard/skin/` is the yard's tree (instance 1), a snag (9) and two shrubs
@@ -224,7 +305,10 @@ model needs (a handle's stiffness, and where it acts).
 CesiumJS (`src/dev/skinHarness.ts`): the driven tree's pixels move while an unskinned tree and
 an undriven skinned shrub do not, rest is the measured frame pixel for pixel, the constant
 handle lifts a shrub whole, a hidden object stays hidden while it moves, and a shrub scaled up
-stays filled only with the covariance following.
+stays filled only with the covariance following. `apps/web/e2e/wind.spec.ts` blows the wind
+over it (with `skin/materials.json`): the tree's pixels keep changing while its base, an
+unskinned tree and the undriven shrub stay still; the same clock steps give the same frame;
+calm is the measured frame, pixel for pixel.
 
 `data/tiles/synthetic-yard/instances/` is the committed yard segmented against its own labels
 (`segment_scene.py ... --truth labels.json --tile-gaussians 6000`). It sits beside `splat/`,

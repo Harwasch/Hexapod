@@ -20,8 +20,8 @@ Architecture: [SCENE_OBJECTS.md](SCENE_OBJECTS.md). Branch: `living-models`.
 
 ## C. Drive
 
-- [ ] C1 Wind forces on handles (living)
-- [ ] C2 Video teacher fits materials per instance (stiffness, damping, drag)
+- [x] C1 Wind forces on handles (living): anchored modal model per skin (`ω_j = c·√λ_j / scale`, the lowest tenth anchors), exact 60 Hz grid, bounded at a quarter of a support radius; priors from properties, `materials.json` overrides (SCENE_OBJECTS.md §4); 0.34 ms a frame for 30 objects (e2e on the yard)
+- [ ] C2 Video teacher fits materials per instance (stiffness, damping, drag): writes `materials.json` (SCENE_OBJECTS.md §4)
 - [ ] C3 Telemetry drives a rigid instance (live)
 - [ ] C4 Movable instances to their own tilesets + fill the hole
 

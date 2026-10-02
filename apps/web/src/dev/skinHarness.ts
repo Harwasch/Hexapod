@@ -88,7 +88,7 @@ export interface SkinHarness {
   hooks(): { motion: string[]; jacobian: string[]; skin: boolean; active: boolean };
   /** Wind on every skin at `strength` towards `bearingDeg`, the harness clock set to `t0`. */
   windOn(strength: number, bearingDeg: number, t0?: number, seed?: number): Promise<void>;
-  /** Moves the harness clock `seconds` on in steps of `1/fps`, a rendered frame per step. */
+  /** Moves the harness clock `seconds` on in steps of `1/fps`, then renders. */
   advance(seconds: number, fps?: number): Promise<void>;
   /** Calm: every skin handed `null`; waits for the frame. */
   windOff(): Promise<void>;
@@ -369,9 +369,11 @@ export async function startSkinHarness(options: {
     async advance(seconds, fps = 30) {
       const steps = Math.round(seconds * fps);
       const start = windClock;
+      // The state lives on a fixed grid, so ticking the driver through the steps without
+      // drawing each one lands where drawing them would (SwiftShader frames are slow).
       for (let k = 1; k <= steps; k += 1) {
         windClock = start + k / fps;
-        await nextFrame(scene);
+        windDriver?.tick(windClock, windSettings);
       }
       await settle(2);
     },
