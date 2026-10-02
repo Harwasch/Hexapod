@@ -498,6 +498,8 @@ def _run_job(kind: str, scan: str, filler: str, options: dict) -> dict:
             out = root / "inferred"
             argv = ["fill", str(tileset), str(out), "--filler", spec]
             argv += ["--views", str(options.get("views", 8)), "--mode", "ring"]
+            if options.get("max_scale_m"):
+                argv += ["--max-scale-m", str(options["max_scale_m"])]
             if options.get("distill"):
                 argv += ["--distill", str(options["distill"]), "--distill-on", "modal"]
         argv += ["--width", str(width), "--height", str(height), "--save", str(save)]
@@ -599,11 +601,13 @@ def main(
     probes: str = "",
     renderer: str = "cpu",
     parity_test: bool = False,
+    max_scale_m: float = 0.0,
 ) -> None:
     """Every `kind:scan` in `jobs` with every filler, in parallel containers; each result
     under `out/<kind>-<scan>-<filler>/`, and `out/summary.json`. `selftest`: also Fixer on
     its repository's examples, under `out/selftest/`. `renderer`: `cpu` or `gsplat` (the
-    jobs on a GPU). `parity_test`: CPU against gsplat on the yard, in `out/parity.txt`."""
+    jobs on a GPU). `parity_test`: CPU against gsplat on the yard, in `out/parity.txt`.
+    `max_scale_m` (fill jobs, 0 = off): condition without gaussians larger than this."""
     if renderer not in ("cpu", "gsplat"):
         raise SystemExit(f"renderer {renderer!r}: cpu or gsplat")
     if parity_test:
@@ -633,6 +637,8 @@ def main(
         options: dict = {"views": views} if views else {}
         if kind == "fill" and distill:
             options["distill"] = distill
+        if kind == "fill" and max_scale_m > 0:
+            options["max_scale_m"] = max_scale_m
         calls += [(kind, scan, f.strip(), options) for f in fillers.split(",") if f.strip()]
     summary, failed = [], []
     runner = run_job_gsplat if renderer == "gsplat" else run_job

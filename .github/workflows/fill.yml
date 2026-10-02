@@ -54,6 +54,9 @@ env:
   RENDERER: ${{ inputs.renderer || 'gsplat' }}
   # Non-empty: also run tests/test_gsplat_parity.py (CPU against gsplat) on a GPU.
   PARITY: '1'
+  # Fill jobs: condition without gaussians larger than this (m; 0 = keep all). The camp's
+  # edge floaters (scale 0.5-2.7 m) cover most of a gsplat view from outside.
+  MAX_SCALE: '0.5'
 
 jobs:
   fill:
@@ -77,7 +80,8 @@ jobs:
         run: |
           uv run --with modal==1.5.5 modal run infra/modal/fill.py \
             --jobs "$JOBS" --fillers "$FILLERS" --distill "$DISTILL" --out fill-out \
-            --probes "$PROBES" --renderer "$RENDERER" ${PARITY:+--parity-test}
+            --probes "$PROBES" --renderer "$RENDERER" ${PARITY:+--parity-test} \
+            --max-scale-m "$MAX_SCALE"
       - uses: actions/upload-artifact@v4
         if: always()
         with:

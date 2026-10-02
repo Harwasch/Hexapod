@@ -187,6 +187,21 @@ def test_a_dropped_region_is_lifted_where_it_was_not_behind_it() -> None:
     assert np.nanmedian(behind.depth[hole]) == pytest.approx(8.0, abs=0.3)
     assert np.all(np.isfinite(around.depth[hole]))
     assert np.allclose(around.depth[hole], 5.0, atol=0.3)
+    # Narrowed to the scan just outside the region: its surface, even where the image
+    # around the hole is mostly the far wall.
+    reach = np.all(np.abs(scene.positions - [0.0, 0.0, 1.0]) <= 0.6, axis=1)
+    shell = scene.take(np.flatnonzero(reach & ~inside))
+    hole_far = hole.copy()
+    shelled = tf.condition(
+        far,
+        camera,
+        None,
+        mask=hole_far,
+        seen_opacity=np.ones(len(far)),
+        hole_depth="surround",
+        surround=shell,
+    )
+    assert np.allclose(shelled.depth[hole], 5.0, atol=0.3)
     rgb = np.full((60, 80, 3), 200, np.uint8)
     lifted, _ = tf.lift([tf.Filled(around, rgb, 40.0, True)])
     assert np.allclose(lifted.positions[:, 1], 0.0, atol=0.3)
@@ -305,6 +320,38 @@ def test_fill_scan_fills_the_side_a_capture_never_saw(tmp_path: Path) -> None:
     lifted = load_tileset(out / "tileset.json")
     behind = lifted.positions[:, 0].mean()
     assert behind < 0.0  # discs on the wall's unseen face, towards the cameras that made them
+
+
+def test_fill_scan_can_condition_without_floaters(tmp_path: Path) -> None:
+    """`max_scale_m` leaves gaussians larger than that out of every view it renders (a
+    floater gsplat would draw over the frame; the CPU renderer barely shows it)."""
+    wall = _wall(0.0, (0.6, 0.3, 0.2), 4000, 3)
+    floater = Splats(
+        np.array([[0.0, -2.0, 1.0]]),
+        np.array([[1.0, 0.0, 0.0, 0.0]]),
+        np.full((1, 3), 3.0),
+        np.array([[0.9, 0.9, 0.9]]),
+        np.array([0.9]),
+    )
+    scene = Splats.concat([wall, floater])
+    ply = tmp_path / "scene.ply"
+    save_ply(ply, scene, comment="test floater")
+    measured = tmp_path / "measured"
+    splat_tiles.convert(ply, measured, 0.0, 0.0, 0.0, opacity_min=0.0)
+    layout = splat_tiles.ply_layout(ply)
+    grid = vc.cone_grid(layout, np.ones(layout.count, bool), observers=np.array([[0.0, -6.0, 1.0]]))
+    largest: list[float] = []
+
+    def spy(splats: Splats, camera: Camera, **kwargs: object) -> tf.Frame:
+        largest.append(float(splats.scales.max()))
+        return tf.render(splats, camera, **kwargs)  # type: ignore[arg-type]
+
+    evidence = tf.fill_scan(
+        scene, grid, tf.InpaintFiller(), measured / "tileset.json", tmp_path / "inferred",
+        views=4, width=64, height=48, renderer=spy, max_scale_m=1.0,
+    )  # fmt: skip
+    assert evidence["gaussians"] > 0
+    assert largest and max(largest) < 1.0
 
 
 def test_make_filler_names_the_stand_in_and_imports_the_rest() -> None:

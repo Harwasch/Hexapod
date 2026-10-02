@@ -167,6 +167,7 @@ def condition(
     seen_opacity: np.ndarray | None = None,
     *,
     hole_depth: str = "scan",
+    surround: Splats | None = None,
     renderer: Renderer = render,
 ) -> Conditioning:
     """What `camera` is to be told and asked: the seen render, and the mask to fill.
@@ -175,7 +176,9 @@ def condition(
     what it covers), inpainted from around the hole where it has none; `surround`, always
     interpolated across the mask from the measured pixels around it (inverse depth, which is
     affine across a plane) -- for a region that was removed (the drop test), where what the
-    scan shows through the hole is what was behind it."""
+    scan shows through the hole is what was behind it. `surround` (gaussians) narrows "around
+    it" to what they cover: the scan just outside the removed region, so a hole whose image
+    neighbours are far background (a branch against the sky) still gets its own surface."""
     import cv2
 
     weights = seen_weights(splats, camera, grid) if seen_opacity is None else seen_opacity
@@ -186,9 +189,14 @@ def condition(
     depth = np.where(np.isfinite(full.depth), full.depth, np.nan)
     known = np.isfinite(seen.depth) & (seen.alpha >= SEEN_ALPHA)
     if hole_depth == "surround":
-        around = known & ~mask
+        source, around = seen.depth, known & ~mask
+        if surround is not None and len(surround):
+            shell = renderer(surround, camera)
+            near = np.isfinite(shell.depth) & (shell.alpha >= SURROUND_ALPHA) & ~mask
+            if near.any():
+                source, around = shell.depth, near
         if mask.any() and around.any():
-            depth = np.where(mask, _interpolate_depth(seen.depth, around, mask), depth)
+            depth = np.where(mask, _interpolate_depth(source, around, mask), depth)
         else:
             depth = np.where(mask, np.nan, depth)
     elif hole_depth != "scan":
@@ -202,8 +210,11 @@ def condition(
     return Conditioning(camera, seen, full, mask, depth, distance)
 
 
-#: `_interpolate_depth` reads the measured depth in a band this wide (pixels) around a hole.
+#: `_interpolate_depth` reads the measured depth in a band this wide (pixels) around a hole
+#: (wider when the band holds nothing).
 HOLE_RING_PX = 6
+#: Coverage at which a `surround` render's depth counts (it is a thin shell: sparse).
+SURROUND_ALPHA = 0.2
 
 
 def _interpolate_depth(depth: np.ndarray, known: np.ndarray, hole: np.ndarray) -> np.ndarray:
@@ -213,7 +224,14 @@ def _interpolate_depth(depth: np.ndarray, known: np.ndarray, hole: np.ndarray) -
     behind. Known pixels keep their depth."""
     import cv2
 
-    ring = known & (cv2.distanceTransform((~hole).astype(np.uint8), cv2.DIST_L2, 5) <= HOLE_RING_PX)
+    gap = cv2.distanceTransform((~hole).astype(np.uint8), cv2.DIST_L2, 5)
+    ring = known & (gap <= HOLE_RING_PX)
+    for wider in (4, 16):
+        if ring.any():
+            break
+        ring = known & (gap <= wider * HOLE_RING_PX)
+    if not ring.any():
+        ring = known
     inv = np.where(ring, 1.0 / np.where(ring, depth, 1.0), 0.0).astype(np.float32)
     weight = ring.astype(np.float32)
     out = np.full(depth.shape, np.nan, np.float32)
@@ -448,11 +466,15 @@ def drop_and_fill(
     the observers, and scores the fill against what was there: per fill view (PSNR, SSIM on
     the dropped region's pixels, against leaving the hole), and -- after lifting -- from one
     more view the fill never used. The fill is lifted at the depth interpolated across the
-    hole from around it (`hole_depth="surround"`): where the dropped surface was, so the
-    held-out view sees the fill in front of what was behind it."""
+    hole from the scan just outside the region (`hole_depth="surround"`, the gaussians within
+    `SURROUND_SCALE` times its half size): where the dropped surface was, so the held-out
+    view sees the fill in front of what was behind it."""
     centre = np.asarray(centre, np.float64)
     inside = np.all(np.abs(splats.positions - centre) <= half_size_m, axis=1)
     kept, dropped = splats.take(np.flatnonzero(~inside)), splats.take(np.flatnonzero(inside))
+    # What the capture has just outside the region: the surface the hole is lifted onto.
+    reach = np.all(np.abs(splats.positions - centre) <= SURROUND_SCALE * half_size_m, axis=1)
+    shell = splats.take(np.flatnonzero(reach & ~inside))
     # Far enough that the region is about a third of the frame, from where it was seen.
     distance = 3.0 * half_size_m / math.tan(math.radians(60.0) / 2)
     cameras = plan_views(
@@ -478,6 +500,7 @@ def drop_and_fill(
             mask=hole,
             seen_opacity=np.ones(len(kept)),
             hole_depth=hole_depth,
+            surround=shell,
             renderer=renderer,
         )
         conds.append((cond, truth))
@@ -517,6 +540,10 @@ def drop_and_fill(
             "ssimHole": round(ssim(without, truth, hole), 4),
         }
     return report
+
+
+#: The drop test's lift surface: the scan within this many half sizes of the region's centre.
+SURROUND_SCALE = 2.0
 
 
 def _hole(alpha: np.ndarray) -> np.ndarray:
@@ -671,11 +698,19 @@ def fill_scan(
     distill_iterations: int = 0,
     distill_runner: Callable[[dict], dict] | None = None,
     renderer: Renderer = render,
+    max_scale_m: float | None = None,
 ) -> dict[str, object]:
     """The whole of Teacher B on one scan: views at what its view cones fade (`ring`: from
     outside, the sides never walked to; `near`: from the observers), conditioned, filled,
     gated, lifted and packaged beside `measured_tileset` in `out_dir`. Returns the
-    evidence block, with a per-view report under `views`."""
+    evidence block, with a per-view report under `views`.
+
+    `max_scale_m`: condition on the scan without its gaussians larger than this (largest
+    axis) -- the floaters at a capture's edge, which a rasterizer draws as blobs over most
+    of a view from outside (the camp: 0.4% of its gaussians at 0.5 m). The CPU renderer
+    all but hides them (few samples, spread thin); gsplat does not."""
+    if max_scale_m is not None:
+        splats = splats.take(np.flatnonzero(splats.scales.max(axis=1) <= max_scale_m))
     texels = vc.lookup(grid.texels, grid.origin, grid.cell, grid.dims, splats.positions)
     faded = texels[:, 2] != vc.OMNI
     if not faded.any():
@@ -816,6 +851,11 @@ def main(argv: list[str] | None = None) -> int:
     sub.choices["fill"].add_argument("out", type=Path, help="the inferred tileset's directory")
     sub.choices["fill"].add_argument("--mode", choices=("ring", "near"), default="ring")
     sub.choices["fill"].add_argument(
+        "--max-scale-m",
+        type=float,
+        help="condition on the scan without gaussians larger than this (floaters)",
+    )
+    sub.choices["fill"].add_argument(
         "--distill", type=int, default=0, help="refine the lifted fill this many steps"
     )
     sub.choices["fill"].add_argument(
@@ -867,6 +907,7 @@ def main(argv: list[str] | None = None) -> int:
             distill_iterations=args.distill,
             distill_runner=_distill_runner(args.distill_on) if args.distill else None,
             renderer=renderer,
+            max_scale_m=args.max_scale_m,
         )
         print(json.dumps(evidence, indent=1))
     return 0
