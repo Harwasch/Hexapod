@@ -65,10 +65,14 @@ described ancestor's properties). Per instance, crops of the `CROP_VIEWS` views 
 and a contrast prompt (`PROPERTY_PROMPTS`), so each is a probability on its own and the
 attributes do not compete. `behaviour`: `BEHAVIOUR_RULE`.
 
-**Scale** (2026-10-01, 4 CPUs, other jobs running): the 22.6M-gaussian camp with 8 views
-and random two-level masks -- 998k cells at 0.24 m, 5.7M stage-1 edges; cells 36 s, plan
-19 s, render 52 s per view, votes 4 s, lift 46 s, describe 9 s; peak RSS 7.5 GB (the scan
-held as float64 `Splats` is most of it). Rendering dominates: 24 views is ~21 min.
+**Scale** (2026-10-02, Modal L4 + 32 CPUs, `infra/modal/segment.py`): the 22.6M-gaussian
+camp (~110 m across) gets 252 views (24 whole-scan + 228 local); 998k cells at 0.24 m, 5.7M
+stage-1 edges. Cells 29 s, plan 65 s (observers, index, line of sight), render 45 s of
+waiting (24 workers, ~8 s a view each, overlapped with masking), SAM 2.1 masks 695 s (2.8 s
+a view at 32 points a side: now the bulk), votes 11 s, lift 103 s, describe 60 s (1.9k of
+7.3k instances); ~20 min in all. Before (24 views, one render process, the per-view lift):
+render 406 s, lift 81 s, describe 604 s, and one instance held 26% of the scan. A camp view
+renders in 1.6-1.9 GB at most (`RENDER_WORKER_BYTES`).
 
 Usage:
     python segment_scene.py SPLAT.ply TILES_DIR --masks segment_models:Sam2Masks \\
