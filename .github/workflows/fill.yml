@@ -47,14 +47,14 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  JOBS: ${{ inputs.jobs || 'fill:camp' }}
+  JOBS: ${{ inputs.jobs || 'split:pumpkin' }}
   # Scans to run fill.py probe on (Fixer on renders prepared several ways); empty: none.
   PROBES: ""
   FILLERS: ${{ inputs.fillers || 'telea,fixer-t50' }}
   DISTILL: ${{ inputs.distill || '1500' }}
   RENDERER: ${{ inputs.renderer || 'gsplat' }}
   # Non-empty: also run tests/test_gsplat_parity.py (CPU against gsplat) on a GPU.
-  PARITY: "1"
+  PARITY: ""
   # Fill jobs: condition without gaussians larger than this (m; 0 = keep all). The camp's
   # edge floaters (scale 0.5-2.7 m) cover most of a gsplat view from outside.
   MAX_SCALE: "0.5"
