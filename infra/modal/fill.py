@@ -74,6 +74,7 @@ FIXER_COMMIT = "b39dfcaf4eeec90dc943b057ff368c16252c6c6e"
 COSMOS_REPO = "https://github.com/nvidia-cosmos/cosmos-predict2.git"
 COSMOS_COMMIT = "661da4774b0ca41d082a0ecbeb47550bcf07e03f"
 FIXER_RESOLUTION = 1024
+MODEL_PKL = "/work/models/pretrained/pretrained_fixer.pkl"
 FIXER_TIMESTEP = 250
 
 fixer_image = (
@@ -100,6 +101,7 @@ fixer_image = (
     image=fixer_image,
     gpu="L40S",
     volumes={"/work/models": WEIGHTS},
+    memory=49152,
     timeout=3600,
     scaledown_window=120,
 )
@@ -121,7 +123,7 @@ class Fixer:
         self.dtype = torch.bfloat16
         self.width, self.height = fixer.get_resolution_size(FIXER_RESOLUTION)
         self.model = fixer.load_and_compile_model(
-            model_path="/work/models/pretrained/pretrained_fixer.pkl",
+            model_path=MODEL_PKL,
             timestep=FIXER_TIMESTEP,
             vae_skip_connection=False,  # as the README runs it
             batch_size=1,
@@ -132,6 +134,7 @@ class Fixer:
         self.model.set_eval()
         self.calls = 0
         self.seconds = 0.0
+        self.load_report = _load_report(self.model, MODEL_PKL)
 
     @modal.method()
     def fix(self, request: dict) -> dict:
@@ -169,7 +172,36 @@ class Fixer:
             blob = path.read_bytes()
             out[f"{path.stem}-in.png"] = blob
             out[f"{path.stem}-out.png"] = self._fix({"images": [blob]})["images"][0]
+        out["load.json"] = json.dumps(self.load_report, indent=1).encode()
         return out
+
+
+def _load_report(model: object, path: str) -> dict:
+    """How much of the checkpoint the model took: Fixer loads it with `strict=False`, so a
+    key mismatch (another cosmos-predict2) would leave the base weights silently."""
+    import torch
+
+    checkpoint = torch.load(path, map_location="cpu")
+    report = {}
+    for part in ("unet", "vae"):
+        own = getattr(model, part).state_dict()
+        theirs = checkpoint[f"state_dict_{part}"]
+        same = [k for k in theirs if k in own]
+        equal = sum(
+            1
+            for k in same
+            if own[k].shape == theirs[k].shape
+            and torch.equal(own[k].detach().cpu(), theirs[k].to(own[k].dtype))
+        )
+        report[part] = {
+            "modelKeys": len(own),
+            "checkpointKeys": len(theirs),
+            "matched": len(same),
+            "equalAfterLoad": equal,
+            "missing": sorted(set(own) - set(theirs))[:8],
+            "unexpected": sorted(set(theirs) - set(own))[:8],
+        }
+    return report
 
 
 def _snapshot(repo: str, local: Path, marker: str) -> None:
