@@ -781,7 +781,9 @@ def hole_context(
 ) -> dict[str, object]:
     """What a generative filler is told about an object's hole: the tags of what lies around
     its footprint at its base (`teacher_fill.describe_surroundings` over the box the support
-    plane is fitted in), never its own or its fragments' (they are the negative prompt)."""
+    plane is fitted in), never its own or its parts' and fragments'. Only the object's own
+    labels are the negative prompt: its parts and fragments carry the ground's (the pumpkin's
+    included dirt, leaves, rock), which must not be refused."""
     import teacher_fill as tf
 
     low, high = positions.min(axis=0), positions.max(axis=0)
@@ -791,9 +793,9 @@ def hole_context(
     box_high = np.array(
         [centre[0] + reach, centre[1] + reach, low[2] + tf.HOLE_BASE_SHARE * (high[2] - low[2])]
     )
-    fragments = sorted(int(k) for k in np.unique(obj.labels) if k > 0)
+    parts = sorted({*obj.choice.ids, *(int(k) for k in np.unique(obj.labels) if k > 0)})
     return tf.describe_surroundings(
-        instances, box_low, box_high, object_ids=obj.choice.ids, exclude_ids=fragments
+        instances, box_low, box_high, object_ids=[obj.choice.instance], exclude_ids=parts
     )
 
 

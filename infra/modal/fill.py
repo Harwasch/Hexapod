@@ -95,6 +95,13 @@ FILLERS = {
     "qwen": "world_model_client:GenerativeFiller?model=qwen",
     "qwen-chain": "world_model_client:GenerativeFiller?model=qwen&chain=1",
     "flux": "world_model_client:GenerativeFiller?model=flux",
+    # LaMa alone (texture, never an object), and LaMa's fill refined by SDXL at strength 0.6.
+    "lama": "world_model_client:GenerativeFiller?model=lama",
+    "lama-chain": "world_model_client:GenerativeFiller?model=lama&chain=1",
+    "sdxl-lama": "world_model_client:GenerativeFiller?model=sdxl&prefill=lama&strength=0.6",
+    "sdxl-lama-chain": (
+        "world_model_client:GenerativeFiller?model=sdxl&prefill=lama&strength=0.6&chain=1"
+    ),
 }
 
 # --- Fixer -----------------------------------------------------------------------------------
@@ -295,11 +302,12 @@ class InpaintSDXL:
     def load(self) -> None:
         self.im = _inpaint_module()
         self.pipe = self.im.load("sdxl")
+        self.lama = self.im.load_lama("/weights/lama")
         WEIGHTS.commit()
 
     @modal.method()
     def inpaint(self, request: dict) -> dict:
-        return self.im.inpaint("sdxl", self.pipe, request)
+        return self.im.inpaint("sdxl", self.pipe, request, lama=self.lama)
 
 
 @app.cls(
@@ -372,6 +380,8 @@ def inpaint_prefetch(keys: list[str]) -> dict[str, float]:
         started = time.time()
         for repo in im.MODELS[key].repos:
             snapshot_download(repo, token=os.environ.get("HF_TOKEN"), max_workers=16)
+        if key == "sdxl":
+            im.load_lama("/weights/lama", device="cpu")
         WEIGHTS.commit()
         seconds[key] = round(time.time() - started, 1)
     return seconds
@@ -840,7 +850,8 @@ def _inpaint_key(filler: str) -> str | None:
     if "GenerativeFiller" not in spec:
         return None
     query = dict(p.partition("=")[::2] for p in spec.partition("?")[2].split("&") if p)
-    return query.get("model", "sdxl")
+    model = query.get("model", "sdxl")
+    return "sdxl" if model == "lama" else model  # LaMa is held by InpaintSDXL
 
 
 def _prepare_inpainting(calls: list[tuple], out: Path) -> tuple[list[tuple], list[str]]:

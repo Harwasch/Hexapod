@@ -177,7 +177,7 @@ def test_generative_filler_keeps_only_the_masked_pixels_and_sends_its_context() 
     rgb = _gradient(40, 60)
     mask = np.zeros((40, 60), bool)
     mask[10:20, 20:35] = True
-    filler = wmc.GenerativeFiller(model="qwen", remote=remote, grow_px=3)
+    filler = wmc.GenerativeFiller(model="qwen", remote=remote, grow_px=3, context_scale=0)
     filler.context = {"prompt": "dirt and moss seen from above", "negative": "pumpkin"}
     (out,) = filler.fill(rgb, mask)
     (out2,) = filler.fill(rgb, mask)
@@ -204,3 +204,36 @@ def test_generative_filler_chains_only_when_asked() -> None:
         wmc.GenerativeFiller(model="dalle", remote=None)  # type: ignore[arg-type]
     spec = "world_model_client:GenerativeFiller?model=qwen&chain=1"
     assert tf.make_filler(spec).name == "inpaint-qwen-chain"
+    spec = "world_model_client:GenerativeFiller?model=sdxl&prefill=lama&strength=0.6"
+    assert tf.make_filler(spec).name == "inpaint-sdxl-lama"
+
+
+def test_generative_filler_shows_the_model_a_crop_around_the_hole() -> None:
+    sent: list[tuple[str, dict]] = []
+
+    def remote(cls: str, method: str, request: dict) -> dict:
+        sent.append((cls, request))
+        image = wmc.decode_png(request["image"])
+        half = image[::2, ::2]  # answers at another size: resized back to the crop
+        return {"image": wmc.encode_png(255 - half), "model": "fake"}
+
+    rgb = _gradient(300, 400)
+    mask = np.zeros((300, 400), bool)
+    mask[140:160, 300:330] = True
+    filler = wmc.GenerativeFiller(model="lama", remote=remote, grow_px=0, min_crop_px=64)
+    (out,) = filler.fill(rgb, mask)
+    cls, request = sent[0]
+    assert cls == "InpaintSDXL" and request["prefill"] == "lama" and request["strength"] == 0
+    assert filler.name == "inpaint-lama"
+    crop = wmc.decode_png(request["image"])
+    assert crop.shape[:2] == (75, 75)  # 2.5 times the hole's 30 px, square
+    x0, y0, w, h = filler.received[0]["crop"]
+    assert np.array_equal(crop, rgb[y0 : y0 + h, x0 : x0 + w])
+    assert 300 >= x0 + w - 75 and x0 <= 300 and y0 <= 140
+    assert np.array_equal(out[~mask], rgb[~mask])
+    assert not np.array_equal(out[mask], rgb[mask])
+    # Near the frame's edge the window slides inside it.
+    edge = np.zeros_like(mask)
+    edge[0:10, 390:400] = True
+    window = wmc.GenerativeFiller(remote=remote, min_crop_px=64).crop(edge)
+    assert window == (slice(0, 64), slice(336, 400))

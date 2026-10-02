@@ -10,6 +10,13 @@ and the pixels around them.
 | `sdxl` | diffusers/stable-diffusion-xl-1.0-inpainting-0.1           | CreativeML OpenRAIL++-M        |
 | `qwen` | Qwen/Qwen-Image + InstantX/Qwen-Image-ControlNet-Inpainting | Apache-2.0 (both)             |
 | `flux` | black-forest-labs/FLUX.1-Fill-dev (gated)                  | FLUX.1 [dev] Non-Commercial    |
+| (pre)  | LaMa big-lama, TorchScript export of IOPaint (`LAMA_URL`)  | Apache-2.0                     |
+
+LaMa (Fourier convolutions, not a diffusion model) fills a hole with the texture around it
+and never puts an object in it; the diffusion models, shown an object-shaped hole, tend to
+draw an object there (on the pumpkin: a blue bowl, an orange disc). `"prefill": "lama"`
+fills the hole with LaMa first; SDXL then denoises that at `strength` < 1 (detail on a
+layout LaMa chose), or with `strength` 0 the LaMa fill comes back as it is.
 
 `flux` is here for comparison only: its licence allows non-commercial use of the model (its
 outputs are the user's), so it cannot run in a product; and the account must have accepted
@@ -17,7 +24,7 @@ it on the Hub. OpenRAIL++-M is permissive with use restrictions (its Attachment 
 on to anyone redistributing the weights; Apache-2.0 has none.
 
 A request is `{"image": png, "mask": png (white = paint), "prompt", "negative"?, "seed",
-"steps"?, "guidance"?, "strength"?}`; the answer `{"image": png at the input's size,
+"steps"?, "guidance"?, "strength"?, "prefill"?}`; the answer `{"image": png at the input's size,
 "model", "seconds"}`. The whole frame comes back as the model drew it: the caller keeps
 only the masked pixels (`GenerativeFiller` composites), so the model may re-encode the rest.
 
@@ -36,6 +43,9 @@ SDXL_MODEL = "diffusers/stable-diffusion-xl-1.0-inpainting-0.1"
 QWEN_MODEL = "Qwen/Qwen-Image"
 QWEN_CONTROLNET = "InstantX/Qwen-Image-ControlNet-Inpainting"
 FLUX_FILL_MODEL = "black-forest-labs/FLUX.1-Fill-dev"
+#: big-lama as IOPaint (Apache-2.0) exports it, and its md5 (checked on download).
+LAMA_URL = "https://github.com/Sanster/models/releases/download/add_big_lama/big-lama.pt"
+LAMA_MD5 = "e3aa4aaa15225a33ec84f9f4bc47e500"
 
 
 @dataclass(frozen=True)
@@ -101,8 +111,56 @@ def load(key: str, device: str = "cuda") -> Any:
     return pipe.to(device)
 
 
-def inpaint(key: str, pipe: Any, request: dict) -> dict:
-    """One request (module docstring) through `pipe`, a `load(key)`."""
+def load_lama(folder: str, device: str = "cuda") -> Any:
+    """big-lama from `LAMA_URL`, cached in `folder` (md5 checked)."""
+    import hashlib
+    import os
+    import urllib.request
+
+    import torch
+
+    path = os.path.join(folder, "big-lama.pt")
+    if not os.path.exists(path):
+        os.makedirs(folder, exist_ok=True)
+        with urllib.request.urlopen(LAMA_URL, timeout=600) as response:
+            blob = response.read()
+        if hashlib.md5(blob).hexdigest() != LAMA_MD5:
+            raise ValueError("big-lama.pt: md5 mismatch")
+        with open(path + ".part", "wb") as f:
+            f.write(blob)
+        os.replace(path + ".part", path)
+    model = torch.jit.load(path, map_location=device)
+    model.eval()
+    return model
+
+
+def lama_fill(model: Any, image: Any, mask: Any) -> Any:
+    """LaMa's fill of `mask` (L, white = fill) in `image` (RGB), the rest as given."""
+    import numpy as np
+    import torch
+    from PIL import Image
+
+    rgb = np.asarray(image, dtype=np.float32) / 255.0
+    hole = (np.asarray(mask) > 127).astype(np.float32)
+    h, w = hole.shape
+    ph, pw = (-h) % 8, (-w) % 8
+    rgb_p = np.pad(rgb, ((0, ph), (0, pw), (0, 0)), mode="reflect")
+    hole_p = np.pad(hole, ((0, ph), (0, pw)), mode="reflect")
+    device = next(model.parameters()).device
+    x = torch.from_numpy(rgb_p).permute(2, 0, 1)[None].to(device)
+    m = torch.from_numpy(hole_p)[None, None].to(device)
+    with torch.no_grad():
+        out = model(x, m)[0].permute(1, 2, 0).float().cpu().numpy()
+    out = out[:h, :w]
+    if out.max() <= 1.5:  # the export answers in 0..1 or 0..255 depending on its version
+        out = out * 255.0
+    filled = np.where(hole[..., None] > 0, np.clip(out, 0, 255), rgb * 255.0)
+    return Image.fromarray(np.round(filled).astype(np.uint8))
+
+
+def inpaint(key: str, pipe: Any, request: dict, lama: Any = None) -> dict:
+    """One request (module docstring) through `pipe`, a `load(key)`; `lama` (`load_lama`)
+    for a request with `"prefill": "lama"`."""
     import torch
     from PIL import Image
 
@@ -120,7 +178,14 @@ def inpaint(key: str, pipe: Any, request: dict) -> dict:
     generator = torch.Generator("cuda").manual_seed(int(request.get("seed", 0)))
     prompt = str(request["prompt"])
     negative = str(request.get("negative", ""))
-    if key == "sdxl":
+    strength = float(request.get("strength", 0.99))
+    if request.get("prefill") == "lama":
+        if lama is None:
+            raise ValueError("a LaMa prefill was asked of a class without LaMa")
+        image_in = lama_fill(lama, image_in, mask_in)
+    if request.get("prefill") == "lama" and strength <= 0:
+        out = image_in
+    elif key == "sdxl":
         out = pipe(
             prompt=prompt,
             negative_prompt=negative or None,
@@ -128,7 +193,7 @@ def inpaint(key: str, pipe: Any, request: dict) -> dict:
             mask_image=mask_in,
             width=width,
             height=height,
-            strength=float(request.get("strength", 0.99)),
+            strength=strength,
             num_inference_steps=steps,
             guidance_scale=guidance,
             generator=generator,
@@ -161,7 +226,9 @@ def inpaint(key: str, pipe: Any, request: dict) -> dict:
     out.convert("RGB").resize(size, Image.LANCZOS).save(buffer, format="PNG")
     return {
         "image": buffer.getvalue(),
-        "model": model_name(key),
+        "model": model_name(key)
+        if strength > 0 or request.get("prefill") != "lama"
+        else "big-lama",
         "seconds": round(time.time() - started, 2),
         "size": [width, height],
     }

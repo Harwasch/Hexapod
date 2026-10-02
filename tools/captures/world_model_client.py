@@ -158,10 +158,18 @@ class FixerFiller:
 #: What a hole is filled with when the caller says nothing about its surroundings.
 GROUND_PROMPT = "the ground seen from above, natural photograph, daylight, sharp detail"
 #: Never paint these into a hole: a removed object's labels are added by the caller.
-INPAINT_NEGATIVE = "object, text, watermark, frame, border, blur, flat colour, smudge, cartoon"
+INPAINT_NEGATIVE = (
+    "object, bowl, plate, pot, container, ball, toy, fruit, vegetable, hole, crater, shadow, "
+    "text, watermark, frame, border, blur, flat colour, smudge, cartoon"
+)
 
 #: The Modal class that holds each inpainting model (`infra/modal/world_models.py`).
-INPAINT_CLASSES = {"sdxl": "InpaintSDXL", "qwen": "InpaintQwen", "flux": "InpaintFlux"}
+INPAINT_CLASSES = {
+    "sdxl": "InpaintSDXL",
+    "qwen": "InpaintQwen",
+    "flux": "InpaintFlux",
+    "lama": "InpaintSDXL",  # LaMa is held beside SDXL (`inpaint_models.lama_fill`)
+}
 
 
 @dataclass
@@ -191,6 +199,15 @@ class GenerativeFiller:
     grow_px: int = 6
     #: 1: fill the views in turn, each shown the earlier views' fill (`teacher_fill`).
     chain: int = 0
+    #: `lama`: LaMa fills the hole first (`inpaint_models`), the model refines it at
+    #: `strength`; `model="lama"` is LaMa alone.
+    prefill: str = ""
+    strength: float | None = None
+    #: The model sees a crop around the hole this many times its size (0: the whole frame):
+    #: the hole's surroundings at the model's resolution, not the frame's far edges.
+    context_scale: float = 2.5
+    #: Crops smaller than this (pixels a side) are grown to it.
+    min_crop_px: int = 256
     context: dict | None = None
     #: Per call: the model, its seconds, and how well it kept the unmasked pixels by itself.
     received: list[dict] = field(default_factory=list)
@@ -198,12 +215,33 @@ class GenerativeFiller:
     def __post_init__(self) -> None:
         if self.model not in INPAINT_CLASSES:
             raise ValueError(f"model {self.model!r}: one of {', '.join(INPAINT_CLASSES)}")
+        if self.model == "lama":
+            self.prefill, self.strength = "lama", 0.0
         if not self.name:
-            self.name = f"inpaint-{self.model}" + ("-chain" if self.chain else "")
+            self.name = f"inpaint-{self.model}"
+            if self.prefill and self.model != "lama":
+                self.name += f"-{self.prefill}"
+            if self.chain:
+                self.name += "-chain"
 
     @property
     def chain_views(self) -> bool:
         return bool(self.chain)
+
+    def crop(self, mask: np.ndarray) -> tuple[slice, slice]:
+        """The window the model is shown: `context_scale` times the mask's bounding box,
+        square where the frame allows, inside the frame."""
+        h, w = mask.shape
+        if self.context_scale <= 0:
+            return slice(0, h), slice(0, w)
+        ys, xs = np.nonzero(mask)
+        side = max(int(ys.max() - ys.min()) + 1, int(xs.max() - xs.min()) + 1)
+        side = max(side * self.context_scale, self.min_crop_px)
+        ch, cw = min(h, round(side)), min(w, round(side))
+        cy, cx = (ys.min() + ys.max()) / 2, (xs.min() + xs.max()) / 2
+        y0 = int(np.clip(round(cy - ch / 2), 0, h - ch))
+        x0 = int(np.clip(round(cx - cw / 2), 0, w - cw))
+        return slice(y0, y0 + ch), slice(x0, x0 + cw)
 
     def fill(self, rgb: np.ndarray, mask: np.ndarray) -> list[np.ndarray]:
         import cv2
@@ -218,9 +256,11 @@ class GenerativeFiller:
             size = 2 * self.grow_px + 1
             kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (size, size))
             grown = cv2.dilate(mask.astype(np.uint8), kernel) > 0
+        window = self.crop(grown)
+        shown, asked = rgb[window], grown[window]
         request: dict = {
-            "image": encode_png(rgb),
-            "mask": encode_png(np.repeat(grown[..., None].astype(np.uint8) * 255, 3, axis=2)),
+            "image": encode_png(shown),
+            "mask": encode_png(np.repeat(asked[..., None].astype(np.uint8) * 255, 3, axis=2)),
             "prompt": prompt,
             "negative": negative,
             "seed": int(self.seed),
@@ -229,20 +269,27 @@ class GenerativeFiller:
             request["steps"] = int(self.steps)
         if self.guidance is not None:
             request["guidance"] = float(self.guidance)
+        if self.prefill:
+            request["prefill"] = self.prefill
+        if self.strength is not None:
+            request["strength"] = float(self.strength)
         response = self.remote(INPAINT_CLASSES[self.model], "inpaint", request)
-        drawn = _resize(decode_png(response["image"]), rgb.shape[1], rgb.shape[0])
-        diff = (drawn.astype(np.float64) - rgb.astype(np.float64))[~grown]
+        drawn = _resize(decode_png(response["image"]), shown.shape[1], shown.shape[0])
+        diff = (drawn.astype(np.float64) - shown.astype(np.float64))[~asked]
         mse = float(np.mean(diff**2)) if diff.size else 0.0
         self.received.append(
             {
                 "model": response.get("model"),
                 "seconds": response.get("seconds"),
                 "prompt": prompt,
+                "crop": [window[1].start, window[0].start, shown.shape[1], shown.shape[0]],
                 # How far the model moved what it was not asked to paint (it is discarded).
                 "rawOutsidePsnr": round(float(10 * np.log10(255.0**2 / max(mse, 1e-10))), 2),
             }
         )
-        return [np.where(mask[..., None], drawn, rgb).astype(np.uint8)]
+        out = rgb.copy()
+        out[window] = np.where(mask[window][..., None], drawn, shown)
+        return [out.astype(np.uint8)]
 
 
 def presmooth(rgb: np.ndarray, sigma: float) -> np.ndarray:

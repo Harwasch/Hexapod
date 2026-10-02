@@ -509,11 +509,12 @@ class InpaintSDXL:
     def load(self) -> None:
         self.im = _inpaint_models()
         self.pipe = self.im.load("sdxl")
+        self.lama = self.im.load_lama("/weights/lama")
         WEIGHTS.commit()
 
     @modal.method()
     def inpaint(self, request: dict) -> dict:
-        return self.im.inpaint("sdxl", self.pipe, request)
+        return self.im.inpaint("sdxl", self.pipe, request, lama=self.lama)
 
 
 @app.cls(

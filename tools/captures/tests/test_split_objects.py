@@ -445,7 +445,7 @@ def test_describe_surroundings_names_the_neighbours_by_footprint_not_the_object(
     )  # fmt: skip
     assert out["labels"] == ["straw", "dirt"]
     assert out["negative"] == "pumpkin"
-    assert out["prompt"].startswith("Straw and dirt, the bare ground seen from above")
+    assert out["prompt"].startswith("Straw and dirt: a top-down close-up photograph")
 
 
 def test_skins_are_rebound_with_the_tiles(tmp_path: Path) -> None:

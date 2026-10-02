@@ -51,7 +51,7 @@ env:
   JOBS: ${{ inputs.jobs || 'split:pumpkin' }}
   # Scans to run fill.py probe on (Fixer on renders prepared several ways); empty: none.
   PROBES: ""
-  FILLERS: ${{ inputs.fillers || 'telea,fixer-t50,sdxl,sdxl-chain,qwen,qwen-chain' }}
+  FILLERS: ${{ inputs.fillers || 'telea,fixer-t50,lama,lama-chain,sdxl,sdxl-lama,sdxl-lama-chain,qwen,qwen-chain' }}
   DISTILL: ${{ inputs.distill || '1500' }}
   RENDERER: ${{ inputs.renderer || 'gsplat' }}
   # Non-empty: also run tests/test_gsplat_parity.py (CPU against gsplat) on a GPU.

@@ -424,8 +424,8 @@ SURROUNDINGS_SHARE = 0.1
 SURROUNDINGS_LABELS = 4
 #: How a prompt is phrased for what a hole's views look down on, and for a scan from outside.
 SURROUNDINGS_VIEWS = {
-    "above": "{labels}, the bare ground seen from above, nothing standing on it, natural "
-    "photograph, daylight, sharp detail",
+    "above": "{labels}: a top-down close-up photograph of the ground, a seamless natural "
+    "texture, evenly lit, nothing lying on it, sharp detail",
     "outside": "{labels}, seen from outside, natural photograph, daylight, sharp detail",
 }
 
