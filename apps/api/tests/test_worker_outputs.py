@@ -74,10 +74,13 @@ def a_package(root: Path, tiles: int = 3) -> Path:
     return splat
 
 
-def step_json(root: Path, stage: str, runner: str) -> None:
+def step_json(root: Path, stage: str, runner: str, attempt: int | None = None) -> None:
     path = root / "stages" / stage / "step.json"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"stageId": stage, "runner": runner}))
+    step: dict[str, object] = {"stageId": stage, "runner": runner}
+    if attempt is not None:
+        step["attempt"] = attempt
+    path.write_text(json.dumps(step))
 
 
 # --- Cache-Control ------------------------------------------------------------------------
@@ -216,11 +219,16 @@ class NoUploads:
         return self.inner.upload_file(key, source, content_type, **kwargs)
 
 
-def provider_left(storage: S3Storage, stage: str, files: dict[str, bytes]) -> None:
-    """What a provider puts under `transfer/out`: plain octet-stream, no cache header."""
+def provider_left(
+    storage: S3Storage, stage: str, files: dict[str, bytes], attempt: int = 1
+) -> None:
+    """What a provider puts under `transfer/out` (`out-a<N>` after the first attempt):
+    plain octet-stream, no cache header."""
     for name, data in files.items():
         storage.put_object(
-            f"{transfer_outputs_key(JOB, stage)}/{name}", data, "application/octet-stream"
+            f"{transfer_outputs_key(JOB, stage, attempt)}/{name}",
+            data,
+            "application/octet-stream",
         )
 
 
@@ -254,6 +262,55 @@ def test_a_dispatched_stages_file_is_copied_not_uploaded(
         "application/octet-stream",
         IMMUTABLE_CACHE,
     )
+
+
+def test_the_transfer_key_is_the_pipelines_for_a_later_attempt_too() -> None:
+    from cloud import StageKeys
+
+    keys = StageKeys(
+        root=f"runs/{JOB}",
+        stage=f"runs/{JOB}/train",
+        checkpoint=f"runs/{JOB}/train/checkpoint-a2",
+        attempt=2,
+    )
+    assert transfer_outputs_key(JOB, "train", 2) == keys.outputs
+
+
+def test_a_later_attempt_is_copied_from_its_own_transfer_key(
+    storage: S3Storage, tmp_path: Path
+) -> None:
+    ply = tmp_path / "stages" / "train" / "out" / "canonical.ply"
+    ply.parent.mkdir(parents=True)
+    ply.write_bytes(b"ply\x00new")
+    step_json(tmp_path, "train", "cloud", attempt=2)
+    provider_left(storage, "train", {"canonical.ply": b"ply\x00new"}, attempt=2)
+    counting = NoUploads(storage)
+
+    uploaded = upload_artifact(counting, tmp_path, JOB, splat_ref())
+
+    assert uploaded is not None
+    assert counting.uploads == []
+    assert storage.get_object(uploaded.storage_key) == b"ply\x00new"
+
+
+def test_an_earlier_attempts_leftover_is_never_copied_as_a_later_ones(
+    storage: S3Storage, tmp_path: Path
+) -> None:
+    # Attempt 1 left a file of the same name and size; attempt 2 handed nothing back
+    # through the bucket under its own key. The leftover must not be copied as attempt
+    # 2's: the workdir's bytes are uploaded instead.
+    ply = tmp_path / "stages" / "train" / "out" / "canonical.ply"
+    ply.parent.mkdir(parents=True)
+    ply.write_bytes(b"ply\x00new")
+    step_json(tmp_path, "train", "cloud", attempt=2)
+    provider_left(storage, "train", {"canonical.ply": b"ply\x00old"}, attempt=1)
+    counting = NoUploads(storage)
+
+    uploaded = upload_artifact(counting, tmp_path, JOB, splat_ref())
+
+    assert uploaded is not None
+    assert counting.uploads == [uploaded.storage_key]
+    assert storage.get_object(uploaded.storage_key) == b"ply\x00new"
 
 
 def test_a_dispatched_stages_directory_is_copied_member_by_member(

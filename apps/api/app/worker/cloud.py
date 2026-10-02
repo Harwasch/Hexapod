@@ -31,7 +31,6 @@ process whose job is to hold a lease. The child still has no database session.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from concurrent.futures import ThreadPoolExecutor
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from importlib.util import find_spec

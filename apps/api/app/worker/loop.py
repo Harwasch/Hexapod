@@ -64,8 +64,8 @@ from app.worker.child import resolve_recipe
 from app.worker.claim import anything_claimable, claim_next
 from app.worker.cloud import check_dispatchable
 from app.worker.config import WorkerConfig
-from app.worker.pipeline_bridge import recipe_dir
 from app.worker.disk import DiskGuard
+from app.worker.pipeline_bridge import recipe_dir
 from app.worker.runner import JobSupervisor, Terminal
 
 log = logging.getLogger("app.worker")
