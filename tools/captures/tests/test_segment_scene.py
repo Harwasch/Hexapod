@@ -179,7 +179,9 @@ def test_behaviour_rule() -> None:
 
 def test_oracle_masks_cover_the_views(run: dict) -> None:
     result = run["result"]
-    assert len(result.views) == VIEWS
+    # The yard is wider than one view's footprint: the whole-scan views plus local ones.
+    assert VIEWS < len(result.views) <= ss.MAX_VIEWS
+    assert sum(np.isfinite(v.camera.far) for v in result.views) > VIEWS
     assert result.lifted.stats["levels"] == 2
     # Every view's cells voted somewhere at the object level.
     for v in result.votes:

@@ -63,8 +63,9 @@ import hashlib
 import importlib
 import json
 import math
+import os
 import time
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol, runtime_checkable
@@ -76,7 +77,7 @@ from scipy.spatial import cKDTree
 
 import scene_plants
 import splat_tiles
-from splat_render import Camera, Splats, _from_columns, render
+from splat_render import Camera, SplatIndex, Splats, _from_columns, render
 
 __all__ = [
     "Embedder",
@@ -613,9 +614,12 @@ class View:
     purity: np.ndarray
 
 
-def render_view(splats: Splats, camera: Camera, cells: np.ndarray) -> View:
-    """The view the pipeline and `OracleMasks` both see (same renderer, same seed)."""
-    frame = render(splats, camera, labels=cells)
+def render_view(
+    splats: Splats, camera: Camera, cells: np.ndarray, index: SplatIndex | None = None
+) -> View:
+    """The view the pipeline and `OracleMasks` both see (same renderer, same seed; `index`
+    only makes it faster)."""
+    frame = render(splats, camera, labels=cells, index=index)
     return View(
         camera,
         np.round(frame.rgb * 255).astype(np.uint8),
@@ -624,8 +628,64 @@ def render_view(splats: Splats, camera: Camera, cells: np.ndarray) -> View:
     )
 
 
-def render_views(splats: Splats, cameras: Sequence[Camera], cells: np.ndarray) -> list[View]:
-    return [render_view(splats, camera, cells) for camera in cameras]
+def render_views(
+    splats: Splats,
+    cameras: Sequence[Camera],
+    cells: np.ndarray,
+    *,
+    index: SplatIndex | None = None,
+    workers: int = 1,
+    cache: Path | None = None,
+) -> Iterator[View]:
+    """The views, in camera order, rendered by `workers` processes. The processes are forked
+    (the scan is shared copy-on-write, not copied), each renders whole views, and the views
+    come back in order as they are done -- the same views as one process makes, so the run
+    is deterministic. The caller can use each view (mask it on a GPU) while the rest render.
+    Fork before anything starts a GPU context; with `workers` 1 or no fork, one process."""
+    import multiprocessing as mp
+
+    n_cells = int(cells.max()) + 1 if cells.size else 0
+    _POOL_STATE.update(
+        splats=splats, cameras=list(cameras), cells=cells, index=index, cache=cache,
+        n_cells=n_cells,
+    )  # fmt: skip
+    try:
+        if workers <= 1 or len(cameras) <= 1 or "fork" not in mp.get_all_start_methods():
+            for k in range(len(cameras)):
+                yield _render_job(k)
+            return
+        with mp.get_context("fork").Pool(min(workers, len(cameras))) as pool:
+            yield from pool.imap(_render_job, range(len(cameras)))
+    finally:
+        _POOL_STATE.clear()
+
+
+#: What forked render workers read (set by `render_views` before the fork).
+_POOL_STATE: dict[str, object] = {}
+
+
+def _render_job(k: int) -> View:
+    state = _POOL_STATE
+    cameras = state["cameras"]
+    assert isinstance(cameras, list)
+    return cached_view(
+        state["cache"],  # type: ignore[arg-type]
+        state["splats"],  # type: ignore[arg-type]
+        cameras[k],
+        state["cells"],  # type: ignore[arg-type]
+        int(state["n_cells"]),  # type: ignore[arg-type]
+        state["index"],  # type: ignore[arg-type]
+    )
+
+
+def default_workers() -> int:
+    """Processes to render with: the CPUs this process may use."""
+    import os
+
+    try:
+        return max(1, len(os.sched_getaffinity(0)))
+    except AttributeError:  # not Linux
+        return max(1, os.cpu_count() or 1)
 
 
 # ------------------------------------------------------------------------- the oracle
@@ -709,19 +769,23 @@ class _Votes:
 
 
 def vote(view: View, masks: Sequence[Mask], n_cells: int, levels: int) -> _Votes:
-    """Which mask of each level every visible cell of `view` is in (`MASK_SHARE`)."""
+    """Which mask of each level every visible cell of `view` is in (`MASK_SHARE`). Works on
+    the view's own cells, so its cost does not grow with the scan."""
     owner = view.cell.reshape(-1)
     weight = view.purity.reshape(-1).astype(np.float64)
     good = (owner >= 0) & (weight >= MIN_PURITY)
-    seen = np.bincount(owner[good], weight[good], n_cells)
-    visible = np.flatnonzero(seen >= MIN_VISIBLE_PX)
-    best = np.full((levels, n_cells), -1, np.int32)
-    best_share = np.zeros((levels, n_cells))
-    best_score = np.zeros((levels, n_cells))
+    pixels = np.flatnonzero(good)
+    cells, local = np.unique(owner[pixels], return_inverse=True)
+    weight = weight[pixels]
+    m = cells.size
+    seen = np.bincount(local, weight, m)
+    best = np.full((levels, m), -1, np.int32)
+    best_share = np.zeros((levels, m))
+    best_score = np.zeros((levels, m))
     for k, mask in enumerate(masks):
-        inside = good & np.asarray(mask.mask, bool).reshape(-1)
-        share = np.bincount(owner[inside], weight[inside], n_cells)
-        share = np.divide(share, seen, out=np.zeros(n_cells), where=seen > 0)
+        inside = np.asarray(mask.mask, bool).reshape(-1)[pixels]
+        share = np.bincount(local[inside], weight[inside], m)
+        share = np.divide(share, seen, out=np.zeros(m), where=seen > 0)
         level = mask.level
         better = (share >= MASK_SHARE) & (
             (share > best_share[level])
@@ -730,7 +794,19 @@ def vote(view: View, masks: Sequence[Mask], n_cells: int, levels: int) -> _Votes
         best[level, better] = k
         best_share[level, better] = share[better]
         best_score[level, better] = mask.score
-    return _Votes(visible.astype(np.int32), seen[visible].astype(np.float32), best[:, visible])
+    visible = seen >= MIN_VISIBLE_PX
+    return _Votes(
+        cells[visible].astype(np.int32), seen[visible].astype(np.float32), best[:, visible]
+    )
+
+
+def _pad_levels(votes: _Votes, levels: int) -> _Votes:
+    """`votes` with -1 rows for the mask levels its view had none of."""
+    have = votes.masks.shape[0]
+    if have >= levels:
+        return votes
+    pad = np.full((levels - have, votes.cells.size), -1, np.int32)
+    return _Votes(votes.cells, votes.weight, np.concatenate([votes.masks, pad]))
 
 
 def _components(n: int, a: np.ndarray, b: np.ndarray) -> np.ndarray:
@@ -1386,18 +1462,23 @@ def _cache_key(camera: Camera, n_cells: int) -> str:
 
 
 def cached_view(
-    cache: Path | None, splats: Splats, camera: Camera, cells: np.ndarray, n_cells: int
+    cache: Path | None,
+    splats: Splats,
+    camera: Camera,
+    cells: np.ndarray,
+    n_cells: int,
+    index: SplatIndex | None = None,
 ) -> View:
     """`render_view`, kept in `cache` (keyed by the camera and the cell count) so a run that
     is stopped picks up where it was rather than rendering again."""
     if cache is None:
-        return render_view(splats, camera, cells)
+        return render_view(splats, camera, cells, index)
     path = cache / f"view-{_cache_key(camera, n_cells)}.npz"
     if path.exists():
         with np.load(path) as z:
             return View(camera, z["rgb"], z["cell"], z["purity"])
-    view = render_view(splats, camera, cells)
-    tmp = path.with_suffix(".tmp.npz")
+    view = render_view(splats, camera, cells, index)
+    tmp = path.with_suffix(f".{os.getpid()}.tmp.npz")
     np.savez_compressed(tmp, rgb=view.rgb, cell=view.cell, purity=view.purity)
     tmp.replace(path)
     return view
@@ -1460,42 +1541,66 @@ def segment(
     source_factory=None,
     cache: Path | None = None,
     progress=None,
+    workers: int | None = None,
+    max_views: int = MAX_VIEWS,
 ) -> Segmentation:
     """Cells, views, masks, votes, lifting and meaning, for a scan held in memory.
 
     `source_factory(cameras)` builds a mask source that needs the cameras (`OracleMasks`).
     `cache`: a directory where each view and its masks are kept as they are made, so a
     stopped run resumes (views and masks are most of the time on a large scan).
-    `progress(message)` is told as each view is done."""
+    `progress(message)` is told as each view is done. `workers`: render processes
+    (default: the CPUs this process may use)."""
     timings: dict[str, float] = {}
     mark = time.perf_counter()
     cell, centroids, counts, edge = cells or supervoxels(splats.positions)
     timings["cellsS"] = time.perf_counter() - mark
     mark = time.perf_counter()
+    index = SplatIndex.build(splats)
     if cameras is None:
-        cameras = plan_views(splats.positions, view_count, observers=observer_points(splats))
+        cameras = plan_views(
+            splats.positions,
+            view_count,
+            observers=observer_points(splats),
+            edge=edge,
+            solid=centroids,
+            max_views=max_views,
+        )
     timings["planS"] = time.perf_counter() - mark
-    mark = time.perf_counter()
     if cache is not None:
         cache.mkdir(parents=True, exist_ok=True)
     n_cells = len(centroids)
-    views = []
-    for k, camera in enumerate(cameras):
-        views.append(cached_view(cache, splats, camera, cell, n_cells))
+    # Views render in forked workers while this process masks the ones already done (the
+    # mask model's GPU context starts after the fork). Each view's masks become its votes
+    # and are dropped; the views are kept for `describe`.
+    views: list[View] = []
+    view_votes: list[_Votes] = []
+    render_s = masks_s = 0.0
+    mark = time.perf_counter()
+    rendered = render_views(
+        splats, cameras, cell, index=index, workers=workers or default_workers(), cache=cache
+    )
+    for k, view in enumerate(rendered):
+        views.append(view)
+        now = time.perf_counter()
+        render_s += now - mark
         if progress:
             progress(f"view {k + 1}/{len(cameras)} rendered")
-    timings["renderS"] = time.perf_counter() - mark
-    mark = time.perf_counter()
-    if source is None:
-        source = source_factory(cameras)
-    all_masks = []
-    for k, view in enumerate(views):
-        all_masks.append(cached_masks(cache, view, source, n_cells))
+        if source is None:
+            source = source_factory(cameras)
+        masks = cached_masks(cache, view, source, n_cells)
+        view_levels = max((m.level for m in masks), default=0) + 1
+        view_votes.append(vote(view, masks, n_cells, view_levels))
         if progress:
-            progress(f"view {k + 1}/{len(views)} masked ({len(all_masks[-1])} masks)")
-    levels = max((m.level for masks in all_masks for m in masks), default=0) + 1
-    votes = [vote(v, m, n_cells, levels) for v, m in zip(views, all_masks, strict=True)]
-    timings["masksS"] = time.perf_counter() - mark
+            progress(f"view {k + 1}/{len(cameras)} masked ({len(masks)} masks)")
+        mark = time.perf_counter()
+        masks_s += mark - now
+    del index
+    levels = max((v.masks.shape[0] for v in view_votes), default=1)
+    votes = [_pad_levels(v, levels) for v in view_votes]
+    # Rendering overlaps masking: renderS is the time spent waiting for views.
+    timings["renderS"] = render_s
+    timings["masksS"] = masks_s
     mark = time.perf_counter()
     lifted = lift(votes, centroids, counts, edge, levels)
     lifted.stats["cellEdgeM"] = round(edge, 4)
@@ -1550,7 +1655,15 @@ def main() -> None:
         "--embedder", default="segment_scene:FakeEmbedder", help="module:Class, an Embedder"
     )
     parser.add_argument("--vocabulary", type=Path, default=None, help="one tag per line")
-    parser.add_argument("--views", type=int, default=VIEW_COUNT)
+    parser.add_argument(
+        "--views", type=int, default=VIEW_COUNT, help="views of the whole scan (rings, observers)"
+    )
+    parser.add_argument(
+        "--max-views", type=int, default=MAX_VIEWS, help="at most this many with local views"
+    )
+    parser.add_argument(
+        "--workers", type=int, default=None, help="render processes (default: usable CPUs)"
+    )
     parser.add_argument("--save-dir", type=Path, default=None, help="write the views here")
     parser.add_argument(
         "--cache", type=Path, default=None, help="keep views and masks here; a rerun resumes"
@@ -1592,6 +1705,8 @@ def main() -> None:
         embedder,
         vocabulary,
         view_count=args.views,
+        workers=args.workers,
+        max_views=args.max_views,
         source_factory=factory,
         cache=args.cache,
         progress=lambda message: print(message, flush=True),
