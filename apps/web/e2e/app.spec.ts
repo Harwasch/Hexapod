@@ -28,7 +28,10 @@ test.describe("boot", () => {
   test("app boots, viewer initializes and onboarding shows", async ({ app }) => {
     await expect(app.getByTestId("onboarding")).toBeVisible();
     await expect(app.getByRole("heading", { name: "Explore the living world" })).toBeVisible();
-    await expect(app.getByTestId("status-bar")).toContainText("Planet");
+    // At globe scale with no site, the status line sums up the catalog; the camera readouts
+    // are developer telemetry and stay off unless Settings › Advanced turns them on.
+    await expect(app.getByTestId("status-fleet")).toContainText("1 site");
+    await expect(app.getByTestId("status-bar")).toHaveCount(0);
     const errors: string[] = [];
     app.on("pageerror", (e) => errors.push(e.message));
     await app.waitForTimeout(500);
@@ -88,14 +91,21 @@ test.describe("catalog", () => {
     await expect(card).toContainText("Splat");
     await card.click();
     await expect(app.getByTestId("representation-switcher")).toBeVisible({ timeout: 30_000 });
-    await expect(app.getByTestId("status-bar")).not.toContainText("Planet");
+    // At the site the status line reports the site's own fleet, not the catalog's.
+    await expect(app.getByTestId("status-fleet")).toContainText("Fleet:");
+    await expect(app.getByTestId("status-fleet")).not.toContainText("site");
   });
 
   test("representation switch keeps the camera", async ({ app }) => {
     await app.getByTestId("onboarding-demo").click();
     const switcher = app.getByTestId("representation-switcher");
     await expect(switcher).toBeVisible({ timeout: 30_000 });
-    await expect(app.getByTestId("status-bar")).toContainText("Splat");
+    await expect(switcher.getByRole("radio", { name: /Splat/ })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    // Which engine draws the splat is a developer's comparison, in Settings › Advanced.
+    await expect(switcher.getByTestId("splat-renderer")).toHaveCount(0);
     const readCamera = () =>
       app.evaluate(() => {
         interface Handle {
@@ -131,7 +141,10 @@ test.describe("catalog", () => {
       .toBeLessThan(0.01);
     const before = await readCamera();
     await switcher.getByRole("radio", { name: /Mesh/ }).click();
-    await expect(app.getByTestId("status-bar")).toContainText("Mesh");
+    await expect(switcher.getByRole("radio", { name: /Mesh/ })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
     await app.waitForTimeout(800);
     // Cesium re-normalises the camera frame every frame; compare within float noise.
     const after = await readCamera();
@@ -141,6 +154,17 @@ test.describe("catalog", () => {
     expect(Math.abs(after.heading - before.heading)).toBeLessThan(1e-9);
     expect(Math.abs(after.pitch - before.pitch)).toBeLessThan(1e-9);
     await expect(switcher.getByRole("radio", { name: /Points/ })).toBeDisabled();
+    // The fixture's mesh lives at example.invalid, so it never loads: the failure is said
+    // beside the switch, with a way to try again, and trying again asks for it again.
+    const load = app.getByTestId("site-load");
+    await expect(load).toContainText("Couldn’t load the 3D model", { timeout: 30_000 });
+    const tilesetRequests: string[] = [];
+    app.on("request", (request) => {
+      if (request.url().includes("example.invalid/mesh")) tilesetRequests.push(request.url());
+    });
+    await load.getByRole("button", { name: "Retry" }).click();
+    await expect.poll(() => tilesetRequests.length, { timeout: 15_000 }).toBeGreaterThan(0);
+    await expect(load).toContainText("Couldn’t load the 3D model", { timeout: 30_000 });
   });
 
   test("layer toggle updates runtime state and About sheet shows provenance", async ({ app }) => {
@@ -231,25 +255,57 @@ test.describe("interaction", () => {
     await expect(app.getByTestId("measure-active")).toHaveCount(0);
   });
 
-  test("command palette and keyboard shortcuts drive the UI", async ({ app }) => {
+  test("the command box and keyboard shortcuts drive the UI", async ({ app }) => {
+    await app.getByTestId("onboarding-explore").click();
+    // ⌘K / Ctrl+K focuses the one box; with nothing typed it lists every action and its key.
     await app.keyboard.press("Control+k");
-    const palette = app.getByTestId("command-palette");
-    await expect(palette).toBeVisible();
-    await app.getByTestId("palette-input").fill("settings");
+    const input = app.getByRole("combobox", { name: "Search, run an action or ask the agent" });
+    await expect(input).toBeFocused();
+    const results = app.getByRole("listbox", { name: "Results" });
+    await expect(results.getByRole("option", { name: /Saved views/ })).toContainText("B");
+    await app.keyboard.type("settings");
+    // Enter runs the highlighted row: the Settings action, not the agent.
+    await expect(results.getByRole("option", { selected: true })).toContainText("Settings");
     await app.keyboard.press("Enter");
     await expect(app.getByTestId("settings-sheet")).toBeVisible();
     await expect(app.getByRole("radiogroup", { name: "Quality preset" })).toBeVisible();
+
+    // The developer readouts live behind Settings › Advanced, off until turned on.
+    await expect(app.getByTestId("status-bar")).toHaveCount(0);
+    await app.getByTestId("settings-advanced").getByText("Advanced").click();
+    await app.getByRole("switch", { name: "Show developer readouts" }).click();
+    await expect(app.getByTestId("status-bar")).toContainText("Alt");
+    await expect(app.getByRole("radiogroup", { name: "Splat renderer" })).toBeVisible();
     await app.keyboard.press("Escape");
     await expect(app.getByTestId("settings-sheet")).toHaveCount(0);
+
+    // "/" also focuses the box; Escape closes its list without running anything.
+    await app.keyboard.press("/");
+    await expect(input).toBeFocused();
+    await app.keyboard.type("compare");
+    await expect(results).toBeVisible();
+    await app.keyboard.press("Escape");
+    await expect(results).toHaveCount(0);
+    await expect(app.getByTestId("compare-panel")).toHaveCount(0);
+
     await app.keyboard.press("l");
     await expect(app.getByTestId("layers-panel")).toBeVisible();
     await app.keyboard.press("Escape");
     await expect(app.getByTestId("layers-panel")).toHaveCount(0);
+
+    // "?" lists every key, from the same registry the box shows its keys from.
+    await app.keyboard.press("Shift+?");
+    const sheet = app.getByTestId("shortcut-sheet");
+    await expect(sheet).toBeVisible();
+    await expect(sheet.getByRole("region", { name: "Camera" })).toContainText("Reset north");
+    await expect(sheet).toContainText("Walk / explore mode");
+    await app.keyboard.press("Escape");
+    await expect(sheet).toHaveCount(0);
   });
 
   test("major UI is keyboard accessible", async ({ app }) => {
     await app.getByTestId("onboarding-explore").click();
-    await app.getByTestId("search-input").focus();
+    await app.getByTestId("command-input").focus();
     // Tab through the top-right controls to the tool rail; every stop must be a real control.
     for (let i = 0; i < 12; i++) {
       await app.keyboard.press("Tab");
@@ -333,6 +389,15 @@ test.describe("the HUD over the map", () => {
   // navigation, which would wipe the dismissal this test reloads to check.
   test("the evaluation-token notice can be dismissed and stays dismissed", async ({ page }) => {
     await mockApi(page);
+    // The notice is for whoever deployed this, so it rides the developer readouts. Seeded
+    // only once: a reload must find the dismissal this test is about, not a fresh seed.
+    await page.addInitScript(() => {
+      if (!window.localStorage.getItem("twin.settings.v1"))
+        window.localStorage.setItem(
+          "twin.settings.v1",
+          JSON.stringify({ state: { devReadouts: true }, version: 3 }),
+        );
+    });
     await page.goto("/");
     await expect(page.getByTestId("cesium-viewport")).toBeVisible();
     const notice = page.getByTestId("notice-default-token");
@@ -382,10 +447,13 @@ test.describe("add data", () => {
       ),
     );
     await page.goto("/");
-    await expect(page.getByTestId("status-bar")).toContainText("Alt");
+    await expect(page.getByTestId("status-line")).toBeVisible();
     await page.getByTestId("tool-add-data").click();
     const sheet = page.getByTestId("add-data");
     await expect(sheet).toBeVisible();
+    // Uploading leads; linking something already hosted is folded away until asked for.
+    await expect(page.getByTestId("site-submit")).toBeHidden();
+    await page.getByTestId("add-link-toggle").click();
     await page.getByTestId("site-submit").click();
     await expect(sheet.getByText("Give it a name")).toBeVisible();
     await expect(sheet.getByText("Paste or upload a GeoJSON Polygon footprint.")).toBeVisible();
@@ -419,6 +487,7 @@ test.describe("add data", () => {
 
   test("layer form rejects bad URL templates", async ({ app }) => {
     await app.getByTestId("tool-add-data").click();
+    await app.getByTestId("add-link-toggle").click();
     await app.getByTestId("add-tab-imagery").click();
     await app.getByTestId("layer-name").fill("My tiles");
     await app.getByTestId("layer-url").fill("https://tiles.example.com/{z}/{x}.png");
@@ -475,7 +544,11 @@ test.describe("mission control", () => {
     await expect(app.getByTestId("plan-source")).toContainText(/Claude|Rule-based/);
     await expect(app.getByTestId("plan-review")).toContainText("Z-21");
     await expect(app.getByTestId("plan-schedule")).toBeVisible();
+    // The status line carries the agent's latest line; the chevron opens the whole thread.
+    await app.getByTestId("agent-stream-toggle").click();
     await expect(app.getByTestId("agent-stream")).toContainText("Drafted");
+    await app.getByTestId("agent-stream-toggle").click();
+    await expect(app.getByTestId("agent-stream")).toHaveCount(0);
     // The draft is drawn on the map: coverage passes for Z-21, a step marker, no route (one zone).
     await expect
       .poll(() => planEntityIds(app))
@@ -530,7 +603,7 @@ test.describe("mission control", () => {
     await app.getByTestId("command-input").fill("3D scan this field into a splat");
     await app.getByTestId("command-input").press("Enter");
     await expect(app.getByTestId("plan-awaiting-ground")).toBeVisible({ timeout: 15_000 });
-    await expect(app.getByTestId("agent-stream")).toContainText("Click the ground");
+    await expect(app.getByTestId("status-agent")).toContainText("Click the ground");
     // One click on the map: the mapped field under it becomes the ground, corners on the map.
     const canvas = app.locator("canvas").first();
     const box = await canvas.boundingBox();
@@ -583,18 +656,25 @@ test.describe("mission control", () => {
     await expect(app.getByTestId("plan-detail")).toContainText("A-01 Test Field");
   });
 
-  test("command bar drives the agent stream and layer pills toggle overlays", async ({ app }) => {
+  test("the agent answers on the status line and layer pills toggle overlays", async ({ app }) => {
     await app.getByTestId("onboarding-demo").click();
     await expect(app.getByTestId("project-card")).toContainText("Blackrock Mesa", {
       timeout: 30_000,
     });
+    // The site's fleet, counted the way the Fleet window counts it, and labelled simulated.
+    await expect(app.getByTestId("status-fleet")).toContainText(
+      "Fleet: 4 working · 2 need attention",
+    );
+    await expect(app.getByTestId("status-fleet")).toContainText("simulated");
+    // An instruction highlights "Ask the agent", so Enter asks rather than searches.
     await app.getByTestId("command-input").fill("where is TR-07");
+    await expect(app.getByTestId("command-row-agent")).toHaveAttribute("aria-selected", "true");
     await app.keyboard.press("Enter");
-    await expect(app.getByTestId("agent-stream")).toContainText("Locating TR-07 Harrier");
+    await expect(app.getByTestId("status-agent")).toContainText("Locating TR-07 Harrier");
     await expect(app.getByTestId("selection-card").last()).toContainText("Service due");
     await app.getByTestId("command-input").fill("hide zones");
     await app.keyboard.press("Enter");
-    await expect(app.getByTestId("agent-stream")).toContainText("Zones off");
+    await expect(app.getByTestId("status-agent")).toContainText("Zones off");
     await expect(app.getByTestId("pill-zones")).toHaveAttribute("aria-pressed", "false");
     await expect(app.locator('[data-testid^="zone-chip-"]')).toHaveCount(0);
     await app.getByTestId("pill-zones").click({ force: true });

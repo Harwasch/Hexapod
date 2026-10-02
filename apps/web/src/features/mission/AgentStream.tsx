@@ -1,29 +1,54 @@
-import { ChevronDown, ChevronUp } from "lucide-react";
+import { TriangleAlert } from "lucide-react";
 
 import { useMission } from "@/state/mission";
 
-/** Bottom-right agent activity: collapsed status pill that expands into the thread list (design: agent stream). */
-export function AgentStream() {
+import type { ConnectionIssue } from "../notices/connection";
+
+/**
+ * The agent's activity log (design: agent stream): what it is running, what is queued, what it
+ * has done, and the conversation with the operator. It opens above the status line, which
+ * carries the one line of it that matters now; degraded connections lead it with their
+ * sentence, since the status line only has room for their name.
+ */
+export function AgentActivityLog({ id, issues }: { id: string; issues: ConnectionIssue[] }) {
   const project = useMission((s) => s.project);
-  const open = useMission((s) => s.streamOpen);
-  const setOpen = useMission((s) => s.setStreamOpen);
   const log = useMission((s) => s.log);
   const drafting = useMission((s) => s.composer?.status === "drafting");
   const actions = project?.agent.actions ?? [];
   const running = actions.filter((a) => a.status === "run").length + (drafting ? 1 : 0);
-  // An idle agent has no card: the stream appears when something runs, when a command was
-  // answered, or when the operator opens it (key `a`).
-  if (!project || (running === 0 && log.length === 0 && !open)) return null;
-  const headline = drafting ? "Drafting a plan…" : project.agent.headline;
+  const empty = actions.length === 0 && log.length === 0 && !drafting;
   return (
-    <div className={`mc-stream ${open ? "is-open" : ""}`} data-testid="agent-stream">
-      <div className="glass mc-stream__panel" aria-hidden={!open} id="agent-stream-panel">
-        <div className="mc-stream__head">
-          <span className="mc-stream__title">
-            {drafting ? "Planning with the agent" : project.agent.summary}
-          </span>
-          {running > 0 && <span className="mc-eyebrow">{running} running</span>}
-        </div>
+    <div
+      className="glass glass--strong status-log"
+      id={id}
+      role="region"
+      aria-label="Agent activity"
+      data-hud-popover=""
+      data-testid="agent-stream"
+    >
+      {issues.length > 0 && (
+        <ul className="status-log__issues" aria-label="Connection">
+          {issues.map((issue) => (
+            <li key={issue.id} className="status-log__issue">
+              <TriangleAlert size={14} aria-hidden="true" />
+              <span>
+                <strong>{issue.title}.</strong> {issue.detail}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="mc-stream__head">
+        <span className="mc-stream__title">
+          {drafting ? "Planning with the agent" : (project?.agent.summary ?? "Agent")}
+        </span>
+        {running > 0 && <span className="mc-eyebrow">{running} running</span>}
+      </div>
+      {empty ? (
+        <p className="status-log__empty">
+          Nothing yet. Ask from the command box: a place, a layer, or the work to plan.
+        </p>
+      ) : (
         <ul className="mc-stream__list" aria-label="Agent actions">
           {drafting && (
             <li className="mc-stream__item is-run">
@@ -32,12 +57,8 @@ export function AgentStream() {
               <Blink />
             </li>
           )}
-          {actions.map((action, i) => (
-            <li
-              key={action.id}
-              className={`mc-stream__item is-${action.status}`}
-              style={{ transitionDelay: open ? `${0.08 + i * 0.035}s` : "0s" }}
-            >
+          {actions.map((action) => (
+            <li key={action.id} className={`mc-stream__item is-${action.status}`}>
               <span className="mc-dot mc-stream__dot" aria-hidden="true" />
               <span className="mc-stream__text">{action.text}</span>
               {action.status === "run" && <Blink />}
@@ -53,33 +74,18 @@ export function AgentStream() {
             </li>
           ))}
         </ul>
+      )}
+      {project && (
         <div className="mc-stream__foot">
           {project.agent.footer}
           {project.simulated ? " · simulated activity" : ""}
         </div>
-      </div>
-      <button
-        type="button"
-        className="glass mc-stream__pill"
-        onClick={() => setOpen(!open)}
-        aria-expanded={open}
-        aria-controls="agent-stream-panel"
-        data-testid="agent-stream-toggle"
-      >
-        <span className={`mc-spinner ${running > 0 ? "" : "is-static"}`} aria-hidden="true" />
-        <span className="mc-stream__headline">{headline}</span>
-        {running > 0 && <Blink />}
-        {open ? (
-          <ChevronDown size={13} aria-hidden="true" />
-        ) : (
-          <ChevronUp size={13} aria-hidden="true" />
-        )}
-      </button>
+      )}
     </div>
   );
 }
 
-function Blink() {
+export function Blink() {
   return (
     <span className="mc-blink" aria-hidden="true">
       <i />

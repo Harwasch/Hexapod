@@ -933,7 +933,7 @@ export const test = base.extend<{ app: Page }>({
     await page.goto("/");
     await expect(page.getByTestId("cesium-viewport")).toBeVisible();
     await expect(page.locator("canvas").first()).toBeVisible();
-    await expect(page.getByTestId("status-bar")).toContainText("Alt");
+    await expect(page.getByTestId("status-line")).toBeVisible();
     await use(page);
   },
 });

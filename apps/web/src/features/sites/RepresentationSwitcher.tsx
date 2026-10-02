@@ -9,25 +9,19 @@ import { useScene } from "@/cesium/SceneContext";
 import { representationLabel } from "@/lib/format";
 import { describeEvidence } from "@/lib/inferred";
 import { useInferred } from "@/state/inferred";
-import { useSettings, type SplatRenderer } from "@/state/settings";
 import { useSites } from "@/state/sites";
 
 import { InstanceSearch } from "./InstanceSearch";
 
 const ORDER: Representation[] = ["gaussian-splat", "mesh", "point-cloud"];
 
-/** Who draws the splat, side by side for comparison (settings `splatRenderer`). */
-const RENDERERS: { value: SplatRenderer; label: string; ariaLabel: string }[] = [
-  { value: "playcanvas", label: "PlayCanvas", ariaLabel: "Draw splats with PlayCanvas" },
-  { value: "spark", label: "Spark", ariaLabel: "Draw splats with Spark" },
-  { value: "cesium", label: "Cesium", ariaLabel: "Draw splats with CesiumJS" },
-];
-
-/** [Splat] [Mesh] [Points] — appears when the camera is near a loaded site. Switching keeps the camera. */
+/**
+ * [Splat] [Mesh] [Points] — appears when the camera is at a site that has a model. Switching
+ * keeps the camera. Which engine draws a splat is a comparison for developers, so that choice
+ * lives in Settings › Advanced, not here.
+ */
 export function RepresentationSwitcher() {
   const scene = useScene();
-  const splatRenderer = useSettings((s) => s.splatRenderer);
-  const setSettings = useSettings((s) => s.set);
   const activeSiteId = useSites((s) => s.activeSiteId);
   const nearSiteId = useSites((s) => s.nearSiteId);
   const representation = useSites((s) =>
@@ -40,8 +34,8 @@ export function RepresentationSwitcher() {
   const setShowInferred = useInferred((s) => s.setShow);
   const shownAsset = site?.assets.find((a) => a.representation === representation);
   const evidence = shownAsset ? (inferred[shownAsset.id] ?? []) : [];
-  const visible = Boolean(site && nearSiteId === activeSiteId);
   const available = ORDER.filter((rep) => site?.assets.some((a) => a.representation === rep));
+  const visible = Boolean(site && nearSiteId === activeSiteId && available.length > 0);
   const options = ORDER.map((rep) => {
     const asset = site?.assets.find((a) => a.representation === rep);
     const loading = asset ? assets[asset.id]?.loadState === "loading" : false;
@@ -82,15 +76,6 @@ export function RepresentationSwitcher() {
             />
             {available.length === 1 && (
               <span className="sr-only">Only one representation is available for this site.</span>
-            )}
-            {representation === "gaussian-splat" && (
-              <GlassSegmentedControl
-                aria-label="Splat renderer"
-                data-testid="splat-renderer"
-                value={splatRenderer}
-                onValueChange={(next) => setSettings({ splatRenderer: next })}
-                options={RENDERERS}
-              />
             )}
             {representation === "gaussian-splat" && evidence.length > 0 && (
               <span

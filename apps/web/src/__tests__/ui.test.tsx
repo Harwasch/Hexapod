@@ -15,8 +15,8 @@ import { SimulatedBadge } from "@/features/living/SimulatedBadge";
 import { LayersPanel } from "@/features/layers/LayersPanel";
 import { SettingsSheet } from "@/features/settings/SettingsSheet";
 import { OnboardingCard } from "@/features/onboarding/OnboardingCard";
-import { SetupNotices } from "@/features/notices/SetupNotices";
-import { CommandBar } from "@/features/mission/CommandBar";
+import { DevReadouts } from "@/features/shell/DevReadouts";
+import { StatusLine } from "@/features/mission/StatusLine";
 import { ToolRail } from "@/features/shell/ToolRail";
 import {
   DEFAULT_WIND_STRENGTH,
@@ -129,8 +129,8 @@ describe("InspectorPanel", () => {
   });
 });
 
-describe("CommandBar + Onboarding", () => {
-  it("renders altitude in the selected unit system", () => {
+describe("Developer readouts + Onboarding", () => {
+  it("are off by default and render altitude in the selected unit system when on", () => {
     vi.spyOn(api, "GET").mockRejectedValue(new TypeError("offline"));
     useViewer.getState().setCamera({
       ...useViewer.getState().camera,
@@ -138,11 +138,16 @@ describe("CommandBar + Onboarding", () => {
       scaleBand: "city",
       metersPerPixel: 2,
     });
-    const { rerender } = render(wrap(<CommandBar />));
+    const { rerender } = render(wrap(<DevReadouts />));
+    // An operator reads the map, not its telemetry: nothing until Settings › Advanced asks.
+    expect(screen.queryByTestId("status-bar")).not.toBeInTheDocument();
+    useSettings.getState().set({ devReadouts: true });
+    rerender(wrap(<DevReadouts />));
     expect(screen.getByTestId("status-altitude")).toHaveTextContent("1.5 km");
     useSettings.getState().set({ units: "imperial" });
-    rerender(wrap(<CommandBar />));
+    rerender(wrap(<DevReadouts />));
     expect(screen.getByTestId("status-altitude")).toHaveTextContent("ft");
+    vi.restoreAllMocks();
   });
 
   it("onboarding appears once the viewer is ready and stays dismissed", async () => {
@@ -157,11 +162,16 @@ describe("CommandBar + Onboarding", () => {
   });
 });
 
-describe("SetupNotices", () => {
+describe("Setup and connection notices", () => {
   it("lets the evaluation-token hint be dismissed for good, and keeps a rejected token loud", async () => {
     vi.spyOn(api, "GET").mockRejectedValue(new TypeError("offline"));
     useViewer.getState().setTokenState("default");
-    const { unmount } = render(wrap(<SetupNotices />));
+    // The hint is for whoever deployed this build, so it rides the developer readouts.
+    const { unmount: unmountQuiet } = render(wrap(<DevReadouts />));
+    expect(screen.queryByTestId("notice-default-token")).not.toBeInTheDocument();
+    unmountQuiet();
+    useSettings.getState().set({ devReadouts: true });
+    const { unmount } = render(wrap(<DevReadouts />));
     expect(await screen.findByTestId("notice-default-token")).toBeInTheDocument();
 
     // A real, labelled, keyboard-reachable control — not a click handler on a div.
@@ -185,16 +195,18 @@ describe("SetupNotices", () => {
 
     // Dismissed means dismissed: the setting is persisted, so a later mount stays quiet.
     unmount();
-    const remount = render(wrap(<SetupNotices />));
+    const remount = render(wrap(<DevReadouts />));
     await waitFor(() =>
       expect(screen.queryByTestId("notice-default-token")).not.toBeInTheDocument(),
     );
     remount.unmount();
 
-    // A rejected token is a fault, not a setup note: it is never dismissible.
+    // A rejected token is a fault, not a setup note: it is on the status line for everyone,
+    // readouts or not, and never dismissible.
+    useSettings.getState().set({ devReadouts: false });
     useViewer.getState().setTokenState("invalid");
-    render(wrap(<SetupNotices />));
-    expect(await screen.findByTestId("notice-token")).toBeInTheDocument();
+    render(wrap(<StatusLine />));
+    expect(await screen.findByTestId("notice-token")).toHaveTextContent("Map key rejected");
     expect(screen.queryByTestId("notice-default-token-dismiss")).not.toBeInTheDocument();
     useViewer.getState().setTokenState("unknown");
     vi.restoreAllMocks();

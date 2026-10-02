@@ -15,7 +15,7 @@ import {
   useLiving,
   type LivingSiteStatus,
 } from "@/state/living";
-import { QUALITY_SSE, useSettings } from "@/state/settings";
+import { QUALITY_SSE, useSettings, type SplatRenderer } from "@/state/settings";
 import { useUi } from "@/state/ui";
 import { useViewer } from "@/state/viewer";
 
@@ -252,14 +252,12 @@ export function SettingsSheet() {
   const open = useUi((s) => s.settingsOpen);
   const setOpen = useUi((s) => s.setSettingsOpen);
   const s = useSettings();
-  const bounds = QUALITY_SSE[s.quality];
-  const manual = s.manualScreenSpaceError;
   return (
     <GlassSheet
       open={open}
       onOpenChange={setOpen}
       title="Settings"
-      description="Appearance, units, rendering and world."
+      description="Appearance, units, rendering and world; developer options under Advanced."
       side="right"
       testId="settings-sheet"
     >
@@ -373,54 +371,6 @@ export function SettingsSheet() {
             />
           }
         />
-        <details>
-          <summary className="setting__label" style={{ cursor: "pointer", padding: "0.5rem 0" }}>
-            Advanced
-          </summary>
-          <Row
-            id="manual-sse-label"
-            label="Manual screen-space error"
-            hint={
-              manual === null
-                ? "Off — preset controls quality"
-                : `${manual} px (lower is sharper, heavier)`
-            }
-            control={
-              <GlassSwitch
-                aria-labelledby="manual-sse-label"
-                checked={manual !== null}
-                onCheckedChange={(on) => s.set({ manualScreenSpaceError: on ? bounds.base : null })}
-              />
-            }
-          />
-          {manual !== null && (
-            <GlassSlider
-              aria-label="Screen-space error"
-              value={manual}
-              min={1}
-              max={64}
-              step={1}
-              onValueChange={(v) => s.set({ manualScreenSpaceError: v })}
-            />
-          )}
-          <Row
-            id="explore-speed-label"
-            label="Explore speed"
-            hint={`${s.exploreSpeed.toFixed(1)} m/s`}
-            control={
-              <div style={{ width: "9rem" }}>
-                <GlassSlider
-                  aria-label="Explore speed"
-                  value={s.exploreSpeed}
-                  min={0.5}
-                  max={50}
-                  step={0.5}
-                  onValueChange={(exploreSpeed) => s.set({ exploreSpeed })}
-                />
-              </div>
-            }
-          />
-        </details>
       </section>
       <Divider />
       <section aria-labelledby="settings-world">
@@ -455,6 +405,104 @@ export function SettingsSheet() {
       <Divider />
       <WriteTokenSection />
       <WindSection />
+      <Divider />
+      <AdvancedSection />
     </GlassSheet>
+  );
+}
+
+/** Who draws a splat, side by side for comparison (settings `splatRenderer`). */
+const RENDERERS: { value: SplatRenderer; label: string; ariaLabel: string }[] = [
+  { value: "playcanvas", label: "PlayCanvas", ariaLabel: "Draw splats with PlayCanvas" },
+  { value: "spark", label: "Spark", ariaLabel: "Draw splats with Spark" },
+  { value: "cesium", label: "Cesium", ariaLabel: "Draw splats with CesiumJS" },
+];
+
+/**
+ * What a developer or deployer tunes and an operator never needs: which engine draws splats,
+ * a fixed screen-space error, the explore speed, and the camera and renderer readouts.
+ * Collapsed until asked for.
+ */
+function AdvancedSection() {
+  const s = useSettings();
+  const bounds = QUALITY_SSE[s.quality];
+  const manual = s.manualScreenSpaceError;
+  return (
+    <section aria-labelledby="settings-advanced">
+      <details className="disclosure settings-advanced" data-testid="settings-advanced">
+        <summary className="disclosure__summary glass-eyebrow" id="settings-advanced">
+          Advanced
+        </summary>
+        <Row
+          id="dev-readouts-label"
+          label="Show developer readouts"
+          hint="Altitude, scale, metres per pixel and the renderer in the bottom bar, and setup notes for whoever deployed this"
+          control={
+            <GlassSwitch
+              aria-labelledby="dev-readouts-label"
+              checked={s.devReadouts}
+              onCheckedChange={(devReadouts) => s.set({ devReadouts })}
+            />
+          }
+        />
+        <Row
+          id="splat-renderer-label"
+          label="Splat renderer"
+          hint="Who draws Gaussian splats, for comparison; the globe, navigation and tools stay CesiumJS"
+          control={
+            <GlassSegmentedControl
+              aria-label="Splat renderer"
+              data-testid="splat-renderer"
+              value={s.splatRenderer}
+              onValueChange={(splatRenderer) => s.set({ splatRenderer })}
+              options={RENDERERS}
+            />
+          }
+        />
+        <Row
+          id="manual-sse-label"
+          label="Manual screen-space error"
+          hint={
+            manual === null
+              ? "Off — preset controls quality"
+              : `${manual} px (lower is sharper, heavier)`
+          }
+          control={
+            <GlassSwitch
+              aria-labelledby="manual-sse-label"
+              checked={manual !== null}
+              onCheckedChange={(on) => s.set({ manualScreenSpaceError: on ? bounds.base : null })}
+            />
+          }
+        />
+        {manual !== null && (
+          <GlassSlider
+            aria-label="Screen-space error"
+            value={manual}
+            min={1}
+            max={64}
+            step={1}
+            onValueChange={(v) => s.set({ manualScreenSpaceError: v })}
+          />
+        )}
+        <Row
+          id="explore-speed-label"
+          label="Explore speed"
+          hint={`${s.exploreSpeed.toFixed(1)} m/s`}
+          control={
+            <div style={{ width: "9rem" }}>
+              <GlassSlider
+                aria-label="Explore speed"
+                value={s.exploreSpeed}
+                min={0.5}
+                max={50}
+                step={0.5}
+                onValueChange={(exploreSpeed) => s.set({ exploreSpeed })}
+              />
+            </div>
+          }
+        />
+      </details>
+    </section>
   );
 }

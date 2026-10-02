@@ -6,7 +6,14 @@ export type MeasureMode = "point" | "distance" | "area" | "height" | "elevation"
 interface UiState {
   activePanel: ToolPanel | null;
   inspectorOpen: boolean;
-  paletteOpen: boolean;
+  /** The keyboard shortcut sheet (`?`). */
+  shortcutsOpen: boolean;
+  /**
+   * The agent's activity log, above the status line. Only the operator opens it (its chevron,
+   * `a`, the command box): the status line already says what the agent is doing and its
+   * latest reply, so nothing that happens on its own puts thirteen lines over the map.
+   */
+  activityOpen: boolean;
   settingsOpen: boolean;
   addDataOpen: boolean;
   aboutLayerId: string | null;
@@ -22,7 +29,8 @@ interface UiState {
   togglePanel: (panel: ToolPanel) => void;
   setPanel: (panel: ToolPanel | null) => void;
   setInspectorOpen: (open: boolean) => void;
-  setPaletteOpen: (open: boolean) => void;
+  setShortcutsOpen: (open: boolean) => void;
+  setActivityOpen: (open: boolean) => void;
   setSettingsOpen: (open: boolean) => void;
   setAddDataOpen: (open: boolean) => void;
   setAboutLayerId: (id: string | null) => void;
@@ -35,7 +43,8 @@ interface UiState {
 export const useUi = create<UiState>()((set) => ({
   activePanel: null,
   inspectorOpen: false,
-  paletteOpen: false,
+  shortcutsOpen: false,
+  activityOpen: false,
   settingsOpen: false,
   addDataOpen: false,
   aboutLayerId: null,
@@ -46,7 +55,8 @@ export const useUi = create<UiState>()((set) => ({
   togglePanel: (panel) => set((s) => ({ activePanel: s.activePanel === panel ? null : panel })),
   setPanel: (panel) => set({ activePanel: panel }),
   setInspectorOpen: (inspectorOpen) => set({ inspectorOpen }),
-  setPaletteOpen: (paletteOpen) => set({ paletteOpen }),
+  setShortcutsOpen: (shortcutsOpen) => set({ shortcutsOpen }),
+  setActivityOpen: (activityOpen) => set({ activityOpen }),
   setSettingsOpen: (settingsOpen) => set({ settingsOpen }),
   setAddDataOpen: (addDataOpen) => set({ addDataOpen }),
   setAboutLayerId: (aboutLayerId) => set({ aboutLayerId }),

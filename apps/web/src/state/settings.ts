@@ -32,6 +32,12 @@ export interface SettingsState {
       operator's concern; once they have read it, it stays gone. */
   ionTokenNoticeDismissed: boolean;
   devToolsOpen: boolean;
+  /**
+   * Camera and renderer readouts in the bottom bar (altitude, scale, metres per pixel, which
+   * world and renderer) and the deployer's setup notes. Settings › Advanced; off by default,
+   * because an operator reads the map, not its telemetry.
+   */
+  devReadouts: boolean;
   exploreSpeed: number;
   /**
    * Living Survey motion in the splat vertex shader ("Motion on GPU"). On by default; off puts
@@ -81,6 +87,7 @@ const defaults = {
   onboardingDismissed: false,
   ionTokenNoticeDismissed: false,
   devToolsOpen: false,
+  devReadouts: false,
   exploreSpeed: 4,
   livingGpuMotion: true,
   splatRenderer: DEFAULT_SPLAT_RENDERER,

@@ -11,7 +11,10 @@
  * A "surface" is any glass element in the HUD that is not inside another one, plus the data
  * credits. The map's own markers and zone chips are pinned to the world, not the screen, so
  * they are not surfaces. Modal sheets are checked separately: they cover the HUD on purpose,
- * behind a scrim, and only have to fit on screen.
+ * behind a scrim, and only have to fit on screen. So do the two popovers
+ * (`[data-hud-popover]`: the command box's results and the agent's activity log): they open
+ * over the regions when asked for and close with Escape or a click away, so they are held
+ * to the screen's edges but not to the regions'.
  */
 import type { Page } from "@playwright/test";
 
@@ -25,6 +28,7 @@ const VIEWPORTS = [
 
 interface Surface {
   name: string;
+  popover: boolean;
   x: number;
   y: number;
   width: number;
@@ -62,6 +66,7 @@ async function settledSurfaces(page: Page): Promise<Surface[]> {
             el.className;
           return {
             name,
+            popover: el.closest("[data-hud-popover]") !== null,
             x: Math.round(box.x),
             y: Math.round(box.y),
             width: Math.round(box.width),
@@ -109,6 +114,7 @@ async function expectNoOverlap(page: Page, label: string): Promise<void> {
     )
       problems.push(`${a.name} leaves the screen (${a.x},${a.y} ${a.width}×${a.height})`);
     for (const b of surfaces.slice(i + 1)) {
+      if (a.popover || b.popover) continue;
       const w = Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x);
       const h = Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y);
       if (w > 1 && h > 1) problems.push(`${a.name} overlaps ${b.name} by ${w}×${h}`);
@@ -130,7 +136,7 @@ async function boot(page: Page, options: MockOptions = {}, onboarding = false): 
     );
   }, !onboarding);
   await page.goto("/");
-  await expect(page.getByTestId("status-bar")).toContainText("Alt", { timeout: 60_000 });
+  await expect(page.getByTestId("status-line")).toBeVisible({ timeout: 60_000 });
 }
 
 /** Presses a global shortcut with nothing focused, the way a person would from the map. */
@@ -186,6 +192,12 @@ for (const viewport of VIEWPORTS) {
       await shortcut(page, "l");
       await expect(page.getByTestId("layers-panel")).toBeVisible();
       await expectNoOverlap(page, "layers with selection, feeds and agent");
+      // The agent's full log opens above the status line and stays on screen.
+      await shortcut(page, "a");
+      await expect(page.getByTestId("agent-stream")).toBeVisible();
+      await expectNoOverlap(page, "agent activity log");
+      await shortcut(page, "a");
+      await expect(page.getByTestId("agent-stream")).toHaveCount(0);
       if (viewport.name !== "phone") {
         await shortcut(page, "d");
         await expect(page.getByTestId("dev-panel")).toBeVisible();

@@ -1,64 +1,8 @@
-import { useLayers as useLayerCatalog } from "@/api/queries";
-import { useScene } from "@/cesium/SceneContext";
-import { useLayers } from "@/state/layers";
-import { useMission } from "@/state/mission";
+import { useQuickLayers } from "./quickLayers";
 
-/** Quick layer toggles on the right edge (design: LAYER TOGGLES). */
+/** Quick layer toggles on the right edge (design: LAYER TOGGLES). The command box lists the same four. */
 export function LayerPills() {
-  const scene = useScene();
-  const catalog = useLayerCatalog();
-  const runtime = useLayers((s) => s.runtime);
-  const mission = useMission((s) => s.layers);
-  const toggle = useMission((s) => s.toggleLayer);
-  const project = useMission((s) => s.project);
-
-  const basemap =
-    (catalog.data ?? []).find(
-      (l) => l.render.exclusiveGroup === "basemap" && runtime[l.id]?.visible,
-    ) ?? (catalog.data ?? []).find((l) => l.slug === "bing-maps-aerial");
-  const vegetation =
-    (catalog.data ?? []).find((l) => l.slug === "esa-worldcover-2021") ??
-    (catalog.data ?? []).find((l) => l.category === "land-cover");
-  const imageryOn = Boolean(basemap && runtime[basemap.id]?.visible);
-  const vegetationOn = Boolean(vegetation && runtime[vegetation.id]?.visible);
-
-  const pills = [
-    {
-      id: "imagery",
-      label: "Imagery",
-      on: imageryOn,
-      disabled: !basemap,
-      onClick: () => basemap && void scene?.layers.setVisible(basemap.id, !imageryOn),
-    },
-    {
-      id: "vegetation",
-      label: "Vegetation",
-      on: vegetationOn,
-      disabled: !vegetation,
-      onClick: () => vegetation && void scene?.layers.setVisible(vegetation.id, !vegetationOn),
-    },
-    {
-      id: "zones",
-      label: "Zones",
-      on: mission.zones,
-      disabled: !project,
-      onClick: () => {
-        toggle("zones");
-        scene?.mission.setLayer("zones", !mission.zones);
-      },
-    },
-    {
-      id: "tracks",
-      label: "Tracks",
-      on: mission.tracks,
-      disabled: !project,
-      onClick: () => {
-        toggle("tracks");
-        scene?.mission.setLayer("tracks", !mission.tracks);
-      },
-    },
-  ];
-
+  const pills = useQuickLayers();
   return (
     <div
       className="glass glass--sm mc-pills"
@@ -73,7 +17,7 @@ export function LayerPills() {
           className={`mc-pill ${pill.on ? "is-on" : ""}`}
           aria-pressed={pill.on}
           disabled={pill.disabled}
-          onClick={pill.onClick}
+          onClick={pill.toggle}
           data-testid={`pill-${pill.id}`}
         >
           {pill.label}

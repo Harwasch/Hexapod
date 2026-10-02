@@ -78,7 +78,7 @@ export function AddDataSheet() {
       description={
         sites.builtin
           ? "Offline: nothing can be saved right now."
-          : "Link a model or map source that is already hosted."
+          : "Upload captures to build a model, or link a source that is already hosted."
       }
       side="right"
       testId="add-data"
@@ -100,41 +100,48 @@ export function AddDataSheet() {
         </span>
         <ChevronRight size={16} aria-hidden="true" />
       </button>
-      <p className="panel__eyebrow">Or link a hosted source</p>
-      <div className="tabs" role="tablist" aria-label="Data type">
-        {TABS.map(({ id, label, icon: Icon }) => (
-          <GlassButton
-            key={id}
-            size="sm"
-            role="tab"
-            aria-selected={tab === id}
-            active={tab === id}
-            onClick={() => setTab(id)}
-            leadingIcon={<Icon size={14} aria-hidden="true" />}
-            data-testid={`add-tab-${id}`}
-          >
-            {label}
-          </GlassButton>
-        ))}
-      </div>
-      <div role="tabpanel">
-        {tab === "site" && <SiteForm onDone={() => setOpen(false)} disabled={sites.builtin} />}
-        {tab === "ion" && (
-          <LayerForm kind="ion" onDone={() => setOpen(false)} disabled={sites.builtin} />
-        )}
-        {tab === "tiles" && (
-          <LayerForm kind="tiles" onDone={() => setOpen(false)} disabled={sites.builtin} />
-        )}
-        {tab === "geojson" && (
-          <LayerForm kind="geojson" onDone={() => setOpen(false)} disabled={sites.builtin} />
-        )}
-        {tab === "imagery" && (
-          <LayerForm kind="imagery" onDone={() => setOpen(false)} disabled={sites.builtin} />
-        )}
-        {tab === "stac" && (
-          <LayerForm kind="stac" onDone={() => setOpen(false)} disabled={sites.builtin} />
-        )}
-      </div>
+      {/* Linking is for data that is already hosted somewhere; most people never need it, so
+          its six forms stay folded until asked for. */}
+      <details className="disclosure add-link" data-testid="add-link">
+        <summary className="disclosure__summary add-link__summary" data-testid="add-link-toggle">
+          Link a hosted source
+          <span className="add-link__kinds">ion · 3D Tiles · GeoJSON · imagery · STAC</span>
+        </summary>
+        <div className="tabs" role="tablist" aria-label="Data type">
+          {TABS.map(({ id, label, icon: Icon }) => (
+            <GlassButton
+              key={id}
+              size="sm"
+              role="tab"
+              aria-selected={tab === id}
+              active={tab === id}
+              onClick={() => setTab(id)}
+              leadingIcon={<Icon size={14} aria-hidden="true" />}
+              data-testid={`add-tab-${id}`}
+            >
+              {label}
+            </GlassButton>
+          ))}
+        </div>
+        <div role="tabpanel">
+          {tab === "site" && <SiteForm onDone={() => setOpen(false)} disabled={sites.builtin} />}
+          {tab === "ion" && (
+            <LayerForm kind="ion" onDone={() => setOpen(false)} disabled={sites.builtin} />
+          )}
+          {tab === "tiles" && (
+            <LayerForm kind="tiles" onDone={() => setOpen(false)} disabled={sites.builtin} />
+          )}
+          {tab === "geojson" && (
+            <LayerForm kind="geojson" onDone={() => setOpen(false)} disabled={sites.builtin} />
+          )}
+          {tab === "imagery" && (
+            <LayerForm kind="imagery" onDone={() => setOpen(false)} disabled={sites.builtin} />
+          )}
+          {tab === "stac" && (
+            <LayerForm kind="stac" onDone={() => setOpen(false)} disabled={sites.builtin} />
+          )}
+        </div>
+      </details>
     </GlassSheet>
   );
 }

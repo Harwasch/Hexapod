@@ -178,33 +178,35 @@ body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-close {
 /* ---- HUD layout ---------------------------------------------------------- */
 /* One grid, fixed regions. Every floating surface is placed in exactly one region, so two
    surfaces can only meet by stacking inside a dock — never by drawing over each other. Who
-   gets a contested region is decided in `state/layout.ts`.
+   gets a contested region is decided in `state/layout.ts`. Two things float over the regions
+   on purpose, and close with Escape or a click away: the command box's results and the agent
+   activity log (`[data-hud-popover]`).
 
    Wide (≥ 900px)                               Compact (< 900px)
-   ┌─────────────── top ───────────────┐        ┌──── top ────┐
-   │rail│ left │  center  │ right │nav│        │  messages   │
-   │    │ dock │          │ dock  │   │        │    (map)    │
-   │    │──────── strip ─────────│   │        │    sheet    │
-   ├─────────────── bar ───────────────┤        │ agent/strip │
-   └───────────────────────────────────┘        │ rail · bar  │
+   ┌──────────────── top ────────────────┐      ┌──── top ────┐
+   │rail│ left │  center  │ right │      │      │ command box │
+   │    │ dock │          │ dock  │      │      │  messages   │
+   │    │──────── strip ─────────│      │      │    sheet    │
+   ├ status line ·········· nav + credits┤      │ status line │
+   └─────────────────────────────────────┘      │ strip, rail │
+                                                 │  nav+credit │
                                                  └─────────────┘ */
 .hud {
   /* The widest the left dock may be while every other column keeps its width. */
   --dock-left-max: calc(
-    100vw - 2 * var(--edge-gap) - 4 * var(--hud-gap) - var(--rail-w) - var(--nav-w) -
-      var(--panel-width)
+    100vw - 2 * var(--edge-gap) - 3 * var(--hud-gap) - var(--rail-w) - var(--panel-width)
   );
   position: absolute;
   inset: 0;
   z-index: var(--z-ui);
   display: grid;
-  grid-template-columns: var(--rail-w) auto minmax(0, 1fr) var(--panel-width) var(--nav-w);
+  grid-template-columns: var(--rail-w) auto minmax(0, 1fr) var(--panel-width);
   grid-template-rows: auto minmax(0, 1fr) auto auto;
   grid-template-areas:
-    "top top top top top"
-    "rail left center right nav"
-    "rail strip strip strip nav"
-    "bar bar bar bar bar";
+    "top top top top"
+    "rail left center right"
+    "rail strip strip strip"
+    "bar bar bar bar";
   gap: var(--hud-gap);
   padding: var(--edge-gap);
   padding-top: max(var(--edge-gap), env(safe-area-inset-top));
@@ -228,10 +230,10 @@ body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-close {
 
 .hud-top {
   grid-area: top;
-  /* Menus drop out of the top bar, over the regions below it. */
+  /* Menus and the command box's results drop out of the top bar, over the regions below. */
   z-index: 3;
   display: grid;
-  grid-template-columns: minmax(max-content, 1fr) minmax(0, 26rem) minmax(max-content, 1fr);
+  grid-template-columns: minmax(max-content, 1fr) minmax(0, 32rem) minmax(max-content, 1fr);
   align-items: center;
   gap: var(--hud-gap);
 }
@@ -247,11 +249,6 @@ body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-close {
 .hud-rail {
   grid-area: rail;
   align-self: start;
-}
-
-.hud-nav {
-  grid-area: nav;
-  align-self: end;
 }
 
 .hud-center {
@@ -271,16 +268,20 @@ body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-close {
   gap: var(--space-2);
 }
 
+/* The status line on the left; developer readouts (when on) and the camera + credits pill on
+   the right. The bar is one pill tall, so the map keeps the height a command bar used to take. */
 .hud-bar {
   grid-area: bar;
+  /* Above the docks: the activity log opens upwards out of it. */
+  z-index: 2;
   display: flex;
   align-items: center;
   gap: var(--hud-gap);
 }
 
-.hud-bar > :first-child {
-  flex: 1;
-  min-width: 0;
+.hud-bar > .status-line-wrap {
+  flex: 0 1 auto;
+  margin-right: auto;
 }
 
 /* Docks stack what they hold. Items shrink before they overflow and panels scroll inside
@@ -360,18 +361,6 @@ body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-close {
   flex: 0 1 auto;
 }
 
-.hud-agent {
-  flex: 0 1 auto;
-  display: flex;
-  flex-direction: column;
-  justify-content: flex-end;
-  margin-top: auto;
-}
-
-.hud-agent > * {
-  min-height: 0;
-}
-
 @media (max-width: 1180px) {
   :root {
     --panel-width: 19.5rem;
@@ -398,12 +387,16 @@ body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-close {
       "bar";
   }
 
+  /* Project and view tabs on one row, the command box across the row below them. */
   .hud-top {
     grid-template-columns: minmax(0, 1fr) auto;
   }
 
-  .hud-top__search,
-  .hud-nav,
+  .hud-top__search {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
   .hud-pills {
     display: none;
   }
@@ -426,9 +419,29 @@ body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-close {
     max-width: none;
   }
 
-  .hud-agent {
+  /* So do the bar's: the status line above the strip, the camera + credits pill at the foot. */
+  .hud-bar {
+    display: contents;
+  }
+
+  .hud-bar > * {
+    position: relative;
+    z-index: 2;
+  }
+
+  .hud-bar > .status-line-wrap {
     grid-area: agent;
-    margin-top: 0;
+    margin-right: 0;
+    max-width: none;
+  }
+
+  .hud-bar > .hud-corner {
+    grid-area: bar;
+    justify-self: end;
+  }
+
+  .hud-bar > .dev-readouts {
+    display: none;
   }
 
   /* A sheet is as wide as the screen. */
@@ -449,88 +462,259 @@ body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-close {
     align-self: auto;
   }
 
-  .hud-bar {
-    flex-direction: column;
-    align-items: stretch;
-    gap: var(--space-1);
-  }
-
-  .hud-bar > :first-child {
-    order: 1;
-  }
-
   .credit-slot .cesium-viewer-bottom {
     font-size: 12px;
     padding: 0.15rem 0.5rem;
   }
 }
 
-/* ---- Search -------------------------------------------------------------- */
-.search {
+/* ---- Command box --------------------------------------------------------- */
+/* Search, actions and the agent in one combobox (features/command-palette/CommandBox). */
+.command {
   position: relative;
 }
 
-.search__field {
+.command__field {
   display: flex;
   align-items: center;
   gap: 0.6rem;
   padding: 0.3rem 0.5rem 0.3rem 0.9rem;
+  transition: border-color var(--motion-fast) var(--ease-out);
 }
 
-.search__input {
+/* The input draws no outline of its own; the whole field shows where the keyboard is. */
+.command__field:focus-within {
+  border-color: var(--accent-border);
+  box-shadow:
+    var(--glass-shadow-soft),
+    0 0 0 2px var(--accent-ring);
+}
+
+.command__input {
   flex: 1;
   min-width: 0;
   border: 0;
   background: transparent;
   color: var(--text-primary);
-  font: 400 13px / 1.4 var(--font-sans);
+  font: 400 13.5px / 1.4 var(--font-sans);
   outline: none;
 }
 
-.search__input::placeholder {
+.command__input::placeholder {
   color: var(--text-tertiary);
 }
 
-.search__results {
+.command__keys {
+  display: inline-flex;
+  gap: 2px;
+  padding-right: 4px;
+}
+
+.command__spin {
+  animation: glass-spin 0.8s linear infinite;
+}
+
+.command__results {
   position: absolute;
   top: calc(100% + 0.5rem);
   left: 0;
   right: 0;
   padding: 0.35rem;
-  max-height: 20rem;
+  max-height: min(28rem, 62vh);
   overflow: auto;
+  scroll-padding-block: 2rem;
 }
 
-.search__result {
+.command__group + .command__group {
+  margin-top: 0.25rem;
+  padding-top: 0.25rem;
+  border-top: 1px solid var(--divider);
+}
+
+.command__heading {
+  padding: 0.45rem 0.75rem 0.2rem;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.command__row {
   display: flex;
-  flex-direction: column;
-  gap: 0.1rem;
-  width: 100%;
-  padding: 0.55rem 0.75rem;
-  border: 0;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.5rem 0.75rem;
   border-radius: var(--glass-radius-sm);
-  background: transparent;
   color: var(--text-primary);
   font: 500 var(--text-sm) / 1.3 var(--font-sans);
-  text-align: left;
   cursor: pointer;
 }
 
-.search__result:hover,
-.search__result[aria-selected="true"] {
+/* The highlighted row: a fill and an edge, so it still reads with transparency or contrast
+   settings that flatten fills. */
+.command__row[aria-selected="true"] {
   background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px var(--accent-border);
 }
 
-.search__result-sub {
+.command__row--agent .command__row-icon {
+  color: var(--agent);
+}
+
+.command__row--agent[aria-selected="true"] {
+  background: var(--agent-soft);
+  box-shadow: inset 0 0 0 1px var(--agent-border);
+}
+
+.command__row-icon {
+  flex: none;
+  color: var(--text-secondary);
+}
+
+.command__row-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.command__row-label,
+.command__row-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.command__row-sub {
   font-size: var(--text-xs);
   font-weight: 400;
   color: var(--text-secondary);
 }
 
-.search__hint {
-  padding: 0.55rem 0.75rem;
+.command__row-keys {
+  display: inline-flex;
+  flex: none;
+  gap: 2px;
+}
+
+.command__row-enter {
+  flex: none;
+  color: var(--text-secondary);
+}
+
+.command__hint {
+  padding: 0.45rem 0.75rem;
   font-size: var(--text-xs);
   color: var(--text-tertiary);
+}
+
+/* The key hints stay in view at the foot of a long list. */
+.command__foot {
+  position: sticky;
+  bottom: -0.35rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.9rem;
+  margin: 0.25rem -0.35rem -0.35rem;
+  padding: 0.5rem 1.1rem 0.55rem;
+  border-top: 1px solid var(--divider);
+  background: var(--glass-bg-flat);
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+
+.command__foot span {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+/* ---- Bottom bar: developer readouts, camera + credits -------------------- */
+.dev-readouts {
+  display: flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  min-height: 2.5rem;
+  padding: 0 0.9rem;
+  overflow: hidden;
+  border-radius: var(--glass-radius-pill);
+  font-size: 12px;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.dev-readouts strong {
+  font-weight: 600;
+}
+
+.dev-readouts__sep {
+  flex: none;
+  width: 1px;
+  height: 0.9rem;
+  background: var(--divider);
+}
+
+.dev-readouts__note {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding-left: 0.6rem;
+  border-left: 1px solid var(--divider);
+  color: var(--agent);
+  font-family: var(--font-sans);
+}
+
+.dev-readouts__dismiss {
+  display: grid;
+  place-items: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.dev-readouts__dismiss:hover {
+  background: var(--control-bg);
+}
+
+.dev-readouts__dismiss:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+/* Compass, Earth and the data credits share one pill in the bottom-right corner. */
+.hud-corner {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 0.1rem;
+  max-width: 100%;
+  min-height: 2.5rem;
+  padding: 0.15rem;
+  border-radius: var(--glass-radius-pill);
+}
+
+.hud-corner .credit-slot {
+  min-width: 0;
+  margin-left: 0.2rem;
+  padding-left: 0.2rem;
+  border-left: 1px solid var(--divider);
+}
+
+/* Inside the pill the credits are text, not a second pill. */
+.hud-corner .credit-slot .cesium-viewer-bottom {
+  padding: 0.2rem 0.65rem 0.2rem 0.35rem;
+  border: 0;
+  background: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 
 /* ---- Tool rail ----------------------------------------------------------- */
@@ -1283,19 +1467,18 @@ body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-close {
 }
 
 /* ---- Nav controls -------------------------------------------------------- */
+/* Compass and Earth, in a row at the start of the corner pill (.hud-corner). */
 .nav-controls {
   display: flex;
-  flex-direction: column;
   align-items: center;
-  gap: 0.15rem;
-  width: 100%;
-  padding: 0.3rem 0;
+  gap: 0.1rem;
 }
 
 .nav-controls .glass-button {
-  width: 2.25rem;
-  height: 2.25rem;
+  width: 2.1rem;
+  height: 2.1rem;
   border-color: transparent;
+  border-radius: 50%;
   background: transparent;
 }
 
@@ -1460,64 +1643,6 @@ body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-close {
   border-radius: 50%;
 }
 
-/* ---- Command palette ----------------------------------------------------- */
-.palette {
-  width: min(34rem, calc(100vw - 2rem));
-  padding: 0.5rem;
-}
-
-.palette [cmdk-input] {
-  width: 100%;
-  padding: 0.75rem 0.9rem;
-  border: 0;
-  border-bottom: 1px solid var(--divider);
-  background: transparent;
-  color: var(--text-primary);
-  font: 400 var(--text-lg) / 1.3 var(--font-sans);
-  outline: none;
-}
-
-.palette [cmdk-list] {
-  max-height: min(50vh, 22rem);
-  overflow: auto;
-  padding: 0.35rem 0;
-  scroll-padding-block: 0.35rem;
-}
-
-.palette [cmdk-group-heading] {
-  padding: 0.5rem 0.9rem 0.25rem;
-  font-size: var(--text-xs);
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--text-tertiary);
-}
-
-.palette [cmdk-item] {
-  display: flex;
-  align-items: center;
-  gap: 0.65rem;
-  padding: 0.55rem 0.9rem;
-  border-radius: var(--glass-radius-sm);
-  font-size: var(--text-sm);
-  cursor: pointer;
-}
-
-.palette [cmdk-item][data-selected="true"] {
-  background: var(--accent-soft);
-}
-
-.palette [cmdk-item] .glass-kbd {
-  margin-left: auto;
-}
-
-.palette [cmdk-empty] {
-  padding: 1.25rem;
-  text-align: center;
-  color: var(--text-tertiary);
-  font-size: var(--text-sm);
-}
-
 /* ---- Forms --------------------------------------------------------------- */
 .form {
   display: flex;
@@ -1609,8 +1734,9 @@ body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-close {
 }
 
 /* ---- Notices and status messages --------------------------------------- */
-/* Notices, toasts and the Simulated badge share one shape: icon, a bold line, a plain line,
-   and at most one control. They live in the right dock's message stack. */
+/* Toasts and the Simulated badge share one shape: icon, a bold line, a plain line, and at
+   most one control. They live in the right dock's message stack; connection faults moved to
+   the status line (mission.css). */
 .notice,
 .living-badge {
   display: flex;
@@ -1820,6 +1946,137 @@ body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-close {
 .add-upload__text span {
   font-size: var(--text-xs);
   color: var(--text-secondary);
+}
+
+/* Linking a hosted source: folded under the upload, which is what most people came for. */
+.add-link__summary {
+  padding: var(--space-2) 0;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.add-link__summary:focus-visible {
+  outline: none;
+  border-radius: var(--radius-sm);
+  box-shadow: var(--focus-ring);
+}
+
+.add-link__kinds {
+  margin-left: auto;
+  font-size: var(--text-xs);
+  font-weight: 400;
+  color: var(--text-tertiary);
+}
+
+.add-link[open] > .tabs {
+  margin-bottom: var(--space-4);
+}
+
+/* ---- Settings › Advanced ------------------------------------------------- */
+.settings-advanced > summary {
+  padding: var(--space-1) 0;
+}
+
+.settings-advanced > summary:focus-visible {
+  outline: none;
+  border-radius: var(--radius-sm);
+  box-shadow: var(--focus-ring);
+}
+
+/* ---- Site model load: "Loading 3D model 42%" / "Couldn't load · Retry" ---- */
+.site-load {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.4rem 0.6rem 0.4rem 0.85rem;
+  font: 500 12.5px / 1.3 var(--font-sans);
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.site-load__spin {
+  flex: none;
+  color: var(--accent);
+  animation: glass-spin 0.8s linear infinite;
+}
+
+.site-load--error {
+  border-color: var(--warn-border);
+}
+
+.site-load__icon {
+  flex: none;
+  color: var(--warn);
+}
+
+.site-load__sep {
+  color: var(--text-tertiary);
+}
+
+.site-load__retry {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.2rem 0.6rem;
+  border: 1px solid var(--control-border);
+  border-radius: var(--glass-radius-pill);
+  background: var(--control-bg);
+  color: var(--text-primary);
+  font: 600 12px var(--font-sans);
+  cursor: pointer;
+}
+
+.site-load__retry:hover {
+  background: var(--control-bg-hover);
+}
+
+.site-load__retry:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+/* ---- Keyboard shortcuts sheet (?) ---------------------------------------- */
+.shortcuts {
+  width: min(46rem, calc(100vw - 2rem));
+  max-height: min(86vh, 46rem);
+  overflow: auto;
+}
+
+.shortcuts__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr));
+  gap: var(--space-5) var(--space-6);
+}
+
+.shortcuts__group > h3 {
+  margin-bottom: var(--space-2);
+}
+
+.shortcuts__list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin: 0;
+}
+
+.shortcuts__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  font-size: var(--text-sm);
+}
+
+.shortcuts__row dt {
+  color: var(--text-secondary);
+}
+
+.shortcuts__row dd {
+  display: inline-flex;
+  flex: none;
+  gap: 3px;
+  margin: 0;
 }
 
 /* On a phone the message row keeps to the two newest toasts. */
