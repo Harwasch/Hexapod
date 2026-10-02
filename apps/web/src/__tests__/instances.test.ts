@@ -787,6 +787,48 @@ describe("attachInstances", () => {
     expect(primitive.vertexVisibility).toBeUndefined();
   });
 
+  it("follows the scan's state for a split object without taking over its table", async () => {
+    useInstances.getState().setTable("scan", doc());
+    const { primitive } = fakeScene([{ positions: TILE_B.positions, start: 0 }], 4);
+    const tileset = {
+      root: { extras: { instances: { uri: "../../instances.json", count: 4 } } },
+      resource: { url: "https://x.test/scan/objects/4/tileset.json" },
+      gaussianSplatPrimitive: primitive,
+    } as unknown as Cesium3DTileset;
+    const listeners: (() => void)[] = [];
+    const scene = {
+      preUpdate: {
+        addEventListener: (f: () => void) => {
+          listeners.push(f);
+          return () => listeners.splice(listeners.indexOf(f), 1);
+        },
+      },
+      requestRender: () => undefined,
+    } as unknown as Pick<Scene, "preUpdate" | "requestRender">;
+    const asked: string[] = [];
+    const table = useInstances.getState().assets.scan;
+    const dispose = attachInstances(
+      tileset,
+      scene,
+      "scan",
+      fakeGpu(),
+      (url, ref) => {
+        asked.push(`${url} ${ref.uri}`);
+        return Promise.resolve(doc());
+      },
+      { follower: true },
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(asked).toEqual(["https://x.test/scan/objects/4/tileset.json ../../instances.json"]);
+    expect(useInstances.getState().assets.scan).toBe(table);
+    for (const f of listeners) f();
+    expect(primitive.vertexVisibility).toBeDefined();
+    dispose();
+    expect(useInstances.getState().assets.scan).toBeDefined();
+    expect(primitive.vertexVisibility).toBeUndefined();
+  });
+
   it("costs nothing without a declaration", () => {
     const tileset = { root: { extras: {} }, resource: { url: "x" } } as unknown as Cesium3DTileset;
     const scene = {} as Pick<Scene, "preUpdate" | "requestRender">;

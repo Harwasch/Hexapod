@@ -21,10 +21,15 @@ samples) in a CPU container; `--renderer gsplat` runs the same job in a GPU cont
 -- what a viewer draws, and what Fixer is trained to clean. `--parity-test` runs
 `tools/captures/tests/test_gsplat_parity.py` (CPU against gsplat on the yard) on that GPU.
 
+`split:<scan>` runs `tools/captures/split_objects.py split` (C4): the scan's chosen objects
+(`SPLIT_ARGS`) out into tilesets of their own and the holes they leave filled with the same
+filler, renderer and distill; the split tileset comes back as `split.tar.gz`.
+
 Run from the repository root (`.github/workflows/fill.yml` does):
 
     modal run infra/modal/fill.py --jobs drop:yard,drop:spool
     modal run infra/modal/fill.py --jobs fill:camp --renderer gsplat --distill 1500
+    modal run infra/modal/fill.py --jobs split:pumpkin --fillers fixer-t50 --renderer gsplat
 """
 
 from __future__ import annotations
@@ -38,7 +43,7 @@ import sys
 import tarfile
 import tempfile
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import modal
 
@@ -65,6 +70,9 @@ SCANS: dict[str, str] = {
 }
 #: The dropped cube's half size (m) per scan: the test's region, not a fill setting.
 DROP_HALF_SIZE_M = {"yard": 0.4, "spool": 0.15, "pumpkin": 0.15, "camp": 0.4}
+#: `split:<scan>`: which objects to take out. The pumpkin's are classed in place (A6), so
+#: by id: the red pumpkin (instance 3) and the fragments segmentation left under other ids.
+SPLIT_ARGS = {"pumpkin": ["--ids", "3", "--absorb"], "spool": ["--select", "loose", "--absorb"]}
 #: Fixer runs at 16:9 (1024x576); views are rendered at that aspect so it is not stretched.
 DROP_SIZE = (640, 360)
 FILL_SIZE = (1024, 576)
@@ -376,6 +384,10 @@ def _fetch(url: str, out: Path) -> Path:
             uris.append(uri)
     if cones := document["root"].get("extras", {}).get("viewCones", {}).get("uri"):
         uris.append(cones)
+    # The instances, for `split` (and the embedding beside them).
+    if instances := document["root"].get("extras", {}).get("instances", {}).get("uri"):
+        uris.append(instances)
+        uris.append(str(PurePosixPath(instances).with_name("instances.emb")))
 
     def get(uri: str) -> None:
         (out / uri).parent.mkdir(parents=True, exist_ok=True)
@@ -395,15 +407,17 @@ def _remote_classes() -> None:
     )
 
 
-def _teacher_fill(argv: list[str]) -> tuple[int, dict | None, str]:
-    """`teacher_fill.main(argv)` in this process; its JSON and its log."""
-    import teacher_fill
+def _teacher_fill(argv: list[str], module: str = "teacher_fill") -> tuple[int, dict | None, str]:
+    """`<module>.main(argv)` in this process (`teacher_fill`, or `split_objects`); its JSON
+    and its log."""
+    import importlib
 
+    main = importlib.import_module(module).main
     stdout, stderr = io.StringIO(), io.StringIO()
     code = 1
     with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
         try:
-            code = teacher_fill.main(argv)
+            code = main(argv)
         except Exception:  # reported back; the other jobs go on
             import traceback
 
@@ -483,7 +497,17 @@ def _run_job(kind: str, scan: str, filler: str, options: dict) -> dict:
             logs.append("view cones backfilled from the leaves")
         save = root / "save"
         t = time.time()
-        if kind == "drop":
+        module = "teacher_fill"
+        if kind == "split":
+            width, height = FILL_SIZE
+            module = "split_objects"
+            argv = ["split", str(tileset.parent), str(root / "split"), "--filler", spec]
+            argv += SPLIT_ARGS.get(scan, []) + ["--views", str(options.get("views", 6))]
+            if options.get("max_scale_m"):
+                argv += ["--max-scale-m", str(options["max_scale_m"])]
+            if options.get("distill"):
+                argv += ["--distill", str(options["distill"]), "--distill-on", "modal"]
+        elif kind == "drop":
             width, height = DROP_SIZE
             argv = [
                 "drop",
@@ -506,12 +530,14 @@ def _run_job(kind: str, scan: str, filler: str, options: dict) -> dict:
                 argv += ["--distill", str(options["distill"]), "--distill-on", "modal"]
         argv += ["--width", str(width), "--height", str(height), "--save", str(save)]
         argv += ["--renderer", options.get("renderer", "cpu")]
-        code, result, log = _teacher_fill(argv)
+        code, result, log = _teacher_fill(argv, module)
         timings["teacherS"] = round(time.time() - t, 1)
         timings.update({f"{k.lower()}S": round(v, 1) for k, v in REMOTE_SECONDS.items()})
         logs.append(log)
         if save.exists():
             files.update({f"strips/{k}": v for k, v in _tree(save).items()})
+        if kind == "split" and code == 0 and (root / "split" / "tileset.json").exists():
+            files["split.tar.gz"] = _tar(root / "split")
         if kind == "fill" and code == 0 and (root / "inferred" / "tileset.json").exists():
             import teacher_fill
 
@@ -634,12 +660,12 @@ def main(
     calls = []
     for job in (j.strip() for j in jobs.split(",") if j.strip()):
         kind, _, scan = job.partition(":")
-        if kind not in ("drop", "fill") or scan not in SCANS:
-            raise SystemExit(f"job {job!r}: drop|fill:<{'|'.join(SCANS)}>")
+        if kind not in ("drop", "fill", "split") or scan not in SCANS:
+            raise SystemExit(f"job {job!r}: drop|fill|split:<{'|'.join(SCANS)}>")
         options: dict = {"views": views} if views else {}
-        if kind == "fill" and distill:
+        if kind in ("fill", "split") and distill:
             options["distill"] = distill
-        if kind == "fill" and max_scale_m > 0:
+        if kind in ("fill", "split") and max_scale_m > 0:
             options["max_scale_m"] = max_scale_m
         calls += [(kind, scan, f.strip(), options) for f in fillers.split(",") if f.strip()]
     summary, failed = [], []
@@ -672,5 +698,12 @@ def _headline(brief: dict) -> dict:
     result = brief.get("result") or {}
     if brief["kind"] == "drop":
         return {"heldOut": result.get("heldOut"), "timings": brief["timings"]}
+    if brief["kind"] == "split":
+        fills = result.get("fills") or {}
+        return {
+            "objects": result.get("objects"),
+            "heldOut": {k: (v or {}).get("heldOut") for k, v in fills.items()},
+            "timings": brief["timings"],
+        }
     keep = ("gaussians", "views", "meanConfidence", "perView", "distill")
     return {**{k: result.get(k) for k in keep}, "timings": brief["timings"]}

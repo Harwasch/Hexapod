@@ -73,6 +73,7 @@ __all__ = [
     "clean_mask",
     "condition",
     "drop_and_fill",
+    "fill_hole",
     "fill_scan",
     "lift",
     "link_inferred",
@@ -388,8 +389,14 @@ def _disc_rotations(normals: np.ndarray) -> np.ndarray:
     return np.column_stack([np.cos(half), axis * np.sin(half)[:, None]])
 
 
-def lift(filled: Sequence[Filled], stride: int = 2) -> tuple[Splats, np.ndarray]:
-    """The accepted fills' masked pixels as gaussians, and each one's confidence."""
+def lift(
+    filled: Sequence[Filled], stride: int = 2, *, hole_scaled: bool = False
+) -> tuple[Splats, np.ndarray]:
+    """The accepted fills' masked pixels as gaussians, and each one's confidence.
+
+    `hole_scaled`: confidence halves every `CONFIDENCE_PX` or every half the view's deepest
+    distance into its mask, whichever is longer -- a hole that must close (an object moved
+    away) is not left transparent in its middle for being wide."""
     parts, confidences = [], []
     for f in filled:
         if not f.accepted:
@@ -412,7 +419,10 @@ def lift(filled: Sequence[Filled], stride: int = 2) -> tuple[Splats, np.ndarray]
         positions = camera.centre + local @ camera.rotation
         footprint = stride * z / camera.focal
         scales = np.column_stack([0.6 * footprint, 0.6 * footprint, 0.1 * footprint])
-        confidence = np.exp(-cond.distance[v, u] / CONFIDENCE_PX * math.log(2))
+        halving = CONFIDENCE_PX
+        if hole_scaled:
+            halving = max(halving, 0.5 * float(cond.distance[mask].max()))
+        confidence = np.exp(-cond.distance[v, u] / halving * math.log(2))
         parts.append(
             Splats(
                 positions,
@@ -555,6 +565,284 @@ def _hole(alpha: np.ndarray) -> np.ndarray:
     return cv2.morphologyEx(raw, cv2.MORPH_CLOSE, np.ones((7, 7), np.uint8)).astype(bool)
 
 
+#: A pixel of a removed object's silhouette needs filling when what the scan shows there now
+#: lies more than this share of its depth behind the surface the object stood on (or nothing
+#: covers it): the view sees through where the object stood.
+SEE_THROUGH = 0.05
+#: Hole views look down on where the object stood at least this steeply (degrees): its
+#: footprint is what the capture could not see.
+HOLE_ELEVATION_DEG = 35.0
+#: ...from far enough that the object spans about this share of the frame's height.
+HOLE_FRAME_SHARE = 0.45
+#: The surface a removed object stood on: the scan around its footprint (`SURROUND_SCALE`
+#: half sizes out) no higher than this share of its height above its base.
+HOLE_BASE_SHARE = 0.25
+#: Coverage is judged on the render's alpha dilated by this (px): the CPU renderer's samples
+#: leave a measured surface speckled, and a speck is no hole.
+HOLE_COVER_PX = 3
+#: The footprint a hole is filled over: the object's ground plan padded by this share of its size.
+HOLE_FOOTPRINT_PAD = 0.25
+HOLE_RULE = (
+    "the hole a split object left (split_objects.py): pixels of virtual views around where it "
+    "stood that now see through the surface it stood on (a plane fitted to the scan around its "
+    "footprint), filled by an image model, gated on the other pixels, lifted onto that plane as "
+    "discs facing their camera, opacity by distance from measured pixels"
+)
+
+
+def hole_views(
+    grid: vc.ConeGrid | None,
+    removed: Splats,
+    count: int,
+    *,
+    width: int = 480,
+    height: int = 360,
+    fov_deg: float = 60.0,
+) -> list[Camera]:
+    """`count` cameras on where `removed` stood: from the observers' side when the grid has
+    observers (else a ring), at least `HOLE_ELEVATION_DEG` above it, looking at its lower
+    part, at a distance where it fills `HOLE_FRAME_SHARE` of the frame."""
+    low, high = removed.positions.min(axis=0), removed.positions.max(axis=0)
+    size = float(np.max(high - low))
+    target = np.array(
+        [(low[0] + high[0]) / 2, (low[1] + high[1]) / 2, low[2] + 0.25 * (high - low)[2]]
+    )
+    distance = size / HOLE_FRAME_SHARE / (2 * math.tan(math.radians(fov_deg) / 2))
+    distance = max(distance, 2.0 * size)
+    if grid is not None and grid.observers.shape[0]:
+        eyes = [c.centre for c in plan_views(grid, target[None], count=count, distance_m=distance)]
+    else:
+        eyes = []
+    while len(eyes) < count:  # a ring makes up what the observers do not
+        a = 2 * math.pi * len(eyes) / count + 0.3
+        eyes.append(target + distance * np.array([math.cos(a), math.sin(a), 0.0]))
+    cameras = []
+    lowest = math.radians(HOLE_ELEVATION_DEG)
+    for eye in eyes:
+        d = np.asarray(eye, np.float64) - target
+        flat = float(np.hypot(d[0], d[1]))
+        azimuth = math.atan2(d[1], d[0]) if flat > 1e-9 else 0.0
+        elevation = max(math.atan2(d[2], flat), lowest)
+        direction = np.array(
+            [
+                math.cos(elevation) * math.cos(azimuth),
+                math.cos(elevation) * math.sin(azimuth),
+                math.sin(elevation),
+            ]
+        )
+        cameras.append(
+            Camera.look_at(
+                target + distance * direction, target, fov_deg=fov_deg, width=width, height=height
+            )
+        )
+    return cameras
+
+
+def support_plane(points: np.ndarray, rounds: int = 4) -> tuple[np.ndarray, float] | None:
+    """The plane `n . x = c` (unit `n`, upward) through `points`, least squares with the
+    farthest fifth dropped each round: the ground under a removed object, without the tufts
+    and stems on it. None for fewer than 3 points."""
+    pts = np.asarray(points, np.float64)
+    if pts.shape[0] < 3:
+        return None
+    keep = np.ones(pts.shape[0], bool)
+    normal, offset = np.array([0.0, 0.0, 1.0]), float(np.median(pts[:, 2]))
+    for _ in range(rounds):
+        centre = pts[keep].mean(axis=0)
+        _, _, vt = np.linalg.svd(pts[keep] - centre, full_matrices=False)
+        normal = vt[-1] if vt[-1][2] >= 0 else -vt[-1]
+        offset = float(normal @ centre)
+        residual = np.abs(pts @ normal - offset)
+        if keep.sum() < 15:
+            break
+        keep = residual <= np.quantile(residual[keep], 0.8)
+    return normal, offset
+
+
+def plane_depth(camera: Camera, normal: np.ndarray, offset: float) -> np.ndarray:
+    """Per pixel, the camera depth (along its axis) at which its ray meets the plane; NaN
+    where it does not (parallel, or behind the camera)."""
+    rays = camera.rays()
+    along = rays @ normal
+    with np.errstate(divide="ignore", invalid="ignore"):
+        t = (offset - float(normal @ camera.centre)) / along
+    z = t * (rays @ camera.rotation[2])
+    return np.where(np.isfinite(z) & (t > 0), z, np.nan)
+
+
+def _covered(alpha: np.ndarray) -> np.ndarray:
+    import cv2
+
+    kernel = np.ones((HOLE_COVER_PX, HOLE_COVER_PX), np.uint8)
+    return cv2.dilate(alpha.astype(np.float32), kernel) >= COVERED_ALPHA
+
+
+def see_through(full: Frame, silhouette: np.ndarray, surface: np.ndarray) -> np.ndarray:
+    """Of a removed object's `silhouette`, the pixels that see through the `surface` it stood
+    on (`plane_depth`): nothing covers them now, or what does lies `SEE_THROUGH` behind it."""
+    on = np.isfinite(surface)
+    limit = np.where(on, surface, np.inf) * (1 + SEE_THROUGH)
+    behind = np.isfinite(full.depth) & (full.depth > limit)
+    return silhouette & on & (~_covered(full.alpha) | behind)
+
+
+def _hole_conditioning(
+    kept: Splats,
+    removed: Splats,
+    camera: Camera,
+    plane: tuple[np.ndarray, float],
+    renderer: Renderer,
+) -> tuple[Conditioning, np.ndarray]:
+    """One hole view: the scan without the object rendered, the pixels that see through
+    where it stood as the mask, the plane's depth there to lift at; and its silhouette."""
+    import cv2
+
+    silhouette = _hole(renderer(removed, camera).alpha)
+    full = renderer(kept, camera)
+    surface = plane_depth(camera, *plane)
+    # Only where the plane is under the object (its footprint, padded): what lies beyond it
+    # was not the object's to hide.
+    low, high = removed.positions.min(axis=0), removed.positions.max(axis=0)
+    pad = HOLE_FOOTPRINT_PAD * float(np.max(high - low))
+    hit = (
+        camera.centre + camera.rays() * (surface / (camera.rays() @ camera.rotation[2]))[..., None]
+    )
+    with np.errstate(invalid="ignore"):
+        under = np.all((hit[..., :2] >= low[:2] - pad) & (hit[..., :2] <= high[:2] + pad), axis=-1)
+    mask = clean_mask(see_through(full, silhouette, np.where(under, surface, np.nan)))
+    depth = np.where(mask, surface, np.where(np.isfinite(full.depth), full.depth, np.nan))
+    known = np.isfinite(full.depth) & (full.alpha >= SEEN_ALPHA)
+    distance = cv2.distanceTransform((mask | ~known).astype(np.uint8), cv2.DIST_L2, 5)
+    shown = _extend_background(full, mask)
+    return Conditioning(camera, shown, shown, mask, depth, distance), silhouette
+
+
+def _extend_background(frame: Frame, mask: np.ndarray) -> Frame:
+    """`frame` with the empty pixels around a hole (nothing rendered there: the scan's edge)
+    painted from the covered ones, so a filler working from the hole's surroundings is not
+    shown the void as its context. Coverage and depth stay as rendered."""
+    import cv2
+
+    empty = ~_covered(frame.alpha) & ~mask
+    if not empty.any() or empty.all():
+        return frame
+    painted = cv2.inpaint(
+        to_u8(frame.rgb), (empty | mask).astype(np.uint8) * 255, 5, cv2.INPAINT_TELEA
+    )
+    rgb = np.where(empty[..., None], painted.astype(np.float64) / 255.0, frame.rgb)
+    return Frame(rgb, frame.depth, frame.alpha, frame.label, frame.purity)
+
+
+def _coverage(
+    renderer: Renderer, kept: Splats, lifted: Splats, camera: Camera, through: np.ndarray
+) -> dict[str, float]:
+    """How much of the see-through pixels the scan covers without and with the fill."""
+    before = renderer(kept, camera).alpha
+    after = renderer(Splats.concat([kept, lifted]), camera).alpha if len(lifted) else before
+    n = int(through.sum())
+
+    def share(alpha: np.ndarray) -> float:
+        return round(float(_covered(alpha)[through].mean()), 4) if n else 1.0
+
+    return {"throughPx": n, "coveredBefore": share(before), "coveredAfter": share(after)}
+
+
+def fill_hole(
+    kept: Splats,
+    removed: Splats,
+    filler: Filler,
+    grid: vc.ConeGrid | None,
+    *,
+    views: int = 6,
+    width: int = 480,
+    height: int = 360,
+    stride: int = 2,
+    renderer: Renderer = render,
+    save_dir: Path | None = None,
+    distill_iterations: int = 0,
+    distill_runner: Callable[[dict], dict] | None = None,
+) -> tuple[Splats, np.ndarray, list[Camera], dict[str, object]]:
+    """The hole `removed` (taken out of the scan, now `kept`) leaves, filled: `drop_and_fill`
+    for a region that is gone for good. The surface it stood on is a plane fitted to the scan
+    around its footprint (`support_plane`); from `views` cameras around where it stood
+    (`hole_views`, and one more held out), the pixels of its silhouette that now see through
+    that plane (`see_through`: the footprint nobody saw, the void behind) are filled, gated,
+    lifted onto the plane and optionally distilled.
+
+    Returns the lifted gaussians, their confidence, the cameras that made them and a report:
+    per view the silhouette and see-through pixels and the gate, and in the held-out view how
+    much of what sees through the scan covers before and after the fill."""
+    low, high = removed.positions.min(axis=0), removed.positions.max(axis=0)
+    centre, half = (low + high) / 2, float(np.max(high - low)) / 2
+    # The surface it stood on: the scan around its footprint, no higher than its lower
+    # quarter (the frame is east-north-up) -- not the neighbours' crowns beside it.
+    p = kept.positions
+    around = (
+        np.all(np.abs(p[:, :2] - centre[:2]) <= SURROUND_SCALE * half, axis=1)
+        & (p[:, 2] <= low[2] + HOLE_BASE_SHARE * (high[2] - low[2]))
+        & (p[:, 2] >= low[2] - half)
+    )
+    plane = support_plane(p[around])
+    report: dict[str, object] = {"filler": filler.name, "removed": len(removed)}
+    if plane is None:
+        empty = Splats(*(np.zeros((0, k)) for k in (3, 4, 3, 3)), np.zeros(0))
+        return empty, np.zeros(0), [], {**report, "lifted": 0, "skipped": "no surface around it"}
+    report["plane"] = {
+        "normal": [round(float(v), 4) for v in plane[0]],
+        "offset": round(plane[1], 4),
+        "points": int(around.sum()),
+    }
+    cameras = hole_views(grid, removed, views + 1, width=width, height=height)
+    held, used = cameras[-1], cameras[:-1]
+    conds, silhouettes = [], []
+    for camera in used:
+        cond, silhouette = _hole_conditioning(kept, removed, camera, plane, renderer)
+        conds.append(cond)
+        silhouettes.append(int(silhouette.sum()))
+    filled = fill_views(conds, filler)
+    lifted, confidence = lift(filled, stride=stride, hole_scaled=True)
+    distilled: dict[str, object] | None = None
+    if distill_iterations > 0 and len(lifted):
+        import distill_fill
+
+        lifted, distilled = refine(
+            lifted, kept, filled, distill_iterations, distill_runner or distill_fill.run
+        )
+        confidence = np.clip(lifted.opacities / 0.95, 0, 1)
+    if save_dir is not None:
+        for k, f in enumerate(filled):
+            cond = f.conditioning
+            truth = to_u8(renderer(Splats.concat([kept, removed]), cond.camera).rgb)
+            _save_strip(save_dir / f"view{k}.png", [truth, to_u8(cond.full.rgb), f.rgb], cond.mask)
+    report.update(
+        {
+            "lifted": len(lifted),
+            "views": [
+                {
+                    "silhouettePx": s,
+                    "throughPx": int(f.conditioning.mask.sum()),
+                    "gatePsnr": round(f.gate_psnr_db, 2),
+                    "accepted": f.accepted,
+                }
+                for s, f in zip(silhouettes, filled, strict=True)
+            ],
+        }
+    )
+    held_cond, _ = _hole_conditioning(kept, removed, held, plane, renderer)
+    report["heldOut"] = _coverage(renderer, kept, lifted, held, held_cond.mask)
+    if save_dir is not None:
+        before = to_u8(renderer(Splats.concat([kept, removed]), held).rgb)
+        without = to_u8(held_cond.full.rgb)
+        with_fill = (
+            to_u8(renderer(Splats.concat([kept, lifted]), held).rgb) if len(lifted) else without
+        )
+        _save_strip(save_dir / "held-out.png", [before, without, with_fill], held_cond.mask)
+    if distilled:
+        report["distill"] = distilled
+    used_cameras = [f.conditioning.camera for f in filled if f.accepted]
+    return lifted, confidence, used_cameras, report
+
+
 def _save_strip(path: Path, images: Sequence[np.ndarray], mask: np.ndarray) -> None:
     """Truth, hole and fill side by side, the mask outlined in the hole."""
     import cv2
@@ -599,10 +887,14 @@ def package_inferred(
     measured_tileset: Path,
     out_dir: Path,
     filler: str,
+    *,
+    rule: str | None = None,
+    extra: dict[str, object] | None = None,
 ) -> dict[str, object]:
     """The lifted gaussians as their own tileset beside the measured one: the same frame
     (the measured root transform), view cones from the virtual cameras that made them, and
-    `extras.evidence` saying what they are."""
+    `extras.evidence` saying what they are (`rule` replaces the fill-from-outside rule;
+    `extra` adds keys, e.g. the instance whose hole it fills)."""
     import splat_tiles
 
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -628,11 +920,13 @@ def package_inferred(
         "gaussians": len(lifted),
         "meanConfidence": round(float(confidence.mean()), 4) if confidence.size else 0.0,
         "measured": measured_tileset.parent.name,
-        "rule": (
+        "rule": rule
+        or (
             "masked pixels of virtual views (what the scan covers but never saw from there), "
             "filled by an image model, gated on the unmasked pixels, lifted at the scan's "
             "depth as discs facing their camera, opacity by distance from measured pixels"
         ),
+        **(extra or {}),
     }
     document["root"]["extras"]["viewCones"] = cone_extras
     document["root"]["extras"]["evidence"] = evidence
