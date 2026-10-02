@@ -17,18 +17,26 @@ length), so this proves what ends up where and never who may read it.
 
 from __future__ import annotations
 
+import threading
+import time
 import uuid
 from collections.abc import Iterator
+from pathlib import Path
+from typing import Any
 
 import boto3
 import pytest
 from moto import mock_aws
 
 from app.config import Settings
+from app.models.enums import GeorefMethod, ScaleSource
 from app.storage import ObjectStorage, S3Storage
 from app.storage.factory import build_public_storage, build_publish_storage, build_storage
 from app.storage.null import StorageUnavailableError
-from app.worker.publish import Publisher, PublishError
+from app.worker.outputs import upload_artifact
+from app.worker.pipeline_bridge import ArtifactRef
+from app.worker.publish import PUBLISH_WORKERS, Publisher, PublishError
+from app.worker.registration import Registration, publish_outputs
 
 PRIVATE = "twin-assets"
 PUBLIC = "twin-public"
@@ -150,10 +158,161 @@ def test_publishing_an_empty_prefix_refuses_rather_than_returning_a_dead_url(
 
 
 def test_a_tree_without_its_entry_file_refuses(buckets: Publisher) -> None:
-    """Tiles but no `tileset.json` is a site that looks fine until somebody opens it."""
+    """Tiles but no `tileset.json` is a site that looks fine until somebody opens it --
+    refused before a single tile is copied."""
     buckets.private.put_object(f"{TILES}/0/0.glb", b"glb", "model/gltf-binary")
     with pytest.raises(PublishError, match="but not"):
         buckets.publish_tree(TILES, f"{TILES}/tileset.json")
+    assert keys_in(buckets.public) == set()
+
+
+# --- many objects: in parallel, the entry last, and all or no site --------------------
+
+
+class Recorded:
+    """The public bucket, with every copy slowed down and its start and end recorded."""
+
+    def __init__(self, inner: S3Storage, *, delay_s: float = 0.05, fail: str = "") -> None:
+        self.inner = inner
+        self.delay_s = delay_s
+        self.fail = fail
+        self.spans: dict[str, tuple[float, float]] = {}
+        self.active = 0
+        self.peak = 0
+        self.lock = threading.Lock()
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.inner, name)
+
+    @property
+    def available(self) -> bool:
+        return True
+
+    @property
+    def bucket(self) -> str:
+        return self.inner.bucket
+
+    def copy_object(self, source_bucket: str, source_key: str, key: str, **kwargs: Any) -> Any:
+        started = time.monotonic()
+        with self.lock:
+            self.active += 1
+            self.peak = max(self.peak, self.active)
+        try:
+            time.sleep(self.delay_s)
+            if key == self.fail:
+                raise RuntimeError(f"R2 said no to {key}")
+            return self.inner.copy_object(source_bucket, source_key, key, **kwargs)
+        finally:
+            with self.lock:
+                self.active -= 1
+                self.spans[key] = (started, time.monotonic())
+
+
+def a_large_tileset(private: ObjectStorage, tiles: int = 24) -> None:
+    """Keys chosen so the listing puts `tileset.json` *before* the files after it in
+    sort order, which is what made the entry public first when copies went in order."""
+    private.put_object(f"{TILES}/tileset.json", b"{}", "application/json")
+    for index in range(tiles):
+        private.put_object(f"{TILES}/splat_{index}.glb", b"glb", "model/gltf-binary")
+    private.put_object(f"{TILES}/viewcones.bin", b"vc", "application/octet-stream")
+
+
+def recorded(buckets: Publisher, **kwargs: Any) -> tuple[Publisher, Recorded]:
+    assert isinstance(buckets.public, S3Storage)
+    slow = Recorded(buckets.public, **kwargs)
+    return Publisher(private=buckets.private, public=slow), slow
+
+
+def test_the_entry_is_copied_last_after_every_other_copy_has_returned(
+    buckets: Publisher,
+) -> None:
+    a_large_tileset(buckets.private)
+    publisher, slow = recorded(buckets)
+
+    url = publisher.publish_tree(TILES, f"{TILES}/tileset.json")
+
+    assert url == f"{PUBLIC_URL}/{TILES}/tileset.json"
+    entry_started, _ = slow.spans.pop(f"{TILES}/tileset.json")
+    assert len(slow.spans) == 25
+    assert all(ended <= entry_started for _, ended in slow.spans.values())
+    assert keys_in(buckets.public) == keys_in(buckets.private, TILES)
+
+
+def test_the_copies_overlap(buckets: Publisher) -> None:
+    a_large_tileset(buckets.private)
+    publisher, slow = recorded(buckets, delay_s=0.1)
+
+    started = time.monotonic()
+    publisher.publish_tree(TILES, f"{TILES}/tileset.json")
+    took = time.monotonic() - started
+
+    assert slow.peak == PUBLISH_WORKERS
+    # 26 copies of 0.1 s: 2.6 s one at a time, four rounds of eight and the entry here.
+    assert took < 1.2
+
+
+def test_a_failed_copy_leaves_no_entry_and_no_site(buckets: Publisher) -> None:
+    """The run's outputs are safe in the private bucket; the public one may hold a few
+    stray tiles, but never the root that would point a viewer at a partial tileset --
+    and `publish_outputs` turns the failure into no tileset URL, so no site."""
+    a_large_tileset(buckets.private)
+    publisher, slow = recorded(buckets, fail=f"{TILES}/splat_3.glb")
+
+    with pytest.raises(PublishError, match="R2 said no"):
+        publisher.publish_tree(TILES, f"{TILES}/tileset.json")
+    assert f"{TILES}/tileset.json" not in keys_in(buckets.public)
+    assert f"{TILES}/tileset.json" not in slow.spans
+
+    document = Registration(
+        slug="orchard",
+        title="Orchard",
+        recipe="splat-ingest",
+        lat=0.0,
+        lon=0.0,
+        height=0.0,
+        georef_method=GeorefMethod.NONE,
+        scale_source=ScaleSource.UNRESOLVED,
+        uncertainty_m=0.0,
+        document={},
+    )
+    published = publish_outputs(
+        buckets.private,
+        publish=publisher,
+        job_id=JOB,
+        registration=document,
+        tiles_stage_id="package",
+    )
+    assert published.tileset is None
+
+
+def test_a_published_copy_keeps_the_cache_control_it_was_uploaded_with(
+    buckets: Publisher, tmp_path: Path
+) -> None:
+    """Set once, at upload, by `outputs.cache_control_for`; carried by CopyObject."""
+    package = tmp_path / "stages" / "package" / "out" / "splat"
+    package.mkdir(parents=True)
+    (package / "tileset.json").write_text("{}")
+    (package / "splat_0.glb").write_bytes(b"glb")
+    ref = ArtifactRef(
+        name="splat",
+        stage_id="package",
+        path="stages/package/out/splat",
+        kind="dir",
+        content_type="application/octet-stream",
+        bytes=5,
+        checksum="sha256:x",
+    )
+    assert upload_artifact(buckets.private, tmp_path, JOB, ref) is not None
+
+    buckets.publish_tree(TILES, f"{TILES}/tileset.json")
+
+    raw = boto3.client("s3", region_name="us-east-1")
+    tile = raw.head_object(Bucket=PUBLIC, Key=f"{TILES}/splat_0.glb")
+    root = raw.head_object(Bucket=PUBLIC, Key=f"{TILES}/tileset.json")
+    assert tile["CacheControl"] == "public, max-age=31536000, immutable"
+    assert tile["ContentType"] == "model/gltf-binary"
+    assert root["CacheControl"] == "public, max-age=300, stale-while-revalidate=604800"
+    assert root["ContentType"] == "application/json"
 
 
 # --- one bucket: the behaviour this replaced, unchanged -----------------------------

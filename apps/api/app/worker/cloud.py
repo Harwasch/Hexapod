@@ -31,12 +31,13 @@ process whose job is to hold a lease. The child still has no database session.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from importlib.util import find_spec
 from pathlib import Path
 
 from app.storage import ObjectStorage
+from app.worker.parallel import TRANSFER_WORKERS as PARALLEL_WORKERS
+from app.worker.parallel import each
 from app.worker.pipeline_bridge import (
     PROVIDERS,
     CloudRunner,
@@ -101,11 +102,14 @@ def check_dispatchable(providers: Sequence[str]) -> None:
 class ObjectStoreTransfer:
     """The pipeline's `Transfer`, over the bucket.
 
-    Uploads are whole objects read into memory, exactly as `app.worker.outputs` does (a
-    stage's inputs are frames of a megabyte or two each); downloads stream to disk,
-    because what comes back from a GPU stage is one file of hundreds of megabytes. Keys
-    are opaque strings chosen by the pipeline, so nothing here knows what a stage or a
-    checkpoint is.
+    Uploads and downloads both stream between disk and the bucket (`upload_file`,
+    `download_file`), because what crosses in either direction can be one file of
+    hundreds of megabytes -- a trained splat coming back from a GPU stage, or going out
+    to `optimise_lod` -- and a directory's members move eight at a time. Keys are opaque
+    strings chosen by the pipeline, so nothing here knows what a stage or a checkpoint
+    is. (What the provider leaves under `.../transfer/out` is also where
+    `outputs.upload_artifact` copies a dispatched stage's artifacts from, inside the
+    bucket, rather than uploading the bytes this downloaded straight back.)
     """
 
     storage: ObjectStorage
@@ -175,18 +179,15 @@ class ObjectStoreTransfer:
 
 #: How many objects of one directory move at once. A frames artifact is ~100 objects of
 #: 0.2-2 MB, and one request at a time spends most of its time on each request's round
-#: trip rather than on bytes; eight keeps within botocore's default pool of ten
-#: connections and, for uploads (each member read into memory), 8 x 2 MB of the
-#: worker's RAM.
-TRANSFER_WORKERS = 8
+#: trip rather than on bytes. The number, and why it is eight, is `app.worker.parallel`'s,
+#: shared with the artifact uploads and the publish copies.
+TRANSFER_WORKERS = PARALLEL_WORKERS
 
 
 def _parallel[T](work: Callable[[T], int], items: Sequence[T]) -> list[int]:
-    """`work` over `items`, `TRANSFER_WORKERS` at a time; the first failure is raised."""
-    if len(items) <= 1:
-        return [work(item) for item in items]
-    with ThreadPoolExecutor(max_workers=TRANSFER_WORKERS) as pool:
-        return list(pool.map(work, items))
+    """`work` over `items`, `TRANSFER_WORKERS` at a time; the first failure is raised,
+    and what had not started by then is not started."""
+    return each(work, items, workers=TRANSFER_WORKERS)
 
 
 def adapter_for(

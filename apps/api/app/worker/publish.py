@@ -26,6 +26,14 @@ start a *production* deployment that has storage and a public URL but no separat
 bucket: the convenient case and the dangerous case look identical from inside the process,
 so the deployment that must not be convenient is the one that gets checked. See
 `app/main.py`.
+
+**What a browser is told about caching travels with the object.** `outputs.upload_artifact`
+writes every run output with its `Cache-Control` (`outputs.cache_control_for`: a year and
+immutable for a run's binary files, five minutes for JSON), and a copy made here keeps the
+metadata it was written with -- so the published tiles carry the same lifetime whether a
+browser reads them from the bucket's public URL or through the tile proxy
+(`functions/r2/[[path]].js`), which applies the same rule. An object uploaded before that
+was set has none, and is published as it is.
 """
 
 from __future__ import annotations
@@ -34,11 +42,16 @@ from dataclasses import dataclass
 
 from app.storage import ObjectStorage
 from app.storage.null import StorageUnavailableError
+from app.worker.parallel import TRANSFER_WORKERS, each
 
 #: A tileset is many files and `list_objects` pages. This is the ceiling on one publish,
 #: and it is a refusal rather than a truncation: half a tileset in the public bucket is a
 #: site that renders a hole, which is worse than a site that says it could not publish.
 MAX_PUBLISHED_OBJECTS = 20_000
+
+#: Copies in flight at once in one publish. A `CopyObject` moves no bytes through the
+#: worker, so what eight at a time saves is round trips -- the whole cost of a publish.
+PUBLISH_WORKERS = TRANSFER_WORKERS
 
 
 class PublishError(RuntimeError):
@@ -90,22 +103,41 @@ class Publisher:
         file alone would produce a site whose manifest resolves to nothing. `prefix` is
         the directory; `entry` is the key inside it that the viewer is pointed at.
 
-        The entry is verified to be among what was copied. A tileset whose root file is
-        missing is a broken site that looks like a working one until someone opens it.
+        The entry must be among the objects listed, and is checked before anything is
+        copied: a tileset whose root file is missing is a broken site that looks like a
+        working one until someone opens it, and is refused without copying its tiles.
+
+        The members are copied `PUBLISH_WORKERS` at a time, and the entry **last**, once
+        every member's copy has returned. It used to be one copy and one HEAD at a time in
+        listing order -- 514 tiles took ~8 minutes on the worker, and `tileset.json` was
+        public while `collision.bin` and `viewcones.bin`, which sort after it, were not
+        yet. With the entry last, a public `tileset.json` means everything it names is
+        already there; and when any member fails, the entry is never copied, the publish
+        raises, and `publish_outputs` registers no site -- the stray tiles left in the
+        public bucket are unreachable from anything a viewer is given.
         """
         if not self.splits_buckets:
             return self.url(entry)
-        copied = 0
-        found_entry = False
-        for key in self._keys_under(prefix):
-            self.publish_object(key)
-            copied += 1
-            found_entry = found_entry or key == entry
-        if copied == 0:
+        keys = self._keys_under(prefix)
+        if not keys:
             raise PublishError(f"nothing to publish under {prefix}")
-        if not found_entry:
-            raise PublishError(f"published {copied} objects under {prefix}, but not {entry}")
-        return self.url(entry)
+        if entry not in keys:
+            raise PublishError(
+                f"{prefix} holds {len(keys)} objects, but not {entry}; publishing none of them"
+            )
+        members = [key for key in keys if key != entry]
+        try:
+            each(self._copy, members, workers=PUBLISH_WORKERS)
+        except StorageUnavailableError:
+            return None
+        except Exception as error:
+            raise PublishError(f"could not publish {prefix}: {error}") from error
+        # The barrier: only now that every member is in place does the root become public.
+        return self.publish_object(entry)
+
+    def _copy(self, key: str) -> None:
+        """One object across, keeping its metadata (content type, Cache-Control)."""
+        self.public.copy_object(self.private.bucket, key, key)
 
     def _keys_under(self, prefix: str) -> list[str]:
         keys: list[str] = []

@@ -20,9 +20,20 @@ from app.storage.base import (
 
 if TYPE_CHECKING:
     from mypy_boto3_s3 import S3Client
-    from mypy_boto3_s3.type_defs import CompletedPartTypeDef
+    from mypy_boto3_s3.type_defs import CompletedPartTypeDef, CopySourceTypeDef
 
 _MISSING_CODES = frozenset({"404", "NoSuchKey", "NotFound"})
+
+#: boto3's own multipart threshold (`TransferConfig`). A file at or under it is one
+#: `PutObject`, whose response carries the ETag; over it, the managed transfer returns
+#: nothing, and a HEAD after the upload is what reads the ETag back.
+_SINGLE_PUT_BYTES = 8 * 1024 * 1024
+
+#: botocore keeps 10 connections per client by default. The worker moves a directory's
+#: objects eight at a time (`app.worker.parallel`), and any one of those may be a managed
+#: multipart transfer with threads of its own; at 10 the pool would discard and reopen
+#: connections -- a TLS handshake to R2 each time -- rather than reuse them.
+MAX_POOL_CONNECTIONS = 32
 
 
 class S3Storage:
@@ -57,7 +68,11 @@ class S3Storage:
             # inspection can see. tests/test_storage_objects.py::test_presigned_urls_are_sigv4
             # asserts on the URL string itself -- the only place the difference shows up --
             # and tests/test_storage_minio.py puts the URL to a real server in CI.
-            config=Config(s3={"addressing_style": "path"}, signature_version="s3v4"),
+            config=Config(
+                s3={"addressing_style": "path"},
+                signature_version="s3v4",
+                max_pool_connections=MAX_POOL_CONNECTIONS,
+            ),
         )
         self._endpoint_url = endpoint_url
 
@@ -83,19 +98,39 @@ class S3Storage:
             etag=normalise_etag(response.get("ETag", "")) or None,
         )
 
-    def upload_file(self, key: str, source: Path, content_type: str) -> StoredObject:
-        # boto3's managed transfer, as `download_file`: the file goes up in parts read
-        # from disk (multipart above 8 MB), so memory stays at a few parts.
-        self._client.upload_file(
-            str(source), self._bucket, key, ExtraArgs={"ContentType": content_type}
-        )
-        head = self.head_object(key)
+    def upload_file(
+        self, key: str, source: Path, content_type: str, *, cache_control: str | None = None
+    ) -> StoredObject:
+        size = source.stat().st_size
+        if size <= _SINGLE_PUT_BYTES:
+            # One request, streamed from the open file, whose response carries the ETag:
+            # a tile or a frame no longer costs a second round trip to read it back.
+            with source.open("rb") as body:
+                response = (
+                    self._client.put_object(
+                        Bucket=self._bucket,
+                        Key=key,
+                        Body=body,
+                        ContentType=content_type,
+                        CacheControl=cache_control,
+                    )
+                    if cache_control
+                    else self._client.put_object(
+                        Bucket=self._bucket, Key=key, Body=body, ContentType=content_type
+                    )
+                )
+            etag = normalise_etag(response.get("ETag", "")) or None
+        else:
+            # boto3's managed transfer, as `download_file`: the file goes up in parts read
+            # from disk, so memory stays at a few parts whatever its size.
+            extra = {"ContentType": content_type}
+            if cache_control:
+                extra["CacheControl"] = cache_control
+            self._client.upload_file(str(source), self._bucket, key, ExtraArgs=extra)
+            head = self.head_object(key)
+            etag = head.etag if head is not None else None
         return StoredObject(
-            key=key,
-            url=self.public_url(key),
-            content_type=content_type,
-            size=source.stat().st_size,
-            etag=head.etag if head is not None else None,
+            key=key, url=self.public_url(key), content_type=content_type, size=size, etag=etag
         )
 
     def get_object(self, key: str) -> bytes:
@@ -158,16 +193,43 @@ class S3Storage:
     def delete_object(self, key: str) -> None:
         self._client.delete_object(Bucket=self._bucket, Key=key)
 
-    def copy_object(self, source_bucket: str, source_key: str, key: str) -> StoredObject:
-        self._client.copy_object(
-            Bucket=self._bucket,
-            Key=key,
-            CopySource={"Bucket": source_bucket, "Key": source_key},
-        )
-        copied = self.head_object(key)
-        if copied is None:  # pragma: no cover - a copy that succeeded and then vanished
-            raise RuntimeError(f"copied {source_bucket}/{source_key} to {key}, and it is not there")
-        return copied
+    def copy_object(
+        self,
+        source_bucket: str,
+        source_key: str,
+        key: str,
+        *,
+        content_type: str | None = None,
+        cache_control: str | None = None,
+    ) -> str | None:
+        # No HEAD afterwards. It used to read every copy back, which doubled a publish's
+        # round trips (514 tiles: 1,028 requests, one at a time) to confirm what a 200
+        # from CopyObject already says: R2 and S3 are both strongly consistent, so the
+        # object is there, whole, when this returns.
+        source: CopySourceTypeDef = {"Bucket": source_bucket, "Key": source_key}
+        if content_type is None and cache_control is None:
+            # The default directive, COPY: the object keeps the metadata it was written
+            # with, its content type and Cache-Control included.
+            response = self._client.copy_object(Bucket=self._bucket, Key=key, CopySource=source)
+        elif cache_control:
+            # REPLACE takes only what is given, so the content type is always stated too.
+            response = self._client.copy_object(
+                Bucket=self._bucket,
+                Key=key,
+                CopySource=source,
+                MetadataDirective="REPLACE",
+                ContentType=content_type or "application/octet-stream",
+                CacheControl=cache_control,
+            )
+        else:
+            response = self._client.copy_object(
+                Bucket=self._bucket,
+                Key=key,
+                CopySource=source,
+                MetadataDirective="REPLACE",
+                ContentType=content_type or "application/octet-stream",
+            )
+        return normalise_etag(response.get("CopyObjectResult", {}).get("ETag", "")) or None
 
     def public_url(self, key: str) -> str:
         if self._public_base_url:

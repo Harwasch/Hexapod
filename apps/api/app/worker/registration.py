@@ -351,11 +351,13 @@ def publish_outputs(
 ) -> Published:
     """Copy the run's browser-facing outputs to the public bucket. No database here.
 
-    This is object-store I/O proportional to the tileset, minutes for a large capture
-    (514 tiles took ~8 min on the worker), so the caller runs it with **no transaction
-    open**: a session left idle in a transaction that long is killed by the database's
-    idle-in-transaction timeout, and the registration after it then fails on a dead
-    connection. That is exactly what a 22.7M-gaussian upload hit.
+    This is object-store I/O proportional to the tileset -- 514 tiles took ~8 min on the
+    worker one copy at a time, and `Publisher.publish_tree` now copies eight at a time
+    (about a fifteenth of the round trips' time against a fake store with a fixed
+    latency) -- so the caller runs it with **no transaction open**: a session left idle in
+    a transaction for minutes is killed by the database's idle-in-transaction timeout,
+    and the registration after it then fails on a dead connection. That is exactly what a
+    22.7M-gaussian upload hit, and a faster publish does not make the rule optional.
     """
     # With no publisher the private bucket is also the public one, which is the
     # single-bucket behaviour every caller had before the split; see app/worker/publish.py.
