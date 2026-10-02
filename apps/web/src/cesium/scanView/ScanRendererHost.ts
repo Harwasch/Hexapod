@@ -20,13 +20,16 @@ import {
   Cartesian3,
   Intersect,
   Matrix4,
+  type Camera,
   type Cesium3DTileset,
+  type Scene,
   type Viewer,
 } from "cesium";
 
 import { deviceSplatBudget, deviceSplatCeiling, isHandheld } from "@/lib/detail";
 import { AdaptiveSplatBudget } from "@/lib/splatBudget";
 import { createLogger } from "@/lib/log";
+import { DEFAULT_SPLAT_RENDERER } from "@/state/settings";
 import { TileStreamer, type View } from "@/view/stream";
 import { parseTileset, type TileNode } from "@/view/tiles";
 
@@ -48,8 +51,22 @@ const REPLAN_MS = 150;
 const FETCHES_AT_ONCE = 3;
 /** Most gaussians streamed in at once, whatever the budget. */
 const MAX_STREAMED = 10_000_000;
+/** Resolution while the camera moves, as a share of the resting one (never below
+ *  MIN_MOTION_PIXEL_RATIO), and how long after the last change it counts as resting. */
+const MOTION_RESOLUTION = 0.6;
+const MIN_MOTION_PIXEL_RATIO = 0.75;
+const MOTION_SETTLE_MS = 200;
+/** Most gaussians put on screen per re-plan (~4M a second at REPLAN_MS): tiles that land
+ *  together go up over a few frames instead of all in one. */
+const MAX_SHOWN_PER_UPDATE = 600_000;
+/** The next level of detail within this distance is fetched ahead once the view is served. */
+const PREFETCH_RADIUS_M = 30;
 /** Loaded tiles kept beyond what is drawn, so a look back needs no download. */
 const CACHE_FACTOR = 1.5;
+
+/** Where a scan's package keeps the renderer-native streamed level of detail, beside its
+ *  tileset (PlayCanvas's streamed SOG, written by splat-transform). */
+export const NATIVE_LOD_PATH = "sog/lod-meta.json";
 
 /** What the page's tests and the debug panel read. */
 export interface ScanRendererStatus {
@@ -59,6 +76,12 @@ export interface ScanRendererStatus {
   gaussians: number;
   frames: number;
   error: string | null;
+  /** The gaussians it may draw now (adaptive), those being fetched, and those held. */
+  budget: number;
+  /** Whether the renderer streams the scan's own streamed package (runNative). */
+  native: boolean;
+  loading: number;
+  cached: number;
 }
 
 interface Session {
@@ -72,19 +95,67 @@ interface BackendModule {
   createBackend(canvas: HTMLCanvasElement, budget: number): Promise<ScanBackend<unknown>>;
 }
 
+/** Frames in a row the overlay waits for the globe's own while the camera moves. */
+const MAX_WAIT_FOR_GLOBE = 2;
+
+/**
+ * Calls `draw` once a frame, in step with the globe: right after CesiumJS renders (its
+ * `postRender`, so the overlay is drawn from exactly the camera the globe was), and on the
+ * frames it does not (request-render mode: a still camera) from the animation frame. Drawing
+ * only from the animation frame put the overlay a camera pose behind whenever its callback ran
+ * before CesiumJS's -- the order of animation-frame callbacks, which a render-loop restart
+ * (render-error recovery) flips -- and the scan slid on the map as the view moved.
+ */
+function driveWithGlobe(scene: Scene, camera: Camera, draw: () => void): () => void {
+  const eye = new Cartesian3(Number.NaN, 0, 0);
+  const direction = new Cartesian3();
+  let globeDrew = false;
+  let waited = 0;
+  let raf = 0;
+  const drawNow = (): void => {
+    Cartesian3.clone(camera.positionWC, eye);
+    Cartesian3.clone(camera.directionWC, direction);
+    draw();
+  };
+  const removePostRender = scene.postRender.addEventListener(() => {
+    globeDrew = true;
+    waited = 0;
+    drawNow();
+  });
+  const tick = (): void => {
+    raf = requestAnimationFrame(tick);
+    if (globeDrew) {
+      globeDrew = false;
+      return;
+    }
+    const moved =
+      !Cartesian3.equalsEpsilon(camera.positionWC, eye, 0, 1e-3) ||
+      !Cartesian3.equalsEpsilon(camera.directionWC, direction, 1e-5);
+    // Moved, and the globe has not drawn it yet: it will this frame.
+    if (moved && waited++ < MAX_WAIT_FOR_GLOBE) return;
+    waited = 0;
+    drawNow();
+  };
+  raf = requestAnimationFrame(tick);
+  return () => {
+    cancelAnimationFrame(raf);
+    removePostRender();
+  };
+}
+
 function loadBackend(kind: Exclude<SplatRendererKind, "cesium">): Promise<BackendModule> {
   // Each renderer is its own chunk, fetched only when chosen.
   return kind === "spark" ? import("./sparkBackend") : import("./playcanvasBackend");
 }
 
 export class ScanRendererHost {
-  private kind: SplatRendererKind = "cesium";
+  private kind: SplatRendererKind = DEFAULT_SPLAT_RENDERER;
   private target: ScanTarget | null = null;
   private session: Session | null = null;
   private starting: Promise<void> | null = null;
   private lastError: string | null = null;
 
-  constructor(private readonly viewer: Pick<Viewer, "camera" | "canvas">) {}
+  constructor(private readonly viewer: Pick<Viewer, "camera" | "canvas" | "scene">) {}
 
   get renderer(): SplatRendererKind {
     return this.kind;
@@ -103,7 +174,16 @@ export class ScanRendererHost {
   }
 
   status(): ScanRendererStatus {
-    const inner = this.session?.status() ?? { tiles: 0, gaussians: 0, frames: 0, error: null };
+    const inner = this.session?.status() ?? {
+      tiles: 0,
+      gaussians: 0,
+      frames: 0,
+      error: null,
+      budget: 0,
+      loading: 0,
+      cached: 0,
+      native: false,
+    };
     return {
       kind: this.kind,
       active: this.session !== null,
@@ -189,6 +269,10 @@ export class ScanRendererHost {
   ): Promise<Session> {
     const { viewer } = this;
     const url = new URL(target.tileset.resource.url, location.href).toString();
+    if (backend.streamNative) {
+      const native = await this.runNative(kind, target, canvas, backend, url);
+      if (native) return native;
+    }
     const response = await fetch(url);
     if (!response.ok) throw new Error(`The scan's tileset answered ${String(response.status)}.`);
     const tree = parseTileset(await response.json());
@@ -202,11 +286,12 @@ export class ScanRendererHost {
       add: (mesh) => backend.add(mesh),
       remove: (mesh) => backend.remove(mesh),
       isDrawn: (mesh, sinceMs) => backend.isDrawn(mesh, sinceMs),
+      ...(backend.fade ? { fade: backend.fade.bind(backend) } : {}),
     });
     const streamer = new TileStreamer<unknown>(
       tree,
       {
-        load: (tile) => backend.load(url, tile),
+        load: (tile, signal) => backend.load(url, tile, signal),
         show: (_tile, mesh) => handover.show(mesh, performance.now()),
         hide: (_tile, mesh) => handover.hide(mesh, performance.now()),
         dispose: (mesh) => {
@@ -218,7 +303,13 @@ export class ScanRendererHost {
           log.warn("scan tile did not load; its parent stays", { tile: tile.uri, error });
         },
       },
-      { budget: streamed, cacheBudget: streamed * CACHE_FACTOR, concurrency: FETCHES_AT_ONCE },
+      {
+        budget: streamed,
+        cacheBudget: streamed * CACHE_FACTOR,
+        concurrency: FETCHES_AT_ONCE,
+        maxShownPerUpdate: MAX_SHOWN_PER_UPDATE,
+        prefetchRadiusM: PREFETCH_RADIUS_M,
+      },
     );
     let arrived = true;
     streamer.onArrival = () => {
@@ -236,9 +327,9 @@ export class ScanRendererHost {
     const frameEye = new Cartesian3(Number.NaN, 0, 0);
     const frameDirection = new Cartesian3();
     let lastFrameAt = 0;
+    let lastMotionAt = 0;
     let frames = 0;
-    let running = true;
-    let raf = 0;
+    let stopDriving: (() => void) | null = null;
     const pixelRatio = Math.min(window.devicePixelRatio || 1, isHandheld() ? 1.5 : 2);
 
     const view = (pose: ScanPose): View => {
@@ -264,17 +355,10 @@ export class ScanRendererHost {
     };
 
     const tick = (): void => {
-      if (!running) return;
-      raf = requestAnimationFrame(tick);
       const tileset = target.tileset;
       if (tileset.isDestroyed()) return;
       Matrix4.clone(tileset.root.computedTransform, toWorld);
       Matrix4.inverseTransformation(toWorld, toLocal);
-      const pose = scanPose(viewer.camera, toLocal, {
-        width: viewer.canvas.clientWidth,
-        height: viewer.canvas.clientHeight,
-        pixelRatio,
-      });
       const camera = viewer.camera;
       const moved =
         !Cartesian3.equalsEpsilon(camera.positionWC, lastEye, 0, 1e-3) ||
@@ -285,8 +369,22 @@ export class ScanRendererHost {
         !Cartesian3.equalsEpsilon(camera.directionWC, frameDirection, 1e-5);
       Cartesian3.clone(camera.positionWC, frameEye);
       Cartesian3.clone(camera.directionWC, frameDirection);
+      if (motion) lastMotionAt = now;
+      // Dynamic resolution, as games do: fewer pixels while the view moves (blending splats
+      // is per pixel, and the GPU was what ran out), the full resolution the moment it rests.
+      const moving = now - lastMotionAt < MOTION_SETTLE_MS;
+      const pose = scanPose(viewer.camera, toLocal, {
+        width: viewer.canvas.clientWidth,
+        height: viewer.canvas.clientHeight,
+        pixelRatio: moving
+          ? Math.max(MIN_MOTION_PIXEL_RATIO, pixelRatio * MOTION_RESOLUTION)
+          : pixelRatio,
+      });
       const drawn = Math.min(streamer.drawnGaussians, adaptive.budget);
-      if (motion && lastFrameAt > 0 && adaptive.frame(now - lastFrameAt, drawn)) {
+      // Frames while tiles arrive are slowed by their uploads, not by what is drawn: only a
+      // steady view's motion frames say what the GPU can sort and blend.
+      const steady = motion && streamer.loading === 0 && lastFrameAt > 0;
+      if (steady && adaptive.frame(now - lastFrameAt, drawn)) {
         backend.setBudget(adaptive.budget);
         const next = streamedFor(adaptive.budget);
         streamer.setBudget(next, next * CACHE_FACTOR);
@@ -316,15 +414,14 @@ export class ScanRendererHost {
     }
     handover.show(root, performance.now());
     streamer.adopt(tree.root, root);
-    raf = requestAnimationFrame(tick);
+    stopDriving = driveWithGlobe(viewer.scene, viewer.camera, tick);
     log.info("splat renderer started", { kind, tiles: tree.root.uri });
 
     return {
       kind,
       key: target.key,
       stop: () => {
-        running = false;
-        cancelAnimationFrame(raf);
+        stopDriving?.();
         streamer.stop();
         backend.destroy();
         canvas.remove();
@@ -334,6 +431,83 @@ export class ScanRendererHost {
         gaussians: streamer.drawnGaussians,
         frames,
         error,
+        budget: adaptive.budget,
+        loading: streamer.loading,
+        cached: streamer.loadedGaussians,
+        native: false,
+      }),
+    };
+  }
+
+  /**
+   * The scan in the renderer's own streamed format, when its package has one: the renderer
+   * streams and chooses by itself and this only keeps its camera on Cesium's. Null when the
+   * package has none (older scans), and the tileset is streamed here instead.
+   */
+  private async runNative(
+    kind: Exclude<SplatRendererKind, "cesium">,
+    target: ScanTarget,
+    canvas: HTMLCanvasElement,
+    backend: ScanBackend<unknown>,
+    tilesetUrl: string,
+  ): Promise<Session | null> {
+    const lodUrl = new URL(NATIVE_LOD_PATH, tilesetUrl).toString();
+    const probe = await fetch(lodUrl).catch(() => null);
+    if (!probe?.ok || !backend.streamNative) return null;
+    const stream = await backend.streamNative(lodUrl);
+    const { viewer } = this;
+    const toLocal = new Matrix4();
+    const pixelRatio = Math.min(window.devicePixelRatio || 1, isHandheld() ? 1.5 : 2);
+    const lastEye = new Cartesian3(Number.NaN, 0, 0);
+    const lastDirection = new Cartesian3();
+    let lastMotionAt = 0;
+    let frames = 0;
+    const tick = (): void => {
+      const tileset = target.tileset;
+      if (tileset.isDestroyed()) return;
+      Matrix4.inverseTransformation(tileset.root.computedTransform, toLocal);
+      const camera = viewer.camera;
+      const now = performance.now();
+      if (
+        !Cartesian3.equalsEpsilon(camera.positionWC, lastEye, 0, 1e-3) ||
+        !Cartesian3.equalsEpsilon(camera.directionWC, lastDirection, 1e-5)
+      ) {
+        lastMotionAt = now;
+        Cartesian3.clone(camera.positionWC, lastEye);
+        Cartesian3.clone(camera.directionWC, lastDirection);
+      }
+      const moving = now - lastMotionAt < MOTION_SETTLE_MS;
+      backend.render(
+        scanPose(camera, toLocal, {
+          width: viewer.canvas.clientWidth,
+          height: viewer.canvas.clientHeight,
+          pixelRatio: moving
+            ? Math.max(MIN_MOTION_PIXEL_RATIO, pixelRatio * MOTION_RESOLUTION)
+            : pixelRatio,
+        }),
+      );
+      frames += 1;
+    };
+    const stopDriving = driveWithGlobe(viewer.scene, viewer.camera, tick);
+    log.info("splat renderer streaming natively", { kind, url: lodUrl });
+    return {
+      kind,
+      key: target.key,
+      stop: () => {
+        stopDriving();
+        stream.stop();
+        backend.destroy();
+        canvas.remove();
+      },
+      status: () => ({
+        tiles: 0,
+        gaussians: stream.splats(),
+        frames,
+        error: null,
+        budget: stream.splats(),
+        loading: 0,
+        cached: 0,
+        native: true,
       }),
     };
   }

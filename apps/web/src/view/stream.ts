@@ -41,9 +41,18 @@ export interface View {
 
 /** Refinement stops once every tile's error on screen is under this many CSS pixels. */
 export const TARGET_ERROR_PX = 2;
-/** A tile out of view refines as if its error were this fraction of what it is: turning
- *  around shows the scene coarse rather than a hole, without spending the budget behind. */
-export const OFFSCREEN_WEIGHT = 0.15;
+/** A tile out of view refines as if its error were this fraction of what it is: the view
+ *  gets the budget first, but what is around the camera stays close to as sharp, so turning
+ *  round finds it loaded. At 0.15 every turn in place re-fetched what the last turn had just
+ *  dropped (up to 7.4M gaussians a turn in the Fort Clatsop scan); at 0.5, nothing. */
+export const OFFSCREEN_WEIGHT = 0.5;
+
+/** Updates in a row a fetch may go unwanted before it is aborted (~0.3 s at the replan rate). */
+export const ABANDON_AFTER_UPDATES = 2;
+/** A tile that failed is tried again after this long, up to `MAX_LOAD_FAILURES` times: one
+ *  dropped request used to leave its region coarse for the rest of the visit. */
+export const RETRY_FAILED_MS = 5000;
+export const MAX_LOAD_FAILURES = 3;
 
 /** Nearer than this (metres, or a twentieth of a small tile) a tile's error stops growing:
  *  the camera is at or in it, and a closer look shows it no worse. */
@@ -182,7 +191,8 @@ export function nextSwaps(
 
 /** What the streamer asks of the page: fetch a tile, put it on screen or take it off. */
 export interface StreamHost<M> {
-  load(tile: TileNode): Promise<M>;
+  /** Fetches and decodes `tile`; `signal` aborts it once the view no longer wants it. */
+  load(tile: TileNode, signal?: AbortSignal): Promise<M>;
   show(tile: TileNode, mesh: M): void;
   hide(tile: TileNode, mesh: M): void;
   dispose(mesh: M): void;
@@ -198,6 +208,19 @@ export interface StreamOptions {
   /** Tiles fetched at once. */
   concurrency: number;
   targetErrorPx?: number;
+  /**
+   * Most gaussians put on screen in one update. Tiles that land together otherwise all go up
+   * in one frame (each a GPU upload and a re-sort): a hitch. The rest wait for the next
+   * update, which `onArrival` asks for at once. Unlimited when absent.
+   */
+  maxShownPerUpdate?: number;
+  /**
+   * Prefetch: once nothing the view wants is left to fetch, the next level of detail of the
+   * cut within this many metres of the camera is fetched into the cache, so turning or
+   * stepping there finds it ready -- the ring of a game world loaded around the player.
+   * Off when absent.
+   */
+  prefetchRadiusM?: number;
 }
 
 /**
@@ -208,11 +231,19 @@ export class TileStreamer<M> {
   private readonly parentOf: Map<TileNode, TileNode | null>;
   private readonly loaded = new Map<TileNode, M>();
   private readonly used = new Map<TileNode, number>();
-  private readonly inFlight = new Set<TileNode>();
-  private readonly broken = new Set<TileNode>();
+  /** Fetches under way, how many updates in a row each has not been wanted, and whether it
+   *  is a prefetch (fetched for the cache, not for the view). */
+  private readonly inFlight = new Map<
+    TileNode,
+    { abort: AbortController; unwanted: number; prefetch: boolean }
+  >();
+  /** Tiles that failed to load: how often, and when to try again. */
+  private readonly broken = new Map<TileNode, { failures: number; retryAt: number }>();
   private readonly shown = new Set<TileNode>();
   private desired = new Set<TileNode>();
   private clock = 0;
+  /** Where the camera was at the last update, for eviction: what is near stays. */
+  private eye: [number, number, number] | null = null;
   private stopped = false;
   /** Called when a fetch finishes, so the page can run `update` again. */
   onArrival: (() => void) | null = null;
@@ -250,6 +281,18 @@ export class TileStreamer<M> {
     this.options.cacheBudget = cacheBudget;
   }
 
+  /** Tiles being fetched now. */
+  get loading(): number {
+    return this.inFlight.size;
+  }
+
+  /** Gaussians loaded, drawn or kept for later. */
+  get loadedGaussians(): number {
+    let total = 0;
+    this.loaded.forEach((_mesh, tile) => (total += gaussiansOf(tile)));
+    return total;
+  }
+
   /** Whether anything is still to fetch for the last view. */
   get busy(): boolean {
     return this.inFlight.size > 0;
@@ -259,10 +302,14 @@ export class TileStreamer<M> {
   update(view: View): boolean {
     if (this.stopped) return false;
     const { budget, targetErrorPx } = this.options;
+    this.eye = view.eye;
     this.desired = chooseCut(this.tree, view, budget, targetErrorPx).tiles;
     const isLoaded = (tile: TileNode): boolean => this.loaded.has(tile);
     let changed = false;
     let missing: TileNode[] = [];
+    const limit = this.options.maxShownPerUpdate ?? Number.POSITIVE_INFINITY;
+    let room = limit;
+    let deferred = false;
     // A swap can make the next one possible (children already cached from an earlier look),
     // so swap until nothing more can; the depth of the tree bounds it.
     for (let pass = 0; pass < 32; pass++) {
@@ -275,11 +322,26 @@ export class TileStreamer<M> {
       const next = nextSwaps(this.parentOf, this.shown, this.desired, isLoaded);
       missing = next.missing;
       if (next.swaps.length === 0) break;
-      next.swaps.forEach((swap) => this.apply(swap));
-      changed = true;
+      for (const swap of next.swaps) {
+        const adding = swap.add.reduce(
+          (sum, tile) => sum + (this.shown.has(tile) ? 0 : gaussiansOf(tile)),
+          0,
+        );
+        // A swap bigger than the whole allowance still goes, alone: it cannot be split.
+        if (adding > room && room < limit) {
+          deferred = true;
+          continue;
+        }
+        room -= adding;
+        this.apply(swap);
+        changed = true;
+      }
+      if (deferred) break;
     }
+    if (deferred) setTimeout(() => this.onArrival?.(), 0);
     for (const tile of this.shown) this.used.set(tile, ++this.clock);
     for (const tile of this.desired) if (this.loaded.has(tile)) this.used.set(tile, this.clock);
+    this.abandon(missing);
     this.fetch(missing, view);
     this.evict();
     return changed;
@@ -288,6 +350,8 @@ export class TileStreamer<M> {
   /** Disposes everything and ignores fetches still on their way. */
   stop(): void {
     this.stopped = true;
+    for (const { abort } of this.inFlight.values()) abort.abort();
+    this.inFlight.clear();
     for (const [tile, mesh] of this.loaded) {
       if (this.shown.has(tile)) this.host.hide(tile, mesh);
       this.host.dispose(mesh);
@@ -310,9 +374,36 @@ export class TileStreamer<M> {
     }
   }
 
+  /**
+   * Aborts fetches the view has not wanted for `ABANDON_AFTER_UPDATES` updates in a row: a
+   * camera on the move otherwise kept downloading tiles for where it had been, at the cost of
+   * those for where it is (a game streamer's first rule: cancel what is no longer needed).
+   */
+  private abandon(missing: TileNode[]): void {
+    const needed = new Set(missing);
+    const radius = this.options.prefetchRadiusM ?? 0;
+    for (const [tile, fetch] of this.inFlight) {
+      if (needed.has(tile)) fetch.prefetch = false;
+      fetch.unwanted = needed.has(tile) ? 0 : fetch.unwanted + 1;
+      // A prefetch is never "wanted"; it goes only once the camera has left its ring.
+      const stale = fetch.prefetch
+        ? this.distance(tile) > 2 * radius
+        : fetch.unwanted >= ABANDON_AFTER_UPDATES;
+      if (stale) {
+        fetch.abort.abort();
+        this.inFlight.delete(tile);
+      }
+    }
+  }
+
   /** Starts the most needed fetches: by their parent's priority (what a refine buys). */
   private fetch(missing: TileNode[], view: View): void {
-    const wanted = missing.filter((tile) => !this.inFlight.has(tile) && !this.broken.has(tile));
+    const now = performance.now();
+    const wanted = missing.filter((tile) => {
+      if (this.inFlight.has(tile)) return false;
+      const broken = this.broken.get(tile);
+      return !broken || (broken.failures < MAX_LOAD_FAILURES && now >= broken.retryAt);
+    });
     const worth = (tile: TileNode): number => {
       const parent = this.parentOf.get(tile);
       return parent ? priority(parent, view) : Number.MAX_VALUE;
@@ -320,42 +411,90 @@ export class TileStreamer<M> {
     wanted.sort((a, b) => worth(b) - worth(a));
     for (const tile of wanted) {
       if (this.inFlight.size >= this.options.concurrency) break;
-      this.inFlight.add(tile);
-      this.host.load(tile).then(
-        (mesh) => {
-          this.inFlight.delete(tile);
-          if (this.stopped) {
-            this.host.dispose(mesh);
-            return;
-          }
-          this.loaded.set(tile, mesh);
-          this.used.set(tile, ++this.clock);
-          this.onArrival?.();
-        },
-        (error: unknown) => {
-          this.inFlight.delete(tile);
-          this.broken.add(tile);
-          if (!this.stopped) {
-            this.host.failed?.(tile, error);
-            this.onArrival?.();
-          }
-        },
-      );
+      this.start(tile, false);
+    }
+    if (
+      this.inFlight.size < this.options.concurrency &&
+      wanted.every((t) => this.inFlight.has(t))
+    ) {
+      this.prefetch();
     }
   }
 
-  private depth(tile: TileNode): number {
-    let depth = 0;
-    for (let up = this.parentOf.get(tile); up; up = this.parentOf.get(up)) depth += 1;
-    return depth;
+  /** The next level of the cut near the camera, into the cache, nearest first. */
+  private prefetch(): void {
+    const radius = this.options.prefetchRadiusM;
+    if (!radius) return;
+    let room = this.options.cacheBudget - this.loadedGaussians;
+    for (const fetch of this.inFlight.keys()) room -= gaussiansOf(fetch);
+    const now = performance.now();
+    const candidates: TileNode[] = [];
+    for (const tile of this.desired) {
+      if (tile.children.length === 0 || this.distance(tile) > radius) continue;
+      for (const child of tile.children) {
+        if (this.loaded.has(child) || this.inFlight.has(child)) continue;
+        const broken = this.broken.get(child);
+        if (broken && (broken.failures >= MAX_LOAD_FAILURES || now < broken.retryAt)) continue;
+        candidates.push(child);
+      }
+    }
+    candidates.sort((a, b) => this.distance(a) - this.distance(b));
+    for (const tile of candidates) {
+      if (this.inFlight.size >= this.options.concurrency) break;
+      if (gaussiansOf(tile) > room) break;
+      room -= gaussiansOf(tile);
+      this.start(tile, true);
+    }
+  }
+
+  private start(tile: TileNode, prefetch: boolean): void {
+    const abort = new AbortController();
+    this.inFlight.set(tile, { abort, unwanted: 0, prefetch });
+    this.host.load(tile, abort.signal).then(
+      (mesh) => {
+        if (abort.signal.aborted || this.stopped) {
+          this.host.dispose(mesh);
+          return;
+        }
+        this.inFlight.delete(tile);
+        this.broken.delete(tile);
+        this.loaded.set(tile, mesh);
+        this.used.set(tile, ++this.clock);
+        this.onArrival?.();
+      },
+      (error: unknown) => {
+        if (abort.signal.aborted) return;
+        this.inFlight.delete(tile);
+        const failures = (this.broken.get(tile)?.failures ?? 0) + 1;
+        this.broken.set(tile, { failures, retryAt: performance.now() + RETRY_FAILED_MS });
+        if (!this.stopped) {
+          this.host.failed?.(tile, error);
+          this.onArrival?.();
+        }
+      },
+    );
+  }
+
+  /** How far the camera is from `tile` (its box, else its sphere); 0 with no camera yet. */
+  private distance(tile: TileNode): number {
+    const eye = this.eye;
+    if (!eye) return 0;
+    if (tile.box) return boxDistance(tile.box, eye);
+    const bounds = tile.bounds;
+    if (!bounds) return 0;
+    const [cx, cy, cz] = bounds.center;
+    return Math.max(0, Math.hypot(eye[0] - cx, eye[1] - cy, eye[2] - cz) - bounds.radius);
   }
 
   /**
-   * Finest first, then least recently used, until the cache fits: a coarse tile is a small
-   * download that covers a lot, so it is the last to go. Never a drawn or wanted tile, nor an
-   * ancestor of a drawn one: those are what a step back or a zoom out swaps to, and merged
-   * parents are an eighth or less of what they stand for, so keeping them all costs little
-   * and makes coarsening instant.
+   * Farthest from the camera first, then least recently used, until the cache fits. Never a
+   * drawn or wanted tile, nor an ancestor of a drawn one: those are what a step back or a zoom
+   * out swaps to, and merged parents are an eighth or less of what they stand for.
+   *
+   * It used to drop the finest tiles first -- but the finest tiles loaded are the ones right
+   * around the camera, which turning away takes off screen and turning back wants again:
+   * spinning in place in the Fort Clatsop scan re-downloaded up to 7.4M gaussians a turn.
+   * Distance keeps what surrounds the camera; it is what any direction will show next.
    */
   private evict(): void {
     let total = 0;
@@ -373,7 +512,7 @@ export class TileStreamer<M> {
       .filter((tile) => !this.shown.has(tile) && !this.desired.has(tile) && !kept.has(tile))
       .sort(
         (a, b) =>
-          this.depth(b) - this.depth(a) || (this.used.get(a) ?? 0) - (this.used.get(b) ?? 0),
+          this.distance(b) - this.distance(a) || (this.used.get(a) ?? 0) - (this.used.get(b) ?? 0),
       );
     for (const tile of spare) {
       if (total <= this.options.cacheBudget) break;

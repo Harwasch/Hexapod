@@ -50,7 +50,7 @@ interface Nav {
   toasts: string[];
 }
 
-async function open(page: Page): Promise<void> {
+async function open(page: Page, options: { hidden?: boolean } = {}): Promise<void> {
   await page.route("**/fixture-tiles/**", (route) => {
     const relative = new URL(route.request().url()).pathname.replace(/^.*\/fixture-tiles\//, "");
     if (relative.includes("..")) return route.abort();
@@ -60,8 +60,14 @@ async function open(page: Page): Promise<void> {
       body: readFileSync(resolve(TILES, relative)),
     });
   });
+  const html = options.hidden
+    ? HARNESS_HTML.replace(
+        '"/fixture-tiles/synthetic-tree-lod/tileset.json",',
+        "$&\n{ hidden: true },",
+      )
+    : HARNESS_HTML;
   await page.route("**/__splat-nav", (route) =>
-    route.fulfill({ status: 200, contentType: "text/html", body: HARNESS_HTML }),
+    route.fulfill({ status: 200, contentType: "text/html", body: html }),
   );
   await page.route(/https:\/\/(api|assets|tile)\.cesium\.com\/.*/, (route) => route.abort());
   await page.goto("/__splat-nav");
@@ -240,4 +246,17 @@ test("left-drag grabs the ground and pans; Shift-drag and right-drag orbit", asy
     const after = await heading();
     expect(Math.abs(after - before)).toBeGreaterThan(0.2);
   }
+});
+
+test("a scan another renderer draws is still solid, though CesiumJS never loaded a tile", async ({
+  page,
+}) => {
+  test.setTimeout(300_000);
+  await open(page, { hidden: true });
+  await nav(page, (n) => n.place(10));
+  // Its packaged solids: the crown is straight ahead, and a drive at it stops short of it.
+  expect(await nav(page, (n) => n.hitAhead())).not.toBeNull();
+  const closest = await nav(page, (n) => n.drive(0.5, 40));
+  expect(closest).not.toBeNull();
+  expect(closest ?? 0).toBeGreaterThan(0.8);
 });

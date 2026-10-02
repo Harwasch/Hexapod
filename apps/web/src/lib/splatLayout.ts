@@ -110,3 +110,24 @@ export function playcanvasProperties(cloud: DecodedGeometry): Record<string, Flo
   }
   return out;
 }
+
+/**
+ * Moves the `x`, `y`, `z` columns so they are relative to the middle of their extent, and
+ * returns that middle: positions near zero keep their precision on a GPU that stores them as
+ * half floats (6 cm apart 100 m from the origin), and the caller places the tile there.
+ */
+export function centreColumns(columns: Record<string, Float32Array>): [number, number, number] {
+  const centre = (axis: Float32Array | undefined): number => {
+    if (!axis || axis.length === 0) return 0;
+    let low = Infinity;
+    let high = -Infinity;
+    for (const value of axis) {
+      if (value < low) low = value;
+      if (value > high) high = value;
+    }
+    const middle = (low + high) / 2;
+    for (let i = 0; i < axis.length; i++) axis[i] = (axis[i] ?? 0) - middle;
+    return middle;
+  };
+  return [centre(columns.x), centre(columns.y), centre(columns.z)];
+}

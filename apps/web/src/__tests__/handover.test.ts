@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { Handover } from "@/cesium/scanView/handover";
+import { FADE_MS, Handover } from "@/cesium/scanView/handover";
 
 function setup(maxWaitMs = 1500) {
   const onScreen = new Set<string>();
@@ -76,5 +76,33 @@ describe("Handover", () => {
     handover.hide("b", 2);
     handover.forget("b");
     expect(onScreen.has("b")).toBe(false);
+  });
+
+  it("fades new detail in, and takes the old off only once it is drawn and in", () => {
+    const onScreen = new Set<string>();
+    const drawn = new Set<string>();
+    const alpha = new Map<string, number>();
+    const handover = new Handover<string>({
+      add: (m) => onScreen.add(m),
+      remove: (m) => onScreen.delete(m),
+      isDrawn: (m) => drawn.has(m),
+      fade: (m, a) => alpha.set(m, a),
+    });
+    handover.show("parent", 0);
+    drawn.add("parent");
+    handover.tick(FADE_MS);
+    expect(alpha.get("parent")).toBe(1);
+    handover.show("child", 1000);
+    handover.hide("parent", 1000);
+    expect(alpha.get("child")).toBe(0);
+    handover.tick(1000 + FADE_MS / 2);
+    expect(alpha.get("child")).toBeCloseTo(0.5);
+    handover.tick(1000 + FADE_MS);
+    expect(alpha.get("child")).toBe(1);
+    // Faded in, but not drawn yet: the parent stays.
+    expect(onScreen.has("parent")).toBe(true);
+    drawn.add("child");
+    handover.tick(1000 + FADE_MS + 16);
+    expect(onScreen.has("parent")).toBe(false);
   });
 });

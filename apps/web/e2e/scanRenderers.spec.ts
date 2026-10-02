@@ -13,13 +13,26 @@ import { expect, test, type Page } from "@playwright/test";
 const TILES = resolve(process.cwd(), "../../data/tiles");
 const BACKGROUND = [0x10, 0x14, 0x1a];
 
-async function open(page: Page): Promise<void> {
+/** The yard's PlayCanvas streamed level of detail (splat-transform's lod-meta.json), served
+ *  where a scan's package keeps it: beside the tileset, in `sog/`. */
+const NATIVE = "synthetic-yard/splat/sog/";
+
+async function open(page: Page, options: { native: boolean } = { native: true }): Promise<void> {
   await page.route("**/fixture-tiles/**", (route) => {
-    const relative = new URL(route.request().url()).pathname.replace(/^.*\/fixture-tiles\//, "");
+    let relative = new URL(route.request().url()).pathname.replace(/^.*\/fixture-tiles\//, "");
     if (relative.includes("..")) return route.abort();
+    if (relative.startsWith(NATIVE)) {
+      if (!options.native) return route.fulfill({ status: 404, body: "" });
+      relative = `synthetic-yard-sog/${relative.slice(NATIVE.length)}`;
+    }
+    const contentType = relative.endsWith(".json")
+      ? "application/json"
+      : relative.endsWith(".webp")
+        ? "image/webp"
+        : "model/gltf-binary";
     return route.fulfill({
       status: 200,
-      contentType: relative.endsWith(".json") ? "application/json" : "model/gltf-binary",
+      contentType,
       body: readFileSync(resolve(TILES, relative)),
     });
   });
@@ -101,10 +114,27 @@ test("Spark and PlayCanvas draw the scan where CesiumJS does", async ({ page }, 
   const cesium = share(masks.cesium ?? []);
   expect(cesium).toBeGreaterThan(0.02);
   for (const kind of ["spark", "playcanvas"] as const) {
-    const status = results[kind] as { status: { tiles: number; error: string | null } };
+    const status = results[kind] as {
+      status: { tiles: number; native: boolean; error: string | null };
+    };
     expect(status.status.error).toBeNull();
-    expect(status.status.tiles).toBeGreaterThan(0);
+    // PlayCanvas streams the yard's own streamed package; Spark streams the tiles.
+    expect(status.status.native).toBe(kind === "playcanvas");
+    if (kind === "spark") expect(status.status.tiles).toBeGreaterThan(0);
     expect(share(masks[kind] ?? [])).toBeGreaterThan(cesium * 0.5);
     expect((results.overlap as Record<string, number>)[kind]).toBeGreaterThan(0.6);
   }
+});
+
+test("PlayCanvas streams the tiles for a scan with no streamed package", async ({ page }) => {
+  test.setTimeout(300_000);
+  await page.setViewportSize({ width: 960, height: 600 });
+  await open(page, { native: false });
+  const status: { native: boolean; tiles: number; error: string | null } = await page.evaluate(
+    `window.__scan.use("playcanvas", 90)`,
+  );
+  expect(status.error).toBeNull();
+  expect(status.native).toBe(false);
+  expect(status.tiles).toBeGreaterThan(0);
+  expect(share(await coverage(page))).toBeGreaterThan(0.1);
 });

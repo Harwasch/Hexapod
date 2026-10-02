@@ -8,6 +8,13 @@ export type QualityPreset = "performance" | "balanced" | "ultra";
 export type WorldMode = "open" | "photorealistic";
 /** Who draws splat scans on the globe (cesium/scanView): CesiumJS, Spark or PlayCanvas. */
 export type SplatRenderer = "cesium" | "spark" | "playcanvas";
+/**
+ * Who draws splat scans unless chosen otherwise: PlayCanvas, streaming a scan's own streamed
+ * level of detail as superspl.at does (scanView/ScanRendererHost.runNative). CesiumJS still
+ * draws a Living Survey scan (its motion is CesiumJS's shader) and every other layer. Here,
+ * not beside the renderers, so pages without the globe (admin.html) never load cesium/.
+ */
+export const DEFAULT_SPLAT_RENDERER: SplatRenderer = "playcanvas";
 
 export interface SettingsState {
   theme: ThemeMode;
@@ -38,9 +45,9 @@ export interface SettingsState {
    */
   livingGpuMotion: boolean;
   /**
-   * Who draws splat scans: CesiumJS's own splat primitive, or a dedicated splat renderer laid
-   * over the globe -- Spark (three.js) or PlayCanvas (SuperSplat's engine) -- for comparison.
-   * The globe, navigation and tools stay CesiumJS's either way.
+   * Who draws splat scans: a dedicated splat renderer laid over the globe -- PlayCanvas
+   * (SuperSplat's engine, the default) or Spark (three.js) -- or CesiumJS's own splat
+   * primitive. The globe, navigation and tools stay CesiumJS's either way.
    */
   splatRenderer: SplatRenderer;
   /**
@@ -76,7 +83,7 @@ const defaults = {
   devToolsOpen: false,
   exploreSpeed: 4,
   livingGpuMotion: true,
-  splatRenderer: "cesium" as SplatRenderer,
+  splatRenderer: DEFAULT_SPLAT_RENDERER,
   writeToken: "",
 };
 
@@ -89,12 +96,15 @@ export const useSettings = create<SettingsState>()(
     }),
     {
       name: "twin.settings.v1",
-      version: 2,
-      // v2 switched the default world to Google Photorealistic; stored v1 settings still
-      // carried the old default, so they are moved along once.
+      version: 3,
+      // v2 switched the default world to Google Photorealistic, v3 the default splat renderer
+      // to PlayCanvas; stored settings still carried the old defaults, so they are moved along
+      // once.
       migrate: (persisted, version) => {
-        const state = (persisted ?? {}) as Partial<SettingsState>;
-        return version < 2 ? { ...state, world: "photorealistic" as WorldMode } : state;
+        let state = (persisted ?? {}) as Partial<SettingsState>;
+        if (version < 2) state = { ...state, world: "photorealistic" };
+        if (version < 3) state = { ...state, splatRenderer: DEFAULT_SPLAT_RENDERER };
+        return state;
       },
     },
   ),

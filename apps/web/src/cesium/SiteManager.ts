@@ -24,9 +24,12 @@ import {
 } from "@/lib/detail";
 import { AdaptiveSplatBudget } from "@/lib/splatBudget";
 
+import { DEFAULT_SPLAT_RENDERER } from "@/state/settings";
+
 import type { SplatRendererKind } from "./scanView/types";
 import type { Emitter } from "@/lib/emitter";
 import { createLogger, describeError } from "@/lib/log";
+import { withRetry } from "@/lib/retry";
 import { timed } from "@/lib/timing";
 
 import type { CameraController } from "./CameraController";
@@ -162,7 +165,7 @@ export class SiteManager {
   /** Who draws splat scans: CesiumJS, or a dedicated renderer over the globe
    *  (scanView/ScanRendererHost.ts) while CesiumJS keeps the tileset, hidden, for its frame
    *  and its solids. */
-  private splatRenderer: SplatRendererKind = "cesium";
+  private splatRenderer: SplatRendererKind = DEFAULT_SPLAT_RENDERER;
   /** The site the representation switcher, clipping and the HUD refer to. */
   private primaryId: string | null = null;
   private nearId: string | null = null;
@@ -556,7 +559,15 @@ export class SiteManager {
     this.events.emit("asset", { id: asset.id, patch: { loadState: "loading", error: null } });
     handle.loading = timed(
       "site.asset.load",
-      () => createSiteTileset(asset, { maximumScreenSpaceError: this.screenSpaceError }),
+      () =>
+        withRetry(
+          () => createSiteTileset(asset, { maximumScreenSpaceError: this.screenSpaceError }),
+          {
+            permanent: (error) => isIonAuthError(error) || isIonNotFound(error),
+            onRetry: (error, attempt) =>
+              log.info("asset retrying", { asset: asset.id, attempt, error: describeError(error) }),
+          },
+        ),
       {
         asset: asset.id,
         representation: asset.representation,
@@ -955,14 +966,22 @@ export class SiteManager {
     return false;
   }
 
-  /** Whether CesiumJS draws this asset itself (anything but a splat, under another renderer). */
+  /**
+   * Whether CesiumJS draws this asset itself: anything but a splat under another renderer, and
+   * a Living Survey scan whatever the renderer -- its motion is CesiumJS's splat shader
+   * (LivingSurveyManager), which no other renderer has.
+   */
   private cesiumDraws(asset: SiteAsset): boolean {
-    return this.splatRenderer === "cesium" || asset.representation !== "gaussian-splat";
+    return (
+      this.splatRenderer === "cesium" ||
+      asset.representation !== "gaussian-splat" ||
+      Boolean(asset.renderConfig.rigUrl)
+    );
   }
 
   private scanDrawnElsewhere(entry: ActiveSite, handle: AssetHandle): boolean {
     return (
-      this.splatRenderer !== "cesium" &&
+      !this.cesiumDraws(handle.asset) &&
       entry.engaged &&
       entry.representation === "gaussian-splat" &&
       this.pickAsset(entry, entry.representation)?.id === handle.asset.id
@@ -980,7 +999,7 @@ export class SiteManager {
     for (const { entry, handle } of this.handles()) {
       const tileset = handle.tileset;
       if (!tileset || handle.asset.representation !== "gaussian-splat") continue;
-      tileset.preloadWhenHidden = kind === "cesium";
+      tileset.preloadWhenHidden = this.cesiumDraws(handle.asset);
       const current = this.pickAsset(entry, entry.representation)?.id === handle.asset.id;
       tileset.show = current && entry.engaged && this.cesiumDraws(handle.asset);
     }
@@ -994,7 +1013,8 @@ export class SiteManager {
     if (!active?.engaged || active.representation !== "gaussian-splat") return null;
     const asset = this.pickAsset(active, active.representation);
     const handle = asset ? active.handles.get(asset.id) : undefined;
-    if (!asset || !handle?.tileset || handle.tileset.isDestroyed()) return null;
+    if (!asset || this.cesiumDraws(asset) || !handle?.tileset || handle.tileset.isDestroyed())
+      return null;
     return { key: `${active.site.id}:${asset.id}`, tileset: handle.tileset };
   }
 
