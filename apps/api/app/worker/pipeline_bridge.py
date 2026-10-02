@@ -78,6 +78,7 @@ from errors import (  # noqa: E402
     StopRequested,
 )
 from executor import RunResult, execute  # noqa: E402
+from harmonics import check_degree as check_sh_degree  # noqa: E402
 from live import latest as latest_live  # noqa: E402
 from modal_adapter import ModalAdapter  # noqa: E402
 from plan import Plan, PlannedStage, plan_recipe  # noqa: E402
@@ -121,6 +122,7 @@ __all__ = [
     "SubprocessAdapter",
     "Transfer",
     "Workdir",
+    "check_sh_degree",
     "checkpoint_key",
     "ensure_importable",
     "execute",

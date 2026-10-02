@@ -17,6 +17,7 @@ import boto3
 import pytest
 from fastapi.testclient import TestClient
 from moto import mock_aws
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import _db
@@ -383,6 +384,35 @@ def test_an_override_naming_a_stage_the_recipe_lacks_is_refused_in_its_own_words
     assert "does not have" in detail
     # Names the stages it *does* have, which is what makes the message actionable.
     assert "georeference" in detail and "package" in detail
+
+
+@pytest.mark.parametrize("value", [7, -1, "three", True, 1.5])
+def test_a_ship_sh_degree_the_stage_would_refuse_is_refused_at_launch(
+    client: TestClient, db: Session, storage: S3Storage, value: object
+) -> None:
+    """The stage refuses it with a ValueError, which the worker retries -- three failed
+    attempts, a GPU stage each time on Lane 2 -- so it is a 422 here and nothing is
+    queued."""
+    capture = make_capture(db, storage)
+    response = client.post(
+        f"/api/v1/captures/{capture.id}/process",
+        json={"recipe": "splat-ingest", "params": {"normalize": {"ship_sh_degree": value}}},
+    )
+    assert response.status_code == 422, response.text
+    detail = response.json()["detail"]
+    assert "ship_sh_degree" in detail and "normalize" in detail and "0, 1, 2, 3" in detail
+    assert db.scalars(select(Job).where(Job.capture_id == capture.id)).all() == []
+
+
+def test_a_ship_sh_degree_in_range_is_queued(
+    client: TestClient, db: Session, storage: S3Storage
+) -> None:
+    capture = make_capture(db, storage)
+    response = client.post(
+        f"/api/v1/captures/{capture.id}/process",
+        json={"recipe": "splat-ingest", "params": {"normalize": {"ship_sh_degree": 3}}},
+    )
+    assert response.status_code == 202, response.text
 
 
 def test_two_runs_of_one_capture_are_comparable(
