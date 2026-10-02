@@ -368,10 +368,8 @@ test.describe("the data console", () => {
   });
 
   test("the page does not load CesiumJS", async ({ page }) => {
-    const scripts: string[] = [];
-    page.on("request", (request) => {
-      if (request.resourceType() === "script") scripts.push(request.url());
-    });
+    const requests: string[] = [];
+    page.on("request", (request) => requests.push(request.url()));
 
     await mockApi(page, []);
     await page.goto("/admin.html");
@@ -380,6 +378,13 @@ test.describe("the data console", () => {
 
     // The entire reason admin.html is a third entry: a table of runs has no use for a
     // globe, and the globe is the single biggest thing in this repository's bundle.
-    expect(scripts.filter((url) => /cesium/i.test(url))).toEqual([]);
+    //
+    // Every request, not only scripts: the engine's stylesheet, a worker or a file under
+    // CESIUM_BASE_URL would each mean the console reached the engine. What this test cannot
+    // see is chunking: the dev server serves modules one by one, so it proves the console's
+    // *source* imports no CesiumJS, not that the *build* keeps it out. That failed once (a
+    // shared `tslib` inside `cesium-*.js` made the built page modulepreload all of it) while
+    // this test passed; `scripts/check-bundle.mjs` reads dist/ in CI and covers that half.
+    expect(requests.filter((url) => /cesium/i.test(new URL(url).pathname))).toEqual([]);
   });
 });

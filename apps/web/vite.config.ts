@@ -108,13 +108,15 @@ export default defineConfig({
     target: "es2022",
     sourcemap: true,
     chunkSizeWarningLimit: 5000,
-    rollupOptions: {
+    rolldownOptions: {
       // Three entries, and only the first one is a globe. `upload.html` is the page a
       // phone opens after scanning the handoff QR code — it should not pull a 3D globe
       // over cellular to pick one file. `admin.html` is the data console: full-page and
       // tabular, because a hundred runs and their parameters cannot be shown in a
-      // floating panel over a 3D scene. Both import no CesiumJS, which e2e asserts by
-      // watching for a cesium script request rather than by trusting this comment.
+      // floating panel over a 3D scene. Both import no CesiumJS. e2e watches the dev
+      // server for a cesium request, which proves the *source* imports none; only the
+      // build can prove the *chunks* do not, so `scripts/check-bundle.mjs` reads dist/
+      // and fails CI when any of these pages reaches a Cesium chunk.
       input: {
         index: resolve(import.meta.dirname, "index.html"),
         upload: resolve(import.meta.dirname, "upload.html"),
@@ -124,10 +126,30 @@ export default defineConfig({
         view: resolve(import.meta.dirname, "view.html"),
       },
       output: {
-        manualChunks: (id) =>
-          id.includes("node_modules/cesium") || id.includes("node_modules/@cesium")
-            ? "cesium"
-            : undefined,
+        codeSplitting: {
+          groups: [
+            // Shared runtime helpers, in a chunk of their own, claimed *before* the
+            // engine's group below. A group takes its modules' dependencies with it
+            // (`includeDependenciesRecursively`, on by default, and what keeps chunks free
+            // of import cycles), and CesiumJS depends on `autolinker`, which depends on
+            // `tslib`. So when the engine had the only group, `tslib` was bundled inside
+            // `cesium-*.js`, and the admin page — whose dialogs use `react-remove-scroll`,
+            // which also imports `tslib` — modulepreloaded all 4.9 MB of the engine for
+            // three 200-byte helpers. Vite's dynamic-import preload helper landed there
+            // the same way. Anything else the engine and another page come to share shows
+            // up in check-bundle.mjs, which names the page and the chunk.
+            {
+              name: "helpers",
+              test: /node_modules[\\/](tslib|@babel[\\/]runtime|@swc[\\/]helpers)[\\/]|vite[\\/]preload-helper/,
+              priority: 2,
+            },
+            {
+              name: "cesium",
+              test: /node_modules[\\/](cesium|@cesium)[\\/]/,
+              priority: 1,
+            },
+          ],
+        },
       },
     },
   },

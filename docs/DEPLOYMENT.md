@@ -76,6 +76,13 @@ SPA fallback: Pages serves each document, and a catch-all rewrite to `index.html
 every typo into a silently-served globe instead of a 404. The handoff URL the API mints is
 `<PUBLIC_WEB_BASE>/upload.html#<token>` — a literal path, which must keep working.
 
+Only `index.html` may load CesiumJS. `node apps/web/scripts/check-bundle.mjs [dist]` reads a
+build the way a browser would (entry scripts, modulepreloads, stylesheets, then every static
+import) and exits non-zero if `admin.html`, `upload.html` or `view.html` reaches a Cesium
+chunk; it also prints what each page loads, raw and gzipped. e2e cannot see this — the dev
+server does no chunking — and it is exactly what broke once: a shared `tslib` bundled inside
+`cesium-*.js` made the console modulepreload the whole engine (`vite.config.ts` says how).
+
 Build-time environment, all public once the bundle ships:
 
 | Variable                       | Production value                                                                    |
