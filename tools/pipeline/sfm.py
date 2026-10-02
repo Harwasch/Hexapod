@@ -66,6 +66,7 @@ import numpy.typing as npt
 
 __all__ = [
     "MATCHERS",
+    "THREADS_ENV",
     "VOCAB_TREE_ENV",
     "Camera",
     "Image",
@@ -80,6 +81,7 @@ __all__ = [
     "colmap_exe",
     "colmap_version",
     "count_pairs",
+    "default_threads",
     "feature_extractor_argv",
     "mapper_argv",
     "matcher_argv",
@@ -114,6 +116,14 @@ MATCHERS: dict[str, str] = {
 #: published Flickr100K 32K-word tree into the CPU image at build time, checks its sha256,
 #: and sets this; a machine without it (the worker, CI) matches exhaustively instead.
 VOCAB_TREE_ENV = "COLMAP_VOCAB_TREE"
+
+#: How many threads COLMAP's three steps get when a run does not say (`threads`), as the
+#: image says: `infra/modal/app.py` sets it on the CPU image to the `cpu4` reservation's
+#: hardware threads (`modal_adapter.CPU_TIERS`: 4 physical cores, two each). Unset, the
+#: count is COLMAP's own -1, every core the process can see -- which in a container is the
+#: *host's* (dozens), each SIFT thread with an image's scale space in memory, against a
+#: share of four cores and 8 GiB.
+THREADS_ENV = "COLMAP_NUM_THREADS"
 
 #: COLMAP camera model id -> (name, parameter names). Only the models this stage asks
 #: for are listed; an unlisted id is read as its raw parameter vector and named by id.
@@ -168,6 +178,21 @@ def colmap_available() -> bool:
     except ColmapMissingError:
         return False
     return True
+
+
+def default_threads(environ: Mapping[str, str] | None = None) -> int | None:
+    """COLMAP's thread count when a run gives none: `THREADS_ENV`, or None (COLMAP's -1).
+
+    A value that is not a positive integer is ignored rather than raised on: a typo in an
+    image's environment must not stop a pose that would otherwise have run, and ignoring
+    it is exactly what an unset variable does.
+    """
+    raw = (environ if environ is not None else os.environ).get(THREADS_ENV, "").strip()
+    try:
+        threads = int(raw)
+    except ValueError:
+        return None
+    return threads if threads > 0 else None
 
 
 def vocab_tree_path(configured: object = None) -> Path | None:

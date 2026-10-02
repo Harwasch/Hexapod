@@ -841,7 +841,8 @@ def colmap(ctx: StageContext) -> StageOutcome:
     width, height = _image_size(images[0])
     focal_prior = _optional_float(ctx.param("focal_px"))
     params = None if focal_prior is None else (focal_prior, width / 2.0, height / 2.0, 0.0)
-    threads = _optional_int(ctx.param("threads"))
+    # A run's own `threads`, else the image's (`sfm.THREADS_ENV`: the CPU box's reservation).
+    threads = _optional_int(ctx.param("threads")) or sfm.default_threads()
     seconds = {"extract": 0.0, "match": 0.0, "map": 0.0}
 
     def timed(phase: str, argv: list[str]) -> None:

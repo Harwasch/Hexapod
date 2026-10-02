@@ -143,7 +143,9 @@ RETRIES = 0
 #: Modal bills CPU and memory at max(reserved, used), so reserving them costs at most:
 #: 2 x $0.0472 + 8 GiB x $0.0080 = $0.158 an hour when the trainer uses less, nothing
 #: extra when it uses more (the L4 itself is $0.80). The limit stays soft: a quiet host
-#: still lets the call burst above it.
+#: still lets the call burst above it. That reservation is priced into every GPU call's
+#: `costUsd` (`modal_adapter.GPU_RESERVATION`, which `tests/test_modal_image.py` holds
+#: to these two: change one and change the other).
 GPU_CPU_CORES = 2.0
 GPU_MEMORY_MIB = 8192
 
@@ -266,6 +268,13 @@ VOCAB_TREE_FAISS = "/opt/colmap/vocab_tree_faiss_flickr100K_words32K.bin"
 #: `global_sfm.PYCOLMAP_VERSION` names.
 PYCOLMAP = "pycolmap==4.2.0"
 
+#: COLMAP's threads on the CPU box: `cpu4`'s 4 physical cores (`modal_adapter.CPU_TIERS`),
+#: two hardware threads each -- the reservation it is billed for. Without it COLMAP's -1
+#: counts the *host's* cores, as the GPU image's `THREAD_ENV` explains for the trainer,
+#: and starts a SIFT thread (an image's scale space each) per host core in 8 GiB.
+#: `sfm.default_threads` reads it; `tests/test_modal_image.py` holds it to `CPU_TIERS`.
+COLMAP_THREADS = "8"
+
 #: The CPU box's image: what `pose` needs and nothing a GPU does. Ubuntu 24.04 because
 #: its `colmap` package is 3.9.1, the version every pose measurement and test in this
 #: repository was made with; the CUDA image above is 22.04, whose package is 3.7.
@@ -290,6 +299,7 @@ cpu_image = (
             "PYTHONUNBUFFERED": "1",
             "COLMAP_VOCAB_TREE": VOCAB_TREE,
             "COLMAP4_VOCAB_TREE": VOCAB_TREE_FAISS,
+            "COLMAP_NUM_THREADS": COLMAP_THREADS,
         }
     )
     .add_local_dir(LOCAL_CAPTURES, CAPTURES_DIR, ignore=_IGNORE, copy=True)
