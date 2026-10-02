@@ -184,6 +184,7 @@ registered nothing when the POST failed.
 | what each failed attempt failed of | `stages/<id>/failures.json` |
 | the recipe process's stderr | `recipe-process.stderr.log` in the workdir; its tail in `jobs.error` on a failure |
 | the site | `sites` + the capture's `site_id`, from `registration.json` |
+| what a browser fetches | the public bucket, `runs/<job id>/p<generation>/<stage id>/<name>`, one generation per publish |
 
 A deployment with no bucket still runs: the log and artifact uploads are skipped and say
 so by leaving `log_key` null, rather than failing the job.
@@ -200,7 +201,13 @@ The download into the workdir stays: `place`, `package` and the rest read it the
 
 Publishing (`publish.py`) copies a tileset to the public bucket eight at a time and its
 `tileset.json` last, after every tile, so a public root always means its tiles are there; a
-copy that fails leaves no root and registers no site.
+copy that fails leaves no root and registers no site. Every publish copies into a
+generation of its own, `runs/<job>/p<generation>/...` (`app/services/published.py`; the
+generation is a hash of what is published), because a Refine re-runs the same job and
+rewrites its own keys: the site moves to the new generation only once it is complete, the
+live one is never written again -- so `immutable` holds there and only there -- and a
+republish that fails leaves the site, its thumbnail and its overlay as they were. A run's
+own keys are uploaded with the short lifetime for the same reason.
 
 Every run that ends — finished, failed or cancelled — drops its `inputs/` (a copy of what
 is in the bucket, which a retry fetches again) and every stage's `work/` (scratch);

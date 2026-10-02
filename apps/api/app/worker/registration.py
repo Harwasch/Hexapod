@@ -314,29 +314,35 @@ def _widen(low: float, high: float) -> tuple[float, float]:
     return (middle - MIN_HALF_EXTENT_M, middle + MIN_HALF_EXTENT_M)
 
 
-def _publish_tileset(publish: Publisher, job_id: uuid.UUID, stage_id: str) -> str | None:
-    """The packaged tileset, copied to where a browser can read it.
+def _tileset_prefix(job_id: uuid.UUID, stage_id: str) -> str:
+    return f"{stage_prefix(job_id, stage_id)}/splat"
+
+
+def _publish_tileset(
+    publish: Publisher, job_id: uuid.UUID, stage_id: str, generation: str | None
+) -> str | None:
+    """The packaged tileset, copied to where a browser can read it, into `generation`.
 
     The whole `splat/` directory goes, not just `tileset.json`: the root file names the
     tiles and a site whose tiles are missing renders as nothing at all.
     """
-    prefix = f"{stage_prefix(job_id, stage_id)}/splat"
-    return publish.publish_tree(prefix, f"{prefix}/tileset.json")
-
-
-def _publish_object(
-    publish: Publisher, job_id: uuid.UUID, stage_id: str, key_suffix: str
-) -> str | None:
-    return publish.publish_object(artifact_key(job_id, stage_id, key_suffix))
+    prefix = _tileset_prefix(job_id, stage_id)
+    return publish.publish_tree(prefix, f"{prefix}/tileset.json", generation=generation)
 
 
 @dataclass(frozen=True)
 class Published:
-    """What `publish_outputs` copied to the public bucket: each URL, or None."""
+    """What `publish_outputs` copied to the public bucket: each URL, or None.
+
+    `withheld` says the run had a tileset that could not be published, so nothing of the
+    run went on the site -- not its thumbnail, not its coverage overlay -- and `register`
+    leaves a site that already exists exactly as it was.
+    """
 
     tileset: str | None
     thumbnail: str | None
     coverage: str | None
+    withheld: bool = False
 
 
 def publish_outputs(
@@ -362,34 +368,55 @@ def publish_outputs(
     # With no publisher the private bucket is also the public one, which is the
     # single-bucket behaviour every caller had before the split; see app/worker/publish.py.
     publisher = publish or Publisher(private=storage, public=storage)
+    tiles = _tileset_prefix(job_id, tiles_stage_id) if tiles_stage_id is not None else None
+    # The plan's note on `thumbnail.jpg` was "the sites list -- the endpoint exists
+    # already and nothing calls it". A8's thumbnail stage is what calls it. Beside it the
+    # quality bar's coverage cloud, for the same reason: a browser fetches it.
+    thumbnail_key = (
+        artifact_key(job_id, thumbnail_stage_id, registration.thumbnail)
+        if thumbnail_stage_id is not None and registration.thumbnail
+        else None
+    )
+    coverage_key = (
+        artifact_key(job_id, coverage_stage_id, registration.coverage)
+        if coverage_stage_id is not None and registration.coverage
+        else None
+    )
+    # One generation for everything this run puts on the globe, so the thumbnail and the
+    # overlay sit beside the tiles they were made from, in keys no viewer has fetched
+    # (app/services/published.py). None with one bucket: nothing is copied.
+    generation = publisher.generation(
+        prefixes=[tiles] if tiles is not None else [],
+        keys=[key for key in (thumbnail_key, coverage_key) if key is not None],
+    )
     try:
         url = (
-            _publish_tileset(publisher, job_id, tiles_stage_id)
+            _publish_tileset(publisher, job_id, tiles_stage_id, generation)
             if tiles_stage_id is not None
             else None
         )
     except PublishError:
         # The run succeeded and its outputs are safely in the private bucket; only the
         # copy to the public one failed. A site pointed at half a tileset looks like a
-        # working site until somebody opens it, so there is no site instead.
-        url = None
-    # The plan's note on `thumbnail.jpg` was "the sites list -- the endpoint exists
-    # already and nothing calls it". A8's thumbnail stage is what calls it.
+        # working site until somebody opens it, so the site does not move to it -- and
+        # nothing else of this run goes on it either: a new thumbnail over the old scan,
+        # or a coverage overlay measured on geometry nobody is shown, is the same mix of
+        # two runs by other means. The live generation was never touched.
+        return Published(tileset=None, thumbnail=None, coverage=None, withheld=True)
     try:
         thumbnail = (
-            _publish_object(publisher, job_id, thumbnail_stage_id, registration.thumbnail)
-            if thumbnail_stage_id is not None and registration.thumbnail
+            publisher.publish_object(thumbnail_key, generation=generation)
+            if thumbnail_key is not None
             else None
         )
     except PublishError:
         # A missing thumbnail is a cosmetic loss, not a reason to withhold the site.
         thumbnail = None
-    # The quality bar's coverage cloud, beside the thumbnail and for the same reason: a
-    # browser fetches it. Also cosmetic, so a failed publish drops the overlay only.
+    # Also cosmetic, so a failed publish drops the overlay only.
     try:
         coverage = (
-            _publish_object(publisher, job_id, coverage_stage_id, registration.coverage)
-            if coverage_stage_id is not None and registration.coverage
+            publisher.publish_object(coverage_key, generation=generation)
+            if coverage_key is not None
             else None
         )
     except PublishError:
@@ -483,9 +510,10 @@ def register(
         _repoint_splat(db, registered, url, job_id, registration)
     if registered is not None and thumbnail is not None:
         registered.thumbnail_url = thumbnail
-    if registered is not None:
+    if registered is not None and not published.withheld:
         # The viewer reads the overlay off the site it is showing. Cleared by a run with
-        # none, so an overlay never sits on a splat it was not measured on.
+        # none, so an overlay never sits on a splat it was not measured on -- and left
+        # alone by a run whose tileset was withheld, whose splat is not the one shown.
         metadata = dict(registered.metadata_ or {})
         if coverage:
             metadata["coverageUrl"] = coverage
@@ -559,6 +587,13 @@ def _repoint_splat(
     they are measurements *of that tileset*: leaving the first run's cells on an asset
     now pointing at the second run's geometry would be a placement derived from geometry
     nobody is looking at. A re-run that measured nothing clears them for the same reason.
+
+    A motion rig (`rigUrl`) is dropped when the URL changes, for the same reason and one
+    more. It is stamped with the checksums of the tiles it was built on
+    (living-plants.yml), and it sits *beside* them -- the path is relative to the
+    tileset's URL -- so after a re-run or a Refine, which publishes into a generation of
+    its own, it names a file the new tileset's directory does not have and binds tiles
+    the new tileset does not contain. Rig the new tiles again to animate them.
     """
     splat = next(
         (a for a in site.assets if a.representation == Representation.GAUSSIAN_SPLAT), None
@@ -577,8 +612,11 @@ def _repoint_splat(
             )
         )
     else:
+        render = {**dict(splat.render_config), **placement}
+        if dict(splat.source).get("url") != url:
+            render.pop("rigUrl", None)
         splat.source = {**dict(splat.source), "url": url}
-        splat.render_config = {**dict(splat.render_config), **placement}
+        splat.render_config = render
     metadata = dict(site.metadata_ or {})
     metadata["jobId"] = str(job_id)
     site.metadata_ = metadata

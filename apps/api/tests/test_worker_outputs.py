@@ -19,6 +19,7 @@ import boto3
 import pytest
 
 from app.config import REPO_ROOT
+from app.services.published import PUBLISHED_KEY, published_key
 from app.storage import S3Storage
 from app.worker import outputs
 from app.worker.outputs import (
@@ -90,7 +91,9 @@ def test_the_cache_rule_is_the_tile_proxys_rule() -> None:
     """`functions/r2/[[path]].js` decides the same thing for the proxy. The two are kept
     in step by hand, so this reads the function and checks the parts that decide."""
     source = (REPO_ROOT / "functions" / "r2" / "[[path]].js").read_text()
-    assert 'name.startsWith("runs/") && !/\\.json$/i.test(name)' in source
+    assert "PUBLISHED_KEY.test(name) && !/\\.json$/i.test(name)" in source
+    spelled = re.search(r"const PUBLISHED_KEY = /(.+)/;", source)
+    assert spelled and spelled[1].replace("\\/", "/") == PUBLISHED_KEY.pattern
     year = re.search(r"const YEAR_S = (\d+);", source)
     short = re.search(r"const SHORT_S = (\d+);", source)
     assert year and short
@@ -98,16 +101,42 @@ def test_the_cache_rule_is_the_tile_proxys_rule() -> None:
     assert f"public, max-age={short[1]}, stale-while-revalidate=604800" == SHORT_CACHE
     assert "stale-while-revalidate=604800" in source
 
-    run = f"runs/{JOB}/package/splat"
-    for key in (f"{run}/splat_3-5.glb", f"{run}/collision.bin", f"{run}/x.spz", f"{run}/a.webp"):
-        assert cache_control_for(key) == IMMUTABLE_CACHE, key
+    published = published_key(f"runs/{JOB}/package/splat", "0123456789abcdef")
     for key in (
-        f"{run}/tileset.json",
-        f"{run}/tileset.JSON",
+        f"{published}/splat_3-5.glb",
+        f"{published}/collision.bin",
+        f"{published}/x.spz",
+        f"{published}/a.webp",
+    ):
+        assert cache_control_for(key) == IMMUTABLE_CACHE, key
+    run = f"runs/{JOB}/package/splat"
+    for key in (
+        f"{published}/tileset.json",
+        f"{published}/tileset.JSON",
+        # A run's own keys: a Refine or a retry writes them again with new bytes.
+        f"{run}/splat_3-5.glb",
+        f"runs/{JOB}/train/canonical.ply",
         f"runs/{JOB}/register/registration.json",
         "sites/a/b.glb",
     ):
         assert cache_control_for(key) == SHORT_CACHE, key
+
+
+def test_a_run_s_own_keys_are_not_promised_to_anyone_for_a_year(
+    storage: S3Storage, tmp_path: Path
+) -> None:
+    """A Refine re-runs the same job from `train` and `package` rewrites the same tile
+    names with new geometry. Uploaded `immutable`, a browser reading the bucket's own URL
+    (one bucket, no proxy) would keep the preview's tiles under the new tileset.json."""
+    a_package(tmp_path)
+    ref = tiles_ref()
+    assert upload_artifact(storage, tmp_path, JOB, ref) is not None
+    (tmp_path / "stages" / "package" / "out" / "splat" / "splat_0.glb").write_bytes(b"new")
+    assert upload_artifact(storage, tmp_path, JOB, ref) is not None
+
+    tile = raw_head(f"runs/{JOB}/package/splat/splat_0.glb")
+    assert tile["CacheControl"] == SHORT_CACHE
+    assert storage.get_object(f"runs/{JOB}/package/splat/splat_0.glb") == b"new"
 
 
 def test_artifacts_are_uploaded_with_their_cache_control(
@@ -122,13 +151,13 @@ def test_artifacts_are_uploaded_with_their_cache_control(
     assert upload_artifact(storage, tmp_path, JOB, splat_ref()) is not None
 
     run = f"runs/{JOB}"
-    assert raw_head(f"{run}/package/splat/splat_0.glb")["CacheControl"] == IMMUTABLE_CACHE
+    assert raw_head(f"{run}/package/splat/splat_0.glb")["CacheControl"] == SHORT_CACHE
     assert (
         raw_head(f"{run}/package/splat/collision.bin")["ContentType"] == "application/octet-stream"
     )
     root = raw_head(f"{run}/package/splat/tileset.json")
     assert (root["CacheControl"], root["ContentType"]) == (SHORT_CACHE, "application/json")
-    assert raw_head(f"{run}/train/canonical.ply")["CacheControl"] == IMMUTABLE_CACHE
+    assert raw_head(f"{run}/train/canonical.ply")["CacheControl"] == SHORT_CACHE
 
 
 def test_a_large_file_is_still_streamed_and_still_gets_its_headers(
@@ -265,7 +294,7 @@ def test_a_dispatched_stages_file_is_copied_not_uploaded(
     head = raw_head(uploaded.storage_key)
     assert (head["ContentType"], head["CacheControl"]) == (
         "application/octet-stream",
-        IMMUTABLE_CACHE,
+        SHORT_CACHE,
     )
 
 

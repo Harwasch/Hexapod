@@ -6,11 +6,12 @@
  * answers over HTTP/1.1 only -- six connections per origin, so a scan's hundreds of tiles
  * queue behind each other -- with no Cache-Control, so a browser revalidates or refetches
  * tiles it already has. Here the browser gets HTTP/2 or 3 from the nearest Cloudflare edge,
- * one connection, and a cache lifetime: a year, immutable, for the binary content of a run's
- * published package (`runs/<id>/...` tiles, written once), and five minutes with a week of
- * stale-while-revalidate for anything else -- tileset JSON, which a backfill may rewrite in
- * place (collision-backfill.yml adds `extras.collision`), and `sites/<slug>/...`, which can
- * be republished.
+ * one connection, and a cache lifetime: a year, immutable, for the binary content of a
+ * published generation (`runs/<job>/p<generation>/...`, which every publish writes afresh
+ * and nothing writes again: apps/api/app/services/published.py), and five minutes with a
+ * week of stale-while-revalidate for anything else -- tileset JSON, which a backfill may
+ * rewrite in place (collision-backfill.yml adds `extras.collision`), `sites/<slug>/...`,
+ * which can be republished, and a run's copies from before generations, which were.
  *
  * **One host, and never the upstream's Content-Type.** Whatever this answers is served from
  * the web app's origin, which is the origin the console keeps the write token on
@@ -51,6 +52,12 @@ const MANAGED_HOST = /^pub-[0-9a-f]{32}\.r2\.dev$/;
 const FORWARDED = ["range", "if-none-match", "if-modified-since"];
 const YEAR_S = 31536000;
 const SHORT_S = 300;
+/**
+ * A key inside a published generation: the only keys written exactly once. The same
+ * pattern as `PUBLISHED_KEY` in apps/api/app/services/published.py, which
+ * tests/test_worker_outputs.py holds this to.
+ */
+const PUBLISHED_KEY = /^runs\/[^/]+\/p[0-9a-f]{16}\//;
 
 /**
  * What the public bucket holds, by extension, and the only types this will label anything
@@ -136,16 +143,22 @@ function contentTypeFor(name) {
 }
 
 /**
- * Whether a decoded key may be cached for a year. Its JSON test is the extension's, in any
- * case, exactly as `contentTypeFor` reads it: it once looked at the key as the browser
- * encoded it, case and all, so `runs/<id>/tileset%2Ejson` or `tileset.JSON` -- labelled
- * JSON by the content type, which decodes and lower-cases -- was cached for a year as if it
- * were a tile, and a backfill's rewrite of it never reached anyone.
+ * Whether a decoded key may be cached for a year: inside a published generation, and not
+ * JSON. It was every non-JSON key under `runs/`, and a phone's Refine rewrites a run's
+ * tiles under the same names -- so the preview's tiles stayed cached, at the edge and in
+ * browsers, under the new `tileset.json`. A publish now writes a generation of its own, and
+ * only a generation's keys are never rewritten.
+ *
+ * Its JSON test is the extension's, in any case, exactly as `contentTypeFor` reads it: it
+ * once looked at the key as the browser encoded it, case and all, so
+ * `runs/<id>/tileset%2Ejson` or `tileset.JSON` -- labelled JSON by the content type, which
+ * decodes and lower-cases -- was cached for a year as if it were a tile, and a backfill's
+ * rewrite of it never reached anyone.
  *
  * @param {string} name the decoded key
  */
 function immutable(name) {
-  return name.startsWith("runs/") && !/\.json$/i.test(name);
+  return PUBLISHED_KEY.test(name) && !/\.json$/i.test(name);
 }
 
 /** @param {string} name the decoded key */

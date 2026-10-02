@@ -24,6 +24,8 @@ const modulePath = resolve(process.cwd(), "../../functions/r2/[[path]].js");
 const { onRequest } = (await import(/* @vite-ignore */ modulePath)) as ProxyModule;
 
 const OURS = "pub-67ae49c6d86140a89f7ae818c1b02e99.r2.dev";
+/** A published generation's tileset directory (apps/api/app/services/published.py). */
+const GENERATION = "runs/a/p0123456789abcdef/package/splat";
 const THEIRS = "pub-0123456789abcdef0123456789abcdef.r2.dev";
 const ORIGIN = "https://twin-web.pages.dev";
 const env = { TILE_PROXY_HOST: OURS };
@@ -190,13 +192,24 @@ describe("the /r2 tile proxy", () => {
     expect(sent.get("cookie")).toBeNull();
   });
 
-  it("keeps the cache lifetimes: a year for run tiles, minutes for JSON and sites", async () => {
-    const tile = await onRequest({ request: get(`/r2/${OURS}/runs/a/0.glb`), env });
+  it("keeps the cache lifetimes: a year for a generation's tiles, minutes for the rest", async () => {
+    const tile = await onRequest({ request: get(`/r2/${OURS}/${GENERATION}/0.glb`), env });
     expect(tile.headers.get("Cache-Control")).toBe("public, max-age=31536000, immutable");
-    const tileset = await onRequest({ request: get(`/r2/${OURS}/runs/a/tileset.json`), env });
+    const tileset = await onRequest({
+      request: get(`/r2/${OURS}/${GENERATION}/tileset.json`),
+      env,
+    });
     expect(tileset.headers.get("Cache-Control")).toBe(
       "public, max-age=300, stale-while-revalidate=604800",
     );
+    // A run's tiles outside a generation -- published before generations existed, under
+    // names a Refine rewrote -- are not promised to anyone for a year.
+    for (const key of ["runs/a/package/splat/0.glb", "runs/a/p0123/0.glb", "runs/a/0.glb"]) {
+      const response = await onRequest({ request: get(`/r2/${OURS}/${key}`), env });
+      expect(response.headers.get("Cache-Control"), key).toBe(
+        "public, max-age=300, stale-while-revalidate=604800",
+      );
+    }
     bucket({ status: 304 }, null);
     const unchanged = await onRequest({ request: get(`/r2/${OURS}/sites/x/tileset.json`), env });
     expect(unchanged.status).toBe(304);
@@ -220,7 +233,7 @@ describe("the /r2 tile proxy", () => {
   });
 
   it("keeps an edge copy of the object only, never of a 404 or a 304", async () => {
-    await onRequest({ request: get(`/r2/${OURS}/runs/a/0.glb`), env });
+    await onRequest({ request: get(`/r2/${OURS}/${GENERATION}/0.glb`), env });
     const { init } = fetched()[0] ?? { init: {} };
     // A year for what the bucket answered with the object, and not cached otherwise: a
     // plain cacheTtl would have kept a tile's 404 at the edge for as long as the tile.

@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.models.enums import ArtifactKind
+from app.services.published import is_published
 from app.storage import ObjectStorage
 from app.storage.null import StorageUnavailableError
 from app.worker.parallel import each
@@ -146,12 +147,14 @@ def upload_log(
     return key
 
 
-#: `Cache-Control` for a run output that is written once: the packaged tiles, the
-#: thumbnail, the splat. A browser that has one never asks again.
+#: `Cache-Control` for an object that is written once: a published generation's tiles,
+#: thumbnail and coverage cloud (`app/services/published.py`). A browser that has one
+#: never asks again.
 IMMUTABLE_CACHE = "public, max-age=31536000, immutable"
 #: For everything else: five minutes, then served stale for up to a week while it is
 #: revalidated. Tileset JSON is here because a backfill rewrites it in place
-#: (collision-backfill.yml adds `extras.collision` to a published `tileset.json`).
+#: (collision-backfill.yml adds `extras.collision` to a published `tileset.json`), and a
+#: run's own keys in the private bucket are here because a Refine or a retry rewrites them.
 SHORT_CACHE = "public, max-age=300, stale-while-revalidate=604800"
 #: JSON by its extension, in any case: the proxy decides on the decoded key and reads its
 #: extension case-blind, as it does for the Content-Type it labels the object with.
@@ -162,19 +165,33 @@ def cache_control_for(key: str) -> str:
     """The `Cache-Control` an object under `key` is written with.
 
     The same rule, word for word, as `immutable()` in `functions/r2/[[path]].js`, the
-    Pages Function that serves the public bucket on the web app's origin: a key under
-    `runs/` that is not JSON is immutable, and anything else gets the short lifetime. Set
-    on the object itself, a browser reading the bucket's own public URL is told the same
-    as one going through the proxy, and the published copy carries it (CopyObject keeps
-    the source's metadata). If one of the two rules changes, the other must.
+    Pages Function that serves the public bucket on the web app's origin: a key inside a
+    published generation (`runs/<job>/p<generation>/...`, `app/services/published.py`)
+    that is not JSON is immutable, and anything else gets the short lifetime. Set on the
+    object itself, a browser reading the bucket's own public URL is told the same as one
+    going through the proxy: the run's own keys are uploaded with the short lifetime, and
+    `publish.Publisher` writes each published copy with the lifetime of the key it is
+    copied *to*. If one of the two rules changes, the other must.
 
-    "Immutable" is a promise that a key is never rewritten with different bytes. A run's
-    keys carry its job id, which is what makes it true for a fresh run -- but a Refine
-    re-runs the *same* job from `train`, and `package` writes the same tile names again
-    with new geometry. That was already the proxy's promise before it was the object's.
+    "Immutable" is a promise that a key is never rewritten with different bytes, and a
+    run's own keys cannot make it: a Refine re-runs the *same* job from `train`, and
+    `package` writes the same tile names again with new geometry. It used to be made for
+    every non-JSON key under `runs/` all the same, and a Refine left browsers and the edge
+    with the preview's tiles under the new `tileset.json`. A published generation is
+    written once -- every publish copies into one of its own -- so there it is true.
     """
-    immutable = key.startswith("runs/") and not _JSON_KEY.search(key)
+    immutable = is_published(key) and not _JSON_KEY.search(key)
     return IMMUTABLE_CACHE if immutable else SHORT_CACHE
+
+
+def member_content_type(key: str) -> str:
+    """The Content-Type a directory artifact's member is uploaded with, from its name.
+
+    A published copy states its metadata rather than keeping the source's (it has a
+    lifetime of its own), and a listing carries no content types; this is the same answer
+    the upload gave, so the copy is labelled as the original was.
+    """
+    return _content_type(Path(key), "application/octet-stream")
 
 
 #: The runner a stage dispatched to a provider records in its `step.json`

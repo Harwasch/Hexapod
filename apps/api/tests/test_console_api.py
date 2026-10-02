@@ -24,6 +24,7 @@ from app.main import create_app
 from app.models import Artifact, Capture, CaptureFile, Job, JobStep
 from app.models.enums import ArtifactKind, CaptureKind, RunStatus, UploadStatus
 from app.services import recipes as recipe_service
+from app.services.published import published_key
 from app.storage import NullStorage, S3Storage, get_storage
 
 BUCKET = "twin-test"
@@ -236,11 +237,15 @@ def test_reconciliation_needs_a_bucket(db: Session) -> None:
 # --- outputs ------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("generation", [None, "0123456789abcdef"])
 def test_artifacts_carry_their_run_and_what_references_them(
-    client: TestClient, db: Session, storage: S3Storage
+    client: TestClient, db: Session, storage: S3Storage, generation: str | None
 ) -> None:
+    """With one bucket a site points at the run's own key; with two, at a copy in a
+    publish generation (`runs/<job>/p<generation>/...`). Either is a reference."""
     capture = make_capture(db, storage)
     job = make_run(db, storage, capture)
+    key = f"runs/{job.id}/package/splat/tileset.json"
 
     # A site pointing at the tileset, exactly as `register` writes it.
     site = client.post(
@@ -265,7 +270,9 @@ def test_artifacts_carry_their_run_and_what_references_them(
                     "representation": "gaussian-splat",
                     "source": {
                         "type": "3d-tiles-url",
-                        "url": storage.public_url(f"runs/{job.id}/package/splat/tileset.json"),
+                        "url": storage.public_url(
+                            key if generation is None else published_key(key, generation)
+                        ),
                     },
                 }
             ],

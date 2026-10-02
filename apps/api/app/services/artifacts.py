@@ -10,7 +10,10 @@ tileset's public URL onto a site asset and the thumbnail's onto the site, and th
 are `public_url(storage_key)`, so a reference is found by looking for the key inside them.
 That is a substring test rather than a join, and deliberately: the URL is what a browser
 actually fetches, and a reference that only exists in a column the renderer never reads
-would be a reference that does not stop the object being deleted.
+would be a reference that does not stop the object being deleted. A copy in the public
+bucket carries its publish's generation in the middle of that key
+(`runs/<job>/p<generation>/...`, app/services/published.py), so the key is looked for in
+the URL with the generation taken out.
 """
 
 from __future__ import annotations
@@ -23,16 +26,18 @@ from sqlalchemy.orm import Session, selectinload
 from app.models import Artifact, Asset, Capture, Job, JobStep, Site
 from app.models.enums import ArtifactKind
 from app.schemas.job import ArtifactReference, ArtifactRow
+from app.services.published import unpublished
 
 
 def _reference_urls(db: Session) -> list[tuple[str, ArtifactReference]]:
-    """Every URL a site points at, paired with the reference it would become."""
+    """Every URL a site points at, paired with the reference it would become. Each URL is
+    as `unpublished` reads it: the run's own key, without a publish generation."""
     found: list[tuple[str, ArtifactReference]] = []
     for site in db.scalars(select(Site)).all():
         if site.thumbnail_url:
             found.append(
                 (
-                    site.thumbnail_url,
+                    unpublished(site.thumbnail_url),
                     ArtifactReference(
                         kind="site-thumbnail",
                         site_id=site.id,
@@ -51,7 +56,7 @@ def _reference_urls(db: Session) -> list[tuple[str, ArtifactReference]]:
             continue
         found.append(
             (
-                url,
+                unpublished(url),
                 ArtifactReference(
                     kind="site-asset",
                     site_id=owner.id,

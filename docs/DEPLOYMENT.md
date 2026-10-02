@@ -564,7 +564,8 @@ database, in the Outputs view, and in the URLs the console renders. Nothing abou
 deployment looks wrong — the globe works.
 
 So production runs two buckets and one key scheme. A published object keeps the key it
-already had; only the bucket differs.
+already had, with the publish's generation added after the job id —
+`runs/<job>/p<generation>/<stage>/…` (below) — and the bucket differs.
 
 | Bucket                         | Holds                                                                                                                    | Public |
 | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------ | ------ |
@@ -588,13 +589,38 @@ that fails stops the publish before the root is copied, and the run registers no
 (as before). The first real 514-tile capture took about eight minutes to publish one copy
 and one read-back at a time; against a fake store with a fixed 20 ms a request, the same
 514 objects went from 21.4 s (1,029 requests) to 1.4 s (515). The artifact uploads before
-it run eight at a time as well. Every run output is written with its `Cache-Control` — a
-year and `immutable` for a non-JSON key under `runs/`, five minutes with a week of
-`stale-while-revalidate` for JSON and everything else, the same rule as the tile proxy
-(`functions/r2/[[path]].js`) — and the copy keeps it, so a browser reading the public
-bucket's own URL is told the same as one going through the proxy. (A Refine re-runs the
-same job and rewrites the same tile keys; a browser that cached the preview's tiles as
-immutable keeps them. That was already true of the proxy.)
+it run eight at a time as well.
+
+**Every publish writes a generation of its own** (`app/services/published.py`). A run's own
+keys are not written once: a phone's Refine re-runs the _same_ job from `train`, and
+`package` and `thumbnail` write the same tile names again with new geometry ("Retry from
+this stage" does the same). Those keys used to be copied across unchanged while every
+non-JSON key under `runs/` was served `immutable` for a year, so after a Refine browsers
+and the edge kept the preview's tiles under the new, short-cached `tileset.json` —
+geometry from two reconstructions in one scan — and a republish that failed half way had
+already overwritten part of the live site. Now the copies go to
+`runs/<job>/p<generation>/…`, the site's asset (and thumbnail, and coverage overlay) are
+repointed there only once the whole tileset is in, and the live generation is never
+written again: a republish that fails changes nothing a viewer sees, and leaves the site
+as it was. The generation is a hash of the published objects' keys, sizes and ETags, so
+publishing the same bytes again lands on the same keys (a retried `register` keeps the
+browser's cache); without ETags it is random. A motion rig (`renderConfig.rigUrl`, written
+by `living-plants.yml` beside the tiles it was stamped on) is dropped when the site moves
+to new tiles; rig them again to animate them.
+
+`Cache-Control` follows from that, by one rule shared with the tile proxy
+(`functions/r2/[[path]].js`, `outputs.cache_control_for`): a year and `immutable` for a
+non-JSON key inside a generation, five minutes with a week of `stale-while-revalidate`
+for everything else — JSON (backfills rewrite `tileset.json` in place), `sites/`, the
+run's own keys in the private bucket (uploaded with the short lifetime, because a Refine
+rewrites them), and copies published before generations existed. Each copy is written
+with the lifetime of the key it lands on, so a browser reading the public bucket's own
+URL is told the same as one going through the proxy.
+
+**Old generations stay.** A Refined or re-registered run leaves its previous generation
+in the public bucket, unreferenced; nothing deletes it yet. Removing a generation no
+site's asset or thumbnail URL names (`runs/<job>/p<generation>/`) is a safe cleanup, and
+a follow-up — like the gap below, it is about the public bucket, which nothing walks.
 
 One consequence worth stating plainly: **reconciliation does not see the public bucket.**
 `app/services/reconcile.py` walks `captures/` and `runs/` in the private bucket, so a
