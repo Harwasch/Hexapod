@@ -581,7 +581,11 @@ def test_an_active_run_pings_start_alive_and_success_and_the_queue_check(
     assert wait_until(lambda: any("complete" in body for _, body in pings.sent), timeout=5)
     urls = pings.urls()
     assert set(urls[:2]) == {"https://hc.example/queue", "https://hc.example/run/start"}
-    assert urls.count("https://hc.example/run") >= 2, "alive while running, and done"
+    # Alive while running is a `/start` -- each restarts the check's grace for the run,
+    # where a success ping would only feed the period an idle worker must not trip --
+    # and the one success is the end.
+    assert urls.count("https://hc.example/run/start") >= 2, "claimed, then alive"
+    assert urls.count("https://hc.example/run") == 1, "done, once"
     assert "https://hc.example/run/fail" not in urls
 
 

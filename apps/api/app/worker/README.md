@@ -217,15 +217,20 @@ run kept a 12 GB video on a 20 GB volume until somebody deleted it.
 ## Watching the runs that are going on
 
 `WORKER_HEARTBEAT_URL` is a dead-man's switch for **active runs only**
-(`alerts.py`, healthchecks.io-style): `<url>/start` when a job is claimed, `<url>` every
+(`alerts.py`, healthchecks.io-style): `<url>/start` when a job is claimed and again every
 minute while it runs (from a thread of its own, beside the lease keeper), `<url>` when it
 finishes or is cancelled, `<url>/fail` with the reason when it is dead-lettered — and
 nothing while the worker is idle, or when it lets a job go for a deploy (the next
-worker's `/start`, or the check's grace period, says what happened). A worker killed
-mid-run goes quiet and the check alerts. `QUEUE_CHECK_URL` is pinged when a job is
-claimed; the API starts it when one is queued, so a job nobody claims alerts too. A ping
-is a thread with a 5 s timeout whose every error is logged and dropped: it never holds up
-the worker and never fails a job.
+worker's `/start`, or the check's grace, says what happened). The keep-alive is a
+`/start` because each one restarts the check's grace for the run, so the check is set
+with a **long period (30 days) and a grace of a few minutes (5)**: a worker killed mid-run
+goes quiet and alerts a grace later, and an idle one never does. It used to be a success
+ping, which fed only the period — short, it alerted on every idle afternoon; long, it
+missed a run that had died. `QUEUE_CHECK_URL` is pinged when a job is claimed; the API
+starts it when one is queued and no job is running (one queued behind a two-hour run
+would alert after the grace), so a job nobody claims alerts too. A ping is a thread with a
+5 s timeout whose every error is logged and dropped: it never holds up the worker and
+never fails a job.
 
 ## Room on the volume
 

@@ -335,10 +335,15 @@ secret yet. Without it, a worker that has exited stays stopped until a person ru
 `fly machine start` — so either set it or set `WORKER_IDLE_EXIT_S = "0"` in `fly.toml`.
 
 **`QUEUE_CHECK_URL`** (optional) is a [healthchecks.io](https://healthchecks.io)-style check
-URL. Queueing a job pings `<url>/start`; the worker pings `<url>` when it claims a job. Give
-the check a grace time longer than a cold start (a few minutes), and a job that is queued
-and never claimed — an expired token, a machine that will not boot — becomes an alert
-instead of a phone that says "queued" forever.
+URL. Queueing a job onto an idle worker pings `<url>/start`; the worker pings `<url>`
+whenever it claims a job. Set the check's **period long (30 days)** — it hears nothing
+while nobody queues anything — and its **grace longer than a cold start (10 minutes)**, and
+a job that is queued and never claimed — an expired token, a machine that will not boot —
+becomes an alert instead of a phone that says "queued" forever. No `/start` is sent for a
+job queued while a worker is running another (a job in progress under a live lease): it
+waits for that run, two hours of training and more, and a `/start` for it alerted after
+the grace every time. The run in progress has `WORKER_HEARTBEAT_URL`, and the worker pings
+this check when it claims the queued job afterwards.
 
 **Neon** then sees no queries from an idle deployment and suspends its compute five
 minutes after the worker's last poll. The first query after that waits for the compute to
@@ -1033,10 +1038,25 @@ of the internals, and an `ERROR` line (and so a Sentry event) with the traceback
 The worker's runs have a dead-man's switch, off until it is given URLs (Fly secrets, both
 optional; a free healthchecks.io check each is the shape they are written for):
 
-| Secret                 | Pinged                                                                                                                                       | Alerts when                                                                                 |
-| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| `WORKER_HEARTBEAT_URL` | `/start` when a job is claimed, every minute while it runs, on success; `/fail` with the reason when it is dead-lettered. Nothing while idle | a run fails, or goes quiet: the worker died, hung or was stopped and nobody resumed the job |
-| `QUEUE_CHECK_URL`      | `/start` by the API when a job is queued; by the worker when it claims one                                                                   | a job is queued and never claimed: no worker, or one that cannot claim (a full disk)        |
+| Secret                 | Pinged                                                                                                                                                  | Alerts when                                                                                 |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `WORKER_HEARTBEAT_URL` | `/start` when a job is claimed and every minute while it runs; success at the end; `/fail` with the reason when it is dead-lettered. Nothing while idle | a run fails, or goes quiet: the worker died, hung or was stopped and nobody resumed the job |
+| `QUEUE_CHECK_URL`      | `/start` by the API when a job is queued and none is running; success by the worker when it claims one                                                  | a job is queued and never claimed: no worker, or one that cannot claim (a full disk)        |
+
+**Set the two checks up like this** (healthchecks.io, Simple schedule), or they alert for the
+wrong things. healthchecks.io keeps two clocks: the _period_, from the last success, and the
+_grace_, which also runs from each `/start` — a run must end within the grace of its last
+`/start`, and every `/start` starts it again.
+
+| Check                  | Period  | Grace      | Why                                                                                                                                                   |
+| ---------------------- | ------- | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `WORKER_HEARTBEAT_URL` | 30 days | 5 minutes  | the keep-alive is a `/start` a minute, so a run that goes quiet alerts five minutes later; nothing is sent while idle, which must not alert for weeks |
+| `QUEUE_CHECK_URL`      | 30 days | 10 minutes | a cold start: the machine boots and the worker claims; the long period because an idle deployment queues nothing                                      |
+
+The keep-alive used to be a success ping, which only fed the period: a short period alerted
+every time the worker sat idle, and one long enough to stay quiet through that missed a run
+that went quiet for hours. A grace shorter than a deploy's handover of a running job (the next worker's claim
+sends the next `/start`) alerts on every deploy mid-run.
 
 A ping never blocks the worker and never fails a job (a thread each, a 5 s timeout,
 errors logged and dropped). `fly.toml`'s `[[restart]]` restarts a worker that dies

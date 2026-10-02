@@ -31,10 +31,22 @@ then. A worker that took the job cannot be one of them: it exits only after
 `WORKER_IDLE_EXIT_S` of idleness, far longer than the recheck. A machine stopped by then
 left without the job.
 
-`QUEUE_CHECK_URL`, when set, is a healthchecks.io-style check: queueing pings
-`<url>/start`, and the worker pings `<url>` itself when it claims a job, so a job that is
-queued and never claimed -- a token that has expired, a machine that will not boot --
-raises an alert after the check's grace time instead of waiting for someone to notice.
+`QUEUE_CHECK_URL`, when set, is a healthchecks.io-style check: queueing a job onto an
+idle worker pings `<url>/start`, and the worker pings `<url>` itself whenever it claims a
+job, so a job that is queued and never claimed -- a token that has expired, a machine
+that will not boot -- raises an alert after the check's grace time instead of waiting for
+someone to notice.
+
+**Only onto an idle worker.** A `/start` asks for a claim within the grace -- a few
+minutes, a cold start's worth. A job queued while a worker is running another (a live
+lease: `job_running`) is not going to be claimed in a few minutes; it waits for that run,
+two hours of training and more, and a `/start` for it alerted after the grace every time.
+So none is sent then. The run in progress has its own dead-man's switch
+(`WORKER_HEARTBEAT_URL`, app/worker/alerts.py), and when it ends the worker claims the
+queued job and pings the check as it always does. What this gives up is the case of a
+job queued behind a run whose worker then never claims again: that worker's own check
+alerts first. A lookup that fails sends the `/start` anyway: a false alarm is the better
+mistake for a check whose whole job is to be loud.
 """
 
 from __future__ import annotations
@@ -47,8 +59,13 @@ from typing import Any
 
 import httpx
 from fastapi import BackgroundTasks
+from sqlalchemy import exists, func, select
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.config import Settings, get_settings
+from app.db import get_session_factory
+from app.models import Job
+from app.models.enums import RunStatus
 
 log = logging.getLogger("app.worker_wake")
 
@@ -90,11 +107,12 @@ def after_enqueue(
     *,
     transport: httpx.BaseTransport | None = None,
     later: Callable[[float, Callable[[], object]], None] | None = None,
+    running: Callable[[], bool] | None = None,
 ) -> Wake | None:
-    """Ping the queue check, start the stopped worker machines, and look again later if
-    one was found already up. Never raises."""
+    """Ping the queue check (onto an idle worker), start the stopped worker machines, and
+    look again later if one was found already up. Never raises."""
     resolved = settings or get_settings()
-    ping_queue_check(resolved, transport=transport)
+    ping_queue_check(resolved, transport=transport, running=running)
     wake = wake_workers(resolved, transport=transport)
     if wake is not None and wake.up:
         (later or _later)(RECHECK_AFTER_S, lambda: wake_workers(resolved, transport=transport))
@@ -152,16 +170,53 @@ def wake_workers(
     return Wake(started=tuple(started), up=tuple(up))
 
 
-def ping_queue_check(settings: Settings, *, transport: httpx.BaseTransport | None = None) -> None:
-    """`<QUEUE_CHECK_URL>/start`: a job has been queued, and its claim should follow."""
+def ping_queue_check(
+    settings: Settings,
+    *,
+    transport: httpx.BaseTransport | None = None,
+    running: Callable[[], bool] | None = None,
+) -> bool:
+    """`<QUEUE_CHECK_URL>/start`: a job has been queued onto an idle worker, and its claim
+    should follow within the check's grace. Not sent while a job is running (the module
+    note says why). True when the ping was sent and taken."""
     url = settings.queue_check_url
     if not url:
-        return
+        return False
+    if (running or (lambda: job_running(settings)))():
+        log.info(
+            "wake: a job is running, so the queue check is not started; the one just queued "
+            "waits behind it, and the worker pings the check when it claims it"
+        )
+        return False
     try:
         with httpx.Client(timeout=TIMEOUT_S, transport=transport) as client:
             client.get(f"{url.rstrip('/')}/start").raise_for_status()
     except httpx.HTTPError as error:
         log.warning("wake: the queue check did not take the start ping: %s", error)
+        return False
+    return True
+
+
+def job_running(settings: Settings) -> bool:
+    """Whether a worker holds a job right now: in progress, under a lease that has not run
+    out. An in-progress job whose lease lapsed has no worker -- it is waiting to be claimed
+    like the one just queued, and is no reason to stay quiet. A lookup that fails says
+    False, so the check is started: loud is the safe side of a dead-man's switch."""
+    try:
+        with get_session_factory(settings.database_url)() as session:
+            return bool(
+                session.scalar(
+                    select(
+                        exists().where(
+                            Job.status == RunStatus.IN_PROGRESS,
+                            Job.lease_expires_at > func.now(),
+                        )
+                    )
+                )
+            )
+    except SQLAlchemyError as error:
+        log.warning("wake: could not tell whether a job is running: %s", type(error).__name__)
+        return False
 
 
 def _authorization(token: str) -> str:

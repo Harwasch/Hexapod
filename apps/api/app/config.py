@@ -197,8 +197,9 @@ class Settings(BaseSettings):
     # 0 turns it off; the provider's own limit (six hours on Modal) still applies.
     worker_deadline_factor: float = 2.0
     # A healthchecks.io-style URL pinged for active runs only: `<url>/start` when a job
-    # is claimed, `<url>` every minute while it runs and when it succeeds, `<url>/fail`
-    # when it fails. Nothing while idle. Unset, nothing is pinged.
+    # is claimed and every minute while it runs, `<url>` when it succeeds, `<url>/fail`
+    # when it fails. Nothing while idle, so the check wants a long period (30 days) and a
+    # grace of a few minutes (5): app/worker/alerts.py. Unset, nothing is pinged.
     worker_heartbeat_url: str | None = None
     # Below this many GB free on the workdir's volume the worker does not claim, says so
     # in its log, and evicts finished runs' workdirs older than `worker_evict_after_days`
@@ -233,8 +234,10 @@ class Settings(BaseSettings):
     fly_api_token: str | None = None
     # Set by Fly on every machine; the app whose `worker` machines a new job starts.
     fly_app_name: str | None = None
-    # A healthchecks.io-style check URL. Queueing a job pings `<url>/start`; the worker
-    # pings `<url>` when it claims one, so a job queued and never claimed raises an alert.
+    # A healthchecks.io-style check URL. Queueing a job onto an idle worker pings
+    # `<url>/start` (not while one is running: the job waits for it); the worker pings
+    # `<url>` when it claims one, so a job queued and never claimed raises an alert. A long
+    # period (30 days), a grace longer than a cold start (10 min).
     queue_check_url: str | None = None
 
     api_host: str = "0.0.0.0"  # noqa: S104 - container default, documented in DEPLOYMENT.md

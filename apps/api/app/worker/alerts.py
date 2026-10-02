@@ -3,20 +3,42 @@
 `WORKER_HEARTBEAT_URL` is a healthchecks.io-style check (any service that takes the same
 three URLs works). For each job the worker supervises:
 
-    claimed             <url>/start     the check expects to hear again soon
-    every minute        <url>           still alive
+    claimed             <url>/start     a run has started: it must end within the grace
+    every minute        <url>/start     still running: the grace starts again from now
     finished            <url>           done
     failed              <url>/fail      alert now
-    stopped, or lost    (nothing)       the next worker's /start, or the check's silence
+    stopped, or lost    (nothing)       the next worker's /start, or the grace running out
 
 So a worker that dies mid-run -- OOM-killed, a host gone, a deadlock that stops the
-lease keeper too -- goes quiet, and the check alerts after its grace period, whether or
-not anything ever restarts it. An idle worker sends nothing at all, so an empty queue is
-never an alert and a check is not woken on a schedule for no reason.
+lease keeper too -- goes quiet, and the check alerts once its grace time has passed since
+the last `/start`, whether or not anything ever restarts it. An idle worker sends nothing
+at all, so an empty queue is never an alert.
+
+**Why the keep-alive is a `/start`, and how the check must be set.** healthchecks.io
+watches two clocks. The *period* runs from the last success ping and alerts when nothing
+has arrived for period + grace; a `/start` opens a run, and the run alerts when no
+success or failure follows within the *grace* -- each new `/start` restarting it. The
+keep-alive used to be a success ping, which only ever fed the period: a short period
+alerted whenever the worker sat idle for longer than it (which it does, by design, for
+days), and a period long enough to stay quiet through that was also long enough to miss
+a run that went quiet for hours. As a `/start` it feeds the grace, which is the clock
+about a run. So the check wants:
+
+* **period: long** -- 30 days (or more). It is only "the worker has not finished a job
+  in a month", and must not fire because nobody uploaded anything this week.
+* **grace: a few minutes** -- 5. Longer than the one-minute keep-alive, with room for a
+  ping or two lost to a slow network, and longer than a deploy takes to hand a running
+  job to the next worker (whose claim sends the next `/start`). That is how long a run
+  that dies takes to alert.
 
 `QUEUE_CHECK_URL` is the other half. The API starts that check (`<url>/start`) when it
-queues a job, and the worker completes it (`<url>`) when it claims one: a job queued and
-never claimed -- no worker running, a worker that cannot claim (a full disk) -- alerts.
+queues a job onto an idle worker, and the worker completes it (`<url>`) whenever it
+claims one: a job queued and never claimed -- no worker running, a worker that cannot
+claim (a full disk) -- alerts. It wants the same long period, and a grace longer than a
+cold start: the machine has to boot and the worker claim (10 minutes is generous). The
+API does not start it for a job queued behind one a worker is running -- that job waits
+for as long as the run takes, two hours of training and more, and a check started for it
+would alert after its grace every time (`app/services/worker_wake.py`).
 
 **A ping never blocks the worker and never fails a job.** Each is sent from a short-lived
 thread of its own with a short timeout, and anything it raises is logged and dropped: the
@@ -73,7 +95,8 @@ def _redacted(url: str) -> str:
 
 
 class RunWatch:
-    """One job's pings: `/start` on entry, one every `every_s` until `finish`, and the end.
+    """One job's pings: `/start` on entry, `/start` again every `every_s` until `finish`,
+    and the end -- success or `/fail`.
 
     A context manager around the whole supervision, beside `claim.LeaseKeeper` and for
     the same reason: the periodic ping has to go on whatever the supervising thread is
@@ -113,9 +136,12 @@ class RunWatch:
         return self
 
     def _beat(self) -> None:
+        # A `/start`, not a success: each one restarts the check's grace for this run, so
+        # a run that goes quiet alerts a grace after its last word, while the check's long
+        # period stays a matter of weeks for a worker that is idle (module note).
         assert self._url is not None
         while not self._done.wait(self._every_s):
-            self._ping(self._url, f"job {self._job_id} running")
+            self._ping(f"{self._url}/start", f"job {self._job_id} running")
 
     def _ping(self, url: str, body: str) -> None:
         self.sent.append(ping(url, body, sender=self._sender))

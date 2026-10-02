@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import uuid
 from collections.abc import Callable, Iterator
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -27,6 +28,7 @@ from app.models.capture import CaptureFile
 from app.models.enums import CaptureKind, RunStatus, UploadStatus
 from app.services import phone_key, worker_wake
 from app.services.worker_wake import Wake, after_enqueue, wake_workers
+from tests.conftest import TEST_DATABASE_URL
 from tests.test_job_api import failed_run
 
 APP = "twin-api"
@@ -175,12 +177,17 @@ def test_failures_are_logged_never_raised(
     assert "fm2_secret" not in caplog.text
 
 
+def idle() -> bool:
+    return False
+
+
 def test_the_queue_check_gets_its_start_ping() -> None:
     fly = FakeFly([machine("w1", "stopped")])
     after_enqueue(
         fly_settings(queue_check_url="https://hc-ping.com/abc/"),
         transport=fly.transport,
         later=lambda *a: None,
+        running=idle,
     )
     pinged = [str(r.url) for r in fly.requests if r.url.host == "hc-ping.com"]
     assert pinged == ["https://hc-ping.com/abc/start"]
@@ -190,8 +197,53 @@ def test_the_queue_check_gets_its_start_ping() -> None:
     after_enqueue(
         fly_settings(fly_api_token=None, queue_check_url="https://hc-ping.com/abc"),
         transport=only.transport,
+        running=idle,
     )
     assert [str(r.url) for r in only.requests] == ["https://hc-ping.com/abc/start"]
+
+
+def test_a_job_queued_behind_a_running_one_does_not_start_the_queue_check() -> None:
+    """It will not be claimed within the check's grace: it waits for the run, which can
+    be two hours of training. A `/start` for it alerted after the grace every time. The
+    worker is still woken -- and pings the check itself when it claims the job."""
+    fly = FakeFly([machine("w1", "stopped")])
+    after_enqueue(
+        fly_settings(queue_check_url="https://hc-ping.com/abc"),
+        transport=fly.transport,
+        later=lambda *a: None,
+        running=lambda: True,
+    )
+    assert [r for r in fly.requests if r.url.host == "hc-ping.com"] == []
+    assert fly.started() == ["w1"]
+
+
+def test_running_means_a_live_lease(db: Session) -> None:
+    """In progress under a lease that has not run out. One whose lease lapsed has no
+    worker: it is waiting to be claimed, like the job just queued."""
+    settings = Settings(database_url=TEST_DATABASE_URL)
+    assert worker_wake.job_running(settings) is False
+    capture = Capture(slug="yard", name="Yard", kind=CaptureKind.GAUSSIAN_SPLAT)
+    db.add(capture)
+    db.flush()
+    job = Job(capture_id=capture.id, recipe="splat-ingest", recipe_version="1")
+    db.add(job)
+    db.commit()
+    assert worker_wake.job_running(settings) is False, "queued, not running"
+
+    job.status = RunStatus.IN_PROGRESS
+    job.lease_expires_at = datetime.now(tz=UTC) - timedelta(minutes=1)
+    db.commit()
+    assert worker_wake.job_running(settings) is False, "a lapsed lease is nobody's"
+
+    job.lease_expires_at = datetime.now(tz=UTC) + timedelta(minutes=1)
+    db.commit()
+    assert worker_wake.job_running(settings) is True
+
+    # A database it cannot ask is not a reason to stay quiet.
+    assert (
+        worker_wake.job_running(Settings(database_url="postgresql+psycopg://x@127.0.0.1:1/x"))
+        is False
+    )
 
 
 # --- when the routes ask --------------------------------------------------------------
