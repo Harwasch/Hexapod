@@ -98,3 +98,88 @@ def test_0008_resolves_duplicate_active_runs_before_it_forbids_them(
     assert step is not None and step.status is RunStatus.CANCELLED
     indexes = {index["name"] for index in inspect(engine).get_indexes("jobs")}
     assert "uq_jobs_one_active_per_capture" in indexes
+
+
+def test_0008_keeps_the_run_a_worker_holds_not_the_oldest_in_progress_row(
+    alembic_config: Config, engine: Engine, db: Session
+) -> None:
+    """In progress is not the same as running. An in-progress row whose worker died long
+    ago -- created first, lease lapsed -- used to outrank the duplicate a worker was
+    actually running, which the upgrade then cancelled. The live lease wins; of rows
+    nobody holds, the newest claimed; of queued ones, the oldest."""
+    command.downgrade(alembic_config, "0007")
+    try:
+        now = datetime.now(tz=UTC)
+        with Session(engine) as session:
+            held, lapsed, queued = (
+                Capture(slug=slug, name=slug, kind=CaptureKind.VIDEO)
+                for slug in ("held", "lapsed", "queued")
+            )
+            session.add_all([held, lapsed, queued])
+            session.flush()
+
+            def job(capture: Capture, created_min: int, **fields: object) -> Job:
+                row = Job(
+                    capture_id=capture.id,
+                    recipe="splat-ingest",
+                    recipe_version="1",
+                    created_at=now - timedelta(minutes=created_min),
+                    **fields,
+                )
+                session.add(row)
+                return row
+
+            running = RunStatus.IN_PROGRESS
+            jobs = {
+                # A worker died on this two hours ago; another is running the one below.
+                "dead": job(
+                    held,
+                    120,
+                    status=running,
+                    claimed_at=now - timedelta(minutes=120),
+                    lease_expires_at=now - timedelta(minutes=110),
+                ),
+                "live": job(
+                    held,
+                    1,
+                    status=running,
+                    claimed_at=now - timedelta(minutes=1),
+                    lease_expires_at=now + timedelta(minutes=5),
+                ),
+                "waiting": job(held, 180),
+                # Nobody holds either: the one claimed most recently is the one kept,
+                # whichever was created first.
+                "claimed-early": job(
+                    lapsed,
+                    30,
+                    status=running,
+                    claimed_at=now - timedelta(minutes=29),
+                    lease_expires_at=now - timedelta(minutes=28),
+                ),
+                "claimed-late": job(
+                    lapsed,
+                    60,
+                    status=running,
+                    claimed_at=now - timedelta(minutes=5),
+                    lease_expires_at=now - timedelta(minutes=4),
+                ),
+                "first-in-line": job(queued, 10),
+                "second-in-line": job(queued, 5),
+            }
+            session.commit()
+            ids = {name: row.id for name, row in jobs.items()}
+    finally:
+        command.upgrade(alembic_config, "head")
+
+    status = {
+        name: db.scalar(select(Job.status).where(Job.id == job_id)) for name, job_id in ids.items()
+    }
+    assert status == {
+        "dead": RunStatus.CANCELLED,
+        "live": RunStatus.IN_PROGRESS,
+        "waiting": RunStatus.CANCELLED,
+        "claimed-early": RunStatus.CANCELLED,
+        "claimed-late": RunStatus.IN_PROGRESS,
+        "first-in-line": RunStatus.NOT_STARTED,
+        "second-in-line": RunStatus.CANCELLED,
+    }

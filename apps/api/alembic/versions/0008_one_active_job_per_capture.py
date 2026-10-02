@@ -12,11 +12,21 @@ statuses only, is the check that cannot race; finished runs are untouched by it,
 capture keeps its whole history.
 
 The index cannot be built over a table that already breaks it, so the upgrade first
-resolves any capture with more than one active job: it keeps one -- the one a worker is
-running if any, else the oldest queued -- and cancels the rest, with their unfinished
-steps, saying why in `jobs.error`. A worker holding a cancelled job sees the status on its
-next heartbeat and stops, exactly as for a cancel from the console. The downgrade drops
-the index and does not un-cancel anything.
+resolves any capture with more than one active job: it keeps one and cancels the rest,
+with their unfinished steps, saying why in `jobs.error`. A worker holding a cancelled job
+sees the status on its next heartbeat and stops, exactly as for a cancel from the console.
+The downgrade drops the index and does not un-cancel anything.
+
+Which one is kept, in order:
+
+1. **the one a worker is running now** -- in progress under a lease that has not run out.
+   Cancelling that is cancelling real work (a GPU call, hours in), and it is the only
+   duplicate whose worker would notice. "In progress" alone is not enough: it was the
+   first rule once, and an in-progress row whose worker died long ago -- created earlier,
+   lease lapsed -- outranked the job a worker was actually running, which was cancelled;
+2. else **the newest claimed** in-progress one: of runs nobody holds, the one that got
+   furthest most recently, and the one the next worker would resume;
+3. else **the oldest** -- queued first, so first in line, as the worker would have taken it.
 """
 
 from __future__ import annotations
@@ -46,7 +56,12 @@ def upgrade() -> None:
             WITH ranked AS (
                 SELECT id, row_number() OVER (
                     PARTITION BY capture_id
-                    ORDER BY (status = 'in-progress') DESC, created_at ASC, id ASC
+                    ORDER BY
+                        (status = 'in-progress' AND lease_expires_at > now()) IS TRUE DESC,
+                        (status = 'in-progress') DESC,
+                        claimed_at DESC NULLS LAST,
+                        created_at ASC,
+                        id ASC
                 ) AS n
                 FROM jobs
                 WHERE status IN ('not-started', 'in-progress')
