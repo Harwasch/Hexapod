@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Final, Literal
 
-from fastapi import APIRouter, BackgroundTasks, Depends, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import Field
 from sqlalchemy import func, select
@@ -21,16 +21,22 @@ from app.models.enums import CaptureKind
 from app.models.job import Job
 from app.schemas.base import CamelModel
 from app.schemas.capture import QUALITY_BARS, QUALITY_MODES, CaptureCreate, CaptureRead
+from app.schemas.common import Problem
 from app.schemas.job import JobCreate, JobRead
 from app.services import captures as capture_service
 from app.services import handoff, phone_key, worker_wake
 from app.services import jobs as job_service
 from app.services import recipes as recipe_service
 from app.services.errors import ConflictError, UnauthorizedError
+from app.services.ratelimit import client_key, limits_of
 from app.storage import ObjectStorage
 from app.worker.outputs import artifact_key
 
-router = APIRouter(prefix="/phone", tags=["phone"])
+router = APIRouter(
+    prefix="/phone",
+    tags=["phone"],
+    responses={429: {"model": Problem, "description": "Too many wrong keys; see `Retry-After`"}},
+)
 
 #: What a phone capture is marked with, and how the key's routes recognise their own.
 ORIGIN = "phone-key"
@@ -227,10 +233,22 @@ phone_key_scheme = HTTPBearer(
 
 
 def require_phone_key(
+    request: Request,
     settings: SettingsDep,
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(phone_key_scheme)],
 ) -> None:
+    """The phone key, rate-limited by the wrong ones.
+
+    The token is taken *before* the 200,000-round hash -- bounding what a loop of bad keys
+    costs is the point -- and given back when the key was right, so the limit counts
+    wrong keys only and a phone holding the key is never slowed down. See
+    app/services/ratelimit.py.
+    """
+    bucket = limits_of(request).phone_key
+    client = client_key(request, settings)
+    bucket.take(client)
     phone_key.check(settings, credentials.credentials if credentials is not None else "")
+    bucket.give_back(client)
 
 
 RequirePhoneKey = Depends(require_phone_key)

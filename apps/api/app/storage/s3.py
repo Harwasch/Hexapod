@@ -137,6 +137,23 @@ class S3Storage:
         response = self._client.get_object(Bucket=self._bucket, Key=key)
         return response["Body"].read()
 
+    def get_object_tail(self, key: str, max_bytes: int) -> tuple[bytes, int]:
+        try:
+            # A suffix range: the last `max_bytes`, or the whole object if it is smaller.
+            response = self._client.get_object(
+                Bucket=self._bucket, Key=key, Range=f"bytes=-{max_bytes}"
+            )
+        except ClientError as error:
+            # S3's answer to a suffix range over an empty object. (moto answers 200.)
+            if str(error.response.get("Error", {}).get("Code", "")) == "InvalidRange":
+                return b"", 0
+            raise
+        data = response["Body"].read()
+        # `bytes 6-9/10`: the size is after the slash. Absent on a 200 (no range applied).
+        content_range = response.get("ContentRange") or ""
+        size = content_range.rpartition("/")[2]
+        return data, int(size) if size.isdecimal() else len(data)
+
     def download_file(self, key: str, target: Path) -> int:
         # boto3's managed transfer: ranged GETs written to a temporary file beside the
         # target and renamed into place, so memory stays at a few chunks whatever the

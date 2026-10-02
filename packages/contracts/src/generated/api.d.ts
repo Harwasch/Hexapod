@@ -455,7 +455,7 @@ export interface paths {
         };
         /**
          * Read one step's log
-         * @description Logs live in object storage, not in the database: `logKey` on a step is a key, and this is what turns it into text. 404 when the step has not written one.
+         * @description Logs live in object storage, not in the database: `logKey` on a step is a key, and this is what turns it into text. 404 when the step has not written one. A long log is returned as its last 256 KiB, after a line saying how much was left out: the end of a log is where a run says why it stopped.
          */
         get: operations["read_step_log_api_v1_jobs__job_id__steps__step_id__log_get"];
         put?: never;
@@ -803,13 +803,13 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        get?: never;
+        put?: never;
         /**
          * Reconcile object storage against the database, in both directions
-         * @description Walks `captures/` and `runs/` and reports **orphans** — objects no row claims, which is what a run that died after uploading leaves behind — then takes every row whose object should exist and reports the **missing** ones. The walk stops at `maxObjects` and says so; the row check asks storage directly, so it is exact either way.
+         * @description Walks `captures/` and `runs/` and reports **orphans** — objects no row claims, which is what a run that died after uploading leaves behind — then takes every row whose object should exist and reports the **missing** ones. The walk stops at `maxObjects` and says so; the row check asks storage directly, so it is exact either way. Changes nothing, but needs the write token: the answer lists the private bucket, and the walk is costly enough to be rate-limited.
          */
-        get: operations["get_reconciliation_api_v1_storage_reconciliation_get"];
-        put?: never;
-        post?: never;
+        post: operations["reconcile_storage_api_v1_storage_reconciliation_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5301,6 +5301,15 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
+            /** @description Asked too often; see `Retry-After` */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
             /** @description Object storage is not configured */
             503: {
                 headers: {
@@ -5662,6 +5671,15 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
+            /** @description Too many wrong keys; see `Retry-After` */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
         };
     };
     process_phone_capture_api_v1_phone_captures__capture_id__process_post: {
@@ -5717,6 +5735,15 @@ export interface operations {
             };
             /** @description Validation error */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many wrong keys; see `Retry-After` */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -5786,6 +5813,15 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
+            /** @description Too many wrong keys; see `Retry-After` */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
         };
     };
     stop_phone_capture_api_v1_phone_captures__capture_id__stop_post: {
@@ -5844,6 +5880,15 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
+            /** @description Too many wrong keys; see `Retry-After` */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
         };
     };
     check_key_api_v1_phone_check_post: {
@@ -5891,6 +5936,15 @@ export interface operations {
             };
             /** @description Validation error */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many wrong keys; see `Retry-After` */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -6959,7 +7013,7 @@ export interface operations {
             };
         };
     };
-    get_reconciliation_api_v1_storage_reconciliation_get: {
+    reconcile_storage_api_v1_storage_reconciliation_post: {
         parameters: {
             query?: {
                 maxObjects?: number;
@@ -7008,6 +7062,15 @@ export interface operations {
             };
             /** @description Validation error */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Asked too often; see `Retry-After` */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };

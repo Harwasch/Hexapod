@@ -178,6 +178,47 @@ def test_a_step_with_no_log_is_a_404_not_an_empty_string(client: TestClient, db:
     assert client.get(f"/api/v1/jobs/{uuid.uuid4()}/steps/{stray.id}/log").status_code == 404
 
 
+def test_a_long_log_is_its_tail_read_in_one_ranged_request(
+    client: TestClient, db: Session, storage: S3Storage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A training stage logs for hours. The whole object used to be read into memory on
+    every open of the log drawer; now it is the last 256 KiB, from a whole line, with a
+    line saying what was left out -- in the same response shape."""
+    job = failed_run(db)
+    step = next(s for s in job.steps if s.stage_id == "normalize")
+    lines = [f"step {index:06d} loss=0.{index:06d} " + "~" * 40 for index in range(12_000)]
+    log = ("\n".join(lines) + "\n").encode()
+    assert len(log) > 2 * job_service.STEP_LOG_TAIL_BYTES
+    storage.put_object("runs/x/normalize/log.txt", log, "text/plain")
+
+    def whole_object(key: str) -> bytes:
+        raise AssertionError(f"read all of {key}")
+
+    monkeypatch.setattr(storage, "get_object", whole_object)
+    response = client.get(f"/api/v1/jobs/{job.id}/steps/{step.id}/log")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body) == {"stepId", "stageId", "logKey", "text"}
+    head, first, *_ = body["text"].splitlines()
+    assert head.startswith("[earlier output not shown: the last ")
+    assert head.endswith(f" of {len(log):,} bytes follow]")
+    assert first in lines  # a whole line, not the end of a cut one
+    assert body["text"].endswith(lines[-1])  # (CamelModel strips the final newline)
+    assert len(body["text"].encode()) <= job_service.STEP_LOG_TAIL_BYTES + len(head) + 1
+
+
+def test_an_empty_log_is_an_empty_string(
+    client: TestClient, db: Session, storage: S3Storage
+) -> None:
+    job = failed_run(db)
+    step = next(s for s in job.steps if s.stage_id == "normalize")
+    storage.put_object("runs/x/normalize/log.txt", b"", "text/plain")
+    response = client.get(f"/api/v1/jobs/{job.id}/steps/{step.id}/log")
+    assert response.status_code == 200
+    assert response.json()["text"] == ""
+
+
 def test_retry_cannot_make_a_second_active_run_of_a_capture(
     client: TestClient, db: Session
 ) -> None:

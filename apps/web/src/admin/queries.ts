@@ -84,12 +84,14 @@ export function useSites() {
  * Storage against the database, in both directions.
  *
  * Not polled: it walks a bucket. It is fetched when the Captures view opens and when
- * somebody asks for it again, which is the honest cost of the question.
+ * somebody asks for it again, which is the honest cost of the question. A POST, though it
+ * changes nothing: the API keeps it behind the write token, and the client attaches the
+ * token (and asks for it on a 401) to writes only.
  */
 export function useReconciliation(enabled: boolean) {
   return useQuery({
     queryKey: adminKeys.reconciliation,
-    queryFn: () => unwrap<StorageReconciliation>(api.GET("/api/v1/storage/reconciliation", {})),
+    queryFn: () => unwrap<StorageReconciliation>(api.POST("/api/v1/storage/reconciliation", {})),
     enabled,
     staleTime: Infinity,
     retry: false,

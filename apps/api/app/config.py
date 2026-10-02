@@ -90,6 +90,11 @@ class Settings(BaseSettings):
     api_phone_key_hash: str | None = None
     # How many captures the phone key may create in any 24 hours.
     api_phone_daily_captures: int = 20
+    # The request header holding the real client address, for the per-client rate limits
+    # (app/services/ratelimit.py). Fly's proxy sets `Fly-Client-IP` on every request, so
+    # behind Fly it cannot be forged; without it every client shares the proxy's address.
+    # Set it empty where nothing in front of the API sets one, or anyone could send it.
+    api_client_ip_header: str = "Fly-Client-IP"
 
     cesium_ion_server_token: str | None = None
     cesium_ion_api_base: str = "https://api.cesium.com"

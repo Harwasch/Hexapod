@@ -153,7 +153,7 @@ def test_reconciliation_finds_a_deliberate_orphan_and_a_deliberate_absence(
     db.commit()
     absent = make_run(db, storage, other, upload=False)
 
-    body = client.get("/api/v1/storage/reconciliation").json()
+    body = client.post("/api/v1/storage/reconciliation").json()
 
     orphans = {row["key"] for row in body["orphans"]}
     assert orphans == {f"runs/{ghost}/train/point_cloud.ply"}
@@ -194,7 +194,7 @@ def test_reconciliation_does_not_call_an_unfinished_upload_missing(
     )
     db.commit()
 
-    body = client.get("/api/v1/storage/reconciliation").json()
+    body = client.post("/api/v1/storage/reconciliation").json()
     assert body["missing"] == []
     assert body["rowsChecked"] == 0
 
@@ -206,7 +206,7 @@ def test_reconciliation_caps_the_walk_and_says_so(
     for index in range(5):
         storage.put_object(f"runs/{uuid.uuid4()}/train/{index}.bin", b"x", "application/x-binary")
 
-    body = client.get("/api/v1/storage/reconciliation", params={"maxObjects": 3}).json()
+    body = client.post("/api/v1/storage/reconciliation", params={"maxObjects": 3}).json()
     assert body["scanned"] == 3
     assert body["truncated"] is True
     # The row half is exact regardless: it asks storage per row rather than reading the walk.
@@ -229,7 +229,7 @@ def test_reconciliation_needs_a_bucket(db: Session) -> None:
     app.dependency_overrides[_db] = override_db
     app.dependency_overrides[get_storage] = NullStorage
     with TestClient(app) as client:
-        response = client.get("/api/v1/storage/reconciliation")
+        response = client.post("/api/v1/storage/reconciliation")
     assert response.status_code == 503, response.text
 
 

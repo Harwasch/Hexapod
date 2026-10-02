@@ -114,6 +114,14 @@ class ObjectStorage(Protocol):
 
     def get_object(self, key: str) -> bytes: ...
 
+    def get_object_tail(self, key: str, max_bytes: int) -> tuple[bytes, int]:
+        """The last `max_bytes` of an object, and the object's whole size, in one ranged GET.
+
+        For reading the end of something unbounded -- a step log -- without holding all of
+        it: `get_object` on a run's log is the whole log in memory, per request.
+        """
+        ...
+
     def download_file(self, key: str, target: Path) -> int:
         """Stream an object to a file and return its size, never holding it in memory.
 

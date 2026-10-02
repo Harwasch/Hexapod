@@ -5,7 +5,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, BackgroundTasks, Query
 
-from app.api.deps import DbSession, RequireWriteToken, Storage
+from app.api.deps import DbSession, LimitStepLog, RequireWriteToken, Storage
 from app.models.enums import RunStatus
 from app.schemas.common import Problem
 from app.schemas.job import JobRead, JobRetry, JobStepLog
@@ -16,7 +16,8 @@ router = APIRouter(prefix="/jobs", tags=["jobs"])
 
 #: Reading a log needs a bucket, and says so in the contract.
 LOG_RESPONSES: dict[int | str, dict[str, Any]] = {
-    503: {"model": Problem, "description": "Object storage is not configured"}
+    429: {"model": Problem, "description": "Asked too often; see `Retry-After`"},
+    503: {"model": Problem, "description": "Object storage is not configured"},
 }
 
 
@@ -75,10 +76,13 @@ def retry_job(
     "/{job_id}/steps/{step_id}/log",
     response_model=JobStepLog,
     responses=LOG_RESPONSES,
+    dependencies=[LimitStepLog],
     summary="Read one step's log",
     description=(
         "Logs live in object storage, not in the database: `logKey` on a step is a key, "
-        "and this is what turns it into text. 404 when the step has not written one."
+        "and this is what turns it into text. 404 when the step has not written one. "
+        "A long log is returned as its last 256 KiB, after a line saying how much was "
+        "left out: the end of a log is where a run says why it stopped."
     ),
 )
 def read_step_log(

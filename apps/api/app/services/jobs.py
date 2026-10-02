@@ -203,26 +203,42 @@ def _retry_target(job: Job, from_stage: str | None) -> JobStep:
     raise InvalidInputError(f"job {job.id} has no stage '{from_stage}'; its stages are {known}")
 
 
+#: How much of a step log one read returns: the end, which is where a run says why it
+#: stopped. A training stage logs for hours, and the whole object used to be read into
+#: memory -- and then into one JSON string -- on every open of the console's log drawer.
+STEP_LOG_TAIL_BYTES = 256 * 1024
+
+
 def read_step_log(
     db: Session, storage: ObjectStorage, job_id: uuid.UUID, step_id: uuid.UUID
 ) -> JobStepLog:
-    """Fetch one step's log out of object storage.
+    """Fetch the end of one step's log out of object storage.
 
     Logs are not in the database on purpose — a run's logs are unbounded — so this reads
-    the object `job_steps.log_key` names. A step that has not written one yet is a 404,
-    not an empty string, because "no log" and "an empty log" are different answers.
+    the object `job_steps.log_key` names: its last `STEP_LOG_TAIL_BYTES`, in one ranged
+    read, never the whole object. A longer log starts at its first whole line within
+    that and is headed by a line saying how much is not shown, so a cut is never
+    mistaken for the start of the run. A step that has not written one yet is a 404, not
+    an empty string, because "no log" and "an empty log" are different answers.
     """
     step = db.get(JobStep, step_id)
     if step is None or step.job_id != job_id:
         raise NotFoundError("job step", step_id)
     if not step.log_key:
         raise NotFoundError("log for job step", step_id)
-    return JobStepLog(
-        step_id=step.id,
-        stage_id=step.stage_id,
-        log_key=step.log_key,
-        text=storage.get_object(step.log_key).decode("utf-8", errors="replace"),
-    )
+    data, size = storage.get_object_tail(step.log_key, STEP_LOG_TAIL_BYTES)
+    if size > len(data):
+        # Cut mid-line, and perhaps mid-character: start at the first whole line.
+        newline = data.find(b"\n")
+        if 0 <= newline < len(data) - 1:
+            data = data[newline + 1 :]
+        text = (
+            f"[earlier output not shown: the last {len(data):,} of {size:,} bytes follow]\n"
+            + data.decode("utf-8", errors="replace")
+        )
+    else:
+        text = data.decode("utf-8", errors="replace")
+    return JobStepLog(step_id=step.id, stage_id=step.stage_id, log_key=step.log_key, text=text)
 
 
 def job_to_read(job: Job) -> JobRead:

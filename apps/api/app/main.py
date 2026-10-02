@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -23,6 +24,7 @@ from app.services.errors import (
     NotFoundError,
     UnauthorizedError,
 )
+from app.services.ratelimit import RateLimited, RateLimits
 from app.services.urls import UrlValidationError
 from app.storage import StorageUnavailableError
 
@@ -171,6 +173,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         response.headers["WWW-Authenticate"] = "Bearer"
         return response
 
+    @app.exception_handler(RateLimited)
+    async def rate_limited_handler(_: Request, exc: RateLimited) -> JSONResponse:
+        response = _problem(status.HTTP_429_TOO_MANY_REQUESTS, "Too many requests", str(exc))
+        response.headers["Retry-After"] = str(max(1, math.ceil(exc.retry_after_s)))
+        return response
+
     @app.exception_handler(StorageUnavailableError)
     async def storage_handler(_: Request, exc: StorageUnavailableError) -> JSONResponse:
         return _problem(status.HTTP_503_SERVICE_UNAVAILABLE, "Object storage unavailable", str(exc))
@@ -218,6 +226,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # Read by app.api.deps._settings, so a test app built with explicit settings is
     # governed by them rather than by the process-wide lru_cached environment.
     app.state.settings = settings
+    # Per app rather than per process, for the same reason: a test's app starts with full
+    # buckets instead of whatever the previous test left in them.
+    app.state.rate_limits = RateLimits()
     app.include_router(api_v1)
     # **Development only.** Capture tiles kept on a developer's disk
     # (data/tiles/<slug>/<representation>/tileset.json) are served as static 3D Tiles under
