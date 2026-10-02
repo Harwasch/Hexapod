@@ -619,6 +619,12 @@ origin)`, `rotation` a unit quaternion `x, y, z, w`. The rest pose is the identi
   distilled; a held-out view scores how much of what sees through the scan covers before and
   after. Packaged as an inferred layer (`extras.evidence.hole` = the instance id) and
   declared in `inferredLayers`, so the viewer labels it inferred like any other.
+  A generative filler (`world_model_client:GenerativeFiller`, e.g. `?model=qwen&chain=1`)
+  is told what is around the hole (`hole_context`: instances.json tags around the footprint
+  as the prompt, the object's own labels as the negative), repaints the void with the hole
+  so only measured pixels are its context, and with `chain` fills the views in turn, each
+  shown the earlier views' fill (WORLD_MODEL_RUNBOOK.md §8). The held-out strip's last
+  panel shows the object moved aside, the fill showing.
 - **`--absorb`**: segmentation leaves pieces of an object under other ids (the pumpkin: 40
   small instances, most of them top-level). With it, every other id with 80% of its leaf
   gaussians inside the object's box (its 3rd-97th percentiles, padded 5%) and at most a fifth

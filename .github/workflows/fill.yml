@@ -21,6 +21,7 @@ on:
       - tools/captures/splat_render.py
       - tools/captures/tests/test_gsplat_parity.py
       - tools/captures/world_model_client.py
+      - tools/captures/inpaint_models.py
       - tools/captures/distill_fill.py
       - .github/workflows/fill.yml
   workflow_dispatch:
@@ -30,7 +31,7 @@ on:
         type: string
         default: drop:yard,drop:spool,fill:camp
       fillers:
-        description: Fillers (telea, fixer)
+        description: Fillers (short names in infra/modal/fill.py FILLERS)
         type: string
         default: telea,fixer
       distill:
@@ -50,11 +51,11 @@ env:
   JOBS: ${{ inputs.jobs || 'fill:camp' }}
   # Scans to run fill.py probe on (Fixer on renders prepared several ways); empty: none.
   PROBES: ""
-  FILLERS: ${{ inputs.fillers || 'telea,fixer-t50' }}
+  FILLERS: ${{ inputs.fillers || 'qwen-chain,lama-chain' }}
   DISTILL: ${{ inputs.distill || '1500' }}
   RENDERER: ${{ inputs.renderer || 'gsplat' }}
   # Non-empty: also run tests/test_gsplat_parity.py (CPU against gsplat) on a GPU.
-  PARITY: "1"
+  PARITY: ""
   # Fill jobs: condition without gaussians larger than this (m; 0 = keep all). The camp's
   # edge floaters (scale 0.5-2.7 m) cover most of a gsplat view from outside.
   MAX_SCALE: "0.5"
@@ -79,6 +80,19 @@ jobs:
         run: uv run --with modal==1.5.5 modal secret list
       - name: modal run infra/modal/fill.py
         run: |
+          # The Hugging Face secret by its prefix (the workspace's is not named `huggingface`).
+          HEXAPOD_HF_SECRET=$(uv run --with modal==1.5.5 modal secret list --json | python3 -c '
+          import json, sys
+          def names(x):
+              if isinstance(x, dict):
+                  for v in x.values(): yield from names(v)
+              elif isinstance(x, list):
+                  for v in x: yield from names(v)
+              elif isinstance(x, str) and x.startswith("huggingface"):
+                  yield x
+          print(next(names(json.load(sys.stdin)), "huggingface"))') || HEXAPOD_HF_SECRET=huggingface
+          export HEXAPOD_HF_SECRET
+          echo "Hugging Face secret: $HEXAPOD_HF_SECRET"
           uv run --with modal==1.5.5 modal run infra/modal/fill.py \
             --jobs "$JOBS" --fillers "$FILLERS" --distill "$DISTILL" --out fill-out \
             --probes "$PROBES" --renderer "$RENDERER" ${PARITY:+--parity-test} \

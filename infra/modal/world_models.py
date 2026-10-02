@@ -15,6 +15,10 @@ image and class as in `infra/modal/fill.py`, which ran it on 2026-10-02).
              facebook/sam2.1-hiera-tiny (Apache-2.0) and google/siglip2-base-patch16-224
              (Apache-2.0), run by `tools/captures/segment_models.py` itself (copied into
              the image): class-free masks at three granularities, image/text embeddings.
+    InpaintSDXL / InpaintQwen / InpaintFlux
+             Generative inpainting for Teacher B's holes, run by
+             `tools/captures/inpaint_models.py` (licences in its docstring): image + mask +
+             prompt -> the image painted. `world_model_client.GenerativeFiller` calls them.
 
 The request and response of every method are plain dicts of bytes, strings and numbers,
 so the client (`tools/captures/world_model_client.py`) needs `modal` and nothing else from
@@ -40,7 +44,8 @@ What was checked, 2026-10-01, and what was not:
   first guess that `modal deploy` proves; the runbook (docs/WORLD_MODEL_RUNBOOK.md) says
   what to try first.
 
-Secrets: `huggingface` (HF_TOKEN) for Wan, Cosmos and segmentation; Fixer needs none.
+Secrets: `huggingface` (HF_TOKEN) for Wan, Cosmos, segmentation and inpainting; Fixer
+needs none.
 Weights are cached in the volume
 `hexapod-world-model-weights`, so only the first call downloads.
 
@@ -456,6 +461,106 @@ class SegmentEmbed:
         embedder = self._embedder(request)
         x = embedder.embed_texts(list(request["texts"]))
         return {"embeddings": self.sm.encode_array(x), "model": embedder.model}
+
+
+# --- Generative inpainting (Teacher B on holes Fixer cannot invent) --------------------------
+
+#: `tools/captures/inpaint_models.py` runs here as `infra/modal/fill.py` runs it.
+inpaint_image = (
+    modal.Image.debian_slim(python_version="3.11")
+    .pip_install(
+        "torch==2.8.0",
+        "diffusers==0.40.0",
+        "transformers>=5,<6",
+        "accelerate>=1.6",
+        "sentencepiece",
+        "protobuf",
+        "safetensors",
+        "huggingface_hub>=1.23,<2",
+        "pillow",
+    )
+    .env({"HF_HOME": HF_HOME})
+    .add_local_file(CAPTURES / "inpaint_models.py", "/root/inpaint_models.py")
+)
+
+
+def _inpaint_models():  # noqa: ANN202 - the module, imported where it was copied
+    import sys
+
+    sys.path.insert(0, "/root")
+    import inpaint_models
+
+    inpaint_models.find_token()
+    return inpaint_models
+
+
+@app.cls(
+    image=inpaint_image,
+    gpu="L40S",
+    volumes={"/weights": WEIGHTS},
+    secrets=[HF_SECRET],
+    timeout=3600,
+    scaledown_window=300,
+)
+class InpaintSDXL:
+    """SDXL inpainting (OpenRAIL++-M): `inpaint_models.inpaint` with `sdxl`."""
+
+    @modal.enter()
+    def load(self) -> None:
+        self.im = _inpaint_models()
+        self.pipe = self.im.load("sdxl")
+        self.lama = self.im.load_lama("/weights/lama")
+        WEIGHTS.commit()
+
+    @modal.method()
+    def inpaint(self, request: dict) -> dict:
+        return self.im.inpaint("sdxl", self.pipe, request, lama=self.lama)
+
+
+@app.cls(
+    image=inpaint_image,
+    gpu="H100",
+    volumes={"/weights": WEIGHTS},
+    secrets=[HF_SECRET],
+    memory=131072,
+    timeout=3600,
+    scaledown_window=300,
+)
+class InpaintQwen:
+    """Qwen-Image with its inpainting ControlNet (Apache-2.0): `inpaint_models` `qwen`."""
+
+    @modal.enter()
+    def load(self) -> None:
+        self.im = _inpaint_models()
+        self.pipe = self.im.load("qwen")
+        WEIGHTS.commit()
+
+    @modal.method()
+    def inpaint(self, request: dict) -> dict:
+        return self.im.inpaint("qwen", self.pipe, request)
+
+
+@app.cls(
+    image=inpaint_image,
+    gpu="H100",
+    volumes={"/weights": WEIGHTS},
+    secrets=[HF_SECRET],
+    memory=98304,
+    timeout=3600,
+    scaledown_window=300,
+)
+class InpaintFlux:
+    """FLUX.1 Fill [dev] (gated; non-commercial licence -- for comparison only)."""
+
+    @modal.enter()
+    def load(self) -> None:
+        self.im = _inpaint_models()
+        self.pipe = self.im.load("flux")
+        WEIGHTS.commit()
+
+    @modal.method()
+    def inpaint(self, request: dict) -> dict:
+        return self.im.inpaint("flux", self.pipe, request)
 
 
 # --- shared --------------------------------------------------------------------------------

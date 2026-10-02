@@ -88,6 +88,20 @@ FILLERS = {
     "fixer-t100": "world_model_client:FixerFiller?timestep=100",
     "fixer-t50": "world_model_client:FixerFiller?timestep=50",
     "fixer-smooth": "world_model_client:FixerFiller?presmooth_px=1",
+    # Generative inpainting (tools/captures/inpaint_models.py), prompted from instances.json;
+    # `-chain`: each view shown the earlier views' fill (teacher_fill._chained_fill).
+    "sdxl": "world_model_client:GenerativeFiller?model=sdxl",
+    "sdxl-chain": "world_model_client:GenerativeFiller?model=sdxl&chain=1",
+    "qwen": "world_model_client:GenerativeFiller?model=qwen",
+    "qwen-chain": "world_model_client:GenerativeFiller?model=qwen&chain=1",
+    "flux": "world_model_client:GenerativeFiller?model=flux",
+    # LaMa alone (texture, never an object), and LaMa's fill refined by SDXL at strength 0.6.
+    "lama": "world_model_client:GenerativeFiller?model=lama",
+    "lama-chain": "world_model_client:GenerativeFiller?model=lama&chain=1",
+    "sdxl-lama": "world_model_client:GenerativeFiller?model=sdxl&prefill=lama&strength=0.6",
+    "sdxl-lama-chain": (
+        "world_model_client:GenerativeFiller?model=sdxl&prefill=lama&strength=0.6&chain=1"
+    ),
 }
 
 # --- Fixer -----------------------------------------------------------------------------------
@@ -242,6 +256,135 @@ def _snapshot(repo: str, local: Path, marker: str) -> None:
 
     snapshot_download(repo, local_dir=str(local), token=os.environ.get("HF_TOKEN"))
     WEIGHTS.commit()
+
+
+# --- Generative inpainting, as world_models.InpaintSDXL / InpaintQwen / InpaintFlux --------
+
+#: The workspace's Hugging Face secret: `huggingface` by the runbook, but named otherwise in
+#: this workspace (fill.yml finds it by its prefix and passes it here).
+HF_SECRET = modal.Secret.from_name(os.environ.get("HEXAPOD_HF_SECRET", "huggingface"))
+inpaint_image = (
+    modal.Image.debian_slim(python_version="3.11")
+    .pip_install(
+        "torch==2.8.0",
+        "diffusers==0.40.0",
+        "transformers>=5,<6",
+        "accelerate>=1.6",
+        "sentencepiece",
+        "protobuf",
+        "safetensors",
+        "huggingface_hub>=1.23,<2",
+        "pillow",
+    )
+    .env({"HF_HOME": "/weights/hf"})
+    .add_local_file(LOCAL_CAPTURES / "inpaint_models.py", "/root/inpaint_models.py")
+)
+
+
+def _inpaint_module():  # noqa: ANN202 - inpaint_models, imported where it was copied
+    sys.path.insert(0, "/root")
+    import inpaint_models
+
+    inpaint_models.find_token()
+    return inpaint_models
+
+
+@app.cls(
+    image=inpaint_image,
+    gpu="L40S",
+    volumes={"/weights": WEIGHTS},
+    secrets=[HF_SECRET],
+    timeout=3600,
+    scaledown_window=120,
+)
+class InpaintSDXL:
+    @modal.enter()
+    def load(self) -> None:
+        self.im = _inpaint_module()
+        self.pipe = self.im.load("sdxl")
+        self.lama = self.im.load_lama("/weights/lama")
+        WEIGHTS.commit()
+
+    @modal.method()
+    def inpaint(self, request: dict) -> dict:
+        return self.im.inpaint("sdxl", self.pipe, request, lama=self.lama)
+
+
+@app.cls(
+    image=inpaint_image,
+    gpu="H100",
+    volumes={"/weights": WEIGHTS},
+    secrets=[HF_SECRET],
+    memory=131072,
+    timeout=3600,
+    scaledown_window=120,
+)
+class InpaintQwen:
+    @modal.enter()
+    def load(self) -> None:
+        self.im = _inpaint_module()
+        self.pipe = self.im.load("qwen")
+        WEIGHTS.commit()
+
+    @modal.method()
+    def inpaint(self, request: dict) -> dict:
+        return self.im.inpaint("qwen", self.pipe, request)
+
+
+@app.cls(
+    image=inpaint_image,
+    gpu="H100",
+    volumes={"/weights": WEIGHTS},
+    secrets=[HF_SECRET],
+    memory=98304,
+    timeout=3600,
+    scaledown_window=120,
+)
+class InpaintFlux:
+    @modal.enter()
+    def load(self) -> None:
+        self.im = _inpaint_module()
+        self.pipe = self.im.load("flux")
+        WEIGHTS.commit()
+
+    @modal.method()
+    def inpaint(self, request: dict) -> dict:
+        return self.im.inpaint("flux", self.pipe, request)
+
+
+@app.function(image=inpaint_image, secrets=[HF_SECRET], timeout=300)
+def inpaint_access() -> dict[str, str]:
+    """Whether the workspace's Hugging Face token can read each inpainting model (the gated
+    ones need the licence accepted on its account)."""
+    im = _inpaint_module()
+    token = im.find_token()
+    return {"token": "found" if token else "missing", **im.access(token)}
+
+
+@app.function(
+    image=inpaint_image,
+    secrets=[HF_SECRET],
+    volumes={"/weights": WEIGHTS},
+    cpu=4.0,
+    memory=16384,
+    timeout=3 * 3600,
+)
+def inpaint_prefetch(keys: list[str]) -> dict[str, float]:
+    """Each model's repositories into the weights volume once, before the jobs start, so
+    parallel jobs do not each download them (Qwen-Image is about 58 GB). Seconds per key."""
+    from huggingface_hub import snapshot_download
+
+    im = _inpaint_module()
+    seconds = {}
+    for key in keys:
+        started = time.time()
+        for repo in im.MODELS[key].repos:
+            snapshot_download(repo, token=os.environ.get("HF_TOKEN"), max_workers=16)
+        if key == "sdxl":
+            im.load_lama("/weights/lama", device="cpu")
+        WEIGHTS.commit()
+        seconds[key] = round(time.time() - started, 1)
+    return seconds
 
 
 # --- Distill (gsplat), as world_models.Distill ----------------------------------------------
@@ -404,7 +547,11 @@ def _remote_classes() -> None:
     import world_model_client
 
     world_model_client.LOCAL_CLASSES.update(
-        Fixer=lambda: _Timed("Fixer", Fixer), Distill=lambda: _Timed("Distill", Distill)
+        Fixer=lambda: _Timed("Fixer", Fixer),
+        Distill=lambda: _Timed("Distill", Distill),
+        InpaintSDXL=lambda: _Timed("InpaintSDXL", InpaintSDXL),
+        InpaintQwen=lambda: _Timed("InpaintQwen", InpaintQwen),
+        InpaintFlux=lambda: _Timed("InpaintFlux", InpaintFlux),
     )
 
 
@@ -670,6 +817,8 @@ def main(
             options["max_scale_m"] = max_scale_m
         calls += [(kind, scan, f.strip(), options) for f in fillers.split(",") if f.strip()]
     summary, failed = [], []
+    calls, skipped = _prepare_inpainting(calls, Path(out))
+    failed += skipped
     runner = run_job_gsplat if renderer == "gsplat" else run_job
     for result in runner.starmap(calls, return_exceptions=True):
         if isinstance(result, BaseException):
@@ -693,6 +842,42 @@ def main(
     (Path(out) / "summary.json").write_text(json.dumps(summary, indent=1), encoding="utf-8")
     if failed:
         raise SystemExit(f"failed: {', '.join(failed)}")
+
+
+def _inpaint_key(filler: str) -> str | None:
+    """The inpainting model a filler (short name or spec) runs, or None."""
+    spec = FILLERS.get(filler, filler)
+    if "GenerativeFiller" not in spec:
+        return None
+    query = dict(p.partition("=")[::2] for p in spec.partition("?")[2].split("&") if p)
+    model = query.get("model", "sdxl")
+    return "sdxl" if model == "lama" else model  # LaMa is held by InpaintSDXL
+
+
+def _prepare_inpainting(calls: list[tuple], out: Path) -> tuple[list[tuple], list[str]]:
+    """For the jobs with a generative filler: which models the workspace's Hugging Face token
+    can read (`out/inpaint-access.json`); jobs whose model it cannot are dropped (and named
+    as failed); the rest have their weights fetched into the volume once, before they run."""
+    keys = sorted({k for c in calls if (k := _inpaint_key(c[2]))})
+    if not keys:
+        return calls, []
+    sys.path.insert(0, str(LOCAL_CAPTURES))
+    import inpaint_models
+
+    access = inpaint_access.remote()
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "inpaint-access.json").write_text(json.dumps(access, indent=1), encoding="utf-8")
+    sys.stdout.write(f"inpainting access: {json.dumps(access)}\n")
+    readable = [
+        k for k in keys if all(access.get(r) == "ok" for r in inpaint_models.MODELS[k].repos)
+    ]
+    kept = [c for c in calls if _inpaint_key(c[2]) in (None, *readable)]
+    skipped = [f"{c[0]}-{c[1]}-{c[2]} (no access)" for c in calls if c not in kept]
+    if readable:
+        seconds = inpaint_prefetch.remote(readable)
+        (out / "inpaint-prefetch.json").write_text(json.dumps(seconds), encoding="utf-8")
+        sys.stdout.write(f"inpainting weights fetched: {json.dumps(seconds)}\n")
+    return kept, skipped
 
 
 def _headline(brief: dict) -> dict:
