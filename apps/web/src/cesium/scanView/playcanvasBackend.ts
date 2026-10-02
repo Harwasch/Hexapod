@@ -25,13 +25,12 @@
  * which always makes a WebGL2 device. `createWebgpuBackend` is the WebGPU trial
  * (docs/WEBGPU_TRIAL.md): the device is made first and asynchronously, WebGPU preferred,
  * PlayCanvas's own WebGL2 fallback after it, and the app is an `AppBase` with only what this
- * renderer uses (a camera, gsplats, the gsplat asset handler). On WebGPU three things differ:
- * the work-buffer modifier is WGSL (PlayCanvas picks the language by device); PlayCanvas sorts
- * on the GPU in the frame that draws, so a new tile is drawn by the first ready frame after it
- * goes in and no sort result arrives later to ask for the frame that confirms it -- the
- * renderer asks for it (`frameWanted`) instead; and a device can be lost for good (a driver
- * reset, a GPU process crash), which the host answers by drawing with WebGL2 instead
- * (`hooks.deviceLost`).
+ * renderer uses (a camera, gsplats, the gsplat and texture asset handlers). On WebGPU three
+ * things differ: the work-buffer modifier is WGSL (PlayCanvas picks the language by device);
+ * PlayCanvas sorts on the GPU in the frame that draws, so no sort result arrives later to ask
+ * for the frame that confirms a new tile is drawn -- the renderer asks for that one frame
+ * itself (`frameWanted`); and a device can be lost for good (a driver reset, a GPU process
+ * crash), which the host answers by drawing with WebGL2 instead (`hooks.deviceLost`).
  */
 
 import * as pc from "playcanvas";
@@ -215,12 +214,14 @@ export async function createWebgpuBackend(
     throw new Error("PlayCanvas started neither WebGPU nor WebGL2 (its Null device draws nothing)");
   }
   // `Application` would make a WebGL2 device of its own: the app is assembled around this one,
-  // with only what the renderer uses.
+  // with only what the renderer uses: a camera, gsplats, and the handlers a scan's streamed
+  // package loads through (its octree and SOG chunks are gsplat assets; each chunk's WebP
+  // planes are texture assets -- without that handler a native scan loads nothing).
   const app = new pc.AppBase(canvas);
   const options = new pc.AppOptions();
   options.graphicsDevice = device;
   options.componentSystems = [pc.CameraComponentSystem, pc.GSplatComponentSystem];
-  options.resourceHandlers = [pc.GSplatHandler];
+  options.resourceHandlers = [pc.GSplatHandler, pc.TextureHandler];
   app.init(options);
   return assemble(app, budget, hooks, {
     name: "playcanvas-webgpu",
