@@ -1587,6 +1587,14 @@ class CloudRunner(BaseRunner):
                 f"cloud: sent {sent} byte(s) of checkpoint to the provider (an earlier "
                 f"attempt's state, or a seed an earlier run left for this one)"
             )
+        # And the outputs key, for the same reason. Modal's transfer mirrors `out/` onto
+        # it, deleting what is not there any more; the worker's bucket transfer -- which
+        # the `subprocess` provider uploads through -- only adds. A key used twice (a
+        # Retry or a Refine starts at attempt 1 again) then brought an earlier call's
+        # members home beside this one's: an `UndeclaredArtifactError`, which the worker
+        # does not retry, or a stray member inside a declared directory. Only here, before
+        # a call is made: a call picked up from the book is writing to its key already.
+        self._transfer.delete(keys.outputs)
 
     def _remote_digest(self, key: str, context: StageContext) -> str | None:
         """The checksum recorded beside an uploaded input, or None if there is none."""

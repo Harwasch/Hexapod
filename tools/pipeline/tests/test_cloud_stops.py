@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import shutil
 from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 from typing import Any
@@ -440,6 +441,43 @@ def test_a_call_known_only_by_its_record_is_cancelled_by_id_from_another_runner(
     assert outcome == {handle.id: True, "fc-elsewhere": False}
     assert adapter.reattached == [handle.id] and adapter.cancelled == [handle.id]
     assert adapter.poll(handle).state == "failed"
+
+
+class Additive(LocalTransfer):
+    """The worker's bucket transfer (`ObjectStoreTransfer`), as far as this matters: a
+    directory's `put` adds its members and never removes what was there before."""
+
+    def put(self, key: str, source: Path) -> int:
+        target = self._at(key)
+        target.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(source, target, dirs_exist_ok=True)
+        return sum(p.stat().st_size for p in source.rglob("*") if p.is_file())
+
+
+def test_a_reused_outputs_key_is_cleared_before_the_call_so_no_leftover_comes_home(
+    tmp_path: Path,
+) -> None:
+    """A Retry or a Refine runs its stages at attempt 1 again, on attempt 1's keys. Modal's
+    transfer mirrors `out/` onto the key; the bucket transfer the `subprocess` provider
+    uploads through only adds to it, so an earlier call's member rode home with this
+    one's -- an `UndeclaredArtifactError`, which dead-letters. The key is cleared before
+    the call, as the checkpoint's already was."""
+    workdir = seeded_workdir(tmp_path / "run", upload=False)
+    transfer = Additive(tmp_path / "bucket")
+    leftover = tmp_path / "bucket" / "runs/run/train/transfer/out"
+    leftover.mkdir(parents=True)
+    (leftover / "live").mkdir()
+    (leftover / "live" / "snapshot.ply").write_bytes(b"an earlier run's")
+    adapter = Provider(
+        transfer, tmp_path / "sandbox", name="modal", interruptible=False, script=works(2)
+    )
+    cloud = CloudRunner(
+        Placement((adapter,)), transfer, poll_interval_s=0.0, sleep=lambda _seconds: None
+    )
+
+    run(workdir, cloud)
+
+    assert sorted(p.name for p in workdir.out_dir("train").iterdir()) == ["out.json"]
 
 
 # --- each attempt writes to keys of its own ------------------------------------------
