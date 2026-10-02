@@ -66,6 +66,18 @@ jobs:
       - name: Modal secrets present (names only)
         continue-on-error: true
         run: uv run --with modal==1.5.5 modal secret list
+      # The Hugging Face secret's name in this workspace (the first whose name starts with
+      # "hugging"); world_models.py reads it from HEXAPOD_HF_SECRET.
+      - name: Find the Hugging Face secret
+        run: |
+          name="$(uv run --with modal==1.5.5 modal secret list --json | python3 -c '
+          import json, sys
+          rows = json.load(sys.stdin)
+          names = [v for r in rows for v in (r.values() if isinstance(r, dict) else [r])
+                   if isinstance(v, str) and v.lower().startswith("hugging")]
+          print(names[0] if names else "huggingface")')"
+          echo "Hugging Face secret: $name"
+          echo "HEXAPOD_HF_SECRET=$name" >> "$GITHUB_ENV"
       - name: modal deploy infra/modal/world_models.py
         run: uv run --with modal==1.5.5 modal deploy infra/modal/world_models.py
       - name: modal run infra/modal/dream.py

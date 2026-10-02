@@ -61,7 +61,22 @@ APP_NAME = "hexapod-world-models"
 app = modal.App(APP_NAME)
 
 WEIGHTS = modal.Volume.from_name("hexapod-world-model-weights", create_if_missing=True)
-HF_SECRET = modal.Secret.from_name("huggingface")
+#: The Modal secret holding the Hugging Face token: `huggingface` by default; the workspace's
+#: is named otherwise (CI finds it by its prefix and sets HEXAPOD_HF_SECRET).
+HF_SECRET = modal.Secret.from_name(os.environ.get("HEXAPOD_HF_SECRET", "huggingface"))
+#: The names a token may sit under in that secret; `_hf_token` copies it to HF_TOKEN.
+HF_TOKEN_KEYS = ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN", "HUGGINGFACE_TOKEN", "HF_API_TOKEN")
+
+
+def _hf_token() -> list[str]:
+    """HF_TOKEN set from whichever key the secret uses; the keys present (names only)."""
+    present = sorted(k for k in os.environ if "HF" in k.upper() or "HUGGING" in k.upper())
+    for key in HF_TOKEN_KEYS:
+        if os.environ.get(key):
+            os.environ["HF_TOKEN"] = os.environ[key]
+            os.environ.setdefault("HUGGING_FACE_HUB_TOKEN", os.environ[key])
+            break
+    return present
 
 FIXER_REPO = "https://github.com/nv-tlabs/Fixer.git"
 FIXER_COMMIT = "b39dfcaf4eeec90dc943b057ff368c16252c6c6e"
@@ -228,6 +243,7 @@ class Wan:
         import torch
         from diffusers import AutoencoderKLWan, WanImageToVideoPipeline
 
+        _hf_token()
         started = time.time()
         # The TI2V repository's model_index names `WanPipeline` (text to video); its
         # `expand_timesteps` config is what the image-to-video pipeline reads for TI2V.
@@ -287,6 +303,7 @@ class Cosmos:
         import torch
         from diffusers import Cosmos2VideoToWorldPipeline
 
+        _hf_token()
         started = time.time()
         # The guardrail (the pipeline's safety_checker) is built by the pipeline: it stays on.
         self.pipe = Cosmos2VideoToWorldPipeline.from_pretrained(
@@ -336,8 +353,8 @@ def access() -> dict:
     download (a gated one needs its licence accepted on that token's account)."""
     from huggingface_hub import HfApi
 
+    out: dict = {"secretKeys": _hf_token()}
     api = HfApi(token=os.environ.get("HF_TOKEN"))
-    out: dict = {}
     try:
         out["account"] = api.whoami().get("name")
     except Exception as error:  # noqa: BLE001 - reported, not raised
