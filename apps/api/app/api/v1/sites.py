@@ -5,7 +5,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, File, HTTPException, UploadFile, status
 
-from app.api.deps import DbSession, RequireWriteToken, Storage
+from app.api.deps import DbSession, PublicStorage, RequireWriteToken
 from app.schemas.asset import AssetRead
 from app.schemas.bookmark import CameraBookmarkCreate, CameraBookmarkRead
 from app.schemas.site import SiteCreate, SiteRead, SiteSummary, SiteUpdate
@@ -22,7 +22,10 @@ THUMBNAIL_MAX_BYTES = 2 * 1024 * 1024
 
 @router.get("", response_model=list[SiteSummary], summary="List sites")
 def list_sites(db: DbSession) -> list[SiteSummary]:
-    return [site_service.site_to_summary(db, site) for site in site_service.list_sites(db)]
+    return [
+        site_service.site_to_summary(db, site, area)
+        for site, area in site_service.list_sites_with_area(db)
+    ]
 
 
 @router.post(
@@ -105,21 +108,31 @@ def delete_bookmark(site_id: uuid.UUID, bookmark_id: uuid.UUID, db: DbSession) -
     bookmark_service.delete_bookmark(db, site_id, bookmark_id)
 
 
+# Into the **public** bucket, because the URL saved is the one a browser loads. It was
+# written to the private one (`Storage`) while the URL saved was built on the public
+# host, so in production -- two buckets -- every uploaded thumbnail was a 404.
+#
+# And a plain `def`: every call in here blocks (the database, boto3, the spooled upload's
+# file), and as an `async def` they ran on the event loop, stalling every other request
+# for the length of an upload. FastAPI runs a `def` in its threadpool.
 @router.post(
     "/{site_id}/thumbnail",
     response_model=SiteRead,
     dependencies=[RequireWriteToken],
     summary="Upload a site thumbnail",
 )
-async def upload_thumbnail(
-    site_id: uuid.UUID, db: DbSession, storage: Storage, file: Annotated[UploadFile, File()]
+def upload_thumbnail(
+    site_id: uuid.UUID,
+    db: DbSession,
+    storage: PublicStorage,
+    file: Annotated[UploadFile, File()],
 ) -> SiteRead:
     site = site_service.get_site(db, site_id)
     if file.content_type not in THUMBNAIL_TYPES:
         raise HTTPException(
             status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, "thumbnail must be png, jpeg or webp"
         )
-    data = await file.read(THUMBNAIL_MAX_BYTES + 1)
+    data = file.file.read(THUMBNAIL_MAX_BYTES + 1)
     if len(data) > THUMBNAIL_MAX_BYTES:
         raise HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, "thumbnail must be 2 MB or smaller")
     extension = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp"}[file.content_type]

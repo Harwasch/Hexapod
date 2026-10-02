@@ -17,7 +17,7 @@ from app.services.errors import UnauthorizedError
 from app.services.ion import IonClient
 from app.services.planner import Planner, build_planner
 from app.services.vision import Outliner, build_outliner
-from app.storage import ObjectStorage, get_storage
+from app.storage import ObjectStorage, get_public_storage, get_storage
 
 
 def _db() -> Generator[Session, None, None]:
@@ -53,6 +53,10 @@ Ion = Annotated[IonClient, Depends(_ion)]
 PlannerDep = Annotated[Planner, Depends(_planner)]
 OutlinerDep = Annotated[Outliner | None, Depends(_outliner)]
 Storage = Annotated[ObjectStorage, Depends(get_storage)]
+#: Where something a browser fetches by URL is written: the public bucket where there are
+#: two, the only bucket where there is one. Never `Storage` for that -- in production
+#: `Storage` is the private bucket, which no browser can read.
+PublicStorage = Annotated[ObjectStorage, Depends(get_public_storage)]
 
 #: `Authorization: Bearer <API_WRITE_TOKEN>`. auto_error=False so a missing header
 #: reaches the check below and is answered with the same RFC-7807 Problem as a wrong

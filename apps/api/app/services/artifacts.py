@@ -18,7 +18,7 @@ from __future__ import annotations
 import uuid
 
 from sqlalchemy import Select, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.models import Artifact, Asset, Capture, Job, JobStep, Site
 from app.models.enums import ArtifactKind
@@ -41,7 +41,10 @@ def _reference_urls(db: Session) -> list[tuple[str, ArtifactReference]]:
                     ),
                 )
             )
-    for asset in db.scalars(select(Asset).where(Asset.site_id.isnot(None))).all():
+    # The owning site is loaded with the assets, in one more query: read lazily it was one
+    # query per asset, every time the Outputs view asked which artifacts were referenced.
+    assets = select(Asset).where(Asset.site_id.isnot(None)).options(selectinload(Asset.site))
+    for asset in db.scalars(assets).all():
         url = asset.source.get("url") if isinstance(asset.source, dict) else None
         owner = asset.site
         if not isinstance(url, str) or owner is None:
