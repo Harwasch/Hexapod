@@ -340,6 +340,35 @@ test.describe("the phone layout", () => {
     expect(Math.abs(corner.y - status.y)).toBeLessThan(12);
     await expect(page.getByTestId("nav-north")).toBeVisible();
 
+    // It shows less than it says, and what it shows is whole: the counts and the simulated
+    // tag, then the agent's spinner and "+N". The labels, the agent's sentence and the word
+    // after "+N" are out of view but not out of the live regions or the button's name.
+    const fleet = page.getByTestId("status-fleet");
+    await expect(fleet.getByText("simulated")).toBeVisible();
+    await expect(page.getByTestId("status-line").getByRole("status")).toContainText(
+      "Fleet: 4 working · 2 need attention simulated",
+    );
+    await expect(page.getByTestId("status-agent")).toHaveText(/^Agent: \S.{9,}$/);
+    await expect(page.locator(".status-line__more")).toHaveText(/^\+\d+ tasks?$/);
+    const shown = await page.evaluate(() => {
+      const width = (selector: string) =>
+        document.querySelector(selector)?.getBoundingClientRect().width ?? -1;
+      const clip = document.querySelector("[data-testid='status-fleet'] .status-line__clip")!;
+      return {
+        counts: (clip.lastChild?.textContent ?? "").trim(),
+        clipped: clip.scrollWidth > clip.clientWidth,
+        prefix: width(".status-line__prefix"),
+        sentence: width("[data-testid='status-agent'] .status-line__clip"),
+        word: width(".status-line__more-word"),
+        more: width(".status-line__more"),
+      };
+    });
+    expect(shown).toMatchObject({ counts: "4 working · 2 need attention", clipped: false });
+    expect(shown.prefix).toBeLessThanOrEqual(1);
+    expect(shown.sentence).toBeLessThanOrEqual(1);
+    expect(shown.word).toBeLessThanOrEqual(1);
+    expect(shown.more).toBeGreaterThan(8);
+
     // The data credits are on screen with no tap: a strip of their own, one thin line at the
     // right edge just above the status line, the Cesium ion logo and "Data attribution" in
     // view, over nothing. Google's logo, when Photorealistic 3D Tiles are on, joins the line.

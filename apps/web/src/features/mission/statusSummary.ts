@@ -55,14 +55,17 @@ function plural(n: number, one: string, many = `${one}s`): string {
   return `${n.toLocaleString()} ${n === 1 ? one : many}`;
 }
 
-/** "Fleet: 4 working · 2 need attention" for the site in view. */
+/**
+ * "4 working · 2 need attention" for the site in view. The status line puts its "Fleet:"
+ * label in front, which a phone drops from view (not from screen readers) to fit the counts.
+ */
 export function fleetLine(counts: FleetCounts): string {
-  if (counts.machines === 0) return "Fleet: no machines registered";
+  if (counts.machines === 0) return "no machines registered";
   const parts = [`${counts.working.toLocaleString()} working`];
   if (counts.attention > 0) parts.push(`${counts.attention.toLocaleString()} need attention`);
   if (counts.working === 0 && counts.attention === 0)
     parts[0] = `${plural(counts.machines, "machine")} idle`;
-  return `Fleet: ${parts.join(" · ")}`;
+  return parts.join(" · ");
 }
 
 /** At globe scale with no site: "3 sites · 6 machines · 2 alerts". */

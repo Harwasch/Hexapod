@@ -19,9 +19,11 @@ that layer and the seam where real fleet data plugs in.
 
 On a phone (≤ 640 px) the same parts stack: the site switcher with a search button at the
 top, one bottom sheet (a tool panel, Plan or Fleet, or what is selected), the data credits
-in a thin strip of their own at the right edge, the status line in one row with the compass,
-and a tab bar — Map, Plan, Fleet, More — at the bottom. More holds the four tools; the search
-button opens the command box full screen. Between 641 and 899 px the rail is a row of the four
+in a thin strip of their own at the right edge, the status line in one row with the compass
+("4 working · 2 need attention [simulated] │ ◌ +4 ⌃": the labels and the agent's sentence
+are out of view there but still read by screen readers, and in the activity log), and a tab
+bar — Map, Plan, Fleet, More — at the bottom. More holds the four tools; the search button
+opens the command box full screen. Between 641 and 899 px the rail is a row of the four
 labelled tools above the bar.
 
 - **Site switcher** (`features/mission/ProjectCard`) names the site — one name per site,

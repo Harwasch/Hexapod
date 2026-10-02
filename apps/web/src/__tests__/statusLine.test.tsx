@@ -101,12 +101,11 @@ describe("status line words", () => {
       ],
     });
     expect(fleetCounts(kpis)).toEqual({ machines: 3, working: 4, attention: 2 });
-    expect(fleetLine(fleetCounts(kpis))).toBe("Fleet: 4 working · 2 need attention");
-    expect(fleetLine({ machines: 0, working: 0, attention: 0 })).toBe(
-      "Fleet: no machines registered",
-    );
-    expect(fleetLine({ machines: 2, working: 0, attention: 0 })).toBe("Fleet: 2 machines idle");
-    expect(fleetLine({ machines: 2, working: 2, attention: 0 })).toBe("Fleet: 2 working");
+    // The words only: the status line puts its "Fleet:" label in front (hidden on a phone).
+    expect(fleetLine(fleetCounts(kpis))).toBe("4 working · 2 need attention");
+    expect(fleetLine({ machines: 0, working: 0, attention: 0 })).toBe("no machines registered");
+    expect(fleetLine({ machines: 2, working: 0, attention: 0 })).toBe("2 machines idle");
+    expect(fleetLine({ machines: 2, working: 2, attention: 0 })).toBe("2 working");
   });
 
   it("sums sites at globe scale", () => {
@@ -246,6 +245,28 @@ describe("StatusLine", () => {
     // A press anywhere else closes it, like any popover.
     fireEvent.pointerDown(document.body);
     expect(useUi.getState().activityOpen).toBe(false);
+  });
+
+  it("keeps whole sentences for screen readers where a phone shows only counts and +N", () => {
+    useMission.setState({ project: project({ simulated: true }) });
+    render(wrap(<StatusLine />));
+    // A phone hides the labels, the agent's sentence and the word after "+N" from view with
+    // CSS (`mission.css`); none of it leaves the DOM, so both live regions and the button's
+    // name still say all of it.
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Fleet: 2 working · 1 need attention simulated",
+    );
+    expect(screen.getByText("Fleet:")).toHaveClass("status-line__prefix");
+    expect(screen.getByTestId("status-agent")).toHaveTextContent(
+      "Agent: Sequencing passes against the forecast",
+    );
+    expect(screen.getByTestId("status-agent")).toHaveAttribute("aria-live", "polite");
+    expect(screen.getByText("tasks")).toHaveClass("status-line__more-word");
+    expect(
+      screen.getByRole("button", {
+        name: /^Agent: Sequencing passes against the forecast\s*\+2 tasks\s*Show agent activity$/,
+      }),
+    ).toBeInTheDocument();
   });
 
   it("summarises the catalog at globe scale, with no site engaged", async () => {

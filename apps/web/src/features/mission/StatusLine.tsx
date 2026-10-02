@@ -48,6 +48,12 @@ function useFleetOverview(): { sites: number; counts: FleetCounts; simulated: bo
  * Settings › Advanced, and a healthy connection says nothing.
  *
  * Polite live region: a new reply or a dropped connection is announced without interrupting.
+ *
+ * On a phone the line is one row beside the compass, so it shows less than it says: the
+ * "Fleet:" and "Agent:" labels, the agent's sentence and the word after its "+N" are hidden
+ * from view there (`mission.css`), never removed, so the live regions and the button's name
+ * keep the whole sentence; what shows is the counts, the simulated tag, the agent's spinner
+ * and "+N". The full text is one tap away in the activity log.
  */
 export function StatusLine() {
   const project = useMission((s) => s.project);
@@ -122,7 +128,12 @@ export function StatusLine() {
           ))}
           <span className="status-line__seg" data-testid="status-fleet">
             <span className={`mc-dot ${fleetTone}`} aria-hidden="true" />
-            <span className="status-line__clip">{fleetText}</span>
+            <span className="status-line__clip">
+              {site && <span className="status-line__prefix">Fleet: </span>}
+              {fleetText}
+            </span>
+            {/* A space for the live region's sentence; a flex row draws none. */}
+            {simulated && " "}
             {simulated && <span className="status-line__tag">simulated</span>}
           </span>
         </div>
@@ -149,7 +160,8 @@ export function StatusLine() {
           </span>
           {agent.more > 0 && (
             <span className="status-line__more">
-              +{agent.more} {agent.more === 1 ? "task" : "tasks"}
+              +{agent.more}{" "}
+              <span className="status-line__more-word">{agent.more === 1 ? "task" : "tasks"}</span>
             </span>
           )}
           <span className="sr-only">{open ? "Hide agent activity" : "Show agent activity"}</span>

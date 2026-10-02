@@ -1643,8 +1643,11 @@ a.mc-link {
   }
 }
 
-/* On a phone the status line is one row above the tab bar, beside the compass: the fleet
-   and the agent's line both clip, and the full text of each is one tap away (the log). */
+/* On a phone the status line is one row above the tab bar, beside the compass, and it shows
+   less than it says: "4 working · 2 need attention" with its simulated tag, then the agent's
+   spinner and "+N". The labels, the agent's sentence and the word after "+N" are hidden
+   from view, not from screen readers (the live regions keep the whole sentence), and the
+   full text of each is one tap away in the log (`StatusLine`). */
 @media (max-width: 640px) {
   .status-line-wrap {
     max-width: none;
@@ -1652,37 +1655,77 @@ a.mc-link {
   .status-line {
     flex-direction: row;
     align-items: center;
-    gap: 0.15rem;
+    gap: 0;
     min-height: 2.75rem;
-    padding: 0.15rem 0.2rem 0.15rem 0.7rem;
+    padding: 0.15rem 0.15rem 0.15rem 0.55rem;
     border-radius: var(--glass-radius-pill);
+    font-size: 12px;
   }
+  /* The counts keep their words; the agent's part takes the room that is left. */
   .status-line__text {
     flex: 0 1 auto;
     flex-wrap: nowrap;
+    gap: 0.5rem;
     min-width: 0;
     padding: 0;
   }
   .status-line__text .status-line__seg {
+    gap: 0.35rem;
     min-width: 0;
   }
-  .status-line__text {
-    max-width: 60%;
+  .status-line__tag {
+    padding: 0.05rem 0.3rem;
+    font-size: 11px;
   }
   .status-line .mc-blink {
     display: none;
   }
   .status-line__agent {
+    container-type: inline-size;
     flex: 1 1 0;
-    min-width: 4.75rem;
+    gap: 0.3rem;
+    min-width: 4rem;
     margin-left: 0.2rem;
-    padding: 0.35rem 0.45rem 0.35rem 0.55rem;
+    padding: 0.35rem 0.35rem 0.35rem 0.45rem;
     border-top: 0;
     border-left: 1px solid var(--divider);
     border-radius: 0 var(--glass-radius-pill) var(--glass-radius-pill) 0;
   }
-  .status-line__more {
-    display: none;
+  .status-line__agent .mc-spinner {
+    width: 14px;
+    height: 14px;
+  }
+  .status-line__agent > svg {
+    margin-left: auto;
+  }
+  /* Hidden from view, not from the accessibility tree: the same rules as `.sr-only`. */
+  .status-line__prefix,
+  .status-line__label,
+  .status-line__more-word {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+  /* Short of room for a few words, the agent's part is its spinner and "+N"; "idle" is short
+     enough to stay. Its sentence stays in the live region and in the log. */
+  @container (width < 9rem) {
+    .status-line__agent:not(.is-idle) .status-line__clip {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      margin: -1px;
+      padding: 0;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
   }
 
   /* Plan and Fleet as a bottom sheet: a tighter head and stats, so the table's rows show. */
