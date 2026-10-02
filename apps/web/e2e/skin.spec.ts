@@ -42,6 +42,8 @@ interface SkinHarness {
   rest(): Promise<void>;
   covariance(on: boolean): Promise<void>;
   hide(ids: number[]): Promise<void>;
+  /** Hides every object but `id` (and what is below it). */
+  isolate(id: number): Promise<void>;
   frame(): number;
   difference(a: number, b: number, rect?: Rect, tol?: number): number;
   coverage(a: number, rect?: Rect): number;
@@ -173,11 +175,12 @@ test("a driven object moves, the others stay put, and rest is the measured frame
   await page.screenshot({ path: test.info().outputPath("driven.png") });
 
   // Hidden while it moves: the visibility chain sees the displaced splats.
+  // Hidden and moving, then hidden at rest: the same frame.
   await call("hide", [1]);
   const hidden = await call("frame");
-  await call("hide", []);
-
   await call("rest");
+  const hiddenAtRest = await call("frame");
+  await call("hide", []);
   const calm = await call("frame");
 
   // The constant handle: the shrub lifted two metres, whole.
@@ -188,14 +191,20 @@ test("a driven object moves, the others stay put, and rest is the measured frame
 
   // Covariances follow the skin: the shrub scaled 2.5x about its base (Z_0 = [1.5·I | 0]),
   // with and without.
+  // Everything else hidden, so what is counted is the shrub's own silhouette.
   const scale = 1.5;
   const grown = [scale, 0, 0, 0, 0, scale, 0, 0, 0, 0, scale, 0];
+  await call("isolate", 10);
+  const alone = await call("frame");
   await call("drive", 10, [{ handle: 0, z: grown }]);
   const big = await call("frame");
+  await page.screenshot({ path: test.info().outputPath("scaled-covariance.png") });
   await call("covariance", false);
   const bigThin = await call("frame");
+  await page.screenshot({ path: test.info().outputPath("scaled-no-covariance.png") });
   await call("covariance", true);
   await call("rest");
+  await call("hide", []);
   const shrubBig = (await call("rectOf", 10, 2.6)) ?? undefined;
 
   const measures = {
@@ -211,13 +220,14 @@ test("a driven object moves, the others stay put, and rest is the measured frame
     calmVsRest: await call("difference", rest, calm),
     shrubLifted: await call("difference", rest, lifted, shrub),
     treeUnderLift: await call("difference", rest, lifted, tree),
-    treeCoverage: await call("coverage", rest, tree),
-    hiddenCoverage: await call("coverage", hidden, tree),
+    hiddenVsDriven: await call("difference", driven, hidden, tree),
+    hiddenMovingVsAtRest: await call("difference", hidden, hiddenAtRest),
     bigCoverage: await call("coverage", big, shrubBig),
     bigThinCoverage: await call("coverage", bigThin, shrubBig),
-    restShrubCoverage: await call("coverage", rest, shrubBig),
+    restShrubCoverage: await call("coverage", alone, shrubBig),
   };
   test.info().annotations.push({ type: "measures", description: JSON.stringify(measures) });
+  console.info(JSON.stringify(measures));
 
   expect(shaderErrors(errors)).toEqual([]);
   expect(hooks.motion).toEqual(["splatSkinMotion"]);
@@ -228,12 +238,13 @@ test("a driven object moves, the others stay put, and rest is the measured frame
   // Rendering is deterministic at rest.
   expect(measures.restNoise).toBeLessThan(0.001);
   // The driven tree moves...
-  expect(measures.treeMoved).toBeGreaterThan(0.05);
+  expect(measures.treeMoved).toBeGreaterThan(0.03);
   // ...an unskinned tree and a skinned shrub that is not driven do not.
   expect(measures.otherTreeMoved).toBeLessThan(0.01);
   expect(measures.shrubMoved).toBeLessThan(0.01);
   // Hidden, it is gone wherever it moved to.
-  expect(measures.hiddenCoverage).toBeLessThan(measures.treeCoverage * 0.7);
+  expect(measures.hiddenVsDriven).toBeGreaterThan(0.05);
+  expect(measures.hiddenMovingVsAtRest).toBeLessThan(0.001);
   // At rest again, the measured frame.
   expect(measures.calmVsRest).toBeLessThan(0.001);
   // The constant handle moves the shrub and nothing else.

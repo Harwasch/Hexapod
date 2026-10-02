@@ -15,8 +15,8 @@ Architecture: [SCENE_OBJECTS.md](SCENE_OBJECTS.md). Branch: `living-models`.
 ## B. Skin
 
 - [x] B1 Skin method chosen: Kaolin Simplicits/FreeForm (Apache-2.0); PhysSkin rejected (no licence, unstable on the tree)
-- [ ] B2 Skin format in tiles (weights per splat, handles per instance)
-- [ ] B3 GPU skinning path for any instance (generalise the tree rig hook)
+- [x] B2 Skin format in tiles: `skin.json` + `skin.bin` (SCENE_OBJECTS.md §4), dense int8, 16 B per skinned splat (top-k tears: 22% rms error at k = 4); Kaolin RKPM vendored, NumPy only, 3–8 s per tree
+- [x] B3 GPU skinning path for any instance: a motion-chain part beside the rig, covariances through `I + Σ w_j A_j` (engine patch: optional `splatVertexJacobian`); drivers call `skinningOf(asset).setInstanceHandles(id, Z)` (e2e on the yard)
 
 ## C. Drive
 

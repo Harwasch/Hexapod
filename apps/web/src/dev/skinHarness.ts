@@ -29,6 +29,7 @@ import { attachInstances, instanceSphere } from "@/cesium/splatInstances";
 import { incrementalSplats, keepOffscreenSplats, splatTilesetOf } from "@/cesium/splatInternals";
 import { motionChainOf } from "@/cesium/splatMotionChain";
 import { attachSkin, skinningOf, type SplatSkinning } from "@/cesium/splatSkin";
+import { withDescendants } from "@/lib/instances";
 import { HANDLE_FLOATS, rigidHandle } from "@/lib/skin";
 import { useInstances } from "@/state/instances";
 
@@ -66,6 +67,8 @@ export interface SkinHarness {
   covariance(on: boolean): Promise<void>;
   /** Hides instances through the store (the visibility chain), then waits. */
   hide(ids: number[]): Promise<void>;
+  /** Hides every object but `id` (and what is below it). */
+  isolate(id: number): Promise<void>;
   /** Keeps a copy of the frame; returns its index. */
   frame(): number;
   /** Share of pixels (in `rect`) that differ between frames `a` and `b` by more than `tol`. */
@@ -236,6 +239,20 @@ export async function startSkinHarness(options: {
       const store = useInstances.getState();
       store.showAll(ASSET);
       store.setHidden(ASSET, ids, true);
+      await settle(10);
+    },
+    async isolate(id) {
+      const store = useInstances.getState();
+      const entry = store.assets[ASSET];
+      if (!entry) throw new Error("no instances");
+      const keep = withDescendants(entry, [id]);
+      const others = entry.instances.filter((i) => i.parent === null && !keep.has(i.id));
+      store.showAll(ASSET);
+      store.setHidden(
+        ASSET,
+        others.map((i) => i.id),
+        true,
+      );
       await settle(10);
     },
     frame() {

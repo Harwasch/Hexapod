@@ -355,6 +355,21 @@ def local_jacobians(rest: np.ndarray, moved: np.ndarray, k: int = 12) -> np.ndar
     return bta @ np.linalg.inv(ata + reg)
 
 
+def skin_jacobians(skin: Skin, positions: np.ndarray, handles: np.ndarray) -> np.ndarray:
+    """The deformation's exact Jacobian at `positions`, (n, 3, 3):
+    `I + Σ_j (w_j A_j + Z_j [x − o; 1] ∇w_jᵀ)`. The viewer draws covariances through the
+    first sum only (it drops the `∇w` term)."""
+    m = handles.shape[0]
+    w = np.c_[np.ones(len(positions)), skin.weights(positions)][:, :m]
+    grads = np.concatenate(
+        [np.zeros((len(positions), 1, 3)), skin.weight_gradients(positions)], axis=1
+    )[:, :m]
+    local = np.c_[positions - skin.origin, np.ones(len(positions))]
+    disp = np.einsum("jab,nb->nja", handles, local)
+    jac = np.eye(3)[None] + np.einsum("nj,jab->nab", w, handles[:, :, :3])
+    return jac + np.einsum("nja,njb->nab", disp, grads)
+
+
 def sparsity_report(
     skin: Skin,
     positions: np.ndarray,

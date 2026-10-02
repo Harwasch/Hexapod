@@ -98,9 +98,7 @@ def test_the_constant_handle_moves_the_instance_rigidly():
     points = tree_points()
     w = skin_scene.dequantise(skin_scene.quantise(skin.weights(points)), skin.handles - 1)
     angle = 0.3
-    r = np.array(
-        [[np.cos(angle), -np.sin(angle), 0], [np.sin(angle), np.cos(angle), 0], [0, 0, 1]]
-    )
+    r = np.array([[np.cos(angle), -np.sin(angle), 0], [np.sin(angle), np.cos(angle), 0], [0, 0, 1]])
     r = r @ np.array([[1, 0, 0], [0, np.cos(0.2), -np.sin(0.2)], [0, np.sin(0.2), np.cos(0.2)]])
     t = np.array([0.4, -1.2, 0.25])
     z = np.zeros((skin.handles, 3, 4))
@@ -132,13 +130,12 @@ def test_small_random_handles_bend_the_tree_without_tearing_or_folding(seed):
     assert det.min() > 0.5  # no inverted neighbourhoods
     # The analytic Jacobian (with ∇w) agrees: I + Σ_j (w_j A_j + Z_j[x;1] ∇w_jᵀ) stays positive.
     sample = points[:: max(1, len(points) // 2000)]
-    ws = np.c_[np.ones(len(sample)), skin.weights(sample)]
-    grads = np.concatenate([np.zeros((len(sample), 1, 3)), skin.weight_gradients(sample)], 1)
-    local = np.c_[sample - skin.origin, np.ones(len(sample))]
-    disp = np.einsum("jab,nb->nja", z, local)  # (n, m, 3)
-    jac = np.eye(3)[None] + np.einsum("nj,jab->nab", ws, z[:, :, :3])
-    jac += np.einsum("nja,njb->nab", disp, grads)
+    jac = skin_scene.skin_jacobians(skin, sample, z)
     assert np.linalg.det(jac).min() > 0.5
+    # What the viewer drops (the ∇w term) is small at this amplitude.
+    w = np.c_[np.ones(len(sample)), skin.weights(sample)]
+    kept = np.eye(3)[None] + np.einsum("nj,jab->nab", w, z[:, :, :3])
+    assert np.abs(jac - kept).max() < 0.25
 
 
 def test_dense_int8_is_close_to_float_and_top_k_is_not():
