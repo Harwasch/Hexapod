@@ -24,7 +24,6 @@ Run from the repository root (`.github/workflows/fill.yml` does):
 from __future__ import annotations
 
 import contextlib
-import dataclasses
 import io
 import json
 import os
@@ -157,12 +156,15 @@ class Fixer:
         for blob in request["images"]:
             image = Image.open(io.BytesIO(blob)).convert("RGB")
             size = image.size
+            width, height = self.fixer.get_resolution_size(
+                int(request.get("resolution", FIXER_RESOLUTION))
+            )
             x = self.fixer.preprocess_image(
-                image.resize((self.width, self.height), Image.BILINEAR), self.device, self.dtype
+                image.resize((width, height), Image.BILINEAR), self.device, self.dtype
             )
             with torch.no_grad():
                 y = self.fixer.model_inference(
-                    self.model, 1, self.height, self.width, self.dtype, self.device, x=x
+                    self.model, 1, height, width, self.dtype, self.device, x=x
                 )
             buffer = io.BytesIO()
             self.fixer.postprocess_output(y, size).save(buffer, format="PNG")
@@ -274,11 +276,16 @@ def _get(url: str, timeout: float) -> bytes:
     import urllib.request
 
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})  # noqa: S310
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310
-            return response.read()
-    except urllib.error.HTTPError as error:
-        raise RuntimeError(f"GET {url}: HTTP {error.code} {error.reason}") from None
+    for attempt in range(6):
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310
+                return response.read()
+        except urllib.error.HTTPError as error:
+            # Several jobs fetching one scan at once meet the bucket's rate limit (429).
+            if error.code not in (429, 500, 502, 503, 504) or attempt == 5:
+                raise RuntimeError(f"GET {url}: HTTP {error.code} {error.reason}") from None
+        time.sleep(2.0 * 2**attempt)
+    raise AssertionError("unreachable")
 
 
 def _fetch(url: str, out: Path) -> Path:
@@ -308,7 +315,7 @@ def _fetch(url: str, out: Path) -> Path:
         (out / uri).parent.mkdir(parents=True, exist_ok=True)
         (out / uri).write_bytes(_get(f"{base}/{uri}", 600))
 
-    with concurrent.futures.ThreadPoolExecutor(16) as pool:
+    with concurrent.futures.ThreadPoolExecutor(8) as pool:
         list(pool.map(get, uris))
     return out / "tileset.json"
 
@@ -456,40 +463,40 @@ def probe(scan: str) -> dict:
             vc.build_view_cones(tileset, tileset.parent, tileset)
         splats = load_tileset(tileset)
         grid = vc.cone_grid_from_tileset(tileset)
-    observer = grid.observers[int(np.argmax(grid.observer_weights))]
-    near = np.argsort(np.linalg.norm(splats.positions - observer, axis=1))[:2000]
-    centre = splats.positions[near].mean(axis=0)
     w, h = FILL_SIZE
-    cams = tf.plan_views(grid, centre[None], count=1, width=w, height=h, distance_m=1.2)
+    # The first view fill_scan would make: on a ring outside what the view cones fade.
+    texels = vc.lookup(grid.texels, grid.origin, grid.cell, grid.dims, splats.positions)
+    targets = splats.positions[texels[:, 2] != vc.OMNI]
+    centre = targets.mean(axis=0)
     reach = float(np.percentile(np.linalg.norm(splats.positions - centre, axis=1), 95))
-    cams += tf.plan_views(
-        grid, splats.positions, count=1, mode="ring", ring_radius_m=1.5 * reach, width=w, height=h
-    )
+    cams = tf.plan_views(
+        grid, targets, count=8, mode="ring", ring_radius_m=1.5 * reach, width=w, height=h
+    )[:1]
     files: dict[str, bytes] = {}
     scores: dict[str, dict] = {}
     for k, cam in enumerate(cams):
         frame = render(splats, cam)
-        big = render(
-            splats, dataclasses.replace(cam, focal=2 * cam.focal, width=2 * w, height=2 * h)
-        )
-        ss_rgb = cv2.resize(big.rgb.astype(np.float32), (w, h), interpolation=cv2.INTER_AREA)
-        ss_a = cv2.resize(big.alpha.astype(np.float32), (w, h), interpolation=cv2.INTER_AREA)
+        raw = tf.to_u8(frame.rgb)
+        half = cv2.resize(raw, (w // 2, h // 2), interpolation=cv2.INTER_AREA)
         variants = {
-            "raw": frame.rgb,
-            "smooth1": _smooth(frame.rgb, frame.alpha, 1.0),
-            "smooth2": _smooth(frame.rgb, frame.alpha, 2.0),
-            "super2": ss_rgb,
-            "super2smooth1": _smooth(ss_rgb, ss_a, 1.0),
+            "raw": (raw, FIXER_RESOLUTION),
+            "smooth1": (tf.to_u8(_smooth(frame.rgb, frame.alpha, 1.0)), FIXER_RESOLUTION),
+            "smooth2": (tf.to_u8(_smooth(frame.rgb, frame.alpha, 2.0)), FIXER_RESOLUTION),
+            "blur1.5": (cv2.GaussianBlur(raw, (0, 0), 1.5), FIXER_RESOLUTION),
+            "half": (cv2.resize(half, (w, h), interpolation=cv2.INTER_LINEAR), FIXER_RESOLUTION),
+            "res512": (raw, 512),
+            "res704": (raw, 704),
+            "res960": (raw, 960),
         }
         covered = frame.alpha >= 0.5
-        for name, rgb in variants.items():
-            given = tf.to_u8(rgb)
-            out = decode_png(Fixer().fix.remote({"images": [encode_png(given)]})["images"][0])
-            blur = lambda x: cv2.GaussianBlur(x, (0, 0), 2.0)  # noqa: E731
+        blur = lambda x: cv2.GaussianBlur(x, (0, 0), 2.0)  # noqa: E731
+        for name, (given, resolution) in variants.items():
+            request = {"images": [encode_png(given)], "resolution": resolution}
+            out = decode_png(Fixer().fix.remote(request)["images"][0])
             scores[f"view{k}-{name}"] = {
                 "gate": round(tf.psnr(out, given, covered), 2),
                 "gateBlur2": round(tf.psnr(blur(out), blur(given), covered), 2),
-                "vsRawBlur2": round(tf.psnr(blur(out), blur(tf.to_u8(frame.rgb)), covered), 2),
+                "vsRawBlur2": round(tf.psnr(blur(out), blur(raw), covered), 2),
             }
             files[f"view{k}-{name}.png"] = encode_png(np.concatenate([given, out], axis=1))
     files["scores.json"] = json.dumps(scores, indent=1).encode()
