@@ -109,7 +109,9 @@ mypy_path = ["../captures"]
 [[tool.mypy.overrides]]
 # Type-check calls into splat_tiles against its real signatures, but do not report errors
 # inside tools/captures -- that project does not run mypy and is not this project's to fix.
-module = ["splat_tiles"]
+# splat_tiles imports view_cones, which reaches rig_tiles, synthetic_tree and motion_params;
+# the same rule holds for each of them.
+module = ["splat_tiles", "view_cones", "rig_tiles", "synthetic_tree", "motion_params"]
 follow_imports = "silent"
 
 [[tool.mypy.overrides]]
