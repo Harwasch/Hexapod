@@ -657,7 +657,10 @@ export class SkinWindOscillator {
    * The handles at scene time `t` (interpolated between the last two grid states), bounded:
    * `12·m` numbers, `Z_j = [0 | q_j]` row-major, into `out`. All zeros at rest.
    */
-  handles(t: number, out = new Float64Array(this.model.handles * TWELVE)): Float64Array {
+  handles(
+    t: number,
+    out: Float64Array = new Float64Array(this.model.handles * TWELVE),
+  ): Float64Array {
     out.fill(0);
     const { handles: m, modes: r, shapes, limits } = this.model;
     if (this.#step === undefined || r === 0) return out;

@@ -151,11 +151,11 @@ export class SkinWindDriver {
       return;
     }
     const material = mergeMaterial(materialPrior(traits?.properties, traits?.behaviour), record);
+    const before = d.material;
     const same =
-      d.material !== undefined &&
-      d.material.stiffness === material.stiffness &&
-      d.material.damping === material.damping &&
-      d.material.drag === material.drag;
+      before?.stiffness === material.stiffness &&
+      before.damping === material.damping &&
+      before.drag === material.drag;
     d.material = material;
     if (same && d.oscillator) return;
     const dynamics = d.skin.dynamics;
