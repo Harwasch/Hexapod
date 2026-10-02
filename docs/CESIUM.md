@@ -300,8 +300,30 @@ passes `pitchAdjustHeight`, so the camera looks straight down at the top of the 
 back to the arrival tilt on the way down instead of interpolating the pitch linearly and
 spending the high part staring at the horizon. `flyToBoundingSphere` with that offset is the
 standard arrival; hand-sized objects arrive at a few times their radius.
-Cesium's default double-click entity tracking is removed; double-click flies halfway to the
-clicked point instead.
+Double-click flies halfway to the clicked point (the widget installs no click handlers of its
+own; `Viewer`'s entity tracking used to be removed here).
+
+### Flying to a site
+
+`SiteManager.flyTo` leaves on the click and loads the site during the flight. It used to wait
+first — for the site's record (a GET that meets the API's cold start), for the model's tileset
+(a proxy probe and `tileset.json`, retried up to four times) and, without a bookmark, for the
+model to be clamped to the terrain — and for ever if one of those stalled. Now the first leg
+leaves at once for the best pose known: the authored bookmark when the record is already here
+(a second visit, the built-in demo), else the catalog summary's centre and size. The record
+and the model load meanwhile, with deadlines (12 s for the record, 15 s per tileset attempt;
+`lib/timeout.ts`), and Cesium preloads the flight's destination tiles for the site's tileset
+as soon as it exists (`preloadFlightDestinations`). As better poses arrive (the bookmark with
+the record, the model's bounds once it rests on the ground) the flight is re-pointed without
+a jolt: the new leg's easing leaves at the speed the camera already has and still arrives at
+rest (`flightRetarget.ts`). After landing, a better pose still moves a camera nobody has
+touched, for 8 s. A flight somebody else cancelled is never re-pointed.
+
+Each site's load is a record in `state/sites.ts` (`siteLoads`): phase `details` → `model` →
+`streaming` → `ready`, or `error` with a message and whether retrying can help;
+`retrySiteLoad(siteId)` tries again (flying there again if a fly-to had asked). Each leg's
+destination is also announced as a `flight-destination` event, for renderers that want to
+prefetch the data there.
 
 ## Explore mode
 

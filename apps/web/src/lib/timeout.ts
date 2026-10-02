@@ -49,8 +49,10 @@ export function withTimeout<T>(
     timer = setTimeout(() => {
       timedOut = true;
       const error = new TimeoutError(options.what ?? "The request", ms);
-      options.controller?.abort(error);
+      // Rejected before the abort: abort-aware work rejects synchronously inside `abort()`,
+      // and whichever settles first is what the race reports.
       reject(error);
+      options.controller?.abort(error);
     }, ms);
   });
   work.then(

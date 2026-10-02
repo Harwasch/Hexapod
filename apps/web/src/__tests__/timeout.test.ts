@@ -32,6 +32,18 @@ describe("withTimeout", () => {
     expect(controller.signal.reason).toBeInstanceOf(TimeoutError);
   });
 
+  it("reports the deadline, not the abort it causes in work that listens for one", async () => {
+    const controller = new AbortController();
+    const listening = new Promise<never>((_, reject) =>
+      controller.signal.addEventListener("abort", () => reject(new Error("aborted"))),
+    );
+    const settled = expect(withTimeout(listening, 2_000, { controller })).rejects.toBeInstanceOf(
+      TimeoutError,
+    );
+    await vi.advanceTimersByTimeAsync(2_000);
+    await settled;
+  });
+
   it("hands a result that arrives after the deadline to onLate, to be disposed of", async () => {
     let finish: (value: { destroyed: boolean }) => void = () => undefined;
     const work = new Promise<{ destroyed: boolean }>((resolve) => (finish = resolve));

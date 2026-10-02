@@ -257,6 +257,14 @@ export class CesiumSceneManager {
       }),
       // A site engaging or changing representation changes what a splat renderer draws.
       this.events.on("tilesets", () => this.updateScanRenderer()),
+      // A fly-to leaves before its site has loaded (SiteManager.flyTo). Cesium preloads the
+      // destination's tiles for its own tilesets during the flight (preloadFlightDestinations);
+      // a scan drawn by a dedicated renderer gets nothing of the kind.
+      // TODO(D1): call the scan renderer's destination prefetch here once it is exported, so
+      // the overlay's tiles load during the flight too, e.g.
+      //   this.scanRenderer.prefetchDestination(siteId, pose)
+      // with `pose` the arrival in degrees/metres; re-sent each time the flight is re-pointed.
+      this.events.on("flight-destination", () => undefined),
       this.events.on("ground-pick-mode", (on) => {
         this.pickingGround = on;
         this.selection.setEnabled(this.selectionWanted());

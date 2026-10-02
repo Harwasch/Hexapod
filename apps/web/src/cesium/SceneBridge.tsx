@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 
 import { useLayers as useLayerCatalog, useSite, useSites as useSiteCatalog } from "@/api/queries";
-import { api, unwrap } from "@/api/client";
+import { api, ApiError, unwrap } from "@/api/client";
 import { builtinDemoSite } from "@/api/fallback";
 import { anywhereProject } from "@/missions/anywhere";
 import { reshapedZone } from "@/missions/areas";
@@ -53,6 +53,7 @@ export function SceneBridge() {
       scene.events.on("asset", ({ id, patch }) => sites.updateAsset(id, patch)),
       scene.events.on("site-near", (id) => sites.setNearSite(id)),
       scene.events.on("site-active", (id) => sites.setActiveSite(id)),
+      scene.events.on("site-load", ({ siteId, load }) => sites.setSiteLoad(siteId, load)),
       scene.events.on("representation", ({ siteId, representation }) =>
         sites.setRepresentation(siteId, representation),
       ),
@@ -85,10 +86,15 @@ export function SceneBridge() {
         mission.addArea(mission.project.id, reshapedZone(zone, footprint));
       }),
     ];
+    // The HUD's Retry beside a failed site load calls into the scene through the store.
+    sites.setSiteLoadRetry((siteId) => void scene.sites.retry(siteId));
     // Events raised while the viewer was constructing happened before we subscribed.
     viewer.setStatus(scene.isDestroyed ? "error" : "ready", null);
     viewer.setTokenState(scene.tokenState);
-    return () => offs.forEach((off) => off());
+    return () => {
+      offs.forEach((off) => off());
+      useSites.getState().setSiteLoadRetry(() => undefined);
+    };
   }, [scene]);
 
   // Catalog → scene
@@ -110,14 +116,18 @@ export function SceneBridge() {
 
   useEffect(() => {
     if (!scene || siteCatalog.isLoading) return;
-    const resolver = async (id: string): Promise<Site | null> => {
+    // Null means the catalog has no such site; any other failure (offline, a 5xx, the
+    // SiteManager's deadline aborting `signal`) is thrown, so the scene can offer Retry
+    // instead of reporting a site that exists as gone.
+    const resolver = async (id: string, signal?: AbortSignal): Promise<Site | null> => {
       if (id.startsWith("builtin-")) return builtinDemoSite();
       try {
         return await unwrap<Site>(
-          api.GET("/api/v1/sites/{site_id}", { params: { path: { site_id: id } } }),
+          api.GET("/api/v1/sites/{site_id}", { params: { path: { site_id: id } }, signal }),
         );
-      } catch {
-        return null;
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 404) return null;
+        throw error;
       }
     };
     scene.sites.setCatalog(siteCatalog.data, resolver);

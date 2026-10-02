@@ -1,12 +1,14 @@
 import type { Attribution, Footprint, Representation } from "@twin/contracts";
 
-import type { AssetRuntime } from "@/state/sites";
+import type { AssetRuntime, SiteLoad } from "@/state/sites";
 import type { LayerRuntime, LoadState } from "@/state/layers";
 import type { LivingSurveyStatus } from "@/state/living";
 import type { Measurement } from "@/state/measurements";
 import type { Selection } from "@/state/selection";
 import type { ToastTone } from "@/state/toasts";
 import type { CameraPose, PerformanceSnapshot, TokenState, ViewerStatus } from "@/state/viewer";
+
+import type { ArrivalPose } from "./flightRetarget";
 
 export type { LoadState };
 
@@ -22,6 +24,13 @@ export interface SceneEvents extends Record<string, unknown> {
   asset: { id: string; patch: Partial<AssetRuntime> };
   "site-near": string | null;
   "site-active": string | null;
+  /** One site's load (record, model, first tiles), whole; null once the site is unloaded. */
+  "site-load": { siteId: string; load: SiteLoad | null };
+  /**
+   * Where a fly-to is headed: when it leaves, and again each time it is re-pointed on the way
+   * (SiteManager.flyTo). For whatever wants the destination's data loading during the flight.
+   */
+  "flight-destination": { siteId: string; pose: ArrivalPose };
   representation: { siteId: string; representation: Representation };
   selection: Selection | null;
   hover: string | null;
