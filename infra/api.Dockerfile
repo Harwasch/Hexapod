@@ -36,9 +36,13 @@
 # point at the bucket and this image never needs them. See app/seed/captures.tiles_base_url.
 #
 # Ubuntu 24.04 rather than python:3.12-slim-bookworm, for one package: **COLMAP**. Lane 2's
-# `pose` stage runs `colmap` on this machine, and everything `tools/pipeline/sfm.py` says
-# about it -- `model_aligner`'s `--transform_path` being right while `--output_path` is
-# not, the eight numbers it writes -- was measured on 3.9.1, which is what Ubuntu 24.04
+# `pose` runs on Modal's cpu4 box when WORKER_RUNNER=cloud, but not every COLMAP call
+# leaves: `georeference` (`exif_gps`, no `gpu:`, so it runs here under any runner) calls
+# `colmap model_aligner`, and with WORKER_RUNNER=local -- a dev box, a deployment with no
+# Modal -- `pose` runs here too. Re-checked 2026-10-02 for dropping the ~370 MB below, and
+# kept for that reason. Everything `tools/pipeline/sfm.py` says about it --
+# `model_aligner`'s `--transform_path` being right while `--output_path` is not, the
+# eight numbers it writes -- was measured on 3.9.1, which is what Ubuntu 24.04
 # ships (and what CI's `ubuntu-latest` installs). Debian bookworm ships 3.8 and trixie
 # 3.10 (sources.debian.org, read 2026-09-23); neither is the version those findings are
 # about. Ubuntu 24.04's own Python is 3.12, so the venv is built against /usr/bin/python3.12
@@ -60,8 +64,9 @@ COPY apps/api/ ./
 RUN uv sync --frozen --no-dev --extra modal
 
 FROM ubuntu:24.04 AS runtime
-# `colmap` for the pose stage; ffmpeg is not here because the pipeline uses the binary in
-# the imageio-ffmpeg wheel, never a system one (tools/pipeline/video.py says why).
+# `colmap` for georeference's model_aligner (and pose, when it runs here); ffmpeg is not
+# here because the pipeline uses the binary in the imageio-ffmpeg wheel, never a system
+# one (tools/pipeline/video.py says why).
 RUN apt-get update \
  && apt-get install -y --no-install-recommends python3.12 ca-certificates colmap \
  && rm -rf /var/lib/apt/lists/*

@@ -26,7 +26,9 @@ provider-specific claim in here.
 Why Fly for the compute and Cloudflare for the edge, when consolidating on one provider was
 on the table: [ADR 0007](DECISIONS/0007-fly-for-the-api-cloudflare-for-the-edge.md). The
 short version is the worker: it is a poll loop that supervises hours-long runs and renews a
-lease every two seconds, and a sleep-on-idle runtime has nowhere to put that.
+lease every two seconds, and a sleep-on-idle runtime has nowhere to put that. (It does stop
+when there is nothing to do — on its own terms, never mid-run; see
+[waking the worker](#waking-the-worker-and-letting-neon-sleep).)
 
 The frontend never serves large 3D assets. The browser streams them from Cesium ion or from
 R2, and uploads go browser → R2 directly over presigned URLs. The API carries metadata.
@@ -111,9 +113,21 @@ without them.
 
 - **two process groups from one image.** `app` runs uvicorn behind Fly's proxy and TLS;
   `worker` runs `python -m app.worker` with no service at all.
-- **`auto_stop_machines = "stop"`, `min_machines_running = 0`** on the `app` group only.
-  A single-user API idles for hours; the worker must never be stopped by a proxy that sees
-  no requests, and it is not in `http_service.processes` for that reason.
+- **`auto_stop_machines = "suspend"`, `min_machines_running = 0`** on the `app` group
+  only. A single-user API idles for hours. Suspend rather than stop: Fly snapshots the
+  machine's memory (it allows this up to 2 GB; the API's is 1 GB), so the next request
+  resumes a running uvicorn instead of booting Python and importing the app. The first
+  request after a deploy is still a cold boot — a new image has no snapshot — and a socket
+  held across a suspend (the database pool, an R2 or Anthropic keep-alive) may be found
+  reset once on resume; `pool_pre_ping` (`app/db.py`) checks a pooled connection before
+  using it. The worker must never be stopped by a proxy that sees no requests, and it is
+  not in `http_service.processes` for that reason.
+- **the worker stops itself when idle.** `WORKER_IDLE_EXIT_S=900`: with nothing running
+  or queued for 15 minutes it exits 0 and its machine stays stopped; queueing a job starts
+  it again. See [waking the worker](#waking-the-worker-and-letting-neon-sleep).
+- **two worker slots**: `WORKER_CONCURRENCY=1` general slot and `WORKER_CPU_ONLY_SLOTS=1`,
+  which claims only recipes with no `gpu:` stage, so a one-minute `splat-ingest` is not
+  queued behind a two-hour training run and two training runs never share the machine.
 - **a health check** on `GET /api/v1/health`.
 - **`kill_signal = "SIGTERM"`, `kill_timeout = "30s"`.** The worker treats SIGTERM as a stop
   flag: on its next tick it stops the recipe process, clears the lease on the job it holds
@@ -152,6 +166,8 @@ committed.
 | `PUBLIC_WEB_BASE`                                         | the web origin, for the handoff URL a QR code encodes                        |
 | `CESIUM_ION_SERVER_TOKEN`                                 | optional; `assets:read` for job monitoring. Never a `VITE_` variable         |
 | `ANTHROPIC_API_KEY`                                       | optional; without it the plan drafter is rule-based and says so              |
+| `FLY_API_TOKEN`                                           | a token that can start this app's machines; see waking the worker, below     |
+| `QUEUE_CHECK_URL`                                         | optional; a healthchecks.io-style check for jobs queued and never claimed    |
 
 ### Production refuses to start when it cannot do its job
 
@@ -207,6 +223,73 @@ the job to the next worker, which starts the recipe over. What you lose is the w
 completed stage is recomputed, and a Lane 2 run that was two hours into `train` pays those
 two hours again. You also need a root disk big enough for the largest capture plus the
 image. Size the machine accordingly and treat restarts as expensive.
+
+### Waking the worker, and letting Neon sleep
+
+A worker that polls the queue every two seconds forever keeps two things awake that need
+not be: its own machine, and Neon's compute, which scales to zero only after five minutes
+with no queries. So the worker now stops when it has nothing to do, and the API starts it
+when it queues something.
+
+**The worker side** (`app/worker/loop.py`):
+
+| Setting                       | `fly.toml` | Default | What it does                                                          |
+| ----------------------------- | ---------- | ------- | --------------------------------------------------------------------- |
+| `WORKER_IDLE_S`               | —          | 2       | how often an empty queue is polled at first                           |
+| `WORKER_IDLE_BACKOFF_AFTER_S` | —          | 60      | then doubling once a period: 4, 8, 16 s a minute at a time…           |
+| `WORKER_IDLE_MAX_S`           | —          | 30      | …up to this                                                           |
+| `WORKER_IDLE_EXIT_S`          | 900        | 900     | exit 0 after this long with nothing running or claimed; 0 never exits |
+
+The exit is only ever between jobs — a slot holding a job counts as busy, and the clock
+restarts when a job ends — so nothing about leases or SIGTERM changes. An exit status of 0
+leaves the machine **stopped**: `fly.toml`'s `[[restart]]` policy for the group is
+`on-failure`, so Fly restarts a worker that crashed and leaves one that finished alone.
+The volume and the workdir stay as they are. `.env.example` sets `WORKER_IDLE_EXIT_S=0`,
+because a checkout has nothing that would start the worker again.
+
+**The API side** (`app/services/worker_wake.py`). Every route that queues a job —
+`POST /captures/{id}/process`, the phone's process and refine, `POST /jobs/{id}/retry` —
+adds a background task that runs after the commit and after the response has been sent.
+It lists the app's machines through Fly's Machines API
+(`https://api.machines.dev/v1/apps/$FLY_APP_NAME/machines`; Fly sets `FLY_APP_NAME` on
+every machine), and starts each one whose `config.metadata.fly_process_group` is `worker`
+and whose state is `stopped` or `suspended`. Every request has a 5 s timeout, a failure is
+a warning in the log and never an error to the caller, and with no `FLY_API_TOKEN` the
+whole thing is a no-op — which is what development gets.
+
+**The race** is a job committed just as the worker decides to exit. The worker asks the
+queue once more, under the lock every claim takes, immediately before exiting; a job that
+lands after that question finds the machine still `started`, which a start request does not
+change. So when the wake call finds a worker machine already up, it looks again 20 s later
+and starts any that have stopped by then. A worker that took the job cannot be among them:
+it would not exit for another 15 minutes.
+
+**`FLY_API_TOKEN`** is a Fly **secret on the app** (`fly secrets set`), read by the `app`
+machines — not the GitHub secret of the same name, which is org-scoped so that
+provisioning can create the app. Mint the narrowest token that can start machines:
+
+```bash
+fly tokens create deploy -a twin-api     # app-scoped; can start (and deploy) this app's machines
+fly secrets set -a twin-api FLY_API_TOKEN='FlyV1 fm2_…'
+```
+
+The value is used as Fly prints it (`FlyV1 …`); an older personal token without that prefix
+is sent as a bearer token. A deploy token can do more than start machines — it can deploy
+the app — and Fly's macaroon tokens can be attenuated further; a narrower token that still
+reaches `/machines/{id}/start` has not been tried here. `provision.yml` does not set this
+secret yet. Without it, a worker that has exited stays stopped until a person runs
+`fly machine start` — so either set it or set `WORKER_IDLE_EXIT_S = "0"` in `fly.toml`.
+
+**`QUEUE_CHECK_URL`** (optional) is a [healthchecks.io](https://healthchecks.io)-style check
+URL. Queueing a job pings `<url>/start`; the worker pings `<url>` when it claims a job. Give
+the check a grace time longer than a cold start (a few minutes), and a job that is queued
+and never claimed — an expired token, a machine that will not boot — becomes an alert
+instead of a phone that says "queued" forever.
+
+**Neon** then sees no queries from an idle deployment and suspends its compute five
+minutes after the worker's last poll. The first query after that waits for the compute to
+start (Neon quotes a few hundred milliseconds); a connection the pool held across the
+suspend is checked before use (`pool_pre_ping`) and replaced.
 
 ## GPU training — Modal
 
@@ -303,6 +386,13 @@ Priced 2026-09-23, `iad`: a Fly worker big enough (`performance-4x`, 8 GB) is
 $0.17 for the 40 minutes above. The cost of that choice is one more round trip: the
 frames go up to R2 and the poses come back, which for 100 JPEG frames is tens of MB.
 
+**Why COLMAP is still in the image, then.** Checked 2026-10-02 with dropping its ~370 MB
+in mind: `georeference` (`exif_gps`) declares no `gpu:`, so it runs on the worker under
+every runner, and it calls `colmap model_aligner`. With `WORKER_RUNNER=local` — a
+development box, a deployment without Modal — `pose` runs on the worker as well. And CI's
+`image` job asserts `sfm.colmap_version() == "3.9.1"` in the built image. Taking it out
+would mean moving `georeference` to Modal too, or reimplementing the alignment.
+
 ### Disk: the 20 GB volume
 
 A Lane 2 run in flight holds several things on the worker's volume at once:
@@ -322,6 +412,14 @@ flight, with room for dozens of finished runs.** Past that, run `fly volumes ext
 which needs no redeploy. A failed run keeps its scratch on purpose, for diagnosis. Clear
 it by hand if the volume fills (`fly ssh console`, then remove
 `/data/worker/runs/<job id>`).
+
+That is also why the worker has one general slot and not two: a second Lane 2 run in
+flight is a second upload, frame set and database on the same volume (and a second GPU
+billed). The second slot is CPU-only (`WORKER_CPU_ONLY_SLOTS`) and takes only
+`splat-ingest`, whose run holds the uploaded splat, its normalized copy, the packer's
+sorted working file (about the splat's size) and the tiles — a few times the upload while
+`package` runs, not measured on this volume. A very large ingest beside a very large video
+is the case that wants `fly volumes extend`.
 
 ### Uploads: what the API accepts
 
@@ -357,6 +455,11 @@ selector), which is **not** the scheme the provider hands you — rewrite it.
 Migrations run from `fly.toml`'s `release_command`, so a deploy whose migration fails does
 not replace the running version. Back up with the provider's tooling; the schema is small
 and the heavy data lives in ion and R2.
+
+Neon scales its compute to zero after five minutes with no queries, which an idle
+deployment now gives it: the worker exits once it has been idle for `WORKER_IDLE_EXIT_S`
+and the API machine suspends. See
+[waking the worker](#waking-the-worker-and-letting-neon-sleep).
 
 ## Object storage and CORS — R2
 
@@ -416,6 +519,20 @@ exist only to be fetched by a browser and never hold anything else.
 server-side `CopyObject`, because a run produces those into the private bucket alongside
 things that must stay there. A copy, not a move: the private bucket keeps the originals,
 which are what the artifacts table and reconciliation read.
+
+The copies go eight at a time, and `tileset.json` goes **last**, once every tile's copy has
+returned, so a public `tileset.json` always means the files it names are there. A copy
+that fails stops the publish before the root is copied, and the run registers no site
+(as before). The first real 514-tile capture took about eight minutes to publish one copy
+and one read-back at a time; against a fake store with a fixed 20 ms a request, the same
+514 objects went from 21.4 s (1,029 requests) to 1.4 s (515). The artifact uploads before
+it run eight at a time as well. Every run output is written with its `Cache-Control` — a
+year and `immutable` for a non-JSON key under `runs/`, five minutes with a week of
+`stale-while-revalidate` for JSON and everything else, the same rule as the tile proxy
+(`functions/r2/[[path]].js`) — and the copy keeps it, so a browser reading the public
+bucket's own URL is told the same as one going through the proxy. (A Refine re-runs the
+same job and rewrites the same tile keys; a browser that cached the preview's tiles as
+immutable keeps them. That was already true of the proxy.)
 
 One consequence worth stating plainly: **reconciliation does not see the public bucket.**
 `app/services/reconcile.py` walks `captures/` and `runs/` in the private bucket, so a
@@ -937,6 +1054,13 @@ below is still true of this repository's evidence, whatever it now says about th
 - **Handover commands were written from documentation.** Every command in the handover was
   written from the tools' documented interfaces, and none has been run from this
   repository.
+- **Waking the worker has not met Fly's API.** `app/services/worker_wake.py` is written
+  against the Machines API's documented shapes (`GET /v1/apps/{app}/machines`,
+  `config.metadata.fly_process_group`, `POST …/machines/{id}/start`, a `FlyV1 …` token in
+  `Authorization`) and tested against a stand-in for it. That a deploy token may start
+  machines, that a stopped worker comes back with its volume, and Fly's suspend of the
+  1 GB `app` machine have not been observed from here. `QUEUE_CHECK_URL`'s worker half
+  (the ping on claim) is a separate change.
 - **`provision.yml` has never run, and could not have been tested from where it was
   written.** `api.cloudflare.com`, `api.fly.io`, `api.neon.tech` and `registry.fly.io` are
   all unreachable from that environment — which is the workflow's whole premise, and also

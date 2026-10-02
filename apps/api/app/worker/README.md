@@ -2,7 +2,7 @@
 
 ```bash
 cd apps/api
-uv run python -m app.worker          # poll forever (what C1 deploys beside the API)
+uv run python -m app.worker          # poll until idle for WORKER_IDLE_EXIT_S (0: forever)
 uv run python -m app.worker --once   # claim and run one job, then exit
 ```
 
@@ -121,6 +121,20 @@ registered nothing when the POST failed.
 A deployment with no bucket still runs: the log and artifact uploads are skipped and say
 so by leaving `log_key` null, rather than failing the job.
 
+A directory artifact's members go up eight at a time (`parallel.py`; normalize's frames and
+package's tiles are hundreds of small objects whose cost is round trips), and every
+artifact object is written with the `Cache-Control` a browser should get for it
+(`outputs.cache_control_for`, the same rule as the tile proxy in `functions/r2/[[path]].js`).
+A stage that ran on a provider is **copied** into its artifact keys inside the bucket from
+what the provider left under `runs/<job>/<stage>/transfer/out`, rather than uploaded again
+from the workdir — but only when its `step.json` says `runner: cloud` and the objects match
+the workdir's files name for name and size for size; anything else is uploaded as before.
+The download into the workdir stays: `place`, `package` and the rest read it there.
+
+Publishing (`publish.py`) copies a tileset to the public bucket eight at a time and its
+`tileset.json` last, after every tile, so a public root always means its tiles are there; a
+copy that fails leaves no root and registers no site.
+
 ## Several jobs at once
 
 `WORKER_CONCURRENCY=N` (default 1) runs N **slots** in one worker process (`loop.py`). A
@@ -140,6 +154,18 @@ own recipe process, claim the next -- and nothing about a job is shared between 
 `tests/test_worker_concurrency.py` runs two 30-second jobs in two slots against Postgres:
 both run at once under distinct owners, both leases advance past their length, a cancel
 stops one while the other keeps running, and a stop hands the survivor back.
+
+**CPU-only slots.** `WORKER_CPU_ONLY_SLOTS=N` adds N slots *beside* the general ones that
+claim only a recipe with no `gpu:` stage — `claim_next(recipes=...)`, a filter inside the
+same `SKIP LOCKED` select. Which recipes qualify is read from the recipes when the worker
+starts (`loop.cpu_only_recipes`, through the same lookup a job's recipe goes through, so a
+deployment's own `WORKER_RECIPE_DIR` copy is the one judged); today that is `splat-ingest`.
+Production runs one general slot and one of these: a one-minute ingest no longer waits
+behind a two-hour training run, and two training runs — two GPUs billed, two videos on a
+20 GB volume — never run at once, which is why plain `WORKER_CONCURRENCY=2` was not the
+answer. Slot ids run on across both kinds (`host:pid/0` general, `host:pid/1` CPU-only).
+The test file runs a stand-in training run in the general slot and an ingest in the
+CPU-only one, and checks the CPU-only slot never takes the second training run.
 
 **Why the lease has a thread of its own (the 2026-09-27 dead-letters).** With N = 2 on
 Fly, jobs were taken by the other slot every ~40-60 s and dead-lettered with "stage
@@ -185,14 +211,15 @@ at a time"), in memory that does not grow with it. Measured the same way
 | Lane 2 `quality` + `place` (+ `thumbnail` + `ground_samples` chunked), 1M | 328 MB | 184 MB |
 | the same, 8M | fails at 1.5 GB | 193 MB |
 
-`package` (`tools/captures/splat_tiles.py`) is made out-of-core the same way by the
-large-scene plan's tiler; until that lands it is the one stage here whose peak still
-grows with the splat (5M synthetic gaussians: 1.6 GB, per its own docstring).
+`package` (`tools/captures/splat_tiles.py`) has since been made out-of-core the same way:
+it holds 12-16 bytes a gaussian for the whole scan, and its docstring gives 8M gaussians
+(a 2 GB PLY) packaging at a 380 MB peak (`tests/test_splat_tiles_memory.py`).
 
 So a job spends most of its life at ~80 MB and peaks at ~0.45 GB (ffmpeg, at the start)
-and, apart from `package`, ~0.2 GB at the end, whatever the capture's size. **N = 2 is
-safe on the 2 GB machine** for a capture of any size once `package` is chunked too; N = 3
-was not measured. The 20 GB volume holds about two captures' workdirs in flight, so N > 2
+and ~0.2 GB at the end (~0.4 GB while `package` runs on an 8M splat), whatever the
+capture's size. **N = 2 is safe on the 2 GB machine** -- which is what production's one
+general slot plus one CPU-only slot is: the worst overlap, Lane 2's ffmpeg beside a Lane 1
+`package`, is ~0.45 + ~0.4 GB with the ~0.1 GB supervisor. N = 3 was not measured. The 20 GB volume holds about two captures' workdirs in flight, so N > 2
 wants it extended as well. If the machine does run out, the kernel kills the largest
 process -- a recipe process, whose stage then fails and is retried under the attempt
 budget -- not the supervisor.
@@ -203,12 +230,34 @@ The recipe's `budget_max: 2000000`, set from the old rows of the first table (a 
 peaked near 1.5 GB here), is gone; a deployment whose `package` still loads the whole
 splat should put a `budget_max` back in a run's params for its worker.
 
+## Idle: backing off, exiting, and being woken
+
+An empty queue is polled every `WORKER_IDLE_S` (2 s) for `WORKER_IDLE_BACKOFF_AFTER_S`
+(60 s), then doubling a period at a time up to `WORKER_IDLE_MAX_S` (30 s)
+(`loop.poll_delay`). Once no slot has run or claimed anything for `WORKER_IDLE_EXIT_S`
+(900 s by default; 0 polls forever, and `.env.example` sets 0 for a checkout) the worker
+exits with status 0 and its machine stops. Neon, with nobody polling, scales to zero.
+
+The exit is only between jobs. A slot is busy from the start of its claim to the end of its
+job (`loop._Idle`), the idle clock restarts when a job ends, and the decision to exit takes
+the same lock every claim takes and asks the queue once more under it
+(`claim.anything_claimable`) -- so a job committed while the worker was deciding keeps it
+up, and no slot starts a claim it would then abandon. SIGTERM is unchanged: a stop wakes a
+slot out of even the longest backoff at once.
+
+What starts it again is the API: every route that queues a job asks Fly's Machines API to
+start the stopped `worker` machines once the job is committed, and looks again 20 s later
+if it found one still up -- the worker may have been exiting at that moment
+(`app/services/worker_wake.py`, docs/DEPLOYMENT.md § Waking the worker).
+`tests/test_worker_idle.py` runs the backoff, the exit, the race and the exit status.
+
 ## Configuration
 
 `WORKER_*` in the environment, read through `app.config.Settings` into `WorkerConfig`:
 `WORKDIR`, `RUNNER` (`stub` until A8 makes Lane 1's stages real), `RECIPE_DIR`,
-`IMPL_MODULES`, `LEASE_S`, `POLL_S`, `IDLE_S`, `MAX_ATTEMPTS`, `RETRY_BACKOFF_S`,
-`CONCURRENCY` (slots, 1-8, default 1).
+`IMPL_MODULES`, `LEASE_S`, `POLL_S`, `IDLE_S`, `IDLE_BACKOFF_AFTER_S`, `IDLE_MAX_S`,
+`IDLE_EXIT_S`, `MAX_ATTEMPTS`, `RETRY_BACKOFF_S`, `CONCURRENCY` (general slots, 1-8,
+default 1), `CPU_ONLY_SLOTS` (0-4, default 0).
 
 ## Verify
 
