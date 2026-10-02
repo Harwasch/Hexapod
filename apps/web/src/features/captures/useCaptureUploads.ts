@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { useCallback, useRef, useState } from "react";
+import { useCallback } from "react";
 
 import { ApiError } from "@/api/client";
 import { capturesApi, queryKeys } from "@/api/queries";
@@ -45,6 +45,9 @@ function phoneCaptureName(now: Date = new Date()): string {
  */
 const handles = new Map<string, File>();
 const controllers = new Map<string, AbortController>();
+/** The last drop, for "Try again" after a refused write token: outside React, like `handles`,
+ *  so it outlives the Add panel (which unmounts when Add closes or its tab changes). */
+let lastDrop: File[] = [];
 
 let counter = 0;
 function nextUploadId(): string {
@@ -80,13 +83,27 @@ export interface CaptureUploads {
   busy: boolean;
 }
 
-/** Drives the upload lifecycle: create the capture, register each file, move the bytes. */
+/**
+ * Drives the upload lifecycle: create the capture, register each file, move the bytes.
+ *
+ * Whether a capture is being made, and the last one's error, live in the uploads store
+ * (`creation`), not in the hook: the Add panel that calls it unmounts when Add closes or its
+ * tab changes, and a drop uploading for minutes, or a phone capture being made, must still be
+ * what the panel says when it opens again.
+ */
 export function useCaptureUploads(): CaptureUploads {
   const client = useQueryClient();
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [canRetryDrop, setCanRetryDrop] = useState(false);
-  const lastDrop = useRef<File[]>([]);
+  const { busy, error, canRetryDrop } = useUploads((s) => s.creation);
+  const setCreation = useUploads((s) => s.setCreation);
+  const setError = useCallback(
+    (next: string | null) => setCreation({ error: next }),
+    [setCreation],
+  );
+  const setBusy = useCallback((next: boolean) => setCreation({ busy: next }), [setCreation]);
+  const setCanRetryDrop = useCallback(
+    (next: boolean) => setCreation({ canRetryDrop: next }),
+    [setCreation],
+  );
 
   const invalidate = useCallback(() => {
     void client.invalidateQueries({ queryKey: queryKeys.captures });
@@ -156,7 +173,7 @@ export function useCaptureUploads(): CaptureUploads {
         setCanRetryDrop(false);
         return;
       }
-      lastDrop.current = files;
+      lastDrop = files;
       setBusy(true);
       setError(null);
       setCanRetryDrop(false);
@@ -190,7 +207,7 @@ export function useCaptureUploads(): CaptureUploads {
         setBusy(false);
       }
     },
-    [invalidate, runOne],
+    [invalidate, runOne, setBusy, setCanRetryDrop, setError],
   );
 
   const startFromPhone = useCallback(async () => {
@@ -215,7 +232,7 @@ export function useCaptureUploads(): CaptureUploads {
     } finally {
       setBusy(false);
     }
-  }, [invalidate]);
+  }, [invalidate, setBusy, setCanRetryDrop, setError]);
 
   const retry = useCallback(
     async (uploadId: string) => {
@@ -229,7 +246,7 @@ export function useCaptureUploads(): CaptureUploads {
         setError(messageOf(cause));
       }
     },
-    [runOne],
+    [runOne, setError],
   );
 
   const cancel = useCallback((uploadId: string) => {
@@ -243,7 +260,7 @@ export function useCaptureUploads(): CaptureUploads {
     }
   }, []);
 
-  const retryLastDrop = useCallback(() => start(lastDrop.current), [start]);
+  const retryLastDrop = useCallback(() => start(lastDrop), [start]);
 
   return {
     start,

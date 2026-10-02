@@ -1,5 +1,4 @@
 import { Boxes, RotateCcw, Smartphone } from "lucide-react";
-import { useState } from "react";
 
 import { EmptyState, GlassBadge, GlassButton, Spinner } from "@twin/ui";
 
@@ -33,8 +32,12 @@ export function CaptureUploads({ open }: { open: boolean }) {
   const items = useUploads((s) => s.items);
   const uploads = useCaptureUploads();
   const process = useProcessCapture();
-  // The capture "New capture from phone" made, whose QR code is showing at the top.
-  const [phoneCapture, setPhoneCapture] = useState<string | null>(null);
+  // The capture "New capture from phone" made, whose QR code is showing at the top: in the
+  // uploads store, so closing Add (or switching its tab) mid-handoff loses neither.
+  const phone = useUploads((s) => s.phone);
+  const setPhone = useUploads((s) => s.setPhone);
+  const setPhoneHandoff = useUploads((s) => s.setPhoneHandoff);
+  const phoneCapture = phone?.captureId ?? null;
 
   // `CatalogResult.data` is undefined until the first response lands, exactly as it is
   // for sites; the panel renders its empty state rather than throwing.
@@ -56,12 +59,14 @@ export function CaptureUploads({ open }: { open: boolean }) {
           disabled={captures.builtin}
           busy={uploads.busy}
         />
-        {phoneCapture ? (
+        {phone ? (
           <PhoneHandoff
-            key={phoneCapture}
-            captureId={phoneCapture}
+            key={phone.captureId}
+            captureId={phone.captureId}
             autoOpen
-            onClose={() => setPhoneCapture(null)}
+            kept={phone.handoff}
+            onMinted={(handoff) => setPhoneHandoff(phone.captureId, handoff)}
+            onClose={() => setPhone(null)}
           />
         ) : (
           <GlassButton
@@ -70,8 +75,9 @@ export function CaptureUploads({ open }: { open: boolean }) {
             leadingIcon={<Smartphone size={15} aria-hidden="true" />}
             data-testid="capture-from-phone"
             onClick={() => {
+              // Into the store, so the capture is shown even if the panel closed meanwhile.
               void uploads.startFromPhone().then((id) => {
-                if (id) setPhoneCapture(id);
+                if (id) setPhone(id);
               });
             }}
           >

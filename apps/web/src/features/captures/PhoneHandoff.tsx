@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { GlassButton, Spinner } from "@twin/ui";
 
 import { useCreateHandoff } from "@/api/queries";
+import type { CaptureHandoff } from "@/state/uploads";
 
 /**
  * "Add from phone" — the QR code that gets a capture off the device it is on.
@@ -19,30 +20,47 @@ import { useCreateHandoff } from "@/api/queries";
  * `autoOpen` is for "New capture from phone", where the capture exists only to be sent
  * to, so making the person click a second button to see the code would be a step with
  * no decision in it. `onClose` lets that caller drop the panel it is shown in.
+ *
+ * `kept` and `onMinted` let that caller keep the code beyond this component (the uploads
+ * store, `phone`): the Add panel unmounts when it closes, and coming back must show the code
+ * a phone may be pointing at, not mint another that replaces it -- unless it has expired.
  */
 export function PhoneHandoff({
   captureId,
   autoOpen = false,
   onClose,
+  kept = null,
+  onMinted,
 }: {
   captureId: string;
   autoOpen?: boolean;
   onClose?: () => void;
+  kept?: CaptureHandoff | null;
+  onMinted?: (handoff: CaptureHandoff) => void;
 }) {
   const [open, setOpen] = useState(autoOpen);
   const handoff = useCreateHandoff();
-  const data = handoff.data;
+  // Decided as it opens: a code kept from before that still works is shown again; one minted
+  // here afterwards is `handoff.data`.
+  const [reusable] = useState(() =>
+    kept !== null && Date.parse(kept.expiresAt) > Date.now() ? kept : null,
+  );
+  const data = handoff.data ?? reusable;
 
   // Once per capture, not once per render: a second mint would replace a code someone
   // may already be pointing a phone at. The ref also absorbs StrictMode's double effect.
   const minted = useRef<string | null>(null);
-  const { mutate } = handoff;
+  const { mutateAsync } = handoff;
   useEffect(() => {
-    if (autoOpen && minted.current !== captureId) {
+    if (autoOpen && reusable === null && minted.current !== captureId) {
       minted.current = captureId;
-      mutate({ captureId });
+      // The promise, not `mutate`'s callbacks: those are dropped if the panel closes first.
+      mutateAsync({ captureId }).then(
+        (made) => onMinted?.(made),
+        () => undefined, // said by `handoff.isError` below
+      );
     }
-  }, [autoOpen, captureId, mutate]);
+  }, [autoOpen, captureId, mutateAsync, onMinted, reusable]);
 
   if (!open) {
     return (
