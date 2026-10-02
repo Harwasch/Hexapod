@@ -5,8 +5,9 @@ import { GlassButton, GlassInput, GlassPopover, GlassSwitch } from "@twin/ui";
 
 import { useScene } from "@/cesium/SceneContext";
 import { instanceSphere } from "@/cesium/splatInstances";
-import type { SearchResult } from "@/lib/instances";
+import { formatSplats, type SearchResult } from "@/lib/instances";
 import { useInstances } from "@/state/instances";
+import { useSettings } from "@/state/settings";
 
 /** Moves focus between the rows' main buttons with the arrow keys; Escape goes back up. */
 function moveFocus(event: KeyboardEvent<HTMLElement>, list: HTMLElement | null): void {
@@ -31,6 +32,10 @@ export function InstancePanel({ assetId }: { assetId: string }) {
   const dimOthers = useInstances((s) => s.dimOthers);
   const setQuery = useInstances((s) => s.setQuery);
   const toggleHidden = useInstances((s) => s.toggleHidden);
+  const hideMatches = useInstances((s) => s.hideMatches);
+  const showOnlyMatches = useInstances((s) => s.showOnlyMatches);
+  const gap = useInstances((s) => s.gaps[assetId]);
+  const setSettings = useSettings((s) => s.set);
   const showAll = useInstances((s) => s.showAll);
   const highlight = useInstances((s) => s.highlight);
   const setDimOthers = useInstances((s) => s.setDimOthers);
@@ -92,6 +97,35 @@ export function InstancePanel({ assetId }: { assetId: string }) {
           ))}
         </div>
       )}
+      {gap && (
+        <div className="instance-panel__gap" role="note" data-testid="instance-renderer-gap">
+          <p>Highlight and hide need the Cesium renderer. {gap.reason}</p>
+          <GlassButton
+            size="sm"
+            variant="ghost"
+            onClick={() => setSettings({ splatRenderer: "cesium" })}
+          >
+            Use the Cesium renderer
+          </GlassButton>
+        </div>
+      )}
+      {entry.matches.length > 0 && (
+        <div className="instance-panel__matches" role="group" aria-label="All matches">
+          <span className="instance-panel__count" role="status" data-testid="instance-count">
+            {entry.matches.length > entry.results.length
+              ? `${String(entry.results.length)} of ${String(entry.matches.length)}`
+              : `${String(entry.matches.length)} ${entry.matches.length === 1 ? "match" : "matches"}`}
+          </span>
+          <GlassButton size="sm" variant="ghost" onClick={() => hideMatches(assetId)}>
+            {entry.matches.length === 1
+              ? "Hide the match"
+              : `Hide all ${String(entry.matches.length)} matches`}
+          </GlassButton>
+          <GlassButton size="sm" variant="ghost" onClick={() => showOnlyMatches(assetId)}>
+            Show only matches
+          </GlassButton>
+        </div>
+      )}
       <ul
         id={listId}
         ref={listRef}
@@ -113,6 +147,7 @@ export function InstancePanel({ assetId }: { assetId: string }) {
               >
                 <span className="instance-panel__name">{result.label}</span>
                 <span className="instance-panel__meta">
+                  #{result.id} · {formatSplats(result.splats)} splats ·{" "}
                   {Math.round(result.score * 100)}% · {result.behaviour}
                 </span>
               </button>
@@ -120,7 +155,7 @@ export function InstancePanel({ assetId }: { assetId: string }) {
                 iconOnly
                 size="sm"
                 variant="ghost"
-                aria-label={`${hidden ? "Show" : "Hide"} ${result.label}`}
+                aria-label={`${hidden ? "Show" : "Hide"} ${result.label} #${String(result.id)}`}
                 aria-pressed={hidden}
                 onClick={() => toggleHidden(assetId, result.id)}
               >

@@ -1,7 +1,9 @@
 import { create } from "zustand";
 
 import {
+  hiddenForOnly,
   quickFilters,
+  RESULT_LIMIT,
   searchInstances,
   type Instance,
   type QuickFilter,
@@ -18,7 +20,17 @@ export interface AssetInstances {
   /** Instances tinted; while any are, the rest may be dimmed (`dimOthers`). */
   highlighted: ReadonlySet<number>;
   query: string;
+  /** The first `RESULT_LIMIT` matches, listed. */
   results: SearchResult[];
+  /** Every match's id, best first: what "hide all matches" and "show only matches" act on. */
+  matches: readonly number[];
+}
+
+/** A splat renderer that cannot hide or highlight this scan's objects, and why. */
+export interface RendererGap {
+  /** The renderer drawing the scan now. */
+  renderer: string;
+  reason: string;
 }
 
 interface InstancesState {
@@ -26,6 +38,12 @@ interface InstancesState {
   assets: Record<string, AssetInstances>;
   /** Whether everything but a highlight is dimmed while one is active. */
   dimOthers: boolean;
+  /**
+   * Per asset id, set while the splat renderer drawing it cannot apply hide and highlight
+   * (`cesium/scanView`): the panel says so and offers the CesiumJS renderer.
+   */
+  gaps: Record<string, RendererGap>;
+  setGap: (assetId: string, gap: RendererGap | null) => void;
   setTable: (
     assetId: string,
     table: { instances: Instance[]; propertyNames: string[] } | null,
@@ -33,6 +51,10 @@ interface InstancesState {
   setQuery: (assetId: string, query: string) => void;
   setHidden: (assetId: string, ids: readonly number[], hidden: boolean) => void;
   toggleHidden: (assetId: string, id: number) => void;
+  /** Hides every match of the current query, not only the ones listed. */
+  hideMatches: (assetId: string) => void;
+  /** Hides everything but the current query's matches (and what they contain). */
+  showOnlyMatches: (assetId: string) => void;
   showAll: (assetId: string) => void;
   /** Replaces the highlight; an empty list clears it. */
   highlight: (assetId: string, ids: readonly number[]) => void;
@@ -54,6 +76,19 @@ function patch(
 export const useInstances = create<InstancesState>()((set) => ({
   assets: {},
   dimOthers: true,
+  gaps: {},
+  setGap: (assetId, gap) =>
+    set((s) => {
+      const current = s.gaps[assetId];
+      if (gap === null) {
+        if (!current) return s;
+        return {
+          gaps: Object.fromEntries(Object.entries(s.gaps).filter(([id]) => id !== assetId)),
+        };
+      }
+      if (current?.renderer === gap.renderer && current.reason === gap.reason) return s;
+      return { gaps: { ...s.gaps, [assetId]: gap } };
+    }),
   setTable: (assetId, table) =>
     set((s) => {
       const next: Record<string, AssetInstances> = {};
@@ -67,16 +102,21 @@ export const useInstances = create<InstancesState>()((set) => ({
           highlighted: EMPTY,
           query: "",
           results: [],
+          matches: [],
         };
       }
       return { assets: next };
     }),
   setQuery: (assetId, query) =>
     set((s) =>
-      patch(s, assetId, (current) => ({
-        query,
-        results: searchInstances(current.instances, query),
-      })),
+      patch(s, assetId, (current) => {
+        const all = searchInstances(current.instances, query, Number.POSITIVE_INFINITY);
+        return {
+          query,
+          results: all.slice(0, RESULT_LIMIT),
+          matches: all.map((r) => r.id),
+        };
+      }),
     ),
   setHidden: (assetId, ids, hidden) =>
     set((s) =>
@@ -97,6 +137,23 @@ export const useInstances = create<InstancesState>()((set) => ({
         else next.add(id);
         return { hidden: next };
       }),
+    ),
+  hideMatches: (assetId) =>
+    set((s) =>
+      patch(s, assetId, (current) => {
+        if (current.matches.length === 0) return {};
+        const next = new Set(current.hidden);
+        for (const id of current.matches) next.add(id);
+        return { hidden: next };
+      }),
+    ),
+  showOnlyMatches: (assetId) =>
+    set((s) =>
+      patch(s, assetId, (current) =>
+        current.matches.length === 0
+          ? {}
+          : { hidden: new Set(hiddenForOnly(current, current.matches)) },
+      ),
     ),
   showAll: (assetId) => set((s) => patch(s, assetId, () => ({ hidden: EMPTY }))),
   highlight: (assetId, ids) =>

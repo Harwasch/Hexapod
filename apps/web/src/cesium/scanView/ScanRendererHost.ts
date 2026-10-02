@@ -35,6 +35,7 @@ import { parseTileset, type TileNode } from "@/view/tiles";
 
 import { Handover } from "./handover";
 import { scanPose } from "./pose";
+import { linkScanInstances } from "./scanInstances";
 import type { ScanBackend, ScanPose, SplatRendererKind } from "./types";
 
 const log = createLogger("scan-renderer");
@@ -43,6 +44,8 @@ const log = createLogger("scan-renderer");
 export interface ScanTarget {
   key: string;
   tileset: Cesium3DTileset;
+  /** The scan's asset id: whose objects (state/instances.ts) the renderer draws hidden or lit. */
+  assetId?: string;
 }
 
 /** How often the tile cut is re-planned while the camera moves (ms), as the viewer page. */
@@ -68,6 +71,85 @@ const CACHE_FACTOR = 1.5;
  *  tileset (PlayCanvas's streamed SOG, written by splat-transform). */
 export const NATIVE_LOD_PATH = "sog/lod-meta.json";
 
+/**
+ * Whether a tileset says where its native level of detail is: `root.extras.nativeLod` as a
+ * uri relative to the tileset (or `{ uri }`) says it has one there, `false` that it has none.
+ * `undefined` when it says nothing, as every scan packaged before the key existed.
+ */
+export function declaredNativeLod(extras: unknown): string | false | undefined {
+  if (typeof extras !== "object" || extras === null) return undefined;
+  const value = (extras as { nativeLod?: unknown }).nativeLod;
+  if (value === false) return false;
+  if (typeof value === "string" && value !== "") return value;
+  if (typeof value === "object" && value !== null) {
+    const uri = (value as { uri?: unknown }).uri;
+    if (typeof uri === "string" && uri !== "") return uri;
+  }
+  return undefined;
+}
+
+/** Where the scans found to have no native package are remembered (this device only). */
+const NO_NATIVE_KEY = "hexapod.scan.noNativeLod";
+/** Most tilesets remembered: the oldest go first. */
+const NO_NATIVE_MAX = 200;
+/** How long an absence is believed: a package can be published beside a tileset later. */
+export const NO_NATIVE_TTL_MS = 3 * 24 * 3600 * 1000;
+
+/** Tilesets probed and found without a native package, and when, from browser storage. */
+function rememberedWithout(): [string, number][] {
+  try {
+    const raw: unknown = JSON.parse(localStorage.getItem(NO_NATIVE_KEY) ?? "[]");
+    if (!Array.isArray(raw)) return [];
+    return raw.filter(
+      (e): e is [string, number] =>
+        Array.isArray(e) && typeof e[0] === "string" && typeof e[1] === "number",
+    );
+  } catch {
+    return [];
+  }
+}
+
+function knownWithout(tilesetUrl: string, now: number): boolean {
+  return rememberedWithout().some(([url, at]) => url === tilesetUrl && now - at < NO_NATIVE_TTL_MS);
+}
+
+function rememberWithout(tilesetUrl: string, now: number): void {
+  try {
+    const list = rememberedWithout().filter(
+      ([url, at]) => url !== tilesetUrl && now - at < NO_NATIVE_TTL_MS,
+    );
+    list.push([tilesetUrl, now]);
+    localStorage.setItem(NO_NATIVE_KEY, JSON.stringify(list.slice(-NO_NATIVE_MAX)));
+  } catch {
+    // Storage may be blocked: the probe then runs again next time, as it always did.
+  }
+}
+
+/**
+ * The native level of detail of the tileset at `tilesetUrl`, or null. A declared one
+ * (`declaredNativeLod`) is taken as it is, and a declared absence costs no request. A scan
+ * that declares nothing is probed once -- a HEAD, so nothing is downloaded -- and a scan found
+ * without one is remembered on this device for a few days (`NO_NATIVE_TTL_MS`), so the
+ * probe's 404 -- which the browser logs as an error whatever the page does with it -- is not
+ * repeated on every visit. A scan that has one behaves as it always did.
+ */
+export async function findNativeLod(
+  tilesetUrl: string,
+  extras: unknown,
+  probe: (url: string) => Promise<boolean> = async (url) =>
+    (await fetch(url, { method: "HEAD" }).catch(() => null))?.ok === true,
+): Promise<string | null> {
+  const declared = declaredNativeLod(extras);
+  if (declared === false) return null;
+  if (typeof declared === "string") return new URL(declared, tilesetUrl).toString();
+  const now = Date.now();
+  if (knownWithout(tilesetUrl, now)) return null;
+  const lodUrl = new URL(NATIVE_LOD_PATH, tilesetUrl).toString();
+  if (await probe(lodUrl)) return lodUrl;
+  rememberWithout(tilesetUrl, now);
+  return null;
+}
+
 /** What the page's tests and the debug panel read. */
 export interface ScanRendererStatus {
   kind: SplatRendererKind;
@@ -82,13 +164,16 @@ export interface ScanRendererStatus {
   native: boolean;
   loading: number;
   cached: number;
+  /** Tiles that can carry object ids, and those the scan's instances.json lists, or null. */
+  instances: { tiles: number; matched: number } | null;
 }
 
 interface Session {
   kind: SplatRendererKind;
   key: string;
   stop(): void;
-  status(): Omit<ScanRendererStatus, "kind" | "active">;
+  status(): Omit<ScanRendererStatus, "kind" | "active" | "instances">;
+  instances(): { tiles: number; matched: number } | null;
 }
 
 interface BackendModule {
@@ -188,6 +273,7 @@ export class ScanRendererHost {
       kind: this.kind,
       active: this.session !== null,
       ...inner,
+      instances: this.session?.instances() ?? null,
       error: inner.error ?? this.lastError,
     };
   }
@@ -415,17 +501,22 @@ export class ScanRendererHost {
     handover.show(root, performance.now());
     streamer.adopt(tree.root, root);
     stopDriving = driveWithGlobe(viewer.scene, viewer.camera, tick);
+    const unlinkInstances = target.assetId
+      ? linkScanInstances(target.assetId, backend, false)
+      : () => undefined;
     log.info("splat renderer started", { kind, tiles: tree.root.uri });
 
     return {
       kind,
       key: target.key,
       stop: () => {
+        unlinkInstances();
         stopDriving?.();
         streamer.stop();
         backend.destroy();
         canvas.remove();
       },
+      instances: () => backend.instanceTiles?.() ?? null,
       status: () => ({
         tiles: streamer.drawn.length,
         gaussians: streamer.drawnGaussians,
@@ -451,9 +542,10 @@ export class ScanRendererHost {
     backend: ScanBackend<unknown>,
     tilesetUrl: string,
   ): Promise<Session | null> {
-    const lodUrl = new URL(NATIVE_LOD_PATH, tilesetUrl).toString();
-    const probe = await fetch(lodUrl).catch(() => null);
-    if (!probe?.ok || !backend.streamNative) return null;
+    if (!backend.streamNative) return null;
+    const extras = (target.tileset.root as { extras?: unknown } | undefined)?.extras;
+    const lodUrl = await findNativeLod(tilesetUrl, extras);
+    if (lodUrl === null) return null;
     const stream = await backend.streamNative(lodUrl);
     const { viewer } = this;
     const toLocal = new Matrix4();
@@ -489,11 +581,17 @@ export class ScanRendererHost {
       frames += 1;
     };
     const stopDriving = driveWithGlobe(viewer.scene, viewer.camera, tick);
+    // The native package's splats carry no object ids: the objects panel says so.
+    const unlinkInstances = target.assetId
+      ? linkScanInstances(target.assetId, backend, true)
+      : () => undefined;
     log.info("splat renderer streaming natively", { kind, url: lodUrl });
     return {
       kind,
       key: target.key,
+      instances: () => null,
       stop: () => {
+        unlinkInstances();
         stopDriving();
         stream.stop();
         backend.destroy();

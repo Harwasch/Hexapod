@@ -1,5 +1,7 @@
 import type { TileNode } from "@/view/tiles";
 
+import type { InstanceStyle } from "./scanInstances";
+
 /** What draws a splat scan on the globe: CesiumJS itself, or a dedicated splat renderer. */
 export type SplatRendererKind = "cesium" | "spark" | "playcanvas";
 
@@ -55,5 +57,13 @@ export interface ScanBackend<M> {
   fade?(mesh: M, alpha: number): void;
   /** The most gaussians it may draw a frame (the adaptive budget moved). */
   setBudget(drawn: number): void;
+  /**
+   * Draws the scan's objects hidden and highlighted as `style` says (scanInstances.ts), on
+   * every tile loaded now or later; null draws every splat as it was. Absent when the
+   * renderer cannot, and the objects panel then offers CesiumJS's renderer.
+   */
+  setInstances?(style: InstanceStyle | null): void;
+  /** Tiles loaded now, and how many of them carry object ids: for tests and diagnostics. */
+  instanceTiles?(): { tiles: number; matched: number };
   destroy(): void;
 }

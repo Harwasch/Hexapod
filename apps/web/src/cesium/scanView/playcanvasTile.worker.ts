@@ -5,9 +5,14 @@
  * positions are sent relative to the middle of the tile's box and the entity is placed there,
  * so they stay small numbers wherever the tile is in the scan (a GPU half float is 6 cm apart
  * 100 m out).
+ *
+ * It also digests the tile's own positions, before they are moved (`checksumPositions`, the
+ * key `instances.json` lists each tile's object ids under), so the scan's objects can be hidden
+ * and highlighted in this renderer too (scanInstances.ts).
  */
 
 import { loadSpz } from "@spz-loader/core";
+import { checksumPositions } from "@twin/world";
 
 import { centreColumns, playcanvasProperties } from "@/lib/splatLayout";
 import { spzFromGlb } from "@/view/glb";
@@ -19,10 +24,11 @@ self.onmessage = async (event: MessageEvent<{ id: number; url: string }>): Promi
     if (!response.ok) throw new Error(`The scan's data answered ${String(response.status)}.`);
     const spz = spzFromGlb(await response.arrayBuffer());
     const cloud = await loadSpz(spz, { unpackOptions: { coordinateSystem: "UNSPECIFIED" } });
+    const checksum = checksumPositions(cloud.positions.subarray(0, cloud.numPoints * 3));
     const properties = playcanvasProperties(cloud);
     const origin = centreColumns(properties);
     self.postMessage(
-      { id, count: cloud.numPoints, properties, origin },
+      { id, count: cloud.numPoints, properties, origin, checksum },
       { transfer: Object.values(properties).map((values) => values.buffer) },
     );
   } catch (error) {

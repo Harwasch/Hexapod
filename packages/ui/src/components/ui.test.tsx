@@ -72,6 +72,21 @@ describe("GlassSegmentedControl", () => {
     await userEvent.keyboard("{ArrowLeft}");
     expect(splat).toHaveFocus();
   });
+
+  it("forwards data-testid to the group element", () => {
+    render(
+      <GlassSegmentedControl
+        aria-label="Splat renderer"
+        data-testid="splat-renderer"
+        value="a"
+        onValueChange={() => undefined}
+        options={[{ value: "a", label: "A" }]}
+      />,
+    );
+    expect(screen.getByTestId("splat-renderer")).toBe(
+      screen.getByRole("radiogroup", { name: "Splat renderer" }),
+    );
+  });
 });
 
 describe("GlassSheet", () => {

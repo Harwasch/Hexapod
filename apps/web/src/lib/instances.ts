@@ -290,7 +290,12 @@ export interface SearchResult {
   /** The tag (or property) that matched, or the top tag when only filters were given. */
   label: string;
   behaviour: Behaviour;
+  /** Gaussians the instance holds: tells apart rows that share a label. */
+  splats: number;
 }
+
+/** The default number of results a search lists; the whole match set is kept beside them. */
+export const RESULT_LIMIT = 50;
 
 const FILTER = /([a-z_][\w-]*)\s*(>=|<=|>|<|=|:)\s*([\w.-]+)/gi;
 
@@ -374,6 +379,13 @@ export function instanceLabel(instance: Instance): string {
   return instance.tags[0]?.label ?? `Object ${String(instance.id)}`;
 }
 
+/** A splat count, short: 940, 12.3k, 1.2M. */
+export function formatSplats(splats: number): string {
+  if (splats < 1000) return String(splats);
+  if (splats < 1_000_000) return `${(splats / 1000).toFixed(splats < 10_000 ? 1 : 0)}k`;
+  return `${(splats / 1_000_000).toFixed(1)}M`;
+}
+
 /**
  * How much of the scan an instance is, 0..1: its splats on a log scale against the largest
  * instance's. A query's match is scaled by `PROMINENCE_FLOOR + (1 - PROMINENCE_FLOOR) *
@@ -397,11 +409,11 @@ export function prominence(splats: number, largest: number): number {
 export function searchInstances(
   instances: readonly Instance[],
   query: InstanceQuery | string,
-  limit = 50,
+  limit = RESULT_LIMIT,
 ): SearchResult[] {
   const q = typeof query === "string" ? parseQuery(query) : query;
   if (q.terms.length === 0 && q.filters.length === 0) return [];
-  const results: (SearchResult & { splats: number })[] = [];
+  const results: SearchResult[] = [];
   const sortBy = q.filters.find((f) => f.name !== "behaviour")?.name;
   const largest = instances.reduce((m, i) => Math.max(m, i.splats), 0);
   for (const instance of instances) {
@@ -437,13 +449,39 @@ export function searchInstances(
     });
   }
   results.sort((a, b) => b.score - a.score || b.splats - a.splats || a.id - b.id);
-  return results
-    .slice(0, limit)
-    .map(({ id, score, label, behaviour }) => ({ id, score, label, behaviour }));
+  return Number.isFinite(limit) ? results.slice(0, limit) : results;
+}
+
+/**
+ * What to hide so that only `matches` are drawn: every instance that is not a match, not
+ * inside one (a match's descendants are part of it) and not around one (hiding an ancestor
+ * hides everything under it, `withDescendants`, so a match's ancestors stay shown and their
+ * other children are hidden one by one).
+ */
+export function hiddenForOnly(
+  doc: Pick<InstancesDoc, "instances">,
+  matches: Iterable<number>,
+): number[] {
+  const keep = withDescendants(doc, matches);
+  const parentOf = new Map<number, number | null>();
+  for (const instance of doc.instances) parentOf.set(instance.id, instance.parent);
+  for (const id of [...keep]) {
+    for (let up = parentOf.get(id) ?? null; up !== null && !keep.has(up);) {
+      keep.add(up);
+      up = parentOf.get(up) ?? null;
+    }
+  }
+  return doc.instances.filter((i) => !keep.has(i.id)).map((i) => i.id);
 }
 
 /** One quick filter: a property name with a threshold, or a behaviour. */
 export interface QuickFilter {
+  /** A property score above a threshold, or a behaviour (`behaviour:<name>`). */
+  kind: "property" | "behaviour";
+  /**
+   * What the button says. A behaviour can share its name with a property ("static",
+   * "movable"), so a behaviour filter reads as its query does, "behaviour: <name>".
+   */
   label: string;
   query: string;
   /** Instances it matches. */
@@ -461,14 +499,21 @@ export function quickFilters(
   const out: QuickFilter[] = [];
   for (const name of doc.propertyNames) {
     const count = doc.instances.filter((i) => (i.properties[name] ?? 0) > threshold).length;
-    if (count > 0) out.push({ label: name, query: `${name} > ${String(threshold)}`, count });
+    if (count > 0) {
+      out.push({ kind: "property", label: name, query: `${name} > ${String(threshold)}`, count });
+    }
   }
   out.sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
   const behaviours = new Map<Behaviour, number>();
   for (const i of doc.instances)
     behaviours.set(i.behaviour, (behaviours.get(i.behaviour) ?? 0) + 1);
   for (const [behaviour, count] of [...behaviours].sort((a, b) => b[1] - a[1])) {
-    out.push({ label: behaviour, query: `behaviour:${behaviour}`, count });
+    out.push({
+      kind: "behaviour",
+      label: `behaviour: ${behaviour}`,
+      query: `behaviour:${behaviour}`,
+      count,
+    });
   }
   return out;
 }

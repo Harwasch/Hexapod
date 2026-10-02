@@ -655,6 +655,15 @@ export function cesiumInstanceGpu(): InstanceGpu | undefined {
 const ATTACHED = new Map<string, { tileset: Cesium3DTileset; doc: InstancesDoc }>();
 
 /**
+ * The instances of `assetId`'s scan, once they loaded: what a dedicated splat renderer
+ * (scanView/scanInstances.ts) draws from, since CesiumJS keeps the scan's tileset loaded (hidden)
+ * under any renderer.
+ */
+export function instancesDocOf(assetId: string): InstancesDoc | undefined {
+  return ATTACHED.get(assetId)?.doc;
+}
+
+/**
  * The world-space sphere around instance `id` of `assetId`'s scan: its bounds (tileset local
  * ENU metres) through the root tile's computed transform, which carries the model matrix.
  */
