@@ -854,45 +854,129 @@ def _cell_graph(centroids: np.ndarray, edge: float) -> tuple[np.ndarray, np.ndar
     return pairs // len(centroids), pairs % len(centroids)
 
 
-def _region_masks(
-    votes: Sequence[_Votes], level: int, region: np.ndarray, n: int
-) -> list[tuple[np.ndarray, np.ndarray]]:
-    """Per view: which regions are visible, and the mask of this level holding `MASK_SHARE`
-    of each one's visible weight (-1: none). A region is judged as a whole, so a few cells
-    that bleed into a neighbour's mask do not carry it with them."""
-    out = []
-    for v in votes:
-        reg = region[v.cells]
-        ok = reg >= 0
-        reg, weight, mask = reg[ok], v.weight[ok].astype(np.float64), v.masks[level][ok]
-        visible = np.bincount(reg, weight, n)
-        best = np.full(n, -1, np.int32)
-        assigned = mask >= 0
-        if assigned.any():
-            n_masks = int(mask.max()) + 1
-            keys, inverse = np.unique(
-                reg[assigned].astype(np.int64) * n_masks + mask[assigned], return_inverse=True
-            )
-            sums = np.bincount(inverse, weight[assigned])
-            kr, km = keys // n_masks, keys % n_masks
-            order = np.lexsort((km, -sums, kr))
-            first = order[np.r_[True, kr[order][1:] != kr[order][:-1]]]
-            strong = sums[first] >= MASK_SHARE * visible[kr[first]]
-            best[kr[first][strong]] = km[first][strong]
-        out.append((visible >= MIN_VISIBLE_PX, best))
-    return out
+@dataclass
+class _Observed:
+    """Every view's votes of one mask level, as flat rows in view order (cells ascending
+    within a view): the visible weight of each in-mask cell, and its mask (-1: none)."""
+
+    cell: np.ndarray  # (e,) int64
+    view: np.ndarray  # (e,) int64
+    weight: np.ndarray  # (e,) float64
+    mask: np.ndarray  # (e,) int64
+    views: int
+    masks: int  # 1 + the largest mask index
 
 
-def _agreement(
-    per_view: Sequence[tuple[np.ndarray, np.ndarray]], a: np.ndarray, b: np.ndarray
-) -> tuple[np.ndarray, np.ndarray]:
-    """Per pair: views in the same mask, and views where both were seen and either masked."""
-    together = np.zeros(a.size, np.int32)
-    both = np.zeros(a.size, np.int32)
-    for visible, best in per_view:
-        informative = visible[a] & visible[b] & ((best[a] >= 0) | (best[b] >= 0))
-        both += informative
-        together += informative & (best[a] == best[b])
+def _observed(votes: Sequence[_Votes], level: int, in_mask: np.ndarray) -> _Observed:
+    cells, views, weights, masks = [], [], [], []
+    for k, v in enumerate(votes):
+        ok = in_mask[v.cells]
+        cells.append(v.cells[ok].astype(np.int64))
+        views.append(np.full(int(ok.sum()), k, np.int64))
+        weights.append(v.weight[ok].astype(np.float64))
+        masks.append(v.masks[level][ok].astype(np.int64))
+    if not cells:
+        z = np.zeros(0, np.int64)
+        return _Observed(z, z, np.zeros(0), z, 0, 1)
+    mask = np.concatenate(masks)
+    return _Observed(
+        np.concatenate(cells),
+        np.concatenate(views),
+        np.concatenate(weights),
+        mask,
+        len(votes),
+        int(mask.max()) + 1 if mask.size else 1,
+    )
+
+
+@dataclass
+class _Seen:
+    """Per (region, view) where the region is visible (`MIN_VISIBLE_PX`): the mask holding
+    `MASK_SHARE` of its visible weight there (-1: none). Rows sorted by region, then view."""
+
+    region: np.ndarray  # (r,) int64
+    view: np.ndarray  # (r,) int64
+    best: np.ndarray  # (r,) int64
+    #: Views in all (keys are region x views_bound + view).
+    views_bound: int
+
+    def rows(self, ids: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """Where each id's rows start, and how many."""
+        start = np.searchsorted(self.region, ids, "left")
+        return start, np.searchsorted(self.region, ids, "right") - start
+
+
+def _seen(obs: _Observed, region: np.ndarray, rows: np.ndarray | None = None) -> _Seen:
+    """`_Seen` of the regions `region` (per cell, -1: none) gives the observed rows `rows`
+    (default: all). A region is judged as a whole, so a few cells that bleed into a
+    neighbour's mask do not carry it with them. Sums run in the rows' order."""
+    cell = obs.cell if rows is None else obs.cell[rows]
+    reg = region[cell]
+    ok = reg >= 0
+    view = (obs.view if rows is None else obs.view[rows])[ok]
+    weight = (obs.weight if rows is None else obs.weight[rows])[ok]
+    mask = (obs.mask if rows is None else obs.mask[rows])[ok]
+    reg = reg[ok]
+    key = reg * obs.views + view
+    keys, inverse = np.unique(key, return_inverse=True)
+    visible = np.bincount(inverse, weight, keys.size)
+    best = np.full(keys.size, -1, np.int64)
+    assigned = mask >= 0
+    if assigned.any():
+        mkeys, minv = np.unique(key[assigned] * obs.masks + mask[assigned], return_inverse=True)
+        sums = np.bincount(minv, weight[assigned], mkeys.size)
+        kr, km = mkeys // obs.masks, mkeys % obs.masks
+        order = np.lexsort((km, -sums, kr))
+        first = order[np.r_[True, kr[order][1:] != kr[order][:-1]]]
+        at = np.searchsorted(keys, kr[first])
+        strong = sums[first] >= MASK_SHARE * visible[at]
+        best[at[strong]] = km[first][strong]
+    keep = visible >= MIN_VISIBLE_PX
+    keys = keys[keep]
+    return _Seen(keys // obs.views, keys % obs.views, best[keep], obs.views)
+
+
+#: Pair rows joined at a time in `_agreement` (bounds its memory).
+JOIN_ROWS = 1 << 24
+
+
+def _agreement(seen: _Seen, a: np.ndarray, b: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Per pair: views in the same mask, and views where both were seen and either masked.
+    A sorted join of the two regions' rows on the view."""
+    together = np.zeros(a.size, np.int64)
+    both = np.zeros(a.size, np.int64)
+    if a.size == 0 or seen.region.size == 0:
+        return together, both
+    sa, la = seen.rows(a)
+    sb, lb = seen.rows(b)
+    cost = np.cumsum(la + lb)
+    lo = 0
+    while lo < a.size:
+        hi = int(np.searchsorted(cost, (cost[lo - 1] if lo else 0) + JOIN_ROWS, "right"))
+        hi = max(hi, lo + 1)
+        part = slice(lo, hi)
+        n_part = hi - lo
+        pair_a = np.repeat(np.arange(n_part), la[part])
+        rows_a = np.repeat(sa[part] - np.cumsum(la[part]) + la[part], la[part]) + np.arange(
+            pair_a.size
+        )
+        pair_b = np.repeat(np.arange(n_part), lb[part])
+        rows_b = np.repeat(sb[part] - np.cumsum(lb[part]) + lb[part], lb[part]) + np.arange(
+            pair_b.size
+        )
+        # Both sides are sorted by (pair, view), so their keys are ascending.
+        key_a = pair_a * seen.views_bound + seen.view[rows_a]
+        key_b = pair_b * seen.views_bound + seen.view[rows_b]
+        at = np.minimum(np.searchsorted(key_b, key_a), max(key_b.size - 1, 0))
+        match = (key_b[at] == key_a) if key_b.size else np.zeros(key_a.size, bool)
+        best_a = seen.best[rows_a[match]]
+        best_b = seen.best[rows_b[at[match]]]
+        informative = (best_a >= 0) | (best_b >= 0)
+        same = informative & (best_a == best_b)
+        owner = pair_a[match]
+        both[part] = np.bincount(owner, informative, n_part)
+        together[part] = np.bincount(owner, same, n_part)
+        lo = hi
     return together, both
 
 
@@ -910,26 +994,27 @@ def _relabel(region: np.ndarray) -> np.ndarray:
     return out
 
 
-def _shared(
-    per_view: Sequence[tuple[np.ndarray, np.ndarray]],
-    region: np.ndarray,
-    weights: np.ndarray,
-    n: int,
-) -> tuple[np.ndarray, np.ndarray]:
+def _shared(seen: _Seen, size: np.ndarray, n: int) -> tuple[np.ndarray, np.ndarray]:
     """Pairs of regions that were in one mask in some view, wherever they are: the
     `SHARED_REGIONS` largest of each mask (so a mask over thousands of specks stays cheap)."""
-    size = np.bincount(region[region >= 0], weights[region >= 0], n)
+    masked = seen.best >= 0
+    reg, view, best = seen.region[masked], seen.view[masked], seen.best[masked]
+    order = np.lexsort((reg, -size[reg], best, view))
+    reg, view, best = reg[order], view[order], best[order]
+    if reg.size < 2:
+        return np.zeros(0, np.int64), np.zeros(0, np.int64)
+    starts = np.flatnonzero(np.r_[True, (view[1:] != view[:-1]) | (best[1:] != best[:-1])])
+    lengths = np.diff(np.r_[starts, reg.size])
+    rank = np.arange(reg.size) - np.repeat(starts, lengths)
+    held = np.minimum(lengths, SHARED_REGIONS)
     keys: list[np.ndarray] = []
-    for visible, best in per_view:
-        members = np.flatnonzero(visible & (best >= 0))
-        if members.size < 2:
-            continue
-        order = members[np.lexsort((members, -size[members], best[members]))]
-        for group in np.split(order, np.flatnonzero(np.diff(best[order])) + 1):
-            group = np.sort(group[:SHARED_REGIONS])
-            if group.size > 1:
-                i, j = np.triu_indices(group.size, 1)
-                keys.append(group[i] * n + group[j])
+    for g in np.unique(held[held > 1]):
+        # Every mask holding g regions (after the cut): a (k, g) table, ids sorted per row.
+        first = starts[held == g]
+        table = np.sort(reg[first[:, None] + np.arange(g)[None, :]], axis=1)
+        i, j = np.triu_indices(int(g), 1)
+        keys.append((table[:, i] * n + table[:, j]).reshape(-1))
+    del rank
     if not keys:
         return np.zeros(0, np.int64), np.zeros(0, np.int64)
     key = np.unique(np.concatenate(keys))
@@ -937,7 +1022,8 @@ def _shared(
 
 
 def _joins(
-    per_view: Sequence[tuple[np.ndarray, np.ndarray]],
+    together: np.ndarray,
+    both: np.ndarray,
     pa: np.ndarray,
     pb: np.ndarray,
     size: np.ndarray,
@@ -954,7 +1040,6 @@ def _joins(
     best = np.full(n, -1, np.int64)
     if pa.size == 0:
         return np.zeros(0, np.int64), best
-    together, both = _agreement(per_view, pa, pb)
     ok = (both >= MIN_COVISIBLE) & (together >= MERGE_RATIO * both)
     if not ok.any():
         return np.zeros(0, np.int64), best
@@ -985,33 +1070,50 @@ def _grow(
 
     Stage 1: neighbour cells that share a mask in at least `STRICT_RATIO` of their
     informative views join (single linkage, so strict). Stage 2, in rounds: regions are
-    re-judged as wholes (`_region_masks`), every neighbouring pair is scored, and each region
+    re-judged as wholes (`_seen`), every neighbouring pair is scored, and each region
     joins its best partner when that partner is a sink (`_joins`) -- average evidence, never
     a chain through one ambiguous cell. When neighbours are done, pairs that shared a mask
     anywhere are scored too (`_shared`): an object's parts that a gap or another part
-    separates in space. Up to `MAX_ROUNDS`. `weights`: splats per cell."""
+    separates in space. Up to `MAX_ROUNDS`. `weights`: splats per cell.
+
+    Incremental: a region keeps the smallest id of what joined it (so ids keep their order
+    and ties break as with compact ids), only the regions a round changed are re-judged,
+    and only pairs touching them are scored again."""
     n_cells = in_mask.size
+    obs = _observed(votes, level, in_mask)
     region = np.where(in_mask, np.arange(n_cells), -1)
     ca, cb = _pairs(region, a, b, n_cells)
-    together, both = _agreement(_region_masks(votes, level, region, n_cells), ca, cb)
+    together, both = _agreement(_seen(obs, region), ca, cb)
     keep = (both >= MIN_COVISIBLE) & (together >= STRICT_RATIO * both)
     region = np.where(in_mask, _components(n_cells, ca[keep], cb[keep]), -1)
     region = _relabel(region)
+    n = int(region.max()) + 1 if region.size and region.max() >= 0 else 0
+    if n < 2:
+        return region, 0
+    valid = region >= 0
+    size = np.bincount(region[valid], weights[valid], n).astype(np.float64)
+    seen = _seen(obs, region)
+    pa, pb = _pairs(region, a, b, n)
+    neighbours = pa * n + pb
+    cache_keys = np.zeros(0, np.int64)
+    cache_together = cache_both = np.zeros(0, np.int64)
+    alive = n
     rounds = 0
     far = False
-    while rounds < MAX_ROUNDS:
-        n = int(region.max()) + 1
-        if n < 2:
-            break
-        per_view = _region_masks(votes, level, region, n)
-        pa, pb = _pairs(region, a, b, n)
+    while rounds < MAX_ROUNDS and alive >= 2:
+        keys = neighbours
         if far:
-            fa, fb = _shared(per_view, region, weights, n)
-            key = np.unique(np.concatenate([pa * n + pb, fa * n + fb]))
-            pa, pb = key // n, key % n
-        movers, best = _joins(
-            per_view, pa, pb, np.bincount(region[region >= 0], weights[region >= 0], n)
-        )
+            fa, fb = _shared(seen, size, n)
+            keys = np.union1d(neighbours, fa * n + fb)
+        at = np.minimum(np.searchsorted(cache_keys, keys), max(cache_keys.size - 1, 0))
+        hit = (cache_keys[at] == keys) if cache_keys.size else np.zeros(keys.size, bool)
+        together = np.zeros(keys.size, np.int64)
+        both = np.zeros(keys.size, np.int64)
+        together[hit], both[hit] = cache_together[at[hit]], cache_both[at[hit]]
+        miss = np.flatnonzero(~hit)
+        together[miss], both[miss] = _agreement(seen, keys[miss] // n, keys[miss] % n)
+        cache_keys, cache_together, cache_both = keys, together, both
+        movers, best = _joins(together, both, keys // n, keys % n, size)
         rounds += 1
         if movers.size == 0:
             if far:
@@ -1019,8 +1121,35 @@ def _grow(
             far = True  # neighbours are done; now regions that share masks anywhere
             continue
         joined = _components(n, movers, best[movers])
-        region = _relabel(np.where(region >= 0, joined[np.maximum(region, 0)], -1))
-    return region, rounds
+        low = np.full(int(joined.max()) + 1, n, np.int64)
+        np.minimum.at(low, joined, np.arange(n))
+        new = low[joined]
+        count = np.bincount(joined)
+        member = count[joined] > 1
+        alive -= int(member.sum()) - int((count > 1).sum())
+        size = np.bincount(new, size, n)
+        region = np.where(region >= 0, new[np.maximum(region, 0)], -1)
+        # Re-judge the merged regions only; the others' rows stand.
+        changed = np.zeros(n, bool)
+        changed[new[member]] = True
+        of_row = region[obs.cell]
+        fresh = _seen(obs, region, np.flatnonzero((of_row >= 0) & changed[np.maximum(of_row, 0)]))
+        kept = ~member[seen.region]
+        old_keys = seen.region[kept] * obs.views + seen.view[kept]
+        place = np.searchsorted(old_keys, fresh.region * obs.views + fresh.view)
+        seen = _Seen(
+            np.insert(seen.region[kept], place, fresh.region),
+            np.insert(seen.view[kept], place, fresh.view),
+            np.insert(seen.best[kept], place, fresh.best),
+            obs.views,
+        )
+        na, nb = new[neighbours // n], new[neighbours % n]
+        ok = na != nb
+        neighbours = np.unique(np.minimum(na[ok], nb[ok]) * n + np.maximum(na[ok], nb[ok]))
+        stale = member[cache_keys // n] | member[cache_keys % n]
+        cache_keys = cache_keys[~stale]
+        cache_together, cache_both = cache_together[~stale], cache_both[~stale]
+    return _relabel(region), rounds
 
 
 @dataclass
