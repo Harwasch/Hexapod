@@ -6,6 +6,14 @@
  * answers "not now" and the loader asks again next frame, so arrivals queue in CesiumJS's
  * own priority order rather than in ours, and a burst of them costs the main thread nothing
  * but the copy of each tile's compressed bytes.
+ *
+ * The pool is grown on demand, not made at install. Installing happens while the globe boots
+ * (CesiumSceneManager), and every worker made then downloaded, compiled and started the
+ * 245 kB decoder before the first frame -- on a page that, until somebody flies to a splat
+ * site, decodes nothing. Now the first splat tile starts the first worker, and another is
+ * added only when every one already running is full, up to `poolSize()`. The first decode
+ * waits for a worker to start; the tile it waits on was itself just downloaded, so that is a
+ * small share of its arrival, and it is paid once, by the page that needs it.
  */
 
 import { GltfSpzLoader } from "cesium";
@@ -46,8 +54,9 @@ export function installSplatDecoder(interfaceBusy: () => boolean = () => false):
     { slot: Slot; resolve: (o: object) => void; reject: (e: Error) => void }
   >();
   const slots: Slot[] = [];
+  const size = poolSize();
   let nextId = 1;
-  for (let i = 0; i < poolSize(); i++) {
+  const spawn = (): Slot => {
     const slot: Slot = {
       worker: new Worker(new URL("./spzDecode.worker.ts", import.meta.url), { type: "module" }),
       pending: 0,
@@ -64,7 +73,9 @@ export function installSplatDecoder(interfaceBusy: () => boolean = () => false):
     };
     slot.worker.onerror = (event) => log.warn("decode worker failed", { message: event.message });
     slots.push(slot);
-  }
+    log.info("decode worker started", { workers: slots.length, of: size });
+    return slot;
+  };
 
   const hook: DecodeHook = (spz) => {
     // The interface first (uiActivity.ts): the loader asks again next frame.
@@ -75,6 +86,8 @@ export function installSplatDecoder(interfaceBusy: () => boolean = () => false):
         slot = candidate;
       }
     }
+    // Every running worker is full (or none runs yet): start another while the pool has room.
+    if (!slot && slots.length < size) slot = spawn();
     if (!slot) return undefined;
     const chosen = slot;
     const id = nextId++;

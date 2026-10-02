@@ -179,6 +179,8 @@ export class CesiumSceneManager {
     const interfaceBusy = (): boolean => this.uiActivity.active;
     this.splatGate = new SplatMotionGate(this.viewer.scene, this.events, interfaceBusy);
     this.uninstallSplatSorter = installSplatSorter();
+    // Installs the hook only: the decode workers start with the first splat tile, not here
+    // before the first frame (splatDecoder.ts).
     this.uninstallSplatDecoder = installSplatDecoder(interfaceBusy);
     this.collider = new SplatCollider(this.viewer.scene, () => this.splatGate.holding);
     this.scanRenderer = new ScanRendererHost(this.viewer);
