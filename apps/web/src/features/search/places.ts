@@ -15,6 +15,11 @@ export interface PlaceSearch {
   busy: boolean;
   /** Why the geocoder could not answer, in words; null when it did (even with nothing). */
   error: string | null;
+  /**
+   * The words `places` (and `error`) answer, trimmed. While the next words' search is pending
+   * -- the debounce, then the request -- the last answer is kept, and this says it is stale.
+   */
+  query: string;
 }
 
 /**
@@ -24,12 +29,17 @@ export interface PlaceSearch {
  */
 export function usePlaceSearch(query: string, limit = 5): PlaceSearch {
   const scene = useScene();
-  const [state, setState] = useState<PlaceSearch>({ places: [], busy: false, error: null });
+  const [state, setState] = useState<PlaceSearch>({
+    places: [],
+    busy: false,
+    error: null,
+    query: "",
+  });
   useEffect(() => {
     const trimmed = query.trim();
     const controller = new AbortController();
     if (!scene || trimmed.length < PLACE_MIN_CHARS) {
-      setState({ places: [], busy: false, error: null });
+      setState({ places: [], busy: false, error: null, query: trimmed });
       return () => controller.abort();
     }
     setState((s) => ({ ...s, busy: true }));
@@ -38,11 +48,11 @@ export function usePlaceSearch(query: string, limit = 5): PlaceSearch {
         .search(trimmed, controller.signal)
         .then((results) => {
           if (!controller.signal.aborted)
-            setState({ places: results.slice(0, limit), busy: false, error: null });
+            setState({ places: results.slice(0, limit), busy: false, error: null, query: trimmed });
         })
         .catch((error: unknown) => {
           if (!controller.signal.aborted)
-            setState({ places: [], busy: false, error: describeError(error) });
+            setState({ places: [], busy: false, error: describeError(error), query: trimmed });
         });
     }, PLACE_DEBOUNCE_MS);
     return () => {

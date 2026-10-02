@@ -8,6 +8,8 @@ import { GlassTooltipProvider } from "@twin/ui";
 
 import { api } from "@/api/client";
 import { HOTKEYS, hotkeyKeys, hotkeySheet, type Hotkey } from "@/app/hotkeys";
+import type { CesiumSceneManager } from "@/cesium/CesiumSceneManager";
+import { SceneContext, SceneRegistry } from "@/cesium/SceneContext";
 import { CommandBox } from "@/features/command-palette/CommandBox";
 import {
   AGENT_ROW_ID,
@@ -267,6 +269,66 @@ describe("CommandBox", () => {
     const input = screen.getByRole("combobox");
     await waitFor(() => expect(input).toHaveFocus());
     expect(input).toHaveValue("Mow the orchard");
+  });
+});
+
+describe("places in the command box", () => {
+  /** A scene whose geocoder finds one place named after the words, and a camera that flies. */
+  function fakeScene() {
+    const flights: { longitude: number; latitude: number }[] = [];
+    const scene = {
+      geocoder: {
+        attribution: "Test geocoder",
+        search: vi.fn((words: string) =>
+          Promise.resolve([
+            {
+              label: `${words[0]?.toUpperCase() ?? ""}${words.slice(1)} (place)`,
+              destination: {
+                kind: "point",
+                longitude: words.startsWith("yose") ? -119.5 : -110.5,
+                latitude: 44,
+              },
+            },
+          ]),
+        ),
+      },
+      camera: {
+        flyTo: (longitude: number, latitude: number) => flights.push({ longitude, latitude }),
+        flyToRectangle: vi.fn(),
+      },
+      sites: { flyTo: vi.fn() },
+      layers: { setVisible: vi.fn() },
+      mission: { setLayer: vi.fn() },
+    };
+    const registry = new SceneRegistry();
+    registry.set(scene as unknown as CesiumSceneManager);
+    return { registry, flights, scene };
+  }
+
+  beforeEach(() => {
+    vi.spyOn(api, "GET").mockRejectedValue(new TypeError("offline"));
+    useMission.setState({ project, composer: null, log: [], selection: null, view: "map" });
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it("never runs the last words' place for new words whose search is still pending", async () => {
+    const { registry, flights } = fakeScene();
+    const user = userEvent.setup();
+    render(wrap(<SceneContext.Provider value={registry}>{<CommandBox />}</SceneContext.Provider>));
+    const input = screen.getByRole("combobox");
+    await user.type(input, "yosemite");
+    await screen.findByText("Yosemite (place)");
+    // New words: Yosemite's row goes at once, and the box says it is searching.
+    await user.clear(input);
+    await user.type(input, "yellowstone");
+    expect(screen.queryByText("Yosemite (place)")).not.toBeInTheDocument();
+    expect(screen.getByText("Searching places…")).toBeInTheDocument();
+    // Enter before the new places arrive asks the agent with the words as typed, which finds
+    // and flies to them -- never to the place the old words found.
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(flights).toHaveLength(1));
+    expect(flights[0]?.longitude).toBe(-110.5);
+    expect(useMission.getState().log[0]).toMatchObject({ role: "you", text: "yellowstone" });
   });
 });
 

@@ -67,7 +67,15 @@ export function CommandBox() {
   const inputRef = useRef<HTMLInputElement>(null);
   const listId = useId();
 
-  const { places, busy: searching, error } = usePlaceSearch(open ? query : "", 4);
+  const placeSearch = usePlaceSearch(open ? query : "", 4);
+  const searching = placeSearch.busy;
+  // Places answer the words they were found for. While the next words' search is pending (the
+  // 280 ms pause, then the request) the last words' places are neither listed nor what Enter
+  // runs: typing "yellowstone" over "yosemite" and pressing Enter used to fly to Yosemite.
+  // Until they arrive, Enter asks the agent, which geocodes the words as typed.
+  const fresh = placeSearch.query === query.trim();
+  const places = useMemo(() => (fresh ? placeSearch.places : []), [fresh, placeSearch.places]);
+  const error = fresh ? placeSearch.error : null;
   const { ask, busy: asking } = useAgentCommand();
   const actions = useAppActions();
   const quickLayers = useQuickLayers();
@@ -259,7 +267,9 @@ export function CommandBox() {
         ? `Places unavailable: ${error}`
         : places.length > 0 && scene
           ? scene.geocoder.attribution
-          : null
+          : searching && scene
+            ? "Searching places…"
+            : null
       : null;
 
   return (
