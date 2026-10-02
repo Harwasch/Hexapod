@@ -1,9 +1,19 @@
 /**
  * The PlayCanvas back-end of the scan renderer (ScanRendererHost): SuperSplat's own engine
  * (MIT). Each tile is decoded in a worker into the columns PlayCanvas's `GSplatData` takes
- * (playcanvasTile.worker.ts), made a `GSplatResource`, and drawn by PlayCanvas's unified
+ * (playcanvasTile.worker.ts), already in PlayCanvas's Morton order, made a `GSplatResource`
+ * within the main thread's frame budget (tileWork.ts), and drawn by PlayCanvas's unified
  * splat renderer, which sorts every tile's splats together. PlayCanvas has no level of detail
  * over resources given this way, so it draws what it is given: streamed at the budget itself.
+ *
+ * Drawn on demand. PlayCanvas runs its own update loop (streaming, the hand-off of sort
+ * results) but only renders when the host draws a frame (`autoRender` off: the frame must be
+ * drawn from the globe's camera, in step with it). The loop says when it has something new --
+ * a sort result to apply, streamed detail -- with `frame:request`, PlayCanvas's own hook for
+ * apps that render on demand, and the host draws a frame for it; `frame:ready` says whether a
+ * rendered frame showed every change sorted, which is when a new tile counts as drawn
+ * (handover.ts). Once nothing loads or sorts the loop itself pauses, and anything that could
+ * give it work (a frame drawn, a sort landing) starts it again.
  *
  * The scan's objects (scanInstances.ts): each tile's resource carries one more stream, the
  * instance id of every splat (`splatInstance`, R32U, in the resource's own Morton order), and
@@ -18,18 +28,22 @@ import { tileInstanceIds, type InstancesDoc } from "@/lib/instances";
 import type { TileNode } from "@/view/tiles";
 
 import { INSTANCE_TEXTURE_WIDTH } from "../splatInstances";
+import { splatMinPixelSize } from "./quality";
 import { idsInResourceOrder, SCAN_INSTANCE_RULE_GLSL, type InstanceStyle } from "./scanInstances";
 import { countOverlayLoopTick } from "./stats";
-import type { ScanBackend, ScanPose } from "./types";
+import type { BackendHooks, ScanBackend, ScanPose } from "./types";
 
 interface Decoded {
   id: number;
   count?: number;
+  /** In Morton order already (`order`): playcanvasTile.worker.ts. */
   properties?: Record<string, Float32Array>;
   /** The tile's centre: the positions are relative to it (playcanvasTile.worker.ts). */
   origin?: [number, number, number];
   /** `checksumPositions` of the tile's own positions, before centring. */
   checksum?: string;
+  /** Slot `i` holds the tile's own splat `order[i]`. */
+  order?: Uint32Array;
   error?: string;
 }
 
@@ -71,14 +85,23 @@ interface TileBinding {
 }
 
 /** Frames a disposed tile's GPU resource outlives its entity: PlayCanvas's unified renderer
- *  drops a removed entity from its placements on its next update, and destroying the resource
- *  first left a placement with none ("Cannot read properties of null (reading 'hasCenters')"). */
+ *  drops a removed entity from its placements in the next frame it renders, and destroying
+ *  the resource first left a placement with none ("Cannot read properties of null (reading
+ *  'hasCenters')"). Counted in frames rendered, not loop ticks: a removal is only processed
+ *  by a render. */
 const DESTROY_AFTER_FRAMES = 3;
 
-/** A new entity counts as drawn this many frames and milliseconds after it was added: the
- *  unified renderer copies it into its work buffer and sorts in a worker first. */
+/**
+ * When PlayCanvas cannot say (no `frame:ready`, which it fires for every rendered frame with
+ * splats in it), a new entity counts as drawn this many rendered frames and milliseconds after
+ * it was added: the unified renderer copies it into its work buffer and sorts in a worker
+ * first.
+ */
 const SETTLE_FRAMES = 4;
 const SETTLE_MS = 120;
+
+/** Loop ticks in a row with nothing to load, sort or show before PlayCanvas's loop pauses. */
+export const QUIET_TICKS_BEFORE_PAUSE = 10;
 
 /** Tiles decoded at once: a quarter of the cores, one to three. */
 function workerCount(): number {
@@ -86,9 +109,13 @@ function workerCount(): number {
   return Math.min(3, Math.max(1, Math.floor(cores / 4)));
 }
 
+/** The `frame:ready` handler's arguments (gsplat/system.d.ts EVENT_FRAMEREADY). */
+type FrameReady = (camera: unknown, layer: unknown, ready: boolean, loadingCount: number) => void;
+
 export function createBackend(
   canvas: HTMLCanvasElement,
   budget: number,
+  hooks: BackendHooks,
 ): Promise<ScanBackend<pc.Entity>> {
   const app = new pc.Application(canvas, {
     graphicsDeviceOptions: {
@@ -101,10 +128,10 @@ export function createBackend(
   app.setCanvasFillMode(pc.FILLMODE_NONE);
   app.setCanvasResolution(pc.RESOLUTION_AUTO);
   app.scene.gsplat.splatBudget = budget;
-  // Full-precision work buffer rather than the compact one (quantised transforms), and splats
-  // down to a pixel rather than two: the tiles are already the detail the view asked for.
+  // Full-precision work buffer rather than the compact one (quantised transforms): the tiles
+  // are already the detail the view asked for. The smallest splat kept is set per resolution
+  // (`splatMinPixelSize`, in render).
   (app.scene.gsplat as unknown as { dataFormat: string }).dataFormat = "large";
-  app.scene.gsplat.minPixelSize = 1;
   const camera = new pc.Entity("scan-camera");
   camera.addComponent("camera", { clearColor: new pc.Color(0, 0, 0, 0) });
   app.root.addChild(camera);
@@ -114,6 +141,23 @@ export function createBackend(
   // moved, and a resize cleared the canvas a frame before anything was drawn on it (a black
   // flash where the world is clipped away under the scan).
   app.autoRender = false;
+
+  // The loop pauses when it has nothing to do (see the file comment): its next animation frame
+  // is simply not asked for, and `resumeLoop` asks for it again.
+  let looping = true;
+  let quietTicks = 0;
+  /** The last rendered frame showed every change sorted, with nothing left loading. */
+  let settled = false;
+  const tickAgain = app.requestAnimationFrame.bind(app);
+  app.requestAnimationFrame = () => {
+    if (looping) tickAgain();
+  };
+  const resumeLoop = (): void => {
+    quietTicks = 0;
+    if (looping) return;
+    looping = true;
+    tickAgain();
+  };
   app.start();
 
   const workers = Array.from(
@@ -134,7 +178,7 @@ export function createBackend(
       const id = nextId++;
       waiting.set(id, resolve);
       const worker = workers[turn++ % workers.length];
-      worker?.postMessage({ id, url });
+      worker?.postMessage({ id, url, maxSh: hooks.maxShDegree });
     });
 
   const resources = new WeakMap<pc.Entity, pc.GSplatResource>();
@@ -202,14 +246,56 @@ export function createBackend(
     }
     for (const [entity, tile] of tiles) bind(entity, tile);
   };
-  /** Frames drawn so far, and the frame each entity was added at: PlayCanvas's unified
-   *  renderer takes a new entity into its buffer and sorts it over the next frames. */
+  /** Frames rendered so far, the last one that showed every change sorted (`frame:ready`),
+   *  and the frame count when each entity was added. */
   let framesDrawn = 0;
+  let lastReadyFrame = -1;
+  let frameReadySeen = false;
   const addedAt = new WeakMap<pc.Entity, number>();
   const doomed: { resource: pc.GSplatResource; at: number }[] = [];
   const target = new pc.Vec3();
   const up = new pc.Vec3();
   let size = { width: 0, height: 0, pixelRatio: 0 };
+
+  /** A decoded tile made into PlayCanvas's resource and entity: main-thread work. */
+  const build = (tile: TileNode, decoded: Decoded): pc.Entity => {
+    const { properties, count, order } = decoded;
+    if (!properties || count === undefined || !order) {
+      throw new Error(decoded.error ?? "The tile could not be decoded.");
+    }
+    const data = new pc.GSplatData([
+      {
+        name: "vertex",
+        count,
+        properties: Object.entries(properties).map(([name, storage]) => ({
+          type: "float",
+          name,
+          storage,
+          byteSize: 4,
+        })),
+      },
+    ]);
+    // glTF KHR_gaussian_splatting's convention: linear scale, opacity after the sigmoid.
+    data.activated = true;
+    // Already in Morton order (the worker's `mortonOrder`), as `reorderData` would leave it.
+    const resource = new pc.GSplatResource(app.graphicsDevice, data);
+    const entity = new pc.Entity(tile.uri);
+    if (decoded.origin) entity.setLocalPosition(...decoded.origin);
+    entity.addComponent("gsplat", { resource });
+    resources.set(entity, resource);
+    if (decoded.checksum !== undefined) {
+      const binding: TileBinding = {
+        checksum: decoded.checksum,
+        order,
+        resource,
+        doc: null,
+        matched: false,
+      };
+      tiles.set(entity, binding);
+      if (style) bind(entity, binding);
+    }
+    return entity;
+  };
 
   const backend: ScanBackend<pc.Entity> = {
     name: "playcanvas",
@@ -217,50 +303,25 @@ export function createBackend(
     load: async (tilesetUrl: string, tile: TileNode, signal?: AbortSignal) => {
       const decoded = await decode(new URL(tile.uri, tilesetUrl).toString());
       signal?.throwIfAborted();
-      if (!decoded.properties || decoded.count === undefined) {
-        throw new Error(decoded.error ?? "The tile could not be decoded.");
-      }
-      const data = new pc.GSplatData([
-        {
-          name: "vertex",
-          count: decoded.count,
-          properties: Object.entries(decoded.properties).map(([name, storage]) => ({
-            type: "float",
-            name,
-            storage,
-            byteSize: 4,
-          })),
-        },
-      ]);
-      // glTF KHR_gaussian_splatting's convention: linear scale, opacity after the sigmoid.
-      data.activated = true;
-      // As `reorderData`, keeping the order: the object ids are in the tile's own order.
-      const order = data.calcMortonOrder();
-      data.reorder(order);
-      const resource = new pc.GSplatResource(app.graphicsDevice, data);
-      const entity = new pc.Entity(tile.uri);
-      if (decoded.origin) entity.setLocalPosition(...decoded.origin);
-      entity.addComponent("gsplat", { resource });
-      resources.set(entity, resource);
-      if (decoded.checksum !== undefined) {
-        const binding: TileBinding = {
-          checksum: decoded.checksum,
-          order,
-          resource,
-          doc: null,
-          matched: false,
-        };
-        tiles.set(entity, binding);
-        if (style) bind(entity, binding);
-      }
+      // Building the resource packs every splat into textures on the main thread: within the
+      // frame's budget, a little at a time while the camera moves.
+      const entity = await hooks.work.run(() => {
+        signal?.throwIfAborted();
+        return build(tile, decoded);
+      });
       return entity;
     },
     add: (entity) => {
       app.root.addChild(entity);
       addedAt.set(entity, framesDrawn);
     },
-    isDrawn: (entity, sinceMs) =>
-      framesDrawn - (addedAt.get(entity) ?? framesDrawn) >= SETTLE_FRAMES && sinceMs >= SETTLE_MS,
+    // Drawn once a rendered frame after the one that took it in showed every change sorted;
+    // without `frame:ready`, after a few rendered frames.
+    isDrawn: (entity, sinceMs) => {
+      const added = addedAt.get(entity) ?? framesDrawn;
+      if (frameReadySeen) return lastReadyFrame >= added + 2;
+      return framesDrawn - added >= SETTLE_FRAMES && sinceMs >= SETTLE_MS;
+    },
     remove: (entity) => {
       if (entity.parent) entity.parent.removeChild(entity);
     },
@@ -279,6 +340,7 @@ export function createBackend(
         size = { width: pose.width, height: pose.height, pixelRatio: pose.pixelRatio };
         app.graphicsDevice.maxPixelRatio = pose.pixelRatio;
         app.resizeCanvas(pose.width, pose.height);
+        app.scene.gsplat.minPixelSize = splatMinPixelSize(pose.pixelRatio);
       }
       const component = camera.camera;
       if (component) {
@@ -294,7 +356,13 @@ export function createBackend(
         pose.eye[2] + pose.direction[2],
       );
       camera.lookAt(target, up.set(...pose.up));
+      framesDrawn += 1;
       app.render();
+      while (doomed[0] && framesDrawn - doomed[0].at >= DESTROY_AFTER_FRAMES) {
+        doomed.shift()?.resource.destroy();
+      }
+      // A frame drawn may have started a sort or a load: the loop watches for it.
+      resumeLoop();
     },
     setBudget: (drawn) => {
       app.scene.gsplat.splatBudget = drawn;
@@ -319,6 +387,7 @@ export function createBackend(
       const entity = new pc.Entity("scan");
       entity.addComponent("gsplat", { asset, unified: true });
       app.root.addChild(entity);
+      resumeLoop();
       return {
         splats: () => app.scene.gsplat.splatBudget,
         stop: () => {
@@ -334,15 +403,32 @@ export function createBackend(
       tiles.clear();
       stateTexture?.destroy();
       stateTexture = null;
+      // PlayCanvas only lets go of its context (`gl = null`), and the browser frees a
+      // context's memory whenever it collects the canvas -- with a new canvas and context per
+      // session, a few sessions in a visit held several. Losing it frees it now, once
+      // PlayCanvas has taken its own handlers off the canvas.
+      const gl = (app.graphicsDevice as unknown as { gl?: WebGLRenderingContext | null }).gl;
       app.destroy();
+      gl?.getExtension("WEBGL_lose_context")?.loseContext();
     },
   };
-  app.on("frameupdate", countOverlayLoopTick);
-  app.on("frameend", () => {
-    framesDrawn += 1;
-    while (doomed[0] && framesDrawn - doomed[0].at >= DESTROY_AFTER_FRAMES) {
-      doomed.shift()?.resource.destroy();
-    }
+  app.on("frameupdate", () => {
+    countOverlayLoopTick();
+    quietTicks += 1;
+    if (quietTicks >= QUIET_TICKS_BEFORE_PAUSE && settled && doomed.length === 0) looping = false;
   });
+  const gsplat = app.systems.gsplat as unknown as pc.EventHandler | undefined;
+  // New streamed detail, or a sort result waiting to be applied: a frame shows it.
+  gsplat?.on("frame:request", () => {
+    quietTicks = 0;
+    hooks.frameWanted();
+  });
+  gsplat?.on("frame:ready", ((_camera, _layer, ready, loadingCount) => {
+    frameReadySeen = true;
+    settled = ready && !loadingCount;
+    if (ready) lastReadyFrame = framesDrawn;
+  }) as FrameReady);
+  // A sort that finished while the loop was paused: the loop hands it over (`frame:request`).
+  app.scene.on("gsplat:sorted", resumeLoop);
   return Promise.resolve(backend);
 }

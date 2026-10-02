@@ -11,7 +11,23 @@
  * `FADE_MS` from when it goes on (never held fully transparent: a renderer may skip what it
  * cannot see, and never say it drew it), and the old one comes off only once the new one is
  * drawn and in -- a game's level-of-detail cross-fade: detail sharpens instead of popping.
+ *
+ * The overlay draws only when something changes (overlayFrames.ts), so each tick says what it
+ * still needs (`HandoverStep`): another frame while a fade runs or once a tile came off, and
+ * the time a replaced tile stops waiting. Whether a new tile has drawn is the renderer's to
+ * say when it knows (a sort finished: it asks for a frame itself), so waiting for that costs
+ * no frames.
  */
+
+/** What a tick leaves for the frames after it. */
+export interface HandoverStep {
+  /** Something on screen changed in this tick (a fade moved, a tile came off): draw it. */
+  changed: boolean;
+  /** A fade is still running: draw every frame. */
+  animating: boolean;
+  /** When a replaced tile stops waiting for its replacement regardless, or null. */
+  nextAt: number | null;
+}
 
 export interface HandoverTarget<M> {
   add(mesh: M): void;
@@ -78,15 +94,18 @@ export class Handover<M> {
   }
 
   /** After each frame: settles what has drawn, fades it in, and retires what is replaced. */
-  tick(now: number): void {
+  tick(now: number): HandoverStep {
+    let changed = false;
     for (const [mesh, added] of this.settling) {
       if (this.target.isDrawn(mesh, now - added)) this.settling.delete(mesh);
     }
     for (const [mesh, started] of this.fading) {
       const alpha = Math.min(1, (now - started) / FADE_MS);
       this.target.fade?.(mesh, alpha);
+      changed = true;
       if (alpha >= 1) this.fading.delete(mesh);
     }
+    let nextAt: number | null = null;
     for (const [mesh, { waitFor, since }] of this.retiring) {
       const ready = waitFor.every(
         (waiting) => !this.settling.has(waiting) && !this.fading.has(waiting),
@@ -94,12 +113,23 @@ export class Handover<M> {
       if (ready || now - since > this.maxWaitMs) {
         this.retiring.delete(mesh);
         this.target.remove(mesh);
+        changed = true;
+      } else {
+        // Just past the longest wait: `> maxWaitMs` above.
+        const giveUp = since + this.maxWaitMs + 1;
+        nextAt = nextAt === null ? giveUp : Math.min(nextAt, giveUp);
       }
     }
+    return { changed, animating: this.fading.size > 0, nextAt };
   }
 
   /** Tiles kept on screen past their cut (tests, the debug panel). */
   get retained(): number {
     return this.retiring.size;
+  }
+
+  /** Whether anything is still settling, fading or waiting to come off. */
+  get busy(): boolean {
+    return this.settling.size > 0 || this.fading.size > 0 || this.retiring.size > 0;
   }
 }

@@ -1,6 +1,7 @@
 import type { TileNode } from "@/view/tiles";
 
 import type { InstanceStyle } from "./scanInstances";
+import type { TileWork } from "./tileWork";
 
 /** What draws a splat scan on the globe: CesiumJS itself, or a dedicated splat renderer. */
 export type SplatRendererKind = "cesium" | "spark" | "playcanvas";
@@ -18,6 +19,20 @@ export interface ScanPose {
   width: number;
   height: number;
   pixelRatio: number;
+}
+
+/** What the host hands a back-end when it creates it. */
+export interface BackendHooks {
+  /**
+   * The renderer has something new to show that the host did not cause -- a sort finished,
+   * streamed detail arrived -- and wants a frame (overlayFrames.ts). Without it the overlay
+   * would only draw when the camera or the tiles change.
+   */
+  frameWanted(): void;
+  /** Main-thread tile work, within the frame's budget (tileWork.ts). */
+  work: TileWork;
+  /** Spherical-harmonic bands a tile keeps (quality.ts). */
+  maxShDegree: number;
 }
 
 /** A scan the renderer streams by itself (ScanBackend.streamNative). */
@@ -65,5 +80,10 @@ export interface ScanBackend<M> {
   setInstances?(style: InstanceStyle | null): void;
   /** Tiles loaded now, and how many of them carry object ids: for tests and diagnostics. */
   instanceTiles?(): { tiles: number; matched: number };
+  /**
+   * Lets go of everything, the GPU context included: a lost context (`WEBGL_lose_context`)
+   * is what frees its memory at once rather than whenever the browser collects the canvas,
+   * and every session gets a new canvas and a new context.
+   */
   destroy(): void;
 }

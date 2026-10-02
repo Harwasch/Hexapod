@@ -74,8 +74,12 @@ export interface DecodedGeometry extends DecodedCloud {
  * opacity after the sigmoid) -- the same values spz-loader gives CesiumJS. Colour goes back to
  * its degree-0 coefficient (`f_dc`), rotations from xyzw to PlayCanvas's w-first `rot_0..3`,
  * and higher bands to PLY's `f_rest` order: every coefficient's red, then green, then blue.
+ * Bands above `maxShDegree` are left out (a phone keeps one: scanView/quality.ts).
  */
-export function playcanvasProperties(cloud: DecodedGeometry): Record<string, Float32Array> {
+export function playcanvasProperties(
+  cloud: DecodedGeometry,
+  maxShDegree = 3,
+): Record<string, Float32Array> {
   const n = cloud.numPoints;
   const out: Record<string, Float32Array> = {};
   const column = (source: Float32Array, stride: number, offset: number): Float32Array => {
@@ -99,14 +103,109 @@ export function playcanvasProperties(cloud: DecodedGeometry): Record<string, Flo
     for (let i = 0; i < n; i++) dc[i] = ((cloud.colors[i * 3 + c] ?? 0.5) - 0.5) / SH_C0;
     out[`f_dc_${String(c)}`] = dc;
   }
-  const coefficients = SH_COEFFICIENTS[Math.min(cloud.shDegree, 3)] ?? 0;
-  const stride = coefficients * 3;
+  // The stride is the file's; only the first `kept` coefficients of each splat are read (the
+  // bands are stored lowest first, so the first ones are the lower bands).
+  const stride = (SH_COEFFICIENTS[Math.min(cloud.shDegree, 3)] ?? 0) * 3;
+  const kept = SH_COEFFICIENTS[Math.max(0, Math.min(cloud.shDegree, maxShDegree, 3))] ?? 0;
   for (let c = 0; c < 3; c++) {
-    for (let k = 0; k < coefficients; k++) {
+    for (let k = 0; k < kept; k++) {
       const values = new Float32Array(n);
       for (let i = 0; i < n; i++) values[i] = cloud.sh[i * stride + k * 3 + c] ?? 0;
-      out[`f_rest_${String(c * coefficients + k)}`] = values;
+      out[`f_rest_${String(c * kept + k)}`] = values;
     }
+  }
+  return out;
+}
+
+/** Morton code bits per axis, as PlayCanvas's `GSplatData.calcMortonOrder`. */
+const MORTON_BITS = 10;
+const MORTON_CELLS = 1 << MORTON_BITS;
+
+/** Spreads the low 10 bits of `v` two apart (bit i to bit 3i). */
+function spread(v: number): number {
+  let x = v & (MORTON_CELLS - 1);
+  x = (x ^ (x << 16)) & 0xff0000ff;
+  x = (x ^ (x << 8)) & 0x0300f00f;
+  x = (x ^ (x << 4)) & 0x030c30c3;
+  x = (x ^ (x << 2)) & 0x09249249;
+  return x;
+}
+
+/**
+ * The order PlayCanvas's `GSplatData.calcMortonOrder` gives the splats at `x`, `y`, `z`:
+ * along a Morton curve through a 1024³ grid over their extent, splats in the same cell in
+ * their own order. PlayCanvas reorders a resource's splats this way so neighbours on screen
+ * are neighbours in its textures; it used to run on the main thread, a `Map` of arrays per
+ * cell, as each tile arrived (scanView/playcanvasBackend.ts). Here it is a stable two-pass
+ * radix sort on the 30-bit codes, for a worker (playcanvasTile.worker.ts): the same order.
+ * `order[i]` is the splat that goes to slot `i`.
+ */
+export function mortonOrder(x: Float32Array, y: Float32Array, z: Float32Array): Uint32Array {
+  const n = x.length;
+  const range = (axis: Float32Array): [number, number] => {
+    let min = axis[0] ?? 0;
+    let max = min;
+    for (let i = 1; i < n; i++) {
+      const v = axis[i] ?? 0;
+      if (v < min) min = v;
+      if (v > max) max = v;
+    }
+    return [min, max];
+  };
+  const [minX, maxX] = range(x);
+  const [minY, maxY] = range(y);
+  const [minZ, maxZ] = range(z);
+  const sizeX = minX === maxX ? 0 : MORTON_CELLS / (maxX - minX);
+  const sizeY = minY === maxY ? 0 : MORTON_CELLS / (maxY - minY);
+  const sizeZ = minZ === maxZ ? 0 : MORTON_CELLS / (maxZ - minZ);
+  const codes = new Uint32Array(n);
+  for (let i = 0; i < n; i++) {
+    const ix = Math.min(MORTON_CELLS - 1, Math.floor(((x[i] ?? 0) - minX) * sizeX));
+    const iy = Math.min(MORTON_CELLS - 1, Math.floor(((y[i] ?? 0) - minY) * sizeY));
+    const iz = Math.min(MORTON_CELLS - 1, Math.floor(((z[i] ?? 0) - minZ) * sizeZ));
+    codes[i] = (spread(iz) << 2) + (spread(iy) << 1) + spread(ix);
+  }
+  // Least significant 15 bits first, then the most: each pass stable, so equal codes keep
+  // their splats' own order, as PlayCanvas's per-cell arrays do.
+  const RADIX = 1 << 15;
+  const counts = new Uint32Array(RADIX);
+  let from = new Uint32Array(n);
+  let to = new Uint32Array(n);
+  for (let i = 0; i < n; i++) from[i] = i;
+  for (const shift of [0, 15]) {
+    counts.fill(0);
+    for (let i = 0; i < n; i++) {
+      const digit = ((codes[i] ?? 0) >>> shift) & (RADIX - 1);
+      counts[digit] = (counts[digit] ?? 0) + 1;
+    }
+    let running = 0;
+    for (let d = 0; d < RADIX; d++) {
+      const c = counts[d] ?? 0;
+      counts[d] = running;
+      running += c;
+    }
+    for (let i = 0; i < n; i++) {
+      const index = from[i] ?? 0;
+      const digit = ((codes[index] ?? 0) >>> shift) & (RADIX - 1);
+      const at = counts[digit] ?? 0;
+      to[at] = index;
+      counts[digit] = at + 1;
+    }
+    [from, to] = [to, from];
+  }
+  return from;
+}
+
+/** Every column put in `order` (as PlayCanvas's `GSplatData.reorder`): slot `i` gets `order[i]`. */
+export function reorderColumns(
+  columns: Record<string, Float32Array>,
+  order: Uint32Array,
+): Record<string, Float32Array> {
+  const out: Record<string, Float32Array> = {};
+  for (const [name, values] of Object.entries(columns)) {
+    const moved = new Float32Array(order.length);
+    for (let i = 0; i < order.length; i++) moved[i] = values[order[i] ?? 0] ?? 0;
+    out[name] = moved;
   }
   return out;
 }

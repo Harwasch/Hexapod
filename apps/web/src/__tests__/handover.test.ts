@@ -105,4 +105,37 @@ describe("Handover", () => {
     handover.tick(1000 + FADE_MS + 16);
     expect(onScreen.has("parent")).toBe(false);
   });
+
+  it("says what the next frames need: a frame per fade step, one after a retire, a deadline", () => {
+    const drawn = new Set<string>();
+    const handover = new Handover<string>(
+      {
+        add: () => undefined,
+        remove: () => undefined,
+        isDrawn: (m) => drawn.has(m),
+        fade: () => undefined,
+      },
+      1000,
+    );
+    handover.show("parent", 0);
+    drawn.add("parent");
+    // Fading in: a frame every display frame until it is in.
+    expect(handover.tick(10)).toEqual({ changed: true, animating: true, nextAt: null });
+    expect(handover.tick(FADE_MS)).toEqual({ changed: true, animating: false, nextAt: null });
+    // Settled and in: nothing more to draw, however long it rests.
+    expect(handover.tick(5000)).toEqual({ changed: false, animating: false, nextAt: null });
+    expect(handover.busy).toBe(false);
+    handover.show("child", 6000);
+    handover.hide("parent", 6000);
+    // The child fades in; the parent waits for it, and gives up at the longest wait.
+    const step = handover.tick(6000 + FADE_MS);
+    expect(step.animating).toBe(false);
+    expect(step.nextAt).toBe(6000 + 1000 + 1);
+    // Not drawn yet: waiting costs no frames (the renderer asks for one once it has drawn).
+    expect(handover.tick(6500)).toEqual({ changed: false, animating: false, nextAt: 7001 });
+    drawn.add("child");
+    // Drawn: the parent comes off, and that change wants one more frame.
+    expect(handover.tick(6600)).toEqual({ changed: true, animating: false, nextAt: null });
+    expect(handover.busy).toBe(false);
+  });
 });

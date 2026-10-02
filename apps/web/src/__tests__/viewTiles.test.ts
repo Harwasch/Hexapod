@@ -19,7 +19,13 @@ import {
   type TileNode,
   type TileTree,
 } from "@/view/tiles";
-import { TileStreamer, chooseCut, type StreamHost, type View } from "@/view/stream";
+import {
+  RETRY_FAILED_MS,
+  TileStreamer,
+  chooseCut,
+  type StreamHost,
+  type View,
+} from "@/view/stream";
 
 function tile(
   uri: string,
@@ -486,6 +492,103 @@ describe("streaming towards the cut", () => {
     }
     // west.glb failed once and was not asked for again; the root covers it still.
     expect(loads).toBe(2);
+    expect(streamer.drawn.map((drawn) => drawn.uri)).toEqual(["root.glb"]);
+  });
+
+  it("says when a failed tile is due again, so a page that updates only when told retries", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    try {
+      let fail = true;
+      let loads = 0;
+      const host: StreamHost<string> = {
+        load: (chosen) => {
+          loads += 1;
+          return fail ? Promise.reject(new Error("503")) : Promise.resolve(chosen.uri);
+        },
+        show: () => undefined,
+        hide: () => undefined,
+        dispose: () => undefined,
+      };
+      const streamer = new TileStreamer(site, host, {
+        budget: 1e9,
+        cacheBudget: 1e9,
+        concurrency: 1,
+      });
+      let told = 0;
+      streamer.onArrival = () => (told += 1);
+      streamer.adopt(site.root, "root.glb");
+      const close = viewFrom([-50, 0, 5]);
+      streamer.update(close);
+      await vi.advanceTimersByTimeAsync(0);
+      // Told at once (the failure), and nothing else until it is due.
+      expect(told).toBe(1);
+      await vi.advanceTimersByTimeAsync(RETRY_FAILED_MS - 100);
+      expect(told).toBe(1);
+      await vi.advanceTimersByTimeAsync(200);
+      expect(told).toBe(2);
+      fail = false;
+      const before = loads;
+      streamer.update(close);
+      expect(loads).toBeGreaterThan(before);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("a flight's destination, fetched ahead", () => {
+  const close = viewFrom([-50, 0, 5]);
+  const far = viewFrom([0, 0, 100_000]);
+
+  it("fetches the cut there and every tile above it, shallowest first, before the way there", async () => {
+    const { host, pending, arrive } = fakeHost();
+    const streamer = new TileStreamer(site, host, {
+      budget: 1e9,
+      cacheBudget: 1e9,
+      concurrency: 3,
+    });
+    streamer.adopt(site.root, "root.glb");
+    streamer.update(far);
+    expect([...pending.keys()]).toEqual([]);
+    streamer.prefetchView(close);
+    expect(streamer.prefetchingDestination).toBe(true);
+    // Two of three slots (one stays the view's), the level under the root first: a tile swaps
+    // for its children only once all of them are in.
+    expect([...pending.keys()].sort()).toEqual(["east.glb", "west.glb"]);
+    for (let round = 0; round < 4; round++) {
+      await arrive();
+      // Still far away: the views on the way want the root alone, and abandon nothing ahead.
+      streamer.update(far);
+    }
+    expect(pending.size).toBe(0);
+    // Arrived: the destination's cut is drawn in one update, nothing left to fetch.
+    streamer.update(close);
+    expect(streamer.drawn.map((drawn) => drawn.uri).sort()).toEqual(
+      ["east-a.glb", "east-b.glb", "west-a.glb", "west-b.glb"].sort(),
+    );
+    expect(pending.size).toBe(0);
+    expect(streamer.prefetchingDestination).toBe(false);
+  });
+
+  it("keeps what it fetched from the cache's eviction until it is reached or forgotten", async () => {
+    const { host, disposed, arrive } = fakeHost();
+    const streamer = new TileStreamer(site, host, {
+      budget: 1e9,
+      cacheBudget: 60_000,
+      concurrency: 3,
+    });
+    streamer.adopt(site.root, "root.glb");
+    streamer.update(far);
+    streamer.prefetchView(close);
+    for (let round = 0; round < 4; round++) {
+      await arrive();
+      streamer.update(far);
+    }
+    expect(disposed).toEqual([]);
+    // The flight was cancelled: what only it wanted goes to fit the cache.
+    streamer.prefetchView(null);
+    streamer.update(far);
+    expect(disposed.length).toBeGreaterThan(0);
     expect(streamer.drawn.map((drawn) => drawn.uri)).toEqual(["root.glb"]);
   });
 });

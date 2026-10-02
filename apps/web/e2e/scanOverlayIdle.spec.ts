@@ -1,0 +1,150 @@
+/**
+ * What the splat overlay (cesium/scanView) costs when nothing moves. The app renders the globe
+ * on demand (request-render mode), so a still view used to cost nothing -- except the overlay,
+ * which redrew the same frame every display frame. Here the yard fixture is drawn by each
+ * dedicated renderer with the globe in request-render mode, as in the app, and the overlay's
+ * own counters (`window.__twinStats`, scanView/stats.ts) are read across five seconds of rest:
+ * once the scan has loaded, nothing should be drawn at all.
+ *
+ * The second test is the overlay's resolution: under the performance preset the globe renders
+ * one device pixel per CSS pixel, and on a 2x display the overlay's canvas must too.
+ */
+
+import { readFileSync, writeFileSync } from "node:fs";
+import { resolve } from "node:path";
+
+import { expect, test, type Page } from "@playwright/test";
+
+const TILES = resolve(process.cwd(), "../../data/tiles");
+const NATIVE = "synthetic-yard/splat/sog/";
+
+interface Stats {
+  overlayDraws: number;
+  overlayLoopTicks: number;
+  overlayWakes: Record<string, number>;
+  overlayCanvas: { width: number; height: number; pixelRatio: number };
+}
+
+async function open(page: Page, options: { native: boolean }): Promise<void> {
+  await page.route("**/fixture-tiles/**", (route) => {
+    let relative = new URL(route.request().url()).pathname.replace(/^.*\/fixture-tiles\//, "");
+    if (relative.includes("..")) return route.abort();
+    if (relative.startsWith(NATIVE)) {
+      if (!options.native) return route.fulfill({ status: 404, body: "" });
+      relative = `synthetic-yard-sog/${relative.slice(NATIVE.length)}`;
+    }
+    const contentType = relative.endsWith(".json")
+      ? "application/json"
+      : relative.endsWith(".webp")
+        ? "image/webp"
+        : "model/gltf-binary";
+    return route.fulfill({
+      status: 200,
+      contentType,
+      body: readFileSync(resolve(TILES, relative)),
+    });
+  });
+  const html = `<!doctype html><html><head><style>
+#v .cesium-widget, #v .cesium-widget > canvas:first-child { width: 100vw; height: 100vh; display: block; }
+</style></head><body style="margin:0;background:#10141a">
+<div id="v" style="position:relative;width:100vw;height:100vh"></div>
+<script type="module">
+const h = await import("/src/dev/scanRendererHarness.ts");
+window.__scan = await h.startScanRendererHarness({ container: document.getElementById("v"),
+  tilesetUrl: "/fixture-tiles/synthetic-yard/splat/tileset.json", rangeM: 45,
+  requestRenderMode: true });
+</script></body></html>`;
+  await page.route("**/__scan-overlay-idle", (route) =>
+    route.fulfill({ status: 200, contentType: "text/html", body: html }),
+  );
+  await page.route(/https:\/\/(api|assets|tile)\.cesium\.com\/.*/, (route) => route.abort());
+  await page.goto("/__scan-overlay-idle");
+  await page.waitForFunction(() => "__scan" in window, undefined, { timeout: 180_000 });
+}
+
+const stats = (page: Page): Promise<Stats> =>
+  page.evaluate(
+    () =>
+      JSON.parse(
+        JSON.stringify((window as unknown as { __twinStats: Stats }).__twinStats),
+      ) as Stats,
+  );
+
+/** Draws and loop ticks over `ms` of a still camera. */
+async function rest(page: Page, ms: number): Promise<{ draws: number; ticks: number }> {
+  const before = await stats(page);
+  await page.waitForTimeout(ms);
+  const after = await stats(page);
+  return {
+    draws: after.overlayDraws - before.overlayDraws,
+    ticks: after.overlayLoopTicks - before.overlayLoopTicks,
+  };
+}
+
+for (const [kind, native] of [
+  ["playcanvas", false],
+  ["spark", false],
+  ["playcanvas", true],
+] as const) {
+  test(`${kind}${native ? " (native)" : ""} draws nothing once a still scan has loaded`, async ({
+    page,
+  }, testInfo) => {
+    test.setTimeout(300_000);
+    await page.setViewportSize({ width: 960, height: 600 });
+    await open(page, { native });
+    const status: { tiles: number; error: string | null; native: boolean } = await page.evaluate(
+      `window.__scan.use(${JSON.stringify(kind)}, ${native ? 20 : 90})`,
+    );
+    expect(status.error).toBeNull();
+    expect(status.native).toBe(native);
+    // Whatever was still settling (fades, the last sorts) has a few seconds to finish.
+    await page.waitForTimeout(3000);
+    const idle = await rest(page, 5000);
+    // A move wakes it: frames are drawn while the camera turns, and stop again after.
+    const beforeMove = (await stats(page)).overlayDraws;
+    await page.evaluate(`window.__scan.orbit(20, 30)`);
+    const moved = (await stats(page)).overlayDraws - beforeMove;
+    await page.waitForTimeout(3000);
+    const after = await rest(page, 5000);
+    const result = { kind, native, status, idle, moved, after, stats: await stats(page) };
+    writeFileSync(testInfo.outputPath("idle.json"), JSON.stringify(result, null, 1));
+    console.info(JSON.stringify(result));
+    expect(moved).toBeGreaterThan(5);
+    expect(idle.draws).toBeLessThanOrEqual(2);
+    expect(after.draws).toBeLessThanOrEqual(2);
+    // PlayCanvas's own update loop pauses too once nothing is loading or sorting.
+    if (kind === "playcanvas") {
+      expect(idle.ticks).toBeLessThanOrEqual(30);
+      expect(after.ticks).toBeLessThanOrEqual(30);
+    }
+  });
+}
+
+test.describe("on a 2x display", () => {
+  test.use({ deviceScaleFactor: 2 });
+
+  test("the overlay renders at the globe's resolution", async ({ page }) => {
+    test.setTimeout(300_000);
+    await page.setViewportSize({ width: 800, height: 500 });
+    await open(page, { native: false });
+    // Performance: CSS pixels (Cesium's browser-recommended resolution).
+    await page.evaluate(`window.__scan.setResolution(true, 1)`);
+    await page.evaluate(`window.__scan.use("playcanvas", 90)`);
+    await page.waitForTimeout(1500);
+    const performance = (await stats(page)).overlayCanvas;
+    // Balanced at a ladder step: device pixels times 0.65.
+    await page.evaluate(`window.__scan.setResolution(false, 0.65)`);
+    await page.waitForTimeout(1500);
+    const ladder = (await stats(page)).overlayCanvas;
+    // Ultra at rest: every device pixel.
+    await page.evaluate(`window.__scan.setResolution(false, 1)`);
+    await page.waitForTimeout(1500);
+    const ultra = (await stats(page)).overlayCanvas;
+    console.info(JSON.stringify({ performance, ladder, ultra }));
+    expect(performance.pixelRatio).toBeCloseTo(1, 2);
+    expect(performance.width).toBe(800);
+    expect(ladder.pixelRatio).toBeCloseTo(1.3, 2);
+    expect(ultra.pixelRatio).toBeCloseTo(2, 2);
+    expect(ultra.width).toBe(1600);
+  });
+});

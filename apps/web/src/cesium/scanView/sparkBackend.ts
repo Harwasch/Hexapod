@@ -20,6 +20,10 @@
  * per-tile texture and the shared state table, and applies the same rule as CesiumJS and
  * PlayCanvas. A change of what is hidden or highlighted rewrites the table and has Spark
  * regenerate the tiles' splats.
+ *
+ * Drawn on demand: Spark has no loop of its own -- it sorts in a worker when a frame is drawn
+ * and the view or the splats changed -- and says when a sort it started has finished
+ * (`onDirty`), which is when the host draws the frame that shows it (overlayFrames.ts).
  */
 
 import { dyno, SparkRenderer, type SplatMesh } from "@sparkjsdev/spark";
@@ -33,7 +37,7 @@ import { loadSplatTile } from "@/view/sparkStream";
 
 import { INSTANCE_TEXTURE_WIDTH } from "../splatInstances";
 import type { InstanceStyle } from "./scanInstances";
-import type { ScanBackend, ScanPose } from "./types";
+import type { BackendHooks, ScanBackend, ScanPose } from "./types";
 
 /** Splats a row of a tile's id texture holds (one a texel, R32UI). */
 const SPARK_IDS_WIDTH = 4096;
@@ -77,7 +81,11 @@ interface SparkTile {
   ids: THREE.DataTexture | null;
 }
 
-export function createBackend(canvas: HTMLCanvasElement): Promise<ScanBackend<SplatMesh>> {
+export function createBackend(
+  canvas: HTMLCanvasElement,
+  _budget: number,
+  hooks: BackendHooks,
+): Promise<ScanBackend<SplatMesh>> {
   const renderer = new THREE.WebGLRenderer({
     canvas,
     alpha: true,
@@ -87,7 +95,12 @@ export function createBackend(canvas: HTMLCanvasElement): Promise<ScanBackend<Sp
   });
   renderer.setClearColor(0x000000, 0);
   const scene = new THREE.Scene();
-  const spark = new SparkRenderer({ renderer, enableLod: false });
+  // A sort finished (or the splats were regenerated): the next frame shows it.
+  const spark = new SparkRenderer({
+    renderer,
+    enableLod: false,
+    onDirty: () => hooks.frameWanted(),
+  });
   scene.add(spark);
   const camera = new THREE.PerspectiveCamera();
   const target = new THREE.Vector3();
@@ -188,10 +201,22 @@ export function createBackend(canvas: HTMLCanvasElement): Promise<ScanBackend<Sp
         extSplats: true,
         signal,
       });
+      // Bands above the device's (a phone keeps one: quality.ts).
+      if (mesh.maxSh > hooks.maxShDegree) {
+        mesh.maxSh = hooks.maxShDegree;
+        mesh.updateGenerator();
+      }
       const positions = await spzPositions(bytes).catch(() => undefined);
       if (positions) {
+        // Digesting every centre is main-thread work: within the frame's budget.
+        const checksum = await hooks.work
+          .run(() => checksumPositions(positions))
+          .catch((error: unknown) => {
+            mesh.dispose();
+            throw error;
+          });
         const binding: SparkTile = {
-          checksum: checksumPositions(positions),
+          checksum,
           count: positions.length / 3,
           doc: null,
           matched: false,
@@ -251,7 +276,14 @@ export function createBackend(canvas: HTMLCanvasElement): Promise<ScanBackend<Sp
       tiles.clear();
       stateTexture?.dispose();
       renderer.setAnimationLoop(null);
+      // Spark's own: its accumulators' targets and textures, and its sort worker -- never
+      // let go before, so each session left a worker running.
+      scene.remove(spark);
+      spark.dispose();
       renderer.dispose();
+      // three's dispose frees what three made but keeps the context; losing it frees the
+      // rest now rather than when the browser collects the canvas.
+      renderer.forceContextLoss();
     },
   };
   return Promise.resolve(backend);

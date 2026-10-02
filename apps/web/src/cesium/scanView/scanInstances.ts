@@ -136,6 +136,8 @@ export function instanceGap(
 /**
  * Keeps `backend` drawing asset `assetId`'s objects as the store has them, from the moment
  * its instances load. `native` is a session that streams a package without object ids.
+ * `restyled` is called after each style the back-end is handed: the overlay draws only when
+ * something changes (overlayFrames.ts), and a hide or highlight is a change no camera makes.
  * Returns the disposer, which also clears any gap it reported.
  */
 export function linkScanInstances(
@@ -143,6 +145,7 @@ export function linkScanInstances(
   backend: ScanBackend<unknown>,
   native: boolean,
   docOf: (assetId: string) => InstancesDoc | undefined = instancesDocOf,
+  restyled: () => void = () => undefined,
 ): () => void {
   const gap = instanceGap(backend, native);
   const store = useInstances;
@@ -157,7 +160,10 @@ export function linkScanInstances(
     const entry = state.assets[assetId];
     const doc = entry ? docOf(assetId) : undefined;
     if (!entry || !doc) {
-      if (last !== null) backend.setInstances?.(null);
+      if (last !== null) {
+        backend.setInstances?.(null);
+        restyled();
+      }
       last = null;
       return;
     }
@@ -171,6 +177,7 @@ export function linkScanInstances(
     }
     last = { doc, hidden: entry.hidden, highlighted: entry.highlighted, dim: state.dimOthers };
     backend.setInstances?.(instanceStyle(doc, entry.hidden, entry.highlighted, state.dimOthers));
+    restyled();
   };
   const off = store.subscribe(push);
   push();
