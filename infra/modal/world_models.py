@@ -8,9 +8,10 @@ image and class as in `infra/modal/fill.py`, which ran it on 2026-10-02).
              24 fps, 720p class. Teacher A's clip source.
     Distill  gsplat: the lifted fill refined against the filled views, the measured scan
              frozen (tools/captures/distill_fill.py).
-    Cosmos   nvidia/Cosmos-Predict2.5-2B, post-trained (NVIDIA Open Model License, gated).
-             Image2World: still + prompt -> 77 frames at 16 fps. Teacher A's second clip
-             source. Its guardrails stay on -- the licence requires them.
+    Cosmos   nvidia/Cosmos-Predict2-2B-Video2World (NVIDIA Open Model License, gated), through
+             diffusers' Cosmos2VideoToWorldPipeline: still + prompt -> 93 frames at 16 fps,
+             1280x704. Teacher A's second clip source. Its guardrail stays on -- the
+             licence requires it.
     SegmentMasks / SegmentEmbed
              facebook/sam2.1-hiera-tiny (Apache-2.0) and google/siglip2-base-patch16-224
              (Apache-2.0), run by `tools/captures/segment_models.py` itself (copied into
@@ -31,14 +32,13 @@ What was checked, 2026-10-01, and what was not:
   environment from cosmos-predict2's uv.lock on a public CUDA base instead, and on
   2026-10-02 it loaded every checkpoint key and cleaned Fixer's own examples.
 * Wan: the Hub model card's diffusers recipe, with `WanImageToVideoPipeline` for the
-  image-conditioned case; 1280x704 is the 720p size, the aspect following the input.
-* Cosmos: the repository at `COSMOS_COMMIT` was read -- `examples/inference.py` with a
-  JSON spec, `--inference-type=image2world --model=2B/post-trained`, output saved at 16 fps.
-  The Hugging Face token must have accepted the licences of Cosmos-Predict2.5-2B,
-  Cosmos-Reason1-7B and Cosmos-Guardrail1 (it had not, on 2026-10-01).
-* Wan, Cosmos and Distill have not been built by Modal or run. Their package pins are the
-  first guess that `modal deploy` proves; the runbook (docs/WORLD_MODEL_RUNBOOK.md) says
-  what to try first.
+  image-conditioned case (the TI2V repository's `expand_timesteps`); 1280x704 is the 720p
+  size, the aspect following the input.
+* Cosmos: diffusers' own pipeline for the Predict2 Video2World checkpoint, the guardrail
+  (`cosmos_guardrail`) built by it. `access()` reports which gated repositories the
+  `huggingface` secret's token can read.
+* Wan and Cosmos run from CI: `.github/workflows/dream.yml` deploys this app and runs
+  `infra/modal/dream.py` (docs/WORLD_MODEL_RUNBOOK.md, section 8).
 
 Secrets: `huggingface` (HF_TOKEN) for Wan, Cosmos and segmentation; Fixer needs none.
 Weights are cached in the volume
@@ -51,8 +51,8 @@ from __future__ import annotations
 
 import io
 import os
-import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 import modal
@@ -76,10 +76,20 @@ WAN_FRAMES = 121
 #: The 720p area of TI2V-5B; the clip takes the still's aspect at about this many pixels.
 WAN_AREA = 1280 * 704
 
-COSMOS_REPO = "https://github.com/nvidia-cosmos/cosmos-predict2.5.git"
-COSMOS_COMMIT = "a2c298b0a3df3778b973fe65e9e58877b292d8a7"
+COSMOS_MODEL = "nvidia/Cosmos-Predict2-2B-Video2World"
 COSMOS_FPS = 16.0
-COSMOS_FRAMES = 77
+COSMOS_FRAMES = 93
+#: Its 720p checkpoint's size: the still is scaled to cover it and centre-cropped.
+COSMOS_SIZE = (1280, 704)
+
+#: What the video models download: Wan is open; Cosmos and its guardrail's checkpoint are
+#: gated (the licence is accepted per account); the guardrail's prompt model is open.
+ACCESS_REPOS = (
+    WAN_MODEL,
+    COSMOS_MODEL,
+    "nvidia/Cosmos-1.0-Guardrail",
+    "Qwen/Qwen3Guard-Gen-0.6B",
+)
 
 #: Both video models are told the camera does not move: Teacher A tracks pixels, and a
 #: moving camera would read as the trunk swaying.
@@ -177,33 +187,40 @@ class Fixer:
         return {"images": out, "model": f"nvidia/Fixer@{FIXER_COMMIT[:7]}"}
 
 
-# --- Wan 2.2 -------------------------------------------------------------------------------
+# --- Wan 2.2 and Cosmos-Predict2 (one diffusers image) -------------------------------------
 
-wan_image = (
+#: Both video models through diffusers. Cosmos' pipeline builds its own guardrail
+#: (`cosmos_guardrail`: a blocklist and Qwen3Guard on the prompt, face blur on the frames;
+#: the licence requires it), which needs transformers 5; Wan runs on the same stack.
+video_image = (
     modal.Image.debian_slim(python_version="3.11")
-    .apt_install("ffmpeg")
+    .apt_install("ffmpeg", "git", "libgl1", "libglib2.0-0")
     .pip_install(
-        "torch==2.6.0",
-        "diffusers==0.35.1",
-        "transformers>=4.51,<5",
+        "torch==2.8.0",
+        "torchvision==0.23.0",
+        "diffusers==0.40.0",
+        "transformers>=5,<6",
         "accelerate>=1.6",
         "ftfy",
         "sentencepiece",
+        "protobuf",
         "imageio[ffmpeg]>=2.37",
         "pillow",
-        "huggingface_hub>=0.30",
+        "huggingface_hub",
+        "cosmos_guardrail==0.3.2",
     )
     .env({"HF_HOME": HF_HOME})
 )
 
 
 @app.cls(
-    image=wan_image,
-    gpu="A100-80GB",
+    image=video_image,
+    gpu="H100",
     volumes={"/weights": WEIGHTS},
     secrets=[HF_SECRET],
     timeout=3600,
     scaledown_window=300,
+    max_containers=4,
 )
 class Wan:
     @modal.enter()
@@ -211,6 +228,9 @@ class Wan:
         import torch
         from diffusers import AutoencoderKLWan, WanImageToVideoPipeline
 
+        started = time.time()
+        # The TI2V repository's model_index names `WanPipeline` (text to video); its
+        # `expand_timesteps` config is what the image-to-video pipeline reads for TI2V.
         vae = AutoencoderKLWan.from_pretrained(
             WAN_MODEL, subfolder="vae", torch_dtype=torch.float32
         )
@@ -218,13 +238,16 @@ class Wan:
             WAN_MODEL, vae=vae, torch_dtype=torch.bfloat16
         ).to("cuda")
         WEIGHTS.commit()
+        self.load_seconds = time.time() - started
 
     @modal.method()
     def clip(self, request: dict) -> dict:
-        """`{"image": png, "prompt", "seed", "frames"?, "steps"?}` -> `{"mp4", "fps", "model"}`."""
+        """`{"image": png, "prompt", "seed", "frames"?, "steps"?}` -> `{"mp4", "fps",
+        "model", "seconds", "loadSeconds", "size"}`."""
         import torch
         from PIL import Image
 
+        started = time.time()
         image = Image.open(io.BytesIO(request["image"])).convert("RGB")
         width, height = video_size(image.size, WAN_AREA, 32)
         frames = self.pipe(
@@ -237,75 +260,95 @@ class Wan:
             guidance_scale=5.0,
             num_inference_steps=int(request.get("steps", 50)),
             generator=torch.Generator("cuda").manual_seed(int(request["seed"])),
+            output_type="np",
         ).frames[0]
-        return {"mp4": _mp4(frames, WAN_FPS), "fps": WAN_FPS, "model": WAN_MODEL}
-
-
-# --- Cosmos-Predict2.5 ---------------------------------------------------------------------
-
-cosmos_image = (
-    modal.Image.from_registry("nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04", add_python="3.12")
-    .apt_install("git", "git-lfs", "ffmpeg", "curl")
-    .run_commands(
-        "curl -LsSf https://astral.sh/uv/0.8.12/install.sh | sh",
-        f"git clone {COSMOS_REPO} /cosmos && git -C /cosmos checkout {COSMOS_COMMIT}",
-        # The repository's own environment: its lockfile, CUDA 12.8 extra.
-        "cd /cosmos && /root/.local/bin/uv sync --locked --extra=cu128",
-    )
-    .env({"HF_HOME": HF_HOME})
-)
+        return {
+            "mp4": _mp4(_u8(frames), WAN_FPS),
+            "fps": WAN_FPS,
+            "model": WAN_MODEL,
+            "seconds": round(time.time() - started, 1),
+            "loadSeconds": round(self.load_seconds, 1),
+            "size": [width, height],
+        }
 
 
 @app.cls(
-    image=cosmos_image,
+    image=video_image,
     gpu="H100",
     volumes={"/weights": WEIGHTS},
     secrets=[HF_SECRET],
     timeout=3600,
     scaledown_window=300,
+    max_containers=2,
 )
 class Cosmos:
+    @modal.enter()
+    def load(self) -> None:
+        import torch
+        from diffusers import Cosmos2VideoToWorldPipeline
+
+        started = time.time()
+        # The guardrail (the pipeline's safety_checker) is built by the pipeline: it stays on.
+        self.pipe = Cosmos2VideoToWorldPipeline.from_pretrained(
+            COSMOS_MODEL, torch_dtype=torch.bfloat16
+        ).to("cuda")
+        WEIGHTS.commit()
+        self.load_seconds = time.time() - started
+
     @modal.method()
     def clip(self, request: dict) -> dict:
-        """`{"image": png, "prompt", "seed", "frames"?}` -> `{"mp4", "fps", "model"}`.
-        Raises if the guardrail blocks the clip."""
-        import json
+        """`{"image": png, "prompt", "seed", "frames"?, "steps"?}` -> `{"mp4", "fps",
+        "model", "seconds", "loadSeconds", "size"}`. Raises if the guardrail blocks it."""
+        import torch
+        from PIL import Image
 
-        with tempfile.TemporaryDirectory() as work:
-            root = Path(work)
-            (root / "still.png").write_bytes(request["image"])
-            spec = {
-                "inference_type": "image2world",
-                "name": "clip",
-                "prompt": f"{request['prompt']} {STATIC_CAMERA}",
-                "negative_prompt": NEGATIVE,
-                "input_path": "still.png",
-                "seed": int(request["seed"]),
-                "num_output_frames": int(request.get("frames", COSMOS_FRAMES)),
-            }
-            (root / "clip.json").write_text(json.dumps(spec))
-            subprocess.run(  # noqa: S603 - fixed argv; only file paths we wrote vary
-                [
-                    "/cosmos/.venv/bin/python",
-                    "examples/inference.py",
-                    "-i",
-                    str(root / "clip.json"),
-                    "-o",
-                    str(root / "out"),
-                    "--inference-type=image2world",
-                    "--model=2B/post-trained",
-                ],
-                cwd="/cosmos",
-                check=True,
-                env={**os.environ, "HF_HOME": HF_HOME},
-            )
-            WEIGHTS.commit()
-            (video,) = sorted((root / "out").rglob("*.mp4"))
-            return {
-                "mp4": video.read_bytes(),
-                "fps": COSMOS_FPS,
-                "model": f"nvidia/Cosmos-Predict2.5-2B@{COSMOS_COMMIT[:7]}",
-            }
+        started = time.time()
+        image = Image.open(io.BytesIO(request["image"])).convert("RGB")
+        width, height = COSMOS_SIZE
+        frames = self.pipe(
+            image=_cover(image, width, height),
+            prompt=f"{request['prompt']} {STATIC_CAMERA}",
+            negative_prompt=NEGATIVE,
+            height=height,
+            width=width,
+            num_frames=int(request.get("frames", COSMOS_FRAMES)),
+            num_inference_steps=int(request.get("steps", 35)),
+            fps=int(COSMOS_FPS),
+            generator=torch.Generator("cuda").manual_seed(int(request["seed"])),
+            output_type="np",
+        ).frames[0]
+        frames = _u8(frames)
+        if frames.size == 0 or not frames.any():
+            raise RuntimeError("Cosmos returned an empty clip (blocked by the guardrail?)")
+        return {
+            "mp4": _mp4(frames, COSMOS_FPS),
+            "fps": COSMOS_FPS,
+            "model": COSMOS_MODEL,
+            "seconds": round(time.time() - started, 1),
+            "loadSeconds": round(self.load_seconds, 1),
+            "size": [width, height],
+        }
+
+
+@app.function(image=video_image, secrets=[HF_SECRET], timeout=300)
+def access() -> dict:
+    """Whether the `huggingface` secret's token can read each repository the video models
+    download (a gated one needs its licence accepted on that token's account)."""
+    from huggingface_hub import HfApi
+
+    api = HfApi(token=os.environ.get("HF_TOKEN"))
+    out: dict = {}
+    try:
+        out["account"] = api.whoami().get("name")
+    except Exception as error:  # noqa: BLE001 - reported, not raised
+        out["account"] = f"error: {error}"
+    for repo in ACCESS_REPOS:
+        try:
+            api.auth_check(repo)
+            out[repo] = "ok"
+        except Exception as error:  # noqa: BLE001 - reported, not raised
+            out[repo] = f"{type(error).__name__}: {str(error).splitlines()[0][:200]}"
+    return out
 
 
 # --- Distill (gsplat) -----------------------------------------------------------------------
@@ -370,7 +413,7 @@ segment_image = (
 )
 
 
-def _segment_models():  # noqa: ANN202 - the module, imported where it was copied
+def _segment_models():
     import sys
 
     sys.path.insert(0, "/root")
@@ -428,7 +471,7 @@ class SegmentEmbed:
         self.sm = _segment_models()
         self.models: dict = {}
 
-    def _embedder(self, request: dict):  # noqa: ANN202 - a segment_models.SiglipEmbedder
+    def _embedder(self, request: dict):
         name = request.get("model", self.sm.SIGLIP_MODEL)
         if name not in self.models:
             self.models[name] = self.sm.SiglipEmbedder(model=name, device="cuda")
@@ -469,6 +512,25 @@ def video_size(size: tuple[int, int], area: int, multiple: int) -> tuple[int, in
         max(multiple, round(w * scale / multiple) * multiple),
         max(multiple, round(h * scale / multiple) * multiple),
     )
+
+
+def _u8(frames: object) -> object:
+    """A pipeline's `np` frames (floats in 0..1, (T, H, W, 3)) as uint8."""
+    import numpy as np
+
+    return np.clip(np.round(np.asarray(frames, np.float32) * 255), 0, 255).astype(np.uint8)
+
+
+def _cover(image: object, width: int, height: int) -> object:
+    """A PIL image scaled to cover `width` x `height`, centre-cropped to it."""
+    from PIL import Image
+
+    w, h = image.size  # type: ignore[attr-defined]
+    scale = max(width / w, height / h)
+    size = (max(width, round(w * scale)), max(height, round(h * scale)))
+    image = image.resize(size, Image.LANCZOS)  # type: ignore[attr-defined]
+    left, top = (size[0] - width) // 2, (size[1] - height) // 2
+    return image.crop((left, top, left + width, top + height))
 
 
 def _mp4(frames: list, fps: float) -> bytes:

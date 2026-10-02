@@ -1,0 +1,81 @@
+name: Dream clips (Modal GPU, Wan 2.2 and Cosmos-Predict2)
+
+# Deploys infra/modal/world_models.py (the video models), then runs infra/modal/dream.py:
+# start frames of published scans drawn with gsplat, a clip per start x prompt x model with a
+# contact sheet, and the video teacher for materials (C2) fitted to Wan clips of the camp's
+# plants. Uploads clips, sheets, stills and the fitted materials.json as the `dream`
+# artifact. Nothing is published. See docs/WORLD_MODEL_RUNBOOK.md, section 8.
+#
+# On a push to a `wm-*` working branch that touches the dream code (not `living-models`, so
+# merges there start no GPU run). The Modal token is the repository's; the video models read
+# the Modal secret `huggingface` (HF_TOKEN).
+
+on:
+  push:
+    branches: ["wm-*"]
+    paths:
+      - infra/modal/dream.py
+      - infra/modal/world_models.py
+      - tools/captures/teacher_materials.py
+      - .github/workflows/dream.yml
+  workflow_dispatch:
+    inputs:
+      scans:
+        description: Scans to dream from (camp, pumpkin; empty for none)
+        type: string
+        default: camp,pumpkin
+      models:
+        description: Video models (Wan, Cosmos)
+        type: string
+        default: Wan,Cosmos
+      instances:
+        description: Camp instances to fit materials to (empty for none)
+        type: string
+        default: 225,244,113,414,231
+      chain:
+        description: Wan calls per materials clip, each from the last frame
+        type: string
+        default: "3"
+
+concurrency:
+  group: dream-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  SCANS: ${{ inputs.scans || 'camp,pumpkin' }}
+  MODELS: ${{ inputs.models || 'Wan,Cosmos' }}
+  PROMPTS: gentle,gusty,rain
+  INSTANCES: ${{ inputs.instances || '225,244,113,414,231' }}
+  CHAIN: ${{ inputs.chain || '3' }}
+
+jobs:
+  dream:
+    name: Dream on Modal GPUs
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Check the Modal token is there
+        run: |
+          test -n "$MODAL_TOKEN_ID" -a -n "$MODAL_TOKEN_SECRET" \
+            || { echo "::error::MODAL_TOKEN_ID / MODAL_TOKEN_SECRET are not set"; exit 1; }
+      - name: Modal secrets present (names only)
+        continue-on-error: true
+        run: uv run --with modal==1.5.5 modal secret list
+      - name: modal deploy infra/modal/world_models.py
+        run: uv run --with modal==1.5.5 modal deploy infra/modal/world_models.py
+      - name: modal run infra/modal/dream.py
+        run: |
+          uv run --with modal==1.5.5 modal run infra/modal/dream.py \
+            --scans "$SCANS" --models "$MODELS" --prompts "$PROMPTS" \
+            --instances "$INSTANCES" --chain "$CHAIN" --out dream-out
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dream
+          path: dream-out
+          if-no-files-found: warn
