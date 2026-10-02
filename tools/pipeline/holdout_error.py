@@ -22,10 +22,12 @@ What it does, per held-out (`val`) frame:
    module (`app_opt`) into the DC colour. Reading the PLY keeps every array below in the
    PLY's row order by construction -- the order `trained.ply` is written in, before the
    stage's own ROI or support-mask crop (which the stage applies to these arrays too).
-3. **Rendered as it will be shown.** `trained.ply` keeps only the DC colour
-   (`gaussians.CANONICAL_PROPERTIES`), so the error map is of a degree-0 render: the
-   accuracy of what is published. The full-SH render's PSNR is recorded beside it
-   (`psnrFullSh`) so the cost of dropping the higher bands is visible.
+3. **Rendered as it will be shown.** `trained.ply` ships the DC colour and the first
+   `--sh-degree` SH bands of what was trained (the `train` stage's `ship_sh_degree`, 0 by
+   default: DC only), so the error map is of a render at that degree, with the bands
+   above it dropped exactly as the stage drops them (`shipped_sh`): the accuracy of what
+   is published. The full-SH render's PSNR is recorded beside it (`psnrFullSh`, and
+   `meanPsnrFullSh` over the frames) so the cost of what is not shipped is visible.
 4. **Error map**: `holdout_maths.error_map`, the trainer's loss per pixel.
 5. **Attribution**: one more render with a zero two-channel "colour" per gaussian and one
    backward pass: the gradient is `sum_p e(p) w_i(p)` and `sum_p w_i(p)`, with `w_i(p)`
@@ -126,6 +128,25 @@ def sh_rest(columns: dict[str, np.ndarray]) -> np.ndarray | None:
     return np.ascontiguousarray(flat.reshape(-1, 3, bands).transpose(0, 2, 1))
 
 
+#: Coefficients a channel has above DC at degree 0..3 (harmonics.SH_DIMS; this file runs
+#: under the trainer's interpreter and imports nothing of the pipeline but holdout_maths).
+SH_DIMS = (0, 3, 8, 15)
+
+
+def shipped_sh(sh0: np.ndarray, rest: np.ndarray | None, degree: int) -> tuple[np.ndarray, int]:
+    """The coefficients `trained.ply` ships at `degree`, (N, (d + 1)^2, 3), and that `d`:
+    DC, then the first `SH_DIMS[d]` of `rest` (N, K, 3) -- the bands below `degree` are a
+    prefix of `sh_rest`'s coefficient-major order, which is what the `train` stage's
+    channel-major truncation (`harmonics.sources`) keeps. A PLY with fewer bands than
+    asked ships what it has, as the stage does."""
+    available = 0 if rest is None else max(d for d, n in enumerate(SH_DIMS) if n <= rest.shape[1])
+    used = max(0, min(int(degree), available))
+    if used == 0 or rest is None:
+        return np.ascontiguousarray(sh0, dtype=np.float32), 0
+    kept = np.concatenate([sh0, rest[:, : SH_DIMS[used], :]], axis=1)
+    return np.ascontiguousarray(kept, dtype=np.float32), used
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     parser.add_argument("--data_dir", type=Path, help="the dataset the trainer read")
@@ -137,6 +158,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--antialiased", action="store_true")
     parser.add_argument("--ssim_weight", type=float, default=holdout_maths.SSIM_WEIGHT)
     parser.add_argument("--budget-s", dest="budget_s", type=float, default=900.0)
+    # The SH degree trained.ply ships (the train stage's `ship_sh_degree`): what is rendered.
+    parser.add_argument("--sh-degree", dest="sh_degree", type=int, default=0)
     # Not for the pipeline: gsplat has no CPU rasteriser. For checking this file's
     # plumbing on a CPU against a stand-in `gsplat.rasterization`.
     parser.add_argument("--device", default="cuda", help=argparse.SUPPRESS)
@@ -189,6 +212,10 @@ def main(argv: list[str] | None = None) -> int:
     rest = sh_rest(columns)
     full = None if rest is None else torch.cat([sh0, torch.from_numpy(rest).to(device)], dim=1)
     full_degree = None if full is None else round(math.sqrt(full.shape[1])) - 1
+    # What trained.ply ships, and so what is shown and measured: DC and `--sh-degree` bands.
+    dc = np.stack([columns[f"f_dc_{i}"] for i in range(3)], axis=1).astype(np.float32)[:, None]
+    shipped, shipped_degree = shipped_sh(dc, rest, args.sh_degree)
+    shown_colors = torch.from_numpy(shipped).to(device)
     mode = "antialiased" if args.antialiased else "classic"
 
     def render(colors: Any, viewmat: Any, k: Any, width: int, height: int, degree: Any) -> Any:
@@ -225,7 +252,7 @@ def main(argv: list[str] | None = None) -> int:
         height, width = int(real.shape[0]), int(real.shape[1])
         mask = data["mask"].numpy().astype(bool) if "mask" in data else None
         with torch.no_grad():
-            rgb, alpha, _ = render(sh0, viewmat, k, width, height, 0)
+            rgb, alpha, _ = render(shown_colors, viewmat, k, width, height, shipped_degree)
             shown = rgb[0].clamp(0.0, 1.0).cpu().numpy()
             coverage = alpha[0, ..., 0].cpu().numpy()
             if mask is not None:
@@ -264,6 +291,7 @@ def main(argv: list[str] | None = None) -> int:
     error = accumulator.mean_error()
     measured = np.isfinite(error)
     psnrs = [view["psnr"] for view in views if view["psnr"] is not None]
+    full_psnrs = [view["psnrFullSh"] for view in views if view["psnrFullSh"] is not None]
     summary: dict[str, Any] = {
         "status": "ok",
         "gaussians": count,
@@ -271,8 +299,15 @@ def main(argv: list[str] | None = None) -> int:
         "views": len(views),
         "perView": views,
         "meanPsnr": round(float(np.mean(psnrs)), 3) if psnrs else None,
+        # Every band trained, against `meanPsnr` at what ships: what the cut costs.
+        "meanPsnrFullSh": round(float(np.mean(full_psnrs)), 3) if full_psnrs else None,
         "medianError": (round(float(np.median(error[measured])), 5) if measured.any() else None),
-        "rendered": "dc-only (as trained.ply ships it)",
+        "shDegree": shipped_degree,
+        "rendered": (
+            "dc-only (as trained.ply ships it)"
+            if shipped_degree == 0
+            else f"sh degree {shipped_degree} (as trained.ply ships it)"
+        ),
         "rasterizeMode": mode,
         "ssimWeight": args.ssim_weight,
         "testEvery": args.test_every,

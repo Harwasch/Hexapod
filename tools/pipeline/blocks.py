@@ -100,6 +100,7 @@ import block_maths
 import convergence
 import gaussian_budget
 import gaussians
+import harmonics
 import holdout
 import init_seed
 import live
@@ -535,11 +536,18 @@ def write_columns(path: Path, columns: Mapping[str, Any], names: Sequence[str]) 
 
 
 def merge_plys(
-    parts: Sequence[Path], target: Path, names: Sequence[str] | None = None, *, chunk: int = 1 << 20
+    parts: Sequence[Path],
+    target: Path,
+    names: Sequence[str] | None = None,
+    *,
+    chunk: int = 1 << 20,
+    sources: Mapping[str, str] | None = None,
 ) -> tuple[int, int]:
     """Concatenate `parts` into one PLY of `names` (default: the first part's), reading
     and writing `chunk` rows at a time -- the merged splat is never in memory, only one
-    chunk of one part. Returns (gaussians, bytes).
+    chunk of one part. Returns (gaussians, bytes). `sources` names the part's property an
+    output one is read from where they differ: SH truncated to a lower degree is not a
+    prefix of the trainer's channel-major `f_rest_*` (`harmonics.sources`).
 
     A local, minimal chunked append: the Phase 2 splat I/O (chunked, memory-mapped, Morton
     ordered) should replace it when it lands.
@@ -548,8 +556,9 @@ def merge_plys(
     if not layouts:
         raise ValueError("nothing to merge")
     wanted = tuple(names) if names is not None else layouts[0].names
+    read_from = {name: (sources or {}).get(name, name) for name in wanted}
     for part, layout in zip(parts, layouts, strict=True):
-        missing = [name for name in wanted if name not in layout.names]
+        missing = [name for name in read_from.values() if name not in layout.names]
         if missing:
             raise ValueError(f"{part.name} has no {', '.join(missing)}")
     total = sum(layout.count for layout in layouts)
@@ -570,7 +579,7 @@ def merge_plys(
                 piece = rows[start : start + chunk]
                 record = np.empty(piece.shape[0], dtype=out_dtype)
                 for name in wanted:
-                    record[name] = piece[name]
+                    record[name] = piece[read_from[name]]
                 written += handle.write(record.tobytes())
             del rows
     return total, written
@@ -1529,9 +1538,16 @@ def _merge_and_measure(
     directories = [_state_dir(ctx) / _block_dir(i) for i in range(plan.partition.count)]
     parts = [part for directory in directories for part in block_parts(directory)]
     full = work / "merged_full.ply"
+    # trained.ply ships the DC colour and `ship_sh_degree` of the blocks' SH bands (0 by
+    # default), truncated channel-major as a single run's are (stages.gsplat); the
+    # held-out error below is rendered at the same degree.
+    names = ply_layout(parts[0]).names if parts else ()
+    asked = harmonics.check_degree(settings.params.get("ship_sh_degree"))
+    shipped = min(asked, harmonics.degree_of(names)) if asked else 0
+    rest = harmonics.sources(shipped, harmonics.stride_of(names)) if shipped else {}
     with phases.phase("merge"):
         count, _ = merge_plys(parts, full)
-        _, written = merge_plys(parts, trained_ply, gaussians.CANONICAL_PROPERTIES)
+        _, written = merge_plys(parts, trained_ply, gaussians.ply_properties(shipped), sources=rest)
     ctx.log(
         f"blocks: merged {plan.partition.count} blocks into {count} gaussians "
         f"({', '.join(str(done[str(i)]['gaussiansKept']) for i in range(plan.partition.count))})"
@@ -1553,6 +1569,7 @@ def _merge_and_measure(
         antialiased=bool(settings.switches.get("antialiased")),
         script=settings.holdout_script,
         budget_s=settings.holdout_budget_s,
+        sh_degree=shipped,
     )
     phases.add("holdout", time.monotonic() - holding)
     # The splats are in the merged output now; the checkpoint keeps only the records, so

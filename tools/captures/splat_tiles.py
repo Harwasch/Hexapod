@@ -2213,10 +2213,10 @@ def convert(
     degree 0 (degree 1: 1.17-1.20x, degree 2: 1.36-1.44x), not the 3.4x of the raw bytes:
     quantised SH is mostly near zero and compresses well. Packing takes ~3x as long
     (786k gaussians: 3.0 s at degree 0, 8.4 s at 3), most of it gzip. A PLY without `f_rest_*` packs
-    to exactly the bytes it always did -- which is every `canonical.ply` today: the
-    pipeline's normalise/place stages drop `f_rest_*` and rotate only positions and
-    quaternions (tools/pipeline gaussians.py), so its captures stay degree 0 until those
-    stages keep the bands and rotate them too.
+    to exactly the bytes it always did -- which is every pipeline `canonical.ply` by
+    default: the pipeline ships `ship_sh_degree` bands (0 unless a run asks), and when it
+    does, its normalise/place stages turn them with the splat (tools/pipeline
+    harmonics.py), so a canonical.ply's SH is already in the frame its positions are.
 
     **Optimised parents.** `parents`, when given, are parent gaussians optimised against
     the capture's photos on the GPU (tools/pipeline lod_optimise.py, Hierarchical 3DGS

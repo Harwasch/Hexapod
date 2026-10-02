@@ -20,6 +20,14 @@ byte-identical to the in-memory path; the one exception is a ground sample's lon
 and latitude, whose cell mean is accumulated in float64 here where `np.mean` sums float32
 pairwise (a difference of order 1e-7 m on a cell a few metres across; see
 `ground_samples`).
+
+**Spherical harmonics.** A source opened with `sh_degree` above 0 (or None: every band
+the file has) carries that many bands of `f_rest_*` beside the canonical fourteen, and
+`transform_to` / `orient_to` write them -- turned with the splat (`gaussians.transform`,
+`harmonics.rotate`) -- into a `canonical.ply` of `gaussians.ply_properties`. The passes
+that only measure (the footprint, the ground cells) read without them (`with_sh=False`):
+they need the centres, and turning 45 coefficients a gaussian to throw them away would be
+most of their time.
 """
 
 from __future__ import annotations
@@ -34,6 +42,7 @@ import numpy.typing as npt
 from PIL import Image, ImageFilter
 
 import gaussians
+import harmonics
 import outofcore
 import splat_io
 from captures_bridge import SplatFormatError, sigmoid
@@ -67,7 +76,8 @@ _ALIASES = ("red", "green", "blue", "alpha")
 
 class SplatSource:
     """A splat read a chunk at a time, as the canonical columns `gaussians.read_splat`
-    would give for the same rows."""
+    would give for the same rows -- and, when it carries SH (`sh_degree` above 0), that
+    many bands of `f_rest_*` beside them, as `read_splat(path, sh_degree=...)` would."""
 
     count: int
     source_format: gaussians.SourceFormat
@@ -76,22 +86,40 @@ class SplatSource:
     properties_in: tuple[str, ...]
     dropped: tuple[str, ...]
     chunk: int = splat_io.CHUNK
+    #: The SH bands above DC each chunk carries: what was asked for, at most the file's.
+    sh_degree: int = 0
 
-    def read(self, start: int, stop: int) -> Columns:
+    @property
+    def properties(self) -> tuple[str, ...]:
+        """What a chunk holds, in `canonical.ply`'s order: what a writer of it writes."""
+        return gaussians.ply_properties(self.sh_degree)
+
+    def read(self, start: int, stop: int, *, with_sh: bool = True) -> Columns:
         raise NotImplementedError
 
     def checksum(self) -> str:
         raise NotImplementedError
 
-    def chunks(self, chunk: int | None = None) -> Iterator[tuple[int, Columns]]:
+    def chunks(
+        self, chunk: int | None = None, *, with_sh: bool = True
+    ) -> Iterator[tuple[int, Columns]]:
+        """Each chunk in order; `with_sh=False` leaves the SH bands out, for a pass that
+        only measures the splat and would otherwise read (and turn) them for nothing."""
         for start, stop in splat_io.ranges(self.count, chunk or self.chunk):
-            yield start, self.read(start, stop)
+            yield start, self.read(start, stop, with_sh=with_sh)
+
+
+def _wanted_degree(sh_degree: int | None, available: int) -> int:
+    """`sh_degree` capped at what the file has; None means all of it."""
+    return available if sh_degree is None else min(harmonics.check_degree(sh_degree), available)
 
 
 class PlySource(SplatSource):
     """A PLY on disk: rows read by range (`splat_io.SplatReader`) and normalised."""
 
-    def __init__(self, path: Path, *, chunk: int = splat_io.CHUNK) -> None:
+    def __init__(
+        self, path: Path, *, chunk: int = splat_io.CHUNK, sh_degree: int | None = 0
+    ) -> None:
         self.reader = splat_io.SplatReader(path, chunk=chunk)
         self.chunk = self.reader.chunk
         self.count = self.reader.count
@@ -100,16 +128,33 @@ class PlySource(SplatSource):
         self.source_bytes = path.stat().st_size
         self.properties_in = self.reader.properties
         # Refuse now, by name, what `read_splat` would refuse: a PLY with no way to the
-        # canonical fourteen.
+        # canonical fourteen, or -- only when its bands are asked for -- a broken run of
+        # f_rest_*, which a DC-only read drops unread as it always did.
         empty = {name: np.zeros(0, np.float32) for name in self.properties_in}
         kept = gaussians.normalise(path.name, empty)
-        self.dropped = tuple(name for name in self.properties_in if name not in kept)
+        available = (
+            0 if sh_degree == 0 else harmonics.degree_of(self.properties_in, source=path.name)
+        )
+        self.sh_degree = _wanted_degree(sh_degree, available)
+        # Each carried band's name in the file: a lower degree than the file's is not a
+        # prefix of its names (`harmonics.sources`).
+        self._sh = (
+            harmonics.sources(self.sh_degree, harmonics.stride_of(self.properties_in))
+            if self.sh_degree
+            else {}
+        )
+        carried = set(kept) | set(self._sh.values())
+        self.dropped = tuple(name for name in self.properties_in if name not in carried)
         self._raw = tuple(
             name for name in self.properties_in if name in CANONICAL or name in _ALIASES
         )
 
-    def read(self, start: int, stop: int) -> Columns:
-        return gaussians.normalise(self.source_name, self.reader.read(start, stop, self._raw))
+    def read(self, start: int, stop: int, *, with_sh: bool = True) -> Columns:
+        sh = self._sh if with_sh else {}
+        raw = self.reader.read(start, stop, (*self._raw, *sh.values()))
+        columns = gaussians.normalise(self.source_name, raw)
+        columns.update({out: raw[name] for out, name in sh.items()})
+        return columns
 
     def checksum(self) -> str:
         return self.reader.checksum()
@@ -127,23 +172,32 @@ class ArraySource(SplatSource):
         self.source_bytes = splat.source_bytes
         self.properties_in = splat.properties_in
         self.dropped = splat.dropped
+        self.sh_degree = splat.sh_degree
 
-    def read(self, start: int, stop: int) -> Columns:
-        return {name: self.splat.columns[name][start:stop] for name in CANONICAL}
+    def read(self, start: int, stop: int, *, with_sh: bool = True) -> Columns:
+        names = self.properties if with_sh else CANONICAL
+        return {name: self.splat.columns[name][start:stop] for name in names}
 
     def checksum(self) -> str:
         return self.splat.source_checksum
 
 
-def open_splat(path: Path, *, chunk: int = splat_io.CHUNK) -> SplatSource:
+def open_splat(
+    path: Path, *, chunk: int = splat_io.CHUNK, sh_degree: int | None = 0
+) -> SplatSource:
     """A `.ply` streamed from disk; a `.spz` unpacked whole, since SPZ is one gzip stream
     of column blocks (all positions, then all alphas, ...) and reading one row range means
     inflating everything before it. A phone's `.spz` is small: its PLY equivalent is
-    what grows with a trained scene."""
+    what grows with a trained scene.
+
+    `sh_degree`: the SH bands above DC to carry -- 0 (the default, every stage that only
+    reads the splat), a degree 1-3 (at most what the file has), or None for every band
+    the file has (`place` and `quality`, which pass on what `train` shipped)."""
     suffix = path.suffix.lower()
     if suffix == ".ply":
-        return PlySource(path, chunk=chunk)
-    return ArraySource(gaussians.read_splat(path), chunk=chunk)
+        return PlySource(path, chunk=chunk, sh_degree=sh_degree)
+    wanted = harmonics.MAX_DEGREE if sh_degree is None else harmonics.check_degree(sh_degree)
+    return ArraySource(gaussians.read_splat(path, sh_degree=wanted), chunk=chunk)
 
 
 # ---------------------------------------------------------------------------------------
@@ -175,7 +229,8 @@ def _xyz(columns: Mapping[str, F32]) -> tuple[F32, F32, F32, npt.NDArray[np.bool
 
 
 def _moved(source: SplatSource, steps: Sequence[Step]) -> Iterator[Columns]:
-    for _, columns in source.chunks():
+    """The splat after `steps`, without its SH bands: every caller only measures it."""
+    for _, columns in source.chunks(with_sh=False):
         yield _apply(columns, steps)
 
 
@@ -353,7 +408,9 @@ def _write(
     count = non_finite = 0
     low = np.full(3, np.inf)
     high = np.full(3, -np.inf)
-    with splat_io.PlyWriter(out, CANONICAL, count=source.count) as writer:
+    # The canonical fourteen, and the source's SH bands when it carries any -- turned with
+    # the splat by each step (`gaussians.transform`).
+    with splat_io.PlyWriter(out, source.properties, count=source.count) as writer:
         for _, read in source.chunks():
             # Counted as read, as `read_splat` counts `non_finite`: before any transform.
             _, _, _, finite_in = _xyz(read)
@@ -449,7 +506,7 @@ def median_gaussian_m(source: SplatSource) -> float:
     axis of every gaussian whose three log-scales are finite, rounded to 6 places."""
 
     def radii() -> Iterator[F32]:
-        for _, columns in source.chunks():
+        for _, columns in source.chunks(with_sh=False):
             scales = np.stack([columns[f"scale_{i}"] for i in range(3)], axis=1)
             finite = np.isfinite(scales).all(axis=1)
             yield np.exp(scales[finite]).reshape(-1)
@@ -486,7 +543,7 @@ def thumbnail(
         return finite & np.isfinite(alpha) & (alpha >= alpha_min), alpha
 
     def axes() -> Iterator[tuple[F32, I64]]:
-        for _, columns in source.chunks():
+        for _, columns in source.chunks(with_sh=False):
             visible, _ = visible_of(columns)
             count = int(visible.sum())
             yield (
@@ -503,7 +560,8 @@ def thumbnail(
         high = np.array([found[0][1], found[1][1]])
         nearest = np.full(size * size, np.inf, dtype=np.float32)
         flat_image = image.reshape(-1, 3)
-        for _, columns in source.chunks():
+        # A flat DC colour, as the in-memory thumbnail draws: no SH read for it.
+        for _, columns in source.chunks(with_sh=False):
             visible, _ = visible_of(columns)
             kept += int(visible.sum())
             if not bool(visible.any()):

@@ -583,6 +583,10 @@ def test_the_quality_switches_reach_the_trainer_with_the_presets_semantics(
         "batchSize": 1,
         "variant": "3dgs",
         "initFrom": "sfm",
+        # Nothing past DC asked for, shipped, or (by this stand-in, unlike gsplat) fitted.
+        "shDegreeRequested": 0,
+        "shDegree": 0,
+        "shDegreeTrained": 0,
     }
     assert document["colorCorrected"] is None
 

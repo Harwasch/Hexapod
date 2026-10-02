@@ -57,10 +57,19 @@ PLY_PROPERTIES = (
 )
 
 
-def write_ply(path: Path, count: int, seed: int) -> None:
-    """A valid 3DGS PLY with the fourteen properties `gaussians.read_splat` reads."""
+#: Coefficients a channel has above DC at SH degree 0..3.
+SH_DIMS = (0, 3, 8, 15)
+
+
+def write_ply(path: Path, count: int, seed: int, sh_degree: int = 0) -> None:
+    """A valid 3DGS PLY with the fourteen properties `gaussians.read_splat` reads -- and,
+    with `sh_degree`, gsplat's `f_rest_*` (channel-major, after `f_dc_*`, as v1.5.3's
+    `export_splats` writes them). The rest of the SH comes from its own generator, so
+    the fourteen are the same bytes whatever degree is asked for."""
+    rest = [f"f_rest_{i}" for i in range(3 * SH_DIMS[sh_degree])]
+    names = [*PLY_PROPERTIES[:6], *rest, *PLY_PROPERTIES[6:]]
     rng = np.random.default_rng(seed)
-    rows = np.zeros(count, dtype=np.dtype([(name, "<f4") for name in PLY_PROPERTIES]))
+    rows = np.zeros(count, dtype=np.dtype([(name, "<f4") for name in names]))
     for axis in ("x", "y", "z"):
         rows[axis] = rng.normal(scale=1.5, size=count).astype(np.float32)
     for index in range(3):
@@ -68,11 +77,14 @@ def write_ply(path: Path, count: int, seed: int) -> None:
         rows[f"scale_{index}"] = np.full(count, -3.0, dtype=np.float32)
     rows["opacity"] = np.full(count, 2.0, dtype=np.float32)
     rows["rot_0"] = np.ones(count, dtype=np.float32)
+    shine = np.random.default_rng(seed + 1_000_003)
+    for name in rest:
+        rows[name] = shine.normal(scale=0.1, size=count).astype(np.float32)
     header = (
         "ply\nformat binary_little_endian 1.0\n"
         "comment written by tests/gsplat_stand_in.py -- not a trained splat\n"
         f"element vertex {count}\n"
-        + "".join(f"property float {name}\n" for name in PLY_PROPERTIES)
+        + "".join(f"property float {name}\n" for name in names)
         + "end_header\n"
     )
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -125,6 +137,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--use_bilateral_grid", action="store_true")
     parser.add_argument("--packed", action="store_true")
     parser.add_argument("--batch_size", type=int, default=1)
+    # v1.5.3's own flag, whose default there is 3: every real export carries 45
+    # f_rest_*. The stand-in's default is 0, so the tests written before SH shipped read
+    # the PLYs they always did; a test of SH passes it (`extra_args`), as a run could.
+    parser.add_argument("--sh_degree", type=int, default=0)
     # Not gsplat's: how this stand-in is told to behave like a reclaimed machine.
     parser.add_argument("--ckpt-every", type=int, default=100)
     parser.add_argument("--die-at", type=int, default=None)
@@ -227,6 +243,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.result_dir / "ply" / f"point_cloud_{step - 1}.ply",
                 args.gaussians,
                 seed=step,
+                sh_degree=args.sh_degree,
             )
         doomed = args.die_if_image is None or any(
             args.die_if_image in path.name for path in images.iterdir()
@@ -258,7 +275,10 @@ def main(argv: list[str] | None = None) -> int:
     (stats / f"val_step{step - 1:04d}.json").write_text(json.dumps(val), encoding="utf-8")
     if args.save_ply and not args.no_ply:
         write_ply(
-            args.result_dir / "ply" / f"point_cloud_{step - 1}.ply", args.gaussians, seed=step
+            args.result_dir / "ply" / f"point_cloud_{step - 1}.ply",
+            args.gaussians,
+            seed=step,
+            sh_degree=args.sh_degree,
         )
     sys.stdout.write(f"stand-in: finished at step {step}" + "\n")
     return 0

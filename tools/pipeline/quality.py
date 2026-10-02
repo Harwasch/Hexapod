@@ -1524,7 +1524,9 @@ def support_gate(ctx: StageContext) -> StageOutcome:
         raise ValueError(f"quality.bar must be one of {', '.join(BARS)}, not {bar!r}")
     thresholds = Thresholds.from_params(ctx.params)
     chunk = int(ctx.param("chunk_gaussians", splat_io.CHUNK))
-    source = splat_stream.open_splat(ctx.input(GATED_PLY_SOURCE), chunk=chunk)
+    # Every SH band `train` shipped (`ship_sh_degree`) passes through to `gated.ply` untouched:
+    # the gate selects and fades gaussians, it does not decide what colour they carry.
+    source = splat_stream.open_splat(ctx.input(GATED_PLY_SOURCE), chunk=chunk, sh_degree=None)
     model = sfm.read_model(ctx.input("poses"))
     cameras = Cameras.from_model(model)
     scratch = ctx.work_dir / "quality-chunks"
@@ -1557,7 +1559,7 @@ def _grade(
     writers = {
         name: columns.create(name, np.float32) for name in ("x", "y", "z", "alpha", "radius")
     }
-    for _, read in source.chunks():
+    for _, read in source.chunks(with_sh=False):
         for axis in "xyz":
             writers[axis].append(read[axis])
         writers["alpha"].append(np.ascontiguousarray(sigmoid(read["opacity"]), dtype=np.float32))
@@ -1764,8 +1766,9 @@ def _grade(
         applied = BARS[BARS.index(applied) + 1]
         ctx.log(f"WARNING: bar {bar!r} leaves too little; falling back to {applied!r}")
     kept_count = passing[applied]
+    # `trained.ply`'s own schema: the fourteen, and the SH bands it carries.
     with splat_io.PlyWriter(
-        ctx.output(GATED_PLY.name), gaussians.CANONICAL_PROPERTIES, count=kept_count
+        ctx.output(GATED_PLY.name), source.properties, count=kept_count
     ) as writer:
         for start, read in source.chunks():
             tiers = columns.read("tiers", start, start + read["x"].shape[0])

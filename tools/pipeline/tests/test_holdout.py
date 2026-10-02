@@ -194,6 +194,36 @@ def test_the_script_reads_the_plys_spherical_harmonics_back_in_gsplats_order(
     np.testing.assert_array_equal(restored, rest)
 
 
+def test_the_script_renders_the_degree_trained_ply_ships() -> None:
+    """`shipped_sh` is what the held-out frames are rendered with: DC, then the first
+    bands of the trainer's SH -- the same coefficients the `train` stage's channel-major
+    truncation keeps (`harmonics.sources`), so the error measured is of what ships."""
+    import harmonics
+    from holdout_error import SH_DIMS, shipped_sh
+
+    assert tuple(SH_DIMS) == harmonics.SH_DIMS
+    n = 6
+    sh0 = np.arange(n * 3, dtype=np.float32).reshape(n, 1, 3)
+    rest = np.arange(n * 45, dtype=np.float32).reshape(n, 15, 3) + 1000
+    for degree, width in ((0, 1), (1, 4), (2, 9), (3, 16)):
+        colours, used = shipped_sh(sh0, rest, degree)
+        assert used == degree and colours.shape == (n, width, 3)
+        np.testing.assert_array_equal(colours[:, 0], sh0[:, 0])
+        np.testing.assert_array_equal(colours[:, 1:], rest[:, : width - 1])
+    # Against the stage: the PLY's channel-major f_rest truncated as trained.ply is.
+    flat = rest.transpose(0, 2, 1).reshape(n, -1)
+    columns = {f"f_rest_{i}": flat[:, i] for i in range(45)}
+    shipped = harmonics.truncate(columns, 1)
+    as_trained = np.stack(
+        [np.stack([shipped[f"f_rest_{c * 3 + j}"] for c in range(3)], axis=1) for j in range(3)],
+        axis=1,
+    )
+    np.testing.assert_array_equal(shipped_sh(sh0, rest, 1)[0][:, 1:], as_trained)
+    # Fewer bands than asked: what there is. None at all: DC.
+    assert shipped_sh(sh0, rest[:, :3], 3)[1] == 1
+    assert shipped_sh(sh0, None, 3)[1] == 0
+
+
 # --- the rule ---------------------------------------------------------------------------
 
 

@@ -113,11 +113,15 @@ def measure(
     antialiased: bool = False,
     script: Path | None = None,
     budget_s: float = DEFAULT_BUDGET_S,
+    sh_degree: int = 0,
 ) -> dict[str, Any]:
     """Write `holdout/` for the `train` stage, and return its `holdout.json`.
 
     `ply` is the trainer's own export (`rows` gaussians); `keep` is the stage's crop of it
     into `trained.ply` (None for no crop). The arrays written are `keep`'s rows, in order.
+    `sh_degree` is the degree `trained.ply` ships: the script renders the held-out frames
+    at it (`--sh-degree`), so the error `quality` gates with is the error of what is
+    published, whatever colour detail that is.
     """
     out = ctx.output(HOLDOUT.name)
     if not enabled:
@@ -145,6 +149,8 @@ def measure(
         str(test_every),
         "--budget-s",
         f"{budget_s:g}",
+        "--sh-degree",
+        str(sh_degree),
     ]
     if antialiased:
         argv.append("--antialiased")
@@ -449,6 +455,8 @@ def report(
         "status": "ok",
         "views": summary.get("views"),
         "meanPsnr": summary.get("meanPsnr"),
+        "meanPsnrFullSh": summary.get("meanPsnrFullSh"),
+        "shDegree": summary.get("shDegree"),
         "rendered": summary.get("rendered"),
         "seconds": summary.get("seconds"),
         "perView": views,

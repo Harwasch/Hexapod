@@ -26,7 +26,9 @@ import blocks
 import convergence
 import gaussian_budget
 import gaussians
+import harmonics
 import sfm
+import splat_io
 import synthetic_scene
 import training
 from adapters import LocalTransfer, SubprocessAdapter
@@ -372,6 +374,27 @@ def test_the_merged_ply_is_the_concatenation_of_the_cropped_blocks(
     gaussians.write_ply(reference, read_ply(full))
     # Byte-identical to the in-memory writer every other trained.ply comes from.
     assert canonical.read_bytes() == reference.read_bytes()
+
+
+def test_a_merged_trained_ply_ships_the_runs_sh_degree_truncated_channel_major(
+    tmp_path: Path,
+) -> None:
+    """Degree 1 of the blocks' degree-3 parts: not a prefix of the names, so read by
+    `sources` -- and byte-identical to what a single run's `write_ply` makes of them."""
+    parts = []
+    for index, count in enumerate((700, 450)):
+        directory = tmp_path / f"block_{index}"
+        blocks.write_parts(directory, columns(count, index, rest=45), list(columns(1, 0, rest=45)))
+        parts.extend(blocks.block_parts(directory))
+    trained = tmp_path / "trained.ply"
+    blocks.merge_plys(
+        parts, trained, gaussians.ply_properties(1), chunk=313, sources=harmonics.sources(1, 15)
+    )
+    full = {name: np.concatenate([read_ply(p)[name] for p in parts]) for name in read_ply(parts[0])}
+    reference = tmp_path / "reference.ply"
+    canonical = {name: full[name] for name in gaussians.CANONICAL_PROPERTIES}
+    gaussians.write_ply(reference, {**canonical, **harmonics.truncate(full, 1)}, sh_degree=1)
+    assert trained.read_bytes() == reference.read_bytes()
 
 
 # --- the prior ------------------------------------------------------------------------
@@ -764,6 +787,33 @@ def test_the_merged_splat_is_evaluated_or_says_why_not(tmp_path: Path) -> None:
         assert document["psnr"] is None
         step = json.loads(workdir.step_path("train").read_text())
         assert step["metrics"]["metricsSource"] == "none"
+
+
+def test_a_block_run_ships_the_sh_degree_it_was_asked_for_and_measures_it(
+    tmp_path: Path,
+) -> None:
+    """The stand-in exports SH 3 (`--sh_degree 3`, gsplat's own flag and default); a run
+    asking for degree 1 merges degree 1 into trained.ply, and the held-out error is asked
+    for at degree 1 -- what ships -- not at 0 or 3."""
+    workdir = Workdir.create(tmp_path / "run")
+    seed_walk(workdir)
+    seed_prior(workdir, tmp_path / "scratch")
+    params = block_params(
+        ship_sh_degree=1,
+        extra_args=["--ckpt-every", "100", "--gaussians", "64", "--sh_degree", "3"],
+        holdout_error=True,
+        holdout_script=str(Path(__file__).resolve().parent / "holdout_stand_in.py"),
+    )
+
+    document = run_blocks(workdir, params)
+
+    trained = workdir.out_dir("train") / "trained.ply"
+    assert splat_io.read_layout(trained).properties == gaussians.ply_properties(1)
+    assert document["settings"]["shDegree"] == 1
+    assert document["holdout"]["shDegree"] == 1
+    assert "--sh-degree 1" in workdir.log_path("train").read_text()
+    step = json.loads(workdir.step_path("train").read_text())
+    assert step["metrics"]["shDegree"] == 1
 
 
 def test_one_block_after_the_minimum_rule_trains_as_a_single_run(tmp_path: Path) -> None:
