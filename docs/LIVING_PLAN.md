@@ -23,7 +23,7 @@ Architecture: [SCENE_OBJECTS.md](SCENE_OBJECTS.md). Branch: `living-models`.
 - [x] C1 Wind forces on handles (living): anchored modal model per skin (`ω_j = c·√λ_j / scale`, the lowest tenth anchors), exact 60 Hz grid, bounded at a quarter of a support radius; priors from properties, `materials.json` overrides (SCENE_OBJECTS.md §4); 0.34 ms a frame for 30 objects (e2e on the yard)
 - [x] C2 Video teacher fits materials per instance (stiffness, damping, drag): writes `materials.json` (SCENE_OBJECTS.md §4); `teacher_materials.py` matches the C1 model's predicted screen-motion spectrum (Python port `skin_wind.py`, parity-tested against `skinWind.ts`) to tracked points; synthetic yard from a 4×-wrong prior: c within 4%, ζ within 16%, D within 14%; a world-model clip on Modal not yet run (needs the `huggingface` secret)
 - [ ] C3 Telemetry drives a rigid instance (live)
-- [ ] C4 Movable instances to their own tilesets + fill the hole
+- [~] C4 Movable instances to their own tilesets + fill the hole: `split_objects.py split` (SCENE_OBJECTS.md §4 "Split objects"): objects as one-tile tilesets in their own frame (SPZ records sliced, never re-quantised), instances/skin re-bound, `root.extras.objects` with origin and pose, the hole filled as an inferred layer (`teacher_fill.fill_hole`); viewer loads, places and hides/highlights them (`cesium/splitObjects.ts`). Yard (CPU, Telea): counts conserved, round trip ≤ 1/255, footprint 6% -> 95% covered. Pumpkin on GPU (gsplat, Fixer t50, Distill 1500): hole 0.4% -> 99% covered, but Fixer only cleans: the fill is flat colour (needs a generative inpainter). Behaviour rule needs a size term (proposed `--select loose`)
 
 ## E. Merge
 

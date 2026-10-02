@@ -468,6 +468,13 @@ sees through (6% covered), is 95% covered after the fill and lifted to within 0.
 ground; a second run writes the same bytes, the input is untouched, and a split scan splits
 again. The committed yard's skins re-bind (rows of what stayed equal, the shrub's left).
 
+**On a real scan** (the pumpkin, `fill.py --jobs split:pumpkin`, WORLD_MODEL_RUNBOOK.md §7):
+`--ids 3 --absorb` takes the red pumpkin (27,319 gaussians, 40 fragment ids absorbed) out
+cleanly; the hole, 0.4% covered from a held-out view, is 99% covered after the fill with
+every filler tried, but NVIDIA Fixer (t50-t250) only cleans what it is shown: inside the
+hole it keeps the rough Telea fill's flat colour. A generative inpainter is the next filler
+to try for holes.
+
 ### Fixture and browser checks
 
 `data/tiles/synthetic-yard/skin/` is the yard's tree (instance 1), a snag (9) and two shrubs
