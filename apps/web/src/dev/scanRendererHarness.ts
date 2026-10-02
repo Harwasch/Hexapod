@@ -34,6 +34,11 @@ export interface ScanRendererHarness {
   setResolution(browserRecommended: boolean, resolutionScale: number): void;
   /** Turns the camera about the scan by `degrees` over `frames` animation frames. */
   orbit(degrees: number, frames: number): Promise<void>;
+  /**
+   * Whether the globe still renders: a frame is requested and its `postRender` waited for, up
+   * to `timeoutMs`. CesiumJS's render loop stops for good on a throw it does not catch.
+   */
+  globeRenders(timeoutMs?: number): Promise<boolean>;
 }
 
 export async function startScanRendererHarness(options: {
@@ -79,6 +84,20 @@ export async function startScanRendererHarness(options: {
       widget.useBrowserRecommendedResolution = browserRecommended;
       widget.resolutionScale = resolutionScale;
       scene.requestRender();
+    },
+    globeRenders(timeoutMs = 3000) {
+      return new Promise((resolve) => {
+        const timer = setTimeout(() => {
+          remove();
+          resolve(false);
+        }, timeoutMs);
+        const remove = scene.postRender.addEventListener(() => {
+          clearTimeout(timer);
+          remove();
+          resolve(true);
+        });
+        scene.requestRender();
+      });
     },
     async orbit(degrees, frames) {
       // About the vertical through the scan: the axis from the Earth's centre through it.

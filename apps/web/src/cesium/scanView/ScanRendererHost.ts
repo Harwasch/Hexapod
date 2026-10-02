@@ -37,7 +37,7 @@ import {
 
 import { deviceSplatBudget, deviceSplatCeiling, isHandheld } from "@/lib/detail";
 import { AdaptiveSplatBudget } from "@/lib/splatBudget";
-import { createLogger } from "@/lib/log";
+import { createLogger, describeError } from "@/lib/log";
 import { DEFAULT_SPLAT_RENDERER } from "@/state/settings";
 import { TileStreamer, type View } from "@/view/stream";
 import { parseTileset, type TileNode } from "@/view/tiles";
@@ -320,8 +320,25 @@ export class ScanRendererHost {
    * meet the same failure per scan. Choosing the renderer again tries WebGPU again.
    */
   private webgpuFailed: string | null = null;
-  /** Starts whose device was lost before their session existed (`deviceLost`). */
-  private readonly lostStarts = new WeakSet<object>();
+  /**
+   * Starts retired, whether or not their session exists yet: their device was lost
+   * (`deviceLost`), or a frame threw (`drawFailed`). One retirement each, and a session still
+   * starting is dropped as it arrives (`sync`).
+   */
+  private readonly retiredStarts = new WeakSet<object>();
+  /**
+   * The renderer and scan whose overlay threw while drawing (`drawFailed`): not started again
+   * for that scan until the renderer is chosen again, or another scan is shown. A renderer
+   * that throws on a scan throws on every frame of it, and restarting it on the spot would
+   * only fetch the scan again to throw again.
+   */
+  private drawFailure: { kind: SplatRendererKind; key: string } | null = null;
+  /**
+   * Told, in words for the screen, when a session's overlay threw and was retired: the scan it
+   * drew is gone from the view (CesiumJS keeps its own copy hidden), so the operator should
+   * hear why. The scene manager raises a toast.
+   */
+  onFailure: ((message: string) => void) | null = null;
 
   constructor(
     private readonly viewer: HostViewer,
@@ -340,6 +357,8 @@ export class ScanRendererHost {
     if (kind === this.kind) return;
     this.kind = kind;
     if (kind === "playcanvas-webgpu") this.webgpuFailed = null;
+    // Choosing a renderer is asking for it: one that threw on this scan is tried again.
+    this.drawFailure = null;
     this.sync();
   }
 
@@ -406,7 +425,9 @@ export class ScanRendererHost {
   }
 
   private sync(): void {
-    const wanted = this.kind !== "cesium" && this.target !== null;
+    const failedHere =
+      this.drawFailure?.kind === this.kind && this.drawFailure.key === this.target?.key;
+    const wanted = this.kind !== "cesium" && this.target !== null && !failedHere;
     const current = this.session;
     if (current && (!wanted || current.kind !== this.kind || current.key !== this.target?.key)) {
       current.stop();
@@ -423,7 +444,7 @@ export class ScanRendererHost {
         if (
           this.kind !== kind ||
           this.target?.key !== target.key ||
-          this.lostStarts.has(session.token)
+          this.retiredStarts.has(session.token)
         ) {
           session.stop();
         } else {
@@ -476,17 +497,54 @@ export class ScanRendererHost {
    * again from the start. Later sessions this visit go straight to WebGL2 (`webgpuFailed`).
    */
   private deviceLost(token: object, reason: string): void {
-    if (this.lostStarts.has(token)) return;
-    this.lostStarts.add(token);
+    if (this.retiredStarts.has(token)) return;
+    this.retiredStarts.add(token);
     this.webgpuFailed = reason;
     log.warn("splat renderer lost its device; drawing with WebGL2 instead", { reason });
-    // Never torn down from inside the renderer's own callback. A session still starting is
-    // dropped as it arrives (`sync`).
+    this.retire(token);
+  }
+
+  /**
+   * A frame of the session from start `token` threw (OverlayFrames has stopped it already, and
+   * kept the throw out of CesiumJS's frame): the session is retired, its error is what the
+   * status says, the scan is not started again with this renderer (`drawFailure`), and whoever
+   * listens (`onFailure`) is told. The globe and its other managers never notice.
+   */
+  private drawFailed(token: object, kind: SplatRendererKind, key: string, error: unknown): void {
+    if (this.retiredStarts.has(token)) return;
+    this.retiredStarts.add(token);
+    const message = `The ${kind} splat renderer stopped: ${describeError(error)}`;
+    this.lastError = message;
+    this.drawFailure = { kind, key };
+    log.error("splat renderer threw while drawing; its overlay is retired", {
+      kind,
+      error: describeError(error),
+    });
+    this.retire(token);
+    try {
+      this.onFailure?.(message);
+    } catch {
+      // A listener's own failure is not the overlay's to report.
+    }
+  }
+
+  /**
+   * Stops the session from start `token`, if it is the one drawing, and lets `sync` decide what
+   * replaces it. Never from inside the renderer's own callback or frame: on the next task. A
+   * session still starting is dropped as it arrives (`sync`, `retiredStarts`).
+   */
+  private retire(token: object): void {
     setTimeout(() => {
       const session = this.session;
       if (session?.token !== token) return;
-      session.stop();
       this.session = null;
+      try {
+        session.stop();
+      } catch (error) {
+        // A renderer that broke while drawing can break again on the way out; its canvas is
+        // gone either way (the session's `stop`), and nothing of it is drawn again.
+        log.warn("a retired splat renderer did not stop cleanly", { error: describeError(error) });
+      }
       this.sync();
     }, 0);
   }
@@ -543,8 +601,10 @@ export class ScanRendererHost {
     const api = backend.api ?? "webgl2";
     canvas.dataset.api = api;
     const notice = kind === "playcanvas-webgpu" ? (backend.apiNote ?? this.webgpuFailed) : null;
+    // A frame that throws retires this session, never the globe (overlayFrames.ts).
+    const failed = (error: unknown): void => this.drawFailed(token, kind, target.key, error);
     try {
-      const session = await this.run(kind, target, canvas, backend, budget, wake, work);
+      const session = await this.run(kind, target, canvas, backend, budget, wake, work, failed);
       return Object.assign(session, { token, api, notice });
     } catch (error) {
       // Whatever failed before the first frame leaves nothing behind.
@@ -563,11 +623,12 @@ export class ScanRendererHost {
     budget: number,
     wake: { frame: (reason: string) => void },
     work: TileWork,
+    failed: (error: unknown) => void,
   ): Promise<SessionCore> {
     const { viewer } = this;
     const url = new URL(target.tileset.resource.url, location.href).toString();
     if (backend.streamNative) {
-      const native = await this.runNative(kind, target, canvas, backend, url, wake, work);
+      const native = await this.runNative(kind, target, canvas, backend, url, wake, work, failed);
       if (native) return native;
     }
     const response = await fetch(url);
@@ -758,6 +819,7 @@ export class ScanRendererHost {
           return inputs.changed(viewer.camera, inputSize(), tileset.root.computedTransform);
         },
         draw: frame,
+        failed,
       },
     );
     wake.frame = (reason) => driver.wake(reason);
@@ -774,9 +836,13 @@ export class ScanRendererHost {
         unlinkInstances();
         driver.stop();
         work.stop();
-        streamer.stop();
-        backend.destroy();
-        canvas.remove();
+        // The canvas goes whatever the renderer does on the way out (a retired one may throw).
+        try {
+          streamer.stop();
+          backend.destroy();
+        } finally {
+          canvas.remove();
+        }
       },
       prefetch: (destination) => {
         if (!destination) {
@@ -826,6 +892,7 @@ export class ScanRendererHost {
     tilesetUrl: string,
     wake: { frame: (reason: string) => void },
     work: TileWork,
+    failed: (error: unknown) => void,
   ): Promise<SessionCore | null> {
     if (!backend.streamNative) return null;
     const extras = (target.tileset.root as { extras?: unknown } | undefined)?.extras;
@@ -885,6 +952,7 @@ export class ScanRendererHost {
           return inputs.changed(viewer.camera, inputSize(), tileset.root.computedTransform);
         },
         draw: frame,
+        failed,
       },
     );
     wake.frame = (reason) => driver.wake(reason);
@@ -905,9 +973,12 @@ export class ScanRendererHost {
         unlinkInstances();
         driver.stop();
         work.stop();
-        stream.stop();
-        backend.destroy();
-        canvas.remove();
+        try {
+          stream.stop();
+          backend.destroy();
+        } finally {
+          canvas.remove();
+        }
       },
       status: () => ({
         tiles: 0,

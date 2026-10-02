@@ -165,6 +165,35 @@ for (const [kind, native] of [
   );
 }
 
+test("a renderer that throws while drawing is retired, and the globe keeps rendering", async ({
+  page,
+}) => {
+  // The overlay draws inside the globe's `postRender`, which CesiumJS raises outside the try
+  // that turns a render error into `renderError`: a throw there used to stop CesiumJS's render
+  // loop for good, with no recovery (overlayFrames.ts).
+  test.setTimeout(300_000);
+  await page.setViewportSize({ width: 960, height: 600 });
+  await open(page, { native: false });
+  const status: Status = await page.evaluate(`window.__scan.use("playcanvas", 90)`);
+  expect(status.error).toBeNull();
+  expect(await page.evaluate(`window.__scan.globeRenders()`)).toBe(true);
+  // The tile planner, which runs inside the overlay's frame, breaks; a turn re-plans.
+  await page.evaluate(`import("/src/view/stream.ts").then((m) => {
+    m.TileStreamer.prototype.update = () => { throw new Error("the planner broke"); };
+  })`);
+  await page.evaluate(`window.__scan.orbit(20, 20)`);
+  await expect
+    .poll(() => page.evaluate(`window.__scan.status().active`), { timeout: 30_000 })
+    .toBe(false);
+  const after: Status = await page.evaluate(`window.__scan.status()`);
+  expect(after.error).toContain("the planner broke");
+  expect(await page.locator("canvas[data-scan-renderer]").count()).toBe(0);
+  // The globe renders on: every requested frame arrives, moving or not.
+  expect(await page.evaluate(`window.__scan.globeRenders()`)).toBe(true);
+  await page.evaluate(`window.__scan.orbit(10, 10)`);
+  expect(await page.evaluate(`window.__scan.globeRenders()`)).toBe(true);
+});
+
 test.describe("on a 2x display", () => {
   test.use({ deviceScaleFactor: 2 });
 

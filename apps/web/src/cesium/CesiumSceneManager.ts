@@ -200,6 +200,15 @@ export class CesiumSceneManager {
     this.uninstallSplatDecoder = installSplatDecoder(interfaceBusy);
     this.collider = new SplatCollider(this.viewer.scene, () => this.splatGate.holding);
     this.scanRenderer = new ScanRendererHost(this.viewer);
+    // A dedicated splat renderer that throws while drawing is retired on the spot, and the
+    // globe carries on (overlayFrames.ts); the scan it drew is gone from the view, so say why.
+    this.scanRenderer.onFailure = (message) =>
+      this.events.emit("toast", {
+        tone: "error",
+        title: "The scan stopped drawing",
+        body: `${message.replace(/\.$/, "")}. The map carries on; Settings › Advanced › Splat renderer can draw the scan with another renderer.`,
+        id: "scan-renderer-failed",
+      });
     this.camera.setCollider(this.collider);
     // Cesium's own camera control asks the splats' solids before reading depth back from
     // the GPU (engine patch, ScreenSpaceCameraController.pickHook).

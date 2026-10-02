@@ -1,4 +1,4 @@
-import { Cartesian3, Matrix4, PerspectiveFrustum, type Camera } from "cesium";
+import { Cartesian3, Event as CesiumEvent, Matrix4, PerspectiveFrustum, type Camera } from "cesium";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -177,6 +177,69 @@ describe("the overlay draws only when something changes", () => {
     frame();
     frame();
     expect(state.draws).toBe(2);
+  });
+
+  it("a frame that throws stops the overlay and never reaches the globe's render", () => {
+    // CesiumJS's own event, raised as Scene.render raises `postRender`: outside the try that
+    // turns a render error into `renderError`, so a listener's throw would stop its render loop.
+    const postRender = new CesiumEvent();
+    const failures: unknown[] = [];
+    let draws = 0;
+    const frames = new OverlayFrames((listener) => postRender.addEventListener(listener), {
+      changed: () => true,
+      draw: () => {
+        draws += 1;
+        // The renderer threw before the frame recorded its inputs: still "changed".
+        throw new Error("Cannot read properties of null (reading 'hasCenters')");
+      },
+      failed: (error) => failures.push(error),
+    });
+    expect(() => postRender.raiseEvent()).not.toThrow();
+    expect(draws).toBe(1);
+    expect(failures).toHaveLength(1);
+    expect((failures[0] as Error).message).toContain("hasCenters");
+    // Stopped: off the globe's event, and nothing more is drawn however often it renders.
+    expect(postRender.numberOfListeners).toBe(0);
+    frames.wake("tiles");
+    for (let i = 0; i < 5; i++) postRender.raiseEvent();
+    expect(draws).toBe(1);
+    expect(frames.waiting).toBe(false);
+
+    // The same from the animation frame, and from `changed` itself.
+    let callbacks: (() => void)[] = [];
+    const clock: FrameClock = {
+      now: () => 0,
+      requestFrame: (callback) => callbacks.push(callback),
+      cancelFrame: () => {
+        callbacks = [];
+      },
+      setTimer: () => 0,
+      clearTimer: () => undefined,
+    };
+    const told: unknown[] = [];
+    let drawn = 0;
+    const other = new OverlayFrames(
+      () => () => undefined,
+      {
+        changed: () => {
+          throw new Error("tileset destroyed");
+        },
+        draw: () => {
+          drawn += 1;
+          return { again: false, by: null };
+        },
+        failed: (error) => told.push(error),
+      },
+      clock,
+    );
+    other.wake("tiles");
+    const run = callbacks;
+    callbacks = [];
+    expect(() => run.forEach((callback) => callback())).not.toThrow();
+    expect(told).toHaveLength(1);
+    other.wake("tiles");
+    expect(callbacks).toHaveLength(0);
+    expect(drawn).toBe(0);
   });
 
   it("stops: no frames, no deadlines, and off the globe's event", () => {

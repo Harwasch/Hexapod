@@ -54,6 +54,11 @@ interface Rig {
     frustum: PerspectiveFrustum;
   };
   viewer: { resolutionScale: number; useBrowserRecommendedResolution: boolean };
+  /** Set to make every later `render` throw, as a renderer broken mid-session would. */
+  fail: { render: Error | null };
+  /** Renderers made so far (one per session started). */
+  created: () => number;
+  destroyed: () => number;
   /** The globe renders one frame (its `postRender`). */
   globe: () => void;
   /** `ms` of display frames (16 ms each), with the globe rendering in each when asked. */
@@ -72,6 +77,9 @@ async function rig(
   const pending: Rig["pending"] = new Map();
   const budgets: number[] = [];
   let hooks: BackendHooks | null = null;
+  const fail: Rig["fail"] = { render: null };
+  let created = 0;
+  let destroyed = 0;
   const backend: ScanBackend<string> = {
     name: "playcanvas",
     loadFactor: 1,
@@ -85,13 +93,19 @@ async function rig(
     add: () => undefined,
     remove: () => undefined,
     dispose: () => undefined,
-    render: (pose) => void renders.push(pose),
+    render: (pose) => {
+      if (fail.render) throw fail.render;
+      renders.push(pose);
+    },
     isDrawn: () => true,
     setBudget: (drawn) => void budgets.push(drawn),
-    destroy: () => undefined,
+    destroy: () => {
+      destroyed += 1;
+    },
   };
   const module: BackendModule = {
     createBackend: (_canvas, _budget, given) => {
+      created += 1;
       hooks = given;
       return Promise.resolve(backend as ScanBackend<unknown>);
     },
@@ -143,6 +157,9 @@ async function rig(
       return hooks;
     },
     budgets,
+    fail,
+    created: () => created,
+    destroyed: () => destroyed,
     camera,
     viewer,
     globe,
@@ -315,6 +332,40 @@ describe("what wakes the splat overlay", () => {
     // where it was.
     expect(r.loads.slice(before).sort()).toEqual(["r-20.glb", "r20.glb"]);
     cancel();
+    r.host.destroy();
+  });
+
+  it("a renderer that throws while drawing is retired, and the globe's render never sees it", async () => {
+    const r = await rig();
+    await settle(r);
+    const failures: string[] = [];
+    r.host.onFailure = (message) => failures.push(message);
+    r.fail.render = new Error("Cannot read properties of null (reading 'hasCenters')");
+    // The camera moved: the overlay draws inside the globe's `postRender`, which CesiumJS
+    // raises outside its render-error try (a throw there stops its render loop for good).
+    r.camera.positionWC = new Cartesian3(-20, -58, 10);
+    expect(() => r.globe()).not.toThrow();
+    await r.run(100);
+    const status = r.host.status();
+    expect(status.active).toBe(false);
+    expect(status.error).toContain("hasCenters");
+    expect(failures).toHaveLength(1);
+    expect(r.destroyed()).toBe(1);
+    expect(document.querySelectorAll("canvas[data-scan-renderer]")).toHaveLength(0);
+    // Not restarted on the spot to throw again, however often the globe renders...
+    for (let i = 0; i < 5; i++) {
+      r.camera.positionWC = new Cartesian3(-20, -57 + i, 10);
+      expect(() => r.globe()).not.toThrow();
+    }
+    await r.run(1000, true);
+    expect(r.created()).toBe(1);
+    // ...until the renderer is chosen again.
+    r.fail.render = null;
+    r.host.setRenderer("cesium");
+    r.host.setRenderer("playcanvas");
+    await r.run(400);
+    expect(r.created()).toBe(2);
+    expect(r.host.status()).toMatchObject({ active: true, error: null });
     r.host.destroy();
   });
 

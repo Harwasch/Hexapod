@@ -28,6 +28,17 @@
  * Drawing only from the animation frame put the overlay a pose behind whenever its callback ran
  * before CesiumJS's -- the order of animation-frame callbacks, which a render-loop restart
  * (render-error recovery) flips -- and the scan slid on the map as the view moved.
+ *
+ * Nothing the overlay throws reaches the globe. Drawing from `postRender` puts the renderer's
+ * whole frame -- PlayCanvas's or Spark's render, the tile planner, the hand-over -- inside
+ * CesiumJS's frame, and CesiumJS raises `postRender` outside the try that turns a render error
+ * into `scene.renderError` (Scene.js, `render`): a throw there reaches CesiumWidget's render
+ * loop, which stops for good without a word (`useDefaultRenderLoop = false`), so the globe froze
+ * and the scene manager's render-error recovery never heard of it. And it would throw again on
+ * every frame: a frame that throws before recording what it was drawn from leaves `changed()`
+ * true. So a frame that throws stops the overlay -- no more frames, no more listening to the
+ * globe -- and the error goes to `FrameSource.failed`, which retires the session that drew it
+ * (ScanRendererHost); the globe carries on as if the overlay had never been there.
  */
 
 import { Cartesian3, Matrix4, type Camera } from "cesium";
@@ -67,6 +78,11 @@ export interface FrameSource {
   /** Whether what a frame is drawn from differs from what the last frame was drawn from. */
   changed(): boolean;
   draw(): FrameOutcome;
+  /**
+   * `changed` or `draw` threw. The overlay has stopped already (see the file comment); this is
+   * where the error is said and the session retired. Called once.
+   */
+  failed?(error: unknown): void;
 }
 
 /**
@@ -142,11 +158,14 @@ export class OverlayFrames {
     }
   }
 
+  /** Inside CesiumJS's frame (`postRender`): nothing may escape it (see the file comment). */
   private globeRendered(): void {
     if (this.stopped) return;
     this.globeDrew = true;
     this.waited = 0;
-    if (this.pending || this.source.changed()) this.drawNow();
+    this.guarded(() => {
+      if (this.pending || this.source.changed()) this.drawNow();
+    });
   }
 
   private readonly tick = (): void => {
@@ -159,14 +178,35 @@ export class OverlayFrames {
       this.schedule();
       return;
     }
-    // Moved, and the globe has not drawn it yet: it will this frame.
-    if (this.source.changed() && this.waited++ < MAX_WAIT_FOR_GLOBE) {
-      this.schedule();
-      return;
-    }
-    this.waited = 0;
-    this.drawNow();
+    this.guarded(() => {
+      // Moved, and the globe has not drawn it yet: it will this frame.
+      if (this.source.changed() && this.waited++ < MAX_WAIT_FOR_GLOBE) {
+        this.schedule();
+        return;
+      }
+      this.waited = 0;
+      this.drawNow();
+    });
   };
+
+  /**
+   * Runs one of the overlay's own steps so that a throw stops the overlay and is handed to
+   * `FrameSource.failed` instead of propagating: from `postRender` it would stop CesiumJS's
+   * render loop for good, and the next frame would only throw it again.
+   */
+  private guarded(step: () => void): void {
+    try {
+      step();
+    } catch (error) {
+      this.stop();
+      try {
+        this.source.failed?.(error);
+      } catch {
+        // Whoever was told could not take it either; the overlay is stopped regardless, and
+        // the globe must still not see it.
+      }
+    }
+  }
 
   private drawNow(): void {
     // Cleared first: a wake while drawing (a renderer asking for another frame) stands.
