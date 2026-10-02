@@ -27,12 +27,23 @@ z forward; `K = [[f, 0, cx], [0, f, cy], [0, 0, 1]]`), in the scan's own frame.
 
 from __future__ import annotations
 
+import itertools
+import math
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 
-__all__ = ["Camera", "Frame", "Splats", "load_ply", "load_tileset", "render", "save_ply"]
+__all__ = [
+    "Camera",
+    "Frame",
+    "SplatIndex",
+    "Splats",
+    "load_ply",
+    "load_tileset",
+    "render",
+    "save_ply",
+]
 
 
 @dataclass(frozen=True)
@@ -44,6 +55,9 @@ class Camera:
     focal: float  # pixels
     width: int
     height: int
+    #: Gaussians whose centre is farther along the view axis than this are not drawn: a view
+    #: meant for what is near does not show the horizon as specks.
+    far: float = float("inf")
 
     @staticmethod
     def look_at(
@@ -54,6 +68,7 @@ class Camera:
         width: int = 640,
         height: int = 360,
         up: tuple[float, float, float] = (0.0, 0.0, 1.0),
+        far: float = float("inf"),
     ) -> Camera:
         eye_a = np.asarray(eye, np.float64)
         forward = np.asarray(target, np.float64) - eye_a
@@ -64,7 +79,7 @@ class Camera:
         right /= np.linalg.norm(right)
         down = np.cross(forward, right)
         focal = 0.5 * width / np.tan(np.radians(fov_deg) / 2)
-        return Camera(np.stack([right, down, forward]), eye_a, float(focal), width, height)
+        return Camera(np.stack([right, down, forward]), eye_a, float(focal), width, height, far)
 
     def project(self, points: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """Pixel coordinates (n, 2) and depths (n,) of world points (n, 3)."""
@@ -95,13 +110,16 @@ class Camera:
         return d / np.linalg.norm(d, axis=-1, keepdims=True)
 
     def to_json(self) -> dict[str, object]:
-        return {
+        data: dict[str, object] = {
             "rotation": self.rotation.tolist(),
             "centre": self.centre.tolist(),
             "focal": self.focal,
             "width": self.width,
             "height": self.height,
         }
+        if math.isfinite(self.far):
+            data["far"] = self.far
+        return data
 
     @staticmethod
     def from_json(data: dict[str, object]) -> Camera:
@@ -111,6 +129,7 @@ class Camera:
             float(data["focal"]),  # type: ignore[arg-type]
             int(data["width"]),  # type: ignore[call-overload]
             int(data["height"]),  # type: ignore[call-overload]
+            float(data.get("far", float("inf"))),  # type: ignore[arg-type]
         )
 
 
@@ -242,6 +261,82 @@ def _rotation_matrices(q: np.ndarray) -> np.ndarray:
     ).reshape(-1, 3, 3)  # fmt: skip
 
 
+#: Gaussians per chunk of a `SplatIndex`.
+CHUNK_SPLATS = 8192
+#: Samples generated at a time: bounds the renderer's memory, not what it draws.
+SAMPLE_BLOCK = 1 << 21
+
+
+def _spread(v: np.ndarray) -> np.ndarray:
+    """The low 21 bits of each value, two zero bits between each (a Morton code's axis)."""
+    v = v & np.uint64(0x1FFFFF)
+    for shift, mask in (
+        (32, 0x1F00000000FFFF),
+        (16, 0x1F0000FF0000FF),
+        (8, 0x100F00F00F00F00F),
+        (4, 0x10C30C30C30C30C3),
+        (2, 0x1249249249249249),
+    ):
+        v = (v | (v << np.uint64(shift))) & np.uint64(mask)
+    return v
+
+
+@dataclass(frozen=True)
+class SplatIndex:
+    """Gaussians grouped into compact chunks (equal runs along a Morton curve), each with a
+    bounding sphere padded by twice its largest scale. `render(..., index=)` projects only
+    the chunks that can reach the frame (`visible`): the same frame as without it -- the test
+    is conservative -- at a fraction of the cost when a view sees a part of a large scan."""
+
+    #: Gaussian indices, chunk after chunk.
+    order: np.ndarray
+    #: Per chunk: bounding-sphere centre (c, 3) and padded radius (c,).
+    centres: np.ndarray
+    radii: np.ndarray
+    size: int
+
+    @staticmethod
+    def build(splats: Splats, size: int = CHUNK_SPLATS) -> SplatIndex:
+        pos = np.asarray(splats.positions, np.float64)
+        if len(pos) == 0:
+            return SplatIndex(np.zeros(0, np.int64), np.zeros((0, 3)), np.zeros(0), size)
+        lo = pos.min(axis=0)
+        span = np.maximum(pos.max(axis=0) - lo, 1e-9)
+        q = np.minimum((pos - lo) / span * (1 << 21), (1 << 21) - 1).astype(np.uint64)
+        one, two = np.uint64(1), np.uint64(2)
+        key = _spread(q[:, 0]) | (_spread(q[:, 1]) << one) | (_spread(q[:, 2]) << two)
+        del q
+        order = np.argsort(key, kind="stable")
+        del key
+        starts = np.arange(0, len(pos), size)
+        ordered = pos[order]
+        lo_c = np.minimum.reduceat(ordered, starts, axis=0)
+        hi_c = np.maximum.reduceat(ordered, starts, axis=0)
+        del ordered
+        reach = np.maximum.reduceat(np.asarray(splats.scales).max(axis=1)[order], starts)
+        radii = np.linalg.norm(hi_c - lo_c, axis=1) / 2 + 2.0 * reach
+        return SplatIndex(order, (lo_c + hi_c) / 2, radii, size)
+
+    def visible(self, camera: Camera) -> np.ndarray:
+        """Sorted indices of the gaussians whose chunk's sphere meets `camera`'s frustum
+        (between 0.05 and `far` along its axis)."""
+        p = (self.centres - camera.centre) @ camera.rotation.T
+        r = self.radii
+        ok = (p[:, 2] + r > 0.05) & (p[:, 2] - r < camera.far)
+        for axis, half in ((0, camera.width / 2), (1, camera.height / 2)):
+            t = half / camera.focal
+            norm = math.hypot(1.0, t)
+            ok &= (p[:, axis] - t * p[:, 2]) / norm <= r
+            ok &= (-p[:, axis] - t * p[:, 2]) / norm <= r
+        chunks = np.flatnonzero(ok)
+        if chunks.size == 0:
+            return np.zeros(0, np.int64)
+        starts = chunks * self.size
+        lengths = np.minimum(starts + self.size, self.order.size) - starts
+        offsets = np.repeat(starts - (np.cumsum(lengths) - lengths), lengths)
+        return np.sort(self.order[offsets + np.arange(int(lengths.sum()))])
+
+
 def render(
     splats: Splats,
     camera: Camera,
@@ -252,48 +347,90 @@ def render(
     max_samples: int = 24,
     sample_budget: int = 12_000_000,
     seed: int = 0,
+    index: SplatIndex | None = None,
 ) -> Frame:
     """What `camera` sees of `splats`. `opacity_scale` (n,) multiplies each gaussian's
-    opacity (a view-cone fade, a mask); `labels` (n,) are reported per pixel."""
+    opacity (a view-cone fade, a mask); `labels` (n,) are reported per pixel. `index`
+    (`SplatIndex.build(splats)`, built once) skips what cannot be in the frame; the frame is
+    the same without it."""
     rng = np.random.default_rng(seed)
     w_px, h_px = camera.width, camera.height
-    op = splats.opacities if opacity_scale is None else splats.opacities * opacity_scale
-    uv, z = camera.project(splats.positions)
-    radius = camera.focal * splats.scales.max(axis=1) / np.maximum(z, 1e-6) * 2.0
-    keep = (
-        (z > 0.05)
-        & (uv[:, 0] > -radius)
-        & (uv[:, 0] < w_px + radius)
-        & (uv[:, 1] > -radius)
-        & (uv[:, 1] < h_px + radius)
-        & (op > 0.004)
-    )
-    index = np.nonzero(keep)[0]
-    area = np.pi * radius[index] ** 2
+    candidates = None if index is None else index.visible(camera)
+    count = len(splats) if candidates is None else candidates.size
+    # Which gaussians reach the frame, tested in blocks (memory stays bounded).
+    kept_index, kept_radius = [], []
+    for start in range(0, count, SAMPLE_BLOCK):
+        stop = min(start + SAMPLE_BLOCK, count)
+        rows = np.arange(start, stop) if candidates is None else candidates[start:stop]
+        op = splats.opacities[rows]
+        if opacity_scale is not None:
+            op = op * np.asarray(opacity_scale)[rows]
+        uv, z = camera.project(splats.positions[rows])
+        radius = camera.focal * splats.scales[rows].max(axis=1) / np.maximum(z, 1e-6) * 2.0
+        keep = (
+            (z > 0.05)
+            & (z < camera.far)
+            & (uv[:, 0] > -radius)
+            & (uv[:, 0] < w_px + radius)
+            & (uv[:, 1] > -radius)
+            & (uv[:, 1] < h_px + radius)
+            & (op > 0.004)
+        )
+        kept_index.append(rows[keep])
+        kept_radius.append(radius[keep])
+    index_g = np.concatenate(kept_index) if kept_index else np.zeros(0, np.int64)
+    area = np.pi * (np.concatenate(kept_radius) if kept_radius else np.zeros(0)) ** 2
+    del kept_index, kept_radius
     n = np.clip((area / 6.0).astype(np.int64), 1, max_samples)
     if n.sum() > sample_budget:
-        kept = rng.random(index.size) < sample_budget / n.sum()
-        index, n, area = index[kept], n[kept], area[kept]
-    rot = _rotation_matrices(splats.rotations[index])
-    owner = np.repeat(np.arange(index.size), n)
+        kept = rng.random(index_g.size) < sample_budget / n.sum()
+        index_g, n, area = index_g[kept], n[kept], area[kept]
+    positions, scales = splats.positions[index_g], splats.scales[index_g]
+    op = splats.opacities[index_g]
+    if opacity_scale is not None:
+        op = op * np.asarray(opacity_scale)[index_g]
     # Each gaussian's samples are its own, the same in every frame (a table indexed by the
     # gaussian and the sample), so a gaussian that moves carries its samples with it and
-    # consecutive frames differ by the motion, not by sampling noise.
-    within = np.arange(owner.size) - np.repeat(np.cumsum(n) - n, n)
-    local = _noise((index[owner] * 2654435761 + within * 40503 + seed) % _NOISE.shape[0])
-    local = local * splats.scales[index][owner]
-    world = splats.positions[index][owner] + np.einsum("nij,nj->ni", rot[owner], local)
-    p = (world - camera.centre) @ camera.rotation.T
-    ok = p[:, 2] > 0.02
-    px = np.floor(camera.focal * p[:, 0] / np.where(ok, p[:, 2], 1) + w_px / 2).astype(np.int64)
-    py = np.floor(camera.focal * p[:, 1] / np.where(ok, p[:, 2], 1) + h_px / 2).astype(np.int64)
-    ok &= (px >= 0) & (px < w_px) & (py >= 0) & (py < h_px)
-    owner, depth, px, py = owner[ok], p[ok, 2], px[ok], py[ok]
+    # consecutive frames differ by the motion, not by sampling noise. Made in blocks of
+    # gaussians (`SAMPLE_BLOCK` samples) so memory stays bounded; each sample is the same.
+    first = np.cumsum(n) - n
+    total_samples = int(n.sum())
+    cuts = np.unique(
+        np.r_[
+            0,
+            np.searchsorted(first, np.arange(SAMPLE_BLOCK, total_samples, SAMPLE_BLOCK)),
+            index_g.size,
+        ]
+    )
+    owners, depths, pxs, pys = [], [], [], []
+    for g0, g1 in itertools.pairwise(cuts.tolist()):
+        counts = n[g0:g1]
+        owner = np.repeat(np.arange(g0, g1), counts)
+        within = np.arange(owner.size) - np.repeat(first[g0:g1] - first[g0], counts)
+        local = _noise((index_g[owner] * 2654435761 + within * 40503 + seed) % _NOISE.shape[0])
+        local = local * scales[owner]
+        rot = _rotation_matrices(splats.rotations[index_g[g0:g1]])
+        world = positions[owner] + np.einsum("nij,nj->ni", rot[owner - g0], local)
+        del local, rot
+        p = (world - camera.centre) @ camera.rotation.T
+        del world
+        ok = p[:, 2] > 0.02
+        zs = np.where(ok, p[:, 2], 1)
+        px = np.floor(camera.focal * p[:, 0] / zs + w_px / 2).astype(np.int64)
+        py = np.floor(camera.focal * p[:, 1] / zs + h_px / 2).astype(np.int64)
+        ok &= (px >= 0) & (px < w_px) & (py >= 0) & (py < h_px)
+        owners.append(owner[ok])
+        depths.append(p[ok, 2])
+        pxs.append(px[ok])
+        pys.append(py[ok])
+    owner = np.concatenate(owners) if owners else np.zeros(0, np.int64)
+    depth = np.concatenate(depths) if depths else np.zeros(0)
+    px = np.concatenate(pxs) if pxs else np.zeros(0, np.int64)
+    py = np.concatenate(pys) if pys else np.zeros(0, np.int64)
+    del owners, depths, pxs, pys
     # A gaussian's opacity spread over the pixels its samples cover (about area / n each).
     per_sample_px = area[owner] / n[owner]
-    a = np.clip(
-        op[index][owner] * np.minimum(1.0, 6.0 / np.maximum(per_sample_px, 1e-6)), 0.0, 0.99
-    )
+    a = np.clip(op[owner] * np.minimum(1.0, 6.0 / np.maximum(per_sample_px, 1e-6)), 0.0, 0.99)
     pixel = py * w_px + px
     order = np.lexsort((depth, pixel))
     pixel, a, depth, owner = pixel[order], a[order], depth[order], owner[order]
@@ -304,7 +441,7 @@ def render(
     before = running - log_t - (running[starts] - log_t[starts])[group] if pixel.size else running
     weight = a * np.exp(before)
     total = h_px * w_px
-    colour = splats.colours[index][owner]
+    colour = splats.colours[index_g[owner]]
     rgb = np.stack(
         [np.bincount(pixel, weight * colour[:, c], total) for c in range(3)], axis=1
     ).astype(np.float64)
@@ -315,7 +452,7 @@ def render(
     purity = np.zeros(total)
     if labels is not None and pixel.size:
         # Per pixel, each label's share of what was composited; the largest wins.
-        sample_labels = np.asarray(labels)[index][owner]
+        sample_labels = np.asarray(labels)[index_g[owner]]
         key = pixel * (int(sample_labels.max()) + 2) + (sample_labels + 1)
         keys, inverse = np.unique(key, return_inverse=True)
         sums = np.bincount(inverse, weight)
