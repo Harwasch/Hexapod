@@ -285,6 +285,9 @@ export class SplatInstances implements SplatVisibilityPart, SplatVertexColor {
   #positions: Float32Array | undefined;
   #incremental = false;
   #covered = 0;
+  /** The first drawn tile's bake (local → the frame the shader sees), once ids are written. */
+  #bake: number[] | undefined;
+  #idsVersion = 0;
   #anyHidden = false;
   #anyHighlighted = false;
   #params: unknown;
@@ -323,6 +326,42 @@ export class SplatInstances implements SplatVisibilityPart, SplatVertexColor {
   /** Whether the shader would act this frame. */
   get active(): boolean {
     return this.#drawActive();
+  }
+
+  /**
+   * The per-splat id texture, for another part that keys on instances (the rigid motion of
+   * `splatRigid.ts`): RGBA32UI, four ids a texel, laid out as `splatInstanceId` reads it.
+   */
+  get idTexture(): InstanceTexture | undefined {
+    return this.#idTexture;
+  }
+
+  /** Splat indices the id texture covers. */
+  get covered(): number {
+    return this.#covered;
+  }
+
+  /** The ids match what the primitive draws now (see `#drawActive`, less the state). */
+  get idsCurrent(): boolean {
+    if (this.#idTexture === undefined || this.#generation < 0) return false;
+    const primitive = this.#primitive;
+    if (!primitive) return false;
+    return this.#incremental || primitive._snapshot?.generation === this.#generation;
+  }
+
+  /** The id of every splat index, as uploaded (read only: the CPU side of the id texture). */
+  get ids(): Uint32Array {
+    return this.#ids;
+  }
+
+  /** Bumped whenever the ids change. */
+  get idsVersion(): number {
+    return this.#idsVersion;
+  }
+
+  /** The first drawn tile's bake (tileset local → shader frame), once a snapshot is bound. */
+  get bake(): readonly number[] | undefined {
+    return this.#bake;
   }
 
   /** Called by the patched engine (through the visibility chain, and as `vertexColor`). */
@@ -469,6 +508,10 @@ export class SplatInstances implements SplatVisibilityPart, SplatVertexColor {
     this.#covered = numSplats;
     this.#generation = generation;
     this.#positions = positions;
+    const first = listed.tiles[0];
+    if (first !== undefined && (this.#bake === undefined || !sameMatrix(this.#bake, first.bake)))
+      this.#bake = Array.from(first.bake);
+    this.#idsVersion += 1;
     this.#ensureTextures();
     return { changed: true, tiles: listed.tiles.length, matched };
   }
@@ -652,7 +695,10 @@ export function cesiumInstanceGpu(): InstanceGpu | undefined {
 // ---- Attachment --------------------------------------------------------------------------
 
 /** Loaded scans, by asset id, for flying to an instance. */
-const ATTACHED = new Map<string, { tileset: Cesium3DTileset; doc: InstancesDoc }>();
+const ATTACHED = new Map<
+  string,
+  { tileset: Cesium3DTileset; doc: InstancesDoc; hook: SplatInstances }
+>();
 
 /**
  * The instances of `assetId`'s scan, once they loaded: what a dedicated splat renderer
@@ -661,6 +707,11 @@ const ATTACHED = new Map<string, { tileset: Cesium3DTileset; doc: InstancesDoc }
  */
 export function instancesDocOf(assetId: string): InstancesDoc | undefined {
   return ATTACHED.get(assetId)?.doc;
+}
+
+/** The hooks of `assetId`'s scan, once its instances loaded: what keys motion on instances. */
+export function instancesHookOf(assetId: string): SplatInstances | undefined {
+  return ATTACHED.get(assetId)?.hook;
 }
 
 /**
@@ -732,7 +783,7 @@ export function attachInstances(
     .then((doc) => {
       if (disposed) return;
       hook = new SplatInstances(doc, gpu, splatTilesetOf(tileset));
-      ATTACHED.set(assetId, { tileset, doc });
+      ATTACHED.set(assetId, { tileset, doc, hook });
       useInstances.getState().setTable(assetId, doc);
       push();
       log.info("instances attached", {

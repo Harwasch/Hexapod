@@ -364,6 +364,114 @@ mode wants minutes of footage; a world-model clip of ~5 s (`teacher_materials.py
 or Cosmos on Modal, `huggingface` secret needed) resolves only fast objects.
 `tests/test_teacher_materials.py` runs the snag at 90 s (c within 5%, ζ 35%, D 20%).
 
+### Telemetry on instances (step C3)
+
+Live mode's first driver: a pose stream bound to an instance moves that object rigidly.
+`packages/world/src/telemetry.ts` (frames, rigid motion, the playout track, synthetic paths),
+`apps/web/src/lib/telemetry.ts` (the bindings file, the wire format),
+`lib/telemetrySources.ts` (sources), `cesium/telemetry.ts` (the driver, attached by
+`SiteManager` beside the skin), `cesium/splatRigid.ts` (rigid motion without a skin).
+
+**Bindings: `telemetry.json`**, beside the tiles, declared by `root.extras.telemetry = { "uri",
+"count" }` (the pattern of `instances`, `skin` and `materials`). A separate file for the reason
+`materials.json` is one: a binding is deployment data (which robot is which object) and must
+survive a re-segmentation or skin refit; it is keyed by instance id, so a re-segmentation that
+renumbers instances needs its bindings re-pointed. The loader takes any URL, so the API can
+serve the same document per site when bindings move out of the tiles.
+
+```jsonc
+{
+  "format": "hexapod.telemetry", "version": 1,
+  "sources": {                       // by id
+    "r1":   { "kind": "sse", "url": "https://bridge/r1", "frame": "geodetic" },
+    "yard": { "kind": "websocket", "url": "wss://bridge/fleet" },  // frame defaults to "scan"
+    "loop": { "kind": "synthetic", "frame": "ecef", "rateHz": 2, "delayMs": 40, "jitterMs": 60,
+              "dropouts": [[from, to], ...],                       // source ms, optional
+              "path": { "kind": "circle", "centre": [x, y, z], "radius": 2.5, "periodS": 24,
+                        "phaseDeg": -90 } }  // or { "kind": "polyline", "points", "speedMps" }
+  },
+  "bindings": [
+    {
+      "instance": 8,                 // instances.json id: it and everything below it move
+      "source": "loop",
+      "stream": "R1",                // optional: only readings whose "stream" is this
+      "rest": { "frame": "scan", "position": [x, y, z], "orientation": [x, y, z, w] },
+                                     // the body frame at capture; omitted: the instance's
+                                     // base centre (bounds), level, scan axes
+      "latencyMs": 250,              // playout delay
+      "extrapolateMs": 1000,         // dead reckoning past the newest reading
+      "staleMs": 3000,               // newest reading older than this: stale
+      "stale": "rest",               // "rest": fade back over fadeMs; "freeze": hold
+      "fadeMs": 2000
+    }
+  ]
+}
+```
+
+A synthetic path is written in the scan frame whatever the source's `frame`; the source emits
+its readings in that frame, so the conversions run as they would for a real stream.
+
+**Readings** (the wire format of an SSE or WebSocket source, and what a robot or fleet bridge
+publishes): a JSON message is a reading, an array of them, or `{ "samples": [...] }`; a reading
+is `{ "t", "position", "orientation"?, "headingDeg"?, "pitchDeg"?, "rollDeg"?, "frame"?,
+"stream"? }`. `t` is milliseconds (epoch, the source's clock) or ISO 8601. `position` and
+`orientation` (`[x, y, z, w]`, body → frame) are the body frame's pose in one of three frames:
+`scan` (the tileset's local ENU, what `instances.json` is written in), `ecef` (WGS84 metres),
+`geodetic` (`[lon°, lat°, h]`, orientation body → east-north-up there). Without an
+`orientation`, heading (clockwise from north), pitch (nose up) and roll (right side down) are
+read in the level frame at the position, for a body with x forward, y left, z up. Everything is
+brought into the scan frame through the root's computed transform (its linear part taken as a
+rotation).
+
+**Motion.** The pose shown `P` moves the object by `M = P · rest⁻¹` (`x' = R x + t`). A
+**skinned** instance takes it through its skin's constant handle, `Z_0 = [R − I | t + (R − I)o]`
+about the skin's origin `o`, the elastic handles at rest (exact: `w_0 ≡ 1`, and the covariance
+follows `R`). Any **other** instance takes it through the rigid part of the motion chain
+(`splatRigid.ts`): the scan's per-splat instance ids (shared with hide and highlight), a slot
+per driven instance written at it and every instance below it, and per slot the motion folded
+into the baked frame as a skin handle is (three RGBA32F texels); it gives the chain its linear
+part, so covariances turn with the object. No skin, no new data: any segmented object can be
+driven. A skin that arrives after the readings takes the object over from the rigid part.
+
+**Playout** (`PoseTrack`). The source's clock need not match ours: the offset is the smallest
+`arrival − t` over the last 32 readings (the fastest transport seen), so the time shown is
+`now − offset − latencyMs` in source time. Between readings: linear position, slerp. Past the
+newest: constant velocity and turn rate from the last two (not across a gap over 5 s) for up to
+`extrapolateMs`, then held there. Past `staleMs`: `freeze` holds; `rest` blends the pose back to
+the rest pose over `fadeMs` and then hands the object `null`, the measured frame pixel for
+pixel. Before the first reading the object is at rest; a reading after a fade is live again at
+once. `driver.statuses` gives each binding's state (`none`, `live`, `extrapolated`, `held`,
+`stale`, `rest`), its age and the pose, what a "Observed · n s old" badge reads
+(LIVING_ENGINE.md §1).
+
+**With the wind.** A bound instance, its ancestors and its descendants are claimed
+(`motionClaims.ts`); the wind (`skinWind.ts`) neither sways nor writes a claimed skin, so a
+driven shrub keeps its elastic handles at rest while the tree beside it sways. Overlap between
+two bindings (one instance inside another) gives the deeper one its own slot.
+
+**Sources.** `synthetic` (deterministic, sampled on the driver's clock: the same clock gives the
+same readings, with delay, hashed jitter and dropouts; dev and e2e), `sse` and `websocket` (JSON
+messages, stamped on arrival). All three implement one interface (`TelemetrySource`:
+`subscribe`, optional `pump(now)`); the Fleet tab's machines (`missions/types.ts`, a demo
+provider today) reach a scan the same way once a robot bridge publishes their poses.
+
+**Sorted where drawn.** The splat sorter orders by rest positions; a driven object moves metres
+and turns, so the rigid part tells the sorter (`splatSorter.ts`, `setSortMotion`) each splat's
+slot and each slot's motion. Every sort carries, per slot, the eye moved back by the slot's
+motion (`M⁻¹(eye − t)`): a rigid motion keeps distances, so the rest positions sorted against
+that eye give the moved splats' order exactly, with no positions re-sent. A slot's eye moving as
+far as the camera would have to move calls for a new sort. A skinned object moved by its constant
+handle still sorts at rest (small objects; the same groups could come from the skin ids).
+
+**Renderers.** CesiumJS (its own splat primitive) only, as the skin is. The dedicated renderers
+would need the same rule over the instance ids they already stream for hide and highlight
+(`cesium/scanView/scanInstances.ts`): in PlayCanvas, a per-instance 3×4 motion (a small uniform
+array or texture indexed by a slot per id) applied to centres, and rotations applied to the
+covariances, in the work-buffer modifier that already reads the ids; in Spark, the same in the
+object modifier (dyno), with a motion uniform per driven object. Neither has the skin path yet,
+so a skinned instance would take the rigid path there. Nothing else changes: the driver hands
+each renderer motions, not pixels.
+
 ### Fixture and browser checks
 
 `data/tiles/synthetic-yard/skin/` is the yard's tree (instance 1), a snag (9) and two shrubs
@@ -376,6 +484,16 @@ stays filled only with the covariance following. `apps/web/e2e/wind.spec.ts` blo
 over it (with `skin/materials.json`): the tree's pixels keep changing while its base, an
 unskinned tree and the undriven shrub stay still; the same clock steps give the same frame;
 calm is the measured frame, pixel for pixel.
+
+`data/tiles/synthetic-yard/telemetry/telemetry.json` binds two synthetic loops: the box
+building (8, unskinned: the rigid part) round a 2.5 m circle, readings in ECEF at 2 Hz with
+delay and jitter; the shrub 10 (skinned and wind-swayed by its material) round a 0.6 m circle,
+geodetic at 5 Hz, set to freeze. `apps/web/e2e/telemetry.spec.ts` drives them in a real
+CesiumJS (`skinHarness.ts`, a harness clock): the pose shown is the path at the playout time
+(within 2 cm), the building's pixels leave its place and arrive where the path is while
+unbound objects stay still, a silent source holds, fades and returns the measured frame
+pixel for pixel, the frozen shrub holds, and with the wind on the bound shrub keeps its elastic
+handles at rest while the tree sways; the same clock gives the same frame.
 
 `data/tiles/synthetic-yard/instances/` is the committed yard segmented against its own labels
 (`segment_scene.py ... --truth labels.json --tile-gaussians 6000`). It sits beside `splat/`,

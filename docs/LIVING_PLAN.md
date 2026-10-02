@@ -22,7 +22,7 @@ Architecture: [SCENE_OBJECTS.md](SCENE_OBJECTS.md). Branch: `living-models`.
 
 - [x] C1 Wind forces on handles (living): anchored modal model per skin (`ω_j = c·√λ_j / scale`, the lowest tenth anchors), exact 60 Hz grid, bounded at a quarter of a support radius; priors from properties, `materials.json` overrides (SCENE_OBJECTS.md §4); 0.34 ms a frame for 30 objects (e2e on the yard)
 - [x] C2 Video teacher fits materials per instance (stiffness, damping, drag): writes `materials.json` (SCENE_OBJECTS.md §4); `teacher_materials.py` matches the C1 model's predicted screen-motion spectrum (Python port `skin_wind.py`, parity-tested against `skinWind.ts`) to tracked points; synthetic yard from a 4×-wrong prior: c within 4%, ζ within 16%, D within 14%; a world-model clip on Modal not yet run (needs the `huggingface` secret)
-- [ ] C3 Telemetry drives a rigid instance (live)
+- [x] C3 Telemetry drives a rigid instance (live): `telemetry.json` bindings beside the tiles (SCENE_OBJECTS.md §4), readings in scan / ECEF / geodetic frames, a playout track (clock offset, latency, interpolation, bounded dead reckoning, stale: freeze or fade to rest); a skinned instance moves by its constant handle, any other by a new rigid motion-chain part keyed by instance ids; bound instances claimed from the wind; synthetic, SSE and WebSocket sources behind one interface (e2e on the yard: the building follows its loop within 2 cm, unbound objects still, silence fades back to the measured frame exactly). CesiumJS only; PlayCanvas/Spark need the same rule in their id modifiers
 - [ ] C4 Movable instances to their own tilesets + fill the hole
 
 ## E. Merge

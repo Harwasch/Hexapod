@@ -43,6 +43,7 @@ import { splatTilesetOf } from "./splatInternals";
 import { attachInferredLayers } from "./inferredLayers";
 import { attachInstances } from "./splatInstances";
 import { attachSkin } from "./splatSkin";
+import { attachTelemetry } from "./telemetry";
 import { attachViewCones } from "./splatViewCones";
 import type { SceneEvents } from "./types";
 
@@ -650,6 +651,8 @@ export class SiteManager {
         attachInstances(tileset, this.scene, asset.id),
         // Objects that move by their skins, once a driver sets handles (lib/skin.ts).
         attachSkin(tileset, this.scene, asset.id),
+        // Objects a live pose stream moves (lib/telemetry.ts), when the scan binds any.
+        attachTelemetry(tileset, this.scene, asset.id),
       );
     }
     handle.unsubscribe.push(

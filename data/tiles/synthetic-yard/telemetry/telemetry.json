@@ -1,0 +1,53 @@
+{
+  "format": "hexapod.telemetry",
+  "version": 1,
+  "sources": {
+    "yard-loop": {
+      "kind": "synthetic",
+      "frame": "ecef",
+      "rateHz": 2,
+      "delayMs": 40,
+      "jitterMs": 60,
+      "path": {
+        "kind": "circle",
+        "centre": [20.0, 8.72045, -0.113],
+        "radius": 2.5,
+        "periodS": 24,
+        "phaseDeg": -90
+      }
+    },
+    "shrub-loop": {
+      "kind": "synthetic",
+      "frame": "geodetic",
+      "rateHz": 5,
+      "delayMs": 20,
+      "jitterMs": 30,
+      "path": {
+        "kind": "circle",
+        "centre": [13.30355, 7.6923, 0.2239],
+        "radius": 0.6,
+        "periodS": 8,
+        "phaseDeg": -90
+      }
+    }
+  },
+  "bindings": [
+    {
+      "instance": 8,
+      "source": "yard-loop",
+      "latencyMs": 600,
+      "extrapolateMs": 1000,
+      "staleMs": 2500,
+      "stale": "rest",
+      "fadeMs": 1500
+    },
+    {
+      "instance": 10,
+      "source": "shrub-loop",
+      "latencyMs": 300,
+      "extrapolateMs": 500,
+      "staleMs": 1500,
+      "stale": "freeze"
+    }
+  ]
+}

@@ -428,6 +428,13 @@ export class SplatSkinning implements SplatMotionPart {
     return true;
   }
 
+  /** The handles instance `instanceId`'s skin was last set to (rest frame), or null at rest. */
+  instanceHandles(instanceId: number): Float64Array | null {
+    const skin = this.doc.byInstance.get(instanceId);
+    const driven = skin ? this.#driven.get(skin.id) : undefined;
+    return driven ? driven.slice() : null;
+  }
+
   /** Every skin back at rest. */
   rest(): void {
     for (const id of [...this.#driven.keys()]) this.setHandles(id, null);

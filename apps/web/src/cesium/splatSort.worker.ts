@@ -10,6 +10,10 @@
  * (`write`), and a range is drawn only while it is shown -- `show` when its tile goes live,
  * `hide` when it leaves the view but stays resident in its slot, `release` when the slot is
  * freed. Ranges not shown are left out of the order: neither uploaded nor drawn.
+ *
+ * Rigidly moving groups (`splatRigid.ts`, through `setSortMotion` in splatSorter.ts): a
+ * splat's group (`groups`, sent when membership changes) and, with each sort, the eye carried
+ * back by each group's motion, so a driven object is ordered where it is drawn.
  */
 
 import { sortBackToFront } from "@/lib/splatOrder";
@@ -41,10 +45,14 @@ type SortRequest =
       generation: number;
       count: number;
       eye: [number, number, number];
+      /** Per group g (1-based), the eye in its rest frame at 3g..3g+2. */
+      eyes?: Float64Array;
     }
+  | { kind: "groups"; owner: number; groups: Uint16Array | null }
   | { kind: "forget"; owner: number };
 
 const snapshots = new Map<number, Snapshot>();
+const groupsOf = new Map<number, Uint16Array>();
 
 /** The owner's slot arrays, created (every slot empty and hidden) at a new capacity. */
 function slotsOf(owner: number, capacity: number): Snapshot & { live: Uint8Array } {
@@ -85,8 +93,13 @@ self.onmessage = (event: MessageEvent<SortRequest>): void => {
       if (request.kind === "release") slots.positions.fill(Number.NaN, request.start * 3, end * 3);
       return;
     }
+    case "groups":
+      if (request.groups) groupsOf.set(request.owner, request.groups);
+      else groupsOf.delete(request.owner);
+      return;
     case "forget":
       snapshots.delete(request.owner);
+      groupsOf.delete(request.owner);
       return;
     case "sort":
       break;
@@ -105,6 +118,14 @@ self.onmessage = (event: MessageEvent<SortRequest>): void => {
     return;
   }
   const count = slots ? request.count : snapshot.count;
-  const { order, nearest } = sortBackToFront(snapshot.positions, count, request.eye, snapshot.live);
+  const groups = groupsOf.get(request.owner);
+  const moving = groups && request.eyes ? { groups, eyes: request.eyes } : undefined;
+  const { order, nearest } = sortBackToFront(
+    snapshot.positions,
+    count,
+    request.eye,
+    snapshot.live,
+    moving,
+  );
   self.postMessage({ id: request.id, order, nearest }, { transfer: [order.buffer] });
 };

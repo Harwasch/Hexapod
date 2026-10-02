@@ -13,6 +13,7 @@ export * from "./skin";
 export * from "./skinWind";
 export * from "./spectral";
 export * from "./symmetricEigen";
+export * from "./telemetry";
 export * from "./tileRuns";
 export * from "./turbulence";
 export * from "./vec";
