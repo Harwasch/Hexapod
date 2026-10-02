@@ -48,10 +48,10 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  JOBS: ${{ inputs.jobs || 'split:pumpkin' }}
+  JOBS: ${{ inputs.jobs || 'fill:camp' }}
   # Scans to run fill.py probe on (Fixer on renders prepared several ways); empty: none.
   PROBES: ""
-  FILLERS: ${{ inputs.fillers || 'lama,lama-chain,sdxl,sdxl-chain,sdxl-lama-chain,qwen-chain' }}
+  FILLERS: ${{ inputs.fillers || 'qwen-chain,lama-chain' }}
   DISTILL: ${{ inputs.distill || '1500' }}
   RENDERER: ${{ inputs.renderer || 'gsplat' }}
   # Non-empty: also run tests/test_gsplat_parity.py (CPU against gsplat) on a GPU.

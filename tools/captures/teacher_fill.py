@@ -120,7 +120,7 @@ class Filler(Protocol):
     Optional, read with `getattr`: `context` -- a filler that has it (a generative inpainter,
     `world_model_client.GenerativeFiller`) is told what surrounds what it fills
     (`describe_surroundings`: a prompt and what not to paint) before its views; and
-    `chain_views` -- `fill_hole` then fills the views in turn, each shown what the earlier
+    `chain_views` -- `fill_hole` and `fill_scan` then fill the views in turn, each shown what the earlier
     ones filled, lifted and re-rendered, with only the rest masked (`_chained_fill`); and
     `reads_void` -- `fill` is then also given `void=`, the pixels where nothing was measured
     and nothing is asked (beyond the scan's edge, painted over rough for the others), which
@@ -1208,7 +1208,10 @@ def fill_scan(
         low, high = np.percentile(targets, 2, axis=0), np.percentile(targets, 98, axis=0)
         context = describe_surroundings(instances, low, high, view="outside")
         filler.context = context  # type: ignore[attr-defined]
-    filled = fill_views(conds, filler)
+    if getattr(filler, "chain_views", False):
+        filled = _chained_fill(conds, filler, renderer, stride)
+    else:
+        filled = fill_views(conds, filler)
     if save_dir is not None:
         for k, f in enumerate(filled):
             given = to_u8(f.conditioning.full.rgb)

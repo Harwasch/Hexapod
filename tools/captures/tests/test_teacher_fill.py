@@ -322,6 +322,56 @@ def test_fill_scan_fills_the_side_a_capture_never_saw(tmp_path: Path) -> None:
     assert behind < 0.0  # discs on the wall's unseen face, towards the cameras that made them
 
 
+class _Painter:
+    """Paints what it is asked in one colour; chains its views and reads the void."""
+
+    name = "painter"
+    chain_views = True
+    reads_void = True
+
+    def __init__(self) -> None:
+        self.context: dict | None = None
+        self.asked: list[int] = []
+        self.voids: list[int] = []
+
+    def fill(self, rgb: np.ndarray, mask: np.ndarray, void: np.ndarray) -> list[np.ndarray]:
+        assert not (void & mask).any()
+        self.asked.append(int(mask.sum()))
+        self.voids.append(int(void.sum()))
+        return [np.where(mask[..., None], np.array([30, 200, 30], np.uint8), rgb)]
+
+
+def test_fill_scan_chains_a_filler_that_asks_and_tells_it_the_void(tmp_path: Path) -> None:
+    rng = np.random.default_rng(1)
+    n = 6000
+    positions = np.column_stack(
+        [rng.normal(0, 0.01, n), rng.uniform(-1, 1, n), rng.uniform(0, 2, n)]
+    )
+    wall = Splats(
+        positions,
+        np.tile([1.0, 0.0, 0.0, 0.0], (n, 1)),
+        np.full((n, 3), 0.03),
+        np.tile([0.6, 0.3, 0.2], (n, 1)),
+        np.full(n, 0.9),
+    )
+    ply = tmp_path / "wall.ply"
+    save_ply(ply, wall, comment="test wall")
+    measured = tmp_path / "measured"
+    splat_tiles.convert(ply, measured, 0.0, 0.0, 0.0, opacity_min=0.0)
+    layout = splat_tiles.ply_layout(ply)
+    grid = vc.cone_grid(layout, np.ones(layout.count, bool), observers=np.array([[6.0, 0, 1]]))
+    painter = _Painter()
+    evidence = tf.fill_scan(
+        wall, grid, painter, measured / "tileset.json", tmp_path / "inferred",
+        views=6, width=96, height=72, stride=2,
+    )  # fmt: skip
+    asked_total = [v["maskPx"] for v in evidence["perView"]]
+    assert len(painter.asked) == 6 and all(v > 0 for v in painter.voids)
+    # Later views reuse what earlier ones filled: asked less than they lift.
+    assert sum(painter.asked) < sum(asked_total)
+    assert evidence["gaussians"] > 0
+
+
 def test_fill_scan_can_condition_without_floaters(tmp_path: Path) -> None:
     """`max_scale_m` leaves gaussians larger than that out of every view it renders (a
     floater gsplat would draw over the frame; the CPU renderer barely shows it)."""
