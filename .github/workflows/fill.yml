@@ -39,7 +39,9 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  JOBS: ${{ inputs.jobs || 'drop:spool' }}
+  JOBS: ${{ inputs.jobs || '' }}
+  # Fixer on renders prepared several ways (fill.py probe), and on its own examples.
+  PROBES: spool,yard,pumpkin
   FILLERS: ${{ inputs.fillers || 'telea,fixer' }}
   DISTILL: ${{ inputs.distill || '0' }}
 
@@ -64,7 +66,8 @@ jobs:
       - name: modal run infra/modal/fill.py
         run: |
           uv run --with modal==1.5.5 modal run infra/modal/fill.py \
-            --jobs "$JOBS" --fillers "$FILLERS" --distill "$DISTILL" --out fill-out --selftest
+            --jobs "$JOBS" --fillers "$FILLERS" --distill "$DISTILL" --out fill-out \
+            --probes "$PROBES"
       - uses: actions/upload-artifact@v4
         if: always()
         with:

@@ -24,6 +24,7 @@ Run from the repository root (`.github/workflows/fill.yml` does):
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import io
 import json
 import os
@@ -419,6 +420,75 @@ def run_job(kind: str, scan: str, filler: str, options: dict) -> dict:
         }
 
 
+def _smooth(rgb, alpha, sigma: float):  # noqa: ANN001, ANN202 - arrays
+    """Normalized convolution: the renderer's point samples spread over their gaps."""
+    import cv2
+    import numpy as np
+
+    w = cv2.GaussianBlur(alpha.astype(np.float32), (0, 0), sigma)
+    c = cv2.GaussianBlur((rgb * alpha[..., None]).astype(np.float32), (0, 0), sigma)
+    a = np.clip(w, 0, 1)
+    return np.where(w[..., None] > 1e-4, c / np.maximum(w, 1e-4)[..., None], 0) * a[..., None]
+
+
+@app.function(image=job_image, cpu=8.0, memory=65536, timeout=3600)
+def probe(scan: str) -> dict:
+    """Fixer on one scan's renders, prepared several ways: which input it can work with."""
+    _remote_classes()
+    os.chdir(CAPTURES)
+    import cv2
+    import numpy as np
+    import teacher_fill as tf
+    import view_cones as vc
+    from splat_render import load_tileset, render
+    from world_model_client import decode_png, encode_png
+
+    with tempfile.TemporaryDirectory() as work:
+        tileset = _fetch(SCANS[scan], Path(work) / "scan")
+        if not (tileset.parent / vc.URI).exists():
+            vc.build_view_cones(tileset, tileset.parent, tileset)
+        splats = load_tileset(tileset)
+        grid = vc.cone_grid_from_tileset(tileset)
+    observer = grid.observers[int(np.argmax(grid.observer_weights))]
+    near = np.argsort(np.linalg.norm(splats.positions - observer, axis=1))[:2000]
+    centre = splats.positions[near].mean(axis=0)
+    w, h = FILL_SIZE
+    cams = tf.plan_views(grid, centre[None], count=1, width=w, height=h, distance_m=1.2)
+    reach = float(np.percentile(np.linalg.norm(splats.positions - centre, axis=1), 95))
+    cams += tf.plan_views(
+        grid, splats.positions, count=1, mode="ring", ring_radius_m=1.5 * reach, width=w, height=h
+    )
+    files: dict[str, bytes] = {}
+    scores: dict[str, dict] = {}
+    for k, cam in enumerate(cams):
+        frame = render(splats, cam)
+        big = render(
+            splats, dataclasses.replace(cam, focal=2 * cam.focal, width=2 * w, height=2 * h)
+        )
+        ss_rgb = cv2.resize(big.rgb.astype(np.float32), (w, h), interpolation=cv2.INTER_AREA)
+        ss_a = cv2.resize(big.alpha.astype(np.float32), (w, h), interpolation=cv2.INTER_AREA)
+        variants = {
+            "raw": frame.rgb,
+            "smooth1": _smooth(frame.rgb, frame.alpha, 1.0),
+            "smooth2": _smooth(frame.rgb, frame.alpha, 2.0),
+            "super2": ss_rgb,
+            "super2smooth1": _smooth(ss_rgb, ss_a, 1.0),
+        }
+        covered = frame.alpha >= 0.5
+        for name, rgb in variants.items():
+            given = tf.to_u8(rgb)
+            out = decode_png(Fixer().fix.remote({"images": [encode_png(given)]})["images"][0])
+            blur = lambda x: cv2.GaussianBlur(x, (0, 0), 2.0)  # noqa: E731
+            scores[f"view{k}-{name}"] = {
+                "gate": round(tf.psnr(out, given, covered), 2),
+                "gateBlur2": round(tf.psnr(blur(out), blur(given), covered), 2),
+                "vsRawBlur2": round(tf.psnr(blur(out), blur(tf.to_u8(frame.rgb)), covered), 2),
+            }
+            files[f"view{k}-{name}.png"] = encode_png(np.concatenate([given, out], axis=1))
+    files["scores.json"] = json.dumps(scores, indent=1).encode()
+    return {"scan": scan, "files": files}
+
+
 @app.local_entrypoint()
 def main(
     jobs: str = "drop:yard,drop:spool",
@@ -427,6 +497,7 @@ def main(
     distill: int = 0,
     out: str = "fill-out",
     selftest: bool = False,
+    probes: str = "",
 ) -> None:
     """Every `kind:scan` in `jobs` with every filler, in parallel containers; each result
     under `out/<kind>-<scan>-<filler>/`, and `out/summary.json`. `selftest`: also Fixer on
@@ -436,6 +507,15 @@ def main(
         folder.mkdir(parents=True, exist_ok=True)
         for name, data in Fixer().examples.remote().items():
             (folder / name).write_bytes(data)
+    if probes:
+        for result in probe.map([s.strip() for s in probes.split(",") if s.strip()]):
+            folder = Path(out) / f"probe-{result['scan']}"
+            folder.mkdir(parents=True, exist_ok=True)
+            for name, data in result["files"].items():
+                (folder / name).write_bytes(data)
+            sys.stdout.write(f"probe {result['scan']}: {result['files']['scores.json'].decode()}\n")
+    if not jobs:
+        return
     calls = []
     for job in (j.strip() for j in jobs.split(",") if j.strip()):
         kind, _, scan = job.partition(":")
