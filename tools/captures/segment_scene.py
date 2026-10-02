@@ -170,6 +170,12 @@ MIN_PURITY = 0.5
 MASK_SHARE = 0.5
 #: Stage 1: neighbouring cells join outright when in the same mask in this share of views.
 STRICT_RATIO = 0.9
+#: ... counting this many pseudo-views against them, so two views are not enough: single
+#: linkage over a million cells percolates through any pair that agrees by chance.
+STRICT_PRIOR = 3.0
+#: A mask over more than this share of a view's drawn pixels does not vote: it says the
+#: whole view is one thing, which is no evidence about what in it belongs together.
+MAX_MASK_SHARE = 0.8
 #: Stage 2's far pairs: the largest regions of each mask, at most this many.
 SHARED_REGIONS = 48
 #: Stage 2 stops after this many rounds of mutual-best joins.
@@ -182,6 +188,10 @@ MIN_COVISIBLE = 2
 #: Stage 1's graph: each cell's nearest cells, within this many cell edges.
 NEIGHBOURS = 10
 NEIGHBOUR_CELLS = 3.0
+#: A region of fewer cells is a speck: its cells, and seen cells in no mask, take their
+#: neighbours' region, up to this many steps out (`_absorb`).
+MIN_REGION_CELLS = 8
+ABSORB_ROUNDS = 3
 #: An instance needs at least this many splats.
 MIN_INSTANCE_SPLATS = 30
 #: Cells no view saw take the nearest seen cell's labels within this many cell edges.
@@ -808,6 +818,8 @@ def vote(view: View, masks: Sequence[Mask], n_cells: int, levels: int) -> _Votes
     best_score = np.zeros((levels, m))
     for k, mask in enumerate(masks):
         inside = np.asarray(mask.mask, bool).reshape(-1)[pixels]
+        if inside.sum() > MAX_MASK_SHARE * pixels.size:
+            continue  # (nearly) the whole view: says nothing about what is one thing
         share = np.bincount(local[inside], weight[inside], m)
         share = np.divide(share, seen, out=np.zeros(m), where=seen > 0)
         level = mask.level
@@ -1084,7 +1096,7 @@ def _grow(
     region = np.where(in_mask, np.arange(n_cells), -1)
     ca, cb = _pairs(region, a, b, n_cells)
     together, both = _agreement(_seen(obs, region), ca, cb)
-    keep = (both >= MIN_COVISIBLE) & (together >= STRICT_RATIO * both)
+    keep = (both >= MIN_COVISIBLE) & (together >= STRICT_RATIO * (both + STRICT_PRIOR))
     region = np.where(in_mask, _components(n_cells, ca[keep], cb[keep]), -1)
     region = _relabel(region)
     n = int(region.max()) + 1 if region.size and region.max() >= 0 else 0
@@ -1152,6 +1164,34 @@ def _grow(
     return _relabel(region), rounds
 
 
+def _absorb(region: np.ndarray, a: np.ndarray, b: np.ndarray, seen: np.ndarray) -> np.ndarray:
+    """Specks and gaps: a seen cell in no region, or in one of fewer than `MIN_REGION_CELLS`
+    cells, takes the region most of its stage-1 neighbours are in (ties: the lower id), for
+    up to `ABSORB_ROUNDS` steps outwards. A mask model leaves slivers between its masks and
+    a few cells that no view resolved; they belong to what surrounds them."""
+    region = region.copy()
+    n = int(region.max()) + 1 if region.size else 0
+    if n == 0:
+        return region
+    cells = np.bincount(region[region >= 0], minlength=n)
+    open_ = seen & ((region < 0) | (cells[np.maximum(region, 0)] < MIN_REGION_CELLS))
+    region[open_] = -1
+    for _ in range(ABSORB_ROUNDS):
+        ra, rb = region[a], region[b]
+        to_a = (ra < 0) & (rb >= 0) & open_[a]
+        to_b = (rb < 0) & (ra >= 0) & open_[b]
+        cell = np.concatenate([a[to_a], b[to_b]])
+        if cell.size == 0:
+            break
+        label = np.concatenate([rb[to_a], ra[to_b]])
+        keys, counts = np.unique(cell * n + label, return_counts=True)
+        kc, kl = keys // n, keys % n
+        order = np.lexsort((kl, -counts, kc))
+        first = order[np.r_[True, kc[order][1:] != kc[order][:-1]]]
+        region[kc[first]] = kl[first]
+    return region
+
+
 @dataclass
 class Lifted:
     """Instances over cells: the hierarchy, each cell's deepest instance, and its views."""
@@ -1190,6 +1230,7 @@ def lift(
             in_mask[level, v.cells[v.masks[level] >= 0]] = True
     for level in range(levels):
         joined, rounds = _grow(votes, level, in_mask[level], a, b, cell_counts)
+        joined = _absorb(joined, a, b, seen)
         stats[f"level{level}Rounds"] = rounds
         valid = joined >= 0
         size = np.bincount(joined[valid], cell_counts[valid])
@@ -1594,16 +1635,43 @@ def _colours(ids: np.ndarray) -> np.ndarray:
     return np.where((ids > 0)[..., None], rgb, 0.0)
 
 
-def render_instances(splats: Splats, splat_id: np.ndarray, camera: Camera, out: Path) -> np.ndarray:
-    """The scan beside itself coloured by instance id, as a PNG: what a person checks."""
+def render_instances(
+    splats: Splats,
+    splat_id: np.ndarray,
+    camera: Camera | Sequence[Camera],
+    out: Path,
+    index: SplatIndex | None = None,
+) -> np.ndarray:
+    """The scan beside itself coloured by instance id, one row per camera, as a PNG: what a
+    person checks."""
     from PIL import Image
 
-    frame = render(splats, camera, labels=splat_id.astype(np.int64))
-    colour = _colours(np.maximum(frame.label, 0)) * frame.alpha[..., None]
-    image = np.concatenate([frame.rgb, colour], axis=1)
+    rows = []
+    for cam in [camera] if isinstance(camera, Camera) else camera:
+        frame = render(splats, cam, labels=splat_id.astype(np.int64), index=index)
+        colour = _colours(np.maximum(frame.label, 0)) * frame.alpha[..., None]
+        rows.append(np.concatenate([frame.rgb, colour], axis=1))
+    image = np.concatenate(rows, axis=0)
     pixels = np.round(np.clip(image, 0, 1) * 255).astype(np.uint8)
     Image.fromarray(pixels).save(out)
     return pixels
+
+
+def top_level(parent: np.ndarray) -> np.ndarray:
+    """Per id (index 0: none), its level-0 ancestor (parents have lower ids)."""
+    top = np.arange(parent.size + 1)
+    for k in range(1, parent.size + 1):
+        if parent[k - 1]:
+            top[k] = top[parent[k - 1]]
+    return top
+
+
+def check_cameras(views: Sequence[View], count: int = 4) -> list[Camera]:
+    """Cameras for `render_instances`: the first view (the whole scan) and, when there are
+    local views (a far plane), `count - 1` of them spread through the plan."""
+    local = [v.camera for v in views if math.isfinite(v.camera.far)]
+    picks = [local[(2 * k + 1) * len(local) // (2 * (count - 1))] for k in range(count - 1)]
+    return [views[0].camera] + (picks if local else [])
 
 
 def collect_votes(
@@ -1734,7 +1802,7 @@ def segment(
     # and are dropped; the views are kept for `describe`.
     views: list[View] = []
     view_votes: list[_Votes] = []
-    render_s = masks_s = 0.0
+    render_s = masks_s = votes_s = 0.0
     mark = time.perf_counter()
     rendered = render_views(
         splats, cameras, cell, index=index, workers=workers or default_workers(), cache=cache
@@ -1748,18 +1816,21 @@ def segment(
         if source is None:
             source = source_factory(cameras)
         masks = cached_masks(cache, view, source, n_cells)
+        voted = time.perf_counter()
         view_levels = max((m.level for m in masks), default=0) + 1
         view_votes.append(vote(view, masks, n_cells, view_levels))
         if progress:
             progress(f"view {k + 1}/{len(cameras)} masked ({len(masks)} masks)")
         mark = time.perf_counter()
-        masks_s += mark - now
+        masks_s += voted - now
+        votes_s += mark - voted
     del index
     levels = max((v.masks.shape[0] for v in view_votes), default=1)
     votes = [_pad_levels(v, levels) for v in view_votes]
     # Rendering overlaps masking: renderS is the time spent waiting for views.
     timings["renderS"] = render_s
     timings["masksS"] = masks_s
+    timings["votesS"] = votes_s
     mark = time.perf_counter()
     lifted = lift(votes, centroids, counts, edge, levels)
     lifted.stats["cellEdgeM"] = round(edge, 4)
@@ -1908,7 +1979,12 @@ def main() -> None:
             json.dumps([v.camera.to_json() for v in result.views], indent=1), encoding="utf-8"
         )
     if args.render_instances:
-        render_instances(splats, result.splat_id, result.views[0].camera, args.render_instances)
+        # Coloured by object (each splat's top-level instance), from a few viewpoints.
+        objects = top_level(result.lifted.parent)[result.splat_id]
+        cameras = check_cameras(result.views)
+        render_instances(
+            splats, objects, cameras, args.render_instances, index=SplatIndex.build(splats)
+        )
     print(
         json.dumps(
             {

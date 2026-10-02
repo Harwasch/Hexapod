@@ -261,6 +261,14 @@ def point_grid(n_per_side: int) -> np.ndarray:
     return np.stack([x.ravel(), y.ravel()], axis=1)
 
 
+def candidate_levels(areas: np.ndarray, pixels: int, max_area: float) -> tuple[np.ndarray, ...]:
+    """Per candidate (points, k): its level among its point's candidates that are not the
+    whole image, and whether it is one of them (area at most `max_area` of `pixels`). A
+    point whose widest answer is the whole view has its next answer as its whole."""
+    small = areas <= max_area * pixels
+    return granularity_levels(np.where(small, areas, -1)), small
+
+
 def granularity_levels(areas: np.ndarray) -> np.ndarray:
     """`areas` (points, k): the k candidate masks of each point prompt. Their level, by area
     within the point: largest 0 (whole), then 1 (part), ... k-1 (subpart). Ties keep order."""
@@ -309,19 +317,23 @@ def select_masks(
     nms_iou: float,
     min_area: float,
     repeat_iou: float,
+    max_area: float = 1.0,
 ) -> tuple[list[tuple[int, int, int]], list[float]]:
     """From candidate logits (points, k, h, w) and SAM's predicted IoU (points, k): the kept
     `(point, candidate, level)` and their scores, coarsest level first, best score first.
 
-    Per level: thresholds, then NMS by mask IoU. Then a finer mask whose IoU with a kept
-    coarser one is above `repeat_iou` is dropped (a whole with no parts is one mask)."""
+    Candidates over `max_area` of the image are left out before the levels are counted
+    (`candidate_levels`). Per level: thresholds, then NMS by mask IoU. Then a finer mask
+    whose IoU with a kept coarser one is above `repeat_iou` is dropped (a whole with no
+    parts is one mask)."""
     p, k = iou_pred.shape
     binary = logits > 0
     areas = binary.reshape(p, k, -1).sum(axis=2)
-    levels = granularity_levels(areas)
+    pixels = logits.shape[2] * logits.shape[3]
+    levels, small = candidate_levels(areas, pixels, max_area)
     stab = stability(logits.reshape(p * k, *logits.shape[2:])).reshape(p, k)
-    min_px = min_area * logits.shape[2] * logits.shape[3]
-    ok = (iou_pred >= pred_iou_thresh) & (stab >= stability_thresh) & (areas >= min_px)
+    min_px = min_area * pixels
+    ok = (iou_pred >= pred_iou_thresh) & (stab >= stability_thresh) & (areas >= min_px) & small
     pts, cand = np.nonzero(ok)
     if pts.size == 0:
         return [], []
@@ -377,6 +389,10 @@ def choose_masks(
     return kept, scores
 
 
+#: Torch's CPU threads beside a GPU (pre- and post-processing only).
+GPU_HOST_THREADS = 4
+
+
 def _device(device: str | None) -> str:
     import torch
 
@@ -395,20 +411,24 @@ class Sam2Masks:
     On 4 idle CPU cores, hiera-tiny, a 640x480 image: the image encoder (SAM's fixed 1024
     input) about 1.5 s, then about 0.06 s per point prompt -- the mask decoder's two-way
     transformer runs over all 64x64 image tokens once per point. So 16 points a side about
-    17 s, 32 a side (SAM's default, `ModalSam2Masks`') about 67 s.
+    17 s, 32 a side (SAM's default, used here and by `ModalSam2Masks`) about 67 s; on a GPU
+    it is fast either way, and 32 a side finds the small things a large scan is full of.
 
     The thresholds are looser than SAM's automatic generator (0.88 / 0.95): splat renders
     are noisy, and at SAM's own values a camp view kept a handful of masks; at 0.6 / 0.8
     the canopies, the roof, the bushes and the ground each came back."""
 
     model: str = SAM2_MODEL
-    points_per_side: int = 16
-    points_per_batch: int = 64
+    points_per_side: int = 32
+    points_per_batch: int = 128
     pred_iou_thresh: float = 0.6
     stability_thresh: float = 0.8
     nms_iou: float = 0.7
     #: Smallest mask kept, as a fraction of the image.
     min_area: float = 0.0005
+    #: Largest: a candidate over this share of the image is the whole view, not a thing in
+    #: it; its point's next answer is its whole (`candidate_levels`).
+    max_area: float = 0.8
     #: A finer mask this similar to a kept coarser one is the same thing, dropped.
     repeat_iou: float = 0.9
     device: str | None = None
@@ -428,6 +448,9 @@ class Sam2Masks:
             model = Sam2Model.from_pretrained(self.model).to(device).eval()
             if device == "cpu":
                 torch.set_num_threads(max(1, torch.get_num_threads()))
+            else:
+                # The GPU does the work; CPU threads would only contend with the renderers.
+                torch.set_num_threads(GPU_HOST_THREADS)
             self._loaded = (processor, model, device)
         return self._loaded
 
@@ -464,14 +487,15 @@ class Sam2Masks:
         outer = (low > -1.0).reshape(p, k, -1).sum(dim=2)
         stab = inner.double() / outer.clamp(min=1).double()
         areas_np = areas.cpu().numpy()
-        levels = granularity_levels(areas_np)
+        pixels = low.shape[2] * low.shape[3]
+        levels, small = candidate_levels(areas_np, pixels, self.max_area)
         stab_np = stab.cpu().numpy()
         iou_np = iou_pred.cpu().numpy()
-        min_px = self.min_area * low.shape[2] * low.shape[3]
         ok = (
             (iou_np >= self.pred_iou_thresh)
             & (stab_np >= self.stability_thresh)
-            & (areas_np >= min_px)
+            & (areas_np >= self.min_area * pixels)
+            & small
         )
         pts, cand = np.nonzero(ok)
         if pts.size == 0:

@@ -268,3 +268,11 @@ def test_real_models_smoke() -> None:
     y = embedder.embed_texts(["a photo of a red box.", "a photo of a dog."])
     assert x.shape == (1, embedder.dim) and np.allclose(np.linalg.norm(x, axis=1), 1)
     assert (x @ y.T)[0, 0] > (x @ y.T)[0, 1]
+
+
+def test_a_whole_view_candidate_hands_its_level_to_the_next() -> None:
+    # Point 0: its widest answer covers the whole view, so its part becomes its whole.
+    areas = np.array([[1000, 300, 20], [500, 200, 50]])
+    levels, small = sm.candidate_levels(areas, 1000, 0.8)
+    np.testing.assert_array_equal(small, [[False, True, True], [True, True, True]])
+    np.testing.assert_array_equal(levels, [[2, 0, 1], [0, 1, 2]])
