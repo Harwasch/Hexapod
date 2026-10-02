@@ -7,6 +7,9 @@ fail before its fix:
 
 * a job **cancelled between two attempts** is closed out as a cancel, not dropped as
   "lost";
+* an **exception in the supervisor's own loop** stops the recipe process before it goes
+  anywhere -- a cancel when the job is about to be dead-lettered, a detach when somebody
+  else will resume it -- instead of leaving it running beside the next job;
 """
 
 from __future__ import annotations
@@ -15,15 +18,17 @@ import threading
 import time
 from pathlib import Path
 
+import pytest
+from sqlalchemy import update
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.models import Job
+from app.models import Job, JobStep
 from app.models.enums import RunStatus
 from app.services import jobs as job_service
 from app.storage import S3Storage
 from app.worker.runner import JobSupervisor
 from tests.test_worker import config, make_capture, queue_job, steps_by_stage, wait_until
-from tests.test_worker_stops import Pings, claimed, in_background, watched
+from tests.test_worker_stops import Pings, claimed, in_background, recipe_process, watched
 
 # --------------------------------------------------------------------------------------
 # A cancel that lands while the worker waits to try a stage again
@@ -83,3 +88,53 @@ def test_a_stop_during_the_retry_backoff_lets_go_of_the_job_at_once(
     handed_back = db.get(Job, job.id)
     assert handed_back is not None and handed_back.status is RunStatus.IN_PROGRESS
     assert handed_back.claimed_by is None and handed_back.lease_expires_at is None
+
+
+# --------------------------------------------------------------------------------------
+# An exception in the supervisor's own loop
+# --------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("taken", "signal_heard", "outcome"),
+    [
+        # Still this worker's: the failure dead-letters the job, so the call goes too.
+        (False, "CancelRequested", "error"),
+        # Reclaimed meanwhile: the new holder resumes it, so the call is left for it.
+        (True, "DetachRequested", "lost"),
+    ],
+)
+def test_an_exception_in_the_watch_loop_stops_the_recipe_process_before_it_propagates(
+    db: Session,
+    sessions: sessionmaker[Session],
+    storage: S3Storage,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    taken: bool,
+    signal_heard: str,
+    outcome: str,
+) -> None:
+    """A database error in the heartbeat's own writes (here `_report_progress`) used to
+    escape to `_report_supervisor_failure` with the recipe process still running: the job
+    was dead-lettered and its workdir tidied under a live process, its GPU call kept
+    billing, and the slot went on to claim another job beside the orphan."""
+    job = queue_job(db, make_capture(db), "t-notes-stop")
+    claimed(sessions, job)
+
+    def breaks(_db: Session, step: JobStep, _workdir: Path) -> None:
+        if step.stage_id != "two":
+            return
+        if taken:
+            with sessions() as other:
+                other.execute(update(Job).where(Job.id == job.id).values(claimed_by="worker-b"))
+                other.commit()
+        raise RuntimeError("server closed the connection unexpectedly")
+
+    monkeypatch.setattr(JobSupervisor, "_report_progress", staticmethod(breaks))
+
+    result = JobSupervisor(sessions, storage, config(tmp_path)).run(job.id)
+
+    assert result == outcome
+    assert recipe_process() is None, "the recipe process outlived its supervisor"
+    said = tmp_path / "runs" / str(job.id) / "stages" / "two" / "work" / "stopped-by.txt"
+    assert said.read_text() == signal_heard

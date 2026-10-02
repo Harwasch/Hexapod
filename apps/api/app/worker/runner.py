@@ -194,6 +194,9 @@ class JobSupervisor:
         self._failure = ""
         #: How a ping is sent; replaced in tests.
         self.sender: alerts.Sender = alerts.send
+        #: The recipe process this supervisor last started, so nothing tidies a workdir
+        #: while it is still running in it (`_tidy`).
+        self._process: subprocess.Popen[str] | None = None
 
     # --- the outer loop: attempts ------------------------------------------------
 
@@ -423,51 +426,26 @@ class JobSupervisor:
         workdir_root: Path,
         stop: threading.Event | None,
     ) -> _RunState:
-        """The heartbeat loop over one recipe process, until it ends or is stopped."""
-        inbox: queue.Queue[object] = queue.Queue()
-        reader = threading.Thread(target=_pump, args=(process.stdout, inbox), daemon=True)
-        reader.start()
+        """The heartbeat loop over one recipe process, until it ends or is stopped.
 
-        state = _RunState()
-        current: JobStep | None = None
-        next_beat = time.monotonic()
-        while True:
-            now = time.monotonic()
-            if stop is not None and stop.is_set():
-                # This worker is going away (a deploy), not the job: the recipe process
-                # leaves its remote call running and written down, and the step is marked
-                # so the next worker resumes it without spending an attempt.
-                _stop(process, self._config.terminate_grace_s, DETACH_SIGNAL)
-                if current is not None:
-                    self._report_calls(db, current, workdir_root)
-                    self._mark_detached(db, current)
-                state.outcome = "stopped"
-                return state
-            if now >= next_beat:
-                beat = claim.heartbeat(
-                    db, job.id, worker_id=self._config.worker_id, lease_s=self._config.lease_s
-                )
-                if beat is not claim.Heartbeat.HELD:
-                    # Cancelled, or reclaimed while this worker was not looking. Either
-                    # way the child must stop now, not at the end of its stage -- and its
-                    # remote call with it: nobody here is going to poll it again.
-                    _stop(process, self._config.terminate_grace_s, CANCEL_SIGNAL)
-                    state.outcome = "cancelled" if beat is claim.Heartbeat.CANCELLED else "lost"
-                    if beat is claim.Heartbeat.LOST:
-                        self._log_lost(db, job.id)
-                    return state
-                if current is not None:
-                    self._report_progress(db, current, workdir_root)
-                    self._report_calls(db, current, workdir_root)
-                next_beat = now + self._config.poll_s
-            try:
-                item = inbox.get(timeout=max(0.01, next_beat - time.monotonic()))
-            except queue.Empty:
-                continue
-            if item is _EOF:
-                break
-            if isinstance(item, Event):
-                current = self._apply(db, job, item, workdir_root, state, current)
+        Nothing that goes wrong in here leaves the recipe process behind. The loop writes
+        to the database every tick (the heartbeat, the progress line, the calls) and
+        uploads every finished stage, and any of those can raise -- a connection Neon
+        dropped, a bucket that answered 500. Until the 2026-10 review that exception went
+        straight to `_report_supervisor_failure` with the recipe process still running:
+        the job was dead-lettered, `_tidy` deleted `inputs/` and `work/` under a live
+        process, its GPU call billed on, and the slot claimed another job beside the
+        orphan. Now the process is stopped first, and with the signal that matches what
+        happens to the job next (`_signal_after_failure`).
+        """
+        self._process = process
+        try:
+            state, current, ended = self._watch_loop(db, job, process, workdir_root, stop)
+        except BaseException:
+            _stop(process, self._config.terminate_grace_s, self._signal_after_failure(job.id))
+            raise
+        if not ended:
+            return state
         process.wait()
         if not state.outcome:
             # No RUN_FINISHED and no RUN_FAILED: the child was killed from outside.
@@ -487,6 +465,88 @@ class JobSupervisor:
                     ),
                 )
         return state
+
+    def _watch_loop(
+        self,
+        db: Session,
+        job: Job,
+        process: subprocess.Popen[str],
+        workdir_root: Path,
+        stop: threading.Event | None,
+    ) -> tuple[_RunState, JobStep | None, bool]:
+        """`_watch_child`'s loop: the state so far, the step running, and whether the
+        recipe process's output ended (False: it was stopped, and `state` says why)."""
+        inbox: queue.Queue[object] = queue.Queue()
+        reader = threading.Thread(target=_pump, args=(process.stdout, inbox), daemon=True)
+        reader.start()
+
+        state = _RunState()
+        current: JobStep | None = None
+        next_beat = time.monotonic()
+        while True:
+            now = time.monotonic()
+            if stop is not None and stop.is_set():
+                # This worker is going away (a deploy), not the job: the recipe process
+                # leaves its remote call running and written down, and the step is marked
+                # so the next worker resumes it without spending an attempt.
+                _stop(process, self._config.terminate_grace_s, DETACH_SIGNAL)
+                if current is not None:
+                    self._report_calls(db, current, workdir_root)
+                    self._mark_detached(db, current)
+                state.outcome = "stopped"
+                return state, current, False
+            if now >= next_beat:
+                beat = claim.heartbeat(
+                    db, job.id, worker_id=self._config.worker_id, lease_s=self._config.lease_s
+                )
+                if beat is not claim.Heartbeat.HELD:
+                    # Cancelled, or reclaimed while this worker was not looking. Either
+                    # way the child must stop now, not at the end of its stage -- and its
+                    # remote call with it: nobody here is going to poll it again.
+                    _stop(process, self._config.terminate_grace_s, CANCEL_SIGNAL)
+                    state.outcome = "cancelled" if beat is claim.Heartbeat.CANCELLED else "lost"
+                    if beat is claim.Heartbeat.LOST:
+                        self._log_lost(db, job.id)
+                    return state, current, False
+                if current is not None:
+                    self._report_progress(db, current, workdir_root)
+                    self._report_calls(db, current, workdir_root)
+                next_beat = now + self._config.poll_s
+            try:
+                item = inbox.get(timeout=max(0.01, next_beat - time.monotonic()))
+            except queue.Empty:
+                continue
+            if item is _EOF:
+                return state, current, True
+            if isinstance(item, Event):
+                current = self._apply(db, job, item, workdir_root, state, current)
+
+    def _signal_after_failure(self, job_id: uuid.UUID) -> int:
+        """How to stop a recipe process this supervisor is abandoning on an exception.
+
+        `run` turns the exception into a dead-letter when the job is still this worker's,
+        and a dead-lettered job's call is cancelled: CANCEL, which also enters what the
+        call billed in the ledger. When it is not -- reclaimed by another worker, finished
+        elsewhere, or the database unreachable, in which case the dead-letter will not be
+        written either and the lapsed lease hands the job to whoever resumes it -- the
+        call is left running and written down for that worker to pick up: DETACH. Either
+        way the dead-letter path still cancels anything left in the books
+        (`_cancel_recorded_calls`), so a detach here can never outlive a dead-letter.
+        Asked on a session of its own: the supervisor's may be the thing that failed.
+        """
+        session = self._sessions()
+        try:
+            job = session.get(Job, job_id)
+            ours = (
+                job is not None
+                and job.status is RunStatus.IN_PROGRESS
+                and job.claimed_by == self._config.worker_id
+            )
+        except Exception:
+            ours = False
+        finally:
+            session.close()
+        return CANCEL_SIGNAL if ours else DETACH_SIGNAL
 
     def _apply(
         self,
@@ -620,8 +680,7 @@ class JobSupervisor:
             self._tidy(self._config.workdir_for(job.id))
         return "complete"
 
-    @staticmethod
-    def _tidy(workdir_root: Path) -> None:
+    def _tidy(self, workdir_root: Path) -> None:
         """After a run that ended, drop what the workdir contract says is disposable.
 
         Every stage's `work/` is scratch by A6's own definition ("safe to delete at any
@@ -633,7 +692,22 @@ class JobSupervisor:
         A failed or cancelled run is tidied the same way: a retry fetches its inputs
         again exactly as a retry of a finished one does. A failure to tidy is logged and
         nothing else: the run is over either way.
+
+        Never under a recipe process that is still running in the workdir: deleting its
+        `inputs/` and `work/` would fail the stage in ways that say nothing about why.
+        `_watch_child` stops the process before any way out of it, so this is the last
+        line, not the first; a process found alive here is stopped as a cancel first,
+        since every caller is closing the run.
         """
+        if self._process is not None and self._process.poll() is None:
+            log.error(
+                "worker %s: the recipe process %d was still running when its run ended; "
+                "stopping it before tidying %s",
+                self._id,
+                self._process.pid,
+                workdir_root,
+            )
+            _stop(self._process, self._config.terminate_grace_s, CANCEL_SIGNAL)
         workdir = Workdir(workdir_root)
         doomed = [workdir.inputs_dir]
         if workdir.stages_dir.is_dir():
