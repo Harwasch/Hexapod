@@ -164,10 +164,17 @@ without them.
 - **`kill_signal = "SIGTERM"`, `kill_timeout = "30s"`.** The worker treats SIGTERM as a stop
   flag: on its next tick it stops the recipe process, clears the lease on the job it holds
   and exits, so the next worker can take that job immediately instead of waiting the lease
-  out. 30 s is fourteen ticks of headroom. (Both keys are at the _top_ of `fly.toml`,
-  before any table header. TOML gives a bare key to whichever table precedes it, so written
-  next to the health check — where they read most naturally — they silently become fields of
-  that check and Fly never sees them. CI asserts they are top-level.)
+  out. 30 s is fourteen ticks of headroom. A deploy does not stop a GPU call in flight: the
+  recipe process is told it is a shutdown (SIGUSR1), leaves the Modal call running and
+  writes down its id, and the next worker re-attaches to it at the same attempt
+  (`apps/api/app/worker/README.md`, "A GPU call outlives the process that made it"). A
+  cancelled job's call is cancelled within seconds. (Both keys are at the _top_ of
+  `fly.toml`, before any table header. TOML gives a bare key to whichever table precedes
+  it, so written next to the health check — where they read most naturally — they
+  silently become fields of that check and Fly never sees them. CI asserts they are
+  top-level.)
+- **`[[restart]]` for the worker, `on-failure`.** A worker that crashes is restarted (ten
+  tries); one that exits 0 on purpose is left stopped.
 - **a 20 GB volume** at `/data`, on the `worker` group only, with
   `WORKER_WORKDIR=/data/worker`. See [the workdir](#the-workers-workdir). It asked for
   50 GB until the first real provisioning run met Fly's "To create more than 20GB in
@@ -437,14 +444,19 @@ A Lane 2 run in flight holds several things on the worker's volume at once:
 - the trained PLY coming back from Modal (hundreds of MB);
 - the packaged tiles.
 
-When a run finishes, the worker deletes `inputs/` and every stage's `work/`
-(`WorkerConfig.tidy_finished_runs`, on by default). That leaves `out/`, `step.json` and
-`checkpoint/`, which is everything "retry from this stage" reads: a few hundred MB per
-finished Lane 2 run. **20 GB is therefore enough for one capture of up to about 8 GB in
-flight, with room for dozens of finished runs.** Past that, run `fly volumes extend`,
-which needs no redeploy. A failed run keeps its scratch on purpose, for diagnosis. Clear
-it by hand if the volume fills (`fly ssh console`, then remove
-`/data/worker/runs/<job id>`).
+When a run ends — finished, failed or cancelled — the worker deletes `inputs/` and every
+stage's `work/` (`WorkerConfig.tidy_finished_runs`, on by default). That leaves `out/`,
+`step.json` and `checkpoint/`, which is everything "retry from this stage" reads: a few
+hundred MB per Lane 2 run. **20 GB is therefore enough for one capture of up to about 8 GB
+in flight, with room for dozens of finished runs.** Past that, run `fly volumes extend`,
+which needs no redeploy.
+
+The worker also checks before it claims. Below `WORKER_MIN_FREE_GB` (5) free it evicts
+the workdirs of runs that ended more than `WORKER_EVICT_AFTER_DAYS` (7) ago, oldest
+first; if that is not enough it does **not** claim, and logs `NOT CLAIMING` at error
+level once a minute — the job stays queued (and alerts, with `QUEUE_CHECK_URL`) instead of
+failing on a full disk after its download. A run whose workdir was evicted still retries;
+it starts over from the upload.
 
 That is also why the worker has one general slot and not two: a second Lane 2 run in
 flight is a second upload, frame set and database on the same volume (and a second GPU
@@ -977,6 +989,24 @@ the API has.
 pydantic model rejecting a stored row — used to be a 422 too, carrying the bug's own message
 as if the caller had made it, and logged nowhere. It is now a `500` whose body says nothing
 of the internals, and an `ERROR` line (and so a Sentry event) with the traceback.
+
+The worker's runs have a dead-man's switch, off until it is given URLs (Fly secrets, both
+optional; a free healthchecks.io check each is the shape they are written for):
+
+| Secret                 | Pinged                                                                                                                                       | Alerts when                                                                                 |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `WORKER_HEARTBEAT_URL` | `/start` when a job is claimed, every minute while it runs, on success; `/fail` with the reason when it is dead-lettered. Nothing while idle | a run fails, or goes quiet: the worker died, hung or was stopped and nobody resumed the job |
+| `QUEUE_CHECK_URL`      | `/start` by the API when a job is queued; by the worker when it claims one                                                                   | a job is queued and never claimed: no worker, or one that cannot claim (a full disk)        |
+
+A ping never blocks the worker and never fails a job (a thread each, a 5 s timeout,
+errors logged and dropped). `fly.toml`'s `[[restart]]` restarts a worker that dies
+(`on-failure`, ten tries); one that keeps dying is what the two checks report.
+
+**What a job may cost.** `WORKER_JOB_COST_CAP_USD` (default 20, 0 turns it off) is a
+ceiling on one job's `costUsd`, across stages and attempts: no GPU call starts past it, a
+running one is cancelled when its cost would go over it, and the job is dead-lettered
+saying so. `costUsd` on Modal includes the 2 cores and 8 GiB each GPU function reserves
+(+$0.158/h on an L4); it does not include a container's idle minute after its last call.
 
 ## Handover
 

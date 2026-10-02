@@ -212,8 +212,15 @@ than an error:
 - `checkpoint/` is **kept** across attempts. It is the one directory the executor does not
   clear. A stage sees `ctx.has_checkpoint` and `ctx.checkpoint_dir`;
 - `ctx.checkpoint_key` is the object-storage key `CloudRunner` syncs that directory to
-  (`runs/<run id>/<stage id>/checkpoint`), and it lands in the StepResult when the stage
-  left anything behind, so `job_step.checkpoint_key` has something to record.
+  (`runs/<run id>/<stage id>/checkpoint`, and `checkpoint-a<N>` from attempt 2 on), and
+  it lands in the StepResult when the stage left anything behind, so
+  `job_step.checkpoint_key` has something to record. One key **per attempt**
+  (`runners.per_attempt`; the outputs' and each piece's keys follow it): a remote call
+  nobody stopped would otherwise go on syncing over the next attempt's checkpoint — a
+  mirrored sync deletes what it does not have — and could land its `out/` just before
+  the next attempt's is fetched. The contents still carry over: each attempt's
+  checkpoint comes home into the workdir and the next attempt sends it out again under
+  its own key.
 
 The sync is on an **interval** while the stage runs, not at the end: a checkpoint that
 only appears when the stage finishes is worth nothing to an attempt that never does.
@@ -289,6 +296,40 @@ adapter reports `pending` until `run_stage`'s own first line appears in the call
 and `CloudRunner` cancels a stage still pending after `max_pending_s` (30 minutes) rather
 than holding the worker for `max_wait_s` (a day).
 
+### When the process watching a call stops
+
+A remote call does not stop because the process polling it did, so every call is written
+down the moment it is submitted — `stages/<id>/calls.json`, the `CallBook` — and struck
+off once it has ended, come home and been entered in `attempts.json`. The worker stops
+its recipe process by raising one of two `errors.StopRequested` (BaseExceptions, so no
+`except Exception` on the way swallows one), and `CloudRunner` answers each differently:
+
+- **`CancelRequested`** (a cancelled job, a lost lease): the call is cancelled and what it
+  billed so far goes into the ledger as a `failed` entry whose detail says `cancelled:`.
+- **`DetachRequested`** (the worker shutting down): a call whose adapter is
+  `Reattachable` is left running and the book is marked `detached`. The next runner finds
+  it there and re-attaches — `ModalAdapter.reattach`, over `FunctionCall.from_id` — with
+  nothing staged again and nothing submitted twice; a fan-out is picked up at the pieces
+  it left (`fan_out`, `parts_done`). An adapter without `reattach` is cancelled instead.
+
+A killed process leaves the book as it was and the next attempt re-attaches the same way,
+on the call's own keys. Ledger entries carry the call's id, so an entry already written
+for a re-attached call is not written twice. `CloudRunner.reap` cancels every book no
+stage of the run is about to resume, and one the worker marks `orphaned` (known only
+from the database, its workdir gone). `shield` is how the worker holds a stop back while
+a call is between being created and being written down. `tests/test_cloud_stops.py`.
+
+**What a stage may cost, and how long.** `cost_cap_usd` refuses a call once the run's
+ledgers reach it and cancels a running call — or a fan-out's pieces, priced together —
+whose running cost would take the run over it (`CostCapError`). A call that runs out of
+time ends as `RemoteTimeoutError` rather than `RemoteStageError`, which the worker does
+not retry: the deployed function's own limit (`Poll.timed_out`, from Modal's
+`FunctionTimeoutError`), `max_wait_s`, and `deadline_factor` — a call whose trainer's own
+newest progress line projected T seconds is cancelled once it has run 2T plus 30 min,
+which a slow trainer that keeps printing never reaches and a hung one does, hours before
+the six-hour limit. And a failed call's last log lines are read once more after its
+verdict, where a traceback (a CUDA out-of-memory) can arrive late.
+
 ### The remote half
 
 A provider's container fetches its own bytes, which is the one thing `SubprocessAdapter`
@@ -330,6 +371,14 @@ were paid for too. `run_cost(workdir)` totals it, and the worker writes that ont
 measured**. A tier with no rate records its billed seconds and no cost; it does not get
 an invented number, because a plausible price in a cost column is a price that will be
 believed. A deployment supplies its own through `PIPELINE_GPU_RATES`.
+
+On Modal a GPU hour is the GPU **and** the 2 cores and 8 GiB every GPU function reserves
+(`modal_adapter.GPU_RESERVATION`, billed at max(reserved, used)): `ModalAdapter.rate`
+adds $0.158 an hour, from Modal's per-core and per-GiB list prices
+(`providers.MODAL_CORE_HOUR_USD`, `MODAL_GIB_HOUR_USD`), to every GPU tier's rate,
+operator-supplied ones included — an L4 hour is $0.958, not $0.80. Still not in
+`costUsd`: a container's idle scale-down window after its last call (Modal's default, a
+minute; `infra/modal/app.py` sets none), which Modal bills and no call owns.
 
 Everything that is not "run the implementation" — clearing the previous attempt, keeping the
 checkpoint, checking the declared `produces` exist, hashing them, writing the StepResult —
@@ -413,9 +462,15 @@ untouched by them, and `StubRunner` fabricates the new artifacts with no edit of
 `pose` runs on the **worker's CPU**, not the GPU box. The GPU is billed by the second and
 only `train` needs one. COLMAP's CPU path is the one every finding in `sfm.py` was measured
 on. And shipping frames to Modal for SfM and back would add a round trip the stage does
-not otherwise need. What it costs, measured on 4 cores of this development container
-(COLMAP 3.9.1, the Ubuntu 24.04 package; real iPhone-portrait frames, 1080×1920, orbiting
-one object), with the machine partly contended, so these numbers are upper bounds:
+not otherwise need. (Since then `pose` is dispatched to Modal's `cpu4` box, a 4-core,
+8 GiB CPU function; there COLMAP's thread count is the box's reservation -- 8, two
+hardware threads a core, `COLMAP_NUM_THREADS` in the CPU image, read by
+`sfm.default_threads` when a run gives no `threads` -- rather than COLMAP's -1, which in a
+container counts the host's dozens of cores and starts a SIFT thread, each holding a
+frame's scale space, for every one.) What it costs, measured on 4 cores of this
+development container (COLMAP 3.9.1, the Ubuntu 24.04 package; real iPhone-portrait
+frames, 1080×1920, orbiting one object), with the machine partly contended, so these
+numbers are upper bounds:
 
 | Matcher                        | Frames | Features / max side | Extract | Match | Map   | Total     | Registered |
 | ------------------------------ | ------ | ------------------- | ------- | ----- | ----- | --------- | ---------- |
@@ -679,7 +734,8 @@ from the clock; else `containerBootedAt`) or its entry (a warm call) to `remoteF
 a call that reported no clocks (failed, preempted, an older image). In `call_phases`,
 `start` is then the cold start alone and `queue` sits beside the sum. Not counted by
 either: a container's idle scale-down window after its last call, which Modal bills and
-no call owns; and the reserved CPU and memory, which `providers.py` does not price.
+no call owns. (The reserved CPU and memory used not to be priced either; since the
+2026-10 audit `ModalAdapter.rate` adds them -- "What a run cost" above.)
 
 **A part may start on an L40S** (`modal_adapter.GPU_FALLBACKS`: `l4 -> (l4, l40s)`,
 deployed as `run_stage_l4_fallback` with `gpu=["L4", "L40S"]`, Modal's ranked list: the

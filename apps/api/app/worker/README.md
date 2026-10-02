@@ -55,8 +55,9 @@ JobSupervisor._supervise, every poll_s (2 s by default):
 Three consequences worth stating:
 
 - **cancellation lands mid-stage.** `POST /jobs/{id}/cancel` sets the status; the next
-  heartbeat sees it, SIGTERMs the child and SIGKILLs it after `terminate_grace_s`. Worst
-  case is one poll interval plus the grace — seconds, not the length of the stage;
+  heartbeat sees it, SIGTERMs the child and SIGKILLs it after `terminate_grace_s` (15 s).
+  Worst case is one poll interval plus the grace — seconds, not the length of the stage —
+  and a GPU call the stage had out is cancelled with it (below);
 - **a stage that segfaults is a failed step, not a lost worker**;
 - **the child has no database and no credentials.** Everything that touches the bucket or
   the session happens in the supervisor, from the events the child sends.
@@ -81,7 +82,42 @@ passes. After that the job is claimable by anyone, and the worker that takes it:
 
 A worker asked to stop politely (SIGTERM, SIGINT) does not wait for the stage to finish:
 it stops the recipe process on its next tick and **clears** the lease instead of leaving
-it to lapse, so the job is claimable at once.
+it to lapse, so the job is claimable at once. That stop is a *detach*, not a failure: the
+step is marked `detached` and the next worker runs it as the **same attempt**, so a deploy
+spends nothing of the budget.
+
+## A GPU call outlives the process that made it
+
+A stage on Modal is somebody else's machine, and it does not stop because the recipe
+process polling it did. Until the 2026-10 audit the call id lived only in that process's
+memory and the child had no signal handler, so a cancelled job, a lost lease and a deploy
+all left the GPU training for nobody for up to six hours — and the next attempt spawned
+a second call writing to the same keys. Now the supervisor's signal says why it is
+stopping the child, and `child.Interrupts` turns it into an exception the pipeline's
+`CloudRunner` acts on (`tools/pipeline/cloud.py` has the mechanism):
+
+| why the recipe process stops | signal | what happens to the call |
+| --- | --- | --- |
+| the job was cancelled, or the lease was lost | SIGTERM | cancelled (Modal: containers terminated); what it billed goes into the ledger |
+| this worker is shutting down (a deploy) | SIGUSR1 | left running, recorded as `detached`; the next worker **re-attaches** (`FunctionCall.from_id`) instead of submitting again, at the same attempt |
+| the process or the worker is killed outright | — | nothing runs; the record is still there and the retry (a new attempt) adopts the call |
+| the workdir is gone (another machine) | — | the call's id is on the step's row (`metrics.remoteCalls`, copied every heartbeat); the next worker writes it back as `orphaned` and the call is cancelled before anything runs |
+
+The record is `stages/<id>/calls.json` (`CallBook`): written the moment a call is
+submitted — with the stop signal held back until it is — and struck off once the call has
+ended, come home and been entered in `attempts.json`, which is idempotent per call id so
+a re-attached call is never paid for twice. A call recorded for a stage the run is not
+about to resume is cancelled before the run starts, and any call still recorded when a
+job is dead-lettered or cancelled is cancelled from the supervisor. Every key a call
+writes is per attempt (`checkpoint`, `checkpoint-a2`, …), so a call that escaped all of
+that cannot write over the next attempt's checkpoint or outputs. A provider whose calls
+cannot be re-attached to (`subprocess`, a child of the process going away) is cancelled
+on a detach as well.
+
+One gap is known: a job cancelled in the seconds between a deploy's worker letting go of
+it and the next worker claiming it is never claimed again, so a call that worker left
+running finishes on its own (or at the function's six-hour limit). Its id is on the
+step's row.
 
 ## Giving up: the dead-letter path
 
@@ -93,6 +129,29 @@ forever by whoever is next.
 
 A recipe that will not resolve at all dead-letters on the first look, because it will not
 resolve on the second either.
+
+**Not every failure gets the whole budget** (`retry.py`). Under a six-hour Modal limit,
+three attempts at a stage that timed out were eighteen GPU-hours. The worker reads each
+failure first — its error, and the failed attempt's own lines of the stage log (the
+recipe process reports where they begin) — and the classes are kept narrow, because a
+retry spent on a failure put in the wrong one is the cheaper mistake:
+
+| failure | what the worker does |
+| --- | --- |
+| CUDA out of memory (`CUDA out of memory`, `OutOfMemoryError` in the attempt's log) | **one** retry, with `cap_max` at 0.7x the cap the attempt's `gsplat: cap_max …` line names, written into `jobs.params[stage]`; a second, or one with no cap to lower, is not retried |
+| out of time (`RemoteTimeoutError`: Modal's `FunctionTimeoutError`, `max_wait_s`, the overdue-trainer deadline) | not retried |
+| a broken recipe or stage contract (`errors.BAD_INPUT_ERRORS`) | not retried |
+| the run reached its dollar cap (`CostCapError`) | not retried |
+| anything else | `worker_max_attempts`, as before |
+
+Each stage's verdicts are in `stages/<id>/failures.json`, which is how "one" retry stays
+one across a worker restart.
+
+**A job has a dollar ceiling**, `WORKER_JOB_COST_CAP_USD` (20; 0 turns it off), over the
+attempt ledgers' `costUsd`: `CloudRunner` submits no call once the run is at it and
+cancels a running call — or a fan-out's pieces together — whose running cost would take
+the run over it, and the worker starts no attempt past it. Priced calls only: a tier with
+no rate is not stopped by a figure nobody has.
 
 **Retrying is then a person's decision**, through `POST /jobs/{id}/retry`: it resumes at
 `fromStage` (or at the stage that failed), keeps every completed step and its artifacts,
@@ -116,6 +175,9 @@ registered nothing when the POST failed.
 | stage logs | object storage, `runs/<job id>/<stage id>/log.txt` → `job_steps.log_key` |
 | artifacts | object storage, `runs/<job id>/<stage id>/<name>`, one `artifacts` row each |
 | the workdir | `WORKER_WORKDIR/<job id>`, kept after the run — retry-from-stage reads it |
+| remote calls in flight | `stages/<id>/calls.json`, and a copy on the step: `metrics.remoteCalls` |
+| what each failed attempt failed of | `stages/<id>/failures.json` |
+| the recipe process's stderr | `recipe-process.stderr.log` in the workdir; its tail in `jobs.error` on a failure |
 | the site | `sites` + the capture's `site_id`, from `registration.json` |
 
 A deployment with no bucket still runs: the log and artifact uploads are skipped and say
@@ -126,7 +188,7 @@ package's tiles are hundreds of small objects whose cost is round trips), and ev
 artifact object is written with the `Cache-Control` a browser should get for it
 (`outputs.cache_control_for`, the same rule as the tile proxy in `functions/r2/[[path]].js`).
 A stage that ran on a provider is **copied** into its artifact keys inside the bucket from
-what the provider left under `runs/<job>/<stage>/transfer/out`, rather than uploaded again
+what the provider left under `runs/<job>/<stage>/transfer/out` (`out-a<N>` for attempt N), rather than uploaded again
 from the workdir — but only when its `step.json` says `runner: cloud` and the objects match
 the workdir's files name for name and size for size; anything else is uploaded as before.
 The download into the workdir stays: `place`, `package` and the rest read it there.
@@ -134,6 +196,38 @@ The download into the workdir stays: `place`, `package` and the rest read it the
 Publishing (`publish.py`) copies a tileset to the public bucket eight at a time and its
 `tileset.json` last, after every tile, so a public root always means its tiles are there; a
 copy that fails leaves no root and registers no site.
+
+Every run that ends — finished, failed or cancelled — drops its `inputs/` (a copy of what
+is in the bucket, which a retry fetches again) and every stage's `work/` (scratch);
+`out/`, `step.json` and `checkpoint/` stay. It used to be finished runs only, and a failed
+run kept a 12 GB video on a 20 GB volume until somebody deleted it.
+
+## Watching the runs that are going on
+
+`WORKER_HEARTBEAT_URL` is a dead-man's switch for **active runs only**
+(`alerts.py`, healthchecks.io-style): `<url>/start` when a job is claimed, `<url>` every
+minute while it runs (from a thread of its own, beside the lease keeper), `<url>` when it
+finishes or is cancelled, `<url>/fail` with the reason when it is dead-lettered — and
+nothing while the worker is idle, or when it lets a job go for a deploy (the next
+worker's `/start`, or the check's grace period, says what happened). A worker killed
+mid-run goes quiet and the check alerts. `QUEUE_CHECK_URL` is pinged when a job is
+claimed; the API starts it when one is queued, so a job nobody claims alerts too. A ping
+is a thread with a 5 s timeout whose every error is logged and dropped: it never holds up
+the worker and never fails a job.
+
+## Room on the volume
+
+Before it claims, the worker looks at the free space on `WORKER_WORKDIR`'s volume
+(`disk.py`). Below `WORKER_MIN_FREE_GB` (5) it tidies every run that has ended, then
+evicts whole workdirs of runs that ended more than `WORKER_EVICT_AFTER_DAYS` (7) ago,
+oldest first, until there is room; a retry of one of those starts over from the upload.
+If there is still no room it does not claim, and logs `NOT CLAIMING` at error level once
+a minute: the job stays queued rather than failing on a full disk after its download.
+A run that is not over is never touched.
+
+The supervisor's session also commits before it downloads the capture (`_seed`), as it
+already did before uploads: a session idle in a transaction for the length of a 12 GB
+download is one Neon terminates, and the next statement on it fails.
 
 ## Several jobs at once
 
@@ -257,10 +351,14 @@ if it found one still up -- the worker may have been exiting at that moment
 `WORKDIR`, `RUNNER` (`stub` until A8 makes Lane 1's stages real), `RECIPE_DIR`,
 `IMPL_MODULES`, `LEASE_S`, `POLL_S`, `IDLE_S`, `IDLE_BACKOFF_AFTER_S`, `IDLE_MAX_S`,
 `IDLE_EXIT_S`, `MAX_ATTEMPTS`, `RETRY_BACKOFF_S`, `CONCURRENCY` (general slots, 1-8,
-default 1), `CPU_ONLY_SLOTS` (0-4, default 0).
+default 1), `CPU_ONLY_SLOTS` (0-4, default 0), `JOB_COST_CAP_USD` (20; 0 off),
+`DEADLINE_FACTOR` (2; 0 off), `HEARTBEAT_URL` (unset: no pings), `MIN_FREE_GB` (5; 0
+off), `EVICT_AFTER_DAYS` (7). And `QUEUE_CHECK_URL`, unprefixed because the API reads it
+too.
 
 ## Verify
 
 ```bash
-cd apps/api && uv run ruff check . && uv run mypy . && uv run pytest -q tests/test_worker.py
+cd apps/api && uv run ruff check . && uv run mypy . && uv run pytest -q tests/test_worker.py \
+  tests/test_worker_stops.py
 ```
