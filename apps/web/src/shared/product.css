@@ -1,0 +1,81 @@
+/* ---------------------------------------------------------------------------
+   The shared slim header of the gallery and the data console (`product.ts`):
+   the product's mark and name, then Globe · Scans · Data console. Written against the
+   design tokens only, so it reads the same on both pages and follows their settings.
+   --------------------------------------------------------------------------- */
+
+.product-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-4);
+  min-height: 2.75rem;
+  padding: 0.4rem 0.5rem 0.4rem 0.75rem;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--glass-radius-pill);
+  background: var(--glass-bg-flat);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  box-shadow: var(--glass-shadow-soft);
+  font-family: var(--font-sans);
+}
+
+.product-bar__brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  color: var(--text-primary);
+  font: 600 14px var(--font-sans);
+  text-decoration: none;
+}
+
+/* The same mark the globe's site switcher wears. */
+.product-bar__mark {
+  width: 20px;
+  height: 20px;
+  border-radius: 7px;
+  background: linear-gradient(140deg, var(--accent), var(--warn));
+}
+
+.product-bar__nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem;
+  margin-left: auto;
+}
+
+.product-bar__link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2rem;
+  padding: 0 0.8rem;
+  border: 1px solid transparent;
+  border-radius: var(--glass-radius-pill);
+  color: var(--text-secondary);
+  font: 600 13px var(--font-sans);
+  text-decoration: none;
+}
+
+.product-bar__link:hover {
+  background: var(--control-bg);
+  color: var(--text-primary);
+}
+
+.product-bar__link[aria-current="page"] {
+  background: var(--control-bg-hover);
+  border-color: var(--control-border);
+  color: var(--text-primary);
+}
+
+.product-bar__brand:focus-visible,
+.product-bar__link:focus-visible {
+  outline: none;
+  border-radius: var(--glass-radius-pill);
+  box-shadow: var(--focus-ring);
+}
+
+@media (max-width: 480px) {
+  .product-bar__nav {
+    margin-left: 0;
+  }
+}

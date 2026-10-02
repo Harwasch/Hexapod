@@ -26,6 +26,7 @@ import { useQuickLayers } from "../mission/quickLayers";
 import { useAgentCommand } from "../mission/useAgentCommand";
 import { useMissionActions } from "../mission/useMissionActions";
 import { flyToPlace, usePlaceSearch } from "../search/places";
+import { siteDisplayName } from "../sites/siteNames";
 import {
   buildCommandGroups,
   defaultActiveId,
@@ -140,9 +141,10 @@ export function CommandBox() {
           "sites",
           (sites.data ?? []).map((site) => ({
             id: `site-${site.id}`,
-            label: site.name,
+            label: siteDisplayName(site),
             sub: "Site · fly to its reality model",
-            keywords: site.slug.replace(/-/g, " "),
+            // Still found by the catalog's own name and slug, which the label no longer shows.
+            keywords: `${site.name} ${site.slug.replace(/-/g, " ")}`,
             run: () => void scene?.sites.flyTo(site.id),
           })),
         ),

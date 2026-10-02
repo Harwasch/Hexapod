@@ -17,37 +17,18 @@ import { GlassBadge, GlassButton, GlassProgress, type GlassProgressTone } from "
 
 import { useCancelJob, useRetryJob, useStepLog } from "@/api/queries";
 import { formatBytes, formatDate, formatDuration } from "@/lib/format";
+import { captureKindLabel, captureStatusLabel, runStatusLabel } from "@/lib/labels";
 import { uploadsForCapture, type UploadItem } from "@/state/uploads";
 
 import { PhoneHandoff } from "./PhoneHandoff";
 import { classify, type Proposal } from "./recipes";
 
-/**
- * Plain words for the API's status values. The raw value stays on `data-status`, where
- * tests and anyone inspecting the page can still read it exactly.
- */
-const CAPTURE_STATUS: Record<string, string> = {
-  "awaiting-files": "Waiting for files",
-  "not-started": "Ready",
-  "in-progress": "Processing",
-  complete: "Done",
-  error: "Failed",
-  cancelled: "Cancelled",
-};
-
-const JOB_STATUS: Record<string, string> = {
-  "not-started": "Queued",
-  "in-progress": "Running",
-  complete: "Done",
-  error: "Failed",
-  cancelled: "Cancelled",
-};
-
-const KIND: Record<string, { label: string; icon: typeof Film }> = {
-  video: { label: "Video", icon: Film },
-  images: { label: "Photos", icon: Images },
-  "gaussian-splat": { label: "Splat", icon: Box },
-  "point-cloud": { label: "Point cloud", icon: ScanLine },
+/** Icons for what a capture is made of; the words are `lib/labels.ts`, shared with the console. */
+const KIND_ICON: Record<string, typeof Film> = {
+  video: Film,
+  images: Images,
+  "gaussian-splat": Box,
+  "point-cloud": ScanLine,
 };
 
 /** The recipe's verb, which is what a person asked for: "Reconstruct", "Package and place". */
@@ -203,7 +184,7 @@ export function CaptureCard({
   // once files land, what they are is the better answer.
   const kindId =
     capture.metadata.origin === "phone" && capture.files.length > 0 ? proposal.kind : capture.kind;
-  const kind = KIND[kindId] ?? { label: kindId, icon: Box };
+  const kind = { label: captureKindLabel(kindId), icon: KIND_ICON[kindId] ?? Box };
   const KindIcon = kind.icon;
 
   return (
@@ -217,7 +198,7 @@ export function CaptureCard({
             data-testid="capture-status"
             data-status={capture.status}
           >
-            {CAPTURE_STATUS[capture.status] ?? capture.status}
+            {captureStatusLabel(capture.status)}
           </GlassBadge>
         </div>
         <div className="card__meta">
@@ -379,7 +360,7 @@ function JobStages({ job }: { job: Job }) {
       <div className="card__row card__row--between">
         <span className="capture__job-title">{recipeLabel(job.recipe)}</span>
         <GlassBadge tone={statusTone(status)} data-testid="capture-job-status" data-status={status}>
-          {JOB_STATUS[status] ?? status}
+          {runStatusLabel(status)}
         </GlassBadge>
       </div>
       <GlassProgress

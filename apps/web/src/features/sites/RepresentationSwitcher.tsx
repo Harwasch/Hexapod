@@ -12,12 +12,14 @@ import { useInferred } from "@/state/inferred";
 import { useSites } from "@/state/sites";
 
 import { InstanceSearch } from "./InstanceSearch";
+import { siteDisplayName } from "./siteNames";
 
 const ORDER: Representation[] = ["gaussian-splat", "mesh", "point-cloud"];
 
 /**
- * [Splat] [Mesh] [Points] — appears when the camera is at a site that has a model. Switching
- * keeps the camera. Which engine draws a splat is a comparison for developers, so that choice
+ * [Splat] [Mesh] [Points] — appears when the camera is at a site that has a model, beside the
+ * site's one display name (`siteNames.ts`), never the record of the tileset it came from.
+ * Switching keeps the camera. Which engine draws a splat is a comparison for developers, so that choice
  * lives in Settings › Advanced, not here.
  */
 export function RepresentationSwitcher() {
@@ -65,8 +67,8 @@ export function RepresentationSwitcher() {
           transition={{ type: "spring", stiffness: 380, damping: 30 }}
         >
           <GlassPanel strong pill className="rep-switch" data-testid="representation-switcher">
-            <span className="rep-switch__label" title={site.name}>
-              {site.name}
+            <span className="rep-switch__label" title={siteDisplayName(site)}>
+              {siteDisplayName(site)}
             </span>
             <GlassSegmentedControl
               aria-label="Reality model representation"

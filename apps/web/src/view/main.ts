@@ -22,6 +22,7 @@ import type { Capture, Site, SiteSummary } from "@twin/contracts";
 import { loadCollision } from "@/lib/collision";
 import { deviceSplatBudget } from "@/lib/detail";
 import { tileUrl } from "@/lib/tileProxy";
+import { productHeader } from "@/shared/product";
 
 import { parseCoverage } from "./coverage";
 import { showLive } from "./live";
@@ -36,6 +37,7 @@ import {
   type TileNode,
   type TileTree,
 } from "./tiles";
+import "./view.css";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
 
@@ -63,7 +65,10 @@ async function json<T>(url: string): Promise<T> {
 
 async function showGallery(): Promise<void> {
   el("viewer").hidden = true;
-  el("gallery").hidden = false;
+  const gallery = el("gallery");
+  gallery.hidden = false;
+  // The shared header: the product's name and the way back to the globe and the console.
+  if (!gallery.querySelector(".product-bar")) gallery.prepend(productHeader("scans"));
   document.title = "Scans";
   const status = el("gallery-status");
   const cards = el("cards");

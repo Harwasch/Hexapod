@@ -14,6 +14,7 @@ import { GlassButton, GlassSegmentedControl, GlassTooltipProvider } from "@twin/
 
 import { QueryClient, QueryClientProvider, useQueryClient } from "@tanstack/react-query";
 
+import { ProductHeader } from "@/shared/ProductHeader";
 import { useSettings } from "@/state/settings";
 import { useUi } from "@/state/ui";
 
@@ -80,6 +81,7 @@ function Console() {
 
   return (
     <div className="admin">
+      <ProductHeader current="console" />
       <header className="admin__bar">
         <div className="admin__title">
           <Database size={16} aria-hidden="true" />
@@ -133,9 +135,6 @@ function Console() {
           >
             Write token
           </GlassButton>
-          <a className="admin__globe" href="/">
-            Open the globe
-          </a>
         </div>
       </header>
 

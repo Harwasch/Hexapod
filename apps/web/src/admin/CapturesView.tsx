@@ -15,6 +15,8 @@ import type { Capture, Job } from "@twin/contracts";
 
 import { EmptyState, GlassBadge, GlassButton, Spinner } from "@twin/ui";
 
+import { captureKindLabel, captureStatusLabel, uploadStatusLabel } from "@/lib/labels";
+
 import { formatBytes, formatDate, shortId } from "./format";
 import { siteIndex, useCaptures, useJobs, useReconciliation, useSites } from "./queries";
 
@@ -42,7 +44,7 @@ function CaptureFiles({ capture }: { capture: Capture }) {
             <td className="admin-num">{formatBytes(file.bytes)}</td>
             <td className="admin-mono admin-ellipsis">{file.checksum ?? "—"}</td>
             <td className="admin-mono admin-ellipsis">{file.storageKey}</td>
-            <td>{file.status}</td>
+            <td title={file.status}>{uploadStatusLabel(file.status)}</td>
           </tr>
         ))}
         {capture.files.length === 0 && (
@@ -252,7 +254,7 @@ export function CapturesView({ onLaunch }: { onLaunch: (captureId: string) => vo
                         <br />
                         <span className="admin-mono admin-dim">{capture.slug}</span>
                       </td>
-                      <td>{capture.kind}</td>
+                      <td title={capture.kind}>{captureKindLabel(capture.kind)}</td>
                       <td>{capture.sensor ?? capture.device ?? "—"}</td>
                       <td className="admin-num">{capture.files.length}</td>
                       <td className="admin-num">{formatBytes(bytes)}</td>
@@ -267,7 +269,7 @@ export function CapturesView({ onLaunch }: { onLaunch: (captureId: string) => vo
                                 : "neutral"
                           }
                         >
-                          {capture.status}
+                          {captureStatusLabel(capture.status)}
                         </GlassBadge>
                       </td>
                       <td className="admin-num">{runs.length}</td>

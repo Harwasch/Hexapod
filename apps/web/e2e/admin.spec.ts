@@ -271,6 +271,13 @@ test.describe("the data console", () => {
     await expect(page.getByTestId("capture-row")).toHaveCount(2);
     await expect(page.getByTestId("captures-table")).toContainText("Back paddock");
     await expect(page.getByTestId("captures-table")).toContainText("Scaniverse");
+    // People's words for the API's values: the kind and the state, not "gaussian-splat".
+    const rows = page.getByTestId("capture-row");
+    await expect(rows.first()).toContainText("Splat");
+    await expect(rows.first()).toContainText("Done");
+    await expect(rows.nth(1)).toContainText("Ready");
+    await expect(page.getByTestId("captures-table")).not.toContainText("gaussian-splat");
+    await expect(page.getByTestId("captures-table")).not.toContainText("not-started");
 
     // The source files are one click down, with the checksum and the storage key that
     // reconciliation is about.
@@ -300,6 +307,7 @@ test.describe("the data console", () => {
     await page.goto("/admin.html#/runs");
 
     await expect(page.getByTestId("run-row")).toHaveCount(2);
+    await expect(page.getByTestId("run-status").first()).toHaveText("Done");
     await page.getByRole("checkbox").first().check();
     await page.getByRole("checkbox").nth(1).check();
 
@@ -360,11 +368,27 @@ test.describe("the data console", () => {
     await page.goto("/admin.html#/outputs");
 
     await expect(page.getByTestId("output-row")).toHaveCount(2);
+    await expect(page.getByTestId("output-row").first()).toContainText("3D Tiles");
     await page.getByTestId("outputs-filter").selectOption("unreferenced");
     await expect(page.getByTestId("output-row")).toHaveCount(1);
     await expect(page.getByTestId("outputs-table")).toContainText(
       `runs/${RUN_SMALL}/package/splat`,
     );
+  });
+
+  test("shares the product's header: back to the globe, across to the scans", async ({ page }) => {
+    await mockApi(page, []);
+    await page.goto("/admin.html");
+    const bar = page.getByTestId("product-bar");
+    await expect(bar.getByRole("link", { name: "Globe" })).toHaveAttribute("href", "/");
+    await expect(bar.getByRole("link", { name: "Scans" })).toHaveAttribute("href", "/view.html");
+    await expect(bar.getByRole("link", { name: "Data console" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+    // The shared tokens and fonts: the same face the globe sets its words in.
+    const font = await bar.evaluate((el) => getComputedStyle(el).fontFamily);
+    expect(font).toContain("Instrument Sans");
   });
 
   test("the page does not load CesiumJS", async ({ page }) => {

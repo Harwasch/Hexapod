@@ -13,6 +13,7 @@ import { useMission } from "@/state/mission";
 import { useUi } from "@/state/ui";
 
 import { flyToPlace } from "../search/places";
+import { siteDisplayName } from "../sites/siteNames";
 import { startPlanDraft } from "./planDrafting";
 import { planFromText } from "./planFlow";
 import { useMissionActions } from "./useMissionActions";
@@ -77,13 +78,16 @@ export function useAgentCommand(): { ask: (text: string) => Promise<void>; busy:
             return `Flying to ${hit.label}.`;
           },
           flyToSite: (query) => {
+            // A site answers to its display name ("Blackrock Mesa") and to its catalog record.
             const site = (sites.data ?? []).find(
               (s) =>
-                s.name.toLowerCase().includes(query) || s.slug.includes(query.replace(/\s+/g, "-")),
+                siteDisplayName(s).toLowerCase().includes(query) ||
+                s.name.toLowerCase().includes(query) ||
+                s.slug.includes(query.replace(/\s+/g, "-")),
             );
             if (!site) return null;
             void scene?.sites.flyTo(site.id);
-            return `Flying to ${site.name}.`;
+            return `Flying to ${siteDisplayName(site)}.`;
           },
           toggleLayer: (query, visible) => {
             if (/^(zones?)$/.test(query) || /^(tracks?)$/.test(query)) {

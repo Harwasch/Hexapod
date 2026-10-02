@@ -100,11 +100,6 @@ a {
   margin-left: auto;
 }
 
-.admin__globe {
-  font-size: var(--text-sm);
-  white-space: nowrap;
-}
-
 .admin__token {
   display: flex;
   align-items: flex-end;
