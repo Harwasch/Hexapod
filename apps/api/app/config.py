@@ -8,8 +8,9 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path, PurePosixPath
+from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -214,6 +215,27 @@ class Settings(BaseSettings):
 
     api_host: str = "0.0.0.0"  # noqa: S104 - container default, documented in DEPLOYMENT.md
     api_port: int = 8000
+
+    # --- Observability (app/observability.py) ---------------------------------------
+    # The level of the API's own `twin.*` loggers; libraries stay at WARNING.
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
+    # `json` (one object per line) or `text`. Unset: json in production, text elsewhere.
+    log_format: Literal["json", "text"] | None = None
+    # Error reporting. Unset, sentry-sdk is never imported.
+    sentry_dsn: str | None = None
+    # The share of requests traced for performance. 0 sends errors only.
+    sentry_traces_sample_rate: float = Field(default=0.0, ge=0.0, le=1.0)
+
+    @field_validator("log_level", "log_format", mode="before")
+    @classmethod
+    def _case_insensitive(cls, value: object, info: ValidationInfo) -> object:
+        # `LOG_LEVEL=info` and `LOG_FORMAT=JSON` mean what they say; an empty value is unset.
+        if isinstance(value, str):
+            value = value.strip()
+            if not value:
+                return "INFO" if info.field_name == "log_level" else None
+            return value.upper() if info.field_name == "log_level" else value.lower()
+        return value
 
     @field_validator(
         "api_cors_origins", "worker_impl_modules", "worker_cloud_providers", mode="before"

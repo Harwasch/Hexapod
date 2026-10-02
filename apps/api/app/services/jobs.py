@@ -18,7 +18,7 @@ from app.models.enums import RunStatus, UploadStatus
 from app.schemas.job import JobCreate, JobRead, JobStepLog
 from app.services import recipes as recipe_service
 from app.services.captures import get_capture
-from app.services.errors import ConflictError, NotFoundError
+from app.services.errors import ConflictError, InvalidInputError, NotFoundError
 from app.storage import ObjectStorage
 
 #: A run that has not finished. A capture may be run many times -- comparing two runs
@@ -38,7 +38,7 @@ def create_job(db: Session, capture_id: uuid.UUID, payload: JobCreate) -> Job:
     version = recipe_service.version_of(payload.recipe)
     if version is None:
         known = ", ".join(recipe_service.known_names())
-        raise ValueError(f"unknown recipe '{payload.recipe}'; known recipes are {known}")
+        raise InvalidInputError(f"unknown recipe '{payload.recipe}'; known recipes are {known}")
     recipe_service.check_overrides(payload.recipe, payload.params)
     if not any(file.status is UploadStatus.COMPLETE for file in capture.files):
         raise ConflictError(
@@ -177,7 +177,7 @@ def _retry_target(job: Job, from_stage: str | None) -> JobStep:
         if step.stage_id == from_stage:
             return step
     known = ", ".join(step.stage_id for step in ordered)
-    raise ValueError(f"job {job.id} has no stage '{from_stage}'; its stages are {known}")
+    raise InvalidInputError(f"job {job.id} has no stage '{from_stage}'; its stages are {known}")
 
 
 def read_step_log(

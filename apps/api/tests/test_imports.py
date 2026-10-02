@@ -29,11 +29,16 @@ def _run(code: str) -> subprocess.CompletedProcess[str]:
 
 
 def test_booting_the_app_does_not_import_the_model_sdk() -> None:
+    """Nor sentry-sdk, which only a deployment with SENTRY_DSN set loads."""
     result = _run(
         """
-        import sys
+        import os, sys
+        os.environ.pop("SENTRY_DSN", None)
         import app.main
-        heavy = sorted(m for m in sys.modules if m == "anthropic" or m.startswith("anthropic."))
+        heavy = sorted(
+            m for m in sys.modules
+            if m.split(".")[0] in {"anthropic", "sentry_sdk"}
+        )
         assert not heavy, heavy
         """
     )

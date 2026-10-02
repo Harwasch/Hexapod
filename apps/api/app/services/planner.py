@@ -758,7 +758,7 @@ class RulesPlanner:
         crew = _answer_text(request.answers, "crew")
         if crew == "all":
             wanted = len(request.machines)
-        elif crew and crew.isdigit():
+        elif crew and crew.isdecimal():
             wanted = int(crew)
         chosen = list(dict.fromkeys([*request.preferred_machine_ids, *mentioned]))
         chosen = [

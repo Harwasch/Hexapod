@@ -18,3 +18,16 @@ class UnauthorizedError(Exception):
     Only raised when a token is configured: an unset `API_WRITE_TOKEN` leaves writes
     open, and `create_app` refuses to start in production without one.
     """
+
+
+class InvalidInputError(ValueError):
+    """A request that is well-formed but asks for something that cannot be: a recipe that
+    does not exist, a stage a run does not have, a window past the last part. A 422.
+
+    The API used to turn *every* `ValueError` into a 422, which made a bug -- a failed
+    `int()`, a pydantic model rejecting a row the database already held -- look like the
+    caller's mistake, with the bug's own message as the explanation and no log line at
+    all. Now only this is a 422 (with `UrlValidationError` and request validation), and any
+    other `ValueError` is a logged 500. It subclasses `ValueError` so that code catching
+    `ValueError` around a service call (the phone's Refine) keeps working unchanged.
+    """

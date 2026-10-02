@@ -20,7 +20,7 @@ from app.schemas.asset import (
 )
 from app.schemas.common import Attribution, LicenseMetadata, Provenance
 from app.services import geometry
-from app.services.errors import NotFoundError
+from app.services.errors import InvalidInputError, NotFoundError
 from app.services.urls import validate_dataset_url
 
 
@@ -103,7 +103,7 @@ def update_asset(db: Session, asset_id: uuid.UUID, payload: AssetUpdate) -> Asse
             geometry.footprint_to_wkb(payload.footprint) if payload.footprint else None
         )
     if asset.valid_from and asset.valid_to and asset.valid_to < asset.valid_from:
-        raise ValueError("validTo must not precede validFrom")
+        raise InvalidInputError("validTo must not precede validFrom")
     db.commit()
     db.refresh(asset)
     return asset

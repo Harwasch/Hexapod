@@ -15,8 +15,14 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api.v1.router import api_v1
 from app.config import REPO_ROOT, Settings, get_settings
+from app.observability import configure_logging, init_sentry
 from app.schemas.common import Problem
-from app.services.errors import ConflictError, NotFoundError, UnauthorizedError
+from app.services.errors import (
+    ConflictError,
+    InvalidInputError,
+    NotFoundError,
+    UnauthorizedError,
+)
 from app.services.urls import UrlValidationError
 from app.storage import StorageUnavailableError
 
@@ -55,6 +61,11 @@ def _problem(
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
+    # First: without it the INFO lines below and every `twin.api` line after them went
+    # nowhere (see app/observability.py). Sentry before the app is built, which is when
+    # its FastAPI integration has to be in place.
+    configure_logging(settings)
+    init_sentry(settings)
     # Fail at startup, not at the first unauthenticated POST. An unset API_WRITE_TOKEN
     # means "writes are open", which is how a fresh checkout and the test suite run with
     # no configuration; this line is what stops that convenience reaching production.
@@ -168,9 +179,33 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def url_handler(_: Request, exc: UrlValidationError) -> JSONResponse:
         return _problem(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid URL", str(exc))
 
-    @app.exception_handler(ValueError)
-    async def value_error_handler(_: Request, exc: ValueError) -> JSONResponse:
+    @app.exception_handler(InvalidInputError)
+    async def invalid_input_handler(_: Request, exc: InvalidInputError) -> JSONResponse:
         return _problem(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid input", str(exc))
+
+    # Every other ValueError is a bug, not a bad request: a failed parse of something the
+    # API produced itself, a pydantic model refusing a row the database already held. It
+    # used to be a 422 carrying the bug's own message as if the caller had made it, and
+    # logged nowhere. Now it is a 500 that says nothing about the internals, and a log line
+    # that says everything -- which, being ERROR with the exception attached, is also what
+    # Sentry's logging integration turns into an event where SENTRY_DSN is set. Handled
+    # here rather than left to the server-error middleware so the response still passes
+    # through CORS and the browser can read the status.
+    @app.exception_handler(ValueError)
+    async def value_error_handler(request: Request, exc: ValueError) -> JSONResponse:
+        logger.error(
+            "unexpected %s on %s %s",
+            type(exc).__name__,
+            request.method,
+            request.url.path,
+            exc_info=exc,
+            extra={"method": request.method, "path": request.url.path},
+        )
+        return _problem(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            "Internal error",
+            "Something went wrong on the server. It has been logged.",
+        )
 
     @app.exception_handler(RequestValidationError)
     async def validation_handler(_: Request, exc: RequestValidationError) -> JSONResponse:

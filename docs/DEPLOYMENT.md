@@ -200,6 +200,7 @@ committed.
 | `ANTHROPIC_API_KEY`                                       | optional; without it the plan drafter is rule-based and says so              |
 | `FLY_API_TOKEN`                                           | a token that can start this app's machines; see waking the worker, below     |
 | `QUEUE_CHECK_URL`                                         | optional; a healthchecks.io-style check for jobs queued and never claimed    |
+| `SENTRY_DSN`                                              | optional; error reporting, see [Observability](#observability)               |
 
 ### Production refuses to start when it cannot do its job
 
@@ -878,8 +879,40 @@ object in the bucket behind. Deleting them is a console job; leaving them is har
 ## Observability
 
 `apps/web/src/lib/log.ts` and `lib/timing.ts` expose sinks for a vendor (Sentry,
-OpenTelemetry). The API adds a `Server-Timing` header and logs slow requests to stdout;
-`fly logs` is the shipper until there is a reason for another.
+OpenTelemetry). The API adds a `Server-Timing` header, and `fly logs` is the shipper until
+there is a reason for another.
+
+**API logs are JSON lines in production** (`app/observability.py`): `time`, `level`,
+`logger`, `message`, any structured fields, and `exception` with the traceback. Until this
+was configured the API set up no logging at all, so every `twin.api` INFO line (the
+production tiles notice, among others) was dropped and warnings came out with no time or
+logger name. uvicorn's access and error lines go through the same handler, so one format is
+interleaved, not two.
+
+| Variable                    | Default                           | What it does                                                         |
+| --------------------------- | --------------------------------- | -------------------------------------------------------------------- |
+| `LOG_LEVEL`                 | `INFO`                            | level of the API's own `twin.*` loggers; libraries stay at `WARNING` |
+| `LOG_FORMAT`                | `json` in production, else `text` | one JSON object per line, or a line a person reads                   |
+| `SENTRY_DSN`                | unset                             | error reporting; unset, `sentry-sdk` is never even imported          |
+| `SENTRY_TRACES_SAMPLE_RATE` | `0`                               | the share of requests traced; `0` sends errors only                  |
+
+All four are optional; set `SENTRY_DSN` as a Fly secret (`fly secrets set SENTRY_DSN=…`) —
+it is account-specific — and the others the same way if you want something other than the
+default. Nothing in `fly.toml` needs to change.
+
+**No line carries a credential.** Every line is redacted before it is written: `Bearer`
+values, phone-handoff tokens (`h1.…`), the query string of any presigned URL (its signature
+is a working credential for an hour), PBKDF2 hashes, and the literal value of every secret
+the process was configured with. Sentry gets the same treatment, and is configured with no
+request bodies and no stack-frame locals — a frame holding `Settings` holds every secret
+the API has.
+
+**A 422 is the caller's fault and a 500 is ours.** Only deliberate validation failures
+(`InvalidInputError` in `app/services/errors.py`, URL checks, request validation) are
+`422`s. Any other `ValueError` — a failed parse of something the API produced itself, a
+pydantic model rejecting a stored row — used to be a 422 too, carrying the bug's own message
+as if the caller had made it, and logged nowhere. It is now a `500` whose body says nothing
+of the internals, and an `ERROR` line (and so a Sentry event) with the traceback.
 
 ## Handover
 

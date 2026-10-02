@@ -39,7 +39,7 @@ from app.schemas.capture import (
 from app.schemas.common import Attribution, LicenseMetadata, Provenance, TemporalExtent
 from app.schemas.job import JobRead
 from app.services import handoff
-from app.services.errors import ConflictError, NotFoundError
+from app.services.errors import ConflictError, InvalidInputError, NotFoundError
 from app.services.slugs import slugify
 from app.storage import DEFAULT_EXPIRES_IN, MultipartPart, ObjectStorage
 
@@ -227,7 +227,9 @@ def _presign_window(
     part_size = choose_part_size(file.bytes)
     total = file.parts_total
     if total is not None and first_part_number > total:
-        raise ValueError(f"firstPartNumber {first_part_number} is past the last part ({total})")
+        raise InvalidInputError(
+            f"firstPartNumber {first_part_number} is past the last part ({total})"
+        )
     window = min(count or PRESIGN_WINDOW_PARTS, PRESIGN_WINDOW_PARTS)
     last = first_part_number + window - 1
     if total is not None:

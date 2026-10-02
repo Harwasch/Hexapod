@@ -39,6 +39,11 @@ dependencies = [
   # own (~80 MB) on purpose: `ubuntu-latest` has no ffmpeg and `static-ffmpeg` downloads
   # one at import, which fails on a machine with no network.
   "imageio-ffmpeg>=0.5",
+  # Error reporting, and only when SENTRY_DSN is set: app/observability.py imports it
+  # inside the function that initialises it, so a deployment without a DSN never loads
+  # it. A dependency rather than an extra so that setting the secret is the whole change
+  # -- the image is built from this lockfile and an extra would need a Dockerfile edit.
+  "sentry-sdk>=2.20",
 ]
 
 [project.optional-dependencies]

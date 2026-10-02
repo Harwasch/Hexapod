@@ -28,6 +28,7 @@ from app.schemas.pipeline import (
     RecipeRead,
     RecipeStageRead,
 )
+from app.services.errors import InvalidInputError
 
 if TYPE_CHECKING:  # pragma: no cover - import is for typing only
     from app.worker.pipeline_bridge import Recipe
@@ -172,10 +173,10 @@ def check_overrides(name: str, params: dict[str, Any]) -> None:
             try:
                 recipe.with_params(_stage_keyed(name, params))
             except PipelineError as error:
-                # Re-raised as a ValueError only to reach the 422 handler; the message is
+                # Re-raised as InvalidInputError only to reach the 422 handler; the message is
                 # the pipeline's, word for word, because it is the one that knows which
                 # stages the recipe has.
-                raise ValueError(str(error)) from error
+                raise InvalidInputError(str(error)) from error
             return
 
 
@@ -189,7 +190,7 @@ def _stage_keyed(recipe: str, params: dict[str, Any]) -> dict[str, dict[str, Any
     keyed: dict[str, dict[str, Any]] = {}
     for stage_id, overrides in params.items():
         if not isinstance(overrides, dict):
-            raise ValueError(
+            raise InvalidInputError(
                 f"recipe '{recipe}': `params[{stage_id!r}]` must be an object of that "
                 f"stage's parameters, for example "
                 f"{{'georeference': {{'lat': 51.5, 'lon': -0.12}}}}"
