@@ -72,7 +72,10 @@ waiting (24 workers, ~8 s a view each, overlapped with masking), SAM 2.1 masks 6
 a view at 32 points a side: now the bulk), votes 11 s, lift 103 s, describe 60 s (1.9k of
 7.3k instances); ~20 min in all. Before (24 views, one render process, the per-view lift):
 render 406 s, lift 81 s, describe 604 s, and one instance held 26% of the scan. A camp view
-renders in 1.6-1.9 GB at most (`RENDER_WORKER_BYTES`).
+renders in 1.6-1.9 GB at most (`RENDER_WORKER_BYTES`). Since the masks are the bulk, the
+Modal function now reserves 8 CPUs and 32 GiB (measured on the camp: 1,416 s for $0.56,
+against 1,217 s for $1.04 on 32 and 96 GiB), and the render processes follow from that
+reservation (`--cpus`, `--memory-gb`; `default_workers`) rather than a fixed 24.
 
 Usage:
     python segment_scene.py SPLAT.ply TILES_DIR --masks segment_models:Sam2Masks \\
@@ -734,14 +737,43 @@ def _memory_room() -> float | None:
     return float(int(limit) - used)
 
 
-def default_workers() -> int:
-    """Processes to render with: the CPUs this process may use, no more than the memory
-    left holds at `RENDER_WORKER_BYTES` each."""
+def _resident_bytes() -> float | None:
+    """This process's resident set (Linux `/proc/self/status` VmRSS), or None if unknown."""
     try:
-        cpus = len(os.sched_getaffinity(0))
-    except AttributeError:  # not Linux
-        cpus = os.cpu_count() or 1
+        for line in Path("/proc/self/status").read_text().splitlines():
+            if line.startswith("VmRSS:"):
+                return float(int(line.split()[1]) * 1024)
+    except (OSError, ValueError, IndexError):
+        return None
+    return None
+
+
+def default_workers(cpus: int | None = None, memory_bytes: float | None = None) -> int:
+    """Processes to render with: the CPUs this process may use, no more than the memory
+    left holds at `RENDER_WORKER_BYTES` each.
+
+    `cpus` and `memory_bytes` are the container's *reservation*, when the caller knows it:
+    a Modal function's `cpu=` and `memory=` (infra/modal/segment.py passes them as
+    `--cpus` / `--memory-gb`). Inside the container what shows need not be what was
+    reserved -- tools/pipeline found thread pools sized to the *host's* core count there
+    (its README, "One slow part"), and Modal lets a container burst past its reservation
+    when the host has room and bills max(reserved, used) -- so sizing by what is visible
+    can fork a render per host core onto 8 paid-for ones, and pay for the burst. With
+    them, the CPUs are the reserved ones and the room is the reservation less what this
+    process already holds (the scan, its index, the models: this is called after they are
+    loaded), or the cgroup's room if that is smaller. A render over the room is one more
+    process waiting for memory, so the room caps the count as the cores do.
+    """
+    if cpus is None:
+        try:
+            cpus = len(os.sched_getaffinity(0))
+        except AttributeError:  # not Linux
+            cpus = os.cpu_count() or 1
     room = _memory_room()
+    if memory_bytes is not None:
+        held = _resident_bytes() or 0.0
+        reserved = max(0.0, float(memory_bytes) - held)
+        room = reserved if room is None else min(room, reserved)
     if room is not None:
         cpus = min(cpus, int(room // RENDER_WORKER_BYTES))
     return max(1, cpus)
@@ -1797,14 +1829,18 @@ def segment(
     progress=None,
     workers: int | None = None,
     max_views: int = MAX_VIEWS,
+    cpus: int | None = None,
+    memory_bytes: float | None = None,
 ) -> Segmentation:
     """Cells, views, masks, votes, lifting and meaning, for a scan held in memory.
 
     `source_factory(cameras)` builds a mask source that needs the cameras (`OracleMasks`).
     `cache`: a directory where each view and its masks are kept as they are made, so a
     stopped run resumes (views and masks are most of the time on a large scan).
-    `progress(message)` is told as each view is done. `workers`: render processes
-    (default: the CPUs this process may use)."""
+    `progress(message)` is told as each view is done. `workers`: render processes; by
+    default `default_workers(cpus, memory_bytes)` once the scan and its index are held --
+    the container's reservation when `cpus` / `memory_bytes` give it, else what this
+    process may use."""
     timings: dict[str, float] = {}
     mark = time.perf_counter()
     cell, centroids, counts, edge = cells or supervoxels(splats.positions)
@@ -1831,9 +1867,10 @@ def segment(
     view_votes: list[_Votes] = []
     render_s = masks_s = votes_s = 0.0
     mark = time.perf_counter()
-    rendered = render_views(
-        splats, cameras, cell, index=index, workers=workers or default_workers(), cache=cache
-    )
+    workers = workers or default_workers(cpus, memory_bytes)
+    if progress is not None:
+        progress(f"render workers: {workers}")
+    rendered = render_views(splats, cameras, cell, index=index, workers=workers, cache=cache)
     for k, view in enumerate(rendered):
         views.append(view)
         now = time.perf_counter()
@@ -1919,7 +1956,20 @@ def main() -> None:
         "--max-views", type=int, default=MAX_VIEWS, help="at most this many with local views"
     )
     parser.add_argument(
-        "--workers", type=int, default=None, help="render processes (default: usable CPUs)"
+        "--workers",
+        type=int,
+        default=None,
+        help="render processes (default: from --cpus/--memory-gb, else the usable CPUs and "
+        "the memory left, at RENDER_WORKER_BYTES each)",
+    )
+    parser.add_argument(
+        "--cpus", type=int, default=None, help="the container's reserved cores (Modal cpu=)"
+    )
+    parser.add_argument(
+        "--memory-gb",
+        type=float,
+        default=None,
+        help="the container's reserved memory in GiB (Modal memory=), less what is loaded",
     )
     parser.add_argument("--save-dir", type=Path, default=None, help="write the views here")
     parser.add_argument(
@@ -1964,6 +2014,8 @@ def main() -> None:
         view_count=args.views,
         workers=args.workers,
         max_views=args.max_views,
+        cpus=args.cpus,
+        memory_bytes=None if args.memory_gb is None else args.memory_gb * float(1 << 30),
         source_factory=factory,
         cache=args.cache,
         progress=lambda message: print(message, flush=True),

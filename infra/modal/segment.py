@@ -12,6 +12,17 @@ weights volume once. Run from the repository root (`.github/workflows/segment.ym
 
     modal run infra/modal/segment.py                    # the scans in SCANS, in parallel
     modal run infra/modal/segment.py --names spool --views 24
+
+**What a call reserves, and what that costs.** An L4 with `CPU_CORES` cores and
+`MEMORY_MIB` of memory -- chosen on cost, from the camp (below) -- and, for a scan of more
+than `LARGE_TILES` tiles, `LARGE_CPU_CORES` and `LARGE_MEMORY_MIB` through
+`Function.with_options` (modal 1.5.5, the version `.github/workflows/segment.yml` pins).
+The render processes are not a fixed number: `segment_scene.default_workers` derives them
+from the reservation it is told (`--cpus`, `--memory-gb`) -- one per reserved core, no more
+than the memory left after the scan and the models are loaded holds at
+`RENDER_WORKER_BYTES` each -- because inside the container the host's cores and memory
+are visible, not the reservation, and a hard `--workers 24` on 8 cores forks three
+renders per core and pays for the burst (Modal bills max(reserved, used)).
 """
 
 from __future__ import annotations
@@ -68,10 +79,84 @@ image = (
 )
 
 
-#: Render processes per container: each holds one view's working set (about 1-2 GB on
-#: the 22.6M-gaussian camp, `segment_scene.RENDER_WORKER_BYTES`) beside the scan they all
-#: share copy-on-write.
-RENDER_WORKERS = 24
+#: The reservation every call gets, chosen on cost. Measured on the camp (22.6M gaussians,
+#: ~110 m, 252 views; 2026-10-02, L4): **8 cores and 32 GiB, 1,416 s for $0.56**, against
+#: 32 cores and 96 GiB, 1,217 s for $1.04 -- 14% faster for 86% more, because SAM 2.1's
+#: masks on the GPU (695 s of the camp's) are the bulk and the CPU renders overlap them.
+#: At Modal's per-second rates -- L4 $0.80/h, a core $0.047/h, a GiB $0.008/h, which
+#: reproduce both figures -- 8 cores and 32 GiB are $0.63/h of CPU and memory beside the
+#: L4, and the camp's run is $0.32 of GPU, $0.15 of cores and $0.10 of memory.
+CPU_CORES = 8.0
+MEMORY_MIB = 32 * 1024
+
+#: A scan of more tiles than this gets the large reservation. A tile is at most 100k
+#: gaussians (the package stage's `tile_gaussians`), so this is about 45M gaussians: twice
+#: the camp (about 260 tiles). What grows with the scan is what the main process holds --
+#: the scan whole, its index, every view kept for `describe` (segment_scene's docstring:
+#: the camp ran "on 15 GB") -- and at twice the camp that alone leaves 32 GiB room for one
+#: render at `RENDER_WORKER_BYTES`, so the renders, not the masks, would set the pace,
+#: and a little more would not fit at all. The view count does not grow past
+#: `MAX_VIEWS` (480), so time grows about with the views: **expected, not measured**, about
+#: twice the camp's 24 min at 16 cores and 64 GiB, ~$1.6 a scan ($0.80/h of L4 and $1.27/h
+#: of cores and memory).
+LARGE_TILES = 500
+LARGE_CPU_CORES = 16.0
+LARGE_MEMORY_MIB = 64 * 1024
+
+
+def tiles_in(document: dict) -> int:
+    """How many tiles (content URIs, parents included) a tileset.json names."""
+    count = 0
+    stack = [document["root"]]
+    while stack:
+        tile = stack.pop()
+        if tile.get("content", {}).get("uri"):
+            count += 1
+        stack.extend(tile.get("children", []))
+    return count
+
+
+def reservation(tiles: int) -> tuple[float, int]:
+    """(cores, MiB) for a scan of `tiles` tiles: the default, or the large one past
+    `LARGE_TILES` (see there for why, and what it is expected to cost)."""
+    if tiles > LARGE_TILES:
+        return LARGE_CPU_CORES, LARGE_MEMORY_MIB
+    return CPU_CORES, MEMORY_MIB
+
+
+def segment_argv(
+    tiles: Path,
+    render: Path,
+    *,
+    views: int,
+    cpus: float,
+    memory_mib: int,
+    cache: Path | None = None,
+) -> list[str]:
+    """`segment_scene.py`'s command line for one scan: the reservation, not a worker count,
+    so the render processes follow the memory the scan leaves (`default_workers`)."""
+    return [
+        sys.executable,
+        "segment_scene.py",
+        str(tiles / "tileset.json"),
+        str(tiles),
+        "--masks",
+        "segment_models:Sam2Masks",
+        "--embedder",
+        "segment_models:SiglipEmbedder",
+        "--vocabulary",
+        "data/open_vocabulary.txt",
+        "--views",
+        str(views),
+        "--render-instances",
+        str(render),
+        "--cpus",
+        str(int(cpus)),
+        "--memory-gb",
+        f"{memory_mib / 1024:g}",
+        *(["--cache", str(cache)] if cache is not None else []),
+    ]
+
 
 #: The public bucket answers Python's default user agent with 403 (Cloudflare's bot rules);
 #: curl's is let through.
@@ -121,16 +206,27 @@ def _fetch(url: str, out: Path) -> int:
 @app.function(
     image=image,
     gpu="L4",
-    # Views render in forked processes (RENDER_WORKERS) while the GPU masks them.
-    cpu=32.0,
-    memory=98304,
+    # Views render in forked processes, as many as this reservation holds
+    # (`segment_scene.default_workers`), while the GPU masks them. A large scan's call
+    # overrides both (`reservation`, `Function.with_options`).
+    cpu=CPU_CORES,
+    memory=MEMORY_MIB,
     volumes={"/weights": WEIGHTS},
     timeout=3 * 3600,
 )
-def segment_scan(name: str, url: str, views: int = 24, keep_masks: bool = False) -> dict:
+def segment_scan(
+    name: str,
+    url: str,
+    views: int = 24,
+    keep_masks: bool = False,
+    cpus: float = CPU_CORES,
+    memory_mib: int = MEMORY_MIB,
+) -> dict:
     """Segment one published scan; returns the files (bytes) and the run's summary.
     `keep_masks`: also return `masks.tar` (every view's masks and the cameras, the
-    `--cache` files that are not views), to lift again elsewhere without a GPU."""
+    `--cache` files that are not views), to lift again elsewhere without a GPU.
+    `cpus` and `memory_mib` are what this call reserved -- the caller chose them -- which
+    the container cannot see for itself."""
     import tarfile
 
     started = time.time()
@@ -141,25 +237,14 @@ def segment_scan(name: str, url: str, views: int = 24, keep_masks: bool = False)
         fetched = time.time() - started
         render = Path(work) / "instances.png"
         run = subprocess.run(  # noqa: S603 - fixed argv; only paths we made vary
-            [
-                sys.executable,
-                "segment_scene.py",
-                str(tiles / "tileset.json"),
-                str(tiles),
-                "--masks",
-                "segment_models:Sam2Masks",
-                "--embedder",
-                "segment_models:SiglipEmbedder",
-                "--vocabulary",
-                "data/open_vocabulary.txt",
-                "--views",
-                str(views),
-                "--render-instances",
-                str(render),
-                "--workers",
-                str(RENDER_WORKERS),
-                *(["--cache", str(cache)] if keep_masks else []),
-            ],
+            segment_argv(
+                tiles,
+                render,
+                views=views,
+                cpus=cpus,
+                memory_mib=memory_mib,
+                cache=cache if keep_masks else None,
+            ),
             cwd=CAPTURES,
             capture_output=True,
             text=True,
@@ -186,6 +271,8 @@ def segment_scan(name: str, url: str, views: int = 24, keep_masks: bool = False)
             "name": name,
             "ok": True,
             "tiles": count,
+            "cpus": cpus,
+            "memoryMiB": memory_mib,
             "fetchS": round(fetched, 1),
             "totalS": round(time.time() - started, 1),
             "files": files,
@@ -200,10 +287,35 @@ def main(
     out: str = "segment-out",
     keep_masks: bool = False,
 ) -> None:
-    """Segment the named scans in parallel containers; write each result under `out/`."""
+    """Segment the named scans in parallel containers; write each result under `out/`.
+
+    Each scan's reservation follows its size (`reservation`): its tileset.json is read
+    here first -- a few kB -- to count its tiles, and a scan past `LARGE_TILES` is spawned
+    on `segment_scan.with_options(cpu=..., memory=...)`, a container pool of its own.
+    """
     chosen = [n.strip() for n in names.split(",") if n.strip()]
     failed = []
-    for result in segment_scan.starmap([(n, SCANS[n], views, keep_masks) for n in chosen]):
+    calls = []
+    for name in chosen:
+        url = SCANS[name]
+        try:
+            tiles = tiles_in(json.loads(_get(url, 120)))
+        except (RuntimeError, OSError, ValueError, KeyError) as error:
+            # The container fetches the same URL and will say what is wrong with it.
+            sys.stdout.write(f"{name}: could not count tiles ({error}); default reservation\n")
+            tiles = 0
+        cpus, memory_mib = reservation(tiles)
+        function = (
+            segment_scan
+            if (cpus, memory_mib) == (CPU_CORES, MEMORY_MIB)
+            else segment_scan.with_options(cpu=cpus, memory=memory_mib)
+        )
+        sys.stdout.write(
+            f"{name}: {tiles} tiles -> {cpus:g} cores, {memory_mib // 1024} GiB on an L4\n"
+        )
+        calls.append(function.spawn(name, url, views, keep_masks, cpus, memory_mib))
+    for call in calls:
+        result = call.get()
         folder = Path(out) / result["name"]
         folder.mkdir(parents=True, exist_ok=True)
         (folder / "log.txt").write_text(result["log"], encoding="utf-8")
