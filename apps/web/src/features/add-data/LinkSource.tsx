@@ -1,14 +1,4 @@
-import {
-  Box,
-  ChevronRight,
-  FileJson,
-  Globe2,
-  Image,
-  Layers3,
-  MapPinned,
-  Upload,
-  UploadCloud,
-} from "lucide-react";
+import { Box, FileJson, Globe2, Image, Layers3, MapPinned, Upload } from "lucide-react";
 import { useState, type ReactNode, type SubmitEvent } from "react";
 
 import type { AssetInput, LayerCreate, Representation, SiteCreate } from "@twin/contracts";
@@ -19,7 +9,6 @@ import {
   GlassInput,
   GlassSegmentedControl,
   GlassSelect,
-  GlassSheet,
   GlassSwitch,
   GlassTextarea,
   useFieldId,
@@ -43,7 +32,6 @@ import {
 } from "@/lib/validation";
 import { useSettings } from "@/state/settings";
 import { useToasts } from "@/state/toasts";
-import { useUi } from "@/state/ui";
 
 type Tab = "site" | "ion" | "tiles" | "geojson" | "imagery" | "stac";
 
@@ -64,85 +52,46 @@ function errorMessage(error: unknown): string {
   return describeError(error);
 }
 
-export function AddDataSheet() {
-  const open = useUi((s) => s.addDataOpen);
-  const setOpen = useUi((s) => s.setAddDataOpen);
+/**
+ * "Link a source": a site or a layer that is already hosted somewhere — a Cesium ion asset, a
+ * 3D Tiles URL, GeoJSON, an imagery service or a STAC item. The second tab of the Add panel;
+ * the first is the uploader, which is what most people arriving there came for.
+ */
+export function LinkSource({ onDone }: { onDone: () => void }) {
   const [tab, setTab] = useState<Tab>("site");
   const sites = useSiteCatalog();
-  const setPanel = useUi((s) => s.setPanel);
   return (
-    <GlassSheet
-      open={open}
-      onOpenChange={setOpen}
-      title="Add data"
-      description={
-        sites.builtin
+    <section className="add-link" aria-label="Link a source" data-testid="add-link">
+      <p className="glass-subtle add-link__intro">
+        {sites.builtin
           ? "Offline: nothing can be saved right now."
-          : "Upload captures to build a model, or link a source that is already hosted."
-      }
-      side="right"
-      testId="add-data"
-    >
-      {/* Most people arriving here have files, not URLs: send them to the uploader first. */}
-      <button
-        type="button"
-        className="add-upload"
-        data-testid="add-data-upload"
-        onClick={() => {
-          setOpen(false);
-          setPanel("captures");
-        }}
-      >
-        <UploadCloud size={20} aria-hidden="true" />
-        <span className="add-upload__text">
-          <strong>Upload a video, photos or a splat</strong>
-          <span>Videos and photos become 3D models; splats are placed as they are.</span>
-        </span>
-        <ChevronRight size={16} aria-hidden="true" />
-      </button>
-      {/* Linking is for data that is already hosted somewhere; most people never need it, so
-          its six forms stay folded until asked for. */}
-      <details className="disclosure add-link" data-testid="add-link">
-        <summary className="disclosure__summary add-link__summary" data-testid="add-link-toggle">
-          Link a hosted source
-          <span className="add-link__kinds">ion · 3D Tiles · GeoJSON · imagery · STAC</span>
-        </summary>
-        <div className="tabs" role="tablist" aria-label="Data type">
-          {TABS.map(({ id, label, icon: Icon }) => (
-            <GlassButton
-              key={id}
-              size="sm"
-              role="tab"
-              aria-selected={tab === id}
-              active={tab === id}
-              onClick={() => setTab(id)}
-              leadingIcon={<Icon size={14} aria-hidden="true" />}
-              data-testid={`add-tab-${id}`}
-            >
-              {label}
-            </GlassButton>
-          ))}
-        </div>
-        <div role="tabpanel">
-          {tab === "site" && <SiteForm onDone={() => setOpen(false)} disabled={sites.builtin} />}
-          {tab === "ion" && (
-            <LayerForm kind="ion" onDone={() => setOpen(false)} disabled={sites.builtin} />
-          )}
-          {tab === "tiles" && (
-            <LayerForm kind="tiles" onDone={() => setOpen(false)} disabled={sites.builtin} />
-          )}
-          {tab === "geojson" && (
-            <LayerForm kind="geojson" onDone={() => setOpen(false)} disabled={sites.builtin} />
-          )}
-          {tab === "imagery" && (
-            <LayerForm kind="imagery" onDone={() => setOpen(false)} disabled={sites.builtin} />
-          )}
-          {tab === "stac" && (
-            <LayerForm kind="stac" onDone={() => setOpen(false)} disabled={sites.builtin} />
-          )}
-        </div>
-      </details>
-    </GlassSheet>
+          : "Already hosted somewhere? Register it as a site or a layer."}
+      </p>
+      <div className="tabs" role="tablist" aria-label="Data type">
+        {TABS.map(({ id, label, icon: Icon }) => (
+          <GlassButton
+            key={id}
+            size="sm"
+            role="tab"
+            aria-selected={tab === id}
+            active={tab === id}
+            onClick={() => setTab(id)}
+            leadingIcon={<Icon size={14} aria-hidden="true" />}
+            data-testid={`add-tab-${id}`}
+          >
+            {label}
+          </GlassButton>
+        ))}
+      </div>
+      <div role="tabpanel">
+        {tab === "site" && <SiteForm onDone={onDone} disabled={sites.builtin} />}
+        {tab === "ion" && <LayerForm kind="ion" onDone={onDone} disabled={sites.builtin} />}
+        {tab === "tiles" && <LayerForm kind="tiles" onDone={onDone} disabled={sites.builtin} />}
+        {tab === "geojson" && <LayerForm kind="geojson" onDone={onDone} disabled={sites.builtin} />}
+        {tab === "imagery" && <LayerForm kind="imagery" onDone={onDone} disabled={sites.builtin} />}
+        {tab === "stac" && <LayerForm kind="stac" onDone={onDone} disabled={sites.builtin} />}
+      </div>
+    </section>
   );
 }
 

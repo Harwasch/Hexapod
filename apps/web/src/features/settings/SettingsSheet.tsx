@@ -541,6 +541,21 @@ function AdvancedSection() {
             </div>
           }
         />
+        {/* The developer console: off the rail, here and on `D` (builds with dev tools only). */}
+        {env.devToolsEnabled && (
+          <Row
+            id="dev-tools-label"
+            label="Developer tools"
+            hint="The performance, tiles and Living Survey console, in the right dock. Also D."
+            control={
+              <GlassSwitch
+                aria-labelledby="dev-tools-label"
+                checked={s.devToolsOpen}
+                onCheckedChange={(devToolsOpen) => s.set({ devToolsOpen })}
+              />
+            }
+          />
+        )}
       </details>
     </section>
   );

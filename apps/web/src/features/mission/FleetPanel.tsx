@@ -14,14 +14,18 @@ const TONE_CLASS = {
   neutral: "mc-dot--neutral",
 } as const;
 
-/** Fleet table with stats, attention note and the treatment log (design: Fleet view + DATA WINDOW). */
+/**
+ * Fleet table with stats, attention note and the treatment log (design: Fleet view + DATA
+ * WINDOW), in the right-hand drawer. Picking a row flies to that machine and opens its card
+ * beside the drawer; the table stays open, so the next row is one click away.
+ */
 export function FleetPanel() {
   const project = useMission((s) => s.project);
   const view = useMission((s) => s.view);
   const selection = useMission((s) => s.selection);
   const workLogOpen = useMission((s) => s.workLogOpen);
   const setWorkLogOpen = useMission((s) => s.setWorkLogOpen);
-  const setAddDataOpen = useUi((s) => s.setAddDataOpen);
+  const openAdd = useUi((s) => s.openAdd);
   const { selectMachine } = useMissionActions();
   const open = view === "fleet";
   const totalAcres = project?.workLog.reduce((sum, row) => sum + (row.acres ?? 0), 0) ?? 0;
@@ -31,9 +35,9 @@ export function FleetPanel() {
         <motion.div
           key="fleet"
           className="mc-window-wrap mc-window-wrap--wide"
-          initial={{ opacity: 0, y: 10, scale: 0.985 }}
-          animate={{ opacity: 1, y: 0, scale: 1 }}
-          exit={{ opacity: 0, y: 8, scale: 0.985 }}
+          initial={{ opacity: 0, x: 16 }}
+          animate={{ opacity: 1, x: 0 }}
+          exit={{ opacity: 0, x: 16 }}
           transition={{ type: "spring", stiffness: 360, damping: 32 }}
         >
           <GlassPanel
@@ -52,7 +56,7 @@ export function FleetPanel() {
                 <button
                   type="button"
                   className="mc-btn mc-btn--accent"
-                  onClick={() => setAddDataOpen(true)}
+                  onClick={() => openAdd("link")}
                 >
                   Add a site
                 </button>

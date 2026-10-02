@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, type ReactNode } from "react";
+import { lazy, Suspense, useEffect } from "react";
 
 import { ErrorBoundary } from "@/app/ErrorBoundary";
 import { env } from "@/app/env";
@@ -10,12 +10,10 @@ import { useMission } from "@/state/mission";
 import { useSettings } from "@/state/settings";
 import { useUi } from "@/state/ui";
 
-import { AddDataSheet } from "../add-data/AddDataSheet";
-import { BookmarksPanel } from "../bookmarks/BookmarksPanel";
-import { CapturesPanel } from "../captures/CapturesPanel";
+import { AddPanel } from "../add-data/AddPanel";
 import { CommandBox } from "../command-palette/CommandBox";
 import { ShortcutSheet } from "../command-palette/ShortcutSheet";
-import { ComparePanel } from "../compare/ComparePanel";
+import { CompareSplit } from "../compare/Compare";
 import { DevPanel } from "../dev/DevPanel";
 import { ExploreHud } from "../explore/ExploreHud";
 import { InspectorPanel } from "../inspector/InspectorPanel";
@@ -25,22 +23,21 @@ import { SimulatedBadge } from "../living/SimulatedBadge";
 import { MeasurePanel } from "../measure/MeasurePanel";
 import { FeedsPanel } from "../mission/FeedsPanel";
 import { FleetPanel } from "../mission/FleetPanel";
-import { LayerPills } from "../mission/LayerPills";
 import { MissionOverlays } from "../mission/MissionOverlays";
 import { PlansPanel } from "../mission/PlansPanel";
 import { ProjectCard } from "../mission/ProjectCard";
+import { openSiteSwitcher } from "../mission/siteSwitcher";
 import { SelectionCard } from "../mission/SelectionCard";
 import { StatusLine } from "../mission/StatusLine";
 import { ViewTabs } from "../mission/ViewTabs";
-import { NavControls } from "../nav/NavControls";
 import { Toasts } from "../notices/Toasts";
 import { OnboardingCard } from "../onboarding/OnboardingCard";
 import { RepresentationSwitcher } from "../sites/RepresentationSwitcher";
 import { SiteLoadStatus } from "../sites/SiteLoadStatus";
-import { SitesPanel } from "../sites/SitesPanel";
 import { TimelineControl } from "../timeline/TimelineControl";
-import { CreditSlot } from "./CreditSlot";
 import { DevReadouts } from "./DevReadouts";
+import { MapCorner } from "./MapCorner";
+import { PhoneTabBar } from "./PhoneTabBar";
 import { ToolRail } from "./ToolRail";
 
 const SettingsSheet = lazy(() =>
@@ -53,12 +50,23 @@ function GlobalHotkeys() {
   const ui = useUi();
   const settings = useSettings();
   const mission = useMission();
-  useHotkey(HOTKEYS.layers.combo, () => ui.togglePanel("layers"));
-  useHotkey(HOTKEYS.sites.combo, () => ui.togglePanel("sites"));
+  useHotkey(HOTKEYS.layers.combo, () => ui.openLayers("browse"));
+  useHotkey(HOTKEYS.compare.combo, () => ui.openLayers("compare"));
   useHotkey(HOTKEYS.measure.combo, () => ui.togglePanel("measure"));
-  useHotkey(HOTKEYS.compare.combo, () => ui.togglePanel("compare"));
-  useHotkey(HOTKEYS.bookmarks.combo, () => ui.togglePanel("bookmarks"));
-  useHotkey(HOTKEYS.captures.combo, () => ui.togglePanel("captures"));
+  useHotkey(HOTKEYS.captures.combo, () =>
+    ui.activePanel === "add" && ui.addTab === "upload" ? ui.setPanel(null) : ui.openAdd("upload"),
+  );
+  // Sites and saved views live in the site switcher; their keys open it where they are.
+  useHotkey(HOTKEYS.sites.combo, () =>
+    mission.projectsOpen && ui.switcherFocus === "sites"
+      ? mission.setProjectsOpen(false)
+      : openSiteSwitcher("sites"),
+  );
+  useHotkey(HOTKEYS.bookmarks.combo, () =>
+    mission.projectsOpen && ui.switcherFocus === "views"
+      ? mission.setProjectsOpen(false)
+      : openSiteSwitcher("views"),
+  );
   useHotkey(HOTKEYS.resetNorth.combo, () => scene?.camera.resetNorth());
   useHotkey(HOTKEYS.topDown.combo, () => scene?.camera.topDown());
   useHotkey(HOTKEYS.home.combo, () => scene?.camera.flyHome());
@@ -78,6 +86,7 @@ function GlobalHotkeys() {
   );
   useHotkey(HOTKEYS.escape.combo, () => {
     if (ui.shortcutsOpen) ui.setShortcutsOpen(false);
+    else if (ui.moreOpen) ui.setMoreOpen(false);
     else if (ui.activityOpen) ui.setActivityOpen(false);
     else if (ui.writeTokenPrompt) ui.setWriteTokenPrompt(false);
     else if (ui.measureMode) ui.setMeasureMode(null);
@@ -106,11 +115,6 @@ function SettingsSheetLazy() {
   );
 }
 
-function MapOnly({ children }: { children: ReactNode }) {
-  const view = useMission((s) => s.view);
-  return view === "map" ? <>{children}</> : null;
-}
-
 /**
  * Composes the HUD over the world as a fixed set of screen regions.
  *
@@ -118,34 +122,40 @@ function MapOnly({ children }: { children: ReactNode }) {
  * (`.hud` in `app.css`), so two surfaces can never be drawn over each other: they can
  * only share a dock, where they stack. The regions:
  *
- * - **top**: project, the command box (search, actions, the agent), view tabs.
- * - **rail**: tools on the left edge.
- * - **left dock**: the one panel you opened — a tool panel or the Plan / Fleet window.
- * - **right dock**: quick layers, messages (toasts), what you selected.
+ * - **top**: the site switcher, the command box (search, actions, the agent), view tabs.
+ * - **rail**: four labelled tools on the left edge — Layers, Measure, Add, Settings.
+ * - **left dock**: the tool panel you opened.
+ * - **drawer**: Plan or Fleet, full height on the right edge. The map beside it stays live:
+ *   it takes clicks, and a machine picked from the Fleet table is flown to with its card open.
+ * - **right dock**: messages (toasts), what you selected, the inspector.
  * - **center**: first-run welcome; otherwise the map.
  * - **strip**: controls for what is in view (representation and its load, dates, explore).
  * - **bar**: the status line on the left (fleet, agent, a degraded connection), developer
  *   readouts when they are on, and the compass, Earth and data credits in one pill on the
  *   right.
+ * - **tabs**: on a phone only, Map / Plan / Fleet / More along the bottom.
  *
- * Two things float on purpose, over the regions, and close with Escape or a click away: the
- * command box's results and the agent's activity log (`data-hud-popover`).
+ * Things that float on purpose, over the regions, and close with Escape or a click away: the
+ * command box's results, the site switcher, the agent's activity log, and on a phone the More
+ * sheet and the folded data credits (`data-hud-popover`).
  *
- * On a phone the docks collapse into one bottom sheet; `data-sheet` says which dock was
- * touched last, and that one is shown (`state/layout.ts`).
+ * On narrow screens the docks and the drawer collapse into one bottom sheet; `data-sheet`
+ * says which was touched last, and that one is shown (`state/layout.ts`).
  */
 export function AppShell() {
   const sheet = useLayout((s) => s.focus);
+  const view = useMission((s) => s.view);
   useEffect(() => bindDockRules(), []);
   return (
     <>
       <GlobalHotkeys />
-      <div className="hud" data-sheet={sheet ?? "none"} data-testid="hud">
+      <div className="hud" data-sheet={sheet ?? "none"} data-view={view} data-testid="hud">
         <ErrorBoundary inline label="Fleet overlay">
           <MissionOverlays />
         </ErrorBoundary>
+        <CompareSplit />
         <header className="hud-region hud-top">
-          <ErrorBoundary inline label="Project">
+          <ErrorBoundary inline label="Site">
             <ProjectCard />
           </ErrorBoundary>
           <div className="hud-top__search">
@@ -161,12 +171,11 @@ export function AppShell() {
         <section className="hud-region hud-dock hud-dock--left" aria-label="Panel">
           <ErrorBoundary inline label="Panel">
             <LayersPanel />
-            <SitesPanel />
-            <CapturesPanel />
             <MeasurePanel />
-            <ComparePanel />
-            <BookmarksPanel />
+            <AddPanel />
           </ErrorBoundary>
+        </section>
+        <section className="hud-region hud-drawer" aria-label="Plan and fleet">
           <ErrorBoundary inline label="Plans">
             <PlansPanel />
             <FleetPanel />
@@ -176,9 +185,6 @@ export function AppShell() {
           <OnboardingCard />
         </div>
         <aside className="hud-region hud-dock hud-dock--right" aria-label="Details">
-          <div className="hud-stack hud-pills">
-            <LayerPills />
-          </div>
           <div className="hud-stack hud-messages">
             <ErrorBoundary inline label="Simulated motion">
               <SimulatedBadge />
@@ -198,24 +204,21 @@ export function AppShell() {
         </aside>
         <div className="hud-region hud-strip">
           <ExploreHud />
-          <MapOnly>
-            <TimelineControl />
-            <RepresentationSwitcher />
-            <SiteLoadStatus />
-          </MapOnly>
+          <TimelineControl />
+          <RepresentationSwitcher />
+          <SiteLoadStatus />
         </div>
         <footer className="hud-region hud-bar">
           <ErrorBoundary inline label="Status">
             <StatusLine />
           </ErrorBoundary>
           <DevReadouts />
-          <div className="glass glass--strong hud-corner" data-testid="map-corner">
-            <NavControls />
-            <CreditSlot />
-          </div>
+          <MapCorner />
         </footer>
+        <div className="hud-region hud-tabs">
+          <PhoneTabBar />
+        </div>
       </div>
-      <AddDataSheet />
       <SettingsSheetLazy />
       <LayerAboutSheet />
       <ShortcutSheet />

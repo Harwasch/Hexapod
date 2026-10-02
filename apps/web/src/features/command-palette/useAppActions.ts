@@ -4,13 +4,17 @@ import {
   CloudUpload,
   Columns2,
   Compass,
+  Database,
   Earth,
   Footprints,
   Gauge,
+  Images,
   Keyboard,
   Layers,
+  Link2,
   Map as MapIcon,
   MapPin,
+  MapPinPlus,
   Plus,
   Ruler,
   Settings2,
@@ -27,6 +31,8 @@ import { useScene } from "@/cesium/SceneContext";
 import { useMission } from "@/state/mission";
 import { useSettings } from "@/state/settings";
 import { useUi } from "@/state/ui";
+
+import { openSiteSwitcher } from "../mission/siteSwitcher";
 
 export interface AppAction {
   id: string;
@@ -95,17 +101,24 @@ export function useAppActions(): AppAction[] {
     {
       id: "upload",
       label: "Upload a capture",
-      keywords: "captures video photos splat",
+      keywords: "add captures video photos splat phone",
       icon: CloudUpload,
       shortcut: keys("captures"),
-      run: () => ui().setPanel("captures"),
+      run: () => ui().openAdd("upload"),
     },
     {
       id: "add-data",
-      label: "Add data",
-      keywords: "link hosted source tiles geojson imagery stac ion site",
-      icon: Plus,
-      run: () => ui().setAddDataOpen(true),
+      label: "Link a hosted source",
+      keywords: "add data link tiles geojson imagery stac ion layer",
+      icon: Link2,
+      run: () => ui().openAdd("link"),
+    },
+    {
+      id: "add-site",
+      label: "Add a site",
+      keywords: "new site reality model register",
+      icon: MapPinPlus,
+      run: () => ui().openAdd("link"),
     },
     {
       id: "top-down",
@@ -125,11 +138,11 @@ export function useAppActions(): AppAction[] {
     },
     {
       id: "compare",
-      label: "Compare",
-      keywords: "split swipe layers",
+      label: "Compare layers",
+      keywords: "split swipe",
       icon: Columns2,
       shortcut: keys("compare"),
-      run: () => ui().setPanel("compare"),
+      run: () => ui().openLayers("compare"),
     },
     {
       id: "explore",
@@ -153,10 +166,10 @@ export function useAppActions(): AppAction[] {
     {
       id: "saved-views",
       label: "Saved views",
-      keywords: "bookmarks",
+      keywords: "bookmarks camera save view",
       icon: Bookmark,
       shortcut: keys("bookmarks"),
-      run: () => ui().setPanel("bookmarks"),
+      run: () => openSiteSwitcher("views"),
     },
     {
       id: "settings",
@@ -177,18 +190,32 @@ export function useAppActions(): AppAction[] {
     {
       id: "layers",
       label: "Layers",
-      keywords: "basemap data",
+      keywords: "basemap data favourites",
       icon: Layers,
       shortcut: keys("layers"),
-      run: () => ui().setPanel("layers"),
+      run: () => ui().openLayers("browse"),
     },
     {
       id: "sites",
-      label: "Sites",
-      keywords: "catalog reality models",
+      label: "Switch site",
+      keywords: "sites catalog reality models projects",
       icon: MapPin,
       shortcut: keys("sites"),
-      run: () => ui().setPanel("sites"),
+      run: () => openSiteSwitcher("sites"),
+    },
+    {
+      id: "scan-gallery",
+      label: "Scan gallery",
+      keywords: "scans viewer phone captures 3d",
+      icon: Images,
+      run: () => window.location.assign("/view.html"),
+    },
+    {
+      id: "data-console",
+      label: "Data console",
+      keywords: "admin runs outputs storage jobs",
+      icon: Database,
+      run: () => window.location.assign("/admin.html"),
     },
     {
       id: "earth",

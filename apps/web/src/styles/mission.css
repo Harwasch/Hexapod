@@ -1,6 +1,7 @@
 /* ---------------------------------------------------------------------------
-   Mission-control surfaces: project badge, view tabs, layer pills, markers,
-   zone chips, selection cards, plan / fleet windows, the status line and agent log.
+   Mission-control surfaces: the site switcher, view tabs, layer pills (the favourites at
+   the top of Layers), markers, zone chips, selection cards, the Plan / Fleet drawer, the
+   status line and agent log.
    Built on the glass tokens; no duplicated material definitions.
    --------------------------------------------------------------------------- */
 
@@ -34,6 +35,16 @@
 
 .mc-link:hover {
   color: var(--accent-strong);
+}
+
+a.mc-link {
+  text-decoration: none;
+}
+
+.mc-link:focus-visible {
+  outline: none;
+  border-radius: 6px;
+  box-shadow: var(--focus-ring);
 }
 
 .mc-row {
@@ -128,7 +139,7 @@
   color: var(--text-secondary);
 }
 
-/* ---- Project badge ----------------------------------------------------- */
+/* ---- Site switcher (the project badge and its menu) -------------------- */
 .mc-project {
   position: relative;
   width: 19.25rem;
@@ -141,7 +152,8 @@
   position: absolute;
   top: 100%;
   left: 0;
-  right: 0;
+  width: max(100%, 23rem);
+  max-width: calc(100vw - 2 * var(--edge-gap));
 }
 
 .mc-project__badge {
@@ -177,7 +189,17 @@
   gap: 2px;
 }
 
+/* The name takes only the room it needs, leaving space beside it for a status chip. */
+.mc-project__title {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
 .mc-project__name {
+  flex: 0 1 auto;
+  min-width: 0;
   font: 600 15px var(--font-sans);
   white-space: nowrap;
   overflow: hidden;
@@ -194,8 +216,13 @@
 
 .mc-project__menu {
   margin-top: 0.5rem;
+  max-height: calc(100vh - 6.5rem);
+  max-height: calc(100dvh - 6.5rem);
   border-radius: 18px;
-  overflow: hidden;
+  overflow: auto;
+  overscroll-behavior: contain;
+  /* Dense text over the map and the panels under it: nearly opaque, like the command box. */
+  background: color-mix(in srgb, var(--surface-solid) 96%, transparent);
 }
 
 .mc-project__menu-head,
@@ -213,13 +240,58 @@
 }
 
 .mc-project__menu-foot {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  gap: 0.5rem 1.1rem;
   border-top: 1px solid var(--divider);
 }
 
 .mc-project__menu-list {
-  padding: 0.5rem;
-  max-height: 18rem;
+  margin: 0;
+  padding: 0.4rem 0.5rem;
+  max-height: 14rem;
   overflow: auto;
+  list-style: none;
+}
+
+.mc-project__views {
+  border-top: 1px solid var(--divider);
+}
+
+.mc-project__view {
+  display: flex;
+  align-items: center;
+  gap: 0.15rem;
+}
+
+.mc-project__view .mc-project__row {
+  flex: 1;
+  min-width: 0;
+  padding: 0.5rem 0.7rem;
+}
+
+.mc-project__save {
+  display: flex;
+  gap: 0.4rem;
+  padding: 0.35rem 0.95rem 0;
+}
+
+.mc-project__save-input.mc-input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.45rem 0.65rem;
+  resize: none;
+}
+
+.mc-project__note,
+.mc-project__empty {
+  margin: 0;
+  padding: 0.4rem 0.95rem 0.7rem;
+  font: 400 12px / 1.4 var(--font-sans);
+}
+
+.mc-project__empty {
+  padding: 0.65rem 0.7rem;
 }
 
 .mc-project__row {
@@ -239,8 +311,17 @@
 
 .mc-project__row:hover,
 .mc-project__row:focus-visible {
-  background: rgba(255, 255, 255, 0.09);
+  background: var(--control-bg);
   outline: none;
+}
+
+.mc-project__row:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--accent-ring);
+}
+
+/* The site the camera is at. */
+.mc-project__row.is-here {
+  background: var(--accent-soft);
 }
 
 .mc-project__row-text {
@@ -709,9 +790,10 @@
   box-shadow: 0 0 8px rgba(0, 0, 0, 0.6);
 }
 
-/* ---- Windows (Plan / Fleet) ------------------------------------------- */
-/* The Plan / Fleet window lives in the left dock, which it has to itself (one replaces the
-   other, see `state/layout.ts`). It is as tall as its content and scrolls past the dock. */
+/* ---- Plan / Fleet drawer ---------------------------------------------- */
+/* The Plan / Fleet window is the right-hand drawer (`.hud-drawer` in app.css): full height at
+   the right edge on a wide screen, a bottom sheet on a narrow one. A tool panel and the
+   drawer replace each other (`state/layout.ts`), so the map between them keeps its width. */
 .mc-window-wrap {
   display: flex;
   flex-direction: column;
@@ -1496,6 +1578,88 @@
     border-left: 0;
     border-top: 1px solid var(--divider);
     border-radius: 0 0 14px 14px;
+  }
+}
+
+/* On a phone the status line is one row above the tab bar, beside the compass: the fleet
+   and the agent's line both clip, and the full text of each is one tap away (the log). */
+@media (max-width: 640px) {
+  .status-line-wrap {
+    max-width: none;
+  }
+  .status-line {
+    flex-direction: row;
+    align-items: center;
+    gap: 0.15rem;
+    min-height: 2.75rem;
+    padding: 0.15rem 0.2rem 0.15rem 0.7rem;
+    border-radius: var(--glass-radius-pill);
+  }
+  .status-line__text {
+    flex: 0 1 auto;
+    flex-wrap: nowrap;
+    min-width: 0;
+    padding: 0;
+  }
+  .status-line__text .status-line__seg {
+    min-width: 0;
+  }
+  .status-line__text {
+    max-width: 60%;
+  }
+  .status-line .mc-blink {
+    display: none;
+  }
+  .status-line__agent {
+    flex: 1 1 0;
+    min-width: 4.75rem;
+    margin-left: 0.2rem;
+    padding: 0.35rem 0.45rem 0.35rem 0.55rem;
+    border-top: 0;
+    border-left: 1px solid var(--divider);
+    border-radius: 0 var(--glass-radius-pill) var(--glass-radius-pill) 0;
+  }
+  .status-line__more {
+    display: none;
+  }
+
+  /* Plan and Fleet as a bottom sheet: a tighter head and stats, so the table's rows show. */
+  .hud-drawer .mc-window__head {
+    align-items: center;
+    padding: 0.85rem 1rem 0.75rem;
+  }
+  .hud-drawer .mc-window__title {
+    font-size: 17px;
+  }
+  .hud-drawer .mc-window__sub {
+    display: none;
+  }
+  .hud-drawer .mc-stats--row {
+    gap: 1.1rem;
+    padding: 0.6rem 1rem 0.7rem;
+  }
+  .hud-drawer .mc-stat__value--lg {
+    font-size: 18px;
+  }
+  .hud-drawer .mc-stat__label {
+    margin-top: 3px;
+  }
+  .hud-drawer .mc-table-wrap {
+    padding: 0.25rem 0.5rem 0.6rem;
+  }
+  .hud-drawer .mc-table--fleet .mc-table__head,
+  .hud-drawer .mc-table--fleet .mc-table__row {
+    grid-template-columns: 1.5fr 1fr 0.9fr 44px;
+    padding: 0.55rem 0.5rem;
+  }
+  /* Hours on shift: in the machine's card, a tap away. */
+  .hud-drawer .mc-table--fleet .mc-table__head > :nth-child(5),
+  .hud-drawer .mc-table--fleet .mc-table__row > :nth-child(5) {
+    display: none;
+  }
+  .hud-drawer .mc-window__foot {
+    padding: 0.6rem 1rem;
+    font-size: 12px;
   }
 }
 

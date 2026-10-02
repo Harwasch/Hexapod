@@ -11,6 +11,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 
 import { GlassButton, GlassPanel, Kbd } from "@twin/ui";
 
@@ -91,6 +92,12 @@ export function CommandBox() {
     setChosen(null);
     inputRef.current?.blur();
   }, []);
+
+  // On a phone the field is folded into a search button and the box opens full screen; the
+  // input is only focusable once it is shown, so focus follows the open state.
+  useEffect(() => {
+    if (open && document.activeElement !== inputRef.current) inputRef.current?.focus();
+  }, [open]);
 
   useHotkey(
     HOTKEYS.command.combo,
@@ -254,141 +261,167 @@ export function CommandBox() {
       : null;
 
   return (
-    <div className="command" data-testid="command-box">
-      <GlassPanel strong pill className="command__field">
-        {busy ? (
-          <Loader2 size={16} className="glass-muted command__spin" aria-hidden="true" />
-        ) : (
-          <Search size={16} className="glass-muted" aria-hidden="true" />
-        )}
-        <input
-          ref={inputRef}
-          className="command__input"
-          type="text"
-          placeholder="Search places, sites, actions — or ask the agent"
-          aria-label="Search, run an action or ask the agent"
-          role="combobox"
-          aria-expanded={showList}
-          aria-controls={listId}
-          aria-haspopup="listbox"
-          aria-autocomplete="list"
-          aria-activedescendant={showList && activeId ? optionId(activeId) : undefined}
-          autoComplete="off"
-          spellCheck={false}
-          value={query}
-          onChange={(event) => {
-            setQuery(event.target.value);
-            setChosen(null);
-            setOpen(true);
-          }}
-          onFocus={() => setOpen(true)}
-          onBlur={() => setOpen(false)}
-          onKeyDown={onKeyDown}
-          data-testid="command-input"
-        />
-        {query ? (
-          <GlassButton
-            iconOnly
-            size="sm"
-            variant="ghost"
-            aria-label="Clear"
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => focus("")}
-          >
-            <X size={14} aria-hidden="true" />
-          </GlassButton>
-        ) : (
-          <span className="command__keys glass-subtle" aria-hidden="true">
-            {hotkeyKeys(HOTKEYS.command).map((key) => (
-              <Kbd key={key}>{key}</Kbd>
-            ))}
-          </span>
-        )}
-      </GlassPanel>
-      <div className="sr-only" role="status" aria-live="polite">
-        {showList ? `${rows.length} ${rows.length === 1 ? "result" : "results"}` : ""}
-      </div>
-      {showList && (
-        <GlassPanel
-          strong
-          className="command__results"
-          role="listbox"
-          id={listId}
-          aria-label="Results"
-          data-hud-popover=""
-          data-testid="command-results"
-          onMouseDown={(event) => event.preventDefault()}
-        >
-          {groups.map((group) => (
-            <div
-              key={group.id}
-              role="group"
-              aria-labelledby={`${listId}-heading-${group.id}`}
-              className="command__group"
+    <>
+      <GlassButton
+        iconOnly
+        variant="glass"
+        className="command-trigger"
+        aria-label="Search, run an action or ask the agent"
+        aria-expanded={open}
+        onClick={() => {
+          // Shown and focused inside the tap itself, so a phone raises its keyboard.
+          flushSync(() => setOpen(true));
+          focus();
+        }}
+        data-testid="command-trigger"
+      >
+        <Search size={18} aria-hidden="true" />
+      </GlassButton>
+      <div className={`command ${open ? "is-open" : ""}`} data-testid="command-box">
+        <GlassPanel strong pill className="command__field">
+          {busy ? (
+            <Loader2 size={16} className="glass-muted command__spin" aria-hidden="true" />
+          ) : (
+            <Search size={16} className="glass-muted" aria-hidden="true" />
+          )}
+          <input
+            ref={inputRef}
+            className="command__input"
+            type="text"
+            placeholder="Search places, sites, actions — or ask the agent"
+            aria-label="Search, run an action or ask the agent"
+            role="combobox"
+            aria-expanded={showList}
+            aria-controls={listId}
+            aria-haspopup="listbox"
+            aria-autocomplete="list"
+            aria-activedescendant={showList && activeId ? optionId(activeId) : undefined}
+            autoComplete="off"
+            spellCheck={false}
+            value={query}
+            onChange={(event) => {
+              setQuery(event.target.value);
+              setChosen(null);
+              setOpen(true);
+            }}
+            onFocus={() => setOpen(true)}
+            onBlur={() => setOpen(false)}
+            onKeyDown={onKeyDown}
+            data-testid="command-input"
+          />
+          {query ? (
+            <GlassButton
+              iconOnly
+              size="sm"
+              variant="ghost"
+              aria-label="Clear"
+              className="command__clear"
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => focus("")}
             >
-              <div
-                id={`${listId}-heading-${group.id}`}
-                className="command__heading"
-                aria-hidden="true"
-              >
-                {group.heading}
-              </div>
-              {group.rows.map((row) => {
-                const Icon = row.icon ?? GROUP_ICONS[group.id];
-                const active = row.id === activeId;
-                return (
-                  // Options are not focusable: focus stays in the input and the highlight is
-                  // announced through aria-activedescendant; the keyboard path is the input's.
-                  // eslint-disable-next-line jsx-a11y/click-events-have-key-events
-                  <div
-                    key={row.id}
-                    id={optionId(row.id)}
-                    role="option"
-                    tabIndex={-1}
-                    aria-selected={active}
-                    className={`command__row ${group.id === "agent" ? "command__row--agent" : ""}`}
-                    onClick={() => run(row)}
-                    onMouseMove={() => row.id !== activeId && setChosen(row.id)}
-                    data-testid={`command-row-${row.id}`}
-                  >
-                    <Icon size={15} className="command__row-icon" aria-hidden="true" />
-                    <span className="command__row-text">
-                      <span className="command__row-label">{row.label}</span>
-                      {row.sub && <span className="command__row-sub">{row.sub}</span>}
-                    </span>
-                    {row.shortcut && (
-                      <span
-                        className="command__row-keys"
-                        aria-label={`Shortcut ${row.shortcut.join(" ")}`}
-                      >
-                        {row.shortcut.map((key) => (
-                          <Kbd key={key}>{key}</Kbd>
-                        ))}
-                      </span>
-                    )}
-                    {active && (
-                      <CornerDownLeft size={13} className="command__row-enter" aria-hidden="true" />
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          ))}
-          {placesHint && <div className="command__hint">{placesHint}</div>}
-          <div className="command__foot" aria-hidden="true">
-            <span>
-              <Kbd>↑</Kbd>
-              <Kbd>↓</Kbd> move
+              <X size={14} aria-hidden="true" />
+            </GlassButton>
+          ) : (
+            <span className="command__keys glass-subtle" aria-hidden="true">
+              {hotkeyKeys(HOTKEYS.command).map((key) => (
+                <Kbd key={key}>{key}</Kbd>
+              ))}
             </span>
-            <span>
-              <Kbd>↵</Kbd> run
-            </span>
-            <span>
-              <Kbd>Esc</Kbd> close
-            </span>
-          </div>
+          )}
+          {/* Full screen on a phone, the box needs its own way out; elsewhere a click away does. */}
+          <button type="button" className="command__close" onClick={close}>
+            Cancel
+          </button>
         </GlassPanel>
-      )}
-    </div>
+        <div className="sr-only" role="status" aria-live="polite">
+          {showList ? `${rows.length} ${rows.length === 1 ? "result" : "results"}` : ""}
+        </div>
+        {showList && (
+          <GlassPanel
+            strong
+            className="command__results"
+            role="listbox"
+            id={listId}
+            aria-label="Results"
+            data-hud-popover=""
+            data-testid="command-results"
+            onMouseDown={(event) => event.preventDefault()}
+          >
+            {groups.map((group) => (
+              <div
+                key={group.id}
+                role="group"
+                aria-labelledby={`${listId}-heading-${group.id}`}
+                className="command__group"
+              >
+                <div
+                  id={`${listId}-heading-${group.id}`}
+                  className="command__heading"
+                  aria-hidden="true"
+                >
+                  {group.heading}
+                </div>
+                {group.rows.map((row) => {
+                  const Icon = row.icon ?? GROUP_ICONS[group.id];
+                  const active = row.id === activeId;
+                  return (
+                    // Options are not focusable: focus stays in the input and the highlight is
+                    // announced through aria-activedescendant; the keyboard path is the input's.
+                    // eslint-disable-next-line jsx-a11y/click-events-have-key-events
+                    <div
+                      key={row.id}
+                      id={optionId(row.id)}
+                      role="option"
+                      tabIndex={-1}
+                      aria-selected={active}
+                      className={`command__row ${group.id === "agent" ? "command__row--agent" : ""}`}
+                      onClick={() => run(row)}
+                      onMouseMove={() => row.id !== activeId && setChosen(row.id)}
+                      data-testid={`command-row-${row.id}`}
+                    >
+                      <Icon size={15} className="command__row-icon" aria-hidden="true" />
+                      <span className="command__row-text">
+                        <span className="command__row-label">{row.label}</span>
+                        {row.sub && <span className="command__row-sub">{row.sub}</span>}
+                      </span>
+                      {row.shortcut && (
+                        <span
+                          className="command__row-keys"
+                          aria-label={`Shortcut ${row.shortcut.join(" ")}`}
+                        >
+                          {row.shortcut.map((key) => (
+                            <Kbd key={key}>{key}</Kbd>
+                          ))}
+                        </span>
+                      )}
+                      {active && (
+                        <CornerDownLeft
+                          size={13}
+                          className="command__row-enter"
+                          aria-hidden="true"
+                        />
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
+            {placesHint && <div className="command__hint">{placesHint}</div>}
+            <div className="command__foot" aria-hidden="true">
+              <span>
+                <Kbd>↑</Kbd>
+                <Kbd>↓</Kbd> move
+              </span>
+              <span>
+                <Kbd>↵</Kbd> run
+              </span>
+              <span>
+                <Kbd>Esc</Kbd> close
+              </span>
+            </div>
+          </GlassPanel>
+        )}
+      </div>
+    </>
   );
 }

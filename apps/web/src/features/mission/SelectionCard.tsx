@@ -11,7 +11,6 @@ import { useMissionActions } from "./useMissionActions";
 export function SelectionCard() {
   const project = useMission((s) => s.project);
   const selection = useMission((s) => s.selection);
-  const view = useMission((s) => s.view);
   const openPlan = useMission((s) => s.openPlan);
   const setFeedsOpen = useMission((s) => s.setFeedsOpen);
   const feedsOpen = useMission((s) => s.feedsOpen);
@@ -25,7 +24,8 @@ export function SelectionCard() {
       : undefined;
   const zone =
     selection?.kind === "zone" ? project?.zones.find((z) => z.id === selection.id) : undefined;
-  const show = view === "map" && Boolean(machine ?? zone);
+  // Shown in every view: the Plan / Fleet drawer leaves the map, and this card, in sight.
+  const show = Boolean(machine ?? zone);
 
   return (
     <AnimatePresence>

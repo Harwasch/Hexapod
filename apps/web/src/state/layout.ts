@@ -10,12 +10,15 @@ import { useUi } from "./ui";
  * The screen is split into fixed regions (see `.hud` in `app.css`), so two surfaces can
  * only collide if two of them want the same region at once. Two rules settle that:
  *
- * 1. **The left dock holds one thing.** A tool panel (Layers, Sites, …) and the Plan /
- *    Fleet window share it; opening one closes the other. Picking Plan closes the open
- *    tool panel, and opening a tool panel returns the view to Map.
- * 2. **On a phone there is one sheet.** Both docks become the same bottom sheet, so the
- *    one touched last wins and the other waits behind it. `focus` is that choice; the CSS
- *    reads it from `data-sheet` on `.hud` and only acts on it at compact widths.
+ * 1. **One side panel at a time.** A tool panel (Layers, Measure, Add) opens in the left
+ *    dock and the Plan / Fleet drawer on the right; opening one closes the other, so the
+ *    map between them keeps its width. Picking Plan closes the open tool panel, and opening
+ *    a tool panel returns the view to Map. What is selected on the map (the right dock)
+ *    stays beside the drawer: picking a Fleet row selects the machine without closing it.
+ * 2. **On a phone there is one sheet.** The left dock, the drawer and the right dock all
+ *    become the same bottom sheet, so the one touched last wins and the other waits behind
+ *    it. `focus` is that choice ("left" is a tool panel or the drawer); the CSS reads it
+ *    from `data-sheet` on `.hud` and only acts on it at compact widths.
  */
 export type Dock = "left" | "right";
 
@@ -33,14 +36,14 @@ export const useLayout = create<LayoutState>()((set) => ({
 export function rightDockBusy(): boolean {
   const mission = useMission.getState();
   return (
-    (mission.selection !== null && mission.view === "map") ||
+    mission.selection !== null ||
     mission.feedsOpen ||
     useUi.getState().inspectorOpen ||
     useSettings.getState().devToolsOpen
   );
 }
 
-/** Anything showing in the left dock: a tool panel or the Plan / Fleet window. */
+/** Anything showing on the left of the sheet rule: a tool panel or the Plan / Fleet drawer. */
 export function leftDockBusy(): boolean {
   return useUi.getState().activePanel !== null || useMission.getState().view !== "map";
 }

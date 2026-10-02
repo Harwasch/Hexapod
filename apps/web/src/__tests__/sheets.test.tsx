@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GlassTooltipProvider } from "@twin/ui";
 
 import { api } from "@/api/client";
-import { AddDataSheet } from "@/features/add-data/AddDataSheet";
+import { AddPanel } from "@/features/add-data/AddPanel";
 import { SettingsSheet } from "@/features/settings/SettingsSheet";
 import { useRendererOverride, useSettings } from "@/state/settings";
 import { useUi } from "@/state/ui";
@@ -27,7 +27,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.restoreAllMocks();
-  useUi.setState({ settingsOpen: false, addDataOpen: false });
+  useUi.setState({ settingsOpen: false, activePanel: null, addTab: "upload" });
 });
 
 describe("Settings › Advanced", () => {
@@ -78,20 +78,26 @@ describe("Settings › Advanced", () => {
   });
 });
 
-describe("Add data", () => {
-  it("leads with the upload and folds the hosted-source forms away", async () => {
+describe("Add", () => {
+  it("leads with the upload and keeps the hosted-source forms on the second tab", async () => {
     const user = userEvent.setup();
-    useUi.setState({ addDataOpen: true });
-    render(wrap(<AddDataSheet />));
-    const sheet = screen.getByTestId("add-data");
-    expect(within(sheet).getByTestId("add-data-upload")).toHaveTextContent(
-      "Upload a video, photos or a splat",
+    useUi.getState().openAdd("upload");
+    render(wrap(<AddPanel />));
+    const panel = screen.getByTestId("add-panel");
+    const tabs = within(panel).getByRole("radiogroup", { name: "What to add" });
+    expect(within(tabs).getByRole("radio", { name: /Upload a capture/ })).toHaveAttribute(
+      "aria-checked",
+      "true",
     );
-    const link = within(sheet).getByTestId("add-link");
-    expect(link).not.toHaveAttribute("open");
-    await user.click(within(sheet).getByTestId("add-link-toggle"));
-    expect(link).toHaveAttribute("open");
-    await user.click(within(sheet).getByTestId("add-tab-stac"));
-    expect(within(sheet).getByTestId("add-tab-stac")).toHaveAttribute("aria-selected", "true");
+    // The uploader: the drop zone and the phone handoff, then the list.
+    expect(within(panel).getByTestId("captures-panel")).toBeInTheDocument();
+    expect(within(panel).getByTestId("capture-from-phone")).toBeInTheDocument();
+    expect(within(panel).queryByTestId("site-form")).not.toBeInTheDocument();
+
+    await user.click(within(tabs).getByRole("radio", { name: /Link a source/ }));
+    expect(useUi.getState().addTab).toBe("link");
+    expect(within(panel).getByTestId("site-form")).toBeInTheDocument();
+    await user.click(within(panel).getByTestId("add-tab-stac"));
+    expect(within(panel).getByTestId("add-tab-stac")).toHaveAttribute("aria-selected", "true");
   });
 });

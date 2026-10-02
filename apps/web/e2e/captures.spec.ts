@@ -19,8 +19,10 @@ async function boot(page: Page, options: MockOptions = {}): Promise<CaptureMockS
   return state;
 }
 
+/** Add › Upload a capture: the rail's Add tool opens on its first tab. */
 async function openPanel(page: Page): Promise<void> {
-  await page.getByTestId("tool-captures").click();
+  await page.getByTestId("tool-add").click();
+  await expect(page.getByTestId("add-panel")).toBeVisible();
   await expect(page.getByTestId("captures-panel")).toBeVisible();
 }
 

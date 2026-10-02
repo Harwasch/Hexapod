@@ -9,10 +9,11 @@ import { useMission } from "@/state/mission";
 export function useMissionActions() {
   const scene = useScene();
 
+  // Selecting leaves the view alone: the Plan / Fleet drawer sits beside the map, so a machine
+  // picked from the Fleet table is flown to and its card opens next to the table.
   const selectMachine = useCallback(
     (id: string, options: { fly?: boolean } = {}) => {
       useMission.getState().select({ kind: "machine", id });
-      useMission.getState().setView("map");
       scene?.mission.setSelectedZone(null);
       if (options.fly) scene?.mission.flyToMachine(id);
     },
@@ -22,7 +23,6 @@ export function useMissionActions() {
   const selectZone = useCallback(
     (id: string, options: { fly?: boolean } = {}) => {
       useMission.getState().select({ kind: "zone", id });
-      useMission.getState().setView("map");
       scene?.mission.setSelectedZone(id);
       if (options.fly) scene?.mission.flyToZone(id);
     },

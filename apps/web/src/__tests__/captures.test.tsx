@@ -9,7 +9,7 @@ import { GlassTooltipProvider } from "@twin/ui";
 
 import { ApiError, api, auth } from "@/api/client";
 import { uploadCaptureFile } from "@/api/uploads";
-import { CapturesPanel } from "@/features/captures/CapturesPanel";
+import { AddPanel } from "@/features/add-data/AddPanel";
 import { captureName, classify, extensionOf, unsupported } from "@/features/captures/recipes";
 import { SettingsSheet } from "@/features/settings/SettingsSheet";
 import { formatBytes, formatDuration } from "@/lib/format";
@@ -338,11 +338,11 @@ describe("what the API client puts on the wire", () => {
   });
 });
 
-describe("CapturesPanel", () => {
+describe("Add › Upload a capture", () => {
   it("disables the drop zone when the API is offline", async () => {
     vi.spyOn(api, "GET").mockRejectedValue(new TypeError("offline"));
-    useUi.getState().setPanel("captures");
-    render(wrap(<CapturesPanel />));
+    useUi.getState().openAdd("upload");
+    render(wrap(<AddPanel />));
     expect(await screen.findByTestId("captures-offline")).toBeInTheDocument();
     await waitFor(() => expect(screen.getByTestId("capture-file-input")).toBeDisabled());
     expect(screen.getByTestId("capture-dropzone")).toHaveClass("dropzone--disabled");
@@ -353,9 +353,9 @@ describe("CapturesPanel", () => {
       data: [],
       response: new Response(null, { status: 200 }),
     });
-    useUi.getState().setPanel("captures");
+    useUi.getState().openAdd("upload");
     useUi.getState().setWriteTokenPrompt(true);
-    render(wrap(<CapturesPanel />));
+    render(wrap(<AddPanel />));
     await userEvent.type(await screen.findByTestId("write-token-input"), "from-the-operator");
     await userEvent.click(screen.getByTestId("write-token-save"));
     expect(useSettings.getState().writeToken).toBe("from-the-operator");

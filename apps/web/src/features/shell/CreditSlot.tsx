@@ -11,7 +11,7 @@ import { useScene } from "@/cesium/SceneContext";
  * this slot; the layout then gives it space like any other surface. It is moved back on
  * unmount so the viewer can tear down the tree it built.
  */
-export function CreditSlot() {
+export function CreditSlot({ popover = false }: { popover?: boolean }) {
   const scene = useScene();
   const slot = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -25,5 +25,13 @@ export function CreditSlot() {
       else credits.remove();
     };
   }, [scene]);
-  return <div ref={slot} className="credit-slot" data-testid="credits" />;
+  // Opened over the bar from the phone's (i), it floats like the other popovers.
+  return (
+    <div
+      ref={slot}
+      className="credit-slot"
+      data-testid="credits"
+      data-hud-popover={popover ? "" : undefined}
+    />
+  );
 }

@@ -4,17 +4,17 @@
  * The HUD is a grid of fixed regions (`.hud` in `app.css`, rules in `state/layout.ts`), so
  * no two floating surfaces should ever be drawn over each other, and none should hang off
  * the screen. This opens the panel combinations people actually reach — one tool panel at a
- * time, a selection with its feeds and the agent open, Plan and Fleet, the captures panel
- * mid-job with its phone QR code, the offline state — at a desktop, a laptop and a phone
- * size, and after each one asserts exactly that on the bounding boxes.
+ * time, a selection with its feeds and the agent open, the Plan / Fleet drawer with a machine
+ * picked from it, Add mid-job with its phone QR code, the offline state — at a desktop, a
+ * laptop and a phone size, and after each one asserts exactly that on the bounding boxes.
  *
  * A "surface" is any glass element in the HUD that is not inside another one, plus the data
  * credits. The map's own markers and zone chips are pinned to the world, not the screen, so
  * they are not surfaces. Modal sheets are checked separately: they cover the HUD on purpose,
- * behind a scrim, and only have to fit on screen. So do the two popovers
- * (`[data-hud-popover]`: the command box's results and the agent's activity log): they open
- * over the regions when asked for and close with Escape or a click away, so they are held
- * to the screen's edges but not to the regions'.
+ * behind a scrim, and only have to fit on screen. So do the popovers (`[data-hud-popover]`:
+ * the command box's results, the site switcher, the agent's activity log, the phone's More
+ * sheet and folded credits): they open over the regions when asked for and close with Escape
+ * or a click away, so they are held to the screen's edges but not to the regions'.
  */
 import type { Page } from "@playwright/test";
 
@@ -145,6 +145,30 @@ async function shortcut(page: Page, key: string): Promise<void> {
   await page.keyboard.press(key);
 }
 
+/** Map / Plan / Fleet: the tabs at the top right, or on a phone the bar at the bottom. */
+async function showView(page: Page, view: "map" | "plan" | "fleet"): Promise<void> {
+  const phone = page.getByTestId(`phone-tab-${view}`);
+  if (await phone.isVisible()) await phone.click();
+  else await page.getByTestId(`view-tab-${view}`).click();
+}
+
+/** A rail tool, or on a phone the same tool under More. */
+async function tool(page: Page, id: "layers" | "measure" | "add" | "settings"): Promise<void> {
+  const more = page.getByTestId("phone-tab-more");
+  if (await more.isVisible()) {
+    await more.click();
+    await page.getByTestId(`more-${id}`).click();
+  } else await page.getByTestId(`tool-${id}`).click();
+}
+
+/** Says something in the command box; on a phone its search button opens it first. */
+async function ask(page: Page, text: string): Promise<void> {
+  const trigger = page.getByTestId("command-trigger");
+  if (await trigger.isVisible()) await trigger.click();
+  await page.getByTestId("command-input").fill(text);
+  await page.getByTestId("command-input").press("Enter");
+}
+
 async function loadDemo(page: Page): Promise<void> {
   await page.getByTestId("onboarding-demo").click();
   await expect(page.getByTestId("project-card")).toContainText("Blackrock Mesa", {
@@ -155,11 +179,11 @@ async function loadDemo(page: Page): Promise<void> {
 
 const TOOLS = [
   ["l", "layers-panel"],
-  ["s", "sites-panel"],
-  ["u", "captures-panel"],
+  ["c", "compare-controls"],
+  ["u", "add-panel"],
   ["m", "measure-panel"],
-  ["c", "compare-panel"],
-  ["b", "bookmarks-panel"],
+  ["s", "site-switcher"],
+  ["b", "site-switcher"],
 ] as const;
 
 for (const viewport of VIEWPORTS) {
@@ -177,13 +201,15 @@ for (const viewport of VIEWPORTS) {
       for (const [key, panel] of TOOLS) {
         await shortcut(page, key);
         await expect(page.getByTestId(panel)).toBeVisible();
-        await expectNoOverlap(page, panel);
+        await expectNoOverlap(page, `${key}: ${panel}`);
       }
       await shortcut(page, "b");
+      await expect(page.getByTestId("site-switcher")).toHaveCount(0);
+      await shortcut(page, "m");
+      await expect(page.getByTestId("measure-panel")).toHaveCount(0);
 
       // What a busy operator has open at once: a machine, its cameras, a panel, the agent.
-      await page.getByTestId("command-input").fill("where is TR-04");
-      await page.getByTestId("command-input").press("Enter");
+      await ask(page, "where is TR-04");
       await expect(page.getByTestId("selection-card")).toBeVisible();
       await expectNoOverlap(page, "selection with the agent");
       await page.getByTestId("selection-card").getByRole("button", { name: "Camera" }).click();
@@ -205,24 +231,42 @@ for (const viewport of VIEWPORTS) {
       }
     });
 
-    test("plan and fleet windows, and the plan composer", async ({ page }) => {
+    test("the plan and fleet drawer, a machine picked from it, and the plan composer", async ({
+      page,
+    }) => {
       test.setTimeout(240_000);
       await boot(page, {}, true);
       await loadDemo(page);
       await shortcut(page, "l");
-      await page.getByTestId("view-tab-plan").click();
+      await showView(page, "plan");
       await expect(page.getByTestId("plans-panel")).toBeVisible();
-      // The window and a tool panel share the left dock; one replaces the other.
+      // A tool panel and the drawer replace each other, so the map between them keeps its width.
       await expect(page.getByTestId("layers-panel")).toHaveCount(0);
       await expectNoOverlap(page, "plans");
       await page.getByTestId("plan-thistle").click();
       await expect(page.getByTestId("plan-detail")).toBeVisible();
       await expectNoOverlap(page, "plan detail");
-      await page.getByTestId("view-tab-fleet").click();
+      await showView(page, "fleet");
       await expect(page.getByTestId("fleet-panel")).toBeVisible();
       await expectNoOverlap(page, "fleet");
-      await page.getByTestId("command-input").fill("Mow Z-21 weekly with one mower");
-      await page.getByTestId("command-input").press("Enter");
+      // Several rows of the table show, on a phone too.
+      const rows = await page.locator('[data-testid^="fleet-row-"]').evaluateAll((els) => {
+        const sheet = document.querySelector(".hud-drawer .mc-window__body");
+        const bottom = sheet?.getBoundingClientRect().bottom ?? 0;
+        return els.filter((el) => el.getBoundingClientRect().bottom <= bottom + 1).length;
+      });
+      expect(rows).toBeGreaterThanOrEqual(viewport.name === "phone" ? 3 : 5);
+      // A machine picked from the table: its card opens beside the drawer, which stays.
+      await page.getByTestId("fleet-row-TR-04").click();
+      await expect(page.getByTestId("selection-card")).toContainText("TR-04 Kestrel");
+      await expectNoOverlap(page, "fleet with a machine selected");
+      if (viewport.name !== "phone") await expect(page.getByTestId("fleet-panel")).toBeVisible();
+      else {
+        // One sheet on a phone: the card is in front; the Fleet tab brings the table back.
+        await showView(page, "fleet");
+        await expect(page.getByTestId("fleet-panel")).toBeVisible();
+      }
+      await ask(page, "Mow Z-21 weekly with one mower");
       await expect(page.getByTestId("plan-review")).toBeVisible({ timeout: 30_000 });
       await expectNoOverlap(page, "plan composer with the agent open");
     });
@@ -260,7 +304,7 @@ for (const viewport of VIEWPORTS) {
       await expect(page.getByTestId("captures-offline")).toBeVisible();
       await expectNoOverlap(page, "offline captures");
 
-      await page.getByTestId("tool-settings").click();
+      await tool(page, "settings");
       const sheet = page.getByTestId("settings-sheet");
       await expect(sheet).toBeVisible();
       const box = (await sheet.boundingBox())!;
@@ -271,3 +315,61 @@ for (const viewport of VIEWPORTS) {
     });
   });
 }
+
+test.describe("the phone layout", () => {
+  test.use({ viewport: { width: 390, height: 844 } });
+
+  test("tab bar, More, full-screen search, one-row status and folded credits", async ({ page }) => {
+    test.setTimeout(240_000);
+    await boot(page, {}, true);
+    await loadDemo(page);
+    // Map / Plan / Fleet / More along the bottom; the rail and the view tabs give way to it.
+    await expect(page.getByTestId("phone-tabs")).toBeVisible();
+    await expect(page.getByTestId("tool-layers")).toBeHidden();
+    await expect(page.getByTestId("view-tabs")).toBeHidden();
+    const tabs = await page.getByTestId("phone-tabs").boundingBox();
+    const status = await page.getByTestId("status-line").boundingBox();
+    const corner = await page.getByTestId("map-corner").boundingBox();
+    if (!tabs || !status || !corner) throw new Error("the phone's bottom rows are not laid out");
+    // The status line is one row, directly above the tab bar, with the compass beside it.
+    expect(status.y + status.height).toBeLessThanOrEqual(tabs.y);
+    expect(status.height).toBeLessThan(56);
+    expect(Math.abs(corner.y - status.y)).toBeLessThan(12);
+    await expect(page.getByTestId("nav-north")).toBeVisible();
+
+    // The credits fold behind an (i), and open above the bar with the attribution dialog.
+    const credits = page.getByTestId("credits");
+    await expect(credits).toBeHidden();
+    await page.getByTestId("credits-toggle").click();
+    await expect(credits.locator(".cesium-viewer-bottom")).toBeVisible();
+    await expect(credits.getByRole("button", { name: "Data attribution" })).toBeVisible();
+    await expectNoOverlap(page, "phone credits open");
+    await page.getByTestId("credits-toggle").click();
+    await expect(credits).toBeHidden();
+
+    // More holds the four tools.
+    await page.getByTestId("phone-tab-more").click();
+    await expect(page.getByTestId("phone-more").getByRole("button")).toHaveText([
+      "Layers",
+      "Measure",
+      "Add",
+      "Settings",
+    ]);
+    await expectNoOverlap(page, "phone More sheet");
+    await page.getByTestId("more-layers").click();
+    await expect(page.getByTestId("layers-panel")).toBeVisible();
+    await expect(page.getByTestId("phone-more")).toHaveCount(0);
+
+    // Search is a button that opens the command box over the whole screen.
+    await expect(page.getByTestId("command-input")).toBeHidden();
+    await page.getByTestId("command-trigger").click();
+    const input = page.getByTestId("command-input");
+    await expect(input).toBeFocused();
+    const box = await page.getByTestId("command-box").boundingBox();
+    expect(box?.width).toBeGreaterThanOrEqual(388);
+    expect(box?.height).toBeGreaterThanOrEqual(840);
+    await expect(page.getByTestId("command-results")).toBeVisible();
+    await page.getByRole("button", { name: "Cancel" }).click();
+    await expect(input).toBeHidden();
+  });
+});
