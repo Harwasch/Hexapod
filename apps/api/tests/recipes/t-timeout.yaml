@@ -1,0 +1,7 @@
+# A stage that runs out of time, which the worker does not retry.
+name: t-timeout
+version: 1
+description: A stage that outruns its limit.
+inputs: []
+stages:
+  - { id: train, impl: t_timeout }

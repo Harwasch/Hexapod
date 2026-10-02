@@ -143,3 +143,72 @@ def t_gpu_train(ctx: StageContext) -> StageOutcome:
             time.sleep(5.0)  # SIGTERM ends the process well before this
     _write(ctx, TRAINED.name, iterations=done, resumed=died.exists())
     return StageOutcome(metrics={"iterations": done}, summary=f"trained to {done}")
+
+
+# --- for tests/test_worker_stops.py ----------------------------------------------------
+
+STOPPED = ArtifactDecl("stopped.json", content_type="application/json")
+
+
+@stage_impl("t_gpu_slow", produces=(TRAINED,), summary="a remote stage that takes its time")
+def t_gpu_slow(ctx: StageContext) -> StageOutcome:
+    """Runs in the fake Modal container (`tests/fake_modal`): `iterations` steps of `step_s`
+    each, checkpointing as it goes, and says which process did the work -- so a test can
+    tell one call re-attached to from two calls."""
+    target = int(ctx.param("iterations", 10))
+    for done in range(1, target + 1):
+        time.sleep(float(ctx.param("step_s", 0.5)))
+        (ctx.checkpoint_dir / "progress.json").write_text(json.dumps({"done": done}))
+        ctx.log(f"step {done} of {target}")
+    _write(ctx, TRAINED.name, iterations=target, pid=os.getpid())
+    return StageOutcome(metrics={"iterations": target})
+
+
+@stage_impl("t_notes_stop", produces=(STOPPED,), summary="says how it was stopped, then stops")
+def t_notes_stop(ctx: StageContext) -> StageOutcome:
+    """Sleeps, and if it is stopped writes down what it was stopped *with*: the recipe
+    process turns the supervisor's two signals into two exceptions."""
+    try:
+        time.sleep(float(ctx.param("seconds", 30.0)))
+    except BaseException as error:
+        (ctx.work_dir / "stopped-by.txt").write_text(type(error).__name__, encoding="utf-8")
+        raise
+    _write(ctx, STOPPED.name)
+    return StageOutcome(metrics={})
+
+
+@stage_impl("t_oom", produces=(TRAINED,), summary="runs out of GPU memory above a cap")
+def t_oom(ctx: StageContext) -> StageOutcome:
+    """Logs the training stage's budget line and, above `fits` gaussians, the traceback a
+    CUDA out-of-memory leaves -- the two things the worker reads to retry it lower."""
+    cap = int(ctx.param("cap_max", 1_000_000))
+    ctx.log(f"gsplat: cap_max auto -> {cap}; 3.10M footprints^2 of surface x 0.3 = {cap}")
+    if cap > int(ctx.param("fits", 0)):
+        ctx.log("torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 2.00 GiB")
+        raise RuntimeError("the trainer exited with status 1")
+    _write(ctx, TRAINED.name, cap=cap)
+    return StageOutcome(metrics={"capMax": cap})
+
+
+@stage_impl("t_timeout", produces=(TRAINED,), summary="runs out of time")
+def t_timeout(ctx: StageContext) -> StageOutcome:
+    from errors import RemoteTimeoutError
+
+    raise RemoteTimeoutError(ctx.recipe, ctx.stage_id, ctx.impl, "modal", "FunctionTimeoutError")
+
+
+@stage_impl("t_contract", produces=(TRAINED,), summary="asks for an input it never declared")
+def t_contract(ctx: StageContext) -> StageOutcome:
+    ctx.input("poses")
+    raise AssertionError("unreachable: the input is undeclared")
+
+
+@stage_impl("t_dies", produces=(TRAINED,), summary="dies without a word on its stdout")
+def t_dies(ctx: StageContext) -> StageOutcome:
+    """What a segfault or an import error in a native library looks like from outside: a
+    few words on stderr and the process gone, no event reported."""
+    import sys
+
+    sys.stderr.write("fatal: the native trainer could not map its weights\n")
+    sys.stderr.flush()
+    os._exit(9)

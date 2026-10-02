@@ -1,0 +1,7 @@
+# A stage whose code asks for an input it never declared, which the worker does not retry.
+name: t-contract
+version: 1
+description: A stage that breaks its own contract.
+inputs: []
+stages:
+  - { id: train, impl: t_contract }

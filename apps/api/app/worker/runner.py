@@ -36,10 +36,27 @@ B1b added one distinction to that loop and one number to the job:
   status, from the per-stage ledgers in the workdir. Every attempt is in that total,
   including the ones that were preempted: the time a cheap host billed before it took
   the machine back was still bought.
+
+And the audit after it, four more:
+
+* **a stop says why** (`child.CANCEL_SIGNAL`, `child.DETACH_SIGNAL`). A cancel or a lost
+  lease SIGTERMs the recipe process, which cancels its remote call on the way out; this
+  worker shutting down SIGUSR1s it, which leaves the call running and written down
+  (`cloud.CallBook`), marks the step `detached`, and lets the next worker re-attach to
+  it at the *same* attempt -- a deploy spends nothing. The book is copied onto the
+  step's row (`metrics.remoteCalls`) on every heartbeat, so a worker on another machine,
+  whose workdir does not have it, can still cancel the calls by id.
+* **a failure is read before it is retried** (`app.worker.retry`): CUDA running out of
+  memory gets one retry at a lower gaussian cap, a timeout or a broken recipe none.
+* **a job has a dollar ceiling** (`cost_cap_usd`), held by the cloud runner call by
+  call and here between attempts.
+* **the recipe process's stderr is kept** (`CHILD_STDERR` in the workdir) and its tail
+  goes into the job's error, so a process that died without a word says why.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import queue
@@ -61,14 +78,25 @@ from app.models import Capture, Job, JobStep
 from app.models.enums import CaptureStatus, RunStatus, UploadStatus
 from app.storage import ObjectStorage
 from app.storage.null import StorageUnavailableError
-from app.worker import claim, events, outputs, params, registration, steps
-from app.worker.child import ChildSpec, load_impl_modules, resolve_recipe
+from app.worker import alerts, claim, events, outputs, params, registration, retry, steps
+from app.worker.child import (
+    CANCEL_SIGNAL,
+    DETACH_SIGNAL,
+    ChildSpec,
+    load_impl_modules,
+    resolve_recipe,
+)
+from app.worker.cloud import build_runners
 from app.worker.config import WorkerConfig
 from app.worker.events import Event
 from app.worker.pipeline_bridge import (
+    CALL_BOOK,
     PIPELINE_DIR,
     ArtifactRef,
     AttemptLedger,
+    CallBook,
+    CallRecord,
+    CloudRunner,
     PipelineError,
     Plan,
     RunCost,
@@ -87,6 +115,22 @@ log = logging.getLogger("app.worker")
 #: one place the cloud runner's "the machine was taken back" is translated into a
 #: supervisor decision.
 PREEMPTED = "PreemptedError"
+
+#: The recipe process's stderr, in the run's workdir. Appended to by every process of the
+#: run, each one's part starting with a line that says when; its tail goes into the job's
+#: error when a run fails. It used to go to /dev/null, so a process that died of an
+#: uncaught exception or an import error left nothing behind but its exit code.
+CHILD_STDERR = "recipe-process.stderr.log"
+#: How much of it the job's error carries.
+STDERR_TAIL_LINES = 20
+STDERR_TAIL_CHARS = 2000
+
+#: The step metric that says a stage was interrupted by this worker shutting down, so
+#: the next worker resumes it at the same attempt (`_attempts`). `start_step` clears it
+#: with the rest of the metrics when the stage runs again.
+DETACHED = "detached"
+#: The step metric holding the stage's remote calls in flight (`_report_calls`).
+REMOTE_CALLS = "remoteCalls"
 
 #: How much of a running stage's log the heartbeat reads: the progress line and the live
 #: viewer's lines are all near the end, and a live-cameras line is up to ~25 kB.
@@ -111,6 +155,9 @@ class _RunState:
     preempted: bool = False
     #: Stage id -> the artifacts it produced, from the StepResult it sent.
     produced: dict[str, tuple[ArtifactRef, ...]] = field(default_factory=dict)
+    #: Stage id -> how long its log was when this process started it: where the attempt's
+    #: own lines begin, which is what a failure is classified from (`app.worker.retry`).
+    log_from: dict[str, int] = field(default_factory=dict)
 
     def stage_producing(self, artifact: str) -> str | None:
         for stage_id, refs in self.produced.items():
@@ -143,6 +190,10 @@ class JobSupervisor:
         # Optional, and defaulting to `storage`, so a caller that has one bucket keeps
         # the behaviour it had: `Publisher` treats same-bucket as nothing to publish.
         self._publish = Publisher(private=storage, public=publish_storage or storage)
+        #: Why the job was dead-lettered, for the dead-man's switch's `/fail` ping.
+        self._failure = ""
+        #: How a ping is sent; replaced in tests.
+        self.sender: alerts.Sender = alerts.send
 
     # --- the outer loop: attempts ------------------------------------------------
 
@@ -150,25 +201,38 @@ class JobSupervisor:
         # The lease is renewed from its own thread for the whole supervision, not only
         # from the heartbeat in `_supervise`: this thread also downloads the capture and
         # uploads every finished stage, each for longer than a lease (`claim.LeaseKeeper`).
-        with claim.LeaseKeeper(
-            self._sessions,
-            job_id,
-            worker_id=self._config.worker_id,
-            lease_s=self._config.lease_s,
-            interval_s=min(self._config.poll_s, self._config.lease_s / 3),
+        # The dead-man's switch (`alerts.RunWatch`) pings from a thread of its own for the
+        # same reason, and says `/start` now: a job reaches here the moment it is claimed.
+        with (
+            claim.LeaseKeeper(
+                self._sessions,
+                job_id,
+                worker_id=self._config.worker_id,
+                lease_s=self._config.lease_s,
+                interval_s=min(self._config.poll_s, self._config.lease_s / 3),
+            ),
+            alerts.RunWatch(
+                self._config.heartbeat_url,
+                job_id,
+                queue_url=self._config.queue_check_url,
+                every_s=self._config.heartbeat_every_s,
+                sender=self.sender,
+            ) as watch,
         ):
             db = self._sessions()
             try:
-                return self._run(db, job_id, stop)
+                outcome = self._run(db, job_id, stop)
             except Exception as error:
                 # One job must not take the worker down. A bucket that has gone away, a
                 # workdir on a full disk, a bug here -- the job says what happened and the
                 # loop goes on to the next one. A person can retry it from the panel,
                 # which is the same affordance a dead-lettered job gets.
                 log.exception("worker %s: job %s failed in the supervisor", self._id, job_id)
-                return self._report_supervisor_failure(job_id, error)
+                outcome = self._report_supervisor_failure(job_id, error)
             finally:
                 db.close()
+            watch.finish(outcome, self._failure)
+            return outcome
 
     def _report_supervisor_failure(self, job_id: uuid.UUID, error: Exception) -> Terminal:
         """Record the failure on a session of its own: the one that raised may be unusable."""
@@ -203,6 +267,7 @@ class JobSupervisor:
             self._seed(db, job, recipe.inputs, workdir_root)
         except StorageUnavailableError as error:
             return self._dead_letter(db, job, f"could not fetch the capture's files: {error}")
+        self._recover_calls(db, job_id, workdir_root)
 
         while True:
             completed = self._completed_stages(db, job_id, workdir_root)
@@ -224,6 +289,9 @@ class JobSupervisor:
                     f"stage {stage_id!r} has been attempted {attempt - 1} times without "
                     f"completing and will not be retried again{lost}{last}",
                 )
+            over = self._over_cap(workdir_root)
+            if over is not None:
+                return self._dead_letter(db, job, over)
             run_params, dropped = params.without_stale_roi(stage_params, plan, completed)
             if dropped:
                 log.warning(
@@ -251,6 +319,12 @@ class JobSupervisor:
                 return self._dead_letter(db, job, state.error or "the run failed before any stage")
             job.error = state.error
             db.commit()
+            if not state.preempted:
+                decision = self._read_failure(state, attempts, workdir_root)
+                if not decision.retry:
+                    return self._dead_letter(db, job, f"{decision.why}: {state.error}")
+                if decision.params:
+                    stage_params = self._override(db, job, plan, state.failed_stage, decision)
             if state.preempted:
                 # Worth saying out loud in the log: this is the cheap tier doing what the
                 # cheap tier does, not the stage being broken. The next attempt resumes
@@ -304,15 +378,42 @@ class JobSupervisor:
             transfer_dir=(
                 str(self._config.cloud_transfer_dir) if self._config.cloud_transfer_dir else None
             ),
+            cost_cap_usd=self._config.cost_cap_usd or None,
+            deadline_factor=self._config.deadline_factor,
         ).write(workdir_root / "child.json")
-        process = subprocess.Popen(  # noqa: S603 - fixed argv, no shell, our own module
-            [sys.executable, "-u", "-m", "app.worker.child", str(spec_path)],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            env=self._child_env(),
-            cwd=str(_API_ROOT),
-            text=True,
-        )
+        stderr_path = workdir_root / CHILD_STDERR
+        with stderr_path.open("ab") as stderr:
+            stderr.write(
+                f"--- recipe process started {datetime.now(tz=UTC).isoformat()}\n".encode()
+            )
+            stderr.flush()
+            stderr_from = stderr.tell()
+            process = subprocess.Popen(  # noqa: S603 - fixed argv, no shell, our own module
+                [sys.executable, "-u", "-m", "app.worker.child", str(spec_path)],
+                stdout=subprocess.PIPE,
+                stderr=stderr,
+                env=self._child_env(),
+                cwd=str(_API_ROOT),
+                text=True,
+            )
+        state = self._watch_child(db, job, process, workdir_root, stop)
+        if state.outcome == events.RUN_FAILED and process.returncode not in (None, 0):
+            said = _tail_lines(stderr_path, stderr_from)
+            if said:
+                state.error = (
+                    f"{state.error}\n--- the recipe process's stderr, last lines ---\n{said}"
+                )
+        return state
+
+    def _watch_child(
+        self,
+        db: Session,
+        job: Job,
+        process: subprocess.Popen[str],
+        workdir_root: Path,
+        stop: threading.Event | None,
+    ) -> _RunState:
+        """The heartbeat loop over one recipe process, until it ends or is stopped."""
         inbox: queue.Queue[object] = queue.Queue()
         reader = threading.Thread(target=_pump, args=(process.stdout, inbox), daemon=True)
         reader.start()
@@ -323,7 +424,13 @@ class JobSupervisor:
         while True:
             now = time.monotonic()
             if stop is not None and stop.is_set():
-                _stop(process, self._config.terminate_grace_s)
+                # This worker is going away (a deploy), not the job: the recipe process
+                # leaves its remote call running and written down, and the step is marked
+                # so the next worker resumes it without spending an attempt.
+                _stop(process, self._config.terminate_grace_s, DETACH_SIGNAL)
+                if current is not None:
+                    self._report_calls(db, current, workdir_root)
+                    self._mark_detached(db, current)
                 state.outcome = "stopped"
                 return state
             if now >= next_beat:
@@ -332,14 +439,16 @@ class JobSupervisor:
                 )
                 if beat is not claim.Heartbeat.HELD:
                     # Cancelled, or reclaimed while this worker was not looking. Either
-                    # way the child must stop now, not at the end of its stage.
-                    _stop(process, self._config.terminate_grace_s)
+                    # way the child must stop now, not at the end of its stage -- and its
+                    # remote call with it: nobody here is going to poll it again.
+                    _stop(process, self._config.terminate_grace_s, CANCEL_SIGNAL)
                     state.outcome = "cancelled" if beat is claim.Heartbeat.CANCELLED else "lost"
                     if beat is claim.Heartbeat.LOST:
                         self._log_lost(db, job.id)
                     return state
                 if current is not None:
                     self._report_progress(db, current, workdir_root)
+                    self._report_calls(db, current, workdir_root)
                 next_beat = now + self._config.poll_s
             try:
                 item = inbox.get(timeout=max(0.01, next_beat - time.monotonic()))
@@ -363,7 +472,9 @@ class JobSupervisor:
                     db,
                     current,
                     log_key=self._upload_log(job.id, workdir_root, current.stage_id),
-                    checkpoint_key=self._checkpoint_key(job.id, workdir_root, current.stage_id),
+                    checkpoint_key=self._checkpoint_key(
+                        job.id, workdir_root, current.stage_id, current.attempt
+                    ),
                 )
         return state
 
@@ -377,6 +488,7 @@ class JobSupervisor:
         current: JobStep | None,
     ) -> JobStep | None:
         if event.kind == events.STAGE_STARTED:
+            state.log_from[event.stage_id] = event.log_from
             return steps.start_step(
                 db,
                 job.id,
@@ -424,12 +536,17 @@ class JobSupervisor:
             state.error_type = event.error_type
             state.preempted = event.error_type == PREEMPTED
             if current is not None:
+                # The failed attempt's calls are struck from the book by now (cancelled,
+                # or ended); a copy left on the row would be cancelled again by id.
+                self._report_calls(db, current, workdir_root)
                 steps.fail_step(
                     db,
                     current,
                     log_key=self._upload_log(job.id, workdir_root, event.stage_id),
                     preempted=state.preempted,
-                    checkpoint_key=self._checkpoint_key(job.id, workdir_root, event.stage_id),
+                    checkpoint_key=self._checkpoint_key(
+                        job.id, workdir_root, event.stage_id, event.attempt
+                    ),
                 )
             return None
         if event.kind in (events.RUN_FINISHED, events.RUN_FAILED):
@@ -495,7 +612,7 @@ class JobSupervisor:
 
     @staticmethod
     def _tidy(workdir_root: Path) -> None:
-        """After a run that finished, drop what the workdir contract says is disposable.
+        """After a run that ended, drop what the workdir contract says is disposable.
 
         Every stage's `work/` is scratch by A6's own definition ("safe to delete at any
         time"), and `inputs/` is a copy of what is still in the bucket -- `_seed` fetches
@@ -503,7 +620,9 @@ class JobSupervisor:
         video, every candidate frame ffmpeg extracted before selection, COLMAP's database.
         On a 20 GB worker volume, keeping them would fill it in three or four captures.
         `out/`, `step.json` and `checkpoint/` stay, which is all retry-from-stage reads.
-        A failure to tidy is logged and nothing else: the run succeeded.
+        A failed or cancelled run is tidied the same way: a retry fetches its inputs
+        again exactly as a retry of a finished one does. A failure to tidy is logged and
+        nothing else: the run is over either way.
         """
         workdir = Workdir(workdir_root)
         doomed = [workdir.inputs_dir]
@@ -523,6 +642,10 @@ class JobSupervisor:
         written, which is precisely why A6 clears `out/` at the start of every attempt.
         Nothing half-written is uploaded, and no `artifacts` row is created for it.
         """
+        workdir_root = self._config.workdir_for(job.id)
+        # The recipe process cancelled its call on SIGTERM; this catches one it could not
+        # (killed before it got to it), so a cancelled job leaves no GPU running.
+        self._cancel_recorded_calls(workdir_root)
         steps.stop_active_steps(db, job.id, RunStatus.CANCELLED)
         db.refresh(job)
         if job.finished_at is None:
@@ -531,21 +654,35 @@ class JobSupervisor:
         # A cancelled run still ran, and a GPU still billed for the part of it that did.
         self._record_cost(job)
         db.commit()
+        if self._config.tidy_finished_runs:
+            self._tidy(workdir_root)
         return "cancelled"
 
     def _dead_letter(self, db: Session, job: Job, why: str) -> Terminal:
-        """Stop trying, and say why in the place the panel already renders."""
+        """Stop trying, and say why in the place the panel already renders.
+
+        Any remote call still written down for the run is cancelled first -- a worker
+        that crashed on the last attempt it was allowed leaves one running, and nothing
+        would ever pick it up again. Then the workdir is tidied like a finished run's:
+        a failed run kept its inputs and every stage's scratch until the volume filled,
+        though a retry fetches the inputs again and scratch is scratch.
+        """
         if not self._still_ours(db, job):
             return "lost"
+        workdir_root = self._config.workdir_for(job.id)
+        self._cancel_recorded_calls(workdir_root)
         steps.stop_active_steps(db, job.id, RunStatus.ERROR)
         db.refresh(job)
         job.status = RunStatus.ERROR
         job.error = why
+        self._failure = why
         self._close(job)
         capture = db.get(Capture, job.capture_id)
         if capture is not None:
             capture.status = CaptureStatus.ERROR
         db.commit()
+        if self._config.tidy_finished_runs:
+            self._tidy(workdir_root)
         return "error"
 
     def _close(self, job: Job) -> None:
@@ -645,17 +782,20 @@ class JobSupervisor:
         return outputs.upload_log(self._storage, workdir_root, job_id, stage_id)
 
     @staticmethod
-    def _checkpoint_key(job_id: uuid.UUID, workdir_root: Path, stage_id: str) -> str | None:
+    def _checkpoint_key(
+        job_id: uuid.UUID, workdir_root: Path, stage_id: str, attempt: int = 1
+    ) -> str | None:
         """The key of a stage's checkpoint, or None when there is nothing in it.
 
         Recorded on an attempt that did *not* finish, which is the case with no
         StepResult to read it out of — and the case where it matters most, because it is
-        what the next attempt resumes from.
+        what the next attempt resumes from. The attempt's own key: each attempt syncs to
+        one of its own (`outputs.checkpoint_key`).
         """
         directory = Workdir(workdir_root).checkpoint_dir(stage_id)
         if not directory.is_dir() or not any(directory.iterdir()):
             return None
-        return outputs.checkpoint_key(job_id, stage_id)
+        return outputs.checkpoint_key(job_id, stage_id, attempt)
 
     def _seed(self, db: Session, job: Job, inputs: tuple[str, ...], workdir_root: Path) -> None:
         """Put the capture's uploaded bytes where the recipe says its inputs live.
@@ -667,22 +807,30 @@ class JobSupervisor:
         """
         work = Workdir.create(workdir_root)
         capture = db.get(Capture, job.capture_id)
+        # What to fetch, read now, as plain values: the downloads below take minutes for
+        # a large video, and the session's transaction -- opened by these reads and the
+        # ones before them -- must not sit idle across them. Neon terminates a connection
+        # idle in a transaction, and the next statement on it fails (`_end_transaction`).
+        wanted = [
+            (source.storage_key, Path(source.filename).name)
+            for source in (capture.files if capture is not None else ())
+            if source.status is UploadStatus.COMPLETE
+        ]
+        _end_transaction(db)
         for name in inputs:
             if name != "upload" or capture is None:
                 continue
             target = work.input_path(name)
             target.mkdir(parents=True, exist_ok=True)
-            for source in capture.files:
-                if source.status is not UploadStatus.COMPLETE:
-                    continue
+            for key, filename in wanted:
                 # File by file, not "the directory has something in it": a worker that
                 # stopped between two files, or mid-file (`download_file` writes beside
                 # the target and renames), left a directory that is not empty and not
                 # complete, and a resume that skipped it ran the recipe on half a capture.
-                path = target / Path(source.filename).name
+                path = target / filename
                 if path.is_file():
                     continue
-                self._storage.download_file(source.storage_key, path)
+                self._storage.download_file(key, path)
 
     def _completed_stages(self, db: Session, job_id: uuid.UUID, workdir_root: Path) -> set[str]:
         """Stages that may be skipped: complete in the database **and** still on disk."""
@@ -697,12 +845,27 @@ class JobSupervisor:
     def _attempts(
         self, db: Session, job_id: uuid.UUID, plan: Plan, completed: set[str]
     ) -> dict[str, int]:
+        """The attempt each stage still to run is about to make.
+
+        One more than the row's -- except for a stage this worker's predecessor was
+        stopped in the middle of for a deploy (`DETACHED`): that attempt did not fail, its
+        remote call may well still be running and is about to be re-attached to, so it
+        carries on as the same attempt. A crash is not a detach and still counts: a stage
+        that keeps killing its worker must run out of attempts.
+        """
         rows = steps.steps_of(db, job_id)
-        return {
-            stage.id: (rows[stage.id].attempt if stage.id in rows else 0) + 1
-            for stage in plan.stages
-            if stage.id not in completed
-        }
+        attempts: dict[str, int] = {}
+        for stage in plan.stages:
+            if stage.id in completed:
+                continue
+            row = rows.get(stage.id)
+            if row is None:
+                attempts[stage.id] = 1
+            elif row.status is RunStatus.IN_PROGRESS and (row.metrics or {}).get(DETACHED):
+                attempts[stage.id] = row.attempt
+            else:
+                attempts[stage.id] = row.attempt + 1
+        return attempts
 
     def _exhausted(
         self, plan: Plan, completed: set[str], attempts: dict[str, int], workdir_root: Path
@@ -734,6 +897,170 @@ class JobSupervisor:
     def _last_error(self, db: Session, job: Job) -> str:
         db.refresh(job)
         return f": {job.error}" if job.error else ""
+
+    # --- remote calls that outlive a recipe process ---------------------------------
+
+    @staticmethod
+    def _book(workdir_root: Path, stage_id: str) -> CallBook:
+        return CallBook.read(Workdir(workdir_root).stage_dir(stage_id) / CALL_BOOK)
+
+    @staticmethod
+    def _report_calls(db: Session, step: JobStep, workdir_root: Path) -> None:
+        """Copy the stage's `CallBook` onto its row, as `metrics.remoteCalls`.
+
+        The workdir is on this machine's volume; the row is where a worker anywhere can
+        read it. A job reclaimed on another machine -- a different volume, or this one
+        replaced -- has no book, and this copy is how its calls are still found and
+        cancelled by id (`_recover_calls`). Ids, providers and when, not the requests:
+        enough to cancel, which is all a call without its workdir is good for.
+        """
+        book = JobSupervisor._book(workdir_root, step.stage_id)
+        calls = {
+            slot: {key: value for key, value in record.to_dict().items() if key != "request"}
+            for slot, record in sorted(book.calls.items())
+        }
+        metrics = dict(step.metrics or {})
+        if metrics.get(REMOTE_CALLS, {}) == calls:
+            return
+        if calls:
+            metrics[REMOTE_CALLS] = calls
+        else:
+            metrics.pop(REMOTE_CALLS, None)
+        step.metrics = metrics
+        db.commit()
+
+    @staticmethod
+    def _mark_detached(db: Session, step: JobStep) -> None:
+        """Say on the row that this attempt was interrupted by a deploy (`_attempts`)."""
+        step.metrics = {**(step.metrics or {}), DETACHED: True}
+        db.commit()
+
+    def _recover_calls(self, db: Session, job_id: uuid.UUID, workdir_root: Path) -> None:
+        """Put back, as `orphaned` books, the calls the database knows of and this workdir
+        does not: the job was last run on another volume, or this one lost its files.
+
+        The recipe process cancels an orphaned book before it runs anything
+        (`CloudRunner.reap`) rather than re-attaching to it -- the inputs those calls were
+        given came from a workdir that is gone, and the run starts over -- so a GPU left
+        running by a worker that died on another machine stops now, not in six hours.
+        """
+        for stage_id, step in steps.steps_of(db, job_id).items():
+            if step.status is RunStatus.COMPLETE:
+                continue
+            known = (step.metrics or {}).get(REMOTE_CALLS)
+            path = Workdir(workdir_root).stage_dir(stage_id) / CALL_BOOK
+            if not known or not isinstance(known, dict) or path.exists():
+                continue
+            calls = {
+                str(slot): CallRecord.from_dict(entry)
+                for slot, entry in known.items()
+                if isinstance(entry, dict) and entry.get("id")
+            }
+            if calls:
+                log.warning(
+                    "worker %s: job %s stage %s had remote call(s) %s in flight on a workdir "
+                    "this worker does not have; cancelling them",
+                    self._id,
+                    job_id,
+                    stage_id,
+                    ", ".join(record.handle.id for record in calls.values()),
+                )
+                CallBook(path, calls=calls, orphaned=True).save()
+        _end_transaction(db)
+
+    def _cancel_recorded_calls(self, workdir_root: Path) -> None:
+        """Cancel every remote call still written down in the run's workdir, from here.
+
+        For a run that is over while a call may not be: dead-lettered after a crash on its
+        last attempt, or cancelled after its recipe process was killed before it could
+        cancel. Built from the same configuration the recipe process uses, so the same
+        adapters; nothing to do (and nothing built) for a run with no books. Never
+        raises: the job is being closed, and a provider being unreachable must not stop
+        that -- it is logged, and the book stays for whoever looks.
+        """
+        workdir = Workdir(workdir_root)
+        if self._config.runner != "cloud" or not workdir.stages_dir.is_dir():
+            return
+        if not any(workdir.stages_dir.glob(f"*/{CALL_BOOK}")):
+            return
+        try:
+            runners = build_runners(
+                self._storage,
+                providers=self._config.cloud_providers,
+                sandbox=self._config.sandbox_for(workdir_root.name),
+                impl_modules=self._config.impl_modules,
+                modal_app=self._config.modal_app,
+                transfer_dir=self._config.cloud_transfer_dir,
+            )
+            if isinstance(runners.gpu, CloudRunner):
+                cancelled = runners.gpu.reap(workdir, keep=None)
+                if cancelled:
+                    log.info("worker %s: cancelled remote call(s) %s", self._id, cancelled)
+        except Exception:
+            log.exception("worker %s: could not cancel the remote calls in %s", self._id, workdir)
+
+    # --- what a failure is, and what it may cost ------------------------------------
+
+    def _over_cap(self, workdir_root: Path) -> str | None:
+        """Why not to start another attempt, when the run has spent its cap; else None.
+
+        Between attempts, from the ledgers. Not while a call is written down as still out
+        there: that one is billing as well, and the recipe process is what can both price
+        it and cancel it (`CloudRunner`), so it is left to hold the cap.
+        """
+        cap = self._config.cost_cap_usd
+        workdir = Workdir(workdir_root)
+        if not cap or cap <= 0:
+            return None
+        if workdir.stages_dir.is_dir() and any(workdir.stages_dir.glob(f"*/{CALL_BOOK}")):
+            return None
+        spent = run_cost(workdir).usd
+        if spent is None or spent < cap:
+            return None
+        return (
+            f"the run has been billed ${spent:.2f}, at or over its ${cap:.2f} cap "
+            f"(WORKER_JOB_COST_CAP_USD); not starting another attempt"
+        )
+
+    def _read_failure(
+        self, state: _RunState, attempts: dict[str, int], workdir_root: Path
+    ) -> retry.Decision:
+        """Classify a stage's failure from its error and its attempt's log, decide on the
+        next attempt (`app.worker.retry`), and write the failure into its history."""
+        stage_id = state.failed_stage
+        log_path = Workdir(workdir_root).log_path(stage_id)
+        logged = _read_from(log_path, state.log_from.get(stage_id, 0))
+        failure = retry.classify(state.error_type, state.error, logged)
+        history = retry.History.of(Workdir(workdir_root).stage_dir(stage_id))
+        decision = retry.decide(stage_id, failure, history)
+        history.add(attempts.get(stage_id, 1), failure)
+        if failure.kind != "other":
+            log.info(
+                "worker %s: stage %s failed (%s): %s",
+                self._id,
+                stage_id,
+                failure.kind,
+                "retrying" + (f" with {decision.params}" if decision.params else "")
+                if decision.retry
+                else "not retrying",
+            )
+        return decision
+
+    def _override(
+        self, db: Session, job: Job, plan: Plan, stage_id: str, decision: retry.Decision
+    ) -> dict[str, dict[str, Any]]:
+        """Write a retry's parameters into `jobs.params[stage]` -- the existing per-run
+        override, so the change is on the job for anyone to see and outlives this worker
+        -- and return the run's parameters with it applied."""
+        current = dict(job.params or {})
+        current[stage_id] = {**dict(current.get(stage_id) or {}), **decision.params}
+        job.params = current
+        job.error = (
+            f"{job.error or 'the stage failed'}\n--- retrying stage {stage_id!r} with "
+            f"{json.dumps(decision.params, sort_keys=True)} ---"
+        )
+        db.commit()
+        return self._stage_params(db, job, plan)
 
 
 _API_ROOT = Path(__file__).resolve().parents[2]
@@ -773,16 +1100,42 @@ def _pump(stream: IO[str] | None, inbox: queue.Queue[object]) -> None:
     inbox.put(_EOF)
 
 
-def _stop(process: subprocess.Popen[str], grace_s: float) -> None:
-    """SIGTERM, then SIGKILL. A stage that ignores the first does not get to keep running."""
+def _stop(process: subprocess.Popen[str], grace_s: float, signum: int = CANCEL_SIGNAL) -> None:
+    """`signum` -- which says why (`child.CANCEL_SIGNAL`, `child.DETACH_SIGNAL`) -- then
+    SIGKILL. A stage that ignores the first does not get to keep running."""
     if process.poll() is not None:
         return
-    process.terminate()
+    process.send_signal(signum)
     try:
         process.wait(timeout=grace_s)
     except subprocess.TimeoutExpired:
         process.kill()
         process.wait()
+
+
+#: The most of a failed attempt's log a failure is classified from: the end of it, where
+#: a traceback is, with room for a training stage's chatter before it.
+FAILURE_LOG_BYTES = 262_144
+
+
+def _read_from(path: Path, offset: int, limit: int = FAILURE_LOG_BYTES) -> str:
+    """What was written to `path` after `offset`, at most its last `limit` bytes."""
+    try:
+        with path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            end = handle.tell()
+            handle.seek(max(offset, end - limit, 0))
+            return handle.read().decode("utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+def _tail_lines(path: Path, offset: int) -> str:
+    """The last lines this process wrote to its stderr, for a job's error: bounded in
+    lines and characters, because the error is a column a person reads in a panel."""
+    lines = [line for line in _read_from(path, offset).splitlines() if line.strip()]
+    tail = "\n".join(lines[-STDERR_TAIL_LINES:])
+    return tail if len(tail) <= STDERR_TAIL_CHARS else "..." + tail[-STDERR_TAIL_CHARS:]
 
 
 def _end_transaction(db: Session) -> None:

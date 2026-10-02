@@ -28,6 +28,7 @@ from app.storage import ObjectStorage
 from app.storage.null import StorageUnavailableError
 from app.worker.parallel import each
 from app.worker.pipeline_bridge import ArtifactRef, Workdir
+from app.worker.pipeline_bridge import checkpoint_key as stage_checkpoint_key
 
 log = logging.getLogger("app.worker")
 
@@ -75,26 +76,31 @@ def artifact_key(job_id: uuid.UUID, stage_id: str, name: str) -> str:
     return f"{stage_prefix(job_id, stage_id)}/{name}"
 
 
-def transfer_outputs_key(job_id: uuid.UUID, stage_id: str) -> str:
-    """Where a stage dispatched to a provider had its `out/` put by the provider.
+def transfer_outputs_key(job_id: uuid.UUID, stage_id: str, attempt: int = 1) -> str:
+    """Where attempt `attempt` of a stage dispatched to a provider had its `out/` put.
 
     The pipeline's `StageKeys.outputs`, stated once on this side as `checkpoint_key` below
     is: `runs/<job>/<stage>/transfer/out`, under `transfer/` so it cannot collide with
-    the per-artifact keys uploaded here. `tests/test_worker_outputs.py` holds the two to
-    the same string.
+    the per-artifact keys uploaded here, with the attempt's suffix after the first
+    (`runners.per_attempt`: `out-a2`, ...) so an attempt nobody stopped cannot land its
+    outputs where the next one's are read. `tests/test_worker_outputs.py` holds the two
+    to the same string.
     """
-    return f"{stage_prefix(job_id, stage_id)}/transfer/out"
+    name = "out" if attempt == 1 else f"out-a{attempt}"
+    return f"{stage_prefix(job_id, stage_id)}/transfer/{name}"
 
 
-def checkpoint_key(job_id: uuid.UUID, stage_id: str) -> str:
-    """Where a dispatched stage's checkpoint lives, stated once on this side too.
+def checkpoint_key(job_id: uuid.UUID, stage_id: str, attempt: int = 1) -> str:
+    """Where attempt `attempt` of a dispatched stage synced its checkpoint.
 
-    It is the same string `BaseRunner` puts in `StageContext.checkpoint_key`, built from
-    the same two facts (the run id is the workdir's directory name, which is the job id).
-    The supervisor needs it for a step that did *not* finish -- a preempted attempt has
-    a checkpoint and no StepResult to read it out of.
+    It is the string `BaseRunner` puts in `StageContext.checkpoint_key` -- the pipeline's
+    own `runners.checkpoint_key`, one key per attempt so a call nobody stopped cannot
+    write over the next attempt's -- built from the same facts (the run id is the
+    workdir's directory name, which is the job id). The supervisor needs it for a step
+    that did *not* finish -- a preempted attempt has a checkpoint and no StepResult to
+    read it out of.
     """
-    return f"{stage_prefix(job_id, stage_id)}/checkpoint"
+    return stage_checkpoint_key(str(job_id), stage_id, attempt)
 
 
 @dataclass(frozen=True)
@@ -262,9 +268,10 @@ def _copy_from_transfer(
     for one `CopyObject`, any error from the copy -- returns False and the caller uploads,
     as it always did. Only "there is no bucket" propagates.
     """
-    if not _dispatched(workdir_root, ref.stage_id):
+    attempt = _dispatched_attempt(workdir_root, ref.stage_id)
+    if attempt is None:
         return False
-    remote = f"{transfer_outputs_key(job_id, ref.stage_id)}/{ref.name}"
+    remote = f"{transfer_outputs_key(job_id, ref.stage_id, attempt)}/{ref.name}"
     try:
         if ref.kind == "dir":
             local = {
@@ -313,14 +320,23 @@ def _copy_from_transfer(
     return True
 
 
-def _dispatched(workdir_root: Path, stage_id: str) -> bool:
-    """Did this stage run on a provider? Its `step.json` -- written before the stage is
-    reported finished -- names the runner that ran it."""
+def _dispatched_attempt(workdir_root: Path, stage_id: str) -> int | None:
+    """The attempt that ran this stage on a provider, or None if it ran here.
+
+    Its `step.json` -- written before the stage is reported finished -- names the runner
+    that ran it and the attempt it was. The attempt matters: every attempt after the first
+    hands its `out/` back under a key of its own (`transfer_outputs_key`), and a file of
+    the same name and size left there by an earlier attempt must never be copied as this
+    one's.
+    """
     try:
         step = json.loads(Workdir(workdir_root).step_path(stage_id).read_text("utf-8"))
     except (OSError, ValueError):
-        return False
-    return isinstance(step, dict) and step.get("runner") == DISPATCHED_RUNNER
+        return None
+    if not isinstance(step, dict) or step.get("runner") != DISPATCHED_RUNNER:
+        return None
+    attempt = step.get("attempt", 1)
+    return attempt if isinstance(attempt, int) and attempt >= 1 else None
 
 
 def _sizes_under(storage: ObjectStorage, prefix: str) -> dict[str, int]:

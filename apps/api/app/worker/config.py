@@ -15,6 +15,17 @@ from pathlib import Path
 from app.config import REPO_ROOT, Settings, get_settings
 
 
+def _queue_check_url(settings: Settings) -> str | None:
+    """`QUEUE_CHECK_URL`: the check the API starts when it queues a job, which the worker
+    completes when it claims one, so a job queued and never claimed raises an alert.
+
+    The API owns that setting -- it is the side that sends `/start` -- so it is read from
+    `Settings` when `Settings` has it, and from the environment as `Settings` would
+    otherwise: one variable, whichever side is deployed first."""
+    value = getattr(settings, "queue_check_url", None) or os.environ.get("QUEUE_CHECK_URL")
+    return str(value) if value else None
+
+
 def default_worker_id() -> str:
     """Host and pid. Two workers on one machine differ; the same worker restarted does not
     pretend to be the one that died, because the pid changed."""
@@ -50,8 +61,29 @@ class WorkerConfig:
     #: keeps losing the box after the fallback is a problem with the placement.
     max_preemptions: int = 4
     retry_backoff_s: float = 2.0
-    #: How long a cancelled child is given to die politely before it is killed.
-    terminate_grace_s: float = 5.0
+    #: How long a stopped recipe process is given to exit before it is killed. A cancel
+    #: makes it cancel its remote call on the way out -- one request to the provider, and
+    #: what that call billed into the ledger -- so this is longer than a signal needs.
+    #: Under fly.toml's 30 s `kill_timeout` with room for a tick and the lease release.
+    terminate_grace_s: float = 15.0
+    #: The most one job may be billed, in dollars (`WORKER_JOB_COST_CAP_USD`); 0 is no cap.
+    cost_cap_usd: float = 20.0
+    #: `CloudRunner`'s `deadline_factor` (`WORKER_DEADLINE_FACTOR`); 0 turns it off.
+    deadline_factor: float = 2.0
+    #: The dead-man's switch for active runs (`WORKER_HEARTBEAT_URL`), and the URL the
+    #: API starts when it queues a job (`QUEUE_CHECK_URL`), pinged when one is claimed.
+    #: See `app.worker.alerts`.
+    heartbeat_url: str | None = None
+    queue_check_url: str | None = None
+    #: How often an active run pings `heartbeat_url`.
+    heartbeat_every_s: float = 60.0
+    #: Free space on the workdir's volume below which nothing is claimed (`app.worker.
+    #: disk`). 0 here, so a config built by hand -- a test's -- never looks at its disk;
+    #: `WORKER_MIN_FREE_GB` (5) is what a deployment runs with.
+    min_free_gb: float = 0.0
+    #: Finished, failed or cancelled runs' workdirs older than this may be evicted when
+    #: the volume is short of `min_free_gb`.
+    evict_after_days: float = 7.0
     #: Drop `inputs/` and every stage's `work/` once a run has finished successfully (see
     #: `JobSupervisor._tidy`). On by default; off only for tests that read scratch files.
     tidy_finished_runs: bool = True
@@ -106,6 +138,12 @@ class WorkerConfig:
             idle_backoff_after_s=resolved.worker_idle_backoff_after_s,
             idle_max_s=resolved.worker_idle_max_s,
             idle_exit_s=resolved.worker_idle_exit_s,
+            cost_cap_usd=resolved.worker_job_cost_cap_usd,
+            deadline_factor=resolved.worker_deadline_factor,
+            heartbeat_url=resolved.worker_heartbeat_url or None,
+            queue_check_url=_queue_check_url(resolved),
+            min_free_gb=resolved.worker_min_free_gb,
+            evict_after_days=resolved.worker_evict_after_days,
         )
 
     @property

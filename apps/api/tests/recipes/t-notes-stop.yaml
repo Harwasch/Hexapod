@@ -1,0 +1,9 @@
+# A quick stage, then one that writes down what it was stopped with: the recipe process
+# turns the supervisor's SIGTERM and SIGUSR1 into a cancel and a detach.
+name: t-notes-stop
+version: 1
+description: A stage that says how it was stopped.
+inputs: []
+stages:
+  - { id: one, impl: t_first }
+  - { id: two, impl: t_notes_stop, params: { seconds: 30 } }

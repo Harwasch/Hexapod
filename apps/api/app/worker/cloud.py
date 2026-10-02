@@ -31,6 +31,8 @@ process whose job is to hold a lease. The child still has no database session.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from importlib.util import find_spec
 from pathlib import Path
@@ -243,6 +245,9 @@ def build_runners(
     poll_interval_s: float = 5.0,
     checkpoint_every_s: float = 60.0,
     transfer_dir: Path | None = None,
+    shield: Callable[[], AbstractContextManager[object]] = nullcontext,
+    cost_cap_usd: float | None = None,
+    deadline_factor: float = 2.0,
 ) -> RunnerSet:
     """CPU stages here, GPU stages on the first provider that keeps them.
 
@@ -250,6 +255,11 @@ def build_runners(
     back to, which `Placement.of` refuses to let be interruptible. A deployment that
     names only a cheap interruptible host has no fallback, and `Placement` says so rather
     than quietly retrying it forever.
+
+    `shield` is the recipe process's way of holding a stop signal back while a call is
+    submitted and written down (`app.worker.child.Interrupts`); `cost_cap_usd` and
+    `deadline_factor` are the job's dollar ceiling and the overdue-trainer guard, both
+    `CloudRunner`'s to enforce because it is what sees a call's running cost and log.
     """
     if not providers:
         return RunnerSet.local()
@@ -271,5 +281,8 @@ def build_runners(
             transfer,
             poll_interval_s=poll_interval_s,
             checkpoint_every_s=checkpoint_every_s,
+            shield=shield,
+            cost_cap_usd=cost_cap_usd,
+            deadline_factor=deadline_factor,
         )
     )

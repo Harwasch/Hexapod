@@ -65,6 +65,7 @@ from app.worker.claim import anything_claimable, claim_next
 from app.worker.cloud import check_dispatchable
 from app.worker.config import WorkerConfig
 from app.worker.pipeline_bridge import recipe_dir
+from app.worker.disk import DiskGuard
 from app.worker.runner import JobSupervisor, Terminal
 
 log = logging.getLogger("app.worker")
@@ -166,6 +167,13 @@ class Worker:
                 )
                 config = replace(config, cpu_only_slots=0)
         self._config = config
+        # One for the process: its slots share the volume, and the eviction's lock.
+        self._disk = DiskGuard(
+            session_factory,
+            config.workdir_root,
+            min_free_gb=config.min_free_gb,
+            evict_after_days=config.evict_after_days,
+        )
 
     @staticmethod
     def from_settings(settings: Settings | None = None) -> Worker:
@@ -206,8 +214,15 @@ class Worker:
         ]
 
     def claim(self, config: WorkerConfig | None = None) -> uuid.UUID | None:
-        """Take the next claimable job, committing the claim immediately (A0 #2)."""
+        """Take the next claimable job, committing the claim immediately (A0 #2).
+
+        Not when the workdir's volume is short of room (`app.worker.disk`): the job
+        stays queued -- an empty claim, as far as the loop is concerned -- rather than
+        failing on a full disk after its download.
+        """
         resolved = config or self._config
+        if not self._disk.room_to_claim():
+            return None
         db = self._sessions()
         try:
             job = claim_next(

@@ -25,8 +25,8 @@ import pytest
 from sqlalchemy import Engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.models import Artifact, Capture, Job, JobStep, Site
-from app.models.enums import CaptureKind, CaptureStatus, RunStatus
+from app.models import Artifact, Capture, CaptureFile, Job, JobStep, Site
+from app.models.enums import CaptureKind, CaptureStatus, RunStatus, UploadStatus
 from app.services import jobs as job_service
 from app.storage import NullStorage, ObjectStorage, S3Storage
 from app.worker import steps as step_service
@@ -442,12 +442,42 @@ def test_long_uploads_and_publishing_hold_no_transaction_open(
     session.close()
     db.commit()  # the test's own session holds nothing either
 
+    # And the download before the first stage: a video of gigabytes, read after the
+    # supervisor's session has looked the job and the capture up -- which opened a
+    # transaction that used to stay open, idle, for the whole download.
+    real_download = storage.download_file
+
+    def download(key: str, target: Path) -> int:
+        seen.append(("download", idle_in_transaction()))
+        return real_download(key, target)
+
+    monkeypatch.setattr(storage, "download_file", download)
+    video = make_capture(db, slug="video")
+    storage.put_object(f"captures/{video.id}/IMG_0001.MOV", b"not a video", "video/quicktime")
+    db.add(
+        CaptureFile(
+            capture_id=video.id,
+            filename="IMG_0001.MOV",
+            storage_key=f"captures/{video.id}/IMG_0001.MOV",
+            bytes=11,
+            status=UploadStatus.COMPLETE,
+        )
+    )
+    db.commit()
+    fetched = queue_job(db, video, "t-upload")
+
     try:
         assert run_job(sessions, storage, job.id, config(tmp_path)) == "complete"
+        session = sessions()
+        assert claim_next(session, worker_id="worker-a", lease_s=30) is not None
+        session.close()
+        db.commit()
+        assert run_job(sessions, storage, fetched.id, config(tmp_path)) == "complete"
     finally:
         probe.dispose()
     assert any(kind == "publish" for kind, _ in seen), seen
     assert any(kind == "upload" for kind, _ in seen), seen
+    assert any(kind == "download" for kind, _ in seen), seen
     assert [entry for entry in seen if entry[1] != 0] == [], seen
 
 
@@ -749,10 +779,22 @@ def test_a_worker_asked_to_stop_lets_go_of_the_job_mid_stage(
     assert handed_back is not None
     assert handed_back.status is RunStatus.IN_PROGRESS
     assert handed_back.claimed_by is None and handed_back.lease_expires_at is None
+    # The step says it was stopped for a shutdown, not that it failed...
+    assert steps_by_stage(db, job.id)["two"].metrics.get("detached") is True
     # Claimable straight away, with no lease to wait out.
     taker = sessions()
     assert claim_next(taker, worker_id="worker-b", lease_s=30) is not None
     taker.close()
+
+    # ...so the next worker resumes it as the same attempt: a deploy spends nothing.
+    handed_back.params = {"two": {"seconds": 0.2}}
+    db.commit()
+    assert run_job(sessions, storage, job.id, config(tmp_path, worker_id="worker-b")) == (
+        "complete"
+    )
+    steps = steps_by_stage(db, job.id)
+    assert steps["two"].attempt == 1
+    assert steps["one"].attempt == 1, "the stage that had finished was skipped"
 
 
 def test_a_deployment_with_no_bucket_still_runs_it_just_has_no_logs(

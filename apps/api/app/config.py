@@ -186,6 +186,25 @@ class Settings(BaseSettings):
     # Being taken off a cheap interruptible box is not the stage failing, so it does not
     # spend the budget meant for one that is -- but the ceiling is still hard.
     worker_max_preemptions: int = 4
+    # The most one job may be billed, across every stage and attempt, in dollars: no
+    # remote call starts past it and a running one is cancelled when its cost would go
+    # over it, and the job is dead-lettered saying so. A typical Lane 2 run is a dollar
+    # or two (an L4 hour is ~$0.96 with its reservation); 20 is a runaway guard, not a
+    # budget. 0 turns it off.
+    worker_job_cost_cap_usd: float = 20.0
+    # A remote call whose trainer stops printing progress is cancelled as timed out once
+    # it has run this many times what its newest progress line projected (plus 30 min).
+    # 0 turns it off; the provider's own limit (six hours on Modal) still applies.
+    worker_deadline_factor: float = 2.0
+    # A healthchecks.io-style URL pinged for active runs only: `<url>/start` when a job
+    # is claimed, `<url>` every minute while it runs and when it succeeds, `<url>/fail`
+    # when it fails. Nothing while idle. Unset, nothing is pinged.
+    worker_heartbeat_url: str | None = None
+    # Below this many GB free on the workdir's volume the worker does not claim, says so
+    # in its log, and evicts finished runs' workdirs older than `worker_evict_after_days`
+    # to make room. 0 turns the check off.
+    worker_min_free_gb: float = 5.0
+    worker_evict_after_days: float = 7.0
     # Pause between attempts at the same stage.
     worker_retry_backoff_s: float = 2.0
     # Jobs one worker process supervises at once, each in its own slot with its own claim,

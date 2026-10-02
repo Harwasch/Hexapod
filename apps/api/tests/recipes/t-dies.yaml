@@ -1,0 +1,7 @@
+# A stage whose process dies with a few words on stderr and no event.
+name: t-dies
+version: 1
+description: A recipe process that dies without reporting.
+inputs: []
+stages:
+  - { id: train, impl: t_dies }
