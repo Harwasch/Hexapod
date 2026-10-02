@@ -1,7 +1,7 @@
 /* ---------------------------------------------------------------------------
    Mission-control surfaces: the site switcher, view tabs, layer pills (the favourites at
-   the top of Layers), markers, zone chips, selection cards, the Plan / Fleet drawer, the
-   status line and agent log.
+   the top of Layers), markers, zone chips and site pins, selection cards, the Plan / Fleet
+   drawer, the status line and agent log.
    Built on the glass tokens; no duplicated material definitions.
    --------------------------------------------------------------------------- */
 
@@ -575,6 +575,68 @@ a.mc-link {
 }
 
 .mc-chip:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+/* ---- Site pin: a project at globe scale -------------------------------- */
+/* One pin with the site's name and how many markers and chips it stands for. It hangs above
+   its anchor, so the point it names stays visible under it. */
+.mc-site-pin {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin: -2.6rem 0 0 -0.6rem;
+  padding: 0.35rem 0.4rem 0.35rem 0.55rem;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface-solid) 88%, transparent);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.45);
+  color: var(--text-primary);
+  font: 600 12.5px var(--font-sans);
+  white-space: nowrap;
+  cursor: pointer;
+  pointer-events: auto;
+  will-change: transform;
+}
+
+/* The stem from the pin down to the ground it names. */
+.mc-site-pin::after {
+  content: "";
+  position: absolute;
+  left: 0.55rem;
+  top: 100%;
+  width: 2px;
+  height: 0.95rem;
+  background: linear-gradient(var(--accent), transparent);
+}
+
+.mc-site-pin__dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 9px var(--accent);
+}
+
+.mc-site-pin__count {
+  min-width: 1.4rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--text-primary);
+  font-size: 12px;
+  text-align: center;
+}
+
+.mc-site-pin:hover {
+  border-color: var(--accent-border);
+}
+
+.mc-site-pin:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
 }
