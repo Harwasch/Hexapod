@@ -413,6 +413,8 @@ def drop_and_fill(
         with_fill = (
             to_u8(render(Splats.concat([kept, lifted]), held).rgb) if len(lifted) else without
         )
+        if save_dir is not None:
+            _save_strip(save_dir / "held-out.png", [truth, without, with_fill], hole)
         report.held_out = {
             "maskPx": int(hole.sum()),
             "psnrFill": round(psnr(with_fill, truth, hole), 2),
@@ -443,6 +445,25 @@ def _save_strip(path: Path, images: Sequence[np.ndarray], mask: np.ndarray) -> N
     marked[edge > 0] = (255, 0, 255)
     strip = np.concatenate([images[0], marked, *images[2:]], axis=1)
     Image.fromarray(strip).save(path)
+
+
+def _save_before_after(
+    save_dir: Path, splats: Splats, lifted: Splats, grid: vc.ConeGrid, filled: Sequence[Filled]
+) -> None:
+    """Per accepted view, `after{k}.png`: the scan as the globe draws it from there (faded by
+    its view cones) beside the same with the inferred layer added."""
+    from PIL import Image
+
+    both = Splats.concat([splats, lifted])
+    for k, f in enumerate(filled):
+        if not f.accepted:
+            continue
+        camera = f.conditioning.camera
+        weights = np.concatenate([seen_weights(splats, camera, grid), np.ones(len(lifted))])
+        after = to_u8(render(both, camera, opacity_scale=weights).rgb)
+        strip = np.concatenate([to_u8(f.conditioning.seen.rgb), after], axis=1)
+        save_dir.mkdir(parents=True, exist_ok=True)
+        Image.fromarray(strip).save(save_dir / f"after{k}.png")
 
 
 def package_inferred(
@@ -603,6 +624,8 @@ def fill_scan(
         )
     used = [f.conditioning.camera for f in filled if f.accepted]
     evidence = package_inferred(lifted, confidence, used, measured_tileset, out_dir, filler.name)
+    if save_dir is not None:
+        _save_before_after(save_dir, splats, lifted, grid, filled)
     return {**evidence, "perView": per_view, **({"distill": distilled} if distilled else {})}
 
 

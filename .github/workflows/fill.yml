@@ -1,0 +1,73 @@
+name: Fill scans (Modal GPU, NVIDIA Fixer)
+
+# Runs tools/captures/teacher_fill.py (Teacher B) on Modal with NVIDIA Fixer as the filler,
+# beside the CPU stand-in (Telea) for comparison: the drop test (scored against what was
+# there) and the fill from outside (an inferred layer). Uploads the reports, strips and
+# inferred tilesets as an artifact. Nothing is published. See infra/modal/fill.py and
+# docs/WORLD_MODEL_RUNBOOK.md.
+#
+# On a push to `living-models` (or a `wm-*` working branch) that touches the fill code
+# (workflow_dispatch only works once this file is on the default branch). The Modal token
+# is the repository's; Fixer needs no other secret.
+
+on:
+  push:
+    branches: [living-models, "wm-*"]
+    paths:
+      - infra/modal/fill.py
+      - tools/captures/teacher_fill.py
+      - tools/captures/world_model_client.py
+      - tools/captures/distill_fill.py
+      - .github/workflows/fill.yml
+  workflow_dispatch:
+    inputs:
+      jobs:
+        description: kind:scan pairs (drop|fill, scans in infra/modal/fill.py)
+        type: string
+        default: drop:yard,drop:spool,fill:camp
+      fillers:
+        description: Fillers (telea, fixer)
+        type: string
+        default: telea,fixer
+      distill:
+        description: Distill steps for fill jobs (0 = none)
+        type: string
+        default: "0"
+
+concurrency:
+  group: fill-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  JOBS: ${{ inputs.jobs || 'drop:yard' }}
+  FILLERS: ${{ inputs.fillers || 'telea,fixer' }}
+  DISTILL: ${{ inputs.distill || '0' }}
+
+jobs:
+  fill:
+    name: Fill on a Modal GPU
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Check the Modal token is there
+        run: |
+          test -n "$MODAL_TOKEN_ID" -a -n "$MODAL_TOKEN_SECRET" \
+            || { echo "::error::MODAL_TOKEN_ID / MODAL_TOKEN_SECRET are not set"; exit 1; }
+      - name: Modal secrets present (names only)
+        continue-on-error: true
+        run: uv run --with modal==1.5.5 modal secret list
+      - name: modal run infra/modal/fill.py
+        run: |
+          uv run --with modal==1.5.5 modal run infra/modal/fill.py \
+            --jobs "$JOBS" --fillers "$FILLERS" --distill "$DISTILL" --out fill-out
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: fill
+          path: fill-out
+          if-no-files-found: warn

@@ -35,11 +35,21 @@ PLANT_PROMPT = (
 )
 
 
-def modal_remote(cls: str, method: str, request: dict) -> dict:
-    """Calls `cls.method(request)` on the deployed app (needs MODAL_TOKEN_ID/SECRET)."""
-    import modal
+#: GPU classes by name that `modal_remote` calls in place of the deployed app's: set by a
+#: runner already inside a Modal app that defines its own (`infra/modal/fill.py`).
+LOCAL_CLASSES: dict[str, Callable[[], object]] = {}
 
-    instance = modal.Cls.from_name(os.environ.get("HEXAPOD_WORLD_MODELS_APP", APP_NAME), cls)()
+
+def modal_remote(cls: str, method: str, request: dict) -> dict:
+    """Calls `cls.method(request)` on the deployed app (needs MODAL_TOKEN_ID/SECRET), or on
+    the class registered in `LOCAL_CLASSES` under that name."""
+    if cls in LOCAL_CLASSES:
+        instance = LOCAL_CLASSES[cls]()
+    else:
+        import modal
+
+        app = os.environ.get("HEXAPOD_WORLD_MODELS_APP", APP_NAME)
+        instance = modal.Cls.from_name(app, cls)()
     return getattr(instance, method).remote(request)
 
 
