@@ -32,12 +32,16 @@
  *   `Content-Security-Policy: sandbox; default-src 'none'`, so even a mislabelled object
  *   opened as a page is an opaque-origin document that can run nothing and load nothing.
  *
- * `HEAD /r2/` answers 204 with `X-Tile-Proxy: 1` when a host is pinned: the web app routes
- * tiles here only once it has seen that (apps/web/src/lib/tileProxy.ts). With no host
- * pinned -- the variable unset, empty, or not an r2.dev hostname -- the probe is a 404
- * without the header and every proxied path is a 404 too, so the web app keeps loading the
- * managed URL directly. That is the safe way to be misconfigured: slower tiles, not an open
- * proxy.
+ * `HEAD /r2/` answers 204 with `X-Tile-Proxy: <the pinned host>` when a host is pinned, and
+ * the web app routes a URL here only when its host is *that* host
+ * (apps/web/src/lib/tileProxy.ts). It used to answer `X-Tile-Proxy: 1`, and the web app
+ * then sent every `pub-*.r2.dev` URL here -- which, once the host was pinned, was a 404 for
+ * any tileset in another public bucket: one added through Add data, a demo or seed bucket,
+ * a public bucket the deployment used before. Naming the host makes the probe say exactly
+ * what this serves, so everything else keeps loading from where it is. With no host pinned
+ * -- the variable unset, empty, or not an r2.dev hostname -- the probe is a 404 without the
+ * header and every proxied path is a 404 too, so the web app keeps loading the managed URL
+ * directly. That is the safe way to be misconfigured: slower tiles, not an open proxy.
  *
  * Pages runs a function only for its own routes (the generated _routes.json), so nothing
  * else on the site is affected.
@@ -151,11 +155,12 @@ export async function onRequest({ request, env }) {
   const rest = new URL(request.url).pathname.replace(/^\/r2\/?/, "");
   if (rest === "") {
     // The probe. Without a pinned host it must not say "here", or the web app would send
-    // every tile to a function that is going to refuse them all.
+    // every tile to a function that is going to refuse them all; with one, it says which,
+    // so the web app sends only that bucket's URLs and leaves every other bucket alone.
     return pinned
       ? new Response(null, {
           status: 204,
-          headers: { "X-Tile-Proxy": "1", "Cache-Control": "no-store" },
+          headers: { "X-Tile-Proxy": pinned, "Cache-Control": "no-store" },
         })
       : new Response(null, { status: 404, headers: { "Cache-Control": "no-store" } });
   }

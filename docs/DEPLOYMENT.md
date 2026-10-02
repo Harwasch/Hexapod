@@ -108,8 +108,11 @@ them) is immutable on the same terms: a new cut of a font gets a new file name.
 
 `functions/r2/[[path]].js` is a Pages Function that serves the public bucket's `r2.dev`
 URL from the web app's own origin, over HTTP/2-3 and with cache lifetimes (r2.dev gives
-HTTP/1.1 and neither). The web app uses it only once `HEAD /r2/` answers `X-Tile-Proxy: 1`
-(`apps/web/src/lib/tileProxy.ts`).
+HTTP/1.1 and neither). `HEAD /r2/` answers `X-Tile-Proxy: <the pinned host>`, and the web
+app (`apps/web/src/lib/tileProxy.ts`) sends a URL through it only when the URL is on that
+host. Any other `r2.dev` bucket — a tileset added through Add data, a demo or seed bucket —
+loads from its own URL, as it would with no proxy. (The probe used to answer `1`, and every
+`pub-*.r2.dev` URL was rewritten to a function that 404s all but one host.)
 
 Whatever it answers is served from the origin where the console keeps the write token in
 `localStorage`, so it is locked to exactly what it is for:
@@ -134,7 +137,8 @@ the probe answers 404 without the header, every proxied path is a 404, and the w
 loads tiles from the bucket's own URL. A custom domain needs no proxy: Cloudflare already
 serves it over HTTP/2 with caching, and the web app only ever routes `r2.dev` hosts here.
 Tiles published under a _previous_ r2.dev host (an older public bucket) are not served
-through the proxy; republish them, or leave the proxy off until they are.
+through the proxy: the web app loads them from that host directly, over HTTP/1.1 and
+uncached, until they are republished into the current bucket.
 
 ## API and worker — Fly.io
 

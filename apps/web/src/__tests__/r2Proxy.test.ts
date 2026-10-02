@@ -59,10 +59,14 @@ describe("the /r2 tile proxy", () => {
   beforeEach(() => bucket());
   afterEach(() => vi.unstubAllGlobals());
 
-  it("announces itself on the probe once a host is pinned", async () => {
+  it("names the one host it serves on the probe, once a host is pinned", async () => {
     const response = await onRequest({ request: get("/r2/", {}, "HEAD"), env });
     expect(response.status).toBe(204);
-    expect(response.headers.get("X-Tile-Proxy")).toBe("1");
+    expect(response.headers.get("X-Tile-Proxy")).toBe(OURS);
+    // However the operator wrote it, the probe names the bare hostname the web app compares.
+    const asUrl = { TILE_PROXY_HOST: ` https://${OURS.toUpperCase()}/ ` };
+    const probe = await onRequest({ request: get("/r2/", {}, "HEAD"), env: asUrl });
+    expect(probe.headers.get("X-Tile-Proxy")).toBe(OURS);
   });
 
   it("with no host pinned, answers the probe without the header and proxies nothing", async () => {
