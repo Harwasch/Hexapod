@@ -74,9 +74,30 @@ def test_the_poll_backs_off_after_a_minute_and_stops_at_thirty_seconds() -> None
 def test_the_settings_reach_the_worker_and_a_checkout_default_is_documented(
     tmp_path: Path,
 ) -> None:
-    resolved = WorkerConfig.from_settings(Settings(worker_workdir=str(tmp_path)))
-    assert resolved.idle_exit_s == 900.0
-    assert (resolved.idle_backoff_after_s, resolved.idle_max_s) == (60.0, 30.0)
+    # The defaults as declared: a developer's own .env (copied from .env.example, which
+    # sets 0) would override a Settings() built here, so the field is what is read.
+    defaults = {
+        name: Settings.model_fields[name].default
+        for name in ("worker_idle_exit_s", "worker_idle_backoff_after_s", "worker_idle_max_s")
+    }
+    assert defaults == {
+        "worker_idle_exit_s": 900.0,
+        "worker_idle_backoff_after_s": 60.0,
+        "worker_idle_max_s": 30.0,
+    }
+    resolved = WorkerConfig.from_settings(
+        Settings(
+            worker_workdir=str(tmp_path),
+            worker_idle_exit_s=120,
+            worker_idle_backoff_after_s=10,
+            worker_idle_max_s=5,
+        )
+    )
+    assert (resolved.idle_exit_s, resolved.idle_backoff_after_s, resolved.idle_max_s) == (
+        120.0,
+        10.0,
+        5.0,
+    )
     # A worker built directly -- every test, any embedding -- polls forever.
     assert config(tmp_path).idle_exit_s == 0.0
     example = (API_ROOT.parents[1] / ".env.example").read_text()
