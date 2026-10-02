@@ -13,10 +13,14 @@
  * them amber and dims the rest; and with the view-cone part in the same chain ("seen from
  * below only", seen from above) the scan still vanishes and comes back.
  *
+ * The same holds under the app's default splat renderer, PlayCanvas over the globe
+ * (cesium/scanView): there the ids come from each tile's checksum as PlayCanvas decodes it, and
+ * a hidden splat loses its opacity in PlayCanvas's own work buffer (scanInstances.ts).
+ *
  * Headless GL is SwiftShader: pixels are counted, not eyeballed.
  */
 
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { expect, test, type Page } from "@playwright/test";
@@ -46,6 +50,13 @@ interface InstancesHarness {
   measure(rect?: Rect): Measure;
   hooks(): { visibility: string[]; color: boolean; table: boolean };
   tiles(): { uri: string; splats: number }[];
+  scan(): {
+    kind: string;
+    active: boolean;
+    tiles: number;
+    native: boolean;
+    instances: { tiles: number; matched: number } | null;
+  } | null;
 }
 
 const TILES = resolve(process.cwd(), "../../data/tiles");
@@ -55,6 +66,7 @@ const INSTANCES = "../instances/instances.json";
 interface Options {
   incremental: boolean;
   maximumScreenSpaceError: number;
+  renderer?: "cesium" | "playcanvas" | "spark";
 }
 
 function harnessHtml(options: Options): string {
@@ -77,6 +89,7 @@ function harnessHtml(options: Options): string {
         url: "/fixture-tiles/${TILESET}",
         incremental: ${String(options.incremental)},
         maximumScreenSpaceError: ${String(options.maximumScreenSpaceError)},
+        renderer: "${options.renderer ?? "cesium"}",
       });
     </script>
   </body>
@@ -101,9 +114,13 @@ async function open(page: Page, options: Options, errors: string[]): Promise<voi
       tileset.root.extras = {
         ...tileset.root.extras,
         instances: { uri: INSTANCES, count: instances.instances.length },
+        // The yard has no PlayCanvas streamed package here, and says so: nothing is probed.
+        nativeLod: false,
       };
       return route.fulfill({ status: 200, json: tileset });
     }
+    const file = resolve(TILES, relative);
+    if (!existsSync(file)) return route.fulfill({ status: 404, body: "" });
     const type = relative.endsWith(".json")
       ? "application/json"
       : relative.endsWith(".glb")
@@ -112,7 +129,7 @@ async function open(page: Page, options: Options, errors: string[]): Promise<voi
     return route.fulfill({
       status: 200,
       contentType: type,
-      body: readFileSync(resolve(TILES, relative)),
+      body: readFileSync(file),
     });
   });
   await page.route("**/instances-harness.html", (route) =>
@@ -254,3 +271,81 @@ test("the ids follow the splats in aggregated mode, at the app's screen-space er
   expect(lit.warmth).toBeGreaterThan(baseline.warmth + 20);
   expect(restored.coverage).toBeGreaterThan(baseline.coverage * 0.95);
 });
+
+for (const renderer of ["playcanvas", "spark"] as const) {
+  test(`under ${renderer === "playcanvas" ? "PlayCanvas, the app's default renderer" : "Spark"}, objects hide, highlight and hide all`, async ({
+    page,
+  }) => {
+    test.setTimeout(600_000);
+    const errors: string[] = [];
+    const requests: string[] = [];
+    page.on("request", (request) => requests.push(request.url()));
+    await open(page, { incremental: true, maximumScreenSpaceError: 16, renderer }, errors);
+    const call = caller(page);
+    await call("view", 30, -50, 45);
+    const baseline = await call("view", 30, -50, 45);
+    const scan = await call("scan");
+    const hooks = await call("hooks");
+    await page.screenshot({ path: test.info().outputPath(`${renderer}-baseline.png`) });
+    const list = await call("instances");
+    const largest = list.filter((i) => i.parent === null).slice(0, 3);
+    const hidden = await call("set", { hidden: largest.map((i) => i.id) });
+    await page.screenshot({ path: test.info().outputPath(`${renderer}-hidden-largest.png`) });
+    // Hide all: every instance at once, as "Hide all N matches" does for a broad query.
+    const all = await call("set", { hidden: list.map((i) => i.id) });
+    await page.screenshot({ path: test.info().outputPath(`${renderer}-hidden-all.png`) });
+    const shown = await call("set", {});
+    const target = largest[2]?.id ?? 1;
+    const rect = (await call("rectOf", target)) ?? undefined;
+    const before = await call("measure", rect);
+    const tinted = await call("set", { highlighted: [target], dimOthers: false }, rect);
+    const undimmed = await call("measure");
+    const dimmed = await call("set", { highlighted: [target] });
+    await page.screenshot({ path: test.info().outputPath(`${renderer}-highlight.png`) });
+    const both = await call("set", { hidden: [largest[0]?.id ?? 1], highlighted: [target] });
+    await page.screenshot({ path: test.info().outputPath(`${renderer}-hide-and-highlight.png`) });
+    const restored = await call("set", {});
+
+    test.info().annotations.push({
+      type: "measures",
+      description: JSON.stringify({
+        scan,
+        hooks,
+        largest,
+        baseline,
+        hidden,
+        all,
+        shown,
+        rect,
+        before,
+        tinted,
+        undimmed,
+        dimmed,
+        both,
+        restored,
+      }),
+    });
+    expect(shaderErrors(errors)).toEqual([]);
+    expect(errors.filter((e) => /404|Failed to load/i.test(e))).toEqual([]);
+    // The tileset declares no native package: it is not probed for one.
+    expect(requests.filter((url) => url.includes("lod-meta.json"))).toEqual([]);
+    expect(scan?.kind).toBe(renderer);
+    expect(scan?.native).toBe(false);
+    expect(hooks.table).toBe(true);
+    // Every tile PlayCanvas loaded is found in instances.json by its checksum.
+    expect(scan?.instances?.tiles).toBeGreaterThan(0);
+    expect(scan?.instances?.matched).toBe(scan?.instances?.tiles);
+    // CesiumJS draws no splats here: what is counted is the dedicated renderer's.
+    expect(baseline.coverage).toBeGreaterThan(0.05);
+    expect(hidden.coverage).toBeLessThan(baseline.coverage * 0.9);
+    // The app's screen-space error draws coarse tiles too, whose merged splats carry an id only
+    // where all their children share it (as in aggregated mode above).
+    expect(all.coverage).toBeLessThan(baseline.coverage * 0.25);
+    expect(shown.coverage).toBeGreaterThan(baseline.coverage * 0.95);
+    expect(restored.coverage).toBeGreaterThan(baseline.coverage * 0.95);
+    expect(tinted.warmth).toBeGreaterThan(before.warmth * 1.3);
+    expect(dimmed.luma).toBeLessThan(undimmed.luma * 0.6);
+    expect(dimmed.coverage).toBeLessThan(undimmed.coverage);
+    expect(both.coverage).toBeLessThan(dimmed.coverage);
+  });
+}

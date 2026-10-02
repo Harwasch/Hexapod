@@ -126,6 +126,19 @@ Written beside the measured tiles; read by the viewer, the skinning step and the
 The measured tileset's `root.extras.instances = { "uri": "instances.json", "count": n }`, so
 the viewer finds it without probing (the same pattern as `viewCones` and `inferredLayers`).
 
+**In the viewer**, hide and highlight work under every splat renderer, from the same per-tile
+binding: CesiumJS's own primitive (`cesium/splatInstances.ts`: the visibility chain and the
+colour hook), and the dedicated renderers laid over the globe (`cesium/scanView/scanInstances.ts`).
+PlayCanvas digests each tile's positions in its decode worker, keeps the ids beside the tile's
+splats as one more resource stream (in PlayCanvas's Morton order), and applies the rule in a
+work-buffer modifier; Spark digests the tile's SPZ centres and applies it in an object
+modifier (a dyno). The rule is CesiumJS's: a hidden splat has no opacity, a highlighted one
+is pulled toward the tint, and while anything is highlighted the rest are dimmed. A scan that
+PlayCanvas streams from its own package (`sog/lod-meta.json`) has no tile checksums, so its
+objects cannot be hidden there; the objects panel says so and offers the CesiumJS renderer.
+The panel's "Hide all N matches" and "Show only matches" act on every match of the query, not
+only the fifty it lists.
+
 ### `skin.json` + `skin.bin` (step B2)
 
 Written by `tools/captures/skin_scene.py TILES_DIR instances.json [--out DIR] [--link]`, one
@@ -191,6 +204,7 @@ splat's ancestor chain owns it (a tree, not each branch), so the skin is smooth 
   The eigenmodes are global (non-zero almost everywhere), so keeping the k largest per splat
   switches modes on and off between neighbours and tears; on the yard's objects top-4 is 22–55%
   rms error. Dense int8 is within 1% everywhere measured (yard: 0.5–0.8% rms, ≤ 2.2% max).
+
 - **Size**: 16 B per skinned splat, nothing for static ones; `skin.json` ~0.4 KB per tile plus
   ~1.3 KB per skin, and its `dynamics` 0.7–2.5 KB (two `m×m` triangles). The yard fixture: 4
   skins, 12,568 rows, `skin.bin` 201 KB, `skin.json` 12 KB. Everything skinned in the yard would be 727 KB (45k splats; gzip 446 KB) against

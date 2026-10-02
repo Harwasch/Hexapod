@@ -27,6 +27,7 @@ import {
 } from "@/cesium/splatVisibility";
 import {
   halfToFloat,
+  hiddenForOnly,
   instanceLabel,
   instancesRefOf,
   matchLabel,
@@ -299,13 +300,38 @@ describe("search", () => {
 
   it("offers quick filters from what the file holds", () => {
     const filters = quickFilters(doc());
-    expect(filters.map((f) => [f.label, f.query, f.count])).toEqual([
-      ["movable", "movable > 0.5", 2],
-      ["vegetation", "vegetation > 0.5", 2],
-      ["vehicle", "vehicle > 0.5", 1],
-      ["movable", "behaviour:movable", 2],
-      ["in-place", "behaviour:in-place", 2],
+    expect(filters.map((f) => [f.kind, f.label, f.query, f.count])).toEqual([
+      ["property", "movable", "movable > 0.5", 2],
+      ["property", "vegetation", "vegetation > 0.5", 2],
+      ["property", "vehicle", "vehicle > 0.5", 1],
+      ["behaviour", "behaviour: movable", "behaviour:movable", 2],
+      ["behaviour", "behaviour: in-place", "behaviour:in-place", 2],
     ]);
+    // A property and a behaviour that share a name ("movable") never read the same.
+    expect(new Set(filters.map((f) => f.label)).size).toBe(filters.length);
+  });
+
+  it("returns every match when asked for no limit, with each one's size", () => {
+    const many = Array.from({ length: 120 }, (_, k) => ({
+      ...(doc().instances[1] ?? ({} as never)),
+      id: k + 1,
+      splats: 1000 + k,
+    }));
+    expect(searchInstances(many, "vegetation")).toHaveLength(50);
+    const all = searchInstances(many, "vegetation", Number.POSITIVE_INFINITY);
+    expect(all).toHaveLength(120);
+    // Ties go to the larger instance; the size comes with the result.
+    expect(all[0]).toMatchObject({ id: 120, splats: 1119 });
+  });
+
+  it("hides everything but the matches, keeping what holds them and what they hold", () => {
+    const d = doc();
+    // 3 is inside 2: showing only 3 keeps its parent 2 (hiding 2 would hide 3 with it).
+    expect(hiddenForOnly(d, [3]).sort()).toEqual([1, 4]);
+    // Showing only 2 keeps 3, inside it.
+    expect(hiddenForOnly(d, [2]).sort()).toEqual([1, 4]);
+    expect(hiddenForOnly(d, [1, 4]).sort()).toEqual([2, 3]);
+    expect(hiddenForOnly(d, []).sort()).toEqual([1, 2, 3, 4]);
   });
 
   it("walks the hierarchy down from a coarse instance", () => {
@@ -358,7 +384,45 @@ describe("search by meaning (the seam)", () => {
 });
 
 describe("the store", () => {
-  beforeEach(() => useInstances.setState({ assets: {}, dimOthers: true }));
+  beforeEach(() => useInstances.setState({ assets: {}, dimOthers: true, gaps: {} }));
+
+  it("hides all of a query's matches, or shows only them, past the listed ones", () => {
+    const s = (): ReturnType<typeof useInstances.getState> => useInstances.getState();
+    const base = doc();
+    const many = Array.from({ length: 120 }, (_, k) => ({
+      ...(base.instances[1] ?? ({} as never)),
+      id: k + 1,
+      properties: { vegetation: k < 90 ? 0.9 : 0.1 },
+    }));
+    s().setTable("a", { instances: many, propertyNames: ["vegetation"] });
+    s().setQuery("a", "vegetation > 0.5");
+    expect(s().assets.a?.results).toHaveLength(50);
+    expect(s().assets.a?.matches).toHaveLength(90);
+    s().hideMatches("a");
+    expect(s().assets.a?.hidden.size).toBe(90);
+    expect(s().assets.a?.hidden.has(90)).toBe(true);
+    expect(s().assets.a?.hidden.has(91)).toBe(false);
+    s().showOnlyMatches("a");
+    expect([...(s().assets.a?.hidden ?? [])].sort((x, y) => x - y)).toEqual(
+      Array.from({ length: 30 }, (_, k) => 91 + k),
+    );
+    // No query, no matches: nothing changes.
+    s().setQuery("a", "");
+    const hidden = s().assets.a?.hidden;
+    s().hideMatches("a");
+    s().showOnlyMatches("a");
+    expect(s().assets.a?.hidden).toBe(hidden);
+  });
+
+  it("records a renderer that cannot draw a scan's objects", () => {
+    const s = (): ReturnType<typeof useInstances.getState> => useInstances.getState();
+    s().setGap("a", { renderer: "playcanvas", reason: "native" });
+    const gaps = s().gaps;
+    s().setGap("a", { renderer: "playcanvas", reason: "native" });
+    expect(s().gaps).toBe(gaps);
+    s().setGap("a", null);
+    expect(s().gaps.a).toBeUndefined();
+  });
 
   it("holds a scan's table, searches it, and hides and highlights", () => {
     const s = (): ReturnType<typeof useInstances.getState> => useInstances.getState();

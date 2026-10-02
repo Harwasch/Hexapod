@@ -9,6 +9,12 @@
  * `SiteManager` attaches one (`attachViewCones`, `attachInstances`, the store in
  * `state/instances.ts`), so what is driven here is what the app runs.
  *
+ * With `renderer: "playcanvas"` the scan is drawn as the app draws it by default: CesiumJS's
+ * tileset hidden (but loaded, for its frame and its instances.json) and PlayCanvas streaming
+ * the same tiles over it (cesium/scanView), with the objects bound by tile checksum there
+ * (scanView/scanInstances.ts); `renderer: "spark"` the same with Spark. Measures then read both canvases, the globe's under the
+ * renderer's.
+ *
  * Loaded dynamically by the spec; nothing imports it, so it never reaches the production
  * bundle. Headless GL is SwiftShader: pixels are counted, not eyeballed.
  */
@@ -25,6 +31,7 @@ import {
   type Scene,
 } from "cesium";
 
+import { ScanRendererHost, type ScanRendererStatus } from "@/cesium/scanView/ScanRendererHost";
 import { attachInstances, instanceSphere, type InstancePrimitive } from "@/cesium/splatInstances";
 import { incrementalSplats, keepOffscreenSplats, splatTilesetOf } from "@/cesium/splatInternals";
 import { cesiumViewConeGpu, SplatViewCones } from "@/cesium/splatViewCones";
@@ -77,6 +84,8 @@ export interface InstancesHarness {
   hooks(): { visibility: string[]; color: boolean; table: boolean };
   /** The tiles drawn now, and their splats. */
   tiles(): { uri: string; splats: number }[];
+  /** The dedicated renderer's status, when one draws the scan. */
+  scan(): ScanRendererStatus | null;
 }
 
 function nextFrame(scene: Scene): Promise<void> {
@@ -101,7 +110,25 @@ export async function startInstancesHarness(options: {
   incremental?: boolean;
   /** 16 by default; a low one draws the leaves wherever the camera is. */
   maximumScreenSpaceError?: number;
+  /** Who draws the splats: CesiumJS (default) or PlayCanvas over it, as the app's default. */
+  renderer?: "cesium" | "playcanvas" | "spark";
 }): Promise<InstancesHarness> {
+  const dedicated = options.renderer === "playcanvas" || options.renderer === "spark";
+  if (dedicated) {
+    // The renderer's own canvas keeps its pixels between frames, so they can be counted.
+    const getContext = Object.getOwnPropertyDescriptor(HTMLCanvasElement.prototype, "getContext")
+      ?.value as (this: HTMLCanvasElement, type: string, attributes?: unknown) => unknown;
+    HTMLCanvasElement.prototype.getContext = function (
+      this: HTMLCanvasElement,
+      type: string,
+      attributes?: Record<string, unknown>,
+    ) {
+      const forced = this.dataset.scanRenderer
+        ? { ...attributes, preserveDrawingBuffer: true }
+        : attributes;
+      return getContext.call(this, type, forced);
+    } as typeof HTMLCanvasElement.prototype.getContext;
+  }
   const widget = new CesiumWidget(options.container, {
     baseLayer: false,
     requestRenderMode: false,
@@ -125,6 +152,15 @@ export async function startInstancesHarness(options: {
   }
   scene.primitives.add(tileset);
   attachInstances(tileset, scene, ASSET);
+  let host: ScanRendererHost | undefined;
+  if (dedicated && options.renderer) {
+    // As SiteManager.setSplatRenderer: CesiumJS's scan hidden, and not streamed.
+    tileset.show = false;
+    tileset.preloadWhenHidden = false;
+    host = new ScanRendererHost(widget);
+    host.setRenderer(options.renderer);
+    host.setTarget({ key: ASSET, tileset, assetId: ASSET });
+  }
 
   const primitive = (): InstancePrimitive | undefined =>
     splatTilesetOf(tileset).gaussianSplatPrimitive;
@@ -156,6 +192,8 @@ export async function startInstancesHarness(options: {
     const context = copy.getContext("2d");
     if (!context) return { coverage: 0, amber: 0, luma: 0, warmth: 0 };
     context.drawImage(canvas, 0, 0);
+    const overlay = document.querySelector<HTMLCanvasElement>("canvas[data-scan-renderer]");
+    if (host && overlay) context.drawImage(overlay, 0, 0, copy.width, copy.height);
     const x0 = Math.max(0, Math.floor(rect?.x ?? 0));
     const y0 = Math.max(0, Math.floor(rect?.y ?? 0));
     const x1 = Math.min(copy.width, Math.ceil(rect ? rect.x + rect.width : copy.width));
@@ -197,6 +235,26 @@ export async function startInstancesHarness(options: {
           rangeM,
         ),
       );
+      if (host) {
+        // The renderer's tiles: settled once the count has held for a second.
+        let settled = 0;
+        let last = -1;
+        for (let frame = 0; frame < 3000 && settled < 60; frame += 1) {
+          await nextFrame(scene);
+          const status = host.status();
+          const ready =
+            status.frames > 5 &&
+            status.tiles > 0 &&
+            status.loading === 0 &&
+            useInstances.getState().assets[ASSET] !== undefined &&
+            (status.instances?.matched ?? 0) > 0;
+          settled = ready && status.tiles === last ? settled + 1 : 0;
+          last = status.tiles;
+        }
+        if (!useInstances.getState().assets[ASSET]) throw new Error("instances never loaded");
+        await settle(30);
+        return measure();
+      }
       for (let frame = 0; frame < 600; frame += 1) {
         if (tileset.tilesLoaded && primitive() && useInstances.getState().assets[ASSET]) break;
         await nextFrame(scene);
@@ -223,6 +281,7 @@ export async function startInstancesHarness(options: {
       await settle(20);
       return measure(rect);
     },
+    scan: () => host?.status() ?? null,
     async cones(mode) {
       const target = primitive();
       if (!file || !below || !target) throw new Error("no view-cone grid on this tileset");

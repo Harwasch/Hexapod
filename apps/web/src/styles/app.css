@@ -1244,6 +1244,36 @@ body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-close {
   gap: 0.5rem;
 }
 
+.instance-panel__matches {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.5rem;
+}
+
+.instance-panel__count {
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.instance-panel__gap {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.25rem;
+  padding: 0.4rem 0.5rem;
+  border-radius: 0.5rem;
+  background: var(--glass-tint);
+  box-shadow: inset 2px 0 0 var(--warn);
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+}
+
+.instance-panel__gap p {
+  margin: 0;
+}
+
 .instance-panel__dim {
   display: flex;
   align-items: center;
