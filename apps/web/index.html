@@ -10,12 +10,58 @@
       content="A continuously zoomable digital twin of the living world, from planet to centimetre."
     />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <!-- The globe's first requests, before the engine has even been parsed: Cesium ion's API
+         (the terrain and imagery endpoints, the ion asset list), the host its tiles stream
+         from, and Google's 3D Tiles (the photorealistic world is on by default). A preconnect
+         is the DNS lookup and TLS handshake done while the bundle downloads. `crossorigin`
+         because CesiumJS fetches all three in CORS mode, which uses separate connections. -->
+    <link rel="preconnect" href="https://api.cesium.com" crossorigin />
+    <link rel="preconnect" href="https://assets.ion.cesium.com" crossorigin />
+    <link rel="preconnect" href="https://tile.googleapis.com" crossorigin />
+    <!-- Fonts, self-hosted (public/fonts, SIL OFL 1.1, licences beside them). This used to be
+         a Google Fonts stylesheet: render-blocking, on two more origins, before any of the
+         page could paint. One variable woff2 per family covers the 400-600 weights the page
+         asked Google for (heavier text clamps to 600, as it did). Latin subset only: a name
+         with a glyph outside it (ł, ő) shows that glyph in the fallback font, where Google
+         also sent a latin-ext file. Preloaded so the files arrive with the bundle, and
+         declared here rather than in the bundled CSS so the browser knows the faces before
+         that stylesheet arrives. admin.html declares the same two faces. -->
     <link
-      href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=Azeret+Mono:wght@400;500;600&display=swap"
-      rel="stylesheet"
+      rel="preload"
+      href="/fonts/instrument-sans-v4-latin.woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
     />
+    <link
+      rel="preload"
+      href="/fonts/azeret-mono-v21-latin.woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
+    <style>
+      @font-face {
+        font-family: "Instrument Sans";
+        font-style: normal;
+        font-weight: 400 600;
+        font-display: swap;
+        src: url("/fonts/instrument-sans-v4-latin.woff2") format("woff2");
+        unicode-range:
+          U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308,
+          U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+      }
+      @font-face {
+        font-family: "Azeret Mono";
+        font-style: normal;
+        font-weight: 400 600;
+        font-display: swap;
+        src: url("/fonts/azeret-mono-v21-latin.woff2") format("woff2");
+        unicode-range:
+          U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308,
+          U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+      }
+    </style>
     <title>Land Ops</title>
   </head>
   <body>
