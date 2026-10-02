@@ -4,12 +4,12 @@ name: Segment scans (Modal GPU)
 # published scans named in infra/modal/segment.py, and uploads instances.json,
 # instances.emb and a colour-by-instance PNG per scan as an artifact. Nothing is published.
 #
-# On a push to `living-models` that touches the segmentation code (workflow_dispatch only
+# On a push to `living-models` (or a `seg-*` working branch) that touches the segmentation code (workflow_dispatch only
 # works once this file is on the default branch). The Modal token is the repository's.
 
 on:
   push:
-    branches: [living-models]
+    branches: [living-models, "seg-*"]
     paths:
       - infra/modal/segment.py
       - tools/captures/segment_scene.py
