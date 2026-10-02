@@ -1,0 +1,177 @@
+"""Scene segmentation on a Modal GPU: `tools/captures/segment_scene.py` with SAM 2.1 and
+SigLIP 2 on CUDA, for scans already published as tilesets.
+
+docs/SCENE_OBJECTS.md is the method; this file only puts it on a GPU. The container gets
+the same `tools/captures` code the CPU runs, fetches a scan's tileset (every tile, so the
+binding covers parents too) from its public URL, runs the CLI, and hands back
+`instances.json`, `instances.emb`, a colour-by-instance PNG and the run's summary. Nothing
+is written to any bucket: the caller decides what to keep.
+
+No secrets: both models are public (Apache-2.0) and download from Hugging Face into the
+weights volume once. Run from the repository root (`.github/workflows/segment.yml` does):
+
+    modal run infra/modal/segment.py                    # the scans in SCANS, in parallel
+    modal run infra/modal/segment.py --names spool --views 24
+"""
+
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+import modal
+
+APP_NAME = "hexapod-segment"
+app = modal.App(APP_NAME)
+WEIGHTS = modal.Volume.from_name("hexapod-world-model-weights", create_if_missing=True)
+HF_HOME = "/weights/hf"
+CAPTURES = "/root/captures"
+
+if modal.is_local():
+    LOCAL_CAPTURES = Path(__file__).resolve().parents[2] / "tools" / "captures"
+else:
+    LOCAL_CAPTURES = Path(CAPTURES)
+
+#: The published scans to segment, by short name: their public tileset URLs.
+PUBLIC = "https://pub-67ae49c6d86140a89f7ae818c1b02e99.r2.dev/runs"
+SCANS: dict[str, str] = {
+    "spool": f"{PUBLIC}/8e1cc115-cb80-4af2-81fc-dccaf6b65891/package/splat/tileset.json",
+    "pumpkin": f"{PUBLIC}/430c1932-5b6a-47b1-bb71-bb7fa2fec86b/package/splat/tileset.json",
+    "camp": f"{PUBLIC}/50c25673-0940-4574-9b96-0b21362f83ca/package/splat/tileset.json",
+}
+
+image = (
+    modal.Image.debian_slim(python_version="3.12")
+    .pip_install(
+        # CUDA wheels from PyPI (cu128); transformers carries SAM 2 and SigLIP 2.
+        "torch==2.8.0",
+        "torchvision==0.23.0",
+        "transformers>=4.56",
+        # tools/captures/pyproject.toml's dependencies.
+        "numpy>=1.26",
+        "pillow>=10",
+        "laspy[lazrs]>=2.5",
+        "pyproj>=3.6",
+        "scipy>=1.11",
+        "opencv-python-headless>=4.10",
+    )
+    .env({"HF_HOME": HF_HOME})
+    .add_local_dir(
+        LOCAL_CAPTURES,
+        CAPTURES,
+        ignore=["**/.venv/**", "**/__pycache__/**", "tests/**", "**/*.pyc"],
+    )
+)
+
+
+def _fetch(url: str, out: Path) -> int:
+    """The tileset and every tile it names, parents included."""
+    import concurrent.futures
+    import urllib.request
+
+    out.mkdir(parents=True, exist_ok=True)
+    base = url.rsplit("/", 1)[0]
+    if not url.startswith("https://"):
+        raise ValueError(f"not an https URL: {url}")
+    with urllib.request.urlopen(url, timeout=120) as response:  # noqa: S310 - https only
+        (out / "tileset.json").write_bytes(response.read())
+    document = json.loads((out / "tileset.json").read_text(encoding="utf-8"))
+    uris: list[str] = []
+    stack = [document["root"]]
+    while stack:
+        tile = stack.pop()
+        if uri := tile.get("content", {}).get("uri"):
+            uris.append(uri)
+        stack.extend(tile.get("children", []))
+
+    def get(uri: str) -> None:
+        (out / uri).parent.mkdir(parents=True, exist_ok=True)
+        with urllib.request.urlopen(f"{base}/{uri}", timeout=600) as response:  # noqa: S310
+            (out / uri).write_bytes(response.read())
+
+    with concurrent.futures.ThreadPoolExecutor(16) as pool:
+        list(pool.map(get, uris))
+    return len(uris)
+
+
+@app.function(
+    image=image,
+    gpu="L4",
+    cpu=8.0,
+    memory=32768,
+    volumes={"/weights": WEIGHTS},
+    timeout=3 * 3600,
+)
+def segment_scan(name: str, url: str, views: int = 24) -> dict:
+    """Segment one published scan; returns the files (bytes) and the run's summary."""
+    started = time.time()
+    with tempfile.TemporaryDirectory() as work:
+        tiles = Path(work) / "tiles"
+        count = _fetch(url, tiles)
+        fetched = time.time() - started
+        render = Path(work) / "instances.png"
+        run = subprocess.run(  # noqa: S603 - fixed argv; only paths we made vary
+            [
+                sys.executable,
+                "segment_scene.py",
+                str(tiles / "tileset.json"),
+                str(tiles),
+                "--masks",
+                "segment_models:Sam2Masks",
+                "--embedder",
+                "segment_models:SiglipEmbedder",
+                "--vocabulary",
+                "data/open_vocabulary.txt",
+                "--views",
+                str(views),
+                "--render-instances",
+                str(render),
+            ],
+            cwd=CAPTURES,
+            capture_output=True,
+            text=True,
+        )
+        WEIGHTS.commit()
+        log = run.stdout[-20000:] + run.stderr[-20000:]
+        if run.returncode != 0:
+            return {"name": name, "ok": False, "log": log}
+        files = {
+            k: (tiles / k).read_bytes()
+            for k in ("instances.json", "instances.emb")
+            if (tiles / k).exists()
+        }
+        if render.exists():
+            files["instances.png"] = render.read_bytes()
+        return {
+            "name": name,
+            "ok": True,
+            "tiles": count,
+            "fetchS": round(fetched, 1),
+            "totalS": round(time.time() - started, 1),
+            "files": files,
+            "log": log,
+        }
+
+
+@app.local_entrypoint()
+def main(names: str = ",".join(SCANS), views: int = 24, out: str = "segment-out") -> None:
+    """Segment the named scans in parallel containers; write each result under `out/`."""
+    chosen = [n.strip() for n in names.split(",") if n.strip()]
+    failed = []
+    for result in segment_scan.starmap([(n, SCANS[n], views) for n in chosen]):
+        folder = Path(out) / result["name"]
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "log.txt").write_text(result["log"], encoding="utf-8")
+        for file, data in result.get("files", {}).items():
+            (folder / file).write_bytes(data)
+        summary = {k: v for k, v in result.items() if k not in ("files", "log")}
+        (folder / "summary.json").write_text(json.dumps(summary, indent=1), encoding="utf-8")
+        sys.stdout.write(json.dumps(summary) + "\n")
+        if not result["ok"]:
+            failed.append(result["name"])
+    if failed:
+        raise SystemExit(f"segmentation failed for {', '.join(failed)}")
