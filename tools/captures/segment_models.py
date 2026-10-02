@@ -374,10 +374,13 @@ def choose_masks(
         score = iou_pred[rows] * stab[rows]
         order = np.argsort(-score, kind="stable")
         sub = overlap[np.ix_(rows[order], rows[order])]
+        # Greedy NMS: a mask is kept unless a better kept one overlaps it (IoU is symmetric).
         keep: list[int] = []
+        suppressed = np.zeros(order.size, bool)
         for i in range(order.size):
-            if all(sub[i, j] <= nms_iou for j in keep):
+            if not suppressed[i]:
                 keep.append(i)
+                suppressed |= sub[i] > nms_iou
         chosen = rows[order[keep]]
         if kept_rows and chosen.size:
             repeat = overlap[np.ix_(chosen, kept_rows)].max(axis=1) > repeat_iou

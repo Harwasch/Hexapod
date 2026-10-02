@@ -48,8 +48,8 @@ jobs:
       - name: modal run infra/modal/segment.py
         run: |
           uv run --with modal==1.5.5 modal run infra/modal/segment.py \
-            --names "${{ inputs.names || 'camp' }}" \
-            --views "${{ inputs.views || '24' }}" --keep-masks --out segment-out
+            --names "${{ inputs.names || 'spool,pumpkin,camp' }}" \
+            --views "${{ inputs.views || '24' }}" --out segment-out
       - uses: actions/upload-artifact@v4
         if: always()
         with:
