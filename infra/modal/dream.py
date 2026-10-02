@@ -269,7 +269,7 @@ def starts(scan: str) -> dict:
         rgb = renderer(splats, cam, background=SKY).rgb
         name = f"{scan}-{s['name']}"
         files[f"{name}.png"] = encode_png(to_u8(rgb))
-        views.append({"name": name, "camera": cam.to_json(), **s})
+        views.append({**s, "candidate": s["name"], "name": name, "camera": cam.to_json()})
     # The candidates at a glance.
     thumbs = []
     for s in scored:
@@ -509,56 +509,70 @@ def main(
     options = {"model": "Wan", "seeds": seeds, "chain": chain, "strength": strength}
     material_calls = [materials.spawn("camp", i, options) for i in jobs]
 
-    names = [s.strip() for s in scans.split(",") if s.strip()]
-    summary["starts"] = []
-    views: list[tuple[str, bytes]] = []
-    for result in starts.map(names, return_exceptions=True):
-        if isinstance(result, BaseException):
-            summary["starts"].append({"error": repr(result)})
-            sys.stdout.write(f"starts raised: {result!r}\n")
-            continue
-        _write(folder / "starts", result["files"])
-        brief = {k: v for k, v in result.items() if k != "files"}
-        summary["starts"].append(brief)
-        for v in result["views"]:
-            views.append((v["name"], result["files"][f"{v['name']}.png"]))
-        sys.stdout.write(f"starts {result['scan']}: {[v['name'] for v in result['views']]}\n")
-        dump()
+    def dream_phase() -> None:
+        names = [s.strip() for s in scans.split(",") if s.strip()]
+        summary["starts"] = []
+        views: list[tuple[str, bytes]] = []
+        for result in starts.map(names, return_exceptions=True):
+            if isinstance(result, BaseException):
+                summary["starts"].append({"error": repr(result)})
+                sys.stdout.write(f"starts raised: {result!r}\n")
+                continue
+            _write(folder / "starts", result["files"])
+            brief = {k: v for k, v in result.items() if k != "files"}
+            summary["starts"].append(brief)
+            for v in result["views"]:
+                views.append((v["name"], result["files"][f"{v['name']}.png"]))
+            sys.stdout.write(f"starts {result['scan']}: {[v['name'] for v in result['views']]}\n")
+            dump()
 
-    classes = {m: modal.Cls.from_name(WORLD_MODELS_APP, m)() for m in models.split(",") if m}
-    calls = []
-    for name, png in views:
-        for p in (p.strip() for p in prompts.split(",") if p.strip()):
-            for model, cls in classes.items():
-                for seed in range(1, seeds + 1):
-                    request = {"image": png, "prompt": PROMPTS[p], "seed": seed}
-                    calls.append(
-                        (f"{name}-{p}-{model.lower()}-s{seed}", model, cls.clip.spawn(request))
-                    )
-    summary["clips"] = []
-    sheets = []
-    for label, model, call in calls:
-        started = time.time()
-        try:
-            response = call.get()
-        except Exception as error:  # noqa: BLE001 - one failed model does not stop the rest
-            summary["clips"].append({"clip": label, "model": model, "error": repr(error)[:2000]})
-            sys.stdout.write(f"clip {label}: {error!r}\n"[:2000])
-            continue
-        (folder / "clips").mkdir(exist_ok=True)
-        (folder / "clips" / f"{label}.mp4").write_bytes(response["mp4"])
-        entry = {k: v for k, v in response.items() if k != "mp4"}
-        entry |= {"clip": label, "waitedS": round(time.time() - started, 1)}
-        summary["clips"].append(entry)
-        sheets.append((label, sheet.spawn(response["mp4"], f"{label} ({response.get('model')})")))
-        sys.stdout.write(f"clip {label}: {json.dumps(entry)}\n")
+        classes = {m: modal.Cls.from_name(WORLD_MODELS_APP, m)() for m in models.split(",") if m}
+        calls = []
+        for name, png in views:
+            for p in (p.strip() for p in prompts.split(",") if p.strip()):
+                for model, cls in classes.items():
+                    for seed in range(1, seeds + 1):
+                        request = {"image": png, "prompt": PROMPTS[p], "seed": seed}
+                        calls.append(
+                            (f"{name}-{p}-{model.lower()}-s{seed}", model, cls.clip.spawn(request))
+                        )
+        summary["clips"] = []
+        sheets = []
+        for label, model, call in calls:
+            started = time.time()
+            try:
+                response = call.get()
+            except Exception as error:  # noqa: BLE001 - one failed model does not stop the rest
+                summary["clips"].append(
+                    {"clip": label, "model": model, "error": repr(error)[:2000]}
+                )
+                sys.stdout.write(f"clip {label}: {error!r}\n"[:2000])
+                continue
+            (folder / "clips").mkdir(exist_ok=True)
+            (folder / "clips" / f"{label}.mp4").write_bytes(response["mp4"])
+            entry = {k: v for k, v in response.items() if k != "mp4"}
+            entry |= {"clip": label, "waitedS": round(time.time() - started, 1)}
+            summary["clips"].append(entry)
+            sheets.append(
+                (label, sheet.spawn(response["mp4"], f"{label} ({response.get('model')})"))
+            )
+            sys.stdout.write(f"clip {label}: {json.dumps(entry)}\n")
+            dump()
+        for label, call in sheets:
+            try:
+                (folder / "sheets").mkdir(exist_ok=True)
+                (folder / "sheets" / f"{label}.png").write_bytes(call.get())
+            except Exception as error:  # noqa: BLE001
+                sys.stdout.write(f"sheet {label}: {error!r}\n")
+
+    try:
+        dream_phase()
+    except Exception as error:  # noqa: BLE001 - the materials jobs still come back
+        import traceback
+
+        summary["dreamError"] = traceback.format_exc()[-4000:]
+        sys.stdout.write(f"dream phase raised: {error!r}\n")
         dump()
-    for label, call in sheets:
-        try:
-            (folder / "sheets").mkdir(exist_ok=True)
-            (folder / "sheets" / f"{label}.png").write_bytes(call.get())
-        except Exception as error:  # noqa: BLE001
-            sys.stdout.write(f"sheet {label}: {error!r}\n")
 
     summary["materials"] = []
     merged: dict[int, dict] = {}
