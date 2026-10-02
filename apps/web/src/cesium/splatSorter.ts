@@ -15,6 +15,14 @@
  * driver names each splat's group and each group's motion (`setSortMotion`), every sort
  * carries the eye moved back by each group's motion (`groupEyes`), and a motion that has
  * moved a group's eye as far as the camera would have to move calls for a sort.
+ *
+ * The worker keeps a primitive's positions until it is told to `forget` them, which used to
+ * be never: a large scan's slot arrays (12 bytes a splat, at 1.6 times the device budget)
+ * stayed in the worker for the rest of the visit after its site unloaded -- about 58 MB a
+ * scan. CesiumJS says nothing when a primitive goes (a tileset's destroy does not even
+ * destroy its splat primitive), so the sorter watches for it itself (`whenGone`): the
+ * tileset's or the primitive's own `destroy`, and, for whatever is dropped without either,
+ * the garbage collector (`FinalizationRegistry`). Never on hide: slot positions are sent once.
  */
 
 import * as CesiumBarrel from "cesium";
@@ -137,6 +145,30 @@ export function groupEyes(
   return out;
 }
 
+/**
+ * Calls `gone` once, before `primitive` -- or the tileset it draws (`_tileset`) -- is
+ * destroyed: their `destroy` is wrapped on the instance. CesiumJS has no event for it.
+ */
+export function whenGone(primitive: object, gone: () => void): void {
+  let called = false;
+  const once = (): void => {
+    if (called) return;
+    called = true;
+    gone();
+  };
+  const wrap = (target: unknown): void => {
+    const holder = target as { destroy?: unknown } | null | undefined;
+    const destroy = holder?.destroy;
+    if (!holder || typeof destroy !== "function") return;
+    holder.destroy = function (this: unknown, ...args: unknown[]): unknown {
+      once();
+      return (destroy as (...a: unknown[]) => unknown).apply(this, args);
+    };
+  };
+  wrap(primitive);
+  wrap((primitive as { _tileset?: unknown })._tileset);
+}
+
 export function installSplatSorter(): () => void {
   const module = primitiveModule();
   if (!module || typeof Worker === "undefined") return () => undefined;
@@ -154,12 +186,21 @@ export function installSplatSorter(): () => void {
     /** The eye and the group eyes of the last sort. */
     eye: [number, number, number] | undefined;
     eyes: Float64Array | undefined;
+    /** The worker was told to drop its positions: the primitive is gone. */
+    forgotten: boolean;
   }
+  let stopped = false;
+  const forget = (id: number): void => {
+    if (!stopped) worker.postMessage({ kind: "forget", owner: id });
+  };
+  // Whatever goes without a destroy (a tileset dropped, never destroyed) once it is collected.
+  const collected =
+    typeof FinalizationRegistry === "undefined" ? null : new FinalizationRegistry<number>(forget);
   const owners = new WeakMap<object, Owner>();
   const ownerOf = (primitive: object): Owner => {
     let owner = owners.get(primitive);
     if (!owner) {
-      owner = {
+      const created: Owner = {
         id: nextOwner++,
         generation: -1,
         pending: 0,
@@ -168,8 +209,17 @@ export function installSplatSorter(): () => void {
         groups: undefined,
         eye: undefined,
         eyes: undefined,
+        forgotten: false,
       };
-      owners.set(primitive, owner);
+      owner = created;
+      owners.set(primitive, created);
+      collected?.register(primitive, created.id, created);
+      whenGone(primitive, () => {
+        if (created.forgotten) return;
+        created.forgotten = true;
+        collected?.unregister(created);
+        forget(created.id);
+      });
     }
     return owner;
   };
@@ -283,6 +333,7 @@ export function installSplatSorter(): () => void {
   module.sortHook = hook;
   return () => {
     if (module.sortHook === hook) module.sortHook = undefined;
+    stopped = true;
     worker.terminate();
   };
 }
