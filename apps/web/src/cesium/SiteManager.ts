@@ -1073,16 +1073,23 @@ export class SiteManager {
             : describeError(error);
         log.warn("asset failed", { asset: asset.id, error: message });
         this.events.emit("asset", { id: asset.id, patch: { loadState: "error", error: message } });
-        if (this.showsAsset(active, asset)) {
+        const shown = this.showsAsset(active, asset);
+        if (shown) {
           const permanent = isIonAuthError(error) || isIonNotFound(error);
           this.failLoad(active.site.id, `${asset.name} did not load: ${message}`, !permanent);
         }
-        this.events.emit("toast", {
-          tone: "error",
-          title: `${asset.name} failed to load`,
-          body: message,
-          id: `asset-${asset.id}`,
-        });
+        // The active site's model is said once, where the operator is looking: the load pill
+        // beside Splat / Mesh / Points reads the record above ("Couldn't load the 3D model ·
+        // Retry", `SiteLoadStatus`). A toast as well would say it twice, and with the asset's
+        // file name rather than the site's. Any other failure has no pill to speak for it.
+        if (!shown || this.primaryId !== active.site.id) {
+          this.events.emit("toast", {
+            tone: "error",
+            title: `${asset.name} failed to load`,
+            body: message,
+            id: `asset-${asset.id}`,
+          });
+        }
         if (isIonAuthError(error)) this.events.emit("token", "invalid");
         return null;
       })

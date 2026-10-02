@@ -5,8 +5,10 @@
  * One box replaced three inputs (the search pill, the ⌘K palette and the agent bar), so it
  * must answer each of their questions without making the operator say which one they meant:
  * a place name flies there, "settings" opens Settings, "Z-21" selects the zone, and a
- * sentence of work goes to the agent. The groups are listed in a fixed order; what changes
- * with the words is which row is highlighted for Enter (`defaultActiveId`).
+ * sentence of work goes to the agent. The groups are listed in a fixed order — what the
+ * console already knows (sites, zones, plans, layers, actions) above what the geocoder finds
+ * (places), so the best local match is the top row — and what changes with the words is
+ * which row is highlighted for Enter (`defaultActiveId`).
  */
 
 import type { LucideIcon } from "lucide-react";
@@ -36,13 +38,17 @@ export interface CommandGroup {
   rows: CommandRow[];
 }
 
+/**
+ * Local matches first, then places, then the agent. Places arrive a beat after the keystroke;
+ * listed below the local groups, they never push the highlighted row down the list.
+ */
 export const GROUP_ORDER: readonly CommandGroupId[] = [
-  "places",
   "sites",
   "zones",
   "plans",
   "layers",
   "actions",
+  "places",
   "agent",
 ];
 
@@ -160,10 +166,11 @@ export function prefersAgent(
 /**
  * The row Enter runs before the operator moves the highlight.
  *
- * The groups keep their order, but the highlight goes to the agent when the words read as an
- * instruction, else to the first local match (a site, zone, plan, layer or action), else to
- * the first place. Local matches beat places because they are there the moment a key is
- * pressed, while places arrive a beat later: Enter must not change meaning under a fast typist.
+ * The highlight goes to the agent when the words read as an instruction, else to the first
+ * local match (a site, zone, plan, layer or action) — the top row, since the local groups are
+ * listed first — else to the first place. Local matches beat places because they are there the
+ * moment a key is pressed, while places arrive a beat later: Enter must not change meaning
+ * under a fast typist.
  */
 export function defaultActiveId(
   query: string,

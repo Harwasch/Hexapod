@@ -103,8 +103,9 @@ describe("command results", () => {
     expect(empty[0]?.rows).toHaveLength(2);
 
     const north = buildCommandGroups("north", candidates, () => undefined);
-    // Places come from the geocoder already matched; the rest are filtered here.
-    expect(north.map((g) => g.id)).toEqual(["places", "sites", "zones", "actions", "agent"]);
+    // Places come from the geocoder already matched; the rest are filtered here. What the
+    // console knows is listed above what the geocoder found, and the agent is last.
+    expect(north.map((g) => g.id)).toEqual(["sites", "zones", "actions", "places", "agent"]);
     expect(north.at(-1)?.rows[0]).toMatchObject({
       id: AGENT_ROW_ID,
       label: "Ask the agent: “north”",
@@ -143,6 +144,9 @@ describe("command results", () => {
       () => undefined,
     );
     expect(defaultActiveId("north", groups, { draftOpen: false })).toBe("zone-Z-21");
+    // The highlighted best match is the top row, not one below a list of places.
+    expect(groups[0]?.rows[0]?.id).toBe("zone-Z-21");
+    expect(groups.map((g) => g.id)).toEqual(["zones", "places", "agent"]);
     const placesOnly = buildCommandGroups(
       "yosemite",
       { places: [row("place-0", "Yosemite")] },
