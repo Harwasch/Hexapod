@@ -244,7 +244,9 @@ tileset hidden for its frame and solids. The overlay is held to the globe's rule
   budget moves; and by deadlines (the full-resolution frame 200 ms after the camera rests, a
   re-plan the 150 ms throttle held back, a replaced tile's longest wait). A fade draws every
   frame. A new PlayCanvas tile counts as drawn once a rendered frame reports it sorted
-  (`frame:ready`), and PlayCanvas's own update loop pauses once nothing loads or sorts.
+  (`frame:ready`), and PlayCanvas's own update loop pauses once nothing loads or sorts. A
+  disposed PlayCanvas tile asks for the three frames that let its GPU resource go: one evicted
+  at rest used to wait for ever and keep that loop ticking every display frame.
   Measured on the yard fixture (software GL, `e2e/scanOverlayIdle.spec.ts`): 5 s at rest after
   loading drew 27 PlayCanvas frames and 27 loop ticks before, none after; Spark 5, then none.
   `window.__twinStats` (development builds, or `?stats`) counts draws, loop ticks and wakes.

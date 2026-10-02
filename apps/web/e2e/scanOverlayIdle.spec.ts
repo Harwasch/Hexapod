@@ -165,6 +165,45 @@ for (const [kind, native] of [
   );
 }
 
+test("playcanvas pauses again after a tile is evicted at rest", async ({ page }) => {
+  // A disposed tile's resource waits a few rendered frames before it is destroyed, and
+  // PlayCanvas's loop does not pause while one waits. A tile evicted at rest used to get the
+  // one frame it was evicted in: the resource waited for ever, and the loop ticked every
+  // display frame for as long as the page stayed open (playcanvasBackend.ts).
+  test.setTimeout(300_000);
+  await page.setViewportSize({ width: 960, height: 600 });
+  await open(page, { native: false });
+  // Each plan records its streamer, so the test can reach the tile cache.
+  await page.evaluate(`import("/src/view/stream.ts").then((m) => {
+    const update = m.TileStreamer.prototype.update;
+    m.TileStreamer.prototype.update = function (view) {
+      window.__streamer = this;
+      return update.call(this, view);
+    };
+  })`);
+  const status: Status = await page.evaluate(`window.__scan.use("playcanvas", 90)`);
+  expect(status.error).toBeNull();
+  await page.waitForTimeout(3000);
+  expect((await rest(page, 2000)).ticks).toBeLessThanOrEqual(30);
+  // At rest, a tile's load lands after the view abandoned it, and the streamer disposes it at
+  // once (view/stream.ts, `start`): a real PlayCanvas resource, made and let go of with
+  // nothing moving. Then the globe draws one frame for something else (its resolution).
+  const disposed: string = await page.evaluate(`(async () => {
+    const streamer = window.__streamer;
+    const [tile] = [...streamer.loaded.keys()];
+    const mesh = await streamer.host.load(tile, new AbortController().signal);
+    streamer.host.dispose(mesh);
+    return tile.uri;
+  })()`);
+  expect(disposed).toMatch(/\.glb$/);
+  await page.evaluate(`window.__scan.setResolution(false, 0.9)`);
+  await page.waitForTimeout(3000);
+  const after = await rest(page, 5000);
+  console.info(JSON.stringify({ disposed, after }));
+  expect(after.draws).toBeLessThanOrEqual(2);
+  expect(after.ticks).toBeLessThanOrEqual(30);
+});
+
 test("a renderer that throws while drawing is retired, and the globe keeps rendering", async ({
   page,
 }) => {

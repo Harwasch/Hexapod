@@ -134,7 +134,11 @@ interface TileBinding {
  *  drops a removed entity from its placements in the next frame it renders, and destroying
  *  the resource first left a placement with none ("Cannot read properties of null (reading
  *  'hasCenters')"). Counted in frames rendered, not loop ticks: a removal is only processed
- *  by a render. */
+ *  by a render -- so while one is waiting, the renderer asks the host for those frames
+ *  (`frameWanted`): a tile evicted at rest (an off-screen one dropped from the cache at the
+ *  end of a plan, a load that landed after it was abandoned) had no frames coming, its
+ *  resource was never freed, and PlayCanvas's loop, which pauses only once nothing is
+ *  waiting, ticked every display frame for as long as the page stayed open. */
 const DESTROY_AFTER_FRAMES = 3;
 
 /**
@@ -480,7 +484,12 @@ function assemble(
       tiles.delete(entity);
       const resource = resources.get(entity);
       entity.destroy();
-      if (resource) doomed.push({ resource, at: framesDrawn });
+      if (resource) {
+        doomed.push({ resource, at: framesDrawn });
+        // The renders that let it go (DESTROY_AFTER_FRAMES): asked for, since a dispose at
+        // rest has none coming. Within a frame the host takes it as one more frame.
+        hooks.frameWanted();
+      }
     },
     render: (pose: ScanPose) => {
       // A lost device draws nothing; the host is already replacing this renderer.
@@ -514,6 +523,9 @@ function assemble(
       while (doomed[0] && framesDrawn - doomed[0].at >= DESTROY_AFTER_FRAMES) {
         doomed.shift()?.resource.destroy();
       }
+      // A resource still waiting for its renders gets them: at most DESTROY_AFTER_FRAMES
+      // frames after the last dispose, and then the loop can pause (`frameupdate`).
+      if (doomed.length > 0) hooks.frameWanted();
       // A frame drawn may have started a sort or a load: the loop watches for it.
       resumeLoop();
       // Sorted on the GPU, this frame was ready and a tile added lately still needs a ready
@@ -582,6 +594,8 @@ function assemble(
       gl?.getExtension("WEBGL_lose_context")?.loseContext();
     },
   };
+  // A resource waiting to be destroyed keeps the loop going until the renders it asked for
+  // (`render`, `dispose`) have let it go: a few frames, never for good.
   app.on("frameupdate", () => {
     countOverlayLoopTick();
     quietTicks += 1;
