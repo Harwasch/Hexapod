@@ -32,7 +32,10 @@ labelled tools above the bar.
   every catalog site (fly there; the one you are at is marked), the current site's saved
   views (open, save the current camera, delete; `features/bookmarks/savedViews.ts`), "Add a
   site", and links to the scan gallery and the data console. `s` opens it on its sites, `b`
-  on its saved views; both are command-box actions ("Switch site", "Saved views").
+  on its saved views; both are command-box actions ("Switch site", "Saved views"). Views saved
+  in this browser before any site was visited are listed under "Other saved views". Escape
+  closes it from anywhere inside, the view-name field `b` focuses included, and hands the
+  keyboard back to the badge.
 - **Simulated motion badge** (`features/living/SimulatedBadge`) sits directly under it whenever
   the Living Survey is animating, in the same corner and the same voice the project badge uses
   for a simulated fleet. It has to be ambient: Gaussian splats never write depth and are
@@ -73,8 +76,12 @@ labelled tools above the bar.
   Friday") highlights the agent; a name highlights its best match — a site, zone, plan, layer
   or action before a geocoded place, because places arrive a beat later and Enter must not
   change meaning under a fast typist; the local groups are listed above Places, so the
-  highlighted best match is the top row. `?` opens the shortcut sheet, printed from the same
-  registry (`app/hotkeys.ts`) the box shows each action's key from.
+  highlighted best match is the top row. Places found for earlier words are neither listed nor
+  run while the new words' search is pending ("Searching places…"); Enter then asks the agent,
+  which geocodes the words as typed. Words asked while the agent is still answering (a change
+  typed while a plan is being drafted) are logged at once and answered in turn. `?` opens the
+  shortcut sheet, printed from the same registry (`app/hotkeys.ts`) the box shows each
+  action's key from.
 - **Status line** (`StatusLine`, bottom left) is one pill: the fleet in view ("Fleet: 4
   working · 2 need attention", counted as the Fleet window's KPIs count it), the agent's
   line ("Agent: <current task> +N tasks"; a reply holds it for 15 s, so the answer to what

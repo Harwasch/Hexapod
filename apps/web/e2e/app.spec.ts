@@ -1,6 +1,6 @@
 import type { Page } from "@playwright/test";
 
-import { addOnScreenCredit, demoSite, expect, mockApi, test } from "./fixtures";
+import { addOnScreenCredit, expect, mockApi, test } from "./fixtures";
 
 /** Ids of the plan overlay entities the map is drawing (passes, step markers, route). */
 function entityIds(app: Page): Promise<string[]> {
@@ -111,7 +111,8 @@ test.describe("catalog", () => {
     // The site's record answers 503 (a cold or failing API). The camera still leaves on the
     // click, for the catalog summary's pose; the site never becomes active, so the pill has to
     // follow the flight's site to say why no model came.
-    const record = `**/api/v1/sites/${demoSite.id}`;
+    // The record alone: one path segment after /sites/ (not the list, not its bookmarks).
+    const record = "**/api/v1/sites/*";
     await app.route(record, (route) =>
       route.fulfill({ status: 503, contentType: "application/json", body: '{"detail":"cold"}' }),
     );
