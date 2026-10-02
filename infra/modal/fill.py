@@ -67,6 +67,13 @@ FILL_SIZE = (1024, 576)
 #: The public bucket answers Python's default user agent with 403; curl's is let through.
 USER_AGENT = "curl/8.5.0 (hexapod-fill)"
 
+#: Fillers by short name: the CPU stand-in, Fixer, and Fixer shown the render presmoothed.
+FILLERS = {
+    "telea": "telea",
+    "fixer": "world_model_client:FixerFiller",
+    "fixer-smooth": "world_model_client:SmoothedFixerFiller",
+}
+
 # --- Fixer -----------------------------------------------------------------------------------
 
 FIXER_REPO = "https://github.com/nv-tlabs/Fixer.git"
@@ -358,7 +365,7 @@ def run_job(kind: str, scan: str, filler: str, options: dict) -> dict:
     _remote_classes()
     os.chdir(CAPTURES)
     started = time.time()
-    spec = "telea" if filler == "telea" else "world_model_client:FixerFiller"
+    spec = FILLERS[filler]
     files: dict[str, bytes] = {}
     with tempfile.TemporaryDirectory() as work:
         root = Path(work)

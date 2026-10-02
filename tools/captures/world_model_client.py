@@ -125,11 +125,37 @@ class FixerFiller:
     name: str = "nvidia-fixer"
     reads_full_render: bool = True
 
+    #: Spread the CPU renderer's point samples over their gaps (normalized convolution, this
+    #: sigma in pixels) before Fixer sees the frame: 0 sends the render as it is.
+    presmooth_px: float = 0.0
+
     def fill(self, rgb: np.ndarray, mask: np.ndarray) -> list[np.ndarray]:
-        response = self.remote("Fixer", "fix", {"images": [encode_png(rgb)]})
+        shown = presmooth(rgb, self.presmooth_px) if self.presmooth_px > 0 else rgb
+        response = self.remote("Fixer", "fix", {"images": [encode_png(shown)]})
         (fixed,) = response["images"]
         out = decode_png(fixed)
         return [_resize(out, rgb.shape[1], rgb.shape[0])]
+
+
+@dataclass
+class SmoothedFixerFiller(FixerFiller):
+    """`FixerFiller` shown the render with its samples spread over their gaps (1 px)."""
+
+    name: str = "nvidia-fixer-presmooth1"
+    presmooth_px: float = 1.0
+
+
+def presmooth(rgb: np.ndarray, sigma: float) -> np.ndarray:
+    """Normalized convolution of a point-sampled render: the covered pixels' colours
+    averaged over the empty (black) pixels near them, so the gaps between samples fill;
+    pixels a few sigmas from any sample stay black."""
+    import cv2
+
+    weight = (rgb.max(axis=2) > 0).astype(np.float32)
+    w = cv2.GaussianBlur(weight, (0, 0), sigma)
+    c = cv2.GaussianBlur(rgb.astype(np.float32) * weight[..., None], (0, 0), sigma)
+    out = np.where(w[..., None] > 1e-4, c / np.maximum(w, 1e-4)[..., None], 0.0)
+    return np.clip(np.round(out), 0, 255).astype(np.uint8)
 
 
 @dataclass

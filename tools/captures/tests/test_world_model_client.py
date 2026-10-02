@@ -136,3 +136,11 @@ def test_the_client_calls_what_the_app_defines() -> None:
     # The rates the client expects are the rates the app sends.
     assert constants["WAN_FPS"] == wmc.VideoClips(model="Wan", remote=None).fps  # type: ignore[arg-type]
     assert constants["COSMOS_FPS"] == wmc.VideoClips(model="Cosmos", remote=None).fps  # type: ignore[arg-type]
+
+
+def test_presmooth_fills_the_gaps_between_samples_and_leaves_empty_space_dark() -> None:
+    rgb = np.zeros((40, 40, 3), np.uint8)
+    rgb[::2, 0:20:2] = (200, 100, 50)  # samples on every other pixel, left half
+    out = wmc.presmooth(rgb, 1.0)
+    assert out[5:35, 5:15, 0].min() > 100  # the gaps took the samples' colour
+    assert out[:, 30:].max() == 0  # nothing drawn where nothing was

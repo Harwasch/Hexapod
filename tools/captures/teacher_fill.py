@@ -18,7 +18,8 @@ say so. Every stage runs on the CPU with the image model behind one interface (`
    `InpaintFiller` is the CPU stand-in (OpenCV Telea inpainting); NVIDIA Fixer and Cosmos are
    Fillers run on a GPU (infra/modal/world_models.py);
 4. **gate** -- a fill that changed the unmasked pixels by more than `GATE_PSNR_DB` is
-   refused: it was told what is there and repainted it;
+   refused: it was told what is there and repainted it (a filler that re-renders the whole
+   frame is held to its layout: `GATE_FULL_RENDER_PSNR_DB` on blurred frames);
 5. **lift** (`lift`) -- every `stride`-th masked pixel becomes a flat gaussian facing its
    camera, at the depth the scan has there (or the depth inpainted from around the hole),
    with the filled colour and an opacity scaled by **confidence**: how far the pixel is
@@ -64,6 +65,13 @@ __all__ = [
 
 #: A fill that changed the pixels it was not asked to fill by more than this (PSNR) is refused.
 GATE_PSNR_DB = 25.0
+#: A filler that re-renders the whole frame (`reads_full_render`, NVIDIA Fixer) changes every
+#: pixel's texture -- the CPU renderer's point samples become a photograph's grain -- so it is
+#: gated on the frame's layout instead: both blurred by `GATE_BLUR_PX`, and this PSNR. On
+#: the first GPU runs (spool, pumpkin, yard from outside) Fixer kept the scene at 20-30 dB
+#: blurred and 12-17 dB unblurred; an inverted frame scores under 10 either way.
+GATE_FULL_RENDER_PSNR_DB = 20.0
+GATE_BLUR_PX = 2.0
 #: Untouched pixels score this rather than infinity, so reports stay JSON.
 GATE_CAP_DB = 99.0
 #: Confidence halves about every this many pixels from the nearest measured pixel.
@@ -258,6 +266,7 @@ def fill_views(conds: Sequence[Conditioning], filler: Filler) -> list[Filled]:
     """Each view filled and gated: the first fill whose unmasked pixels kept their render."""
     out = []
     full = bool(getattr(filler, "reads_full_render", False))
+    threshold = GATE_FULL_RENDER_PSNR_DB if full else GATE_PSNR_DB
     for cond in conds:
         given = to_u8(cond.seen.rgb)
         shown = to_u8(cond.full.rgb) if full else given
@@ -268,12 +277,19 @@ def fill_views(conds: Sequence[Conditioning], filler: Filler) -> list[Filled]:
 
                 candidate = cv2.resize(candidate, (given.shape[1], given.shape[0]))
             kept = cond.seen.alpha >= SEEN_ALPHA
-            score = min(psnr(candidate, given, kept & ~cond.mask), GATE_CAP_DB)
+            a, b = (_blur(candidate), _blur(given)) if full else (candidate, given)
+            score = min(psnr(a, b, kept & ~cond.mask), GATE_CAP_DB)
             if best is None or score > best.gate_psnr_db:
-                best = Filled(cond, candidate, score, score >= GATE_PSNR_DB)
+                best = Filled(cond, candidate, score, score >= threshold)
         assert best is not None
         out.append(best)
     return out
+
+
+def _blur(rgb: np.ndarray) -> np.ndarray:
+    import cv2
+
+    return cv2.GaussianBlur(rgb, (0, 0), GATE_BLUR_PX)
 
 
 def _disc_rotations(normals: np.ndarray) -> np.ndarray:
