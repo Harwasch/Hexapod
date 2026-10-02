@@ -64,7 +64,7 @@ export function InstancePanel({ assetId }: { assetId: string }) {
         id={inputId}
         type="search"
         autoComplete="off"
-        placeholder="tree, table, vegetation > 0.5"
+        placeholder="spool, tree, vegetation > 0.5"
         value={entry.query}
         aria-controls={listId}
         aria-describedby={`${inputId}-hint`}
@@ -72,8 +72,9 @@ export function InstancePanel({ assetId }: { assetId: string }) {
         onKeyDown={onInputKey}
       />
       <span id={`${inputId}-hint`} className="sr-only">
-        Words match each object&apos;s tags; filters like vegetation &gt; 0.5 or behaviour:movable
-        narrow them. Enter goes to the best match; the arrow keys move through the results.
+        Words match each object&apos;s tags and, where the scan has embeddings, what it looks like;
+        filters like vegetation &gt; 0.5 or behaviour:movable narrow them. Enter goes to the best
+        match; the arrow keys move through the results.
       </span>
       {entry.filters.length > 0 && (
         <div className="instance-panel__filters" role="group" aria-label="Quick filters">
@@ -114,6 +115,7 @@ export function InstancePanel({ assetId }: { assetId: string }) {
                 <span className="instance-panel__name">{result.label}</span>
                 <span className="instance-panel__meta">
                   {Math.round(result.score * 100)}% · {result.behaviour}
+                  {result.via === "meaning" && " · by meaning"}
                 </span>
               </button>
               <GlassButton
@@ -134,7 +136,12 @@ export function InstancePanel({ assetId }: { assetId: string }) {
           );
         })}
       </ul>
-      {entry.query.trim() !== "" && entry.results.length === 0 && (
+      {entry.meaning === "loading" && entry.query.trim() !== "" && (
+        <p className="instance-panel__empty" role="status" data-testid="instance-meaning-loading">
+          Matching by meaning too…
+        </p>
+      )}
+      {entry.query.trim() !== "" && entry.results.length === 0 && entry.meaning !== "loading" && (
         <p className="instance-panel__empty" role="status">
           No object matches.
         </p>

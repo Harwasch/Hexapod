@@ -42,6 +42,7 @@ import * as CesiumBarrel from "cesium";
 import {
   instancesRefOf,
   loadInstances,
+  resolveBeside,
   tileInstanceIds,
   withDescendants,
   type InstancesDoc,
@@ -724,7 +725,11 @@ export function attachInstances(
       if (disposed) return;
       hook = new SplatInstances(doc, gpu, splatTilesetOf(tileset));
       ATTACHED.set(assetId, { tileset, doc });
-      useInstances.getState().setTable(assetId, doc);
+      // instances.emb is not fetched here: only the first search by meaning needs it.
+      const embeddingSource = doc.embedding
+        ? { instancesUrl: resolveBeside(url, ref.uri), ref: doc.embedding }
+        : null;
+      useInstances.getState().setTable(assetId, { ...doc, embeddingSource });
       push();
       log.info("instances attached", {
         asset: assetId,

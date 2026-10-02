@@ -38,6 +38,7 @@ import {
   rankByEmbedding,
   resolveBeside,
   searchInstances,
+  subtreeSplats,
   tileInstanceIds,
   withDescendants,
   type InstancesDoc,
@@ -258,14 +259,15 @@ describe("search", () => {
     const results = searchInstances(d.instances, "tree");
     expect(results.map((r) => r.id)).toEqual([2, 3]);
     expect(results[0]?.label).toBe("oak tree");
-    const largest = Math.max(...d.instances.map((i) => i.splats));
-    const oak = d.instances.find((i) => i.id === 2);
+    // Prominence counts an instance with its parts: the oak (20) with its trunk (30).
+    const totals = subtreeSplats(d.instances);
+    expect(totals.get(2)).toBe(50);
+    const largest = Math.max(...totals.values());
     expect(results[0]?.score).toBeCloseTo(
-      0.95 *
-        0.8 *
-        (PROMINENCE_FLOOR + (1 - PROMINENCE_FLOOR) * prominence(oak?.splats ?? 0, largest)),
+      0.95 * 0.8 * (PROMINENCE_FLOOR + (1 - PROMINENCE_FLOOR) * prominence(50, largest)),
       9,
     );
+    expect(results[0]?.via).toBe("tags");
     expect(results[0]?.behaviour).toBe("in-place");
     // A lower tag matches too, by its own score.
     expect(searchInstances(d.instances, "car").map((r) => [r.id, r.label])).toEqual([[1, "car"]]);
@@ -290,7 +292,8 @@ describe("search", () => {
     expect(byName.map((r) => r.id)).toEqual([2, 3]);
     expect(byName[0]?.label).toBe("vegetation 0.97");
     expect(searchInstances(d.instances, "movable > 0.5").map((r) => r.id)).toEqual([1, 4]);
-    expect(searchInstances(d.instances, "behaviour:in-place").map((r) => r.id)).toEqual([3, 2]);
+    // Equal scores: the larger first, counting parts (the oak with its trunk).
+    expect(searchInstances(d.instances, "behaviour:in-place").map((r) => r.id)).toEqual([2, 3]);
     expect(searchInstances(d.instances, "tree vegetation >= 0.9").map((r) => r.id)).toEqual([2]);
     // A property an instance does not carry fails the filter.
     expect(searchInstances(d.instances, "vehicle < 0.5")).toEqual([]);
@@ -712,6 +715,12 @@ describe("attachInstances", () => {
     await Promise.resolve();
     expect(asked).toEqual(["https://x.test/scan/tileset.json instances.json"]);
     expect(useInstances.getState().assets.scan?.instances).toHaveLength(4);
+    // Where instances.emb is, for the first search by meaning; not fetched yet.
+    expect(useInstances.getState().assets.scan?.embeddingSource).toEqual({
+      instancesUrl: "https://x.test/scan/instances.json",
+      ref: { file: "instances.emb", model: "siglip2", dim: 4, dtype: "float16" },
+    });
+    expect(useInstances.getState().assets.scan?.meaning).toBe("idle");
     for (const f of listeners) f();
     expect(primitive.vertexVisibility).toBeDefined();
     const before = renders;
