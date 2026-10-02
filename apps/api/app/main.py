@@ -25,6 +25,7 @@ from app.services.errors import (
     UnauthorizedError,
 )
 from app.services.ratelimit import RateLimited, RateLimits
+from app.services.text_encoder import LazyTextEncoder, TextEncoderUnavailableError
 from app.services.urls import UrlValidationError
 from app.storage import StorageUnavailableError
 from app.worlds.lifecycle import worlds_lifespan
@@ -203,6 +204,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def storage_handler(_: Request, exc: StorageUnavailableError) -> JSONResponse:
         return _problem(status.HTTP_503_SERVICE_UNAVAILABLE, "Object storage unavailable", str(exc))
 
+    @app.exception_handler(TextEncoderUnavailableError)
+    async def text_encoder_handler(_: Request, exc: TextEncoderUnavailableError) -> JSONResponse:
+        return _problem(
+            status.HTTP_503_SERVICE_UNAVAILABLE, "Search by meaning unavailable", str(exc)
+        )
+
     @app.exception_handler(UrlValidationError)
     async def url_handler(_: Request, exc: UrlValidationError) -> JSONResponse:
         return _problem(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid URL", str(exc))
@@ -249,6 +256,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # Per app rather than per process, for the same reason: a test's app starts with full
     # buckets instead of whatever the previous test left in them.
     app.state.rate_limits = RateLimits()
+    # Loaded on the first search, not here (app/services/text_encoder.py).
+    app.state.text_encoder = LazyTextEncoder(
+        settings.text_encoder_dir, threads=settings.text_encoder_threads
+    )
     app.include_router(api_v1)
     # **Development only.** Capture tiles kept on a developer's disk
     # (data/tiles/<slug>/<representation>/tileset.json) are served as static 3D Tiles under

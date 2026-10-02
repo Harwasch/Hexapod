@@ -226,3 +226,6 @@ export type SignatureZone = Schemas["SignatureZone"];
 export type WorkableGroundRequest = Schemas["WorkableGroundRequest"];
 export type WorkableGround = Schemas["WorkableGroundRead"];
 export type WorkableLeftOut = Schemas["WorkableLeftOut"];
+
+/** A search query embedded with the model scan objects were described with (search by meaning). */
+export type TextEmbedding = Schemas["TextEmbedding"];
