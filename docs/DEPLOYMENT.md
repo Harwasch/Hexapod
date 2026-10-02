@@ -547,7 +547,10 @@ already had; only the bucket differs.
 
 Two paths put things in the public bucket, and they differ for a reason.
 `app/seed/publish.py` writes `sites/` and `catalog.json` **straight there**, because those
-exist only to be fetched by a browser and never hold anything else.
+exist only to be fetched by a browser and never hold anything else — and so does
+`POST /sites/{id}/thumbnail`, at `sites/<site id>/thumbnail.<ext>`. (It used to write to the
+private bucket while saving a URL on the public host, so every uploaded thumbnail 404'd once
+there were two buckets.)
 `app/worker/publish.py` **copies** a finished run's tileset and thumbnail across with a
 server-side `CopyObject`, because a run produces those into the private bucket alongside
 things that must stay there. A copy, not a move: the private bucket keeps the originals,
@@ -609,6 +612,54 @@ has to be committed), applies the document with `aws s3api put-bucket-cors` agai
 `https://<account-id>.r2.cloudflarestorage.com` with `--region auto`, and then prints what
 the bucket reports back. **Read that output.** It is the first time any of this meets a real
 R2 API.
+
+### Narrowing the credentials: operator steps
+
+Two credentials are broader than they need to be today. Neither is a code change — the
+runtime configuration is deliberately left as it is — so these are steps for whoever holds
+the accounts, in the order to take them.
+
+**One R2 key pair does three jobs.** `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` become the
+API's and the worker's `OBJECT_STORAGE_*` pair on Fly, _and_ `modal.yml` copies the same
+pair into the Modal secret `twin-object-storage` for the GPU container. They need different
+things:
+
+| Who                   | Needs                                                                                                   |
+| --------------------- | ------------------------------------------------------------------------------------------------------- |
+| API and worker (Fly)  | Object Read & Write on the **private** bucket, and on the **public** one (publishing is a `CopyObject`) |
+| GPU container (Modal) | Object Read & Write on the **private** bucket only: inputs in, `runs/<id>/` out                         |
+
+So a leak from Modal's side today is write access to the bucket the world reads. To split it:
+
+1. R2 → Manage API tokens → Create API token: **Object Read & Write**, "Specify bucket(s)" →
+   the **private** bucket only (`R2_BUCKET`, `twin-assets` by default). Note the pair.
+2. Replace the Modal secret with it — from a file, so the values are not on a command line:
+   write `OBJECT_STORAGE_ENDPOINT_URL`, `OBJECT_STORAGE_ACCESS_KEY`,
+   `OBJECT_STORAGE_SECRET_KEY`, `OBJECT_STORAGE_BUCKET` and `OBJECT_STORAGE_REGION=auto` as a
+   JSON object and run `modal secret create twin-object-storage --force --from-json <file>`.
+   Delete the file. **Re-running `modal.yml` puts the broad pair back** (it builds the
+   secret from `R2_ACCESS_KEY_ID`), so repeat this step after any run of it.
+3. Make sure the repository's pair — the one Fly gets — is scoped to **exactly the two
+   buckets** (`R2_BUCKET` and `R2_PUBLIC_BUCKET`) and nothing else on the account. If it
+   was minted for "all buckets", mint a two-bucket token, put it in `R2_ACCESS_KEY_ID` /
+   `R2_SECRET_ACCESS_KEY`, and re-run **Provision** (it re-sets the Fly secrets).
+4. Revoke the old token in R2 → Manage API tokens once uploads, a Lane 2 run and a publish
+   have all worked on the new ones.
+
+**The phone key's hash is in `fly.toml`.** A salted PBKDF2 hash, 200,000 rounds, of a key of
+about 59 bits — not the key, and slow to attack — but it is in a public repository, where an
+offline guesser has all the time it likes and the API's rate limit does not apply. To take
+it out of the repository:
+
+1. Generate a new key (the old hash has been public, so rotate rather than move it) and its
+   hash, in `apps/api`:
+   `uv run python -c "import secrets, sys; from app.services.phone_key import hash_key; k = '-'.join(secrets.token_hex(2) for _ in range(4)); print(k); print(hash_key(k, salt=secrets.token_bytes(16)), file=sys.stderr)"`
+   — the key on stdout is for the phone; the hash on stderr is for Fly.
+2. `fly secrets set -a twin-api API_PHONE_KEY_HASH='<the hash>'` — single quotes, because
+   the hash contains `$`.
+3. In the same change, delete the `API_PHONE_KEY_HASH` line from `fly.toml`'s `[env]`, so
+   the old value cannot come back with a later deploy, and deploy.
+4. On each phone: **Forget key**, then type the new one.
 
 ### MinIO, for development
 
@@ -874,7 +925,20 @@ object in the bucket behind. Deleting them is a console job; leaving them is har
 - `pnpm audit --audit-level high` and `pip-audit` run in CI.
 - Dataset URLs are validated (scheme, credentials, private hosts in production).
 - Reads are open so the world stays viewable; every mutating endpoint requires
-  `Authorization: Bearer $API_WRITE_TOKEN`, and the worker uses the same token.
+  `Authorization: Bearer $API_WRITE_TOKEN`, and the worker uses the same token. So does one
+  read: storage reconciliation (`POST /storage/reconciliation`), which walks the private
+  bucket and lists what is in it.
+- The routes whose cost is the attack are rate-limited per client, in process
+  (`app/services/ratelimit.py`): wrong phone keys (each is 200,000 PBKDF2 rounds; a right
+  key is never limited), reconciliation, and step-log reads. A refusal is a `429` with
+  `Retry-After`. The client is the address in `API_CLIENT_IP_HEADER` (default
+  `Fly-Client-IP`, which Fly's proxy sets on every request); behind anything other than Fly
+  set that header's name, or empty to use the socket address, or the limit is one bucket for
+  everyone. None of it is reachable by the phone page's 10-second polling.
+- The `/r2/` tile proxy fetches from one pinned bucket host and labels what it serves
+  itself; see [the tile proxy](#the-r2-tile-proxy-and-the-one-host-it-serves).
+- One queued-or-running job per capture is a partial unique index (migration `0008`), not
+  only a check in code, so a double-click on Process is a `409`, not a second run.
 
 ## Observability
 
@@ -960,9 +1024,11 @@ Note the account id while you are there: it is the 32-hex string in the dashboar
 → `CLOUDFLARE_ACCOUNT_ID`
 
 **Cloudflare R2, separately** — R2 → Manage API tokens → Create API token.
-_Scope:_ **Object Read & Write**, and under "Specify bucket(s)" choose **only** the bucket
-this deployment uses (`twin-assets` unless you set the `R2_BUCKET` variable). This is an
-S3-compatible key pair, a different kind of credential from the token above, and there is no
+_Scope:_ **Object Read & Write**, and under "Specify bucket(s)" choose **only** the two
+buckets this deployment uses (`twin-assets` and `twin-assets-public` unless you set the
+`R2_BUCKET` / `R2_PUBLIC_BUCKET` variables): publishing copies from one into the other with
+this pair. See [Narrowing the credentials](#narrowing-the-credentials-operator-steps) for
+giving Modal a pair that reaches only the private one. This is an S3-compatible key pair, a different kind of credential from the token above, and there is no
 API that mints one — which is why it is on this list. The API needs it in any case:
 `OBJECT_STORAGE_ACCESS_KEY` and `OBJECT_STORAGE_SECRET_KEY` are what presign every upload.
 → `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`
