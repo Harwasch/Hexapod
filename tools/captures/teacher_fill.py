@@ -718,18 +718,19 @@ def _hole_conditioning(
 
 
 def _extend_background(frame: Frame, mask: np.ndarray) -> Frame:
-    """`frame` with the empty pixels around a hole (nothing rendered there: the scan's edge)
-    painted from the covered ones, so a filler working from the hole's surroundings is not
-    shown the void as its context. Coverage and depth stay as rendered."""
+    """`frame` with the hole and the empty pixels around it (nothing rendered there: the
+    scan's edge) painted from the covered ones (Telea), so a filler is not shown the void as
+    context -- and one that re-renders the whole frame (NVIDIA Fixer, an artifact cleaner,
+    not an inpainter: on the pumpkin it kept an empty hole black) starts from a rough fill
+    it can clean. Coverage and depth stay as rendered."""
     import cv2
 
     empty = ~_covered(frame.alpha) & ~mask
-    if not empty.any() or empty.all():
+    todo = empty | mask
+    if not todo.any() or todo.all():
         return frame
-    painted = cv2.inpaint(
-        to_u8(frame.rgb), (empty | mask).astype(np.uint8) * 255, 5, cv2.INPAINT_TELEA
-    )
-    rgb = np.where(empty[..., None], painted.astype(np.float64) / 255.0, frame.rgb)
+    painted = cv2.inpaint(to_u8(frame.rgb), todo.astype(np.uint8) * 255, 5, cv2.INPAINT_TELEA)
+    rgb = np.where(todo[..., None], painted.astype(np.float64) / 255.0, frame.rgb)
     return Frame(rgb, frame.depth, frame.alpha, frame.label, frame.purity)
 
 
