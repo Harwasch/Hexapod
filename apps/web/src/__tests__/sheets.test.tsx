@@ -9,7 +9,7 @@ import { GlassTooltipProvider } from "@twin/ui";
 import { api } from "@/api/client";
 import { AddDataSheet } from "@/features/add-data/AddDataSheet";
 import { SettingsSheet } from "@/features/settings/SettingsSheet";
-import { useSettings } from "@/state/settings";
+import { useRendererOverride, useSettings } from "@/state/settings";
 import { useUi } from "@/state/ui";
 
 function wrap(children: ReactNode) {
@@ -48,6 +48,33 @@ describe("Settings › Advanced", () => {
     const renderer = within(advanced).getByRole("radiogroup", { name: "Splat renderer" });
     await user.click(within(renderer).getByRole("radio", { name: "Draw splats with Spark" }));
     expect(useSettings.getState().splatRenderer).toBe("spark");
+    await user.click(
+      within(renderer).getByRole("radio", {
+        name: "Draw splats with PlayCanvas on WebGPU (beta)",
+      }),
+    );
+    expect(useSettings.getState().splatRenderer).toBe("playcanvas-webgpu");
+  });
+
+  it("shows the renderer the page address chose, and a choice here ends it", async () => {
+    const user = userEvent.setup();
+    useRendererOverride.setState({ renderer: "playcanvas-webgpu" });
+    useUi.setState({ settingsOpen: true });
+    render(wrap(<SettingsSheet />));
+    const advanced = screen.getByTestId("settings-advanced");
+    await user.click(within(advanced).getByText("Advanced"));
+    const renderer = within(advanced).getByRole("radiogroup", { name: "Splat renderer" });
+    const webgpu = within(renderer).getByRole("radio", {
+      name: "Draw splats with PlayCanvas on WebGPU (beta)",
+    });
+    expect(webgpu).toHaveAttribute("aria-checked", "true");
+    expect(within(advanced).getByTestId("splat-renderer-now")).toHaveTextContent(
+      "Chosen by the page address for this visit",
+    );
+    await user.click(within(renderer).getByRole("radio", { name: "Draw splats with PlayCanvas" }));
+    expect(useRendererOverride.getState().renderer).toBeNull();
+    expect(useSettings.getState().splatRenderer).toBe("playcanvas");
+    expect(within(advanced).queryByTestId("splat-renderer-now")).not.toBeInTheDocument();
   });
 });
 

@@ -9,6 +9,8 @@ import { GlassTooltipProvider } from "@twin/ui";
 import type { Site, SiteAsset } from "@twin/contracts";
 
 import { api } from "@/api/client";
+import type { CesiumSceneManager } from "@/cesium/CesiumSceneManager";
+import { sceneRegistry } from "@/cesium/SceneContext";
 import { InspectorPanel } from "@/features/inspector/InspectorPanel";
 import { DevPanel } from "@/features/dev/DevPanel";
 import { SimulatedBadge } from "@/features/living/SimulatedBadge";
@@ -147,6 +149,34 @@ describe("Developer readouts + Onboarding", () => {
     useSettings.getState().set({ units: "imperial" });
     rerender(wrap(<DevReadouts />));
     expect(screen.getByTestId("status-altitude")).toHaveTextContent("ft");
+    vi.restoreAllMocks();
+  });
+
+  it("name the splat renderer's API, its latest frame rate, and why WebGPU fell back", async () => {
+    vi.spyOn(api, "GET").mockRejectedValue(new TypeError("offline"));
+    useSettings.getState().set({ devReadouts: true, splatRenderer: "playcanvas-webgpu" });
+    useSites.setState({ activeSiteId: "site", representation: { site: "gaussian-splat" } });
+    const status = {
+      kind: "playcanvas-webgpu",
+      active: true,
+      api: "webgl2",
+      notice: "WebGPU device lost: GPU process restarted",
+      meter: { fps: 31.6, p95Ms: 48.2, cpuMs: 4.04, frames: 40, live: false },
+    };
+    sceneRegistry.set({ scanRendererStatus: status } as unknown as CesiumSceneManager);
+    render(wrap(<DevReadouts />));
+    expect(await screen.findByTestId("status-splat-renderer")).toHaveTextContent(
+      "PlayCanvas · WebGL2 (WebGPU unavailable)",
+    );
+    expect(screen.getByTestId("status-splat-meter")).toHaveTextContent(
+      "last move 32 fps · p95 48 ms · draw 4.0 ms",
+    );
+    expect(screen.getByTestId("status-splat-notice")).toHaveTextContent(
+      "WebGPU device lost: GPU process restarted",
+    );
+    sceneRegistry.set(null);
+    useSites.setState({ activeSiteId: null, representation: {} });
+    useSettings.getState().reset();
     vi.restoreAllMocks();
   });
 
