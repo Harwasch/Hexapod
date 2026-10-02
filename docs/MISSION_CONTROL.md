@@ -8,12 +8,13 @@ that layer and the seam where real fleet data plugs in.
 ## Layout
 
 ```text
-┌ Project badge ──── Search ───────────────── Map · Plan · Fleet ┐
-│ (site picker)                                Imagery Vegetation Zones Tracks
-│ Tool rail        (machine markers, zone chips over the world)   Inspector / Dev
-│ ┌ panels ┐                                                      ┌ Plans / Fleet window ┐
-│ Feeds · Selection card                                          Agent activity stream
-└ Command bar ── "select TR-07" · "show zones" · "fly to …" ── readouts ┘
+┌ Project badge ─── [ ⌘K  Search, run an action or ask the agent ] ─── Map · Plan · Fleet ┐
+│ (site picker)                                          Imagery Vegetation Zones Tracks
+│ Tool rail        (machine markers, zone chips over the world)       Toasts
+│ ┌ panels ┐                                                          Selection · Feeds
+│ ┌ Plans / Fleet window ┐                                            Inspector / Dev
+│ ┌ activity log ┐            [ Splat · Mesh · Points ] [ Loading 3D model 42% ]
+└ Fleet: 4 working · 2 need attention │ Agent: <task> +4 tasks ⌃      ◎ ⌂ │ Data ┘
 ```
 
 - **Project badge** (`features/mission/ProjectCard`) names the active site's project; its menu
@@ -34,11 +35,37 @@ that layer and the seam where real fleet data plugs in.
 - **Plans** and **Fleet** windows list plans with detail + "Show on map", and machines with a
   treatment log. "+ New plan", "Plan a mission" (Fleet) and "Plan here" (a zone without a
   plan) open the plan composer described below.
-- **Agent stream** (`AgentStream`, key `a`) is the running log of agent actions and command
-  replies. It has no card while the agent is idle: it appears when something runs (a plan
-  being drafted, a demo thread), when a command was answered, or when opened with `a`.
-- **Command bar** (`CommandBar`) accepts short intents; `lib/intents.ts` parses them locally
-  (machine and zone ids, views, layers, measure, camera, site fly-to, then geocoding).
+- **Command box** (`features/command-palette/CommandBox`, `⌘K` / `Ctrl+K` or `/`) is the one
+  text box: it replaced the search pill, the ⌘K palette and the agent bar. Results are grouped
+  — Places (the geocoder), Sites, Zones and Plans (from the project), Layers, Actions with
+  their keys — and the last row is always “Ask the agent: …”, which runs the words through
+  `lib/intents.ts` (machine and zone ids, views, layers, measure, camera, site fly-to,
+  geocoding, and a sentence of work to the planner; `useAgentCommand`). Enter runs the
+  highlighted row, the arrows move it, Escape closes. Which row is highlighted follows the
+  words (`commandResults.ts`): an instruction or a sentence ("where is TR-07", "mow Z-21 by
+  Friday") highlights the agent; a name highlights its best match — a site, zone, plan, layer
+  or action before a geocoded place, because places arrive a beat later and Enter must not
+  change meaning under a fast typist. `?` opens the shortcut sheet, printed from the same
+  registry (`app/hotkeys.ts`) the box shows each action's key from.
+- **Status line** (`StatusLine`, bottom left) is one pill: the fleet in view ("Fleet: 4
+  working · 2 need attention", counted as the Fleet window's KPIs count it), the agent's
+  line ("Agent: <current task> +N tasks"; a reply holds it for 15 s, so the answer to what
+  was just asked is where the operator is looking), and the connection only when it is
+  degraded ("Catalog API offline", "Map key rejected", "Graphics paused"). At globe scale
+  with no site it sums up the catalog (sites · machines · alerts). It is a polite live
+  region. Its chevron (or `a`) opens the **activity log** above it (`AgentActivityLog`):
+  every running, queued and done action and the conversation, led by the full sentence of any
+  connection fault. Flows that want the operator to read the agent (`streamOpen`) light the
+  agent's line up instead of opening thirteen lines over the map.
+- **Bottom right**: compass and Earth share one pill with the data credits. Zoom, top-down and
+  explore mode have no on-screen buttons; they are keys (wheel / `+` `-`, `T`, `G`) and
+  command-box actions.
+- **Developer readouts** (altitude, scale band, metres per pixel, the world, the splat
+  renderer) and the deployer's "Shared demo map key" note are behind Settings › Advanced ›
+  Show developer readouts, off by default. The splat renderer choice (PlayCanvas / Spark /
+  Cesium) is there too; the strip at a site keeps only Splat / Mesh / Points, and beside it
+  the model's load: "Loading 3D model 42%", or "Couldn't load the 3D model · Retry"
+  (`features/sites/SiteLoadStatus`, from the per-asset load state `SiteManager` writes).
 
 ## Planning with the agent
 
@@ -46,15 +73,15 @@ A plan is a mission for the fleet, and the agent drafts it. The flow is goal →
 → approve:
 
 1. **Goal.** The operator writes what the fleet should achieve ("clear the star thistle from
-   Z-14 and Z-21 with two mowers before seed set") in the plan composer, or in the command bar
+   Z-14 and Z-21 with two mowers before seed set") in the plan composer, or in the command box
    as `plan: …` / "draft a plan to …". Zones and machines can be pre-selected with chips; a
    selected zone or machine seeds them.
 2. **Draft.** The console sends the goal plus the project's zones, machines and existing plans
    to `POST /api/v1/agent/plan-draft`. The API drafts with Claude (official SDK, structured
    output, model from `ANTHROPIC_MODEL`, default `claude-opus-5`) when `ANTHROPIC_API_KEY`
    is set; otherwise a rule-based planner drafts and every draft says so (`source`, `note`).
-   The key never reaches the browser. While drafting, the agent stream shows the running
-   thread.
+   The key never reaches the browser. While drafting, the status line says so and the
+   activity log shows the running thread.
 3. **Review.** The draft shows title, objective, zones, machines, cadence and dates, the
    estimate (acres, machine-hours, days), ordered steps, risks and the agent's questions.
    Title and objective are editable; "Redraft" sends an answer or adjustment ("use three
@@ -71,7 +98,7 @@ into a zone (`missions/areas.ts`, ids `A-01…`). Drawn areas are kept in the br
 on the plans that cover them (`areas` on the plan record), so a plan opened on another device
 brings its ground with it. The world redraws zones whenever the store's project changes.
 
-**Planning from the bar.** The bar at the bottom is the one place to talk. A sentence of work
+**Planning from the command box.** The command box is the one place to talk. A sentence of work
 ("3D scan this field into a splat", "mow the orchard by Friday with two mowers", or the older
 "plan: …") is a plan request (`lib/intents.ts`, `isWorkRequest`). The flow
 (`features/mission/planFlow.ts`) finds the ground first: zones named in the goal; else, when
@@ -86,7 +113,7 @@ square labelled as the guess it is. The agent then drafts with defaults and the 
 (`PlanCard.tsx`) shows the result: the ground (its corners on the map, dragging redrafts), the
 numbers, what it assumed as chips (each clarification's default; tapping one shows the
 alternatives and redrafts), the schedule and steps, risks, and Approve. Plain words in the
-bar while a draft is open are a change to it ("two drones", "finish by Friday"). The camera
+box while a draft is open are a change to it ("two drones", "finish by Friday"). The camera
 frames the ground at an angle when the draft lands.
 
 **Task families.** The rules planner reads the goal as a treatment (mow, clear, spray…), a
@@ -160,7 +187,7 @@ camera leaves it, the project does not.
 site. Every record carries `simulated: true`, the project badge says so, and nothing in the
 demo is presented as a live feed (camera feeds show "no stream"). Replace
 `DemoMissionProvider` with a provider backed by your fleet API (REST/WebSocket/MCAP) to get
-live positions; the overlays, cards and command bar do not change.
+live positions; the overlays, cards, command box and status line do not change.
 
 ## Design language
 
@@ -172,5 +199,10 @@ Fonts with system fallbacks; the light glass theme is opt-in in Settings.
 ## Tests
 
 - `src/__tests__/intents.test.ts` — command parsing.
+- `src/__tests__/commandBox.test.tsx` — result groups, which row Enter runs, the combobox
+  keyboard, the hotkey registry and the shortcut sheet.
+- `src/__tests__/statusLine.test.tsx` — fleet counts and lines, the agent's line, the
+  activity log, globe-scale summary, model load feedback.
 - `e2e/app.spec.ts` "mission control" — tabs, plan → show on map, fleet → selection,
-  command bar replies, layer pills.
+  the agent's replies on the status line, layer pills; "interaction" — the command box,
+  `?`, Settings › Advanced.

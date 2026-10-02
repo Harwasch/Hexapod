@@ -197,7 +197,7 @@ While the camera moves the root element carries `data-moving`; glass panels drop
 backdrop blur for the duration (a full-screen pass per panel otherwise) and use a flat tint,
 and the HUD's continuous animations (agent blink, marker pulse, spinners) pause. At rest the
 blur is 24 px (it was 40: a blur costs radius² per canvas repaint under the panel, and every
-arriving tile is a repaint), and the agent stream's spinner only spins while something runs.
+arriving tile is a repaint), and the status line's agent spinner only spins while something runs.
 
 A CPU profile of a drag (software GL, so GL calls are inflated, but the shape holds) put
 Cesium's own JavaScript under 2 % and the main thread in three WebGL stalls instead:

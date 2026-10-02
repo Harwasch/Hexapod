@@ -40,7 +40,7 @@ cd apps/web && node scripts/fetch-sample-object.mjs --slug potted_plant_04 --lon
 ```
 
 Finding them afterwards: press `S` for the Sites panel and click the sample, or type
-`fly to rock` / `fly to weed` in the command bar. Both sit a few metres apart, so once you
+`fly to rock` / `fly to weed` in the command box. Both sit a few metres apart, so once you
 are at one, the other is in view.
 
 `rock_09` is a 14 cm rock with 4K textures, about 0.035 mm per texel; `weed_plant_02` is a
@@ -50,7 +50,8 @@ generated `tileset.json`, with the site registered through Add data.
 
 While a model smaller than 30 m in radius is active the camera's zoom floor drops from
 0.6 m to 5 mm and the near plane from 1 m to 1 cm, and a fly-to arrives at a few times the
-object's radius. The scale readout in the command bar switches to mm/px below 1 cm.
+object's radius. The scale readout (Settings › Advanced › Show developer readouts) switches
+to mm/px below 1 cm.
 
 ## What to compare
 
