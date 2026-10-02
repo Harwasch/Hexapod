@@ -8,17 +8,28 @@ that layer and the seam where real fleet data plugs in.
 ## Layout
 
 ```text
-┌ Project badge ─── [ ⌘K  Search, run an action or ask the agent ] ─── Map · Plan · Fleet ┐
-│ (site picker)                                          Imagery Vegetation Zones Tracks
-│ Tool rail        (machine markers, zone chips over the world)       Toasts
-│ ┌ panels ┐                                                          Selection · Feeds
-│ ┌ Plans / Fleet window ┐                                            Inspector / Dev
-│ ┌ activity log ┐            [ Splat · Mesh · Points ] [ Loading 3D model 42% ]
-└ Fleet: 4 working · 2 need attention │ Agent: <task> +4 tasks ⌃      ◎ ⌂ │ Data ┘
+┌ Site switcher ── [ ⌘K  Search, run an action or ask the agent ] ── Map · Plan · Fleet ┐
+│ Layers    ┌ tool panel ┐                          Toasts      ┌ Plan / Fleet drawer ┐ │
+│ Measure   │ (one at a  │   markers and zone       Selection   │ full height; the map│ │
+│ Add       │  time)     │   chips; one site pin    Inspector   │ beside it stays live│ │
+│ Settings  └────────────┘   above 50 km                        │                     │ │
+│              [ Blackrock Mesa  Splat · Mesh · Points ] [ Load ]└─────────────────────┘ │
+└ Fleet: 4 working · 2 need attention │ Agent: <task> +4 tasks ⌃          ◎ ⌂ │ Data ┘
 ```
 
-- **Project badge** (`features/mission/ProjectCard`) names the active site's project; its menu
-  lists catalog sites and opens Add Data.
+On a phone (≤ 640 px) the same parts stack: the site switcher with a search button at the
+top, one bottom sheet (a tool panel, Plan or Fleet, or what is selected), the status line in
+one row with the compass and an (i) for the data credits, and a tab bar — Map, Plan, Fleet,
+More — at the bottom. More holds the four tools; the search button opens the command box full
+screen. Between 641 and 899 px the rail is a row of the four labelled tools above the bar.
+
+- **Site switcher** (`features/mission/ProjectCard`) names the site — one name per site,
+  its project's when it has one (`features/sites/siteNames.ts`, `docs/GLOSSARY.md`) — and
+  leaves room beside the name for a status chip. Its menu is where you change where you are:
+  every catalog site (fly there; the one you are at is marked), the current site's saved
+  views (open, save the current camera, delete; `features/bookmarks/savedViews.ts`), "Add a
+  site", and links to the scan gallery and the data console. `s` opens it on its sites, `b`
+  on its saved views; both are command-box actions ("Switch site", "Saved views").
 - **Simulated motion badge** (`features/living/SimulatedBadge`) sits directly under it whenever
   the Living Survey is animating, in the same corner and the same voice the project badge uses
   for a simulated fleet. It has to be ambient: Gaussian splats never write depth and are
@@ -27,25 +38,39 @@ that layer and the seam where real fleet data plugs in.
   never written to; whether that geometry is a measured capture, and at what resolution, is
   stated per site in the Inspector ("Measured and simulated").
 - **View tabs** (`ViewTabs`) switch `map` / `plan` / `fleet`. Keys `1` `2` `3`.
-- **Layer pills** (`LayerPills`) toggle imagery, vegetation, zones and tracks.
+- **Tool rail** (`features/shell/ToolRail`): four labelled tools — **Layers** (`L`), **Measure**
+  (`M`), **Add** (`U`) and **Settings** (`,`). Layers starts with the four favourites
+  (Imagery, Vegetation, Zones, Tracks; `features/layers/LayerFavourites`) and has two modes,
+  All layers and **Compare** (`C`; the swipe divider outlives the panel,
+  `features/compare/Compare`). **Add** has two tabs: **Upload a capture** (drop zone, the
+  phone handoff and the captures list) and **Link a source** (ion, 3D Tiles, GeoJSON, imagery,
+  STAC, or a site; `features/add-data`). The developer console is a switch in Settings ›
+  Advanced (and `D`). Everything that left the rail is still a command-box action.
 - **Markers and chips** (`MissionOverlays`) are DOM elements positioned every frame from
   `MissionManager` anchors, so they stay crisp and accessible (real buttons, keyboard focus).
+  Above 50 km of altitude a project's markers and chips collapse into one **site pin** with
+  the site's name and how many things it stands for; it flies to the site
+  (`missions/sitePin.ts`).
 - **Selection card** shows a machine (battery, acres, shift, Pause / Camera) or a zone
   (progress, Open plan / Reassign).
-- **Plans** and **Fleet** windows list plans with detail + "Show on map", and machines with a
-  treatment log. "+ New plan", "Plan a mission" (Fleet) and "Plan here" (a zone without a
-  plan) open the plan composer described below.
+- **Plans** and **Fleet** open as a drawer at the right edge, full height (a bottom sheet on a
+  phone): plans with detail + "Show on map", and machines with a treatment log. The map
+  beside it stays live — it takes clicks, and a Fleet row flies to its machine and opens its
+  card next to the drawer, which stays open. A tool panel and the drawer replace each other
+  (`state/layout.ts`). "+ New plan", "Plan a mission" (Fleet) and "Plan here" (a zone
+  without a plan) open the plan composer described below.
 - **Command box** (`features/command-palette/CommandBox`, `⌘K` / `Ctrl+K` or `/`) is the one
   text box: it replaced the search pill, the ⌘K palette and the agent bar. Results are grouped
-  — Places (the geocoder), Sites, Zones and Plans (from the project), Layers, Actions with
-  their keys — and the last row is always “Ask the agent: …”, which runs the words through
+  — Sites, Zones and Plans (from the project), Layers, Actions with their keys, then Places
+  (the geocoder) — and the last row is always “Ask the agent: …”, which runs the words through
   `lib/intents.ts` (machine and zone ids, views, layers, measure, camera, site fly-to,
   geocoding, and a sentence of work to the planner; `useAgentCommand`). Enter runs the
   highlighted row, the arrows move it, Escape closes. Which row is highlighted follows the
   words (`commandResults.ts`): an instruction or a sentence ("where is TR-07", "mow Z-21 by
   Friday") highlights the agent; a name highlights its best match — a site, zone, plan, layer
   or action before a geocoded place, because places arrive a beat later and Enter must not
-  change meaning under a fast typist. `?` opens the shortcut sheet, printed from the same
+  change meaning under a fast typist; the local groups are listed above Places, so the
+  highlighted best match is the top row. `?` opens the shortcut sheet, printed from the same
   registry (`app/hotkeys.ts`) the box shows each action's key from.
 - **Status line** (`StatusLine`, bottom left) is one pill: the fleet in view ("Fleet: 4
   working · 2 need attention", counted as the Fleet window's KPIs count it), the agent's
@@ -65,7 +90,12 @@ that layer and the seam where real fleet data plugs in.
   Show developer readouts, off by default. The splat renderer choice (PlayCanvas / Spark /
   Cesium) is there too; the strip at a site keeps only Splat / Mesh / Points, and beside it
   the model's load: "Loading 3D model 42%", or "Couldn't load the 3D model · Retry"
-  (`features/sites/SiteLoadStatus`, from the per-asset load state `SiteManager` writes).
+  (`features/sites/SiteLoadStatus`, from the site's load record `SiteManager` writes). The
+  active site's failed model is said there only — no toast repeats it with the asset's file
+  name; a failure no pill speaks for (a site loading in the background) still raises one.
+- **Other pages**: the scan gallery (`view.html`) and the data console (`admin.html`) share a
+  slim header — Globe · Scans · Data console (`src/shared/product.ts`) — on the same tokens
+  and fonts. The phone's capture page (`upload.html`) stays on its own.
 
 ## Planning with the agent
 
@@ -199,10 +229,16 @@ Fonts with system fallbacks; the light glass theme is opt-in in Settings.
 ## Tests
 
 - `src/__tests__/intents.test.ts` — command parsing.
-- `src/__tests__/commandBox.test.tsx` — result groups, which row Enter runs, the combobox
-  keyboard, the hotkey registry and the shortcut sheet.
+- `src/__tests__/commandBox.test.tsx` — result groups (local before places), which row Enter
+  runs, the combobox keyboard, the hotkey registry and the shortcut sheet.
+- `src/__tests__/layoutTools.test.tsx` — the four tools, every moved entry still a command,
+  Layers' favourites and Compare, the site switcher, the drawer beside a selection, the phone
+  tab bar, the site pin, the console's labels and the shared header.
+- `src/__tests__/siteLoadToast.test.ts` — a failed model is said by the pill, not a toast.
 - `src/__tests__/statusLine.test.tsx` — fleet counts and lines, the agent's line, the
   activity log, globe-scale summary, model load feedback.
-- `e2e/app.spec.ts` "mission control" — tabs, plan → show on map, fleet → selection,
-  the agent's replies on the status line, layer pills; "interaction" — the command box,
-  `?`, Settings › Advanced.
+- `e2e/app.spec.ts` "mission control" — tabs, plan → show on map, a fleet row → its card
+  beside the drawer, the agent's replies on the status line, the layer favourites, the site
+  pin; "interaction" — the command box, `?`, Settings › Advanced; the site switcher.
+- `e2e/layout.spec.ts` — no surfaces overlap at desktop, laptop and phone sizes, and the
+  phone layout (tab bar, More, full-screen search, one-row status, folded credits).
