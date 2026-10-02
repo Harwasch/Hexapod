@@ -7,7 +7,7 @@ import { useSite } from "@/api/queries";
 import { useScene } from "@/cesium/SceneContext";
 import { useSites, type AssetRuntime } from "@/state/sites";
 
-import { outstanding, retrySiteLoad, shownAsset, siteLoad } from "./siteLoad";
+import { fromSiteRecord, outstanding, retrySiteLoad, shownAsset, siteLoad } from "./siteLoad";
 
 interface Progress {
   assetId: string | null;
@@ -56,9 +56,20 @@ export function SiteLoadStatus() {
     });
   }, [assetId]);
 
+  // The site's own record first: during a fly-to it covers the wait for the site's details
+  // and the model's creation, before any asset has a runtime to read.
+  const record = useSites((s) => (activeSiteId ? s.siteLoads[activeSiteId] : undefined));
+  const retrySite = useSites((s) => s.retrySiteLoad);
+  const fromSite = fromSiteRecord(record);
+
   const current = progress.assetId === assetId ? progress : START;
-  const load = activeSiteId && assetId ? siteLoad(runtime, current.peak, current.settled) : null;
-  if (!load || !assetId) return null;
+  const load =
+    fromSite ?? (activeSiteId && assetId ? siteLoad(runtime, current.peak, current.settled) : null);
+  if (!load || !activeSiteId) return null;
+  const retry = () => {
+    if (fromSite && record?.retryable !== false) retrySite(activeSiteId);
+    else if (assetId) void retrySiteLoad(scene, assetId);
+  };
 
   return (
     <GlassPanel
@@ -86,7 +97,7 @@ export function SiteLoadStatus() {
           <button
             type="button"
             className="site-load__retry"
-            onClick={() => void retrySiteLoad(scene, assetId)}
+            onClick={retry}
             data-testid="site-load-retry"
           >
             <RotateCw size={12} aria-hidden="true" />

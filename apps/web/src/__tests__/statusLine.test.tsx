@@ -18,7 +18,7 @@ import {
   REPLY_HOLD_MS,
   sumFleet,
 } from "@/features/mission/statusSummary";
-import { shownAsset, siteLoad } from "@/features/sites/siteLoad";
+import { fromSiteRecord, shownAsset, siteLoad } from "@/features/sites/siteLoad";
 import type { Machine, Project } from "@/missions/types";
 import type { AgentLogEntry } from "@/state/mission";
 import { useMission } from "@/state/mission";
@@ -161,6 +161,34 @@ describe("site model load feedback", () => {
     expect(
       siteLoad({ ...defaultAssetRuntime, loadState: "error", error: "ion refused" }, 0, false),
     ).toEqual({ phase: "error", message: "ion refused" });
+  });
+
+  it("reads the site-level record first, and stays quiet once it is ready", () => {
+    const record = {
+      phase: "details" as const,
+      progress: 0,
+      error: null,
+      retryable: true,
+      attempt: 1,
+      flight: true,
+      startedAt: 0,
+    };
+    expect(fromSiteRecord(undefined)).toBeNull();
+    expect(fromSiteRecord(record)).toEqual({ phase: "loading", percent: null });
+    expect(fromSiteRecord({ ...record, phase: "model", progress: 0.42 })).toEqual({
+      phase: "loading",
+      percent: 42,
+    });
+    // Never claims 100% while it is still loading.
+    expect(fromSiteRecord({ ...record, phase: "streaming", progress: 1 })).toEqual({
+      phase: "loading",
+      percent: 99,
+    });
+    expect(fromSiteRecord({ ...record, phase: "ready", progress: 1 })).toBeNull();
+    expect(fromSiteRecord({ ...record, phase: "error", error: "timed out" })).toEqual({
+      phase: "error",
+      message: "timed out",
+    });
   });
 
   it("picks the asset the scene shows, the way SiteManager does", () => {

@@ -1,18 +1,31 @@
 import type { Representation, SiteAsset } from "@twin/contracts";
 
 import type { CesiumSceneManager } from "@/cesium/CesiumSceneManager";
-import type { AssetRuntime } from "@/state/sites";
+import type { AssetRuntime, SiteLoad as SiteLoadRecord } from "@/state/sites";
 
 /**
- * Load feedback for the site's 3D model, from what `SiteManager` already writes to the store
- * per asset (`AssetRuntime.loadState`, `.error`, `.progress`).
+ * Load feedback for the site's 3D model, from two sources in the store:
  *
- * Merge note: a parallel change ("D2") adds per-site load progress, an error and a retry to the
- * store and scene. This reads only the per-asset fields that exist today; when D2 lands, point
- * `siteLoad` at its fields and `retrySiteLoad` at its retry, and keep the pill as it is.
+ * - the scene's per-site record (`siteLoads`, written by `SiteManager` as a fly-to fetches
+ *   the site's details and creates its model during the flight), which says what a first
+ *   visit is waiting on and offers the scene's own retry (`retrySiteLoad(siteId)`); and
+ * - the per-asset runtime (`AssetRuntime.loadState`, `.error`, `.progress`), which still
+ *   covers what the site record does not: a model streaming after the site counts as
+ *   ready, and switching Splat / Mesh / Points at a site already loaded.
+ *
+ * The site record wins while it is not ready; after that the asset's own state speaks.
  */
 export type SiteLoad =
   { phase: "loading"; percent: number | null } | { phase: "error"; message: string } | null;
+
+/** What the site-level record says, or null once it is ready (or absent). */
+export function fromSiteRecord(record: SiteLoadRecord | undefined): SiteLoad {
+  if (!record || record.phase === "ready") return null;
+  if (record.phase === "error")
+    return { phase: "error", message: record.error ?? "The site could not be loaded." };
+  const percent = Math.min(99, Math.max(0, Math.round(record.progress * 100)));
+  return { phase: "loading", percent: percent > 0 ? percent : null };
+}
 
 /** The asset the scene shows for a representation, chosen the way `SiteManager.pickAsset` does. */
 export function shownAsset(
