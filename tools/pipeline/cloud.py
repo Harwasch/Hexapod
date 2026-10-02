@@ -1039,10 +1039,7 @@ class CloudRunner(BaseRunner):
                 produces=stage.impl.produces,
             )
             self._within_cap(context, f"call {part or 'for the stage'}")
-            with self._shield():
-                submitted = self._wall()
-                handle = adapter.submit(request)
-                book.put(part, CallRecord(handle, submitted, context.attempt, request))
+            handle, submitted = self._submit(adapter, request, context, tier, book, part)
             context.log(f"cloud: submitted to {adapter.name!r} as call {handle.id}")
             started = self._clock()
         else:
@@ -1063,6 +1060,30 @@ class CloudRunner(BaseRunner):
             failure = RemoteTimeoutError if poll.timed_out else RemoteStageError
             raise failure(context.recipe, context.stage_id, context.impl, adapter.name, poll.detail)
         return _Called(adapter=adapter, poll=poll, submitted_at=submitted, request=request)
+
+    def _submit(
+        self,
+        adapter: ProviderAdapter,
+        request: StageRequest,
+        context: StageContext,
+        tier: str,
+        book: CallBook,
+        slot: str,
+    ) -> tuple[RemoteHandle, float]:
+        """Submit and write the call into the book, with any stop held back until both are
+        done (`shield`) -- and if one was, deal with the call before letting it through, as
+        `_watch` would have: it is out there now, and written down."""
+        handle: RemoteHandle | None = None
+        try:
+            with self._shield():
+                submitted = self._wall()
+                handle = adapter.submit(request)
+                book.put(slot, CallRecord(handle, submitted, context.attempt, request))
+        except BaseException as error:
+            if handle is not None and slot in book.calls:
+                self._stopped(adapter, handle, context, tier, None, book, slot, error)
+            raise
+        return handle, submitted
 
     # --- calls a previous process left running ---------------------------------------
 
@@ -1091,9 +1112,10 @@ class CloudRunner(BaseRunner):
         elif not isinstance(adapter, Reattachable) or record.request is None:
             problem = "that provider's calls cannot be re-attached to"
         else:
+            # No `shield`: the call is written down already, so a stop landing here leaves
+            # nothing unaccounted for.
             try:
-                with self._shield():
-                    adapter.reattach(record.handle, record.request, record.submitted_at)
+                adapter.reattach(record.handle, record.request, record.submitted_at)
             except Exception as error:
                 problem = f"re-attaching failed: {error!r}"
         if not problem and adapter is not None and record.request is not None:
@@ -1374,10 +1396,7 @@ class CloudRunner(BaseRunner):
         )
         adapter = self._placement.adapter_for(AttemptLedger.read(context.attempts_path).preemptions)
         self._within_cap(context, f"part {part.id}")
-        with self._shield():
-            submitted = self._wall()
-            handle = adapter.submit(request)
-            book.put(part.id, CallRecord(handle, submitted, context.attempt, request))
+        handle, submitted = self._submit(adapter, request, context, tier, book, part.id)
         context.log(
             f"cloud: part {part.id} submitted to {adapter.name!r} (call {call}) as {handle.id}"
         )
@@ -1631,23 +1650,43 @@ class CloudRunner(BaseRunner):
                     return poll
                 self._call_within_cap(adapter, handle, context, tier, poll, book, slot)
                 self._sleep(self._poll_interval_s)
-        except CostCapError:
-            raise  # cancelled and recorded on the way to raising it
-        except DetachRequested:
-            if isinstance(adapter, Reattachable):
-                book.detached = True
-                book.save()
-                context.log(
-                    f"cloud: the worker is shutting down; call {handle.id} on "
-                    f"{adapter.name!r} is left running for the next one to re-attach to"
-                )
-                raise
-            why = "the worker is shutting down and this provider's calls cannot be re-attached to"
-            self._cancel(adapter, handle, context, tier, poll, book, slot, why)
-            raise
         except BaseException as error:
-            self._cancel(adapter, handle, context, tier, poll, book, slot, _why(error))
+            self._stopped(adapter, handle, context, tier, poll, book, slot, error)
             raise
+
+    def _stopped(
+        self,
+        adapter: ProviderAdapter,
+        handle: RemoteHandle,
+        context: StageContext,
+        tier: str,
+        last: Poll | None,
+        book: CallBook,
+        slot: str,
+        error: BaseException,
+    ) -> None:
+        """What becomes of a call when whatever was watching it stops with `error`.
+
+        A detach leaves a call that can be re-attached to running and marks the book; a
+        cost-cap stop has already cancelled it; anything else -- a cancel, a lost lease, a
+        bug -- cancels it now. The caller re-raises `error`.
+        """
+        if isinstance(error, CostCapError):
+            return  # cancelled and recorded on the way to raising it
+        if isinstance(error, DetachRequested) and isinstance(adapter, Reattachable):
+            book.detached = True
+            book.save()
+            context.log(
+                f"cloud: the worker is shutting down; call {handle.id} on "
+                f"{adapter.name!r} is left running for the next one to re-attach to"
+            )
+            return
+        why = (
+            "the worker is shutting down and this provider's calls cannot be re-attached to"
+            if isinstance(error, DetachRequested)
+            else _why(error)
+        )
+        self._cancel(adapter, handle, context, tier, last, book, slot, why)
 
     def _cancel(
         self,

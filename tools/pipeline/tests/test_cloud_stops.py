@@ -19,6 +19,7 @@ call runs out of time, none of which the worker retries.
 
 from __future__ import annotations
 
+import contextlib
 import json
 from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
@@ -250,6 +251,43 @@ def test_a_cancel_cancels_the_call_and_records_what_it_billed(
     assert entry.usd == pytest.approx(2.0)
     assert ledger_of(workdir).preemptions == 0, "a cancel is not a preemption"
     assert not (workdir.stage_dir("train") / CALL_BOOK).exists()
+
+
+def held_until_written(stop: BaseException) -> Callable[[], Any]:
+    """A `shield` whose held-back stop is let through as it closes: a signal that arrived
+    while the call was being submitted and written down."""
+
+    @contextlib.contextmanager
+    def shield() -> Iterator[None]:
+        yield
+        raise stop
+
+    return shield
+
+
+def test_a_stop_held_back_during_the_submit_still_cancels_or_detaches_the_call(
+    tmp_path: Path,
+) -> None:
+    """The stop lands between the submit and the watch, outside `_watch`'s handler; the
+    call is out there and written down, and is dealt with exactly as `_watch` would."""
+    workdir = seeded_workdir(tmp_path / "cancel", upload=False)
+    adapter = provider(tmp_path)
+    cloud = runner(adapter, tmp_path, shield=held_until_written(CancelRequested()))
+    with pytest.raises(CancelRequested):
+        run(workdir, cloud)
+    assert len(adapter.submitted) == 1
+    assert len(adapter.cancelled) == 1
+    assert not (workdir.stage_dir("train") / CALL_BOOK).exists()
+    (entry,) = ledger_of(workdir).entries
+    assert entry.detail.startswith("cancelled:")
+
+    workdir = seeded_workdir(tmp_path / "detach", upload=False)
+    adapter = provider(tmp_path)
+    cloud = runner(adapter, tmp_path, shield=held_until_written(DetachRequested()))
+    with pytest.raises(DetachRequested):
+        run(workdir, cloud)
+    assert adapter.cancelled == []
+    assert book_of(workdir).detached and len(book_of(workdir).calls) == 1
 
 
 # --- a crash leaves the book, and the next attempt adopts the call -------------------
