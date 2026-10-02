@@ -48,6 +48,9 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 
 __all__ = [
+    "MODAL_CORE_HOUR_USD",
+    "MODAL_GIB_HOUR_USD",
+    "MODAL_RESERVATION_LIST",
     "PROVIDERS",
     "RATES_ENV_VAR",
     "Provider",
@@ -114,6 +117,15 @@ RUNPOD_LIST = f"runpod.io/pricing, read {SURVEYED}"
 #: $0.00000222 a GiB-second, both from modal.com/pricing read 2026-09-23. 4 x 0.0000131
 #: x 3600 + 8 x 0.00000222 x 3600 = 0.188640 + 0.063936 = $0.252576 an hour.
 MODAL_CPU_LIST = "modal.com/pricing (4 cores + 8 GiB), read 2026-09-23"
+#: The same two list prices, an hour each: what a GPU function's CPU and memory
+#: *reservation* costs on top of its GPU. Modal bills CPU and memory at max(reserved,
+#: used), and every GPU function in `infra/modal/app.py` reserves cores and memory
+#: (`modal_adapter.GPU_RESERVATION`), so that much is billed whether the trainer uses it or
+#: not -- `ModalAdapter.rate` adds it to a GPU tier's rate. 0.0000131 x 3600 = $0.04716 a
+#: core-hour; 0.00000222 x 3600 = $0.007992 a GiB-hour.
+MODAL_CORE_HOUR_USD = 0.04716
+MODAL_GIB_HOUR_USD = 0.007992
+MODAL_RESERVATION_LIST = "modal.com/pricing (CPU and memory reserved), read 2026-09-23"
 #: Modal's L40S: $0.000542 a second on modal.com/pricing, read 2026-09-27 (the same page
 #: still listed the L4 at $0.000222 and the A10 at $0.000306, so the rows above hold).
 #: 0.000542 x 3600 = $1.9512 an hour. 48 GB and Ada, like the L4, at 2.4x its price.

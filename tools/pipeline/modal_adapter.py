@@ -58,7 +58,19 @@ Two things the check settled that are not defects but change what can be claimed
   that did not report those clocks (failed, preempted, still running, or an older
   image) keeps the old proxy -- wall time since `submit` -- and says so
   (`billing: wall-proxy`). Neither counts the container's idle scale-down window after
-  its last call, which Modal does bill and which belongs to no call.
+  its last call, which Modal does bill and which belongs to no call: Modal's default
+  `scaledown_window`, a minute, since `infra/modal/app.py` sets none -- up to a minute
+  of GPU and reservation per container, a few cents on an L4, and not in `costUsd`.
+* **What an hour costs is the GPU *and* the reservation.** Every GPU function reserves
+  2 cores and 8 GiB (`GPU_RESERVATION`, `infra/modal/app.py`), which Modal bills at
+  max(reserved, used) on top of the GPU -- +$0.158 an hour, a fifth again of an L4's
+  $0.80. `rate` adds it to every GPU tier's rate, so `costUsd` is what the call cost
+  rather than what its GPU cost. A deployment's own `PIPELINE_GPU_RATES` figure is
+  taken as the GPU's and gets the reservation added the same way.
+* **A call can be picked up by another process.** `FunctionCall.from_id` rebuilds a
+  call from its id, and Modal keeps a result for seven days, so `reattach` lets the
+  worker that comes up after a deploy poll the call the previous one left running
+  instead of paying for a second one (`cloud.Reattachable`, `cloud.CallBook`).
 * **`interruptible = False` is right, for a different reason than it said.** The old
   comment claimed "Modal's own tiers are not interruptible". They are: `nonpreemptible`
   is a real parameter of `@app.function` and it defaults to `False`. What makes Modal the
@@ -103,9 +115,22 @@ from cloud import (
     container_billing,
 )
 from contracts import FANOUT_PARAM
-from providers import Rate, provider
+from providers import (
+    MODAL_CORE_HOUR_USD,
+    MODAL_GIB_HOUR_USD,
+    MODAL_RESERVATION_LIST,
+    Rate,
+    provider,
+)
 
-__all__ = ["GPU_FALLBACKS", "ModalAdapter", "fallback_tier", "tier_of_gpu"]
+__all__ = [
+    "GPU_FALLBACKS",
+    "GPU_RESERVATION",
+    "ModalAdapter",
+    "fallback_tier",
+    "reservation_rate",
+    "tier_of_gpu",
+]
 
 #: The SDK release every symbol in this module was read against. Recorded because
 #: "checked" is only meaningful with a version attached, and because the next person to
@@ -185,6 +210,24 @@ CPU_TIERS: Mapping[str, tuple[float, int]] = {
     "cpu4": (4.0, 8192),
 }
 
+#: What every GPU function reserves beside its GPU: (Modal physical cores, memory in MiB).
+#: `infra/modal/app.py` deploys with exactly these (`GPU_CPU_CORES`, `GPU_MEMORY_MIB`;
+#: `tests/test_modal_image.py` holds the two to each other), and says why they are
+#: reserved: the trainer is CPU-fed, and a GPU function that reserves nothing gets 0.125
+#: of a core. Here because the reservation is billed, and `rate` prices it.
+GPU_RESERVATION: tuple[float, int] = (2.0, 8192)
+
+
+def reservation_rate(tier: str) -> Rate | None:
+    """What a GPU tier's CPU and memory reservation costs an hour; None for a CPU tier
+    (whose rate in `providers.py` already *is* its cores and memory) or an unknown one."""
+    if tier not in GPU_NAMES:
+        return None
+    cores, memory_mib = GPU_RESERVATION
+    usd = cores * MODAL_CORE_HOUR_USD + memory_mib / 1024 * MODAL_GIB_HOUR_USD
+    return Rate(usd, f"{cores:g} cores + {memory_mib / 1024:g} GiB, {MODAL_RESERVATION_LIST}")
+
+
 #: Fully-qualified exception class name -> what it means for a submitted stage.
 #:
 #: Qualified, and matched on the *exact* class rather than by `isinstance`, for two
@@ -208,6 +251,11 @@ _STATES: Mapping[str, RemoteState | None] = {
     "modal.exception.OutputExpiredError": "failed",
 }
 
+#: The failures among `_STATES` that are the call running out of time, which the worker
+#: does not retry (`Poll.timed_out`): the next attempt would outrun the same limit, at the
+#: cost of the whole limit in GPU time.
+_TIMEOUTS: frozenset[str] = frozenset({"modal.exception.FunctionTimeoutError"})
+
 #: The prefix of the first line `run_stage` prints inside the container. Its appearance
 #: in a call's log is what moves the call from `pending` to `running`.
 START_MARKER = "run_stage: "
@@ -222,7 +270,8 @@ MAX_LOG_LINES = 5_000
 
 @dataclass
 class _Call:
-    request: StageRequest
+    #: None for a call re-attached to only to be cancelled (`reattach`).
+    request: StageRequest | None
     call: Any
     started_at: float
     #: The wall clock at submit (`cloud.container_billing` compares it with the
@@ -234,6 +283,7 @@ class _Call:
     billing: str = BILLING_PROXY
     queue_s: float | None = None
     detail: str = ""
+    timed_out: bool = False
     billed_s: float = 0.0
     metrics: Mapping[str, Any] = field(default_factory=dict)
     summary: str = ""
@@ -291,12 +341,17 @@ class ModalAdapter:
     # --- the protocol -------------------------------------------------------------
 
     def rate(self, tier: str) -> Rate | None:
-        """The surveyed rate, unless the deployment supplied its own."""
+        """The surveyed rate, unless the deployment supplied its own -- plus, for a GPU
+        tier, the CPU and memory every GPU function reserves (`reservation_rate`), which
+        Modal bills beside the GPU. Unpriced stays unpriced: a GPU with no rate is not
+        given one made of its reservation alone."""
         supplied = self._rates.get(tier)
-        if supplied is not None:
-            return supplied
         listed = provider(self.name)
-        return None if listed is None else listed.rate(tier)
+        gpu = supplied if supplied is not None else (listed.rate(tier) if listed else None)
+        reserved = reservation_rate(tier)
+        if gpu is None or reserved is None:
+            return gpu
+        return Rate(gpu.usd_per_hour + reserved.usd_per_hour, f"{gpu.source}; {reserved.source}")
 
     def submit(self, request: StageRequest) -> RemoteHandle:
         """Spawn the deployed function and hand back its call id.
@@ -331,6 +386,28 @@ class ModalAdapter:
         )
         return handle
 
+    def reattach(
+        self, handle: RemoteHandle, request: StageRequest | None, submitted_at: float
+    ) -> None:
+        """Pick up a call another process spawned, from its id (`cloud.Reattachable`).
+
+        `FunctionCall.from_id` is lazy -- it makes no request until the call is used -- so
+        this cannot fail on a call Modal no longer has; that arrives as the first poll's
+        `OutputExpiredError` (results are kept seven days), which is a failure like any
+        other. The billed-time proxy counts from the original submit, not from now.
+        """
+        if handle.id in self._calls:
+            return
+        call = self._modal().FunctionCall.from_id(handle.id)
+        elapsed = max(0.0, time.time() - submitted_at)
+        self._calls[handle.id] = _Call(
+            request=request,
+            call=call,
+            started_at=time.monotonic() - elapsed,
+            submitted_at=submitted_at,
+            chain=self._chain(request) if request is not None else (handle.tier,),
+        )
+
     def _chain(self, request: StageRequest) -> tuple[str, ...]:
         """The tiers this call may run on: a part's fallback list, or its own tier."""
         role = request.params.get(FANOUT_PARAM)
@@ -355,6 +432,7 @@ class ModalAdapter:
                 return Poll(state=self._liveness(run), billed_s=run.billed_s, billing=BILLING_PROXY)
             run.state = state
             run.detail = f"{type(error).__name__}: {error}"
+            run.timed_out = _qualified(error) in _TIMEOUTS
             return self._result(run)
         run.state = "succeeded"
         run.metrics = dict((outcome or {}).get("metrics") or {})
@@ -445,6 +523,15 @@ class ModalAdapter:
         the same `GPU_NAMES` table above, so a tier this adapter can ask for is a tier
         that was deployed.
         """
+        return self._modal().Function.from_name(
+            self._app_name,
+            f"{self._function_name}_{tier}",
+            environment_name=self._environment_name,
+        )
+
+    @staticmethod
+    def _modal() -> Any:
+        """The `modal` package, imported here and only here, and explained when absent."""
         try:
             import modal  # optional, and absent everywhere this actually runs
         except ImportError as error:  # pragma: no cover - modal is not a dependency here
@@ -454,11 +541,7 @@ class ModalAdapter:
                 "so nothing here should pull a client library into the image. Install it "
                 "in the deployment that actually uses Modal"
             ) from error
-        return modal.Function.from_name(
-            self._app_name,
-            f"{self._function_name}_{tier}",
-            environment_name=self._environment_name,
-        )
+        return modal
 
     @staticmethod
     def _lines(entries: Iterable[Any]) -> list[str]:
@@ -498,8 +581,7 @@ class ModalAdapter:
         that meant "still running" costs one dead-lettered stage, while an unrecognised
         exception treated as "still running" costs a poll loop that never ends.
         """
-        kind = type(error)
-        return _STATES.get(f"{kind.__module__}.{kind.__qualname__}", "failed")
+        return _STATES.get(_qualified(error), "failed")
 
     @staticmethod
     def _result(run: _Call) -> Poll:
@@ -517,4 +599,11 @@ class ModalAdapter:
             billing=run.billing,
             queue_s=run.queue_s,
             tier=run.tier,
+            timed_out=run.timed_out,
         )
+
+
+def _qualified(error: BaseException) -> str:
+    """An exception's class as `module.QualName`: what `_STATES` and `_TIMEOUTS` key on."""
+    kind = type(error)
+    return f"{kind.__module__}.{kind.__qualname__}"
