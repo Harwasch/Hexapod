@@ -56,6 +56,14 @@ interface SitesState {
   /** Per-site load state, by site id; absent once a site is unloaded. */
   siteLoads: Record<string, SiteLoad>;
   /**
+   * The site the latest fly-to is taking the camera to, until the camera has left it
+   * (SiteManager, `site-flight`); null otherwise. The load pill follows it before
+   * `activeSiteId`: a site becomes active only once its record has arrived, so a record that
+   * is slow, or never comes (a cold or failing API, no network), would otherwise be loading
+   * and failing where nothing on screen speaks for it -- and its Retry out of reach.
+   */
+  flightSiteId: string | null;
+  /**
    * Tries a failed site load again: the record if that is what failed (flying there again if
    * a fly-to asked for it), otherwise the model. Installed by the scene (SceneBridge); a no-op
    * until it is.
@@ -70,6 +78,7 @@ interface SitesState {
   /** The scene's view of one site's load, or null when the site is unloaded. */
   setSiteLoad: (siteId: string, load: SiteLoad | null) => void;
   setSiteLoadRetry: (retry: (siteId: string) => void) => void;
+  setFlightSite: (siteId: string | null) => void;
 }
 
 export const defaultAssetRuntime: AssetRuntime = {
@@ -88,6 +97,7 @@ export const useSites = create<SitesState>()((set) => ({
   temporalAsset: {},
   assets: {},
   siteLoads: {},
+  flightSiteId: null,
   retrySiteLoad: () => undefined,
   setActiveSite: (activeSiteId) => set({ activeSiteId }),
   setNearSite: (nearSiteId) => set({ nearSiteId }),
@@ -116,4 +126,5 @@ export const useSites = create<SitesState>()((set) => ({
       return { siteLoads: rest };
     }),
   setSiteLoadRetry: (retrySiteLoad) => set({ retrySiteLoad }),
+  setFlightSite: (flightSiteId) => set({ flightSiteId }),
 }));

@@ -1,6 +1,6 @@
 import type { Page } from "@playwright/test";
 
-import { addOnScreenCredit, expect, mockApi, test } from "./fixtures";
+import { addOnScreenCredit, demoSite, expect, mockApi, test } from "./fixtures";
 
 /** Ids of the plan overlay entities the map is drawing (passes, step markers, route). */
 function entityIds(app: Page): Promise<string[]> {
@@ -103,6 +103,29 @@ test.describe("catalog", () => {
     // At the site the status line reports the site's own fleet, not the catalog's.
     await expect(app.getByTestId("status-fleet")).toContainText("Fleet:");
     await expect(app.getByTestId("status-fleet")).not.toContainText("site");
+  });
+
+  test("a fly-to whose site record fails says so beside the switcher, and Retry flies on", async ({
+    app,
+  }) => {
+    // The site's record answers 503 (a cold or failing API). The camera still leaves on the
+    // click, for the catalog summary's pose; the site never becomes active, so the pill has to
+    // follow the flight's site to say why no model came.
+    const record = `**/api/v1/sites/${demoSite.id}`;
+    await app.route(record, (route) =>
+      route.fulfill({ status: 503, contentType: "application/json", body: '{"detail":"cold"}' }),
+    );
+    await app.getByTestId("onboarding-explore").click();
+    await app.keyboard.press("s");
+    await app.getByTestId("site-row-cesium-splat-demo").click();
+    const load = app.getByTestId("site-load");
+    await expect(load).toContainText("Couldn’t load the 3D model", { timeout: 30_000 });
+    await expect(app.getByTestId("representation-switcher")).toHaveCount(0);
+    // The API recovers; Retry flies there again and the site loads.
+    await app.unroute(record);
+    await load.getByRole("button", { name: "Retry" }).click();
+    await expect(app.getByTestId("representation-switcher")).toBeVisible({ timeout: 30_000 });
+    await expect(app.getByText("Couldn’t load the 3D model")).toHaveCount(0);
   });
 
   test("representation switch keeps the camera", async ({ app }) => {

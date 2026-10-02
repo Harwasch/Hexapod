@@ -54,6 +54,7 @@ export function SceneBridge() {
       scene.events.on("site-near", (id) => sites.setNearSite(id)),
       scene.events.on("site-active", (id) => sites.setActiveSite(id)),
       scene.events.on("site-load", ({ siteId, load }) => sites.setSiteLoad(siteId, load)),
+      scene.events.on("site-flight", (id) => sites.setFlightSite(id)),
       scene.events.on("representation", ({ siteId, representation }) =>
         sites.setRepresentation(siteId, representation),
       ),

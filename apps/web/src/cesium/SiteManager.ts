@@ -269,6 +269,13 @@ export class SiteManager {
   private metersPerPixel = Number.POSITIVE_INFINITY;
   private appliedMetersPerPixel = Number.POSITIVE_INFINITY;
   private flightTarget: string | null = null;
+  /**
+   * The site the latest fly-to is taking the camera to, for the HUD's load pill
+   * (`site-flight`), until the camera has left it (`checkProximity`). Unlike `flightTarget` it
+   * outlives the flight: a site whose record failed never becomes active, and once the camera
+   * has landed at the summary's pose the pill must still say why nothing loaded and offer Retry.
+   */
+  private flightSiteId: string | null = null;
   private readonly unsubscribe: (() => void)[] = [];
   private lastProximityCheck = 0;
 
@@ -442,6 +449,12 @@ export class SiteManager {
     return site;
   }
 
+  private setFlightSite(siteId: string | null): void {
+    if (this.flightSiteId === siteId) return;
+    this.flightSiteId = siteId;
+    this.events.emit("site-flight", siteId);
+  }
+
   private setPrimary(siteId: string): void {
     if (this.primaryId === siteId) return;
     const entry = this.loaded.get(siteId);
@@ -463,6 +476,7 @@ export class SiteManager {
       this.clipping.setFootprint(id, null);
       this.loaded.delete(id);
       if (this.loads.delete(id)) this.events.emit("site-load", { siteId: id, load: null });
+      if (this.flightSiteId === id) this.setFlightSite(null);
     }
     if (this.primaryId && !this.loaded.has(this.primaryId)) {
       this.primaryId = null;
@@ -504,6 +518,8 @@ export class SiteManager {
     // Protected from proximity unloading from the very start: the catalog can finish loading
     // while the site details are still being fetched, and the camera is usually far away.
     this.flightTarget = siteId;
+    // The pill speaks for this site from the click: its record is what it waits on first.
+    this.setFlightSite(siteId);
     const serial = ++this.flightSerial;
     const detail = this.detailFor(siteId);
     // Swallowed here: `activate` turns a failure into the site's load record.
@@ -555,6 +571,8 @@ export class SiteManager {
 
   private siteNotFound(siteId: string): void {
     if (this.flightTarget === siteId) this.flightTarget = null;
+    // Said by the toast below; there is nothing for the pill to retry.
+    if (this.flightSiteId === siteId) this.setFlightSite(null);
     this.events.emit("toast", {
       tone: "error",
       title: "Site not found",
@@ -1428,6 +1446,21 @@ export class SiteManager {
       } else if (!entry && distance < ACTIVATE_DISTANCE_M && pose.altitude < ACTIVATE_DISTANCE_M) {
         void this.activate(summary.id, { primary: false });
       }
+    }
+
+    // The pill follows a fly-to's destination until the camera has left it, once the flight is
+    // over (landed or taken over): further out than a site hands its model back to the world,
+    // or higher than sites load at all. Landing at a site whose record failed keeps it, with
+    // its error and Retry; a small site registered inside it (a rock on a campus) does not
+    // take the pill away, as "the nearest site" would.
+    const flown = this.flightSiteId;
+    if (flown !== null && this.flightTarget !== flown) {
+      const there = ranked.find((r) => r.summary.id === flown);
+      const stays =
+        there !== undefined &&
+        there.distance < there.radius * DISENGAGE_DISTANCE_RADII &&
+        pose.altitude < ACTIVATE_DISTANCE_M;
+      if (!stays) this.setFlightSite(null);
     }
 
     for (const entry of this.loaded.values())

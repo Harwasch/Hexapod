@@ -24,6 +24,8 @@ export interface SceneEvents extends Record<string, unknown> {
   "site-active": string | null;
   /** One site's load (record, model, first tiles), whole; null once the site is unloaded. */
   "site-load": { siteId: string; load: SiteLoad | null };
+  /** The site a fly-to is taking the camera to, until the camera has left it; else null. */
+  "site-flight": string | null;
   representation: { siteId: string; representation: Representation };
   selection: Selection | null;
   hover: string | null;

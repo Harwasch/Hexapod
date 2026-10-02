@@ -33,10 +33,18 @@ function advance(progress: Progress, assetId: string, runtime: AssetRuntime | un
  * "Loading 3D model 42%" beside the Splat / Mesh / Points switch while the site's model comes
  * in, and "Couldn't load the 3D model · Retry" when it fails — the model is what a site visit
  * is for, so its state is said where the operator is looking, not only in a toast.
+ *
+ * It speaks for the site a fly-to is taking the camera to (`flightSiteId`) before the active
+ * one. A site becomes active only once its record has arrived, and the record is the first
+ * thing a first visit waits on: read from the active site alone, a cold API, a 5xx or no
+ * network left the camera landing at the summary's pose with no model, nothing on screen
+ * saying why, and the Retry that would fly there again out of reach.
  */
 export function SiteLoadStatus() {
   const scene = useScene();
   const activeSiteId = useSites((s) => s.activeSiteId);
+  const flightSiteId = useSites((s) => s.flightSiteId);
+  const siteId = flightSiteId ?? activeSiteId;
   const representation = useSites((s) =>
     activeSiteId ? s.representation[activeSiteId] : undefined,
   );
@@ -57,18 +65,19 @@ export function SiteLoadStatus() {
   }, [assetId]);
 
   // The site's own record first: during a fly-to it covers the wait for the site's details
-  // and the model's creation, before any asset has a runtime to read.
-  const record = useSites((s) => (activeSiteId ? s.siteLoads[activeSiteId] : undefined));
+  // and the model's creation, before any asset has a runtime to read. The asset's own state
+  // speaks only for the active site, whose assets the scene shows.
+  const record = useSites((s) => (siteId ? s.siteLoads[siteId] : undefined));
   const retrySite = useSites((s) => s.retrySiteLoad);
   const fromSite = fromSiteRecord(record);
 
   const current = progress.assetId === assetId ? progress : START;
-  const load =
-    fromSite ?? (activeSiteId && assetId ? siteLoad(runtime, current.peak, current.settled) : null);
-  if (!load || !activeSiteId) return null;
+  const assetSpeaks = siteId === activeSiteId && activeSiteId !== null && assetId !== null;
+  const load = fromSite ?? (assetSpeaks ? siteLoad(runtime, current.peak, current.settled) : null);
+  if (!load || !siteId) return null;
   const retry = () => {
-    if (fromSite && record?.retryable !== false) retrySite(activeSiteId);
-    else if (assetId) void retrySiteLoad(scene, assetId);
+    if (fromSite && record?.retryable !== false) retrySite(siteId);
+    else if (assetSpeaks && assetId) void retrySiteLoad(scene, assetId);
   };
 
   return (

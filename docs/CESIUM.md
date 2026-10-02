@@ -330,7 +330,12 @@ touched, for 8 s. A flight somebody else cancelled is never re-pointed.
 
 Each site's load is a record in `state/sites.ts` (`siteLoads`): phase `details` → `model` →
 `streaming` → `ready`, or `error` with a message and whether retrying can help;
-`retrySiteLoad(siteId)` tries again (flying there again if a fly-to had asked). Each leg also
+`retrySiteLoad(siteId)` tries again (flying there again if a fly-to had asked). The HUD's load
+pill reads the record of the site the latest fly-to is taking the camera to (`flightSiteId`,
+the `site-flight` event) before the active site's, until the camera has left it: a site only
+becomes active once its record has arrived, so a record that failed (a cold API past its
+deadline, a 5xx, no network) used to land the camera at the summary's pose with nothing on
+screen saying why, and no Retry. Each leg also
 hands its destination to the splat overlay (`prefetchScanDestination`, above); a re-pointed
 leg replaces that prefetch and a cancelled flight stops it.
 

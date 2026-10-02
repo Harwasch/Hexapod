@@ -92,9 +92,12 @@ function harness() {
   const flights: Flight[] = [];
   const loads: SiteLoad[] = [];
   const toasts: string[] = [];
+  /** What the load pill follows (`site-flight`), in order. */
+  const flightSites: (string | null)[] = [];
   events.on("site-load", ({ load }) => {
     if (load) loads.push(load);
   });
+  events.on("site-flight", (id) => flightSites.push(id));
   events.on("toast", (toast) => toasts.push(toast.title));
   const listener = { addEventListener: () => () => undefined };
   const viewer = {
@@ -111,14 +114,10 @@ function harness() {
       sampleHeightSupported: false,
     },
   };
+  /** Where the camera is, as CameraController.pose says; a test moves it. */
+  const at = { longitude: -110, latitude: 35, altitude: 18_000_000 };
   const camera = {
-    pose: () => ({
-      longitude: -110,
-      latitude: 35,
-      altitude: 18_000_000,
-      height: 18_000_000,
-      metersPerPixel: 10_000,
-    }),
+    pose: () => ({ ...at, height: at.altitude, metersPerPixel: 10_000 }),
     isMoving: false,
     refreshPose: vi.fn(),
     setObjectScale: vi.fn(),
@@ -153,7 +152,7 @@ function harness() {
     { setFootprint: vi.fn() } as unknown as ClippingManager,
     performance as unknown as PerformanceManager,
   );
-  return { manager, flights, loads, toasts, events };
+  return { manager, flights, loads, toasts, events, flightSites, at };
 }
 
 /** A promise the test settles by hand, as a slow or stalled API would. */
@@ -246,6 +245,37 @@ describe("SiteManager.flyTo", () => {
     expect(calls).toBe(2);
     expect(flights.at(-1)?.longitude).toBe(BOOKMARK.longitude);
     expect(loads.at(-1)?.phase).toBe("ready");
+  });
+
+  it("names the flight's site for the load pill, through a failed record, until the camera leaves", async () => {
+    const { manager, flights, loads, flightSites, at } = harness();
+    let calls = 0;
+    manager.setCatalog([summary], () => {
+      calls += 1;
+      return calls === 1
+        ? Promise.reject(new Error("The server answered 503."))
+        : Promise.resolve(site());
+    });
+    await manager.flyTo(SITE_ID);
+    // From the click: the site never became active (its record failed), so this is the only
+    // way the pill knows which record to read.
+    expect(flightSites).toEqual([SITE_ID]);
+    expect(loads.at(-1)).toMatchObject({ phase: "error", retryable: true, flight: true });
+    expect(loads.at(-1)?.error).toContain("503");
+    // The camera lands at the summary's pose: the pill keeps the site, with its Retry.
+    Object.assign(at, { longitude: LON, latitude: LAT, altitude: 600 });
+    flights[0]?.options.onComplete?.();
+    expect(flightSites).toEqual([SITE_ID]);
+    // Retry flies there again, now with the record.
+    await manager.retry(SITE_ID);
+    expect(flights.at(-1)?.longitude).toBe(BOOKMARK.longitude);
+    expect(loads.at(-1)?.phase).toBe("ready");
+    flights.at(-1)?.options.onComplete?.();
+    expect(flightSites).toEqual([SITE_ID]);
+    // The camera leaves (Whole Earth): the pill lets the site go.
+    Object.assign(at, { longitude: -110, latitude: 35, altitude: 18_000_000 });
+    flights.at(-1)?.options.onCancel?.();
+    expect(flightSites).toEqual([SITE_ID, null]);
   });
 
   it("reports a site the catalog no longer has, without flying anywhere", async () => {
