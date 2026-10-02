@@ -75,7 +75,7 @@ changed:
 **What to run, in order:**
 
 1. **Push the branch.** `.github/workflows/modal.yml` runs on a push to
-   `claude/funny-carson-937ydv` that touches `infra/modal/**`, so this push triggers it. It
+   `living-models` that touches `infra/modal/**`, so this push triggers it. It
    creates the Modal secret `twin-object-storage` from the R2 private-bucket pair, deploys
    `twin-pipeline` (the first image build takes 15–30 min), and trains 500 steps on an L4,
    for about $0.07–0.20. Its job summary carries the gaussian count, PSNR and billed

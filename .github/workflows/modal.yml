@@ -32,7 +32,7 @@ name: Modal
 
 on:
   push:
-    branches: [claude/funny-carson-937ydv]
+    branches: [living-models]
     # The image carries a copy of the pipeline (the train stage's own code runs in it), so
     # any change to that code is a change to what the GPU box runs, and a deployed image
     # older than the worker's pipeline is a skew nothing else would catch. Tests and docs

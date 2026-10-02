@@ -27,9 +27,9 @@ Architecture: [SCENE_OBJECTS.md](SCENE_OBJECTS.md). Branch: `living-models`.
 
 ## E. Merge
 
-- [ ] E1 Pull in `claude/funny-carson-937ydv` (rendering + UX) after its final push, once A–B1 are merged
-- [ ] E2 After E1: this session owns releases and infrastructure
-  - [ ] Retarget the 5 workflows that run on pushes to `claude/funny-carson-937ydv` (modal, modal-benchmark, living-plants, minnetonka-tree, collision-backfill)
+- [x] E1 Pulled in `claude/funny-carson-937ydv` (rendering + UX), merged cleanly at `0e0dd71`
+- [~] E2 After E1: this session owns releases and infrastructure
+  - [x] Retarget the 6 workflows that ran on pushes to `claude/funny-carson-937ydv` to `living-models` (modal, modal-benchmark, living-plants, minnetonka-tree, collision-backfill, streamed-lod-backfill)
   - [ ] Bring `main` up to date (it is 108 commits behind `living-models`) by pull request
 
 ## D. Already done (this branch)

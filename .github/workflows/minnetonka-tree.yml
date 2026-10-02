@@ -42,7 +42,7 @@ name: Minnetonka tree
 
 on:
   push:
-    branches: [claude/funny-carson-937ydv]
+    branches: [living-models]
   workflow_dispatch:
     inputs:
       steps:
