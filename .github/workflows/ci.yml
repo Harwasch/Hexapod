@@ -15,6 +15,48 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # What this diff touches, for the jobs that are worth skipping when it does not touch
+  # them -- today only the Playwright shards, the slowest thing here by far. A job-level
+  # `if:` rather than a workflow-level `paths:` filter, deliberately: a workflow that
+  # `paths:` leaves out never starts, so a required check on it waits for ever, while a job
+  # skipped by `if:` reports "skipped", which branch protection counts as passing. Only a
+  # pull request can skip anything: main, a dispatch, and a diff this cannot compute run
+  # everything.
+  changes:
+    name: Changes · what this diff touches
+    runs-on: ubuntu-latest
+    outputs:
+      web: ${{ steps.filter.outputs.web }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: filter
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ "$EVENT" != "pull_request" ]; then
+            echo "web=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          # The checkout is the PR merged onto its base, so its diff from the base commit is
+          # the PR's changes -- with whatever the base gained since the event, which can
+          # only make this run more, never less.
+          if ! git fetch --no-tags --depth=1 origin "$BASE" \
+            || ! changed=$(git diff --name-only "$BASE" HEAD); then
+            echo "::warning::could not diff against $BASE; running everything"
+            echo "web=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          printf '%s\n' "$changed"
+          # What the web app is built and served from, the e2e fixtures it loads off disk
+          # (data/tiles), and this file. A backend-only diff (apps/api, tools/, infra/,
+          # docs/) matches none of it. `contracts` is under packages/.
+          web='^(apps/web/|packages/|data/tiles/|patches/|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|package\.json$|\.github/workflows/ci\.yml$)'
+          if printf '%s\n' "$changed" | grep -qE "$web"; then
+            echo "web=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "web=false" >> "$GITHUB_OUTPUT"
+            echo "Nothing the web app is built or tested from changed: Playwright is skipped."
+          fi
+
   web:
     name: Web · lint, typecheck, test, build
     runs-on: ubuntu-latest
@@ -35,6 +77,12 @@ jobs:
       - run: pnpm build
         env:
           VITE_CESIUM_ION_ACCESS_TOKEN: ""
+      # admin.html, upload.html and view.html must not load CesiumJS (README: "Neither of
+      # the last two loads CesiumJS"); the script exits non-zero when one of the built pages
+      # references a Cesium chunk. It is written in a parallel change (apps/web/scripts/
+      # check-bundle.mjs) -- this step needs it on the branch to pass.
+      - name: The pages that must not load Cesium do not
+        run: node apps/web/scripts/check-bundle.mjs
 
   workflows:
     name: Workflows · parse, and agree with the handover
@@ -94,10 +142,25 @@ jobs:
           sys.exit(1 if problems else 0)
           PY
 
-  e2e:
-    name: Web · Playwright
+  # Playwright, in shards. 115 tests ran in ~45 min on one runner: Cesium on SwiftShader's
+  # software GL is CPU-bound, so a runner keeps `workers: 1` (apps/web/playwright.config.ts)
+  # and the parallelism is across runners instead -- each shard a fresh runner with its own
+  # dev server (18 of the 23 specs load /src/ modules -- the dev harnesses -- which only the
+  # dev server serves). `fullyParallel` is off, so Playwright shards by file: on 2026-10-02
+  # the 122 tests split 39, 28, 25 and 30 (app, admin and captures in the first). Expected,
+  # not yet measured: ~12-15 min a shard after ~3 min of install, so ~15-18 min of wall time
+  # for the same runner-minutes. Not `needs: web`: a shard does not use the build, so it
+  # starts at once rather than after lint, typecheck, unit tests and the build.
+  e2e-shard:
+    name: Web · Playwright (shard ${{ matrix.shard }}/4)
     runs-on: ubuntu-latest
-    needs: web
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
+    strategy:
+      # Every shard to the end: one failing must not hide what the others would have found.
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -107,12 +170,76 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @twin/web exec playwright install --with-deps chromium
-      - run: pnpm e2e
+      # E2E_BLOB: the config's blob reporter, merged into one HTML report by e2e-report.
+      - run: pnpm --filter @twin/web exec playwright test --shard=${{ matrix.shard }}/4
+        env:
+          E2E_BLOB: "1"
       - uses: actions/upload-artifact@v4
-        if: failure()
+        if: ${{ !cancelled() }}
+        with:
+          name: blob-report-${{ matrix.shard }}
+          path: apps/web/blob-report
+          retention-days: 1
+
+  e2e-report:
+    name: Web · Playwright report
+    runs-on: ubuntu-latest
+    needs: [changes, e2e-shard]
+    # After the shards whatever they found, but not when they were skipped or cancelled.
+    if: ${{ !cancelled() && needs.changes.outputs.web == 'true' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # Each shard's blob is named by its shard (report-1.zip ...), so they share a folder.
+      - uses: actions/download-artifact@v4
+        with:
+          path: apps/web/all-blob-reports
+          pattern: blob-report-*
+          merge-multiple: true
+      - name: One HTML report from every shard
+        working-directory: apps/web
+        run: pnpm exec playwright merge-reports --reporter html ./all-blob-reports
+      - uses: actions/upload-artifact@v4
         with:
           name: playwright-report
           path: apps/web/playwright-report
+          retention-days: 14
+
+  # The check branch protection requires, under the name the single Playwright job had: it
+  # passes when every shard passed or the shards were skipped (nothing web changed), and
+  # fails otherwise. Without it the required check would be four shard names, which a
+  # skipped matrix never reports -- the hang a job-level `if:` exists to avoid.
+  e2e:
+    name: Web · Playwright
+    runs-on: ubuntu-latest
+    needs: [changes, e2e-shard, e2e-report]
+    if: ${{ always() }}
+    steps:
+      - name: Every shard passed, or none was needed
+        env:
+          CHANGES: ${{ needs.changes.result }}
+          WEB: ${{ needs.changes.outputs.web }}
+          SHARDS: ${{ needs.e2e-shard.result }}
+          REPORT: ${{ needs.e2e-report.result }}
+        run: |
+          echo "changes: $CHANGES (web: $WEB), shards: $SHARDS, report: $REPORT"
+          if [ "$CHANGES" != "success" ]; then
+            echo "::error::the changes job did not succeed, so nothing says e2e could be skipped"
+            exit 1
+          fi
+          if [ "$WEB" != "true" ]; then
+            echo "nothing the web app is built or tested from changed; Playwright skipped"
+            exit 0
+          fi
+          if [ "$SHARDS" != "success" ]; then
+            echo "::error::Playwright shards: $SHARDS (the merged report is the playwright-report artifact)"
+            exit 1
+          fi
 
   captures:
     name: Captures · lint, test
