@@ -67,6 +67,12 @@ interface Options {
   incremental: boolean;
   maximumScreenSpaceError: number;
   renderer?: "cesium" | "playcanvas" | "spark";
+  /**
+   * Mount the app's objects panel, and tag the yard's two largest objects (the yard is
+   * segmented against its own truth, so it has no tags): the largest "conifer", the next
+   * "bush", so the panel lists Trees and Shrubs & bushes over Other.
+   */
+  panel?: boolean;
 }
 
 function harnessHtml(options: Options): string {
@@ -78,10 +84,12 @@ function harnessHtml(options: Options): string {
     <style>
       html, body { margin: 0; height: 100%; background: #10141a; }
       #viewer, #viewer .cesium-widget, #viewer canvas { width: 100vw; height: 100vh; display: block; }
+      #panel { position: fixed; top: 12px; right: 12px; z-index: 10; width: 21rem; padding: 0.6rem; }
     </style>
   </head>
   <body>
     <div id="viewer"></div>
+    ${options.panel ? '<div id="panel" class="glass glass--strong"></div>' : ""}
     <script type="module">
       const harness = await import("/src/dev/instancesHarness.ts");
       window.__instances = await harness.startInstancesHarness({
@@ -90,6 +98,7 @@ function harnessHtml(options: Options): string {
         incremental: ${String(options.incremental)},
         maximumScreenSpaceError: ${String(options.maximumScreenSpaceError)},
         renderer: "${options.renderer ?? "cesium"}",
+        ${options.panel ? 'panel: document.getElementById("panel"),' : ""}
       });
     </script>
   </body>
@@ -103,7 +112,16 @@ async function open(page: Page, options: Options, errors: string[]): Promise<voi
   page.on("pageerror", (error) => errors.push(error.message));
   const instances = JSON.parse(
     readFileSync(resolve(TILES, "synthetic-yard/instances/instances.json"), "utf-8"),
-  ) as { instances: unknown[] };
+  ) as {
+    instances: { id: number; parent: number | null; splats: number; tags?: unknown[] }[];
+  };
+  if (options.panel) {
+    const roots = instances.instances
+      .filter((i) => i.parent === null)
+      .sort((a, b) => b.splats - a.splats);
+    if (roots[0]) roots[0].tags = [{ label: "conifer", score: 0.6 }];
+    if (roots[1]) roots[1].tags = [{ label: "bush", score: 0.5 }];
+  }
   await page.route("**/fixture-tiles/**", (route) => {
     const relative = new URL(route.request().url()).pathname.replace(/^.*\/fixture-tiles\//, "");
     if (relative.includes("..")) return route.abort();
@@ -118,6 +136,9 @@ async function open(page: Page, options: Options, errors: string[]): Promise<voi
         nativeLod: false,
       };
       return route.fulfill({ status: 200, json: tileset });
+    }
+    if (relative === "synthetic-yard/instances/instances.json") {
+      return route.fulfill({ status: 200, json: instances });
     }
     const file = resolve(TILES, relative);
     if (!existsSync(file)) return route.fulfill({ status: 404, body: "" });
@@ -136,7 +157,13 @@ async function open(page: Page, options: Options, errors: string[]): Promise<voi
     route.fulfill({ status: 200, contentType: "text/html", body: harnessHtml(options) }),
   );
   await page.goto("/instances-harness.html");
-  await page.waitForFunction(() => "__instances" in window, undefined, { timeout: 120_000 });
+  try {
+    await page.waitForFunction(() => "__instances" in window, undefined, { timeout: 180_000 });
+  } catch (error) {
+    throw new Error(`the harness never started; page errors: ${errors.join(" | ")}`, {
+      cause: error,
+    });
+  }
 }
 
 /** Calls a harness method in the page. */
@@ -349,3 +376,54 @@ for (const renderer of ["playcanvas", "spark"] as const) {
     expect(both.coverage).toBeLessThan(dimmed.coverage);
   });
 }
+
+test("the objects panel hides a category, highlights it on a click, and resets, under PlayCanvas", async ({
+  page,
+}) => {
+  test.setTimeout(600_000);
+  const errors: string[] = [];
+  await open(
+    page,
+    { incremental: true, maximumScreenSpaceError: 16, renderer: "playcanvas", panel: true },
+    errors,
+  );
+  const call = caller(page);
+  await call("view", 30, -50, 45);
+  const baseline = await call("view", 30, -50, 45);
+  const panel = page.getByTestId("instance-panel");
+  const rows = panel.locator("ul[aria-label='Object categories'] > li");
+  await expect(rows).toHaveCount(3);
+  expect(
+    await rows.evaluateAll((li) => li.map((e) => (e as HTMLElement).dataset.category)),
+  ).toEqual(["trees", "shrubs", "other"]);
+  await expect(panel).not.toContainText(/Object \d/);
+  await page.locator("#panel").screenshot({ path: test.info().outputPath("panel.png") });
+
+  await panel.getByRole("button", { name: "Hide Trees", exact: true }).click();
+  await page.waitForTimeout(500);
+  const hidden = await call("measure");
+  await page.screenshot({ path: test.info().outputPath("panel-hidden-trees.png") });
+  await expect(panel.getByRole("status")).toHaveText("Trees hidden");
+  await panel.getByRole("button", { name: "Reset" }).click();
+  await page.waitForTimeout(500);
+  const reset = await call("measure");
+
+  await panel.locator("li[data-category='trees'] > div > [data-row]").click();
+  await page.waitForTimeout(500);
+  const lit = await call("measure");
+  await page.screenshot({ path: test.info().outputPath("panel-highlight-trees.png") });
+  await panel.locator("li[data-category='trees'] > div > [data-row]").click();
+  await page.waitForTimeout(500);
+  const cleared = await call("measure");
+
+  test.info().annotations.push({
+    type: "measures",
+    description: JSON.stringify({ baseline, hidden, reset, lit, cleared }),
+  });
+  expect(shaderErrors(errors)).toEqual([]);
+  expect(hidden.coverage).toBeLessThan(baseline.coverage * 0.9);
+  expect(reset.coverage).toBeGreaterThan(baseline.coverage * 0.95);
+  expect(lit.warmth).toBeGreaterThan(baseline.warmth + 5);
+  expect(lit.luma).toBeLessThan(baseline.luma);
+  expect(cleared.coverage).toBeGreaterThan(baseline.coverage * 0.95);
+});

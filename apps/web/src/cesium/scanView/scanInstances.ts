@@ -17,7 +17,7 @@
  * reported to the store as a gap, which the objects panel shows with a switch to CesiumJS.
  */
 
-import { withDescendants, type InstancesDoc } from "@/lib/instances";
+import type { InstancesDoc } from "@/lib/instances";
 import { useInstances } from "@/state/instances";
 
 import {
@@ -47,7 +47,10 @@ export interface InstanceStyle {
   readonly dim: readonly [number, number, number, number];
 }
 
-/** The style for `doc` with `hidden` and `highlighted` (store ids, expanded to leaves here). */
+/**
+ * The style for `doc` with `hidden` and `highlighted`: the store's exact sets (a category's or
+ * an object's members, `state/instances.ts`), applied id for id.
+ */
 export function instanceStyle(
   doc: InstancesDoc,
   hidden: ReadonlySet<number>,
@@ -57,11 +60,9 @@ export function instanceStyle(
 ): InstanceStyle {
   const rows = stateTextureRows(doc.maxId);
   const state = new Uint8Array(INSTANCE_TEXTURE_WIDTH * rows * 4);
-  const hiddenLeaves = withDescendants(doc, hidden);
-  const litLeaves = withDescendants(doc, highlighted);
-  writeStateTexels(state, doc.maxId, hiddenLeaves, litLeaves);
-  const anyHidden = hiddenLeaves.size > 0;
-  const anyLit = litLeaves.size > 0;
+  writeStateTexels(state, doc.maxId, hidden, highlighted);
+  const anyHidden = hidden.size > 0;
+  const anyLit = highlighted.size > 0;
   return {
     doc,
     state,

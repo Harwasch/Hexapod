@@ -28,6 +28,7 @@ import {
 
 import { deviceSplatBudget, deviceSplatCeiling, isHandheld } from "@/lib/detail";
 import { AdaptiveSplatBudget } from "@/lib/splatBudget";
+import { instancesRefOf } from "@/lib/instances";
 import { createLogger } from "@/lib/log";
 import { DEFAULT_SPLAT_RENDERER } from "@/state/settings";
 import { TileStreamer, type View } from "@/view/stream";
@@ -533,7 +534,10 @@ export class ScanRendererHost {
   /**
    * The scan in the renderer's own streamed format, when its package has one: the renderer
    * streams and chooses by itself and this only keeps its camera on Cesium's. Null when the
-   * package has none (older scans), and the tileset is streamed here instead.
+   * package has none (older scans), and the tileset is streamed here instead. Also null for
+   * a scan with objects (`extras.instances`): the native package's splats carry no object ids,
+   * so the objects could not be hidden or highlighted there (the published camp, which has
+   * both, drew every object whatever the panel said); its 3D Tiles carry them by checksum.
    */
   private async runNative(
     kind: Exclude<SplatRendererKind, "cesium">,
@@ -544,6 +548,7 @@ export class ScanRendererHost {
   ): Promise<Session | null> {
     if (!backend.streamNative) return null;
     const extras = (target.tileset.root as { extras?: unknown } | undefined)?.extras;
+    if (target.assetId && instancesRefOf(extras) !== null) return null;
     const lodUrl = await findNativeLod(tilesetUrl, extras);
     if (lodUrl === null) return null;
     const stream = await backend.streamNative(lodUrl);

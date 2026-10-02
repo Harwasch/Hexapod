@@ -82,6 +82,27 @@ All of these are general models; none knows our scenes.
    vision-language model can fill the same record with free-text descriptions.
 6. **Behaviour.** `static` | `in-place` | `movable`, derived from the property scores by
    rule. It decides storage (§1) and which driver applies.
+7. **Categories.** The 1,300 labels are too fine to act on (the camp lists 650 "forest floor"
+   pieces and 238 "bush"es), so each label also belongs to one of 27 broad scene categories
+   (Trees, Shrubs & bushes, Grass & ground cover, Ground & soil, Water, Buildings, Walls &
+   fences, Paths & roads, Vehicles, People, Animals, Furniture, ..., Other). The mapping is
+   data, `tools/captures/data/categories.json`, made by the same SigLIP 2 text encoder: each
+   label's tag prompt goes to the nearest category (a few phrasings each, averaged) by cosine,
+   and the outliers inspection found are corrected in `scene_categories.OVERRIDES`
+   (`python scene_categories.py --review` lists every label with its nearest three). It is
+   general, not per scan; the viewer bundles the same file.
+
+   An instance's category is the one its tags vote for (each tag's score added to its label's
+   category); an instance without tags takes what most of its tagged siblings are (by splats:
+   a coarse parent is often a mixed region -- on the pumpkin scan a 6 m "pumpkin" instance holds
+   the hay around the pumpkins, and its untagged parts are hay like their tagged siblings, not
+   pumpkin), else its nearest tagged ancestor's (a part is what it is part of), else the
+   category most of the splats below it are in, else Other. An
+   **object** is an instance whose parent is in another category (or that has none), with
+   every descendant reached through its own category: a category is the union of its objects,
+   so hiding Ground & soil hides the ground and its untagged bits, not the trees a ground
+   region contains. An object is named by its best tag of its own category, else by its
+   category ("Trees 3"), never by an id.
 
 ## 4. Data contract (v1)
 
@@ -107,17 +128,29 @@ Written beside the measured tiles; read by the viewer, the skinning step and the
       "properties": { "movable": 0.82, "rigid": 0.77, "elastic": 0.05, "static": 0.10,
                       "vegetation": 0.02, "water": 0.0, "vehicle": 0.91, "creature": 0.01 },
       "behaviour": "movable",        // "static" | "in-place" | "movable"
-      "views": 14                    // how many views it was seen in
+      "views": 14,                   // how many views it was seen in
+      "category": "vehicles"         // optional (§3 step 7); the viewer derives it if absent
     }
   ],
   "tiles": { "<tile checksum>": [id, count, id, count, ...] },  // per tile, RLE, tile order
-  "tilesEncoding": "rle; a merged parent splat takes an id only if all its children share it"
+  "tilesEncoding": "rle; a leaf splat carries its instance; a merged splat the instance most of the 8 leaf splats nearest to it carry"
 }
 ```
 
 - `tiles` uses the same checksum keys and run-length encoding as `plants.json`
   (`scene_plants.plant_binding`), so the viewer's existing per-tile binding code applies.
 - Ids are leaf-level (the finest instance). The hierarchy is walked through `parent`.
+- A coarse tile's merged splat takes the id most of the leaf splats nearest to it carry
+  (`rebind_instances.py`). The first rule gave it an id only when all the leaf splats merged
+  into it shared one; leaf instances are an object's parts, so few merged splats qualified --
+  on the published camp 46% of the non-leaf splats of the fourth level of detail and 22% of
+  the fifth carried 0, now 32% and 11% (8.7% to 0.9% at the sixth); the pumpkin's unassigned
+  share halves (2.4% to 1.2%). Scans published under the old rule are fixed by
+  `python rebind_instances.py TILES_DIR`, which rewrites only their instances.json from the
+  published tiles.
+- What the segmentation never saw keeps 0 and can be neither hidden nor highlighted: on the
+  camp that is the sparse rim of the capture (its shallow leaf tiles, 2.7 M splats, are 36-94%
+  unassigned), which a view from above the whole camp is mostly made of.
 - `instances.emb`: `float16`, `count × dim`, row `k` is instance id `k + 1`, L2-normalised; an
   instance that was not described (no `tags`) has a zero row.
 
@@ -133,11 +166,35 @@ PlayCanvas digests each tile's positions in its decode worker, keeps the ids bes
 splats as one more resource stream (in PlayCanvas's Morton order), and applies the rule in a
 work-buffer modifier; Spark digests the tile's SPZ centres and applies it in an object
 modifier (a dyno). The rule is CesiumJS's: a hidden splat has no opacity, a highlighted one
-is pulled toward the tint, and while anything is highlighted the rest are dimmed. A scan that
-PlayCanvas streams from its own package (`sog/lod-meta.json`) has no tile checksums, so its
-objects cannot be hidden there; the objects panel says so and offers the CesiumJS renderer.
-The panel's "Hide all N matches" and "Show only matches" act on every match of the query, not
-only the fifty it lists.
+is pulled toward the tint, and while anything is highlighted the rest are dimmed. The store
+(`state/instances.ts`) holds exact id sets -- a category's or an object's members -- and every
+renderer applies them id for id, so hiding one category never takes another's instances with
+it.
+
+A scan whose package also has PlayCanvas's own streamed format (`sog/lod-meta.json`) is drawn
+from its 3D Tiles instead when it has objects (`extras.instances`): the native package carries
+no tile checksums, so its splats have no object ids: before this, the published camp (which
+has both) streamed natively under the default renderer, and hide and highlight did nothing
+there but a note offering CesiumJS. A scan with a native package and no objects still
+streams natively.
+
+**The objects panel** (`features/sites/InstanceSearch.tsx`), from the "Objects" button beside
+the representation switcher:
+
+- a search box ("Search objects");
+- the scan's categories, largest share of the scan first, each with its colour, name, number
+  of objects and an eye that hides or shows the whole category; clicking a row highlights the
+  category (the rest dims), clicking it again clears it;
+- a chevron (or the right arrow key) opens a category onto its objects, fifty at a time, each
+  with its own eye; clicking an object highlights it and flies to it;
+- while searching, the matching objects are listed the same way, grouped by category, with
+  "Hide all" and "Show only" for every match. Words match tags and category names ("trees",
+  "water"); a typed property filter (`vegetation > 0.5`, `behaviour:movable`) still works but
+  has no buttons;
+- one "Reset" whenever anything is hidden or highlighted, with what is hidden in words.
+
+The property scores and behaviours are not shown: they drive physics, not browsing (SigLIP's
+"vegetation" scored the pumpkins 0.88 -- true of a gourd, and confusing in a list).
 
 ### `skin.json` + `skin.bin` (step B2)
 
@@ -289,17 +346,18 @@ producer (the video teacher) and must survive a skin refit.
 
 ```jsonc
 {
-  "format": "hexapod.materials", "version": 1,
+  "format": "hexapod.materials",
+  "version": 1,
   "materials": [
     {
-      "instance": 1,        // instances.json id (the skin's owner)
-      "stiffness": 3.5,     // c, m/s: ω_j = c·√λ_j / scale
-      "damping": 0.1,       // ζ of every anchored mode, 0..0.95
-      "drag": 0.025,        // D, dimensionless: a handle's acceleration D·|v|v / scale
-      "wind": true,         // whether the wind drives it at all
-      "evidence": "fitted-real"  // the motion evidence ladder, or "prior"
-    }
-  ]
+      "instance": 1, // instances.json id (the skin's owner)
+      "stiffness": 3.5, // c, m/s: ω_j = c·√λ_j / scale
+      "damping": 0.1, // ζ of every anchored mode, 0..0.95
+      "drag": 0.025, // D, dimensionless: a handle's acceleration D·|v|v / scale
+      "wind": true, // whether the wind drives it at all
+      "evidence": "fitted-real", // the motion evidence ladder, or "prior"
+    },
+  ],
 }
 ```
 
@@ -350,11 +408,11 @@ the truth 0.8 × the prior's `c`, `ζ` 0.07, 1.3 × its `D`; fitted once from th
 and once from a prior 4× too stiff, a quarter of the drag and `ζ` 0.3 -- both land in the
 same place):
 
-| instance             | true c / ζ / D        | fitted (from the prior)   | error c / ζ / D        |
-| -------------------- | --------------------- | ------------------------- | ---------------------- |
-| 9, snag (7 m)        | 4.87 / 0.070 / 0.0325 | 4.92 / 0.068 / 0.0319     | +0.9% / −3% / −2%      |
-| 1, tree (9.7 m)      | 2.80 / 0.070 / 0.0325 | 2.70 / 0.081 / 0.0339     | −3.6% / +16% / +4%     |
-| 10, shrub (1.9 m)    | 5.43 / 0.070 / 0.0323 | 5.48 / 0.072 / 0.0277     | +0.9% / +3% / −14%     |
+| instance          | true c / ζ / D        | fitted (from the prior) | error c / ζ / D    |
+| ----------------- | --------------------- | ----------------------- | ------------------ |
+| 9, snag (7 m)     | 4.87 / 0.070 / 0.0325 | 4.92 / 0.068 / 0.0319   | +0.9% / −3% / −2%  |
+| 1, tree (9.7 m)   | 2.80 / 0.070 / 0.0325 | 2.70 / 0.081 / 0.0339   | −3.6% / +16% / +4% |
+| 10, shrub (1.9 m) | 5.43 / 0.070 / 0.0323 | 5.48 / 0.072 / 0.0277   | +0.9% / +3% / −14% |
 
 The fitted snag replays its clip (same wind realisation) at a correlation of 0.998, the tree
 0.93 (its sway reaches the output bound at this strength), the shrub 0.998. Damping needs a
