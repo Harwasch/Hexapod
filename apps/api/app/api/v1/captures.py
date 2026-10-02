@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Query, status
+from fastapi import APIRouter, BackgroundTasks, Query, status
 from fastapi.responses import RedirectResponse
 
 from app.api.deps import (
@@ -29,6 +29,7 @@ from app.schemas.common import Problem
 from app.schemas.job import JobCreate, JobRead
 from app.services import captures as capture_service
 from app.services import jobs as job_service
+from app.services import worker_wake
 
 router = APIRouter(prefix="/captures", tags=["captures"])
 
@@ -144,8 +145,13 @@ def abort_file(
         "claims the row with a lease and executes the recipe."
     ),
 )
-def process_capture(capture_id: uuid.UUID, payload: JobCreate, db: DbSession) -> JobRead:
-    return job_service.job_to_read(job_service.create_job(db, capture_id, payload))
+def process_capture(
+    capture_id: uuid.UUID, payload: JobCreate, db: DbSession, background: BackgroundTasks
+) -> JobRead:
+    job = job_service.create_job(db, capture_id, payload)
+    # Committed: start the worker if it has stopped for want of work (worker_wake).
+    worker_wake.schedule(background)
+    return job_service.job_to_read(job)
 
 
 @router.post(

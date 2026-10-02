@@ -3,13 +3,14 @@ from __future__ import annotations
 import uuid
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, BackgroundTasks, Query
 
 from app.api.deps import DbSession, RequireWriteToken, Storage
 from app.models.enums import RunStatus
 from app.schemas.common import Problem
 from app.schemas.job import JobRead, JobRetry, JobStepLog
 from app.services import jobs as job_service
+from app.services import worker_wake
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
@@ -61,8 +62,13 @@ def cancel_job(job_id: uuid.UUID, db: DbSession) -> JobRead:
         "can be retried by a person after the worker has stopped retrying it by itself."
     ),
 )
-def retry_job(job_id: uuid.UUID, payload: JobRetry, db: DbSession) -> JobRead:
-    return job_service.job_to_read(job_service.retry_job(db, job_id, payload.from_stage))
+def retry_job(
+    job_id: uuid.UUID, payload: JobRetry, db: DbSession, background: BackgroundTasks
+) -> JobRead:
+    job = job_service.retry_job(db, job_id, payload.from_stage)
+    # A retry is an enqueue: committed `not-started`, so the worker may need starting.
+    worker_wake.schedule(background)
+    return job_service.job_to_read(job)
 
 
 @router.get(
