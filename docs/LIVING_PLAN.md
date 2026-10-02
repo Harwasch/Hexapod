@@ -9,7 +9,7 @@ Architecture: [SCENE_OBJECTS.md](SCENE_OBJECTS.md). Branch: `living-models`.
 - [x] A2 Model adapters: SAM 2 masks, SigLIP embeddings, open-vocabulary tags, property scores (CPU and Modal GPU via `segment.yml`)
 - [x] A3 Run on the camp (GPU, 252 views, 20 min): 816 top-level objects, 92% assigned; fort wall, cabin, trails, bushes, flagpole found; touching conifer crowns still merge
 - [x] A4 Viewer: load `instances.json`, hide / highlight by instance, text search (checked in a real browser on the spool; e2e on the yard)
-- [~] A5 Camp in the viewer: instances published beside the camp, spool and pumpkin tiles (`publish-instances.yml`); live check in progress
+- [x] A5 Camp in the viewer: instances published beside the camp, spool and pumpkin tiles (`publish-instances.yml`); live-checked; hide / highlight now work under PlayCanvas, Spark and Cesium, plus "hide all N matches"
 - [~] A6 Segment the pumpkin (phone capture 09-28) and spool (09-26) scans — both segmented; pumpkins tagged "pumpkin", spool split well but the vocabulary has no "spool" (needs search by meaning)
 
 ## B. Skin
