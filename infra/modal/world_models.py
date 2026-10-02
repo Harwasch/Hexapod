@@ -71,12 +71,14 @@ HF_TOKEN_KEYS = ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN", "HUGGINGFACE_TOKEN", "HF_
 def _hf_token() -> list[str]:
     """HF_TOKEN set from whichever key the secret uses; the keys present (names only)."""
     present = sorted(k for k in os.environ if "HF" in k.upper() or "HUGGING" in k.upper())
-    for key in HF_TOKEN_KEYS:
-        if os.environ.get(key):
-            os.environ["HF_TOKEN"] = os.environ[key]
-            os.environ.setdefault("HUGGING_FACE_HUB_TOKEN", os.environ[key])
-            break
+    # A known key first, else whichever value looks like a token (`hf_...`).
+    keys = [k for k in HF_TOKEN_KEYS if os.environ.get(k)]
+    keys += sorted(k for k, v in os.environ.items() if v.startswith("hf_"))
+    if keys:
+        os.environ["HF_TOKEN"] = os.environ[keys[0]]
+        os.environ.setdefault("HUGGING_FACE_HUB_TOKEN", os.environ[keys[0]])
     return present
+
 
 FIXER_REPO = "https://github.com/nv-tlabs/Fixer.git"
 FIXER_COMMIT = "b39dfcaf4eeec90dc943b057ff368c16252c6c6e"

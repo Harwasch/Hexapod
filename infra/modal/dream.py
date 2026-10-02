@@ -87,6 +87,15 @@ PROMPTS: dict[str, str] = {
 #: two knee-high bushes on the clearing's edge, a 4 m bush, a 3.8 m conifer, a 9.7 m tree.
 CAMP_INSTANCES = (225, 244, 113, 414, 231)
 
+#: The Hub repositories each video model needs readable (`world_models.access`).
+NEEDS: dict[str, tuple[str, ...]] = {
+    "Wan": ("Wan-AI/Wan2.2-TI2V-5B-Diffusers",),
+    "Cosmos": ("nvidia/Cosmos-Predict2-2B-Video2World", "nvidia/Cosmos-1.0-Guardrail"),
+}
+#: How long the run waits for one clip (queued behind others) and for one materials job.
+CLIP_TIMEOUT_S = 3600
+MATERIALS_TIMEOUT_S = 3 * 3600
+
 GSPLAT_WHEEL = (
     "gsplat @ https://github.com/nerfstudio-project/gsplat/releases/download/v1.5.3/"
     "gsplat-1.5.3%2Bpt24cu124-cp310-cp310-linux_x86_64.whl"
@@ -368,7 +377,7 @@ def _run_main(module: str, argv: list[str]) -> tuple[int, str]:
     return code, out.getvalue()[-40000:]
 
 
-@app.function(image=job_image, gpu="L4", cpu=8.0, memory=98304, timeout=4 * 3600)
+@app.function(image=job_image, gpu="L4", cpu=8.0, memory=98304, timeout=3 * 3600)
 def materials(scan: str, instance: int, options: dict) -> dict:
     """The skin of one instance, then `teacher_materials.py world` on it: its report,
     materials.json, still, clips, spectrum and log."""
@@ -526,7 +535,14 @@ def main(
             sys.stdout.write(f"starts {result['scan']}: {[v['name'] for v in result['views']]}\n")
             dump()
 
-        classes = {m: modal.Cls.from_name(WORLD_MODELS_APP, m)() for m in models.split(",") if m}
+        wanted = [m for m in models.split(",") if m]
+        # A model whose weights the token cannot read fails in its container's start, which
+        # Modal retries without end (run 37054515134 waited 4 h on Cosmos): it is skipped.
+        usable = [m for m in wanted if all(access.get(r) == "ok" for r in NEEDS.get(m, ()))]
+        summary["skippedModels"] = {
+            m: {r: access.get(r) for r in NEEDS.get(m, ())} for m in wanted if m not in usable
+        }
+        classes = {m: modal.Cls.from_name(WORLD_MODELS_APP, m)() for m in usable}
         calls = []
         for name, png in views:
             for p in (p.strip() for p in prompts.split(",") if p.strip()):
@@ -541,7 +557,7 @@ def main(
         for label, model, call in calls:
             started = time.time()
             try:
-                response = call.get()
+                response = call.get(timeout=CLIP_TIMEOUT_S)
             except Exception as error:  # noqa: BLE001 - one failed model does not stop the rest
                 summary["clips"].append(
                     {"clip": label, "model": model, "error": repr(error)[:2000]}
@@ -578,7 +594,7 @@ def main(
     merged: dict[int, dict] = {}
     for call in material_calls:
         try:
-            result = call.get()
+            result = call.get(timeout=MATERIALS_TIMEOUT_S)
         except Exception as error:  # noqa: BLE001
             summary["materials"].append({"error": repr(error)[:2000]})
             sys.stdout.write(f"materials raised: {error!r}\n")

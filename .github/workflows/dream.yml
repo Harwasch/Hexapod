@@ -52,7 +52,7 @@ jobs:
   dream:
     name: Dream on Modal GPUs
     runs-on: ubuntu-latest
-    timeout-minutes: 300
+    timeout-minutes: 240
     env:
       MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
       MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
