@@ -322,24 +322,58 @@ def select_masks(
     stab = stability(logits.reshape(p * k, *logits.shape[2:])).reshape(p, k)
     min_px = min_area * logits.shape[2] * logits.shape[3]
     ok = (iou_pred >= pred_iou_thresh) & (stab >= stability_thresh) & (areas >= min_px)
+    pts, cand = np.nonzero(ok)
+    if pts.size == 0:
+        return [], []
+    flat = binary[pts, cand]
+    return choose_masks(
+        pts,
+        cand,
+        levels[pts, cand],
+        iou_pred[pts, cand],
+        stab[pts, cand],
+        mask_iou(flat, flat),
+        nms_iou=nms_iou,
+        repeat_iou=repeat_iou,
+    )
+
+
+def choose_masks(
+    pts: np.ndarray,
+    cand: np.ndarray,
+    levels: np.ndarray,
+    iou_pred: np.ndarray,
+    stab: np.ndarray,
+    overlap: np.ndarray,
+    *,
+    nms_iou: float,
+    repeat_iou: float,
+) -> tuple[list[tuple[int, int, int]], list[float]]:
+    """`select_masks`' choice among candidates that passed the thresholds: per level
+    (coarsest first) NMS by `overlap` (their mask IoU, (n, n)), then repeats of a kept
+    coarser mask dropped. The heavy part, `overlap`, can come from a GPU."""
     kept: list[tuple[int, int, int]] = []
     scores: list[float] = []
-    kept_masks: list[np.ndarray] = []
-    for level in range(k):
-        pts, cand = np.nonzero(ok & (levels == level))
-        if pts.size == 0:
+    kept_rows: list[int] = []
+    for level in range(int(levels.max()) + 1 if levels.size else 0):
+        rows = np.flatnonzero(levels == level)
+        if rows.size == 0:
             continue
-        masks = binary[pts, cand]
-        score = iou_pred[pts, cand] * stab[pts, cand]
-        chosen = mask_nms(masks, score, nms_iou)
-        if kept_masks and chosen.size:
-            coarser = np.stack(kept_masks)
-            repeat = mask_iou(masks[chosen], coarser).max(axis=1) > repeat_iou
+        score = iou_pred[rows] * stab[rows]
+        order = np.argsort(-score, kind="stable")
+        sub = overlap[np.ix_(rows[order], rows[order])]
+        keep: list[int] = []
+        for i in range(order.size):
+            if all(sub[i, j] <= nms_iou for j in keep):
+                keep.append(i)
+        chosen = rows[order[keep]]
+        if kept_rows and chosen.size:
+            repeat = overlap[np.ix_(chosen, kept_rows)].max(axis=1) > repeat_iou
             chosen = chosen[~repeat]
         for c in chosen:
             kept.append((int(pts[c]), int(cand[c]), level))
-            scores.append(float(iou_pred[pts[c], cand[c]]))
-            kept_masks.append(masks[c])
+            scores.append(float(iou_pred[c]))
+            kept_rows.append(int(c))
     return kept, scores
 
 
@@ -417,24 +451,51 @@ class Sam2Masks:
                     input_labels=torch.ones(1, pts.shape[0], 1, dtype=torch.long, device=device),
                     multimask_output=True,
                 )
-                logits.append(out.pred_masks[0].float().cpu())
-                ious.append(out.iou_scores[0].float().cpu())
-        low = torch.cat(logits)  # (points, 3, 256, 256)
-        iou_pred = torch.cat(ious).numpy()
-        chosen, scores = select_masks(
-            low.numpy(),
-            iou_pred,
-            pred_iou_thresh=self.pred_iou_thresh,
-            stability_thresh=self.stability_thresh,
+                logits.append(out.pred_masks[0].float())
+                ious.append(out.iou_scores[0].float())
+        low = torch.cat(logits)  # (points, 3, 256, 256), on the model's device
+        iou_pred = torch.cat(ious)
+        p, k = iou_pred.shape
+        # The candidates' statistics on the device (the bulk of the work), the choice on
+        # the CPU: the same as `select_masks` on the whole array.
+        binary = low > 0
+        areas = binary.reshape(p, k, -1).sum(dim=2)
+        inner = (low > 1.0).reshape(p, k, -1).sum(dim=2)  # `stability`, offset 1
+        outer = (low > -1.0).reshape(p, k, -1).sum(dim=2)
+        stab = inner.double() / outer.clamp(min=1).double()
+        areas_np = areas.cpu().numpy()
+        levels = granularity_levels(areas_np)
+        stab_np = stab.cpu().numpy()
+        iou_np = iou_pred.cpu().numpy()
+        min_px = self.min_area * low.shape[2] * low.shape[3]
+        ok = (
+            (iou_np >= self.pred_iou_thresh)
+            & (stab_np >= self.stability_thresh)
+            & (areas_np >= min_px)
+        )
+        pts, cand = np.nonzero(ok)
+        if pts.size == 0:
+            return []
+        index = torch.as_tensor(pts, device=low.device), torch.as_tensor(cand, device=low.device)
+        flat = binary[index].reshape(pts.size, -1).float()
+        inter = flat @ flat.T
+        size = flat.sum(dim=1)
+        overlap = (inter / (size[:, None] + size[None, :] - inter).clamp(min=1.0)).cpu().numpy()
+        chosen, scores = choose_masks(
+            pts,
+            cand,
+            levels[pts, cand],
+            iou_np[pts, cand],
+            stab_np[pts, cand],
+            overlap,
             nms_iou=self.nms_iou,
-            min_area=self.min_area,
             repeat_iou=self.repeat_iou,
         )
         if not chosen:
             return []
         pick = torch.stack([low[pt, cd] for pt, cd, _ in chosen])[:, None]
         full = torch.nn.functional.interpolate(pick, size=(h, w), mode="bilinear")[:, 0] > 0
-        full_np = full.numpy()
+        full_np = full.cpu().numpy()
         return [
             Mask(full_np[i], level, float(np.clip(score, 0.0, 1.0)))
             for i, ((_, _, level), score) in enumerate(zip(chosen, scores, strict=True))
