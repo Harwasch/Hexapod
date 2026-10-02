@@ -806,6 +806,8 @@ class View:
     cell: np.ndarray
     #: (h, w) float32: that cell's share of the pixel's coverage.
     purity: np.ndarray
+    #: (h, w, 3) uint8: the CPU renderer's point samples, when `rgb` was drawn by another.
+    samples: np.ndarray | None = None
 
 
 def render_view(
@@ -1556,6 +1558,11 @@ def behaviour(properties: dict[str, float]) -> str:
     return "static"
 
 
+#: The crops an instance can be described by: from the views' images in context and alone,
+#: the same from the CPU's point samples (when the views were drawn by another renderer),
+#: and portraits of its own splats.
+CROP_KINDS = ("context", "alone", "context-samples", "alone-samples", "portrait")
+DESCRIBE_KINDS = ("context", "alone", "portrait")
 #: Crops embedded at a time (bounds what `describe` holds).
 EMBED_CHUNK = 512
 #: A view is used for an instance's crops when it shows at least this share of the pixels
@@ -1657,14 +1664,29 @@ def _shrink(image: np.ndarray) -> np.ndarray:
     return np.asarray(Image.fromarray(np.ascontiguousarray(image, np.uint8)).resize(size, 4))
 
 
-def _crops(view: View, box: np.ndarray, cell_id: np.ndarray, ids: np.ndarray) -> list[np.ndarray]:
+def _save_gallery(path: Path, rows: list[list[np.ndarray]], side: int = 128) -> None:
+    """Rows of crops, each scaled to `side` square, as one JPEG (a check of what was seen)."""
+    from PIL import Image
+
+    width = max((len(r) for r in rows), default=1)
+    sheet = Image.new("RGB", (width * side, len(rows) * side))
+    for i, row in enumerate(rows):
+        for j, crop in enumerate(row):
+            tile = Image.fromarray(np.ascontiguousarray(crop, np.uint8)).resize((side, side))
+            sheet.paste(tile, (j * side, i * side))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    sheet.save(path, quality=85)
+
+
+def _crops(
+    view: View, image: np.ndarray, box: np.ndarray, cell_id: np.ndarray, ids: np.ndarray
+) -> list[np.ndarray]:
     """Two square crops of an instance in a view: in context (its box padded `CROP_PAD`,
     what is not the instance dimmed to `CONTEXT_DIM`) and alone (its box, what is not the
     instance grey). The instance's pixels are those whose cell carries one of `ids` (it and
     the instances below it), closed over the renderer's speckle (a 3x3 closing)."""
     import cv2
 
-    image = view.rgb
     h, w = image.shape[:2]
     x0, y0, x1, y1 = (float(b) for b in box)
     bw, bh = x1 - x0 + 1, y1 - y0 + 1
@@ -1684,8 +1706,9 @@ def _crops(view: View, box: np.ndarray, cell_id: np.ndarray, ids: np.ndarray) ->
             crop = np.where(inside[..., None], crop, CONTEXT_DIM * crop)
         else:
             crop = np.where(inside[..., None], crop, 255.0 * BACKGROUND_GREY)
-        if crop.size:
-            out.append(_shrink(np.round(crop).astype(np.uint8)))
+        if not crop.size:
+            crop = np.full((1, 1, 3), 255.0 * BACKGROUND_GREY)
+        out.append(_shrink(np.round(crop).astype(np.uint8)))
     return out
 
 
@@ -1753,6 +1776,9 @@ def describe(
     render_splats: Splats | None = None,
     render_cell: np.ndarray | None = None,
     categories: dict[str, str] | None = None,
+    kinds: Sequence[str] | None = None,
+    by_kind: dict[str, np.ndarray] | None = None,
+    debug_dir: Path | None = None,
 ) -> list[Instance]:
     """Per instance: bounds, centroid and splat counts, views, crops embedded, tags,
     properties, category and behaviour. Bounds and centroid cover the instance with its
@@ -1762,7 +1788,11 @@ def describe(
     of its own splats from each of those views' sides (`_portraits`: `render_splats`, the
     splats the views were drawn from, and their cells `render_cell`). The category is voted
     by its tags' labels (`categories`, label to category; default the committed file) and
-    a zero-shot head over the categories' own prompts (`category_scores`)."""
+    a zero-shot head over the categories' own prompts (`category_scores`).
+
+    `kinds`: which crops make the embedding (`CROP_KINDS`; default `DESCRIBE_KINDS`).
+    `by_kind`: filled with every kind's own embedding (each crop kind is then made), to
+    compare them. `debug_dir`: a sheet of some instances' crops is written there."""
     n = lifted.parent.size
     if n == 0:
         return []
@@ -1821,29 +1851,56 @@ def describe(
     subtree_ids = [np.asarray(ids, np.int64) for ids in subtree]
     portrait = _portraits(lifted, renderer, render_splats, render_cell)
     dim = int(embedder.dim)
-    embedding = np.zeros((n, dim))
+    wanted = set(DESCRIBE_KINDS if kinds is None else kinds)
+    collect = wanted | (set(CROP_KINDS) if by_kind is not None else set())
+    sums: dict[str, np.ndarray] = {}
     crops: list[np.ndarray] = []
-    owner_of_crop: list[int] = []
+    owner_of_crop: list[tuple[str, int]] = []
+    shown = set(np.flatnonzero(described)[:: max(1, int(described.sum()) // 48)].tolist())
+    gallery: list[list[np.ndarray]] = []
+
+    def add(kind: str, k: int, crop: np.ndarray) -> None:
+        if kind in collect:
+            crops.append(crop)
+            owner_of_crop.append((kind, k))
+            if debug_dir is not None and k in shown:
+                gallery[-1].append(crop)
 
     def flush() -> None:
         if crops:
             rows = np.asarray(embedder.embed_images(crops), np.float64).reshape(len(crops), dim)
-            np.add.at(embedding, np.asarray(owner_of_crop), rows)
+            for (kind, k), row in zip(owner_of_crop, rows, strict=True):
+                sums.setdefault(kind, np.zeros((n, dim)))[k] += row
             crops.clear()
             owner_of_crop.clear()
 
     for k in np.flatnonzero(described):
+        if debug_dir is not None and k in shown:
+            gallery.append([])
         for v in _crop_views(area[:, k], boxes[:, k], views):
-            for crop in _crops(views[v], boxes[v, k], lifted.cell_id, subtree_ids[k]):
-                crops.append(crop)
-                owner_of_crop.append(int(k))
-            if portrait is not None:
-                crops.append(portrait(subtree_ids[k], views[v].camera, lo[k], hi[k], centroid[k]))
-                owner_of_crop.append(int(k))
+            view = views[v]
+            context, alone = _crops(view, view.rgb, boxes[v, k], lifted.cell_id, subtree_ids[k])
+            add("context", int(k), context)
+            add("alone", int(k), alone)
+            if view.samples is not None and collect & {"context-samples", "alone-samples"}:
+                context, alone = _crops(
+                    view, view.samples, boxes[v, k], lifted.cell_id, subtree_ids[k]
+                )
+                add("context-samples", int(k), context)
+                add("alone-samples", int(k), alone)
+            if portrait is not None and "portrait" in collect:
+                shot = portrait(subtree_ids[k], view.camera, lo[k], hi[k], centroid[k])
+                add("portrait", int(k), shot)
         if len(crops) >= EMBED_CHUNK:
             flush()
     flush()
-    embedding = _normalise(embedding)
+    # Each kind weighs the same, however many crops of it there were.
+    parts = [_normalise(sums[c]) for c in sorted(wanted) if c in sums]
+    embedding = _normalise(sum(parts, np.zeros((n, dim))))
+    if by_kind is not None:
+        by_kind.update({kind: _normalise(rows) for kind, rows in sums.items()})
+    if debug_dir is not None and gallery:
+        _save_gallery(debug_dir / "crops.jpg", gallery)
 
     words = list(vocabulary)
     names = list(PROPERTY_PROMPTS)
@@ -1913,6 +1970,7 @@ def _categories(
     tag_scores: np.ndarray,
     words: Sequence[str],
     labels: dict[str, str] | None,
+    head_weight: float = CATEGORY_HEAD_WEIGHT,
 ) -> list[str | None]:
     """Per instance, its category when described: `CATEGORY_HEAD_WEIGHT` of the zero-shot
     head (`category_scores`) and the rest from its `CATEGORY_TAGS` best labels, each
@@ -1935,12 +1993,48 @@ def _categories(
                     votes[r, column[c]] += tag_scores[rows[r], t]
     total = votes.sum(axis=1, keepdims=True)
     tags = np.divide(votes, total, out=np.zeros_like(votes), where=total > 0)
-    mixed = np.where(
-        total > 0, CATEGORY_HEAD_WEIGHT * head + (1 - CATEGORY_HEAD_WEIGHT) * tags, head
-    )
+    mixed = np.where(total > 0, head_weight * head + (1 - head_weight) * tags, head)
     best = np.argmax(mixed, axis=1)
     for r, k in enumerate(rows):
         out[k] = ids[int(best[r])]
+    return out
+
+
+#: `describe_variants`: crop kinds compared, and the category head's weights.
+VARIANT_KINDS = (
+    ("context",), ("alone",), ("portrait",), ("context-samples",), ("alone-samples",),
+    ("context", "alone"), ("context", "portrait"), ("context", "alone", "portrait"),
+    ("context-samples", "alone-samples"), ("context", "context-samples"),
+)  # fmt: skip
+VARIANT_HEAD_WEIGHTS = (0.0, 0.5, 1.0)
+
+
+def describe_variants(
+    embedder: Embedder,
+    vocabulary: Sequence[str],
+    by_kind: dict[str, np.ndarray],
+) -> dict[str, dict[str, list]]:
+    """Per variant (`VARIANT_KINDS` x `VARIANT_HEAD_WEIGHTS`, named `kinds@weight`), each
+    instance's category and best label as `describe` would give them from those crops: to
+    measure which crops describe a scan best, on the same instances."""
+    words = list(vocabulary)
+    labels = scene_categories.load()
+    out: dict[str, dict[str, list]] = {}
+    for kinds in VARIANT_KINDS:
+        if not all(k in by_kind for k in kinds):
+            continue
+        embedding = _normalise(sum(by_kind[k] for k in kinds))
+        has = np.any(embedding != 0, axis=1)
+        own = getattr(embedder, "score_tags", None)
+        if own is not None:
+            scores = np.asarray(own(embedding, words), np.float64)
+        else:
+            text = np.asarray(embedder.embed_texts(words), np.float64)
+            scores = _softmax(LOGIT_SCALE * embedding @ text.T)
+        top = [words[int(t)] if h else None for t, h in zip(scores.argmax(axis=1), has)]
+        for weight in VARIANT_HEAD_WEIGHTS:
+            category = _categories(embedder, embedding, has, scores, words, labels, weight)
+            out[f"{'+'.join(kinds)}@{weight:g}"] = {"category": category, "top": top}
     return out
 
 
@@ -2262,6 +2356,9 @@ def segment(
     max_scale_m: float | None = None,
     coverage_rounds: int = 0,
     coverage_budget: int = COVERAGE_VIEWS,
+    describe_kinds: Sequence[str] | None = None,
+    by_kind: dict[str, np.ndarray] | None = None,
+    debug_dir: Path | None = None,
 ) -> Segmentation:
     """Cells, views, masks, votes, lifting and meaning, for a scan held in memory.
 
@@ -2280,7 +2377,9 @@ def segment(
     seen cell's within their own reach (`lift`'s `cell_reach`). `coverage_rounds`: after
     the lift, up to this many rounds of `coverage_views` (at most `coverage_budget` views
     each) aimed at what is still without an instance, each followed by a lift of all the
-    votes; a round is not run once less than `COVERAGE_MIN_SHARE` of the splats is left."""
+    votes; a round is not run once less than `COVERAGE_MIN_SHARE` of the splats is left.
+    `describe_kinds`, `by_kind`, `debug_dir`: `describe`'s `kinds`, `by_kind` and
+    `debug_dir` (which also gets a sheet of some views, as drawn and as sampled)."""
     timings: dict[str, float] = {}
     mark = time.perf_counter()
     cell, centroids, counts, edge = cells or supervoxels(splats.positions)
@@ -2334,6 +2433,7 @@ def segment(
                     cached_raster(cache, renderer, view_splats, view.camera, n_cells, tag, index),
                     view.cell,
                     view.purity,
+                    samples=view.rgb,
                 )
             rastered = time.perf_counter()
             clock["rasterS"] += rastered - now
@@ -2393,9 +2493,17 @@ def segment(
     timings.update(clock)
     mark = time.perf_counter()
     votes = [_pad_levels(v, levels) for v in view_votes]
+    if debug_dir is not None and views:
+        picked = views[:: max(1, len(views) // 24)]
+        _save_gallery(
+            debug_dir / "views.jpg",
+            [[v.rgb] + ([v.samples] if v.samples is not None else []) for v in picked],
+            side=256,
+        )
     instances = describe(
         lifted, splats, cell, views, embedder, vocabulary,
         renderer=renderer, render_splats=view_splats, render_cell=view_cell,
+        kinds=describe_kinds, by_kind=by_kind, debug_dir=debug_dir,
     )  # fmt: skip
     timings["describeS"] = time.perf_counter() - mark
     return Segmentation(
@@ -2473,6 +2581,17 @@ def main() -> None:
         "--coverage-views", type=int, default=COVERAGE_VIEWS, help="at most this many a round"
     )
     parser.add_argument(
+        "--describe-kinds",
+        default=",".join(DESCRIBE_KINDS),
+        help=f"crops an instance is described by, of {', '.join(CROP_KINDS)}",
+    )
+    parser.add_argument(
+        "--variants", type=Path, default=None, help="write describe_variants here (JSON)"
+    )
+    parser.add_argument(
+        "--debug-dir", type=Path, default=None, help="sheets of some views and crops"
+    )
+    parser.add_argument(
         "--workers", type=int, default=None, help="render processes (default: usable CPUs)"
     )
     parser.add_argument("--save-dir", type=Path, default=None, help="write the views here")
@@ -2505,6 +2624,7 @@ def main() -> None:
             if line.strip() and not line.lstrip().startswith("#")
         ]
     source = load_masks(args.masks) if args.masks else None
+    by_kind: dict[str, np.ndarray] | None = {} if args.variants else None
     factory = None
     if args.truth:
         truth = json.loads(args.truth.read_text(encoding="utf-8"))
@@ -2525,7 +2645,15 @@ def main() -> None:
         max_scale_m=args.max_scale_m,
         coverage_rounds=args.coverage_rounds,
         coverage_budget=args.coverage_views,
+        describe_kinds=[k for k in args.describe_kinds.split(",") if k],
+        by_kind=by_kind,
+        debug_dir=args.debug_dir,
     )
+    if args.variants:
+        args.variants.write_text(
+            json.dumps(describe_variants(embedder, vocabulary, by_kind), separators=(",", ":")),
+            encoding="utf-8",
+        )
     if from_tiles:
         tiles = tile_binding_by_position(args.tiles, splats.positions, result.splat_id)
     else:

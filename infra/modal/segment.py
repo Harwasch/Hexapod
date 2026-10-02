@@ -209,6 +209,10 @@ def segment_scan(
                 str(COVERAGE_VIEWS),
                 "--workers",
                 str(RENDER_WORKERS),
+                "--variants",
+                str(Path(work) / "variants.json"),
+                "--debug-dir",
+                str(Path(work) / "debug"),
                 *(["--cache", str(cache)] if keep_masks else []),
             ],
             cwd=CAPTURES,
@@ -238,6 +242,8 @@ def segment_scan(
                 str(new),
                 "--sheet",
                 str(Path(work) / "compare.png"),
+                "--max-scale-m",
+                str(MAX_SCALE_M),
                 *(["--gsplat"] if renderer == "gsplat" else []),
                 "--out",
                 str(Path(work) / "report.json"),
@@ -247,9 +253,9 @@ def segment_scan(
             text=True,
         )
         log += "\n--- report\n" + report.stdout[-20000:] + report.stderr[-20000:]
-        for k in ("compare.png", "report.json"):
+        for k in ("compare.png", "report.json", "variants.json", "debug/views.jpg", "debug/crops.jpg"):
             if (Path(work) / k).exists():
-                files[k] = (Path(work) / k).read_bytes()
+                files[k.rsplit("/", 1)[-1]] = (Path(work) / k).read_bytes()
         if keep_masks and cache.exists():
             tar = Path(work) / "masks.tar"
             with tarfile.open(tar, "w") as out:

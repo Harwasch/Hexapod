@@ -205,6 +205,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--sheet", type=Path, default=None, help="a contact sheet PNG")
     parser.add_argument("--gsplat", action="store_true", help="draw the sheet with gsplat")
     parser.add_argument("--out", type=Path, default=None, help="the metrics as JSON")
+    parser.add_argument(
+        "--max-scale-m", type=float, default=None, help="leave larger gaussians out of the sheet"
+    )
     args = parser.parse_args(argv)
     checksums = tile_checksums(args.tiles)
     documents = [json.loads(p.read_text(encoding="utf-8")) for p in args.documents]
@@ -215,9 +218,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.out.write_text(text + "\n", encoding="utf-8")
     if args.sheet:
         splats = load_tileset(args.tiles / "tileset.json")
+        keep = np.arange(len(splats))
+        if args.max_scale_m is not None:
+            keep = np.flatnonzero(splats.scales.max(axis=1) <= args.max_scale_m)
+            splats = splats.take(keep)
         panels = []
         for path, document in zip(args.documents, documents, strict=True):
-            painted = colourings(document, leaf_ids(args.tiles, document, checksums))
+            painted = colourings(document, leaf_ids(args.tiles, document, checksums)[keep])
             name = path.parent.name or path.stem
             panels += [(f"{name}: objects", painted["objects"])]
             panels += [(f"{name}: categories", painted["categories"])]
