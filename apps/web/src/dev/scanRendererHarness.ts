@@ -7,7 +7,14 @@
  * Loaded dynamically by the spec; nothing imports it, so it never reaches the production bundle.
  */
 
-import { CesiumWidget, Color, HeadingPitchRange, Math as CesiumMath, Matrix4 } from "cesium";
+import {
+  Cartesian3,
+  CesiumWidget,
+  Color,
+  HeadingPitchRange,
+  Math as CesiumMath,
+  Matrix4,
+} from "cesium";
 import type { SiteAsset } from "@twin/contracts";
 
 import { createSiteTileset } from "@/cesium/providers/tiles";
@@ -20,16 +27,26 @@ export interface ScanRendererHarness {
   /** Draws the scan with `kind` and waits until its tiles are up (or `timeoutS` pass). */
   use(kind: SplatRendererKind, timeoutS: number): Promise<ScanRendererStatus>;
   status(): ScanRendererStatus;
+  /**
+   * The globe's resolution, as the PerformanceManager sets it: CSS pixels (the performance
+   * preset) or device pixels, times the adaptive ladder's scale. The overlay follows it.
+   */
+  setResolution(browserRecommended: boolean, resolutionScale: number): void;
+  /** Turns the camera about the scan by `degrees` over `frames` animation frames. */
+  orbit(degrees: number, frames: number): Promise<void>;
 }
 
 export async function startScanRendererHarness(options: {
   container: HTMLElement;
   tilesetUrl: string;
   rangeM: number;
+  /** Render only on change, as the app does (scene manager); off by default. */
+  requestRenderMode?: boolean;
 }): Promise<ScanRendererHarness> {
   const widget = new CesiumWidget(options.container, {
     baseLayer: false,
-    requestRenderMode: false,
+    requestRenderMode: options.requestRenderMode ?? false,
+    maximumRenderTimeChange: Number.POSITIVE_INFINITY,
     msaaSamples: 1,
   });
   const { scene, camera } = widget;
@@ -58,6 +75,20 @@ export async function startScanRendererHarness(options: {
 
   return {
     status: () => host.status(),
+    setResolution(browserRecommended, resolutionScale) {
+      widget.useBrowserRecommendedResolution = browserRecommended;
+      widget.resolutionScale = resolutionScale;
+      scene.requestRender();
+    },
+    async orbit(degrees, frames) {
+      // About the vertical through the scan: the axis from the Earth's centre through it.
+      const axis = Cartesian3.normalize(tileset.boundingSphere.center, new Cartesian3());
+      for (let i = 0; i < frames; i++) {
+        camera.rotate(axis, CesiumMath.toRadians(degrees / frames));
+        scene.requestRender();
+        await frame();
+      }
+    },
     async use(kind, timeoutS) {
       tileset.show = kind === "cesium";
       tileset.preloadWhenHidden = kind === "cesium";

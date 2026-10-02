@@ -36,6 +36,7 @@ import { parseTileset, type TileNode } from "@/view/tiles";
 import { Handover } from "./handover";
 import { scanPose } from "./pose";
 import { linkScanInstances } from "./scanInstances";
+import { countOverlayDraw } from "./stats";
 import type { ScanBackend, ScanPose, SplatRendererKind } from "./types";
 
 const log = createLogger("scan-renderer");
@@ -486,6 +487,7 @@ export class ScanRendererHost {
         streamer.update(view(pose));
       }
       backend.render(pose);
+      countOverlayDraw(canvas, pose.pixelRatio);
       handover.tick(performance.now());
       frames += 1;
     };
@@ -569,15 +571,17 @@ export class ScanRendererHost {
         Cartesian3.clone(camera.directionWC, lastDirection);
       }
       const moving = now - lastMotionAt < MOTION_SETTLE_MS;
+      const ratio = moving
+        ? Math.max(MIN_MOTION_PIXEL_RATIO, pixelRatio * MOTION_RESOLUTION)
+        : pixelRatio;
       backend.render(
         scanPose(camera, toLocal, {
           width: viewer.canvas.clientWidth,
           height: viewer.canvas.clientHeight,
-          pixelRatio: moving
-            ? Math.max(MIN_MOTION_PIXEL_RATIO, pixelRatio * MOTION_RESOLUTION)
-            : pixelRatio,
+          pixelRatio: ratio,
         }),
       );
+      countOverlayDraw(canvas, ratio);
       frames += 1;
     };
     const stopDriving = driveWithGlobe(viewer.scene, viewer.camera, tick);

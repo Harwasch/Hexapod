@@ -19,6 +19,7 @@ import type { TileNode } from "@/view/tiles";
 
 import { INSTANCE_TEXTURE_WIDTH } from "../splatInstances";
 import { idsInResourceOrder, SCAN_INSTANCE_RULE_GLSL, type InstanceStyle } from "./scanInstances";
+import { countOverlayLoopTick } from "./stats";
 import type { ScanBackend, ScanPose } from "./types";
 
 interface Decoded {
@@ -336,6 +337,7 @@ export function createBackend(
       app.destroy();
     },
   };
+  app.on("frameupdate", countOverlayLoopTick);
   app.on("frameend", () => {
     framesDrawn += 1;
     while (doomed[0] && framesDrawn - doomed[0].at >= DESTROY_AFTER_FRAMES) {
