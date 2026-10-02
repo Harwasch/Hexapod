@@ -55,17 +55,14 @@ export function useAgentCommand(): { ask: (text: string) => Promise<void>; busy:
     setPlannerConfigured(planner.data?.provider === "claude");
   }, [planner.data?.provider, setPlannerConfigured]);
   const [busy, setBusy] = useState(false);
-  // Read at call time: a second Enter while the first answer is on its way is dropped.
+  // Read at call time: whether an answer is on its way, and what was asked meanwhile.
   const busyRef = useRef(false);
+  const waiting = useRef<string[]>([]);
 
-  const ask = useCallback(
-    async (text: string) => {
-      const input = text.trim();
-      if (!input || busyRef.current) return;
-      busyRef.current = true;
-      setBusy(true);
+  /** One exchange: the words to the app or the planner, the reply to the agent log. */
+  const answer = useCallback(
+    async (input: string) => {
       const { appendLog } = useMission.getState();
-      appendLog("you", input);
       try {
         const runtime = useLayers.getState().runtime;
         const reply = await runIntent(input, {
@@ -169,12 +166,36 @@ export function useAgentCommand(): { ask: (text: string) => Promise<void>; busy:
         appendLog("agent", reply);
       } catch (error) {
         appendLog("agent", `That didn't work: ${describeError(error)}`);
+      }
+    },
+    [scene, sites.data, layers.data, selectMachine, selectZone],
+  );
+
+  /**
+   * Asks, or, while an answer is on its way, waits its turn: the words are logged at once (the
+   * operator sees they were heard) and answered in order. A second Enter used to be dropped
+   * without a word -- after the command box had already closed and cleared it -- and a
+   * sentence of work keeps the agent busy until its draft is in, so a refinement typed while
+   * the plan was being drafted simply vanished.
+   */
+  const ask = useCallback(
+    async (text: string) => {
+      const input = text.trim();
+      if (!input) return;
+      useMission.getState().appendLog("you", input);
+      waiting.current.push(input);
+      if (busyRef.current) return;
+      busyRef.current = true;
+      setBusy(true);
+      try {
+        for (let next = waiting.current.shift(); next !== undefined; next = waiting.current.shift())
+          await answer(next);
       } finally {
         busyRef.current = false;
         setBusy(false);
       }
     },
-    [scene, sites.data, layers.data, selectMachine, selectZone],
+    [answer],
   );
 
   return { ask, busy };
