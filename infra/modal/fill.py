@@ -84,9 +84,10 @@ fixer_image = (
         "pip install uv==0.8.12",
         f"git clone {COSMOS_REPO} /cosmos && git -C /cosmos checkout {COSMOS_COMMIT}",
         # The repository's locked environment (torch 2.6 cu126, transformer-engine, apex,
-        # flash-attn as prebuilt wheels), into the image's own Python.
+        # flash-attn as prebuilt wheels), into the image's own Python. `--frozen`, not
+        # `--locked`: Modal's PyPI mirror as the default index reads as a stale lock.
         "cd /cosmos && UV_PROJECT_ENVIRONMENT=$(python -c 'import sys; print(sys.prefix)') "
-        "uv sync --locked --inexact --no-install-project --extra cu126",
+        "uv sync --frozen --inexact --no-install-project --extra cu126",
         # Fixer's Dockerfile.cosmos, then its repository at the pinned commit.
         'pip install --no-deps "cosmos-predict2==1.0.9"',
         "pip install lpips natsort",

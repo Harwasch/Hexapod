@@ -58,7 +58,6 @@ app = modal.App(APP_NAME)
 
 WEIGHTS = modal.Volume.from_name("hexapod-world-model-weights", create_if_missing=True)
 HF_SECRET = modal.Secret.from_name("huggingface")
-NGC_SECRET = modal.Secret.from_name("ngc")
 
 FIXER_REPO = "https://github.com/nv-tlabs/Fixer.git"
 FIXER_COMMIT = "b39dfcaf4eeec90dc943b057ff368c16252c6c6e"
@@ -93,13 +92,23 @@ HF_HOME = "/weights/hf"
 
 # --- Fixer ---------------------------------------------------------------------------------
 
+#: cosmos-predict2 at the commit that is its 1.0.9 (what Fixer's Dockerfile pip-installs).
+FIXER_COSMOS_REPO = "https://github.com/nvidia-cosmos/cosmos-predict2.git"
+FIXER_COSMOS_COMMIT = "661da4774b0ca41d082a0ecbeb47550bcf07e03f"
+
+#: Not FIXER_BASE (NGC, needs a key): the environment that container holds, built from
+#: cosmos-predict2's own uv.lock on its Dockerfile's public CUDA base, then Fixer's
+#: Dockerfile lines. The same recipe as `infra/modal/fill.py`, where it was run.
 fixer_image = (
-    modal.Image.from_registry(FIXER_BASE, secret=NGC_SECRET)
+    modal.Image.from_registry("nvidia/cuda:12.6.3-cudnn-devel-ubuntu24.04", add_python="3.10")
+    .apt_install("git", "curl", "ffmpeg", "libgl1", "libglib2.0-0")
     .run_commands(
-        # Fixer's Dockerfile.cosmos, line for line, then its repository at the pinned commit.
+        "pip install uv==0.8.12",
+        f"git clone {FIXER_COSMOS_REPO} /cosmos && git -C /cosmos checkout {FIXER_COSMOS_COMMIT}",
+        "cd /cosmos && UV_PROJECT_ENVIRONMENT=$(python -c 'import sys; print(sys.prefix)') "
+        "uv sync --frozen --inexact --no-install-project --extra cu126",
         'pip install --no-deps "cosmos-predict2==1.0.9"',
-        "pip install lpips vision-aided-loss natsort git+https://github.com/openai/CLIP.git "
-        '"torchmetrics[image]" "huggingface_hub>=0.30"',
+        "pip install lpips natsort",
         f"git clone {FIXER_REPO} /work/fixer && git -C /work/fixer checkout {FIXER_COMMIT}",
     )
     .env({"HF_HOME": HF_HOME})
@@ -110,7 +119,6 @@ fixer_image = (
     image=fixer_image,
     gpu="L40S",
     volumes={"/work/models": WEIGHTS},
-    secrets=[HF_SECRET],
     timeout=1800,
     scaledown_window=300,
 )
@@ -138,6 +146,7 @@ class Fixer:
             dtype=self.dtype,
             compile=False,
         )
+        self.model.set_eval()
 
     @modal.method()
     def fix(self, request: dict) -> dict:
