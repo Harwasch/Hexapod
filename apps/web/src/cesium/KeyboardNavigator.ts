@@ -1,4 +1,4 @@
-import type { Cartesian3, Scene, Viewer } from "cesium";
+import type { Cartesian3, CesiumWidget, Scene } from "cesium";
 
 import { isTyping } from "@/lib/hotkeys";
 
@@ -32,7 +32,7 @@ export class KeyboardNavigator {
   private readonly removeTick: () => void;
 
   constructor(
-    private readonly viewer: Viewer,
+    private readonly viewer: CesiumWidget,
     private readonly camera: CameraController,
   ) {
     this.scene = viewer.scene;

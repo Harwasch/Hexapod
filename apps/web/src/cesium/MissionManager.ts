@@ -12,7 +12,7 @@ import {
   SceneTransforms,
   sampleTerrainMostDetailed,
   type Scene,
-  type Viewer,
+  type CesiumWidget,
 } from "cesium";
 
 import {
@@ -114,7 +114,7 @@ export class MissionManager {
   private readonly scratchToCamera = new Cartesian3();
 
   constructor(
-    private readonly viewer: Viewer,
+    private readonly viewer: CesiumWidget,
     private readonly events: Emitter<SceneEvents>,
     private readonly camera: CameraController,
   ) {

@@ -2,11 +2,11 @@ import {
   Cartesian2,
   type Cartesian3,
   Cartographic,
+  CesiumWidget,
   Color,
   Math as CesiumMath,
   RequestScheduler,
   type Scene,
-  Viewer,
 } from "cesium";
 
 import { Emitter } from "@/lib/emitter";
@@ -64,7 +64,14 @@ const SCAN_FLOORLESS_ALTITUDE_M = 30;
  * destroy once.
  */
 export class CesiumSceneManager {
-  readonly viewer: Viewer;
+  /**
+   * The engine's own widget: canvas, scene, clock, entities and data sources. Named `viewer`
+   * because it used to be one (see the constructor) and because e2e reads
+   * `__twin.viewer.entities` and `.clock`, which the widget has too.
+   */
+  readonly viewer: CesiumWidget;
+  /** `.cesium-viewer`: the widget and its credit bar, removed as one on destroy. */
+  private readonly host: HTMLElement;
   readonly scene: Scene;
   readonly events = new Emitter<SceneEvents>();
   readonly camera: CameraController;
@@ -102,18 +109,21 @@ export class CesiumSceneManager {
   constructor(container: HTMLElement, options: SceneManagerOptions) {
     const tokenState = configureIonToken(options.ionToken);
     this.tokenState = tokenState;
-    this.viewer = new Viewer(container, {
-      animation: false,
-      timeline: false,
-      baseLayerPicker: false,
-      geocoder: false,
-      homeButton: false,
-      sceneModePicker: false,
-      navigationHelpButton: false,
-      fullscreenButton: false,
-      infoBox: false,
-      selectionIndicator: false,
-      vrButton: false,
+    // A `CesiumWidget`, not a `Viewer`. Every one of Viewer's widgets was switched off here, and
+    // since 1.145 the widget itself owns what the app used of Viewer -- entities, data sources,
+    // the clock and its ticking, resizing. Constructing a Viewer is what put `@cesium/widgets`
+    // in the bundle (the widgets, knockout, their view models: 226 kB of the engine chunk, and
+    // widgets.css): code that ran only to build DOM nobody saw. The DOM Viewer did build that the app relies
+    // on is rebuilt here: a `.cesium-viewer` host and, after the widget, the
+    // `.cesium-viewer-bottom` credit bar that CreditSlot moves into the HUD. The host is
+    // removed on destroy, so CreditSlot's cleanup finds the bar's home gone and drops it too.
+    const host = document.createElement("div");
+    host.className = "cesium-viewer";
+    container.appendChild(host);
+    this.host = host;
+    const credits = document.createElement("div");
+    credits.className = "cesium-viewer-bottom";
+    this.viewer = new CesiumWidget(host, {
       scene3DOnly: true,
       shouldAnimate: true,
       baseLayer: false,
@@ -133,7 +143,9 @@ export class CesiumSceneManager {
       // Hosting it on <body> takes it out of that context; `app.css` then puts it on the
       // sheet layer and dresses it in the glass material.
       creditViewport: document.body,
+      creditContainer: credits,
     });
+    host.appendChild(credits);
     this.scene = this.viewer.scene;
     const scene = this.scene;
     // Before any tileset can load. The interception only sees `generateFromAttributes` calls
@@ -448,6 +460,7 @@ export class CesiumSceneManager {
     this.camera.destroy();
     this.events.clear();
     if (!this.viewer.isDestroyed()) this.viewer.destroy();
+    this.host.remove();
     log.info("viewer destroyed");
   }
 }

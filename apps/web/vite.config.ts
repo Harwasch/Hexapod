@@ -7,8 +7,12 @@ import { defineConfig, type Plugin } from "vite";
 
 const cesiumSource = fileURLToPath(new URL("./node_modules/cesium/Build/Cesium", import.meta.url));
 const CESIUM_BASE_URL = "/cesium/";
-/** CesiumJS's static build directories the app loads at runtime through CESIUM_BASE_URL. */
-const CESIUM_STATIC_DIRS = ["Workers", "ThirdParty", "Assets", "Widgets"];
+/**
+ * CesiumJS's static build directories the app loads at runtime through CESIUM_BASE_URL. Not
+ * `Widgets`: only `@cesium/widgets` reads from it (InfoBox, picker icons), and the scene runs on
+ * the engine's `CesiumWidget` without any of them (CesiumSceneManager).
+ */
+const CESIUM_STATIC_DIRS = ["Workers", "ThirdParty", "Assets"];
 
 const MIME: Record<string, string> = {
   ".js": "text/javascript",

@@ -6,7 +6,7 @@ import {
   Ray,
   Transforms,
   type Scene,
-  type Viewer,
+  type CesiumWidget,
 } from "cesium";
 
 import type { Emitter } from "@/lib/emitter";
@@ -104,7 +104,7 @@ export class ExploreController {
   private readonly toLocal = new Matrix4();
 
   constructor(
-    private readonly viewer: Viewer,
+    private readonly viewer: CesiumWidget,
     private readonly events: Emitter<SceneEvents>,
   ) {
     this.scene = viewer.scene;

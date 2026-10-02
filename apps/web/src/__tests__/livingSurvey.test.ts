@@ -45,7 +45,7 @@ import {
 } from "./splatFixture";
 import { buildDrawCommand, fakeFactory, FakeHookedSinglePrimitive } from "./splatGpuFixture";
 
-import { JulianDate, type Viewer } from "cesium";
+import { JulianDate, type CesiumWidget } from "cesium";
 
 const BREEZE: WindSettings = { strength: 0.6, bearingDeg: 250 };
 const ASSET_ID = "asset-tree";
@@ -122,7 +122,7 @@ function createHarness(options: HarnessOptions = {}) {
   events.on("toast", (toast) => toasts.push(toast));
 
   const manager = new LivingSurveyManager(
-    viewer as unknown as Viewer,
+    viewer as unknown as CesiumWidget,
     events,
     sites as unknown as SiteManager,
     performance as unknown as PerformanceManager,

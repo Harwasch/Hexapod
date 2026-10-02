@@ -8,7 +8,7 @@ import {
   type Cesium3DTileset,
   type Rectangle,
   type Scene,
-  type Viewer,
+  type CesiumWidget,
   type Cesium3DTile,
   sampleTerrainMostDetailed,
 } from "cesium";
@@ -191,7 +191,7 @@ export class SiteManager {
   private lastProximityCheck = 0;
 
   constructor(
-    private readonly viewer: Viewer,
+    private readonly viewer: CesiumWidget,
     private readonly events: Emitter<SceneEvents>,
     private readonly camera: CameraController,
     private readonly clipping: ClippingManager,

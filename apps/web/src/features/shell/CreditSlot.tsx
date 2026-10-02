@@ -16,7 +16,7 @@ export function CreditSlot() {
   const slot = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const host = slot.current;
-    const credits = scene?.viewer.bottomContainer as HTMLElement | undefined;
+    const credits = scene?.viewer.creditContainer as HTMLElement | undefined;
     if (!host || !credits) return;
     const home = credits.parentElement;
     host.appendChild(credits);

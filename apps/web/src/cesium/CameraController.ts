@@ -12,7 +12,7 @@ import {
   Math as CesiumMath,
   Rectangle,
   type Scene,
-  type Viewer,
+  type CesiumWidget,
 } from "cesium";
 
 import type { CameraBookmark } from "@twin/contracts";
@@ -150,7 +150,7 @@ export class CameraController {
   private hinted = false;
 
   constructor(
-    private readonly viewer: Viewer,
+    private readonly viewer: CesiumWidget,
     private readonly events: Emitter<SceneEvents>,
   ) {
     this.scene = viewer.scene;

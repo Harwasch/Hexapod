@@ -13,7 +13,7 @@ import {
   ScreenSpaceEventType,
   sampleTerrainMostDetailed,
   type Scene,
-  type Viewer,
+  type CesiumWidget,
 } from "cesium";
 
 import type { Site } from "@twin/contracts";
@@ -68,18 +68,16 @@ export class SelectionManager {
   private hoverEnabled = true;
 
   constructor(
-    private readonly viewer: Viewer,
+    private readonly viewer: CesiumWidget,
     private readonly events: Emitter<SceneEvents>,
     private readonly camera: CameraController,
     private readonly layers: LayerManager,
     private readonly sites: SiteManager,
   ) {
     this.scene = viewer.scene;
-    // Cesium's default double-click "track entity" behaviour would fight our navigation.
-    viewer.cesiumWidget.screenSpaceEventHandler.removeInputAction(
-      ScreenSpaceEventType.LEFT_DOUBLE_CLICK,
-    );
-    viewer.cesiumWidget.screenSpaceEventHandler.removeInputAction(ScreenSpaceEventType.LEFT_CLICK);
+    // The clicks are ours alone. `Viewer` installed select-on-click and track-on-double-click,
+    // which fought this navigation and were removed here; the `CesiumWidget` the scene now runs
+    // on installs no input actions at all, so there is nothing left to take away.
     this.handler = new ScreenSpaceEventHandler(viewer.canvas);
     this.handler.setInputAction((event: ScreenSpaceEventHandler.PositionedEvent) => {
       if (this.enabled) void this.select(event.position);

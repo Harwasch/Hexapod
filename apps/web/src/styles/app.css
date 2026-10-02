@@ -1,4 +1,9 @@
-@import "cesium/Build/Cesium/Widgets/widgets.css";
+/* The engine widget's own rules (canvas sizing, `touch-action: none`, credits, the error panel)
+   and the shared ones its performance overlay uses -- not `widgets.css`, which is those plus
+   every Viewer widget's styles (timeline, animation, pickers, inspectors), 30 kB of rules for
+   DOM this app never builds since the scene runs on a `CesiumWidget` (CesiumSceneManager). */
+@import "cesium/Build/Cesium/Widgets/CesiumWidget/CesiumWidget.css";
+@import "cesium/Build/Cesium/Widgets/shared.css";
 @import "@twin/ui/styles.css";
 @import "./mission.css";
 
@@ -66,8 +71,9 @@ a {
 /* The data credits. `CreditSlot` moves Cesium's credit container out of the widget and into
    the HUD's bottom bar, so it is laid out like any other surface instead of being chased with
    offsets. It stays a chip: the one thing that ever bloated it, CesiumJS's default-token
-   advice, is demoted into the "Data attribution" dialog in `cesium/ion.ts`. Viewer.resize()
-   still writes inline left/bottom/right on the element, so the reset wins with !important. */
+   advice, is demoted into the "Data attribution" dialog in `cesium/ion.ts`. The bar is the
+   `.cesium-viewer-bottom` CesiumSceneManager makes as the widget's credit container; the
+   resets stay !important so no engine rule for the class can pull it back over the globe. */
 .credit-slot {
   display: flex;
   flex: none;

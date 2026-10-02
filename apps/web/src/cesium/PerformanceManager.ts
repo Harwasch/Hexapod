@@ -1,4 +1,4 @@
-import type { PostProcessStage, Scene, Viewer } from "cesium";
+import type { CesiumWidget, PostProcessStage, Scene } from "cesium";
 
 import { isHandheld } from "@/lib/detail";
 import type { Emitter } from "@/lib/emitter";
@@ -392,7 +392,7 @@ export class PerformanceManager {
   private readonly constrained = constrainedDevice();
 
   constructor(
-    private readonly viewer: Viewer,
+    private readonly viewer: CesiumWidget,
     private readonly events: Emitter<SceneEvents>,
   ) {
     this.scene = viewer.scene;

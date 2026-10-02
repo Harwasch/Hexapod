@@ -32,7 +32,7 @@ import {
   type Cesium3DTileset,
   type HeadingPitchRange,
   type Scene,
-  type Viewer,
+  type CesiumWidget,
 } from "cesium";
 
 import { deviceSplatBudget, deviceSplatCeiling, isHandheld } from "@/lib/detail";
@@ -279,7 +279,7 @@ export function destinationPose(scene: Scene, destination: ScanDestination): Cam
 }
 
 type HostViewer = Pick<
-  Viewer,
+  CesiumWidget,
   "camera" | "canvas" | "scene" | "resolutionScale" | "useBrowserRecommendedResolution"
 >;
 

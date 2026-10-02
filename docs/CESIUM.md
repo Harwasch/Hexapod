@@ -6,9 +6,22 @@ Sandcastle sources. Everything below was verified against that version.
 
 ## Viewer setup
 
-`CesiumSceneManager` creates one `Viewer` with every stock widget disabled, `scene3DOnly`,
-`baseLayer: false` (imagery is a catalog layer), MSAA off until the still frame is sharpened, `depthTestAgainstTerrain`
-and a WebGL2 context. The credit display is restyled into a glass chip but never hidden;
+`CesiumSceneManager` creates one `CesiumWidget` — the engine's own widget, not `Viewer` — with
+`scene3DOnly`, `baseLayer: false` (imagery is a catalog layer), MSAA off until the still frame is
+sharpened, `depthTestAgainstTerrain` and a WebGL2 context. Every one of `Viewer`'s widgets was
+switched off, and since 1.145 the widget owns everything the app used of `Viewer` (entities,
+data sources, the clock, resizing), so constructing a `Viewer` only bought `@cesium/widgets`
+and its stylesheet: 226 kB of the engine chunk and 21 kB of CSS. The scene manager rebuilds the
+two pieces of `Viewer`'s DOM the app relies on, the `.cesium-viewer` host and the
+`.cesium-viewer-bottom` credit bar, and the `Widgets/` static directory is no longer deployed.
+The globe's other managers take a `CesiumWidget`; the field is still called `viewer`.
+
+The splat hooks reach engine internals the typings do not declare (`GaussianSplatPrimitive`,
+`GltfSpzLoader`, `Texture`, …). They import them by name, declared `unknown` in
+`cesium/undeclared.d.ts`, never through `import * as Cesium`: a namespace read by key keeps
+every export of the engine in the bundle (653 kB of it, measured).
+
+The credit display is restyled into a glass chip but never hidden;
 provider credits stay visible, and the chip's **Data attribution** link opens CesiumJS's
 dialog with the full list. That dialog is hosted on `<body>` (`creditViewport`) so it can sit
 on the sheet layer instead of inside `.viewport`, which is pinned below the HUD.
