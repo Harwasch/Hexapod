@@ -80,7 +80,9 @@ def ping(url: str, body: str = "", *, sender: Sender = send) -> threading.Thread
         try:
             sender(url, body[:BODY_LIMIT])
         except Exception as error:
-            log.warning("worker: ping to %s failed: %r", _redacted(url), error)
+            # The kind of failure, not its message: an httpx error's message can name the
+            # URL it was sent to, and the path of a check URL is its secret.
+            log.warning("worker: ping to %s failed: %s", _redacted(url), type(error).__name__)
 
     thread = threading.Thread(target=run, name="ping", daemon=True)
     thread.start()

@@ -67,7 +67,10 @@ from app.db import get_session_factory
 from app.models import Job
 from app.models.enums import RunStatus
 
-log = logging.getLogger("app.worker_wake")
+# Under `twin`, the API's own logger hierarchy (app/observability.py), so its INFO lines --
+# which machines a queued job started -- are written. As `app.worker_wake` it sat outside
+# it, at the libraries' WARNING, and every one of them was dropped.
+log = logging.getLogger("twin.worker_wake")
 
 #: Fly's Machines API. The app is named in the path; the token decides what it may do.
 FLY_MACHINES_API = "https://api.machines.dev/v1"
@@ -158,12 +161,14 @@ def wake_workers(
                 try:
                     client.post(f"/apps/{app_name}/machines/{machine_id}/start").raise_for_status()
                 except httpx.HTTPError as error:
-                    log.warning("wake: could not start worker machine %s: %s", machine_id, error)
+                    log.warning(
+                        "wake: could not start worker machine %s: %s", machine_id, _why(error)
+                    )
                     continue
                 started.append(machine_id)
     except (httpx.HTTPError, ValueError) as error:
         # ValueError: a body that is not the JSON the API documents.
-        log.warning("wake: could not list app %s's machines: %s", app_name, error)
+        log.warning("wake: could not list app %s's machines: %s", app_name, _why(error))
         return None
     if started:
         log.info("wake: started worker machine(s) %s for a queued job", ", ".join(started))
@@ -191,8 +196,16 @@ def ping_queue_check(
     try:
         with httpx.Client(timeout=TIMEOUT_S, transport=transport) as client:
             client.get(f"{url.rstrip('/')}/start").raise_for_status()
+    except httpx.HTTPStatusError as error:
+        # Never the error itself: httpx puts the URL in its message, and a check URL is a
+        # secret -- whoever has it can ping the check, or silence it.
+        log.warning(
+            "wake: the queue check did not take the start ping: HTTP %d",
+            error.response.status_code,
+        )
+        return False
     except httpx.HTTPError as error:
-        log.warning("wake: the queue check did not take the start ping: %s", error)
+        log.warning("wake: the queue check did not take the start ping: %s", type(error).__name__)
         return False
     return True
 
@@ -217,6 +230,17 @@ def job_running(settings: Settings) -> bool:
     except SQLAlchemyError as error:
         log.warning("wake: could not tell whether a job is running: %s", type(error).__name__)
         return False
+
+
+def _why(error: Exception) -> str:
+    """What went wrong, without the request: a status, or the error's kind and message for
+    anything that is not an HTTP answer. The Machines API's URLs carry nothing secret, but
+    one place to say so is better than trusting every message httpx may ever write."""
+    if isinstance(error, httpx.HTTPStatusError):
+        return f"HTTP {error.response.status_code}"
+    if isinstance(error, httpx.HTTPError):
+        return type(error).__name__
+    return f"{type(error).__name__}: {error}"
 
 
 def _authorization(token: str) -> str:

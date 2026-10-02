@@ -22,13 +22,17 @@ What `configure_logging` sets up, once per process however many apps are created
 **Nothing secret is written.** Every line goes through `Redactor` before it leaves: bearer
 credentials, phone-handoff tokens, the query string of a presigned URL (its signature *is*
 the credential, for an hour), PBKDF2 hashes, and the literal values of every secret this
-process was configured with. A log line is read by more people, and kept longer, than any
-credential is meant to be.
+process was configured with -- tokens and keys, the database's password, and the two
+healthchecks.io URLs, whose path *is* their secret (whoever has one can ping the check, or
+keep it quiet). A log line is read by more people, and kept longer, than any credential
+is meant to be.
 
 Sentry is opt-in: `init_sentry` does nothing, and imports nothing, unless `SENTRY_DSN` is
 set. When it is, it is configured not to send what logs do not either -- no request
 bodies, no stack-frame locals (a `Settings` object in a frame is every secret this API
-has), and every message and breadcrumb through the same `Redactor`.
+has), and every message and breadcrumb through the same `Redactor` -- a breadcrumb's
+`data` too, where sentry-sdk's httpx and stdlib integrations put the URL of every outgoing
+request (a queue-check ping's URL among them).
 """
 
 from __future__ import annotations
@@ -40,6 +44,10 @@ import sys
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from typing import Any, TextIO
+from urllib.parse import urlsplit
+
+from sqlalchemy.engine import make_url
+from sqlalchemy.exc import ArgumentError
 
 from app.config import Settings
 
@@ -75,6 +83,10 @@ class Redactor:
 
     @classmethod
     def for_settings(cls, settings: Settings) -> Redactor:
+        """Every secret `settings` holds. Four were missing until the 2026-10 review:
+        the Fly token, the database's password, and the two check URLs -- the queue
+        check's was in the log in full whenever its ping failed (httpx's message names
+        the URL it was asked for)."""
         return cls(
             [
                 settings.api_write_token,
@@ -85,6 +97,10 @@ class Redactor:
                 settings.anthropic_api_key,
                 settings.cesium_ion_server_token,
                 settings.sentry_dsn,
+                *_token_parts(settings.fly_api_token),
+                *_database_password(settings.database_url),
+                *_url_secrets(settings.worker_heartbeat_url),
+                *_url_secrets(settings.queue_check_url),
             ]
         )
 
@@ -96,6 +112,47 @@ class Redactor:
         text = _HANDOFF.sub(f"h1.{REDACTED}", text)
         text = _PBKDF2.sub(f"pbkdf2_sha256${REDACTED}", text)
         return _URL_WITH_QUERY.sub(_strip_signed_query, text)
+
+
+def _token_parts(token: str | None) -> list[str]:
+    """A Fly token as it may be printed: whole (`FlyV1 fm2_a,fm2_b`), without its scheme,
+    and each macaroon in it on its own."""
+    if not token:
+        return []
+    whole = token.strip()
+    bare = whole.removeprefix("FlyV1 ").strip()
+    return [whole, bare, *(part.strip() for part in bare.split(","))]
+
+
+def _database_password(url: str | None) -> list[str]:
+    """The password in `DATABASE_URL`, as written (URL-encoded) and as the driver uses it."""
+    if not url:
+        return []
+    try:
+        decoded = make_url(url).password
+    except (ArgumentError, ValueError):
+        decoded = None
+    try:
+        encoded = urlsplit(url).password
+    except ValueError:
+        encoded = None
+    return [str(value) for value in (decoded, encoded) if value]
+
+
+def _url_secrets(url: str | None) -> list[str]:
+    """A check URL whose path is the secret: the path, wherever it appears -- in the whole
+    URL or in a line that names only the request's path -- so the host stays readable
+    (`https://hc-ping.com/[redacted]/start`). A path too short to redact safely is no
+    secret worth the name, and the whole URL is redacted instead."""
+    if not url:
+        return []
+    stripped = url.strip().rstrip("/")
+    try:
+        parts = urlsplit(stripped)
+    except ValueError:
+        return [stripped]
+    path = parts.path.strip("/")
+    return [path] if len(path) >= _MIN_SECRET_LENGTH and not parts.query else [stripped]
 
 
 def _strip_signed_query(match: re.Match[str]) -> str:
@@ -246,9 +303,7 @@ def init_sentry(settings: Settings) -> bool:
         return _redact_event(event, redact)
 
     def before_breadcrumb(crumb: Any, _hint: Any) -> Any:
-        if isinstance(crumb.get("message"), str):
-            crumb["message"] = redact(crumb["message"])
-        return crumb
+        return _redact_breadcrumb(crumb, redact)
 
     sentry_sdk.init(
         dsn=dsn,
@@ -264,6 +319,21 @@ def init_sentry(settings: Settings) -> bool:
     )
     _sentry_dsn = dsn
     return True
+
+
+def _redact_breadcrumb(crumb: dict[str, Any], redact: Redactor) -> dict[str, Any]:
+    """A breadcrumb's message, and every string in its `data`: an httpx breadcrumb is
+    `{"type": "http", "data": {"url": ..., "http.query": ...}}`, and that URL is whatever
+    the request went to -- a check URL that is a secret, a presigned URL that is a
+    credential for an hour."""
+    if isinstance(crumb.get("message"), str):
+        crumb["message"] = redact(crumb["message"])
+    data = crumb.get("data")
+    if isinstance(data, dict):
+        for key, value in data.items():
+            if isinstance(value, str):
+                data[key] = redact(value)
+    return crumb
 
 
 def _redact_event(event: dict[str, Any], redact: Redactor) -> dict[str, Any]:
@@ -286,4 +356,11 @@ def _redact_event(event: dict[str, Any], redact: Redactor) -> dict[str, Any]:
             request["query_string"] = REDACTED
         if isinstance(request.get("url"), str):
             request["url"] = redact(request["url"])
+    # Breadcrumbs pass through `before_breadcrumb` when they are recorded; the copies on
+    # the event are redacted again, so nothing depends on that having happened.
+    crumbs = event.get("breadcrumbs")
+    values = crumbs.get("values") if isinstance(crumbs, dict) else crumbs
+    for crumb in values if isinstance(values, list) else []:
+        if isinstance(crumb, dict):
+            _redact_breadcrumb(crumb, redact)
     return event

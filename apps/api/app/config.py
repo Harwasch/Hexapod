@@ -237,7 +237,7 @@ class Settings(BaseSettings):
     # A healthchecks.io-style check URL. Queueing a job onto an idle worker pings
     # `<url>/start` (not while one is running: the job waits for it); the worker pings
     # `<url>` when it claims one, so a job queued and never claimed raises an alert. A long
-    # period (30 days), a grace longer than a cold start (10 min).
+    # period (30 days), a grace longer than a cold start (10 min). A secret: logs redact it.
     queue_check_url: str | None = None
 
     api_host: str = "0.0.0.0"  # noqa: S104 - container default, documented in DEPLOYMENT.md

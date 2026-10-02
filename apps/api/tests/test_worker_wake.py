@@ -9,6 +9,7 @@ they ask: after a job is committed, and not after a request that queued nothing.
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta
@@ -26,6 +27,7 @@ from app.main import create_app
 from app.models import Capture, Job
 from app.models.capture import CaptureFile
 from app.models.enums import CaptureKind, RunStatus, UploadStatus
+from app.observability import configure_logging
 from app.services import phone_key, worker_wake
 from app.services.worker_wake import Wake, after_enqueue, wake_workers
 from tests.conftest import TEST_DATABASE_URL
@@ -200,6 +202,37 @@ def test_the_queue_check_gets_its_start_ping() -> None:
         running=idle,
     )
     assert [str(r.url) for r in only.requests] == ["https://hc-ping.com/abc/start"]
+
+
+def test_a_queue_check_that_fails_is_logged_without_its_url(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The check URL's path is its secret, and httpx's own message names the URL. The log
+    says what happened -- a status, or the kind of failure -- and never where."""
+    monkeypatch.setattr(worker_wake.log, "disabled", False)
+    secret = "7c1e2d3f-4a5b-6c7d-8e9f-a0b1c2d3e4f5"
+    settings = fly_settings(fly_api_token=None, queue_check_url=f"https://hc-ping.com/{secret}")
+    refused = httpx.MockTransport(lambda request: httpx.Response(404, text="not found"))
+
+    def unreachable(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError(f"cannot reach {request.url}", request=request)
+
+    with caplog.at_level(logging.WARNING, logger=worker_wake.log.name):
+        assert not worker_wake.ping_queue_check(settings, transport=refused, running=idle)
+        assert not worker_wake.ping_queue_check(
+            settings, transport=httpx.MockTransport(unreachable), running=idle
+        )
+    assert "HTTP 404" in caplog.text and "ConnectError" in caplog.text
+    assert secret not in caplog.text
+
+
+def test_the_wake_logs_under_the_apis_own_loggers(capsys: pytest.CaptureFixture[str]) -> None:
+    """`twin.*` is what `configure_logging` lets through at INFO. As `app.worker_wake` the
+    line saying which machines a queued job started was dropped, every time."""
+    assert worker_wake.log.name.startswith("twin.")
+    configure_logging(Settings(log_format="text", log_level="INFO"))
+    wake_workers(fly_settings(), transport=FakeFly([machine("w1", "stopped")]).transport)
+    assert "started worker machine(s) w1" in capsys.readouterr().err
 
 
 def test_a_job_queued_behind_a_running_one_does_not_start_the_queue_check() -> None:

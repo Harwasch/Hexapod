@@ -1024,9 +1024,13 @@ default. Nothing in `fly.toml` needs to change.
 **No line carries a credential.** Every line is redacted before it is written: `Bearer`
 values, phone-handoff tokens (`h1.…`), the query string of any presigned URL (its signature
 is a working credential for an hour), PBKDF2 hashes, and the literal value of every secret
-the process was configured with. Sentry gets the same treatment, and is configured with no
-request bodies and no stack-frame locals — a frame holding `Settings` holds every secret
-the API has.
+the process was configured with — `FLY_API_TOKEN`, the password in `DATABASE_URL`, and the
+path of `WORKER_HEARTBEAT_URL` and `QUEUE_CHECK_URL` (whoever has a check's URL can ping it,
+or keep it quiet) among them. Sentry gets the same treatment, breadcrumbs' `data` included
+(its httpx integration records every outgoing request's URL there), and is configured with
+no request bodies and no stack-frame locals — a frame holding `Settings` holds every secret
+the API has. The wake-up code logs as `twin.worker_wake`, so its INFO lines (which worker
+machines a queued job started) are written; as `app.worker_wake` they were dropped.
 
 **A 422 is the caller's fault and a 500 is ours.** Only deliberate validation failures
 (`InvalidInputError` in `app/services/errors.py`, URL checks, request validation) are

@@ -7,6 +7,7 @@ import logging
 import sys
 from typing import Any
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -51,6 +52,57 @@ def test_redactor_strips_credentials_by_shape_and_by_value() -> None:
     assert "https://x.dev/a.json?v=2" in text
     # Too short to be a real secret; replacing it would mangle ordinary words.
     assert "short" in redact("a short line")
+
+
+def test_every_secret_in_the_settings_is_redacted_by_value() -> None:
+    """The four the 2026-10 review found missing: the Fly token, the database's password,
+    and the two check URLs, whose path is the secret."""
+    fly = "FlyV1 fm2_lJPECAAAAAAAAMqEcEmZzeXBlcg==,fm2_lJPETnZpFJ0eXBlcg=="
+    settings = Settings(
+        fly_api_token=fly,
+        database_url="postgresql+psycopg://twin:s3cret%40pass-word@db.neon.tech/twin",
+        worker_heartbeat_url="https://hc-ping.com/1f3a6c2e-9d1b-4e7a-8c55-0b2d4f6a8e10",
+        queue_check_url="https://hc-ping.com/7c1e2d3f-4a5b-6c7d-8e9f-a0b1c2d3e4f5/",
+    )
+    redact = Redactor.for_settings(settings)
+    text = redact(
+        f"token {fly}; bare fm2_lJPETnZpFJ0eXBlcg==; "
+        "connect postgresql+psycopg://twin:s3cret%40pass-word@db.neon.tech/twin "
+        "password s3cret@pass-word; "
+        "Client error '404 Not Found' for url "
+        "'https://hc-ping.com/7c1e2d3f-4a5b-6c7d-8e9f-a0b1c2d3e4f5/start'; "
+        "POST /1f3a6c2e-9d1b-4e7a-8c55-0b2d4f6a8e10/fail"
+    )
+    for secret in (
+        "fm2_lJPECAAAAAAAAMqEcEmZzeXBlcg==",
+        "fm2_lJPETnZpFJ0eXBlcg==",
+        "s3cret",
+        "7c1e2d3f-4a5b-6c7d-8e9f-a0b1c2d3e4f5",
+        "1f3a6c2e-9d1b-4e7a-8c55-0b2d4f6a8e10",
+    ):
+        assert secret not in text, secret
+    # Which host and which database are not secrets, and stay readable.
+    assert "db.neon.tech/twin" in text and "hc-ping.com" in text
+
+
+def test_a_failed_worker_ping_logs_neither_its_url_nor_the_errors_message(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The worker's logs are not run through `Redactor` (its own process, its own
+    logging), so a ping that fails names the host and the kind of failure, and nothing an
+    httpx message may carry of the URL."""
+    from app.worker import alerts
+
+    monkeypatch.setattr(alerts.log, "disabled", False)
+    secret = "1f3a6c2e-9d1b-4e7a-8c55-0b2d4f6a8e10"
+
+    def fails(url: str, _body: str) -> None:
+        raise httpx.ConnectError(f"cannot reach {url}")
+
+    with caplog.at_level(logging.WARNING, logger=alerts.log.name):
+        alerts.ping(f"https://hc-ping.com/{secret}/start", sender=fails).join()
+    assert "hc-ping.com" in caplog.text and "ConnectError" in caplog.text
+    assert secret not in caplog.text
 
 
 def test_json_lines_carry_level_logger_extras_and_no_secrets() -> None:
@@ -182,3 +234,29 @@ def test_sentry_starts_with_a_dsn_and_sends_no_secrets(monkeypatch: pytest.Monke
     assert "deadbeef" not in json.dumps(event)
     crumb = options["before_breadcrumb"]({"message": f"Bearer {WRITE_TOKEN}"}, {})
     assert WRITE_TOKEN not in crumb["message"]
+
+
+def test_a_breadcrumbs_data_is_redacted_too(monkeypatch: pytest.MonkeyPatch) -> None:
+    """sentry-sdk's httpx integration records every outgoing request as a breadcrumb with
+    its URL in `data`: a presigned URL, or the queue check's, whose path is its secret."""
+    import sentry_sdk
+
+    calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(sentry_sdk, "init", lambda **kwargs: calls.append(kwargs))
+    monkeypatch.setattr(observability, "_sentry_dsn", None)
+    check = "https://hc-ping.com/7c1e2d3f-4a5b-6c7d-8e9f-a0b1c2d3e4f5"
+    init_sentry(Settings(sentry_dsn="https://public@o0.ingest.sentry.io/2", queue_check_url=check))
+    options = calls[0]
+
+    def http(url: str) -> dict[str, Any]:
+        return {"type": "http", "category": "httplib", "data": {"url": url, "method": "GET"}}
+
+    crumb = options["before_breadcrumb"](http(f"{check}/start"), {})
+    assert "7c1e2d3f" not in json.dumps(crumb)
+    assert crumb["data"]["method"] == "GET"
+    signed = options["before_breadcrumb"](http(PRESIGNED), {})
+    assert "deadbeef" not in json.dumps(signed)
+
+    # And the copies an event carries, whether or not they came through the hook.
+    event = options["before_send"]({"breadcrumbs": {"values": [http(f"{check}/fail")]}}, {})
+    assert "7c1e2d3f" not in json.dumps(event)
