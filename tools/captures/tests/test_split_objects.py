@@ -367,6 +367,87 @@ def test_a_split_tileset_can_be_split_again(result, tmp_path: Path) -> None:
         so.split(split.out_dir, tmp_path / "twice", ids=[SHRUB_ID])
 
 
+class _ChainedPainter:
+    """A stand-in generative filler: paints what it is asked in one colour, reads a context,
+    and asks to see the earlier views' fill (`chain_views`)."""
+
+    name = "painter"
+    chain_views = True
+
+    def __init__(self) -> None:
+        self.context: dict | None = None
+        self.asked: list[int] = []
+        self.received: list[dict] = []
+
+    def fill(self, rgb: np.ndarray, mask: np.ndarray) -> list[np.ndarray]:
+        self.asked.append(int(mask.sum()))
+        self.received.append({"model": "painter"})
+        return [np.where(mask[..., None], np.array([200, 40, 40], np.uint8), rgb)]
+
+
+def test_a_generative_filler_is_told_the_surroundings_and_chains_its_views(
+    scan: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import teacher_fill as tf
+
+    painter = _ChainedPainter()
+    monkeypatch.setattr(tf, "make_filler", lambda spec: painter)
+    save = tmp_path / "strips"
+    split = so.split(
+        scan,
+        tmp_path / "out",
+        ids=[SHRUB_ID],
+        fill=so.fill_holes("painter", views=4, save_dir=save, **SIZE),
+    )
+    report = split.report["fills"][str(SHRUB_ID)]
+    # Told what is around the hole (the lawn), never to paint the shrub back.
+    assert painter.context == report["context"]
+    assert "ground" in report["context"]["labels"]
+    assert "shrub" not in report["context"]["labels"]
+    assert report["context"]["negative"] == "shrub"
+    assert len(report["fillerCalls"]) == 4
+    # The first view paints its whole hole; later ones only what the earlier fills, lifted
+    # and re-rendered, do not already cover -- but each lifts its whole hole.
+    through = [v["throughPx"] for v in report["views"]]
+    assert painter.asked[0] == through[0]
+    assert sum(painter.asked[1:]) < 0.8 * sum(through[1:])
+    assert all(v["accepted"] for v in report["views"])
+    assert report["heldOut"]["coveredAfter"] > 0.8
+    # The held-out strip: as it was | without | filled | the object moved aside.
+    from PIL import Image
+
+    strip = Image.open(save / str(SHRUB_ID) / "held-out.png")
+    assert strip.size == (4 * SIZE["width"], SIZE["height"])
+
+
+def test_describe_surroundings_names_the_neighbours_by_footprint_not_the_object() -> None:
+    import teacher_fill as tf
+
+    def inst(k: int, label: str, low: list[float], high: list[float], splats: int) -> dict:
+        return {
+            "id": k,
+            "splats": splats,
+            "bounds": {"min": low, "max": high},
+            "tags": [{"label": label, "score": 0.5}],
+        }
+
+    instances = [
+        inst(1, "pumpkin", [-50, -50, 0], [50, 50, 2], 100_000),  # scene-wide, mostly elsewhere
+        inst(2, "straw", [-1, -1, 0], [1, 1, 0.3], 5_000),
+        inst(3, "pumpkin", [-0.5, -0.5, 0], [0.5, 0.5, 1], 20_000),  # the object
+        inst(4, "dirt", [-2, -2, 0], [0, 0, 0.2], 3_000),
+        inst(5, "moss", [-0.2, -0.2, 0], [0.2, 0.2, 0.1], 50),  # a fragment
+        inst(6, "branch", [-1, -1, 3], [1, 1, 4], 9_000),  # above the region
+    ]
+    out = tf.describe_surroundings(
+        instances, np.array([-1.0, -1, -0.5]), np.array([1.0, 1, 0.3]), object_ids=[3],
+        exclude_ids=[5],
+    )  # fmt: skip
+    assert out["labels"] == ["straw", "dirt"]
+    assert out["negative"] == "pumpkin"
+    assert out["prompt"].startswith("Straw and dirt, the bare ground seen from above")
+
+
 def test_skins_are_rebound_with_the_tiles(tmp_path: Path) -> None:
     """The committed yard with its skins linked: splitting a skinned shrub keeps every other
     tile's skin rows and the changed tiles' rows for what stayed."""

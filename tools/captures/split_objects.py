@@ -776,6 +776,27 @@ def _write_tileset(
 # ------------------------------------------------------------------------------- the fill
 
 
+def hole_context(
+    instances: Sequence[dict], positions: np.ndarray, obj: SplitObject
+) -> dict[str, object]:
+    """What a generative filler is told about an object's hole: the tags of what lies around
+    its footprint at its base (`teacher_fill.describe_surroundings` over the box the support
+    plane is fitted in), never its own or its fragments' (they are the negative prompt)."""
+    import teacher_fill as tf
+
+    low, high = positions.min(axis=0), positions.max(axis=0)
+    centre, half = (low + high) / 2, float(np.max(high - low)) / 2
+    reach = tf.SURROUND_SCALE * half
+    box_low = np.array([centre[0] - reach, centre[1] - reach, low[2] - half])
+    box_high = np.array(
+        [centre[0] + reach, centre[1] + reach, low[2] + tf.HOLE_BASE_SHARE * (high[2] - low[2])]
+    )
+    fragments = sorted(int(k) for k in np.unique(obj.labels) if k > 0)
+    return tf.describe_surroundings(
+        instances, box_low, box_high, object_ids=obj.choice.ids, exclude_ids=fragments
+    )
+
+
 def fill_holes(
     filler_spec: str = "telea",
     *,
@@ -805,6 +826,7 @@ def fill_holes(
             kept = kept.take(np.flatnonzero(kept.scales.max(axis=1) <= max_scale_m))
         grid = vc.cone_grid_from_tileset(scene_tileset)
         filler = tf.make_filler(filler_spec)
+        instances = tf.read_instances(scene_tileset)
         runner = None
         if distill:
             runner = tf._distill_runner(distill_on)
@@ -812,6 +834,9 @@ def fill_holes(
             columns = unpack_spz(write_spz(obj.scene_spz()))
             removed: Splats = _from_columns(columns)
             save = save_dir / str(obj.choice.instance) if save_dir else None
+            context = None
+            if hasattr(filler, "context"):
+                context = hole_context(instances, removed.positions, obj)
             lifted, confidence, cameras, report = tf.fill_hole(
                 kept,
                 removed,
@@ -825,6 +850,7 @@ def fill_holes(
                 save_dir=save,
                 distill_iterations=distill,
                 distill_runner=runner,
+                context=context,
             )
             obj.fill = {"report": report}
             if len(lifted) == 0:

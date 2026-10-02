@@ -72,6 +72,7 @@ __all__ = [
     "InpaintFiller",
     "clean_mask",
     "condition",
+    "describe_surroundings",
     "drop_and_fill",
     "fill_hole",
     "fill_scan",
@@ -81,6 +82,7 @@ __all__ = [
     "make_renderer",
     "package_inferred",
     "plan_views",
+    "read_instances",
     "refine",
 ]
 
@@ -113,7 +115,13 @@ class Filler(Protocol):
 
     `rgb` is the scan faded by its view cones (masked pixels empty) unless the filler sets
     `reads_full_render`: then it is the whole scan as rendered from there, unseen side and
-    all -- what an artifact-fixing model (NVIDIA Fixer) is trained to clean."""
+    all -- what an artifact-fixing model (NVIDIA Fixer) is trained to clean.
+
+    Optional, read with `getattr`: `context` -- a filler that has it (a generative inpainter,
+    `world_model_client.GenerativeFiller`) is told what surrounds what it fills
+    (`describe_surroundings`: a prompt and what not to paint) before its views; and
+    `chain_views` -- `fill_hole` then fills the views in turn, each shown what the earlier
+    ones filled, lifted and re-rendered, with only the rest masked (`_chained_fill`)."""
 
     name: str
 
@@ -369,6 +377,121 @@ def fill_views(conds: Sequence[Conditioning], filler: Filler) -> list[Filled]:
         assert best is not None
         out.append(best)
     return out
+
+
+#: A chained view reuses an earlier view's fill where that, re-rendered, covers this much.
+CHAIN_ALPHA = 0.5
+
+
+def _chained_fill(
+    conds: Sequence[Conditioning], filler: Filler, renderer: Renderer, stride: int
+) -> list[Filled]:
+    """`fill_views` one view at a time, each shown the fill of the views before it: their
+    accepted fills lifted (onto the same surface every view lifts to) and rendered from
+    here, painted into the hole wherever they cover it, and only the rest of the hole left
+    for the filler. What one view invented the next one sees rather than invents again.
+    Each `Filled` keeps its view's whole mask, so lifting and distilling treat it as any."""
+    out: list[Filled] = []
+    for cond in conds:
+        ask = cond
+        if any(f.accepted for f in out):
+            painted, _ = lift(out, stride=stride, hole_scaled=True)
+            solid = Splats(
+                painted.positions,
+                painted.rotations,
+                painted.scales,
+                painted.colours,
+                np.full(len(painted), 0.95),
+            )
+            frame = renderer(solid, cond.camera)
+            reuse = cond.mask & (frame.alpha >= CHAIN_ALPHA)
+            if reuse.any():
+                colour = frame.rgb / np.maximum(frame.alpha, 1e-6)[..., None]
+                rgb = np.where(reuse[..., None], np.clip(colour, 0, 1), cond.seen.rgb)
+                seen = Frame(rgb, cond.seen.depth, cond.seen.alpha, cond.seen.label,
+                             cond.seen.purity)  # fmt: skip
+                ask = Conditioning(
+                    cond.camera, seen, seen, cond.mask & ~reuse, cond.depth, cond.distance
+                )
+        (f,) = fill_views([ask], filler)
+        out.append(Filled(cond, f.rgb, f.gate_psnr_db, f.accepted))
+    return out
+
+
+#: `describe_surroundings`: the labels named are those carrying at least this share of the
+#: strongest one's weight, at most `SURROUNDINGS_LABELS` of them.
+SURROUNDINGS_SHARE = 0.1
+SURROUNDINGS_LABELS = 4
+#: How a prompt is phrased for what a hole's views look down on, and for a scan from outside.
+SURROUNDINGS_VIEWS = {
+    "above": "{labels}, the bare ground seen from above, nothing standing on it, natural "
+    "photograph, daylight, sharp detail",
+    "outside": "{labels}, seen from outside, natural photograph, daylight, sharp detail",
+}
+
+
+def describe_surroundings(
+    instances: Sequence[dict],
+    low: np.ndarray,
+    high: np.ndarray,
+    *,
+    object_ids: Sequence[int] = (),
+    exclude_ids: Sequence[int] = (),
+    view: str = "above",
+    top_tags: int = 3,
+) -> dict[str, object]:
+    """What a generative filler is told about a region (`low`..`high`, the scan's local ENU):
+    the tags of the instances (instances.json) that reach into its horizontal box and start
+    no higher than its top, each tag weighted by its score, the instance's gaussians and the
+    share of its own footprint inside the box (a scene-wide instance does not drown the
+    patch at hand); the strongest few named in the prompt. `object_ids` (a removed object)
+    and `exclude_ids` (its fragments) say nothing; the object's own top labels become the
+    negative prompt and are never named: a hole is not painted with what was taken out of it."""
+    silent = {int(k) for k in (*object_ids, *exclude_ids)}
+    removed: list[str] = []
+    for inst in instances:
+        if int(inst["id"]) in {int(k) for k in object_ids}:
+            removed += [str(t["label"]) for t in inst.get("tags", [])[:2]]
+    removed = list(dict.fromkeys(removed))
+    weights: dict[str, float] = {}
+    for inst in instances:
+        if int(inst["id"]) in silent:
+            continue
+        a = np.asarray(inst["bounds"]["min"], float)
+        b = np.asarray(inst["bounds"]["max"], float)
+        if a[2] > high[2]:
+            continue
+        overlap = np.clip(np.minimum(b[:2], high[:2]) - np.maximum(a[:2], low[:2]), 0, None)
+        share = float(np.prod(overlap)) / float(np.prod(np.maximum(b[:2] - a[:2], 1e-3)))
+        if share <= 0:
+            continue
+        for t in inst.get("tags", [])[:top_tags]:
+            label = str(t["label"])
+            gain = float(t["score"]) * int(inst.get("splats", 1)) * share
+            weights[label] = weights.get(label, 0.0) + gain
+    ranked = sorted(
+        ((k, w) for k, w in weights.items() if k not in removed), key=lambda kv: (-kv[1], kv[0])
+    )
+    labels = [k for k, w in ranked[:SURROUNDINGS_LABELS] if w >= SURROUNDINGS_SHARE * ranked[0][1]]
+    named = (
+        " and ".join([", ".join(labels[:-1]), labels[-1]]) if len(labels) > 1 else "".join(labels)
+    )
+    prompt = SURROUNDINGS_VIEWS[view].format(labels=named or "the ground")
+    return {
+        "prompt": prompt[0].upper() + prompt[1:],
+        "negative": ", ".join(removed),
+        "labels": labels,
+        "weights": {k: round(w, 2) for k, w in ranked[:8]},
+    }
+
+
+def read_instances(tileset: Path) -> list[dict]:
+    """The instances a tileset declares (`root.extras.instances`), or none."""
+    document = json.loads(tileset.read_text(encoding="utf-8"))
+    uri = document["root"].get("extras", {}).get("instances", {}).get("uri")
+    if not uri or not (tileset.parent / uri).exists():
+        return []
+    return json.loads((tileset.parent / uri).read_text(encoding="utf-8")).get("instances", [])
 
 
 def _blur(rgb: np.ndarray) -> np.ndarray:
@@ -762,17 +885,22 @@ def fill_hole(
     save_dir: Path | None = None,
     distill_iterations: int = 0,
     distill_runner: Callable[[dict], dict] | None = None,
+    context: dict[str, object] | None = None,
 ) -> tuple[Splats, np.ndarray, list[Camera], dict[str, object]]:
     """The hole `removed` (taken out of the scan, now `kept`) leaves, filled: `drop_and_fill`
     for a region that is gone for good. The surface it stood on is a plane fitted to the scan
     around its footprint (`support_plane`); from `views` cameras around where it stood
     (`hole_views`, and one more held out), the pixels of its silhouette that now see through
     that plane (`see_through`: the footprint nobody saw, the void behind) are filled, gated,
-    lifted onto the plane and optionally distilled.
+    lifted onto the plane and optionally distilled. `context` (`describe_surroundings`) is
+    handed to a filler that reads one (a generative inpainter's prompt); a filler with
+    `chain_views` fills the views in turn (`_chained_fill`).
 
     Returns the lifted gaussians, their confidence, the cameras that made them and a report:
     per view the silhouette and see-through pixels and the gate, and in the held-out view how
-    much of what sees through the scan covers before and after the fill."""
+    much of what sees through the scan covers before and after the fill. `save_dir`: per view
+    truth | hole | fill, and `held-out.png`: the scan as it was | without the object | with
+    the fill | the object moved aside (`MOVE_SHARE` of its size), the fill showing."""
     low, high = removed.positions.min(axis=0), removed.positions.max(axis=0)
     centre, half = (low + high) / 2, float(np.max(high - low)) / 2
     # The surface it stood on: the scan around its footprint, no higher than its lower
@@ -800,7 +928,16 @@ def fill_hole(
         cond, silhouette = _hole_conditioning(kept, removed, camera, plane, renderer)
         conds.append(cond)
         silhouettes.append(int(silhouette.sum()))
-    filled = fill_views(conds, filler)
+    if context is not None and hasattr(filler, "context"):
+        filler.context = context  # type: ignore[attr-defined]
+        report["context"] = context
+    calls_before = len(getattr(filler, "received", []))
+    if getattr(filler, "chain_views", False):
+        filled = _chained_fill(conds, filler, renderer, stride)
+    else:
+        filled = fill_views(conds, filler)
+    if received := getattr(filler, "received", [])[calls_before:]:
+        report["fillerCalls"] = received
     lifted, confidence = lift(filled, stride=stride, hole_scaled=True)
     distilled: dict[str, object] | None = None
     if distill_iterations > 0 and len(lifted):
@@ -837,11 +974,34 @@ def fill_hole(
         with_fill = (
             to_u8(renderer(Splats.concat([kept, lifted]), held).rgb) if len(lifted) else without
         )
-        _save_strip(save_dir / "held-out.png", [before, without, with_fill], held_cond.mask)
+        moved = to_u8(
+            renderer(Splats.concat([kept, lifted, _moved_aside(removed, held)]), held).rgb
+        )
+        _save_strip(save_dir / "held-out.png", [before, without, with_fill, moved], held_cond.mask)
     if distilled:
         report["distill"] = distilled
     used_cameras = [f.conditioning.camera for f in filled if f.accepted]
     return lifted, confidence, used_cameras, report
+
+
+#: `fill_hole`'s last panel moves the object this share of its size, to the camera's right.
+MOVE_SHARE = 0.9
+
+
+def _moved_aside(removed: Splats, camera: Camera) -> Splats:
+    """`removed` shifted level, to `camera`'s right, by `MOVE_SHARE` of its size."""
+    right = np.array(camera.rotation[0], dtype=np.float64)
+    right[2] = 0.0
+    right /= max(float(np.linalg.norm(right)), 1e-9)
+    size = float(np.max(removed.positions.max(axis=0) - removed.positions.min(axis=0)))
+    shift = MOVE_SHARE * size * right
+    return Splats(
+        removed.positions + shift,
+        removed.rotations,
+        removed.scales,
+        removed.colours,
+        removed.opacities,
+    )
 
 
 def _save_strip(path: Path, images: Sequence[np.ndarray], mask: np.ndarray) -> None:
@@ -1023,6 +1183,12 @@ def fill_scan(
         height=height,
     )
     conds = [condition(splats, camera, grid, renderer=renderer) for camera in cameras]
+    context: dict[str, object] | None = None
+    if hasattr(filler, "context") and (instances := read_instances(measured_tileset)):
+        # A generative filler is told what the scan holds (what its views look at).
+        low, high = np.percentile(targets, 2, axis=0), np.percentile(targets, 98, axis=0)
+        context = describe_surroundings(instances, low, high, view="outside")
+        filler.context = context  # type: ignore[attr-defined]
     filled = fill_views(conds, filler)
     if save_dir is not None:
         for k, f in enumerate(filled):
@@ -1056,7 +1222,14 @@ def fill_scan(
     evidence = package_inferred(lifted, confidence, used, measured_tileset, out_dir, filler.name)
     if save_dir is not None:
         _save_before_after(save_dir, splats, lifted, grid, filled, renderer)
-    return {**evidence, "perView": per_view, **({"distill": distilled} if distilled else {})}
+    extra: dict[str, object] = {"perView": per_view}
+    if distilled:
+        extra["distill"] = distilled
+    if context is not None:
+        extra["context"] = context
+    if received := getattr(filler, "received", None):
+        extra["fillerCalls"] = received
+    return {**evidence, **extra}
 
 
 def make_filler(spec: str) -> Filler:

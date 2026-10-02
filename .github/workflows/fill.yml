@@ -21,6 +21,7 @@ on:
       - tools/captures/splat_render.py
       - tools/captures/tests/test_gsplat_parity.py
       - tools/captures/world_model_client.py
+      - tools/captures/inpaint_models.py
       - tools/captures/distill_fill.py
       - .github/workflows/fill.yml
   workflow_dispatch:
@@ -30,7 +31,7 @@ on:
         type: string
         default: drop:yard,drop:spool,fill:camp
       fillers:
-        description: Fillers (telea, fixer)
+        description: Fillers (short names in infra/modal/fill.py FILLERS)
         type: string
         default: telea,fixer
       distill:
@@ -47,14 +48,14 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  JOBS: ${{ inputs.jobs || 'fill:camp' }}
+  JOBS: ${{ inputs.jobs || 'split:pumpkin' }}
   # Scans to run fill.py probe on (Fixer on renders prepared several ways); empty: none.
   PROBES: ""
-  FILLERS: ${{ inputs.fillers || 'telea,fixer-t50' }}
+  FILLERS: ${{ inputs.fillers || 'telea,fixer-t50,sdxl,sdxl-chain,qwen,qwen-chain' }}
   DISTILL: ${{ inputs.distill || '1500' }}
   RENDERER: ${{ inputs.renderer || 'gsplat' }}
   # Non-empty: also run tests/test_gsplat_parity.py (CPU against gsplat) on a GPU.
-  PARITY: "1"
+  PARITY: ""
   # Fill jobs: condition without gaussians larger than this (m; 0 = keep all). The camp's
   # edge floaters (scale 0.5-2.7 m) cover most of a gsplat view from outside.
   MAX_SCALE: "0.5"
