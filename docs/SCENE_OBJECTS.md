@@ -75,6 +75,26 @@ All of these are general models; none knows our scenes.
    An instance too small in every view for a useful crop (`DESCRIBE_MIN_PX`) keeps no
    embedding and no tags (its row in `instances.emb` is zero) and its nearest described
    ancestor's properties.
+   **Search by meaning (decided 2026-10-02).** A query is embedded with the same model's
+   text tower and the tags' template (`"a photo of a {}."`), on the API's CPU:
+   `GET /api/v1/text-embeddings` (`apps/api/app/services/text_encoder.py`), from files
+   `tools/captures/export_text_encoder.py` writes in the image's build stage (fp16-stored
+   transformer as ONNX, a memory-mapped fp16 token table, the model's sentencepiece). The
+   viewer fetches `instances.emb` on the first search and blends (`searchInstances`):
+
+   | Option (measured 2026-10-02, 4 shared CPUs)   | Size           | Parity to `SiglipEmbedder`                                 | Latency                                 |
+   | --------------------------------------------- | -------------- | ---------------------------------------------------------- | --------------------------------------- |
+   | Browser, onnx-community int8 text tower       | 283 MB + 34 MB | cos 0.92-0.98; top-10 overlap down to 3/10                 | download alone fails "first query < 5s" |
+   | Modal function (`SegmentEmbed.embed_texts`)   | -              | exact                                                      | container cold start per idle period    |
+   | **API CPU, onnxruntime, fp32 maths (chosen)** | +565 MB image  | cos ≥ 0.9999998, same top-10 on every query and scan tried | first 1.24 s (load), then ~140 ms       |
+
+   Resident memory with the encoder loaded: ~640 MB of the app machine's 1 GB. The match by
+   meaning is the cosine's margin over the scan's median for that query (`MEANING_FLOOR`
+   0.015, `MEANING_SPAN` 0.05: crops of splat renders sit below SigLIP's photo calibration,
+   so its own sigmoid calls everything a non-match), blended with the tag match by noisy-OR
+   under the prominence prior; an undescribed instance takes its ancestor's (×0.9). With no
+   encoder (503) or no `instances.emb`, search is by tags.
+
 5. **Tags and properties.** Zero-shot against a large open vocabulary (tags) and a short,
    fixed list of _attribute_ prompts (not classes): movable, rigid, elastic/flexible,
    static structure, vegetation, water, vehicle, person/animal. Each property is a

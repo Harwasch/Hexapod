@@ -208,6 +208,28 @@ completed stage is recomputed, and a Lane 2 run that was two hours into `train` 
 two hours again. You also need a root disk big enough for the largest capture plus the
 image. Size the machine accordingly and treat restarts as expensive.
 
+### Search by meaning runs on the app machine
+
+`GET /api/v1/text-embeddings` embeds a viewer's object-search query with SigLIP 2's text
+tower (docs/SCENE_OBJECTS.md §3 step 4), on the app machine's own CPU with onnxruntime. The
+image's `text-encoder` build stage exports the tower from the pinned model revision with
+torch (which does not reach the runtime image) and fails the build if it disagrees with
+transformers; the runtime gets ~565 MB at `/opt/text-encoder` and `TEXT_ENCODER_DIR` points
+at it. No secret, no Modal: the model is public (Apache-2.0).
+
+- **Memory.** The model loads on the first search, not at boot: the app process goes from
+  ~130 MB to ~640 MB resident (measured locally). That fits `shared-cpu-1x` with 1 GB; if
+  the app machine is ever seen near its limit, raise it to 2 GB (`fly scale memory 2048
+--process-group app`) rather than dropping the encoder.
+- **Time.** The first search on a freshly started machine pays ~1.3 s to load, later ones
+  ~140 ms on one core (`TEXT_ENCODER_THREADS`, default 1). Responses are cacheable (the
+  same text gives the same vector).
+- **Without it** (`TEXT_ENCODER_DIR` unset, or the files missing) the route answers 503 and
+  the viewer searches by tags, which is also what it does while the encoder loads.
+- **Build.** The export stage downloads torch (CPU) and the 1.5 GB model once per uncached
+  build: a few minutes on the builder. CI's `image` job asks the built image for
+  embeddings.
+
 ## GPU training — Modal
 
 Lane 2 (`photo-reconstruct`: a phone or desktop video in, a placed splat out) splits
