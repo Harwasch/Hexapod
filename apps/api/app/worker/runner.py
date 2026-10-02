@@ -645,6 +645,7 @@ class JobSupervisor:
         workdir_root = self._config.workdir_for(job.id)
         # The recipe process cancelled its call when told to; this catches one it could not
         # (killed before it got to it), so a cancelled job leaves no GPU running.
+        _end_transaction(db)
         self._cancel_recorded_calls(workdir_root)
         steps.stop_active_steps(db, job.id, RunStatus.CANCELLED)
         db.refresh(job)
@@ -670,6 +671,7 @@ class JobSupervisor:
         if not self._still_ours(db, job):
             return "lost"
         workdir_root = self._config.workdir_for(job.id)
+        _end_transaction(db)
         self._cancel_recorded_calls(workdir_root)
         steps.stop_active_steps(db, job.id, RunStatus.ERROR)
         db.refresh(job)
@@ -1031,9 +1033,14 @@ class JobSupervisor:
         log_path = Workdir(workdir_root).log_path(stage_id)
         logged = _read_from(log_path, state.log_from.get(stage_id, 0))
         failure = retry.classify(state.error_type, state.error, logged)
+        attempt = attempts.get(stage_id, 1)
         history = retry.History.of(Workdir(workdir_root).stage_dir(stage_id))
+        if attempt <= 1:
+            # The stage is starting over -- a person's Retry resets the attempts -- and
+            # what an earlier run of it failed of is that run's.
+            history.entries.clear()
         decision = retry.decide(stage_id, failure, history)
-        history.add(attempts.get(stage_id, 1), failure)
+        history.add(attempt, failure)
         if failure.kind != "other":
             log.info(
                 "worker %s: stage %s failed (%s): %s",
