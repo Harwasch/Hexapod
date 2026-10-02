@@ -17,6 +17,8 @@ on:
     paths:
       - infra/modal/fill.py
       - tools/captures/teacher_fill.py
+      - tools/captures/splat_render.py
+      - tools/captures/tests/test_gsplat_parity.py
       - tools/captures/world_model_client.py
       - tools/captures/distill_fill.py
       - .github/workflows/fill.yml
@@ -34,17 +36,24 @@ on:
         description: Distill steps for fill jobs (0 = none)
         type: string
         default: "0"
+      renderer:
+        description: Render the views on the CPU or with gsplat on a GPU (cpu, gsplat)
+        type: string
+        default: gsplat
 
 concurrency:
   group: fill-${{ github.ref }}
   cancel-in-progress: false
 
 env:
-  JOBS: ${{ inputs.jobs || 'fill:camp' }}
+  JOBS: ${{ inputs.jobs || 'drop:yard,drop:spool,fill:camp' }}
   # Scans to run fill.py probe on (Fixer on renders prepared several ways); empty: none.
   PROBES: ''
-  FILLERS: ${{ inputs.fillers || 'fixer-t50,fixer-t100' }}
+  FILLERS: ${{ inputs.fillers || 'telea,fixer,fixer-t100,fixer-t50' }}
   DISTILL: ${{ inputs.distill || '0' }}
+  RENDERER: ${{ inputs.renderer || 'gsplat' }}
+  # Non-empty: also run tests/test_gsplat_parity.py (CPU against gsplat) on a GPU.
+  PARITY: '1'
 
 jobs:
   fill:
@@ -68,7 +77,7 @@ jobs:
         run: |
           uv run --with modal==1.5.5 modal run infra/modal/fill.py \
             --jobs "$JOBS" --fillers "$FILLERS" --distill "$DISTILL" --out fill-out \
-            --probes "$PROBES"
+            --probes "$PROBES" --renderer "$RENDERER" ${PARITY:+--parity-test}
       - uses: actions/upload-artifact@v4
         if: always()
         with:

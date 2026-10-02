@@ -10,7 +10,8 @@ say so. Every stage runs on the CPU with the image model behind one interface (`
 1. **views** (`plan_views`) -- virtual cameras: at eye height above the observers (the
    view cones' finest-detail region, or the real cameras when known), or on a ring outside
    the scan, aimed at what is to be filled;
-2. **conditioning** (`condition`) -- per view, the scan rendered with each gaussian faded by
+2. **conditioning** (`condition`) -- per view (rendered by `splat_render.render` on the CPU,
+   or gsplat on a GPU: `make_renderer`), the scan rendered with each gaussian faded by
    its view cone (what was seen from here), the full render (what is there at all), and the
    **mask**: pixels the scan covers but only with what was never seen from this side (or,
    for the drop test, the pixels a dropped region covered);
@@ -21,7 +22,8 @@ say so. Every stage runs on the CPU with the image model behind one interface (`
    refused: it was told what is there and repainted it (a filler that re-renders the whole
    frame is held to its layout: `GATE_FULL_RENDER_PSNR_DB` on blurred frames);
 5. **lift** (`lift`) -- every `stride`-th masked pixel becomes a flat gaussian facing its
-   camera, at the depth the scan has there (or the depth inpainted from around the hole),
+   camera, at the depth the scan has there (or the depth inpainted from around the hole;
+   for a dropped region, always interpolated across the hole from around it),
    with the filled colour and an opacity scaled by **confidence**: how far the pixel is
    from anything measured in its view (`exp(-d / CONFIDENCE_PX)`);
 6. **package** (`package_inferred`) -- the gaussians as their own tileset in the scan's frame,
@@ -47,6 +49,23 @@ import numpy as np
 import view_cones as vc
 from splat_render import Camera, Frame, Splats, render, save_ply
 
+#: What every view is rendered with: `(splats, camera, *, opacity_scale=None) -> Frame`.
+#: `splat_render.render` (the CPU's point samples) or `splat_render.GsplatRenderer` (gsplat
+#: on a GPU, what a viewer draws and what Fixer is trained on); see `make_renderer`.
+Renderer = Callable[..., Frame]
+
+
+def make_renderer(spec: str = "cpu") -> Renderer:
+    """`cpu` (`splat_render.render`) or `gsplat` (`splat_render.GsplatRenderer`, CUDA)."""
+    if spec == "cpu":
+        return render
+    if spec == "gsplat":
+        from splat_render import GsplatRenderer
+
+        return GsplatRenderer()
+    raise ValueError(f"renderer {spec!r}: 'cpu' or 'gsplat'")
+
+
 __all__ = [
     "Conditioning",
     "Filler",
@@ -58,6 +77,7 @@ __all__ = [
     "lift",
     "link_inferred",
     "make_filler",
+    "make_renderer",
     "package_inferred",
     "plan_views",
     "refine",
@@ -145,17 +165,34 @@ def condition(
     grid: vc.ConeGrid | None,
     mask: np.ndarray | None = None,
     seen_opacity: np.ndarray | None = None,
+    *,
+    hole_depth: str = "scan",
+    renderer: Renderer = render,
 ) -> Conditioning:
-    """What `camera` is to be told and asked: the seen render, and the mask to fill."""
+    """What `camera` is to be told and asked: the seen render, and the mask to fill.
+
+    The depth a masked pixel is lifted at: `scan`, the scan's own there (the unseen side of
+    what it covers), inpainted from around the hole where it has none; `surround`, always
+    interpolated across the mask from the measured pixels around it (inverse depth, which is
+    affine across a plane) -- for a region that was removed (the drop test), where what the
+    scan shows through the hole is what was behind it."""
     import cv2
 
     weights = seen_weights(splats, camera, grid) if seen_opacity is None else seen_opacity
-    seen = render(splats, camera, opacity_scale=weights)
-    full = render(splats, camera)
+    seen = renderer(splats, camera, opacity_scale=weights)
+    full = renderer(splats, camera)
     if mask is None:
         mask = clean_mask((seen.alpha < SEEN_ALPHA) & (full.alpha >= COVERED_ALPHA))
     depth = np.where(np.isfinite(full.depth), full.depth, np.nan)
     known = np.isfinite(seen.depth) & (seen.alpha >= SEEN_ALPHA)
+    if hole_depth == "surround":
+        around = known & ~mask
+        if mask.any() and around.any():
+            depth = np.where(mask, _interpolate_depth(seen.depth, around, mask), depth)
+        else:
+            depth = np.where(mask, np.nan, depth)
+    elif hole_depth != "scan":
+        raise ValueError(f"hole_depth {hole_depth!r}: 'scan' or 'surround'")
     missing = mask & ~np.isfinite(depth)
     if missing.any() and known.any():
         log_d = np.where(known, np.log(np.where(known, seen.depth, 1.0)), 0).astype(np.float32)
@@ -163,6 +200,34 @@ def condition(
         depth = np.where(missing, np.exp(filled), depth)
     distance = cv2.distanceTransform((mask | ~known).astype(np.uint8), cv2.DIST_L2, 5)
     return Conditioning(camera, seen, full, mask, depth, distance)
+
+
+#: `_interpolate_depth` reads the measured depth in a band this wide (pixels) around a hole.
+HOLE_RING_PX = 6
+
+
+def _interpolate_depth(depth: np.ndarray, known: np.ndarray, hole: np.ndarray) -> np.ndarray:
+    """Depth everywhere, interpolated from the `known` pixels: inverse depth smoothed in from
+    the ring of known pixels just outside the `hole` (normalised convolution at growing
+    scales), so a hole the width of a region gets the surface around it, not what lies
+    behind. Known pixels keep their depth."""
+    import cv2
+
+    ring = known & (cv2.distanceTransform((~hole).astype(np.uint8), cv2.DIST_L2, 5) <= HOLE_RING_PX)
+    inv = np.where(ring, 1.0 / np.where(ring, depth, 1.0), 0.0).astype(np.float32)
+    weight = ring.astype(np.float32)
+    out = np.full(depth.shape, np.nan, np.float32)
+    todo = ~known
+    sigma = 2.0
+    while todo.any() and sigma < 4 * max(depth.shape):
+        w = cv2.GaussianBlur(weight, (0, 0), sigma)
+        v = cv2.GaussianBlur(inv * weight, (0, 0), sigma)
+        ok = todo & (w > 1e-3)
+        out[ok] = v[ok] / w[ok]
+        todo &= ~ok
+        sigma *= 2.0
+    with np.errstate(divide="ignore"):
+        return np.where(known, depth, 1.0 / np.maximum(out, 1e-9)).astype(np.float64)
 
 
 def clean_mask(mask: np.ndarray, px: int = MASK_CLEAN_PX) -> np.ndarray:
@@ -376,11 +441,15 @@ def drop_and_fill(
     height: int = 360,
     stride: int = 2,
     save_dir: Path | None = None,
+    hole_depth: str = "surround",
+    renderer: Renderer = render,
 ) -> DropReport:
     """Removes the gaussians in a cube the capture saw, fills it from `views` cameras near
     the observers, and scores the fill against what was there: per fill view (PSNR, SSIM on
     the dropped region's pixels, against leaving the hole), and -- after lifting -- from one
-    more view the fill never used."""
+    more view the fill never used. The fill is lifted at the depth interpolated across the
+    hole from around it (`hole_depth="surround"`): where the dropped surface was, so the
+    held-out view sees the fill in front of what was behind it."""
     centre = np.asarray(centre, np.float64)
     inside = np.all(np.abs(splats.positions - centre) <= half_size_m, axis=1)
     kept, dropped = splats.take(np.flatnonzero(~inside)), splats.take(np.flatnonzero(inside))
@@ -400,9 +469,17 @@ def drop_and_fill(
     )
     conds = []
     for camera in used:
-        truth = to_u8(render(splats, camera).rgb)
-        hole = _hole(render(dropped, camera).alpha)
-        cond = condition(kept, camera, None, mask=hole, seen_opacity=np.ones(len(kept)))
+        truth = to_u8(renderer(splats, camera).rgb)
+        hole = _hole(renderer(dropped, camera).alpha)
+        cond = condition(
+            kept,
+            camera,
+            None,
+            mask=hole,
+            seen_opacity=np.ones(len(kept)),
+            hole_depth=hole_depth,
+            renderer=renderer,
+        )
         conds.append((cond, truth))
     filled = fill_views([c for c, _ in conds], filler)
     for k, (f, (cond, truth)) in enumerate(zip(filled, conds, strict=True)):
@@ -423,12 +500,12 @@ def drop_and_fill(
         )
     lifted, _ = lift(filled, stride=stride)
     report.lifted = len(lifted)
-    truth = to_u8(render(splats, held).rgb)
-    hole = _hole(render(dropped, held).alpha)
+    truth = to_u8(renderer(splats, held).rgb)
+    hole = _hole(renderer(dropped, held).alpha)
     if hole.any():
-        without = to_u8(render(kept, held).rgb)
+        without = to_u8(renderer(kept, held).rgb)
         with_fill = (
-            to_u8(render(Splats.concat([kept, lifted]), held).rgb) if len(lifted) else without
+            to_u8(renderer(Splats.concat([kept, lifted]), held).rgb) if len(lifted) else without
         )
         if save_dir is not None:
             _save_strip(save_dir / "held-out.png", [truth, without, with_fill], hole)
@@ -465,7 +542,12 @@ def _save_strip(path: Path, images: Sequence[np.ndarray], mask: np.ndarray) -> N
 
 
 def _save_before_after(
-    save_dir: Path, splats: Splats, lifted: Splats, grid: vc.ConeGrid, filled: Sequence[Filled]
+    save_dir: Path,
+    splats: Splats,
+    lifted: Splats,
+    grid: vc.ConeGrid,
+    filled: Sequence[Filled],
+    renderer: Renderer = render,
 ) -> None:
     """Per accepted view, `after{k}.png`: the scan as the globe draws it from there (faded by
     its view cones) beside the same with the inferred layer added."""
@@ -477,7 +559,7 @@ def _save_before_after(
             continue
         camera = f.conditioning.camera
         weights = np.concatenate([seen_weights(splats, camera, grid), np.ones(len(lifted))])
-        after = to_u8(render(both, camera, opacity_scale=weights).rgb)
+        after = to_u8(renderer(both, camera, opacity_scale=weights).rgb)
         strip = np.concatenate([to_u8(f.conditioning.seen.rgb), after], axis=1)
         save_dir.mkdir(parents=True, exist_ok=True)
         Image.fromarray(strip).save(save_dir / f"after{k}.png")
@@ -588,6 +670,7 @@ def fill_scan(
     save_dir: Path | None = None,
     distill_iterations: int = 0,
     distill_runner: Callable[[dict], dict] | None = None,
+    renderer: Renderer = render,
 ) -> dict[str, object]:
     """The whole of Teacher B on one scan: views at what its view cones fade (`ring`: from
     outside, the sides never walked to; `near`: from the observers), conditioned, filled,
@@ -609,7 +692,7 @@ def fill_scan(
         width=width,
         height=height,
     )
-    conds = [condition(splats, camera, grid) for camera in cameras]
+    conds = [condition(splats, camera, grid, renderer=renderer) for camera in cameras]
     filled = fill_views(conds, filler)
     if save_dir is not None:
         for k, f in enumerate(filled):
@@ -642,7 +725,7 @@ def fill_scan(
     used = [f.conditioning.camera for f in filled if f.accepted]
     evidence = package_inferred(lifted, confidence, used, measured_tileset, out_dir, filler.name)
     if save_dir is not None:
-        _save_before_after(save_dir, splats, lifted, grid, filled)
+        _save_before_after(save_dir, splats, lifted, grid, filled, renderer)
     return {**evidence, "perView": per_view, **({"distill": distilled} if distilled else {})}
 
 
@@ -720,6 +803,12 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument("--height", type=int, default=360 if name == "drop" else 480)
         p.add_argument("--stride", type=int, default=2)
         p.add_argument("--save", type=Path, help="where to write truth/hole/fill strips")
+        p.add_argument(
+            "--renderer",
+            choices=("cpu", "gsplat"),
+            default="cpu",
+            help="render the views on the CPU or with gsplat on a CUDA GPU",
+        )
     sub.choices["drop"].add_argument("--half-size-m", type=float, default=0.15)
     sub.choices["drop"].add_argument(
         "--centre", type=float, nargs=3, help="local ENU; default: beside the main observer"
@@ -740,6 +829,7 @@ def main(argv: list[str] | None = None) -> int:
     splats = load_tileset(args.tileset)
     grid = vc.cone_grid_from_tileset(args.tileset)
     filler = make_filler(args.filler)
+    renderer = make_renderer(args.renderer)
     if args.command == "drop":
         if args.centre is not None:
             centre = np.array(args.centre)
@@ -758,6 +848,7 @@ def main(argv: list[str] | None = None) -> int:
             height=args.height,
             stride=args.stride,
             save_dir=args.save,
+            renderer=renderer,
         )
         print(json.dumps(report.to_json(), indent=1))
     else:
@@ -775,6 +866,7 @@ def main(argv: list[str] | None = None) -> int:
             save_dir=args.save,
             distill_iterations=args.distill,
             distill_runner=_distill_runner(args.distill_on) if args.distill else None,
+            renderer=renderer,
         )
         print(json.dumps(evidence, indent=1))
     return 0
