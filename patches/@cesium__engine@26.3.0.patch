@@ -144,7 +144,7 @@ index db3adac5ab6db91f0fa3d08f1eb69b0837b5be4f..6a92d66292f9e76eccf91f00e6b7a199
     * Gets the amount of memory used by the batch table textures and any binary
     * metadata properties not accounted for in geometryByteLength or
 diff --git a/Source/Scene/GaussianSplatPrimitive.js b/Source/Scene/GaussianSplatPrimitive.js
-index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..8998868ccd9477d079e04649b0ad57771e60c1bb 100644
+index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..620c2f2ff1bd0d04aa51aff78ed4e5ca63aa0df0 100644
 --- a/Source/Scene/GaussianSplatPrimitive.js
 +++ b/Source/Scene/GaussianSplatPrimitive.js
 @@ -174,6 +174,51 @@ const DEFAULT_SORT_MIN_POSITION_DELTA = 1.0;
@@ -235,7 +235,7 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..8998868ccd9477d079e04649b0ad5777
        }
        return;
      }
-@@ -1070,9 +1130,123 @@ function GaussianSplatPrimitive(options) {
+@@ -1070,9 +1130,128 @@ function GaussianSplatPrimitive(options) {
     * @private
     */
    this._splatBudgetSSEScale = 1.0;
@@ -284,6 +284,11 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..8998868ccd9477d079e04649b0ad5777
 +   * `vec3 splatVertexMotion(uint splatIndex, vec3 position)`, which the vertex shader applies
 +   * to each splat's fetched position (in the draw command's model frame) before projecting it.
 +   * `splatIndex` is the attribute-texture index, addressed with `u_splatRowMask/Shift`.
++   *
++   * Optionally, its lines may also `#define HAS_SPLAT_VERTEX_JACOBIAN` and define
++   * `mat3 splatVertexJacobian(uint splatIndex, vec3 position)`: the motion's local linear map
++   * at the splat (called after `splatVertexMotion` for the same splat, with the displaced
++   * position), which the shader applies to the splat's covariance, `J · Σ · Jᵀ`.
 +   *
 +   * Setting or clearing it rebuilds the draw command on the next render; nothing else about
 +   * the primitive changes. Upstream has no equivalent: `customShader` does not reach splats.
@@ -359,7 +364,7 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..8998868ccd9477d079e04649b0ad5777
    /**
     * Indicates whether the primitive is ready for use.
     * @memberof GaussianSplatPrimitive.prototype
-@@ -1149,6 +1323,7 @@ GaussianSplatPrimitive.prototype._wrappedUpdate = function (frameState) {
+@@ -1149,6 +1328,7 @@ GaussianSplatPrimitive.prototype._wrappedUpdate = function (frameState) {
   * @private
   */
  GaussianSplatPrimitive.prototype.destroy = function () {
@@ -367,7 +372,7 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..8998868ccd9477d079e04649b0ad5777
    this._positions = undefined;
    this._rotations = undefined;
    this._scales = undefined;
-@@ -1577,6 +1752,37 @@ GaussianSplatPrimitive.buildGSplatDrawCommand = function (
+@@ -1577,6 +1757,37 @@ GaussianSplatPrimitive.buildGSplatDrawCommand = function (
    renderResources.instanceCount = instanceCount;
    renderResources.count = 4;
    renderResources.primitiveType = PrimitiveType.TRIANGLE_STRIP;
@@ -405,7 +410,7 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..8998868ccd9477d079e04649b0ad5777
    shaderBuilder.addVertexLines(GaussianSplatVS);
    shaderBuilder.addFragmentLines(GaussianSplatFS);
    const shaderProgram = shaderBuilder.buildShaderProgram(frameState.context);
-@@ -1606,10 +1812,22 @@ GaussianSplatPrimitive.buildGSplatDrawCommand = function (
+@@ -1606,10 +1817,22 @@ GaussianSplatPrimitive.buildGSplatDrawCommand = function (
    idxAttr.constant = 0;
    idxAttr.instanceDivisor = 1;
  
@@ -428,7 +433,7 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..8998868ccd9477d079e04649b0ad5777
      const geometry = new Geometry({
        attributes: {
          screenQuadPosition: new GeometryAttribute({
-@@ -1637,7 +1855,9 @@ GaussianSplatPrimitive.buildGSplatDrawCommand = function (
+@@ -1637,7 +1860,9 @@ GaussianSplatPrimitive.buildGSplatDrawCommand = function (
        .vertexBuffer.copyFromArrayView(primitive._indexes);
    }
  
@@ -439,7 +444,7 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..8998868ccd9477d079e04649b0ad5777
  
    // The draw command uses rootTransform as its modelMatrix. tileset.modelMatrix
    // is baked into the splat positions by transformTile and must not appear here
-@@ -1670,6 +1890,582 @@ GaussianSplatPrimitive.buildGSplatDrawCommand = function (
+@@ -1670,6 +1895,582 @@ GaussianSplatPrimitive.buildGSplatDrawCommand = function (
    primitive._drawCommand = command;
  };
  
@@ -1022,7 +1027,7 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..8998868ccd9477d079e04649b0ad5777
  /**
   * Updates the Gaussian splat primitive for the current frame.
   * This method checks if the primitive needs to be updated based on the current frame state,
-@@ -1683,20 +2479,57 @@ GaussianSplatPrimitive.buildGSplatDrawCommand = function (
+@@ -1683,20 +2484,57 @@ GaussianSplatPrimitive.buildGSplatDrawCommand = function (
  GaussianSplatPrimitive.prototype.update = function (frameState) {
    const tileset = this._tileset;
  
@@ -1080,7 +1085,7 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..8998868ccd9477d079e04649b0ad5777
    const hasRootTransform = defined(this._rootTransform);
  
    if (frameState.passes.pick === true) {
-@@ -1712,6 +2545,12 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
+@@ -1712,6 +2550,12 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
    }
  
    if (this._sorterState === GaussianSplatSortingState.IDLE) {
@@ -1093,7 +1098,7 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..8998868ccd9477d079e04649b0ad5777
      const selectedTilesChanged =
        tileset._selectedTiles.length !== 0 &&
        haveSelectedTilesChanged(this, tileset._selectedTiles);
-@@ -1740,11 +2579,20 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
+@@ -1740,11 +2584,20 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
      } else {
        this._snapshotRebuildStallFrames = 0;
      }
@@ -1116,7 +1121,7 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..8998868ccd9477d079e04649b0ad5777
        this._dirty ||
        this._needsSnapshotRebuild ||
        selectedTilesChanged ||
-@@ -1759,6 +2607,7 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
+@@ -1759,6 +2612,7 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
      }
  
      if (
@@ -1124,7 +1129,7 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..8998868ccd9477d079e04649b0ad5777
        tileset._selectedTiles.length !== 0 &&
        this._needsSnapshotRebuild &&
        allowRebuild
-@@ -2055,6 +2904,10 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
+@@ -2055,6 +2909,10 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
      if (!hasRootTransform) {
        return;
      }
@@ -1135,7 +1140,7 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..8998868ccd9477d079e04649b0ad5777
  
      Matrix4.clone(camera.viewMatrix, this._prevViewMatrix);
      Matrix4.multiply(camera.viewMatrix, this._rootTransform, scratchMatrix4A);
-@@ -2071,14 +2924,7 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
+@@ -2071,14 +2929,7 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
          dataGeneration: dataGeneration,
          expectedCount: expectedCount,
        };
@@ -1151,7 +1156,7 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..8998868ccd9477d079e04649b0ad5777
        this._sorterPromise = rawPromise;
        if (defined(rawPromise)) {
          markSteadySortStart(this, frameState);
-@@ -2105,14 +2951,7 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
+@@ -2105,14 +2956,7 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
          dataGeneration: dataGeneration,
          expectedCount: expectedCount,
        };
@@ -1167,7 +1172,7 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..8998868ccd9477d079e04649b0ad5777
        this._sorterPromise = rawPromise;
        if (defined(rawPromise)) {
          markSteadySortStart(this, frameState);
-@@ -2132,7 +2971,18 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
+@@ -2132,7 +2976,18 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
      return; //still sorting, wait for next frame
    } else if (this._sorterState === GaussianSplatSortingState.SORTED) {
      //update the draw command if sorted
@@ -1186,7 +1191,7 @@ index 40c86195c4d86b4eaf986ba99eba2d7466ec88e7..8998868ccd9477d079e04649b0ad5777
      this._sorterState = GaussianSplatSortingState.IDLE; //reset state for next frame
      this._dirty = false;
      this._sorterPromise = undefined; //reset promise for next frame
-@@ -2144,4 +2994,10 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
+@@ -2144,4 +2999,10 @@ GaussianSplatPrimitive.prototype.update = function (frameState) {
    this._dirty = false;
  };
  
@@ -1368,7 +1373,7 @@ index c5d264395fc522ecc29717e57ff159aa4ed3cfd1..f7b22ea41aac67be450cf0e49db7d519
    let edgeTiles;
  
 diff --git a/Source/Shaders/PrimitiveGaussianSplatVS.glsl b/Source/Shaders/PrimitiveGaussianSplatVS.glsl
-index 18838d6c4b087d4b2bdcedfd0741d8217fb4900c..a6b4e47c68faa457b7b8dc180bd2bbef45856823 100644
+index 18838d6c4b087d4b2bdcedfd0741d8217fb4900c..eefb4aea9fe461a2e4704fe7d3330ceeea10d84c 100644
 --- a/Source/Shaders/PrimitiveGaussianSplatVS.glsl
 +++ b/Source/Shaders/PrimitiveGaussianSplatVS.glsl
 @@ -151,6 +151,11 @@ void main() {
@@ -1408,7 +1413,16 @@ index 18838d6c4b087d4b2bdcedfd0741d8217fb4900c..a6b4e47c68faa457b7b8dc180bd2bbef
  
      gl_Position = clipPosition;
  
-@@ -174,7 +194,10 @@ void main() {
+@@ -171,10 +191,19 @@ void main() {
+     vec2 u2 = unpackHalf2x16(covariance.y);
+     vec2 u3 = unpackHalf2x16(covariance.z);
+     mat3 Vrk = mat3(u1.x, u1.y, u2.x, u1.y, u2.y, u3.x, u2.x, u3.x, u3.y);
++#if defined(HAS_SPLAT_VERTEX_MOTION) && defined(HAS_SPLAT_VERTEX_JACOBIAN)
++    // Optional, declared by the motion hook's own lines: the motion's local linear map at
++    // this splat, called after splatVertexMotion for the same splat. The covariance follows it.
++    mat3 splatMotionJacobian = splatVertexJacobian(texIdx, splatPosition.xyz);
++    Vrk = splatMotionJacobian * Vrk * transpose(splatMotionJacobian);
++#endif
  
      vec4 covVectors = calcCovVectors(splatViewPos.xyz, Vrk);
  
@@ -1420,7 +1434,7 @@ index 18838d6c4b087d4b2bdcedfd0741d8217fb4900c..a6b4e47c68faa457b7b8dc180bd2bbef
          gl_Position = discardVec;
          return;
      }
-@@ -186,11 +209,18 @@ void main() {
+@@ -186,11 +215,18 @@ void main() {
  
      v_vertPos = corner ;
      v_splatColor = vec4(covariance.w & 0xffu, (covariance.w >> 8) & 0xffu, (covariance.w >> 16) & 0xffu, (covariance.w >> 24) & 0xffu) / 255.0;
@@ -1441,7 +1455,7 @@ index 18838d6c4b087d4b2bdcedfd0741d8217fb4900c..a6b4e47c68faa457b7b8dc180bd2bbef
  }
 \ No newline at end of file
 diff --git a/Source/Shaders/PrimitiveGaussianSplatVS.js b/Source/Shaders/PrimitiveGaussianSplatVS.js
-index 0fab5dd6b552ab92efe01e4131204530d02e0374..f036ebb8eef1af3276bd306020dd559c667557b1 100644
+index 0fab5dd6b552ab92efe01e4131204530d02e0374..d6cbce6add6e62085abce8f9622c489c5092ed58 100644
 --- a/Source/Shaders/PrimitiveGaussianSplatVS.js
 +++ b/Source/Shaders/PrimitiveGaussianSplatVS.js
 @@ -152,6 +152,11 @@ void main() {\n\
@@ -1481,7 +1495,16 @@ index 0fab5dd6b552ab92efe01e4131204530d02e0374..f036ebb8eef1af3276bd306020dd559c
  \n\
      gl_Position = clipPosition;\n\
  \n\
-@@ -175,7 +195,10 @@ void main() {\n\
+@@ -172,10 +192,19 @@ void main() {\n\
+     vec2 u2 = unpackHalf2x16(covariance.y);\n\
+     vec2 u3 = unpackHalf2x16(covariance.z);\n\
+     mat3 Vrk = mat3(u1.x, u1.y, u2.x, u1.y, u2.y, u3.x, u2.x, u3.x, u3.y);\n\
++#if defined(HAS_SPLAT_VERTEX_MOTION) && defined(HAS_SPLAT_VERTEX_JACOBIAN)\n\
++    // Optional, declared by the motion hook's own lines: the motion's local linear map at\n\
++    // this splat, called after splatVertexMotion for the same splat. The covariance follows it.\n\
++    mat3 splatMotionJacobian = splatVertexJacobian(texIdx, splatPosition.xyz);\n\
++    Vrk = splatMotionJacobian * Vrk * transpose(splatMotionJacobian);\n\
++#endif\n\
  \n\
      vec4 covVectors = calcCovVectors(splatViewPos.xyz, Vrk);\n\
  \n\
@@ -1493,7 +1516,7 @@ index 0fab5dd6b552ab92efe01e4131204530d02e0374..f036ebb8eef1af3276bd306020dd559c
          gl_Position = discardVec;\n\
          return;\n\
      }\n\
-@@ -187,11 +210,18 @@ void main() {\n\
+@@ -187,11 +216,18 @@ void main() {\n\
  \n\
      v_vertPos = corner ;\n\
      v_splatColor = vec4(covariance.w & 0xffu, (covariance.w >> 8) & 0xffu, (covariance.w >> 16) & 0xffu, (covariance.w >> 24) & 0xffu) / 255.0;\n\
