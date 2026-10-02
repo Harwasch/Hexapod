@@ -309,6 +309,7 @@ class _Reporter:
                 attempt=attempt,
                 # Before the stage writes a line: where this attempt's part of it begins.
                 log_from=log.stat().st_size if log is not None and log.is_file() else 0,
+                started_at=time.time(),
             )
         )
 

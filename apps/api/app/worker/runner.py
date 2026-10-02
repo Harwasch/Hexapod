@@ -100,7 +100,9 @@ from app.worker.pipeline_bridge import (
     PipelineError,
     Plan,
     RunCost,
+    StepResult,
     Workdir,
+    checksum_of,
     latest_live,
     latest_progress,
     plan_recipe,
@@ -270,6 +272,14 @@ class JobSupervisor:
             self._seed(db, job, recipe.inputs, workdir_root)
         except StorageUnavailableError as error:
             return self._dead_letter(db, job, f"could not fetch the capture's files: {error}")
+        try:
+            # Before `_recover_calls`: a stage finished here drops the copy of its calls
+            # its row still has from before they came home, which would otherwise be
+            # written back as an orphaned book and cancelled -- a call long over.
+            self._settle_finished(db, job, plan, workdir_root, stop)
+        except outputs.UploadStopped:
+            claim.release(db, job.id, worker_id=self._config.worker_id)
+            return "lost"
         self._recover_calls(db, job_id, workdir_root)
 
         while True:
@@ -316,7 +326,7 @@ class JobSupervisor:
             if state.outcome == "lost":
                 return "lost"
             if state.outcome == events.RUN_FINISHED:
-                return self._finish_complete(db, job, state)
+                return self._finish_complete(db, job, state, stop)
             if not state.failed_stage:
                 # Nothing to retry from: the run never reached a stage.
                 return self._dead_letter(db, job, state.error or "the run failed before any stage")
@@ -519,7 +529,14 @@ class JobSupervisor:
             if item is _EOF:
                 return state, current, True
             if isinstance(item, Event):
-                current = self._apply(db, job, item, workdir_root, state, current)
+                try:
+                    current = self._apply(db, job, item, workdir_root, state, current, stop)
+                except outputs.UploadStopped:
+                    # A stop landed between two objects of a finished stage's upload. The
+                    # stop branch at the top of the loop takes it from here: the recipe
+                    # process is detached and the step left unfinished, for the next
+                    # worker to finish from its `step.json` (`_settle_finished`).
+                    continue
 
     def _signal_after_failure(self, job_id: uuid.UUID) -> int:
         """How to stop a recipe process this supervisor is abandoning on an exception.
@@ -556,6 +573,7 @@ class JobSupervisor:
         workdir_root: Path,
         state: _RunState,
         current: JobStep | None,
+        stop: threading.Event | None = None,
     ) -> JobStep | None:
         if event.kind == events.STAGE_STARTED:
             state.log_from[event.stage_id] = event.log_from
@@ -566,6 +584,11 @@ class JobSupervisor:
                 ordinal=event.ordinal,
                 impl=event.impl,
                 attempt=event.attempt,
+                started_at=(
+                    datetime.fromtimestamp(event.started_at, tz=UTC)
+                    if event.started_at is not None
+                    else None
+                ),
             )
         if event.kind in (events.STAGE_FINISHED, events.STAGE_SKIPPED):
             refs = tuple(ArtifactRef.from_dict(entry) for entry in event.step.get("artifacts", ()))
@@ -580,25 +603,7 @@ class JobSupervisor:
                 impl=event.impl,
                 attempt=event.attempt,
             )
-            # Uploads are minutes for a large stage (a 514-tile package): end the
-            # transaction first so the session is not left idle inside one.
-            _end_transaction(db)
-            uploaded = [
-                result
-                for ref in refs
-                if (result := outputs.upload_artifact(self._storage, workdir_root, job.id, ref))
-            ]
-            # The final live-cameras line lands just before the stage ends; read it now,
-            # before a heartbeat could, so the finished step keeps it for the viewer.
-            self._report_progress(db, step, workdir_root)
-            steps.finish_step(
-                db,
-                step,
-                metrics=_metrics(event.step),
-                log_key=self._upload_log(job.id, workdir_root, event.stage_id),
-                checkpoint_key=_optional_str(event.step.get("checkpointKey")),
-                artifacts=uploaded,
-            )
+            self._record_finished(db, job, step, event.step, workdir_root, stop)
             return None
         if event.kind == events.STAGE_FAILED:
             state.failed_stage = event.stage_id
@@ -628,9 +633,136 @@ class JobSupervisor:
             return current
         return current
 
+    def _record_finished(
+        self,
+        db: Session,
+        job: Job,
+        step: JobStep,
+        result: dict[str, Any],
+        workdir_root: Path,
+        stop: threading.Event | None,
+    ) -> None:
+        """Upload a finished stage's artifacts and log, and finish its row from `result`,
+        its `StepResult` as a dict. Idempotent -- the keys are the stage's own and a
+        retried upload writes the same ones -- which is what lets `_settle_finished` call
+        it again for a stage whose worker stopped in the middle of it. Raises
+        `outputs.UploadStopped` between two objects once `stop` is set."""
+        refs = tuple(ArtifactRef.from_dict(entry) for entry in result.get("artifacts", ()))
+        stopping = stop.is_set if stop is not None else None
+        # Uploads are minutes for a large stage (a 514-tile package): end the
+        # transaction first so the session is not left idle inside one.
+        _end_transaction(db)
+        uploaded = [
+            artifact
+            for ref in refs
+            if (
+                artifact := outputs.upload_artifact(
+                    self._storage, workdir_root, job.id, ref, stopping=stopping
+                )
+            )
+        ]
+        # The final live-cameras line lands just before the stage ends; read it now,
+        # before a heartbeat could, so the finished step keeps it for the viewer.
+        self._report_progress(db, step, workdir_root)
+        steps.finish_step(
+            db,
+            step,
+            metrics=_metrics(result),
+            log_key=self._upload_log(job.id, workdir_root, step.stage_id),
+            checkpoint_key=_optional_str(result.get("checkpointKey")),
+            artifacts=uploaded,
+        )
+
+    def _settle_finished(
+        self,
+        db: Session,
+        job: Job,
+        plan: Plan,
+        workdir_root: Path,
+        stop: threading.Event | None,
+    ) -> None:
+        """Finish the rows of stages that finished while their worker was not looking.
+
+        The recipe process does not wait for the supervisor: it writes a stage's
+        `step.json`, reports it, and goes on to the next stage while the supervisor
+        uploads the one that finished. A worker stopped in the middle of that upload -- a
+        deploy's SIGTERM waited for it until fly.toml's 30 s `kill_timeout` SIGKILLed the
+        worker -- left the stage finished on disk and `in-progress` on its row, and the
+        next worker ran it again: for `train`, hours of GPU billed twice. So before
+        anything runs, each stage in order that is not complete on its row but has this
+        attempt's proof of finishing (`_proof_of_finish`) has its upload redone and its
+        row finished, and is skipped like any completed stage. The first stage without
+        that proof is where the run resumes, and nothing after it is looked at.
+        """
+        rows = steps.steps_of(db, job.id)
+        workdir = Workdir(workdir_root)
+        for stage in plan.stages:
+            row = rows.get(stage.id)
+            if row is not None and row.status is RunStatus.COMPLETE:
+                if workdir.step_path(stage.id).is_file():
+                    continue
+                return
+            result = self._proof_of_finish(row, workdir, stage.id)
+            if row is None or result is None:
+                return
+            log.info(
+                "worker %s: job %s stage %s finished (attempt %d) while its worker was "
+                "recording it; finishing its upload instead of running it again",
+                self._id,
+                job.id,
+                stage.id,
+                row.attempt,
+            )
+            self._record_finished(db, job, row, result, workdir_root, stop)
+
+    @staticmethod
+    def _proof_of_finish(
+        row: JobStep | None, workdir: Workdir, stage_id: str
+    ) -> dict[str, Any] | None:
+        """The stage's `step.json`, if it proves the attempt on `row` finished; else None.
+
+        All of it has to hold, because a `step.json` outlives the attempt that wrote it --
+        a Refine re-runs `train` beside the preview's, and a killed attempt leaves the
+        last successful one's:
+
+        * the row says that attempt is still running (`in-progress`);
+        * the file names that attempt and that stage;
+        * it was written after the row's attempt started -- not an earlier run's, which
+          is what a re-run stage finds beside it;
+        * every artifact it lists is in `out/` with the checksum it gives, so `out/` was
+          neither wiped by a later start nor half rewritten.
+
+        The row's `started_at` is the recipe process's own stamp of the start
+        (`events.Event.started_at`), taken before `out/` is cleared and so before this
+        attempt's `step.json` can exist, on the clock that file's mtime is on. A row the
+        supervisor had to start itself, with its own clock, may fail the third and be run
+        again, which is what happened to every stage before this: nothing that fails it
+        is mistaken for finished.
+        """
+        if row is None or row.status is not RunStatus.IN_PROGRESS or row.started_at is None:
+            return None
+        path = workdir.step_path(stage_id)
+        try:
+            written = datetime.fromtimestamp(path.stat().st_mtime, tz=UTC)
+            document = json.loads(path.read_text(encoding="utf-8"))
+            result = StepResult.from_dict(document)
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+        if result.stage_id != stage_id or result.attempt != row.attempt:
+            return None
+        if written < row.started_at:
+            return None
+        for ref in result.artifacts:
+            produced = workdir.root / ref.path
+            if not produced.exists() or checksum_of(produced) != ref.checksum:
+                return None
+        return dict(document)
+
     # --- terminal states ----------------------------------------------------------
 
-    def _finish_complete(self, db: Session, job: Job, state: _RunState) -> Terminal:
+    def _finish_complete(
+        self, db: Session, job: Job, state: _RunState, stop: threading.Event | None = None
+    ) -> Terminal:
         ref = state.ref("registration.json")
         document = (
             registration.Registration.read(self._config.workdir_for(job.id) / ref.path)
@@ -639,6 +771,12 @@ class JobSupervisor:
         )
         published = None
         if document is not None:
+            # Publishing is minutes for a large capture, and a deploy's SIGTERM that
+            # waited for it was SIGKILLed at the 30 s `kill_timeout`. Every stage is
+            # finished on its row by now, so a worker that lets go here costs the next
+            # one a publish -- idempotent copies -- and no stage.
+            if self._stopping(db, job, stop):
+                return "lost"
             # Copy to the public bucket first, with no transaction open: for a large
             # capture it takes minutes, and a session idle in a transaction that long is
             # killed by the database (see registration.publish_outputs).
@@ -652,6 +790,8 @@ class JobSupervisor:
                 thumbnail_stage_id=state.stage_producing("thumbnail.jpg"),
                 coverage_stage_id=state.stage_producing("coverage_enu.ply"),
             )
+            if self._stopping(db, job, stop):
+                return "lost"
         if not self._still_ours(db, job):
             return "lost"
         capture = db.get(Capture, job.capture_id)
@@ -679,6 +819,13 @@ class JobSupervisor:
         if self._config.tidy_finished_runs:
             self._tidy(self._config.workdir_for(job.id))
         return "complete"
+
+    def _stopping(self, db: Session, job: Job, stop: threading.Event | None) -> bool:
+        """True, having let go of the job, when this worker is shutting down."""
+        if stop is None or not stop.is_set():
+            return False
+        claim.release(db, job.id, worker_id=self._config.worker_id)
+        return True
 
     def _tidy(self, workdir_root: Path) -> None:
         """After a run that ended, drop what the workdir contract says is disposable.

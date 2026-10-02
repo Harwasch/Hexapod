@@ -54,7 +54,7 @@ def ensure_importable(directory: Path = PIPELINE_DIR) -> None:
 ensure_importable()
 
 from adapters import FakeAdapter, LocalTransfer, SubprocessAdapter  # noqa: E402
-from artifacts import ArtifactRef  # noqa: E402
+from artifacts import ArtifactRef, checksum_of  # noqa: E402
 from cloud import (  # noqa: E402
     CALL_BOOK,
     AttemptLedger,
@@ -124,6 +124,7 @@ __all__ = [
     "Workdir",
     "check_sh_degree",
     "checkpoint_key",
+    "checksum_of",
     "ensure_importable",
     "execute",
     "latest_live",

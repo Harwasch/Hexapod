@@ -212,3 +212,21 @@ def t_dies(ctx: StageContext) -> StageOutcome:
     sys.stderr.write("fatal: the native trainer could not map its weights\n")
     sys.stderr.flush()
     os._exit(9)
+
+
+# --- for tests/test_worker_recovery.py -------------------------------------------------
+
+MANY = ArtifactDecl("many", kind="dir", content_type="inode/directory")
+
+
+@stage_impl("t_many", produces=(MANY,), summary="a directory of many small members")
+def t_many(ctx: StageContext) -> StageOutcome:
+    """What normalize's frames and package's tiles are to the upload: dozens of objects,
+    so a stop can land between two of them. Counts its runs in `work/` as `_quick` does."""
+    counter = ctx.work_dir / "runs.txt"
+    runs = len(counter.read_text().splitlines()) if counter.exists() else 0
+    counter.write_text("x\n" * (runs + 1), encoding="utf-8")
+    out = ctx.output(MANY.name)
+    for index in range(int(ctx.param("members", 40))):
+        (out / f"member_{index:03d}.bin").write_bytes(f"{index}".encode() * 8)
+    return StageOutcome(metrics={"runs": runs + 1})

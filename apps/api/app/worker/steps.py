@@ -41,8 +41,12 @@ def start_step(
     ordinal: int,
     impl: str,
     attempt: int,
+    started_at: datetime | None = None,
 ) -> JobStep:
-    """The row exists while the stage is still running, which is what makes it live."""
+    """The row exists while the stage is still running, which is what makes it live.
+
+    `started_at` is when the recipe process started the stage, when it said; now, when
+    it did not. The supervisor can read a quick stage's start after the stage is over."""
     step = db.scalar(select(JobStep).where(JobStep.job_id == job_id, JobStep.ordinal == ordinal))
     if step is None:
         step = JobStep(job_id=job_id, stage_id=stage_id, ordinal=ordinal, impl=impl)
@@ -51,7 +55,7 @@ def start_step(
     step.impl = impl
     step.attempt = attempt
     step.status = RunStatus.IN_PROGRESS
-    step.started_at = utcnow()
+    step.started_at = started_at or utcnow()
     # A restarted step (a retry, the phone's Refine) starts with nothing measured: the
     # previous attempt's metrics, its progress bar included, describe a run that is over.
     step.metrics = {}

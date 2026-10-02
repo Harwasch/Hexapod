@@ -43,6 +43,12 @@ class Event:
     #: Measured here, by the process that is about to write them -- the supervisor reads
     #: the event later, when a stage that fails at once has already logged its failure.
     log_from: int = 0
+    #: For a started stage: when this process started it (epoch seconds), which becomes
+    #: the row's `started_at`. Stamped here for the same reason as `log_from`: the
+    #: supervisor may read the event after the stage has finished -- it was uploading the
+    #: stage before -- and a `started_at` later than the stage's own `step.json` is a
+    #: start that cannot be compared with it (`JobSupervisor._proof_of_finish`).
+    started_at: float | None = None
 
     def to_json(self) -> str:
         return json.dumps(
@@ -56,6 +62,7 @@ class Event:
                 "errorType": self.error_type,
                 "step": self.step,
                 "logFrom": self.log_from,
+                "startedAt": self.started_at,
             },
             sort_keys=True,
         )
@@ -84,4 +91,9 @@ class Event:
             error_type=str(document.get("errorType", "")),
             step=step if isinstance(step, dict) else {},
             log_from=int(document.get("logFrom", 0) or 0),
+            started_at=_seconds(document.get("startedAt")),
         )
+
+
+def _seconds(value: object) -> float | None:
+    return float(value) if isinstance(value, int | float) and not isinstance(value, bool) else None

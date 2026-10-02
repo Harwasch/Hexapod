@@ -20,6 +20,7 @@ import logging
 import mimetypes
 import re
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -102,6 +103,20 @@ def checkpoint_key(job_id: uuid.UUID, stage_id: str, attempt: int = 1) -> str:
     read it out of.
     """
     return stage_checkpoint_key(str(job_id), stage_id, attempt)
+
+
+class UploadStopped(Exception):  # noqa: N818 - a request, as `StopRequested` is
+    """The worker was asked to stop while a stage's artifacts were going up.
+
+    Raised between two objects, never in the middle of one, so whatever is in the bucket
+    is whole; the stage's row is left unfinished, and the next worker redoes the upload
+    from the stage's `step.json` (`JobSupervisor._settle_finished`). Every key is the
+    same on the second go, so nothing the first left behind is in the way.
+    """
+
+
+#: Asked between two objects of an upload: True once the worker is stopping.
+Stopping = Callable[[], bool]
 
 
 @dataclass(frozen=True)
@@ -203,7 +218,12 @@ MAX_COPY_BYTES = 5 * 1024**3
 
 
 def upload_artifact(
-    storage: ObjectStorage, workdir_root: Path, job_id: uuid.UUID, ref: ArtifactRef
+    storage: ObjectStorage,
+    workdir_root: Path,
+    job_id: uuid.UUID,
+    ref: ArtifactRef,
+    *,
+    stopping: Stopping | None = None,
 ) -> UploadedArtifact | None:
     """Upload one artifact and describe the row it becomes.
 
@@ -217,16 +237,23 @@ def upload_artifact(
 
     A stage that ran on a provider is not uploaded at all when its bytes are already in
     the bucket: see `_copy_from_transfer`.
+
+    `stopping` is asked before the artifact and before each member, and `UploadStopped`
+    raised once it says yes: a tileset is hundreds of objects and minutes of uploads, and
+    a deploy's SIGTERM that waited for the last of them was a SIGKILL at fly.toml's 30 s
+    `kill_timeout` instead.
     """
+    _check(stopping, ref)
     source = workdir_root / ref.path
     key = artifact_key(job_id, ref.stage_id, ref.name)
     try:
         if ref.kind == "dir":
             if not source.is_dir():
                 return None
-            if not _copy_from_transfer(storage, workdir_root, job_id, ref, source, key):
+            if not _copy_from_transfer(storage, workdir_root, job_id, ref, source, key, stopping):
 
                 def one(member: Path) -> object:
+                    _check(stopping, ref)
                     member_key = f"{key}/{member.relative_to(source).as_posix()}"
                     return storage.upload_file(
                         member_key,
@@ -239,7 +266,7 @@ def upload_artifact(
         else:
             if not source.is_file():
                 return None
-            if not _copy_from_transfer(storage, workdir_root, job_id, ref, source, key):
+            if not _copy_from_transfer(storage, workdir_root, job_id, ref, source, key, stopping):
                 # Streamed from disk: a trained splat can be larger than the worker's memory.
                 storage.upload_file(
                     key, source, ref.content_type, cache_control=cache_control_for(key)
@@ -259,6 +286,11 @@ def _members(directory: Path) -> list[Path]:
     return sorted(path for path in directory.rglob("*") if path.is_file())
 
 
+def _check(stopping: Stopping | None, ref: ArtifactRef) -> None:
+    if stopping is not None and stopping():
+        raise UploadStopped(f"stopped while uploading {ref.stage_id}'s {ref.name}")
+
+
 def _copy_from_transfer(
     storage: ObjectStorage,
     workdir_root: Path,
@@ -266,6 +298,7 @@ def _copy_from_transfer(
     ref: ArtifactRef,
     source: Path,
     key: str,
+    stopping: Stopping | None = None,
 ) -> bool:
     """Copy a dispatched stage's artifact into place inside the bucket, if it can be.
 
@@ -303,6 +336,7 @@ def _copy_from_transfer(
                 return False
 
             def one(relative: str) -> object:
+                _check(stopping, ref)
                 member_key = f"{key}/{relative}"
                 return storage.copy_object(
                     storage.bucket,
@@ -325,7 +359,7 @@ def _copy_from_transfer(
                 content_type=ref.content_type,
                 cache_control=cache_control_for(key),
             )
-    except StorageUnavailableError:
+    except (StorageUnavailableError, UploadStopped):
         raise
     except Exception:
         log.warning(
