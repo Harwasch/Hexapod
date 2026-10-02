@@ -194,9 +194,13 @@ package's tiles are hundreds of small objects whose cost is round trips), and ev
 artifact object is written with the `Cache-Control` a browser should get for it
 (`outputs.cache_control_for`, the same rule as the tile proxy in `functions/r2/[[path]].js`).
 A stage that ran on a provider is **copied** into its artifact keys inside the bucket from
-what the provider left under `runs/<job>/<stage>/transfer/out` (`out-a<N>` for attempt N), rather than uploaded again
-from the workdir — but only when its `step.json` says `runner: cloud` and the objects match
-the workdir's files name for name and size for size; anything else is uploaded as before.
+what the provider left under `runs/<job>/<stage>/transfer/out` (`out-a<N>` for a call
+attempt N submitted), rather than uploaded again from the workdir — but only when its
+`step.json` says `runner: cloud`, names the key its outputs came home from
+(`metrics.outputsKey`, the call's own: a call re-attached to wrote under the attempt that
+submitted it), and the objects there match the workdir's files name for name and size for
+size; anything else is uploaded as before. The key is never guessed from the attempt
+number: after a Retry resets the attempts, `out-a2` can hold an earlier run's outputs.
 The download into the workdir stays: `place`, `package` and the rest read it there.
 
 Publishing (`publish.py`) copies a tileset to the public bucket eight at a time and its

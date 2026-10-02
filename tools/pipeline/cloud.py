@@ -978,6 +978,12 @@ class CloudRunner(BaseRunner):
         # `billedS` they account for a remote stage's wall time end to end.
         metrics["stageInS"] = round(staged_s, 2)
         metrics["outputsBackS"] = round(back_s, 2)
+        # Which key `out/` came home from: the call's, which is an earlier attempt's for a
+        # call re-attached to across a dead worker. The worker copies the artifacts into
+        # place from exactly this key (`app/worker/outputs.py`); guessing it from the
+        # attempt number was wrong for an adopted call, and after a Retry reset the
+        # attempts could name another run's leftover outputs of the same size.
+        metrics["outputsKey"] = called.request.outputs_key
         return StageOutcome(metrics=metrics, summary=called.poll.summary)
 
     def _request(

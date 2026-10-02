@@ -75,12 +75,28 @@ def a_package(root: Path, tiles: int = 3) -> Path:
     return splat
 
 
-def step_json(root: Path, stage: str, runner: str, attempt: int | None = None) -> None:
+#: `step_json`'s default: the key a call submitted by the step's own attempt wrote to.
+OWN = "own"
+
+
+def step_json(
+    root: Path,
+    stage: str,
+    runner: str,
+    attempt: int | None = None,
+    outputs_key: str | None = OWN,
+) -> None:
+    """A stage's `step.json`, as `CloudRunner` writes it: with the key its outputs came
+    home from (`metrics.outputsKey`) -- by default its own attempt's, None for none."""
     path = root / "stages" / stage / "step.json"
     path.parent.mkdir(parents=True, exist_ok=True)
-    step: dict[str, object] = {"stageId": stage, "runner": runner}
+    step: dict[str, object] = {"stageId": stage, "runner": runner, "metrics": {}}
     if attempt is not None:
         step["attempt"] = attempt
+    if outputs_key == OWN:
+        outputs_key = transfer_outputs_key(JOB, stage, attempt or 1)
+    if outputs_key is not None and runner == "cloud":
+        step["metrics"] = {"outputsKey": outputs_key}
     path.write_text(json.dumps(step))
 
 
@@ -345,6 +361,48 @@ def test_an_earlier_attempts_leftover_is_never_copied_as_a_later_ones(
     assert uploaded is not None
     assert counting.uploads == [uploaded.storage_key]
     assert storage.get_object(uploaded.storage_key) == b"ply\x00new"
+
+
+def test_an_adopted_calls_outputs_are_copied_from_the_key_that_call_wrote(
+    storage: S3Storage, tmp_path: Path
+) -> None:
+    """Attempt 2 re-attached to attempt 1's call, so its outputs came home from `out`, and
+    `out-a2` holds what an earlier run's attempt 2 left there before a Retry reset the
+    attempts -- a file of the same name and size. The step's own record of the key is
+    what is copied from; the attempt number would have copied the other run's bytes."""
+    ply = tmp_path / "stages" / "train" / "out" / "canonical.ply"
+    ply.parent.mkdir(parents=True)
+    ply.write_bytes(b"ply\x00new")
+    step_json(tmp_path, "train", "cloud", attempt=2, outputs_key=transfer_outputs_key(JOB, "train"))
+    provider_left(storage, "train", {"canonical.ply": b"ply\x00new"}, attempt=1)
+    provider_left(storage, "train", {"canonical.ply": b"ply\x00old"}, attempt=2)
+    counting = NoUploads(storage)
+
+    uploaded = upload_artifact(counting, tmp_path, JOB, splat_ref())
+
+    assert uploaded is not None and counting.uploads == []
+    assert storage.get_object(uploaded.storage_key) == b"ply\x00new"
+
+
+@pytest.mark.parametrize(
+    "recorded",
+    [None, f"runs/{uuid.UUID(int=7)}/train/transfer/out", f"runs/{JOB}/train/checkpoint"],
+)
+def test_without_a_recorded_key_of_its_own_a_dispatched_stage_is_uploaded(
+    storage: S3Storage, tmp_path: Path, recorded: str | None
+) -> None:
+    """No guessing: a step with no `outputsKey` (written before it was recorded), or one
+    naming anything but this stage's own transfer outputs, is uploaded from the workdir
+    even when the attempt's key holds a file that matches."""
+    ply = tmp_path / "stages" / "train" / "out" / "canonical.ply"
+    ply.parent.mkdir(parents=True)
+    ply.write_bytes(b"ply\x00abc")
+    step_json(tmp_path, "train", "cloud", outputs_key=recorded)
+    provider_left(storage, "train", {"canonical.ply": b"ply\x00abc"})
+    counting = NoUploads(storage)
+
+    assert upload_artifact(counting, tmp_path, JOB, splat_ref()) is not None
+    assert counting.uploads == [f"runs/{JOB}/train/canonical.ply"]
 
 
 def test_a_dispatched_stages_directory_is_copied_member_by_member(

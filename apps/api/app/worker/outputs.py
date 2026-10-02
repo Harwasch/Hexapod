@@ -79,14 +79,15 @@ def artifact_key(job_id: uuid.UUID, stage_id: str, name: str) -> str:
 
 
 def transfer_outputs_key(job_id: uuid.UUID, stage_id: str, attempt: int = 1) -> str:
-    """Where attempt `attempt` of a stage dispatched to a provider had its `out/` put.
+    """Where a call submitted by attempt `attempt` of a dispatched stage puts its `out/`.
 
     The pipeline's `StageKeys.outputs`, stated once on this side as `checkpoint_key` below
     is: `runs/<job>/<stage>/transfer/out`, under `transfer/` so it cannot collide with
     the per-artifact keys uploaded here, with the attempt's suffix after the first
     (`runners.per_attempt`: `out-a2`, ...) so an attempt nobody stopped cannot land its
     outputs where the next one's are read. `tests/test_worker_outputs.py` holds the two
-    to the same string.
+    to the same string. Which of them a finished step's outputs came from is not
+    derived from this: the step records it (`_dispatched_outputs`).
     """
     name = "out" if attempt == 1 else f"out-a{attempt}"
     return f"{stage_prefix(job_id, stage_id)}/transfer/{name}"
@@ -212,6 +213,8 @@ def member_content_type(key: str) -> str:
 #: The runner a stage dispatched to a provider records in its `step.json`
 #: (`tools/pipeline/cloud.py`, `CloudRunner.name`).
 DISPATCHED_RUNNER = "cloud"
+#: The metric in which it records the key its outputs came home from.
+OUTPUTS_KEY = "outputsKey"
 #: One `CopyObject`'s ceiling on S3 and on R2. Bigger needs `UploadPartCopy`; an object
 #: over it is uploaded instead (a trained splat is ~2 GB at the L4's 8M gaussians).
 MAX_COPY_BYTES = 5 * 1024**3
@@ -303,8 +306,8 @@ def _copy_from_transfer(
     """Copy a dispatched stage's artifact into place inside the bucket, if it can be.
 
     A stage that ran on Modal handed its `out/` back through the bucket: the provider put
-    it under `transfer_outputs_key`, and the recipe process downloaded it into the
-    workdir. Uploading those bytes again from the worker -- a trained splat is up to 2 GB,
+    it under one of `transfer_outputs_key`'s keys, and the recipe process downloaded it
+    into the workdir. Uploading those bytes again from the worker -- a trained splat is up to 2 GB,
     from a shared-CPU machine -- moves them a third time to put them where they already
     are. So the artifact is copied server side from the provider's copy instead.
 
@@ -314,16 +317,17 @@ def _copy_from_transfer(
     this stage" reads the workdir. Only the upload goes.
 
     Done only when it is safe to say the bucket's copy *is* the workdir's: the stage's
-    `step.json` says it was dispatched, and the provider's objects match the workdir's
-    files name for name and byte count for byte count. Anything else -- a stage that ran
-    here, a transfer through a shared directory rather than the bucket, an object too big
-    for one `CopyObject`, any error from the copy -- returns False and the caller uploads,
-    as it always did. Only "there is no bucket" propagates.
+    `step.json` says it was dispatched and which key its outputs came home from, and the
+    provider's objects there match the workdir's files name for name and byte count for
+    byte count. Anything else -- a stage that ran here, a step that does not say, a
+    transfer through a shared directory rather than the bucket, an object too big for one
+    `CopyObject`, any error from the copy -- returns False and the caller uploads, as it
+    always did. Only "there is no bucket" (and a stop) propagates.
     """
-    attempt = _dispatched_attempt(workdir_root, ref.stage_id)
-    if attempt is None:
+    outputs_key = _dispatched_outputs(workdir_root, job_id, ref.stage_id)
+    if outputs_key is None:
         return False
-    remote = f"{transfer_outputs_key(job_id, ref.stage_id, attempt)}/{ref.name}"
+    remote = f"{outputs_key}/{ref.name}"
     try:
         if ref.kind == "dir":
             local = {
@@ -373,14 +377,19 @@ def _copy_from_transfer(
     return True
 
 
-def _dispatched_attempt(workdir_root: Path, stage_id: str) -> int | None:
-    """The attempt that ran this stage on a provider, or None if it ran here.
+def _dispatched_outputs(workdir_root: Path, job_id: uuid.UUID, stage_id: str) -> str | None:
+    """The key a dispatched stage's outputs came home from, or None to upload instead.
 
-    Its `step.json` -- written before the stage is reported finished -- names the runner
-    that ran it and the attempt it was. The attempt matters: every attempt after the first
-    hands its `out/` back under a key of its own (`transfer_outputs_key`), and a file of
-    the same name and size left there by an earlier attempt must never be copied as this
-    one's.
+    Read from its `step.json` -- written before the stage is reported finished -- where
+    `CloudRunner` records the key of the call whose outputs it fetched (`outputsKey`).
+    That is the call's key, not the attempt's: a call re-attached to across a dead worker
+    wrote under the attempt that submitted it. Until the 2026-10 review this was guessed
+    from the step's attempt number, which named the wrong key for such a call -- and after
+    a person's Retry reset the attempts to 1, `out-a2` and the rest could hold an earlier
+    run's outputs, whose file of the same name and size would have been copied as this
+    run's. So there is no guess: a step that does not say (written before it did), says
+    a stage ran here, or names anything but one of this stage's own transfer keys
+    (`transfer_outputs_key`) is uploaded from the workdir.
     """
     try:
         step = json.loads(Workdir(workdir_root).step_path(stage_id).read_text("utf-8"))
@@ -388,8 +397,14 @@ def _dispatched_attempt(workdir_root: Path, stage_id: str) -> int | None:
         return None
     if not isinstance(step, dict) or step.get("runner") != DISPATCHED_RUNNER:
         return None
-    attempt = step.get("attempt", 1)
-    return attempt if isinstance(attempt, int) and attempt >= 1 else None
+    metrics = step.get("metrics")
+    recorded = metrics.get(OUTPUTS_KEY) if isinstance(metrics, dict) else None
+    if not isinstance(recorded, str):
+        return None
+    first = transfer_outputs_key(job_id, stage_id)
+    if recorded != first and not re.fullmatch(re.escape(first) + r"-a[1-9][0-9]*", recorded):
+        return None
+    return recorded
 
 
 def _sizes_under(storage: ObjectStorage, prefix: str) -> dict[str, int]:

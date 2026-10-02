@@ -319,6 +319,30 @@ def test_after_a_crash_the_next_attempt_adopts_the_call_on_its_own_keys(tmp_path
     assert result.steps[0].attempt == 2
 
 
+def test_the_step_says_which_key_its_outputs_came_home_from(tmp_path: Path) -> None:
+    """The worker copies a dispatched stage's artifacts into place from the provider's copy
+    of `out/` rather than uploading them again. Which key that copy is under is the
+    call's, not the attempt's: an adopted call wrote under the attempt that submitted it.
+    So the step records it (`outputsKey`), and the worker reads that instead of guessing
+    from the attempt number -- after a Retry resets the attempts, `out-a2` can hold an
+    earlier run's outputs of the same name and size."""
+    workdir = seeded_workdir(tmp_path / "run", upload=False)
+    adapter = provider(tmp_path)
+    with pytest.raises(DetachRequested):
+        run(workdir, runner(adapter, tmp_path, sleep=stops(2, DetachRequested())))
+    book = book_of(workdir)
+    book.detached = False
+    book.save()
+
+    adopted = run(workdir, runner(adapter, tmp_path), attempt=2)
+    fresh = run(seeded_workdir(tmp_path / "fresh", upload=False), runner(adapter, tmp_path), 3)
+
+    assert adopted.steps[0].metrics["outputsKey"] == "runs/run/train/transfer/out"
+    assert fresh.steps[0].metrics["outputsKey"] == "runs/fresh/train/transfer/out-a3"
+    step = json.loads(workdir.step_path("train").read_text())
+    assert step["metrics"]["outputsKey"] == "runs/run/train/transfer/out"
+
+
 def test_a_call_already_in_the_ledger_is_not_paid_for_twice(tmp_path: Path) -> None:
     """Killed after it wrote the ledger and before it struck the call from the book: the
     next runner re-attaches to a call that is already paid for, and the ledger keeps the
