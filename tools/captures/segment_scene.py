@@ -88,6 +88,7 @@ __all__ = [
     "OracleMasks",
     "View",
     "describe",
+    "footprint_anchors",
     "instances_document",
     "lift",
     "link_instances",
@@ -100,6 +101,7 @@ __all__ = [
     "segment",
     "supervoxels",
     "tile_binding",
+    "view_footprint",
     "write_instances",
 ]
 
@@ -120,6 +122,31 @@ OBSERVER_PITCH_DEG = 15.0
 YAW_CANDIDATES = 16
 #: An observer eye needs this much free space (no splat centre nearer), metres.
 OBSERVER_CLEARANCE_M = 0.3
+#: Local views (scans wider than one view): the frame's width at its target holds
+#: `VIEW_WIDTH / CELL_PX` cells, so a cell spans about `CELL_PX` pixels.
+CELL_PX = 4.0
+#: Local view targets: a grid over the scan's footprint, this many per footprint width.
+ANCHORS_PER_FOOTPRINT = 3
+#: A grid bin holds the scan with at least this share of the median occupied bin's sample.
+FOOTPRINT_DENSITY = 0.1
+#: Oblique views per target, alternating between these elevations (degrees).
+OBLIQUE_VIEWS = 4
+OBLIQUE_ELEVATIONS_DEG = (35.0, 55.0, 20.0, 75.0)
+#: ... at these factors of the distance where the frame spans one footprint.
+OBLIQUE_DISTANCES = (1.0, 0.7, 0.5, 1.4)
+#: Line of sight: `OBLIQUE_PROBES` points from the eye to `OBLIQUE_PROBE_FROM` of the way
+#: back towards it from the target; a probe is clear with no sampled splat within
+#: `OBLIQUE_CLEARANCE` of a footprint. The first candidate with `OBLIQUE_CLEAR` of its
+#: probes clear is taken, else the clearest if at least `OBLIQUE_MIN_CLEAR`, else none.
+OBLIQUE_PROBES = 12
+OBLIQUE_PROBE_FROM = 0.25
+OBLIQUE_CLEARANCE = 0.03
+OBLIQUE_CLEAR = 0.9
+OBLIQUE_MIN_CLEAR = 0.6
+#: Extra eye-height observer views per target.
+EYE_VIEWS = 2
+#: At most this many views in all (rings, observers, local).
+MAX_VIEWS = 480
 #: Splats sampled for the scan's extent and the observers' clearance test (seeded).
 PLAN_SAMPLE = 400_000
 
@@ -388,18 +415,63 @@ def observer_points(splats: Splats) -> np.ndarray:
     return vc.cone_grid_from_chunks(chunks(), chunks(), len(splats)).observers
 
 
+def _farthest(points: np.ndarray, count: int, start: int) -> list[int]:
+    """`count` indices of `points` spread by farthest-point sampling from `start`."""
+    chosen = [start]
+    gaps = np.linalg.norm(points - points[start], axis=1)
+    while len(chosen) < min(count, len(points)):
+        chosen.append(int(gaps.argmax()))
+        gaps = np.minimum(gaps, np.linalg.norm(points - points[chosen[-1]], axis=1))
+    return chosen
+
+
+def view_footprint(edge: float, width: int = VIEW_WIDTH) -> float:
+    """A local view's footprint (the frame's width at its target), metres: `CELL_PX`
+    pixels per cell, so the cells it votes for are resolved."""
+    return width * edge / CELL_PX
+
+
+def footprint_anchors(
+    sample: np.ndarray, lo: np.ndarray, hi: np.ndarray, step: float
+) -> np.ndarray:
+    """Targets for local views: the centres of a `step` grid over the robust box where the
+    scan is (bins with at least `FOOTPRINT_DENSITY` of the median occupied bin's sample),
+    each at its bin's ground (5th percentile of height)."""
+    inside = np.all((sample >= lo) & (sample <= hi), axis=1)
+    pts = sample[inside]
+    if len(pts) == 0:
+        return np.zeros((0, 3))
+    dims = np.maximum(np.ceil((hi[:2] - lo[:2]) / step).astype(np.int64), 1)
+    ij = np.minimum(np.floor((pts[:, :2] - lo[:2]) / step).astype(np.int64), dims - 1)
+    key = ij[:, 0] * dims[1] + ij[:, 1]
+    keys, inverse, counts = np.unique(key, return_inverse=True, return_counts=True)
+    dense = counts >= FOOTPRINT_DENSITY * np.median(counts)
+    order = np.argsort(inverse, kind="stable")
+    groups = np.split(pts[order, 2], np.cumsum(counts)[:-1])
+    out = []
+    for k in np.flatnonzero(dense):
+        i, j = divmod(int(keys[k]), int(dims[1]))
+        ground = float(np.percentile(groups[k], 5))
+        out.append([lo[0] + (i + 0.5) * step, lo[1] + (j + 0.5) * step, ground])
+    return np.asarray(out, np.float64).reshape(-1, 3)
+
+
 def plan_views(
     positions: np.ndarray,
     count: int = VIEW_COUNT,
     *,
     observers: np.ndarray | None = None,
+    edge: float | None = None,
+    solid: np.ndarray | None = None,
+    max_views: int = MAX_VIEWS,
     width: int = VIEW_WIDTH,
     height: int = VIEW_HEIGHT,
     fov_deg: float = VIEW_FOV_DEG,
     up: tuple[float, float, float] = (0.0, 0.0, 1.0),
     eye_height_m: float = 1.6,
 ) -> list[Camera]:
-    """`count` cameras: rings around the scan, and observer-near views.
+    """Cameras: `count` views of the whole scan (rings and observer-near views), plus, for a
+    scan wider than one view's footprint, local views that scale with its area.
 
     The rings (`count - count // 2` views, or all of them with no observers) see every side
     at alternating `RING_ELEVATIONS_DEG`: half from far enough out that the scan's robust
@@ -407,28 +479,52 @@ def plan_views(
     scales, so small things are not specks. Observer views stand `eye_height_m` above
     observer points with `OBSERVER_CLEARANCE_M` of free space, spread by farthest-point
     sampling, `OBSERVER_PITCH_DEG` down, each facing the most of the scan within reach
-    (`YAW_CANDIDATES`) -- the close views of what a walk-in capture saw best. Nothing in it
-    knows the scene."""
+    (`YAW_CANDIDATES`) -- the close views of what a walk-in capture saw best.
+
+    **Local views** (given the cell `edge`): a view's footprint is `view_footprint(edge)`
+    (a cell spans `CELL_PX` pixels). When the robust box is wider than that, the footprint is
+    gridded `ANCHORS_PER_FOOTPRINT` times per footprint width (`footprint_anchors`), and
+    each anchor gets `OBLIQUE_VIEWS` obliques at the distance where the frame spans one
+    footprint (azimuths turned by the golden angle per anchor; the elevation and distance
+    are the first of `OBLIQUE_ELEVATIONS_DEG` x `OBLIQUE_DISTANCES` with a clear line of
+    sight to the target past `solid` (points that block it: the occupied cells' centres;
+    default the sample) -- under a canopy the view goes low, in the open high) and
+    `EYE_VIEWS` more observer views; every local and observer view then has a far plane a
+    footprint beyond its target. At most `max_views` in all (anchors spread by farthest
+    points). Nothing in it knows the scene; small scans get the plain `count` views."""
     sample, lo, hi = _extent(positions)
     centre = (lo + hi) / 2
     up_a = np.asarray(up, np.float64)
-    eyes: list[tuple[np.ndarray, np.ndarray]] = []
+    radius = max(0.5 * float(np.linalg.norm((hi - lo)[:2])), 1e-3)
+    half_fov = math.radians(fov_deg) / 2
+    anchors = np.zeros((0, 3))
+    footprint = math.inf
+    if edge is not None:
+        footprint = view_footprint(edge, width)
+        if float(np.max(hi[:2] - lo[:2])) > footprint:
+            anchors = footprint_anchors(sample, lo, hi, footprint / ANCHORS_PER_FOOTPRINT)
+            per_anchor = OBLIQUE_VIEWS + EYE_VIEWS
+            room = max(0, (max_views - count) // per_anchor)
+            if len(anchors) > room:
+                start = int(np.argmin(np.linalg.norm(anchors[:, :2] - centre[:2], axis=1)))
+                anchors = anchors[np.sort(_farthest(anchors, room, start))]
+        if not len(anchors):
+            footprint = math.inf
+    local = len(anchors) > 0
+    eyes: list[tuple[np.ndarray, np.ndarray, float]] = []
     near: list[np.ndarray] = []
+    tree = cKDTree(sample)
     if observers is not None and len(observers) and count > 1:
         pool = np.asarray(observers, np.float64).reshape(-1, 3) + up_a * eye_height_m
-        clearance = cKDTree(sample).query(pool, k=1)[0]
+        clearance = tree.query(pool, k=1)[0]
         pool = pool[clearance >= OBSERVER_CLEARANCE_M]
         if len(pool):
-            chosen = [int(np.argmin(np.linalg.norm(pool - centre, axis=1)))]
-            gaps = np.linalg.norm(pool - pool[chosen[0]], axis=1)
-            while len(chosen) < min(count // 2, len(pool)):
-                chosen.append(int(gaps.argmax()))
-                gaps = np.minimum(gaps, np.linalg.norm(pool - pool[chosen[-1]], axis=1))
-            near = [pool[k] for k in chosen]
-    ring = count - len(near)
+            start = int(np.argmin(np.linalg.norm(pool - centre, axis=1)))
+            wanted = count // 2 + EYE_VIEWS * len(anchors)
+            near = [pool[k] for k in _farthest(pool, wanted, start)]
+    ring = count - min(len(near), count // 2)
     outer = (ring + 1) // 2
-    radius = max(0.5 * float(np.linalg.norm((hi - lo)[:2])), 1e-3)
-    distance = radius / math.tan(math.radians(fov_deg) / 2)
+    distance = radius / math.tan(half_fov)
     for k in range(ring):
         # Two scales: the whole scan from the outer ring, a half of it from half as far.
         inner = k >= outer
@@ -446,15 +542,49 @@ def plan_views(
         target = centre.copy()
         if inner:
             target[:2] += 0.5 * radius * direction[:2] / max(math.cos(elevation), 1e-9)
-        eyes.append((target + distance * (0.5 if inner else 1.0) * direction, target))
+        eyes.append((target + distance * (0.5 if inner else 1.0) * direction, target, math.inf))
+    if local:
+        reach = footprint / 2 / math.tan(half_fov)
+        golden = math.pi * (3 - math.sqrt(5))
+        sight = tree if solid is None else cKDTree(np.asarray(solid, np.float64))
+        probes = np.linspace(OBLIQUE_PROBE_FROM, 1.0, OBLIQUE_PROBES)
+        n_elev = len(OBLIQUE_ELEVATIONS_DEG)
+        for i, target in enumerate(anchors):
+            for j in range(OBLIQUE_VIEWS):
+                azimuth = 2 * math.pi * j / OBLIQUE_VIEWS + i * golden
+                # Candidates in order of preference: elevations from this view's turn in
+                # the cycle, each at the distances in `OBLIQUE_DISTANCES`.
+                candidates = []
+                for e in range(n_elev):
+                    elevation = math.radians(OBLIQUE_ELEVATIONS_DEG[(i + j + e) % n_elev])
+                    direction = np.array(
+                        [
+                            math.cos(elevation) * math.cos(azimuth),
+                            math.cos(elevation) * math.sin(azimuth),
+                            math.sin(elevation),
+                        ]
+                    )
+                    candidates += [reach * f * direction for f in OBLIQUE_DISTANCES]
+                offsets = np.asarray(candidates)
+                # Line of sight: probes from the eye towards the target, each clear when no
+                # sampled splat is within `OBLIQUE_CLEARANCE` of a footprint.
+                points = target + offsets[:, None, :] * probes[None, ::-1, None]
+                gap = sight.query(points.reshape(-1, 3), k=1)[0].reshape(len(offsets), -1)
+                clear = (gap >= OBLIQUE_CLEARANCE * footprint).mean(axis=1)
+                good = np.flatnonzero(clear >= OBLIQUE_CLEAR)
+                pick = int(good[0]) if good.size else int(np.argmax(clear))
+                if clear[pick] >= OBLIQUE_MIN_CLEAR:
+                    eye = target + offsets[pick]
+                    eyes.append((eye, target, float(np.linalg.norm(offsets[pick])) + footprint))
     pitch = math.radians(OBSERVER_PITCH_DEG)
     yaws = 2 * math.pi * np.arange(YAW_CANDIDATES) / YAW_CANDIDATES
+    within = min(radius, footprint)
     for eye in near:
         # Look where the scan is: the yaw whose wedge holds the most of it within reach.
         offset = sample[:, :2] - eye[:2]
-        reach = np.linalg.norm(offset, axis=1)
+        reach_m = np.linalg.norm(offset, axis=1)
         bearing = np.arctan2(offset[:, 1], offset[:, 0])
-        close = reach <= radius
+        close = reach_m <= within
         held = [
             int(np.sum(close & (np.abs(np.angle(np.exp(1j * (bearing - y)))) <= math.pi / 6)))
             for y in yaws
@@ -463,10 +593,10 @@ def plan_views(
         look = np.array(
             [math.cos(pitch) * math.cos(yaw), math.cos(pitch) * math.sin(yaw), -math.sin(pitch)]
         )
-        eyes.append((eye, eye + look))
+        eyes.append((eye, eye + look, footprint))
     return [
-        Camera.look_at(eye, target, fov_deg=fov_deg, width=width, height=height, up=up)
-        for eye, target in eyes
+        Camera.look_at(eye, target, fov_deg=fov_deg, width=width, height=height, up=up, far=far)
+        for eye, target, far in eyes
     ]
 
 
