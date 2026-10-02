@@ -432,6 +432,34 @@ jobs:
               sys.exit(f"the catalogue is missing {missing}; it listed {names}")
           print("catalogue lists:", names)
           PY
+      - name: The image can embed a search query
+        # Search by meaning (app/services/text_encoder.py): the text tower the build stage
+        # exported must be in the image and load under onnxruntime. Its parity with
+        # transformers was checked by the export, so here only that it answers, and that
+        # "spool" is nearer "cable spool" than "pumpkin" in what it answers.
+        run: |
+          for q in spool "cable spool" pumpkin; do
+            if ! curl -fsS --get --data-urlencode "text=$q" \
+                http://127.0.0.1:8000/api/v1/text-embeddings -o "emb-${q// /-}.json"; then
+              echo "GET /api/v1/text-embeddings failed for '$q'"; docker logs twin-api || true
+              exit 1
+            fi
+          done
+          python3 - <<'PY'
+          import json
+          import math
+          import sys
+
+          spool, cable, pumpkin = (
+              json.load(open(f"emb-{q}.json")) for q in ("spool", "cable-spool", "pumpkin")
+          )
+          if spool["model"] != "siglip:google/siglip2-base-patch16-224" or spool["dim"] != 768:
+              sys.exit(f"unexpected encoder: {spool['model']} / {spool['dim']}")
+          dot = lambda a, b: sum(x * y for x, y in zip(a["embedding"], b["embedding"]))
+          if abs(math.sqrt(dot(spool, spool)) - 1) > 1e-3 or dot(spool, cable) <= dot(spool, pumpkin):
+              sys.exit("the embeddings do not look like SigLIP 2's text tower")
+          print("text-embeddings:", spool["prompt"], round(dot(spool, cable), 3), round(dot(spool, pumpkin), 3))
+          PY
       - name: The pipeline's stages and cloud seam import in the image's venv
         # The worker's child process imports `stages` for a real job, in this interpreter,
         # and nothing above reaches it: an empty queue never plans a recipe. It is also the

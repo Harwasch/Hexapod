@@ -59,6 +59,12 @@ dependencies = [
 # It stays an extra so the choice is still a choice: a deployment with no GPU stages can
 # `uv sync` without it and carry nothing extra.
 modal = ["modal>=1.5.5"]
+# Search by meaning: SigLIP 2's text tower on the API's CPU (app/services/text_encoder.py),
+# from the files tools/captures/export_text_encoder.py writes in the image's build stage.
+# onnxruntime (MIT) and sentencepiece (Apache-2.0) rather than torch: ~25 MB of wheels
+# instead of ~700 MB. An extra like `modal`, installed by infra/api.Dockerfile; without it
+# (or without TEXT_ENCODER_DIR) the route answers 503 and the viewer searches by tags.
+text = ["onnxruntime>=1.20", "sentencepiece>=0.2"]
 
 [dependency-groups]
 dev = [
@@ -150,6 +156,11 @@ follow_imports = "silent"
 # `stages` imports, and which this project type-checks across the seam -- imports it.
 # The same override tools/pipeline/pyproject.toml carries, for the same module.
 module = ["imageio_ffmpeg.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# The `text` extra: neither ships type information, and CI's mypy runs without extras.
+module = ["onnxruntime.*", "sentencepiece.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

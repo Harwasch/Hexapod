@@ -90,6 +90,14 @@ class Settings(BaseSettings):
     # How many captures the phone key may create in any 24 hours.
     api_phone_daily_captures: int = 20
 
+    # Search by meaning (app/services/text_encoder.py): the directory
+    # tools/captures/export_text_encoder.py wrote -- SigLIP 2's text tower, which the image
+    # bakes in at /opt/text-encoder. Unset, `GET /api/v1/text-embeddings` answers 503 and
+    # the viewer searches by tags alone. Threads: onnxruntime's intra-op count; the app
+    # machine is shared-cpu-1x.
+    text_encoder_dir: Path | None = None
+    text_encoder_threads: int = 1
+
     cesium_ion_server_token: str | None = None
     cesium_ion_api_base: str = "https://api.cesium.com"
 

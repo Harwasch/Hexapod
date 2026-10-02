@@ -816,6 +816,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/text-embeddings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Embed a search query with the model scan objects were described with
+         * @description SigLIP 2's text tower (google/siglip2-base-patch16-224, the model segmentation embedded each object's views with), on the query inside the tags' template ("a photo of a {}."). The viewer ranks a scan's objects by the cosine between this and their rows of instances.emb. A leading article is dropped (the template has one). The first call on a machine loads the model (about 1.5 s); then about 140 ms. The same text always gives the same vector, so responses are cacheable. 503 when this deployment has no encoder: search falls back to tags.
+         */
+        get: operations["text_embedding_api_v1_text_embeddings_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -3275,6 +3295,23 @@ export interface components {
             /** Start */
             start?: string | null;
         };
+        /**
+         * TextEmbedding
+         * @description The query embedded with SigLIP 2's text tower, comparable with `instances.emb` rows.
+         *
+         *     Use it only when `model` equals the scan's `instances.json` `embedding.model`; a
+         *     vector from another model is not in the same space.
+         */
+        TextEmbedding: {
+            /** Dim */
+            dim: number;
+            /** Embedding */
+            embedding: number[];
+            /** Model */
+            model: string;
+            /** Prompt */
+            prompt: string;
+        };
         /** TilesUrlLayerSource */
         TilesUrlLayerSource: {
             /**
@@ -3534,6 +3571,7 @@ export type SchemaSiteUpdate = components['schemas']['SiteUpdate'];
 export type SchemaStacSource = components['schemas']['StacSource'];
 export type SchemaStorageReconciliation = components['schemas']['StorageReconciliation'];
 export type SchemaTemporalExtent = components['schemas']['TemporalExtent'];
+export type SchemaTextEmbedding = components['schemas']['TextEmbedding'];
 export type SchemaTilesUrlLayerSource = components['schemas']['TilesUrlLayerSource'];
 export type SchemaTilesUrlSource = components['schemas']['TilesUrlSource'];
 export type SchemaUploadStatus = components['schemas']['UploadStatus'];
@@ -7016,6 +7054,73 @@ export interface operations {
                 };
             };
             /** @description Object storage is not configured */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    text_embedding_api_v1_text_embeddings_get: {
+        parameters: {
+            query: {
+                text: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TextEmbedding"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No text encoder on this deployment, or it failed */
             503: {
                 headers: {
                     [name: string]: unknown;

@@ -17,6 +17,7 @@ from app.api.v1.router import api_v1
 from app.config import REPO_ROOT, Settings, get_settings
 from app.schemas.common import Problem
 from app.services.errors import ConflictError, NotFoundError, UnauthorizedError
+from app.services.text_encoder import LazyTextEncoder, TextEncoderUnavailableError
 from app.services.urls import UrlValidationError
 from app.storage import StorageUnavailableError
 
@@ -164,6 +165,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def storage_handler(_: Request, exc: StorageUnavailableError) -> JSONResponse:
         return _problem(status.HTTP_503_SERVICE_UNAVAILABLE, "Object storage unavailable", str(exc))
 
+    @app.exception_handler(TextEncoderUnavailableError)
+    async def text_encoder_handler(_: Request, exc: TextEncoderUnavailableError) -> JSONResponse:
+        return _problem(
+            status.HTTP_503_SERVICE_UNAVAILABLE, "Search by meaning unavailable", str(exc)
+        )
+
     @app.exception_handler(UrlValidationError)
     async def url_handler(_: Request, exc: UrlValidationError) -> JSONResponse:
         return _problem(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid URL", str(exc))
@@ -183,6 +190,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # Read by app.api.deps._settings, so a test app built with explicit settings is
     # governed by them rather than by the process-wide lru_cached environment.
     app.state.settings = settings
+    # Loaded on the first search, not here (app/services/text_encoder.py).
+    app.state.text_encoder = LazyTextEncoder(
+        settings.text_encoder_dir, threads=settings.text_encoder_threads
+    )
     app.include_router(api_v1)
     # **Development only.** Capture tiles kept on a developer's disk
     # (data/tiles/<slug>/<representation>/tileset.json) are served as static 3D Tiles under

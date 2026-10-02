@@ -148,3 +148,6 @@ export type PipelineProvider = Schemas["ProviderRead"];
 export type RunStatus = Schemas["RunStatus"];
 export type GeorefMethod = Schemas["GeorefMethod"];
 export type ScaleSource = Schemas["ScaleSource"];
+
+/** A search query embedded with the model scan objects were described with (search by meaning). */
+export type TextEmbedding = Schemas["TextEmbedding"];

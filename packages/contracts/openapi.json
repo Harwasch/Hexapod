@@ -7331,6 +7331,39 @@
         "title": "TemporalExtent",
         "type": "object"
       },
+      "TextEmbedding": {
+        "additionalProperties": false,
+        "description": "The query embedded with SigLIP 2's text tower, comparable with `instances.emb` rows.\n\nUse it only when `model` equals the scan's `instances.json` `embedding.model`; a\nvector from another model is not in the same space.",
+        "properties": {
+          "dim": {
+            "title": "Dim",
+            "type": "integer"
+          },
+          "embedding": {
+            "items": {
+              "type": "number"
+            },
+            "title": "Embedding",
+            "type": "array"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "prompt": {
+            "title": "Prompt",
+            "type": "string"
+          }
+        },
+        "required": [
+          "model",
+          "prompt",
+          "dim",
+          "embedding"
+        ],
+        "title": "TextEmbedding",
+        "type": "object"
+      },
       "TilesUrlLayerSource": {
         "additionalProperties": false,
         "properties": {
@@ -12304,6 +12337,91 @@
         "summary": "Reconcile object storage against the database, in both directions",
         "tags": [
           "storage"
+        ]
+      }
+    },
+    "/api/v1/text-embeddings": {
+      "get": {
+        "description": "SigLIP 2's text tower (google/siglip2-base-patch16-224, the model segmentation embedded each object's views with), on the query inside the tags' template (\"a photo of a {}.\"). The viewer ranks a scan's objects by the cosine between this and their rows of instances.emb. A leading article is dropped (the template has one). The first call on a machine loads the model (about 1.5 s); then about 140 ms. The same text always gives the same vector, so responses are cacheable. 503 when this deployment has no encoder: search falls back to tags.",
+        "operationId": "text_embedding_api_v1_text_embeddings_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "text",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Text",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TextEmbedding"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No text encoder on this deployment, or it failed"
+          }
+        },
+        "summary": "Embed a search query with the model scan objects were described with",
+        "tags": [
+          "search"
         ]
       }
     }

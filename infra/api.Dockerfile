@@ -47,6 +47,25 @@
 # and it lands on the API machines too because Fly runs one image for both process groups.
 FROM ghcr.io/astral-sh/uv:0.8.17 AS uv
 
+# Search by meaning (app/services/text_encoder.py, docs/SCENE_OBJECTS.md §3 step 4): SigLIP
+# 2's text tower, exported from the pinned model revision with torch -- which stays in this
+# stage; the runtime gets onnxruntime and ~565 MB of files (tower.onnx, token_table.npy,
+# tokenizer.model, manifest.json). The export checks itself against transformers and fails
+# the build below cosine 0.9999. Versions are the ones the parity was measured with.
+FROM ubuntu:24.04 AS text-encoder
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends python3.12 ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+COPY --from=uv /uv /uvx /bin/
+ENV UV_PYTHON=/usr/bin/python3.12 UV_PYTHON_DOWNLOADS=never
+COPY tools/captures/export_text_encoder.py /export/export_text_encoder.py
+RUN uv run --no-project --index https://download.pytorch.org/whl/cpu \
+      --index-strategy unsafe-best-match \
+      --with torch==2.14.1 --with transformers==5.18.0 --with onnx==1.23.1 \
+      --with onnxruntime==1.30.0 --with sentencepiece==0.2.2 --with huggingface_hub \
+      --with numpy python /export/export_text_encoder.py /opt/text-encoder \
+ && rm -rf /root/.cache
+
 FROM ubuntu:24.04 AS builder
 RUN apt-get update \
  && apt-get install -y --no-install-recommends python3.12 ca-certificates \
@@ -55,9 +74,9 @@ COPY --from=uv /uv /uvx /bin/
 WORKDIR /app
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_PYTHON=/usr/bin/python3.12 UV_PYTHON_DOWNLOADS=never
 COPY apps/api/pyproject.toml apps/api/uv.lock ./
-RUN uv sync --frozen --no-install-project --no-dev --extra modal
+RUN uv sync --frozen --no-install-project --no-dev --extra modal --extra text
 COPY apps/api/ ./
-RUN uv sync --frozen --no-dev --extra modal
+RUN uv sync --frozen --no-dev --extra modal --extra text
 
 FROM ubuntu:24.04 AS runtime
 # `colmap` for the pose stage; ffmpeg is not here because the pipeline uses the binary in
@@ -72,13 +91,14 @@ RUN userdel --remove ubuntu 2>/dev/null || true; useradd --create-home --uid 100
 COPY --from=builder --chown=api:api /app /app
 COPY --chown=api:api tools/pipeline /app/tools/pipeline
 COPY --chown=api:api tools/captures /app/tools/captures
+COPY --from=text-encoder /opt/text-encoder /opt/text-encoder
 # PIPELINE_DIR is also what app/config.REPO_ROOT would derive here (it is `/app` in this
 # image, so the default is already `/app/tools/pipeline`). Set anyway: it is the one line
 # that says out loud where the layout above puts the pipeline, and it is what the worker
 # hands its child process. QT_QPA_PLATFORM because COLMAP links Qt: its CLI commands used
 # here open no window, and `offscreen` makes sure one that tried would not need a display.
 ENV PATH="/app/.venv/bin:$PATH" PYTHONUNBUFFERED=1 PIPELINE_DIR=/app/tools/pipeline \
-    QT_QPA_PLATFORM=offscreen
+    QT_QPA_PLATFORM=offscreen TEXT_ENCODER_DIR=/opt/text-encoder
 USER api
 EXPOSE 8000
 # Migrations run on start so a fresh database is usable immediately.
