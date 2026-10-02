@@ -6,6 +6,15 @@ import type { UnitSystem } from "@twin/geo";
 export type ThemeMode = "auto" | "light" | "dark";
 export type QualityPreset = "performance" | "balanced" | "ultra";
 export type WorldMode = "open" | "photorealistic";
+/** Who draws splat scans on the globe (cesium/scanView): CesiumJS, Spark or PlayCanvas. */
+export type SplatRenderer = "cesium" | "spark" | "playcanvas";
+/**
+ * Who draws splat scans unless chosen otherwise: PlayCanvas, streaming a scan's own streamed
+ * level of detail as superspl.at does (scanView/ScanRendererHost.runNative). CesiumJS still
+ * draws a Living Survey scan (its motion is CesiumJS's shader) and every other layer. Here,
+ * not beside the renderers, so pages without the globe (admin.html) never load cesium/.
+ */
+export const DEFAULT_SPLAT_RENDERER: SplatRenderer = "playcanvas";
 
 export interface SettingsState {
   theme: ThemeMode;
@@ -24,6 +33,23 @@ export interface SettingsState {
   ionTokenNoticeDismissed: boolean;
   devToolsOpen: boolean;
   exploreSpeed: number;
+  /**
+   * Living Survey motion in the splat vertex shader ("Motion on GPU"). On by default; off puts
+   * every rigged site on the CPU path, for comparing the two or for hardware where the shader
+   * path misbehaves. A build can still force the CPU path (`VITE_SPLAT_GPU_MOTION=0`), and a
+   * site falls back to it on its own when the engine or its tiles cannot take the shader path.
+   *
+   * Persisted, unlike the wind (`state/living.ts`): this is how the device renders, not what
+   * the scene shows — both paths draw the same motion, so an old choice cannot make a survey
+   * silently animate.
+   */
+  livingGpuMotion: boolean;
+  /**
+   * Who draws splat scans: a dedicated splat renderer laid over the globe -- PlayCanvas
+   * (SuperSplat's engine, the default) or Spark (three.js) -- or CesiumJS's own splat
+   * primitive. The globe, navigation and tools stay CesiumJS's either way.
+   */
+  splatRenderer: SplatRenderer;
   /**
    * The API's shared write token (`API_WRITE_TOKEN`), entered once in the UI.
    *
@@ -56,6 +82,8 @@ const defaults = {
   ionTokenNoticeDismissed: false,
   devToolsOpen: false,
   exploreSpeed: 4,
+  livingGpuMotion: true,
+  splatRenderer: DEFAULT_SPLAT_RENDERER,
   writeToken: "",
 };
 
@@ -68,12 +96,15 @@ export const useSettings = create<SettingsState>()(
     }),
     {
       name: "twin.settings.v1",
-      version: 2,
-      // v2 switched the default world to Google Photorealistic; stored v1 settings still
-      // carried the old default, so they are moved along once.
+      version: 3,
+      // v2 switched the default world to Google Photorealistic, v3 the default splat renderer
+      // to PlayCanvas; stored settings still carried the old defaults, so they are moved along
+      // once.
       migrate: (persisted, version) => {
-        const state = (persisted ?? {}) as Partial<SettingsState>;
-        return version < 2 ? { ...state, world: "photorealistic" as WorldMode } : state;
+        let state = (persisted ?? {}) as Partial<SettingsState>;
+        if (version < 2) state = { ...state, world: "photorealistic" };
+        if (version < 3) state = { ...state, splatRenderer: DEFAULT_SPLAT_RENDERER };
+        return state;
       },
     },
   ),

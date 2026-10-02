@@ -5,7 +5,7 @@
    --------------------------------------------------------------------------- */
 
 .mc-eyebrow {
-  font: 600 10.5px var(--font-sans);
+  font: 600 12px var(--font-sans);
   letter-spacing: 0.09em;
   color: var(--text-secondary);
   text-transform: uppercase;
@@ -27,7 +27,7 @@
   border: 0;
   background: none;
   padding: 0;
-  font: 600 11.5px var(--font-sans);
+  font: 600 12px var(--font-sans);
   color: var(--accent);
   cursor: pointer;
 }
@@ -130,8 +130,18 @@
 
 /* ---- Project badge ----------------------------------------------------- */
 .mc-project {
+  position: relative;
   width: 19.25rem;
-  max-width: calc(100vw - 2 * var(--edge-gap));
+  max-width: 100%;
+}
+
+/* The switcher menu is a popover: it drops over the regions below the top bar instead of
+   growing the bar (which would push the whole HUD down while it is open). */
+.mc-project__pop {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
 }
 
 .mc-project__badge {
@@ -180,7 +190,7 @@
 }
 
 .mc-project__meta {
-  font: 400 11.5px var(--font-sans);
+  font: 400 12px var(--font-sans);
   color: var(--text-secondary);
   white-space: nowrap;
   overflow: hidden;
@@ -199,7 +209,7 @@
   align-items: center;
   justify-content: space-between;
   padding: 0.7rem 0.95rem;
-  font: 500 11.5px var(--font-sans);
+  font: 500 12px var(--font-sans);
   color: var(--text-secondary);
 }
 
@@ -251,12 +261,12 @@
 }
 
 .mc-project__row-meta {
-  font: 400 11px var(--font-sans);
+  font: 400 12px var(--font-sans);
   color: var(--text-secondary);
 }
 
 .mc-project__row-count {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
   color: var(--text-secondary);
 }
@@ -295,16 +305,20 @@
 /* ---- Layer pills ------------------------------------------------------- */
 .mc-pills {
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 0.5rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-1);
+  padding: var(--space-1);
+  border-radius: var(--glass-radius-sm);
 }
 
 .mc-pill {
-  padding: 0.6rem 0.9rem;
-  border-radius: 14px;
+  padding: 0.4rem 0.7rem;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
   color: var(--text-secondary);
-  font: 600 11.5px var(--font-sans);
+  font: 600 12px var(--font-sans);
   cursor: pointer;
   transition:
     background var(--motion-fast) var(--ease-out),
@@ -335,6 +349,7 @@
 .mc-overlays {
   position: absolute;
   inset: 0;
+  z-index: 0;
   pointer-events: none;
   overflow: hidden;
 }
@@ -421,7 +436,7 @@
   left: 28px;
   top: 3px;
   white-space: nowrap;
-  font: 600 11.5px var(--font-sans);
+  font: 600 12px var(--font-sans);
   color: var(--text-primary);
   text-shadow: var(--text-shadow);
 }
@@ -472,13 +487,13 @@
 }
 
 .mc-chip__id {
-  font-size: 11.5px;
+  font-size: 12px;
   font-weight: 600;
   text-shadow: 0 1px 6px rgba(0, 0, 0, 0.8);
 }
 
 .mc-chip__short {
-  font: 400 11px var(--font-sans);
+  font: 400 12px var(--font-sans);
   color: rgba(242, 246, 239, 0.84);
   text-shadow: 0 1px 6px rgba(0, 0, 0, 0.8);
 }
@@ -490,8 +505,8 @@
 
 /* ---- Selection card ---------------------------------------------------- */
 .mc-card {
-  width: 18.75rem;
-  max-width: calc(100vw - 2 * var(--edge-gap));
+  width: 100%;
+  overflow: auto;
   padding: 1rem 1.1rem;
   border-radius: 20px;
 }
@@ -510,13 +525,13 @@
 
 .mc-card__meta {
   margin-top: 3px;
-  font: 400 11.5px var(--font-sans);
+  font: 400 12px var(--font-sans);
   color: var(--text-secondary);
 }
 
 .mc-card__note {
   margin-top: 0.5rem;
-  font: 400 11.5px/1.45 var(--font-sans);
+  font: 400 12px/1.45 var(--font-sans);
   color: rgba(242, 246, 239, 0.78);
 }
 
@@ -541,7 +556,7 @@
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
-  font: 600 11px var(--font-sans);
+  font: 600 12px var(--font-sans);
 }
 
 .mc-status .mc-dot {
@@ -616,7 +631,7 @@
 
 .mc-stat__label {
   margin-top: 5px;
-  font: 400 11px var(--font-sans);
+  font: 400 12px var(--font-sans);
   color: var(--text-secondary);
 }
 
@@ -652,7 +667,7 @@
 .mc-btn--sm {
   flex: none;
   padding: 0.55rem 0.9rem;
-  font-size: 11.5px;
+  font-size: 12px;
 }
 
 .mc-btn:focus-visible {
@@ -700,37 +715,27 @@
 }
 
 /* ---- Windows (Plan / Fleet) ------------------------------------------- */
-.hud > .mc-window-wrap,
+/* The Plan / Fleet window lives in the left dock, which it has to itself (one replaces the
+   other, see `state/layout.ts`). It is as tall as its content and scrolls past the dock. */
 .mc-window-wrap {
-  position: absolute;
-  top: 5.75rem;
-  bottom: 6.5rem;
-  right: calc(var(--edge-gap) + 27.5rem);
-  width: 37.5rem;
-  max-width: calc(100vw - 2 * var(--edge-gap));
-  /* A compact window leaves the rest of its slot to the map underneath. */
-  pointer-events: none;
-}
-
-.mc-window-wrap > * {
-  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  width: var(--window-width);
+  max-width: 100%;
+  min-height: 0;
 }
 
 .mc-window-wrap--wide {
-  width: 40rem;
+  width: calc(var(--window-width) + 2.5rem);
 }
 
 .mc-window {
   display: flex;
   flex-direction: column;
-  height: 100%;
-  border-radius: 24px;
-  overflow: hidden;
-}
-
-.mc-window--compact {
-  height: auto;
   max-height: 100%;
+  min-height: 0;
+  border-radius: var(--glass-radius);
+  overflow: hidden;
 }
 
 .mc-window__head {
@@ -810,7 +815,7 @@
   border-radius: 12px;
   border: 1px solid rgba(255, 255, 255, 0.18);
   background: rgba(255, 255, 255, 0.1);
-  font: 600 11px var(--font-sans);
+  font: 600 12px var(--font-sans);
   flex: none;
 }
 
@@ -851,7 +856,7 @@
 }
 
 .mc-plan__state {
-  font: 600 11px var(--font-sans);
+  font: 600 12px var(--font-sans);
   flex: none;
 }
 
@@ -862,14 +867,14 @@
 }
 
 .mc-plan__label {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 500;
   color: rgba(242, 246, 239, 0.8);
 }
 
 .mc-plan__meta {
   justify-content: space-between;
-  font: 400 11.5px var(--font-sans);
+  font: 400 12px var(--font-sans);
   color: var(--text-secondary);
 }
 
@@ -909,7 +914,7 @@
   display: flex;
   justify-content: space-between;
   margin-top: 0.45rem;
-  font-size: 10.5px;
+  font-size: 12px;
   font-weight: 500;
   color: rgba(242, 246, 239, 0.66);
 }
@@ -923,7 +928,7 @@
   border-radius: 12px;
   border: 1px solid rgba(255, 255, 255, 0.13);
   background: rgba(255, 255, 255, 0.06);
-  font: 500 11.5px var(--font-sans);
+  font: 500 12px var(--font-sans);
 }
 
 .mc-facts {
@@ -1001,7 +1006,7 @@
 }
 
 .mc-table__head {
-  font: 600 10.5px var(--font-sans);
+  font: 600 12px var(--font-sans);
   letter-spacing: 0.08em;
   color: var(--text-secondary);
 }
@@ -1051,7 +1056,7 @@
 .mc-table__secondary {
   display: block;
   margin-top: 2px;
-  font: 400 11px var(--font-sans);
+  font: 400 12px var(--font-sans);
   color: var(--text-secondary);
 }
 
@@ -1059,10 +1064,14 @@
 .mc-stream {
   display: flex;
   flex-direction: column;
-  align-items: flex-end;
+  align-items: stretch;
   gap: 0;
-  width: 26.875rem;
-  max-width: calc(100vw - 2 * var(--edge-gap));
+  width: 100%;
+  min-height: 0;
+}
+
+.mc-stream__pill {
+  flex: none;
 }
 
 .mc-stream.is-open {
@@ -1087,6 +1096,7 @@
 }
 
 .mc-stream.is-open .mc-stream__panel {
+  min-height: 0;
   max-height: min(30rem, 48vh);
   opacity: 1;
   transform: scale(1);
@@ -1172,7 +1182,7 @@
 .mc-stream__foot {
   padding: 0.75rem 1.1rem;
   border-top: 1px solid var(--divider);
-  font: 500 11.5px var(--font-sans);
+  font: 500 12px var(--font-sans);
   color: var(--text-secondary);
 }
 
@@ -1272,7 +1282,7 @@
   align-items: center;
   gap: 0.5rem;
   flex: none;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-primary);
   white-space: nowrap;
 }
@@ -1307,8 +1317,8 @@
 
 /* ---- Feeds ------------------------------------------------------------- */
 .mc-feeds {
-  width: 25rem;
-  max-width: calc(100vw - 2 * var(--edge-gap));
+  width: 100%;
+  overflow: auto;
   border-radius: 22px;
   overflow: hidden;
 }
@@ -1329,7 +1339,7 @@
   background:
     linear-gradient(180deg, rgba(6, 9, 5, 0.45) 0%, rgba(6, 9, 5, 0) 38%, rgba(6, 9, 5, 0.6) 100%),
     radial-gradient(120% 90% at 50% 25%, rgba(127, 216, 192, 0.12), rgba(6, 9, 5, 0.6));
-  font: 600 10px var(--font-sans);
+  font: 600 12px var(--font-sans);
   color: var(--text-primary);
   text-shadow: 0 0 3px rgba(6, 9, 5, 0.95);
 }
@@ -1349,7 +1359,7 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 9px;
+  font-size: 12px;
 }
 
 .mc-feed__state .mc-dot {
@@ -1361,14 +1371,14 @@
   left: 50%;
   top: 50%;
   transform: translate(-50%, -50%);
-  font: 500 10px var(--font-mono);
+  font: 500 12px var(--font-mono);
   color: var(--text-tertiary);
 }
 
 .mc-feed__time {
   left: 8px;
   bottom: 7px;
-  font-size: 9.5px;
+  font-size: 12px;
   font-weight: 500;
 }
 
@@ -1412,36 +1422,19 @@
 }
 
 /* ---- Responsive --------------------------------------------------------- */
-@media (max-width: 1180px) {
-  .mc-window-wrap {
-    right: var(--edge-gap);
-    width: min(37.5rem, calc(100vw - 2 * var(--edge-gap)));
-  }
-  .mc-stream {
-    width: min(26.875rem, calc(100vw - 2 * var(--edge-gap)));
-  }
-}
-
-@media (max-width: 760px) {
+@media (max-width: 899px) {
   .mc-project {
-    width: 15rem;
+    width: auto;
   }
   .mc-bar__readout {
     display: none;
   }
   .mc-tabs__tab {
-    padding: 0.5rem 0.75rem;
+    padding: 0.45rem 0.7rem;
   }
-  .mc-window-wrap {
-    top: 8.5rem;
-    bottom: 5.5rem;
-  }
-  .mc-stream {
-    width: calc(100vw - 2 * var(--edge-gap));
-  }
-  .mc-card,
-  .mc-feeds {
-    width: calc(100vw - 2 * var(--edge-gap));
+  .mc-window-wrap,
+  .mc-window-wrap--wide {
+    width: 100%;
   }
 }
 
@@ -1508,7 +1501,7 @@
   border: 1px solid rgba(255, 255, 255, 0.16);
   background: rgba(255, 255, 255, 0.07);
   color: var(--text-secondary);
-  font: 500 11.5px var(--font-sans);
+  font: 500 12px var(--font-sans);
   cursor: pointer;
   transition:
     background var(--motion-fast) var(--ease-out),
@@ -1552,7 +1545,7 @@
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  font: 400 11.5px var(--font-sans);
+  font: 400 12px var(--font-sans);
   color: var(--text-secondary);
 }
 
@@ -1564,7 +1557,7 @@
   display: flex;
   flex-wrap: wrap;
   gap: 0.4rem 1rem;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-secondary);
 }
 
@@ -1580,7 +1573,7 @@
 }
 
 .mc-step__meta {
-  font-size: 10.5px;
+  font-size: 12px;
   color: var(--text-secondary);
   margin-top: 0.1rem;
 }
@@ -1644,17 +1637,17 @@
 }
 
 .mc-schedule__tick {
-  font: 500 9.5px var(--font-mono);
+  font: 500 12px var(--font-mono);
   fill: var(--text-tertiary);
 }
 
 .mc-schedule__lane {
-  font: 600 10.5px var(--font-mono);
+  font: 600 12px var(--font-mono);
   fill: var(--text-secondary);
 }
 
 .mc-schedule__bar-label {
-  font: 600 10px var(--font-mono);
+  font: 600 12px var(--font-mono);
   fill: #0a0e09;
   pointer-events: none;
 }
@@ -1702,7 +1695,7 @@
 }
 
 .mc-clarify__why {
-  font: 400 11.5px/1.4 var(--font-sans);
+  font: 400 12px/1.4 var(--font-sans);
   color: var(--text-secondary);
   margin-top: 0.1rem;
 }
@@ -1720,7 +1713,7 @@
 }
 
 .mc-clarify__value {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-primary);
   white-space: nowrap;
 }
@@ -1781,7 +1774,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .mc-stepper__dots {
@@ -1872,7 +1865,7 @@
   border-radius: 12px;
   background: rgba(127, 216, 192, 0.08);
   border: 1px solid rgba(127, 216, 192, 0.3);
-  font: 400 11.5px/1.45 var(--font-sans);
+  font: 400 12px/1.45 var(--font-sans);
   color: var(--text-secondary);
 }
 
@@ -1976,7 +1969,7 @@
 
 .mc-ground__note {
   margin: 0;
-  font-size: 11.5px;
+  font-size: 12px;
   line-height: 1.45;
 }
 
@@ -1986,7 +1979,7 @@
 
 .mc-assume::after {
   content: "▾";
-  font-size: 9px;
+  font-size: 12px;
   opacity: 0.7;
 }
 
@@ -2020,6 +2013,6 @@
 
 .mc-review__hint {
   margin: 0;
-  font-size: 11.5px;
+  font-size: 12px;
   text-align: center;
 }

@@ -45,7 +45,7 @@ export function OnboardingCard() {
             data-testid="onboarding"
           >
             <h2 id="onboarding-title">Explore the living world</h2>
-            <p>Zoom from the planet to the machines working the land.</p>
+            <p>From the whole planet down to the machines working a field.</p>
             <div className="onboarding__actions">
               <GlassButton
                 variant="glass"
@@ -62,7 +62,7 @@ export function OnboardingCard() {
                 disabled={!demo}
                 data-testid="onboarding-demo"
               >
-                View high-resolution demo
+                Open the demo site
               </GlassButton>
             </div>
           </GlassPanel>

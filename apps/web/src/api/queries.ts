@@ -66,7 +66,19 @@ function withFallback<T>(query: UseQueryResult<T>, fallback: () => T): CatalogRe
   };
 }
 
-const RETRY = { retry: 1, retryDelay: 800, staleTime: 30_000 } as const;
+/**
+ * The API scales to zero (fly.toml), so a first request can meet a cold start. The built-in
+ * catalog stands in after one quick retry, as before, but a query that failed now asks
+ * again every few seconds until the API answers: the real sites replace it without a reload.
+ */
+const RETRY = {
+  retry: 1,
+  retryDelay: 800,
+  staleTime: 30_000,
+  refetchInterval: (query: { state: { status: string } }) =>
+    query.state.status === "error" ? RECOVER_POLL_MS : false,
+} as const;
+const RECOVER_POLL_MS = 5000;
 
 /**
  * The captures published to object storage, fetched only once the API has actually

@@ -311,7 +311,7 @@ def test_the_catalogue_is_the_recipe_files(client: TestClient) -> None:
     ingest = next(r for r in body["recipes"] if r["name"] == "splat-ingest")
     package = next(stage for stage in ingest["stages"] if stage["id"] == "package")
     # The defaults an override is merged over come from the file, not from this API.
-    assert package["params"]["max_gaussians"] == 400000
+    assert package["params"]["tile_gaussians"] == 100000
     assert package["gpu"] is None
 
     reconstruct = next(r for r in body["recipes"] if r["name"] == "photo-reconstruct")
@@ -338,14 +338,14 @@ def test_launching_a_run_with_an_override_stores_it_on_the_job(
         f"/api/v1/captures/{capture.id}/process",
         json={
             "recipe": "splat-ingest",
-            "params": {"package": {"max_gaussians": 50000, "opacity_min": 0.1}},
+            "params": {"package": {"tile_gaussians": 50000, "opacity_min": 0.1}},
             "provider": "runpod-community",
             "tier": "l4",
         },
     )
     assert response.status_code == 202, response.text
     job = response.json()
-    assert job["params"] == {"package": {"max_gaussians": 50000, "opacity_min": 0.1}}
+    assert job["params"] == {"package": {"tile_gaussians": 50000, "opacity_min": 0.1}}
     assert job["provider"] == "runpod-community"
     assert job["tier"] == "l4"
     # Stamped from the recipe file, so two runs can be told apart by what they ran.
@@ -353,7 +353,7 @@ def test_launching_a_run_with_an_override_stores_it_on_the_job(
 
     stored = db.get(Job, uuid.UUID(job["id"]))
     assert stored is not None
-    assert stored.params == {"package": {"max_gaussians": 50000, "opacity_min": 0.1}}
+    assert stored.params == {"package": {"tile_gaussians": 50000, "opacity_min": 0.1}}
 
 
 def test_an_override_naming_a_stage_the_recipe_lacks_is_refused_in_its_own_words(
@@ -388,14 +388,14 @@ def test_two_runs_of_one_capture_are_comparable(
     set it ran with, so what differs between them is readable rather than remembered.
     """
     capture = make_capture(db, storage)
-    first = make_run(db, storage, capture, params={"package": {"max_gaussians": 400000}})
-    second = make_run(db, storage, capture, params={"package": {"max_gaussians": 50000}})
+    first = make_run(db, storage, capture, params={"package": {"tile_gaussians": 100000}})
+    second = make_run(db, storage, capture, params={"package": {"tile_gaussians": 50000}})
 
     runs = client.get("/api/v1/jobs", params={"captureId": str(capture.id)}).json()
     assert {run["id"] for run in runs} == {str(first.id), str(second.id)}
     by_id = {run["id"]: run for run in runs}
-    assert by_id[str(first.id)]["params"]["package"]["max_gaussians"] == 400000
-    assert by_id[str(second.id)]["params"]["package"]["max_gaussians"] == 50000
+    assert by_id[str(first.id)]["params"]["package"]["tile_gaussians"] == 100000
+    assert by_id[str(second.id)]["params"]["package"]["tile_gaussians"] == 50000
     # Same recipe and version: the only difference between them is the parameter, which
     # is the condition a comparison has to be able to state.
     assert len({run["recipe"] for run in runs}) == 1

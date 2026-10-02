@@ -1,0 +1,632 @@
+{
+ "asset": {
+  "version": "1.1"
+ },
+ "geometricError": 9.748021887999599,
+ "extensionsUsed": [
+  "3DTILES_content_gltf"
+ ],
+ "extensions": {
+  "3DTILES_content_gltf": {
+   "extensionsUsed": [
+    "KHR_gaussian_splatting",
+    "KHR_gaussian_splatting_compression_spz_2"
+   ],
+   "extensionsRequired": [
+    "KHR_gaussian_splatting",
+    "KHR_gaussian_splatting_compression_spz_2"
+   ]
+  }
+ },
+ "root": {
+  "transform": [
+   0.991886900677955,
+   0.12712346857870324,
+   0.0,
+   0.0,
+   -0.059757045430001515,
+   0.4662571848292513,
+   0.8826286496123826,
+   0.0,
+   0.112202815405663,
+   -0.8754677957135949,
+   0.47007091686619146,
+   0.0,
+   716174.8198441175,
+   -5587988.042970852,
+   2980310.87893276,
+   1.0
+  ],
+  "refine": "REPLACE",
+  "boundingVolume": {
+   "box": [
+    -0.2026870846748352,
+    -0.23739540576934814,
+    3.257124066352844,
+    3.9382588502078386,
+    0,
+    0,
+    0,
+    4.708920144668135,
+    0,
+    0,
+    0,
+    4.874010943999799
+   ]
+  },
+  "geometricError": 0.8139167367558464,
+  "content": {
+   "uri": "splat.glb"
+  },
+  "extras": {
+   "gaussians": 114,
+   "viewCones": {
+    "format": "hexapod.viewcones",
+    "version": 1,
+    "uri": "viewcones.bin",
+    "origin": [
+     -2.466064,
+     -3.262207,
+     0.00293
+    ],
+    "cell": 0.067289,
+    "dims": [
+     66,
+     87,
+     97
+    ],
+    "fadeDeg": 20.0,
+    "rule": "observers: cells within 2.5x of the scan's finest detail (the gaussian-weighted 20th percentile of each cell's 25th-percentile middle axis, cells of at least 8); a cell's cone holds 90% of their weight; seen from everywhere within 2.5 cells of them or where they surround it",
+    "gaussians": 12000,
+    "occupiedCells": 6012,
+    "observers": "finest-detail region",
+    "observerPoints": 111,
+    "fineCells": 111,
+    "fineShare": 0.0987,
+    "finestMiddleAxisM": 0.0134,
+    "directionalShare": 0.0,
+    "observerBox": {
+     "min": [
+      -1.558,
+      -2.152,
+      3.199
+     ],
+     "max": [
+      1.739,
+      1.953,
+      6.227
+     ]
+    }
+   },
+   "collision": {
+    "format": "hexapod.collision",
+    "version": 1,
+    "uri": "collision.bin",
+    "cell": 0.125,
+    "origin": [
+     -3.0,
+     -4.0,
+     0.0
+    ],
+    "brick": 8,
+    "bricks": 75,
+    "solidCells": 2666,
+    "rule": "solid where the opacities of the splats centred in the cell, counting splats at least 0.2 opaque, sum to at least 0.6"
+   }
+  },
+  "children": [
+   {
+    "boundingVolume": {
+     "box": [
+      -0.8063218593597412,
+      -1.598159480839968,
+      4.774598598480225,
+      2.4994757888093893,
+      0,
+      0,
+      0,
+      2.4678412904218145,
+      0,
+      0,
+      0,
+      2.431401324011416
+     ]
+    },
+    "geometricError": 0.4037322998046875,
+    "content": {
+     "uri": "splat_1.glb"
+    },
+    "extras": {
+     "gaussians": 117
+    },
+    "children": [
+     {
+      "boundingVolume": {
+       "box": [
+        -0.8566894531250001,
+        -1.6480712890625,
+        4.8773193359375,
+        2.0043605261531634,
+        0,
+        0,
+        0,
+        2.0091212683406634,
+        0,
+        0,
+        0,
+        1.4258693152156632
+       ]
+      },
+      "geometricError": 0.0,
+      "content": {
+       "uri": "splat_1-012345.glb"
+      },
+      "extras": {
+       "gaussians": 1157
+      }
+     },
+     {
+      "boundingVolume": {
+       "box": [
+        -0.006387114524841309,
+        -0.8393554687500001,
+        5.642843961715698,
+        1.2331814408232267,
+        0,
+        0,
+        0,
+        1.2680540919233856,
+        0,
+        0,
+        0,
+        1.2181547522474823
+       ]
+      },
+      "geometricError": 0.20186614990234375,
+      "content": {
+       "uri": "splat_1-7.glb"
+      },
+      "extras": {
+       "gaussians": 106
+      },
+      "children": [
+       {
+        "boundingVolume": {
+         "box": [
+          -0.0426025390625,
+          -0.84130859375,
+          5.656005859375,
+          1.04508778200868,
+          0,
+          0,
+          0,
+          1.04374500857118,
+          0,
+          0,
+          0,
+          1.0456981335711797
+         ]
+        },
+        "geometricError": 0.0,
+        "content": {
+         "uri": "splat_1-7-0123456.glb"
+        },
+        "extras": {
+         "gaussians": 1212
+        }
+       },
+       {
+        "boundingVolume": {
+         "box": [
+          0.3603515625,
+          -0.4364013671875,
+          6.001220703125,
+          0.6278324808605311,
+          0,
+          0,
+          0,
+          0.6274662699230311,
+          0,
+          0,
+          0,
+          0.5628910746105316
+         ]
+        },
+        "geometricError": 0.0,
+        "content": {
+         "uri": "splat_1-7-7.glb"
+        },
+        "extras": {
+         "gaussians": 387
+        }
+       }
+      ]
+     },
+     {
+      "boundingVolume": {
+       "box": [
+        -0.0361328125,
+        -0.8389892578124999,
+        4.0439453125,
+        1.2409941206236355,
+        0,
+        0,
+        0,
+        1.2491728315611352,
+        0,
+        0,
+        0,
+        1.2439238081236352
+       ]
+      },
+      "geometricError": 0.0,
+      "content": {
+       "uri": "splat_1-6.glb"
+      },
+      "extras": {
+       "gaussians": 573
+      }
+     }
+    ]
+   },
+   {
+    "boundingVolume": {
+     "box": [
+      -0.539046049118042,
+      1.2456043707788922,
+      4.781986355781555,
+      2.1878186247687412,
+      0,
+      0,
+      0,
+      2.179643992034588,
+      0,
+      0,
+      0,
+      2.395808794293888
+     ]
+    },
+    "geometricError": 0.4037322998046875,
+    "content": {
+     "uri": "splat_3.glb"
+    },
+    "extras": {
+     "gaussians": 127
+    },
+    "children": [
+     {
+      "boundingVolume": {
+       "box": [
+        -1.3861083984375,
+        0.93603515625,
+        4.5595703125,
+        0.8146989914109817,
+        0,
+        0,
+        0,
+        1.2423112960984817,
+        0,
+        0,
+        0,
+        1.4710710617234817
+       ]
+      },
+      "geometricError": 0.0,
+      "content": {
+       "uri": "splat_3-012.glb"
+      },
+      "extras": {
+       "gaussians": 1139
+      }
+     },
+     {
+      "boundingVolume": {
+       "box": [
+        -0.03936687111854553,
+        0.7851355408784002,
+        5.626567840576172,
+        1.2971783775368069,
+        0,
+        0,
+        0,
+        1.2969577176493887,
+        0,
+        0,
+        0,
+        1.2435732084789608
+       ]
+      },
+      "geometricError": 0.20385621179389352,
+      "content": {
+       "uri": "splat_3-5.glb"
+      },
+      "extras": {
+       "gaussians": 113
+      },
+      "children": [
+       {
+        "boundingVolume": {
+         "box": [
+          -0.0592041015625,
+          0.7750244140625,
+          5.3707275390625,
+          1.0387510498544534,
+          0,
+          0,
+          0,
+          1.0553526123544534,
+          0,
+          0,
+          0,
+          0.7704405029794534
+         ]
+        },
+        "geometricError": 0.0,
+        "content": {
+         "uri": "splat_3-5-01234.glb"
+        },
+        "extras": {
+         "gaussians": 1258
+        }
+       },
+       {
+        "boundingVolume": {
+         "box": [
+          0.45678710937500006,
+          0.775146484375,
+          5.6524658203125,
+          0.545064761509445,
+          0,
+          0,
+          0,
+          1.040670230259445,
+          0,
+          0,
+          0,
+          1.0427454255719448
+         ]
+        },
+        "geometricError": 0.0,
+        "content": {
+         "uri": "splat_3-5-567.glb"
+        },
+        "extras": {
+         "gaussians": 593
+        }
+       }
+      ]
+     },
+     {
+      "boundingVolume": {
+       "box": [
+        -0.0333251953125,
+        1.2371826171875,
+        4.0413818359375,
+        1.2032452468328314,
+        0,
+        0,
+        0,
+        1.6778546218328314,
+        0,
+        0,
+        0,
+        1.2139874343328314
+       ]
+      },
+      "geometricError": 0.0,
+      "content": {
+       "uri": "splat_3-46.glb"
+      },
+      "extras": {
+       "gaussians": 1392
+      }
+     },
+     {
+      "boundingVolume": {
+       "box": [
+        0.0849609375,
+        2.063232421875,
+        5.0028076171875,
+        0.9587415919453208,
+        0,
+        0,
+        0,
+        0.7814954981953209,
+        0,
+        0,
+        0,
+        0.45910780288282105
+       ]
+      },
+      "geometricError": 0.0,
+      "content": {
+       "uri": "splat_3-7.glb"
+      },
+      "extras": {
+       "gaussians": 223
+      }
+     }
+    ]
+   },
+   {
+    "boundingVolume": {
+     "box": [
+      1.355695366859436,
+      -1.5071200132369995,
+      5.083253383636475,
+      1.1116591901491866,
+      0,
+      0,
+      0,
+      1.94985141465175,
+      0,
+      0,
+      0,
+      1.8023519725512251
+     ]
+    },
+    "geometricError": 0.2069643484857176,
+    "content": {
+     "uri": "splat_5.glb"
+    },
+    "extras": {
+     "gaussians": 154
+    },
+    "children": [
+     {
+      "boundingVolume": {
+       "box": [
+        1.263916015625,
+        -1.5374755859375,
+        4.5372314453125,
+        0.8136106194655256,
+        0,
+        0,
+        0,
+        1.7739377679030257,
+        0,
+        0,
+        0,
+        1.0500608147780257
+       ]
+      },
+      "geometricError": 0.0,
+      "content": {
+       "uri": "splat_5-012.glb"
+      },
+      "extras": {
+       "gaussians": 496
+      }
+     },
+     {
+      "boundingVolume": {
+       "box": [
+        1.3681640625,
+        -0.8388671875,
+        5.6239013671875,
+        0.8915993072485073,
+        0,
+        0,
+        0,
+        1.0915504791235073,
+        0,
+        0,
+        0,
+        1.0609108306860078
+       ]
+      },
+      "geometricError": 0.0,
+      "content": {
+       "uri": "splat_5-3.glb"
+      },
+      "extras": {
+       "gaussians": 1057
+      }
+     }
+    ]
+   },
+   {
+    "boundingVolume": {
+     "box": [
+      1.3367301523685455,
+      1.2483172016218305,
+      4.972829699516296,
+      1.1012939416522705,
+      0,
+      0,
+      0,
+      1.798540682224425,
+      0,
+      0,
+      0,
+      1.733262231265994
+     ]
+    },
+    "geometricError": 0.2063543326754489,
+    "content": {
+     "uri": "splat_7.glb"
+    },
+    "extras": {
+     "gaussians": 173
+    },
+    "children": [
+     {
+      "boundingVolume": {
+       "box": [
+        1.35986328125,
+        0.7718505859375,
+        4.9591064453125,
+        0.894146043549616,
+        0,
+        0,
+        0,
+        1.102520066987116,
+        0,
+        0,
+        0,
+        1.5478325669871162
+       ]
+      },
+      "geometricError": 0.0,
+      "content": {
+       "uri": "splat_7-01.glb"
+      },
+      "extras": {
+       "gaussians": 1291
+      }
+     },
+     {
+      "boundingVolume": {
+       "box": [
+        1.1915283203125,
+        2.0660400390625,
+        4.3836669921875,
+        0.7685354324438083,
+        0,
+        0,
+        0,
+        0.8276174636938083,
+        0,
+        0,
+        0,
+        0.9311330886938081
+       ]
+      },
+      "geometricError": 0.0,
+      "content": {
+       "uri": "splat_7-23.glb"
+      },
+      "extras": {
+       "gaussians": 281
+      }
+     }
+    ]
+   },
+   {
+    "boundingVolume": {
+     "box": [
+      -0.17578125,
+      0.0816650390625,
+      1.6160888671875,
+      1.1846198396508363,
+      0,
+      0,
+      0,
+      1.5153083162133363,
+      0,
+      0,
+      0,
+      2.3016852693383365
+     ]
+    },
+    "geometricError": 0.0,
+    "content": {
+     "uri": "splat_02.glb"
+    },
+    "extras": {
+     "gaussians": 941
+    }
+   }
+  ]
+ }
+}

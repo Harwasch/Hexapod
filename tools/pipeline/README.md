@@ -7,9 +7,24 @@ which imports this project as a library.
 
 **Lane 1 is real.** `splat-ingest` runs end to end on a CPU: a `.ply` or `.spz` in,
 `canonical.ply`, a `splat/` tileset, a thumbnail, ground samples, a manifest and a
-registration out.
+registration out. Since 2026-09-23 it **converts the file's up axis** rather than assuming
+z -- see [The up axis](#the-up-axis) -- which is what stopped uploads landing on their side.
 
-**Lane 2's first three stages are real since B2**, with one honest boundary:
+**Lane 2 is real up to the GPU, and the GPU half is built and checked but has never run.**
+The state of each piece, in the three-state vocabulary of `docs/HANDOFF.md`:
+
+| Piece                                         | State        | Evidence                                                                                                                                                                                                                                                                                                     |
+| --------------------------------------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| frames from an iPhone-shaped HEVC `.mov`      | verified     | portrait (display matrix -90), HEVC, `mdta` location: 100/100 frames upright, location read (`tests/test_normalize.py` and a real-frame check)                                                                                                                                                               |
+| poses (COLMAP 3.9.1, CPU)                     | verified     | rendered orbit 40/40 (CI, on a GitHub runner too); real photographs, 50/50 exhaustive; timing in [Where pose runs](#where-pose-runs). Matching is not deterministic, so a low registration is retried: other mapper seeds, then one fresh matching pass, keeping the best (`mapperAttempts` in `poses.json`) |
+| levelling by camera-up                        | verified     | real reconstruction: dominant plane 0.39 deg from up after levelling; rendered orbit within 5 deg (CI)                                                                                                                                                                                                       |
+| the EXIF similarity, applied (`place`)        | verified     | rendered orbit with synthetic GPS: sparse points 0.011 m from the scene placed, 0.41 m unplaced (CI)                                                                                                                                                                                                         |
+| a video with no location                      | verified     | falls back to the capture's `lat`/`lon`, recorded `manual`; with neither it refuses by name (CI)                                                                                                                                                                                                             |
+| `train` argv and output layout (gsplat 1.5.3) | verified     | parsed by v1.5.3's own `simple_trainer.py` CLI in a CPU replica of the image's venv (CI job `trainer`), then run for real on an L4 (below)                                                                                                                                                                   |
+| the Modal training image                      | verified     | built by Modal on 2026-09-23 (about 8 minutes, once); CUDA 12.4.1, torch 2.4.1, gsplat 1.5.3                                                                                                                                                                                                                 |
+| the GPU path end to end                       | verified     | `modal.yml` smoke, 2026-09-23: 500 steps on an L4, 68 s billed, $0.015, PSNR/SSIM read from gsplat's stats file, `trained.ply` placed and packaged to a tileset                                                                                                                                              |
+| `ModalAdapter` against a live workspace       | verified     | the same smoke: submit, poll to success, log tail, outputs back through R2. Its first two real runs found two bugs, both fixed and tested (below)                                                                                                                                                            |
+| a full-length training run on a real capture  | **unproven** | the smoke trained 500 steps; 30,000 steps on a real video has not run. Its cost is unmeasured -- scale from the smoke's billed seconds                                                                                                                                                                       |
 
 - `normalize` / `ffmpeg_frames` extracts and selects frames and scrapes the container's
   metadata. It runs here and in CI, on a generated clip.
@@ -17,10 +32,15 @@ registration out.
   40 frames rendered from the committed synthetic tree, 40/40 registered, 0.059° median
   rotation error, 0.092% of scene extent in translation. CI installs `colmap` so this
   runs there too, and the test file fails rather than skipping if that install goes away.
-- `train` / `gsplat` **dispatches** a training run: the dataset, the argv, the checkpoint
-  layout that survives a preemption, the metrics, the PLY. **No training run has been
-  executed in this repository** — `gsplat` needs CUDA and there is no GPU here — so its
-  tests drive a stand-in trainer and say so in their names.
+- `train` / `gsplat` **dispatches** a training run: the dataset, the argv, the metrics,
+  the PLY. **No training run has been executed in this repository** — `gsplat` needs CUDA
+  and there is no GPU here — so its tests drive a stand-in trainer and say so in their
+  names. Since 2026-09-23 the argv and file names are checked against gsplat v1.5.3's own
+  `simple_trainer.py`, which corrected four transcription errors, each of which would have
+  cost a GPU run: `--ckpt` means _evaluate_, not resume (so a preempted attempt now
+  restarts, and says so); there is no PLY without `--save_ply`; world normalisation is on
+  by default and would have exported the splat in a rotated, rescaled frame; and the
+  stats and PLY names are zero-based (`val_step29999.json`, `point_cloud_29999.ply`).
 
 - `georeference` / `exif_gps` reads each frame's own EXIF GPS, defines an east/north/up
   frame about the median fix, and has `colmap model_aligner` solve for the similarity
@@ -103,8 +123,10 @@ def gsplat(ctx: StageContext) -> StageOutcome:
 `optional_consumes` is how `mask: none` and `mask: robust` are both legal without the
 trainer or the executor knowing which one ran.
 
-Both lanes converge on `canonical.ply` — Lane 1 normalises an already-reconstructed splat
-into it, Lane 2's trainer writes it — so one `package` implementation serves both.
+Both lanes converge on `canonical.ply`, always east/north/up about the placed origin —
+Lane 1 normalises an already-reconstructed splat into it, Lane 2's `place` stage turns the
+trainer's `trained.ply` (COLMAP's frame) into it — so one `package` implementation serves
+both.
 
 ### What fails, and when
 
@@ -249,9 +271,23 @@ zero-timeout poll raises `modal.exception.TimeoutError`, which does not inherit 
 so every healthy stage was dead-lettered on its first poll. `tests/test_modal_adapter.py`
 now pins the classification against fakes that mirror the real exception hierarchy.
 
-That check moves the adapter from _guessed_ to _read_. It does not move it to _verified_,
-and the table above is unchanged on purpose: running it needs an account and a token this
-repository does not have, so `ModalAdapter` stays **unproven**.
+That check moved the adapter from _guessed_ to _read_; the first real runs moved it to
+_verified_, and found two more things no reading could have:
+
+- **"Not finished yet" is the builtin `TimeoutError`.** `FunctionCall.get(timeout=0)` in
+  `modal==1.5.5` raises a bare builtin `TimeoutError()` (`poll_function`), not
+  `modal.exception.TimeoutError`. The adapter called that a failure, so the first smoke
+  was dead-lettered on its first poll. The builtin now means "keep polling", and
+  `remote.execute` converts a stage's own `TimeoutError` so the two cannot be confused.
+- **A container imports `app.py` itself**, as `/root/app.py` with no repository around
+  it; computing the repo root there crash-looped every container on `IndexError: 2`. CI
+  now imports the file the way the container entrypoint does.
+
+And one guard that came out of the second: Modal answers "no output yet" identically for
+a training stage and for a container that crash-loops before the function starts. The
+adapter reports `pending` until `run_stage`'s own first line appears in the call's log,
+and `CloudRunner` cancels a stage still pending after `max_pending_s` (30 minutes) rather
+than holding the worker for `max_wait_s` (a day).
 
 ### The remote half
 
@@ -360,7 +396,7 @@ path: the worker runs these stages in that environment. Nothing under `app/api` 
 - **`splat-ingest`** — Lane 1, no GPU: `normalize → georeference → package → thumbnail →
 ground_samples → manifest → register`. Every stage is real.
 - **`photo-reconstruct`** — Lane 2: `normalize → pose → mask → train → compensate →
-georeference → package → thumbnail → ground_samples → manifest → register`. Only `train`
+georeference → place → package → thumbnail → ground_samples → manifest → register`. Only `train`
   declares `gpu:`; `compensate` gains one when its impl becomes `imc` (B3), since asking
   for an L4 to run `none` would be billing a GPU to do nothing. Both lanes end in the same
   artifact set, so the console cannot tell which one made a site except by reading its
@@ -371,6 +407,395 @@ decorators**: `stages.py` gained three `@stage_impl`s and three `ArtifactDecl`s,
 recipes gained three entries. `executor.py`, `runners.py`, `plan.py` and `workdir.py` are
 untouched by them, and `StubRunner` fabricates the new artifacts with no edit of its own.
 `tests/test_lane1.py` asserts that rather than leaving it as a claim.
+
+## Where pose runs
+
+`pose` runs on the **worker's CPU**, not the GPU box. The GPU is billed by the second and
+only `train` needs one. COLMAP's CPU path is the one every finding in `sfm.py` was measured
+on. And shipping frames to Modal for SfM and back would add a round trip the stage does
+not otherwise need. What it costs, measured on 4 cores of this development container
+(COLMAP 3.9.1, the Ubuntu 24.04 package; real iPhone-portrait frames, 1080×1920, orbiting
+one object), with the machine partly contended, so these numbers are upper bounds:
+
+| Matcher                        | Frames | Features / max side | Extract | Match | Map   | Total     | Registered |
+| ------------------------------ | ------ | ------------------- | ------- | ----- | ----- | --------- | ---------- |
+| exhaustive                     | 50     | 8192 / 2400         | 80 s    | 927 s | 54 s  | 1061 s    | 50/50      |
+| **exhaustive**                 | **50** | **4096 / 1600**     | 127 s   | 502 s | 24 s  | **653 s** | **50/50**  |
+| sequential                     | 100    | 8192 / 2400         | 292 s   | 635 s | 146 s | 1073 s    | 60/100     |
+| sequential                     | 100    | 4096 / 1600         | 169 s   | 382 s | 95 s  | 646 s     | 46/100     |
+| sequential + loop (vocab tree) | 100    | 4096 / 1600         | 182 s   | 535 s | 128 s | 845 s     | 76/100     |
+| sequential + loop, overlap 5   | 100    | 4096 / 1600         | 154 s   | 319 s | 144 s | 616 s     | 51/100     |
+
+What this decided, in `recipes/photo-reconstruct.yaml`:
+
+- **`exhaustive`, still.** It is the only matcher that registered every frame. Sequential
+  matching is linear rather than quadratic, but it lost a quarter to a half of the orbit
+  even with vocabulary-tree loop closure (Flickr100K 32K words, sha256 `d37d8f19…`). So
+  `sfm.matcher_argv` can express loop closure, but no recipe asks for it.
+- **`keep: 100`, down from 400.** Exhaustive matching is quadratic. Scaling the 50-frame
+  match by pairs gives about 2 000 s of matching for 100 frames on 4 cores, and about
+  9 h for 400. 100 frames of a one-minute orbit is one every 0.6 s. Frames are chosen by
+  **`sharpness-windowed`**, the sharpest of each of 100 equal stretches, so that the cut
+  cannot lose a whole blurred side the way global top-K could. (Since recipe v9 that is
+  a photo set's rule only: a video's frames are chosen by camera motion, `select:
+viewpoint` -- the sharpest of each window of ~10% of the view or ~1 deg of viewpoint,
+  as many as the capture covers, up to `keep_video` -- see `keyframes.py`. Frame size is
+  `max_side: auto`, 1600 unless the capture measurably holds more; `resolution.py`.)
+- **4096 features at 1600 px** instead of the stage's 8192 at 2400: the same 50/50 in 62%
+  of the time. Only the SfM sees the downscale; `train` reads the full frames.
+
+That puts a real capture's pose at roughly **35–45 minutes on 4 dedicated cores**. This
+is an extrapolation, not a measurement of 100 frames exhaustive; the 100-frame exhaustive
+run at 8192 features was stopped rather than waited out. Thinning has a floor as well as
+a ceiling: every third of the same 100 frames (30) registered only **4**. Feature
+extraction peaked at 1.7 GB resident (matching 81 MB, mapping 52 MB), which is why
+`docs/DEPLOYMENT.md § GPU training — Modal` sizes the Fly worker up before Lane 2. The
+lever after that is COLMAP's GPU SIFT and matching, which would put `pose` on the Modal
+box too. The Ubuntu package is built without CUDA (`colmap help`: "without CUDA"), so that
+needs a COLMAP build in the training image. It is not done.
+
+A fixture-sized check of the same stage runs in CI: 40 rendered frames, exhaustive,
+40/40 registered.
+
+### `mapper: global`, and the minutes that are not COLMAP
+
+`pose` now runs on Modal's `cpu4`. Its first real 87-frame video took 301 s, of which
+COLMAP was 192 s (extract 3.7, match 121, map 67). Two changes aim at the rest:
+
+- **`mapper: global`** (opt-in; `global_sfm.py`) maps with GLOMAP as COLMAP 4 ships it,
+  through the prebuilt `pycolmap==4.2.0` wheel in the CPU image, on a copy of the 3.9.1
+  database; a result under `min_registered_fraction`, or a mapper that cannot run, falls
+  back to the incremental mapper on the same matches. On the 40-frame orbit: 40/40,
+  0.104° / 0.172% against incremental's 0.122° / 0.207%. Whether it saves most of the
+  67 s of mapping on a real video is **unmeasured**; turn it on per run with
+  `{"pose": {"mapper": "global"}}` and compare `mapS` with `globalMapS`.
+- **Transfers.** A frames artifact is ~100 objects, moved one request at a time by both
+  the worker and the container. Both now move eight at once, and every remote stage
+  records where its wall time went: `stageInS` and `outputsBackS` (worker side),
+  `remoteFetchS`, `remoteStageS` and `remoteUploadS` (container side), beside `billedS`.
+  What is left of `billedS` after those is container start and queueing. The next real
+  run is what attributes the 110 s; nothing here measured it.
+
+### `colmap: "4.2"`: the pose stage on COLMAP 4.2
+
+`pose` runs apt's COLMAP 3.9.1. `{"pose": {"colmap": "4.2"}}` runs extraction, matching
+and incremental mapping on COLMAP 4.2 instead, through the `pycolmap==4.2.0` wheel the CPU
+image already carries for `mapper: global` (`colmap4.py`): no second COLMAP build, and
+the same matching plan, exhaustive fallback, mapper seeds and `poses.json` -- whose
+`version` says which COLMAP ran, beside a new `meanReprojectionErrorPx` for both. 4.2
+reads a faiss vocabulary tree, not 3.9.1's FLANN one, so the image carries the faiss build
+of the same 32K-word tree at `$COLMAP4_VOCAB_TREE`, and pairs a video's frames the way
+3.9.1 does (4.2's own `quadratic_overlap` drops the linear window; `colmap4._matching`).
+The poses artifact stays 3.9.1's three files, which 3.9.1's `model_aligner` reads.
+
+On the rendered orbits (4 cores, `colmap4.py` has the table) 4.2 matched 1.35-5x and
+mapped 2-2.3x faster, with pose error within run-to-run noise of 3.9.1's: 87 frames at 1600x1200, sequential with
+loop closure and the recipe's settings, 475 s -> 294 s (match 255 -> 189 s, map
+193 -> 83 s), 87/87 both. The spool's 179 frames spent 266 s matching and 323 s mapping
+on 3.9.1. Measured there on Modal's cpu4 (two previews each, 2026-09-28): 4.2 matched in
+43-49 s and mapped in 187-225 s, 179/179 registered, with the same preview (24.06-24.07 dB
+/ LPIPS 0.169 against 24.07-24.15 / 0.166-0.168). 4.2 is the recipe's default since;
+`colmap: "3.9"` runs the old CLI.
+
+## Refine from the preview
+
+The phone's Refine re-runs `train` in the preview's workdir with `init_from: preview`
+(`init_seed.py`). Every `train` run leaves a seed -- the centres, colours and opacities of
+its visible gaussians -- in its `checkpoint/`, which a re-run keeps and `CloudRunner`
+carries to the GPU box. The Refine appends that seed, cropped to the support mask, to
+COLMAP's points (with empty tracks, so the depth loss keeps its real observations), and
+trains `init_schedule_scale` (1.0: measured better than 0.5 on the spool, 25.85 vs 25.11 dB) of the schedule, because gsplat's `sfm` init turns
+exactly those points into its starting gaussians. A seed trained against other poses is
+refused by fingerprint and the run trains from COLMAP's points on its own schedule.
+
+**Expected**: the measured 30k-step Refine was 1,278 s of L4 training (21 min, $0.31 all
+in); half the steps from a dense start should be roughly 650-750 s (the early steps cost
+more, starting near the cap rather than growing to it), about $0.14-0.17 less. **Check
+on the first run**: `train_metrics.json`'s `init` block (seed points, budget) and
+`requestedIterations` (15,000); held-out PSNR/SSIM/LPIPS against the 30k run's
+(`train_metrics.json` of the earlier Refine); `trainSeconds`; the quality stage's
+`keepPct`; and floaters in the viewer. If quality falls short, raise
+`init_schedule_scale` (the phone may send it) before abandoning the seed; `init_from:
+sfm` restores the old behaviour.
+
+## How many gaussians, and for how long
+
+`train`'s gaussian cap is `cap_max: auto` (`gaussian_budget.py`): the supported surface
+counted in its own finest-view pixels -- per sparse point, depth / focal for the camera
+that saw it largest, at the size training reads the frames; voxels of 32 of those
+footprints, one face each -- times `gaussian_density` 0.1. A Refine counts its support
+mask in full and the rest at a tenth. Clamped to the preview's 200k and to the L4's
+memory at that frame size (gsplat's own 1M/2M/3M MCMC measurements: ~8.7M at 1600 px,
+~5.4M at 2400; training rasterizes `--packed`, whose saving the model does not yet count).
+The 2M `budget_max` the recipe used to set is gone: it was what `place`/`package` could
+load whole on the 2 GB worker, and the stages after training now read the splat a chunk
+at a time (see "Stages after training, a chunk at a time"); `budget_max` remains an
+override. Measured offline, 2026-09-27: 3DGS's Truck model at its 979 px, **1.52M** (15.2M
+footprints^2; the calibration point); four local phone/photo models at 1600 px, 0.42M-0.81M.
+An integer `cap_max` is an override (the preview's 200k); a phone tier multiplies the
+budget (`density_scale`: Quick 0.5, Best 2).
+
+`converge: true` (`convergence.py`, `converge_trainer.py`) runs the trainer through a
+wrapper that, after MCMC's densification ends (25k of 30k, scaled), evaluates the held-out
+split every 500 steps and stops once the best PSNR of the last 2,000 steps is under
+0.05 dB above the best before them -- by adding the next step to the trainer's own save,
+export and evaluation lists, so the PLY and stats land where they always do. A budget over
+1M may run a longer maximum, `sqrt(budget / 1M)` up to 2x. `train_metrics.json` has
+`budget` (every input, and which clamp applied) and `convergence` (the held-out curve,
+`stepsRun` of `stepsMax`, whether and why it stopped).
+
+**Not yet run on a GPU. Check on the first run**: that `convergence.hook.hooked` is true
+(the wrapper found gsplat's `cli` and the trainer's `Runner`); `peakMemoryGb` against the
+memory model at the budget it chose; `trainSeconds` for a 1.5-2M budget on the L4
+(~35-50 min at 30k, extrapolated from gsplat's A100 table and the spool's 21 min at
+500k); where the curve flattens relative to `refineStopIter` -- the rule can only save
+the last sixth of a schedule, so a curve still rising at the end says the maximum, not
+the rule, is what binds; and `[benchmark:recipe]` against `[benchmark:recipe-500k]`.
+
+## Blocks, one GPU each
+
+A budget more than one GPU trains (`blocks: auto`), or `blocks: <n>`, trains the scene as
+blocks and merges them into one `trained.ply` (`blocks.py` has the recipe and its sources).
+Measured on the L4 with the spool forced to 2 blocks: quality matched the whole run
+(26.42 dB / LPIPS 0.1056 merged, 26.39 / 0.1088 whole), but one call trained the blocks in
+turn -- a 7.5k-step coarse pass, then 2,530 s and 2,207 s of blocks -- for 2.3 h and
+$1.73 against ~1 h and $0.67 whole. Modal bills per GPU-second, so the blocks now train
+**at once, one GPU each**, which costs the same seconds and ends with the longest block.
+
+`CloudRunner` does the fanning out (`contracts.FanOut`), because it already owns what a
+piece of work on a GPU needs -- retries, preemption, fallback, the checkpoint and the
+attempt ledger. One stage attempt is three kinds of call through the same adapter:
+
+| call     | runs                                                        | writes                        |
+| -------- | ----------------------------------------------------------- | ----------------------------- |
+| head     | the prior (or coarse pass) and the camera test, **once**    | `checkpoint/blocks/plan.json` |
+| part × N | one block each, `block_parallel` (4) at once, longest first | `blocks/block_NNN/` + `.json` |
+| join     | merge, merged evaluation, held-out error                    | the stage's outputs           |
+
+A part runs on its own checkpoint key (the prior and the plan copied onto it), so N parts
+syncing at once never overwrite one another; only the paths it declares come home. A part
+that fails or is preempted is resubmitted alone (`part_attempts`, 3 calls) while the others
+carry on; one that never succeeds ends the attempt only after the rest have finished, and
+the next attempt's head lists only the blocks with no record -- a finished block is never
+trained twice, and with a single block left the head trains it itself. Every call is an
+entry in `attempts.json` (`part`: the block, or `join`), so `billedS`, `costUsd` and
+`run_cost` are sums over concurrent calls; `fanOutWallS`, `fanOutBilledByPart` and
+`fanOutPeak` are on the step. In the stage log each part's lines carry `[bN]`; the progress
+bar follows the slowest block (the stage ends when it does) and the live viewer the most
+advanced block's snapshot.
+
+No GPU waits on another: the head returns before the parts start and the join starts after
+they end. That is why the fan-out is not a GPU container spawning children, nor a Modal CPU
+function orchestrating them (`cpu4`): the first bills a GPU to wait, and the second would
+need its own retries, fallback and pricing, and its children's seconds would never reach
+the ledger. `block_parallel` is capped by `CloudRunner(max_parallel=8)`: keep that under
+the Modal workspace's GPU concurrency limit divided by the runs the worker trains at once,
+since a part queued beyond the limit sits `pending` and is cancelled after `max_pending_s`.
+`block_parallel: 1` (or a runner that does not fan out, such as `LocalRunner`) trains the
+blocks in turn in one call, as before, bounded by the 5 h in-attempt budget.
+
+**Expected, not yet measured.** The spool at 2 blocks: 2.3 h less the shorter block
+(2,207 s), about **1.7 h**, for the same ~$1.73 plus two container starts and dataset
+copies (a few cents) -- and with a Preview's prior, no coarse pass either. A large scene of
+4 blocks of ~45 min each: head + 45 min + join instead of head + 3 h + join (and no 5 h
+yield), for the same GPU-seconds.
+
+**Each block's schedule follows its own frames** (`block_schedule`). `frames`, the
+default, is the single run's rule -- `training.schedule_scale`, linear in frames up to
+`schedule_full_at` (60), never below `schedule_floor` -- applied to the frames the block
+is given, then the block's own gaussian factor and convergence stop, as for a whole run.
+A block given every frame keeps the run's schedule exactly: the spool's two blocks (all
+156 training cameras each) are unchanged. With the recipe's 60 and the 50-frame minimum a
+block must have, `frames` shortens only a block of 50-59 frames; `share` (the run's
+schedule times the block's share of the frames, so each frame is visited about as often
+as in the whole run) is what would shrink a large scene's blocks, and is opt-in until a
+GPU run has measured it. `full` is every block the whole schedule.
+
+**Validate on the GPU**: the spool at `blocks: 2` (and `block_parallel: 1` as the
+control) -- `fanOutWallS`, the two parts' `billedS` against the serial 2,530 s / 2,207 s,
+PSNR/LPIPS against 26.42 / 0.1056; then a large capture at `blocks: 4` with
+`block_schedule: share` against `frames`.
+
+**Where a part's billed seconds go.** Measured on the L4 (spool, `blocks: 2`, bilateral
+grid, job 62d796d4): parts billed 4,191 s and 4,323 s against 2,967 s and 3,048 s of
+`blockSeconds` (the trainer's process), ~1,250 s each beyond it. Everything a part does
+outside the trainer was timed on this repository's CPU on a real 100-frame capture with a
+1M-gaussian prior and a 1M-gaussian SH-3 block: the dataset (now hard-linked) under 0.5 s,
+both budgets 0.4 s, the prior 0.2 s, the seed 5 s, the ring, the read-back, the crop and
+the parts file 2.5 s -- about 10 s. So the minutes are before the function body (the GPU
+queue, the container's start), after it returns (the runner noticing), or in transfers,
+and nothing recorded which. Now every call says, additively, to its billed figure:
+
+| metric         | what                                                                                                                                                                                                                                                                                                                                                                                                              |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `fanOutPhases` | per part: `start` (submit to function body: queue + cold start; `cold:1` if the container was new), `import`, `fetch`, the stage's `stageDataset`, `budget`, `prepare`, `loadPrior`, `dataset`, `seed`, `train`, `post`, `stageOther`, `finalSync`, `output`, `rest` (the result reaching the runner, clock skew); not summed: `bgSync` (the syncer beside the stage), `collect` (the runner fetching the result) |
+| `headPhases`   | the head call, the same way (`prepare` is the prior and the camera test)                                                                                                                                                                                                                                                                                                                                          |
+| `remotePhases` | the last call: the join (`merge`, `eval`, `holdout`) or the one call                                                                                                                                                                                                                                                                                                                                              |
+| `blockPhases`  | each block record's `phases`, as the join saw them                                                                                                                                                                                                                                                                                                                                                                |
+| `blockTrainer` | inside each block's trainer (`trainer_timing.json`): `setup`, `eval`, `ply`, `steps`, `evals`                                                                                                                                                                                                                                                                                                                     |
+
+The container reports `remoteStartedAt`/`remoteEnteredAt`/`containerBootedAt` (wall
+clock), `containerCall`, `remoteImportS`, `remoteFinalSyncS`/`remoteOutputS` (with their
+bytes) and the syncer's `remoteSyncs`/`remoteSyncS`/`remoteSyncBytes`; the runner submits
+with its own wall clock and puts the two together (`cloud.call_phases`).
+
+**One slow part, and one that waited (job 33bc1bff, spool, `blocks: 2`, L4).** b1 waited
+1,697 s before its function body ran, then trained 28,786 steps at ~18 it/s; b0 started in
+12 s and trained 29,926 steps at ~3 it/s -- 10,089 s of trainer steps, billed 10,285 s --
+on similar blocks (626k / 605k gaussians, the same 156 cameras, no ring). Both report
+`cold:1` (`containerCall` 1: each was its container's first call), so b0 did _not_ run in
+the head's warm container, and nothing of the head's could have shared it. What was on b0's
+side: its final checkpoint sync, which touches no GPU, took 65 s against b1's 4.4 s. A GPU
+function that asks Modal for no CPU is reserved 0.125 of a core and bursts into what its
+host's other tenants leave, and the trainer is CPU-fed (four DataLoader workers decoding a
+JPEG a step, a Python loop launching each step's kernels), with thread pools sized to the
+_host's_ `os.cpu_count()`. So, ranked: a CPU-starved container (most likely); a slow or
+throttled GPU; different work (least: same code, cameras and schedule). Changed:
+
+- **Every GPU function reserves 2 cores and 8 GiB** (`infra/modal/app.py`, `GPU_CPU_CORES`,
+  `GPU_MEMORY_MIB`; Modal bills max(reserved, used), so at most +$0.16/h over an L4's
+  $0.80), and the image caps OpenMP/MKL/OpenBLAS/OpenCV pools at 4 threads.
+- **The machine is measured**: `remoteHost` (per call; `headHost`, and `fanOutHosts` per
+  part) from `host.HostWatch` -- `cores` (CPU seconds over wall: what the call actually
+  got), `cpus`, `cpuQuota`, `throttledS`, `psiCpu`, `load`; `gpuUtil`/`gpuUtilMin`,
+  `smMHz`/`smMHzMin`, `tempC`, `powerW`, `throttle` (nvidia-smi's reasons, OR-ed), and
+  `remoteGpu`. The next run says which it was: starved is low `gpuUtil` with low `cores`
+  and high `throttledS`/`psiCpu`; a slow GPU is high `gpuUtil` at a low `smMHz` or a
+  `throttle` bit; different work is neither.
+- **A call leaves nothing running** (a warm container's next call would share it):
+  `remote.execute` kills every process started under it, however it ends
+  (`remoteReaped`), names any thread still alive (`remoteLeftoverThreads`), joins the
+  checkpoint syncer for as long as a sync in flight takes, and the app removes the
+  sandbox. `progress.stream` kills its tool when the reading stops. Not
+  `single_use_containers`: reuse only happens within Modal's scale-down window, it saves
+  a cold start, and the slow part was a fresh container anyway.
+
+**Billed from the container, not the submit.** A finished Modal call is now billed from
+its container's start (a cold call: `containerStartedAt`, the sandbox's uptime subtracted
+from the clock; else `containerBootedAt`) or its entry (a warm call) to `remoteFinishedAt`
+(`cloud.container_billing`), clamped to the runner's wall time; the wait before it is
+`queueS` (per call in `attempts.json`, summed on the step), not a cost. `billing`
+(`billingBasis` on the step) says `container` or `wall-proxy` -- the old figure, kept for
+a call that reported no clocks (failed, preempted, an older image). In `call_phases`,
+`start` is then the cold start alone and `queue` sits beside the sum. Not counted by
+either: a container's idle scale-down window after its last call, which Modal bills and
+no call owns; and the reserved CPU and memory, which `providers.py` does not price.
+
+**A part may start on an L40S** (`modal_adapter.GPU_FALLBACKS`: `l4 -> (l4, l40s)`,
+deployed as `run_stage_l4_fallback` with `gpu=["L4", "L40S"]`, Modal's ranked list: the
+first type free wins). Parts only -- a single run, a head and a join keep their L4. The
+L40S is 2.44x the L4's price and trained ~2.3x faster on our benchmark, so a block costs
+~17% more by that benchmark (+6% on training seconds at list prices), and ends in under
+half the time instead of waiting half an hour. The A10 ($1.10, 1.38x) is left out until
+gsplat has been timed on one. The container reports its GPU, and the call is priced and
+ledgered at that tier (`fanOutTiers`); a deployment without the fallback function runs the
+part on its own tier; `ModalAdapter(part_fallback=False)` turns it off.
+
+What was cut, none of it a training step (the merged `trained.ply` stays byte-identical
+to the serial one's, `test_blocks.py`):
+
+- **Evaluation renders.** gsplat's `eval()` writes every val frame's ground truth and
+  render side by side as a full-size PNG, which `converge_trainer.py` then deleted unread:
+  ~1.1 s of zlib per 4 Mpx canvas measured here, ~1.7 s at 2,400 px, x 22 frames x the 15
+  evaluations of a converging 30k run -- **~7-10 min per block**, and per single run with
+  `converge` (inside `blockSeconds`, which is why it did not show as overhead). The
+  wrappers now give the trainer an `imageio` that skips `renders/`; the join's merged
+  evaluation runs through the block wrapper for the same reason (~40 s).
+- **LPIPS on intermediate evaluations**, which the rule never reads (PSNR only): skipped,
+  and dropped from their stats; the last evaluation, the one reported, keeps it.
+- **Re-uploading what was just downloaded.** `S3Transfer.get` now remembers what it
+  fetched, so the syncer's first sync no longer sends back a part's prior, or the join's
+  every finished block (hundreds of MB to GBs at the L4's budget ceiling).
+- **Bringing home more than the result.** A finished part's declared members are fetched
+  one by one, not its whole key (its prior and live snapshots came back too).
+
+### Batched steps (`batch_size`)
+
+`batch_size: B` (1-8, default 1) trains B images a step. gsplat v1.5.3 scales every
+learning rate by `sqrt(B)` and Adam's eps by `1/sqrt(B)` but does not shorten the
+schedule, so the stage divides `--steps_scaler` by B: the same images trained on, in B
+times fewer steps. The refine window, SH interval and evaluation steps are scaled by the
+trainer with it, and `converge_trainer.py` scales its window by `cfg.steps_scaler`, so
+the convergence stop follows the shorter run unchanged. Refused with `depth_loss` (a
+batch of per-frame SfM point lists does not collate); frames must share one size; the
+`absgrad` assert in `rasterization` is multi-GPU only. The memory model counts B frames
+of raster memory, so the budget's ceiling -- and with it `blocks: auto` -- accounts for
+it. Whether B > 1 is faster per image on an L4 is exactly what is not yet measured:
+`batch_size: 2` and `4` on the spool against 1, comparing `trainSeconds` and PSNR/LPIPS.
+
+## Optimised parents (`optimise_lod`)
+
+`package` merges each parent tile from its subtree by Hierarchical 3DGS's moment matching;
+Phase 1 measured that ahead of thinned parents on PSNR, SSIM and holes, not on LPIPS at
+the switch distance -- merged parents are blurry. `optimise_lod` (recipe 10) optimises
+them against the photos, as H3DGS Sec. 5.1 does its interior nodes: leaves frozen, a random
+training frame and a log-uniform tau in [3, 64] px each step, Cesium's own REPLACE cut at
+tau rendered at full resolution, the trainer's 0.8 L1 + 0.2 D-SSIM, train_post.py's
+learning rates, opacity kept at most 0.99 for SPZ. It is a GPU stage between `place` and
+`package` because the tree is a function of `canonical.ply` -- after `quality`'s crop and
+`place`'s east/north/up -- and it builds that tree with the packer's own code
+(`splat_tiles.hierarchy`); the parents come back keyed by tile and cell and fingerprinted
+by the PLY's sha256, and `package` refuses them for any other tree. `lod_parents.py` is
+the stage, `lod_optimise.py` the torch half, `lod_maths.py` the tested numpy half.
+
+The parents are kept only if the held-out frames' loss at the cut fell; a failure, a
+rejection or `enabled: false` leaves the merged parents, as before. Iterations are planned
+so each parent is optimised about as often as H3DGS's 15,000 optimise each of its nodes
+(15,000 x ln 2 / ln 20 = 3,471 choices), from the measured rate at which the training
+frames' cuts choose it: 3,471 when there is one parent tile (a scan of about 1M gaussians
+at 100k a tile), at most 15,000.
+
+**Not yet run on a GPU. Expected** on the L4: a step renders the cut (up to every leaf)
+and back-propagates like a training step at the same count, so ~10-15 steps a second at
+~1M gaussians (the measured Refine ran 23 steps a second at 500k); 3.5k steps is ~5 min,
+plus ~2 min of tree building, target renders and evaluation and the container's start --
+about $0.10 at $0.80 an hour; the 15,000-step ceiling ~$0.40; `budget_s` (1 h) bounds it.
+**Check on the first run** (`stages/optimise_lod/out/lod_parents/summary.json`):
+`itPerSecond` and `loopSeconds`; `timesChosen` (every parent tile trained); `before` /
+`after` held-out loss, PSNR and LPIPS per tau; `switchDistance` -- each parent alone from
+where its error projects to 16 px against its own leaves, merged and optimised, the
+measure Phase 1 made; `accepted`. `experiments/lod_compare.py` repeats Phase 1's exact
+protocol (root at the switch distance, Cesium's cut from four distances) on the GPU, on
+two tilesets packed from the run's `canonical.ply` with and without `--parents`.
+
+## Stages after training, a chunk at a time
+
+`quality`, `place`, `thumbnail`, `ground_samples` and Lane 1's `normalize` never hold the
+splat. They read it in fixed row ranges (`splat_io.py`: `SplatReader` parses the PLY
+header as the packager does and reads a range with one read, `PlyWriter` appends
+`canonical.ply` byte-identical to `gaussians.write_ply`, `ColumnStore` keeps
+per-gaussian results on disk between passes), and get every whole-splat statistic in
+passes over the ranges (`outofcore.py`: radix selection that reproduces `np.median` and
+`np.percentile` bit for bit, and group-by counts in hash partitions). `splat_stream.py`
+is `gaussians.orient`/`transform`/`render_thumbnail`/`ground_samples` on such a stream;
+`quality.support_pass` regroups the opaque occluders into the same 2^18-row blocks the
+whole-splat stage used and tests each camera against spatial cells of a chunk before it
+projects any of it.
+
+The outputs are the whole-splat stages' own: `tests/test_chunked_equivalence.py` runs
+each beside the path it replaced (for `quality`, a frozen copy of the old stage,
+`tests/quality_in_memory.py`) on a few hundred thousand gaussians cut into prime-sized
+chunks and requires the same bytes -- except a ground sample's longitude and latitude,
+whose cell mean is a float64 sum here and a float32 pairwise one in `np.mean` (under a
+micrometre). Peak memory (`VmHWM`), measured by `tests/memory_probe.py` in a process of its own
+(synthetic orbit, 16 cameras, held-out arrays):
+
+| gaussians | whole-splat quality + place | chunked quality + place + thumbnail + ground |
+| --------- | --------------------------- | -------------------------------------------- |
+| 250k      | 114 MB                      | 162 MB                                       |
+| 1M        | 328 MB                      | 184 MB                                       |
+| 4M        | 1,067 MB                    | 182 MB                                       |
+| 8M        | fails under a 1.5 GB limit  | 193 MB, 81 s                                 |
+
+Lane 1 on a phone's SH3 upload (gsplat's 59-float rows), `normalize` + `thumbnail` +
+`ground_samples`: 711 MB whole against 139 MB chunked at 1M gaussians, 1,386 MB against
+144 MB at 2M.
+
+`tests/test_bounded_memory.py` holds the scaling (150k against 600k gaussians, with the
+fixed-size buffers shrunk so both are past them: no growth, where the whole-splat path
+grows 125 MB) and, with `PIPELINE_BENCH=1`, the 8M run under a 1.5 GB address-space limit.
+Each stage takes `chunk_gaussians` (2^18 rows by default); nothing it computes depends on
+it.
 
 ## Lane 1
 
@@ -403,6 +828,49 @@ parser that kept collecting `property` lines past the second `element` (so a mes
 trailing `element face` joined the vertex dtype, every gaussian was read at the wrong
 stride, and the read came back **silently** with `|x| max = 1.7e38`). Fixing only the type
 map would have turned the loud failure into the silent one.
+
+### The up axis
+
+Everything downstream reads `canonical.ply` as east/north/up with z up -- the tileset's
+node matrix, the thumbnail, the ground samples -- and until 2026-09-23 nothing converted
+an upload into that frame. So a Scaniverse `.spz` (y up) and a 3DGS/COLMAP `.ply` (y down)
+both landed tipped 90 degrees, and `splat_ground` measured "ground" along the capture's
+depth, which the viewer's clamp then dutifully rested on the terrain.
+
+`ingest_splat` now turns the file into east/north/up (`gaussians.orient`): positions, each
+gaussian's quaternion (`q' = q_R * q`), and nothing else -- the colour is exactly
+invariant, because `canonical.ply` keeps only the view-independent SH DC term. Which axis
+is up:
+
+| Source                                    | Default | Evidence                                                                                                                                                                   |
+| ----------------------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `.spz`                                    | `y`     | the SPZ README ("RUB coordinate system following the OpenGL and three.js convention"); two real Scaniverse share-page scans render upright y-up and upside down y-down     |
+| `.spz` counter-examples                   | --      | six of Spark's sample `.spz` files are y **down** (Spark's quick start rotates `butterfly.spz` 180 degrees): written without declaring a frame. They need `upAxis: "-y"`   |
+| `.ply`                                    | `-y`    | the SPZ README ("PLY ... typically uses RDF"), Niantic's own `saveSplatToPly` converting to right/down/forward; Inria's `train` renders upright y-down                     |
+| Inria 3DGS / gsplat / nerfstudio (COLMAP) | `-y`    | the COLMAP world frame is the first camera's, y down, tilted by however it was held (nerfstudio's parser says so); nerfstudio's own exporter writes its z-up world instead |
+| Polycam, Luma, KIRI, Postshot `.ply`      | `-y`    | **not measured** -- no public sample downloadable without an account; this is the PLY convention, and the override is the remedy                                           |
+
+A capture's `metadata.upAxis` (`z`, `-z`, `y`, `-y`, `x`, `-x`) overrides the default and
+`metadata.headingDeg` turns it about the vertical; the API refuses anything else at
+creation, and the worker hands both to whichever stage runs `ingest_splat`. There is no
+`auto`: a plane normal has a sign nothing in a splat resolves, and an object has no ground
+under it. The origin moves to the footprint's centre and the lower quartile of the per-cell
+ground heights, which cannot change the viewer's clamp (a constant vertical shift moves
+every sample by the same amount) and puts the placed coordinate in the middle of the
+capture. `source_meta.json`'s `frame` records all of it.
+
+Before and after on real downloads -- the thumbnails are in the session's scratchpad, and
+`tests/test_up_axis.py` holds the same facts on synthetic trees of known orientation,
+needles and all:
+
+| Sample                               | Before (z assumed)                                 | After (format default)                            |
+| ------------------------------------ | -------------------------------------------------- | ------------------------------------------------- |
+| Scaniverse `oebjag65cbkuvm42` (.spz) | lying down: the elevation view shows it from above | a hedge standing on a path                        |
+| Scaniverse `jb4dj3iobbwt6px2` (.spz) | lying down: seen from above                        | a bin and bushes upright on the ground            |
+| Inria `train` (.ply)                 | the locomotive on its side                         | upright                                           |
+| Spark `cat.spz` (.spz, y-down file)  | lying down: seen from above                        | upside down, as its file is: needs `upAxis: "-y"` |
+
+`.spz` versions 2 and 3 are read; version 4 (ZSTD streams) is refused by name.
 
 ### `ground_samples.json`
 
@@ -467,10 +935,25 @@ Three things it will not say:
   bias, and a bias common to all of them moves the whole reconstruction without changing a
   single residual. `uncertaintyM` is floored at five metres for that reason, and the
   residual is reported separately as what it is.
-- **the similarity has not been applied.** `alignment.applied` is `false`: `train` writes
-  `canonical.ply` in COLMAP's own frame and `package` places that frame on the globe as if
-  it were east/north/up, so a Lane 2 capture is still packaged in the reconstruction's
-  arbitrary orientation. The transform is recorded; applying it is the next step.
+- **the similarity is applied, and not by this stage.** `alignment.applied` is `true`
+  since the `place` stage exists: `train` writes `trained.ply` in COLMAP's own frame
+  (gsplat's world normalisation is off for exactly this), `georef.json` carries the
+  transform as `frame`, and `place` turns the splat by it into `canonical.ply`. Checked
+  against the scene rather than against itself: on the rendered orbit, COLMAP's sparse
+  points placed this way sit a median 0.011 m from the tree and ground they were rendered
+  from, and 0.41 m unplaced.
+
+Without GPS -- the ordinary iPhone video -- `frame` is a **levelling by camera-up**: the
+mean of every registered frame's up vector, which is gravity for footage filmed the way
+people hold phones (nerfstudio's default `orientation_method="up"` and gsplat's
+`similarity_from_cameras` use the same estimate). On a real 50-frame reconstruction of
+hand-held photographs the dominant plane came out 0.39 degrees from vertical after
+levelling, with 71% of points above it and 3% below. Heading is not knowable from images
+(the capture's `headingDeg` turns it), scale stays unresolved (`scale`, metres per model
+unit, defaults to 1), and the splat is recentred on its own footprint as Lane 1 is. A
+video with no location falls back to the capture's own `lat`/`lon` -- the console sends
+where its camera was looking -- recorded as `manual`; with none of the three the stage
+refuses rather than placing the capture at (0, 0).
 
 ### `manifest.json`
 

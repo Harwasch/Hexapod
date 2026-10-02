@@ -3,10 +3,17 @@
 Everything here is pure or a subprocess argv, so the `pose` stage in `stages.py` stays a
 thin layer that resolves artifacts. Three things live here that are worth naming:
 
-* **`exhaustive` is the default matcher and `sequential` carries a warning.** A0 #7 ran
+* **The `pose` stage runs `sequential` only with loop detection, and only as a first
+  try.** A0 #7 ran
   both on the same 40-frame closed orbit: exhaustive registered 40/40, sequential without
-  loop detection registered **2**. Sequential is 2.5x faster and is the right choice for a
-  long linear walk; on an orbit it is a way to get a green stage and no reconstruction.
+  loop detection registered **2**, because the last frame never meets the first. With a
+  vocabulary tree (`vocab_tree_path`) sequential matching queries every tenth frame
+  against the whole capture, which is what closes an orbit, and it matches a small
+  multiple of the frame count in pairs rather than its square. It is still not trusted
+  on its own: the README's 100 real frames registered 76 in its run and 98 when the same
+  frames were re-run on 2026-09-26 -- the mapper is not repeatable run to run -- so the
+  `pose` stage checks the registered fraction and falls back to exhaustive matching when
+  it is short (see `colmap` in stages.py, and `matching_plan` for the measurements).
 * **the focal length.** A0 #7 measured COLMAP's self-calibrated focal 3.1% low on this
   fixture. `camera_params` therefore exists: given a focal prior (EXIF, ARKit) the stage
   fixes it and says so, and given none it records `focalPriorPx: null` together with the
@@ -46,35 +53,48 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import sqlite3
 import struct
 import subprocess
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import BinaryIO
+from typing import Any, BinaryIO
 
 import numpy as np
 import numpy.typing as npt
 
 __all__ = [
     "MATCHERS",
+    "VOCAB_TREE_ENV",
     "Camera",
     "Image",
+    "MatchPass",
     "Model",
+    "Points3D",
     "Similarity",
+    "UpEstimate",
     "alignment_residuals",
+    "camera_up",
     "colmap_available",
     "colmap_exe",
     "colmap_version",
+    "count_pairs",
     "feature_extractor_argv",
     "mapper_argv",
     "matcher_argv",
+    "matching_plan",
     "model_aligner_argv",
     "quat_to_matrix",
     "read_model",
+    "read_points",
+    "read_points3d",
     "read_similarity",
     "rotation_angle_deg",
+    "rotation_onto_z",
     "umeyama",
+    "vocab_tree_path",
+    "write_points3d",
     "write_ref_positions",
 ]
 
@@ -83,9 +103,17 @@ F64 = npt.NDArray[np.float64]
 #: The matchers this stage will run, and what each one is for.
 MATCHERS: dict[str, str] = {
     "exhaustive": "every pair; the only one that closes an orbit (A0 #7: 40/40)",
-    "sequential": "neighbours in filename order; 2.5x faster, and 2/40 on a closed orbit",
+    "sequential": (
+        "neighbours in filename order, plus vocabulary-tree loop closure when given a "
+        "tree; without one, 2/40 on a closed orbit"
+    ),
     "spatial": "neighbours by GPS; needs per-image location priors in the database",
 }
+
+#: Where the image says its vocabulary tree is. `infra/modal/app.py` downloads COLMAP's
+#: published Flickr100K 32K-word tree into the CPU image at build time, checks its sha256,
+#: and sets this; a machine without it (the worker, CI) matches exhaustively instead.
+VOCAB_TREE_ENV = "COLMAP_VOCAB_TREE"
 
 #: COLMAP camera model id -> (name, parameter names). Only the models this stage asks
 #: for are listed; an unlisted id is read as its raw parameter vector and named by id.
@@ -142,6 +170,25 @@ def colmap_available() -> bool:
     return True
 
 
+def vocab_tree_path(configured: object = None) -> Path | None:
+    """The vocabulary tree for loop detection: the `vocab_tree` param, else the env var.
+
+    None when neither names a file that exists. Loop detection is what separates a
+    sequential match that closes an orbit from one that registers 2 of 40, so a missing
+    tree is not something to run without: the caller matches exhaustively instead and
+    says why.
+
+    The tree must be the FLANN-format `vocab_tree_flickr100K_words32K.bin` that COLMAP
+    3.9.1 reads. COLMAP 3.11 moved to a faiss format with differently named files
+    (`vocab_tree_faiss_*`), which 3.9.1 cannot load.
+    """
+    raw = str(configured) if configured else os.environ.get(VOCAB_TREE_ENV, "")
+    if not raw:
+        return None
+    path = Path(raw).expanduser()
+    return path.resolve() if path.is_file() else None
+
+
 # --- argv ---------------------------------------------------------------------------
 
 
@@ -154,6 +201,8 @@ def feature_extractor_argv(
     single_camera: bool = True,
     max_image_size: int = 2400,
     max_features: int = 8192,
+    first_octave: int | None = None,
+    num_threads: int | None = None,
     use_gpu: bool = False,
 ) -> list[str]:
     """SIFT over every frame, into one database.
@@ -161,6 +210,10 @@ def feature_extractor_argv(
     `single_camera` is on by default because a frame set from one clip *is* one camera,
     and letting COLMAP fit one intrinsic per frame throws away the only constraint that
     makes a 40-frame orbit over-determined.
+
+    `first_octave` is COLMAP's own -1 unless given: -1 doubles the image before building
+    the scale space, so the finest octave alone is four times the frame's pixels.
+    `num_threads` None is COLMAP's -1, every core the process can see.
     """
     argv = [
         colmap_exe(),
@@ -182,17 +235,35 @@ def feature_extractor_argv(
     ]
     if camera_params is not None:
         argv += ["--ImageReader.camera_params", ",".join(f"{v:.10g}" for v in camera_params)]
+    if first_octave is not None:
+        argv += ["--SiftExtraction.first_octave", str(first_octave)]
+    if num_threads is not None:
+        argv += ["--SiftExtraction.num_threads", str(num_threads)]
     return argv
 
 
 def matcher_argv(
-    database: Path, matcher: str = "exhaustive", *, use_gpu: bool = False
+    database: Path,
+    matcher: str = "exhaustive",
+    *,
+    use_gpu: bool = False,
+    overlap: int | None = None,
+    vocab_tree: Path | None = None,
+    num_threads: int | None = None,
 ) -> list[str]:
+    """The matching pass. For `sequential`, `overlap` neighbours in each direction and,
+    with a `vocab_tree`, loop detection -- which is what closes an orbit that sequential
+    matching alone would leave open (A0 #7's 2/40).
+
+    Every matcher skips a pair the database already holds, which is what makes an
+    `exhaustive` pass after a `sequential` one a fill-in: it matches only the pairs the
+    first pass did not. `clear_matches` is how a pass is made to start over instead.
+    """
     if matcher not in MATCHERS:
         raise ValueError(
             f"unknown matcher {matcher!r}; this stage runs one of {', '.join(sorted(MATCHERS))}"
         )
-    return [
+    argv = [
         colmap_exe(),
         f"{matcher}_matcher",
         "--database_path",
@@ -200,6 +271,19 @@ def matcher_argv(
         "--SiftMatching.use_gpu",
         "1" if use_gpu else "0",
     ]
+    if matcher == "sequential":
+        if overlap is not None:
+            argv += ["--SequentialMatching.overlap", str(overlap)]
+        if vocab_tree is not None:
+            argv += [
+                "--SequentialMatching.loop_detection",
+                "1",
+                "--SequentialMatching.vocab_tree_path",
+                str(vocab_tree),
+            ]
+    if num_threads is not None:
+        argv += ["--SiftMatching.num_threads", str(num_threads)]
+    return argv
 
 
 def mapper_argv(
@@ -209,11 +293,26 @@ def mapper_argv(
     *,
     refine_focal_length: bool = True,
     refine_extra_params: bool = True,
+    random_seed: int = 0,
+    num_threads: int | None = None,
+    snapshot_path: Path | None = None,
+    snapshot_every: int = 0,
 ) -> list[str]:
-    """Incremental SfM. `refine_focal_length=False` is how a focal prior is *held*."""
-    return [
+    """Incremental SfM. `refine_focal_length=False` is how a focal prior is *held*.
+
+    `snapshot_path` with `snapshot_every` N makes the mapper write the reconstruction so
+    far into a new directory under it every N registered images -- what `live.MapperWatch`
+    reads to show cameras as they are solved. Off unless asked for.
+
+    `random_seed` is COLMAP's own default, 0, unless a retry asks for another: the
+    mapper's initial-pair search is randomised, and which pair it starts from decides
+    whether an orbit closes (see `colmap` in stages.py).
+    """
+    argv = [
         colmap_exe(),
         "mapper",
+        "--random_seed",
+        str(random_seed),
         "--database_path",
         str(database),
         "--image_path",
@@ -227,6 +326,163 @@ def mapper_argv(
         "--Mapper.ba_refine_extra_params",
         "1" if refine_extra_params else "0",
     ]
+    if num_threads is not None:
+        argv += ["--Mapper.num_threads", str(num_threads)]
+    if snapshot_path is not None and snapshot_every > 0:
+        argv += [
+            "--Mapper.snapshot_path",
+            str(snapshot_path),
+            "--Mapper.snapshot_images_freq",
+            str(snapshot_every),
+        ]
+    return argv
+
+
+@dataclass(frozen=True)
+class MatchPass:
+    """One matching pass the `pose` stage may run, and why it is in the plan."""
+
+    matcher: str
+    loop_detection: bool = False
+    #: Forget every earlier match first (`clear_matches`), so this pass re-matches rather
+    #: than filling in.
+    clear: bool = False
+    why: str = ""
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "matcher": self.matcher,
+            "loopDetection": self.loop_detection,
+            "clear": self.clear,
+            "why": self.why,
+        }
+
+
+def matching_plan(
+    requested: str,
+    *,
+    source_format: str | None,
+    vocab_tree: bool,
+    rematches: int = 1,
+) -> tuple[MatchPass, ...]:
+    """Which matching passes to run, in order; the stage stops at the first that is enough.
+
+    `auto` is the recipe's choice. A frame set that came out of a **video** is in time
+    order, so each frame's neighbours by name are its neighbours in space, and sequential
+    matching with vocabulary-tree loop detection matches a few pairs per frame where
+    exhaustive matches every pair. Measured 2026-09-26 on 4 cores of the development
+    container (COLMAP 3.9.1, 4096 features, 1600 px; the machine was shared with another
+    test run for part of it, so these are upper bounds):
+
+        capture                      matcher          pairs  extract  match   map  total  reg.
+        fixture orbit, 87 @ 640x480  exhaustive       3,741    17 s  195 s  33 s  245 s  87/87
+        fixture orbit, 87 @ 640x480  sequential+loop  1,192    10 s   93 s  27 s  131 s  87/87
+        real frames, 100 @ 3008x2000 sequential+loop  1,372   109 s  348 s 150 s  607 s  100/100
+        README's 100 @ 1080x1920    sequential+loop  1,400    79 s  271 s  82 s  432 s  98/100
+
+    On the 3008x2000 frames (a fisheye walk round a backhoe, in capture order, which SIFT
+    sees at 1600 px), the exhaustive fill-in of the other 3,578 pairs took a further
+    553 s and mapping on all 4,950 took 266 s (98/100): exhaustive from the start would
+    have been about twice the sequential run. When the fallback does run, it costs the
+    sequential pass and one mapping on top of plain exhaustive -- on the fixture, 316 s
+    against 245 s. A **photo set** has no such order --
+    `frame_0003` may be across the scene from `frame_0004` -- so it is matched
+    exhaustively. Sequential is never planned without a vocabulary tree (A0 #7's 2/40);
+    `sequential` asked for by name on a machine with no tree is matched exhaustively, and
+    the plan says so.
+
+    A sequential pass is always followed by an exhaustive one **without** clearing: the
+    matchers skip pairs the database already holds, so the fallback costs only the pairs
+    sequential did not match. Then `rematches` exhaustive passes that do clear, the
+    existing answer to RANSAC's thread-order nondeterminism (`_best_reconstruction`).
+    """
+    if requested not in (*MATCHERS, "auto"):
+        raise ValueError(
+            f"unknown matcher {requested!r}; this stage runs auto or one of "
+            f"{', '.join(sorted(MATCHERS))}"
+        )
+    passes: list[MatchPass] = []
+    wants_sequential = requested == "sequential" or (
+        requested == "auto" and source_format == "video"
+    )
+    if wants_sequential and vocab_tree:
+        passes.append(
+            MatchPass(
+                "sequential",
+                loop_detection=True,
+                why=(
+                    "frames from a video, in time order: neighbours plus vocabulary-tree "
+                    "loop closure"
+                    if requested == "auto"
+                    else "asked for by name, with vocabulary-tree loop closure"
+                ),
+            )
+        )
+        passes.append(
+            MatchPass(
+                "exhaustive",
+                why=(
+                    "fallback: sequential registered too few frames, so every pair it "
+                    "skipped is matched as well"
+                ),
+            )
+        )
+    elif wants_sequential:
+        passes.append(
+            MatchPass(
+                "exhaustive",
+                why=(
+                    f"no vocabulary tree on this machine (${VOCAB_TREE_ENV}), and "
+                    f"sequential matching without loop detection registered 2 of 40 on a "
+                    f"closed orbit (A0 #7)"
+                ),
+            )
+        )
+    elif requested == "spatial":
+        passes.append(MatchPass("spatial", why="asked for by name"))
+    else:
+        passes.append(
+            MatchPass(
+                "exhaustive",
+                why=(
+                    "asked for by name"
+                    if requested == "exhaustive"
+                    else f"frames from {source_format or 'an unknown source'}, in no "
+                    f"guaranteed order: every pair"
+                ),
+            )
+        )
+    last = passes[-1].matcher
+    passes += [
+        MatchPass(last, clear=True, why="rematch: RANSAC across threads is not deterministic")
+    ] * max(0, rematches)
+    return tuple(passes)
+
+
+def count_pairs(database: Path) -> tuple[int, int]:
+    """(pairs matched, pairs geometrically verified) in a COLMAP database.
+
+    Every pair a matcher tried has a `matches` row, empty or not (87 frames exhaustive
+    wrote 3,741 = 87 * 86 / 2), which is what makes this the cost of a matching pass.
+    """
+    with sqlite3.connect(database) as connection:
+        tried = connection.execute("SELECT COUNT(*) FROM matches").fetchone()[0]
+        verified = connection.execute(
+            "SELECT COUNT(*) FROM two_view_geometries WHERE rows > 0"
+        ).fetchone()[0]
+    return int(tried), int(verified)
+
+
+def clear_matches(database: Path) -> None:
+    """Forget every match and two-view geometry, keeping the features.
+
+    `*_matcher` skips pairs the database already has, so this is what makes a second
+    matching pass actually re-match. Features stay: extraction is deterministic, and it
+    is the matching's geometric verification (RANSAC across threads) that is not.
+    """
+    with sqlite3.connect(database) as connection:
+        connection.execute("DELETE FROM matches")
+        connection.execute("DELETE FROM two_view_geometries")
 
 
 def model_aligner_argv(
@@ -424,6 +680,8 @@ class Model:
     images: tuple[Image, ...]
     points3d: int
     mean_track_length: float
+    #: The mean of the points' own reprojection errors (px) -- `model_analyzer`'s number.
+    mean_reprojection_error: float = 0.0
 
     @property
     def registered(self) -> int:
@@ -448,12 +706,13 @@ def read_model(directory: Path) -> Model:
     """
     cameras = _read_cameras(directory / "cameras.bin")
     images = _read_images(directory / "images.bin")
-    points, tracks = _read_points3d(directory / "points3D.bin")
+    points, tracks, errors = _read_points3d(directory / "points3D.bin")
     return Model(
         cameras=cameras,
         images=images,
         points3d=points,
         mean_track_length=(tracks / points) if points else 0.0,
+        mean_reprojection_error=(errors / points) if points else 0.0,
     )
 
 
@@ -509,18 +768,304 @@ def _read_images(path: Path) -> tuple[Image, ...]:
     return tuple(sorted(out, key=lambda image: image.name))
 
 
-def _read_points3d(path: Path) -> tuple[int, int]:
-    """(point count, total track length). The points themselves are not needed here."""
-    points = 0
-    tracks = 0
+def read_points(directory: Path) -> F64:
+    """The sparse model's 3D points, as an (n, 3) array in the model's own frame."""
+    out: list[tuple[float, float, float]] = []
+    with (directory / "points3D.bin").open("rb") as handle:
+        for _ in range(_u64(handle)):
+            record = handle.read(43)  # id u64, xyz 3 x f64, rgb 3 x u8, error f64
+            out.append(struct.unpack_from("<3d", record, 8))
+            handle.read(8 * _u64(handle))
+    return np.asarray(out, dtype=np.float64).reshape(-1, 3)
+
+
+@dataclass(frozen=True)
+class Points3D:
+    """Every field of `points3D.bin`, as arrays, so that a subset can be written back.
+
+    `track_offsets[i]:track_offsets[i + 1]` indexes point `i`'s rows of `track`, each an
+    `(image_id, point2D_idx)` pair: the observations gsplat's parser turns into
+    `point_indices`, which is what its depth loss projects into each frame.
+    """
+
+    ids: npt.NDArray[np.uint64]
+    xyz: F64
+    rgb: npt.NDArray[np.uint8]
+    error: F64
+    track: npt.NDArray[np.uint32]
+    track_offsets: npt.NDArray[np.int64]
+
+    def __len__(self) -> int:
+        return int(self.ids.shape[0])
+
+    def track_of(self, index: int) -> npt.NDArray[np.uint32]:
+        return self.track[self.track_offsets[index] : self.track_offsets[index + 1]]
+
+    def subset(self, keep: npt.NDArray[np.bool_]) -> Points3D:
+        """The points where `keep` is true, their tracks with them."""
+        lengths = np.diff(self.track_offsets)
+        rows = np.repeat(keep, lengths)
+        offsets = np.concatenate([[0], np.cumsum(lengths[keep])]).astype(np.int64)
+        return Points3D(
+            ids=self.ids[keep],
+            xyz=self.xyz[keep],
+            rgb=self.rgb[keep],
+            error=self.error[keep],
+            track=self.track[rows],
+            track_offsets=offsets,
+        )
+
+
+def read_points3d(path: Path) -> Points3D:
+    """`points3D.bin` in full: id, xyz, rgb, error and track, per point."""
+    ids: list[int] = []
+    xyz: list[tuple[float, float, float]] = []
+    rgb: list[tuple[int, int, int]] = []
+    error: list[float] = []
+    tracks: list[npt.NDArray[np.uint32]] = []
+    offsets = [0]
     with path.open("rb") as handle:
         for _ in range(_u64(handle)):
-            handle.read(43)  # id, xyz, rgb, error
+            point_id, x, y, z, r, g, b, err = struct.unpack("<Q3d3Bd", handle.read(43))
+            length = _u64(handle)
+            track = np.frombuffer(handle.read(8 * length), dtype="<u4").reshape(-1, 2)
+            ids.append(point_id)
+            xyz.append((x, y, z))
+            rgb.append((r, g, b))
+            error.append(err)
+            tracks.append(track)
+            offsets.append(offsets[-1] + length)
+    return Points3D(
+        ids=np.asarray(ids, dtype=np.uint64),
+        xyz=np.asarray(xyz, dtype=np.float64).reshape(-1, 3),
+        rgb=np.asarray(rgb, dtype=np.uint8).reshape(-1, 3),
+        error=np.asarray(error, dtype=np.float64),
+        track=(
+            np.concatenate(tracks).astype(np.uint32)
+            if tracks
+            else np.zeros((0, 2), dtype=np.uint32)
+        ),
+        track_offsets=np.asarray(offsets, dtype=np.int64),
+    )
+
+
+def write_points3d(path: Path, points: Points3D) -> int:
+    """Write `points3D.bin` in COLMAP's binary layout. Returns the point count.
+
+    `images.bin` beside it may still name a point this file no longer holds, as the 3D
+    point behind one of its 2D features. gsplat's parser reads the points and their
+    tracks and never that cross-reference, so a file written here is fit for a trainer's
+    dataset; it is not a COLMAP model to hand back to COLMAP, and it never goes into the
+    `poses` artifact.
+    """
+    with path.open("wb") as handle:
+        handle.write(struct.pack("<Q", len(points)))
+        for index in range(len(points)):
+            track = points.track_of(index)
+            handle.write(
+                struct.pack(
+                    "<Q3d3Bd",
+                    int(points.ids[index]),
+                    *(float(v) for v in points.xyz[index]),
+                    *(int(v) for v in points.rgb[index]),
+                    float(points.error[index]),
+                )
+            )
+            handle.write(struct.pack("<Q", int(track.shape[0])))
+            handle.write(np.ascontiguousarray(track, dtype="<u4").tobytes())
+    return len(points)
+
+
+def keep_images(model: Path, names: set[str]) -> dict[str, int]:
+    """Rewrite the binary model in `model` to the images named in `names`, for a
+    trainer's dataset: `images.bin` record by record (each kept image's 2D points as they
+    were), and `points3D.bin` with every track cut to the kept images and a point only
+    the others saw dropped -- gsplat's parser looks every track's image up by id, and
+    the gaussian budget measures a point by the cameras in its track. A point with no
+    track at all (a converted model may carry none) says nothing about who saw it and
+    stays. `cameras.bin` is left as it is. Returns the counts.
+
+    What training on a subset of a capture's photos needs -- one capture session, say --
+    without posing them again: the poses are the joint solve's, so every frame, scale
+    and similarity derived from it still holds."""
+    images_path = model / "images.bin"
+    kept_ids: set[int] = set()
+    records: list[bytes] = []
+    with images_path.open("rb") as handle:
+        count = _u64(handle)
+        for _ in range(count):
+            head = handle.read(64)
+            image_id = int(struct.unpack_from("<I", head, 0)[0])
+            name = _read_cstring(handle)
+            raw_count = handle.read(8)
+            body = handle.read(24 * int(struct.unpack("<Q", raw_count)[0]))
+            if name in names:
+                kept_ids.add(image_id)
+                records.append(head + name.encode("utf-8") + b"\0" + raw_count + body)
+    with images_path.open("wb") as handle:
+        handle.write(struct.pack("<Q", len(records)))
+        for record in records:
+            handle.write(record)
+    points = read_points3d(model / "points3D.bin")
+    rows = np.isin(points.track[:, 0], np.fromiter(kept_ids, dtype=np.uint32))
+    running = np.concatenate([[0], np.cumsum(rows)])
+    lengths = running[points.track_offsets[1:]] - running[points.track_offsets[:-1]]
+    seen = (lengths > 0) | (np.diff(points.track_offsets) == 0)
+    cut = Points3D(
+        ids=points.ids,
+        xyz=points.xyz,
+        rgb=points.rgb,
+        error=points.error,
+        track=points.track[rows],
+        track_offsets=np.concatenate([[0], np.cumsum(lengths)]).astype(np.int64),
+    ).subset(seen)
+    write_points3d(model / "points3D.bin", cut)
+    return {
+        "images": len(records),
+        "imagesBefore": count,
+        "points3D": len(cut),
+        "points3DBefore": len(points),
+    }
+
+
+def poses_serve_frames(
+    model: Model, frame_sizes: Sequence[Sequence[int]], frames: Sequence[str]
+) -> dict[str, Any]:
+    """Whether a model posed on other renderings of the same photos serves these frames,
+    and at what scale; raises with the reason when it does not.
+
+    It does when every posed image is one of the frames and the frames are the posed
+    cameras' shape at one scale: gsplat's parser rescales the intrinsics by the ratio of
+    the first image's size to its camera's and applies it to every camera
+    (`training.build_dataset`), and the extrinsics do not depend on the size at all. So
+    frames re-sized from the same photos train on the same poses -- which is also all a
+    fresh pose run would give them, since `pose` extracts its features at
+    `max_image_size` whatever size the frames are. Rounding of either size is allowed a
+    pixel."""
+    sizes = {tuple(int(v) for v in size) for size in frame_sizes}
+    if len(sizes) != 1:
+        raise ValueError(f"the frames come in {len(sizes)} sizes {sorted(sizes)}; want one")
+    ((width, height),) = sizes
+    posed = {image.name for image in model.images}
+    unknown = sorted(posed - set(frames))
+    if unknown:
+        raise ValueError(
+            f"{len(unknown)} posed images are not among these frames (first: {unknown[:3]})"
+        )
+    cameras = {camera.id for camera in model.cameras}
+    if not cameras or any(image.camera_id not in cameras for image in model.images):
+        raise ValueError("the model's images name cameras it does not have")
+    scales = set()
+    for camera in model.cameras:
+        scale = width / camera.width
+        if abs(camera.height * scale - height) > scale + 1.0:
+            raise ValueError(
+                f"camera {camera.id} is {camera.width}x{camera.height}, the frames "
+                f"{width}x{height}: not the same shape"
+            )
+        scales.add(round(scale, 6))
+    if len(scales) != 1:
+        raise ValueError(f"the cameras scale to these frames by {sorted(scales)}; want one")
+    return {
+        "registered": len(posed),
+        "frames": len(frames),
+        "unposedFrames": len(set(frames) - posed),
+        "frameSize": [width, height],
+        "posedSize": [model.cameras[0].width, model.cameras[0].height],
+        "pixelScale": next(iter(scales)),
+    }
+
+
+@dataclass(frozen=True)
+class UpEstimate:
+    """Which way is up in a reconstruction, from how the camera was held.
+
+    `consistency` is the length of the mean of the per-frame up vectors: 1.0 when every
+    frame was held at the same roll and pitch, falling as they disagree. It is reported
+    rather than thresholded -- a capture walking round a tree tilts the phone a little,
+    one filming the ground from above tilts it a lot, and the number says which.
+    """
+
+    up: tuple[float, float, float]
+    consistency: float
+    frames: int
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "method": "camera-up",
+            "up": [round(v, 6) for v in self.up],
+            "consistency": round(self.consistency, 4),
+            "frames": self.frames,
+            "note": (
+                "the mean of each registered frame's up (-y of the camera, in the model's "
+                "frame): nerfstudio's `up` orientation and gsplat's similarity_from_cameras "
+                "use the same estimate. Right when the capture was filmed roughly upright"
+            ),
+        }
+
+
+def camera_up(model: Model) -> UpEstimate | None:
+    """The mean camera-up direction of a reconstruction, in its own frame.
+
+    COLMAP cameras look down +z with +y pointing *down* the image, so a frame's up in the
+    world is `-R[1, :]` for its world-to-camera rotation `R`. Averaged over every
+    registered frame this is a robust estimate of gravity for footage taken the way
+    people hold phones -- upright, roughly level -- which is what nerfstudio's default
+    `orientation_method="up"` and gsplat's `similarity_from_cameras` both rely on. It is
+    no estimate at all of *heading*: nothing in a reconstruction from images says which
+    way north is.
+    """
+    if not model.images:
+        return None
+    ups = np.stack([-image.rotation[1, :] for image in model.images])
+    mean = ups.mean(axis=0)
+    length = float(np.linalg.norm(mean))
+    if length == 0.0:
+        return None
+    unit = mean / length
+    return UpEstimate(
+        up=(float(unit[0]), float(unit[1]), float(unit[2])),
+        consistency=length,
+        frames=len(model.images),
+    )
+
+
+def rotation_onto_z(up: Sequence[float] | F64) -> F64:
+    """The smallest proper rotation that takes the unit vector `up` onto +z.
+
+    Rodrigues about `up x z`. When `up` is already (anti)parallel to z the axis is
+    undefined, so +z is the identity and -z is a half turn about x -- the same choice
+    `gaussians.UP_AXES["-z"]` makes, so a y-up estimate and a y-up file land the same.
+    """
+    u = np.asarray(up, dtype=np.float64)
+    u = u / np.linalg.norm(u)
+    z = np.array([0.0, 0.0, 1.0])
+    c = float(u @ z)
+    if c > 1.0 - 1e-12:
+        return np.eye(3)
+    if c < -1.0 + 1e-12:
+        return np.diag([1.0, -1.0, -1.0])
+    axis = np.cross(u, z)
+    s = float(np.linalg.norm(axis))
+    k = axis / s
+    kx = np.array([[0.0, -k[2], k[1]], [k[2], 0.0, -k[0]], [-k[1], k[0], 0.0]])
+    return np.asarray(np.eye(3) + s * kx + (1.0 - c) * (kx @ kx), dtype=np.float64)
+
+
+def _read_points3d(path: Path) -> tuple[int, int, float]:
+    """(point count, total track length, summed reprojection error). No positions."""
+    points = 0
+    tracks = 0
+    errors = 0.0
+    with path.open("rb") as handle:
+        for _ in range(_u64(handle)):
+            record = handle.read(43)  # id, xyz, rgb, error
+            errors += struct.unpack_from("<d", record, 35)[0]
             length = _u64(handle)
             handle.read(8 * length)
             points += 1
             tracks += length
-    return points, tracks
+    return points, tracks, errors
 
 
 def _u64(handle: BinaryIO) -> int:

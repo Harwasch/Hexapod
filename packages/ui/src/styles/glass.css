@@ -139,14 +139,16 @@
   cursor: not-allowed;
 }
 
+/* The one action a card or dialog is for: filled, so it is found first. */
 .glass-button--primary {
-  background: var(--accent-soft);
-  border-color: var(--accent-border);
-  color: var(--text-primary);
+  background: var(--accent-fill);
+  border-color: transparent;
+  color: var(--on-accent-fill);
+  font-weight: 600;
 }
 
 .glass-button--primary:hover:not(:disabled) {
-  background: rgba(127, 216, 192, 0.3);
+  background: var(--accent-fill-hover);
 }
 
 .glass-button--ghost {
@@ -557,7 +559,8 @@ select.glass-input {
     width: auto;
     max-height: 80vh;
     transform: none;
-    animation: glass-sheet-bottom var(--motion-slow) var(--ease-spring);
+    /* Not glass-sheet-bottom: that one carries the centred sheet's translateX(-50%). */
+    animation: glass-sheet-rise var(--motion-slow) var(--ease-spring);
   }
 }
 
@@ -799,6 +802,17 @@ select.glass-input {
   to {
     opacity: 1;
     transform: translateX(0);
+  }
+}
+
+@keyframes glass-sheet-rise {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
   }
 }
 

@@ -34,7 +34,6 @@ GENERATE_DEFAULTS = {
     "lon": -82.6966,
     "height": 0.0,
     "height_m": 6.0,
-    "geometric_error": 0.5,
 }
 
 
@@ -110,9 +109,7 @@ def test_the_tiler_keeps_every_splat(generated: Path, tmp_path: Path) -> None:
         lat=0.0,
         lon=0.0,
         height=0.0,
-        max_gaussians=FIXTURE_SPLATS,
         opacity_min=0.02,
-        geometric_error=1.0,
     )
     assert stats["dropped"] == 0
     assert stats["gaussians"] == FIXTURE_SPLATS
@@ -217,7 +214,10 @@ def test_rig_is_structurally_valid(generated: Path) -> None:
     bad rig fails in the tool that produced it rather than three steps downstream."""
     rig = _rig(generated)
     assert rig["units"] == "meters"
-    assert list(rig) == ["units", "canonicalChecksum", "sourceNote", "nodes"]
+    # Key order matches serializeRig(); `motion` points at the Living Mode sidecar beside it.
+    assert list(rig) == ["units", "canonicalChecksum", "sourceNote", "nodes", "motion"]
+    assert rig["motion"] == "motion.json"
+    assert (generated / "source" / "motion.json").is_file()
     nodes = rig["nodes"]
     assert 150 <= len(nodes) <= 65535
     assert nodes[0]["parent"] == -1

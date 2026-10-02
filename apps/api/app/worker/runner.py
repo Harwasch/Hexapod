@@ -8,7 +8,9 @@ The shape, and why:
 * the supervisor's loop *is* the heartbeat. Every `poll_s` it renews `lease_expires_at`,
   re-reads `jobs.status` to see whether somebody cancelled, and drains whatever the child
   has reported since the last tick. One loop, three jobs, no threads except the one that
-  reads the child's stdout;
+  reads the child's stdout -- and `claim.LeaseKeeper`, which renews the lease as well, so
+  that it does not lapse while this loop is away downloading the capture or uploading a
+  finished stage (the 2026-09-27 two-slot dead-letters; see the worker README);
 * every write commits. The panel is polling `GET /jobs`, and a step row that only lands
   when the run is over is not a live stage list. It also keeps the worker from holding a
   transaction open across a stage, which is what A0 measured pinning the vacuum horizon.
@@ -41,6 +43,7 @@ from __future__ import annotations
 import logging
 import os
 import queue
+import shutil
 import subprocess
 import sys
 import threading
@@ -70,8 +73,11 @@ from app.worker.pipeline_bridge import (
     Plan,
     RunCost,
     Workdir,
+    latest_live,
+    latest_progress,
     plan_recipe,
     run_cost,
+    tail_of,
 )
 from app.worker.publish import Publisher
 
@@ -81,6 +87,10 @@ log = logging.getLogger("app.worker")
 #: one place the cloud runner's "the machine was taken back" is translated into a
 #: supervisor decision.
 PREEMPTED = "PreemptedError"
+
+#: How much of a running stage's log the heartbeat reads: the progress line and the live
+#: viewer's lines are all near the end, and a live-cameras line is up to ~25 kB.
+LIVE_TAIL_BYTES = 262_144
 
 #: Pushed onto the event queue when the child's stdout reaches EOF.
 _EOF = object()
@@ -137,18 +147,28 @@ class JobSupervisor:
     # --- the outer loop: attempts ------------------------------------------------
 
     def run(self, job_id: uuid.UUID, *, stop: threading.Event | None = None) -> Terminal:
-        db = self._sessions()
-        try:
-            return self._run(db, job_id, stop)
-        except Exception as error:
-            # One job must not take the worker down. A bucket that has gone away, a
-            # workdir on a full disk, a bug here -- the job says what happened and the
-            # loop goes on to the next one. A person can retry it from the panel, which
-            # is the same affordance a dead-lettered job gets.
-            log.exception("worker %s: job %s failed in the supervisor", self._id, job_id)
-            return self._report_supervisor_failure(job_id, error)
-        finally:
-            db.close()
+        # The lease is renewed from its own thread for the whole supervision, not only
+        # from the heartbeat in `_supervise`: this thread also downloads the capture and
+        # uploads every finished stage, each for longer than a lease (`claim.LeaseKeeper`).
+        with claim.LeaseKeeper(
+            self._sessions,
+            job_id,
+            worker_id=self._config.worker_id,
+            lease_s=self._config.lease_s,
+            interval_s=min(self._config.poll_s, self._config.lease_s / 3),
+        ):
+            db = self._sessions()
+            try:
+                return self._run(db, job_id, stop)
+            except Exception as error:
+                # One job must not take the worker down. A bucket that has gone away, a
+                # workdir on a full disk, a bug here -- the job says what happened and the
+                # loop goes on to the next one. A person can retry it from the panel,
+                # which is the same affordance a dead-lettered job gets.
+                log.exception("worker %s: job %s failed in the supervisor", self._id, job_id)
+                return self._report_supervisor_failure(job_id, error)
+            finally:
+                db.close()
 
     def _report_supervisor_failure(self, job_id: uuid.UUID, error: Exception) -> Terminal:
         """Record the failure on a session of its own: the one that raised may be unusable."""
@@ -204,7 +224,16 @@ class JobSupervisor:
                     f"stage {stage_id!r} has been attempted {attempt - 1} times without "
                     f"completing and will not be retried again{lost}{last}",
                 )
-            state = self._supervise(db, job, workdir_root, completed, attempts, stage_params, stop)
+            run_params, dropped = params.without_stale_roi(stage_params, plan, completed)
+            if dropped:
+                log.warning(
+                    "worker %s: job %s recomputes its poses, so the region of interest on "
+                    "%s is in a frame that no longer exists; training uncropped",
+                    self._id,
+                    job.id,
+                    ", ".join(dropped),
+                )
+            state = self._supervise(db, job, workdir_root, completed, attempts, run_params, stop)
             if state.outcome == "stopped":
                 # This worker is shutting down. Let go of the lease so the next one can
                 # take the job now rather than waiting it out; the stages that finished
@@ -242,6 +271,7 @@ class JobSupervisor:
                 )
                 is not claim.Heartbeat.HELD
             ):
+                self._log_lost(db, job.id)
                 return "lost"
 
     # --- one child process --------------------------------------------------------
@@ -305,7 +335,11 @@ class JobSupervisor:
                     # way the child must stop now, not at the end of its stage.
                     _stop(process, self._config.terminate_grace_s)
                     state.outcome = "cancelled" if beat is claim.Heartbeat.CANCELLED else "lost"
+                    if beat is claim.Heartbeat.LOST:
+                        self._log_lost(db, job.id)
                     return state
+                if current is not None:
+                    self._report_progress(db, current, workdir_root)
                 next_beat = now + self._config.poll_s
             try:
                 item = inbox.get(timeout=max(0.01, next_beat - time.monotonic()))
@@ -364,11 +398,17 @@ class JobSupervisor:
                 impl=event.impl,
                 attempt=event.attempt,
             )
+            # Uploads are minutes for a large stage (a 514-tile package): end the
+            # transaction first so the session is not left idle inside one.
+            _end_transaction(db)
             uploaded = [
                 result
                 for ref in refs
                 if (result := outputs.upload_artifact(self._storage, workdir_root, job.id, ref))
             ]
+            # The final live-cameras line lands just before the stage ends; read it now,
+            # before a heartbeat could, so the finished step keeps it for the viewer.
+            self._report_progress(db, step, workdir_root)
             steps.finish_step(
                 db,
                 step,
@@ -404,12 +444,31 @@ class JobSupervisor:
     # --- terminal states ----------------------------------------------------------
 
     def _finish_complete(self, db: Session, job: Job, state: _RunState) -> Terminal:
+        ref = state.ref("registration.json")
+        document = (
+            registration.Registration.read(self._config.workdir_for(job.id) / ref.path)
+            if ref is not None
+            else None
+        )
+        published = None
+        if document is not None:
+            # Copy to the public bucket first, with no transaction open: for a large
+            # capture it takes minutes, and a session idle in a transaction that long is
+            # killed by the database (see registration.publish_outputs).
+            _end_transaction(db)
+            published = registration.publish_outputs(
+                self._storage,
+                publish=self._publish,
+                job_id=job.id,
+                registration=document,
+                tiles_stage_id=state.stage_producing("splat"),
+                thumbnail_stage_id=state.stage_producing("thumbnail.jpg"),
+                coverage_stage_id=state.stage_producing("coverage_enu.ply"),
+            )
         if not self._still_ours(db, job):
             return "lost"
         capture = db.get(Capture, job.capture_id)
-        ref = state.ref("registration.json")
-        if capture is not None and ref is not None:
-            document = registration.Registration.read(self._config.workdir_for(job.id) / ref.path)
+        if capture is not None and document is not None:
             registration.register(
                 db,
                 self._storage,
@@ -419,6 +478,8 @@ class JobSupervisor:
                 registration=document,
                 tiles_stage_id=state.stage_producing("splat"),
                 thumbnail_stage_id=state.stage_producing("thumbnail.jpg"),
+                coverage_stage_id=state.stage_producing("coverage_enu.ply"),
+                published=published,
             )
         elif capture is not None:
             # A recipe with no `register` stage still finished; the capture is processed
@@ -428,7 +489,32 @@ class JobSupervisor:
         job.error = None
         self._close(job)
         db.commit()
+        if self._config.tidy_finished_runs:
+            self._tidy(self._config.workdir_for(job.id))
         return "complete"
+
+    @staticmethod
+    def _tidy(workdir_root: Path) -> None:
+        """After a run that finished, drop what the workdir contract says is disposable.
+
+        Every stage's `work/` is scratch by A6's own definition ("safe to delete at any
+        time"), and `inputs/` is a copy of what is still in the bucket -- `_seed` fetches
+        it again if a retry ever needs it. Both are the bulk of a Lane 2 run: the uploaded
+        video, every candidate frame ffmpeg extracted before selection, COLMAP's database.
+        On a 20 GB worker volume, keeping them would fill it in three or four captures.
+        `out/`, `step.json` and `checkpoint/` stay, which is all retry-from-stage reads.
+        A failure to tidy is logged and nothing else: the run succeeded.
+        """
+        workdir = Workdir(workdir_root)
+        doomed = [workdir.inputs_dir]
+        if workdir.stages_dir.is_dir():
+            doomed += [stage / "work" for stage in sorted(workdir.stages_dir.iterdir())]
+        for path in doomed:
+            try:
+                if path.is_dir():
+                    shutil.rmtree(path)
+            except OSError:
+                log.warning("worker: could not tidy %s after a finished run", path, exc_info=True)
 
     def _finish_cancelled(self, db: Session, job: Job) -> Terminal:
         """`POST /jobs/{id}/cancel` already set the status; this closes out the run.
@@ -504,6 +590,12 @@ class JobSupervisor:
             "unpriced" if total.usd is None else f"${total.usd:.4f}",
         )
 
+    def _log_lost(self, db: Session, job_id: uuid.UUID) -> None:
+        """The line that says a job was taken from under this slot, and by whom."""
+        log.warning(
+            "worker %s: lost job %s mid-run: %s", self._id, job_id, claim.holder(db, job_id)
+        )
+
     def _still_ours(self, db: Session, job: Job) -> bool:
         db.refresh(job)
         return job.status is RunStatus.IN_PROGRESS and job.claimed_by == self._config.worker_id
@@ -531,6 +623,24 @@ class JobSupervisor:
         env["PIPELINE_DIR"] = str(PIPELINE_DIR)
         return env
 
+    @staticmethod
+    def _report_progress(db: Session, step: JobStep, workdir_root: Path) -> None:
+        """Copy the newest progress line in a running stage's log onto its row.
+
+        On the heartbeat, so it costs one small read a tick. A stage that prints no
+        progress line (most of them) leaves the row alone.
+        """
+        # Enough of the log to hold the newest live-cameras line (~25 kB) with room over.
+        text = tail_of(Workdir(workdir_root).log_path(step.stage_id), LIVE_TAIL_BYTES)
+        found = latest_progress(text)
+        if found is not None:
+            steps.report_progress(db, step, found.to_dict())
+        # What the live viewer draws: the newest cameras and intermediate splat the stage
+        # has logged (`tools/pipeline/live.py`), under `metrics.live`.
+        live = latest_live(text)
+        if live:
+            steps.report_live(db, step, live)
+
     def _upload_log(self, job_id: uuid.UUID, workdir_root: Path, stage_id: str) -> str | None:
         return outputs.upload_log(self._storage, workdir_root, job_id, stage_id)
 
@@ -550,25 +660,29 @@ class JobSupervisor:
     def _seed(self, db: Session, job: Job, inputs: tuple[str, ...], workdir_root: Path) -> None:
         """Put the capture's uploaded bytes where the recipe says its inputs live.
 
-        Skipped when the directory is already populated, so a reclaimed or retried job
-        does not download a 12 GB video again. (It *is* a whole-object read into memory;
-        B1, which moves workdirs between machines, is where streaming belongs.)
+        A file already in the workdir is not fetched again, so a reclaimed or retried job
+        does not download a 12 GB video again. Streamed to disk, not read into memory:
+        the worker machine has 2 GB and an iPhone video is routinely larger than that,
+        and a whole-object read of one killed the worker before the first stage ran.
         """
         work = Workdir.create(workdir_root)
         capture = db.get(Capture, job.capture_id)
         for name in inputs:
-            target = work.input_path(name)
-            if target.is_dir() and any(target.iterdir()):
-                continue
             if name != "upload" or capture is None:
                 continue
+            target = work.input_path(name)
             target.mkdir(parents=True, exist_ok=True)
             for source in capture.files:
                 if source.status is not UploadStatus.COMPLETE:
                     continue
-                (target / Path(source.filename).name).write_bytes(
-                    self._storage.get_object(source.storage_key)
-                )
+                # File by file, not "the directory has something in it": a worker that
+                # stopped between two files, or mid-file (`download_file` writes beside
+                # the target and renames), left a directory that is not empty and not
+                # complete, and a resume that skipped it ran the recipe on half a capture.
+                path = target / Path(source.filename).name
+                if path.is_file():
+                    continue
+                self._storage.download_file(source.storage_key, path)
 
     def _completed_stages(self, db: Session, job_id: uuid.UUID, workdir_root: Path) -> set[str]:
         """Stages that may be skipped: complete in the database **and** still on disk."""
@@ -669,3 +783,16 @@ def _stop(process: subprocess.Popen[str], grace_s: float) -> None:
     except subprocess.TimeoutExpired:
         process.kill()
         process.wait()
+
+
+def _end_transaction(db: Session) -> None:
+    """Commit whatever the session holds so it is not idle in a transaction.
+
+    Called before long object-store I/O. Neon (like any Postgres with
+    `idle_in_transaction_session_timeout`) terminates a connection left idle inside a
+    transaction, and the next statement on it then fails. Committing here writes nothing
+    the step would not have written anyway: every change made so far is already meant
+    to be durable.
+    """
+    if db.in_transaction():
+        db.commit()

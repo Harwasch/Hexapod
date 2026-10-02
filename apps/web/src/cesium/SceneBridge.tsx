@@ -187,9 +187,22 @@ export function SceneBridge() {
     scene?.living.setWind(reducedMotion ? WIND_CALM : wind);
   }, [scene, wind, reducedMotion]);
 
+  // Motion on GPU → scene. Every rigged site switches path in place, restoring the measured
+  // pose through the path it leaves; the build flag and the engine can still force the CPU.
+  const livingGpuMotion = useSettings((s) => s.livingGpuMotion);
+  useEffect(() => {
+    scene?.living.setGpuMotion(livingGpuMotion);
+  }, [scene, livingGpuMotion]);
+
   useEffect(() => {
     scene?.explore.setSpeed(exploreSpeed);
   }, [scene, exploreSpeed]);
+
+  // Splat renderer → scene (CesiumJS, Spark or PlayCanvas; cesium/scanView).
+  const splatRenderer = useSettings((s) => s.splatRenderer);
+  useEffect(() => {
+    scene?.setSplatRenderer(splatRenderer);
+  }, [scene, splatRenderer]);
 
   useEffect(() => {
     if (!scene || layerCatalog.isLoading) return;

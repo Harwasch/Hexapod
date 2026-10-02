@@ -47,7 +47,8 @@ Usage:
         [--labels labels.json --truth-rig rig.json]
 
 It writes ``<out_dir>/source/splat.ply`` (the isolated tree, positions pre-snapped to the SPZ
-grid), ``<out_dir>/source/rig.json``, and ``<out_dir>/splat/`` via ``splat_tiles.convert``.
+grid), ``<out_dir>/source/rig.json``, ``<out_dir>/source/motion.json`` (the Living Mode motion
+sidecar, ``motion_params.py``), and ``<out_dir>/splat/`` via ``splat_tiles.convert``.
 """
 
 from __future__ import annotations
@@ -61,6 +62,7 @@ import numpy as np
 from scipy.sparse.csgraph import connected_components
 from scipy.spatial import cKDTree
 
+import motion_params
 import splat_tiles
 
 # One implementation of the checksum contract, not two. It lives in synthetic_tree.py because
@@ -828,7 +830,6 @@ def extract(
     link_radius: float | None = None,
     min_cluster_points: int = 8,
     max_nodes: int = 200,
-    geometric_error: float = 0.5,
     source_note: str | None = None,
     tile: bool = True,
     truth: tuple[dict, dict] | None = None,
@@ -902,9 +903,11 @@ def extract(
             )[keep],
         },
     )
-    (source_dir / "rig.json").write_text(
-        json.dumps(rig, separators=(",", ":")) + "\n", encoding="utf-8"
-    )
+    # The Living Mode sidecar beside the rig (motion_params.py): per-branch oscillators from the
+    # skeleton alone, the tree's height from its splats and its leaf size from its foliage.
+    kept_log_scales = np.stack([data["scale_0"], data["scale_1"], data["scale_2"]], axis=1)[keep]
+    sidecar = motion_params.sidecar_for(rig, positions.astype(np.float64), kept_log_scales)
+    rig = motion_params.write_sidecar(source_dir, rig, sidecar)
     (source_dir / "positions.f32").write_bytes(canonical.tobytes())
 
     report: dict = {
@@ -926,6 +929,17 @@ def extract(
         "foliage_extent_median_m": round(float(np.median([n["foliage_extent"] for n in nodes])), 4),
         "radius_resolution_m": round(RING_POINTS * spacing / (2.0 * math.pi), 4),
         "canonicalChecksum": rig["canonicalChecksum"],
+        # What the motion sidecar made of this skeleton: branch frequencies from lengths alone.
+        "motion": {
+            "motionEvidence": sidecar["motionEvidence"],
+            "branches": len(set(sidecar["nodes"]["branch"][1:])),
+            "treeHeightM": sidecar["treeHeightM"],
+            "leafSizeM": sidecar["leafSizeM"],
+            "frequencyHz": [
+                min(sidecar["nodes"]["frequencyHz"][1:], default=0),
+                max(sidecar["nodes"]["frequencyHz"][1:], default=0),
+            ],
+        },
         "out_dir": str(out_dir),
     }
     if tile:
@@ -935,9 +949,10 @@ def extract(
             lat,
             lon,
             height,
-            max_gaussians=int(positions.shape[0]) + 1,
             opacity_min=opacity_min,
-            geometric_error=geometric_error,
+            # One tile, whatever the splat count: the deformer refuses anything else,
+            # because splat indices are only stable while tile selection is.
+            tile_gaussians=None,
         )
         if stats["dropped"] != 0:
             # The rig's checksum is over the splats written above. If the tiler drops any of
@@ -1000,7 +1015,6 @@ def main() -> None:
     )
     parser.add_argument("--min-cluster-points", type=int, default=8)
     parser.add_argument("--max-nodes", type=int, default=200)
-    parser.add_argument("--geometric-error", type=float, default=0.5)
     parser.add_argument("--source-note", type=str, default=None)
     parser.add_argument("--no-tile", action="store_true", help="skip splat_tiles.convert")
     parser.add_argument("--labels", type=Path, help="ground-truth labels.json, to score against")
@@ -1035,7 +1049,6 @@ def main() -> None:
         link_radius=args.link_radius,
         min_cluster_points=args.min_cluster_points,
         max_nodes=args.max_nodes,
-        geometric_error=args.geometric_error,
         source_note=args.source_note,
         tile=not args.no_tile,
         truth=truth,

@@ -241,6 +241,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/captures/{capture_id}/live": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The live state of a capture's newest run
+         * @description What a run looks like while it runs, for the live viewer: the pose stage's cameras and a sample of its sparse points as they are solved (quantised, base64; see the schema), and training's newest intermediate splat with a short-lived signed URL for its SPZ (null until the checkpoint syncer has uploaded it). Coordinates are the pose solve's own frame, not east/north/up. Open, like every read: poll it every few seconds.
+         */
+        get: operations["capture_live_api_v1_captures__capture_id__live_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/captures/{capture_id}/process": {
         parameters: {
             query?: never;
@@ -255,6 +275,26 @@ export interface paths {
          * @description Inserts a `not-started` job and returns it. Nothing runs here: the worker claims the row with a lease and executes the recipe.
          */
         post: operations["process_capture_api_v1_captures__capture_id__process_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/captures/{capture_id}/splat.ply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Download the capture's finished splat as a .ply
+         * @description Redirects to a short-lived signed URL for `canonical.ply` from the capture's latest finished run: the whole splat, east/north/up, before it was thinned and tiled for the map. Opens in SuperSplat, Scaniverse and most splat tools.
+         */
+        get: operations["download_splat_api_v1_captures__capture_id__splat_ply_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -366,6 +406,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/jobs/{job_id}/live": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The live state of one run
+         * @description What a run looks like while it runs, for the live viewer: the pose stage's cameras and a sample of its sparse points as they are solved (quantised, base64; see the schema), and training's newest intermediate splat with a short-lived signed URL for its SPZ (null until the checkpoint syncer has uploaded it). Coordinates are the pose solve's own frame, not east/north/up. Open, like every read: poll it every few seconds.
+         */
+        get: operations["job_live_api_v1_jobs__job_id__live_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/jobs/{job_id}/retry": {
         parameters: {
             query?: never;
@@ -441,6 +501,102 @@ export interface paths {
         head?: never;
         /** Update a layer */
         patch: operations["update_layer_api_v1_layers__layer_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/phone/captures": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start a capture from a phone */
+        post: operations["create_phone_capture_api_v1_phone_captures_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/phone/captures/{capture_id}/process": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Queue a run over a capture this phone key started */
+        post: operations["process_phone_capture_api_v1_phone_captures__capture_id__process_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/phone/captures/{capture_id}/refine": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Refine a finished preview: train it again at full quality, inside its region
+         * @description Resumes the capture's latest finished photo-reconstruct run at `train` with new parameters: the phone's quality options, `train.support_mask` set to the voxels the preview's well-supported splats occupy (any shape), `train.init_from` = `preview` (start from the preview's splat on a shorter schedule; the phone may send `sfm`), and `quality.mode` = `refine`. The frames and poses are kept, so the mask is in the frame it was measured in. If the worker no longer has them, the run starts over and trains uncropped rather than applying the region to a different reconstruction.
+         */
+        post: operations["refine_phone_capture_api_v1_phone_captures__capture_id__refine_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/phone/captures/{capture_id}/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Stop the run in progress over a capture this phone key started
+         * @description The phone's Stop button. The same cancel as `POST /jobs/{id}/cancel`, reached with
+         *     the phone key and only for this phone's own captures, so a run that is taking far
+         *     too long can be stopped from the phone that started it.
+         */
+        post: operations["stop_phone_capture_api_v1_phone_captures__capture_id__stop_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/phone/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Check Key
+         * @description 204 when the key is right, so the page can say so before anything is picked.
+         */
+        post: operations["check_key_api_v1_phone_check_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/v1/plans": {
@@ -1122,6 +1278,7 @@ export interface components {
             /** Name */
             name: string;
             provenance: components["schemas"]["Provenance"] | null;
+            quality: components["schemas"]["CaptureQuality"] | null;
             scaleSource: components["schemas"]["ScaleSource"] | null;
             /** Sensor */
             sensor: string | null;
@@ -1282,6 +1439,43 @@ export interface components {
          * @enum {string}
          */
         CaptureKind: "video" | "images" | "gaussian-splat" | "point-cloud";
+        /**
+         * CaptureQuality
+         * @description The quality bar's verdict on a capture's latest finished run.
+         *
+         *     Read model: every field is explicit so the OpenAPI contract marks it required.
+         */
+        CaptureQuality: {
+            /** Bar */
+            bar: string;
+            /** Barapplied */
+            barApplied: string;
+            /** Contextpct */
+            contextPct: number | null;
+            /** Coverageurl */
+            coverageUrl: string | null;
+            gaussians: components["schemas"]["QualityCounts"];
+            /** Gsdmm */
+            gsdMm: number | null;
+            /** Heldoutpsnr */
+            heldOutPsnr: number | null;
+            /**
+             * Jobid
+             * Format: uuid
+             */
+            jobId: string;
+            /** Keeppct */
+            keepPct: number | null;
+            /** Keepverifiedpct */
+            keepVerifiedPct?: number | null;
+            /** Medianviews */
+            medianViews: number | null;
+            /** Mode */
+            mode: string;
+            roi: components["schemas"]["QualityRoi"] | null;
+            /** Tips */
+            tips: components["schemas"]["QualityTip"][];
+        };
         /** CaptureRead */
         CaptureRead: {
             /** Attribution */
@@ -1314,6 +1508,7 @@ export interface components {
             /** Name */
             name: string;
             provenance: components["schemas"]["Provenance"] | null;
+            quality: components["schemas"]["CaptureQuality"] | null;
             scaleSource: components["schemas"]["ScaleSource"] | null;
             /** Sensor */
             sensor: string | null;
@@ -1871,6 +2066,123 @@ export interface components {
             url?: string | null;
         };
         /**
+         * LiveCameras
+         * @description Registered cameras and a sample of the sparse points, from the newest snapshot.
+         */
+        LiveCameras: {
+            /** Aspect */
+            aspect: number | null;
+            /** Cameracount */
+            cameraCount: number;
+            /** Cameras */
+            cameras: string;
+            /** Final */
+            final: boolean;
+            /** Frames */
+            frames: number | null;
+            /** Origin */
+            origin: number[];
+            /** Pointcount */
+            pointCount: number;
+            /** Points */
+            points: string;
+            /** Pointstotal */
+            pointsTotal: number;
+            /** Registered */
+            registered: number;
+            /** Scale */
+            scale: number;
+            /** Seq */
+            seq: number;
+            /** Stageid */
+            stageId: string;
+            /** Up */
+            up: number[] | null;
+        };
+        /**
+         * LiveProgress
+         * @description The running stage's tool progress (`metrics.progress`), when it prints one.
+         */
+        LiveProgress: {
+            /** Done */
+            done: number;
+            /** Elapseds */
+            elapsedS: number | null;
+            /** Remainings */
+            remainingS: number | null;
+            /** Total */
+            total: number;
+        };
+        /**
+         * LiveSplat
+         * @description The newest intermediate splat, and where to fetch it.
+         */
+        LiveSplat: {
+            /** Bytes */
+            bytes: number | null;
+            /** Count */
+            count: number;
+            /** Name */
+            name: string;
+            /** Of */
+            of: number | null;
+            /** Stageid */
+            stageId: string;
+            /** Step */
+            step: number;
+            /** Total */
+            total: number | null;
+            /** Up */
+            up: number[] | null;
+            /** Url */
+            url: string | null;
+        };
+        /**
+         * LiveStage
+         * @description The step the run is on: running now, or the last one to have started.
+         */
+        LiveStage: {
+            /** Impl */
+            impl: string;
+            /** Ordinal */
+            ordinal: number;
+            progress: components["schemas"]["LiveProgress"] | null;
+            /** Stageid */
+            stageId: string;
+            /** Startedat */
+            startedAt: string | null;
+            status: components["schemas"]["RunStatus"];
+        };
+        /** LiveState */
+        LiveState: {
+            cameras: components["schemas"]["LiveCameras"] | null;
+            /**
+             * Captureid
+             * Format: uuid
+             */
+            captureId: string;
+            /** Capturename */
+            captureName: string;
+            /** Error */
+            error: string | null;
+            /**
+             * Jobid
+             * Format: uuid
+             */
+            jobId: string;
+            /** Recipe */
+            recipe: string;
+            /** Siteid */
+            siteId: string | null;
+            splat: components["schemas"]["LiveSplat"] | null;
+            stage: components["schemas"]["LiveStage"] | null;
+            status: components["schemas"]["RunStatus"];
+            /** Stepsdone */
+            stepsDone: number;
+            /** Stepsstarted */
+            stepsStarted: number;
+        };
+        /**
          * MissingObject
          * @description A row whose object is not in the bucket.
          */
@@ -1994,6 +2306,39 @@ export interface components {
             point: components["schemas"]["OutlinePoint"];
             /** Width */
             width: number;
+        };
+        /** PhoneCapture */
+        PhoneCapture: {
+            capture: components["schemas"]["CaptureRead"];
+            /** Uploadtoken */
+            uploadToken: string;
+        };
+        /**
+         * PhoneCaptureCreate
+         * @description Where the phone was, if it said. Both or neither.
+         */
+        PhoneCaptureCreate: {
+            /** Accuracym */
+            accuracyM?: number | null;
+            /** Lat */
+            lat?: number | null;
+            /** Lon */
+            lon?: number | null;
+            /** Name */
+            name?: string | null;
+        };
+        /**
+         * PhoneRefine
+         * @description The phone's options for the full-quality pass (the same whitelist as `process`).
+         *
+         *     `normalize` options are accepted and ignored: a Refine keeps the preview's frames and
+         *     poses, which is the whole point -- the region of interest is only meaningful in them.
+         */
+        PhoneRefine: {
+            /** Params */
+            params?: {
+                [key: string]: unknown;
+            };
         };
         /**
          * PipelineCatalogue
@@ -2569,8 +2914,48 @@ export interface components {
             note: string;
             /** Tiers */
             tiers: string[];
+            /** Usdperhour */
+            usdPerHour: {
+                [key: string]: number;
+            };
             /** Usdperhoura100 */
             usdPerHourA100: number;
+        };
+        /**
+         * QualityCounts
+         * @description Gaussians in, gaussians the bar let out, and each tier's count.
+         */
+        QualityCounts: {
+            /** Context */
+            context: number;
+            /** Drop */
+            drop: number;
+            /** Keep */
+            keep: number;
+            /** Kept */
+            kept: number;
+            /** Total */
+            total: number;
+        };
+        /**
+         * QualityRoi
+         * @description A sphere in the reconstruction's own (COLMAP) frame: where the cameras pointed.
+         *
+         *     Only meaningful over the poses of the run that measured it, which is why a Refine
+         *     re-runs that same job from `train` rather than starting a new one.
+         */
+        QualityRoi: {
+            /** Center */
+            center: number[];
+            /** Radius */
+            radius: number;
+        };
+        /** QualityTip */
+        QualityTip: {
+            /** Id */
+            id: string;
+            /** Text */
+            text: string;
         };
         /**
          * RecipeGpu
@@ -3058,6 +3443,7 @@ export type SchemaCaptureFileRead = components['schemas']['CaptureFileRead'];
 export type SchemaCaptureFileUpload = components['schemas']['CaptureFileUpload'];
 export type SchemaCaptureHandoff = components['schemas']['CaptureHandoff'];
 export type SchemaCaptureKind = components['schemas']['CaptureKind'];
+export type SchemaCaptureQuality = components['schemas']['CaptureQuality'];
 export type SchemaCaptureRead = components['schemas']['CaptureRead'];
 export type SchemaCaptureStatus = components['schemas']['CaptureStatus'];
 export type SchemaCesiumIon3DTilesSource = components['schemas']['CesiumIon3DTilesSource'];
@@ -3090,6 +3476,11 @@ export type SchemaLayerUpdate = components['schemas']['LayerUpdate'];
 export type SchemaLegendEntry = components['schemas']['LegendEntry'];
 export type SchemaLegendMetadata = components['schemas']['LegendMetadata'];
 export type SchemaLicenseMetadata = components['schemas']['LicenseMetadata'];
+export type SchemaLiveCameras = components['schemas']['LiveCameras'];
+export type SchemaLiveProgress = components['schemas']['LiveProgress'];
+export type SchemaLiveSplat = components['schemas']['LiveSplat'];
+export type SchemaLiveStage = components['schemas']['LiveStage'];
+export type SchemaLiveState = components['schemas']['LiveState'];
 export type SchemaMissingObject = components['schemas']['MissingObject'];
 export type SchemaMultiPolygon = components['schemas']['MultiPolygon'];
 export type SchemaMvtSource = components['schemas']['MvtSource'];
@@ -3097,6 +3488,9 @@ export type SchemaOrphanObject = components['schemas']['OrphanObject'];
 export type SchemaOutline = components['schemas']['Outline'];
 export type SchemaOutlinePoint = components['schemas']['OutlinePoint'];
 export type SchemaOutlineRequest = components['schemas']['OutlineRequest'];
+export type SchemaPhoneCapture = components['schemas']['PhoneCapture'];
+export type SchemaPhoneCaptureCreate = components['schemas']['PhoneCaptureCreate'];
+export type SchemaPhoneRefine = components['schemas']['PhoneRefine'];
 export type SchemaPipelineCatalogue = components['schemas']['PipelineCatalogue'];
 export type SchemaPlanArea = components['schemas']['PlanArea'];
 export type SchemaPlanCreate = components['schemas']['PlanCreate'];
@@ -3120,6 +3514,9 @@ export type SchemaPresignedPart = components['schemas']['PresignedPart'];
 export type SchemaProblem = components['schemas']['Problem'];
 export type SchemaProvenance = components['schemas']['Provenance'];
 export type SchemaProviderRead = components['schemas']['ProviderRead'];
+export type SchemaQualityCounts = components['schemas']['QualityCounts'];
+export type SchemaQualityRoi = components['schemas']['QualityRoi'];
+export type SchemaQualityTip = components['schemas']['QualityTip'];
 export type SchemaRecipeGpu = components['schemas']['RecipeGpu'];
 export type SchemaRecipeRead = components['schemas']['RecipeRead'];
 export type SchemaRecipeStageRead = components['schemas']['RecipeStageRead'];
@@ -4204,6 +4601,64 @@ export interface operations {
             };
         };
     };
+    capture_live_api_v1_captures__capture_id__live_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                capture_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LiveState"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     process_capture_api_v1_captures__capture_id__process_post: {
         parameters: {
             query?: never;
@@ -4238,6 +4693,62 @@ export interface operations {
                 };
             };
             /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    download_splat_api_v1_captures__capture_id__splat_ply_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                capture_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            307: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not Found */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -4573,6 +5084,64 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JobRead"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    job_live_api_v1_jobs__job_id__live_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LiveState"];
                 };
             };
             /** @description Missing or wrong write token */
@@ -4996,6 +5565,302 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["LayerRead"];
                 };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    create_phone_capture_api_v1_phone_captures_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PhoneCaptureCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PhoneCapture"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    process_phone_capture_api_v1_phone_captures__capture_id__process_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                capture_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["JobCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobRead"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    refine_phone_capture_api_v1_phone_captures__capture_id__refine_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                capture_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PhoneRefine"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobRead"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    stop_phone_capture_api_v1_phone_captures__capture_id__stop_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                capture_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobRead"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    check_key_api_v1_phone_check_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Missing or wrong write token */
             401: {

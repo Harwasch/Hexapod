@@ -82,6 +82,13 @@ class Settings(BaseSettings):
     # -- see `handoff.key_for`. Set it explicitly when the API runs as more than one
     # process, or a token minted by one will be refused by the next.
     api_handoff_secret: str | None = None
+    # The phone key (app/services/phone_key.py): a short shared key typed once on a phone,
+    # stored here only as `pbkdf2_sha256$<iterations>$<salt hex>$<digest hex>`. Unset
+    # means the phone routes are closed. It unlocks less than the write token: creating a
+    # phone capture, uploading to it and processing it.
+    api_phone_key_hash: str | None = None
+    # How many captures the phone key may create in any 24 hours.
+    api_phone_daily_captures: int = 20
 
     cesium_ion_server_token: str | None = None
     cesium_ion_api_base: str = "https://api.cesium.com"
@@ -135,8 +142,10 @@ class Settings(BaseSettings):
     worker_cloud_providers: list[str] = Field(default_factory=list)
     # How many preemptions of one stage before it moves to the next provider.
     worker_preemptions_before_fallback: int = 2
-    # The Modal app a ModalAdapter would look its function up in. Unused today.
-    worker_modal_app: str = ""
+    # The Modal app ModalAdapter looks `run_stage_<tier>` up in: the name infra/modal/app.py
+    # deploys under. It defaulted to empty and the adapter then fell back to "twin", which
+    # is not the app's name, so the first GPU dispatch would have failed on a lookup.
+    worker_modal_app: str = "twin-pipeline"
     # How often a dispatched stage is polled, and how often the machine running it is
     # asked to sync `checkpoint/` back. The second is the one that decides how much work
     # a preemption throws away.
@@ -173,6 +182,10 @@ class Settings(BaseSettings):
     worker_max_preemptions: int = 4
     # Pause between attempts at the same stage.
     worker_retry_backoff_s: float = 2.0
+    # Jobs one worker process supervises at once, each in its own slot with its own claim,
+    # lease, heartbeat and recipe process (app/worker/loop.py). 1 until raised: the
+    # worker's README gives the memory each slot costs on the 2 GB machine.
+    worker_concurrency: int = Field(default=1, ge=1, le=8)
 
     api_host: str = "0.0.0.0"  # noqa: S104 - container default, documented in DEPLOYMENT.md
     api_port: int = 8000

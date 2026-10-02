@@ -70,6 +70,10 @@ dev = [
   "boto3-stubs[s3]>=1.40",
   "types-shapely>=2.1",
   "moto[s3]>=5.0",
+  # Starlette's TestClient (and so FastAPI's) is built on httpx2, not httpx, and returns
+  # httpx2.Response. The tests name that type; declared so it does not depend on
+  # `anthropic` happening to pull it in.
+  "httpx2>=2.13",
 ]
 
 [build-system]
@@ -129,6 +133,11 @@ module = [
   "runners",
   "sfm",
   "splat_tiles",
+  # splat_tiles imports view_cones, which reaches rig_tiles, synthetic_tree, motion_params.
+  "view_cones",
+  "rig_tiles",
+  "synthetic_tree",
+  "motion_params",
   "stages",
   "training",
   "video",

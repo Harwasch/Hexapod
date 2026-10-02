@@ -60,12 +60,17 @@ export function LayerPills() {
   ];
 
   return (
-    <div className="mc-pills" role="group" aria-label="Quick layers" data-testid="layer-pills">
+    <div
+      className="glass glass--sm mc-pills"
+      role="group"
+      aria-label="Quick layers"
+      data-testid="layer-pills"
+    >
       {pills.map((pill) => (
         <button
           key={pill.id}
           type="button"
-          className={`glass mc-pill ${pill.on ? "is-on" : ""}`}
+          className={`mc-pill ${pill.on ? "is-on" : ""}`}
           aria-pressed={pill.on}
           disabled={pill.disabled}
           onClick={pill.onClick}

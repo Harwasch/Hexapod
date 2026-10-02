@@ -56,8 +56,13 @@ function livingStatus(
     numSplats: 2000,
     displaced: animating,
     rigSourceNote: RIG_NOTE,
+    motionEvidence: null,
     maxDisplacementM: 0.197,
     sortStaleness: 9.8,
+    motionPath: "gpu",
+    cpuReason: null,
+    motionMs: null,
+    applyMs: null,
     ...over,
   };
   return {
@@ -496,6 +501,45 @@ describe("SettingsSheet: the wind control", () => {
     // measurement of what is on screen while being nothing of the kind. It is printed only in
     // the developer panel, with its yardstick beside it.
     expect(living.textContent).not.toMatch(/radii|staleness/i);
+  });
+
+  it("offers Motion on GPU, on by default, and shows each site's path and cost", async () => {
+    useLiving.getState().setStatus(livingStatus(true, { motionMs: 0.42, applyMs: 0.05 }));
+    useViewer.setState((s) => ({
+      performance: { ...s.performance, rendering: true, fps: 58.6, frameTimeMs: 17.1 },
+    }));
+    useUi.setState({ settingsOpen: true });
+    const { rerender } = render(wrap(<SettingsSheet />));
+
+    const gpu = screen.getByRole("switch", { name: "Motion on GPU" });
+    expect(gpu).toHaveAttribute("aria-checked", "true");
+    const readout = screen.getByTestId("living-motion-readout");
+    expect(screen.getByTestId("living-motion-site")).toHaveTextContent(
+      "synthetic-tree: GPU · motion 0.42 ms/frame (write 0.05)",
+    );
+    expect(screen.getByTestId("living-frame-time")).toHaveTextContent(
+      "Scene frame 17.1 ms (59 fps)",
+    );
+    // Still nothing in this section that reads as a measurement or a wind speed.
+    const living = screen.getByRole("region", { name: "Living survey" });
+    expect(living.textContent).not.toMatch(/measured|surveyed|scanned|m\/s/i);
+
+    await userEvent.click(gpu);
+    expect(useSettings.getState().livingGpuMotion).toBe(false);
+
+    // What the scene then reports: the CPU path, and why.
+    useLiving.getState().setStatus(
+      livingStatus(true, {
+        motionPath: "cpu",
+        cpuReason: "switched-off",
+        motionMs: null,
+        applyMs: null,
+      }),
+    );
+    rerender(wrap(<SettingsSheet />));
+    expect(readout).toHaveTextContent(
+      "synthetic-tree: CPU (switched off) · no animated frames yet",
+    );
   });
 
   it("is held calm, and disabled, while reduced motion is on", () => {

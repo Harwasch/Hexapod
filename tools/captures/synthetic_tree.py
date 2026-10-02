@@ -10,6 +10,7 @@ It emits, into ``<out_dir>``::
 
     source/splat.ply             binary little-endian 3DGS PLY, the layout splat_tiles reads
     source/rig.json              MotionRig JSON, the schema in packages/world/src/rig.ts
+    source/motion.json           Living Mode motion sidecar (motion_params.py; motionParams.ts)
     source/labels.json           ground-truth node index per splat, in PLY order
     source/positions.f32         the canonical positions the checksum is over, raw float32
     source/checksum_vectors.json small cases pinning checksum_positions to its TS twin
@@ -40,6 +41,7 @@ from pathlib import Path
 
 import numpy as np
 
+import motion_params
 import splat_tiles
 from splat_tiles import SH_C0, SPZ_FRACTIONAL_BITS
 
@@ -784,7 +786,6 @@ def generate(
     lon: float,
     height: float,
     height_m: float,
-    geometric_error: float,
 ) -> dict[str, float | int | str]:
     """Write every artefact for one synthetic tree and return a summary of what was written."""
     rig = synthetic_tree_rig(height_m=height_m)
@@ -796,8 +797,12 @@ def generate(
     source_dir.mkdir(parents=True, exist_ok=True)
     ply_path = source_dir / "splat.ply"
     write_ply(ply_path, data)
-    (source_dir / "rig.json").write_text(
-        json.dumps(rig, separators=(",", ":")) + "\n", encoding="utf-8"
+    # The Living Mode sidecar (motion.json) beside the rig, and the rig's pointer to it: the
+    # tree's height from its splats, its leaf size from its foliage splats.
+    motion_params.write_sidecar(
+        source_dir,
+        rig,
+        motion_params.sidecar_for(rig, positions.astype(np.float64), data["log_scale"]),
     )
     (source_dir / "labels.json").write_text(
         json.dumps(
@@ -834,9 +839,11 @@ def generate(
         lat,
         lon,
         height,
-        max_gaussians=int(positions.shape[0]) + 1,
         opacity_min=0.02,
-        geometric_error=geometric_error,
+        # One tile, whatever the splat count: the ground-truth labels are in PLY order and
+        # the rig's canonicalChecksum is over this one tile. (The deformer also takes tiled
+        # captures now, given a rig stamped by rig_tiles.py; see data/tiles/synthetic-tree-lod.)
+        tile_gaussians=None,
     )
     if stats["dropped"] != 0:
         # The ground-truth labels are in PLY order. splat_tiles preserves order but not
@@ -866,7 +873,6 @@ def main() -> None:
     parser.add_argument("--lon", type=float, default=-82.6966)
     parser.add_argument("--height", type=float, default=0.0)
     parser.add_argument("--height-m", type=float, default=6.0, help="trunk height, metres")
-    parser.add_argument("--geometric-error", type=float, default=0.5)
     args = parser.parse_args()
     print(
         json.dumps(
@@ -878,7 +884,6 @@ def main() -> None:
                 args.lon,
                 args.height,
                 args.height_m,
-                args.geometric_error,
             )
         )
     )

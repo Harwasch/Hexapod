@@ -1,5 +1,6 @@
 import type { PostProcessStage, Scene, Viewer } from "cesium";
 
+import { isHandheld } from "@/lib/detail";
 import type { Emitter } from "@/lib/emitter";
 import { QUALITY_SSE, type QualityPreset } from "@/state/settings";
 
@@ -31,7 +32,8 @@ export interface QualityDecision {
 
 const LOW_FPS = 26;
 const STEADY_FPS = 50;
-const MEMORY_PRESSURE_RATIO = 1.25;
+/** Past this share of its memory budget a group coarsens (and splat tilesets are trimmed). */
+export const MEMORY_PRESSURE_RATIO = 1.25;
 /** Minimum rendered frames in the last second before the frame rate is trusted. */
 const MIN_FRAMES_FOR_FPS = 6;
 /** Slow motion frames (below LOW_FPS) must add up to this much before quality is cut; smooth
@@ -64,21 +66,42 @@ export function restMsaaFor(preset: QualityPreset): number {
   return preset === "performance" ? 1 : preset === "balanced" ? 2 : 4;
 }
 
+/** Balanced renders the canvas's short side at most this many device pixels while moving:
+ *  4K on a desktop, 1080 on a phone or tablet, whose GPUs have a fraction of the fill rate
+ *  for the same pixel density (SuperSplat's viewer caps its pixel ratio for the same reason). */
+export const MAX_SHORT_SIDE_PX = { desktop: 2160, handheld: 1080 } as const;
+
 /**
  * Base resolution scale for a preset on a screen with `devicePixelRatio`: a 2× display
  * renders four times the pixels of a 1× one, which is where most of a frame goes on an
- * integrated GPU. Balanced caps the effective ratio; ultra keeps every device pixel;
- * performance renders at CSS pixels through `useBrowserRecommendedResolution`.
+ * integrated GPU, and every gaussian is blended per pixel it covers. Balanced caps the
+ * effective ratio and the short side (`MAX_SHORT_SIDE_PX`, given the canvas's short side in
+ * CSS pixels); ultra keeps every device pixel; performance renders at CSS pixels through
+ * `useBrowserRecommendedResolution`.
  */
-export function baseResolutionScale(preset: QualityPreset, devicePixelRatio: number): number {
+export function baseResolutionScale(
+  preset: QualityPreset,
+  devicePixelRatio: number,
+  shortSideCss = 0,
+  handheld = false,
+): number {
   if (preset !== "balanced") return 1;
   const ratio = Math.max(1, devicePixelRatio || 1);
-  return Math.min(1, BALANCED_MAX_PIXEL_RATIO / ratio);
+  let scale = Math.min(1, BALANCED_MAX_PIXEL_RATIO / ratio);
+  if (shortSideCss > 0) {
+    const cap = handheld ? MAX_SHORT_SIDE_PX.handheld : MAX_SHORT_SIDE_PX.desktop;
+    scale = Math.min(scale, cap / (shortSideCss * ratio));
+  }
+  return scale;
 }
 /** Idle refinement only proceeds while tileset memory is below this share of its budget. */
 const REFINE_MEMORY_RATIO = 0.7;
 /** Extra screen-space error per ladder step once resolution cuts are exhausted. */
 const SSE_PENALTY_STEP = 3;
+
+/** Where the controller aims when it moves: a share of the budget between the line where
+ *  refinement holds (`REFINE_MEMORY_RATIO`) and the pressure line. */
+export const TARGET_MEMORY_RATIO = 0.9;
 
 /**
  * Chooses the next maximum screen-space error. Pure so the policy is unit-testable.
@@ -86,16 +109,23 @@ const SSE_PENALTY_STEP = 3;
  * Smoothness first: while the camera moves the tile selection is frozen, because every change
  * pops tiles mid-gesture. At rest, memory pressure coarsens (the only thing that ever does,
  * apart from the manager's ladder shifting the bounds), loading holds, and otherwise the
- * scene uses the idle time the way a maps app does: straight to the finest level, at any
- * height, as long as there is memory headroom. Slow frames at rest are tiles arriving, never a
- * reason to coarsen. Nothing returns to the base on its own: finer tiles stay until memory
- * says otherwise, so the next gesture starts from what is already loaded.
+ * scene uses the idle time the way a maps app does. Nothing returns to the base on its own.
+ *
+ * Both directions are proportional, not stepped: what a view loads grows about as the inverse
+ * square of the error (tiles cover area), so the error that lands the load on
+ * `TARGET_MEMORY_RATIO` of its budget is `current * sqrt(ratio / target)`, and one move gets
+ * there. A fixed step overshot: under a budget smaller than the finest level (a 24M-splat
+ * scan, a 3M budget) it went finest (267% of budget), +4 px (30%), finest again -- every swing
+ * dropping the fine tiles and fetching them back. When even the finest level is predicted to
+ * fit, refinement goes straight there, as before: the levels on the way would each be
+ * requested, decoded and thrown away.
  */
 export function decideScreenSpaceError(sample: QualitySample): QualityDecision {
   const { bounds, current, moving, loading, memoryRatio } = sample;
+  const toward = (ratio: number): number => current * Math.sqrt(ratio / TARGET_MEMORY_RATIO);
   if (memoryRatio > MEMORY_PRESSURE_RATIO) {
     return {
-      screenSpaceError: Math.min(bounds.max, current + 4),
+      screenSpaceError: Math.min(bounds.max, Math.max(current + 0.5, toward(memoryRatio))),
       reason: `memory pressure (${Math.round(memoryRatio * 100)}% of budget)`,
     };
   }
@@ -109,11 +139,14 @@ export function decideScreenSpaceError(sample: QualitySample): QualityDecision {
       screenSpaceError: current,
       reason: `holding (${Math.round(memoryRatio * 100)}% of memory budget)`,
     };
-  // Straight to the finest level, the way a maps app streams once the camera stops: the
-  // intermediate levels would each be requested, decoded and thrown away on the way down.
-  const target = Math.min(bounds.max, bounds.min);
-  if (target === current) return { screenSpaceError: current, reason: "at finest" };
-  return { screenSpaceError: target, reason: "idle refinement" };
+  const finest = Math.min(bounds.max, bounds.min);
+  if (finest >= current) return { screenSpaceError: current, reason: "at finest" };
+  const predictedAtFinest = memoryRatio * (current / finest) ** 2;
+  if (predictedAtFinest <= TARGET_MEMORY_RATIO)
+    return { screenSpaceError: finest, reason: "idle refinement" };
+  const target = Math.max(finest, Math.min(current, toward(Math.max(memoryRatio, 0.01))));
+  if (current - target < 0.25) return { screenSpaceError: current, reason: "at budget" };
+  return { screenSpaceError: target, reason: "idle refinement (to budget)" };
 }
 
 /**
@@ -271,6 +304,7 @@ interface LadderStep {
 export class PerformanceManager {
   private readonly scene: Scene;
   private readonly frameTimestamps: number[] = [];
+  private readonly motionFrameListeners = new Set<(intervalMs: number) => void>();
   private inputs: QualityInputs = {
     preset: "balanced",
     manualScreenSpaceError: null,
@@ -315,6 +349,7 @@ export class PerformanceManager {
   private nearSite = false;
   private readonly timer: ReturnType<typeof setInterval>;
   private readonly colorGrade: PostProcessStage;
+  private gradeSuppressed = false;
   private readonly unsubscribe: (() => void)[] = [];
   private readonly gpu: string | null;
   private readonly webgl2: boolean;
@@ -365,6 +400,8 @@ export class PerformanceManager {
     this.colorGrade = createColorGradeStage();
     this.scene.postProcessStages.add(this.colorGrade);
     this.timer = setInterval(() => this.evaluate(), 500);
+    window.addEventListener("resize", this.onResize);
+    this.unsubscribe.push(() => window.removeEventListener("resize", this.onResize));
     this.events.emit("performance", {
       gpu: this.gpu,
       webgl2: this.webgl2,
@@ -419,6 +456,12 @@ export class PerformanceManager {
   }
 
   /** Registers a group's memory use against its cache budget. */
+  /** Called with each motion frame's interval (ms): what a gesture costs, frame by frame. */
+  addMotionFrameListener(listener: (intervalMs: number) => void): () => void {
+    this.motionFrameListeners.add(listener);
+    return () => this.motionFrameListeners.delete(listener);
+  }
+
   addMemorySource(group: TilesetGroup, source: () => { bytes: number; budget: number }): void {
     this.groups[group].memorySources.push(source);
   }
@@ -445,11 +488,28 @@ export class PerformanceManager {
     return { bytes, budget };
   }
 
+  /**
+   * The colour grade suits the world's flat textures seen from above, not a photographic
+   * scan: +18% saturation on splats that already carry the scene's real colour reads as
+   * lurid green foliage. So it is off while a splat scan fills the view (SiteManager / the
+   * scene manager say when), and one cheap full-screen pass otherwise; performance skips it
+   * with the rest.
+   */
+  setGradeSuppressed(suppressed: boolean): void {
+    if (this.gradeSuppressed === suppressed) return;
+    this.gradeSuppressed = suppressed;
+    this.applyGrade();
+    this.scene.requestRender();
+  }
+
+  private applyGrade(): void {
+    this.colorGrade.enabled = this.inputs.preset !== "performance" && !this.gradeSuppressed;
+  }
+
   configure(inputs: QualityInputs): void {
     this.inputs = inputs;
     const bounds = QUALITY_SSE[inputs.preset];
-    // The colour grade is one cheap full-screen pass; performance skips it with the rest.
-    this.colorGrade.enabled = inputs.preset !== "performance";
+    this.applyGrade();
     for (const group of GROUPS) {
       this.groups[group].sse = inputs.manualScreenSpaceError ?? bounds.base;
       this.applySse(group);
@@ -459,7 +519,7 @@ export class PerformanceManager {
     // recommended (CSS pixel) resolution; the others use native device pixels until the
     // ladder proves the machine cannot keep up.
     this.viewer.useBrowserRecommendedResolution = inputs.preset === "performance";
-    this.baseScale = baseResolutionScale(inputs.preset, window.devicePixelRatio || 1);
+    this.baseScale = this.currentBaseScale();
     this.ladder = buildLadder(inputs.preset);
     this.level = 0;
     this.slowMotionMs = 0;
@@ -468,6 +528,25 @@ export class PerformanceManager {
     this.applyLevel();
     this.evaluate("configured");
   }
+
+  private currentBaseScale(): number {
+    const canvas = this.viewer.canvas;
+    const shortSide = Math.min(canvas.clientWidth, canvas.clientHeight);
+    return baseResolutionScale(
+      this.inputs.preset,
+      window.devicePixelRatio || 1,
+      shortSide,
+      isHandheld(),
+    );
+  }
+
+  /** The canvas changed size (a rotated phone, a resized window): re-derive the base scale. */
+  private readonly onResize = (): void => {
+    const next = this.currentBaseScale();
+    if (Math.abs(next - this.baseScale) < 0.01) return;
+    this.baseScale = next;
+    if (!this.sharpened) this.applyLevel();
+  };
 
   /** Loading state per tileset group; a group's walk waits only for its own tiles. */
   reportLoading(group: TilesetGroup, pending: number, processing: number): void {
@@ -595,6 +674,7 @@ export class PerformanceManager {
     if (weight.judged) {
       this.motionFrameMs.push(dt);
       if (this.motionFrameMs.length > 600) this.motionFrameMs.shift();
+      for (const listener of this.motionFrameListeners) listener(dt);
     }
     // Evidence for the ladder comes from every frame that carries any, so three short
     // slow drags count as much as one long one.

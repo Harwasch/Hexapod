@@ -96,6 +96,13 @@ export type OutlineRequest = Schemas["OutlineRequest"];
 /** Captures: an upload session and the source files it is made of. */
 export type Capture = Schemas["CaptureRead"];
 export type CaptureDetail = Schemas["CaptureDetail"];
+/** A capture a phone started with the phone key, and its upload token. */
+export type PhoneCapture = Schemas["PhoneCapture"];
+export type PhoneRefine = Schemas["PhoneRefine"];
+/** The quality bar's verdict on a capture's latest finished run (null before one). */
+export type CaptureQuality = Schemas["CaptureQuality"];
+export type QualityRoi = Schemas["QualityRoi"];
+export type QualityTip = Schemas["QualityTip"];
 export type CaptureCreate = Schemas["CaptureCreate"];
 export type CaptureKind = Schemas["CaptureKind"];
 export type CaptureStatus = Schemas["CaptureStatus"];
@@ -118,6 +125,12 @@ export type JobArtifact = Schemas["ArtifactRead"];
 export type JobRetry = Schemas["JobRetry"];
 export type JobStepLog = Schemas["JobStepLog"];
 export type ArtifactKind = Schemas["ArtifactKind"];
+
+/** A run while it runs, for the live viewer: cameras as solved, splats as they train. */
+export type LiveState = Schemas["LiveState"];
+export type LiveCameras = Schemas["LiveCameras"];
+export type LiveSplat = Schemas["LiveSplat"];
+export type LiveStage = Schemas["LiveStage"];
 
 /** The data console (admin.html): outputs with their provenance, and storage reconciled. */
 export type ArtifactRow = Schemas["ArtifactRow"];

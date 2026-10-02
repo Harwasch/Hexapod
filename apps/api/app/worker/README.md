@@ -121,11 +121,94 @@ registered nothing when the POST failed.
 A deployment with no bucket still runs: the log and artifact uploads are skipped and say
 so by leaving `log_key` null, rather than failing the job.
 
+## Several jobs at once
+
+`WORKER_CONCURRENCY=N` (default 1) runs N **slots** in one worker process (`loop.py`). A
+slot is what the whole worker used to be -- claim one job, supervise it to the end in its
+own recipe process, claim the next -- and nothing about a job is shared between slots:
+
+- each slot claims with its own id, `host:pid/<n>` (one slot keeps the plain `host:pid`),
+  so `claimed_by`, the heartbeat and `_still_ours` behave exactly as between two separate
+  workers: a lease one slot let lapse and another reclaimed is *lost* to the first;
+- each job's lease is renewed by a `claim.LeaseKeeper` thread of its own, for as long as
+  its supervisor holds it, and a cancel is seen by that slot's heartbeat and stops that
+  job's recipe process only;
+- SIGTERM sets one stop flag: every slot stops its own recipe process and clears its own
+  lease, so every job is claimable at once;
+- `--max-jobs` counts across slots, and a slot reserves its place before claiming.
+
+`tests/test_worker_concurrency.py` runs two 30-second jobs in two slots against Postgres:
+both run at once under distinct owners, both leases advance past their length, a cancel
+stops one while the other keeps running, and a stop hands the survivor back.
+
+**Why the lease has a thread of its own (the 2026-09-27 dead-letters).** With N = 2 on
+Fly, jobs were taken by the other slot every ~40-60 s and dead-lettered with "stage
+'normalize' has been attempted 3 times" though nothing had failed. The heartbeat in
+`_supervise` was the only thing renewing the lease, and the supervising thread also
+downloads the capture before the first stage (`_seed`) and uploads each finished stage's
+artifacts and log before recording it (`_apply`; normalize's ~100 frames to R2) -- each
+longer than the 30 s lease. The first heartbeat after the download was worse than late: it
+ran in the transaction the supervisor's earlier reads had opened, and `now()` is the start
+of the transaction, so it wrote a lease that had already run out and reported HELD. With
+one slot nothing else was polling and none of it showed. With two, the idle slot (polling
+every `idle_s`) claimed the job the moment its lease lapsed, re-ran the stage as the next
+attempt -- A6 wiping the `out/` the first slot was still uploading -- and the two traded it
+until the attempt budget was spent. Now `claim.LeaseKeeper` renews the lease every
+`min(poll_s, lease_s / 3)` from its own thread and session whatever the supervisor is
+doing, and every lease is `statement_timestamp() + lease_s`. The tests with slow uploads
+and a slow download in `test_worker_concurrency.py` reproduce the failure without either.
+A reclaim leaves two lines in the worker's log: "claimed job <id>" a second time for the
+same id, and "lost job <id> mid-run: ... claimed_by=<slot>" from the slot that lost it.
+
+**What N the 2 GB machine can take** is a memory question -- the slots' threads only
+wait, and the GPU and CPU-heavy stages (`pose`, `train`, `quality`) run on Modal. Measured
+2026-09-27 (`/proc` RSS and `getrusage` peaks, on this repository's code):
+
+| process | RSS |
+| --- | --- |
+| the worker (supervisor) after its imports and a DB session | ~105 MB, plus a few MB a slot |
+| a job's recipe process, idle while Modal runs a stage (pipeline, numpy, PIL, modal) | ~80 MB |
+| `normalize` of a 25 s 4K HEVC clip (ffmpeg decoding, 100 frames kept) | peak ~380 MB (ffmpeg) + the 80 |
+| `place`/`package`/`thumbnail` of a 500k-gaussian SH3 splat (Lane 1 recipe, same code) | peak ~395 MB |
+| the same at 1M gaussians (the phone's old "Best" cap) | peak ~750 MB |
+
+Those last two rows were the stages loading the whole splat. Since 2026-09-27 `normalize`
+(Lane 1's ingest), `place`, `thumbnail` and `ground_samples` read it a chunk at a time
+(`tools/pipeline/splat_io.py`, `splat_stream.py`; README "Stages after training, a chunk
+at a time"), in memory that does not grow with it. Measured the same way
+(`tools/pipeline/tests/memory_probe.py`, one process per measurement):
+
+| process | whole splat | a chunk at a time |
+| --- | --- | --- |
+| Lane 1 `normalize` + `thumbnail` + `ground_samples`, 1M-gaussian SH3 upload | 711 MB | 139 MB |
+| the same, 2M | 1,386 MB | 144 MB |
+| Lane 2 `quality` + `place` (+ `thumbnail` + `ground_samples` chunked), 1M | 328 MB | 184 MB |
+| the same, 8M | fails at 1.5 GB | 193 MB |
+
+`package` (`tools/captures/splat_tiles.py`) is made out-of-core the same way by the
+large-scene plan's tiler; until that lands it is the one stage here whose peak still
+grows with the splat (5M synthetic gaussians: 1.6 GB, per its own docstring).
+
+So a job spends most of its life at ~80 MB and peaks at ~0.45 GB (ffmpeg, at the start)
+and, apart from `package`, ~0.2 GB at the end, whatever the capture's size. **N = 2 is
+safe on the 2 GB machine** for a capture of any size once `package` is chunked too; N = 3
+was not measured. The 20 GB volume holds about two captures' workdirs in flight, so N > 2
+wants it extended as well. If the machine does run out, the kernel kills the largest
+process -- a recipe process, whose stage then fails and is retried under the attempt
+budget -- not the supervisor.
+
+Lane 2's gaussian count is sized to the capture (`cap_max: auto`,
+`tools/pipeline/gaussian_budget.py`) and bounded by the L4's memory (~8.7M at 1600 px).
+The recipe's `budget_max: 2000000`, set from the old rows of the first table (a 2M splat
+peaked near 1.5 GB here), is gone; a deployment whose `package` still loads the whole
+splat should put a `budget_max` back in a run's params for its worker.
+
 ## Configuration
 
 `WORKER_*` in the environment, read through `app.config.Settings` into `WorkerConfig`:
 `WORKDIR`, `RUNNER` (`stub` until A8 makes Lane 1's stages real), `RECIPE_DIR`,
-`IMPL_MODULES`, `LEASE_S`, `POLL_S`, `IDLE_S`, `MAX_ATTEMPTS`, `RETRY_BACKOFF_S`.
+`IMPL_MODULES`, `LEASE_S`, `POLL_S`, `IDLE_S`, `MAX_ATTEMPTS`, `RETRY_BACKOFF_S`,
+`CONCURRENCY` (slots, 1-8, default 1).
 
 ## Verify
 

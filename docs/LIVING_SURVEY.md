@@ -9,6 +9,19 @@ positions on the GPU every frame — but the only tree that moves is `data/tiles
 real capture. What that would take, and why it did not happen here, is in
 [CAPTURES.md](CAPTURES.md#the-real-tree-what-was-tried-and-what-it-would-take).
 
+**Living Mode (2026-09-28, [ADR 0008](DECISIONS/0008-living-mode.md)).** A rig whose
+`rig.json` points at a `motion.json` sidecar now moves under a stateless modal model built from
+the skeleton alone — per-branch oscillators at `2.55·L^-0.59` Hz, a whole-tree pendulum mode at
+`2.4/√H`, measured tree and branch damping, `U²` drag, and leaf flutter as a field advected with
+the wind — labelled `motionEvidence: "allometric"` in the Inspector. Since 2026-09-29 the wind is
+EN 1991-1-4 turbulence: a frozen gust field with the Eurocode spectrum carried through the crown
+at the mean speed, which each limb follows quasi-statically below its frequency, plus a resonance
+whose share grows with the wind (`R²` of EN Annex B) — so a light wind is slow, coherent sway and
+a strong one shows each limb ringing ([ADR 0008](DECISIONS/0008-living-mode.md), second addendum).
+The synthetic tree carries one. The model described below, from "How the tree moves" on, is now
+the **legacy** model: the fallback for a rig without a sidecar and the control arm of the blind
+comparison. The mechanism (canonical never written, calm exact, idle idle) is unchanged.
+
 Read this page for the mechanism and its limits. The numbers below were all measured; where the
 measurement was taken under software GL (SwiftShader), it says so, because those numbers are not
 representative of a machine with a GPU.
@@ -28,6 +41,9 @@ quoted. So both halves, up front:
   and no readback, and the write lands in the frame it was made in.
 - Motion cannot contaminate a measurement, by mechanism rather than by care.
 - Idle stays idle: at calm the scene requests zero renders.
+- A level-of-detail REPLACE tileset moves too, through tile loads and parent/child swaps, with
+  every gaussian's motion a function of its canonical position alone (M5; see
+  [Multi-tile tilesets](#multi-tile-tilesets-and-the-gpu-path)).
 
 **Not proven, and not provable from here:**
 
@@ -186,12 +202,14 @@ displacement.
 
 ### Refusals
 
-Before its first write the deformer checks that the tileset is single-tile, that the root
-transform's Z column is the geodetic normal (measured at 1.0 to 15 significant figures on a real
-capture), that the tree's own points stand along local +Z, and that the checksum matches. On any
-failure it writes nothing, ever, and reports which: `no-primitive`, `no-snapshot`, `no-texture`,
-`no-bake-transform`, `no-capture`, `multi-tile`, `layout`, `frame`, `upright`, `checksum`, `bake`,
-`internal`. A tree that does not move is honest; a tree whose wrong splats move is not.
+Before its first write the deformer checks that the root transform's Z column is the geodetic
+normal (measured at 1.0 to 15 significant figures on a real capture), that the tree's own points
+stand along local +Z, and that **every selected tile's** checksum matches the rig. On any failure it
+writes nothing, ever, and reports which. The waits — `no-primitive`, `no-snapshot`, `no-texture`,
+`no-bake-transform`, `no-capture`, `tiles` — are the ordinary first frames after a load or a
+level-of-detail swap; the refusals — `layout`, `frame`, `upright`, `checksum`, `bake`, `internal`
+— are permanent. A tree that does not move is honest; a tree whose wrong splats move is not.
+(`multi-tile` was a refusal until M5; see [Multi-tile tilesets](#multi-tile-tilesets-and-the-gpu-path).)
 
 ### Per frame
 
@@ -236,6 +254,249 @@ that are cheap because nothing is being asked of the machine is how an oscillati
 animating scene can coarsen and earns its quality back on the next gesture. `animating` is surfaced
 in the performance snapshot so the developer panel's `fps` is not read as something it is not. With
 `setAnimating(false)` — the default — every prior test passes unmodified.
+
+## Multi-tile tilesets and the GPU path
+
+M5 of [LIVING_WORLD.md](LIVING_WORLD.md#9-fastest-path-to-the-demo). The decision record is
+[ADR 0007](DECISIONS/0007-splat-vertex-motion-hook.md).
+
+### A gaussian moves by where it stands, not by its tile
+
+One `GaussianSplatPrimitive` draws a whole tileset: each rebuild concatenates the selected tiles'
+baked positions into one array, one texture and one sort, and the selection changes with the
+camera — under REPLACE a merged parent gives way to its children and back. A splat index is
+therefore only a position in today's aggregate. Everything that decides how a gaussian moves is
+instead derived per tile, from that tile's own positions (`splatTiles.ts`):
+
+- **identity** — the tile's un-baked positions must digest, bit-exactly, into `rig.tileChecksums`
+  (stamped offline by `tools/captures/rig_tiles.py` from the SPZ blocks; the single-tile case is
+  the same rule with one digest, `canonicalChecksum`);
+- **binding** — each gaussian's four nearest rig nodes and their blend weights (`skin.ts`,
+  below), from its own position, so a merged parent rides the limb its own centre sits on;
+- **flutter identity** — a hash of the snapped canonical position (`positionKeys` in
+  `@twin/world`) instead of the splat index, so the same gaussian shimmers the same whichever
+  tile carries it, and a parent coincident with a leaf moves exactly as the leaf does.
+
+A snapshot's arrays are those per-tile results concatenated in the snapshot's own tile order,
+which is read from `primitive._selectedTileSet` (the set the engine took from
+`tileset._selectedTiles` when it aggregated) and trusted only after the counts sum to
+`_numSplats` and sampled positions of every tile sit bit-for-bit at their range — otherwise the
+deformer waits (`tiles`), it does not guess. Bindings are cached per tile content, keyed weakly
+and checked against the tile's bake matrix, so a tile that stays selected across swaps is bound
+once. Calm still restores each tile's exact engine bytes, and no tile's positions are ever
+written: `splatDeformerTiles.test.ts` drives the committed REPLACE fixture
+(`data/tiles/synthetic-tree-lod`, 21 tiles, 114–1,392 gaussians each) through root, octant and
+leaf selections in both orders and asserts every uploaded gaussian is bit-identical to its
+one-gaussian reference.
+
+**Why bind in the browser rather than package a per-tile sidecar.** Measured here (Node, 214-node
+rig): un-bake + checksum + nearest-node + keys is about **0.25 µs a gaussian** at scale — 25 ms
+for a 100k-gaussian tile, once per tile load — of which the nearest-node search is about half.
+The identity proof has to run either way, so a sidecar would save ~12 ms per 100k tile for
+2 bytes a gaussian on the wire (~10 % of the tile's SPZ), and would tie every tile to one rig
+version: re-extracting a rig — routine through M0–M3 — would mean re-packaging every tile. The
+rig carries only the tile digests, and re-stamping is 5 s of Python for 2.1M gaussians. The cost
+that is left is a one-off hitch when a large tile loads; spreading binding across frames or into
+a worker is the obvious next step if it shows on hardware.
+
+The binding cost shows up as a hitch when many new tiles arrive at once: the large view's last
+re-derivation, with most of its 26 tiles new, took 1.2–1.8 s in the browser (binding plus the
+per-snapshot binding texture). Tiles that stay loaded are not re-bound (e2e: zooming back in
+re-derives with zero new bindings, 3.7 ms), so it is paid per tile load, not per LOD switch.
+
+### Skinning: four joints a splat, not one
+
+Until 2026-09 every gaussian followed its one nearest node rigidly. A joint's transform rotates
+about a pivot and carries its parent's, so two neighbouring splats on either side of the Voronoi
+boundary between two joints were moved by two different rigid motions: the displacement field
+jumped by the joint's bend times the lever arm, and a limb bent as a chain of sticks. On the
+Minnetonka tree at the default wind, splat pairs under 1.7 cm apart on different joints differed
+by 9 mm at the median and 186 mm at p99.
+
+Now each gaussian blends its **four nearest nodes** with modified Shepard weights (Franke &
+Nielson 1980, radius at the fifth node), so the weights — and the displacement field — are
+continuous everywhere, including where the set of four changes, and a limb bends as a curve.
+The blend is linear (`x + Σ w·(D·x + t)`, `D = R − I`): no joint of the model twists about its
+own limb and bends are hundredths of a radian, so LBS's shrink is sub-millimetre, and a joint at
+rest contributes exact zeros, so calm still restores the measured bytes. Weights are 10-bit
+integers summing to 1023, identical on the CPU and GPU paths. The same weights blend each
+node's flutter amplitude. After: p50 0.16 mm, p99 2.8 mm, and a skinned seam shrinks in
+proportion to the probe spacing where a rigid one does not (`living.test.ts`).
+
+The search is exact (slot 0 is `assignSplatsToNodes`' answer bit for bit): a grid over the
+splats whose cells carry, built on first use and cached per rig, every node that can be among
+any of the cell's points' five nearest. Measured here: ~0.4 s for the Minnetonka tree's 400,000
+splats against ~0.3 s for the nearest node alone, ~1.2 ms for a 1,500-gaussian LOD tile (2.6 ms
+cold). Per vertex the shader fetches the binding texel plus four texels per weighted node — 3.4
+nodes on average on that tree, so ~15 fetches where the rigid binding made 5.
+
+### The GPU path
+
+The CPU path is linear in the splat count: `deformPositions` alone is 32 ms for 1M splats here,
+before the re-bake, the staging write and a 32-byte-a-splat upload. The GPU path moves the
+per-splat work into the splat vertex shader through a minimal engine patch
+(`patches/@cesium__engine@26.3.0.patch`): an optional `GaussianSplatPrimitive.vertexMotion` hook
+whose GLSL function displaces each fetched position before projection (`splatGpuMotion.ts`).
+Per frame the CPU computes each node's transform **in the baked frame** (`M = L·R·L⁻¹`,
+`T = b − M·b + L·t`) and its four flutter coefficients — 0.08 ms for 214 nodes — and uploads one
+16 KB row; per snapshot it uploads each splat's `(node, flutterHash)`. The shader's arithmetic
+has a TypeScript transcription (`evaluateSplatMotion`) that the unit tests hold to the CPU path:
+within 2e-5 m on every gaussian of a multi-tile view.
+
+**Living Mode on the GPU path.** A rig with a motion sidecar (ADR 0008) sways by its modal
+transforms — the same node rows — and flutters by an _advected_ field looked up at each splat's
+canonical position (`applyAdvectedFlutter`), which per-node coefficients cannot express. The
+shader computes it from the fetched position, which is canonical, in the baked frame: the CPU
+folds the un-bake `q = L⁻¹·(p_b − b)`, the wind frame, `texelsPerMeter` and the advection into one
+affine row per texture coordinate (six for the three lookups, offsets reduced modulo the texture
+size so float32 stays sub-texel after any amount of advection) plus the rotation `C = L·W` from
+the wind frame back to the baked one, and writes them — ten texels, 160 B — beside the node rows;
+the node's amplitude goes in its flutter texel. The flutter motion texture depends on the sidecar
+seed alone and goes up once, packed so that each bilinear sample is a single fetch (RGBA32F: 16 MB
+for 1024², three fetches a vertex). A kind flag in the same upload selects the legacy
+coefficients for rigs without a sidecar. `splatGpuLiving.test.ts` holds the transcription to
+`deformPositions` with the advected field on the synthetic tree and on two LOD selections, at
+t = 5 s and after 1.5 h of advection: worst 1.0 µm, against up to 7 cm of flutter; a float32
+emulation of the shader's lookups stays within 3 µm even a day in. Calm and winter write the
+field as still: nothing is sampled.
+
+It is the default path. The CPU path is the fallback, per site: on an engine without the hook,
+for a snapshot whose tiles do not share one bake matrix (`splat_tiles.py` tilesets always do),
+when a build sets `VITE_SPLAT_GPU_MOTION=false`, or when the viewer turns **Settings → Living
+survey → Motion on GPU** off (persisted per browser) to compare the two. The switch is made in
+place (`SplatDeformer.setGpu`): the deformer restores the measured pose through the path it is
+leaving — the CPU path's ordinary restoring write, or the hook uninstalled — before the next frame
+derives on the new one, and `e2e/livingSurveyScene.spec.ts` reads the attribute texture back from
+the GPU mid-gust to hold that to the engine's bytes, word for word. Beside the switch, each site's
+path (and why, when it is the CPU) and its main-thread motion cost per animated frame (a rolling
+mean: model plus write, and the write alone), with the scene's frame time for comparison. On the
+CPU path at the Minnetonka tree's million splats that cost is the frame rate: roughly 70 ms of
+skinned `deformPositions` and re-bake a frame when every tile is selected, plus up to 34 MB of
+texture upload (32 bytes a splat; the table below has the 1.9M-splat figures).
+
+Its invariants are structural. Nothing of the engine's is written at all — not the attribute
+texture, not `_positions`. **Calm is exact**: `u_splatMotionActive` is 0 whenever nothing moves and
+the shader returns the fetched position untouched; a node at rest is written as the exact
+identity, which the shader also returns untouched. **A stale binding is never drawn**: the active
+flag is evaluated at draw time against the committed snapshot's generation, so a snapshot
+committed between our write and the draw renders at rest for that frame.
+
+Measured 2026-09-28 in headless Chromium on SwiftShader (`e2e/livingSurveyPerf.spec.ts`,
+`LIVING_PERF=1`), wind 0.1, on a 4-core container shared with another agent's test run — treat
+every figure as an order of magnitude. `apply` is the motion path's main-thread cost per frame,
+upload submit included; `frame` is apply plus a rendered frame, and under SwiftShader that is
+software rasterisation, not motion. The 12k views: 960×600, 20 frames each. The large view is a
+2.1M-gaussian tree (`synthetic_tree.py --splats 2000000`, packed by `splat_tiles.py` at 100k a
+tile into 38 tiles with 116k merged parents, stamped by `rig_tiles.py`; not committed) at
+320×200 and `maximumScreenSpaceError` 2, where a near view selects 26 tiles: frames there take
+40–130 s, so its `apply` is ten consecutive applies without a render between them.
+
+| view                               |    splats | tiles | CPU apply | GPU apply | CPU frame | GPU frame | upload/frame CPU → GPU |
+| ---------------------------------- | --------: | ----: | --------: | --------: | --------: | --------: | ---------------------: |
+| synthetic tree, 1 tile             |    12,000 |     1 |    4.0 ms |    1.0 ms |    544 ms |    577 ms |         384 KB → 16 KB |
+| synthetic-tree-lod, near (REPLACE) |    12,000 |    14 |    4.4 ms |    1.1 ms |    538 ms |    547 ms |         384 KB → 16 KB |
+| large LOD tree, near (REPLACE)     | 1,937,679 |    26 | ≈ 260 ms¹ |   0.35 ms |  43–133 s |  51–114 s |          62 MB → 16 KB |
+
+¹ Nine of ten applies; the tenth took 134 s, a `texSubImage2D` of 62 MB queued behind
+SwiftShader's pending frame. Inside rendered frames the GPU path's apply averaged 2.5 ms at 1.9M
+splats (the 16 KB upload waiting on the same queue).
+
+Living Mode, measured the same way on 2026-09-28 (wind 0.1, 20 frames, 960×600). The first
+moving frame is reported alone: it is when the GPU path packs and uploads the leaf-flutter
+texture. `apply` is the mean of the next 20, `livingFrame` itself excluded (0.6 ms for 214 nodes
+in Node):
+
+| view                               | path | model  | first moving frame |  apply | upload/frame |
+| ---------------------------------- | ---- | ------ | -----------------: | -----: | -----------: |
+| synthetic tree, 1 tile             | CPU  | living |   26.7 ms (384 KB) | 3.9 ms |       384 KB |
+| synthetic tree, 1 tile             | GPU  | living |    46.6 ms (16 MB) | 0.7 ms |      16.2 KB |
+| synthetic-tree-lod, near (REPLACE) | CPU  | living |   28.8 ms (384 KB) | 3.9 ms |       384 KB |
+| synthetic-tree-lod, near (REPLACE) | GPU  | living |    76.5 ms (16 MB) | 0.7 ms |      16.2 KB |
+| synthetic-tree-lod, near (REPLACE) | GPU  | legacy |     4.1 ms (32 KB) | 0.9 ms |      16.2 KB |
+
+The one-off is ~25 ms of packing plus the 16 MB upload, once per seed per session. In the REPLACE
+e2e (`livingSurveyTiles.spec.ts`) holding the leaves still for one frame changes 15.9 % of pixels
+on both paths, with identical mean differences to four figures — the GPU path draws the same
+flutter the CPU path does.
+
+At calm both paths cost ~0.02 ms (they write nothing). The GPU path's per-frame CPU cost does not
+depend on the splat count; its GPU-side cost (a binding fetch, four motion texel fetches and, for
+fluttering nodes, two `sin/cos` per vertex — or, under Living Mode, ten more motion texel
+fetches and three random-access fetches from a 16 MB texture — four vertices a splat) is exactly
+what SwiftShader cannot measure.
+
+### Draw order
+
+The sorter reads `primitive._positions` — canonical positions — on both paths, so a displaced
+splat is drawn in the order of where it was measured. Nothing re-sorts on motion, deliberately:
+
+- A re-sort needs displaced positions **on the CPU**. The CPU path has them (`displacedBaked`),
+  but the engine sorts `_positions`, and handing it ours means writing the one array this feature
+  never writes. The GPU path has no CPU copy at all; producing one is the per-splat CPU work it
+  exists to remove.
+- What one re-sort costs, measured with the engine's own WASM radix sort
+  (`GaussianSplatSorter.radixSortIndexes`, a worker) from the harness: 32–35 ms for 477k
+  splats and 147–202 ms for 1.94M, plus copying the positions to the worker. The engine
+  already runs one per camera move; one per frame of wind would be a second full sort stream,
+  and for the GPU path it would also need the CPU-side displacement it exists to remove.
+- The staleness it would buy back is bounded without it: `sortStaleness` is a property of the rig
+  and the wind, not of the tiling, and a merged parent — larger than the gaussians it replaces —
+  is proportionally _less_ stale in its own radii.
+
+If a person on real hardware finds the artifact objectionable, the cheap fix is a re-sort every
+few frames from CPU-evaluated positions of a subsample, or of the whole set in a worker; it
+belongs in the engine patch, not in `_positions`.
+
+## Many plants in one tileset
+
+A capture of a park is many plants beside buildings, paths and lawn, in one level-of-detail
+tileset. [ADR 0008's multi-plant addendum](DECISIONS/0008-living-mode.md) has the decision and
+the sources; this is how the pieces fit.
+
+**The rig is a forest.** `tools/captures/scene_plants.py` finds the plants (ground, greenness,
+instances — [CAPTURES.md](CAPTURES.md#every-plant-in-a-capture)) and writes one rig for the
+tileset: node 0 is a **static anchor**, then each plant's joints as a contiguous run whose first
+node is that plant's root. `rig.plants` lists the runs (`id`, `class`, `nodeStart`, `nodeEnd`);
+`validateRig` holds every joint to its own plant (a parent earlier in the same run) and every
+joint outside a run to being an anchor. `living.ts` treats every root as node 0 was treated: an
+anchor whose transform is the identity by value and which carries no oscillator; each plant's
+trunk is its own whole-plant mode. The sidecar's optional `plants` carries each plant's height,
+turbulence ratios and length scale, so a 1 m shrub feels EN 1991-1-4's turbulence at its height
+(held at `z_min` = 5 m) and a 12 m tree at its own, while one frozen field — at the tallest
+plant's length scale — carries the gusts across all of them.
+
+**The binding says which splat is which plant.** For one tree every splat in the tileset is the
+tree, and binding from position alone is right (above). In a scene the joints nearest a brick
+are a crown's, so which splat belongs to which plant — or to none — is what the scene step
+measured, and it travels with the tiles: `plants.json`, the rig's `binding`, per tile **keyed by
+the tile's checksum** — the same digest that proves the tile's identity — as run-length pairs of
+labels in the tile's own gaussian order (0 static, `k` plant `k − 1`). `bindTile` looks the tile
+up after proving it, refuses a tile the binding does not list, and skins with
+`skinSplatsToPlants`: a static gaussian gets the anchor with weight 1023, a plant's gaussian
+exactly what `skinSplatsToNodes` gives it against that plant's joints alone. Merged parents were
+labelled offline by replaying the packer's plan: a parent is a plant's only if every original
+merged into it is.
+
+**Static is pinned, not merely still.** `SplatDeformer` pins every anchor (`pinStaticNodes`,
+after `markMovingNodes`), whatever transform or flutter the motion model hands it — the legacy
+model, which knows nothing of plants, included. On the CPU path a splat whose weighted nodes are
+all at rest gets the engine's own bytes back (`resolveBakedPositions`); on the GPU path the
+anchor's node rows are four texels of exact zeros and the shader returns the fetched position
+untouched. `SplatDeformer.staticAudit()` checks it splat by splat over a live snapshot — the
+buffer the CPU path uploaded, or the shader's transcription over the GPU path's motion texture —
+and `e2e/livingSurveyYard.spec.ts` asserts zero static splats moved on both paths, near and far,
+every frame. A forest rig without its binding is refused (`binding`), and the upright check is
+not applied to a forest: a scene is not a standing tree.
+
+**What it costs.** Binding is per tile load: 0.75 µs a gaussian warm in Node, 1.7 µs cold in
+the browser (43,337 gaussians of the synthetic yard in 74 ms, reported by the deformer as
+`lastBoundTiles`, `lastBoundSplats`, `lastBindMs`). The per-frame model is per joint and per
+oscillator: 0.8 ms for the yard's 406 joints; 11–15 ms for 200 plants and 8,101 joints (forty
+of them skeleton trees); 4.4 ms for 203 shrubs and snags on 2,031 joints — most of it each
+oscillator reading the 320-mode frozen field. Evaluating only the plants the current snapshot
+references is the obvious next step for a large park. The GPU path's per-frame upload is the
+node rows (512 KB at 8,101 joints); its per-frame `apply` on the yard measured 0.15 ms in the
+browser, the CPU path's 0.59 ms.
 
 ## How the tree moves: resonant modes, a gust field, and per-splat flutter
 
@@ -450,6 +711,10 @@ blob past its tip, and bark that spirals along a limb with an azimuthal ripple. 
 
 ## Wind is a scale, not a speed
 
+Under Living Mode ([ADR 0008](DECISIONS/0008-living-mode.md)) the same control is read as dynamic
+pressure, `U = 20·√strength` m/s, because that model's scaling law (deflection ∝ `U²`) is cited;
+its amplitude at any given speed is still an estimate, so the UI keeps the words below.
+
 `strength` is dimensionless, `0..1`, where 1 is the strongest gust this model produces. It is
 deliberately not metres per second: calling it m/s would assert that the sway amplitude had been
 validated against a real tree at that speed. It has not been, and no biomechanical source backs the
@@ -474,10 +739,14 @@ is the fixed thing, not the number it produces.
 
 ## Limits
 
-- **Single-tile splats only.** Snapshots aggregate over selected tiles, so splat indices are stable
-  only while tile selection is. `splat_tiles.py` emits single-node tilesets, so indices are stable
-  there. Anything multi-tile is refused, not approximated.
-- **Draw order goes stale.** The splat sorter reads `primitive._positions` — canonical positions the
+- **A level-of-detail rig must be stamped for its tiling.** Multi-tile tilesets move (see
+  [Multi-tile tilesets](#multi-tile-tilesets-and-the-gpu-path)), but only when `rig.tileChecksums`
+  lists every tile — `tools/captures/rig_tiles.py` writes it. Re-tiling a capture means re-stamping
+  its rig; the rig's nodes do not change. A single-tile rig on a tiled capture is refused
+  (`checksum`), as it should be. `synthetic_tree.py` and `skeleton.py` still pack one tile, which
+  is still valid: their ground-truth labels are in PLY order.
+- **Draw order goes stale** — on both motion paths, and deliberately (see
+  [Draw order](#draw-order)). The splat sorter reads `primitive._positions` — canonical positions the
   deformer never touches — so a displaced splat carries a draw-order key for where it used to be.
   This is an artifact to measure, not a correctness bug, and `sortStaleness` in `@twin/world`
   measures it. It is also why **two frames with identical positions can differ pixel for pixel**:
@@ -585,11 +854,34 @@ the pipeline runs end to end and nothing more.
    cluster its own offset. Splats of one node share a frequency so a cluster ripples rather than
    boils, but whether ~55 independently phased splats read as leaves in wind or as scintillation is
    exactly the kind of question SwiftShader cannot answer and a person can, in one glance.
+5. **Does the GPU path hold up on a GPU?** It is now the default; flip **Motion on GPU** in
+   Settings to compare against the CPU path, with the readout beside it. The tree should
+   look identical to the CPU path (the unit tests hold them within 2e-5 m), Living Mode's leaf
+   flutter included, frame time with wind on should barely move from calm at a million splats
+   (the advected flutter's scattered fetches from a 16 MB texture are the unmeasured risk), and
+   a large tile arriving should not hitch visibly (binding is ~25 ms per 100k-gaussian tile
+   here). None of that is measurable on
+   SwiftShader, and it is what decides whether the GPU path stays the default.
+
+6. **Does the Minnetonka tree now sway rather than vibrate?** Measured, its tips moved at a
+   spectral centroid of 2.4 Hz with 63 % of their speed above 4 Hz; they now move at 1.0 Hz with
+   10 %, 3–4 cm RMS at the default wind (ADR 0008, 2026-09 addendum). Whether that amplitude and
+   the 2–3 mm, 4–9 Hz leaf flutter read as a tree in a breeze is a judgement for eyes.
+7. **Does a light wind now read as gentle sway?** It was still "somewhat animatronic or jittery,
+   especially at low wind": every limb rang at its own frequency at every speed (own-tip
+   centroid 0.64·f_n at 2 m/s, 40 % of the variance at resonance). With the wind a spectrum that
+   moves with its speed, a limb at 2 m/s follows the gusts (centroid 0.06·f_n, 98 % of its
+   variance below f_n/2, ~1 % at resonance), neighbours move together with the gust front's
+   delay, and the resonance comes up with the wind (5–6 % of the variance at 12–16 m/s). Whether
+   ~1.4 mm of slow limb motion at 2 m/s is gentle swaying or too little, and whether the ringing
+   at 12 m/s reads as a tree in a strong wind, is for eyes (ADR 0008, second addendum).
 
 Then the one that matters most: run `skeleton.py` on a real scanned tree and see whether a rig
 inferred from geometry alone moves it convincingly. Everything above is demonstrable on a fixture
 whose topology is known by construction, which is exactly the condition the extractor will not have
-in the field.
+in the field. The path to that run is `.github/workflows/minnetonka-tree.yml`; it packages the tree
+single-tile, as the deformer requires until M5, and checks the `upright` refusal before it
+publishes ([CAPTURES](CAPTURES.md#the-rig-step)).
 
 ### What would break on a rig that is not this one
 
@@ -645,18 +937,31 @@ Worth writing down, because the fixture is tidy in ways a real extraction will n
 
 ## Where the code is
 
-| Piece                                                  | What it holds                                                                                |
-| ------------------------------------------------------ | -------------------------------------------------------------------------------------------- |
-| `packages/world` (`@twin/world`)                       | the pure motion model: rig, gust field, resonant modes, per-splat flutter, `deform`, metrics |
-| `tools/captures/synthetic_tree.py`                     | the procedural tree and its ground-truth labels                                              |
-| `tools/captures/skeleton.py`                           | skeleton extraction from a 3DGS PLY, scored against that truth                               |
-| `apps/web/src/cesium/splatCapture.ts`                  | the interception that captures the packed buffer                                             |
-| `apps/web/src/cesium/splatInternals.ts`                | every CesiumJS internal this depends on, declared once, versioned                            |
-| `apps/web/src/cesium/splatTexels.ts`, `splatFrames.ts` | pure texel addressing and frame arithmetic                                                   |
-| `apps/web/src/cesium/SplatDeformer.ts`                 | attach, validate, refuse, write                                                              |
-| `apps/web/src/cesium/LivingSurveyManager.ts`           | wind, the tick, attach/detach as sites load                                                  |
-| `apps/web/src/state/living.ts`                         | wind state and status, and the staleness yardstick                                           |
-| `apps/web/src/features/living/SimulatedBadge.tsx`      | the ambient label                                                                            |
+| Piece                                                                                               | What it holds                                                                                                                            |
+| --------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `packages/world` (`@twin/world`)                                                                    | the pure motion model: rig, gust field, resonant modes, per-splat flutter, `deform`, metrics                                             |
+| `packages/world/src/living.ts`, `turbulence.ts`, `spectral.ts`, `leafFlutter.ts`, `motionParams.ts` | Living Mode ([ADR 0008](DECISIONS/0008-living-mode.md)): modal model, EN 1991-1-4 gust field, motion textures, advected flutter, sidecar |
+| `packages/world/src/skin.ts`                                                                        | four-node skinning weights (modified Shepard) and the exact search                                                                       |
+| `packages/world/fixtures/minnetonka/`                                                               | the Minnetonka skeleton as a test fixture (CC BY 4.0, Matthew Guertin)                                                                   |
+| `tools/captures/motion_params.py`                                                                   | writes `motion.json` beside a rig (called by `synthetic_tree.py` and `skeleton.py`)                                                      |
+| `apps/web/e2e/livingCompare.spec.ts`                                                                | blind A/B clips, legacy against Living Mode (`LIVING_COMPARE=1`)                                                                         |
+| `tools/captures/synthetic_tree.py`                                                                  | the procedural tree and its ground-truth labels                                                                                          |
+| `tools/captures/skeleton.py`                                                                        | skeleton extraction from a 3DGS PLY, scored against that truth                                                                           |
+| `apps/web/src/cesium/splatCapture.ts`                                                               | the interception that captures the packed buffer                                                                                         |
+| `apps/web/src/cesium/splatInternals.ts`                                                             | every CesiumJS internal this depends on, declared once, versioned                                                                        |
+| `apps/web/src/cesium/splatTexels.ts`, `splatFrames.ts`                                              | pure texel addressing and frame arithmetic                                                                                               |
+| `apps/web/src/cesium/splatTiles.ts`                                                                 | which tile each aggregated splat came from; per-tile identity and binding, cached                                                        |
+| `apps/web/src/cesium/splatGpuMotion.ts`                                                             | the GPU path: motion and binding textures, the shader function, its TS transcription                                                     |
+| `apps/web/src/cesium/splatGpuTextures.ts`                                                           | `Renderer/Texture` from the barrel, for the GPU path                                                                                     |
+| `apps/web/src/cesium/SplatDeformer.ts`                                                              | attach, validate, refuse, write — per snapshot, CPU or GPU                                                                               |
+| `apps/web/src/cesium/LivingSurveyManager.ts`                                                        | wind, the tick, attach/detach as sites load                                                                                              |
+| `apps/web/src/state/living.ts`                                                                      | wind state and status, and the staleness yardstick                                                                                       |
+| `apps/web/src/features/living/SimulatedBadge.tsx`                                                   | the ambient label                                                                                                                        |
+| `tools/captures/scene_plants.py`, `synthetic_yard.py`, `fetch_capture.py`                           | the scene step (ground, classes, plants, forest rig, plant binding), its scored yard, and fetching an upload for it                      |
+| `packages/world/src/plantBinding.ts`                                                                | the plant binding: parsing, per-tile labels, skinning to a plant's own joints                                                            |
+| `tools/captures/rig_tiles.py`                                                                       | stamps a rig with a level-of-detail tileset's per-tile checksums                                                                         |
+| `patches/@cesium__engine@26.3.0.patch`                                                              | the `vertexMotion` hook (and the unrelated terrain-fill guard)                                                                           |
 
 Rig authoring and scoring are documented in [CAPTURES.md](CAPTURES.md#the-synthetic-tree); the
-mechanism decision is [ADR 0006](DECISIONS/0006-splat-texture-rewrite.md).
+mechanism decisions are [ADR 0006](DECISIONS/0006-splat-texture-rewrite.md) and
+[ADR 0007](DECISIONS/0007-splat-vertex-motion-hook.md).

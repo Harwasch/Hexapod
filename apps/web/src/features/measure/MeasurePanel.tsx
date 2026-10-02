@@ -79,8 +79,7 @@ export function MeasurePanel() {
           </p>
         ) : (
           <p className="glass-subtle" style={{ fontSize: "var(--text-xs)", margin: 0 }}>
-            Pick a tool, then click in the world. Results use{" "}
-            {units === "metric" ? "metres" : "feet"}; change units in Settings.
+            Pick a tool, then click on the map. In {units === "metric" ? "metres" : "feet"}.
           </p>
         )}
         <Divider />
@@ -88,7 +87,7 @@ export function MeasurePanel() {
           <EmptyState
             icon={<Ruler size={26} />}
             title="No measurements"
-            body="Measurements stay in the scene until you remove them."
+            body="They stay on the map until you remove them."
           />
         ) : (
           <ul className="glass-list" aria-label="Measurements">

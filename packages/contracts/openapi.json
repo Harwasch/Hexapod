@@ -1439,6 +1439,16 @@
               }
             ]
           },
+          "quality": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CaptureQuality"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "scaleSource": {
             "anyOf": [
               {
@@ -1520,6 +1530,7 @@
           "georefMethod",
           "scaleSource",
           "uncertaintyM",
+          "quality",
           "metadata",
           "attribution",
           "license",
@@ -1843,6 +1854,143 @@
         "title": "CaptureKind",
         "type": "string"
       },
+      "CaptureQuality": {
+        "additionalProperties": false,
+        "description": "The quality bar's verdict on a capture's latest finished run.\n\nRead model: every field is explicit so the OpenAPI contract marks it required.",
+        "properties": {
+          "bar": {
+            "title": "Bar",
+            "type": "string"
+          },
+          "barApplied": {
+            "title": "Barapplied",
+            "type": "string"
+          },
+          "contextPct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contextpct"
+          },
+          "coverageUrl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coverageurl"
+          },
+          "gaussians": {
+            "$ref": "#/components/schemas/QualityCounts"
+          },
+          "gsdMm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gsdmm"
+          },
+          "heldOutPsnr": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Heldoutpsnr"
+          },
+          "jobId": {
+            "format": "uuid",
+            "title": "Jobid",
+            "type": "string"
+          },
+          "keepPct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Keeppct"
+          },
+          "keepVerifiedPct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Keepverifiedpct"
+          },
+          "medianViews": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Medianviews"
+          },
+          "mode": {
+            "title": "Mode",
+            "type": "string"
+          },
+          "roi": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/QualityRoi"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tips": {
+            "items": {
+              "$ref": "#/components/schemas/QualityTip"
+            },
+            "title": "Tips",
+            "type": "array"
+          }
+        },
+        "required": [
+          "jobId",
+          "mode",
+          "bar",
+          "barApplied",
+          "keepPct",
+          "contextPct",
+          "heldOutPsnr",
+          "gaussians",
+          "roi",
+          "tips",
+          "gsdMm",
+          "medianViews",
+          "coverageUrl"
+        ],
+        "title": "CaptureQuality",
+        "type": "object"
+      },
       "CaptureRead": {
         "additionalProperties": false,
         "properties": {
@@ -1946,6 +2094,16 @@
               }
             ]
           },
+          "quality": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CaptureQuality"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "scaleSource": {
             "anyOf": [
               {
@@ -2027,6 +2185,7 @@
           "georefMethod",
           "scaleSource",
           "uncertaintyM",
+          "quality",
           "metadata",
           "attribution",
           "license",
@@ -3774,6 +3933,406 @@
         "title": "LicenseMetadata",
         "type": "object"
       },
+      "LiveCameras": {
+        "additionalProperties": false,
+        "description": "Registered cameras and a sample of the sparse points, from the newest snapshot.",
+        "properties": {
+          "aspect": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Aspect"
+          },
+          "cameraCount": {
+            "title": "Cameracount",
+            "type": "integer"
+          },
+          "cameras": {
+            "title": "Cameras",
+            "type": "string"
+          },
+          "final": {
+            "title": "Final",
+            "type": "boolean"
+          },
+          "frames": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Frames"
+          },
+          "origin": {
+            "items": {
+              "type": "number"
+            },
+            "title": "Origin",
+            "type": "array"
+          },
+          "pointCount": {
+            "title": "Pointcount",
+            "type": "integer"
+          },
+          "points": {
+            "title": "Points",
+            "type": "string"
+          },
+          "pointsTotal": {
+            "title": "Pointstotal",
+            "type": "integer"
+          },
+          "registered": {
+            "title": "Registered",
+            "type": "integer"
+          },
+          "scale": {
+            "title": "Scale",
+            "type": "number"
+          },
+          "seq": {
+            "title": "Seq",
+            "type": "integer"
+          },
+          "stageId": {
+            "title": "Stageid",
+            "type": "string"
+          },
+          "up": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Up"
+          }
+        },
+        "required": [
+          "stageId",
+          "seq",
+          "final",
+          "registered",
+          "frames",
+          "origin",
+          "scale",
+          "up",
+          "aspect",
+          "cameraCount",
+          "cameras",
+          "pointCount",
+          "pointsTotal",
+          "points"
+        ],
+        "title": "LiveCameras",
+        "type": "object"
+      },
+      "LiveProgress": {
+        "additionalProperties": false,
+        "description": "The running stage's tool progress (`metrics.progress`), when it prints one.",
+        "properties": {
+          "done": {
+            "title": "Done",
+            "type": "integer"
+          },
+          "elapsedS": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Elapseds"
+          },
+          "remainingS": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Remainings"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "done",
+          "total",
+          "elapsedS",
+          "remainingS"
+        ],
+        "title": "LiveProgress",
+        "type": "object"
+      },
+      "LiveSplat": {
+        "additionalProperties": false,
+        "description": "The newest intermediate splat, and where to fetch it.",
+        "properties": {
+          "bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bytes"
+          },
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "of": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Of"
+          },
+          "stageId": {
+            "title": "Stageid",
+            "type": "string"
+          },
+          "step": {
+            "title": "Step",
+            "type": "integer"
+          },
+          "total": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total"
+          },
+          "up": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Up"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          }
+        },
+        "required": [
+          "stageId",
+          "step",
+          "total",
+          "count",
+          "of",
+          "bytes",
+          "up",
+          "name",
+          "url"
+        ],
+        "title": "LiveSplat",
+        "type": "object"
+      },
+      "LiveStage": {
+        "additionalProperties": false,
+        "description": "The step the run is on: running now, or the last one to have started.",
+        "properties": {
+          "impl": {
+            "title": "Impl",
+            "type": "string"
+          },
+          "ordinal": {
+            "title": "Ordinal",
+            "type": "integer"
+          },
+          "progress": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LiveProgress"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "stageId": {
+            "title": "Stageid",
+            "type": "string"
+          },
+          "startedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Startedat"
+          },
+          "status": {
+            "$ref": "#/components/schemas/RunStatus"
+          }
+        },
+        "required": [
+          "stageId",
+          "impl",
+          "status",
+          "ordinal",
+          "startedAt",
+          "progress"
+        ],
+        "title": "LiveStage",
+        "type": "object"
+      },
+      "LiveState": {
+        "additionalProperties": false,
+        "properties": {
+          "cameras": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LiveCameras"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "captureId": {
+            "format": "uuid",
+            "title": "Captureid",
+            "type": "string"
+          },
+          "captureName": {
+            "title": "Capturename",
+            "type": "string"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "jobId": {
+            "format": "uuid",
+            "title": "Jobid",
+            "type": "string"
+          },
+          "recipe": {
+            "title": "Recipe",
+            "type": "string"
+          },
+          "siteId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Siteid"
+          },
+          "splat": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LiveSplat"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "stage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LiveStage"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/RunStatus"
+          },
+          "stepsDone": {
+            "title": "Stepsdone",
+            "type": "integer"
+          },
+          "stepsStarted": {
+            "title": "Stepsstarted",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "jobId",
+          "captureId",
+          "captureName",
+          "recipe",
+          "status",
+          "error",
+          "siteId",
+          "stage",
+          "stepsDone",
+          "stepsStarted",
+          "cameras",
+          "splat"
+        ],
+        "title": "LiveState",
+        "type": "object"
+      },
       "MissingObject": {
         "additionalProperties": false,
         "description": "A row whose object is not in the bucket.",
@@ -4048,6 +4607,95 @@
           "point"
         ],
         "title": "OutlineRequest",
+        "type": "object"
+      },
+      "PhoneCapture": {
+        "additionalProperties": false,
+        "properties": {
+          "capture": {
+            "$ref": "#/components/schemas/CaptureRead"
+          },
+          "uploadToken": {
+            "title": "Uploadtoken",
+            "type": "string"
+          }
+        },
+        "required": [
+          "capture",
+          "uploadToken"
+        ],
+        "title": "PhoneCapture",
+        "type": "object"
+      },
+      "PhoneCaptureCreate": {
+        "additionalProperties": false,
+        "description": "Where the phone was, if it said. Both or neither.",
+        "properties": {
+          "accuracyM": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accuracym"
+          },
+          "lat": {
+            "anyOf": [
+              {
+                "maximum": 90.0,
+                "minimum": -90.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lat"
+          },
+          "lon": {
+            "anyOf": [
+              {
+                "maximum": 180.0,
+                "minimum": -180.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lon"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          }
+        },
+        "title": "PhoneCaptureCreate",
+        "type": "object"
+      },
+      "PhoneRefine": {
+        "additionalProperties": false,
+        "description": "The phone's options for the full-quality pass (the same whitelist as `process`).\n\n`normalize` options are accepted and ignored: a Refine keeps the preview's frames and\nposes, which is the whole point -- the region of interest is only meaningful in them.",
+        "properties": {
+          "params": {
+            "additionalProperties": true,
+            "title": "Params",
+            "type": "object"
+          }
+        },
+        "title": "PhoneRefine",
         "type": "object"
       },
       "PipelineCatalogue": {
@@ -5607,6 +6255,13 @@
             "title": "Tiers",
             "type": "array"
           },
+          "usdPerHour": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Usdperhour",
+            "type": "object"
+          },
           "usdPerHourA100": {
             "title": "Usdperhoura100",
             "type": "number"
@@ -5617,10 +6272,91 @@
           "label",
           "tiers",
           "usdPerHourA100",
+          "usdPerHour",
           "interruptible",
           "note"
         ],
         "title": "ProviderRead",
+        "type": "object"
+      },
+      "QualityCounts": {
+        "additionalProperties": false,
+        "description": "Gaussians in, gaussians the bar let out, and each tier's count.",
+        "properties": {
+          "context": {
+            "title": "Context",
+            "type": "integer"
+          },
+          "drop": {
+            "title": "Drop",
+            "type": "integer"
+          },
+          "keep": {
+            "title": "Keep",
+            "type": "integer"
+          },
+          "kept": {
+            "title": "Kept",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total",
+          "kept",
+          "keep",
+          "context",
+          "drop"
+        ],
+        "title": "QualityCounts",
+        "type": "object"
+      },
+      "QualityRoi": {
+        "additionalProperties": false,
+        "description": "A sphere in the reconstruction's own (COLMAP) frame: where the cameras pointed.\n\nOnly meaningful over the poses of the run that measured it, which is why a Refine\nre-runs that same job from `train` rather than starting a new one.",
+        "properties": {
+          "center": {
+            "items": {
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "title": "Center",
+            "type": "array"
+          },
+          "radius": {
+            "exclusiveMinimum": 0.0,
+            "title": "Radius",
+            "type": "number"
+          }
+        },
+        "required": [
+          "center",
+          "radius"
+        ],
+        "title": "QualityRoi",
+        "type": "object"
+      },
+      "QualityTip": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "text"
+        ],
+        "title": "QualityTip",
         "type": "object"
       },
       "RecipeGpu": {
@@ -6879,6 +7615,11 @@
       }
     },
     "securitySchemes": {
+      "phoneKey": {
+        "description": "The phone key, as `Authorization: Bearer <key>`. Opens only /phone routes.",
+        "scheme": "bearer",
+        "type": "http"
+      },
       "uploadToken": {
         "description": "Either the shared write token (`API_WRITE_TOKEN`), or a capture handoff token from `POST /captures/{capture_id}/handoff`. A handoff token is accepted only on this capture's upload endpoints and only until it expires.",
         "scheme": "bearer",
@@ -8387,6 +9128,80 @@
         ]
       }
     },
+    "/api/v1/captures/{capture_id}/live": {
+      "get": {
+        "description": "What a run looks like while it runs, for the live viewer: the pose stage's cameras and a sample of its sparse points as they are solved (quantised, base64; see the schema), and training's newest intermediate splat with a short-lived signed URL for its SPZ (null until the checkpoint syncer has uploaded it). Coordinates are the pose solve's own frame, not east/north/up. Open, like every read: poll it every few seconds.",
+        "operationId": "capture_live_api_v1_captures__capture_id__live_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "capture_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Capture Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LiveState"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "summary": "The live state of a capture's newest run",
+        "tags": [
+          "live"
+        ]
+      }
+    },
     "/api/v1/captures/{capture_id}/process": {
       "post": {
         "description": "Inserts a `not-started` job and returns it. Nothing runs here: the worker claims the row with a lease and executes the recipe.",
@@ -8471,6 +9286,73 @@
           }
         ],
         "summary": "Queue a pipeline run over a capture",
+        "tags": [
+          "captures"
+        ]
+      }
+    },
+    "/api/v1/captures/{capture_id}/splat.ply": {
+      "get": {
+        "description": "Redirects to a short-lived signed URL for `canonical.ply` from the capture's latest finished run: the whole splat, east/north/up, before it was thinned and tiled for the map. Opens in SuperSplat, Scaniverse and most splat tools.",
+        "operationId": "download_splat_api_v1_captures__capture_id__splat_ply_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "capture_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Capture Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "307": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "summary": "Download the capture's finished splat as a .ply",
         "tags": [
           "captures"
         ]
@@ -8942,6 +9824,80 @@
         "summary": "Cancel a job",
         "tags": [
           "jobs"
+        ]
+      }
+    },
+    "/api/v1/jobs/{job_id}/live": {
+      "get": {
+        "description": "What a run looks like while it runs, for the live viewer: the pose stage's cameras and a sample of its sparse points as they are solved (quantised, base64; see the schema), and training's newest intermediate splat with a short-lived signed URL for its SPZ (null until the checkpoint syncer has uploaded it). Coordinates are the pose solve's own frame, not east/north/up. Open, like every read: poll it every few seconds.",
+        "operationId": "job_live_api_v1_jobs__job_id__live_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LiveState"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "summary": "The live state of one run",
+        "tags": [
+          "live"
         ]
       }
     },
@@ -9492,6 +10448,398 @@
         "summary": "Update a layer",
         "tags": [
           "layers"
+        ]
+      }
+    },
+    "/api/v1/phone/captures": {
+      "post": {
+        "operationId": "create_phone_capture_api_v1_phone_captures_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PhoneCaptureCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PhoneCapture"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "phoneKey": []
+          }
+        ],
+        "summary": "Start a capture from a phone",
+        "tags": [
+          "phone"
+        ]
+      }
+    },
+    "/api/v1/phone/captures/{capture_id}/process": {
+      "post": {
+        "operationId": "process_phone_capture_api_v1_phone_captures__capture_id__process_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "capture_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Capture Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JobCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "phoneKey": []
+          }
+        ],
+        "summary": "Queue a run over a capture this phone key started",
+        "tags": [
+          "phone"
+        ]
+      }
+    },
+    "/api/v1/phone/captures/{capture_id}/refine": {
+      "post": {
+        "description": "Resumes the capture's latest finished photo-reconstruct run at `train` with new parameters: the phone's quality options, `train.support_mask` set to the voxels the preview's well-supported splats occupy (any shape), `train.init_from` = `preview` (start from the preview's splat on a shorter schedule; the phone may send `sfm`), and `quality.mode` = `refine`. The frames and poses are kept, so the mask is in the frame it was measured in. If the worker no longer has them, the run starts over and trains uncropped rather than applying the region to a different reconstruction.",
+        "operationId": "refine_phone_capture_api_v1_phone_captures__capture_id__refine_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "capture_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Capture Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PhoneRefine"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "phoneKey": []
+          }
+        ],
+        "summary": "Refine a finished preview: train it again at full quality, inside its region",
+        "tags": [
+          "phone"
+        ]
+      }
+    },
+    "/api/v1/phone/captures/{capture_id}/stop": {
+      "post": {
+        "description": "The phone's Stop button. The same cancel as `POST /jobs/{id}/cancel`, reached with\nthe phone key and only for this phone's own captures, so a run that is taking far\ntoo long can be stopped from the phone that started it.",
+        "operationId": "stop_phone_capture_api_v1_phone_captures__capture_id__stop_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "capture_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Capture Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "phoneKey": []
+          }
+        ],
+        "summary": "Stop the run in progress over a capture this phone key started",
+        "tags": [
+          "phone"
+        ]
+      }
+    },
+    "/api/v1/phone/check": {
+      "post": {
+        "description": "204 when the key is right, so the page can say so before anything is picked.",
+        "operationId": "check_key_api_v1_phone_check_post",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "phoneKey": []
+          }
+        ],
+        "summary": "Check Key",
+        "tags": [
+          "phone"
         ]
       }
     },

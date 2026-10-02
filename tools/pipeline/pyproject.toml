@@ -42,6 +42,10 @@ ignore = ["ANN401", "RUF012", "S101"]
 known-first-party = [
   "adapters",
   "artifacts",
+  "block_maths",
+  "block_trainer",
+  "block_views",
+  "blocks",
   "captures_bridge",
   "cloud",
   "cloud_stages",
@@ -49,16 +53,32 @@ known-first-party = [
   "contracts",
   "errors",
   "executor",
+  "holdout",
+  "holdout_error",
+  "holdout_maths",
+  "holdout_stand_in",
+  "host",
+  "live",
+  "lod_maths",
+  "lod_optimise",
+  "lod_parents",
   "modal_adapter",
+  "phases",
   "plan",
+  "progress",
   "providers",
+  "quality",
+  "quality_in_memory",
   "recipe",
   "registry",
   "run_recipe",
   "run_stage",
   "runners",
   "sfm",
+  "splat_tiles",
   "stages",
+  "synthetic_scene",
+  "test_train_gsplat",
   "training",
   "tree_frames",
   "video",
@@ -76,7 +96,11 @@ known-first-party = [
 # 3.11 was never a version this code actually had to run on.
 python_version = "3.12"
 strict = true
-exclude = ["\\.venv"]
+# tests/loop_stand_in/ (and tests/lod_stand_in/, for lod_optimise.py) holds a stand-in
+# `gsplat` package and `simple_trainer.py`, only ever imported by converge_trainer.py (or
+# lod_optimise.py) from the trainer's directory at run time. Checked as
+# part of this tree, its `gsplat` would shadow the real one's `Any` for every module here.
+exclude = ["\\.venv", "^tests/loop_stand_in/", "^tests/lod_stand_in/"]
 # splat_tiles lives in the sibling uv project tools/captures, which is `package = false`
 # and so cannot be a path dependency. captures_bridge.py puts it on sys.path at runtime;
 # this is how mypy sees the same file, so the seam is type-checked rather than Any.
@@ -85,7 +109,9 @@ mypy_path = ["../captures"]
 [[tool.mypy.overrides]]
 # Type-check calls into splat_tiles against its real signatures, but do not report errors
 # inside tools/captures -- that project does not run mypy and is not this project's to fix.
-module = ["splat_tiles"]
+# splat_tiles imports view_cones, which reaches rig_tiles, synthetic_tree and motion_params;
+# the same rule holds for each of them.
+module = ["splat_tiles", "view_cones", "rig_tiles", "synthetic_tree", "motion_params"]
 follow_imports = "silent"
 
 [[tool.mypy.overrides]]
@@ -97,6 +123,25 @@ ignore_missing_imports = true
 # must not pull a client library into an image that does not use it. The import is inside
 # the one function that needs it and is guarded, so the module still type-checks here.
 module = ["modal.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# holdout_error.py runs on the training box, under the trainer's CPython 3.10 venv with
+# torch, gsplat and gsplat's examples/datasets on its path. None of them is a dependency
+# of this project; the imports are inside `main`, and they type as Any here.
+# lod_optimise.py likewise, and it also reaches for gsplat's trainer's `fused_ssim` and
+# torchmetrics' LPIPS, both optional there.
+module = [
+  "torch",
+  "torch.*",
+  "gsplat",
+  "gsplat.*",
+  "datasets",
+  "datasets.*",
+  "fused_ssim",
+  "torchmetrics",
+  "torchmetrics.*",
+]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

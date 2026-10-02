@@ -67,11 +67,37 @@ export interface SkeletonNode {
   readonly maxAngleRad?: number;
 }
 
+/** What kind of plant a forest rig's plant is (`tools/captures/scene_plants.py`). */
+export type PlantClass = "tree" | "shrub" | "snag";
+
+export const PLANT_CLASSES: readonly PlantClass[] = ["tree", "shrub", "snag"];
+
+/**
+ * One plant of a **forest rig**: a rig for a whole scene, one root per plant.
+ *
+ * A capture of a park is many plants beside buildings, paths and lawn. Its rig holds every
+ * plant's joints, each plant a contiguous run `[nodeStart, nodeEnd)` whose first node is that
+ * plant's root (parent `-1`) and whose other nodes hang from nodes of the same run. Every node
+ * outside all runs is a **static anchor** (parent `-1`, no plant): the splats bound to it never
+ * move, whatever the wind and whatever the motion model, because the deformer pins it
+ * (`SplatDeformer`). Which splat belongs to which plant is not geometric — a wall beside a
+ * crown is not the crown's — so it travels in the binding sidecar the rig points at
+ * (`bindingPath`, `plantBinding.ts`), and a splat is skinned only to its own plant's joints.
+ */
+export interface RigPlant {
+  readonly id: string;
+  readonly class: PlantClass;
+  readonly nodeStart: number;
+  readonly nodeEnd: number;
+}
+
 /** A complete rig. Round-trips losslessly through `JSON.stringify` / `JSON.parse`. */
 export interface MotionRig {
   /**
-   * Nodes in topological order: `nodes[i].parent < i` always, and `nodes[0]` is the sole root.
-   * The root is the anchor — its transform is exactly identity at every time and every wind.
+   * Nodes in topological order: `nodes[i].parent < i` always, and `nodes[0]` is a root.
+   * A root is an anchor — its transform is exactly identity at every time and every wind.
+   * A single-plant rig has exactly one root, `nodes[0]`; a forest rig (`plants`) has one per
+   * plant plus its static anchors.
    */
   readonly nodes: readonly SkeletonNode[];
   /**
@@ -80,13 +106,76 @@ export interface MotionRig {
    * to deform rather than deform the wrong splats.
    */
   readonly canonicalChecksum: string;
+  /**
+   * For a level-of-detail (multi-tile) tileset: `checksumPositions` of **every tile's**
+   * canonical positions, in that tile's own gaussian order, leaves and merged parents alike.
+   *
+   * A tileset the viewer streams has no single array to checksum — it only ever holds some
+   * tiles, and a merged parent is a gaussian no leaf contains — so identity is proven tile by
+   * tile: each selected tile's un-baked digest must be in this set. Absent for a single-tile
+   * rig, where `canonicalChecksum` is the one tile's digest. Written by
+   * `tools/captures/rig_tiles.py`. Identity only: which node a gaussian follows is bound at
+   * load time from its own position (`assignSplatsToNodes`), never packaged.
+   */
+  readonly tileChecksums?: readonly string[];
   /** Length unit of `position` and `radius`. Metres, always; present so a reader need not guess. */
   readonly units: "meters";
   /** Free text: what produced this rig, from what capture. Carried into the UI provenance panel. */
   readonly sourceNote: string;
+  /**
+   * Where this rig's motion sidecar sits, relative to the rig file (JSON key `motion`), or absent
+   * for a rig with none — which then moves under the legacy model. A claim written into the rig,
+   * as `renderConfig.rigUrl` is written into the catalog, so nothing probes for a sidecar that is
+   * not there. See `motionParams.ts` and docs/DECISIONS/0008-living-mode.md.
+   */
+  readonly motionPath?: string;
+  /**
+   * The plants of a forest rig, in order (JSON key `plants`). Absent for a single-plant rig.
+   * See {@link RigPlant}.
+   */
+  readonly plants?: readonly RigPlant[];
+  /**
+   * Where a forest rig's per-splat plant binding sits, relative to the rig file (JSON key
+   * `binding`): which gaussian of every tile belongs to which plant, and which to none. A
+   * forest rig without one does not move: without it a wall would be skinned to the crown
+   * beside it. See `plantBinding.ts`.
+   */
+  readonly bindingPath?: string;
+}
+
+/** Whether `rig` is a forest rig: many plants in one rig, with static anchors. */
+export function isForestRig(rig: MotionRig): boolean {
+  return rig.plants !== undefined;
+}
+
+/**
+ * Per node, `1` for a static anchor — a node of a forest rig outside every plant, whose
+ * splats never move — and `0` otherwise. All zeros for a single-plant rig.
+ */
+export function staticAnchors(rig: MotionRig): Uint8Array {
+  const out = new Uint8Array(rig.nodes.length);
+  const plants = rig.plants;
+  if (plants === undefined) return out;
+  out.fill(1);
+  for (const plant of plants) out.fill(0, plant.nodeStart, plant.nodeEnd);
+  return out;
+}
+
+/** The first static anchor of a forest rig — where static splats are bound — or -1. */
+export function staticAnchorNode(rig: MotionRig): number {
+  if (rig.plants === undefined) return -1;
+  return staticAnchors(rig).indexOf(1);
 }
 
 /** The angular limit in force for a node, radians. */
+/**
+ * Every tile digest this rig accepts: `tileChecksums` when the rig was stamped for a
+ * level-of-detail tileset, otherwise the single tile's `canonicalChecksum`.
+ */
+export function rigTileChecksums(rig: MotionRig): ReadonlySet<string> {
+  return new Set(rig.tileChecksums ?? [rig.canonicalChecksum]);
+}
+
 export function nodeAngleLimit(node: SkeletonNode): number {
   const override = node.maxAngleRad;
   if (override !== undefined && Number.isFinite(override) && override > 0) return override;
@@ -115,6 +204,9 @@ export function heightAboveRoot(rig: MotionRig, index: number): number {
   if (node === undefined || root === undefined) return 0;
   return node.position[2] - root.position[2];
 }
+
+/** The shape `checksumPositions` returns. */
+const CHECKSUM = /^fnv1a32:\d+:[0-9a-f]{8}$/;
 
 function isVec3(value: unknown): value is Vec3 {
   return (
@@ -147,6 +239,47 @@ export function validateRig(rig: MotionRig): string[] {
   if (typeof rig.canonicalChecksum !== "string" || rig.canonicalChecksum.length === 0) {
     issues.push("canonicalChecksum must be a non-empty string");
   }
+  if (rig.tileChecksums !== undefined) {
+    if (!Array.isArray(rig.tileChecksums) || rig.tileChecksums.length === 0) {
+      issues.push("tileChecksums, when present, must be a non-empty array");
+    } else if (!rig.tileChecksums.every((c) => typeof c === "string" && CHECKSUM.test(c))) {
+      issues.push("tileChecksums must all be checksumPositions digests (fnv1a32:<n>:<hex8>)");
+    }
+  }
+  // Read loosely: this is what stands between parsed JSON and the typed value.
+  const rawPlants: unknown = rig.plants;
+  const plants: readonly RigPlant[] | undefined = Array.isArray(rawPlants)
+    ? (rawPlants as readonly RigPlant[])
+    : undefined;
+  /** Per node, the index of its plant in a forest rig, or -1. */
+  const owner = new Int32Array(nodes.length).fill(-1);
+  if (rawPlants !== undefined) {
+    if (plants === undefined) {
+      issues.push("plants, when present, must be an array");
+    } else {
+      plants.forEach((plant, k) => {
+        const { nodeStart: start, nodeEnd: end } = plant;
+        if (typeof plant.id !== "string" || plant.id.length === 0)
+          issues.push(`plant ${k}: empty id`);
+        if (!PLANT_CLASSES.includes(plant.class))
+          issues.push(`plant ${k}: class must be tree, shrub or snag`);
+        if (
+          !Number.isInteger(start) ||
+          !Number.isInteger(end) ||
+          start < 1 ||
+          end <= start ||
+          end > nodes.length
+        ) {
+          issues.push(`plant ${k}: node range [${start}, ${end}) is not inside the rig`);
+          return;
+        }
+        for (let i = start; i < end; i += 1) {
+          if ((owner[i] ?? -1) >= 0) issues.push(`node ${i} belongs to two plants`);
+          owner[i] = k;
+        }
+      });
+    }
+  }
   const seenIds = new Set<string>();
   for (let i = 0; i < nodes.length; i += 1) {
     const node = nodes[i];
@@ -158,10 +291,24 @@ export function validateRig(rig: MotionRig): string[] {
     if (typeof node.id !== "string" || node.id.length === 0) issues.push(`${where}: empty id`);
     if (seenIds.has(node.id)) issues.push(`${where}: duplicate id`);
     seenIds.add(node.id);
+    const plant = rawPlants === undefined ? -1 : (owner[i] ?? -1);
+    const start = plant >= 0 ? (plants?.[plant]?.nodeStart ?? -1) : -1;
     if (i === 0) {
       if (node.parent !== -1) issues.push(`${where}: the first node must be the root (parent -1)`);
-    } else if (!Number.isInteger(node.parent) || node.parent < 0 || node.parent >= i) {
-      issues.push(`${where}: parent ${node.parent} must be an earlier index (topological order)`);
+    } else if (plants !== undefined && plant < 0) {
+      if (node.parent !== -1) issues.push(`${where}: a node outside every plant must be an anchor`);
+    } else if (plants !== undefined && i === start) {
+      if (node.parent !== -1) issues.push(`${where}: a plant's first node must be its root`);
+    } else if (
+      !Number.isInteger(node.parent) ||
+      node.parent < Math.max(0, start) ||
+      node.parent >= i
+    ) {
+      issues.push(
+        `${where}: parent ${node.parent} must be an earlier index (topological order)${
+          plants === undefined ? "" : " of its own plant"
+        }`,
+      );
     }
     if (!isVec3(node.position)) issues.push(`${where}: position must be three finite numbers`);
     if (!Number.isFinite(node.radius) || node.radius < 0)
@@ -175,7 +322,28 @@ export function validateRig(rig: MotionRig): string[] {
       issues.push(`${where}: maxAngleRad, when present, must be > 0`);
     }
   }
+  if (!isSidePath(rig.motionPath)) {
+    issues.push("motion, when present, must be a relative path beside the rig");
+  }
+  if (!isSidePath(rig.bindingPath)) {
+    issues.push("binding, when present, must be a relative path beside the rig");
+  }
+  if (rig.bindingPath !== undefined && plants === undefined) {
+    issues.push("binding is a forest rig's: a rig with a binding must list its plants");
+  }
   return issues;
+}
+
+/** Whether `path` is absent or a plain relative path beside the rig: no `..`, no scheme. */
+function isSidePath(path: string | undefined): boolean {
+  return (
+    path === undefined ||
+    (typeof path === "string" &&
+      path.length > 0 &&
+      !path.includes("..") &&
+      !path.startsWith("/") &&
+      !path.includes(":"))
+  );
 }
 
 /** Throws with every problem listed, or returns the rig unchanged. */
@@ -191,6 +359,7 @@ export function serializeRig(rig: MotionRig): string {
     units: rig.units,
     canonicalChecksum: rig.canonicalChecksum,
     sourceNote: rig.sourceNote,
+    ...(rig.tileChecksums === undefined ? {} : { tileChecksums: [...rig.tileChecksums] }),
     nodes: rig.nodes.map((node) => {
       const out: Record<string, unknown> = {
         id: node.id,
@@ -203,6 +372,18 @@ export function serializeRig(rig: MotionRig): string {
       if (node.maxAngleRad !== undefined) out.maxAngleRad = node.maxAngleRad;
       return out;
     }),
+    ...(rig.motionPath === undefined ? {} : { motion: rig.motionPath }),
+    ...(rig.plants === undefined
+      ? {}
+      : {
+          plants: rig.plants.map((plant) => ({
+            id: plant.id,
+            class: plant.class,
+            nodeStart: plant.nodeStart,
+            nodeEnd: plant.nodeEnd,
+          })),
+        }),
+    ...(rig.bindingPath === undefined ? {} : { binding: rig.bindingPath }),
   });
 }
 
@@ -247,11 +428,46 @@ export function parseRig(text: string): MotionRig {
   });
   const units = root.units;
   if (units !== "meters") throw new Error('motion rig: units must be "meters"');
-  return assertValidRig({
+  const rawTiles = root.tileChecksums;
+  if (rawTiles !== undefined && !Array.isArray(rawTiles)) {
+    throw new Error("motion rig: tileChecksums must be an array");
+  }
+  const base: MotionRig = {
     nodes,
     canonicalChecksum: asString(root.canonicalChecksum),
     units,
     sourceNote: asString(root.sourceNote),
+  };
+  const rig: MotionRig =
+    rawTiles === undefined
+      ? base
+      : { ...base, tileChecksums: rawTiles.map((value) => asString(value)) };
+  const motion = root.motion;
+  if (motion !== undefined && typeof motion !== "string")
+    throw new Error("motion rig: motion must be a string path");
+  const binding = root.binding;
+  if (binding !== undefined && typeof binding !== "string")
+    throw new Error("motion rig: binding must be a string path");
+  const rawPlants = root.plants;
+  if (rawPlants !== undefined && !Array.isArray(rawPlants))
+    throw new Error("motion rig: plants must be an array");
+  const plants = (rawPlants as unknown[] | undefined)?.map((raw, k): RigPlant => {
+    const plant = asRecord(raw, `plants[${k}]`);
+    const klass = plant.class;
+    if (!PLANT_CLASSES.includes(klass as PlantClass))
+      throw new Error(`motion rig: plants[${k}].class is not a known plant class`);
+    return {
+      id: asString(plant.id),
+      class: klass as PlantClass,
+      nodeStart: asNumber(plant.nodeStart),
+      nodeEnd: asNumber(plant.nodeEnd),
+    };
+  });
+  return assertValidRig({
+    ...rig,
+    ...(motion === undefined ? {} : { motionPath: motion }),
+    ...(plants === undefined ? {} : { plants }),
+    ...(binding === undefined ? {} : { bindingPath: binding }),
   });
 }
 
@@ -263,8 +479,11 @@ export function parseRig(text: string): MotionRig {
 export function checksumPositions(positions: Float32Array): string {
   const bytes = new Uint8Array(positions.buffer, positions.byteOffset, positions.byteLength);
   let h = 0x811c9dc5;
-  for (const byte of bytes) {
-    h = Math.imul(h ^ byte, 0x01000193) >>> 0;
+  // An indexed loop, not `for…of`: the iterator protocol cost about four times as much, and a
+  // level-of-detail tileset digests every tile it loads (`splatTiles.ts`).
+  // eslint-disable-next-line @typescript-eslint/prefer-for-of -- measured, see above
+  for (let i = 0; i < bytes.length; i += 1) {
+    h = Math.imul(h ^ (bytes[i] ?? 0), 0x01000193) >>> 0;
   }
   const count = Math.floor(positions.length / 3);
   return `fnv1a32:${count}:${h.toString(16).padStart(8, "0")}`;

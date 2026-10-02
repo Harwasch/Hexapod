@@ -197,6 +197,10 @@ async function publishLiving(app: Page, animating: boolean): Promise<void> {
           rigSourceNote: "synthetic tree, 6.0 m, 33 nodes (tools/captures/synthetic_tree.py)",
           maxDisplacementM: moving ? 0.195 : 0,
           sortStaleness: moving ? 9.7 : 0,
+          motionPath: "gpu",
+          cpuReason: null,
+          motionMs: moving ? 0.42 : null,
+          applyMs: moving ? 0.05 : null,
         },
       ],
     });
@@ -276,7 +280,7 @@ test.describe("the HUD over the map", () => {
     const menu = app.getByRole("menu", { name: "Projects" });
     await expect(menu).toBeVisible();
 
-    // The menu drops down the left edge, past the vertically centred rail. Hit-test the
+    // The menu drops down the left edge, over the tool rail below the top bar. Hit-test the
     // overlap rather than reading z-index: what matters is which element takes the click.
     const owner = await app.evaluate(() => {
       const menu = document.querySelector(".mc-project__menu");
@@ -302,8 +306,8 @@ test.describe("the HUD over the map", () => {
   }) => {
     await app.getByTestId("onboarding-explore").click();
     // Cesium ion's terms and Google Photorealistic 3D Tiles' terms both require the credit
-    // to remain visible. It is a chip above the command bar; it is never removed or hidden.
-    const credits = app.locator(".viewport .cesium-viewer-bottom");
+    // to remain visible. It is a chip in the bottom bar; it is never removed or hidden.
+    const credits = app.getByTestId("credits").locator(".cesium-viewer-bottom");
     await expect(credits).toBeVisible();
     await expect(credits.locator(".cesium-credit-logoContainer img")).toBeVisible();
 

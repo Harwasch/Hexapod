@@ -2,7 +2,7 @@
  "asset": {
   "version": "1.1"
  },
- "geometricError": 4.0,
+ "geometricError": 7.612185024704852,
  "extensionsUsed": [
   "3DTILES_content_gltf"
  ],
@@ -37,26 +37,82 @@
    2980310.87893276,
    1.0
   ],
+  "refine": "REPLACE",
   "boundingVolume": {
    "box": [
     -0.246826171875,
     -0.358642578125,
     3.2327880859375,
-    3.21923828125,
+    2.7954723951649263,
     0,
     0,
     0,
-    3.903564453125,
+    3.4797985670399263,
     0,
     0,
     0,
-    4.2298583984375
+    3.806092512352426
    ]
   },
-  "geometricError": 0.5,
-  "refine": "ADD",
+  "geometricError": 0.0,
   "content": {
    "uri": "splat.glb"
+  },
+  "extras": {
+   "gaussians": 12000,
+   "viewCones": {
+    "format": "hexapod.viewcones",
+    "version": 1,
+    "uri": "viewcones.bin",
+    "origin": [
+     -2.466064,
+     -3.262207,
+     0.00293
+    ],
+    "cell": 0.067289,
+    "dims": [
+     66,
+     87,
+     97
+    ],
+    "fadeDeg": 20.0,
+    "rule": "observers: cells within 2.5x of the scan's finest detail (the gaussian-weighted 20th percentile of each cell's 25th-percentile middle axis, cells of at least 8); a cell's cone holds 90% of their weight; seen from everywhere within 2.5 cells of them or where they surround it",
+    "gaussians": 12000,
+    "occupiedCells": 6012,
+    "observers": "finest-detail region",
+    "observerPoints": 111,
+    "fineCells": 111,
+    "fineShare": 0.0987,
+    "finestMiddleAxisM": 0.0134,
+    "directionalShare": 0.0,
+    "observerBox": {
+     "min": [
+      -1.558,
+      -2.152,
+      3.199
+     ],
+     "max": [
+      1.739,
+      1.953,
+      6.227
+     ]
+    }
+   },
+   "collision": {
+    "format": "hexapod.collision",
+    "version": 1,
+    "uri": "collision.bin",
+    "cell": 0.125,
+    "origin": [
+     -3.0,
+     -4.0,
+     0.0
+    ],
+    "brick": 8,
+    "bricks": 75,
+    "solidCells": 2666,
+    "rule": "solid where the opacities of the splats centred in the cell, counting splats at least 0.2 opaque, sum to at least 0.6"
+   }
   }
  }
 }

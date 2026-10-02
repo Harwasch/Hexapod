@@ -1,0 +1,1338 @@
+{
+ "format": "hexapod.scene",
+ "version": 1,
+ "generator": "tools/captures/scene_plants.py",
+ "splats": 43337,
+ "keptSplats": 43337,
+ "analysedSplats": 43337,
+ "analysis": {
+  "subsampled": false,
+  "maxSplats": 4000000,
+  "rule": "every kept splat"
+ },
+ "classes": [
+  "tree",
+  "shrub",
+  "snag",
+  "grass/low",
+  "ground",
+  "other-static"
+ ],
+ "classCounts": {
+  "tree": 18570,
+  "shrub": 3873,
+  "snag": 3086,
+  "grass/low": 14725,
+  "ground": 1423,
+  "other-static": 1660
+ },
+ "ground": {
+  "originM": [
+   -0.37045707685867596,
+   -0.36655082685867596
+  ],
+  "cellM": 0.37095,
+  "shape": [
+   91,
+   68
+  ],
+  "slopeBound": 0.13931,
+  "layerM": 0.06253,
+  "contactShare": 0.7555,
+  "file": "ground.f32",
+  "dtype": "<f4",
+  "order": "C, x then y"
+ },
+ "classFile": {
+  "file": "classes.u8",
+  "note": "class index per PLY row; dropped rows static"
+ },
+ "thresholds": {
+  "spacingM": {
+   "value": 0.06253,
+   "rule": "median nearest-neighbour distance of the analysed splats",
+   "source": "skeleton.py neighbour_spacing: every radius a multiple of it"
+  },
+  "groundCellM": {
+   "value": 0.37095,
+   "rule": "plan cell holding 8 splats on average",
+   "source": "splat_ground's min_points (tools/pipeline stages.py)"
+  },
+  "groundSlopeBound": {
+   "value": 0.13931,
+   "rule": "median + 3 sigma (MAD) of adjacent lowest-cell slopes",
+   "source": "Vosselman 2000, Slope based filtering of laser altimetry data, IAPRS 33(B3)"
+  },
+  "groundLayerM": {
+   "value": 0.06253,
+   "rule": "median + 3 sigma (MAD) of heights above the surface where it rests",
+   "source": "robust 3-sigma clipping, floored at the spacing"
+  },
+  "exgThreshold": {
+   "value": 0.01592,
+   "effectiveness": 0.8834,
+   "rule": "Otsu on ExG = 2g - r - b (chromatic) of this capture",
+   "source": "Woebbecke et al. 1995 (ExG); Otsu 1979 (threshold)"
+  },
+  "variGreenShareOfExgGreen": 1.0,
+  "linkM": {
+   "value": 0.2814,
+   "rule": "4.5 x the local spacing (median nearest-neighbour distance of each splat's 12 neighbours), shown here at the median spacing",
+   "source": "skeleton.py link_factor"
+  },
+  "shrubMinM": {
+   "value": 0.5,
+   "source": "FAO FRA 2020 Terms and Definitions"
+  },
+  "treeMinM": {
+   "value": 5.0,
+   "source": "FAO FRA 2020 Terms and Definitions"
+  },
+  "crownWidth": {
+   "rule": "CW = 2.51503 + 0.00901 H^2 (m), window CW/2",
+   "source": "Popescu & Wynne 2004, PE&RS 70(5):589-604 (mixed stands)"
+  },
+  "leafyFraction": {
+   "value": 0.5,
+   "rule": "majority of splats green"
+  },
+  "snagSpread": {
+   "value": 0.5,
+   "rule": "not leafy, tree height, spread < 0.5 CW(H)"
+  },
+  "skeletonMinSplatsPerM": {
+   "value": 464.42,
+   "rule": "12,000 / 4 splats over 6.4597 m: the thinnest cloud skeleton.py is tested on",
+   "source": "tests/test_skeleton.py test_recovery_survives_a_quarter_density_cloud"
+  }
+ },
+ "leafSizeM": 0.0986,
+ "plants": [
+  {
+   "id": "tree-0",
+   "class": "tree",
+   "rig": "skeleton",
+   "stem": [
+    8.032,
+    17.03,
+    0.024
+   ],
+   "heightM": 7.036,
+   "crownRadiusM": 2.716,
+   "crownPolygon": [
+    [
+     9.469,
+     19.612
+    ],
+    [
+     8.877,
+     19.78
+    ],
+    [
+     8.754,
+     19.766
+    ],
+    [
+     6.86,
+     19.047
+    ],
+    [
+     6.824,
+     19.03
+    ],
+    [
+     6.312,
+     18.737
+    ],
+    [
+     6.294,
+     18.719
+    ],
+    [
+     6.229,
+     18.647
+    ],
+    [
+     5.916,
+     17.861
+    ],
+    [
+     5.395,
+     15.92
+    ],
+    [
+     5.399,
+     15.877
+    ],
+    [
+     5.571,
+     15.085
+    ],
+    [
+     7.177,
+     13.806
+    ],
+    [
+     7.236,
+     13.772
+    ],
+    [
+     7.391,
+     13.702
+    ],
+    [
+     8.063,
+     13.476
+    ],
+    [
+     8.223,
+     13.51
+    ],
+    [
+     8.775,
+     13.724
+    ],
+    [
+     9.398,
+     14.214
+    ],
+    [
+     9.423,
+     14.303
+    ],
+    [
+     9.544,
+     14.738
+    ],
+    [
+     10.146,
+     16.909
+    ],
+    [
+     10.142,
+     16.976
+    ],
+    [
+     9.896,
+     18.539
+    ]
+   ],
+   "greenFraction": 0.6612,
+   "spreadM": 2.591,
+   "splats": 6987,
+   "boundSplats": 6987,
+   "splatsPerM": 993.0,
+   "nodes": 154,
+   "f0Hz": 0.9048
+  },
+  {
+   "id": "tree-1",
+   "class": "tree",
+   "rig": "skeleton",
+   "stem": [
+    21.037,
+    19.555,
+    0.176
+   ],
+   "heightM": 9.843,
+   "crownRadiusM": 3.768,
+   "crownPolygon": [
+    [
+     19.356,
+     22.321
+    ],
+    [
+     18.658,
+     21.885
+    ],
+    [
+     18.565,
+     21.765
+    ],
+    [
+     18.329,
+     21.265
+    ],
+    [
+     18.12,
+     20.704
+    ],
+    [
+     18.113,
+     20.683
+    ],
+    [
+     17.305,
+     17.978
+    ],
+    [
+     17.293,
+     17.926
+    ],
+    [
+     17.627,
+     16.845
+    ],
+    [
+     17.661,
+     16.798
+    ],
+    [
+     19.844,
+     15.105
+    ],
+    [
+     20.095,
+     14.964
+    ],
+    [
+     21.052,
+     14.618
+    ],
+    [
+     21.122,
+     14.631
+    ],
+    [
+     22.019,
+     14.951
+    ],
+    [
+     22.22,
+     15.079
+    ],
+    [
+     22.871,
+     15.594
+    ],
+    [
+     22.932,
+     15.709
+    ],
+    [
+     23.119,
+     16.287
+    ],
+    [
+     23.977,
+     19.394
+    ],
+    [
+     23.644,
+     21.606
+    ],
+    [
+     23.608,
+     21.708
+    ],
+    [
+     23.053,
+     23.086
+    ],
+    [
+     23.034,
+     23.124
+    ],
+    [
+     22.895,
+     23.229
+    ],
+    [
+     22.225,
+     23.328
+    ],
+    [
+     22.078,
+     23.323
+    ]
+   ],
+   "greenFraction": 0.6607,
+   "spreadM": 3.578,
+   "splats": 8992,
+   "boundSplats": 8992,
+   "splatsPerM": 913.6,
+   "nodes": 169,
+   "f0Hz": 0.765
+  },
+  {
+   "id": "tree-2",
+   "class": "tree",
+   "rig": "crown",
+   "stem": [
+    27.515,
+    7.001,
+    0.124
+   ],
+   "heightM": 11.851,
+   "crownRadiusM": 4.208,
+   "crownPolygon": [
+    [
+     32.338,
+     6.002
+    ],
+    [
+     29.601,
+     10.644
+    ],
+    [
+     29.423,
+     10.697
+    ],
+    [
+     28.684,
+     10.873
+    ],
+    [
+     25.687,
+     11.394
+    ],
+    [
+     24.839,
+     10.78
+    ],
+    [
+     24.794,
+     10.74
+    ],
+    [
+     23.726,
+     6.588
+    ],
+    [
+     23.542,
+     5.296
+    ],
+    [
+     23.928,
+     4.17
+    ],
+    [
+     26.333,
+     2.443
+    ],
+    [
+     27.542,
+     2.013
+    ],
+    [
+     27.617,
+     1.988
+    ],
+    [
+     27.678,
+     1.971
+    ],
+    [
+     32.0,
+     3.577
+    ]
+   ],
+   "greenFraction": 0.6596,
+   "spreadM": 4.451,
+   "splats": 2591,
+   "boundSplats": 2591,
+   "splatsPerM": 218.6,
+   "nodes": 12,
+   "f0Hz": 0.6972
+  },
+  {
+   "id": "shrub-0",
+   "class": "shrub",
+   "rig": "crown",
+   "stem": [
+    11.395,
+    6.907,
+    0.128
+   ],
+   "heightM": 1.116,
+   "crownRadiusM": 0.583,
+   "crownPolygon": [
+    [
+     10.847,
+     6.669
+    ],
+    [
+     10.954,
+     6.518
+    ],
+    [
+     11.075,
+     6.428
+    ],
+    [
+     11.175,
+     6.376
+    ],
+    [
+     11.364,
+     6.314
+    ],
+    [
+     11.411,
+     6.31
+    ],
+    [
+     11.489,
+     6.313
+    ],
+    [
+     11.598,
+     6.338
+    ],
+    [
+     11.723,
+     6.419
+    ],
+    [
+     11.818,
+     6.487
+    ],
+    [
+     11.854,
+     6.515
+    ],
+    [
+     11.871,
+     6.53
+    ],
+    [
+     11.895,
+     6.575
+    ],
+    [
+     11.915,
+     6.632
+    ],
+    [
+     11.981,
+     6.815
+    ],
+    [
+     11.978,
+     6.917
+    ],
+    [
+     11.972,
+     7.023
+    ],
+    [
+     11.945,
+     7.127
+    ],
+    [
+     11.94,
+     7.141
+    ],
+    [
+     11.886,
+     7.245
+    ],
+    [
+     11.851,
+     7.291
+    ],
+    [
+     11.774,
+     7.368
+    ],
+    [
+     11.677,
+     7.424
+    ],
+    [
+     11.645,
+     7.434
+    ],
+    [
+     11.508,
+     7.472
+    ],
+    [
+     11.444,
+     7.488
+    ],
+    [
+     11.215,
+     7.454
+    ],
+    [
+     11.146,
+     7.435
+    ],
+    [
+     11.106,
+     7.419
+    ],
+    [
+     11.034,
+     7.362
+    ],
+    [
+     10.92,
+     7.245
+    ],
+    [
+     10.89,
+     7.197
+    ],
+    [
+     10.815,
+     7.017
+    ],
+    [
+     10.817,
+     6.822
+    ]
+   ],
+   "greenFraction": 0.9211,
+   "spreadM": 0.9,
+   "splats": 697,
+   "boundSplats": 697,
+   "splatsPerM": 624.8,
+   "nodes": 12,
+   "f0Hz": 2.2723
+  },
+  {
+   "id": "shrub-1",
+   "class": "shrub",
+   "rig": "crown",
+   "stem": [
+    12.493,
+    4.994,
+    0.085
+   ],
+   "heightM": 1.393,
+   "crownRadiusM": 0.734,
+   "crownPolygon": [
+    [
+     11.768,
+     5.135
+    ],
+    [
+     11.781,
+     4.834
+    ],
+    [
+     11.835,
+     4.659
+    ],
+    [
+     11.958,
+     4.497
+    ],
+    [
+     12.108,
+     4.38
+    ],
+    [
+     12.124,
+     4.371
+    ],
+    [
+     12.393,
+     4.263
+    ],
+    [
+     12.435,
+     4.263
+    ],
+    [
+     12.71,
+     4.283
+    ],
+    [
+     12.841,
+     4.342
+    ],
+    [
+     13.073,
+     4.544
+    ],
+    [
+     13.162,
+     4.654
+    ],
+    [
+     13.193,
+     4.735
+    ],
+    [
+     13.233,
+     4.885
+    ],
+    [
+     13.238,
+     5.125
+    ],
+    [
+     13.219,
+     5.191
+    ],
+    [
+     13.175,
+     5.325
+    ],
+    [
+     13.081,
+     5.472
+    ],
+    [
+     12.942,
+     5.596
+    ],
+    [
+     12.832,
+     5.669
+    ],
+    [
+     12.614,
+     5.74
+    ],
+    [
+     12.431,
+     5.747
+    ],
+    [
+     12.338,
+     5.731
+    ],
+    [
+     12.251,
+     5.697
+    ],
+    [
+     12.125,
+     5.634
+    ],
+    [
+     12.061,
+     5.598
+    ],
+    [
+     11.979,
+     5.533
+    ],
+    [
+     11.789,
+     5.212
+    ],
+    [
+     11.776,
+     5.173
+    ]
+   ],
+   "greenFraction": 0.9271,
+   "spreadM": 1.108,
+   "splats": 892,
+   "boundSplats": 892,
+   "splatsPerM": 640.2,
+   "nodes": 12,
+   "f0Hz": 2.0332
+  },
+  {
+   "id": "shrub-2",
+   "class": "shrub",
+   "rig": "crown",
+   "stem": [
+    13.281,
+    7.092,
+    0.131
+   ],
+   "heightM": 1.953,
+   "crownRadiusM": 0.928,
+   "crownPolygon": [
+    [
+     13.31,
+     8.041
+    ],
+    [
+     13.076,
+     8.022
+    ],
+    [
+     12.728,
+     7.852
+    ],
+    [
+     12.699,
+     7.833
+    ],
+    [
+     12.565,
+     7.688
+    ],
+    [
+     12.465,
+     7.541
+    ],
+    [
+     12.42,
+     7.452
+    ],
+    [
+     12.39,
+     7.341
+    ],
+    [
+     12.371,
+     6.984
+    ],
+    [
+     12.403,
+     6.794
+    ],
+    [
+     12.466,
+     6.665
+    ],
+    [
+     12.517,
+     6.579
+    ],
+    [
+     12.58,
+     6.492
+    ],
+    [
+     12.719,
+     6.358
+    ],
+    [
+     12.745,
+     6.342
+    ],
+    [
+     12.89,
+     6.26
+    ],
+    [
+     13.145,
+     6.172
+    ],
+    [
+     13.279,
+     6.156
+    ],
+    [
+     13.472,
+     6.167
+    ],
+    [
+     13.513,
+     6.177
+    ],
+    [
+     13.663,
+     6.234
+    ],
+    [
+     13.717,
+     6.256
+    ],
+    [
+     13.819,
+     6.306
+    ],
+    [
+     13.956,
+     6.432
+    ],
+    [
+     14.043,
+     6.514
+    ],
+    [
+     14.136,
+     6.665
+    ],
+    [
+     14.152,
+     6.692
+    ],
+    [
+     14.154,
+     6.695
+    ],
+    [
+     14.214,
+     6.857
+    ],
+    [
+     14.222,
+     6.879
+    ],
+    [
+     14.236,
+     7.167
+    ],
+    [
+     14.209,
+     7.333
+    ],
+    [
+     14.094,
+     7.586
+    ],
+    [
+     13.93,
+     7.781
+    ],
+    [
+     13.82,
+     7.893
+    ],
+    [
+     13.602,
+     7.997
+    ]
+   ],
+   "greenFraction": 0.9212,
+   "spreadM": 1.413,
+   "splats": 1294,
+   "boundSplats": 1294,
+   "splatsPerM": 662.4,
+   "nodes": 12,
+   "f0Hz": 1.7172
+  },
+  {
+   "id": "shrub-3",
+   "class": "shrub",
+   "rig": "crown",
+   "stem": [
+    14.377,
+    5.588,
+    0.125
+   ],
+   "heightM": 0.912,
+   "crownRadiusM": 0.536,
+   "crownPolygon": [
+    [
+     13.901,
+     5.382
+    ],
+    [
+     14.005,
+     5.22
+    ],
+    [
+     14.117,
+     5.139
+    ],
+    [
+     14.307,
+     5.071
+    ],
+    [
+     14.363,
+     5.054
+    ],
+    [
+     14.428,
+     5.055
+    ],
+    [
+     14.649,
+     5.113
+    ],
+    [
+     14.805,
+     5.23
+    ],
+    [
+     14.916,
+     5.411
+    ],
+    [
+     14.94,
+     5.626
+    ],
+    [
+     14.931,
+     5.674
+    ],
+    [
+     14.902,
+     5.752
+    ],
+    [
+     14.879,
+     5.812
+    ],
+    [
+     14.816,
+     5.935
+    ],
+    [
+     14.725,
+     6.037
+    ],
+    [
+     14.664,
+     6.069
+    ],
+    [
+     14.579,
+     6.1
+    ],
+    [
+     14.39,
+     6.137
+    ],
+    [
+     14.342,
+     6.146
+    ],
+    [
+     14.262,
+     6.123
+    ],
+    [
+     14.167,
+     6.081
+    ],
+    [
+     14.024,
+     5.98
+    ],
+    [
+     13.918,
+     5.845
+    ],
+    [
+     13.899,
+     5.794
+    ],
+    [
+     13.882,
+     5.741
+    ],
+    [
+     13.855,
+     5.637
+    ],
+    [
+     13.862,
+     5.494
+    ]
+   ],
+   "greenFraction": 0.9259,
+   "spreadM": 0.799,
+   "splats": 594,
+   "boundSplats": 594,
+   "splatsPerM": 651.2,
+   "nodes": 12,
+   "f0Hz": 2.5128
+  },
+  {
+   "id": "shrub-4",
+   "class": "shrub",
+   "rig": "crown",
+   "stem": [
+    15.897,
+    7.203,
+    0.082
+   ],
+   "heightM": 0.63,
+   "crownRadiusM": 0.437,
+   "crownPolygon": [
+    [
+     14.982,
+     7.289
+    ],
+    [
+     15.687,
+     6.824
+    ],
+    [
+     15.792,
+     6.767
+    ],
+    [
+     15.864,
+     6.755
+    ],
+    [
+     15.991,
+     6.773
+    ],
+    [
+     16.144,
+     6.836
+    ],
+    [
+     16.191,
+     6.86
+    ],
+    [
+     16.248,
+     6.943
+    ],
+    [
+     16.26,
+     6.967
+    ],
+    [
+     16.305,
+     7.056
+    ],
+    [
+     16.335,
+     7.226
+    ],
+    [
+     16.334,
+     7.243
+    ],
+    [
+     16.296,
+     7.414
+    ],
+    [
+     16.149,
+     7.573
+    ],
+    [
+     16.016,
+     7.633
+    ],
+    [
+     15.887,
+     7.639
+    ],
+    [
+     15.822,
+     7.633
+    ],
+    [
+     15.743,
+     7.618
+    ]
+   ],
+   "greenFraction": 0.9293,
+   "spreadM": 0.668,
+   "splats": 396,
+   "boundSplats": 396,
+   "splatsPerM": 628.2,
+   "nodes": 12,
+   "f0Hz": 3.0227
+  },
+  {
+   "id": "snag-0",
+   "class": "snag",
+   "rig": "trunk",
+   "stem": [
+    4.036,
+    4.951,
+    0.156
+   ],
+   "heightM": 6.98,
+   "crownRadiusM": 0.301,
+   "crownPolygon": [
+    [
+     4.62,
+     4.835
+    ],
+    [
+     4.46,
+     5.451
+    ],
+    [
+     3.866,
+     5.309
+    ],
+    [
+     3.745,
+     5.179
+    ],
+    [
+     3.234,
+     4.202
+    ],
+    [
+     4.409,
+     4.56
+    ]
+   ],
+   "greenFraction": 0.0085,
+   "spreadM": 0.393,
+   "splats": 1294,
+   "boundSplats": 1294,
+   "splatsPerM": 185.4,
+   "nodes": 5,
+   "f0Hz": 0.9084
+  },
+  {
+   "id": "snag-1",
+   "class": "snag",
+   "rig": "trunk",
+   "stem": [
+    29.49,
+    20.514,
+    -0.009
+   ],
+   "heightM": 9.96,
+   "crownRadiusM": 0.39,
+   "crownPolygon": [
+    [
+     28.996,
+     20.665
+    ],
+    [
+     29.124,
+     19.989
+    ],
+    [
+     29.289,
+     20.057
+    ],
+    [
+     29.65,
+     20.291
+    ],
+    [
+     29.693,
+     20.333
+    ],
+    [
+     29.899,
+     20.589
+    ],
+    [
+     29.979,
+     20.961
+    ],
+    [
+     29.208,
+     20.865
+    ]
+   ],
+   "greenFraction": 0.0039,
+   "spreadM": 0.46,
+   "splats": 1792,
+   "boundSplats": 1792,
+   "splatsPerM": 179.9,
+   "nodes": 5,
+   "f0Hz": 0.7605
+  }
+ ],
+ "rejectedObjects": 1,
+ "rig": {
+  "nodes": 406,
+  "plants": 10,
+  "tiles": 15,
+  "bytes": {
+   "rig.json": 63497,
+   "motion.json": 24522,
+   "plants.json": 2424
+  }
+ },
+ "score": {
+  "classIoU": {
+   "tree": 0.9983,
+   "shrub": 0.9915,
+   "snag": 0.984,
+   "grass/low": 0.9845,
+   "ground": 0.9304,
+   "other-static": 0.8587
+  },
+  "meanPlantIoU": 0.9913,
+  "instances": {
+   "tree": {
+    "found": 3,
+    "truth": 3
+   },
+   "shrub": {
+    "found": 5,
+    "truth": 5
+   },
+   "snag": {
+    "found": 2,
+    "truth": 2
+   }
+  },
+  "matched": [
+   {
+    "id": "tree-0",
+    "truth": "tree-0",
+    "classMatches": true,
+    "heightErrorM": 0.033,
+    "stemErrorM": 0.044,
+    "rig": "skeleton"
+   },
+   {
+    "id": "tree-1",
+    "truth": "tree-1",
+    "classMatches": true,
+    "heightErrorM": 0.16,
+    "stemErrorM": 0.066,
+    "rig": "skeleton"
+   },
+   {
+    "id": "tree-2",
+    "truth": "tree-2",
+    "classMatches": true,
+    "heightErrorM": 0.034,
+    "stemErrorM": 0.015,
+    "rig": "crown"
+   },
+   {
+    "id": "shrub-0",
+    "truth": "shrub-4",
+    "classMatches": true,
+    "heightErrorM": 0.016,
+    "stemErrorM": 0.009,
+    "rig": "crown"
+   },
+   {
+    "id": "shrub-1",
+    "truth": "shrub-0",
+    "classMatches": true,
+    "heightErrorM": -0.007,
+    "stemErrorM": 0.01,
+    "rig": "crown"
+   },
+   {
+    "id": "shrub-2",
+    "truth": "shrub-2",
+    "classMatches": true,
+    "heightErrorM": -0.047,
+    "stemErrorM": 0.021,
+    "rig": "crown"
+   },
+   {
+    "id": "shrub-3",
+    "truth": "shrub-1",
+    "classMatches": true,
+    "heightErrorM": 0.012,
+    "stemErrorM": 0.026,
+    "rig": "crown"
+   },
+   {
+    "id": "shrub-4",
+    "truth": "shrub-3",
+    "classMatches": true,
+    "heightErrorM": 0.03,
+    "stemErrorM": 0.005,
+    "rig": "crown"
+   },
+   {
+    "id": "snag-0",
+    "truth": "snag-0",
+    "classMatches": true,
+    "heightErrorM": -0.02,
+    "stemErrorM": 0.061,
+    "rig": "trunk"
+   },
+   {
+    "id": "snag-1",
+    "truth": "snag-1",
+    "classMatches": true,
+    "heightErrorM": -0.04,
+    "stemErrorM": 0.017,
+    "rig": "trunk"
+   }
+  ],
+  "heightErrorMaxM": 0.16,
+  "heightErrorMeanM": 0.04
+ }
+}

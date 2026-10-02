@@ -125,6 +125,9 @@ class RemoteExecution:
     seconds_per_tick: float = 1.0
     elapsed_s: float = 0.0
     lines: list[str] = field(default_factory=list)
+    #: What the scripted stage reports on success, as a real stage's `result.json` does:
+    #: a head call that asks to be fanned out says so here (`contracts.FANOUT_METRIC`).
+    metrics: dict[str, MetricValue] = field(default_factory=dict)
 
     @property
     def inputs_dir(self) -> Path:
@@ -332,7 +335,11 @@ class FakeAdapter:
     def _result(run: _FakeRun) -> Poll:
         metrics: Mapping[str, MetricValue] | None = None
         if run.state == "succeeded":
-            metrics = {"fake": True, "ticks": int(run.execution.elapsed_s)}
+            metrics = {
+                "fake": True,
+                "ticks": int(run.execution.elapsed_s),
+                **run.execution.metrics,
+            }
         return Poll(
             state=run.state,
             billed_s=run.execution.elapsed_s,

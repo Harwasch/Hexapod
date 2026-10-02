@@ -30,10 +30,13 @@ import shutil
 import subprocess
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
+from itertools import pairwise
 from pathlib import Path
+from typing import Any
 
 import imageio_ffmpeg
 import numpy as np
+import numpy.typing as npt
 from PIL import Image
 
 __all__ = [
@@ -47,12 +50,16 @@ __all__ = [
     "extract_frames_argv",
     "ffmpeg_exe",
     "ffmpeg_version",
+    "grab_frame_argv",
+    "laplacian_variance",
     "parse_iso6709",
     "pick_source",
     "probe",
     "probe_argv",
     "probe_text",
+    "scale_filter",
     "select_sharpest",
+    "select_sharpest_per_window",
     "sharpness",
     "summarise",
 ]
@@ -305,8 +312,7 @@ def extract_frames_argv(
     """
     chain = [f"fps={fps:g}"]
     if max_side is not None:
-        # Even dimensions, long side bounded, aspect preserved. -2 rounds to even.
-        chain.append(f"scale=w='min({max_side},iw)':h=-2:force_original_aspect_ratio=decrease")
+        chain.append(scale_filter(max_side))
     return [
         ffmpeg_exe(),
         "-hide_banner",
@@ -324,6 +330,41 @@ def extract_frames_argv(
     ]
 
 
+def scale_filter(max_side: int) -> str:
+    """The ffmpeg filter that bounds the *long* side, whichever it is, to `max_side`.
+
+    Aspect preserved, even dimensions (-2). Bounding the width alone, as this once did,
+    left a portrait phone clip -- whose width is its short side -- at nearly full height.
+    """
+    m = max_side
+    return f"scale=w='if(gte(iw,ih),min({m},iw),-2)':h='if(gte(iw,ih),-2,min({m},ih))'"
+
+
+def grab_frame_argv(source: Path, at_s: float, target: Path, *, max_side: int) -> list[str]:
+    """The argv that writes the one frame at `at_s` seconds, losslessly, to `target`.
+
+    `-ss` before `-i` seeks the demuxer to the keyframe before `at_s` and decodes only
+    from there, so sampling eight frames across a two-minute 4K clip decodes eight GOPs
+    rather than the whole clip. PNG, not JPEG: the frames are measured for fine detail
+    (`resolution.py`), and a JPEG's own quantisation is exactly the band being measured.
+    """
+    return [
+        ffmpeg_exe(),
+        "-hide_banner",
+        "-nostdin",
+        "-y",
+        "-ss",
+        f"{max(0.0, at_s):.3f}",
+        "-i",
+        str(source),
+        "-frames:v",
+        "1",
+        "-vf",
+        scale_filter(max_side),
+        str(target),
+    ]
+
+
 def sharpness(path: Path) -> float:
     """Variance of the Laplacian of the luminance, at full resolution.
 
@@ -334,8 +375,15 @@ def sharpness(path: Path) -> float:
     """
     with Image.open(path) as image:
         grey = np.asarray(image.convert("L"), dtype=np.float64)
+    return laplacian_variance(grey)
+
+
+def laplacian_variance(grey: npt.NDArray[np.floating[Any]]) -> float:
+    """`sharpness` of a frame already decoded to grey, for a caller that needs the pixels
+    for something else too (`select: viewpoint` measures motion on the same decode)."""
     if grey.shape[0] < 3 or grey.shape[1] < 3:
         return 0.0
+    grey = grey.astype(np.float64, copy=False)
     laplacian = (
         4.0 * grey[1:-1, 1:-1] - grey[:-2, 1:-1] - grey[2:, 1:-1] - grey[1:-1, :-2] - grey[1:-1, 2:]
     )
@@ -357,6 +405,29 @@ def select_sharpest(scores: Sequence[float], keep: int) -> tuple[int, ...]:
     return tuple(sorted(order[:keep]))
 
 
+def select_sharpest_per_window(scores: Sequence[float], keep: int) -> tuple[int, ...]:
+    """The sharpest frame of each of `keep` equal stretches of the clip, in temporal order.
+
+    Still top-K by rank and still no cutoff -- the rank is taken within a window rather
+    than across the clip. Global top-K is right when it keeps most candidates; when it
+    keeps a quarter of them, a stretch of motion blur (walking faster round one side of
+    the object) can lose every frame of that side, and COLMAP cannot register what it
+    was never given. Windows are `evenly_spaced`'s boundaries; ties break on the earlier
+    index, as `select_sharpest`'s do.
+    """
+    count = len(scores)
+    if keep <= 0 or count == 0:
+        return ()
+    if keep >= count:
+        return tuple(range(count))
+    edges = [round(i * count / keep) for i in range(keep + 1)]
+    return tuple(
+        max(range(start, end), key=lambda i: (scores[i], -i))
+        for start, end in pairwise(edges)
+        if end > start
+    )
+
+
 def evenly_spaced(count: int, keep: int) -> tuple[int, ...]:
     """`keep` indices spread across `count`, endpoints included. The `select: all` path.
 
@@ -374,20 +445,57 @@ def evenly_spaced(count: int, keep: int) -> tuple[int, ...]:
     return tuple(sorted({round(i * step) for i in range(keep)}))
 
 
-def copy_frames(sources: Sequence[Path], out_dir: Path, *, stem: str = "frame") -> tuple[Path, ...]:
+def copy_frames(
+    sources: Sequence[Path],
+    out_dir: Path,
+    *,
+    stem: str = "frame",
+    max_side: int | None = None,
+) -> tuple[Path, ...]:
     """Copy the selected frames into `out_dir`, renumbered from zero in order.
 
     Renumbered rather than keeping the extraction numbers: the frame *set* is the
     artifact, and a gap in it would make the numbering mean "when in the clip" for the
     pose stage, which is a fact it must not be able to read off a filename.
+
+    `max_side` shrinks a frame whose long side is bigger. An iPhone photo is 5712x4284;
+    training on that ran 30,000 gsplat steps on 24 MP images, many times the work of the
+    same scene at 1600 px for no detail a splat can hold. The EXIF block is carried
+    across unchanged, because `georeference` reads each frame's GPS from it and the focal
+    length in 35 mm terms is independent of the pixel count.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     written: list[Path] = []
     for index, source in enumerate(sources):
         target = out_dir / f"{stem}_{index:04d}{source.suffix.lower()}"
-        shutil.copyfile(source, target)
+        if max_side is None or not _shrink(source, target, max_side):
+            shutil.copyfile(source, target)
         written.append(target)
     return tuple(written)
+
+
+def _shrink(source: Path, target: Path, max_side: int) -> bool:
+    """Write `source` into `target` with its long side at most `max_side`.
+
+    False (and nothing written) when it is already small enough, so the caller copies the
+    bytes untouched rather than re-encoding a frame that did not need it.
+    """
+    from PIL import Image
+
+    with Image.open(source) as image:
+        width, height = image.size
+        if max(width, height) <= max_side:
+            return False
+        scale = max_side / max(width, height)
+        size = (max(1, round(width * scale)), max(1, round(height * scale)))
+        exif = image.info.get("exif")
+        resized = image.convert("RGB").resize(size, Image.Resampling.LANCZOS)
+        options: dict[str, object] = {"quality": 95}
+        if exif:
+            options["exif"] = exif
+        kind = "JPEG" if target.suffix in {".jpg", ".jpeg"} else None
+        resized.save(target, format=kind, **options)
+    return True
 
 
 def _run(argv: Sequence[str]) -> str:

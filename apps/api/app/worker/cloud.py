@@ -30,7 +30,8 @@ process whose job is to hold a lease. The child still has no database session.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from importlib.util import find_spec
 from pathlib import Path
@@ -65,6 +66,9 @@ __all__ = [
 #: it early again.
 _NEEDS_CLIENT: Mapping[str, str] = {"modal": "modal"}
 
+#: The name `infra/modal/app.py` deploys under, which `ModalAdapter` looks functions up in.
+MODAL_APP = "twin-pipeline"
+
 
 def check_dispatchable(providers: Sequence[str]) -> None:
     """Refuse a worker configured to dispatch somewhere it cannot reach.
@@ -97,10 +101,11 @@ def check_dispatchable(providers: Sequence[str]) -> None:
 class ObjectStoreTransfer:
     """The pipeline's `Transfer`, over the bucket.
 
-    Whole objects, read and written in memory, exactly as `app.worker.outputs` does: the
-    same trade A7 recorded and the same place streaming belongs when a capture is big
-    enough to need it. Keys are opaque strings chosen by the pipeline, so nothing here
-    knows what a stage or a checkpoint is.
+    Uploads are whole objects read into memory, exactly as `app.worker.outputs` does (a
+    stage's inputs are frames of a megabyte or two each); downloads stream to disk,
+    because what comes back from a GPU stage is one file of hundreds of megabytes. Keys
+    are opaque strings chosen by the pipeline, so nothing here knows what a stage or a
+    checkpoint is.
     """
 
     storage: ObjectStorage
@@ -114,34 +119,31 @@ class ObjectStoreTransfer:
     def put(self, key: str, source: Path) -> int:
         target = self._key(key)
         if source.is_dir():
-            moved = 0
-            for member in sorted(p for p in source.rglob("*") if p.is_file()):
-                data = member.read_bytes()
+
+            def one(member: Path) -> int:
                 relative = member.relative_to(source).as_posix()
-                self.storage.put_object(f"{target}/{relative}", data, "application/octet-stream")
-                moved += len(data)
-            return moved
-        data = source.read_bytes()
-        self.storage.put_object(target, data, "application/octet-stream")
-        return len(data)
+                self.storage.upload_file(f"{target}/{relative}", member, "application/octet-stream")
+                return member.stat().st_size
+
+            return sum(_parallel(one, sorted(p for p in source.rglob("*") if p.is_file())))
+        # Streamed from disk, as `get` is: a stage's input can be a trained splat larger
+        # than the worker's memory (`canonical.ply` for `optimise_lod`, ~2 GB at 8M).
+        self.storage.upload_file(target, source, "application/octet-stream")
+        return source.stat().st_size
 
     def get(self, key: str, target: Path) -> int:
         root = self._key(key)
         single = self.storage.head_object(root)
         if single is not None:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            data = self.storage.get_object(root)
-            target.write_bytes(data)
-            return len(data)
-        moved = 0
-        for member in self._listing(f"{root}/"):
-            relative = member[len(root) + 1 :]
-            destination = target / relative
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            data = self.storage.get_object(member)
-            destination.write_bytes(data)
-            moved += len(data)
-        return moved
+            # Streamed: what comes back from a GPU stage is a trained splat of hundreds
+            # of megabytes, arriving on a worker with two gigabytes.
+            return self.storage.download_file(root, target)
+        return sum(
+            _parallel(
+                lambda member: self.storage.download_file(member, target / member[len(root) + 1 :]),
+                self._listing(f"{root}/"),
+            )
+        )
 
     def exists(self, key: str) -> bool:
         root = self._key(key)
@@ -171,6 +173,22 @@ class ObjectStoreTransfer:
                 return keys
 
 
+#: How many objects of one directory move at once. A frames artifact is ~100 objects of
+#: 0.2-2 MB, and one request at a time spends most of its time on each request's round
+#: trip rather than on bytes; eight keeps within botocore's default pool of ten
+#: connections and, for uploads (each member read into memory), 8 x 2 MB of the
+#: worker's RAM.
+TRANSFER_WORKERS = 8
+
+
+def _parallel[T](work: Callable[[T], int], items: Sequence[T]) -> list[int]:
+    """`work` over `items`, `TRANSFER_WORKERS` at a time; the first failure is raised."""
+    if len(items) <= 1:
+        return [work(item) for item in items]
+    with ThreadPoolExecutor(max_workers=TRANSFER_WORKERS) as pool:
+        return list(pool.map(work, items))
+
+
 def adapter_for(
     name: str,
     transfer: Transfer,
@@ -197,7 +215,7 @@ def adapter_for(
         return FakeAdapter(transfer, sandbox, rates=rates)
     if name == "modal":
         # Never executed. See tools/pipeline/modal_adapter.py, which says so at length.
-        return ModalAdapter(modal_app or "twin", rates=rates)
+        return ModalAdapter(modal_app or MODAL_APP, rates=rates)
     raise ValueError(
         f"unknown cloud provider {name!r}. Known: fake, subprocess, modal. A name from "
         f"the price table that has no adapter yet (runpod-*, vast) is a provider this "

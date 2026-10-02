@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from pathlib import Path
 
 from app.storage.base import (
     DEFAULT_EXPIRES_IN,
@@ -34,7 +35,13 @@ class NullStorage:
     def put_object(self, key: str, data: bytes, content_type: str) -> StoredObject:
         raise StorageUnavailableError(_UNAVAILABLE)
 
+    def upload_file(self, key: str, source: Path, content_type: str) -> StoredObject:
+        raise StorageUnavailableError(_UNAVAILABLE)
+
     def get_object(self, key: str) -> bytes:
+        raise StorageUnavailableError(_UNAVAILABLE)
+
+    def download_file(self, key: str, target: Path) -> int:
         raise StorageUnavailableError(_UNAVAILABLE)
 
     def head_object(self, key: str) -> StoredObject | None:

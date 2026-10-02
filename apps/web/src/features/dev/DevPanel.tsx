@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { Divider, GlassSwitch } from "@twin/ui";
 
 import { useScene } from "@/cesium/SceneContext";
+import type { ScanRendererStatus } from "@/cesium/scanView/ScanRendererHost";
 import type { DebugFlags } from "@/cesium/DebugManager";
 import { representationLabel } from "@/lib/format";
 import { planningSummary } from "@/lib/planningMetrics";
@@ -70,6 +71,8 @@ function livingLine(
     .join(" · ");
 }
 
+const millions = (n: number): string => `${(n / 1e6).toFixed(2)}M`;
+
 /** Developer panel: FPS, camera, tilesets, requests, SSE, debug volumes, GPU. */
 export function DevPanel() {
   const scene = useScene();
@@ -104,6 +107,12 @@ export function DevPanel() {
     () => onSpan((span) => span.name === "api" && setApiMs(Math.round(span.durationMs))),
     [],
   );
+  const [scan, setScan] = useState<ScanRendererStatus | null>(null);
+  useEffect(() => {
+    if (!scene || !open) return;
+    const timer = setInterval(() => setScan(scene.scanRendererStatus), 500);
+    return () => clearInterval(timer);
+  }, [scene, open]);
   const [planning, setPlanning] = useState(() => planningSummary());
   useEffect(() => onSpan((span) => span.name === "planning" && setPlanning(planningSummary())), []);
   const setFlag = (patch: Partial<DebugFlags>) => {
@@ -187,6 +196,13 @@ export function DevPanel() {
               (perf.frameBudget.loadingUpdateMs === null
                 ? ""
                 : ` · while loading ${perf.frameBudget.loadingUpdateMs.toFixed(0)} ms`)}
+        </dd>
+        <dt>Splat renderer</dt>
+        <dd data-testid="dev-scan-renderer">
+          {scan?.active
+            ? `${scan.kind} · ${millions(scan.gaussians)} drawn of ${millions(scan.budget)} · ` +
+              `${String(scan.tiles)} tiles · ${millions(scan.cached)} held · ${String(scan.loading)} loading`
+            : "CesiumJS"}
         </dd>
         <dt>Representation</dt>
         <dd>{representation ? representationLabel(representation) : "—"}</dd>

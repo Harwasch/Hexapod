@@ -17,13 +17,23 @@ that flattened them would test nothing.
 from __future__ import annotations
 
 import importlib.util
+from dataclasses import replace
 from typing import Any
 
 import pytest
 
 from artifacts import ArtifactDecl
 from cloud import RemoteHandle, StageRequest
-from modal_adapter import GPU_NAMES, MAX_LOG_LINES, ModalAdapter
+from contracts import FANOUT_PARAM
+from modal_adapter import (
+    GPU_FALLBACKS,
+    GPU_NAMES,
+    MAX_LOG_LINES,
+    ModalAdapter,
+    fallback_tier,
+    tier_of_gpu,
+)
+from providers import provider
 
 
 def modal_exception(name: str, base: type[BaseException] = Exception) -> type[BaseException]:
@@ -137,15 +147,52 @@ def test_submit_sends_the_request_dict_and_keeps_the_call_id() -> None:
 
 
 def test_a_running_stage_is_running_and_not_failed() -> None:
-    """The regression that matters: `modal.exception.TimeoutError` means "not yet".
-
-    It does not inherit from the builtin `TimeoutError`, so the old `except TimeoutError`
-    never caught it and every healthy stage was dead-lettered on its first poll.
-    """
-    adapter, handle, _ = adapter_over(FakeCall(raises=ModalTimeout()))
+    """The regression that matters, and it happened: a bare builtin `TimeoutError()` is
+    what Modal 1.5.5's zero-timeout `get` raises for a call with no output yet
+    (`modal/_functions.py`, `poll_function`). Classifying it as a failure dead-lettered
+    the first real GPU run on its first poll."""
+    adapter, handle, _ = adapter_over(FakeCall(raises=TimeoutError()))
     poll = adapter.poll(handle)
     assert poll.state == "running"
     assert poll.billed_s >= 0.0
+
+
+def test_a_call_whose_stage_has_not_printed_its_first_line_is_pending() -> None:
+    """A container that crash-loops on import looks exactly like a running stage to
+    `get`; only the log tells them apart, and `CloudRunner` gives up on `pending`."""
+    call = FakeCall(raises=TimeoutError())
+    adapter, handle, _ = adapter_over(call)
+    call.logs = FakeLogs([FakeEntry("Traceback (most recent call last):\nIndexError: 2")])
+    adapter.logs(handle)
+    assert adapter.poll(handle).state == "pending"
+    call.logs = FakeLogs([FakeEntry("run_stage: gsplat for stage 'train', attempt 1")])
+    adapter.logs(handle)
+    assert adapter.poll(handle).state == "running"
+
+
+def test_started_is_remembered_after_the_start_line_scrolls_away() -> None:
+    call = FakeCall(raises=TimeoutError())
+    adapter, handle, _ = adapter_over(call)
+    noise = "\n".join(str(n) for n in range(MAX_LOG_LINES * 3))
+    call.logs = FakeLogs([FakeEntry("run_stage: gsplat for stage 'train'"), FakeEntry(noise)])
+    adapter.logs(handle)
+    assert adapter.poll(handle).state == "running"
+    call.logs = FakeLogs([FakeEntry(noise)])
+    adapter.logs(handle)
+    assert adapter.poll(handle).state == "running"
+
+
+def test_an_unreadable_log_never_makes_a_stage_look_stuck() -> None:
+    call = FakeCall(raises=TimeoutError())
+    adapter, handle, _ = adapter_over(call)
+    call.logs = FakeLogs(RuntimeError("log service down"))
+    adapter.logs(handle)
+    assert adapter.poll(handle).state == "running"
+
+
+def test_modals_own_timeout_also_means_not_yet() -> None:
+    adapter, handle, _ = adapter_over(FakeCall(raises=ModalTimeout()))
+    assert adapter.poll(handle).state == "running"
 
 
 @pytest.mark.parametrize(
@@ -155,9 +202,9 @@ def test_a_running_stage_is_running_and_not_failed() -> None:
         (FunctionTimeout("6h"), "failed"),
         (OutputExpired(), "failed"),
         (InternalFailure("worker lost"), "preempted"),
-        # A stage whose own code times out. Same class name as Modal's, different module,
-        # and it must terminate the poll loop rather than be mistaken for "no result yet".
-        (TimeoutError("the stage's own timeout"), "failed"),
+        # A stage whose own code times out arrives as this, because `remote.execute`
+        # converts it in the container (see test_remote); it must end the poll loop.
+        (RuntimeError("the stage timed out: TimeoutError('read')"), "failed"),
         (RuntimeError("boom"), "failed"),
     ],
 )
@@ -218,16 +265,40 @@ def test_a_failed_log_fetch_is_not_a_failed_stage() -> None:
     assert list(adapter.logs(handle)) == ["kept"]
     call.logs = FakeLogs(RuntimeError("log service down"))
     assert list(adapter.logs(handle)) == ["kept"]
-    assert adapter.poll(handle).state == "running"
+    # Not a verdict either way: "kept" is no start line, so the call is still pending.
+    assert adapter.poll(handle).state not in ("failed", "succeeded", "preempted")
 
 
-def test_logs_are_bounded() -> None:
+def test_logs_are_bounded_per_call_and_never_skip_a_line() -> None:
     call = FakeCall(raises=ModalTimeout())
     adapter, handle, _ = adapter_over(call)
     call.logs = FakeLogs([FakeEntry("\n".join(str(n) for n in range(MAX_LOG_LINES * 3)))])
-    lines = adapter.logs(handle)
-    assert len(lines) == MAX_LOG_LINES
-    assert lines[-1] == str(MAX_LOG_LINES * 3 - 1)
+    first = adapter.logs(handle)
+    assert len(first) == MAX_LOG_LINES
+    assert first[0] == "0"
+    # The caller's cursor advances by what it got; the backlog arrives in order.
+    second = adapter.logs(handle, since=len(first))
+    assert second[0] == str(MAX_LOG_LINES)
+
+
+def test_since_keeps_indexing_the_whole_log_once_it_outgrows_the_held_tail() -> None:
+    # A pose solve logs far more than MAX_LOG_LINES; the lines after that must still
+    # reach the caller (the finished cameras' live line is one of the last).
+    call = FakeCall(raises=ModalTimeout())
+    adapter, handle, _ = adapter_over(call)
+    history = [str(n) for n in range(MAX_LOG_LINES + 10)]
+    call.logs = FakeLogs([FakeEntry("\n".join(history))])
+    cursor = 0
+    while lines := adapter.logs(handle, since=cursor):
+        cursor += len(lines)
+    assert cursor == len(history)
+    history += ["live-cameras: final"]
+    call.logs = FakeLogs([FakeEntry("\n".join(history))])
+    assert list(adapter.logs(handle, since=cursor)) == ["live-cameras: final"]
+    # A failed fetch answers from the held tail, still by the whole log's index.
+    call.logs = FakeLogs(RuntimeError("log service down"))
+    assert list(adapter.logs(handle, since=cursor)) == ["live-cameras: final"]
+    assert list(adapter.logs(handle, since=cursor + 1)) == []
 
 
 def test_logs_of_an_unknown_handle_are_empty() -> None:
@@ -276,3 +347,189 @@ def test_reaching_for_modal_without_the_package_explains_itself() -> None:
     adapter = ModalAdapter("twin")
     with pytest.raises(RuntimeError, match="deliberately not a dependency"):
         adapter.submit(request())
+
+
+# --- what a call is billed, and on which GPU ---------------------------------------------
+
+
+def finished(adapter: ModalAdapter, handle: RemoteHandle, *, wall_s: float) -> None:
+    """Make the call `wall_s` old by the runner's clocks: submitted that long ago."""
+    run = adapter._calls[handle.id]
+    run.started_at -= wall_s
+    run.submitted_at = 1_000_000.0
+
+
+def test_a_cold_call_is_billed_from_its_container_s_start_not_from_the_submit() -> None:
+    """Job 33bc1bff's b1 waited 1,697 s for an L4 and the wall-time proxy billed all of it.
+    Modal bills from the container's start; the wait is reported apart, as `queue_s`."""
+    outcome = {
+        "metrics": {
+            "containerCall": 1,
+            "containerStartedAt": 1_001_697.0,
+            "containerBootedAt": 1_001_700.0,
+            "remoteEnteredAt": 1_001_705.0,
+            "remoteFinishedAt": 1_003_365.0,
+        }
+    }
+    adapter, handle, _ = adapter_over(FakeCall(outcome=outcome))
+    finished(adapter, handle, wall_s=3_372.0)
+
+    poll = adapter.poll(handle)
+
+    assert poll.billing == "container"
+    assert poll.billed_s == pytest.approx(1_668.0)
+    assert poll.queue_s == pytest.approx(1_697.0)
+
+
+def test_without_the_sandbox_s_start_a_cold_call_is_billed_from_its_boot() -> None:
+    outcome = {
+        "metrics": {
+            "containerCall": 1,
+            "containerBootedAt": 1_000_010.0,
+            "remoteEnteredAt": 1_000_012.0,
+            "remoteFinishedAt": 1_000_110.0,
+        }
+    }
+    adapter, handle, _ = adapter_over(FakeCall(outcome=outcome))
+    finished(adapter, handle, wall_s=115.0)
+
+    poll = adapter.poll(handle)
+
+    assert poll.billed_s == pytest.approx(100.0) and poll.queue_s == pytest.approx(10.0)
+
+
+def test_a_warm_call_is_billed_from_entering_the_function() -> None:
+    """The container's start was the call before's; this one starts at its own entry."""
+    outcome = {
+        "metrics": {
+            "containerCall": 2,
+            "containerStartedAt": 999_000.0,
+            "remoteEnteredAt": 1_000_001.0,
+            "remoteFinishedAt": 1_000_051.0,
+        }
+    }
+    adapter, handle, _ = adapter_over(FakeCall(outcome=outcome))
+    finished(adapter, handle, wall_s=60.0)
+
+    poll = adapter.poll(handle)
+
+    assert poll.billed_s == pytest.approx(50.0) and poll.queue_s == pytest.approx(1.0)
+
+
+def test_the_container_s_figure_never_exceeds_the_runner_s_wall_time() -> None:
+    """Clock skew between the two machines can only shrink a bill, never grow it."""
+    outcome = {
+        "metrics": {
+            "containerCall": 1,
+            "containerStartedAt": 999_000.0,
+            "remoteEnteredAt": 999_010.0,
+            "remoteFinishedAt": 1_000_500.0,
+        }
+    }
+    adapter, handle, _ = adapter_over(FakeCall(outcome=outcome))
+    finished(adapter, handle, wall_s=400.0)
+
+    poll = adapter.poll(handle)
+
+    assert poll.billed_s == pytest.approx(400.0) and poll.queue_s == 0.0
+
+
+def test_a_call_that_reports_no_clocks_keeps_the_proxy_and_says_so() -> None:
+    adapter, handle, _ = adapter_over(FakeCall(outcome={"metrics": {"psnr": 27.0}}))
+    finished(adapter, handle, wall_s=42.0)
+
+    poll = adapter.poll(handle)
+
+    assert poll.billing == "wall-proxy"
+    assert poll.billed_s == pytest.approx(42.0, abs=1.0) and poll.queue_s is None
+    running, running_handle, _ = adapter_over(FakeCall(raises=TimeoutError()))
+    assert running.poll(running_handle).billing == "wall-proxy"
+
+
+def part_request(tier: str = "l4") -> StageRequest:
+    return replace(request(), tier=tier, params={FANOUT_PARAM: {"role": "part", "part": "b0"}})
+
+
+def test_a_part_may_start_on_the_first_free_gpu_of_its_fallback_list() -> None:
+    """A part waits on no one GPU type: `run_stage_l4_fallback` is deployed with
+    `gpu=["L4", "L40S"]`, and the call is priced at what the container says it got."""
+    looked_up: list[str] = []
+    call = FakeCall(
+        outcome={"metrics": {"remoteGpu": "NVIDIA L40S", "containerCall": 1}, "summary": ""}
+    )
+
+    def lookup(tier: str) -> FakeFunction:
+        looked_up.append(tier)
+        return FakeFunction(call)
+
+    adapter = ModalAdapter("twin")
+    adapter._function = lookup  # type: ignore[method-assign]
+    handle = adapter.submit(part_request())
+    poll = adapter.poll(handle)
+
+    assert looked_up == [fallback_tier("l4")] == ["l4_fallback"]
+    assert poll.tier == "l40s"
+    # The head, the join and a single run keep the tier they asked for.
+    adapter.submit(request())
+    assert looked_up[-1] == "l4"
+    assert GPU_FALLBACKS["l4"][0] == "l4", "the asked-for tier stays first choice"
+
+
+def test_a_part_on_its_own_tier_is_priced_at_it_and_an_unknown_gpu_at_the_dearest() -> None:
+    for gpu, expected in (("NVIDIA L4", "l4"), ("Some Future GPU", "l40s")):
+        call = FakeCall(outcome={"metrics": {"remoteGpu": gpu}})
+        adapter = ModalAdapter("twin")
+        adapter._function = lambda tier, call=call: FakeFunction(call)  # type: ignore[method-assign,misc]
+        assert adapter.poll(adapter.submit(part_request())).tier == expected
+
+
+def test_a_deployment_without_the_fallback_functions_runs_the_part_on_its_tier() -> None:
+    not_found = modal_exception("NotFoundError")
+    looked_up: list[str] = []
+
+    class Missing:
+        def spawn(self, payload: Any) -> Any:
+            raise not_found("Lookup failed for Function 'run_stage_l4_fallback'")
+
+    def lookup(tier: str) -> Any:
+        looked_up.append(tier)
+        return Missing() if tier.endswith("_fallback") else FakeFunction(FakeCall())
+
+    adapter = ModalAdapter("twin")
+    adapter._function = lookup  # type: ignore[method-assign]
+    adapter.submit(part_request())
+    assert looked_up == ["l4_fallback", "l4"]
+
+
+def test_fallback_can_be_turned_off() -> None:
+    looked_up: list[str] = []
+    adapter = ModalAdapter("twin", part_fallback=False)
+    adapter._function = lambda tier: looked_up.append(tier) or FakeFunction(FakeCall())  # type: ignore[method-assign,func-returns-value]
+    adapter.submit(part_request())
+    assert looked_up == ["l4"]
+
+
+@pytest.mark.parametrize(
+    ("name", "chain", "tier"),
+    [
+        ("NVIDIA L4", ("l4", "l40s"), "l4"),
+        ("NVIDIA L40S", ("l4", "l40s"), "l40s"),
+        ("NVIDIA A10", ("l4", "a10"), "a10"),
+        ("NVIDIA A100-SXM4-80GB", ("a100-40gb", "a100"), "a100"),
+        ("NVIDIA A100-SXM4-40GB", ("a100", "a100-40gb"), "a100-40gb"),
+        ("NVIDIA H100 80GB HBM3", ("l4", "l40s"), None),
+    ],
+)
+def test_a_gpu_s_name_is_its_tier(name: str, chain: tuple[str, ...], tier: str | None) -> None:
+    assert tier_of_gpu(name, chain) == tier
+
+
+def test_every_fallback_list_is_of_deployed_priced_tiers() -> None:
+    """Each tier in a list is one `providers.py` offers Modal with and prices, so the
+    call can always be priced at what it ran on."""
+    modal = provider("modal")
+    assert modal is not None
+    for tier, chain in GPU_FALLBACKS.items():
+        assert chain[0] == tier
+        for one in chain:
+            assert one in modal.tiers and one in GPU_NAMES and modal.rate(one) is not None

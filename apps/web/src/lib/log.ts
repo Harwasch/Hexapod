@@ -48,12 +48,31 @@ export function createLogger(scope: string) {
   };
 }
 
+/**
+ * One readable sentence for an error of any shape.
+ *
+ * Cesium rejects with plain objects (a `RequestErrorEvent`, an aborted request) whose JSON
+ * is `{}`; showing that to a person says nothing, so empty shapes fall back to a sentence.
+ */
 export function describeError(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  if (typeof error === "string") return error;
-  try {
-    return JSON.stringify(error);
-  } catch {
-    return String(error);
+  if (error instanceof Error) return error.message || "Something went wrong.";
+  if (typeof error === "string") return error || "Something went wrong.";
+  if (error && typeof error === "object") {
+    const { message, statusCode } = error as { message?: unknown; statusCode?: unknown };
+    if (typeof message === "string" && message) return message;
+    if (typeof statusCode === "number") return `The server answered ${statusCode}.`;
+    // A class with its own `toString` (Cesium's `RequestErrorEvent` has one) says more than JSON.
+    const toText = (error as { toString?: () => string }).toString;
+    if (typeof toText === "function" && toText !== Object.prototype.toString) {
+      const text = toText.call(error);
+      if (text) return text;
+    }
   }
+  try {
+    const json = JSON.stringify(error);
+    if (json && json !== "{}" && json !== "null") return json;
+  } catch {
+    // fall through
+  }
+  return "The request failed — check the connection.";
 }

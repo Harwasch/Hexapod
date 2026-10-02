@@ -156,6 +156,31 @@ def test_an_input_is_sent_once_however_many_stages_read_it(tmp_path: Path) -> No
     assert len(uploads) == 1
 
 
+def test_an_input_that_changed_under_the_same_key_is_sent_again(tmp_path: Path) -> None:
+    """A stage re-run inside a finished run (retry-from-stage, the phone's Refine) makes
+    a new artifact at the old path. The remote stage after it must get the new bytes,
+    not find the key already there and read the previous run's."""
+    transfer = LocalTransfer(tmp_path / "bucket")
+    adapter = FakeAdapter(transfer, tmp_path / "sandbox", script=counts)
+    workdir = seeded_workdir(tmp_path / "run")
+    recipe = make_recipe(
+        [{"id": "one", "impl": "t_gpu_a", "gpu": {"tier": "a100"}}], inputs=["upload"]
+    )
+    cloud = RunnerSet.cloud(runner(Placement((adapter,)), transfer))
+    execute(recipe, workdir, cloud)
+    key = f"runs/{workdir.root.name}/transfer/inputs/upload"
+    before = {p.name: p.read_bytes() for p in (transfer.root / key).iterdir()}
+
+    changed = next(p for p in workdir.input_path("upload").iterdir() if p.is_file())
+    changed.write_bytes(b"a different capture")
+    execute(recipe, workdir, cloud)
+
+    after = {p.name: p.read_bytes() for p in (transfer.root / key).iterdir()}
+    assert after[changed.name] == b"a different capture" != before[changed.name]
+    # And unchanged inputs are still not re-sent: the checksum object says they match.
+    assert (transfer.root / f"{key}.sha256").is_file()
+
+
 @stage_impl("t_gpu_a", consumes=("upload",), produces=(ArtifactDecl("a.json"),))
 def t_gpu_a(ctx: StageContext) -> StageOutcome:
     raise AssertionError("runs on the provider")
@@ -233,6 +258,67 @@ def test_a_stage_that_never_starts_is_cancelled_and_reported_rather_than_waited_
 
     with pytest.raises(RemoteStageError, match="still pending"):
         execute(gpu_recipe(), workdir, RunnerSet.cloud(waiting))
+
+
+def test_a_stage_stuck_pending_is_given_up_on_long_before_max_wait(tmp_path: Path) -> None:
+    """The crash-looping container: never starts, never returns. `max_pending_s` ends it
+    at half an hour instead of holding the worker for `max_wait_s` (a day)."""
+    transfer = LocalTransfer(tmp_path / "bucket")
+    cancelled: list[str] = []
+
+    class CrashLoops(FakeAdapter):
+        def poll(self, handle: RemoteHandle):  # type: ignore[no-untyped-def]
+            from cloud import Poll
+
+            return Poll(state="pending", billed_s=0.0)
+
+        def cancel(self, handle: RemoteHandle) -> None:
+            cancelled.append(handle.id)
+
+    adapter = CrashLoops(transfer, tmp_path / "sandbox", script=counts)
+    ticks = iter([0.0, 60.0, 1799.0, 1800.0, 1801.0])
+    runner_ = CloudRunner(
+        Placement((adapter,)),
+        transfer,
+        poll_interval_s=0.0,
+        max_wait_s=24 * 3600.0,
+        max_pending_s=1800.0,
+        clock=lambda: next(ticks),
+        sleep=lambda _seconds: None,
+    )
+    workdir = seeded_workdir(tmp_path / "run", upload=False)
+
+    with pytest.raises(RemoteStageError, match="never started"):
+        execute(gpu_recipe(), workdir, RunnerSet.cloud(runner_))
+    assert len(cancelled) == 1
+
+
+def test_a_running_stage_is_not_held_to_the_pending_deadline(tmp_path: Path) -> None:
+    transfer = LocalTransfer(tmp_path / "bucket")
+
+    class SlowButAlive(FakeAdapter):
+        polls = 0
+
+        def poll(self, handle: RemoteHandle):  # type: ignore[no-untyped-def]
+            from cloud import Poll
+
+            SlowButAlive.polls += 1
+            if SlowButAlive.polls < 4:
+                return Poll(state="running", billed_s=0.0)
+            return super().poll(handle)
+
+    adapter = SlowButAlive(transfer, tmp_path / "sandbox", script=counts)
+    ticks = iter(float(t) for t in range(0, 100_000, 3000))
+    runner_ = CloudRunner(
+        Placement((adapter,)),
+        transfer,
+        poll_interval_s=0.0,
+        max_pending_s=1800.0,
+        clock=lambda: next(ticks),
+        sleep=lambda _seconds: None,
+    )
+    workdir = seeded_workdir(tmp_path / "run", upload=False)
+    execute(gpu_recipe(), workdir, RunnerSet.cloud(runner_))
 
 
 # --- placement ----------------------------------------------------------------------
@@ -379,6 +465,8 @@ def test_every_rate_says_where_it_came_from_and_no_tier_is_priced_by_guess() -> 
         "A0 provider survey",
         "modal.com/pricing, read 2026-09-22",
         "runpod.io/pricing, read 2026-09-22",
+        "modal.com/pricing (4 cores + 8 GiB), read 2026-09-23",
+        "modal.com/pricing ($0.000542/s), read 2026-09-27",
     }
     # Every provider still has the surveyed A100 hour the console's column is built on.
     for entry in PROVIDERS:

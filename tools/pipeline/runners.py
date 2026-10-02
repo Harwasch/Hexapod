@@ -264,9 +264,10 @@ class RunnerSet:
             return self.cpu
         if self.gpu is None:
             raise NoRunnerError(
-                f"recipe {stage.recipe!r}, stage {stage.id!r} (impl {stage.impl.name!r}) requires "
-                f"a {stage.gpu.tier} GPU and no GPU runner is configured. Use StubRunner in CI, "
-                f"or a CloudRunner (cloud.py) with a ProviderAdapter and a Transfer"
+                f"recipe {stage.recipe!r}, stage {stage.id!r} (impl {stage.impl.name!r}) runs "
+                f"remotely on tier {stage.gpu.tier!r} and no remote runner is configured. Use "
+                f"StubRunner in CI, or a CloudRunner (cloud.py) with a ProviderAdapter and a "
+                f"Transfer"
             )
         return self.gpu
 

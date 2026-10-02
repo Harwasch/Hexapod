@@ -16,8 +16,20 @@ import {
 import type { Footprint, Representation, Site, SiteAsset, SiteSummary } from "@twin/contracts";
 import { boundingRadiusM, centerOf, circleFootprint, haversineDistance } from "@twin/geo";
 
+import {
+  detailScreenSpaceScale,
+  deviceSplatBudget,
+  deviceSplatCeiling,
+  isHandheld,
+} from "@/lib/detail";
+import { AdaptiveSplatBudget } from "@/lib/splatBudget";
+
+import { DEFAULT_SPLAT_RENDERER } from "@/state/settings";
+
+import type { SplatRendererKind } from "./scanView/types";
 import type { Emitter } from "@/lib/emitter";
 import { createLogger, describeError } from "@/lib/log";
+import { withRetry } from "@/lib/retry";
 import { timed } from "@/lib/timing";
 
 import type { CameraController } from "./CameraController";
@@ -26,6 +38,11 @@ import { isIonAuthError, isIonNotFound } from "./ion";
 import { devicePixelError, type PerformanceManager } from "./PerformanceManager";
 import { groundAt, measuredClamp, type MeasuredGround } from "./placement";
 import { createSiteTileset, tileCacheBudget } from "./providers/tiles";
+import { SPLAT_BYTES_ESTIMATE, SplatCount, splatMemory } from "./splatCount";
+import { splatTilesetOf } from "./splatInternals";
+import { attachInferredLayers } from "./inferredLayers";
+import { attachInstances } from "./splatInstances";
+import { attachViewCones } from "./splatViewCones";
 import type { SceneEvents } from "./types";
 
 const log = createLogger("sites");
@@ -62,6 +79,8 @@ interface AssetHandle {
   unsubscribe: (() => void)[];
   /** The tile-coverage clip refresh is registered once per tileset. */
   coverageWatched?: boolean;
+  /** A splat tileset's loaded gaussians (splatCount.ts): Cesium's byte count misses them. */
+  splats?: SplatCount;
 }
 
 /**
@@ -102,6 +121,35 @@ interface ActiveSite {
   engaged: boolean;
 }
 
+/** Splat tiles kept in memory, as a multiple of what the Detail budget draws: the view,
+ *  its coarser ancestors, and what was looked at a moment ago, so looking back finds it. */
+const SPLAT_CACHE_FACTOR = 2.5;
+/** Ceilings on a splat tileset's cache (bytes): a desktop, and a phone or tablet. */
+const SPLAT_CACHE_CEILING = { desktop: 1536 * 1024 * 1024, handheld: 512 * 1024 * 1024 };
+
+/**
+ * A splat tileset's cache, sized once its tiles say what a splat costs in memory. Cesium's
+ * default (the tile cache budget, 384 MB on a desktop) held 1M splats with spherical
+ * harmonics, 4.8M without -- against a 3M budget, so a look around evicted the view just
+ * left and looking back fetched, decoded and uploaded it again.
+ */
+function sizeSplatCache(tileset: Cesium3DTileset, tile: Cesium3DTile, budget: number): void {
+  const content = tile.content as
+    { geometryByteLength?: number; pointsLength?: number } | undefined;
+  const bytes = content?.geometryByteLength ?? 0;
+  const points = content?.pointsLength ?? 0;
+  if (!(bytes > 0 && points > 0)) return;
+  const perSplat = bytes / points;
+  const ceiling = isHandheld() ? SPLAT_CACHE_CEILING.handheld : SPLAT_CACHE_CEILING.desktop;
+  const wanted = Math.min(ceiling, budget * SPLAT_CACHE_FACTOR * perSplat);
+  const floor = tileCacheBudget().cacheBytes;
+  const cacheBytes = Math.round(Math.max(floor, wanted));
+  // Only ever grows: a tile of a coarser level (fewer bytes a splat) must not shrink it back.
+  if (cacheBytes <= tileset.cacheBytes) return;
+  tileset.cacheBytes = cacheBytes;
+  tileset.maximumCacheOverflowBytes = Math.round(cacheBytes / 2);
+}
+
 /**
  * Loads a site's reality models into the world when they are useful (fly-to or
  * proximity), switches representations without moving the camera, and keeps
@@ -114,11 +162,22 @@ export class SiteManager {
   /** Every site currently loaded in the scene, keyed by site id. Sites can overlap (a hand-sized
    *  object registered on top of a campus), so several stay loaded at once. */
   private readonly loaded = new Map<string, ActiveSite>();
+  /** Who draws splat scans: CesiumJS, or a dedicated renderer over the globe
+   *  (scanView/ScanRendererHost.ts) while CesiumJS keeps the tileset, hidden, for its frame
+   *  and its solids. */
+  private splatRenderer: SplatRendererKind = DEFAULT_SPLAT_RENDERER;
   /** The site the representation switcher, clipping and the HUD refer to. */
   private primaryId: string | null = null;
   private nearId: string | null = null;
   private objectScale = false;
   private screenSpaceError = 16;
+  /** The gaussians this device draws at once (lib/detail.ts), read once. */
+  private readonly splatDetail = deviceSplatBudget();
+  /** The same choice as a factor on splat screen-space error. */
+  private readonly splatDetailScale = detailScreenSpaceScale(this.splatDetail);
+  /** What a view may draw, below that ceiling, from motion frame times (lib/splatBudget.ts). */
+  private readonly splatCeiling = deviceSplatCeiling();
+  private readonly splatBudget = new AdaptiveSplatBudget(this.splatCeiling, this.splatDetail);
   private pixelRatio = 1;
   /** Ground metres per pixel at the view centre when the errors were last applied. */
   private metersPerPixel = Number.POSITIVE_INFINITY;
@@ -139,6 +198,20 @@ export class SiteManager {
       this.applyScreenSpaceError(sse, pixelRatio),
     );
     this.performance.addMemorySource("sites", () => this.memoryUsage());
+    // Splats are budgeted by count, against the Detail choice (splatCount.ts): the group's
+    // pressure is the higher of the two ratios.
+    // Drawn, not loaded: what the budget limits is what a frame draws. Tiles only cached
+    // (turned away from, or replaced by their children) are the tileset cache's to trim, so
+    // a view is never coarsened for splats it is not drawing.
+    this.performance.addMemorySource("sites", () =>
+      splatMemory(this.splatsDrawn(), this.splatBudget.budget),
+    );
+    this.unsubscribe.push(
+      this.performance.addMotionFrameListener((intervalMs) => {
+        if (!this.splatBudget.frame(intervalMs, this.splatsDrawn())) return;
+        log.info("splat budget", { budget: this.splatBudget.budget, ceiling: this.splatCeiling });
+      }),
+    );
     const calibrationTimer = setInterval(() => this.refreshCalibration(), CALIBRATION_TICK_MS);
     this.unsubscribe.push(
       viewer.camera.changed.addEventListener(() => this.checkProximity()),
@@ -426,7 +499,7 @@ export class SiteManager {
       this.pickAsset(active, active.representation)?.id !== asset.id
     )
       return;
-    tileset.show = active.engaged;
+    tileset.show = active.engaged && this.cesiumDraws(asset);
     if (active.engaged) this.applyClip(active, asset, tileset);
     else this.clipping.setFootprint(active.site.id, null);
     this.events.emit("tilesets", this.activeTilesetLabels());
@@ -466,7 +539,7 @@ export class SiteManager {
     const handle = this.handleFor(entry);
     const tileset = handle?.tileset;
     if (!handle || !tileset) return;
-    tileset.show = engaged;
+    tileset.show = engaged && this.cesiumDraws(handle.asset);
     if (engaged) this.applyClip(entry, handle.asset, tileset);
     else this.clipping.setFootprint(entry.site.id, null);
     log.info(engaged ? "site engaged" : "site disengaged", { site: entry.site.slug });
@@ -486,7 +559,15 @@ export class SiteManager {
     this.events.emit("asset", { id: asset.id, patch: { loadState: "loading", error: null } });
     handle.loading = timed(
       "site.asset.load",
-      () => createSiteTileset(asset, { maximumScreenSpaceError: this.screenSpaceError }),
+      () =>
+        withRetry(
+          () => createSiteTileset(asset, { maximumScreenSpaceError: this.screenSpaceError }),
+          {
+            permanent: (error) => isIonAuthError(error) || isIonNotFound(error),
+            onRetry: (error, attempt) =>
+              log.info("asset retrying", { asset: asset.id, attempt, error: describeError(error) }),
+          },
+        ),
       {
         asset: asset.id,
         representation: asset.representation,
@@ -497,15 +578,17 @@ export class SiteManager {
           tileset.destroy();
           return null;
         }
+        // Drawn by another renderer: loaded for its frame and solids, never streamed here.
+        if (!this.cesiumDraws(asset)) tileset.preloadWhenHidden = false;
         this.scene.primitives.add(tileset);
         this.attachTileset(handle, tileset, asset);
         return tileset;
       })
       .catch((error: unknown) => {
         const message = isIonAuthError(error)
-          ? "Cesium ion rejected the asset request. Provide VITE_CESIUM_ION_ACCESS_TOKEN with access to this asset."
+          ? "Cesium ion refused this asset: the map key has no access to it."
           : isIonNotFound(error)
-            ? "Asset not found on Cesium ion (check the asset ID and that your token can read it)."
+            ? "Cesium ion has no asset with this ID that the map key can see."
             : describeError(error);
         log.warn("asset failed", { asset: asset.id, error: message });
         this.events.emit("asset", { id: asset.id, patch: { loadState: "error", error: message } });
@@ -547,14 +630,34 @@ export class SiteManager {
         screenSpaceError: tileset.maximumScreenSpaceError,
       },
     });
+    if (asset.representation === "gaussian-splat") {
+      const splats = new SplatCount();
+      handle.splats = splats;
+      handle.unsubscribe.push(
+        // Loaded splats are counted for the budget; which tiles go when memory runs short is
+        // the tileset cache's choice (least recently used), now that splat tiles report
+        // their bytes (engine patch, GaussianSplat3DTileContent.geometryByteLength).
+        tileset.tileLoad.addEventListener((tile: Cesium3DTile) => {
+          splats.load(tile);
+          sizeSplatCache(tileset, tile, this.splatCeiling);
+        }),
+        tileset.tileUnload.addEventListener((tile: Cesium3DTile) => splats.unload(tile)),
+        // What the capture never saw, faded from the views it never had (lib/viewCones.ts).
+        attachViewCones(tileset),
+        // What an image model filled in where it never looked, beside it (lib/inferred.ts).
+        attachInferredLayers(tileset, this.scene, asset.id),
+        attachInstances(tileset, this.scene, asset.id),
+      );
+    }
     handle.unsubscribe.push(
       tileset.loadProgress.addEventListener((pending: number, processing: number) => {
         this.performance.reportLoading("sites", pending, processing);
+        const counted = (handle.splats?.total ?? 0) * SPLAT_BYTES_ESTIMATE;
         this.events.emit("asset", {
           id: asset.id,
           patch: {
             progress: { pending, processing },
-            memoryMb: Math.round(tileset.totalMemoryUsageInBytes / 1048576),
+            memoryMb: Math.round(Math.max(tileset.totalMemoryUsageInBytes, counted) / 1048576),
             screenSpaceError: tileset.maximumScreenSpaceError,
           },
         });
@@ -567,14 +670,27 @@ export class SiteManager {
     );
   }
 
-  /** Memory held by the visible site tilesets against their configured cache budget. */
+  /** Memory held by the visible site tilesets against their configured cache budget. Splat
+   *  tilesets are budgeted by what they draw instead (splatMemory); their cache holds more. */
   private memoryUsage(): { bytes: number; budget: number } {
     const { cacheBytes, maximumCacheOverflowBytes } = tileCacheBudget();
     let bytes = 0;
     for (const { handle } of this.handles()) {
-      if (handle.tileset?.show) bytes += handle.tileset.totalMemoryUsageInBytes;
+      if (handle.tileset?.show && !handle.splats) bytes += handle.tileset.totalMemoryUsageInBytes;
     }
     return { bytes, budget: cacheBytes + maximumCacheOverflowBytes };
+  }
+
+  /** Gaussians drawn across the visible splat tilesets: what their snapshots hold. */
+  private splatsDrawn(): number {
+    let total = 0;
+    for (const { handle } of this.handles()) {
+      if (!handle.tileset?.show || !handle.splats) continue;
+      const primitive = splatTilesetOf(handle.tileset).gaussianSplatPrimitive;
+      // Live slots, not the slot range: hidden tiles stay resident but are not drawn.
+      total += primitive?._liveSplats ?? primitive?._numSplats ?? 0;
+    }
+    return total;
   }
 
   /**
@@ -737,8 +853,13 @@ export class SiteManager {
       // A per-asset value acts as a floor for quality (never coarser than configured), while
       // splats have a hard floor on refinement because of their per-frame CPU sort.
       let next = configured ? Math.min(configured, sse) : sse;
+      // The device's Detail choice then scales it (lib/detail.ts): a pipeline scan is a
+      // level-of-detail tileset holding every gaussian, and this is what decides how many of
+      // them this device draws. A single-tile scan (the committed tree, anything packaged
+      // before the hierarchy) has nothing to refine, so it is drawn whole either way.
       if (handle.asset.representation === "gaussian-splat")
-        next = Math.max(next, this.performance.splatMinimumScreenSpaceError);
+        next =
+          Math.max(next, this.performance.splatMinimumScreenSpaceError) * this.splatDetailScale;
       // Cesium measures the error in CSS pixels; hand it device pixels so a HiDPI screen
       // gets the detail it can show, and a resolution cut also lightens the tile load. The
       // asset's calibration comes last: a tiler's geometric errors say nothing about texture
@@ -829,6 +950,72 @@ export class SiteManager {
     const moved = Math.abs(Math.log(metersPerPixel / this.appliedMetersPerPixel));
     if (moved > CALIBRATION_STEP || !Number.isFinite(moved))
       this.applyScreenSpaceError(this.screenSpaceError, this.pixelRatio);
+  }
+
+  /** Whether the camera is inside a shown splat scan's bounds: the scan is the whole view. */
+  insideSplatScan(): boolean {
+    const cameraPosition = this.viewer.camera.positionWC;
+    for (const { entry, handle } of this.handles()) {
+      const tileset = handle.tileset;
+      // Drawn by CesiumJS (shown) or by a dedicated renderer (engaged, hidden here).
+      if (!tileset || !handle.splats || !(tileset.show || this.scanDrawnElsewhere(entry, handle)))
+        continue;
+      const sphere = tileset.boundingSphere;
+      if (Cartesian3.distance(cameraPosition, sphere.center) < sphere.radius) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Whether CesiumJS draws this asset itself: anything but a splat under another renderer, and
+   * a Living Survey scan whatever the renderer -- its motion is CesiumJS's splat shader
+   * (LivingSurveyManager), which no other renderer has.
+   */
+  private cesiumDraws(asset: SiteAsset): boolean {
+    return (
+      this.splatRenderer === "cesium" ||
+      asset.representation !== "gaussian-splat" ||
+      Boolean(asset.renderConfig.rigUrl)
+    );
+  }
+
+  private scanDrawnElsewhere(entry: ActiveSite, handle: AssetHandle): boolean {
+    return (
+      !this.cesiumDraws(handle.asset) &&
+      entry.engaged &&
+      entry.representation === "gaussian-splat" &&
+      this.pickAsset(entry, entry.representation)?.id === handle.asset.id
+    );
+  }
+
+  /**
+   * Chooses who draws splat scans. Another renderer than CesiumJS hides the splat tilesets
+   * (and stops them streaming: nothing is preloaded while hidden), but keeps them loaded for
+   * their frame, placement and packaged solids.
+   */
+  setSplatRenderer(kind: SplatRendererKind): void {
+    if (kind === this.splatRenderer) return;
+    this.splatRenderer = kind;
+    for (const { entry, handle } of this.handles()) {
+      const tileset = handle.tileset;
+      if (!tileset || handle.asset.representation !== "gaussian-splat") continue;
+      tileset.preloadWhenHidden = this.cesiumDraws(handle.asset);
+      const current = this.pickAsset(entry, entry.representation)?.id === handle.asset.id;
+      tileset.show = current && entry.engaged && this.cesiumDraws(handle.asset);
+    }
+    this.scene.requestRender();
+  }
+
+  /** The engaged splat scan a dedicated renderer should draw, if any. */
+  scanTarget(): { key: string; tileset: Cesium3DTileset } | null {
+    if (this.splatRenderer === "cesium") return null;
+    const active = this.active;
+    if (!active?.engaged || active.representation !== "gaussian-splat") return null;
+    const asset = this.pickAsset(active, active.representation);
+    const handle = asset ? active.handles.get(asset.id) : undefined;
+    if (!asset || this.cesiumDraws(asset) || !handle?.tileset || handle.tileset.isDestroyed())
+      return null;
+    return { key: `${active.site.id}:${asset.id}`, tileset: handle.tileset };
   }
 
   /** Object scale while the camera is within reach of a hand-sized loaded model. */

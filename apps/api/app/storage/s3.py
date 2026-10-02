@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import boto3
@@ -82,9 +83,32 @@ class S3Storage:
             etag=normalise_etag(response.get("ETag", "")) or None,
         )
 
+    def upload_file(self, key: str, source: Path, content_type: str) -> StoredObject:
+        # boto3's managed transfer, as `download_file`: the file goes up in parts read
+        # from disk (multipart above 8 MB), so memory stays at a few parts.
+        self._client.upload_file(
+            str(source), self._bucket, key, ExtraArgs={"ContentType": content_type}
+        )
+        head = self.head_object(key)
+        return StoredObject(
+            key=key,
+            url=self.public_url(key),
+            content_type=content_type,
+            size=source.stat().st_size,
+            etag=head.etag if head is not None else None,
+        )
+
     def get_object(self, key: str) -> bytes:
         response = self._client.get_object(Bucket=self._bucket, Key=key)
         return response["Body"].read()
+
+    def download_file(self, key: str, target: Path) -> int:
+        # boto3's managed transfer: ranged GETs written to a temporary file beside the
+        # target and renamed into place, so memory stays at a few chunks whatever the
+        # object's size, and a half-written download never looks like a finished one.
+        target.parent.mkdir(parents=True, exist_ok=True)
+        self._client.download_file(self._bucket, key, str(target))
+        return target.stat().st_size
 
     def head_object(self, key: str) -> StoredObject | None:
         try:

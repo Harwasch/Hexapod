@@ -44,14 +44,38 @@ def test_every_recipe_ends_in_a_registration(name: str, tmp_path: Path) -> None:
     # Both lanes converge: same canonical splat, same tileset, same registration.
     assert {"canonical.ply", "splat", "georef.json", "registration.json"} <= set(result.by_name)
     tiles = workdir.root / result.artifact("splat").path
-    assert sorted(entry.name for entry in tiles.iterdir()) == ["splat.glb", "tileset.json"]
+    assert sorted(entry.name for entry in tiles.iterdir()) == [
+        "collision.bin",
+        "splat.glb",
+        "tileset.json",
+        "viewcones.bin",
+    ]
 
 
-def test_photo_reconstruct_routes_only_its_gpu_stage_to_the_gpu_runner() -> None:
+def test_photo_reconstruct_sends_pose_train_quality_and_optimise_lod_off_the_worker() -> None:
+    """`train` and `optimise_lod` (which renders the tileset's cuts) to a GPU; `pose` and
+    `quality` to Modal's CPU box, because COLMAP's extraction and projecting every
+    gaussian into every frame both want more memory than the 2 GB worker has to spare.
+    Nothing else leaves the worker."""
     plan = plan_recipe(load_recipe("photo-reconstruct"))
 
-    assert plan.gpu_stages == ("train",)
-    assert plan.origins["canonical.ply"] == "train"
+    assert plan.gpu_stages == ("pose", "train", "quality", "optimise_lod")
+    tiers = {stage.id: stage.gpu.tier for stage in plan.stages if stage.gpu is not None}
+    assert tiers == {"pose": "cpu4", "train": "l4", "quality": "cpu4", "optimise_lod": "l4"}
+    # The parents are optimised on what `place` wrote, and `package` reads them back.
+    assert plan.origins["placement.json"] == "place"
+    assert plan.origins["lod_parents"] == "optimise_lod"
+    package = next(stage for stage in plan.stages if stage.id == "package")
+    assert package.inputs["lod_parents"] == "stages/optimise_lod/out/lod_parents"
+    # The trainer's splat is in COLMAP's frame; `quality` gates it and `place` is what
+    # makes the gated one canonical.
+    assert plan.origins["trained.ply"] == "train"
+    assert plan.origins["gated.ply"] == "quality"
+    assert plan.origins["canonical.ply"] == "place"
+    assert plan.origins["coverage_enu.ply"] == "place"
+    place = next(stage for stage in plan.stages if stage.id == "place")
+    assert place.inputs["gated.ply"] == "stages/quality/out/gated.ply"
+    assert place.inputs["coverage.ply"] == "stages/quality/out/coverage.ply"
     assert plan.origins["upload"] == "<input>"
 
 
@@ -63,7 +87,7 @@ def test_a_gpu_stage_with_no_gpu_runner_is_refused_before_anything_runs(tmp_path
     from errors import NoRunnerError
 
     workdir = seeded_workdir(tmp_path / "run")
-    with pytest.raises(NoRunnerError, match="requires a l4 GPU"):
+    with pytest.raises(NoRunnerError, match=r"stage 'pose'.*remotely on tier 'cpu4'"):
         execute(load_recipe("photo-reconstruct"), workdir, RunnerSet.local())
     assert not workdir.stages_dir.exists()
 

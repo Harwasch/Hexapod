@@ -7,11 +7,20 @@
  * animating, what happens when a site leaves, and that `destroy()` puts everything back.
  */
 
+import { readFileSync } from "node:fs";
+
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { checksumPositions, WIND_CALM, type WindSettings } from "@twin/world";
+import { checksumPositions, serializeRig, WIND_CALM, type WindSettings } from "@twin/world";
 
-import { LIVING_EPOCH_ISO, LivingSurveyManager, sceneSeconds } from "@/cesium/LivingSurveyManager";
+import {
+  LIVING_EPOCH_ISO,
+  livingMotionPath,
+  LivingSurveyManager,
+  RollingMean,
+  sceneSeconds,
+  type LivingSurveyOptions,
+} from "@/cesium/LivingSurveyManager";
 import { rigUrlFor } from "@/cesium/livingRigs";
 import type { PerformanceManager } from "@/cesium/PerformanceManager";
 import type { LoadedSiteAsset, SiteManager } from "@/cesium/SiteManager";
@@ -29,10 +38,12 @@ import {
   canonicalPositions,
   FakeSplatPrimitive,
   FakeSplatTileset,
+  fixturePath,
   fixtureRig,
   FIXTURE_SPLATS,
   packedBufferFor,
 } from "./splatFixture";
+import { buildDrawCommand, fakeFactory, FakeHookedSinglePrimitive } from "./splatGpuFixture";
 
 import { JulianDate, type Viewer } from "cesium";
 
@@ -61,9 +72,17 @@ class FakeEvent {
   }
 }
 
-function createHarness() {
+interface HarnessOptions {
+  /** A primitive carrying the engine patch's `vertexMotion` hook, so the GPU path can attach. */
+  readonly hooked?: boolean;
+  readonly living?: LivingSurveyOptions;
+}
+
+function createHarness(options: HarnessOptions = {}) {
   const baked = bakeFixture(canonicalPositions);
-  const primitive = new FakeSplatPrimitive(baked);
+  const primitive = options.hooked
+    ? new FakeHookedSinglePrimitive(baked)
+    : new FakeSplatPrimitive(baked);
   const tileset = new FakeSplatTileset(primitive);
   recordSplatCapture({
     count: baked.length / 3,
@@ -107,6 +126,7 @@ function createHarness() {
     events,
     sites as unknown as SiteManager,
     performance as unknown as PerformanceManager,
+    options.living,
   );
 
   return {
@@ -407,8 +427,9 @@ describe("a site that leaves", () => {
 describe("refusals", () => {
   it("toasts a permanent refusal, retires the deformer and never retries", async () => {
     const harness = await attached();
-    // A snapshot that now aggregates two tiles: splat indices are no longer stable.
-    harness.primitive.selectedTileLength = 2;
+    // A rebuilt snapshot whose placement cannot be undone: the measured pose could not be
+    // guaranteed, so the refusal is permanent.
+    harness.tileset.root.content._lastSplatTransform = new Array<number>(16).fill(0);
     harness.primitive._snapshot = { generation: 2 };
     harness.manager.setWind(BREEZE);
     harness.tick(3);
@@ -473,8 +494,14 @@ describe("the wind store", () => {
   });
 });
 
-/** A manager with the fixture attached and one tick run, so the deformer is `ready`. */
-async function attached(): Promise<ReturnType<typeof createHarness>> {
+/**
+ * A manager with the fixture attached and one tick run, so the deformer is `ready`.
+ *
+ * Under the **legacy** model: `JSON.stringify` writes the parsed rig's `motionPath` field, not the
+ * `motion` key a rig file carries, so the served rig points at no sidecar. Living Mode is
+ * exercised by {@link attachedWithSidecar}.
+ */
+async function attached(options: HarnessOptions = {}): Promise<ReturnType<typeof createHarness>> {
   const rigText = JSON.stringify(fixtureRig);
   const fetchMock = vi.fn((input: unknown) =>
     Promise.resolve({
@@ -483,10 +510,225 @@ async function attached(): Promise<ReturnType<typeof createHarness>> {
     } as Response),
   );
   vi.stubGlobal("fetch", fetchMock);
-  const harness = createHarness();
+  const harness = createHarness(options);
   // The rig is fetched; let the attach promise settle before the first tick.
   await vi.waitFor(() => expect(harness.manager.status.sites).toHaveLength(1));
   harness.tick(0);
   vi.unstubAllGlobals();
   return harness;
 }
+
+/**
+ * A manager whose rig points at the committed Living Mode sidecar (ADR 0008), both served by
+ * the fetch mock, so the modal model drives the deformer.
+ */
+async function attachedWithSidecar(): Promise<ReturnType<typeof createHarness>> {
+  const rigText = serializeRig(fixtureRig);
+  const sidecarText = readFileSync(fixturePath("source/motion.json"), "utf8");
+  const sidecarUrl = new URL(fixtureRig.motionPath ?? "", RIG_URL).toString();
+  const fetchMock = vi.fn((input: unknown) => {
+    const url = String(input);
+    const body = url === RIG_URL ? rigText : url === sidecarUrl ? sidecarText : "";
+    return Promise.resolve({
+      ok: body !== "",
+      status: body === "" ? 404 : 200,
+      text: () => Promise.resolve(body),
+    } as Response);
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  const harness = createHarness();
+  await vi.waitFor(() => expect(harness.manager.status.sites).toHaveLength(1), {
+    timeout: 20_000,
+  });
+  harness.tick(0);
+  vi.unstubAllGlobals();
+  return harness;
+}
+
+describe("Living Mode", () => {
+  it("loads the sidecar the rig points at and says how much evidence stands behind it", async () => {
+    expect(fixtureRig.motionPath).toBe("motion.json");
+    const harness = await attachedWithSidecar();
+    expect(harness.manager.status.sites[0]?.motionEvidence).toBe("allometric");
+    harness.manager.setMotionModel("legacy");
+    expect(harness.manager.status.sites[0]?.motionEvidence).toBeNull();
+    harness.manager.setMotionModel("auto");
+    expect(harness.manager.status.sites[0]?.motionEvidence).toBe("allometric");
+    harness.manager.destroy();
+  }, 30_000);
+
+  it("moves the tree, then restores the exact measured bytes at calm", async () => {
+    const harness = await attachedWithSidecar();
+    harness.manager.setWind(BREEZE);
+    harness.tick(3);
+    const windy = harness.primitive.texture.uploads.at(-1);
+    expect(windy).toBeDefined();
+    harness.tick(3.5);
+    expect(harness.primitive.texture.uploads.at(-1)?.words).not.toEqual(windy?.words);
+    harness.manager.setWind(WIND_CALM);
+    harness.tick(4);
+    const restored = harness.primitive.texture.uploads.at(-1);
+    const floats = new Float32Array(restored?.words.buffer ?? new ArrayBuffer(0));
+    const positions = new Float32Array(2000 * 3);
+    for (let i = 0; i < 2000; i += 1) {
+      positions[i * 3] = floats[i * 8] ?? 0;
+      positions[i * 3 + 1] = floats[i * 8 + 1] ?? 0;
+      positions[i * 3 + 2] = floats[i * 8 + 2] ?? 0;
+    }
+    expect(checksumPositions(positions)).toBe(
+      checksumPositions(bakeFixture(canonicalPositions).slice(0, 6000)),
+    );
+    harness.manager.destroy();
+  }, 30_000);
+
+  it("falls back to the legacy model when the sidecar cannot be loaded", async () => {
+    const rigText = serializeRig(fixtureRig);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: unknown) =>
+        Promise.resolve({
+          ok: String(input) === RIG_URL,
+          status: String(input) === RIG_URL ? 200 : 404,
+          text: () => Promise.resolve(rigText),
+        } as Response),
+      ),
+    );
+    const harness = createHarness();
+    await vi.waitFor(() => expect(harness.manager.status.sites).toHaveLength(1));
+    vi.unstubAllGlobals();
+    expect(harness.manager.status.sites[0]?.motionEvidence).toBeNull();
+    harness.manager.destroy();
+  });
+});
+
+describe("Motion on GPU", () => {
+  const gate = { allowed: true, wanted: true, available: true };
+
+  it("names the first reason a site is on the CPU: build, viewer, engine, then tiles", () => {
+    expect(livingMotionPath({ motion: "gpu" }, gate)).toEqual({
+      motionPath: "gpu",
+      cpuReason: null,
+    });
+    const cpu = (cpuReason: "no-factory" | "no-hook" | "mixed-bake", over = {}) =>
+      livingMotionPath({ motion: "cpu", cpuReason }, { ...gate, ...over }).cpuReason;
+    expect(cpu("no-factory", { allowed: false, wanted: false })).toBe("build");
+    expect(cpu("no-factory", { wanted: false })).toBe("switched-off");
+    expect(cpu("no-factory", { available: false })).toBe("engine");
+    expect(cpu("no-hook")).toBe("engine");
+    expect(cpu("mixed-bake")).toBe("mixed-bake");
+    // The engine's absence outranks what a snapshot would have said.
+    expect(cpu("mixed-bake", { available: false })).toBe("engine");
+  });
+
+  it("runs on the GPU by default where the engine carries the hook", async () => {
+    const harness = await attached({ hooked: true, living: { motionTextures: fakeFactory() } });
+    expect(harness.manager.gpuMotion).toEqual(gate);
+    const site = harness.manager.status.sites[0];
+    expect(site?.phase).toBe("ready");
+    expect(site?.motionPath).toBe("gpu");
+    expect(site?.cpuReason).toBeNull();
+    expect((harness.primitive as FakeHookedSinglePrimitive).vertexMotion).toBeDefined();
+    harness.manager.destroy();
+  });
+
+  it("falls back to the CPU, and says why", async () => {
+    const noHook = await attached({ living: { motionTextures: fakeFactory() } });
+    expect(noHook.manager.status.sites[0]?.motionPath).toBe("cpu");
+    expect(noHook.manager.status.sites[0]?.cpuReason).toBe("engine");
+    noHook.manager.destroy();
+
+    const noTextures = await attached({ hooked: true, living: { motionTextures: null } });
+    expect(noTextures.manager.status.sites[0]?.cpuReason).toBe("engine");
+    noTextures.manager.destroy();
+
+    const forced = await attached({
+      hooked: true,
+      living: { gpuMotion: false, motionTextures: fakeFactory() },
+    });
+    expect(forced.manager.status.sites[0]?.cpuReason).toBe("build");
+    // The viewer's setting cannot override the build.
+    forced.manager.setGpuMotion(false);
+    forced.manager.setGpuMotion(true);
+    forced.tick(1);
+    expect(forced.manager.status.sites[0]?.motionPath).toBe("cpu");
+    expect(forced.manager.status.sites[0]?.cpuReason).toBe("build");
+    forced.manager.destroy();
+  });
+
+  it("switching mid-gust leaves nothing displaced behind, either way", async () => {
+    const harness = await attached({ hooked: true, living: { motionTextures: fakeFactory() } });
+    const primitive = harness.primitive as FakeHookedSinglePrimitive;
+    const uniforms = buildDrawCommand(primitive);
+    harness.manager.setWind(BREEZE);
+    harness.tick(3);
+    expect(uniforms.u_splatMotionActive?.()).toBe(1);
+    expect(primitive.texture.uploads).toHaveLength(0);
+
+    // Off: the hook goes before the CPU path writes a single row, and a frame is asked for.
+    harness.requestRender.mockClear();
+    harness.manager.setGpuMotion(false);
+    expect(primitive.vertexMotion).toBeUndefined();
+    expect(uniforms.u_splatMotionActive?.()).toBe(0);
+    expect(harness.requestRender).toHaveBeenCalled();
+    expect(harness.manager.status.sites[0]?.cpuReason).toBe("switched-off");
+    harness.tick(3.5);
+    expect(harness.manager.status.sites[0]?.motionPath).toBe("cpu");
+    expect(harness.manager.status.sites[0]?.displaced).toBe(true);
+    expect(primitive.texture.uploads.length).toBeGreaterThan(0);
+
+    // On again, mid-gust: the CPU path's last act is to write the exact measured bytes back.
+    harness.manager.setGpuMotion(true);
+    const restored = primitive.texture.uploads.at(-1);
+    const floats = new Float32Array(restored?.words.buffer ?? new ArrayBuffer(0));
+    const positions = new Float32Array(2000 * 3);
+    for (let i = 0; i < 2000; i += 1) {
+      positions[i * 3] = floats[i * 8] ?? 0;
+      positions[i * 3 + 1] = floats[i * 8 + 1] ?? 0;
+      positions[i * 3 + 2] = floats[i * 8 + 2] ?? 0;
+    }
+    expect(checksumPositions(positions)).toBe(
+      checksumPositions(bakeFixture(canonicalPositions).slice(0, 6000)),
+    );
+    const uploads = primitive.texture.uploads.length;
+    harness.tick(4);
+    buildDrawCommand(primitive);
+    harness.tick(4.1);
+    expect(harness.manager.status.sites[0]?.motionPath).toBe("gpu");
+    expect(harness.manager.status.sites[0]?.displaced).toBe(true);
+    expect(primitive.texture.uploads.length).toBe(uploads);
+    harness.manager.destroy();
+  });
+
+  it("publishes the motion cost as a rolling mean, not every frame, and restarts it on a switch", async () => {
+    const harness = await attached({ hooked: true, living: { motionTextures: fakeFactory() } });
+    buildDrawCommand(harness.primitive as FakeHookedSinglePrimitive);
+    let published = 0;
+    harness.events.on("living", () => (published += 1));
+    expect(harness.manager.status.sites[0]?.motionMs).toBeNull();
+    harness.manager.setWind(BREEZE);
+    for (let frame = 0; frame < 20; frame += 1) harness.tick(3 + frame / 60);
+    const site = harness.manager.status.sites[0];
+    expect(site?.motionMs).not.toBeNull();
+    expect(site?.motionMs ?? -1).toBeGreaterThanOrEqual(site?.applyMs ?? Infinity);
+    // The wind, the first displaced frame and the first cost; twenty frames are not twenty events.
+    expect(published).toBeLessThanOrEqual(4);
+
+    harness.manager.setGpuMotion(false);
+    expect(harness.manager.status.sites[0]?.motionMs).toBeNull();
+    expect(harness.manager.status.sites[0]?.applyMs).toBeNull();
+    harness.manager.destroy();
+  });
+
+  it("averages over a window", () => {
+    const mean = new RollingMean(3);
+    expect(mean.mean).toBeNull();
+    mean.push(1);
+    mean.push(2);
+    expect(mean.mean).toBe(1.5);
+    mean.push(3);
+    mean.push(10);
+    expect(mean.mean).toBe(5);
+    mean.clear();
+    expect(mean.mean).toBeNull();
+  });
+});

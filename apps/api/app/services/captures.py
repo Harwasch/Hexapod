@@ -15,12 +15,13 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 
 import segno
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.config import Settings
-from app.models import Capture, CaptureFile
-from app.models.enums import CaptureStatus, UploadStatus
+from app.models import Artifact, Capture, CaptureFile, Job, JobStep
+from app.models.enums import ArtifactKind, CaptureStatus, RunStatus, UploadStatus
 from app.schemas.capture import (
     CaptureCreate,
     CaptureDetail,
@@ -30,6 +31,7 @@ from app.schemas.capture import (
     CaptureFileRead,
     CaptureFileUpload,
     CaptureHandoff,
+    CaptureQuality,
     CaptureRead,
     PresignedPart,
     UploadWindow,
@@ -412,6 +414,7 @@ def _capture_fields(capture: Capture) -> dict[str, object]:
         "georef_method": capture.georef_method,
         "scale_source": capture.scale_source,
         "uncertainty_m": capture.uncertainty_m,
+        "quality": quality_of(capture),
         "metadata": capture.metadata_,
         "attribution": [Attribution.model_validate(a) for a in capture.attribution],
         "license": LicenseMetadata.model_validate(capture.license) if capture.license else None,
@@ -421,3 +424,41 @@ def _capture_fields(capture: Capture) -> dict[str, object]:
         "created_at": capture.created_at,
         "updated_at": capture.updated_at,
     }
+
+
+def quality_of(capture: Capture) -> CaptureQuality | None:
+    """The stored verdict, or None -- including when what is stored no longer parses.
+
+    The worker writes this already validated, so a failure here is a schema that moved
+    under old rows; a capture list that 500s over one of them would be the worse answer.
+    """
+    if not capture.quality:
+        return None
+    try:
+        return CaptureQuality.model_validate(capture.quality)
+    except ValidationError:
+        return None
+
+
+def latest_splat_key(db: Session, capture_id: uuid.UUID) -> str:
+    """The storage key of `canonical.ply` from the capture's newest finished run.
+
+    The last step that wrote one wins: in photo-reconstruct `place` rewrites the trained
+    splat into east/north/up, and that placed one is the capture's splat.
+    """
+    get_capture(db, capture_id)
+    key = db.scalar(
+        select(Artifact.storage_key)
+        .join(JobStep, Artifact.job_step_id == JobStep.id)
+        .join(Job, JobStep.job_id == Job.id)
+        .where(
+            Job.capture_id == capture_id,
+            Job.status == RunStatus.COMPLETE,
+            Artifact.kind == ArtifactKind.SPLAT,
+        )
+        .order_by(Job.finished_at.desc(), JobStep.ordinal.desc())
+        .limit(1)
+    )
+    if key is None:
+        raise NotFoundError("finished splat for capture", capture_id)
+    return key

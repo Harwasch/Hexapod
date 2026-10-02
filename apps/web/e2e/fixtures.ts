@@ -261,6 +261,8 @@ export interface CaptureMockState {
   completed: { partNumber: number; etag: string }[][];
   /** Mutating requests that were refused for want of the write token. */
   unauthorized: string[];
+  /** The capture id of every handoff minted, in order. */
+  handoffs: string[];
 }
 
 const STORAGE_PREFIX = "/__storage";
@@ -367,6 +369,7 @@ export async function mockApi(page: Page, options: MockOptions = {}): Promise<Ca
     presigns: [],
     completed: [],
     unauthorized: [],
+    handoffs: [],
   };
   // How many times the job list has been polled: the simulated worker advances one stage
   // per poll, the way `mockPlans` mutates across calls.
@@ -488,6 +491,27 @@ export async function mockApi(page: Page, options: MockOptions = {}): Promise<Ca
       }
     }
 
+    const handoffRoute = /^\/api\/v1\/captures\/([^/]+)\/handoff$/.exec(path);
+    if (handoffRoute && request.method() === "POST") {
+      const captureId = String(handoffRoute[1]);
+      if (!state.captures.some((c) => String(c.id) === captureId))
+        return json({ title: "Not found", status: 404 }, 404);
+      state.handoffs.push(captureId);
+      const expiresAt = new Date(Date.now() + 600_000).toISOString();
+      return json(
+        {
+          captureId,
+          token: `v1.mock.${captureId}`,
+          url: `https://twin.example/upload.html#v1.mock.${captureId}`,
+          expiresAt,
+          expiresIn: 600,
+          renewableUntil: expiresAt,
+          qrSvg: `<svg xmlns="http://www.w3.org/2000/svg" data-capture="${captureId}"></svg>`,
+        },
+        201,
+      );
+    }
+
     const captureRoute =
       /^\/api\/v1\/captures(?:\/([^/]+))?(?:\/files(?:\/([^/]+))?(\/parts|\/complete|\/abort)?|(\/process))?$/.exec(
         path,
@@ -570,10 +594,17 @@ export async function mockApi(page: Page, options: MockOptions = {}): Promise<Ca
         return json(file);
       }
       if (fileId && fileAction === "/parts") {
-        const body = request.postDataJSON() as { firstPartNumber: number };
-        state.presigns.push(body.firstPartNumber);
+        const body = request.postDataJSON() as Record<string, unknown>;
+        // As strict as the API's CaptureFilePartsRequest (extra="forbid"): an unknown key
+        // is a 422 there, so it must be one here too.
+        const unknown = Object.keys(body).filter((k) => k !== "firstPartNumber" && k !== "count");
+        if (unknown.length > 0 || typeof body.firstPartNumber !== "number") {
+          return json({ detail: `unexpected parts request: ${JSON.stringify(body)}` }, 422);
+        }
+        const firstPartNumber = body.firstPartNumber;
+        state.presigns.push(firstPartNumber);
         const file = capture.files.find((f) => String(f.id) === fileId)!;
-        return json(uploadWindow(String(file.id), Number(file.partsTotal), body.firstPartNumber));
+        return json(uploadWindow(String(file.id), Number(file.partsTotal), firstPartNumber));
       }
       if (fileId && fileAction === "/abort") {
         const file = capture.files.find((f) => String(f.id) === fileId)!;

@@ -9,6 +9,7 @@ run for hours.
 
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -51,6 +52,9 @@ def start_step(
     step.attempt = attempt
     step.status = RunStatus.IN_PROGRESS
     step.started_at = utcnow()
+    # A restarted step (a retry, the phone's Refine) starts with nothing measured: the
+    # previous attempt's metrics, its progress bar included, describe a run that is over.
+    step.metrics = {}
     step.finished_at = None
     db.commit()
     return step
@@ -67,7 +71,10 @@ def finish_step(
 ) -> None:
     step.status = RunStatus.COMPLETE
     step.finished_at = utcnow()
-    step.metrics = metrics
+    # The live viewer's last cameras outlive the stage that solved them: training, which
+    # runs next, draws its intermediate splats among them (see `report_live`).
+    live = (step.metrics or {}).get("live")
+    step.metrics = {**metrics, "live": live} if live else metrics
     step.log_key = log_key
     step.checkpoint_key = checkpoint_key
     # A retried stage replaces what it produced last time rather than accumulating it:
@@ -84,6 +91,47 @@ def finish_step(
             )
         )
     db.commit()
+
+
+def report_progress(db: Session, step: JobStep, progress: dict[str, Any]) -> bool:
+    """Record how far a running stage has got, read from its log. True when it changed.
+
+    Kept under `metrics.progress` because `finish_step` replaces the metrics wholesale,
+    so the progress of a finished stage disappears with the stage rather than going stale.
+    """
+    if step.status != RunStatus.IN_PROGRESS or (step.metrics or {}).get("progress") == progress:
+        return False
+    step.metrics = {**(step.metrics or {}), "progress": progress}
+    db.commit()
+    return True
+
+
+#: The most a live-cameras payload may hold, as JSON, before it is refused: the pipeline
+#: caps it well below this (400 cameras, 1,500 points), so a bigger one is not its own.
+MAX_LIVE_BYTES = 96_000
+
+
+def report_live(db: Session, step: JobStep, live: dict[str, Any]) -> bool:
+    """Record the newest live-viewer state a running stage has logged. True when it changed.
+
+    `live` holds `cameras` (registered cameras and a point sample, from the pose stage)
+    and/or `splat` (the newest intermediate splat's object key, from training), exactly
+    as `tools/pipeline/live.py` parsed them. Merged into `metrics.live`, so a stage that
+    logs only one kind keeps the other; `finish_step` keeps it too, and `start_step`
+    clears it with everything else when the stage runs again.
+    """
+    if step.status != RunStatus.IN_PROGRESS:
+        return False
+    cameras = live.get("cameras")
+    if cameras is not None and len(json.dumps(cameras)) > MAX_LIVE_BYTES:
+        live = {key: value for key, value in live.items() if key != "cameras"}
+    current = (step.metrics or {}).get("live") or {}
+    merged = {**current, **live}
+    if not live or merged == current:
+        return False
+    step.metrics = {**(step.metrics or {}), "live": merged}
+    db.commit()
+    return True
 
 
 def fail_step(

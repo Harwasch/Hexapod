@@ -38,8 +38,8 @@ if TYPE_CHECKING:  # pragma: no cover - import is for typing only
 #: same whether or not the catalogue is on the path. It is a fallback, not a source of
 #: truth: where the recipes are readable they are read.
 SHIPPED_RECIPE_VERSIONS: dict[str, str] = {
-    "splat-ingest": "2",
-    "photo-reconstruct": "2",
+    "splat-ingest": "3",
+    "photo-reconstruct": "10",
 }
 
 
@@ -71,6 +71,7 @@ def _providers() -> list[ProviderRead]:
             label=entry.label,
             tiers=list(entry.tiers),
             usd_per_hour_a100=entry.usd_per_hour_a100 or 0.0,
+            usd_per_hour={tier: rate.usd_per_hour for tier, rate in entry.rates.items()},
             interruptible=entry.interruptible,
             note=entry.note,
         )

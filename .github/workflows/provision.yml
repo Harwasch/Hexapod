@@ -352,9 +352,36 @@ jobs:
           # development convenience either way: Cloudflare documents it as rate-limited
           # and "intended for non-production traffic", so a real deployment sets
           # R2_PUBLIC_URL to a custom domain on the public bucket.
+          # The private bucket must not be readable, whatever else is true. This is the
+          # single check the bucket split exists for: `geo-dev`-style buckets hold every
+          # raw upload under captures/ and every run's frames, logs and checkpoints under
+          # runs/, and R2 makes a *bucket* public, never a prefix. A deployment that has
+          # public access switched on here works perfectly and exposes all of it, so this
+          # refuses rather than warns.
+          api GET "$cf/r2/buckets/$BUCKET/domains/managed"
+          if ok && [ "$(printf '%s' "$BODY" | jq -r '.result.enabled // false')" = "true" ]; then
+            leaked="$(printf '%s' "$BODY" | jq -r '.result.domain // "(unnamed)"')"
+            die "R2 bucket '$BUCKET' has public access enabled, at https://${leaked#https://}. That bucket holds raw uploads under captures/ and run outputs under runs/, and R2 exposes whole buckets rather than prefixes -- so everything anyone has ever uploaded is world-readable. Turn it off under R2 -> $BUCKET -> Settings -> Public access. '$PUBLIC_BUCKET' is the bucket that is meant to be public."
+          fi
+
           if [ -n "${R2_PUBLIC_URL:-}" ]; then
             public="${R2_PUBLIC_URL%/}"
             echo "using the R2_PUBLIC_URL variable: $public (the managed r2.dev URL is left untouched)"
+            # An r2.dev hostname names one specific bucket, so when that is what was
+            # given it can be checked against the bucket it is supposed to name. A
+            # custom domain cannot be checked from here and is taken on trust.
+            case "$public" in
+              *.r2.dev)
+                api GET "$cf/r2/buckets/$PUBLIC_BUCKET/domains/managed"
+                want="$(printf '%s' "$BODY" | jq -r '.result.domain // empty')"
+                if [ -n "$want" ] && [ "${public#https://}" != "${want#https://}" ]; then
+                  die "R2_PUBLIC_URL is $public, but the managed r2.dev domain of the public bucket '$PUBLIC_BUCKET' is https://${want#https://}. An r2.dev hostname belongs to exactly one bucket, so this one is pointing at a different bucket -- published tiles would be addressed somewhere they are not. Set R2_PUBLIC_URL to https://${want#https://}, or to a custom domain on '$PUBLIC_BUCKET', or clear it and let this workflow enable the managed URL itself."
+                fi
+                if [ -z "$want" ]; then
+                  die "R2_PUBLIC_URL is an r2.dev hostname but '$PUBLIC_BUCKET' has no managed public URL enabled, so that hostname belongs to some other bucket. Clear R2_PUBLIC_URL and re-run to have this workflow enable the right one."
+                fi
+                ;;
+            esac
           elif [ "$DRY_RUN" = "true" ]; then
             echo "would enable the managed r2.dev public URL on '$PUBLIC_BUCKET'"
             public="https://example.invalid"
@@ -391,10 +418,28 @@ jobs:
           API_HEADERS=(-H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" -H "Accept: application/json")
           cf="https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}"
 
-          api GET "$cf/pages/projects?per_page=100"
-          ok || die "Cloudflare rejected the Pages project list (HTTP $STATUS). CLOUDFLARE_API_TOKEN needs 'Cloudflare Pages: Edit' on this account."
-          subdomain="$(printf '%s' "$BODY" | jq -r --arg n "$PAGES_PROJECT" \
-            'first((.result // [])[]? | select(.name == $n) | .subdomain) // empty')"
+          # By name, not by listing. The first run of this file listed with
+          # `?per_page=100` and Cloudflare answered HTTP 400, code 8000024, "Invalid list
+          # options provided. Review the `page` or `per_page` parameter." -- and the
+          # documentation names both parameters without giving either a range, so a
+          # different number would be another guess. A project is addressable by name, so
+          # the question does not have to be answered: this cannot paginate, cannot miss a
+          # project on a later page, and says exactly what it wants.
+          #
+          # 404 is the ordinary "not there yet" answer and is not an error. Anything else
+          # is reported as what Cloudflare actually said: the old message asserted the
+          # token was missing a scope, which was wrong here and would have sent somebody
+          # to re-mint a perfectly good token.
+          api GET "$cf/pages/projects/$PAGES_PROJECT"
+          if ok; then
+            subdomain="$(printf '%s' "$BODY" | jq -r '.result.subdomain // empty')"
+          elif [ "$STATUS" = "404" ]; then
+            subdomain=""
+          elif [ "$STATUS" = "403" ] || [ "$STATUS" = "401" ]; then
+            die "Cloudflare refused the Pages lookup (HTTP $STATUS). CLOUDFLARE_API_TOKEN needs 'Cloudflare Pages: Edit' on this account."
+          else
+            die "Cloudflare rejected the Pages lookup for '$PAGES_PROJECT' (HTTP $STATUS)."
+          fi
 
           if [ -n "$subdomain" ]; then
             echo "Pages project '$PAGES_PROJECT' exists."
@@ -571,6 +616,7 @@ jobs:
             "PUBLIC_WEB_BASE=$WEB_BASE" \
             "OBJECT_STORAGE_ENDPOINT_URL=$endpoint" \
             "OBJECT_STORAGE_BUCKET=$BUCKET" \
+            "OBJECT_STORAGE_REGION=auto" \
             "OBJECT_STORAGE_PUBLIC_BUCKET=$PUBLIC_BUCKET" \
             "OBJECT_STORAGE_ACCESS_KEY=$R2_ACCESS_KEY_ID" \
             "OBJECT_STORAGE_SECRET_KEY=$R2_SECRET_ACCESS_KEY" \
@@ -768,23 +814,40 @@ jobs:
             || { echo "::error::the deployed catalogue is missing a recipe."; exit 1; }
 
       - name: 3-5 · a real upload through the presigned path
+        id: upload
         env:
           API_WRITE_TOKEN: ${{ secrets.API_WRITE_TOKEN }}
         run: |
           set -euo pipefail
           auth=(-H "Authorization: Bearer ${API_WRITE_TOKEN}" -H 'Content-Type: application/json')
 
-          capture="$(curl -fsS -X POST "${auth[@]}" "$API/api/v1/captures" \
-            --data "$(jq -n --arg n "Provisioning check ${GITHUB_RUN_ID}" \
+          # `curl -f` hides the body, and the body of a failure here is a Problem
+          # document that says what went wrong. The first real run of this workflow
+          # answered 500 on the call below and the log recorded only "error: 500",
+          # which is the least useful possible version of that sentence.
+          post() {
+            local url="$1" data="$2" out code
+            out="$(mktemp)"
+            code="$(curl -sS -o "$out" -w '%{http_code}' -X POST "${auth[@]}" "$url" --data "$data")"
+            BODY="$(cat "$out")"; rm -f "$out"
+            case "$code" in
+              2??) printf '%s' "$BODY"; return 0 ;;
+            esac
+            echo "::error::POST $url answered $code" >&2
+            printf '%s\n' "$BODY" | head -c 2000 >&2
+            return 1
+          }
+
+          capture="$(post "$API/api/v1/captures" \
+            "$(jq -n --arg n "Provisioning check ${GITHUB_RUN_ID}" \
               '{name: $n, kind: "images", description: "Written by .github/workflows/provision.yml to prove presigning and CORS. Safe to delete."}')")"
           capture_id="$(printf '%s' "$capture" | jq -r '.id')"
           echo "capture $capture_id"
 
           printf 'provisioned by run %s\n' "$GITHUB_RUN_ID" > part.bin
           size="$(wc -c < part.bin)"
-          registered="$(curl -fsS -X POST "${auth[@]}" \
-            "$API/api/v1/captures/$capture_id/files" \
-            --data "$(jq -n --argjson b "$size" \
+          registered="$(post "$API/api/v1/captures/$capture_id/files" \
+            "$(jq -n --argjson b "$size" \
               '{filename: "provision-check.txt", contentType: "text/plain", bytes: $b}')")"
           file_id="$(printf '%s' "$registered" | jq -r '.file.id')"
           url="$(printf '%s' "$registered" | jq -r '.upload.parts[0].url')"
@@ -804,11 +867,20 @@ jobs:
           cat preflight.txt
           grep -qi "^access-control-allow-origin: \(\*\|$(printf '%s' "$WEB" | tr 'A-Z' 'a-z')\)$" preflight.lower \
             || { echo "::error::the bucket's CORS rule does not allow $WEB. infra/cors/apply-r2.sh ran against the wrong origin, or the rules were replaced since."; exit 1; }
-          grep -qi '^access-control-expose-headers:.*etag' preflight.lower \
-            || { echo "::error::the bucket does not expose ETag. A browser reads etag === null off each part and the multipart upload can never be completed -- see infra/cors/upload.json."; exit 1; }
+          # Access-Control-Expose-Headers is deliberately NOT checked here. It is a header
+          # of the actual response and not of the preflight -- the preflight carries
+          # allow-origin, allow-methods, allow-headers and max-age, and nothing else. This
+          # step used to grep the preflight for it and failed against R2, which is simply
+          # correct not to send it there; MinIO returning it on an OPTIONS is the lenient
+          # behaviour, not the standard one. The check moved to the PUT below, where a
+          # browser would actually read it.
 
-          # 4. The PUT itself, and the ETag off its response, which is what /complete needs.
-          curl -fsS -o /dev/null -D put.txt -X PUT --upload-file part.bin "$url"
+          # 4. The PUT itself, with an Origin so the response carries its CORS headers,
+          # and the ETag off it, which is what /complete needs.
+          curl -fsS -o /dev/null -D put.txt -X PUT -H "Origin: $WEB" --upload-file part.bin "$url"
+          tr -d '\r' < put.txt | tr 'A-Z' 'a-z' > put.lower
+          grep -qi '^access-control-expose-headers:.*etag' put.lower \
+            || { echo "::error::the bucket does not expose ETag on the upload response. A browser reads etag === null off each part and the multipart upload can never be completed -- see infra/cors/upload.json."; exit 1; }
           etag="$(tr -d '\r' < put.txt | awk 'tolower($1) == "etag:" { print $2 }' | tail -n1)"
           [ -n "$etag" ] || { echo "::error::the presigned PUT returned no ETag."; exit 1; }
           completed="$(curl -fsS -X POST "${auth[@]}" \
@@ -817,15 +889,78 @@ jobs:
           printf '%s\n' "$completed" | jq '{status, storageKey, bytes}'
           key="$(printf '%s' "$completed" | jq -r '.storageKey')"
 
-          # 5. And it is readable at the public URL -- the check that catches an endpoint
-          # and a public URL that belong to different buckets or different accounts.
-          code="$(curl -sS -o /dev/null -w '%{http_code}' "$PUBLIC_URL/$key")"
+          # 5. The public URL serves the PUBLIC bucket, so two things have to be true and
+          # they pull in opposite directions. This step used to assert only the first, of
+          # the uploaded object -- which was right when one bucket did both jobs and is
+          # exactly backwards now: a raw upload being readable there is the failure.
+
+          # 5a. Something actually published is readable. `app.seed.publish` wrote
+          # catalog.json to the public bucket in the job before this one, so a 200 here
+          # proves the public URL and the bucket behind it are the same bucket.
+          code="$(curl -sS -o /dev/null -w '%{http_code}' "$PUBLIC_URL/catalog.json")"
           if [ "$code" != "200" ]; then
-            echo "::error::the object uploaded fine but $PUBLIC_URL/<key> answered $code."
-            echo "::error::OBJECT_STORAGE_PUBLIC_URL and OBJECT_STORAGE_ENDPOINT_URL are crossed, or the public URL is not enabled on this bucket."
+            echo "::error::$PUBLIC_URL/catalog.json answered $code. The seed job published it to the public bucket, so either OBJECT_STORAGE_PUBLIC_URL names a different bucket than OBJECT_STORAGE_PUBLIC_BUCKET, or public access is not enabled on it."
             exit 1
           fi
+
+          # 5b. And the raw upload is NOT. It went to the private bucket under captures/,
+          # which is the whole point of there being two: R2 exposes a bucket and not a
+          # prefix, so one bucket in both roles publishes every scan anyone uploads. A 200
+          # here means that is what this deployment is doing.
+          code="$(curl -sS -o /dev/null -w '%{http_code}' "$PUBLIC_URL/$key")"
+          if [ "$code" = "200" ]; then
+            echo "::error::a raw upload is readable at $PUBLIC_URL/<key>. The public URL is serving the bucket that holds captures/ and runs/, so every upload and every run's logs and checkpoints are world-readable. Check OBJECT_STORAGE_PUBLIC_BUCKET and which bucket the public URL belongs to."
+            exit 1
+          fi
+          echo "a raw upload is not readable at the public URL ($code), which is correct."
           echo "the presigned path works end to end."
+
+      # The worker is the half of the deployment that does the work, and until this step
+      # nothing checked it. Every other check above proves the API accepts an upload;
+      # none proves anything will ever process one. The first deployment that passed
+      # verify had a worker machine Fly reported as "stopped" -- and Fly's deploy calls
+      # that "a good state", because it restores a machine to whatever state it was in
+      # before. A worker has no HTTP service, so nothing ever auto-starts it: uploads
+      # would queue forever behind a green check.
+      - name: 6 · the worker is running
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          curl -fsSL https://fly.io/install.sh | sh
+          export PATH="$HOME/.fly/bin:$PATH"
+          machines="$(flyctl machines list --app twin-api --json)"
+          printf '%s' "$machines" | jq -r '.[] | "\(.id)  \(.config.metadata.fly_process_group // "?")  \(.state)"'
+          workers="$(printf '%s' "$machines" | jq -r '[.[] | select(.config.metadata.fly_process_group == "worker")]')"
+          [ "$(printf '%s' "$workers" | jq 'length')" -gt 0 ] \
+            || { echo "::error::there is no worker machine at all. fly.toml's [processes] names one; the deploy did not create it."; exit 1; }
+          running="$(printf '%s' "$workers" | jq '[.[] | select(.state == "started")] | length')"
+          if [ "$running" -eq 0 ]; then
+            echo "::error::no worker machine is running. Uploads will be accepted and never processed."
+            for id in $(printf '%s' "$workers" | jq -r '.[].id'); do
+              echo "--- worker $id: last events ---"
+              flyctl machines status "$id" --app twin-api 2>&1 | tail -n 25 || true
+            done
+            echo "--- the worker's own log ---"
+            timeout 60 flyctl logs --app twin-api --no-tail 2>&1 | grep -iE 'worker|Traceback|Error|error:' | tail -n 80 || true
+            exit 1
+          fi
+          echo "$running worker machine(s) running."
+
+      # A 500 from the API is the server's story, not the client's, and the client is
+      # all this job could see until now. flyctl is installed only on failure because
+      # that is the only time it is wanted.
+      - name: What the API logged, when the check failed
+        if: failure()
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          curl -fsSL https://fly.io/install.sh | sh
+          export PATH="$HOME/.fly/bin:$PATH"
+          echo "--- the last of the app's own log ---"
+          timeout 60 flyctl logs --app twin-api --no-tail | tail -n 120 || \
+            echo "(could not read the app log; the FLY_API_TOKEN may be app-scoped)"
 
       - name: What to look at
         if: always()

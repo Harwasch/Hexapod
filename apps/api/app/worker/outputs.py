@@ -91,7 +91,18 @@ class UploadedArtifact:
     content_type: str
 
 
+#: Member types stated rather than guessed. `mimetypes` reads the host's own tables
+#: (/etc/mime.types and friends) on top of Python's, so a guess can differ between the
+#: worker image and a developer's machine. `collision.bin` is the packer's gzip-compressed
+#: collision grid (tools/captures splat_tiles `COLLISION_FORMAT`): the web clients fetch
+#: it and inflate it themselves, so it goes out as opaque bytes.
+_MEMBER_TYPES = {".bin": "application/octet-stream"}
+
+
 def _content_type(path: Path, fallback: str) -> str:
+    stated = _MEMBER_TYPES.get(path.suffix.lower())
+    if stated is not None:
+        return stated
     guessed, _ = mimetypes.guess_type(path.name)
     return guessed or fallback
 
@@ -130,15 +141,16 @@ def upload_artifact(
                 return None
             for member in sorted(p for p in source.rglob("*") if p.is_file()):
                 relative = member.relative_to(source).as_posix()
-                storage.put_object(
+                storage.upload_file(
                     f"{key}/{relative}",
-                    member.read_bytes(),
+                    member,
                     _content_type(member, "application/octet-stream"),
                 )
         else:
             if not source.is_file():
                 return None
-            storage.put_object(key, source.read_bytes(), ref.content_type)
+            # Streamed from disk: a trained splat can be larger than the worker's memory.
+            storage.upload_file(key, source, ref.content_type)
     except StorageUnavailableError:
         return None
     return UploadedArtifact(

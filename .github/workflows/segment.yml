@@ -1,0 +1,58 @@
+name: Segment scans (Modal GPU)
+
+# Runs tools/captures/segment_scene.py with SAM 2.1 and SigLIP 2 on a Modal GPU for the
+# published scans named in infra/modal/segment.py, and uploads instances.json,
+# instances.emb and a colour-by-instance PNG per scan as an artifact. Nothing is published.
+#
+# On a push to `living-models` (or a `seg-*` working branch) that touches the segmentation code (workflow_dispatch only
+# works once this file is on the default branch). The Modal token is the repository's.
+
+on:
+  push:
+    branches: [living-models, "seg-*"]
+    paths:
+      - infra/modal/segment.py
+      - tools/captures/segment_scene.py
+      - tools/captures/segment_models.py
+      - .github/workflows/segment.yml
+  workflow_dispatch:
+    inputs:
+      names:
+        description: Scans to segment (comma-separated names from infra/modal/segment.py)
+        type: string
+        default: spool,pumpkin,camp
+      views:
+        description: Views per scan
+        type: string
+        default: "24"
+
+concurrency:
+  group: segment
+  cancel-in-progress: false
+
+jobs:
+  segment:
+    name: Segment on a Modal GPU
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Check the Modal token is there
+        run: |
+          test -n "$MODAL_TOKEN_ID" -a -n "$MODAL_TOKEN_SECRET" \
+            || { echo "::error::MODAL_TOKEN_ID / MODAL_TOKEN_SECRET are not set"; exit 1; }
+      - name: modal run infra/modal/segment.py
+        run: |
+          uv run --with modal==1.5.5 modal run infra/modal/segment.py \
+            --names "${{ inputs.names || 'spool,pumpkin,camp' }}" \
+            --views "${{ inputs.views || '24' }}" --out segment-out
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: segmentation
+          path: segment-out
+          if-no-files-found: warn

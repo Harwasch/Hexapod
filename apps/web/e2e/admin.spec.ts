@@ -225,6 +225,7 @@ const catalogue = {
       label: "Modal",
       tiers: ["l4", "a100"],
       usdPerHourA100: 2.5,
+      usdPerHour: { l4: 0.7992, a100: 2.5 },
       interruptible: false,
       note: "Per-second billing, scale to zero. The reliable default.",
     },

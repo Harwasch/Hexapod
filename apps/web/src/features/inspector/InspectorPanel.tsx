@@ -2,6 +2,7 @@ import { Crosshair, ExternalLink } from "lucide-react";
 
 import { formatLatLon, formatLength } from "@twin/geo";
 import { GlassBadge, GlassButton, GlassTooltip } from "@twin/ui";
+import { MOTION_EVIDENCE_LABEL } from "@twin/world";
 
 import { useLayers as useLayerCatalog, useSite } from "@/api/queries";
 import { useScene } from "@/cesium/SceneContext";
@@ -197,7 +198,15 @@ export function InspectorPanel() {
                 )}
                 <dt>Motion</dt>
                 <dd data-testid="inspector-motion">
-                  Simulated · {livingSite.rigSourceNote}
+                  Simulated
+                  {livingSite.motionEvidence && (
+                    <span data-testid="inspector-motion-evidence">
+                      {" "}
+                      ({livingSite.motionEvidence}:{" "}
+                      {MOTION_EVIDENCE_LABEL[livingSite.motionEvidence]})
+                    </span>
+                  )}{" "}
+                  · {livingSite.rigSourceNote}
                   <br />
                   <span className="glass-subtle">
                     {motionState(livingSite.phase === "ready", living.animating)}
@@ -228,8 +237,11 @@ export function InspectorPanel() {
             </section>
           )}
           {selection.properties && selection.properties.length > 0 && (
-            <section aria-label="Properties">
-              <p className="glass-eyebrow">Properties</p>
+            // Feature properties can run to dozens of raw keys: folded until asked for.
+            <details className="disclosure" aria-label="Properties">
+              <summary className="disclosure__summary">
+                Properties ({selection.properties.length})
+              </summary>
               <dl className="dl" style={{ marginTop: "0.3rem", fontSize: "var(--text-xs)" }}>
                 {selection.properties.map((p) => (
                   <div key={p.key} style={{ display: "contents" }}>
@@ -238,7 +250,7 @@ export function InspectorPanel() {
                   </div>
                 ))}
               </dl>
-            </section>
+            </details>
           )}
         </div>
       )}

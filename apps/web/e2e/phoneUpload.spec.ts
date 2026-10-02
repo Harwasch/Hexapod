@@ -36,10 +36,29 @@ test.describe("the phone upload page", () => {
     await expect(page.locator("#status")).toContainText("Pick a file");
   });
 
-  test("a link with no token refuses rather than showing a dead picker", async ({ page }) => {
+  test("with no link the page asks for the phone key, once", async ({ page }) => {
+    await page.route("**/api/v1/phone/check", async (route) => {
+      const good = route.request().headers().authorization === "Bearer abcd-efgh-jkmn";
+      await route.fulfill({ status: good ? 204 : 401, body: good ? "" : "{}" });
+    });
     await page.goto("/upload.html");
-    await expect(page.locator("#status")).toContainText("not a valid handoff");
+    await expect(page.locator("#keyform")).toBeVisible();
     await expect(page.locator("#form")).toBeHidden();
+
+    await page.locator("#key").fill("abcd-efgh-jkmm");
+    await page.getByRole("button", { name: "Continue" }).click();
+    await expect(page.locator("#status")).toContainText("isn't right");
+
+    // Typed the way a phone types it: capitals and a trailing space are forgiven.
+    await page.locator("#key").fill("ABCD-EFGH-JKMN ");
+    await page.getByRole("button", { name: "Continue" }).click();
+    await expect(page.locator("#form")).toBeVisible();
+    await expect(page.locator("#keyform")).toBeHidden();
+
+    // Remembered: a reload goes straight to the picker.
+    await page.reload();
+    await expect(page.locator("#form")).toBeVisible();
+    await expect(page.locator("#keyform")).toBeHidden();
   });
 
   test("an expired link says so before asking for a file", async ({ page }) => {
@@ -125,6 +144,731 @@ test.describe("the phone upload page", () => {
     expect(puts).toEqual(["/part-1", "/part-2"]);
   });
 
+  test("a file longer than one window asks for the next window the way the API expects", async ({
+    page,
+  }) => {
+    // The API presigns 32 parts at a time and its request schema forbids unknown keys, so
+    // a misnamed field only shows on files over ~256 MB. The mock is as strict as it is.
+    const puts: string[] = [];
+    const windows: unknown[] = [];
+    const part = (n: number) => ({ partNumber: n, url: `https://storage.example/part-${n}` });
+    await page.route("**/api/v1/captures/*/files", async (route) => {
+      await route.fulfill({
+        status: 201,
+        contentType: "application/json",
+        body: JSON.stringify({
+          file: { id: FILE_ID, captureId: CAPTURE_ID, filename: "scene.ply", partsTotal: 3 },
+          upload: {
+            uploadId: "u-1",
+            storageKey: `captures/${CAPTURE_ID}/source/${FILE_ID}/scene.ply`,
+            partSize: 8,
+            partsTotal: 3,
+            nextPartNumber: 3,
+            expiresIn: 3600,
+            parts: [part(1), part(2)],
+          },
+        }),
+      });
+    });
+    await page.route("**/api/v1/captures/*/files/*/parts", async (route) => {
+      const body = route.request().postDataJSON() as Record<string, unknown>;
+      windows.push(body);
+      const keys = Object.keys(body).filter((k) => k !== "firstPartNumber" && k !== "count");
+      if (keys.length > 0 || body.firstPartNumber !== 3) {
+        await route.fulfill({ status: 422, contentType: "application/json", body: "{}" });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          uploadId: "u-1",
+          storageKey: `captures/${CAPTURE_ID}/source/${FILE_ID}/scene.ply`,
+          partSize: 8,
+          partsTotal: 3,
+          nextPartNumber: null,
+          expiresIn: 3600,
+          parts: [part(3)],
+        }),
+      });
+    });
+    await page.route("https://storage.example/**", async (route) => {
+      puts.push(new URL(route.request().url()).pathname);
+      await route.fulfill({
+        status: 200,
+        headers: {
+          ETag: '"etag-x"',
+          "access-control-allow-origin": "*",
+          "access-control-expose-headers": "ETag",
+        },
+        body: "",
+      });
+    });
+    await page.route("**/api/v1/captures/*/files/*/complete", async (route) => {
+      const body = route.request().postDataJSON() as { parts: { partNumber: number }[] };
+      expect(body.parts.map((p) => p.partNumber)).toEqual([1, 2, 3]);
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ id: FILE_ID, status: "complete" }),
+      });
+    });
+
+    await page.goto(`/upload.html#${token(soon())}`);
+    await page.locator("#file").setInputFiles({
+      name: "clip.mov",
+      mimeType: "video/quicktime",
+      buffer: Buffer.alloc(24, 7),
+    });
+
+    await expect(page.locator("#status")).toContainText("on its way", { timeout: 20_000 });
+    expect(windows).toEqual([{ firstPartNumber: 3 }]);
+    expect(puts).toEqual(["/part-1", "/part-2", "/part-3"]);
+  });
+
+  test("several photos upload one after another into the same capture", async ({ page }) => {
+    const registered: string[] = [];
+    const completed: string[] = [];
+
+    await page.route("**/api/v1/captures/*/files", async (route) => {
+      const { filename } = route.request().postDataJSON() as { filename: string };
+      registered.push(filename);
+      const id = `${FILE_ID.slice(0, -1)}${String(registered.length)}`;
+      await route.fulfill({
+        status: 201,
+        contentType: "application/json",
+        body: JSON.stringify({
+          file: { id, captureId: CAPTURE_ID, filename, partsTotal: 1 },
+          upload: {
+            uploadId: `u-${String(registered.length)}`,
+            storageKey: `captures/${CAPTURE_ID}/source/${id}/${filename}`,
+            partSize: 8,
+            partsTotal: 1,
+            nextPartNumber: null,
+            expiresIn: 3600,
+            parts: [{ partNumber: 1, url: `https://storage.example/${filename}` }],
+          },
+        }),
+      });
+    });
+    await page.route("https://storage.example/**", async (route) => {
+      await route.fulfill({
+        status: 200,
+        headers: {
+          ETag: '"etag-x"',
+          "access-control-allow-origin": "*",
+          "access-control-expose-headers": "ETag",
+        },
+        body: "",
+      });
+    });
+    await page.route("**/api/v1/captures/*/files/*/complete", async (route) => {
+      completed.push(route.request().url());
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ status: "complete" }),
+      });
+    });
+
+    await page.goto(`/upload.html#${token(soon())}`);
+    await page.locator("#file").setInputFiles([
+      { name: "a.jpg", mimeType: "image/jpeg", buffer: Buffer.alloc(8, 1) },
+      { name: "b.jpg", mimeType: "image/jpeg", buffer: Buffer.alloc(8, 2) },
+      { name: "c.jpg", mimeType: "image/jpeg", buffer: Buffer.alloc(8, 3) },
+    ]);
+
+    await expect(page.locator("#status")).toContainText("3 files are on their way", {
+      timeout: 20_000,
+    });
+    expect(registered).toEqual(["a.jpg", "b.jpg", "c.jpg"]);
+    expect(completed).toHaveLength(3);
+  });
+
+  test("with the key, a picked video becomes a placed capture and starts processing", async ({
+    page,
+    context,
+  }) => {
+    await context.grantPermissions(["geolocation"]);
+    await context.setGeolocation({ latitude: 44.9778, longitude: -93.265, accuracy: 7 });
+    await page.addInitScript(() => {
+      window.localStorage.setItem("twin.phoneKey", "abcd-efgh-jkmn");
+    });
+
+    const created: unknown[] = [];
+    const processed: unknown[] = [];
+    const tokens: string[] = [];
+    await page.route("**/api/v1/phone/captures", async (route) => {
+      expect(route.request().headers().authorization).toBe("Bearer abcd-efgh-jkmn");
+      created.push(route.request().postDataJSON());
+      await route.fulfill({
+        status: 201,
+        contentType: "application/json",
+        body: JSON.stringify({
+          capture: { id: CAPTURE_ID, name: "Phone capture", files: [], metadata: {} },
+          uploadToken: "h1.first",
+        }),
+      });
+    });
+    await page.route("**/api/v1/captures/*/files", async (route) => {
+      tokens.push(String(route.request().headers().authorization));
+      await route.fulfill({
+        status: 201,
+        contentType: "application/json",
+        // The renewal: every handoff-authorised response carries the next token.
+        headers: {
+          "x-handoff-token": "h1.second",
+          "access-control-expose-headers": "X-Handoff-Token",
+        },
+        body: JSON.stringify({
+          file: { id: FILE_ID, captureId: CAPTURE_ID, filename: "walk.mov", partsTotal: 1 },
+          upload: {
+            uploadId: "u-1",
+            storageKey: "k",
+            partSize: 8,
+            partsTotal: 1,
+            nextPartNumber: null,
+            expiresIn: 3600,
+            parts: [{ partNumber: 1, url: "https://storage.example/part-1" }],
+          },
+        }),
+      });
+    });
+    await page.route("https://storage.example/**", async (route) => {
+      await route.fulfill({
+        status: 200,
+        headers: {
+          ETag: '"etag-x"',
+          "access-control-allow-origin": "*",
+          "access-control-expose-headers": "ETag",
+        },
+        body: "",
+      });
+    });
+    await page.route("**/api/v1/captures/*/files/*/complete", async (route) => {
+      tokens.push(String(route.request().headers().authorization));
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ status: "complete" }),
+      });
+    });
+    await page.route("**/api/v1/phone/captures/*/process", async (route) => {
+      processed.push(route.request().postDataJSON());
+      await route.fulfill({
+        status: 202,
+        contentType: "application/json",
+        body: JSON.stringify({ id: "job-1", status: "not-started", steps: [] }),
+      });
+    });
+
+    await page.goto("/upload.html");
+    // The options are set before the pick, because the pick starts everything.
+    await page.getByText("Processing options").click();
+    await page.getByRole("radio", { name: "Best" }).check();
+    await page.getByRole("radio", { name: "2400 px" }).check();
+    await page.getByRole("radio", { name: "Full" }).check();
+    await page.getByRole("radio", { name: "Strict" }).check();
+    await expect(page.locator("#options summary")).toContainText(
+      "Best · 2400 px · Full detail · Strict bar",
+    );
+    await page.locator("#file").setInputFiles({
+      name: "walk.mov",
+      mimeType: "video/quicktime",
+      buffer: Buffer.alloc(8, 5),
+    });
+
+    await expect(page.locator("#status")).toContainText("processing has started", {
+      timeout: 20_000,
+    });
+    expect(created).toEqual([{ lat: 44.9778, lon: -93.265, accuracyM: 7 }]);
+    // A new capture is processed as a preview first: the frames at the chosen size, a
+    // short training run, and the quality bar's forecast. "Best" is for its Refine. "Full"
+    // detail is not sent: every scan is packaged whole, and Detail is this phone's own
+    // viewing budget, saved beside the other choices for the viewer and the map to read.
+    expect(processed).toEqual([
+      {
+        recipe: "photo-reconstruct",
+        params: {
+          normalize: { max_side: 2400 },
+          train: { schedule_scale: 0.1, cap_max: 200000, train_max_side: 800 },
+          quality: { mode: "preview", bar: "strict" },
+        },
+      },
+    ]);
+    // Only the options that apply to a video are left showing.
+    await expect(page.getByRole("radio", { name: "Y up" })).toBeHidden();
+    // The first call used the token the capture came with; the next used the renewal.
+    expect(tokens).toEqual(["Bearer h1.first", "Bearer h1.second"]);
+  });
+
+  test("a location request that never answers does not stop the upload", async ({ page }) => {
+    // What an iOS in-app browser, or an unanswered permission prompt, looks like: the
+    // callbacks are simply never called.
+    await page.addInitScript(() => {
+      window.localStorage.setItem("twin.phoneKey", "abcd-efgh-jkmn");
+      Object.defineProperty(navigator, "geolocation", {
+        value: { getCurrentPosition: () => undefined },
+        configurable: true,
+      });
+    });
+    const created: unknown[] = [];
+    await page.route("**/api/v1/phone/captures", async (route) => {
+      created.push(route.request().postDataJSON());
+      // Refused, so this test stops at the point it is about: the capture was asked for.
+      await route.fulfill({ status: 409, contentType: "application/json", body: "{}" });
+    });
+
+    await page.goto("/upload.html");
+    await page.locator("#file").setInputFiles({
+      name: "a.jpg",
+      mimeType: "image/jpeg",
+      buffer: Buffer.alloc(8, 1),
+    });
+    await expect.poll(() => created.length, { timeout: 15_000 }).toBe(1);
+    expect(created[0]).toEqual({});
+  });
+
+  test("a part that fails while the phone sleeps is sent again, not lost", async ({ page }) => {
+    await page.route("**/api/v1/captures/*/files", async (route) => {
+      await route.fulfill({
+        status: 201,
+        contentType: "application/json",
+        body: JSON.stringify({
+          file: { id: FILE_ID, captureId: CAPTURE_ID, filename: "a.jpg", partsTotal: 1 },
+          upload: {
+            uploadId: "u-1",
+            storageKey: "k",
+            partSize: 8,
+            partsTotal: 1,
+            nextPartNumber: null,
+            expiresIn: 3600,
+            parts: [{ partNumber: 1, url: "https://storage.example/part-1" }],
+          },
+        }),
+      });
+    });
+    let puts = 0;
+    await page.route("https://storage.example/**", async (route) => {
+      puts += 1;
+      // The first attempt dies the way a locked phone kills it: no response at all.
+      if (puts === 1) return route.abort("connectionreset");
+      await route.fulfill({
+        status: 200,
+        headers: {
+          ETag: '"etag-x"',
+          "access-control-allow-origin": "*",
+          "access-control-expose-headers": "ETag",
+        },
+        body: "",
+      });
+    });
+    await page.route("**/api/v1/captures/*/files/*/complete", (route) =>
+      route.fulfill({ status: 200, contentType: "application/json", body: "{}" }),
+    );
+
+    await page.goto(`/upload.html#${token(soon())}`);
+    await page.locator("#file").setInputFiles({
+      name: "a.jpg",
+      mimeType: "image/jpeg",
+      buffer: Buffer.alloc(8, 1),
+    });
+    await expect(page.locator("#status")).toContainText("on its way", { timeout: 20_000 });
+    expect(puts).toBe(2);
+  });
+
+  test("your captures show each one's real state and only the action that fits it", async ({
+    page,
+  }) => {
+    await page.addInitScript(() => {
+      window.localStorage.setItem("twin.phoneKey", "abcd-efgh-jkmn");
+    });
+    const file = (status: string) => ({ filename: "a.jpg", status, bytes: 8 });
+    const phone = { origin: "phone-key" };
+    await page.route(
+      (url) => url.pathname === "/api/v1/captures",
+      (route) =>
+        route.fulfill({
+          json: [
+            {
+              id: "done",
+              name: "Finished",
+              siteId: "site-1",
+              status: "complete",
+              metadata: phone,
+              files: [file("complete")],
+            },
+            // The capture's own status stays not-started while its run goes: the state
+            // has to come from the run, or this offers Process on something training.
+            {
+              id: "busy",
+              name: "Training",
+              siteId: null,
+              status: "not-started",
+              metadata: phone,
+              files: [file("complete")],
+            },
+            {
+              id: "half",
+              name: "Half sent",
+              siteId: null,
+              status: "not-started",
+              metadata: phone,
+              files: [file("complete"), file("in-progress")],
+            },
+            {
+              id: "idle",
+              name: "Never run",
+              siteId: null,
+              status: "not-started",
+              metadata: phone,
+              files: [file("complete"), file("complete")],
+            },
+            {
+              id: "desk",
+              name: "From the desktop",
+              siteId: "site-2",
+              status: "complete",
+              metadata: { origin: "console" },
+              files: [file("complete")],
+            },
+          ],
+        }),
+    );
+    const training = {
+      id: "job-busy",
+      captureId: "busy",
+      recipe: "photo-reconstruct",
+      status: "in-progress",
+      createdAt: new Date().toISOString(),
+      error: null,
+      steps: [
+        {
+          ordinal: 0,
+          stageId: "normalize",
+          status: "complete",
+          startedAt: null,
+          metrics: { durationS: 9 },
+        },
+        {
+          ordinal: 1,
+          stageId: "pose",
+          status: "complete",
+          startedAt: null,
+          metrics: { durationS: 35, stageCostUsd: 0.002, summary: "4/4 frames registered" },
+        },
+        {
+          ordinal: 2,
+          stageId: "mask",
+          status: "complete",
+          startedAt: null,
+          metrics: { skipped: true },
+        },
+        {
+          ordinal: 3,
+          stageId: "train",
+          status: "in-progress",
+          startedAt: new Date(Date.now() - 12 * 60_000).toISOString(),
+          // What the worker copies off the trainer's progress bar.
+          metrics: { progress: { done: 11100, total: 30000, elapsedS: 700, remainingS: 1200 } },
+        },
+      ],
+    };
+    await page.route(
+      (url) => url.pathname === "/api/v1/jobs",
+      (route) => route.fulfill({ json: [training] }),
+    );
+    await page.route(
+      (url) => url.pathname === "/api/v1/recipes",
+      (route) =>
+        route.fulfill({
+          json: {
+            recipes: [
+              {
+                name: "photo-reconstruct",
+                stages: [
+                  { id: "normalize", impl: "ffmpeg_frames", gpu: null },
+                  { id: "pose", impl: "colmap", gpu: { tier: "cpu4" } },
+                  { id: "mask", impl: "none", gpu: null },
+                  { id: "train", impl: "gsplat", gpu: { tier: "l4" } },
+                  { id: "register", impl: "catalog", gpu: null },
+                ],
+              },
+            ],
+            providers: [{ name: "modal", usdPerHour: { l4: 0.8, cpu4: 0.25 } }],
+          },
+        }),
+    );
+    const processed: string[] = [];
+    await page.route("**/api/v1/phone/captures/*/process", async (route) => {
+      processed.push(route.request().url());
+      await route.fulfill({ status: 202, json: { id: "j", status: "not-started", steps: [] } });
+    });
+
+    await page.goto("/upload.html");
+    const row = (name: string) => page.locator("#mine-list li", { hasText: name });
+    await expect(page.locator("#mine-list li")).toHaveCount(4);
+
+    await expect(row("Finished").getByRole("link", { name: "View in 3D" })).toHaveAttribute(
+      "href",
+      "/view.html#site-1",
+    );
+    await expect(row("Finished").getByRole("link", { name: /Download .* \.ply/ })).toHaveAttribute(
+      "href",
+      /\/api\/v1\/captures\/[^/]+\/splat\.ply$/,
+    );
+    await expect(row("Training")).toContainText("Train the 3D model");
+    // mask is a placeholder, so it is not counted: normalize, pose, train, register.
+    await expect(row("Training")).toContainText("Step 3 of 4");
+    await expect(row("Training")).toContainText("12 min");
+    // 12 min of L4 at $0.80/h is $0.16, plus pose's recorded $0.002.
+    await expect(row("Training")).toContainText("≈$0.16");
+    await expect(row("Training").getByRole("button", { name: "Process" })).toHaveCount(0);
+    await expect(row("Training")).toContainText("about 20 min left");
+    await expect(row("Training").getByRole("button", { name: "Progress" })).toBeVisible();
+    // A running capture can be watched: cameras as they are solved, splats as they train.
+    await expect(row("Training").getByRole("link", { name: "Watch live" })).toHaveAttribute(
+      "href",
+      "/view.html#live/busy",
+    );
+    await expect(row("Finished").getByRole("link", { name: "Watch live" })).toHaveCount(0);
+
+    await row("Training").getByRole("button", { name: "Progress" }).click();
+    const runningStep = page.locator('#stages li[data-state="running"]');
+    await expect(runningStep.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "11100");
+    // 12 min so far and 20 to go, at $0.80/h.
+    await expect(runningStep).toContainText(
+      "11,100 of 30,000 iterations · about 20 min left · ≈ $0.43 when done",
+    );
+
+    const stopped: string[] = [];
+    await page.route("**/api/v1/phone/captures/*/stop", async (route) => {
+      stopped.push(route.request().url());
+      await route.fulfill({ json: { ...training, status: "cancelled" } });
+    });
+    page.once("dialog", (dialog) => void dialog.accept());
+    await row("Training").getByRole("button", { name: "Stop" }).click();
+    await expect.poll(() => stopped.length).toBe(1);
+    expect(stopped[0]).toContain(`/api/v1/phone/captures/${training.captureId}/stop`);
+
+    await expect(row("Half sent")).toContainText("Upload didn't finish");
+    await expect(row("Half sent").getByRole("button")).toHaveCount(0);
+
+    await row("Never run").getByRole("button", { name: "Process" }).click();
+    await expect.poll(() => processed.length).toBe(1);
+    expect(processed[0]).toContain("/api/v1/phone/captures/idle/process");
+  });
+
+  test("a finished preview shows its forecast, and Refine starts the full pass", async ({
+    page,
+  }) => {
+    await page.addInitScript(() => {
+      window.localStorage.setItem("twin.phoneKey", "abcd-efgh-jkmn");
+      window.localStorage.setItem(
+        "twin.phoneOptions.v3",
+        JSON.stringify({ quality: "best", bar: "strict" }),
+      );
+    });
+    const phone = { origin: "phone-key" };
+    const files = [{ filename: "walk.mov", status: "complete", bytes: 8 }];
+    const verdict = (jobId: string, mode: string) => ({
+      jobId,
+      mode,
+      bar: "balanced",
+      barApplied: "balanced",
+      keepPct: mode === "preview" ? 62 : 71.4,
+      keepVerifiedPct: mode === "preview" ? null : 58.2,
+      contextPct: 90,
+      heldOutPsnr: mode === "preview" ? 23.04 : 25.31,
+      gaussians: { total: 200000, kept: 180000, keep: 120000, context: 60000, drop: 20000 },
+      roi: { center: [0.1, -0.2, 3.5], radius: 0.8 },
+      tips:
+        mode === "preview"
+          ? [
+              {
+                id: "from-above",
+                text: "Add frames from above: the highest one looked down at 12°.",
+              },
+              { id: "all-around", text: "Walk all the way around: about 90° has no frames." },
+            ]
+          : [],
+      gsdMm: null,
+      medianViews: 31,
+      coverageUrl: "https://tiles.example/coverage_enu.ply",
+    });
+    const finished = (id: string, captureId: string, mode: string) => ({
+      id,
+      captureId,
+      recipe: "photo-reconstruct",
+      status: "complete",
+      params: { quality: { mode, bar: "balanced" } },
+      createdAt: new Date().toISOString(),
+      error: null,
+      steps: [],
+    });
+    await page.route(
+      (url) => url.pathname === "/api/v1/captures",
+      (route) =>
+        route.fulfill({
+          json: [
+            {
+              id: "prev",
+              name: "Spool table",
+              siteId: "site-p",
+              status: "complete",
+              metadata: phone,
+              files,
+              quality: verdict("job-p", "preview"),
+            },
+            {
+              id: "done",
+              name: "Garden bench",
+              siteId: "site-d",
+              status: "complete",
+              metadata: phone,
+              files,
+              quality: verdict("job-d", "refine"),
+            },
+          ],
+        }),
+    );
+    await page.route(
+      (url) => url.pathname === "/api/v1/jobs",
+      (route) =>
+        route.fulfill({
+          json: [finished("job-p", "prev", "preview"), finished("job-d", "done", "refine")],
+        }),
+    );
+    const refined: { url: string; body: unknown }[] = [];
+    await page.route("**/api/v1/phone/captures/*/refine", async (route) => {
+      expect(route.request().headers().authorization).toBe("Bearer abcd-efgh-jkmn");
+      refined.push({ url: route.request().url(), body: route.request().postDataJSON() });
+      await route.fulfill({
+        status: 202,
+        json: { ...finished("job-p", "prev", "refine"), status: "not-started" },
+      });
+    });
+
+    await page.goto("/upload.html");
+    const row = (name: string) => page.locator("#mine-list li", { hasText: name });
+    await expect(page.locator("#mine-list > li")).toHaveCount(2);
+
+    // The preview: its forecast, what to capture next time, and Refine.
+    await expect(row("Spool table")).toContainText("Preview ready");
+    await expect(row("Spool table").locator(".forecast")).toHaveText(
+      "62% of the scene met the high-quality bar · held-out 23.0 dB",
+    );
+    await expect(row("Spool table").locator(".tips p")).toHaveCount(2);
+    await expect(row("Spool table").locator(".tips")).toContainText("Add frames from above");
+    await expect(row("Spool table").getByRole("link", { name: "View in 3D" })).toBeVisible();
+    // 62% kept: worth refining, so Refine leads and there is no advice against it.
+    await expect(
+      row("Spool table").getByRole("button", { name: "Refine", exact: true }),
+    ).toHaveClass("rowbtn");
+    await expect(row("Spool table").locator(".advice")).toHaveCount(0);
+
+    // The refined one: its result, and no Refine.
+    await expect(row("Garden bench").locator(".forecast")).toHaveText(
+      "Refined · 71% of the scene met the high-quality bar (58% verified by held-out frames) · " +
+        "held-out 25.3 dB · Balanced bar",
+    );
+    await expect(row("Garden bench").getByRole("button", { name: "Refine" })).toHaveCount(0);
+    await expect(row("Garden bench").locator(".tips")).toHaveCount(0);
+
+    await row("Spool table").getByRole("button", { name: "Refine" }).click();
+    await expect.poll(() => refined.length).toBe(1);
+    expect(refined[0]?.url).toContain("/api/v1/phone/captures/prev/refine");
+    // The phone's full-quality options and its quality bar; the server adds the region
+    // (the preview's, in the preview's own camera frame) and the mode.
+    expect(refined[0]?.body).toEqual({
+      params: {
+        normalize: { max_side: "auto" },
+        train: { schedule_floor: 1, density_scale: 2 },
+        quality: { bar: "strict" },
+      },
+    });
+  });
+
+  test("the status panel follows a run through its stages", async ({ page }) => {
+    await page.addInitScript(() => {
+      window.localStorage.setItem("twin.phoneKey", "abcd-efgh-jkmn");
+    });
+    await page.route(
+      (url) => url.pathname === "/api/v1/captures",
+      (route) =>
+        route.fulfill({
+          json: [
+            {
+              id: "busy",
+              name: "Training",
+              siteId: null,
+              status: "not-started",
+              metadata: { origin: "phone-key" },
+              files: [{ filename: "a.jpg", status: "complete", bytes: 8 }],
+            },
+          ],
+        }),
+    );
+    let polls = 0;
+    await page.route(
+      (url) => url.pathname === "/api/v1/jobs",
+      async (route) => {
+        polls += 1;
+        // One failed answer must not end the polling: that was the "Queued" forever bug.
+        if (polls === 2) return route.fulfill({ status: 502, body: "" });
+        const started = new Date(Date.now() - 60_000).toISOString();
+        await route.fulfill({
+          json: [
+            {
+              id: "job",
+              captureId: "busy",
+              recipe: "photo-reconstruct",
+              status: "in-progress",
+              createdAt: started,
+              error: null,
+              steps: [{ ordinal: 0, stageId: "pose", status: "in-progress", startedAt: started }],
+            },
+          ],
+        });
+      },
+    );
+    await page.route(
+      (url) => url.pathname === "/api/v1/recipes",
+      (route) =>
+        route.fulfill({
+          json: {
+            recipes: [
+              {
+                name: "photo-reconstruct",
+                stages: [
+                  { id: "normalize", impl: "ffmpeg_frames", gpu: null },
+                  { id: "pose", impl: "colmap", gpu: { tier: "cpu4" } },
+                  { id: "train", impl: "gsplat", gpu: { tier: "l4" } },
+                  { id: "register", impl: "catalog", gpu: null },
+                ],
+              },
+            ],
+            providers: [{ name: "modal", usdPerHour: { cpu4: 0.25 } }],
+          },
+        }),
+    );
+
+    await page.goto("/upload.html");
+    await page.locator("#mine-list li").getByRole("button", { name: "Progress" }).click();
+    await expect(page.locator("#status")).toContainText("Find where each photo was taken");
+    await expect(page.locator("#detail")).toContainText("so far");
+    // The whole pipeline is listed, with the running step explained and costed.
+    const stages = page.locator("#stages li");
+    await expect(stages).toHaveCount(4);
+    await expect(page.locator('#stages li[data-state="running"]')).toContainText("COLMAP");
+    await expect(page.locator('#stages li[data-state="running"]')).toContainText(
+      "Modal · 4 CPU cores",
+    );
+    await expect(page.locator("#run-cost")).toContainText("Compute so far: $0.0042");
+    await expect(page.locator("#live-link")).toHaveAttribute("href", "/view.html#live/busy");
+    await expect(page.locator("#live-link")).toBeVisible();
+  });
+
   test("a bucket that hides the ETag is reported as the CORS problem it is", async ({ page }) => {
     await page.route("**/api/v1/captures/*/files", async (route) => {
       await route.fulfill({
@@ -178,5 +922,89 @@ test.describe("the phone upload page", () => {
     // The entire reason upload.html is a separate entry: a phone on cellular should not
     // download a 3D globe to pick one file.
     expect(scripts.filter((url) => /cesium/i.test(url))).toEqual([]);
+  });
+
+  test("nothing scrolls sideways on a narrow phone", async ({ page }) => {
+    await page.setViewportSize({ width: 320, height: 700 });
+    await page.addInitScript(() => {
+      window.localStorage.setItem("twin.phoneKey", "abcd-efgh-jkmn");
+    });
+    const running = {
+      id: "job-r",
+      captureId: "long",
+      recipe: "photo-reconstruct",
+      status: "in-progress",
+      createdAt: new Date().toISOString(),
+      steps: [],
+    };
+    await page.route(
+      (url) => url.pathname === "/api/v1/captures",
+      (route) =>
+        route.fulfill({
+          json: [
+            {
+              id: "long",
+              name: "A capture with a very long name from the back paddock by the river",
+              metadata: { origin: "phone-key" },
+              files: [{ status: "complete", filename: "a.jpg", bytes: 1 }],
+              siteId: null,
+              createdAt: new Date().toISOString(),
+            },
+            // A finished preview: the longest row there is, forecast, tips and all.
+            {
+              id: "previewed",
+              name: "Another capture with a long name, previewed and waiting for Refine",
+              metadata: { origin: "phone-key" },
+              files: [{ status: "complete", filename: "a.jpg", bytes: 1 }],
+              siteId: "site-x",
+              createdAt: new Date().toISOString(),
+              quality: {
+                jobId: "job-x",
+                mode: "preview",
+                bar: "balanced",
+                barApplied: "balanced",
+                keepPct: 8,
+                contextPct: 40,
+                heldOutPsnr: 19.52,
+                gaussians: { total: 1, kept: 1, keep: 1, context: 0, drop: 0 },
+                roi: { center: [0, 0, 0], radius: 1 },
+                tips: [
+                  {
+                    id: "more-frames",
+                    text: "Move more slowly or take more photos: a typical point near the subject was in 3 frames, and 8 is what high quality needs.",
+                  },
+                ],
+                gsdMm: null,
+                medianViews: 3,
+                coverageUrl: null,
+              },
+            },
+          ],
+        }),
+    );
+    const previewed = {
+      id: "job-x",
+      captureId: "previewed",
+      recipe: "photo-reconstruct",
+      status: "complete",
+      params: { quality: { mode: "preview" } },
+      createdAt: new Date().toISOString(),
+      steps: [],
+    };
+    await page.route(
+      (url) => url.pathname === "/api/v1/jobs",
+      (route) => route.fulfill({ json: [running, previewed] }),
+    );
+    await page.goto("/upload.html");
+    await page.getByText("Processing options").click();
+    await expect(page.getByRole("button", { name: "Stop" })).toBeVisible();
+    // 8% kept: the capture is what is short, so Refine is offered but not as the next step.
+    await expect(page.getByRole("button", { name: "Refine anyway" })).toBeVisible();
+    await expect(page.locator(".advice")).toContainText("Only 8% of the scene");
+    await expect(page.locator(".tips")).toBeVisible();
+    const [scrollWidth, clientWidth] = await page.evaluate(
+      () => [document.documentElement.scrollWidth, document.documentElement.clientWidth] as const,
+    );
+    expect(scrollWidth).toBeLessThanOrEqual(clientWidth);
   });
 });

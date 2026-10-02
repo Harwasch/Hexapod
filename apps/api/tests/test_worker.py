@@ -29,9 +29,11 @@ from app.models import Artifact, Capture, Job, JobStep, Site
 from app.models.enums import CaptureKind, CaptureStatus, RunStatus
 from app.services import jobs as job_service
 from app.storage import NullStorage, ObjectStorage, S3Storage
-from app.worker.claim import Heartbeat, claim_next, heartbeat, release
+from app.worker import steps as step_service
+from app.worker.claim import Heartbeat, LeaseKeeper, claim_next, heartbeat, release
 from app.worker.config import WorkerConfig
 from app.worker.loop import Worker
+from app.worker.pipeline_bridge import Workdir
 from app.worker.runner import JobSupervisor, Terminal
 from tests.conftest import TEST_DATABASE_URL
 
@@ -56,6 +58,9 @@ def config(tmp_path: Path, worker_id: str = "worker-a", **overrides: object) -> 
         "idle_s": 0.05,
         "retry_backoff_s": 0.0,
         "terminate_grace_s": 2.0,
+        # These tests read counters the test stages leave in `work/` after a run, which
+        # a production worker tidies away once the run has finished.
+        "tidy_finished_runs": False,
     }
     defaults.update(overrides)
     return WorkerConfig(**defaults)  # type: ignore[arg-type]
@@ -183,6 +188,59 @@ def test_a_heartbeat_holds_the_lease_and_reports_what_it_could_not_hold(
     db.commit()
     assert heartbeat(session, job.id, worker_id="worker-a", lease_s=30) is Heartbeat.LOST
     session.close()
+    other.close()
+
+
+def test_a_heartbeat_renews_from_when_it_runs_not_from_when_its_transaction_began(
+    db: Session, sessions: sessionmaker[Session]
+) -> None:
+    """`now()` is the start of the *transaction*. The supervisor's session reads the job,
+    then spends as long as the capture takes to download before its first heartbeat, all
+    in the one transaction those reads opened -- and a lease of `now() + lease_s` written
+    then had lapsed before it was written. The heartbeat said HELD; another slot took
+    the job a moment later (2026-09-27)."""
+    capture = make_capture(db)
+    job = queue_job(db, capture)
+    session, other = sessions(), sessions()
+    try:
+        assert claim_next(session, worker_id="worker-a", lease_s=FAST_LEASE_S) is not None
+        assert session.get(Job, job.id) is not None  # a read: a transaction is open
+        time.sleep(FAST_LEASE_S + 0.5)
+
+        beat = heartbeat(session, job.id, worker_id="worker-a", lease_s=FAST_LEASE_S)
+        assert beat is Heartbeat.HELD
+
+        stolen = claim_next(other, worker_id="worker-b", lease_s=30)
+        assert stolen is None, "a lease renewed a moment ago was already claimable"
+    finally:
+        other.close()
+        session.close()
+
+
+def test_a_lease_keeper_holds_the_lease_while_its_owner_is_busy_and_then_lets_go(
+    db: Session, sessions: sessionmaker[Session]
+) -> None:
+    capture = make_capture(db)
+    job = queue_job(db, capture)
+    owner, other = sessions(), sessions()
+    assert claim_next(owner, worker_id="worker-a", lease_s=FAST_LEASE_S) is not None
+
+    with LeaseKeeper(sessions, job.id, worker_id="worker-a", lease_s=FAST_LEASE_S, interval_s=0.2):
+        # The owner does nothing at all for three leases: an upload, a download.
+        for _ in range(6):
+            time.sleep(FAST_LEASE_S / 2)
+            assert claim_next(other, worker_id="worker-b", lease_s=30) is None
+        release(owner, job.id, worker_id="worker-a")
+        # Released means released: the keeper's renewal is conditional on the owner, so
+        # it cannot put a lease back on a job this worker has let go of.
+        time.sleep(0.5)
+        db.expire_all()
+        let_go = db.get(Job, job.id)
+        assert let_go is not None and let_go.lease_expires_at is None
+    assert not [t for t in threading.enumerate() if t.name.startswith("lease-")]
+    taken = claim_next(other, worker_id="worker-b", lease_s=30)
+    assert taken is not None and taken.claimed_by == "worker-b"
+    owner.close()
     other.close()
 
 
@@ -330,6 +388,66 @@ def test_the_register_stage_describes_and_the_worker_registers(
     assert str(site.assets[0].source["url"]).endswith(f"runs/{job.id}/package/splat/tileset.json")
     # And the tileset really is in the bucket at that key.
     assert json.loads(storage.get_object(f"runs/{job.id}/package/splat/tileset.json"))
+
+
+def test_long_uploads_and_publishing_hold_no_transaction_open(
+    db: Session,
+    sessions: sessionmaker[Session],
+    storage: S3Storage,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Uploading a stage's outputs and copying the tileset to the public bucket take
+    minutes on a large capture. A session left idle in a transaction that long is killed
+    by the database (Neon's idle-in-transaction timeout), and the registration after it
+    then failed: seen on a 22.7M-gaussian, 514-tile upload. So during both, no session
+    may be idle in a transaction -- checked in Postgres itself, not by trusting code."""
+    from sqlalchemy import create_engine, text
+
+    from app.worker import outputs, registration
+
+    probe = create_engine(TEST_DATABASE_URL)
+    seen: list[tuple[str, int]] = []
+
+    def idle_in_transaction() -> int:
+        with probe.connect() as connection:
+            return int(
+                connection.execute(
+                    text(
+                        "SELECT count(*) FROM pg_stat_activity WHERE datname = "
+                        "current_database() AND pid <> pg_backend_pid() AND "
+                        "state LIKE 'idle in transaction%'"
+                    )
+                ).scalar_one()
+            )
+
+    real_upload, real_publish = outputs.upload_artifact, registration._publish_tileset
+
+    def upload(*args: object, **kwargs: object) -> object:
+        seen.append(("upload", idle_in_transaction()))
+        return real_upload(*args, **kwargs)  # type: ignore[arg-type]
+
+    def publish(*args: object, **kwargs: object) -> object:
+        seen.append(("publish", idle_in_transaction()))
+        return real_publish(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(outputs, "upload_artifact", upload)
+    monkeypatch.setattr(registration, "_publish_tileset", publish)
+
+    capture = make_capture(db, slug="large")
+    job = queue_job(db, capture, "t-ingest")
+    session = sessions()
+    assert claim_next(session, worker_id="worker-a", lease_s=30) is not None
+    session.close()
+    db.commit()  # the test's own session holds nothing either
+
+    try:
+        assert run_job(sessions, storage, job.id, config(tmp_path)) == "complete"
+    finally:
+        probe.dispose()
+    assert any(kind == "publish" for kind, _ in seen), seen
+    assert any(kind == "upload" for kind, _ in seen), seen
+    assert [entry for entry in seen if entry[1] != 0] == [], seen
 
 
 def test_a_stage_that_fails_every_time_dead_letters_and_says_why(
@@ -669,3 +787,55 @@ def test_a_recipe_that_does_not_resolve_is_dead_lettered_immediately(
     assert dead is not None
     assert dead.status is RunStatus.ERROR
     assert "did not resolve" in (dead.error or "")
+
+
+def test_a_running_stages_progress_line_reaches_its_row(db: Session, tmp_path: Path) -> None:
+    """A two-hour training stage says how far it has got while it runs, not after.
+
+    The supervisor reads the newest progress line from the stage's log on each heartbeat
+    and keeps it under `metrics.progress`; finishing the stage replaces it.
+    """
+    job = queue_job(db, make_capture(db))
+    step = step_service.start_step(
+        db, job.id, stage_id="train", ordinal=3, impl="gsplat", attempt=1
+    )
+    log_path = Workdir(tmp_path).log_path("train")
+    log_path.parent.mkdir(parents=True)
+    log_path.write_text("$ trainer\nstand-in: starting\n", encoding="utf-8")
+
+    JobSupervisor._report_progress(db, step, tmp_path)
+    assert step.metrics == {}
+
+    with log_path.open("a", encoding="utf-8") as handle:
+        handle.write("loss=0.04| :  37%|###7  | 11100/30000 [40:12<1:08:30,  4.60it/s]\n")
+    JobSupervisor._report_progress(db, step, tmp_path)
+    db.expire_all()
+    row = steps_by_stage(db, job.id)["train"]
+    assert row.metrics["progress"] == {
+        "done": 11100,
+        "total": 30000,
+        "elapsedS": 2412,
+        "remainingS": 4110,
+    }
+    assert step_service.report_progress(db, row, row.metrics["progress"]) is False
+
+    step_service.finish_step(
+        db, row, metrics={"iterations": 30000}, log_key=None, checkpoint_key=None, artifacts=[]
+    )
+    assert step_service.report_progress(db, row, {"done": 1, "total": 2}) is False
+    assert "progress" not in steps_by_stage(db, job.id)["train"].metrics
+
+
+def test_a_restarted_step_does_not_show_the_last_attempts_progress(db: Session) -> None:
+    job = queue_job(db, make_capture(db, "restart"))
+    step = step_service.start_step(
+        db, job.id, stage_id="train", ordinal=3, impl="gsplat", attempt=1
+    )
+    step_service.report_progress(db, step, {"done": 2994, "total": 3000})
+    step_service.finish_step(
+        db, step, metrics={"psnr": 23.1}, log_key=None, checkpoint_key=None, artifacts=[]
+    )
+    again = step_service.start_step(
+        db, job.id, stage_id="train", ordinal=3, impl="gsplat", attempt=2
+    )
+    assert again.metrics == {}

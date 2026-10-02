@@ -214,7 +214,7 @@ export function CommandBar() {
           className="mc-bar__input"
           value={text}
           onChange={(e) => setText(e.target.value)}
-          placeholder="Tell the agent what to do — “3D scan this field”, “mow Z-14 this week”, “fly to Yosemite”"
+          placeholder="Ask the agent — “fly to Yosemite”, “mow Z-14 this week”"
           aria-label="Ask or instruct the agent"
           disabled={busy}
           data-testid="command-input"
@@ -232,8 +232,13 @@ export function CommandBar() {
         <span className="mc-bar__sep" />
         <span>{SCALE_BAND_LABELS[camera.scaleBand]}</span>
         <span className="mc-muted">{formatResolution(camera.metersPerPixel, units)}</span>
-        <span className="mc-bar__sep" />
-        <span className="mc-muted">{worldLabel}</span>
+        {/* The default world goes without saying; only a different one is news. */}
+        {worldLabel !== "Open world" && (
+          <>
+            <span className="mc-bar__sep" />
+            <span className="mc-muted">{worldLabel}</span>
+          </>
+        )}
         {representation && (
           <>
             <span className="mc-bar__sep" />

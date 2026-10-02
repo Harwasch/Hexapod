@@ -44,6 +44,7 @@
 import { hash32 } from "./noise";
 import { nodeModes, nodeNaturalFrequencyHz } from "./modes";
 import { type MotionRig } from "./rig";
+import { SKIN_INFLUENCES, SKIN_WEIGHT_TOTAL, skinCount, type SplatSkin } from "./skin";
 import { clamp, softLimit, VEC3_ZERO, type Vec3 } from "./vec";
 import { gustDelaySeconds, maxWindMagnitude, windAt, type WindSettings } from "./wind";
 
@@ -293,7 +294,7 @@ export function splatFlutter(splatIndex: number, node: number, field: FlutterFie
  * per-splat loop is a hash, eight table reads and a dozen multiply-adds. All zero for a node
  * that does not flutter, which the caller is expected to test for before calling.
  */
-function flutterCoefficients(field: FlutterField): Float64Array {
+export function flutterCoefficients(field: FlutterField): Float64Array {
   const nodes = field.amplitudeM.length;
   const coefficients = new Float64Array(nodes * 4);
   for (let n = 0; n < nodes; n += 1) {
@@ -326,18 +327,34 @@ export function applyFlutter(
   assignment: Uint16Array,
   field: FlutterField,
   count: number,
+  keys?: Uint32Array,
+  /** Blends each splat's coefficients over its skin's nodes; `assignment` is then not read. */
+  skin?: SplatSkin,
 ): void {
   if (field.still) return;
   const coefficients = flutterCoefficients(field);
+  if (skin !== undefined) {
+    blendCoefficients(skin, coefficients, count, keys, target);
+    return;
+  }
   const amplitudes = field.amplitudeM;
-  const limit = Math.min(count, assignment.length, Math.floor(target.length / 3));
+  const limit = Math.min(
+    count,
+    assignment.length,
+    Math.floor(target.length / 3),
+    keys === undefined ? Number.POSITIVE_INFINITY : keys.length,
+  );
   for (let i = 0; i < limit; i += 1) {
     const node = assignment[i] ?? 0;
     if ((amplitudes[node] ?? 0) === 0) continue;
+    // The splat's flutter identity: its index, or — for a tiled capture, where an index is
+    // only a position in whichever tiles happen to be selected — a key derived from where it
+    // stands (`positionKeys`).
+    const key = keys === undefined ? i : (keys[i] ?? 0);
     // `hash32` written out: it lives in another module, and 150,000 calls a frame that the
     // JIT declines to inline is most of this loop's cost. Identical arithmetic, and
     // `flutter.test.ts` pins the two together through `splatFlutter`.
-    const h0 = (Math.imul(FLUTTER_SEED | 0, 0x9e3779b1) ^ (i | 0)) >>> 0;
+    const h0 = (Math.imul(FLUTTER_SEED | 0, 0x9e3779b1) ^ (key | 0)) >>> 0;
     const h1 = Math.imul(h0 ^ (h0 >>> 16), 0x85ebca6b) >>> 0;
     const h2 = Math.imul(h1 ^ (h1 >>> 13), 0xc2b2ae35) >>> 0;
     const h = (h2 ^ (h2 >>> 16)) >>> 0;
@@ -362,6 +379,70 @@ export function applyFlutter(
       (target[base + 2] ?? 0) +
       wave1 * (AXIS_TABLE[axis + 2] ?? 1) +
       wave2 * (AXIS_TABLE[axis + 5] ?? 0);
+  }
+}
+
+/**
+ * {@link applyFlutter} under a skin: each splat's four coefficients are the weighted blend of
+ * its nodes' (`Σ_k (w_k/1023)·c[node_k]`) — the waveform is linear in them, so this is the
+ * blend of the nodes' shimmer — and the rest is the same per-splat hash and table reads.
+ */
+function blendCoefficients(
+  skin: SplatSkin,
+  coefficients: Float64Array,
+  count: number,
+  keys: Uint32Array | undefined,
+  target: Float32Array,
+): void {
+  const limit = Math.min(
+    count,
+    skinCount(skin),
+    Math.floor(target.length / 3),
+    keys === undefined ? Number.POSITIVE_INFINITY : keys.length,
+  );
+  // Module bindings copied to locals: see `deformSkinned`.
+  const influences = SKIN_INFLUENCES;
+  const scale = 1 / SKIN_WEIGHT_TOTAL;
+  const seed = FLUTTER_SEED;
+  const phaseMask = PHASE_MASK;
+  const axisMask = AXIS_MASK;
+  const phases = PHASE_TABLE;
+  const axes = AXIS_TABLE;
+  const { nodes, weights } = skin;
+  for (let i = 0; i < limit; i += 1) {
+    let c0 = 0;
+    let c1 = 0;
+    let c2 = 0;
+    let c3 = 0;
+    const at = i * influences;
+    for (let k = 0; k < influences; k += 1) {
+      const q = weights[at + k] ?? 0;
+      if (q === 0) continue;
+      const w = q * scale;
+      const c = (nodes[at + k] ?? 0) * 4;
+      c0 += w * (coefficients[c] ?? 0);
+      c1 += w * (coefficients[c + 1] ?? 0);
+      c2 += w * (coefficients[c + 2] ?? 0);
+      c3 += w * (coefficients[c + 3] ?? 0);
+    }
+    if (c0 === 0 && c1 === 0 && c2 === 0 && c3 === 0) continue;
+    const key = keys === undefined ? i : (keys[i] ?? 0);
+    // `hash32`, written out as `applyFlutter` does.
+    const h0 = (Math.imul(seed | 0, 0x9e3779b1) ^ (key | 0)) >>> 0;
+    const h1 = Math.imul(h0 ^ (h0 >>> 16), 0x85ebca6b) >>> 0;
+    const h2 = Math.imul(h1 ^ (h1 >>> 13), 0xc2b2ae35) >>> 0;
+    const h = (h2 ^ (h2 >>> 16)) >>> 0;
+    const p1 = (h & phaseMask) * 2;
+    const p2 = ((h >>> 10) & phaseMask) * 2;
+    const axis = ((h >>> 20) & axisMask) * 6;
+    const wave1 = c0 * (phases[p1] ?? 1) + c1 * (phases[p1 + 1] ?? 0);
+    const wave2 = c2 * (phases[p2] ?? 1) + c3 * (phases[p2 + 1] ?? 0);
+    const base = i * 3;
+    target[base] = (target[base] ?? 0) + wave1 * (axes[axis] ?? 0) + wave2 * (axes[axis + 3] ?? 0);
+    target[base + 1] =
+      (target[base + 1] ?? 0) + wave1 * (axes[axis + 1] ?? 0) + wave2 * (axes[axis + 4] ?? 0);
+    target[base + 2] =
+      (target[base + 2] ?? 0) + wave1 * (axes[axis + 2] ?? 1) + wave2 * (axes[axis + 5] ?? 0);
   }
 }
 
@@ -394,3 +475,75 @@ function splatFlutterInto(
   out[1] = wave1 * (AXIS_TABLE[axis + 1] ?? 0) + wave2 * (AXIS_TABLE[axis + 4] ?? 0);
   out[2] = wave1 * (AXIS_TABLE[axis + 2] ?? 1) + wave2 * (AXIS_TABLE[axis + 5] ?? 0);
 }
+
+/** Seed of {@link positionKey}. Distinct from {@link FLUTTER_SEED}, which hashes the key. */
+const POSITION_KEY_SEED = 0x7e57_ab1e;
+
+/** SPZ's position grid, metres: every coordinate of a tiled capture is a multiple of it. */
+export const POSITION_KEY_QUANTUM_M = 1 / 4096;
+
+/**
+ * A splat's flutter identity from **where it stands**, not from its index.
+ *
+ * A splat index is a position in whichever tiles a level-of-detail tileset happens to have
+ * selected, so it changes every time a tile loads, unloads or is replaced by its children. A
+ * key over the snapped canonical position does not: the same gaussian gets the same shimmer
+ * whichever tile carries it and wherever that tile lands in the aggregate, and two gaussians
+ * at one position — a leaf and the parent merged over it, say — flutter identically.
+ *
+ * The coordinates are rounded onto `quantum`'s grid first. Tiled positions already sit on it
+ * exactly (`splat_tiles.py` snaps to 1/4096 m), so for them this is an exact integer, and the
+ * key is a pure function of bits the tiler wrote.
+ */
+export function positionKey(
+  x: number,
+  y: number,
+  z: number,
+  quantum: number = POSITION_KEY_QUANTUM_M,
+): number {
+  const ix = Math.round(x / quantum);
+  const iy = Math.round(y / quantum);
+  const iz = Math.round(z / quantum);
+  return hash32(iz, hash32(iy, hash32(ix, POSITION_KEY_SEED)));
+}
+
+/** {@link positionKey} for every splat of a flat `[x, y, z, …]` array. */
+export function positionKeys(
+  positions: Float32Array,
+  quantum: number = POSITION_KEY_QUANTUM_M,
+  out?: Uint32Array,
+): Uint32Array {
+  const count = Math.floor(positions.length / 3);
+  const keys = out ?? new Uint32Array(count);
+  for (let i = 0; i < count; i += 1) {
+    keys[i] = positionKey(
+      positions[i * 3] ?? 0,
+      positions[i * 3 + 1] ?? 0,
+      positions[i * 3 + 2] ?? 0,
+      quantum,
+    );
+  }
+  return keys;
+}
+
+/**
+ * The 32-bit hash a splat's flutter is read from: bits 0–9 the first phase step, 10–19 the
+ * second, 20–27 the axis pair. What `applyFlutter` computes per splat per frame, exposed so a
+ * GPU evaluation can be handed it once per splat instead of recomputing it.
+ */
+export function flutterHash(key: number): number {
+  return hash32(key, FLUTTER_SEED);
+}
+
+/**
+ * The tables and packing a GPU evaluation of {@link applyFlutter} needs to agree with it.
+ *
+ * `axes` is {@link AXIS_TABLE} itself (six numbers per entry: the two orthonormal axes), so a
+ * shader reads the same directions rather than re-deriving them in float32; the phase step is
+ * `2π / phaseSteps`, and the hash layout is the one {@link flutterHash} documents.
+ */
+export const FLUTTER_GPU_LAYOUT = {
+  phaseSteps: PHASE_STEPS,
+  axisCount: AXIS_COUNT,
+  axes: AXIS_TABLE,
+} as const;

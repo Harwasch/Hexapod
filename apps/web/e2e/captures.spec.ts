@@ -42,7 +42,9 @@ test.describe("the Captures panel", () => {
 
     const card = page.getByTestId("capture-card-capture-1");
     await expect(card).toBeVisible();
-    await expect(card.getByTestId("capture-status")).toHaveText("not-started");
+    await expect(card.getByTestId("capture-status")).toHaveAttribute("data-status", "not-started");
+    // The badge says it in plain words; the API's value is kept on the attribute.
+    await expect(card.getByTestId("capture-status")).toHaveText("Ready");
     await expect(card.getByTestId("capture-file")).toContainText("orchard.mp4");
     // The bar is a real progressbar, and it ends where the file ends.
     const bar = card.getByRole("progressbar").first();
@@ -140,7 +142,10 @@ test.describe("the Captures panel", () => {
     await card.getByTestId("capture-process").click();
 
     await expect(card.getByTestId("capture-job")).toBeVisible();
-    await expect(card.getByTestId("capture-job-status")).toHaveText("not-started");
+    await expect(card.getByTestId("capture-job-status")).toHaveAttribute(
+      "data-status",
+      "not-started",
+    );
     await expect(card.getByTestId("capture-job-queued")).toBeVisible();
     await expect(card.getByTestId("capture-stage")).toHaveCount(0);
     expect(state.jobs[0]).toMatchObject({ recipe: "photo-reconstruct", status: "not-started" });
@@ -153,16 +158,27 @@ test.describe("the Captures panel", () => {
     const card = page.getByTestId("capture-card-capture-1");
     await card.getByTestId("capture-process").click();
 
-    await expect(card.getByTestId("capture-job-status")).toHaveText("in-progress", {
-      timeout: 40_000,
-    });
+    await expect(card.getByTestId("capture-job-status")).toHaveAttribute(
+      "data-status",
+      "in-progress",
+      {
+        timeout: 40_000,
+      },
+    );
     await card.getByTestId("capture-job-cancel").click();
 
-    await expect(card.getByTestId("capture-job-status")).toHaveText("cancelled");
+    await expect(card.getByTestId("capture-job-status")).toHaveAttribute(
+      "data-status",
+      "cancelled",
+    );
     // It stays cancelled: the worker stopped, it did not carry on to the next stage.
-    await expect(card.getByTestId("capture-job-status")).toHaveText("cancelled", {
-      timeout: 10_000,
-    });
+    await expect(card.getByTestId("capture-job-status")).toHaveAttribute(
+      "data-status",
+      "cancelled",
+      {
+        timeout: 10_000,
+      },
+    );
     expect(state.jobs[0]).toMatchObject({ status: "cancelled" });
   });
 
@@ -175,7 +191,9 @@ test.describe("the Captures panel", () => {
     const card = page.getByTestId("capture-card-capture-1");
     await card.getByTestId("capture-process").click();
 
-    await expect(card.getByTestId("capture-job-status")).toHaveText("error", { timeout: 40_000 });
+    await expect(card.getByTestId("capture-job-status")).toHaveAttribute("data-status", "error", {
+      timeout: 40_000,
+    });
     await expect(card.getByTestId("capture-job-error")).toContainText("will not be retried");
     const retry = card.getByTestId("capture-job-retry");
     await expect(retry).toHaveText(/Retry from Train/);
@@ -185,9 +203,13 @@ test.describe("the Captures panel", () => {
     await retry.click();
 
     // The two stages that succeeded are kept, and the run picks up at the third.
-    await expect(card.getByTestId("capture-job-status")).toHaveText("complete", {
-      timeout: 40_000,
-    });
+    await expect(card.getByTestId("capture-job-status")).toHaveAttribute(
+      "data-status",
+      "complete",
+      {
+        timeout: 40_000,
+      },
+    );
     await expect(card.getByTestId("capture-stage")).toHaveCount(5);
   });
 
@@ -214,11 +236,99 @@ test.describe("the Captures panel", () => {
 
     // The mock worker advances one stage per poll of the job list.
     await expect(card.getByTestId("capture-stage").first()).toContainText("Normalize");
-    await expect(card.getByTestId("capture-job-status")).toHaveText("complete", {
-      timeout: 40_000,
-    });
+    await expect(card.getByTestId("capture-job-status")).toHaveAttribute(
+      "data-status",
+      "complete",
+      {
+        timeout: 40_000,
+      },
+    );
     await expect(card.getByTestId("capture-stage")).toHaveCount(5);
     await expect(card.getByTestId("capture-fly-to")).toBeVisible();
+  });
+
+  test("a new capture from phone makes an empty capture and shows its QR code", async ({
+    page,
+  }) => {
+    const state = await boot(page);
+    await openPanel(page);
+
+    await page.getByTestId("capture-from-phone").click();
+
+    // One capture, with no files, waiting for the phone -- and the code is already up,
+    // without a second click on the card's own "Add from phone".
+    const qr = page.getByTestId("handoff-qr");
+    await expect(qr).toBeVisible();
+    await expect.poll(() => state.handoffs).toEqual(["capture-1"]);
+    expect(state.captures).toHaveLength(1);
+    const created = state.captures[0] as { files: unknown[]; metadata: Record<string, unknown> };
+    expect(created.files).toEqual([]);
+    // No recipe: nothing has been picked, so the card proposes one from what arrives.
+    expect(created.metadata.origin).toBe("phone");
+    expect(created.metadata.recipe).toBeUndefined();
+    expect(typeof created.metadata.lat).toBe("number");
+    await expect(
+      page.getByTestId("capture-card-capture-1").getByTestId("capture-status"),
+    ).toHaveAttribute("data-status", "awaiting-files");
+
+    // Closing it brings the button back rather than minting another code on its own.
+    await page.getByRole("button", { name: "Close the phone handoff" }).first().click();
+    await expect(page.getByTestId("capture-from-phone")).toBeVisible();
+    expect(state.handoffs).toEqual(["capture-1"]);
+  });
+
+  test("a video added to a capture that began as a splat is reconstructed, not packaged", async ({
+    page,
+  }) => {
+    const state = await boot(page);
+    const now = new Date().toISOString();
+    // A splat was dropped (so `splat-ingest` was proposed and stored), then a phone sent
+    // a video into the same capture. The files decide the recipe, not the proposal.
+    state.captures.push({
+      id: "capture-1",
+      slug: "capture-1",
+      name: "Mixed",
+      kind: "gaussian-splat",
+      description: null,
+      status: "not-started",
+      siteId: null,
+      device: null,
+      sensor: null,
+      capturedAt: null,
+      temporalExtent: null,
+      georefMethod: null,
+      scaleSource: null,
+      uncertaintyM: null,
+      license: null,
+      provenance: null,
+      attribution: [],
+      metadata: { recipe: "splat-ingest", origin: "console", lat: 1, lon: 2 },
+      files: [
+        {
+          id: "file-1",
+          captureId: "capture-1",
+          filename: "walkaround.mov",
+          contentType: "video/quicktime",
+          bytes: 8,
+          checksum: null,
+          storageKey: "captures/capture-1/source/file-1/walkaround.mov",
+          status: "complete",
+          uploadId: null,
+          partsCompleted: 1,
+          partsTotal: 1,
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+      createdAt: now,
+      updatedAt: now,
+    });
+    await openPanel(page);
+
+    const card = page.getByTestId("capture-card-capture-1");
+    await card.getByTestId("capture-process").click();
+    await expect.poll(() => state.jobs.length).toBe(1);
+    expect(state.jobs[0]).toMatchObject({ recipe: "photo-reconstruct" });
   });
 
   test("with the API offline the drop zone says so and refuses files", async ({ page }) => {

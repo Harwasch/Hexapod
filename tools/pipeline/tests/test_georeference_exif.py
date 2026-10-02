@@ -42,6 +42,7 @@ import numpy as np
 import pytest
 
 import exif
+import gaussians
 import sfm
 import tree_frames
 from conftest import FIXTURE_PLY, make_recipe
@@ -171,7 +172,13 @@ def test_the_residual_is_computed_from_the_transform_not_from_colmaps_output() -
 # --- the located branch, which needs no COLMAP either --------------------------------
 
 
-def _georeference_only(root: Path, frames: Path, *, source_meta: dict[str, object] | None) -> Path:
+def _georeference_only(
+    root: Path,
+    frames: Path,
+    *,
+    source_meta: dict[str, object] | None,
+    params: dict[str, object] | None = None,
+) -> Path:
     workdir = Workdir.create(root)
     target = workdir.input_path("frames")
     target.mkdir(parents=True, exist_ok=True)
@@ -182,7 +189,9 @@ def _georeference_only(root: Path, frames: Path, *, source_meta: dict[str, objec
         workdir.input_path("source_meta.json").write_text(json.dumps(source_meta), "utf-8")
         inputs.append("source_meta.json")
     execute(
-        make_recipe([{"id": "georeference", "impl": "exif_gps"}], inputs=inputs),
+        make_recipe(
+            [{"id": "georeference", "impl": "exif_gps", "params": params or {}}], inputs=inputs
+        ),
         workdir,
         RunnerSet(cpu=LocalRunner()),
     )
@@ -214,12 +223,59 @@ def test_a_video_location_places_the_capture_and_claims_nothing_else(tmp_path: P
     assert "not aligned" in georef["note"]
 
 
-def test_frames_with_no_exif_and_no_location_say_what_to_do_instead(tmp_path: Path) -> None:
+def test_frames_with_no_exif_no_location_and_no_coordinate_say_what_to_do(
+    tmp_path: Path,
+) -> None:
+    """Refused, rather than placed at (0, 0): the Gulf of Guinea is not a default."""
     frames = tmp_path / "frames"
     tree_frames.render_orbit(FIXTURE_PLY, frames, count=3)
 
-    with pytest.raises(Exception, match="manual_placement"):
+    with pytest.raises(Exception, match="lat/lon"):
         _georeference_only(tmp_path / "run", frames, source_meta=None)
+
+
+def test_a_video_with_no_location_falls_back_to_the_captures_own_coordinate(
+    tmp_path: Path,
+) -> None:
+    """The console sends where its camera was looking; the worker hands it over as
+    `lat`/`lon`. It is used, and recorded as the hand placement it is."""
+    frames = tmp_path / "frames"
+    tree_frames.render_orbit(FIXTURE_PLY, frames, count=3)
+
+    georef = json.loads(
+        _georeference_only(
+            tmp_path / "run",
+            frames,
+            source_meta={"location": None},
+            params={"lat": 51.5007, "lon": -0.1246, "heading_deg": 30.0},
+        ).read_text()
+    )
+
+    assert (georef["lat"], georef["lon"], georef["height"]) == (51.5007, -0.1246, 0.0)
+    assert georef["georefMethod"] == "manual"
+    assert georef["scaleSource"] == "unresolved"
+    assert georef["uncertaintyM"] == UNALIGNED_UNCERTAINTY_M
+    # No poses were given, so nothing could level it -- and the frame says so rather than
+    # claiming a rotation. `place` recentres it regardless.
+    assert georef["frame"]["source"] == "none"
+    assert georef["frame"]["recentre"] is True
+    assert georef["frame"]["headingDeg"] == 30.0
+
+
+def test_a_location_on_the_video_wins_over_the_captures_coordinate(tmp_path: Path) -> None:
+    frames = tmp_path / "frames"
+    tree_frames.render_orbit(FIXTURE_PLY, frames, count=3)
+
+    georef = json.loads(
+        _georeference_only(
+            tmp_path / "run",
+            frames,
+            source_meta={"location": {"lat": 37.8, "lon": -122.4, "alt": 12.5}},
+            params={"lat": 51.5007, "lon": -0.1246},
+        ).read_text()
+    )
+
+    assert (georef["lat"], georef["georefMethod"]) == (37.8, "exif-gps")
 
 
 def test_fixes_without_a_pose_model_locate_but_do_not_align(tmp_path: Path) -> None:
@@ -338,8 +394,85 @@ def test_exact_gps_recovers_the_frame_it_was_written_in(
     )
     assert georef["alignment"]["scale"] == pytest.approx(fit.scale, rel=0.01)
 
-    # And what it did not do, said in the document rather than left to be discovered.
-    assert georef["alignment"]["applied"] is False
+    # Applied now, by `place`, from the `frame` block that carries the same similarity.
+    assert georef["alignment"]["applied"] is True
+    frame = georef["frame"]
+    assert frame["source"] == "exif-gps-similarity" and frame["recentre"] is False
+    assert frame["scale"] == georef["alignment"]["scale"]
+
+
+@requires_colmap
+def test_placing_by_the_similarity_puts_the_reconstruction_on_the_scene_it_came_from(
+    orbit: tuple[Path, Path, tree_frames.Truth], tmp_path: Path
+) -> None:
+    """The alignment, applied -- and checked against the scene rather than against itself.
+
+    COLMAP's sparse points are handed to `place` as if they were a trained splat. What
+    comes out must sit on the committed tree the orbit was rendered from, upright, in the
+    east/north/up frame about the georeferenced origin: each point within centimetres of
+    a fixture gaussian or of the rendered ground. Placed without the similarity
+    (identity), they are not, which is what `applied: false` used to mean.
+
+    Measured here on 2026-09-23: 0.011 m median with the similarity, 0.406 m without it.
+    The bounds are 0.1 m and a factor of ten, where a regression would show.
+    """
+    frames, poses, truth = orbit
+    georef = _align(tmp_path / "exact", frames, poses, 0.0, truth)
+    points = sfm.read_points(poses)
+    fixture = gaussians.read_splat(FIXTURE_PLY)
+    # The fixture is in ENU about ORIGIN; the georeference's origin is the median fix,
+    # which on this orbit is ORIGIN raised by the camera height.
+    offset = exif.enu_offsets(
+        (exif.Fix(name="o", lat=georef["lat"], lon=georef["lon"], alt=georef["height"]),),
+        ORIGIN,
+    )["o"]
+    scene = fixture.xyz.astype(np.float64) - np.asarray(offset)
+
+    def placed_distance(frame: dict[str, Any]) -> float:
+        workdir = Workdir.create(tmp_path / f"place-{frame['source']}")
+        trained = workdir.input_path("trained.ply")
+        trained.parent.mkdir(parents=True, exist_ok=True)
+        gaussians.write_ply(trained, _points_as_gaussians(points))
+        (workdir.input_path("georef.json")).write_text(json.dumps({**georef, "frame": frame}))
+        execute(
+            make_recipe(
+                [{"id": "place", "impl": "place_splat"}], inputs=["trained.ply", "georef.json"]
+            ),
+            workdir,
+            RunnerSet(cpu=LocalRunner()),
+        )
+        placed = gaussians.read_splat(workdir.artifact_path("place", "canonical.ply"))
+        sample = placed.xyz[:: max(1, placed.count // 400)].astype(np.float64)
+        nearest = np.sqrt(((sample[:, None, :] - scene[None, :, :]) ** 2).sum(axis=2)).min(axis=1)
+        # The render also has a textured ground at the fixture's z = 0 (`tree_frames`),
+        # and most of SIFT's points are on it: distance to that plane counts too.
+        ground = np.abs(sample[:, 2] + offset[2])
+        return float(np.median(np.minimum(nearest, ground)))
+
+    applied = placed_distance(georef["frame"])
+    identity = placed_distance(
+        {
+            "source": "none",
+            "scale": 1.0,
+            "rotation": np.eye(3).tolist(),
+            "translationM": None,
+            "recentre": False,
+        }
+    )
+
+    assert applied < 0.1, f"median {applied:.3f} m from the scene with the similarity applied"
+    assert identity > 10 * applied, f"identity {identity:.3f} m vs applied {applied:.3f} m"
+
+
+def _points_as_gaussians(points: np.ndarray) -> dict[str, np.ndarray]:
+    count = points.shape[0]
+    columns = {axis: points[:, i] for i, axis in enumerate("xyz")}
+    columns.update({f"f_dc_{i}": np.zeros(count) for i in range(3)})
+    columns.update({"opacity": np.full(count, 2.0)})
+    columns.update({f"scale_{i}": np.full(count, -4.0) for i in range(3)})
+    columns.update({"rot_0": np.ones(count), "rot_1": np.zeros(count)})
+    columns.update({"rot_2": np.zeros(count), "rot_3": np.zeros(count)})
+    return {name: np.ascontiguousarray(v, dtype=np.float32) for name, v in columns.items()}
 
 
 @requires_colmap

@@ -1,15 +1,29 @@
 """A stand-in for gsplat's trainer. **It does not train anything.**
 
 It exists so the `train` stage's *dispatch* can be tested on a machine with no GPU: it
-accepts the argv `training.gsplat_argv` builds, writes files where gsplat writes them
-(`ckpts/`, `stats/`, `ply/`), resumes from a `--ckpt`, and can SIGTERM itself mid-run so a
-preemption is a real signal rather than a mock. Every number it writes is made up, and no
-test in this repository reads one of them as if it were a measurement.
+accepts the argv `training.gsplat_argv` builds and writes what gsplat v1.5.3's
+`examples/simple_trainer.py` writes, where it writes it -- read from that file at that
+tag, not remembered: `ckpts/ckpt_<i>_rank0.pt`, `stats/val_step<i:04d>.json`, and
+`ply/point_cloud_<i>.ply` **only when `--save_ply` is passed**, where `<i>` is the
+zero-based index of the last step (and of each earlier `--ply_steps` step, as the live
+viewer asks for); and it prints the trainer's own progress line,
+`Step:  <i> {...}`. It can SIGTERM itself mid-run so a preemption is a real signal
+rather than a mock. Every number it writes is made up, and no test in this repository
+reads one of them as if it were a measurement.
 
-What it is genuinely evidence for: that the stage builds a COLMAP dataset the trainer can
-find, that `--result_dir` living inside `checkpoint/` makes a killed attempt resumable,
-that `--ckpt` is passed on the second attempt, and that whatever the trainer writes is
-read back into `train_metrics.json` and `canonical.ply`.
+Like the real trainer it cannot resume: a second attempt starts again at step 0. What it
+is genuinely evidence for: that the stage builds a COLMAP dataset the trainer can find,
+passes the switches without which v1.5.3 writes no PLY or writes it in another frame,
+and reads whatever the trainer writes back into `train_metrics.json` and `trained.ply`.
+
+It also writes `cfg.yml`, as the real `train()` does (`yaml.dump(vars(cfg))`), holding
+the settings it resolved the way v1.5.3 resolves them: the `mcmc` preset's
+`opacity_reg` 0.01 unless `--opacity_reg` overrides it, the switches it was given, and
+-- when the dataset holds a real `cameras.bin` and a real first image -- the ratio the
+v1.5.3 parser would scale the intrinsics by (`image_scale`, the image's size over the
+COLMAP camera's). Tests read that file; nothing in the pipeline does. With
+`--depth_loss` it refuses a dataset without `sparse/0/points3D.bin`, which is where the
+real parser's `load_depths` gets its points.
 """
 
 from __future__ import annotations
@@ -23,6 +37,7 @@ import time
 from pathlib import Path
 
 import numpy as np
+from PIL import Image, UnidentifiedImageError
 
 PLY_PROPERTIES = (
     "x",
@@ -64,6 +79,28 @@ def write_ply(path: Path, count: int, seed: int) -> None:
     path.write_bytes(header.encode("ascii") + rows.tobytes())
 
 
+def image_scale(data_dir: Path) -> list[float] | None:
+    """What v1.5.3's parser scales `K` by: the first image's size over the camera's.
+
+    None when either side is not real (the fake bytes most tests seed), since the real
+    parser would fail on those rather than scale anything.
+    """
+    cameras = data_dir / "sparse" / "0" / "cameras.bin"
+    images = sorted(p for p in (data_dir / "images").iterdir() if p.is_file())
+    try:
+        raw = cameras.read_bytes()
+        count = int.from_bytes(raw[:8], "little")
+        width = int.from_bytes(raw[16:24], "little")
+        height = int.from_bytes(raw[24:32], "little")
+        with Image.open(images[0]) as first:
+            actual = first.size
+    except (OSError, IndexError, UnidentifiedImageError):
+        return None
+    if count < 1 or width <= 0 or height <= 0:
+        return None
+    return [actual[0] / width, actual[1] / height]
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("strategy")
@@ -71,11 +108,30 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--data_factor", type=int, default=1)
     parser.add_argument("--result_dir", type=Path, required=True)
     parser.add_argument("--max_steps", type=int, default=30000)
-    parser.add_argument("--ckpt", type=Path, default=None)
     parser.add_argument("--disable_viewer", action="store_true")
+    # v1.5.3's own switches, spelled as `training.gsplat_argv` spells them.
+    parser.add_argument("--save_ply", action="store_true")
+    # A list, as v1.5.3's tyro CLI reads `ply_steps: List[int]`: a PLY at each (scaled)
+    # step, the intermediate ones included -- what the live viewer's snapshots come from.
+    parser.add_argument("--ply_steps", type=int, nargs="+", default=[])
+    parser.add_argument("--steps_scaler", type=float, default=1.0)
+    parser.add_argument("--strategy.cap-max", dest="cap_max", type=int, default=None)
+    parser.add_argument("--no-normalize-world-space", action="store_true")
+    parser.add_argument("--antialiased", action="store_true")
+    parser.add_argument("--opacity_reg", type=float, default=None)
+    parser.add_argument("--depth_loss", action="store_true")
+    parser.add_argument("--pose_opt", action="store_true")
+    parser.add_argument("--app_opt", action="store_true")
+    parser.add_argument("--use_bilateral_grid", action="store_true")
+    parser.add_argument("--packed", action="store_true")
+    parser.add_argument("--batch_size", type=int, default=1)
     # Not gsplat's: how this stand-in is told to behave like a reclaimed machine.
     parser.add_argument("--ckpt-every", type=int, default=100)
     parser.add_argument("--die-at", type=int, default=None)
+    parser.add_argument("--die-marker", type=Path, default=None)
+    # Die only when the dataset holds an image whose name contains this: one block of a
+    # block run, the others untouched (their datasets are the same frames, renamed).
+    parser.add_argument("--die-if-image", default=None)
     # A provider reclaiming a box kills the container's main process, not just the
     # trainer inside it -- which for `SubprocessAdapter` is `run_stage.py`, this
     # process's parent. Opt-in, and passed by exactly one test, because under
@@ -88,6 +144,14 @@ def main(argv: list[str] | None = None) -> int:
     # put its splat somewhere this project does not look" is a real possibility.
     parser.add_argument("--no-ply", action="store_true")
     args, _unknown = parser.parse_known_args(argv)
+    # What v1.5.3's `Config.adjust_steps` does to the one number this stand-in uses.
+    args.max_steps = int(args.max_steps * args.steps_scaler)
+    ply_at = {int(value * args.steps_scaler) for value in args.ply_steps}
+    if args.cap_max is not None:
+        if args.strategy != "mcmc":
+            sys.stderr.write("stand-in: only mcmc has a cap_max\n")
+            return 2
+        args.gaussians = min(args.gaussians, args.cap_max)
 
     images = args.data_dir / "images"
     sparse = args.data_dir / "sparse" / "0"
@@ -98,25 +162,76 @@ def main(argv: list[str] | None = None) -> int:
         sys.stderr.write(f"no COLMAP model under {sparse}\n")
         return 2
 
+    if not args.no_normalize_world_space:
+        sys.stderr.write("stand-in: refusing to train in a normalised world frame\n")
+        return 2
+    points = sparse / "points3D.bin"
+    if args.depth_loss and not (points.is_file() and points.stat().st_size > 0):
+        sys.stderr.write(f"stand-in: --depth_loss needs SfM points and {points} has none\n")
+        return 2
+    args.result_dir.mkdir(parents=True, exist_ok=True)
+    resolved = {
+        "strategy": args.strategy,
+        "max_steps": args.max_steps,
+        "steps_scaler": args.steps_scaler,
+        "cap_max": args.cap_max,
+        "data_factor": args.data_factor,
+        "antialiased": args.antialiased,
+        # The `mcmc` preset's 0.01 (the MCMC paper's), `default`'s 0.0, unless overridden.
+        "opacity_reg": (
+            args.opacity_reg
+            if args.opacity_reg is not None
+            else (0.01 if args.strategy == "mcmc" else 0.0)
+        ),
+        "depth_loss": args.depth_loss,
+        "pose_opt": args.pose_opt,
+        "app_opt": args.app_opt,
+        "use_bilateral_grid": args.use_bilateral_grid,
+        "packed": args.packed,
+        "batch_size": args.batch_size,
+        "image_scale": image_scale(args.data_dir),
+    }
+    (args.result_dir / "cfg.yml").write_text(json.dumps(resolved) + "\n", encoding="utf-8")
     start = 0
-    if args.ckpt is not None:
-        start = int(json.loads(Path(args.ckpt).read_text(encoding="utf-8"))["step"])
-    sys.stdout.write(
-        f"stand-in: strategy={args.strategy} resuming at step {start} of {args.max_steps}\n"
-    )
+    sys.stdout.write(f"stand-in: strategy={args.strategy} starting at step {start}\n")
     ckpts = args.result_dir / "ckpts"
     ckpts.mkdir(parents=True, exist_ok=True)
-    died = args.result_dir / "died-once"
+    # Outside `--result_dir`, which the stage wipes on every attempt: the stand-in has to
+    # remember it was already killed once, or the retry would be killed too.
+    died = args.die_marker or (args.result_dir / "died-once")
 
     step = start
     while step < args.max_steps:
         step += 1
+        # tqdm's redraw, carriage return and all, which is what the real trainer's loop
+        # prints to stderr and what `progress.parse` reads back.
+        sys.stderr.write(
+            f"\rloss=0.1| sh degree=3| : {100 * step // args.max_steps:3d}%|#| "
+            f"{step}/{args.max_steps} [00:0{min(step, 9)}<00:01, 99.00it/s]"
+        )
         if step % args.ckpt_every == 0 or step == args.max_steps:
-            (ckpts / f"ckpt_{step}_rank0.pt").write_text(
-                json.dumps({"step": step}), encoding="utf-8"
+            index = step - 1
+            (ckpts / f"ckpt_{index}_rank0.pt").write_text(
+                json.dumps({"step": index}), encoding="utf-8"
             )
-            sys.stdout.write(f"Step {step}: {args.gaussians + step} GSs" + "\n")
-        if args.die_at is not None and step == args.die_at and not died.exists():
+            stats = {"mem": 0.1, "ellipse_time": 0.5, "num_GS": args.gaussians + step}
+            sys.stdout.write(f"Step:  {index} {stats}" + "\n")
+            # v1.5.3 writes the save step's stats beside the checkpoint.
+            (args.result_dir / "stats").mkdir(parents=True, exist_ok=True)
+            (args.result_dir / "stats" / f"train_step{index:04d}_rank0.json").write_text(
+                json.dumps({**stats, "ellipse_time": 12.5}), encoding="utf-8"
+            )
+        if step in ply_at and step < args.max_steps and args.save_ply and not args.no_ply:
+            # v1.5.3: `if step in [i - 1 for i in cfg.ply_steps]`, with a zero-based step.
+            write_ply(
+                args.result_dir / "ply" / f"point_cloud_{step - 1}.ply",
+                args.gaussians,
+                seed=step,
+            )
+        doomed = args.die_if_image is None or any(
+            args.die_if_image in path.name for path in images.iterdir()
+        )
+        if args.die_at is not None and step == args.die_at and doomed and not died.exists():
             died.write_text("1", encoding="utf-8")
             sys.stdout.write(f"stand-in: the machine is being taken back at step {step}" + "\n")
             sys.stdout.flush()
@@ -130,20 +245,21 @@ def main(argv: list[str] | None = None) -> int:
 
     stats = args.result_dir / "stats"
     stats.mkdir(parents=True, exist_ok=True)
-    (stats / f"val_step{step}_rank0.json").write_text(
-        json.dumps(
-            {
-                "psnr": 27.5,
-                "ssim": 0.8712,
-                "lpips": 0.1431,
-                "ellipse_time": 0.0123,
-                "num_GS": args.gaussians,
-            }
-        ),
-        encoding="utf-8",
-    )
-    if not args.no_ply:
-        write_ply(args.result_dir / "ply" / f"point_cloud_{step}.ply", args.gaussians, seed=step)
+    val: dict[str, float | int] = {
+        "psnr": 27.5,
+        "ssim": 0.8712,
+        "lpips": 0.1431,
+        "ellipse_time": 0.0123,
+        "num_GS": args.gaussians,
+    }
+    if args.use_bilateral_grid:
+        # v1.5.3's eval() adds the colour-corrected three only with a bilateral grid.
+        val.update(cc_psnr=28.25, cc_ssim=0.8801, cc_lpips=0.1402)
+    (stats / f"val_step{step - 1:04d}.json").write_text(json.dumps(val), encoding="utf-8")
+    if args.save_ply and not args.no_ply:
+        write_ply(
+            args.result_dir / "ply" / f"point_cloud_{step - 1}.ply", args.gaussians, seed=step
+        )
     sys.stdout.write(f"stand-in: finished at step {step}" + "\n")
     return 0
 

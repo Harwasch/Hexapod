@@ -51,6 +51,11 @@ class ProviderRead(CamelModel):
     #: Tiers this provider is offered with here. Free strings, as `jobs.tier` is.
     tiers: list[str]
     usd_per_hour_a100: float
+    #: The published or surveyed hourly rate for each tier that has one. A tier absent
+    #: here is unpriced, and a client must say so rather than guess. What lets a page
+    #: estimate the cost of a stage that is still running; a finished stage's real cost
+    #: is in its step metrics.
+    usd_per_hour: dict[str, float]
     #: True where being killed mid-stage is ordinary operation rather than a failure.
     interruptible: bool
     note: str

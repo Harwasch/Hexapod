@@ -1,0 +1,123 @@
+name: Modal benchmark
+
+# The train stage on a scene with published numbers (Tanks and Temples `truck`, against
+# 3DGS's own PSNR/SSIM/LPIPS), on a Modal GPU. Opt-in, and never run by default:
+#
+# * **How to run it.** Push a commit to the working branch whose message contains
+#   `[benchmark]` -- `git commit --allow-empty -m "Calibrate [benchmark]"` is enough, since
+#   this workflow has no paths filter (modal.yml's filter is why the token cannot live
+#   there: an empty commit would never reach it). `[benchmark:recipe]` trains with
+#   photo-reconstruct's own settings instead of gsplat's 3DGS reproduction, and
+#   `[benchmark:gsplat-default+pose_opt]` adds switches (tools/pipeline/experiments/
+#   benchmark.py, `parse_spec`). A push without the token starts this workflow and skips
+#   its only job in seconds, spending nothing. `workflow_dispatch` is here too, for when
+#   this file is on the default branch (dispatch only works from there).
+# * **What it costs.** Estimated, not yet measured: 30k steps of the default strategy on
+#   251 frames at 979x546 is roughly 15-30 minutes of L4 ($0.000222/s on modal.com/pricing),
+#   $0.20-0.40, plus the container's cold start. The runner downloads the 683 MB archive.
+# * **What it deploys.** `modal deploy` first, from this commit, so the image that trains
+#   is the image this commit builds (unchanged layers are reused and the deploy takes a
+#   minute). Same concurrency group as modal.yml (on the job), so the two never
+#   deploy at once.
+#
+# Secrets: the same ones modal.yml reads; see docs/DEPLOYMENT.md.
+
+on:
+  push:
+    branches: [living-models]
+  workflow_dispatch:
+    inputs:
+      spec:
+        description: CONFIG[+switch...], e.g. gsplat-default, recipe, gsplat-default+pose_opt
+        type: string
+        default: gsplat-default
+      tier:
+        description: GPU tier
+        type: choice
+        options: [l4, a10, l40s, a100]
+        default: l4
+
+jobs:
+  benchmark:
+    name: Benchmark the train stage on a published scene
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      contains(github.event.head_commit.message, '[benchmark')
+    # On the job, not the workflow: every push starts this workflow, and a workflow-level
+    # group would queue each of those no-op runs behind modal.yml's -- where a newer
+    # pending run replaces an older one, so a skipped benchmark could cancel a real
+    # deploy. A job skipped by `if` never joins the group.
+    concurrency:
+      group: modal
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+      OBJECT_STORAGE_ENDPOINT_URL: https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
+      OBJECT_STORAGE_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY_ID }}
+      OBJECT_STORAGE_SECRET_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      OBJECT_STORAGE_BUCKET: ${{ vars.R2_BUCKET || 'twin-assets' }}
+      OBJECT_STORAGE_REGION: auto
+      TIER: ${{ inputs.tier || 'l4' }}
+    steps:
+      - uses: actions/checkout@v4
+      # The spec is read out of the commit message here, as data: it is passed through an
+      # environment variable and validated by benchmark.parse_spec, never interpolated
+      # into a shell line.
+      - name: What to benchmark
+        env:
+          MESSAGE: ${{ github.event.head_commit.message }}
+          DISPATCHED: ${{ inputs.spec }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_ENV"
+          import os, re
+          spec = os.environ.get("DISPATCHED") or ""
+          if not spec:
+              found = re.search(r"\[benchmark(?::([A-Za-z0-9_+-]*))?\]", os.environ.get("MESSAGE", ""))
+              spec = (found.group(1) or "") if found else ""
+          if not re.fullmatch(r"[A-Za-z0-9_+-]*", spec):
+              raise SystemExit(f"benchmark spec {spec!r} has characters it cannot have")
+          print(f"SPEC={spec}")
+          PY
+      - name: The secrets this job needs
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          missing=""
+          for name in MODAL_TOKEN_ID MODAL_TOKEN_SECRET OBJECT_STORAGE_ACCESS_KEY OBJECT_STORAGE_SECRET_KEY CLOUDFLARE_ACCOUNT_ID; do
+            if [ -z "${!name:-}" ]; then missing="$missing $name"; fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::missing:$missing. See docs/DEPLOYMENT.md."
+            exit 1
+          fi
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: The Modal client
+        working-directory: tools/pipeline
+        run: |
+          uv sync --frozen
+          uv run --with modal==1.5.5 --with boto3 modal --version
+      - name: modal deploy infra/modal/app.py
+        working-directory: tools/pipeline
+        run: uv run --with modal==1.5.5 --with boto3 modal deploy ../../infra/modal/app.py
+      - name: Train the benchmark scene on a Modal GPU
+        working-directory: tools/pipeline
+        run: |
+          uv run --with modal==1.5.5 --with boto3 python ../../infra/modal/benchmark.py \
+            --scene truck --spec "$SPEC" --tier "$TIER" --work "$RUNNER_TEMP/benchmark"
+      - name: Keep what the benchmark produced
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: modal-benchmark
+          path: |
+            ${{ runner.temp }}/benchmark/bench-*/benchmark.json
+            ${{ runner.temp }}/benchmark/bench-*/benchmark.md
+            ${{ runner.temp }}/benchmark/bench-*/stages/train/out/train_metrics.json
+            ${{ runner.temp }}/benchmark/bench-*/stages/train/log.txt
+            ${{ runner.temp }}/benchmark/bench-*/stages/train/attempts.json
+          if-no-files-found: ignore

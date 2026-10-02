@@ -34,11 +34,13 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from pathlib import Path
 
 import numpy as np
 import pytest
 
+import live
 import sfm
 import stages
 import tree_frames
@@ -262,6 +264,49 @@ def test_the_recovered_poses_are_within_a_degree_and_one_percent_of_the_truth(
 
 
 @requires_colmap
+def test_the_camera_up_estimate_is_the_scenes_up(
+    reconstruction: tuple[Workdir, tree_frames.Truth],
+) -> None:
+    """What `place` levels a GPS-less capture by, scored against the orbit's own up.
+
+    The rendered orbit is in the fixture's east/north/up frame, so its up is +z. The
+    estimate is in COLMAP's arbitrary frame, so it is carried into the truth's by the same
+    similarity the pose score uses before it is compared. Held upright, a camera orbiting
+    a tree averages its tilt away, so this should be within a degree or two; the bound is
+    where a sign or axis error would show (those land at 90 or 180 degrees).
+    """
+    workdir, truth = reconstruction
+    poses = json.loads((workdir.artifact_path("pose", "poses") / "poses.json").read_text())
+    model = sfm.read_model(workdir.artifact_path("pose", "poses"))
+    known = truth.by_name()
+    fit = sfm.umeyama(
+        np.stack([image.centre for image in model.images]),
+        np.stack([known[image.name].centre for image in model.images]),
+    )
+
+    estimate = np.asarray(poses["upEstimate"]["up"])
+    in_truth = fit.rotation @ estimate
+    angle = float(np.degrees(np.arccos(np.clip(in_truth @ np.array([0.0, 0.0, 1.0]), -1, 1))))
+
+    assert poses["upEstimate"]["method"] == "camera-up"
+    assert poses["upEstimate"]["frames"] == FRAMES
+    assert angle < 5.0, f"camera-up is {angle:.2f} deg from the scene's up"
+    # And the rotation `place` builds from it takes it exactly onto +z.
+    # (poses.json rounds to six places, so it is renormalised first.)
+    unit = estimate / np.linalg.norm(estimate)
+    assert sfm.rotation_onto_z(unit) @ unit == pytest.approx([0.0, 0.0, 1.0], abs=1e-9)
+
+
+def test_rotation_onto_z_is_proper_and_handles_both_poles() -> None:
+    for up in ([0.0, 0.0, 1.0], [0.0, 0.0, -1.0], [0.0, -1.0, 0.0], [0.3, -0.9, 0.1]):
+        rotation = sfm.rotation_onto_z(up)
+        unit = np.asarray(up) / np.linalg.norm(up)
+        assert rotation @ unit == pytest.approx([0.0, 0.0, 1.0], abs=1e-9)
+        assert np.linalg.det(rotation) == pytest.approx(1.0)
+        assert rotation @ rotation.T == pytest.approx(np.eye(3), abs=1e-9)
+
+
+@requires_colmap
 def test_the_self_calibrated_focal_is_recorded_with_its_bias_rather_than_trusted(
     reconstruction: tuple[Workdir, tree_frames.Truth],
 ) -> None:
@@ -301,6 +346,32 @@ def test_the_poses_artifact_is_a_colmap_model_anything_downstream_can_read(
     assert artifact["kind"] == "dir" and artifact["bytes"] > 0
 
 
+@requires_colmap
+def test_the_log_carries_cameras_as_they_were_solved_and_the_final_model(
+    reconstruction: tuple[Workdir, tree_frames.Truth],
+) -> None:
+    """The live viewer's cameras come from the real mapper's own snapshots.
+
+    COLMAP 3.9.1 writes one every `snapshot_images_freq` registered images; the watcher
+    logs them as `live-cameras:` lines, and the chosen model is logged once more, final.
+    """
+    workdir, _ = reconstruction
+    log = workdir.log_path("pose").read_text()
+    lines = [line for line in log.splitlines() if line.startswith(live.CAMERAS_TAG)]
+
+    assert "--Mapper.snapshot_path" in log
+    assert lines, "no live-cameras line at all"
+    parsed = [live.parse_line(line) for line in lines]
+    assert all(entry is not None and entry[0] == "cameras" for entry in parsed)
+    final = live.latest(log)["cameras"]
+    assert final["final"] is True and final["registered"] == FRAMES
+    assert final["cameraCount"] == FRAMES and final["pointCount"] > 100
+    # Snapshots are working files: none is left behind.
+    assert not (workdir.work_dir("pose") / "snapshots").exists() or not any(
+        (workdir.work_dir("pose") / "snapshots").rglob("*.bin")
+    )
+
+
 # --- partial registration -------------------------------------------------------------
 #
 # Added by the orchestrator after a one-in-ten standalone run of the fixture above came
@@ -325,3 +396,204 @@ def test_no_frames_is_not_a_division_by_zero() -> None:
     """`_largest_model` returning None already raises for an empty model; this is the
     guard that stops the reporting path dividing by zero on the way there."""
     assert stages.partial_registration_warning(0, 0) is None
+
+
+# --- retries: the smoke's 2/40 ---------------------------------------------------------
+
+
+def _scripted(results: dict[tuple[int, int], int]):  # type: ignore[no-untyped-def]
+    """An `attempt` that answers from a table, and records what it was asked."""
+    asked: list[tuple[int, int]] = []
+
+    def attempt(round_: int, seed: int) -> tuple[Path | None, int]:
+        asked.append((round_, seed))
+        registered = results.get((round_, seed), 0)
+        return (Path(f"m{round_}-{seed}") if registered else None), registered
+
+    return attempt, asked
+
+
+def test_a_good_first_mapping_is_not_retried() -> None:
+    attempt, asked = _scripted({(0, 0): 40})
+    found, tries = stages._best_reconstruction(attempt, rounds=[(0, 1, 2), (0, 1, 2)], enough=32)
+    assert found == Path("m0-0")
+    assert asked == [(0, 0)]
+    assert tries == [{"match": 0, "seed": 0, "registered": 40}]
+
+
+def test_a_mapping_that_closes_on_two_frames_is_retried_with_other_seeds() -> None:
+    """The first real Modal smoke: 2 of 40 on the runner's matches, seed 0."""
+    attempt, asked = _scripted({(0, 0): 2, (0, 1): 40})
+    found, _ = stages._best_reconstruction(attempt, rounds=[(0, 1, 2), (0, 1, 2)], enough=32)
+    assert found == Path("m0-1")
+    assert asked == [(0, 0), (0, 1)]
+
+
+def test_when_no_seed_helps_the_frames_are_matched_again() -> None:
+    attempt, asked = _scripted({(0, 0): 2, (0, 1): 3, (0, 2): 2, (1, 0): 39})
+    found, _ = stages._best_reconstruction(attempt, rounds=[(0, 1, 2), (0, 1, 2)], enough=32)
+    assert found == Path("m1-0")
+    assert asked[-1] == (1, 0)
+
+
+def test_the_best_attempt_is_kept_when_none_is_enough() -> None:
+    """A capture that genuinely does not close still gets its best model, not its last."""
+    attempt, _ = _scripted({(0, 0): 2, (0, 1): 20, (0, 2): 5, (1, 0): 3, (1, 1): 4, (1, 2): 1})
+    found, tries = stages._best_reconstruction(attempt, rounds=[(0, 1, 2), (0, 1, 2)], enough=32)
+    assert found == Path("m0-1")
+    assert len(tries) == 6
+
+
+def test_a_sequential_round_maps_once_and_the_fallback_gets_every_seed() -> None:
+    """Rounds carry their own seeds: one mapping after sequential matching, then the
+    exhaustive fill-in with all three."""
+    attempt, asked = _scripted({(0, 0): 20, (1, 0): 2, (1, 1): 40})
+    found, tries = stages._best_reconstruction(attempt, rounds=[(0,), (0, 1, 2)], enough=32)
+    assert found == Path("m1-1")
+    assert asked == [(0, 0), (1, 0), (1, 1)]
+    assert [t["match"] for t in tries] == [0, 1, 1]
+
+
+# --- which pairs get matched ------------------------------------------------------------
+
+
+def test_a_video_is_matched_sequentially_with_loop_closure_then_exhaustively() -> None:
+    plan = sfm.matching_plan("auto", source_format="video", vocab_tree=True, rematches=1)
+
+    assert [(p.matcher, p.loop_detection, p.clear) for p in plan] == [
+        ("sequential", True, False),
+        # The fallback fills in: no clear, so only the pairs sequential skipped are matched.
+        ("exhaustive", False, False),
+        ("exhaustive", False, True),
+    ]
+    assert "fallback" in plan[1].why
+
+
+def test_a_photo_set_or_an_unknown_source_is_matched_exhaustively() -> None:
+    for source in ("images", None):
+        plan = sfm.matching_plan("auto", source_format=source, vocab_tree=True, rematches=0)
+        assert [p.matcher for p in plan] == ["exhaustive"]
+
+
+def test_sequential_never_runs_without_a_vocabulary_tree() -> None:
+    """A0 #7's 2/40 is sequential matching with no loop detection. Asked for by name or
+    chosen for a video, with no tree it is exhaustive, and the plan says why."""
+    for requested, source in (("auto", "video"), ("sequential", "images")):
+        plan = sfm.matching_plan(requested, source_format=source, vocab_tree=False, rematches=0)
+        assert [p.matcher for p in plan] == ["exhaustive"]
+        assert "no vocabulary tree" in plan[0].why
+
+
+def test_exhaustive_by_name_is_exhaustive_and_an_unknown_matcher_is_refused() -> None:
+    plan = sfm.matching_plan("exhaustive", source_format="video", vocab_tree=True, rematches=2)
+    assert [(p.matcher, p.clear) for p in plan] == [
+        ("exhaustive", False),
+        ("exhaustive", True),
+        ("exhaustive", True),
+    ]
+    with pytest.raises(ValueError, match="unknown matcher"):
+        sfm.matching_plan("nearest_friend", source_format=None, vocab_tree=True)
+
+
+def test_the_vocabulary_tree_is_found_by_param_or_environment_and_only_if_it_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tree = tmp_path / "vocab_tree_flickr100K_words32K.bin"
+    tree.write_bytes(b"tree")
+    monkeypatch.delenv(sfm.VOCAB_TREE_ENV, raising=False)
+
+    assert sfm.vocab_tree_path() is None
+    assert sfm.vocab_tree_path(str(tree)) == tree.resolve()
+    monkeypatch.setenv(sfm.VOCAB_TREE_ENV, str(tree))
+    assert sfm.vocab_tree_path() == tree.resolve()
+    monkeypatch.setenv(sfm.VOCAB_TREE_ENV, str(tmp_path / "missing.bin"))
+    assert sfm.vocab_tree_path() is None
+
+
+@requires_colmap
+def test_the_threads_and_octave_flags_reach_colmap_only_when_given() -> None:
+    plain = sfm.feature_extractor_argv(Path("d"), Path("i"))
+    tuned = sfm.feature_extractor_argv(Path("d"), Path("i"), first_octave=0, num_threads=4)
+
+    assert "--SiftExtraction.first_octave" not in plain
+    assert tuned[tuned.index("--SiftExtraction.first_octave") + 1] == "0"
+    assert tuned[tuned.index("--SiftExtraction.num_threads") + 1] == "4"
+    matcher = sfm.matcher_argv(Path("d"), "exhaustive", num_threads=4)
+    assert matcher[matcher.index("--SiftMatching.num_threads") + 1] == "4"
+    mapper = sfm.mapper_argv(Path("d"), Path("i"), Path("o"), num_threads=4)
+    assert mapper[mapper.index("--Mapper.num_threads") + 1] == "4"
+
+
+# --- a video's frames, matched for real ------------------------------------------------
+#
+# These need COLMAP and the vocabulary tree. The Modal CPU image has both; CI and the
+# worker have no tree, so there the plan is exhaustive (tested above) and these skip.
+
+VOCAB_TREE = sfm.vocab_tree_path()
+requires_vocab_tree = pytest.mark.skipif(
+    not sfm.colmap_available() or VOCAB_TREE is None,
+    reason=f"needs colmap and a vocabulary tree at ${sfm.VOCAB_TREE_ENV} (infra/modal/app.py)",
+)
+VIDEO_FRAMES = 30
+
+
+def _pose_a_video(root: Path, frames: Path, **params: object) -> Workdir:
+    workdir = Workdir.create(root)
+    shutil.copytree(frames, workdir.input_path("frames"))
+    workdir.input_path("source_meta.json").write_text(json.dumps({"format": "video"}))
+    recipe = make_recipe(
+        [{"id": "pose", "impl": "colmap", "params": {"matcher": "auto", **params}}],
+        inputs=["frames", "source_meta.json"],
+    )
+    execute(recipe, workdir, RunnerSet(cpu=LocalRunner()))
+    return workdir
+
+
+@pytest.fixture(scope="module")
+def video_frames(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    frames = tmp_path_factory.mktemp("video") / "frames"
+    tree_frames.render_orbit(FIXTURE_PLY, frames, count=VIDEO_FRAMES)
+    return frames
+
+
+@requires_vocab_tree
+def test_a_videos_frames_are_matched_sequentially_and_close_the_orbit(
+    tmp_path: Path, video_frames: Path
+) -> None:
+    workdir = _pose_a_video(tmp_path / "run", video_frames)
+
+    poses = json.loads((workdir.artifact_path("pose", "poses") / "poses.json").read_text())
+    assert poses["registered"] == VIDEO_FRAMES
+    assert poses["matcher"] == "sequential"
+    matching = poses["matching"]
+    assert matching["sourceFormat"] == "video"
+    assert matching["fellBackToExhaustive"] is False
+    assert [p["matcher"] for p in matching["passes"]] == ["sequential"]
+    assert matching["passes"][0]["loopDetection"] is True
+    assert matching["passes"][0]["pairs"] < VIDEO_FRAMES * (VIDEO_FRAMES - 1) // 2
+
+
+@requires_vocab_tree
+def test_a_short_sequential_result_falls_back_to_filling_in_every_pair(
+    tmp_path: Path, video_frames: Path
+) -> None:
+    """Forced: a fraction no model can reach, so every planned pass runs. The fill-in
+    matches only what sequential skipped -- the pair count ends at n(n-1)/2, not above."""
+    workdir = _pose_a_video(
+        tmp_path / "run", video_frames, min_registered_fraction=1.01, rematches=0
+    )
+
+    poses = json.loads((workdir.artifact_path("pose", "poses") / "poses.json").read_text())
+    matching = poses["matching"]
+    assert matching["fellBackToExhaustive"] is True
+    passes = matching["passes"]
+    assert [(p["matcher"], p["clear"]) for p in passes] == [
+        ("sequential", False),
+        ("exhaustive", False),
+    ]
+    assert passes[0]["pairs"] < passes[1]["pairs"] == VIDEO_FRAMES * (VIDEO_FRAMES - 1) // 2
+    assert poses["registered"] == VIDEO_FRAMES
+    assert [t["seed"] for t in poses["mapperAttempts"] if t["matcher"] == "sequential"] == [0]
+    log = workdir.log_path("pose").read_text()
+    assert "short of min_registered_fraction" in log
+    assert "fallback" in log

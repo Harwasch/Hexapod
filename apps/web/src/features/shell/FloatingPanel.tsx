@@ -1,5 +1,6 @@
 import { X } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
+import { clsx } from "clsx";
 import type { ReactNode } from "react";
 
 import { GlassButton, GlassPanel } from "@twin/ui";
@@ -46,7 +47,7 @@ export function FloatingPanel({
           animate={{ opacity: 1, scale: 1, x: 0, y: 0 }}
           exit={reducedMotion ? { opacity: 0 } : { opacity: 0, scale: 0.98, ...offset }}
           transition={{ type: "spring", stiffness: 420, damping: 34, mass: 0.8 }}
-          className={className}
+          className={clsx("hud-item", className)}
         >
           <GlassPanel
             strong

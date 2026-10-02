@@ -1,9 +1,10 @@
-import { lazy, Suspense, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, type ReactNode } from "react";
 
 import { ErrorBoundary } from "@/app/ErrorBoundary";
 import { env } from "@/app/env";
 import { useScene } from "@/cesium/SceneContext";
 import { useHotkey } from "@/lib/hotkeys";
+import { bindDockRules, useLayout } from "@/state/layout";
 import { useMission } from "@/state/mission";
 import { useSettings } from "@/state/settings";
 import { useUi } from "@/state/ui";
@@ -38,6 +39,7 @@ import { SearchPill } from "../search/SearchPill";
 import { RepresentationSwitcher } from "../sites/RepresentationSwitcher";
 import { SitesPanel } from "../sites/SitesPanel";
 import { TimelineControl } from "../timeline/TimelineControl";
+import { CreditSlot } from "./CreditSlot";
 import { ToolRail } from "./ToolRail";
 
 const SettingsSheet = lazy(() =>
@@ -102,37 +104,49 @@ function MapOnly({ children }: { children: ReactNode }) {
   return view === "map" ? <>{children}</> : null;
 }
 
-/** Composes the mission-control HUD over the world. The map is always the hero. */
+/**
+ * Composes the HUD over the world as a fixed set of screen regions.
+ *
+ * Every surface lives in exactly one region, and regions are cells of one CSS grid
+ * (`.hud` in `app.css`), so two surfaces can never be drawn over each other: they can
+ * only share a dock, where they stack. The regions:
+ *
+ * - **top**: project, search, view tabs.
+ * - **rail** / **nav**: tools on the left edge, camera on the right edge.
+ * - **left dock**: the one panel you opened — a tool panel or the Plan / Fleet window.
+ * - **right dock**: status (notices, toasts), what you selected, and the agent.
+ * - **center**: first-run welcome; otherwise the map.
+ * - **strip**: controls for what is in view (representation, dates, explore).
+ * - **bar**: the command bar and the data credits.
+ *
+ * On a phone the docks collapse into one bottom sheet; `data-sheet` says which dock was
+ * touched last, and that one is shown (`state/layout.ts`).
+ */
 export function AppShell() {
+  const sheet = useLayout((s) => s.focus);
+  useEffect(() => bindDockRules(), []);
   return (
     <>
       <GlobalHotkeys />
-      <div className="hud">
+      <div className="hud" data-sheet={sheet ?? "none"} data-testid="hud">
         <ErrorBoundary inline label="Fleet overlay">
           <MissionOverlays />
         </ErrorBoundary>
-        <div className="hud-top-left">
+        <header className="hud-region hud-top">
           <ErrorBoundary inline label="Project">
             <ProjectCard />
           </ErrorBoundary>
-          {/* Under the project badge on purpose: the same corner already distinguishes
-              simulated demo data from real, and this is the same distinction. */}
-          <ErrorBoundary inline label="Simulated motion">
-            <SimulatedBadge />
-          </ErrorBoundary>
-        </div>
-        <div className="hud-top-center">
-          <ErrorBoundary inline label="Search">
-            <SearchPill />
-          </ErrorBoundary>
-        </div>
-        <div className="hud-top-right">
+          <div className="hud-top__search">
+            <ErrorBoundary inline label="Search">
+              <SearchPill />
+            </ErrorBoundary>
+          </div>
           <ViewTabs />
-          <LayerPills />
-          <SetupNotices />
-        </div>
-        <div className="hud-left">
+        </header>
+        <nav className="hud-region hud-rail" aria-label="Tools">
           <ToolRail />
+        </nav>
+        <section className="hud-region hud-dock hud-dock--left" aria-label="Panel">
           <ErrorBoundary inline label="Panel">
             <LayersPanel />
             <SitesPanel />
@@ -141,45 +155,57 @@ export function AppShell() {
             <ComparePanel />
             <BookmarksPanel />
           </ErrorBoundary>
+          <ErrorBoundary inline label="Plans">
+            <PlansPanel />
+            <FleetPanel />
+          </ErrorBoundary>
+        </section>
+        <div className="hud-region hud-center">
+          <OnboardingCard />
         </div>
-        <div className="hud-nav">
+        <aside className="hud-region hud-dock hud-dock--right" aria-label="Details">
+          <div className="hud-stack hud-pills">
+            <LayerPills />
+          </div>
+          <div className="hud-stack hud-messages">
+            <ErrorBoundary inline label="Simulated motion">
+              <SimulatedBadge />
+            </ErrorBoundary>
+            <SetupNotices />
+            <Toasts />
+          </div>
+          <div className="hud-stack hud-detail">
+            <ErrorBoundary inline label="Selection">
+              <SelectionCard />
+              <FeedsPanel />
+            </ErrorBoundary>
+            <ErrorBoundary inline label="Inspector">
+              <InspectorPanel />
+              <DevPanel />
+            </ErrorBoundary>
+          </div>
+          <div className="hud-stack hud-agent">
+            <ErrorBoundary inline label="Agent">
+              <AgentStream />
+            </ErrorBoundary>
+          </div>
+        </aside>
+        <nav className="hud-region hud-nav" aria-label="Camera">
           <NavControls />
-        </div>
-        <div className="hud-right">
-          <ErrorBoundary inline label="Inspector">
-            <InspectorPanel />
-            <DevPanel />
-          </ErrorBoundary>
-        </div>
-        <ErrorBoundary inline label="Plans">
-          <PlansPanel />
-          <FleetPanel />
-        </ErrorBoundary>
-        <div className="hud-bottom-left">
-          <ErrorBoundary inline label="Selection">
-            <FeedsPanel />
-            <SelectionCard />
-          </ErrorBoundary>
-        </div>
-        <div className="hud-bottom-center">
+        </nav>
+        <div className="hud-region hud-strip">
           <ExploreHud />
           <MapOnly>
             <TimelineControl />
             <RepresentationSwitcher />
           </MapOnly>
         </div>
-        <div className="hud-bottom-right">
-          <ErrorBoundary inline label="Agent">
-            <AgentStream />
-          </ErrorBoundary>
-        </div>
-        <div className="hud-bottom-bar">
+        <footer className="hud-region hud-bar">
           <ErrorBoundary inline label="Command bar">
             <CommandBar />
           </ErrorBoundary>
-        </div>
-        <OnboardingCard />
-        <Toasts />
+          <CreditSlot />
+        </footer>
       </div>
       <AddDataSheet />
       <SettingsSheetLazy />

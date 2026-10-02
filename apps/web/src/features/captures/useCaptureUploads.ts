@@ -8,11 +8,32 @@ import { describeError } from "@/lib/log";
 import { useUploads } from "@/state/uploads";
 import { useViewer } from "@/state/viewer";
 
-import { captureName, classify } from "./recipes";
+import { captureName, classify, SUPPORTED_TEXT, unsupported } from "./recipes";
 
 /** Six decimals is ~0.1 m: finer than a hand placement means anything. */
 function round6(value: number): number {
   return Math.round(value * 1e6) / 1e6;
+}
+
+/**
+ * The point on the ground directly under the camera, as the capture's placement guess.
+ *
+ * A splat file carries no EXIF and no poses -- it is geometry with no idea where on Earth
+ * it belongs -- so without this the pipeline runs correctly and lands the site at (0, 0),
+ * in the Gulf of Guinea.  Where the camera was when you started the capture is the best
+ * guess available, and the manifest records it as `manual`, uncertainty 10 m,
+ * `scaleSource: unresolved`, so nothing downstream mistakes it for a survey. B4's
+ * placement editor is what replaces the guess.
+ */
+function cameraPlacement(): { lat: number; lon: number } {
+  const camera = useViewer.getState().camera;
+  return { lat: round6(camera.latitude), lon: round6(camera.longitude) };
+}
+
+/** "Phone capture 14:05" -- a name that says where it came from and when. */
+function phoneCaptureName(now: Date = new Date()): string {
+  const time = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return `Phone capture ${time}`;
 }
 
 /**
@@ -42,6 +63,11 @@ function messageOf(error: unknown): string {
 export interface CaptureUploads {
   /** Create a capture from these files and upload every one of them. */
   start: (files: File[]) => Promise<void>;
+  /**
+   * Create an empty capture for a phone to upload into, and return its id -- or null if
+   * the API refused, in which case `error` says why.
+   */
+  startFromPhone: () => Promise<string | null>;
   /** Resume one failed upload from the parts it already has. */
   retry: (uploadId: string) => Promise<void>;
   /** Stop one upload and abandon its multipart upload server-side. */
@@ -123,7 +149,13 @@ export function useCaptureUploads(): CaptureUploads {
   const start = useCallback(
     async (files: File[]) => {
       if (files.length === 0) return;
-      const camera = useViewer.getState().camera;
+      // Refused here, before a capture exists, rather than by the pipeline minutes later.
+      const refused = unsupported(files);
+      if (refused.length > 0) {
+        setError(`Can't read ${refused.join(", ")}. Upload ${SUPPORTED_TEXT}.`);
+        setCanRetryDrop(false);
+        return;
+      }
       lastDrop.current = files;
       setBusy(true);
       setError(null);
@@ -135,20 +167,7 @@ export function useCaptureUploads(): CaptureUploads {
           kind: proposal.kind,
           // The proposed recipe rides along so the card can offer it later without
           // re-deriving it from filenames the API has already stored.
-          //
-          // The camera's position is what places the capture. A splat file carries no
-          // EXIF and no poses -- it is geometry with no idea where on Earth it belongs --
-          // so without this the pipeline runs correctly and lands the site at (0, 0), in
-          // the Gulf of Guinea. Where you were looking when you dropped the file is the
-          // best guess available, and the manifest records it as `manual`, uncertainty
-          // 10 m, `scaleSource: unresolved`, so nothing downstream mistakes it for a
-          // survey. B4's placement editor is what replaces the guess.
-          metadata: {
-            recipe: proposal.recipe,
-            origin: "console",
-            lat: round6(camera.latitude),
-            lon: round6(camera.longitude),
-          },
+          metadata: { recipe: proposal.recipe, origin: "console", ...cameraPlacement() },
         });
         invalidate();
         for (const file of files) {
@@ -173,6 +192,30 @@ export function useCaptureUploads(): CaptureUploads {
     },
     [invalidate, runOne],
   );
+
+  const startFromPhone = useCallback(async () => {
+    setBusy(true);
+    setError(null);
+    setCanRetryDrop(false);
+    try {
+      const capture = await capturesApi.create({
+        name: phoneCaptureName(),
+        // Nothing has been picked yet, so this is a guess, and "video" is the likeliest
+        // thing a phone sends. It is display-only: the card reads the files once they
+        // land, and no recipe is stored, so the card proposes one from what arrived
+        // rather than from this.
+        kind: "video",
+        metadata: { origin: "phone", ...cameraPlacement() },
+      });
+      invalidate();
+      return capture.id;
+    } catch (cause) {
+      setError(messageOf(cause));
+      return null;
+    } finally {
+      setBusy(false);
+    }
+  }, [invalidate]);
 
   const retry = useCallback(
     async (uploadId: string) => {
@@ -204,6 +247,7 @@ export function useCaptureUploads(): CaptureUploads {
 
   return {
     start,
+    startFromPhone,
     retry,
     cancel,
     retryLastDrop,

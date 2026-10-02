@@ -35,14 +35,14 @@ export function WriteTokenField({ onSaved }: { onSaved: () => void }) {
       <GlassField
         label="Write token"
         htmlFor={id}
-        hint="This API requires a token for writes. It is kept in this browser (localStorage), which any script on this origin can read — fine for a single-user prototype, not for real accounts."
+        hint="This server needs a token to save uploads. It is stored in this browser, which suits a single-user setup."
       >
         <GlassInput
           id={id}
           type="password"
           value={value}
           autoComplete="off"
-          placeholder="API_WRITE_TOKEN"
+          placeholder="Paste the token"
           onChange={(event) => setValue(event.target.value)}
           data-testid="write-token-input"
         />

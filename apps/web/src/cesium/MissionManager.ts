@@ -103,7 +103,12 @@ export class MissionManager {
   private readonly listeners = new Set<FrameListener>();
   private readonly removeFrame: () => void;
   private lastGoodHeight: number | undefined;
-  private readonly heightCache = new Map<string, { height: number; at: number }>();
+  private readonly heightCache = new Map<
+    string,
+    { height: number; at: number; sampled?: boolean }
+  >();
+  private exploring = false;
+  private readonly removeExplore: () => void;
   private readonly scratchWindow = new Cartesian2();
   private readonly scratchNormal = new Cartesian3();
   private readonly scratchToCamera = new Cartesian3();
@@ -117,6 +122,11 @@ export class MissionManager {
     this.removeFrame = this.scene.postRender.addEventListener(
       () => this.project && this.listeners.size > 0 && this.projectAnchors(),
     );
+    // Walking or flying moves the camera in steps too small for `camera.changed`, so
+    // `isMoving` stays false; a height sample (a render pass) is held off for the duration.
+    this.removeExplore = this.events.on("explore", (on) => {
+      this.exploring = on;
+    });
   }
 
   get current(): Project | null {
@@ -432,10 +442,13 @@ export class MissionManager {
     const now = performance.now();
     const cached = this.heightCache.get(key);
     const ttl = this.camera.isMoving ? MOVING_HEIGHT_TTL_MS : RESTING_HEIGHT_TTL_MS;
-    if (cached && now - cached.at < ttl) return cached.height;
+    // A height sampled from the drawn surface is kept: sampling again is a render pass and a
+    // read-back that waits for the GPU (half a second of main thread in a trace, every few
+    // seconds at rest), for a machine that has not moved.
+    if (cached && (cached.sampled || now - cached.at < ttl)) return cached.height;
     const carto = Cartographic.fromDegrees(longitude, latitude);
     let fromTileset: number | undefined;
-    if (this.scene.sampleHeightSupported && !this.camera.isMoving) {
+    if (this.scene.sampleHeightSupported && !this.camera.isMoving && !this.exploring) {
       try {
         fromTileset = this.scene.sampleHeight(carto, this.viewer.entities.values);
       } catch {
@@ -446,7 +459,7 @@ export class MissionManager {
     let height = reconcileHeights(fromTileset, fromTerrain);
     if (height === undefined) height = this.lastGoodHeight ?? 0;
     else this.lastGoodHeight = height;
-    this.heightCache.set(key, { height, at: now });
+    this.heightCache.set(key, { height, at: now, sampled: fromTileset !== undefined });
     return height;
   }
 
@@ -497,6 +510,7 @@ export class MissionManager {
 
   destroy(): void {
     this.removeFrame();
+    this.removeExplore();
     this.listeners.clear();
     this.clearEntities();
   }

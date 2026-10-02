@@ -1,0 +1,210 @@
+name: Living plants
+
+# Living Mode for every plant of an uploaded capture (docs/CAPTURES.md, "Every plant in a
+# capture"; ADR 0008, the multi-plant addendum). Opt-in, and never run by default.
+#
+# * **What it does.** `plants`: fetches the capture's canonical.ply (the API's
+#   /captures/{id}/splat.ply redirect) and the level-of-detail tiles its run published,
+#   runs the scene step (tools/captures/scene_plants.py) -- ground, classes, plant
+#   instances, one forest rig, its motion sidecar, the per-tile plant binding -- and keeps
+#   all of it as an artifact to review, with the classes and plants in the job summary.
+#   `publish` (only when asked): puts rig.json, motion.json and plants.json beside the
+#   published tileset.json and points the splat asset's renderConfig.rigUrl at rig.json.
+# * **Identity is checked, not assumed.** The scene step replays the packer's plan over the
+#   PLY and refuses unless every published tile holds exactly the gaussians that plan puts in
+#   it; the rig is stamped with the published tiles' own checksums; and the viewer refuses a
+#   tile whose checksum the binding does not list.
+# * **How to run it.** `workflow_dispatch` once this file is on the default branch; before
+#   that, push a commit whose message carries `[plants|capture=<uuid>]`, adding `|publish`
+#   to publish and `|assume_metric` for a capture whose scale source is unresolved but whose
+#   splat is known to be in metres (a phone app with ARKit, say).
+#
+# Secrets, for `publish` only: CLOUDFLARE_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY,
+# API_WRITE_TOKEN; variables R2_PUBLIC_BUCKET (or R2_BUCKET), R2_PUBLIC_URL, TWIN_API_URL.
+
+on:
+  push:
+    branches: [living-models]
+  workflow_dispatch:
+    inputs:
+      capture:
+        description: "The capture's id (a UUID)"
+        type: string
+        required: true
+      publish:
+        description: "Publish the rig beside the tiles and point the asset at it"
+        type: boolean
+        default: false
+      assume_metric:
+        description: "The splat is in metres even though its scale source is unresolved"
+        type: boolean
+        default: false
+
+jobs:
+  plan:
+    name: What to run
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      contains(github.event.head_commit.message, '[plants')
+    runs-on: ubuntu-latest
+    outputs:
+      capture: ${{ steps.plan.outputs.capture }}
+      publish: ${{ steps.plan.outputs.publish }}
+      assume_metric: ${{ steps.plan.outputs.assume_metric }}
+    steps:
+      # Read as data, validated here, never interpolated into a shell line.
+      - id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          MESSAGE: ${{ github.event.head_commit.message }}
+          CAPTURE: ${{ inputs.capture }}
+          PUBLISH: ${{ inputs.publish }}
+          ASSUME_METRIC: ${{ inputs.assume_metric }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import os, re
+          options = {"capture": "", "publish": "false", "assume_metric": "false"}
+          if os.environ["EVENT"] == "workflow_dispatch":
+              for name in options:
+                  options[name] = os.environ.get(name.upper(), "") or options[name]
+          else:
+              found = re.search(r"\[plants([^\]]*)\]", os.environ.get("MESSAGE", ""))
+              for part in (found.group(1) if found else "").split("|")[1:]:
+                  name, _, value = part.partition("=")
+                  if name not in options:
+                      raise SystemExit(f"unknown option {name!r} in the [plants] token")
+                  options[name] = value if value else "true"
+          uuid = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+          valid = {"capture": uuid, "publish": r"true|false", "assume_metric": r"true|false"}
+          for name, pattern in valid.items():
+              if not re.fullmatch(pattern, options[name]):
+                  raise SystemExit(f"{name}={options[name]!r} is not {pattern}")
+          for name, value in options.items():
+              print(f"{name}={value}")
+          PY
+          cat "$GITHUB_OUTPUT"
+
+  plants:
+    name: Scene step on the capture
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      CAPTURE: ${{ needs.plan.outputs.capture }}
+      ASSUME_METRIC: ${{ needs.plan.outputs.assume_metric }}
+      TWIN_API_URL: ${{ vars.TWIN_API_URL || 'https://twin-api.fly.dev' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: The capture's splat and its published tiles
+        working-directory: tools/captures
+        run: |
+          uv sync --frozen
+          extra=""
+          if [ "$ASSUME_METRIC" = "true" ]; then extra="--assume-metric"; fi
+          uv run python fetch_capture.py "$CAPTURE" "$RUNNER_TEMP/work" --api "$TWIN_API_URL" $extra
+      - name: Ground, classes, plants, one forest rig, its binding
+        working-directory: tools/captures
+        run: |
+          mkdir -p "$RUNNER_TEMP/work/living"
+          uv run python scene_plants.py "$RUNNER_TEMP/work/canonical.ply" \
+            --tiles "$RUNNER_TEMP/work/tiles" --out "$RUNNER_TEMP/work/living" \
+            | tee "$RUNNER_TEMP/work/living/summary.json"
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json, os
+          scene = json.load(open(os.environ["RUNNER_TEMP"] + "/work/living/scene.json"))
+          print("## Scene step\n")
+          print(f"Analysed {scene['analysedSplats']:,} of {scene['keptSplats']:,} kept splats "
+                f"({scene['analysis']['rule']}).\n")
+          if "timingsS" in scene:
+              print("Seconds: " + ", ".join(f"{k} {v:g}" for k, v in scene["timingsS"].items()) + "\n")
+          print("| class | splats |\n| --- | ---: |")
+          for name, count in scene["classCounts"].items():
+              print(f"| {name} | {count:,} |")
+          print("\n| plant | rig | height m | splats analysed | splats bound | joints |")
+          print("| --- | --- | ---: | ---: | ---: | ---: |")
+          for p in scene["plants"]:
+              print(f"| {p['id']} | {p['rig']} | {p['heightM']} | {p['splats']:,} "
+                    f"| {p['boundSplats']:,} | {p['nodes']} |")
+          print(f"\nRig: {scene['rig']['nodes']} joints over {scene['rig']['tiles']} tiles.")
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: living-plants
+          path: |
+            ${{ runner.temp }}/work/living/
+            ${{ runner.temp }}/work/capture.json
+          if-no-files-found: error
+
+  publish:
+    name: Publish the rig beside the tiles
+    needs: [plan, plants]
+    if: needs.plan.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      OBJECT_STORAGE_ENDPOINT_URL: https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
+      OBJECT_STORAGE_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY_ID }}
+      OBJECT_STORAGE_SECRET_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      OBJECT_STORAGE_PUBLIC_BUCKET: ${{ vars.R2_PUBLIC_BUCKET || format('{0}-public', vars.R2_BUCKET || 'twin-assets') }}
+      OBJECT_STORAGE_PUBLIC_URL: ${{ vars.R2_PUBLIC_URL }}
+      API_WRITE_TOKEN: ${{ secrets.API_WRITE_TOKEN }}
+      TWIN_API_URL: ${{ vars.TWIN_API_URL || 'https://twin-api.fly.dev' }}
+    steps:
+      - name: The secrets this job needs
+        run: |
+          missing=""
+          for name in OBJECT_STORAGE_ACCESS_KEY OBJECT_STORAGE_SECRET_KEY OBJECT_STORAGE_PUBLIC_URL API_WRITE_TOKEN; do
+            if [ -z "${!name:-}" ]; then missing="$missing $name"; fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::missing:$missing. See docs/DEPLOYMENT.md."
+            exit 1
+          fi
+      - uses: actions/download-artifact@v4
+        with:
+          name: living-plants
+          path: living
+      - uses: astral-sh/setup-uv@v6
+      - name: rig.json, motion.json, plants.json beside tileset.json; the asset's rigUrl
+        run: |
+          uv run --with boto3 python - <<'PY'
+          import json, os, urllib.request
+          import boto3
+          meta = json.load(open("living/capture.json"))
+          asset = meta["asset"]
+          tileset_url = asset["source"]["url"]
+          public = os.environ["OBJECT_STORAGE_PUBLIC_URL"].rstrip("/") + "/"
+          if not tileset_url.startswith(public):
+              raise SystemExit(f"{tileset_url} is not under the public bucket's URL {public}")
+          prefix = tileset_url[len(public):].rsplit("/", 1)[0]
+          s3 = boto3.client(
+              "s3",
+              endpoint_url=os.environ["OBJECT_STORAGE_ENDPOINT_URL"],
+              aws_access_key_id=os.environ["OBJECT_STORAGE_ACCESS_KEY"],
+              aws_secret_access_key=os.environ["OBJECT_STORAGE_SECRET_KEY"],
+              region_name="auto",
+          )
+          for name in ("rig.json", "motion.json", "plants.json"):
+              s3.upload_file(
+                  f"living/living/{name}" if os.path.exists(f"living/living/{name}") else f"living/{name}",
+                  os.environ["OBJECT_STORAGE_PUBLIC_BUCKET"],
+                  f"{prefix}/{name}",
+                  ExtraArgs={"ContentType": "application/json"},
+              )
+          render = dict(asset.get("renderConfig") or {})
+          render["rigUrl"] = "rig.json"
+          request = urllib.request.Request(
+              f"{os.environ['TWIN_API_URL'].rstrip('/')}/api/v1/assets/{asset['id']}",
+              data=json.dumps({"renderConfig": render}).encode(),
+              method="PATCH",
+              headers={
+                  "Authorization": f"Bearer {os.environ['API_WRITE_TOKEN']}",
+                  "Content-Type": "application/json",
+              },
+          )
+          with urllib.request.urlopen(request, timeout=60) as response:
+              print(response.status, json.loads(response.read())["renderConfig"].get("rigUrl"))
+          PY

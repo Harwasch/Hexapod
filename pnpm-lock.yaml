@@ -6,7 +6,7 @@ settings:
 
 patchedDependencies:
   '@cesium/engine@26.3.0':
-    hash: f3afdf9616330e63ce27f99456ed0d09105b8baa7400548a558fa77b4f0fa954
+    hash: b1eefe31bac97600e4b783e536ea6f9e92c8c6fe7129b6154d7129be7a5e78df
     path: patches/@cesium__engine@26.3.0.patch
 
 importers:
@@ -46,6 +46,12 @@ importers:
 
   apps/web:
     dependencies:
+      '@sparkjsdev/spark':
+        specifier: 2.2.0
+        version: 2.2.0(three@0.186.1)
+      '@spz-loader/core':
+        specifier: 0.3.1
+        version: 0.3.1
       '@tanstack/react-query':
         specifier: ^5.102.8
         version: 5.102.8(react@19.3.0)
@@ -79,12 +85,18 @@ importers:
       openapi-fetch:
         specifier: ^0.17.0
         version: 0.17.0
+      playcanvas:
+        specifier: 2.22.6
+        version: 2.22.6
       react:
         specifier: ^19.3.0
         version: 19.3.0
       react-dom:
         specifier: ^19.3.0
         version: 19.3.0(react@19.3.0)
+      three:
+        specifier: 0.186.1
+        version: 0.186.1
       zustand:
         specifier: ^5.0.15
         version: 5.0.15(@types/react@19.3.0)(react@19.3.0)
@@ -119,6 +131,9 @@ importers:
       '@types/react-dom':
         specifier: ^19.2.0
         version: 19.3.0(@types/react@19.3.0)
+      '@types/three':
+        specifier: ^0.186.0
+        version: 0.186.0
       '@vitejs/plugin-react':
         specifier: ^6.1.1
         version: 6.1.1(vite@8.3.0(@types/node@26.5.1))
@@ -386,6 +401,9 @@ packages:
   '@csstools/css-tokenizer@4.0.0':
     resolution: {integrity: sha512-QxULHAm7cNu72w97JUNCBFODFaXpbDg+dP8b/oWFAZ2MTRppA3U00Y2L1HqaS4J6yBqxwa/Y3nMBaxVKbB/NsA==}
     engines: {node: '>=20.19.0'}
+
+  '@dimforge/rapier3d-compat@0.12.0':
+    resolution: {integrity: sha512-uekIGetywIgopfD97oDL5PfeezkFpNhwlzlaEYNOA0N6ghdsOvh/HYjSMek5Q2O1PYvRSDFcqFVJl4r4ZBwOow==}
 
   '@eslint-community/eslint-utils@4.10.1':
     resolution: {integrity: sha512-cuadcxVFE8sDK6iWJbs8Sn0av2Nrh2QSGQhVlBW9AaAHqHwjWsZHT8LJ4hFGPh7ASBV2deFdM7H/DPjulmh8rg==}
@@ -971,6 +989,11 @@ packages:
   '@rolldown/pluginutils@1.0.1':
     resolution: {integrity: sha512-2j9bGt5Jh8hj+vPtgzPtl72j0yRxHAyumoo6TNfAjsLB04UtpSvPbPcDcBMxz7n+9CYB0c1GxQFxYRg2jimqGw==}
 
+  '@sparkjsdev/spark@2.2.0':
+    resolution: {integrity: sha512-wf5F2YAmPXnjm20/MgXYer9FQTXz2JOCo05HwxFkaD7Guk9rHVPIwdJ6fq0oF9ME0heMvYj+TxS6DTrucvy6KA==}
+    peerDependencies:
+      three: '>=0.180.0'
+
   '@spz-loader/core@0.3.1':
     resolution: {integrity: sha512-8qJ1WIBXaJu8HjnJAjYniE0kYcr0kCe5Hp7kDzYiGVvvd7zyrOBwbF5imoW5mvwx1Qba0hxGEK5R9jEoaHKJFA==}
     engines: {node: '>=16', pnpm: '>=8'}
@@ -1018,6 +1041,9 @@ packages:
     peerDependencies:
       '@testing-library/dom': '>=7.21.4'
 
+  '@tweenjs/tween.js@23.1.3':
+    resolution: {integrity: sha512-vJmvvwFxYuGnF2axRtPYocag6Clbb5YS7kLL+SO/TeVFzHqDIWrNKYtcsPMibjDx9O+bu+psAy9NKfWklassUA==}
+
   '@tweenjs/tween.js@25.0.0':
     resolution: {integrity: sha512-XKLA6syeBUaPzx4j3qwMqzzq+V4uo72BnlbOjmuljLrRqdsd3qnzvZZoxvMHZ23ndsRS4aufU6JOZYpCbU6T1A==}
 
@@ -1053,8 +1079,17 @@ packages:
   '@types/react@19.3.0':
     resolution: {integrity: sha512-N0rFCuH9YoxG9/m61l9MfpJKfmLOVU0em7ipIz6TRgSSkvReLB9vL85GB+yr8Bs5leqpvg96JSwF4ZS1s4viQg==}
 
+  '@types/stats.js@0.17.4':
+    resolution: {integrity: sha512-jIBvWWShCvlBqBNIZt0KAshWpvSjhkwkEu4ZUcASoAvhmrgAUI2t1dXrjSL4xXVLB4FznPrIsX3nKXFl/Dt4vA==}
+
+  '@types/three@0.186.0':
+    resolution: {integrity: sha512-mxYSBpDC+D0pLfSP6sW4WZTcT+nrtmZcimMqnVmy36Hte3XpeYSrvgg4TRdaM1GemGog1AWzI5qL2VoIfMXbJQ==}
+
   '@types/trusted-types@2.0.7':
     resolution: {integrity: sha512-ScaPdn1dQczgbl0QFTeTOmVHFULt394XJgOQNoyVhZ6r2vLnMLJfBPd53SB52T/3G36VI1/g2MZaX0cwDuXsfw==}
+
+  '@types/webxr@0.5.24':
+    resolution: {integrity: sha512-h8fgEd/DpoS9CBrjEQXR+dIDraopAEfu4wYVNY2tEPwk60stPWhvZMf4Foo5FakuQ7HFZoa8WceaWFervK2Ovg==}
 
   '@typescript-eslint/eslint-plugin@8.70.0':
     resolution: {integrity: sha512-/v8HZt6RlyIZxB3ntehELOcUcfxKPVGWXnQdJuHRmzrqgF8nQypcC/oxGW+Ot4VGKDq81XugPKxx0n5PBtf9PA==}
@@ -1144,6 +1179,9 @@ packages:
 
   '@vitest/spy@5.0.0':
     resolution: {integrity: sha512-uy+luWBAPw9XfthoHi5AkfHUnuPYEESjl0p/r+meoBnU8bxg5GDQ3Ey8MjcJ6sqahkL4PFyrvfMJJBw7LbU06g==}
+
+  '@webgpu/types@0.1.74':
+    resolution: {integrity: sha512-lgiI4hbuLcI9unnm2cL/tvCaQU45dp0xcLWJh5uB/9MBGvIA4F8XIk7nSiBeg+K4xWGYwgZKn80LmERI5CxoTA==}
 
   '@zip.js/zip.js@2.15.0':
     resolution: {integrity: sha512-hYAuHAaWjt0axbofaDL5XUlmrQPsBDcK3f45ApZuh6N+8UGVk26GoGdtGDvcvzahsHytTQ6DtBVXwG9IcCMjjQ==}
@@ -1551,6 +1589,9 @@ packages:
     peerDependenciesMeta:
       picomatch:
         optional: true
+
+  fflate@0.8.3:
+    resolution: {integrity: sha512-tbZNuJrLwGUp3zshBtdy4W+ORxZuIh8a5ilyIEQDC5rY1f3U20JMry0Ll3WBzU58EZKsEuJFXhb5gwv8CsPvgA==}
 
   file-entry-cache@11.1.5:
     resolution: {integrity: sha512-+PFTHITI08JIGhnNpGNI8T8inUpgZfk3GNEqfT9R2zZV2iFXg3CvqzSl/uEhs7TSGujYRELEANyDvS8Fj7+S7Q==}
@@ -1994,6 +2035,9 @@ packages:
   mersenne-twister@1.1.0:
     resolution: {integrity: sha512-mUYWsMKNrm4lfygPkL3OfGzOPTR2DBlTkBNHM//F6hGp8cLThY897crAlk3/Jo17LEOOjQUrNAx6DvgO77QJkA==}
 
+  meshoptimizer@1.1.1:
+    resolution: {integrity: sha512-oRFNWJRDA/WTrVj7NWvqa5HqE1t9MYDj2VaWirQCzCCrAd2GHrqR/sQezCxiWATPNlKTcRaPRHPJwIRoPBAp5g==}
+
   meshoptimizer@1.2.0:
     resolution: {integrity: sha512-davRZeIJbxJrE24cwQle7ZDsxjdk/OphNOV83oX+efQinyoHY9Jcyz3MHbaoG0qySZajldGztNZ1RN/T19PZsg==}
 
@@ -2123,6 +2167,10 @@ packages:
   picomatch@4.0.7:
     resolution: {integrity: sha512-qcJu88Q2IWqJsDD529JKMdwGm/dvInW4HvQnRwiH9JtihJvzGOscDtHE3x1pBKeUOTysQ8kVmLnJ2kJu7yhcGA==}
     engines: {node: '>=12'}
+
+  playcanvas@2.22.6:
+    resolution: {integrity: sha512-h5yBfE3jfGYWVEsRp8E3BqcPvpG14wwZUpQiJt+/ePsASaPHbfhtdFbABu5igUTN2k37QBQvfg7H1aCEnw/OFQ==}
+    engines: {node: '>=18.3.0'}
 
   playwright-core@1.63.0:
     resolution: {integrity: sha512-rYCsBF/M5HjUch52bbtVONEFjv6Xu8sm8h72dNlR5bzIE1fvC/bxgspzkjSfU+MweEMmPM8KJebG6nnyxo5mCg==}
@@ -2350,6 +2398,9 @@ packages:
 
   symbol-tree@3.2.4:
     resolution: {integrity: sha512-9QNk5KwDF+Bvz+PyObkmSYjI5ksVUYtjW7AU22r2NKcfLJcXp96hkDWU3+XndOsUb+AQ9QhfzfCT2O+CNWT5Tw==}
+
+  three@0.186.1:
+    resolution: {integrity: sha512-blFeqb49wRCSGUGj7gtpfnSGHy2lwDk94RhUmS1c/hTby70kvChbWpkJ4Pm1390LqzzvTmzgXKHPEafJwCb8jA==}
 
   tinybench@6.1.4:
     resolution: {integrity: sha512-9APumHG7r4yOk4X4WlkmE71aZcv1gvin1czO3OQ1U9iJcFA5Ja/ygyb0vPOVHTthFozUYs8CLoLUlM8grb2lTQ==}
@@ -2792,7 +2843,7 @@ snapshots:
       hashery: 1.5.1
       keyv: 5.6.0
 
-  '@cesium/engine@26.3.0(patch_hash=f3afdf9616330e63ce27f99456ed0d09105b8baa7400548a558fa77b4f0fa954)':
+  '@cesium/engine@26.3.0(patch_hash=b1eefe31bac97600e4b783e536ea6f9e92c8c6fe7129b6154d7129be7a5e78df)':
     dependencies:
       '@cesium/wasm-splats': 0.1.0-alpha.2
       '@spz-loader/core': 0.3.1
@@ -2820,7 +2871,7 @@ snapshots:
 
   '@cesium/widgets@16.2.0':
     dependencies:
-      '@cesium/engine': 26.3.0(patch_hash=f3afdf9616330e63ce27f99456ed0d09105b8baa7400548a558fa77b4f0fa954)
+      '@cesium/engine': 26.3.0(patch_hash=b1eefe31bac97600e4b783e536ea6f9e92c8c6fe7129b6154d7129be7a5e78df)
       nosleep.js: 0.12.0
 
   '@csstools/color-helpers@6.1.1': {}
@@ -2846,6 +2897,8 @@ snapshots:
       css-tree: 3.2.1
 
   '@csstools/css-tokenizer@4.0.0': {}
+
+  '@dimforge/rapier3d-compat@0.12.0': {}
 
   '@eslint-community/eslint-utils@4.10.1(eslint@10.10.0)':
     dependencies:
@@ -3366,6 +3419,11 @@ snapshots:
 
   '@rolldown/pluginutils@1.0.1': {}
 
+  '@sparkjsdev/spark@2.2.0(three@0.186.1)':
+    dependencies:
+      fflate: 0.8.3
+      three: 0.186.1
+
   '@spz-loader/core@0.3.1': {}
 
   '@tanstack/query-core@5.102.8': {}
@@ -3412,6 +3470,8 @@ snapshots:
     dependencies:
       '@testing-library/dom': 10.4.2
 
+  '@tweenjs/tween.js@23.1.3': {}
+
   '@tweenjs/tween.js@25.0.0': {}
 
   '@types/aria-query@5.0.4': {}
@@ -3443,8 +3503,21 @@ snapshots:
     dependencies:
       csstype: 3.2.3
 
+  '@types/stats.js@0.17.4': {}
+
+  '@types/three@0.186.0':
+    dependencies:
+      '@dimforge/rapier3d-compat': 0.12.0
+      '@tweenjs/tween.js': 23.1.3
+      '@types/stats.js': 0.17.4
+      '@types/webxr': 0.5.24
+      fflate: 0.8.3
+      meshoptimizer: 1.1.1
+
   '@types/trusted-types@2.0.7':
     optional: true
+
+  '@types/webxr@0.5.24': {}
 
   '@typescript-eslint/eslint-plugin@8.70.0(@typescript-eslint/parser@8.70.0(eslint@10.10.0)(typescript@6.0.3))(eslint@10.10.0)(typescript@6.0.3)':
     dependencies:
@@ -3552,6 +3625,8 @@ snapshots:
       vite: 8.3.0(@types/node@26.5.1)
 
   '@vitest/spy@5.0.0': {}
+
+  '@webgpu/types@0.1.74': {}
 
   '@zip.js/zip.js@2.15.0': {}
 
@@ -3708,7 +3783,7 @@ snapshots:
 
   cesium@1.145.0:
     dependencies:
-      '@cesium/engine': 26.3.0(patch_hash=f3afdf9616330e63ce27f99456ed0d09105b8baa7400548a558fa77b4f0fa954)
+      '@cesium/engine': 26.3.0(patch_hash=b1eefe31bac97600e4b783e536ea6f9e92c8c6fe7129b6154d7129be7a5e78df)
       '@cesium/widgets': 16.2.0
       protobufjs: 8.8.0
 
@@ -4047,6 +4122,8 @@ snapshots:
   fdir@6.5.0(picomatch@4.0.7):
     optionalDependencies:
       picomatch: 4.0.7
+
+  fflate@0.8.3: {}
 
   file-entry-cache@11.1.5:
     dependencies:
@@ -4468,6 +4545,8 @@ snapshots:
 
   mersenne-twister@1.1.0: {}
 
+  meshoptimizer@1.1.1: {}
+
   meshoptimizer@1.2.0: {}
 
   min-indent@1.0.1: {}
@@ -4596,6 +4675,11 @@ snapshots:
   picocolors@1.1.1: {}
 
   picomatch@4.0.7: {}
+
+  playcanvas@2.22.6:
+    dependencies:
+      '@types/webxr': 0.5.24
+      '@webgpu/types': 0.1.74
 
   playwright-core@1.63.0: {}
 
@@ -4860,6 +4944,8 @@ snapshots:
   supports-color@10.2.2: {}
 
   symbol-tree@3.2.4: {}
+
+  three@0.186.1: {}
 
   tinybench@6.1.4: {}
 

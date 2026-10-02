@@ -1,10 +1,12 @@
 # Cloudflare Pages configuration for apps/web's static bundle.
 #
-# There is no Worker here and no Pages Function: this is a static, multi-page bundle
-# (index.html, upload.html, admin.html -- see apps/web/vite.config.ts) that talks to the
-# Fly-hosted API over CORS and streams tiles straight out of R2. The only reason this
-# file exists is so that `wrangler pages deploy` needs no arguments and no dashboard
-# state to know which project and which directory it is publishing.
+# A static, multi-page bundle (index.html, upload.html, admin.html -- see
+# apps/web/vite.config.ts) that talks to the Fly-hosted API over CORS, plus one Pages
+# Function, functions/r2/, that serves the public tile bucket on this origin over HTTP/2-3
+# with cache lifetimes (r2.dev gives HTTP/1.1 and none). `wrangler pages deploy`, run from
+# the repository root, finds and bundles functions/ by itself; the web app uses it only once
+# it answers (apps/web/src/lib/tileProxy.ts). This file exists so that the deploy needs no
+# arguments and no dashboard state to know which project and directory it is publishing.
 #
 # It is a **Direct Upload** project, not a Git-integrated one: the build happens in
 # .github/workflows/deploy.yml, where the VITE_* build-time values live as repository

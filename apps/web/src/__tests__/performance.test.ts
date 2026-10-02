@@ -26,13 +26,14 @@ const base: QualitySample = {
 };
 
 describe("decideScreenSpaceError", () => {
-  it("refines straight to the preset minimum at rest, at any height", () => {
-    expect(decideScreenSpaceError(base)).toEqual({
+  it("refines straight to the preset minimum at rest, at any height, when it fits", () => {
+    const light = { ...base, memoryRatio: 0.01 };
+    expect(decideScreenSpaceError(light)).toEqual({
       screenSpaceError: 2,
       reason: "idle refinement",
     });
-    expect(decideScreenSpaceError({ ...base, current: 3 }).screenSpaceError).toBe(2);
-    expect(decideScreenSpaceError({ ...base, current: 2 })).toEqual({
+    expect(decideScreenSpaceError({ ...light, current: 3 }).screenSpaceError).toBe(2);
+    expect(decideScreenSpaceError({ ...light, current: 2 })).toEqual({
       screenSpaceError: 2,
       reason: "at finest",
     });
@@ -59,11 +60,41 @@ describe("decideScreenSpaceError", () => {
       decideScreenSpaceError({ ...base, current: 8, memoryRatio: 0.75 }).screenSpaceError,
     ).toBe(8);
     const d = decideScreenSpaceError({ ...base, current: 8, memoryRatio: 1.5 });
-    expect(d.screenSpaceError).toBe(12);
+    // Proportional: 8 * sqrt(1.5 / 0.9).
+    expect(d.screenSpaceError).toBeCloseTo(10.33, 2);
     expect(d.reason).toMatch(/memory pressure/);
     expect(
       decideScreenSpaceError({ ...base, current: 31, memoryRatio: 1.5 }).screenSpaceError,
     ).toBe(32);
+  });
+
+  it("settles a view larger than its budget, instead of swinging finest-coarse-finest", () => {
+    // A scan whose finest level is 8x the budget: the load goes as 1 / error^2.
+    const ratioAt = (sse: number): number => 8 * (2 / sse) ** 2;
+    let sse = 2;
+    const seen: number[] = [];
+    for (let i = 0; i < 12; i++) {
+      sse = decideScreenSpaceError({
+        ...base,
+        current: sse,
+        memoryRatio: ratioAt(sse),
+      }).screenSpaceError;
+      seen.push(sse);
+    }
+    const last = seen.slice(-6);
+    // Converged: the same error from the fourth decision on, the load inside the dead band.
+    expect(new Set(last).size).toBe(1);
+    const ratio = ratioAt(last[0] ?? 0);
+    expect(ratio).toBeGreaterThanOrEqual(0.7);
+    expect(ratio).toBeLessThanOrEqual(1.25);
+  });
+
+  it("refines from coarse toward the budget in one move when the finest would not fit", () => {
+    // At 16 px the view holds 20% of its budget; at the finest (2 px) it would be 1280%.
+    const d = decideScreenSpaceError({ ...base, current: 16, memoryRatio: 0.2 });
+    expect(d.reason).toMatch(/to budget/);
+    // 16 * sqrt(0.2 / 0.9) = 7.5: the error that lands the load on 90%.
+    expect(d.screenSpaceError).toBeCloseTo(7.54, 1);
   });
 
   it("follows bounds shifted by a ladder penalty, coarsening at once when the floor rose", () => {
@@ -120,6 +151,18 @@ describe("buildLadder", () => {
     expect(baseResolutionScale("balanced", 3)).toBe(0.5);
     expect(baseResolutionScale("ultra", 2)).toBe(1);
     expect(baseResolutionScale("performance", 2)).toBe(1);
+  });
+
+  it("caps balanced's short side: 4K on a desktop, 1080 on a phone", () => {
+    // A 1440 CSS px tall window at 2x: 2160 device px at the 1.5 ratio cap, so no further cut.
+    expect(baseResolutionScale("balanced", 2, 1440)).toBe(0.75);
+    // A 4K-class 2400 CSS px short side at 1x would render 2400: capped to 2160.
+    expect(baseResolutionScale("balanced", 1, 2400)).toBeCloseTo(0.9);
+    // A phone, 430 CSS px wide at 3x: 1290 device px, 645 at the ratio cap -- under 1080.
+    expect(baseResolutionScale("balanced", 3, 430, true)).toBe(0.5);
+    // A tablet, 1024 CSS px short side at 2x: 1536 at the ratio cap, capped to 1080.
+    expect(baseResolutionScale("balanced", 2, 1024, true)).toBeCloseTo(1080 / 2048);
+    expect(baseResolutionScale("ultra", 2, 1024, true)).toBe(1);
   });
 });
 

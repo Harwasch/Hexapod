@@ -19,10 +19,10 @@
 #                                          apps/api/ *and* tools/pipeline, tools/captures)
 # Secrets: never here. `fly secrets set` -- see docs/DEPLOYMENT.md § Handover.
 #
-# NOT DEPLOYED. No `fly deploy` has ever been run against this file; it was written from
-# the Dockerfile and the settings the code actually reads, and the only mechanical check
-# it has is CI's `image` job, which asserts that every command named under [processes]
-# and in release_command exists on PATH inside the image.
+# Deployed by the operator (twin-api, with the worker's volume at 20 GB rather than the
+# initial_size below, which only applies when a volume is created). CI's `image` job
+# asserts that every command named under [processes] and in release_command exists on
+# PATH inside the image.
 
 app = "twin-api"
 primary_region = "iad"
@@ -74,6 +74,36 @@ kill_timeout = "30s"
   # lapsed lease and another worker starts the recipe over) but the work is not -- and a
   # 12 GB capture would be competing with the image's own layers for the root disk.
   WORKER_WORKDIR = "/data/worker"
+  # Lane 2. `cloud` is `local` plus a GPU runner: every CPU stage still runs on the worker
+  # (Lane 1 entirely, and Lane 2's frames, poses, georeference and packaging), and only
+  # a stage that declares `gpu:` -- `pose` (cpu4) and `train` (l4) -- is sent to Modal, as the `run_stage_<tier>`
+  # functions infra/modal/app.py deploys under the app name `twin-pipeline` (the worker's
+  # default WORKER_MODAL_APP). It needs MODAL_TOKEN_ID / MODAL_TOKEN_SECRET, which
+  # provision.yml forwards as Fly secrets. Without a deployed app a Lane 2 run should fail
+  # at `train` on the function lookup (not yet observed); Lane 1 is untouched either way.
+  # The phone key's salted PBKDF2 hash (app/services/phone_key.py). A hash, not the key,
+  # which is why it can sit in a public file: 200,000 SHA-256 rounds per guess against
+  # ~59 bits. Rotate by generating a new key and replacing this line.
+  API_PHONE_KEY_HASH = "pbkdf2_sha256$200000$540675f0b3538e6c6a46379620b09ccc$7ba333cf98f74da149cc1c88daabf29645f265100c8f51f75fa36fb90b91816b"
+  WORKER_RUNNER = "cloud"
+  WORKER_CLOUD_PROVIDERS = "modal"
+  # Jobs supervised at once. With "2" on 2026-09-27, jobs were reclaimed by the other slot
+  # every ~40-60 s and dead-lettered after "stage 'normalize' has been attempted 3 times".
+  # Cause (reproduced in tests; the Fly logs were not read): the lease was renewed only by
+  # the supervising thread's heartbeat, and that same thread downloads the capture before
+  # the first stage and uploads every finished stage (normalize's ~100 frames to R2)
+  # before it records it -- each longer than the 30 s lease. Worse, its first heartbeat
+  # after the download ran in a transaction opened before it, and `now()` + lease was
+  # already past. One slot: nobody else was polling, so the lapse went unseen. Two: the
+  # idle slot polls every 2 s, took the job, re-ran the stage as the next attempt (wiping
+  # the out/ the first slot was still uploading), and the two slots traded it until the
+  # budget ran out. Fixed in app/worker/claim.py: a per-job LeaseKeeper thread renews the
+  # lease whatever the supervisor is doing, and a lease is computed from
+  # statement_timestamp(), not now(). Guarded by tests/test_worker_concurrency.py (slow
+  # uploads, slow download) and tests/test_worker.py. Still "1" here until "2" has been
+  # validated in production; the worker README says why 2 fits the 2 GB machine. If it
+  # recurs, look for a second "claimed job <id>" and "lost job" in the worker's logs.
+  WORKER_CONCURRENCY = "1"
 
 [processes]
   app = "uvicorn app.main:app --host 0.0.0.0 --port 8000"
@@ -105,7 +135,7 @@ kill_timeout = "30s"
 [[vm]]
   processes = ["worker"]
   # Lane 1 (splat-ingest) runs its stages in this machine -- packing tiles, not training.
-  # Lane 2's `train` is dispatched elsewhere (WORKER_RUNNER=cloud), so this machine
+  # Lane 2's `pose` (Modal cpu4) and `train` (Modal L4) run elsewhere, so this machine
   # supervises rather than computes. Raise it when a stage starts being the bottleneck;
   # `fly scale vm` does not need a redeploy.
   size = "shared-cpu-2x"
@@ -116,7 +146,21 @@ kill_timeout = "30s"
   destination = "/data"
   processes = ["worker"]
   # Captures are large and the workdir outlives the run. 50 GB is roughly four 12 GB
-  # captures in flight; `fly volumes extend` grows it without a redeploy. A volume binds
-  # the worker to one region and one machine -- which is correct here: there is exactly
-  # one worker, and a second one would not share this directory.
-  initial_size = "50gb"
+  # captures in flight, and that is what this asked for until the first real provisioning
+  # run met Fly's answer: "To create more than 20GB in volumes please add a payment
+  # method." So it starts at the ceiling an account without one is allowed, which is
+  # about one and a half captures in flight rather than four.
+  #
+  # That is a starting size and not a decision about how much room the worker needs.
+  # `fly volumes extend` grows it without a redeploy and without recreating anything, so
+  # raising it later costs nothing but the command -- which is the reason this was the
+  # cheap way out of the block rather than a compromise.
+  #
+  # 20 GB is enough for one capture in flight because the worker drops each finished
+  # run's `inputs/` and stages' `work/` (WorkerConfig.tidy_finished_runs): what stays per
+  # Lane 2 run is its outputs, a few hundred MB, while a run in flight briefly holds the
+  # video, its candidate frames and COLMAP's database as well.
+  #
+  # A volume binds the worker to one region and one machine, which is correct here: there
+  # is exactly one worker, and a second one would not share this directory.
+  initial_size = "20gb"

@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -36,6 +37,7 @@ from app.models.enums import (
     ScaleSource,
 )
 from app.schemas.asset import AssetBase, GroundSample, RenderConfig, TilesUrlSource
+from app.schemas.capture import QUALITY_BARS, QUALITY_MODES, CaptureQuality
 from app.schemas.common import Provenance
 from app.schemas.geojson import Polygon
 from app.schemas.site import SiteCreate
@@ -91,6 +93,11 @@ class Registration:
     #: The capture's own measured ground, already on the globe. Empty is not an error: a
     #: recipe with no `ground_samples` stage, or a run under the stub runner.
     ground_samples: tuple[GroundSample, ...] = ()
+    #: The quality stage's summary (`catalog` copies it out of `quality.json`), or None
+    #: for a recipe without one.
+    quality: dict[str, Any] | None = None
+    #: The placed coverage point cloud's file name, when the run made one with points.
+    coverage: str | None = None
 
     @staticmethod
     def read(path: Path) -> Registration:
@@ -111,6 +118,8 @@ class Registration:
             bbox_local_m=_bbox(document.get("bboxLocalM")),
             thumbnail=str(thumbnail) if thumbnail else None,
             ground_samples=_ground_samples(document.get("ground")),
+            quality=document.get("quality") if isinstance(document.get("quality"), dict) else None,
+            coverage=str(document["coverage"]) if document.get("coverage") else None,
         )
 
 
@@ -178,6 +187,70 @@ def _bbox(value: object) -> tuple[list[float], list[float]] | None:
         return ([float(v) for v in low], [float(v) for v in high])
     except (TypeError, ValueError):
         return None
+
+
+def capture_quality(
+    summary: dict[str, Any] | None, job_id: uuid.UUID, coverage_url: str | None
+) -> CaptureQuality | None:
+    """`registration.json`'s quality summary as the API's typed verdict, or None.
+
+    Read as defensively as everything else here: a summary that does not parse costs the
+    capture its forecast and its Refine button, never the run that produced it.
+    """
+    if not summary:
+        return None
+    counts = _mapping(summary.get("gaussians"))
+    roi = _mapping(summary.get("roi")) or None
+    raw_tips = summary.get("tips")
+    tips: list[Any] = raw_tips if isinstance(raw_tips, list) else []
+    gsd = _mapping(summary.get("gsd"))
+    views = _mapping(summary.get("views"))
+    mode = str(summary.get("mode") or "refine")
+    bar = str(summary.get("bar") or "everything")
+    try:
+        return CaptureQuality(
+            job_id=job_id,
+            mode=mode if mode in QUALITY_MODES else "refine",
+            bar=bar if bar in QUALITY_BARS else "everything",
+            bar_applied=str(summary.get("barApplied") or bar),
+            keep_pct=_optional_number(summary.get("keepPct")),
+            keep_verified_pct=_optional_number(summary.get("keepVerifiedPct")),
+            context_pct=_optional_number(summary.get("contextPct")),
+            held_out_psnr=_optional_number(summary.get("heldOutPsnr")),
+            gaussians={
+                "total": int(counts.get("in", 0)),
+                "kept": int(counts.get("out", 0)),
+                "keep": int(counts.get("keep", 0)),
+                "context": int(counts.get("context", 0)),
+                "drop": int(counts.get("drop", 0)),
+            },
+            roi=None if roi is None else {"center": roi.get("center"), "radius": roi.get("radius")},
+            tips=[
+                {"id": str(tip.get("id", "")), "text": str(tip.get("text", ""))}
+                for tip in tips
+                if isinstance(tip, dict) and tip.get("text")
+            ],
+            gsd_mm=_optional_number(gsd.get("medianRoiMm")),
+            median_views=_optional_int(views.get("medianRoi")),
+            coverage_url=coverage_url,
+        )
+    except (ValidationError, TypeError, ValueError):
+        return None
+
+
+def _mapping(value: object) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _optional_number(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    return float(value) if math.isfinite(float(value)) else None
+
+
+def _optional_int(value: object) -> int | None:
+    number = _optional_number(value)
+    return None if number is None else int(number)
 
 
 def _georef_method(value: object) -> GeorefMethod:
@@ -257,22 +330,32 @@ def _publish_object(
     return publish.publish_object(artifact_key(job_id, stage_id, key_suffix))
 
 
-def register(
-    db: Session,
+@dataclass(frozen=True)
+class Published:
+    """What `publish_outputs` copied to the public bucket: each URL, or None."""
+
+    tileset: str | None
+    thumbnail: str | None
+    coverage: str | None
+
+
+def publish_outputs(
     storage: ObjectStorage,
     *,
     publish: Publisher | None = None,
-    capture: Capture,
     job_id: uuid.UUID,
     registration: Registration,
     tiles_stage_id: str | None,
     thumbnail_stage_id: str | None = None,
-) -> uuid.UUID | None:
-    """Create (or keep) the capture's site, and mark the capture complete.
+    coverage_stage_id: str | None = None,
+) -> Published:
+    """Copy the run's browser-facing outputs to the public bucket. No database here.
 
-    Returns the site id, or None when there was nothing registerable — a run under the
-    stub runner with no bucket configured produces no tileset to point a viewer at, and
-    saying so is better than a site with a dead asset on it.
+    This is object-store I/O proportional to the tileset, minutes for a large capture
+    (514 tiles took ~8 min on the worker), so the caller runs it with **no transaction
+    open**: a session left idle in a transaction that long is killed by the database's
+    idle-in-transaction timeout, and the registration after it then fails on a dead
+    connection. That is exactly what a 22.7M-gaussian upload hit.
     """
     # With no publisher the private bucket is also the public one, which is the
     # single-bucket behaviour every caller had before the split; see app/worker/publish.py.
@@ -299,6 +382,53 @@ def register(
     except PublishError:
         # A missing thumbnail is a cosmetic loss, not a reason to withhold the site.
         thumbnail = None
+    # The quality bar's coverage cloud, beside the thumbnail and for the same reason: a
+    # browser fetches it. Also cosmetic, so a failed publish drops the overlay only.
+    try:
+        coverage = (
+            _publish_object(publisher, job_id, coverage_stage_id, registration.coverage)
+            if coverage_stage_id is not None and registration.coverage
+            else None
+        )
+    except PublishError:
+        coverage = None
+    return Published(tileset=url, thumbnail=thumbnail, coverage=coverage)
+
+
+def register(
+    db: Session,
+    storage: ObjectStorage,
+    *,
+    publish: Publisher | None = None,
+    capture: Capture,
+    job_id: uuid.UUID,
+    registration: Registration,
+    tiles_stage_id: str | None,
+    thumbnail_stage_id: str | None = None,
+    coverage_stage_id: str | None = None,
+    published: Published | None = None,
+) -> uuid.UUID | None:
+    """Create (or keep) the capture's site, and mark the capture complete.
+
+    Returns the site id, or None when there was nothing registerable — a run under the
+    stub runner with no bucket configured produces no tileset to point a viewer at, and
+    saying so is better than a site with a dead asset on it.
+
+    Pass `published` (from `publish_outputs`, run first with no transaction open) so that
+    this does only database work; without it the copy happens here, inside whatever
+    transaction the session holds, which is only safe for small outputs.
+    """
+    if published is None:
+        published = publish_outputs(
+            storage,
+            publish=publish,
+            job_id=job_id,
+            registration=registration,
+            tiles_stage_id=tiles_stage_id,
+            thumbnail_stage_id=thumbnail_stage_id,
+            coverage_stage_id=coverage_stage_id,
+        )
+    url, thumbnail, coverage = published.tileset, published.thumbnail, published.coverage
     if capture.site_id is None:
         assets: list[AssetBase] = []
         if url is not None:
@@ -351,6 +481,23 @@ def register(
         _repoint_splat(db, registered, url, job_id, registration)
     if registered is not None and thumbnail is not None:
         registered.thumbnail_url = thumbnail
+    if registered is not None:
+        # The viewer reads the overlay off the site it is showing. Cleared by a run with
+        # none, so an overlay never sits on a splat it was not measured on.
+        metadata = dict(registered.metadata_ or {})
+        if coverage:
+            metadata["coverageUrl"] = coverage
+        else:
+            metadata.pop("coverageUrl", None)
+        # Beside it, how much of the keep tier held-out frames verified, for the legend.
+        verified = _optional_number((registration.quality or {}).get("keepVerifiedPct"))
+        if coverage and verified is not None:
+            metadata["keepVerifiedPct"] = verified
+        else:
+            metadata.pop("keepVerifiedPct", None)
+        registered.metadata_ = metadata
+    verdict = capture_quality(registration.quality, job_id, coverage)
+    capture.quality = None if verdict is None else verdict.model_dump(mode="json", by_alias=True)
     capture.status = CaptureStatus.COMPLETE
     capture.georef_method = registration.georef_method
     capture.scale_source = registration.scale_source

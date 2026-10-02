@@ -14,6 +14,12 @@ from app.schemas.job import JobRead
 
 SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
+#: What a capture's `metadata.upAxis` may say: the axis of the uploaded splat file that
+#: points up. The same six `tools/pipeline/gaussians.UP_AXES` names, restated because
+#: this schema must import without the pipeline on the path; `tests/test_capture_api.py`
+#: asserts the two agree.
+UP_AXES: tuple[str, ...] = ("z", "-z", "y", "-y", "x", "-x")
+
 
 class CaptureBase(CamelModel):
     name: str = Field(min_length=1, max_length=200)
@@ -27,6 +33,28 @@ class CaptureBase(CamelModel):
     attribution: list[Attribution] = Field(default_factory=list)
     license: LicenseMetadata | None = None
     provenance: Provenance | None = None
+
+    @field_validator("metadata")
+    @classmethod
+    def _orientation(cls, value: dict[str, Any]) -> dict[str, Any]:
+        """Refuse an orientation the pipeline would refuse, while the request is open.
+
+        `metadata` is otherwise free-form. These two keys are not: the worker hands them
+        to the normalize stage, and a bad one there fails the run an hour later instead of
+        the upload now.
+        """
+        axis = value.get("upAxis")
+        if axis is not None and axis not in UP_AXES:
+            raise ValueError(
+                f"metadata.upAxis must be one of {', '.join(UP_AXES)} (the axis of the "
+                f"uploaded file that points up), not {axis!r}"
+            )
+        heading = value.get("headingDeg")
+        if heading is not None and (
+            isinstance(heading, bool) or not isinstance(heading, int | float)
+        ):
+            raise ValueError("metadata.headingDeg must be a number of degrees clockwise from north")
+        return value
 
 
 class CaptureCreate(CaptureBase):
@@ -65,6 +93,70 @@ class CaptureFileRead(CamelModel):
     updated_at: datetime
 
 
+#: What `quality.mode` and `quality.bar` may be; tools/pipeline/quality.py's MODES and BARS.
+QUALITY_MODES: tuple[str, ...] = ("preview", "refine")
+QUALITY_BARS: tuple[str, ...] = ("strict", "balanced", "everything")
+
+
+class QualityRoi(CamelModel):
+    """A sphere in the reconstruction's own (COLMAP) frame: where the cameras pointed.
+
+    Only meaningful over the poses of the run that measured it, which is why a Refine
+    re-runs that same job from `train` rather than starting a new one.
+    """
+
+    center: list[float] = Field(min_length=3, max_length=3)
+    radius: float = Field(gt=0)
+
+
+class QualityTip(CamelModel):
+    id: str
+    text: str
+
+
+class QualityCounts(CamelModel):
+    """Gaussians in, gaussians the bar let out, and each tier's count."""
+
+    total: int
+    kept: int
+    keep: int
+    context: int
+    drop: int
+
+
+class CaptureQuality(CamelModel):
+    """The quality bar's verdict on a capture's latest finished run.
+
+    Read model: every field is explicit so the OpenAPI contract marks it required.
+    """
+
+    job_id: uuid.UUID
+    #: `preview` (a short run that forecasts) or `refine` (the full-quality pass).
+    mode: str
+    #: The bar asked for, and the one applied: a bar that would have left almost nothing
+    #: falls back to the next looser one rather than failing the run.
+    bar: str
+    bar_applied: str
+    #: Share of the occupied region of interest that reached the keep tier, in percent.
+    keep_pct: float | None
+    #: The same share, counting only keep whose accuracy was also verified against
+    #: gsplat's held-out frames (the rest is kept on coverage alone). Null when accuracy
+    #: was not measured, and on verdicts stored before it was.
+    keep_verified_pct: float | None = None
+    context_pct: float | None
+    #: gsplat's own held-out frames, in dB.
+    held_out_psnr: float | None
+    gaussians: QualityCounts
+    roi: QualityRoi | None
+    tips: list[QualityTip]
+    #: The median ground sampling distance in the region, in mm per pixel, when the
+    #: capture had a metric scale (EXIF GPS); null otherwise.
+    gsd_mm: float | None
+    median_views: int | None
+    #: The tier-coloured point cloud, east/north/up like the published splat.
+    coverage_url: str | None
+
+
 class CaptureRead(CamelModel):
     id: uuid.UUID
     slug: str
@@ -81,6 +173,8 @@ class CaptureRead(CamelModel):
     georef_method: GeorefMethod | None
     scale_source: ScaleSource | None
     uncertainty_m: float | None
+    # The quality bar's verdict on the latest finished run; null before one ran.
+    quality: CaptureQuality | None
     metadata: dict[str, Any]
     attribution: list[Attribution]
     license: LicenseMetadata | None

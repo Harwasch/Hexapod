@@ -12,6 +12,7 @@ pulled in this environment; every other moving part is the real one.
 
 from __future__ import annotations
 
+import gzip
 import json
 import struct
 import uuid
@@ -79,7 +80,13 @@ def _uploaded_capture(db: Session, storage: S3Storage, *, placed: bool = True) -
         # Lane 1 has no EXIF and no poses, so the coordinate is the operator's: this is
         # "the capture carries a coordinate", and the worker hands it to whichever stage
         # places captures by hand.
-        metadata_={"lat": LAT, "lon": LON, "height": HEIGHT} if placed else {},
+        #
+        # `upAxis: "z"` because the committed fixture is written east/north/up, which is
+        # not what a `.ply` is taken to be when nobody says (y down, the 3DGS
+        # convention). It is also the path a real capture's override takes.
+        metadata_=(
+            {"lat": LAT, "lon": LON, "height": HEIGHT, "upAxis": "z"} if placed else {"upAxis": "z"}
+        ),
     )
     db.add(capture)
     db.flush()
@@ -276,6 +283,23 @@ def test_the_measured_ground_and_the_placement_reach_the_asset(
     assert provenance["uncertaintyM"] == pytest.approx(10.0)
 
 
+def test_a_finished_run_keeps_its_outputs_and_drops_its_scratch(
+    db: Session, sessions: sessionmaker[Session], storage: S3Storage, tmp_path: Path
+) -> None:
+    """The upload copy and every stage's `work/` go; `out/` and `step.json` stay, which
+    is everything retry-from-stage reads. A Lane 2 video run would otherwise leave the
+    video and every candidate frame on the worker's volume."""
+    capture = _uploaded_capture(db, storage)
+
+    job = _run(db, sessions, storage, capture, tmp_path)
+
+    root = tmp_path / "runs" / str(job.id)
+    assert not (root / "inputs").exists()
+    assert not any((root / "stages").glob("*/work"))
+    assert (root / "stages" / "package" / "out" / "splat" / "tileset.json").is_file()
+    assert (root / "stages" / "normalize" / "step.json").is_file()
+
+
 def test_every_artifact_the_plan_asks_for_reaches_the_bucket_with_a_row(
     db: Session, sessions: sessionmaker[Session], storage: S3Storage, tmp_path: Path
 ) -> None:
@@ -305,6 +329,26 @@ def test_every_artifact_the_plan_asks_for_reaches_the_bucket_with_a_row(
     ground = json.loads(storage.get_object(by_kind[ArtifactKind.GROUND_SAMPLES].storage_key))
     assert ground["origin"]["lat"] == pytest.approx(LAT)
     assert ground["samples"]
+
+
+def test_the_collision_grid_goes_up_beside_the_tiles_as_opaque_bytes(
+    db: Session, sessions: sessionmaker[Session], storage: S3Storage, tmp_path: Path
+) -> None:
+    """`collision.bin` (tools/captures splat_tiles `COLLISION_FORMAT`) is in the tileset's
+    directory, so the whole-directory publish carries it; the root tile declares it; and it
+    is served as `application/octet-stream`, the gzip being the client's to inflate."""
+    capture = _uploaded_capture(db, storage)
+
+    job = _run(db, sessions, storage, capture, tmp_path)
+
+    tiles = f"runs/{job.id}/package/splat"
+    tileset = json.loads(storage.get_object(f"{tiles}/tileset.json"))
+    collision = tileset["root"]["extras"]["collision"]
+    assert collision["format"] == "hexapod.collision" and collision["version"] == 1
+    head = storage.head_object(f"{tiles}/{collision['uri']}")
+    assert head is not None and head.content_type == "application/octet-stream"
+    raw = gzip.decompress(storage.get_object(f"{tiles}/{collision['uri']}"))
+    assert len(raw) == 76 * collision["bricks"] and collision["solidCells"] > 0
 
 
 def test_the_thumbnail_endpoint_finally_has_something_to_point_at(
@@ -462,7 +506,7 @@ def test_the_run_is_repeatable_and_produces_the_same_tileset_bytes(
         sensor="Scaniverse",
         device="iPhone 15 Pro",
         captured_at=datetime(2026, 9, 12, tzinfo=UTC),
-        metadata_={"lat": LAT, "lon": LON, "height": HEIGHT},
+        metadata_={"lat": LAT, "lon": LON, "height": HEIGHT, "upAxis": "z"},
     )
     db.add(second_capture)
     db.flush()

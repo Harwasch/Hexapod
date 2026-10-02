@@ -168,7 +168,7 @@ export function PlanCard({ project }: { project: Project }) {
           <div className="mc-window__sub" data-testid="plan-source">
             {claude
               ? `Planned by Claude · ${planner.data?.model ?? ""}`
-              : "Rule-based planner · the API can't see ANTHROPIC_API_KEY"}
+              : "Rule-based draft · no AI planner connected"}
           </div>
         </div>
       </div>

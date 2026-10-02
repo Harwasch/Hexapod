@@ -36,10 +36,10 @@ export function FeedsPanel() {
           >
             <div className="mc-window__head mc-window__head--tight">
               <div>
-                <div className="mc-card__title">Live feeds</div>
+                <div className="mc-card__title">Cameras</div>
                 <div className="mc-card__meta">
-                  {streaming} of {project.machines.length} machines streaming ·{" "}
-                  {project.simulated ? "no video in the simulated fleet" : "live"}
+                  {streaming} of {project.machines.length} online
+                  {project.simulated ? " · simulated fleet, no video" : ""}
                 </div>
               </div>
               <button
@@ -64,7 +64,7 @@ export function FeedsPanel() {
                     <span className={`mc-dot ${STATE_CLASS[feed.state]}`} aria-hidden="true" />{" "}
                     <span className="mc-mono">{feed.state}</span>
                   </span>
-                  <span className="mc-feed__placeholder">no stream</span>
+                  <span className="mc-feed__placeholder">No video</span>
                   <span className="mc-feed__time mc-mono">{feed.time}</span>
                   <span className="mc-feed__cam">{feed.camera}</span>
                 </div>

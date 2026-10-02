@@ -19,10 +19,40 @@ export interface Proposal {
   estimate: string;
 }
 
-const SPLAT = new Set(["ply", "splat", "spz", "ksplat", "sog"]);
-const POINTS = new Set(["las", "laz", "e57", "pcd", "xyz"]);
-const VIDEO = new Set(["mp4", "mov", "m4v", "avi", "mkv", "insv"]);
-const IMAGE = new Set(["jpg", "jpeg", "png", "heic", "heif", "dng", "tif", "tiff", "webp"]);
+/*
+ * Exactly what the pipeline reads, and no more: `SPLAT_SUFFIXES` in
+ * tools/pipeline/gaussians.py and `VIDEO_SUFFIXES` / `IMAGE_SUFFIXES` in
+ * tools/pipeline/video.py. Offering a format the pipeline refuses turns a clear "not
+ * this file" at the drop into a failed run minutes later, so a format joins these sets
+ * when a stage learns to read it. HEIC is absent on purpose: iOS converts photos to JPEG
+ * when a picker does not list HEIC, so the phone page gets JPEGs without asking.
+ */
+const SPLAT = new Set(["ply", "spz"]);
+const VIDEO = new Set(["mp4", "mov", "m4v", "avi", "mkv", "webm"]);
+const IMAGE = new Set(["jpg", "jpeg", "png"]);
+
+/** The file picker's `accept`, built from the same sets so the two cannot drift. */
+export const ACCEPT = [
+  "video/mp4",
+  "video/quicktime",
+  "image/jpeg",
+  "image/png",
+  ...[...VIDEO, ...IMAGE, ...SPLAT].map((ext) => `.${ext}`),
+].join(",");
+
+/** Plain-language list for an error message. */
+export const SUPPORTED_TEXT =
+  "a video (.mp4, .mov, .m4v, .avi, .mkv, .webm), photos (.jpg, .png) or a splat (.ply, .spz)";
+
+/** The files the pipeline could not read, by name. Empty means the drop is fine. */
+export function unsupported(files: { name: string }[]): string[] {
+  return files
+    .filter((file) => {
+      const ext = extensionOf(file.name);
+      return !SPLAT.has(ext) && !VIDEO.has(ext) && !IMAGE.has(ext);
+    })
+    .map((file) => file.name);
+}
 
 export function extensionOf(filename: string): string {
   const base = filename.replace(/\\/g, "/").split("/").pop() ?? filename;
@@ -55,17 +85,8 @@ export function classify(files: { name: string; size: number }[]): Proposal {
       kind: "gaussian-splat",
       recipe: "splat-ingest",
       action: "Package and place",
-      summary: `${count} splat ${noun} — package and place`,
+      summary: `${count} splat ${noun} → placed as is`,
       estimate: "About 30 seconds",
-    };
-  }
-  if (extensions.some((ext) => POINTS.has(ext))) {
-    return {
-      kind: "point-cloud",
-      recipe: "splat-ingest",
-      action: "Package and place",
-      summary: `${count} point-cloud ${noun} — package and place`,
-      estimate: "About a minute",
     };
   }
   if (extensions.some((ext) => VIDEO.has(ext))) {
@@ -73,7 +94,7 @@ export function classify(files: { name: string; size: number }[]): Proposal {
       kind: "video",
       recipe: "photo-reconstruct",
       action: "Reconstruct",
-      summary: `${count} video ${noun} — reconstruct`,
+      summary: `${count} ${count === 1 ? "video" : "videos"} → 3D model`,
       estimate: reconstructEstimate(bytes),
     };
   }
@@ -82,17 +103,17 @@ export function classify(files: { name: string; size: number }[]): Proposal {
       kind: "images",
       recipe: "photo-reconstruct",
       action: "Reconstruct",
-      summary: `${count} ${count === 1 ? "photo" : "photos"} — reconstruct`,
+      summary: `${count} ${count === 1 ? "photo" : "photos"} → 3D model`,
       estimate: reconstructEstimate(bytes),
     };
   }
-  // Nothing recognised: treat it as photos rather than refusing the drop. The API
-  // validates what it is actually given, and lane 2 is the one that reads raw frames.
+  // Nothing recognised. `unsupported` refuses such a drop before it gets here; this is
+  // only what a card shows for a capture whose files predate that check.
   return {
     kind: "images",
     recipe: "photo-reconstruct",
     action: "Reconstruct",
-    summary: `${count} unrecognised ${noun} — will be treated as photos`,
+    summary: `${count} unsupported ${noun}`,
     estimate: reconstructEstimate(bytes),
   };
 }

@@ -28,6 +28,14 @@ import { FallbackGeocoder, IonGeocoder, NominatimGeocoder } from "./providers/ge
 import { SelectionManager } from "./SelectionManager";
 import { SiteManager } from "./SiteManager";
 import { installSplatTextureInterception } from "./splatCapture";
+import { SplatCollider } from "./SplatCollider";
+import { SplatMotionGate } from "./splatMotionGate";
+import { installCameraPickHook } from "./cameraPickHook";
+import { installSplatDecoder } from "./splatDecoder";
+import { installSplatSorter } from "./splatSorter";
+import { UiActivity } from "./uiActivity";
+import { ScanRendererHost, type ScanRendererStatus } from "./scanView/ScanRendererHost";
+import type { SplatRendererKind } from "./scanView/types";
 import type { Geocoder, SceneEvents } from "./types";
 import type { TokenState } from "@/state/viewer";
 
@@ -37,7 +45,18 @@ export interface SceneManagerOptions {
   ionToken: string | undefined;
   /** Initial camera in degrees / metres. */
   home?: { longitude: number; latitude: number; height: number };
+  /**
+   * Whether this build allows Living Survey motion on the GPU (`VITE_SPLAT_GPU_MOTION`, default
+   * true). Where allowed, `living.setGpuMotion` — the viewer's setting — decides; the CPU path
+   * is the fallback either way when the engine or a snapshot cannot take the shader path.
+   */
+  splatGpuMotion?: boolean;
 }
+
+/** Below this altitude over a splat site the view is the scan, shown ungraded. */
+const SCAN_GRADE_ALTITUDE_M = 400;
+/** Inside a scan and this close to the ground, the scan is the ground: no terrain under it. */
+const SCAN_FLOORLESS_ALTITUDE_M = 30;
 
 /**
  * The single owner of the CesiumJS viewer. React talks to this object through
@@ -52,6 +71,13 @@ export class CesiumSceneManager {
   readonly clipping: ClippingManager;
   readonly layers: LayerManager;
   readonly performance: PerformanceManager;
+  readonly splatGate: SplatMotionGate;
+  readonly collider: SplatCollider;
+  private readonly uninstallSplatSorter: () => void;
+  private readonly uninstallSplatDecoder: () => void;
+  private readonly uninstallPickHook: () => void;
+  private readonly uiActivity: UiActivity;
+  private readonly scanRenderer: ScanRendererHost;
   readonly sites: SiteManager;
   readonly living: LivingSurveyManager;
   readonly selection: SelectionManager;
@@ -65,6 +91,10 @@ export class CesiumSceneManager {
   private geocoderInstance: Geocoder;
   private destroyed = false;
   private interactionMode: "select" | "measure" | "explore" = "select";
+  private exploring = false;
+  private insideScan = false;
+  private scanAltitude = Number.POSITIVE_INFINITY;
+  private cameraMoving = false;
   private pickingGround = false;
   private renderRecoveries = 0;
   private readonly unsubscribe: (() => void)[] = [];
@@ -132,6 +162,18 @@ export class CesiumSceneManager {
     this.clipping = new ClippingManager(scene);
     this.layers = new LayerManager(this.viewer, this.events, this.clipping);
     this.performance = new PerformanceManager(this.viewer, this.events);
+    // The interface first, then the camera, then streaming (uiActivity.ts).
+    this.uiActivity = new UiActivity(this.viewer.canvas);
+    const interfaceBusy = (): boolean => this.uiActivity.active;
+    this.splatGate = new SplatMotionGate(this.viewer.scene, this.events, interfaceBusy);
+    this.uninstallSplatSorter = installSplatSorter();
+    this.uninstallSplatDecoder = installSplatDecoder(interfaceBusy);
+    this.collider = new SplatCollider(this.viewer.scene, () => this.splatGate.holding);
+    this.scanRenderer = new ScanRendererHost(this.viewer);
+    this.camera.setCollider(this.collider);
+    // Cesium's own camera control asks the splats' solids before reading depth back from
+    // the GPU (engine patch, ScreenSpaceCameraController.pickHook).
+    this.uninstallPickHook = installCameraPickHook(this.collider);
     this.performance.addScreenSpaceErrorSink("world", (sse, pixelRatio) =>
       this.layers.applyWorldScreenSpaceError(sse, pixelRatio),
     );
@@ -143,7 +185,9 @@ export class CesiumSceneManager {
       this.clipping,
       this.performance,
     );
-    this.living = new LivingSurveyManager(this.viewer, this.events, this.sites, this.performance);
+    this.living = new LivingSurveyManager(this.viewer, this.events, this.sites, this.performance, {
+      gpuMotion: options.splatGpuMotion !== false,
+    });
     this.selection = new SelectionManager(
       this.viewer,
       this.events,
@@ -151,18 +195,47 @@ export class CesiumSceneManager {
       this.layers,
       this.sites,
     );
+    this.selection.setCollider(this.collider);
     this.measurement = new MeasurementManager(this.viewer, this.events);
     this.mission = new MissionManager(this.viewer, this.events, this.camera);
     this.areas = new AreaEditor(this.viewer, this.events);
-    // While the map waits for "the ground you mean", selection keeps its hands off the click.
     this.unsubscribe.push(
+      // A photographic scan close up is shown in its own colours (PerformanceManager
+      // setGradeSuppressed): within a few hundred metres of a splat site that is on screen.
+      this.events.on("camera", (pose) => {
+        const splat = this.sites.activeRepresentation === "gaussian-splat";
+        this.performance.setGradeSuppressed(splat && pose.altitude < SCAN_GRADE_ALTITUDE_M);
+        this.selection.setHoverEnabled(!(splat && pose.altitude < SCAN_GRADE_ALTITUDE_M));
+        this.insideScan = splat && this.sites.insideSplatScan();
+        this.updateScanRenderer();
+        this.scanAltitude = pose.altitude;
+        this.updateScanView();
+      }),
+    );
+    // While the map waits for "the ground you mean", selection keeps its hands off the click;
+    // while exploring (walk or fly, from the toolbar or F) it does no hover picks either: each
+    // is a render pass and a GPU read-back, and the pointer is the look.
+    this.unsubscribe.push(
+      this.events.on("explore", (on) => {
+        this.exploring = on;
+        this.selection.setEnabled(this.selectionWanted());
+        this.updateScanView();
+      }),
+      this.events.on("motion", (moving) => {
+        this.cameraMoving = moving;
+        this.updateScanView();
+      }),
+      // A site engaging or changing representation changes what a splat renderer draws.
+      this.events.on("tilesets", () => this.updateScanRenderer()),
       this.events.on("ground-pick-mode", (on) => {
         this.pickingGround = on;
-        this.selection.setEnabled(this.interactionMode === "select" && !on);
+        this.selection.setEnabled(this.selectionWanted());
         if (on) this.viewer.canvas.style.cursor = "crosshair";
       }),
     );
     this.explore = new ExploreController(this.viewer, this.events);
+    this.explore.setCollider(this.collider);
+    this.explore.setCameraController(this.camera);
     this.keyboard = new KeyboardNavigator(this.viewer, this.camera);
     this.debug = new DebugManager(this.viewer, this.sites, (enabled) =>
       this.clipping.setEnabled(enabled),
@@ -299,10 +372,48 @@ export class CesiumSceneManager {
     };
   }
 
+  /**
+   * Inside a splat scan: the world around it holds still while the camera moves
+   * (LayerManager.holdWorld) and refines once it stops; and near the ground -- walking,
+   * flying low -- the scan is its own ground, with no terrain floor under it
+   * (ClippingManager.setFloorless).
+   */
+  /**
+   * Who draws splat scans: CesiumJS, or a dedicated renderer over the globe (Spark, PlayCanvas;
+   * scanView/ScanRendererHost.ts), for comparison. Everything else stays CesiumJS's.
+   */
+  setSplatRenderer(kind: SplatRendererKind): void {
+    this.sites.setSplatRenderer(kind);
+    this.scanRenderer.setRenderer(kind);
+    this.updateScanRenderer();
+  }
+
+  /** The dedicated splat renderer's state, for the debug panel and tests. */
+  get scanRendererStatus(): ScanRendererStatus {
+    return this.scanRenderer.status();
+  }
+
+  private updateScanRenderer(): void {
+    const target = this.sites.scanTarget();
+    this.scanRenderer.setTarget(target);
+    this.collider.setSolidWhileHidden(target?.tileset ?? null);
+  }
+
+  private updateScanView(): void {
+    const inside = this.insideScan;
+    this.layers.holdWorld(inside, this.cameraMoving);
+    const low = this.exploring || this.scanAltitude < SCAN_FLOORLESS_ALTITUDE_M;
+    this.clipping.setFloorless(inside && low ? (this.sites.activeSite?.id ?? null) : null);
+  }
+
+  private selectionWanted(): boolean {
+    return this.interactionMode === "select" && !this.pickingGround && !this.exploring;
+  }
+
   /** Measuring and exploring take over the pointer; selection yields. */
   setInteractionMode(mode: "select" | "measure" | "explore"): void {
     this.interactionMode = mode;
-    this.selection.setEnabled(mode === "select" && !this.pickingGround);
+    this.selection.setEnabled(this.selectionWanted());
     if (mode !== "measure") this.measurement.stop();
     if (mode !== "explore") this.explore.exit();
   }
@@ -324,6 +435,13 @@ export class CesiumSceneManager {
     this.selection.destroy();
     this.living.destroy();
     this.sites.destroy();
+    this.collider.destroy();
+    this.uninstallSplatSorter();
+    this.uninstallSplatDecoder();
+    this.uninstallPickHook();
+    this.scanRenderer.destroy();
+    this.uiActivity.destroy();
+    this.splatGate.destroy();
     this.performance.destroy();
     this.layers.destroy();
     this.clipping.destroy();

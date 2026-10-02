@@ -37,18 +37,30 @@ from __future__ import annotations
 import json
 import sys
 import threading
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+import time
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import host
 import run_stage
 from cloud import StageRequest, Transfer
+from phases import flat
 
-__all__ = ["RemoteOutcome", "execute", "stage_sandbox"]
+__all__ = ["RemoteOutcome", "SyncStats", "execute", "stage_sandbox"]
 
 #: The four directories a stage is given, in the layout `run_stage._context` expects.
 SANDBOX_DIRS: tuple[str, ...] = ("inputs", "out", "work", "checkpoint")
+
+#: How often the machine is sampled beside the stage (`host.HostWatch`): a few hundred
+#: `nvidia-smi` calls over a long training run, which is nothing, and enough to see a
+#: starved or throttled stretch.
+HOST_EVERY_S = 30.0
+
+#: How long the syncer is waited for once the stage has ended: as long as one sync in
+#: flight can take (`_sync_forever` checks its stop event between syncs, never during).
+SYNC_JOIN_S = 300.0
 
 
 @dataclass(frozen=True)
@@ -76,6 +88,25 @@ class RemoteOutcome:
         }
 
 
+@dataclass
+class SyncStats:
+    """What the checkpoint syncer did while the stage ran: how often it synced, how long
+    those syncs took (on its own thread, beside the stage) and what they moved. A syncer
+    that re-sends a big file every interval shows up here as bytes, not as a slow stage.
+    """
+
+    syncs: int = 0
+    seconds: float = 0.0
+    bytes: int = 0
+    lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+
+    def add(self, seconds: float, moved: int) -> None:
+        with self.lock:
+            self.syncs += 1
+            self.seconds += seconds
+            self.bytes += moved
+
+
 def stage_sandbox(root: Path) -> Path:
     """The four directories, created. Separate so a caller can fill one itself."""
     for name in SANDBOX_DIRS:
@@ -89,42 +120,138 @@ def execute(
     root: Path,
     *,
     impl_modules: Sequence[str] = (),
+    host_every_s: float = HOST_EVERY_S,
+    host_probe: Callable[[], host.Sample] = host.sample,
 ) -> RemoteOutcome:
-    """Fetch, run, sync, upload. Raises whatever the stage raised.
+    """Fetch, run, sync, upload. Raises whatever the stage raised, bar `TimeoutError`.
 
     Letting the stage's exception out is the contract: for Modal it becomes the exception
     `FunctionCall.get` re-raises, which `ModalAdapter.poll` classifies. Swallowing it and
     returning a failure dict would make every failed stage look like a successful call
     that happened to return bad news, and the adapter would have to guess.
+
+    And it leaves nothing running, however it ends. Modal keeps a container warm for the
+    next call, so a child process or a thread this call forgot would share the next
+    call's CPU and GPU: every process started under it is killed on the way out, and
+    every thread still alive is named in the log and counted (`remoteLeftoverThreads`).
     """
+    leftovers = host.Leftovers.now()
+    try:
+        return _execute(request, transfer, root, impl_modules, host_every_s, host_probe, leftovers)
+    finally:
+        # A second time on success, harmlessly (`_execute` reaped before it reported);
+        # this is the pass that matters when the stage raised.
+        _reap(leftovers)
+
+
+def _reap(leftovers: host.Leftovers) -> tuple[int, int]:
+    killed, threads = leftovers.reap()
+    if killed:
+        _say(f"remote: killed {len(killed)} process(es) the call left running: {killed}")
+    if threads:
+        _say(f"remote: {len(threads)} thread(s) the call started are still alive: {threads}")
+    return len(killed), len(threads)
+
+
+def _execute(
+    request: StageRequest,
+    transfer: Transfer,
+    root: Path,
+    impl_modules: Sequence[str],
+    host_every_s: float,
+    host_probe: Callable[[], host.Sample],
+    leftovers: host.Leftovers,
+) -> RemoteOutcome:
     stage_sandbox(root)
+    # The wall clock too, not only the monotonic one: the runner compares it with when it
+    # submitted the call, and the difference is the queue and the container's start --
+    # billed from the container's start, and invisible from inside the stage.
+    started_at = time.time()
+    began = time.monotonic()
     fetched = _fetch(request, transfer, root)
+    fetched_at = time.monotonic()
+    _say(f"remote: fetched {fetched} byte(s) of input and checkpoint in {fetched_at - began:.1f} s")
 
     stop = threading.Event()
+    syncs = SyncStats()
     syncer = threading.Thread(
         target=_sync_forever,
-        args=(request, transfer, root / "checkpoint", stop, request.checkpoint_every_s),
+        args=(request, transfer, root / "checkpoint", stop, request.checkpoint_every_s, syncs),
         daemon=True,
+        name="checkpoint-sync",
     )
+    watch = host.HostWatch(host_every_s, probe=host_probe)
     syncer.start()
     try:
-        run_stage.run(_spec(request, root, impl_modules))
+        with watch:
+            run_stage.run(_spec(request, root, impl_modules))
+    except TimeoutError as error:
+        # The one exception a stage may not let out as itself. Modal 1.5.5 answers a
+        # zero-timeout `FunctionCall.get` on a call that has not finished by raising the
+        # *builtin* `TimeoutError()` (`modal/_functions.py`, `poll_function`), so on the
+        # client a stage that timed out and a stage that is still running would be the
+        # same exception. `ModalAdapter.poll` reads the builtin as "still running";
+        # this is what keeps that reading true. RuntimeError rather than a class of our
+        # own, because the client unpickles it and must not need this module to do so.
+        raise RuntimeError(f"the stage timed out: {error!r}") from error
     finally:
         # Stopped before anything else, including on the failure path: a syncer left
         # running past its stage would keep writing a checkpoint directory that the next
-        # attempt is about to be handed.
+        # attempt is about to be handed. Joined for as long as a sync in flight takes
+        # (a block's splat is hundreds of MB), not five seconds: a syncer that outlived
+        # the call would race the final sync below, and on a warm container carry on
+        # into the next call.
         stop.set()
-        syncer.join(timeout=5.0)
+        syncer.join(timeout=SYNC_JOIN_S)
 
     # Not fatal, and deliberately so. The stage finished; its checkpoint is insurance
     # that is no longer needed, and turning a completed GPU run into a failure because
     # the insurance could not be filed would be the expensive way to be wrong. A bucket
     # that rejects this will reject the upload below too, and that one *is* fatal.
-    _sync_quietly(request, transfer, root / "checkpoint")
+    ran_at = time.monotonic()
+    final = _sync_quietly(request, transfer, root / "checkpoint")
+    synced_at = time.monotonic()
     uploaded = transfer.put(request.outputs_key, root / "out")
+    done_at = time.monotonic()
+    _say(
+        f"remote: final checkpoint sync {final} byte(s) in {synced_at - ran_at:.1f} s; "
+        f"uploaded {uploaded} byte(s) of output in {done_at - synced_at:.1f} s; "
+        f"{syncs.syncs} sync(s) while the stage ran moved {syncs.bytes} byte(s) in "
+        f"{syncs.seconds:.1f} s"
+    )
+    machine = watch.summary()
+    _say(f"remote: the machine while the stage ran: gpu {watch.gpu or '?'}; {flat(machine)}")
+    killed, threads = _reap(leftovers)
     result = _result(root)
+    # Where a remote stage's wall time went, beside the stage's own metrics: the part of
+    # a CPU stage's minutes that is not COLMAP is the bytes moving, and this says how much.
+    # `remoteUploadS` is the final checkpoint sync and `out/` together, as it always was;
+    # the two are also given apart. `remoteStartedAt` is the wall clock (epoch seconds)
+    # the function body began at, for the runner's queue-and-start figure.
+    timing: dict[str, Any] = {
+        "remoteStartedAt": round(started_at, 3),
+        "remoteFetchS": round(fetched_at - began, 2),
+        "remoteFetchBytes": fetched,
+        "remoteStageS": round(ran_at - fetched_at, 2),
+        "remoteUploadS": round(done_at - ran_at, 2),
+        "remoteFinalSyncS": round(synced_at - ran_at, 2),
+        "remoteFinalSyncBytes": final,
+        "remoteOutputS": round(done_at - synced_at, 2),
+        "remoteOutputBytes": uploaded,
+        "remoteSyncs": syncs.syncs,
+        "remoteSyncS": round(syncs.seconds, 2),
+        "remoteSyncBytes": syncs.bytes,
+        "remoteTotalS": round(done_at - began, 2),
+        # The machine the stage ran on (`host.HostWatch`), and what the call left behind
+        # before it was cleaned up: both counts are zero on a clean call.
+        "remoteHost": flat(machine),
+        "remoteReaped": killed,
+        "remoteLeftoverThreads": threads,
+    }
+    if watch.gpu:
+        timing["remoteGpu"] = watch.gpu
     return RemoteOutcome(
-        metrics=result.get("metrics") or {},
+        metrics={**(result.get("metrics") or {}), **timing},
         summary=str(result.get("summary") or ""),
         fetched_bytes=fetched,
         uploaded_bytes=uploaded,
@@ -185,6 +312,7 @@ def _sync_forever(
     checkpoint: Path,
     stop: threading.Event,
     every: float,
+    stats: SyncStats | None = None,
 ) -> None:
     """Sync until told to stop. A failed sync must not take the stage down with it.
 
@@ -192,7 +320,10 @@ def _sync_forever(
     would spin this thread against the bucket for the length of a training run.
     """
     while not stop.wait(max(0.05, every)):
-        _sync_quietly(request, transfer, checkpoint)
+        began = time.monotonic()
+        moved = _sync_quietly(request, transfer, checkpoint)
+        if stats is not None:
+            stats.add(time.monotonic() - began, moved)
 
 
 def _sync_quietly(request: StageRequest, transfer: Transfer, checkpoint: Path) -> int:
@@ -208,6 +339,12 @@ def _sync_quietly(request: StageRequest, transfer: Transfer, checkpoint: Path) -
         sys.stdout.write(f"remote: checkpoint sync failed, continuing: {error!r}\n")
         sys.stdout.flush()
         return 0
+
+
+def _say(line: str) -> None:
+    """One line of this container's log (stdout, which the provider's tail reads)."""
+    sys.stdout.write(line + "\n")
+    sys.stdout.flush()
 
 
 def _result(root: Path) -> dict[str, Any]:

@@ -29,6 +29,7 @@ import type { LayerManager } from "./LayerManager";
 import { ZONE_ENTITY_PREFIX } from "./MissionManager";
 import type { SiteManager } from "./SiteManager";
 import type { SceneEvents } from "./types";
+import type { SplatCollider } from "./SplatCollider";
 
 const log = createLogger("selection");
 const ACCENT = Color.fromCssColorString("#0a84ff");
@@ -62,6 +63,9 @@ export class SelectionManager {
     this.pointerHeld = false;
   };
   private hoverPosition = new Cartesian2();
+  private collider: SplatCollider | null = null;
+  private pickTicket = 0;
+  private hoverEnabled = true;
 
   constructor(
     private readonly viewer: Viewer,
@@ -78,10 +82,10 @@ export class SelectionManager {
     viewer.cesiumWidget.screenSpaceEventHandler.removeInputAction(ScreenSpaceEventType.LEFT_CLICK);
     this.handler = new ScreenSpaceEventHandler(viewer.canvas);
     this.handler.setInputAction((event: ScreenSpaceEventHandler.PositionedEvent) => {
-      if (this.enabled) this.select(event.position);
+      if (this.enabled) void this.select(event.position);
     }, ScreenSpaceEventType.LEFT_CLICK);
     this.handler.setInputAction((event: ScreenSpaceEventHandler.PositionedEvent) => {
-      if (this.enabled) this.selectAndFly(event.position);
+      if (this.enabled) void this.selectAndFly(event.position);
     }, ScreenSpaceEventType.LEFT_DOUBLE_CLICK);
     this.handler.setInputAction((event: ScreenSpaceEventHandler.MotionEvent) => {
       if (this.enabled) this.hover(event.endPosition);
@@ -92,6 +96,19 @@ export class SelectionManager {
   }
 
   /** Disabled while measuring or exploring so those tools own the pointer. */
+  /**
+   * Hover picking on or off. Off over a splat scan: nothing in it is hoverable, and a pick is
+   * a render pass plus a read-back that waits for the GPU to finish the splat frame (half a
+   * second of a busy one), so resting the pointer froze the page.
+   */
+  setHoverEnabled(enabled: boolean): void {
+    this.hoverEnabled = enabled;
+    if (!enabled && this.hoverTimer !== null) {
+      clearTimeout(this.hoverTimer);
+      this.hoverTimer = null;
+    }
+  }
+
   setEnabled(enabled: boolean): void {
     this.enabled = enabled;
     if (!enabled) this.viewer.canvas.style.cursor = "";
@@ -102,21 +119,53 @@ export class SelectionManager {
     this.events.emit("selection", null);
   }
 
+  /** Splat solids, for positions on a scan found on the CPU (SplatCollider). */
+  setCollider(collider: SplatCollider | null): void {
+    this.collider = collider;
+  }
+
+  /**
+   * Where a click landed. On a splat scan its solids answer on the CPU (splats write no depth
+   * anyway); the depth buffer is read only for other 3D content that was hit, since that
+   * read-back waits for the GPU to finish its frame.
+   */
   private pickPosition(window: Cartesian2, picked: unknown): PickContext | null {
     let position: Cartesian3 | undefined;
     const ray = this.viewer.camera.getPickRay(window);
+    const splat = ray ? this.collider?.raycast(ray) : undefined;
+    if (splat) position = splat.point;
     // The depth-buffer pick is only precise at close range; far from the surface the
     // analytic ray/globe intersection is exact, so prefer it unless 3D content was hit.
     const far = this.camera.pose().altitude > 20_000;
-    if (picked === undefined && far && ray) position = this.scene.globe.pick(ray, this.scene);
+    if (!position && picked === undefined && ray) position = this.scene.globe.pick(ray, this.scene);
+    if (!position && far && ray) position = this.scene.globe.pick(ray, this.scene);
     if (!position && this.scene.pickPositionSupported) position = this.scene.pickPosition(window);
     if (!position && ray) position = this.scene.globe.pick(ray, this.scene);
     if (!position) return null;
     return { position, carto: Cartographic.fromCartesian(position) };
   }
 
-  private select(window: Cartesian2): void {
-    const picked: unknown = this.scene.pick(window);
+  /**
+   * The object under a click, without holding the page: `pickAsync` reads the pick back
+   * through a pixel buffer and a fence, so the main thread is free while the GPU finishes
+   * (measured 0.6 ms held, against 590 ms for `scene.pick` behind a splat frame). A click
+   * made while an earlier one is still being answered supersedes it.
+   */
+  private async pickObject(window: Cartesian2): Promise<{ picked: unknown; current: boolean }> {
+    const ticket = ++this.pickTicket;
+    const position = Cartesian2.clone(window);
+    let picked: unknown;
+    try {
+      picked = await this.scene.pickAsync(position);
+    } catch {
+      picked = undefined;
+    }
+    return { picked, current: ticket === this.pickTicket && !this.scene.isDestroyed() };
+  }
+
+  private async select(window: Cartesian2): Promise<void> {
+    const { picked, current } = await this.pickObject(window);
+    if (!current) return;
     // Area handles and candidate outlines belong to the area editor, not to selection.
     if (
       isEntityPick(picked) &&
@@ -166,10 +215,12 @@ export class SelectionManager {
     void this.enrichWithTerrain(selection);
   }
 
-  private selectAndFly(window: Cartesian2): void {
-    const context = this.pickPosition(window, this.scene.pick(window));
+  private async selectAndFly(window: Cartesian2): Promise<void> {
+    const { picked, current } = await this.pickObject(window);
+    if (!current) return;
+    const context = this.pickPosition(window, picked);
     if (!context) return;
-    this.select(window);
+    void this.select(window);
     const distance = Cartesian3.distance(this.viewer.camera.positionWC, context.position);
     const pose = this.camera.pose();
     const lon = CesiumMath.toDegrees(context.carto.longitude);
@@ -330,14 +381,14 @@ export class SelectionManager {
    * starves navigation. Nothing is picked while the camera is moving.
    */
   private hover(window: Cartesian2): void {
-    if (this.pointerHeld) return;
+    if (this.pointerHeld || !this.hoverEnabled) return;
     if (this.hoverTimer !== null) clearTimeout(this.hoverTimer);
     this.hoverPosition = Cartesian2.clone(window, this.hoverPosition);
     this.hoverTimer = setTimeout(() => {
       this.hoverTimer = null;
       // A pick is a render pass plus a GPU read-back; never during a gesture, whether the
       // camera is currently moving or merely paused between two mouse events of a drag.
-      if (!this.enabled || this.camera.isMoving || this.pointerHeld) return;
+      if (!this.enabled || !this.hoverEnabled || this.camera.isMoving || this.pointerHeld) return;
       const picked: unknown = this.scene.pick(this.hoverPosition);
       const interactive = picked instanceof Cesium3DTileFeature || isEntityPick(picked);
       this.viewer.canvas.style.cursor = interactive ? "pointer" : "";

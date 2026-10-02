@@ -4,11 +4,11 @@
 # converge on `canonical.ply` and produce the same `splat/` tileset, so the console cannot
 # tell which one made a site except by reading its manifest.
 #
-# Only `train` declares `gpu:`, and that single fact is what routes it to a GPU runner.
+# `train` and `optimise_lod` declare `gpu:`, and that fact is what routes them to a GPU runner.
 # `compensate` gains a `gpu:` block when its impl becomes `imc` (B3); asking for an L4 to
 # run `none` would be billing a GPU to do nothing.
 name: photo-reconstruct
-version: 2
+version: 10
 description: Reconstruct a splat from a raw capture, then package and register it.
 
 inputs: [upload]
@@ -17,17 +17,104 @@ stages:
   - id: normalize
     impl: ffmpeg_frames
     params:
-      fps: 4
-      # Top-K by variance-of-Laplacian, never an absolute threshold: A0 measured a 101x
-      # within-clip dynamic range, so no cutoff transfers between scenes.
-      select: sharpness
-      keep: 400
+      # A video's keyframes follow how far the camera moved, not how long the clip ran
+      # (`keyframes.py`). Frames were the one lever that beat run-to-run noise on the
+      # spool capture (experiments/run_variants.py, 2026-09-27): 87 -> 173 frames gave
+      # LPIPS 0.174 -> 0.148 and kept 41% against 38%, where no training switch
+      # (antialiased, depth loss, bilateral grid, pose opt, opacity reg) did. By time,
+      # a two-minute walk was thinned to ~1.5 frames a second and a slow close-up kept
+      # near-duplicates; by motion, each gets what it covered.
+      select: viewpoint
+      # Under `viewpoint`, the rate *candidates* are taken at -- the densest keyframes
+      # can ever be -- and each motion window keeps its sharpest candidate, so it is
+      # above the 8 fps that measured best. Bounded by the clip's own rate and by
+      # `max_candidates` over its length (1200: two minutes at 10 fps; every candidate
+      # is decoded, scored and tracked on the worker, ~50 ms each).
+      fps: 15
+      max_candidates: 1200
+      # One window's budget of motion; each window keeps one frame, and neighbouring
+      # keyframes are typically one window apart and at most two.
+      #   overlap 0.9: a window closes when 10% of the view has changed, so neighbours
+      #     share ~90% of it and never less than ~80% -- what SfM asks of sequential
+      #     neighbours, met in the worst case, with the typical case denser for training.
+      #   parallax 0.005: of the long side, ~1 deg of change of viewpoint round a subject
+      #     whose depth is +/-0.4 of the distance to it (checked on Tanks and Temples'
+      #     truck: 251 frames round it, 1.43 deg apart, measured 0.73% each) -- ~360
+      #     keyframes a full orbit, the density the spool's better 8 fps run had.
+      overlap: 0.9
+      parallax: 0.005
+      # A photo set's cap, and what `viewpoint` falls back to for one: it has no order to
+      # measure motion along, so photos keep top-K by sharpness, windowed. 100, not 400,
+      # because a photo set is matched exhaustively, quadratic in frames: measured on 4
+      # cores (README, "Where pose runs"), 50 frames 653 s; 400 would be ~64x the
+      # matching, most of a day.
+      keep: 100
+      # A video's ceiling on keyframes -- for pose time only, not the usual limit. A
+      # video is matched sequentially, ~linear in frames: 173 frames posed in 12 min on
+      # 4 cores (~4 s a frame), so 300 is ~21 min. It binds on a long steady walk (past
+      # ~1.5 min at a walking pace); then every window is widened by the same factor,
+      # which spreads the 300 evenly by motion rather than by time. The tail it guards
+      # against is pose's exhaustive fallback (sequential registering under 80%): at the
+      # backhoe's 0.15 s a pair, 300 frames' 45k pairs would be ~2 h rather than 20 min.
+      keep_video: 300
+      # Long side, in pixels. `auto`: 1600 -- where a phone's frames hold what a splat
+      # can use, and what pose extracts at (max_image_size below) -- unless the sharpest
+      # of 8 sampled frames measurably carry detail above it over a quarter of the
+      # picture; then the source's size, at most `auto_ceiling` (`resolution.py`). 2400
+      # is ~2.25x the pixels and about twice the GPU time, so the rule is conservative
+      # and source_meta.json records its measurement. A number here, or the phone's
+      # "Photo size", overrides it.
+      max_side: auto
+      auto_base: 1600
+      auto_ceiling: 2400
 
   - id: pose
     impl: colmap # | glomap | arkit
     params:
-      # A0 #7: sequential_matcher without loop detection registers 2/40 on a closed orbit.
-      matcher: exhaustive
+      # `auto`: a video's frames are matched sequentially with vocabulary-tree loop
+      # closure, a photo set exhaustively (`sfm.matching_plan`). Sequential is a first
+      # try: if its mapping registers under `min_registered_fraction` of the frames, the
+      # stage matches exhaustively on the same database -- only the pairs sequential
+      # skipped -- and maps again, and poses.json says so. Measured on 4 cores: 100 real
+      # frames, 1,372 pairs and 607 s sequential (100/100) against 4,950 pairs and about
+      # twice the time exhaustive. The tree is in the Modal CPU image
+      # ($COLMAP_VOCAB_TREE); where there is none, `auto` is exhaustive. A0 #7 is why
+      # sequential never runs without it: 2 of 40 on a closed orbit.
+      matcher: auto
+      min_registered_fraction: 0.8
+      # Half the stage's defaults (8192 / 2400): the same 50/50 registered, in 62% of
+      # the time. Training reads the normalized 1600 px frames.
+      max_features: 4096
+      max_image_size: 1600
+      # SIFT from the frame's own resolution rather than COLMAP's -1 (doubled first):
+      # at 1600 px the 4096 cap is hit either way and the doubled octave's features are
+      # the ones it discards. Measured 2026-09-26: 100 real frames, extraction 109 s ->
+      # 35 s, still 100/100; the fixture orbit rendered at 1600x1200, 40/40 either way,
+      # extract + match + map 168 s -> 107 s, median rotation error 0.026 -> 0.032 deg
+      # and translation 0.030% -> 0.046% of extent against the known poses.
+      first_octave: 0
+      # `mapper: global` -- GLOMAP through pycolmap (global_sfm.py), falling back to the
+      # incremental mapper when it registers too few -- stays opt-in: on the spool
+      # capture (179 frames, 2026-09-28, two runs each) it registered 179/179 like the
+      # incremental mapper but took as long (10.7-11.2 min vs 10.3-13.8) and trained a
+      # worse preview (23.69 dB / LPIPS 0.179 vs 24.07-24.15 / 0.166-0.168). It may pay
+      # on much longer walks, where incremental mapping slows most.
+      # mapper: incremental
+      # COLMAP 4.2 through pycolmap (colmap4.py) rather than apt's 3.9.1 CLI -- same
+      # plan, fallbacks and poses.json, `version` saying which ran. On the spool capture
+      # (two runs each): matching 43-49 s vs 250-288 s, mapping 187-225 s vs 297-348 s,
+      # 179/179 registered either way, and the same preview (24.06-24.07 dB / LPIPS
+      # 0.169 vs 24.07-24.15 / 0.166-0.168); the preview went from ~17-18 min to 11-13.
+      # `colmap: "3.9"` runs the old CLI.
+      colmap: "4.2"
+    # On Modal's CPU box, not the worker: `cpu4` is 4 cores and 8 GB with no GPU, billed
+    # per second ($0.25 an hour) only while a capture is posed. Feature extraction
+    # peaked at 1.7 GB on real 1080p frames, more than the 2 GB worker can spare, and a
+    # Fly machine big enough to do it in place is $124 a month whether it is used or not.
+    # `gpu:` is the key because it is the routing signal; the tier says there is no GPU.
+    gpu:
+      tier: cpu4
+      preemptible: false
 
   - id: mask
     impl: none # | robust | sls  <- transients
@@ -35,11 +122,109 @@ stages:
   - id: train
     impl: gsplat # | opensplat | deformable3dgs
     params:
+      # The full schedule. A capture with fewer than `schedule_full_at` frames runs a
+      # proportionally shorter one -- all of it, decay and densification included, via
+      # gsplat's own `--steps_scaler` -- and never less than `schedule_floor` of it. A
+      # 4-photo capture ran the full 30k for 50 min and $0.66 and learned nothing the
+      # 7.5k it now gets would not have.
       iterations: 30000
-      # `trainer` is deliberately absent: gsplat's examples/simple_trainer.py lives in
-      # the training box's image, not in this repository, so the path comes from
-      # $GSPLAT_TRAINER there or from a per-run parameter override. A run started
-      # without either says so by name rather than failing on a missing file.
+      schedule_full_at: 60
+      schedule_floor: 0.25
+      # MCMC densification with a ceiling on the gaussian count, so time and cost are
+      # bounded by the cap rather than by how enthusiastically a capture densifies (the
+      # same 4 photos grew 894k gaussians; `package` keeps 400k of any of them).
+      strategy: mcmc
+      # The ceiling is sized to the capture, not fixed: a fixed 500k was binding on all
+      # nine spool-table runs (a ~2 m table spread thin) while a small object got more
+      # than it had detail for. `auto` measures the supported surface in finest-view
+      # pixels from the sparse model (gaussian_budget.py) -- a Refine's support mask or
+      # roi only -- at the size training reads the frames, and gives `gaussian_density`
+      # gaussians per pixel of it: 0.1 puts 3DGS's Truck at 1.52M, about 3DGS's own count
+      # there and 3x the 500k that already matched its PSNR. Clamped to `budget_floor`
+      # (the preview's 200k) and to the memory of the GPU the stage was placed on
+      # (`gaussian_budget.GPU_MEMORY_GB` by tier, at the real frame size -- on the L4:
+      # ~8.7M at 1600 px, ~5.4M at 2400; `gpu_memory_gb: N` here or in a run's params
+      # overrides the tier's). There is no longer a ceiling below that
+      # for the stages after training: the 2M `budget_max` this set was what `place` and
+      # `package` could load whole on the 2 GB worker (0.75 GB a million, measured), and
+      # they now read the splat a chunk at a time (8M gaussians through quality, place,
+      # thumbnail and ground samples: 193 MB peak). `budget_max: N` here, or in a run's
+      # params, still caps it; an integer `cap_max` is used as given.
+      cap_max: auto
+      gaussian_density: 0.1
+      budget_floor: 200000
+      # Stop when training has converged: after densification ends (25k of 30k, scaled
+      # with the schedule; never before it), held-out PSNR is measured every 500 steps,
+      # and a run whose best of the last 2,000 steps is under 0.05 dB above its best
+      # before them stops -- with the trainer's own save, so the PLY is where it always
+      # is. A budget over 1M may run a longer maximum (sqrt(budget / 1M), at most 2x),
+      # which this then ends early if it went flat. convergence.py has the reasoning.
+      converge: true
+      # After training, on the same GPU: render every held-out frame (every 8th, never
+      # trained on), compare it with the photo, and share each pixel's error out among
+      # the gaussians that painted it (holdout.py). Writes `holdout/`, which `quality`
+      # verifies keep with. Seconds of GPU; it cannot fail the stage.
+      holdout_error: true
+      # What is written here is the Standard run. A run may override any of it per
+      # capture (`jobs.params`), and two named presets are:
+      #
+      #   Preview: {schedule_scale: 0.1, cap_max: 200000, train_max_side: 800}
+      #     A tenth of the schedule (3,000 steps, decay and densification included) on
+      #     frames a quarter the pixels. For "did this capture work at all" in minutes;
+      #     its fixed cap keeps it bounded whatever the capture measures.
+      #   Refine:  {schedule_scale: 1.0}
+      #     The whole schedule even for a capture under `schedule_full_at` frames. The
+      #     phone's Refine also sets `init_from: preview`: start from the preview's own
+      #     splat (init_seed.py) on `init_schedule_scale` (1.0) of the schedule instead.
+      #   A phone's quality tier scales the budget: `density_scale` 0.5 (Quick), 1
+      #   (Standard), 2 (Best).
+      #
+      # Options, deliberately not defaults of either (`training.gsplat_argv` has each
+      # one's mechanics):
+      #   antialiased: true   -- trains opacities against Mip-Splatting's compensation,
+      #     which the renderer must then apply too; the tileset's renderer is not known
+      #     to, so a default of it would draw small gaussians more opaque than trained.
+      #   opacity_reg: 0.001  -- a tenth of the mcmc preset's 0.01 (the MCMC paper's
+      #     value, which is also what pushes dead gaussians to be relocated). No run here
+      #     has measured the lower weight against it.
+      #   depth_loss: true    -- pulls rendered depth toward each frame's own SfM points;
+      #     gsplat marks it experimental, and it has not been run on a GPU here.
+      #   pose_opt: true      -- refines each training frame's pose (phone video poses
+      #     are rolling-shutter and slightly off).
+      #   app_opt: true       -- a per-frame appearance embedding for exposure drift; the
+      #     PLY is baked to degree-0 colour, which is all canonical.ply keeps anyway.
+      #   bilateral_grid: true -- a per-frame colour/exposure correction (gsplat's
+      #     --use_bilateral_grid); train_metrics.json then also has `colorCorrected`.
+      #   These three are the phone-capture recipe the commercial apps are believed to
+      #   use; each stays off until experiments/run_variants.py has measured it on a real
+      #   capture (experiments/variants/spool-table.yaml is that run).
+      #   roi: {center: [x, y, z], radius: r}  -- COLMAP frame; crops the initial points
+      #     to the sphere and the trained splat to 1.5 radii.
+      #   blocks: auto        -- the default without being written: a capture whose budget
+      #     is more than one GPU trains (the raw count over the smaller of the memory
+      #     ceiling and budget_max) trains as blocks from the Preview's splat, and is
+      #     merged into one trained.ply (blocks.py). A number forces that many --
+      #     `blocks: 2` on the spool against `blocks: 1` is the seam test. The blocks
+      #     train on `block_parallel` (4) L4s at once, one call each (CloudRunner fans the
+      #     stage out): the spool's two blocks took 2,530 s + 2,207 s one after another,
+      #     2.3 h and $1.73, where at once they end with the longer for the same GPU-seconds.
+      #     `block_parallel: 1` trains them in turn. Each block's schedule is the whole
+      #     run's rule on its own frames (`block_schedule: frames`; `share`, its share of
+      #     the run's steps, is opt-in). `block_epsilon` (0.05) is the camera test's
+      #     1 - SSIM threshold; `bilateral_grid: true` is its per-image exposure correction
+      #     (a 16x16x8 grid of the 3x4 affine H3DGS App. C.2 fits per image, discarded at
+      #     export).
+      #   batch_size: 2       -- images per step (gsplat's sqrt(batch) learning rates), on
+      #     half the steps so the images trained on are the same. Unmeasured on the L4;
+      #     not with depth_loss.
+      #
+      # psnr, ssim and lpips in train_metrics.json are on gsplat's held-out split: every
+      # 8th registered frame, never trained on (`heldOut` there says how many).
+      #
+      # `trainer` and `python` are deliberately absent: gsplat v1.5.3's
+      # examples/simple_trainer.py and the CPython 3.10 it needs live in the training
+      # image (infra/modal/app.py), which says where through $GSPLAT_TRAINER and
+      # $GSPLAT_PYTHON. A run started without them says so by name.
     gpu:
       tier: l4
       preemptible: true
@@ -56,18 +241,108 @@ stages:
   #
   # `arkit_scale` is deliberately absent rather than commented as an option: no such impl
   # is registered, and `pose: arkit` is the stub it would have depended on.
+  #
+  # A video with no location, and frames with no EXIF, fall back to the coordinate on the
+  # capture (the worker passes `lat`/`lon`), recorded as `manual`. With none of the three
+  # the stage refuses by name rather than placing the capture at (0, 0).
   - id: georeference
     impl: exif_gps # | manual_placement
     params:
       # RANSAC inlier threshold in metres. COLMAP 3.9.1 refuses a zero here outright.
       max_error_m: 5.0
 
+  # The quality bar (quality.py). Per gaussian: how many frames saw it unoccluded, over
+  # what spread of angles, at what ground sampling distance -- then keep / context / drop,
+  # and `bar` decides what `place` gets: strict (keep only), balanced (keep, plus context
+  # faded to half its opacity) or everything (the splat as trained). Strict is the
+  # default: a region is shown only if the data supports it at high quality. It also
+  # measures the extent of the well-supported (keep) splats, in COLMAP's frame, which is
+  # what a phone's Refine trains inside -- decided by the data, with no subject to pick
+  # -- and writes capture tips and a tier-coloured coverage.ply.
+  #
+  # After `georeference`, not straight after `train`, only so that an EXIF-aligned
+  # capture's metric scale is there to report its GSD in mm/px; the criterion itself is
+  # relative, so nothing depends on it. On Modal's CPU box for its CPU time -- it projects
+  # every gaussian into every frame (500k x 90 in the module's tests' synthetic case) --
+  # not for its memory: it reads the splat a chunk at a time, 8M gaussians in under 200 MB.
+  - id: quality
+    impl: support_gate
+    params:
+      # preview | refine: what this run is, for the phone's forecast and its Refine.
+      mode: refine
+      bar: strict
+      keep_min_views: 8
+      keep_min_spread_deg: 45
+      keep_max_gsd_ratio: 2.0
+      context_min_views: 3
+      context_min_spread_deg: 15
+      context_max_gsd_ratio: 6.0
+      # Measured accuracy, from train's holdout/: where held-out frames saw a gaussian
+      # (at least 2 px of it), keep also needs its held-out error -- the trainer's own
+      # loss per pixel, 0.8 L1 + 0.2 (1 - SSIM) -- at most 2x the scene's median for
+      # coverage-keep and at most 0.25. The ratio catches the parts that are worse than
+      # the rest of this capture; the ceiling, a capture that is bad all over. 0.25 is
+      # a first guess (a good held-out render averages about 0.05): no GPU run has
+      # calibrated it yet. Unseen by held-out frames: coverage alone decides.
+      keep_max_holdout_error_ratio: 2.0
+      keep_max_holdout_error: 0.25
+      holdout_min_weight: 2.0
+      min_opacity: 0.02
+      context_fade: 0.5
+      roi_radius_factor: 0.5
+      coverage_points: 150000
+    gpu:
+      tier: cpu4
+      preemptible: false
+
+  # The trained splat is in COLMAP's frame (training runs with gsplat's world
+  # normalisation off). This turns it into east/north/up by the georeference's `frame`:
+  # the EXIF similarity when there is one, otherwise levelled by how the camera was held
+  # and recentred on the splat's own footprint, as Lane 1 is. It places `quality`'s
+  # gated.ply when there is one (trained.ply otherwise), and moves coverage.ply by the
+  # same transform so the viewer's coverage overlay sits on the published splat.
+  - id: place
+    impl: place_splat
+    params: {}
+
+  # The tileset's coarse levels, optimised (lod_parents.py, lod_optimise.py). `package`
+  # merges each parent from its subtree by Hierarchical 3DGS's moment matching, which is
+  # right in the large and blurry up close; this optimises those parents against the
+  # photos, as H3DGS Sec. 5.1 does its interior nodes: leaves frozen, a random training
+  # view and a random screen-space error tau each step, the viewer's own cut at tau
+  # rendered at full resolution, the trainer's loss. Kept only if the held-out frames'
+  # loss at the cut falls; otherwise, and on any failure, `package` draws the merged
+  # parents as before. On the GPU because it renders; after `place` because the tree is
+  # built on canonical.ply's east/north/up axes, from exactly what `package` packs.
+  #
+  # `tile_gaussians` and `opacity_min` are `package`'s, by anchor: the tree is a function
+  # of them and the PLY, and `package` refuses parents optimised for any other tree.
+  #   tau_min / tau_max: 3 / 64 px, where the viewer's maximumScreenSpaceError lives
+  #     (device pixels; H3DGS's own range spans the same factor of ~20).
+  #   iterations: 0 plans them from the tree -- enough that each parent is optimised as
+  #     often as H3DGS's 15,000 optimise each of its nodes, never more than 15,000.
+  #   budget_s: the loop stops here and keeps what it has (an hour of L4 is $0.80).
+  - id: optimise_lod
+    impl: h3dgs_parents
+    params:
+      enabled: true
+      tile_gaussians: &tile_gaussians 100000
+      opacity_min: &opacity_min 0.02
+      tau_min: 3.0
+      tau_max: 64.0
+      iterations: 0
+      budget_s: 3600
+    gpu:
+      tier: l4
+      preemptible: true
+
   - id: package
     impl: splat_tiles
     params:
-      max_gaussians: 400000
-      opacity_min: 0.02
-      geometric_error: 2.0
+      # Every gaussian is packed, in a level-of-detail hierarchy of at most this many a
+      # tile; how many are drawn is the viewer's budget (the phone's Detail choice).
+      tile_gaussians: *tile_gaussians
+      opacity_min: *opacity_min
 
   # The same three stages Lane 1 ends in, reading the same `canonical.ply` and the same
   # `splat/`. Both lanes end in one artifact set, so the console cannot tell which one
