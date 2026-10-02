@@ -39,7 +39,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  JOBS: ${{ inputs.jobs || 'drop:yard' }}
+  JOBS: ${{ inputs.jobs || 'drop:spool,fill:camp' }}
   FILLERS: ${{ inputs.fillers || 'telea,fixer' }}
   DISTILL: ${{ inputs.distill || '0' }}
 
