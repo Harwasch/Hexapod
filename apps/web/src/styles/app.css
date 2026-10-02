@@ -1254,6 +1254,12 @@ body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-close {
   box-shadow: inset 2px 0 0 var(--warn);
 }
 
+/* What is selected in the scene (cesium/sceneSelect): marked in the panel too. */
+.objects-row[data-selected] > .objects-row__line .objects-row__main {
+  background: var(--accent-soft);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
 .objects-row__main:focus-visible {
   outline: 2px solid var(--accent-ring);
   outline-offset: -2px;
