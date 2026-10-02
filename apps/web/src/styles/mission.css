@@ -1078,12 +1078,14 @@
   color: var(--text-primary);
 }
 
+/* The fleet and any fault keep their words; when the bar is short of room the agent's
+   line is the one that clips (its full text is a click away). */
 .status-line__text {
   display: flex;
   align-items: center;
   gap: 0.75rem;
   min-width: 0;
-  flex: 0 1 auto;
+  flex: none;
 }
 
 .status-line__seg {
@@ -1198,6 +1200,7 @@
   max-height: min(28rem, 55vh);
   overflow: auto;
   border-radius: 20px;
+  background: color-mix(in srgb, var(--surface-solid) 96%, transparent);
   animation: status-log-in var(--motion-base) var(--ease-out);
 }
 

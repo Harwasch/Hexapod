@@ -71,9 +71,13 @@ export function DevReadouts() {
         </>
       )}
       {demoKey.show && (
-        <span className="dev-readouts__note" data-testid="notice-default-token">
+        <span
+          className="dev-readouts__note"
+          title="Tiles may load slowly. Set VITE_CESIUM_ION_ACCESS_TOKEN to your own Cesium ion token."
+          data-testid="notice-default-token"
+        >
           <KeyRound size={12} aria-hidden="true" />
-          <span>Shared demo map key: tiles may load slowly</span>
+          <span>Shared demo map key</span>
           <button
             type="button"
             className="dev-readouts__dismiss"
