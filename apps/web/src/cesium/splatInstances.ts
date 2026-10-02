@@ -701,6 +701,32 @@ const ATTACHED = new Map<
 >();
 
 /**
+ * Per asset id, per instance id: a motion of the scan's local frame (column-major 4x4) the
+ * instance is drawn under -- a split object away from where it was measured
+ * (`cesium/splitObjects.ts`). `instanceSphere` follows it.
+ */
+const OFFSETS = new Map<string, Map<number, Matrix4>>();
+
+/** Draws `ids` of `assetId`'s scan under `local` (scan frame) for `instanceSphere`; or not. */
+export function setInstanceOffset(
+  assetId: string,
+  ids: Iterable<number>,
+  local: Matrix4 | undefined,
+): void {
+  let offsets = OFFSETS.get(assetId);
+  if (!offsets) {
+    if (!local) return;
+    offsets = new Map();
+    OFFSETS.set(assetId, offsets);
+  }
+  for (const id of ids) {
+    if (local) offsets.set(id, local);
+    else offsets.delete(id);
+  }
+  if (offsets.size === 0) OFFSETS.delete(assetId);
+}
+
+/**
  * The instances of `assetId`'s scan, once they loaded: what a dedicated splat renderer
  * (scanView/scanInstances.ts) draws from, since CesiumJS keeps the scan's tileset loaded (hidden)
  * under any renderer.
@@ -724,21 +750,27 @@ export function instanceSphere(assetId: string, id: number): BoundingSphere | un
   const root = entry?.tileset.root as { computedTransform?: Matrix4 } | undefined;
   if (!instance || !root?.computedTransform) return undefined;
   const { min, max } = instance.bounds;
+  const offset = OFFSETS.get(assetId)?.get(id);
+  const transform = offset
+    ? Matrix4.multiply(root.computedTransform, offset, new Matrix4())
+    : root.computedTransform;
   const corners: Cartesian3[] = [];
   for (const x of [min[0], max[0]])
     for (const y of [min[1], max[1]])
       for (const z of [min[2], max[2]])
-        corners.push(
-          Matrix4.multiplyByPoint(
-            root.computedTransform,
-            new Cartesian3(x, y, z),
-            new Cartesian3(),
-          ),
-        );
+        corners.push(Matrix4.multiplyByPoint(transform, new Cartesian3(x, y, z), new Cartesian3()));
   return BoundingSphere.fromPoints(corners);
 }
 
 export type LoadInstances = typeof loadInstances;
+
+export interface AttachInstancesOptions {
+  /**
+   * A tileset that draws some of another's instances (a split object): its hooks follow the
+   * store's state for `assetId`, but the table, search and fly-to stay the scan's own.
+   */
+  follower?: boolean;
+}
 
 /**
  * Lets `tileset`'s objects be hidden and highlighted, when its root declares
@@ -753,6 +785,7 @@ export function attachInstances(
   assetId: string,
   gpu: InstanceGpu | undefined = cesiumInstanceGpu(),
   load: LoadInstances = loadInstances,
+  { follower = false }: AttachInstancesOptions = {},
 ): () => void {
   const ref = instancesRefOf((tileset.root as { extras?: unknown } | undefined)?.extras);
   const url = (tileset as unknown as { resource?: { url?: string } }).resource?.url;
@@ -783,8 +816,10 @@ export function attachInstances(
     .then((doc) => {
       if (disposed) return;
       hook = new SplatInstances(doc, gpu, splatTilesetOf(tileset));
-      ATTACHED.set(assetId, { tileset, doc, hook });
-      useInstances.getState().setTable(assetId, doc);
+      if (!follower) {
+        ATTACHED.set(assetId, { tileset, doc, hook });
+        useInstances.getState().setTable(assetId, doc);
+      }
       push();
       log.info("instances attached", {
         asset: assetId,
@@ -805,6 +840,7 @@ export function attachInstances(
     offUpdate();
     hook?.destroy();
     hook = undefined;
+    if (follower) return;
     if (ATTACHED.get(assetId)?.tileset === tileset) ATTACHED.delete(assetId);
     useInstances.getState().setTable(assetId, null);
   };

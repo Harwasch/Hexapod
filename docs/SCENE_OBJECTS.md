@@ -289,17 +289,18 @@ producer (the video teacher) and must survive a skin refit.
 
 ```jsonc
 {
-  "format": "hexapod.materials", "version": 1,
+  "format": "hexapod.materials",
+  "version": 1,
   "materials": [
     {
-      "instance": 1,        // instances.json id (the skin's owner)
-      "stiffness": 3.5,     // c, m/s: ω_j = c·√λ_j / scale
-      "damping": 0.1,       // ζ of every anchored mode, 0..0.95
-      "drag": 0.025,        // D, dimensionless: a handle's acceleration D·|v|v / scale
-      "wind": true,         // whether the wind drives it at all
-      "evidence": "fitted-real"  // the motion evidence ladder, or "prior"
-    }
-  ]
+      "instance": 1, // instances.json id (the skin's owner)
+      "stiffness": 3.5, // c, m/s: ω_j = c·√λ_j / scale
+      "damping": 0.1, // ζ of every anchored mode, 0..0.95
+      "drag": 0.025, // D, dimensionless: a handle's acceleration D·|v|v / scale
+      "wind": true, // whether the wind drives it at all
+      "evidence": "fitted-real", // the motion evidence ladder, or "prior"
+    },
+  ],
 }
 ```
 
@@ -350,11 +351,11 @@ the truth 0.8 × the prior's `c`, `ζ` 0.07, 1.3 × its `D`; fitted once from th
 and once from a prior 4× too stiff, a quarter of the drag and `ζ` 0.3 -- both land in the
 same place):
 
-| instance             | true c / ζ / D        | fitted (from the prior)   | error c / ζ / D        |
-| -------------------- | --------------------- | ------------------------- | ---------------------- |
-| 9, snag (7 m)        | 4.87 / 0.070 / 0.0325 | 4.92 / 0.068 / 0.0319     | +0.9% / −3% / −2%      |
-| 1, tree (9.7 m)      | 2.80 / 0.070 / 0.0325 | 2.70 / 0.081 / 0.0339     | −3.6% / +16% / +4%     |
-| 10, shrub (1.9 m)    | 5.43 / 0.070 / 0.0323 | 5.48 / 0.072 / 0.0277     | +0.9% / +3% / −14%     |
+| instance          | true c / ζ / D        | fitted (from the prior) | error c / ζ / D    |
+| ----------------- | --------------------- | ----------------------- | ------------------ |
+| 9, snag (7 m)     | 4.87 / 0.070 / 0.0325 | 4.92 / 0.068 / 0.0319   | +0.9% / −3% / −2%  |
+| 1, tree (9.7 m)   | 2.80 / 0.070 / 0.0325 | 2.70 / 0.081 / 0.0339   | −3.6% / +16% / +4% |
+| 10, shrub (1.9 m) | 5.43 / 0.070 / 0.0323 | 5.48 / 0.072 / 0.0277   | +0.9% / +3% / −14% |
 
 The fitted snag replays its clip (same wind realisation) at a correlation of 0.998, the tree
 0.93 (its sway reaches the output bound at this strength), the shrub 0.998. Damping needs a
@@ -472,6 +473,116 @@ object modifier (dyno), with a motion uniform per driven object. Neither has the
 so a skinned instance would take the rigid path there. Nothing else changes: the driver hands
 each renderer motions, not pixels.
 
+### Split objects (step C4)
+
+`tools/captures/split_objects.py split TILES_DIR OUT_DIR [--ids 3,7] [--absorb]
+[--filler ...] [--renderer cpu|gsplat] [--distill N]` takes chosen instances out of the
+spatial tiles into tilesets of their own and fills the holes they leave, into a **new**
+directory (the input is never written; an output it did not write is refused; the same
+arguments write the same bytes). Default choice: the coarsest `movable` instances with at
+least 500 gaussians and bounds no larger than 8 m; or explicit `--ids` (an id inside another
+chosen one is dropped). `candidates` lists the choice without writing.
+
+```
+OUT_DIR/
+  tileset.json            the scan without the objects; root.extras.objects, .split, and each
+                          fill in .inferredLayers
+  instances.json (+.emb)  re-bound: rewritten tiles under their new checksums, object tiles added
+  <tile>.<digest>.glb     each tile that held any of an object's gaussians, without them
+  <tile>.glb, sidecars    everything else, copied unchanged
+  objects/<id>/           tileset.json + object.glb (+ viewcones.bin): the object, its own frame
+  fills/<id>/             tileset.json + tiles + viewcones.bin: the inferred layer under it
+```
+
+**Root extras** of the split scan:
+
+```jsonc
+"objects": [
+  {
+    "uri": "objects/3/tileset.json",   // relative to the scan's tileset.json
+    "instance": 3,                     // instances.json id (the object is it and its descendants)
+    "origin": [2.0828, 1.8201, -0.0776], // its frame's origin in the scan's local ENU (m), on
+                                       // the 1/4096 m SPZ grid: its bounds' base centre
+    "pose": { "translation": [0, 0, 0], "rotation": [0, 0, 0, 1] }, // where it is drawn
+    "splats": 27319,
+    "fill": "fills/3/tileset.json"     // the inferred layer under it, when one was made
+  }
+],
+"split": { "format": "hexapod.split", "version": 1, "source": "...",
+           "removed": { "leaves": 27319, "parents": 2124 }, "rule": "..." }
+```
+
+- **The object's tileset**: one tile (leaf gaussians only; small objects need no LOD), its
+  positions relative to `origin` -- the same SPZ records shifted by an integer number of grid
+  steps, so the shift is exact -- and its root transform the scan's times `T(origin)`: loaded
+  alone it draws where it was measured. `root.extras.object = { format: "hexapod.object",
+version, instance, ids, origin, frame, scene, fromTiles }` (`ids`: every id its gaussians
+  carry), `root.extras.instances` points at the scan's `instances.json` (`../../`), and its
+  view cones are rebuilt from the scan's observers in its own frame, so they turn with it.
+- **Pose**: a rigid motion about `origin` in the scan's frame, `p -> origin + t + R (p -
+origin)`, `rotation` a unit quaternion `x, y, z, w`. The rest pose is the identity; the
+  viewer (or a driver) sets another at runtime.
+- **The scan's tiles**: a tile that held any of an object's gaussians is rewritten without
+  them, byte for byte what was there minus the removed records (the SPZ is sliced, never
+  re-quantised; `unpack -> pack` would move a rotation byte here and there), under
+  `<stem>.<new checksum digest>.glb` so no cache serves the old tile for the new. A leaf's
+  gaussian goes with the object by its id; a merged parent's by its id when bound, else
+  (merged across ids) when most of its 8 nearest leaves are the object's. Bounding volumes
+  stay as they were (conservative); a tile left empty loses its content.
+- **Bindings**: `instances.json` keeps every instance and drops the replaced tiles' keys; a
+  rewritten tile's runs are its old runs without the removed gaussians, under its new
+  checksum, and each object tile's runs are added -- the same ids, so hide, highlight and
+  search act on the object wherever it is drawn. `skin.json` (when linked) is re-bound the
+  same way (rows of removed gaussians dropped, rows re-packed in checksum order); an object's
+  own skin is not carried into its tileset yet.
+- **The fill** (`teacher_fill.fill_hole`, the drop test for a region gone for good): the
+  surface the object stood on is a plane fitted to the scan around its footprint (2 half
+  sizes out, no higher than its lower quarter; the farthest fifth dropped per round); views
+  look down on where it stood from the observers' side, at least 35° steep, the object half
+  the frame; the mask is the pixels of its silhouette that now **see through** that plane
+  over its footprint (nothing there, or what is there lies 5% beyond it); the empty pixels
+  around (a scan's edge) are painted from the covered ones before the filler sees them;
+  filled, gated as every fill is, lifted onto the plane, opacity by distance from measured
+  pixels scaled to the hole (its middle is not left transparent for being wide), optionally
+  distilled; a held-out view scores how much of what sees through the scan covers before and
+  after. Packaged as an inferred layer (`extras.evidence.hole` = the instance id) and
+  declared in `inferredLayers`, so the viewer labels it inferred like any other.
+- **`--absorb`**: segmentation leaves pieces of an object under other ids (the pumpkin: 40
+  small instances, most of them top-level). With it, every other id with 80% of its leaf
+  gaussians inside the object's box (its 3rd-97th percentiles, padded 5%) and at most a fifth
+  of its size goes with it. Geometry only.
+
+**In the viewer** (`cesium/splitObjects.ts`, `lib/sceneObjects.ts`, `state/sceneObjects.ts`):
+each declared object is loaded beside the scan (as inferred layers are), shown while the scan
+is shown, faded by its own view cones, and drawn under the model matrix `P · S · L · S⁻¹`
+(`P` the scan's model matrix, `S` its root transform, `L = T(origin + t) R T(−origin)`), so
+at rest it is exactly where it was measured and a pose moves it in the scan's frame
+wherever the scan itself was placed. A pose set in the store (`useSceneObjects.setPose(asset,
+instance, pose)`; `null` for the declared one) overrides the declared pose: what C3's
+telemetry driver will call. Hide and highlight: `attachInstances(..., { follower: true })`
+installs the same hooks on the object's primitive from the scan's `instances.json` and the
+scan's store entry, so an object hides, highlights and dims with the ids it carries; search
+and the table stay the scan's; flying to a moved instance follows its pose
+(`setInstanceOffset`). Not yet: the dedicated renderers (PlayCanvas, Spark) draw the scan
+without its split objects, and collision still has the object at rest.
+
+**Validation** (`tests/test_split_objects.py`, the yard with the lawn under one shrub taken
+away, packed in 6000-gaussian tiles, instances from its labels; CPU, Telea): every leaf
+gaussian is in the scan or the object exactly once (the SPZ records compare equal as a
+multiset), each id's count is conserved, every drawn tile and the object tile are bound with
+runs of their length and nothing stale is left, untouched tiles are byte-identical, scene and
+object at rest render as the scan (≤ 1/255), the shrub's footprint, which the held-out view
+sees through (6% covered), is 95% covered after the fill and lifted to within 0.25 m of the
+ground; a second run writes the same bytes, the input is untouched, and a split scan splits
+again. The committed yard's skins re-bind (rows of what stayed equal, the shrub's left).
+
+**On a real scan** (the pumpkin, `fill.py --jobs split:pumpkin`, WORLD_MODEL_RUNBOOK.md §7):
+`--ids 3 --absorb` takes the red pumpkin (27,319 gaussians, 40 fragment ids absorbed) out
+cleanly; the hole, 0.4% covered from a held-out view, is 99% covered after the fill with
+every filler tried, but NVIDIA Fixer (t50-t250) only cleans what it is shown: inside the
+hole it keeps the rough Telea fill's flat colour. A generative inpainter is the next filler
+to try for holes.
+
 ### Fixture and browser checks
 
 `data/tiles/synthetic-yard/skin/` is the yard's tree (instance 1), a snag (9) and two shrubs
@@ -512,7 +623,18 @@ without dimming, both primitive modes, and composition with the view cones.
 | in-place (plants, flags, water)             | spatial tiles + id (+ skin weights) | stays inside its tile; pad bounds by maximum displacement                                                                                               |
 | movable (vehicles, robots, people, animals) | own object tileset, own frame       | a moving object leaves its spatial tile's bounds (culling breaks); in its own tileset it moves by one matrix. The hole it leaves is filled by Teacher B |
 
-v1 writes ids and the table only; the split into object tilesets is a later step (§6).
+Segmentation writes the ids and the table; `split_objects.py` (§4, "Split objects") moves
+the movable ones into object tilesets and fills their holes, as a separate step on a copy.
+
+**The behaviour rule needs a size term (A6).** On the pumpkin scan both pumpkins scored
+vegetation 0.85-0.96, movable 0.40-0.47 against static 0.43-0.52, so `in-place` took them,
+though nothing roots them; only fragments (`movable` 0.53-0.65) read movable. Proposed
+(`split_objects.py --select loose`, not yet in `segment_scene.BEHAVIOUR_RULE`): movable also
+when `movable >= 0.4`, `movable >= static - 0.1` and the object is compact (bounds' largest
+side at most 0.4 of the scan's), whatever its vegetation. On the pumpkin it picks both
+pumpkins (2, 3) and four fragments, and not the ground patches (5: 3.8 × 5.2 m) or the dirt
+(`movable` 0.11). Folding it into the rule rewrites every published `instances.json`'s
+behaviours, so it waits for a re-segmentation.
 
 ## 6. Order
 

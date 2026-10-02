@@ -41,6 +41,7 @@ import { createSiteTileset, tileCacheBudget } from "./providers/tiles";
 import { SPLAT_BYTES_ESTIMATE, SplatCount, splatMemory } from "./splatCount";
 import { splatTilesetOf } from "./splatInternals";
 import { attachInferredLayers } from "./inferredLayers";
+import { attachSplitObjects } from "./splitObjects";
 import { attachInstances } from "./splatInstances";
 import { attachSkin } from "./splatSkin";
 import { attachTelemetry } from "./telemetry";
@@ -649,6 +650,8 @@ export class SiteManager {
         // What an image model filled in where it never looked, beside it (lib/inferred.ts).
         attachInferredLayers(tileset, this.scene, asset.id),
         attachInstances(tileset, this.scene, asset.id),
+        // Movable objects split into tilesets of their own, placed by their poses (C4).
+        attachSplitObjects(tileset, this.scene, asset.id),
         // Objects that move by their skins, once a driver sets handles (lib/skin.ts).
         attachSkin(tileset, this.scene, asset.id),
         // Objects a live pose stream moves (lib/telemetry.ts), when the scan binds any.
