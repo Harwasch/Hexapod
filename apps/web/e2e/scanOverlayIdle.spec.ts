@@ -8,12 +8,19 @@
  *
  * The second test is the overlay's resolution: under the performance preset the globe renders
  * one device pixel per CSS pixel, and on a 2x display the overlay's canvas must too.
+ *
+ * The `@webgpu` variants hold PlayCanvas on WebGPU (docs/WEBGPU_TRIAL.md) to the same rule, in
+ * the Playwright project with software WebGPU: there it sorts on the GPU in the frame that
+ * draws, so what asks for frames (no sort results; the one confirming frame per batch of tiles,
+ * playcanvasBackend.ts) differs, and the rest must be as still.
  */
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { expect, test, type Page } from "@playwright/test";
+
+import { webgpuAdapter } from "./webgpu";
 
 const TILES = resolve(process.cwd(), "../../data/tiles");
 const NATIVE = "synthetic-yard/splat/sog/";
@@ -81,43 +88,64 @@ async function rest(page: Page, ms: number): Promise<{ draws: number; ticks: num
   };
 }
 
+interface Status {
+  tiles: number;
+  error: string | null;
+  native: boolean;
+  api: string | null;
+  meter: { fps: number; p95Ms: number; cpuMs: number; frames: number } | null;
+}
+
 for (const [kind, native] of [
   ["playcanvas", false],
   ["spark", false],
   ["playcanvas", true],
+  ["playcanvas-webgpu", false],
+  ["playcanvas-webgpu", true],
 ] as const) {
-  test(`${kind}${native ? " (native)" : ""} draws nothing once a still scan has loaded`, async ({
-    page,
-  }, testInfo) => {
-    test.setTimeout(300_000);
-    await page.setViewportSize({ width: 960, height: 600 });
-    await open(page, { native });
-    const status: { tiles: number; error: string | null; native: boolean } = await page.evaluate(
-      `window.__scan.use(${JSON.stringify(kind)}, ${native ? 20 : 90})`,
-    );
-    expect(status.error).toBeNull();
-    expect(status.native).toBe(native);
-    // Whatever was still settling (fades, the last sorts) has a few seconds to finish.
-    await page.waitForTimeout(3000);
-    const idle = await rest(page, 5000);
-    // A move wakes it: frames are drawn while the camera turns, and stop again after.
-    const beforeMove = (await stats(page)).overlayDraws;
-    await page.evaluate(`window.__scan.orbit(20, 30)`);
-    const moved = (await stats(page)).overlayDraws - beforeMove;
-    await page.waitForTimeout(3000);
-    const after = await rest(page, 5000);
-    const result = { kind, native, status, idle, moved, after, stats: await stats(page) };
-    writeFileSync(testInfo.outputPath("idle.json"), JSON.stringify(result, null, 1));
-    console.info(JSON.stringify(result));
-    expect(moved).toBeGreaterThan(5);
-    expect(idle.draws).toBeLessThanOrEqual(2);
-    expect(after.draws).toBeLessThanOrEqual(2);
-    // PlayCanvas's own update loop pauses too once nothing is loading or sorting.
-    if (kind === "playcanvas") {
-      expect(idle.ticks).toBeLessThanOrEqual(30);
-      expect(after.ticks).toBeLessThanOrEqual(30);
-    }
-  });
+  const webgpu = kind === "playcanvas-webgpu";
+  test(
+    `${kind}${native ? " (native)" : ""} draws nothing once a still scan has loaded`,
+    { tag: webgpu ? "@webgpu" : [] },
+    async ({ page }, testInfo) => {
+      test.setTimeout(300_000);
+      await page.setViewportSize({ width: 960, height: 600 });
+      await open(page, { native });
+      if (webgpu) test.skip((await webgpuAdapter(page)) === null, "no WebGPU adapter");
+      const status: Status = await page.evaluate(
+        `window.__scan.use(${JSON.stringify(kind)}, ${native ? 20 : 90})`,
+      );
+      expect(status.error).toBeNull();
+      expect(status.native).toBe(native);
+      // The trial is measured on WebGPU, not on its WebGL2 fallback.
+      if (webgpu) expect(status.api).toBe("webgpu");
+      // Whatever was still settling (fades, the last sorts) has a few seconds to finish.
+      await page.waitForTimeout(3000);
+      const idle = await rest(page, 5000);
+      // A move wakes it: frames are drawn while the camera turns, and stop again after.
+      const beforeMove = (await stats(page)).overlayDraws;
+      await page.evaluate(`window.__scan.orbit(20, 30)`);
+      const moved = (await stats(page)).overlayDraws - beforeMove;
+      // The turn's frames are what the developer readouts' frame meter reads.
+      const current: Status = await page.evaluate(`window.__scan.status()`);
+      const meter = current.meter;
+      await page.waitForTimeout(3000);
+      const after = await rest(page, 5000);
+      const result = { kind, native, status, idle, moved, meter, after, stats: await stats(page) };
+      writeFileSync(testInfo.outputPath("idle.json"), JSON.stringify(result, null, 1));
+      console.info(JSON.stringify(result));
+      expect(moved).toBeGreaterThan(5);
+      expect(meter?.frames).toBeGreaterThanOrEqual(8);
+      expect(meter?.fps).toBeGreaterThan(0);
+      expect(idle.draws).toBeLessThanOrEqual(2);
+      expect(after.draws).toBeLessThanOrEqual(2);
+      // PlayCanvas's own update loop pauses too once nothing is loading or sorting.
+      if (kind !== "spark") {
+        expect(idle.ticks).toBeLessThanOrEqual(30);
+        expect(after.ticks).toBeLessThanOrEqual(30);
+      }
+    },
+  );
 }
 
 test.describe("on a 2x display", () => {

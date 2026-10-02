@@ -173,9 +173,9 @@ for (const native of [true, false]) {
       const masks: Record<string, boolean[]> = {};
       const statuses: Record<string, WebgpuStatus> = {};
       for (const kind of ["cesium", "playcanvas", "playcanvas-webgpu"] as const) {
-        statuses[kind] = (await page.evaluate(
+        statuses[kind] = await page.evaluate(
           `window.__scan.use(${JSON.stringify(kind)}, ${native ? 40 : 90})`,
-        )) as WebgpuStatus;
+        );
         await page.screenshot({ path: testInfo.outputPath(`${kind}.png`) });
         masks[kind] = await coverage(page);
       }

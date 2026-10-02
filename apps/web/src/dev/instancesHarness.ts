@@ -100,6 +100,9 @@ function nextFrame(scene: Scene): Promise<void> {
   });
 }
 
+/** The last frame a WebGPU overlay drew, copied before it was presented (see below). */
+const webgpuMirror = document.createElement("canvas");
+
 /** Amber: red high, green below it, blue well below green (HIGHLIGHT_STYLE.tint, mixed in). */
 function isAmber(r: number, g: number, b: number): boolean {
   return r > 110 && g > 0.5 * r && g < 0.92 * r && b < 0.62 * g;
@@ -130,6 +133,34 @@ export async function startInstancesHarness(options: {
         : attributes;
       return getContext.call(this, type, forced);
     } as typeof HTMLCanvasElement.prototype.getContext;
+    // A WebGPU canvas has no such attribute: once its frame is presented, reading it gives
+    // transparent black. So each frame the renderer draws is copied, still unpresented, into a
+    // 2D mirror -- a microtask queued as the frame takes its texture runs once PlayCanvas's
+    // `render` (which takes the texture and submits the frame in one go) has returned.
+    const contexts = (
+      globalThis as {
+        GPUCanvasContext?: {
+          prototype: { getCurrentTexture: (this: { canvas: HTMLCanvasElement }) => unknown };
+        };
+      }
+    ).GPUCanvasContext;
+    if (contexts) {
+      const getCurrentTexture = contexts.prototype.getCurrentTexture;
+      let queued = false;
+      contexts.prototype.getCurrentTexture = function (this: { canvas: HTMLCanvasElement }) {
+        const canvas = this.canvas;
+        if (!queued && canvas.dataset.scanRenderer) {
+          queued = true;
+          queueMicrotask(() => {
+            queued = false;
+            webgpuMirror.width = canvas.width;
+            webgpuMirror.height = canvas.height;
+            webgpuMirror.getContext("2d")?.drawImage(canvas, 0, 0);
+          });
+        }
+        return getCurrentTexture.call(this);
+      };
+    }
   }
   const widget = new CesiumWidget(options.container, {
     baseLayer: false,
@@ -195,7 +226,9 @@ export async function startInstancesHarness(options: {
     if (!context) return { coverage: 0, amber: 0, luma: 0, warmth: 0 };
     context.drawImage(canvas, 0, 0);
     const overlay = document.querySelector<HTMLCanvasElement>("canvas[data-scan-renderer]");
-    if (host && overlay) context.drawImage(overlay, 0, 0, copy.width, copy.height);
+    // On WebGPU, the last frame drawn as the mirror kept it (see above).
+    const drawn = overlay?.dataset.api === "webgpu" ? webgpuMirror : overlay;
+    if (host && drawn) context.drawImage(drawn, 0, 0, copy.width, copy.height);
     const x0 = Math.max(0, Math.floor(rect?.x ?? 0));
     const y0 = Math.max(0, Math.floor(rect?.y ?? 0));
     const x1 = Math.min(copy.width, Math.ceil(rect ? rect.x + rect.width : copy.width));
