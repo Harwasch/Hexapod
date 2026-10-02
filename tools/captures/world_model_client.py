@@ -208,6 +208,11 @@ class GenerativeFiller:
     context_scale: float = 2.5
     #: Crops smaller than this (pixels a side) are grown to it.
     min_crop_px: int = 256
+    #: Repaint the void too (`teacher_fill.Filler`: beyond the scan's edge, smeared over by
+    #: the rough pre-fill): the model then reads only measured pixels as the hole's context;
+    #: what it paints there is discarded. On the pumpkin the smear's flat polygons were what
+    #: LaMa and SDXL copied into the hole.
+    reads_void: bool = True
     context: dict | None = None
     #: Per call: the model, its seconds, and how well it kept the unmasked pixels by itself.
     received: list[dict] = field(default_factory=list)
@@ -243,7 +248,9 @@ class GenerativeFiller:
         x0 = int(np.clip(round(cx - cw / 2), 0, w - cw))
         return slice(y0, y0 + ch), slice(x0, x0 + cw)
 
-    def fill(self, rgb: np.ndarray, mask: np.ndarray) -> list[np.ndarray]:
+    def fill(
+        self, rgb: np.ndarray, mask: np.ndarray, void: np.ndarray | None = None
+    ) -> list[np.ndarray]:
         import cv2
 
         if not mask.any():
@@ -258,6 +265,8 @@ class GenerativeFiller:
             grown = cv2.dilate(mask.astype(np.uint8), kernel) > 0
         window = self.crop(grown)
         shown, asked = rgb[window], grown[window]
+        if void is not None and self.reads_void:
+            asked = asked | void[window]
         request: dict = {
             "image": encode_png(shown),
             "mask": encode_png(np.repeat(asked[..., None].astype(np.uint8) * 255, 3, axis=2)),

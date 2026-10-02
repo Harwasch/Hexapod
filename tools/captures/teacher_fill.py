@@ -121,7 +121,10 @@ class Filler(Protocol):
     `world_model_client.GenerativeFiller`) is told what surrounds what it fills
     (`describe_surroundings`: a prompt and what not to paint) before its views; and
     `chain_views` -- `fill_hole` then fills the views in turn, each shown what the earlier
-    ones filled, lifted and re-rendered, with only the rest masked (`_chained_fill`)."""
+    ones filled, lifted and re-rendered, with only the rest masked (`_chained_fill`); and
+    `reads_void` -- `fill` is then also given `void=`, the pixels where nothing was measured
+    and nothing is asked (beyond the scan's edge, painted over rough for the others), which
+    such a filler may repaint to keep them out of the context it reads."""
 
     name: str
 
@@ -166,6 +169,14 @@ class Conditioning:
     depth: np.ndarray
     #: Distance in pixels from each masked pixel to the nearest unmasked, measured one.
     distance: np.ndarray
+    #: Pixels outside the mask where nothing was measured (None: the seen render's empty
+    #: pixels). A filler with `reads_void` is told them.
+    void: np.ndarray | None = None
+
+    def void_pixels(self) -> np.ndarray:
+        if self.void is not None:
+            return self.void
+        return (self.seen.alpha < SEEN_ALPHA) & ~self.mask
 
 
 def condition(
@@ -363,7 +374,8 @@ def fill_views(conds: Sequence[Conditioning], filler: Filler) -> list[Filled]:
         given = to_u8(cond.seen.rgb)
         shown = to_u8(cond.full.rgb) if full else given
         best: Filled | None = None
-        for candidate in filler.fill(shown, cond.mask):
+        extra = {"void": cond.void_pixels()} if getattr(filler, "reads_void", False) else {}
+        for candidate in filler.fill(shown, cond.mask, **extra):
             if candidate.shape != given.shape:
                 import cv2
 
@@ -411,7 +423,13 @@ def _chained_fill(
                 seen = Frame(rgb, cond.seen.depth, cond.seen.alpha, cond.seen.label,
                              cond.seen.purity)  # fmt: skip
                 ask = Conditioning(
-                    cond.camera, seen, seen, cond.mask & ~reuse, cond.depth, cond.distance
+                    cond.camera,
+                    seen,
+                    seen,
+                    cond.mask & ~reuse,
+                    cond.depth,
+                    cond.distance,
+                    cond.void_pixels(),  # the reused pixels are context, not void
                 )
         (f,) = fill_views([ask], filler)
         out.append(Filled(cond, f.rgb, f.gate_psnr_db, f.accepted))
@@ -837,7 +855,8 @@ def _hole_conditioning(
     known = np.isfinite(full.depth) & (full.alpha >= SEEN_ALPHA)
     distance = cv2.distanceTransform((mask | ~known).astype(np.uint8), cv2.DIST_L2, 5)
     shown = _extend_background(full, mask)
-    return Conditioning(camera, shown, shown, mask, depth, distance), silhouette
+    void = ~_covered(full.alpha) & ~mask
+    return Conditioning(camera, shown, shown, mask, depth, distance, void), silhouette
 
 
 def _extend_background(frame: Frame, mask: np.ndarray) -> Frame:

@@ -232,6 +232,15 @@ def test_generative_filler_shows_the_model_a_crop_around_the_hole() -> None:
     assert 300 >= x0 + w - 75 and x0 <= 300 and y0 <= 140
     assert np.array_equal(out[~mask], rgb[~mask])
     assert not np.array_equal(out[mask], rgb[mask])
+    # The void (nothing measured) is repainted with the hole, so it is not read as context,
+    # and is discarded with the rest.
+    void = np.zeros_like(mask)
+    void[100:140, 290:340] = True
+    (out_v,) = filler.fill(rgb, mask, void=void)
+    asked = wmc.decode_png(sent[-1][1]["mask"])[..., 0] > 127
+    x0, y0, w, h = filler.received[-1]["crop"]
+    assert asked.sum() == (mask | void)[y0 : y0 + h, x0 : x0 + w].sum()
+    assert np.array_equal(out_v[~mask], rgb[~mask])
     # Near the frame's edge the window slides inside it.
     edge = np.zeros_like(mask)
     edge[0:10, 390:400] = True
