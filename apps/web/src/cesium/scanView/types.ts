@@ -1,3 +1,4 @@
+import type { PickTile } from "@/lib/splatPick";
 import type { TileNode } from "@/view/tiles";
 
 import type { InstanceStyle } from "./scanInstances";
@@ -64,6 +65,11 @@ export interface ScanBackend<M> {
    * renderer cannot, and the objects panel then offers CesiumJS's renderer.
    */
   setInstances?(style: InstanceStyle | null): void;
+  /**
+   * The tiles drawn now, in each tile's own splat order and the scan's frame, for selecting
+   * objects in the scene (cesium/sceneSelect). Absent when the renderer cannot say.
+   */
+  pickTiles?(): readonly PickTile[];
   /** Tiles loaded now, and how many of them carry object ids: for tests and diagnostics. */
   instanceTiles?(): { tiles: number; matched: number };
   /**

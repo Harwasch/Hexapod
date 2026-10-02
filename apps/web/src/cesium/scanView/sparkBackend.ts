@@ -14,7 +14,7 @@
  *   apart at 64-128 m from the origin -- and a tile's splats are in the scan's frame, up to a
  *   hundred metres out: a visible lattice. `extSplats` keeps them as 32-bit floats.
  *
- * The scan's objects: each tile's SPZ centres are digested as it loads (`spzPositions`, the
+ * The scan's objects: each tile's SPZ centres are digested as it loads (`spzPickData`, the
  * checksum `instances.json` and `skin.json` key their per-splat data by), and once the scan
  * has instances or a skin every tile so listed gets a world modifier (a Spark dyno) that reads
  * its splat's instance id, skin id and weight row from per-tile textures and the shared
@@ -31,7 +31,8 @@ import { checksumPositions } from "@twin/world";
 
 import { tileInstanceIds, type InstancesDoc } from "@/lib/instances";
 import { tileSkin, type SkinDoc } from "@/lib/skin";
-import { spzPositions } from "@/lib/spzPositions";
+import type { PickTile } from "@/lib/splatPick";
+import { spzPickData } from "@/lib/spzPositions";
 import { loadSplatTile } from "@/view/sparkStream";
 
 import { INSTANCE_TEXTURE_WIDTH } from "../splatInstances";
@@ -110,6 +111,21 @@ interface SparkTile {
   skinSet: ReadonlySet<number>;
   /** Whether it has a modifier (built from its textures as they are now). */
   modified: boolean;
+  /** The tile's splats for picking, in its own order (cesium/sceneSelect). */
+  pick: PickTile;
+  /** `pick` where `place` last put the tile (a split object at its pose), or null at rest. */
+  placedPick: PickTile | null;
+}
+
+/** `pick` moved by `matrix` (a split object's placement in the scan frame). */
+function placedPickTile(pick: PickTile, matrix: THREE.Matrix4): PickTile {
+  const positions = new Float32Array(pick.positions.length);
+  const point = new THREE.Vector3();
+  for (let i = 0; i < pick.count; i++) {
+    point.fromArray(pick.positions, i * 3).applyMatrix4(matrix);
+    point.toArray(positions, i * 3);
+  }
+  return { ...pick, positions };
 }
 
 /** A per-tile texture: one splat a texel, `SPARK_SPLATS_WIDTH` a row. */
@@ -175,6 +191,8 @@ export function createBackend(
 
   // The shared tables and numbers, as dyno uniforms every tile's modifier reads.
   const tiles = new Map<SplatMesh, SparkTile>();
+  /** Tiles on screen now (added, not removed). */
+  const shown = new Set<SplatMesh>();
   let style: InstanceStyle | null = null;
   let motion: ScanMotion | null = null;
   let stateTexture: THREE.DataTexture | null = null;
@@ -376,11 +394,14 @@ export function createBackend(
         extSplats: true,
         signal,
       });
-      const positions = await spzPositions(bytes).catch(() => undefined);
-      if (positions) {
+      const data = await spzPickData(bytes).catch(() => undefined);
+      if (data) {
+        const checksum = checksumPositions(data.positions);
+        const count = data.positions.length / 3;
         const binding: SparkTile = {
-          checksum: checksumPositions(positions),
-          count: positions.length / 3,
+          checksum,
+          count,
+          pick: { checksum, count, ...data },
           doc: null,
           matched: false,
           ids: null,
@@ -390,15 +411,23 @@ export function createBackend(
           weights: null,
           skinSet: new Set(),
           modified: false,
+          placedPick: null,
         };
         tiles.set(mesh, binding);
         if (style || motion) bind(mesh, binding);
       }
       return mesh;
     },
-    add: (mesh) => scene.add(mesh),
-    remove: (mesh) => scene.remove(mesh),
+    add: (mesh) => {
+      scene.add(mesh);
+      shown.add(mesh);
+    },
+    remove: (mesh) => {
+      scene.remove(mesh);
+      shown.delete(mesh);
+    },
     dispose: (mesh) => {
+      shown.delete(mesh);
       const tile = tiles.get(mesh);
       tile?.ids?.dispose();
       tile?.skins?.dispose();
@@ -407,15 +436,26 @@ export function createBackend(
       mesh.dispose();
     },
     place: (mesh, matrix) => {
+      const tile = tiles.get(mesh);
       if (matrix === null) {
+        if (tile) tile.placedPick = null;
         mesh.position.set(0, 0, 0);
         mesh.quaternion.identity();
         return;
       }
       placement.fromArray(Array.from(matrix));
+      if (tile) tile.placedPick = placedPickTile(tile.pick, placement);
       placement.decompose(mesh.position, mesh.quaternion, placedScale);
     },
     setInstances,
+    pickTiles: () => {
+      const out: PickTile[] = [];
+      for (const mesh of shown) {
+        const tile = tiles.get(mesh);
+        if (tile) out.push(tile.placedPick ?? tile.pick);
+      }
+      return out;
+    },
     instanceTiles: () => {
       let matched = 0;
       for (const tile of tiles.values()) if (tile.matched) matched += 1;

@@ -11,8 +11,9 @@
  * and the rest stay still, the same clock steps give the same frame and calm is the measured
  * frame exactly; telemetry moves the bound building along its path while unbound objects stay
  * still, and a silent source fades it back to the measured frame exactly; a split object is
- * drawn where its pose puts it and back where it was at rest. A scan PlayCanvas streams from
- * its own package carries no tile checksums: the store says the renderer cannot move it.
+ * drawn where its pose puts it and back where it was at rest. A scan with objects is streamed
+ * from its 3D Tiles even with PlayCanvas's own package beside them (that package carries no
+ * tile checksums), so its objects still move there and no motion gap is reported.
  *
  * Frames go to `test.info().outputPath()` and, with `MOTION_FRAMES_DIR`, there too.
  * Headless GL is SwiftShader: pixels are counted, not eyeballed.
@@ -557,18 +558,26 @@ for (const renderer of ["playcanvas", "spark"] as const) {
   });
 }
 
-test("PlayCanvas's own streamed package cannot move objects: the store says so", async ({
+test("with PlayCanvas's own package beside the tiles, a scan with objects still moves", async ({
   page,
 }) => {
   test.setTimeout(600_000);
   const errors: string[] = [];
   await open(page, "playcanvas", { native: true, materials: true }, errors);
   const call = caller(page);
-  await call("view", 30, -35, 32);
+  await call("view", 30, -50, 45);
+  await call("view", 30, -50, 45);
+  const rest = await call("frame");
+  const tree = (await call("rectOf", 1, 1.3)) ?? undefined;
+  await call("drive", 1, [{ handle: 1, z: shift(1.5, 0, 0) }]);
+  const driven = await call("frame");
   const status = await call("rendererStatus");
   const gap = await call("motionGap");
-  console.info(JSON.stringify({ status, gap }));
-  expect(status?.native).toBe(true);
-  expect(gap?.renderer).toBe("playcanvas");
-  expect(gap?.reason).toMatch(/checksums/);
+  const moved = await call("difference", rest, driven, tree);
+  console.info(JSON.stringify({ status, gap, moved }));
+  expect(shaderErrors(errors)).toEqual([]);
+  expect(status?.native).toBe(false);
+  expect(status?.motion?.skinned).toBeGreaterThan(0);
+  expect(gap).toBeNull();
+  expect(moved).toBeGreaterThan(0.03);
 });

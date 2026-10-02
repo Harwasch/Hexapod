@@ -1,0 +1,57 @@
+/* The chip by the cursor that shows what a click or the brush selected (SceneSelectChip.tsx). */
+.scene-select-chip {
+  position: fixed;
+  z-index: var(--z-overlay, 40);
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  max-width: min(22rem, calc(100vw - 1.5rem));
+  padding: 0.45rem 0.55rem;
+  border: 1px solid var(--glass-border, rgba(255, 255, 255, 0.16));
+  border-radius: var(--radius-md, 14px);
+  background: var(--glass-bg-flat, rgba(16, 20, 14, 0.9));
+  box-shadow: var(--glass-shadow-soft, 0 8px 22px rgba(0, 0, 0, 0.34));
+  color: var(--text-primary, #f2f6ef);
+  font-family: var(--font-sans, system-ui, sans-serif);
+  font-size: var(--text-sm, 13px);
+  -webkit-backdrop-filter: blur(var(--glass-blur, 24px));
+  backdrop-filter: blur(var(--glass-blur, 24px));
+}
+
+.scene-select-chip[data-centred] {
+  transform: translateX(-50%);
+}
+
+.scene-select-chip__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.scene-select-chip__label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scene-select-chip__hint {
+  color: var(--text-secondary, rgba(242, 246, 239, 0.8));
+  font-size: var(--text-xs, 12px);
+}
+
+/* The actions: icon buttons (names in tooltips), as the objects panel's eyes. */
+.scene-select-chip__actions {
+  flex-wrap: nowrap;
+  gap: 0.15rem;
+}
+
+.scene-select-chip__divider {
+  width: 1px;
+  height: 1.1rem;
+  margin: 0 0.15rem;
+  background: var(--divider, rgba(255, 255, 255, 0.13));
+}

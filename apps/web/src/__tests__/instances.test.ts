@@ -27,7 +27,6 @@ import {
 } from "@/cesium/splatVisibility";
 import {
   halfToFloat,
-  hiddenForOnly,
   instanceLabel,
   instancesRefOf,
   matchLabel,
@@ -35,7 +34,6 @@ import {
   parseQuery,
   PROMINENCE_FLOOR,
   prominence,
-  quickFilters,
   rankByEmbedding,
   resolveBeside,
   searchInstances,
@@ -298,19 +296,6 @@ describe("search", () => {
     expect(searchInstances(d.instances, "tree", 1)).toHaveLength(1);
   });
 
-  it("offers quick filters from what the file holds", () => {
-    const filters = quickFilters(doc());
-    expect(filters.map((f) => [f.kind, f.label, f.query, f.count])).toEqual([
-      ["property", "movable", "movable > 0.5", 2],
-      ["property", "vegetation", "vegetation > 0.5", 2],
-      ["property", "vehicle", "vehicle > 0.5", 1],
-      ["behaviour", "behaviour: movable", "behaviour:movable", 2],
-      ["behaviour", "behaviour: in-place", "behaviour:in-place", 2],
-    ]);
-    // A property and a behaviour that share a name ("movable") never read the same.
-    expect(new Set(filters.map((f) => f.label)).size).toBe(filters.length);
-  });
-
   it("returns every match when asked for no limit, with each one's size", () => {
     const many = Array.from({ length: 120 }, (_, k) => ({
       ...(doc().instances[1] ?? ({} as never)),
@@ -324,16 +309,6 @@ describe("search", () => {
     expect(all[0]).toMatchObject({ id: 120, splats: 1119 });
   });
 
-  it("hides everything but the matches, keeping what holds them and what they hold", () => {
-    const d = doc();
-    // 3 is inside 2: showing only 3 keeps its parent 2 (hiding 2 would hide 3 with it).
-    expect(hiddenForOnly(d, [3]).sort()).toEqual([1, 4]);
-    // Showing only 2 keeps 3, inside it.
-    expect(hiddenForOnly(d, [2]).sort()).toEqual([1, 4]);
-    expect(hiddenForOnly(d, [1, 4]).sort()).toEqual([2, 3]);
-    expect(hiddenForOnly(d, []).sort()).toEqual([1, 2, 3, 4]);
-  });
-
   it("walks the hierarchy down from a coarse instance", () => {
     const d = doc();
     expect([...withDescendants(d, [2])].sort()).toEqual([2, 3]);
@@ -341,7 +316,7 @@ describe("search", () => {
     expect(withDescendants(d, []).size).toBe(0);
     expect(instanceLabel(d.instances[0] ?? ({} as never))).toBe("pickup truck");
     expect(instanceLabel({ ...(d.instances[0] ?? ({} as never)), tags: [], id: 9 })).toBe(
-      "Object 9",
+      "untagged",
     );
   });
 });
@@ -386,7 +361,7 @@ describe("search by meaning (the seam)", () => {
 describe("the store", () => {
   beforeEach(() => useInstances.setState({ assets: {}, dimOthers: true, gaps: {} }));
 
-  it("hides all of a query's matches, or shows only them, past the listed ones", () => {
+  it("hides all of a query's matches, or shows only them", () => {
     const s = (): ReturnType<typeof useInstances.getState> => useInstances.getState();
     const base = doc();
     const many = Array.from({ length: 120 }, (_, k) => ({
@@ -394,9 +369,8 @@ describe("the store", () => {
       id: k + 1,
       properties: { vegetation: k < 90 ? 0.9 : 0.1 },
     }));
-    s().setTable("a", { instances: many, propertyNames: ["vegetation"] });
+    s().setTable("a", { instances: many });
     s().setQuery("a", "vegetation > 0.5");
-    expect(s().assets.a?.results).toHaveLength(50);
     expect(s().assets.a?.matches).toHaveLength(90);
     s().hideMatches("a");
     expect(s().assets.a?.hidden.size).toBe(90);
@@ -427,12 +401,14 @@ describe("the store", () => {
   it("holds a scan's table, searches it, and hides and highlights", () => {
     const s = (): ReturnType<typeof useInstances.getState> => useInstances.getState();
     s().setTable("a", doc());
-    expect(s().assets.a?.filters.length).toBeGreaterThan(0);
+    expect(s().assets.a?.index.groups.length).toBeGreaterThan(0);
+    // The trunk (3) is part of the oak's object (2): the match is the object.
     s().setQuery("a", "tree");
-    expect(s().assets.a?.results.map((r) => r.id)).toEqual([2, 3]);
-    s().toggleHidden("a", 2);
-    expect([...(s().assets.a?.hidden ?? [])]).toEqual([2]);
-    s().toggleHidden("a", 2);
+    expect(s().assets.a?.matches).toEqual([2]);
+    // By id, an instance takes what it contains.
+    s().setHidden("a", [2], true);
+    expect([...(s().assets.a?.hidden ?? [])].sort()).toEqual([2, 3]);
+    s().setHidden("a", [2], false);
     expect(s().assets.a?.hidden.size).toBe(0);
     s().setHidden("a", [1, 4], true);
     s().setHidden("a", [4], false);
@@ -447,14 +423,14 @@ describe("the store", () => {
     expect(s().dimOthers).toBe(false);
     // An unknown asset is left alone; clearing removes the table.
     const before = s().assets;
-    s().toggleHidden("b", 1);
+    s().setHidden("b", [1], true);
     expect(s().assets).toBe(before);
     s().setTable("a", null);
     expect(s().assets.a).toBeUndefined();
   });
 
   it("keeps no table for a scan with no instances", () => {
-    useInstances.getState().setTable("a", { instances: [], propertyNames: [] });
+    useInstances.getState().setTable("a", { instances: [] });
     expect(useInstances.getState().assets.a).toBeUndefined();
   });
 });
@@ -638,7 +614,10 @@ describe("the hooks", () => {
 
     hook.setState(new Set([2]), new Set(), true);
     expect(hook.active).toBe(true);
-    // Hiding 2 hides its child 3.
+    // The sets are exact (the store expands an instance to what it contains): 2, not 3.
+    const exact = gpu.textures.at(-1)?.data as Uint8Array;
+    expect([exact[2 * 4], exact[3 * 4]]).toEqual([255, 0]);
+    hook.setState(new Set([2, 3]), new Set(), true);
     const state = gpu.textures.at(-1)?.data as Uint8Array;
     expect([state[2 * 4], state[3 * 4], state[1 * 4]]).toEqual([255, 255, 0]);
     expect(uniforms.u_instanceParams?.()).toEqual({ vec4: [1, 4, 12, 0] });
@@ -779,7 +758,7 @@ describe("attachInstances", () => {
     for (const f of listeners) f();
     expect(primitive.vertexVisibility).toBeDefined();
     const before = renders;
-    useInstances.getState().toggleHidden("scan", 1);
+    useInstances.getState().setHidden("scan", [1], true);
     expect(renders).toBe(before + 1);
     dispose();
     expect(useInstances.getState().assets.scan).toBeUndefined();

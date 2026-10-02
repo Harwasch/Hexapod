@@ -52,6 +52,8 @@ export interface Instance {
   properties: Record<string, number>;
   behaviour: Behaviour;
   views: number;
+  /** Its broad scene category (`lib/categories.ts`), when the file says; newer runs do. */
+  category?: string;
 }
 
 export interface EmbeddingRef {
@@ -137,6 +139,7 @@ function instanceOf(raw: unknown): Instance | null {
     properties,
     behaviour: BEHAVIOURS.has(r.behaviour as Behaviour) ? (r.behaviour as Behaviour) : "static",
     views: Math.max(0, Math.round(finite(r.views))),
+    ...(typeof r.category === "string" && r.category !== "" ? { category: r.category } : {}),
   };
 }
 
@@ -374,9 +377,9 @@ export function matchLabel(terms: readonly string[], label: string): number {
   return (sum / terms.length) * 0.95;
 }
 
-/** The label an instance is shown by: its top tag, or its id. */
+/** The label a search result goes by: its top tag (the panel names objects by category). */
 export function instanceLabel(instance: Instance): string {
-  return instance.tags[0]?.label ?? `Object ${String(instance.id)}`;
+  return instance.tags[0]?.label ?? "untagged";
 }
 
 /** A splat count, short: 940, 12.3k, 1.2M. */
@@ -450,72 +453,6 @@ export function searchInstances(
   }
   results.sort((a, b) => b.score - a.score || b.splats - a.splats || a.id - b.id);
   return Number.isFinite(limit) ? results.slice(0, limit) : results;
-}
-
-/**
- * What to hide so that only `matches` are drawn: every instance that is not a match, not
- * inside one (a match's descendants are part of it) and not around one (hiding an ancestor
- * hides everything under it, `withDescendants`, so a match's ancestors stay shown and their
- * other children are hidden one by one).
- */
-export function hiddenForOnly(
-  doc: Pick<InstancesDoc, "instances">,
-  matches: Iterable<number>,
-): number[] {
-  const keep = withDescendants(doc, matches);
-  const parentOf = new Map<number, number | null>();
-  for (const instance of doc.instances) parentOf.set(instance.id, instance.parent);
-  for (const id of [...keep]) {
-    for (let up = parentOf.get(id) ?? null; up !== null && !keep.has(up);) {
-      keep.add(up);
-      up = parentOf.get(up) ?? null;
-    }
-  }
-  return doc.instances.filter((i) => !keep.has(i.id)).map((i) => i.id);
-}
-
-/** One quick filter: a property name with a threshold, or a behaviour. */
-export interface QuickFilter {
-  /** A property score above a threshold, or a behaviour (`behaviour:<name>`). */
-  kind: "property" | "behaviour";
-  /**
-   * What the button says. A behaviour can share its name with a property ("static",
-   * "movable"), so a behaviour filter reads as its query does, "behaviour: <name>".
-   */
-  label: string;
-  query: string;
-  /** Instances it matches. */
-  count: number;
-}
-
-/**
- * Quick filters from what the file holds, not from a class list: each property any instance
- * scores above `threshold` on (most common first), then each behaviour present.
- */
-export function quickFilters(
-  doc: Pick<InstancesDoc, "instances" | "propertyNames">,
-  threshold = 0.5,
-): QuickFilter[] {
-  const out: QuickFilter[] = [];
-  for (const name of doc.propertyNames) {
-    const count = doc.instances.filter((i) => (i.properties[name] ?? 0) > threshold).length;
-    if (count > 0) {
-      out.push({ kind: "property", label: name, query: `${name} > ${String(threshold)}`, count });
-    }
-  }
-  out.sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
-  const behaviours = new Map<Behaviour, number>();
-  for (const i of doc.instances)
-    behaviours.set(i.behaviour, (behaviours.get(i.behaviour) ?? 0) + 1);
-  for (const [behaviour, count] of [...behaviours].sort((a, b) => b[1] - a[1])) {
-    out.push({
-      kind: "behaviour",
-      label: `behaviour: ${behaviour}`,
-      query: `behaviour:${behaviour}`,
-      count,
-    });
-  }
-  return out;
 }
 
 // ---- Search by meaning (the seam) --------------------------------------------------------

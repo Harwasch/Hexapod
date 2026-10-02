@@ -31,6 +31,7 @@ import * as pc from "playcanvas";
 
 import { tileInstanceIds, type InstancesDoc } from "@/lib/instances";
 import { tileSkin, type SkinDoc } from "@/lib/skin";
+import type { PickTile } from "@/lib/splatPick";
 import type { TileNode } from "@/view/tiles";
 
 import { INSTANCE_TEXTURE_WIDTH } from "../splatInstances";
@@ -133,6 +134,46 @@ interface TileBinding {
   glsl: string | null;
   /** The tile's own centres, kept while a motion has moved them for the sorter. */
   restCenters: Float32Array | null;
+  /** The tile's splats for picking, in its own order (cesium/sceneSelect). */
+  pick: PickTile;
+  /** `pick` where `place` last put the tile (a split object at its pose), or null at rest. */
+  placedPick: PickTile | null;
+}
+
+/** A decoded tile's splats for picking, in its own order, before PlayCanvas reorders them. */
+function pickTileOf(decoded: Decoded, checksum: string): PickTile | null {
+  const p = decoded.properties;
+  const count = decoded.count ?? 0;
+  const { x, y, z, scale_0: s0, scale_1: s1, scale_2: s2, opacity } = p ?? {};
+  if (!x || !y || !z || !s0 || !s1 || !s2 || !opacity) return null;
+  const [ox, oy, oz] = decoded.origin ?? [0, 0, 0];
+  const positions = new Float32Array(count * 3);
+  const radii = new Float32Array(count);
+  for (let i = 0; i < count; i++) {
+    positions[i * 3] = (x[i] ?? 0) + ox;
+    positions[i * 3 + 1] = (y[i] ?? 0) + oy;
+    positions[i * 3 + 2] = (z[i] ?? 0) + oz;
+    radii[i] = Math.max(s0[i] ?? 0, s1[i] ?? 0, s2[i] ?? 0);
+  }
+  return { checksum, count, positions, radii, opacity: Float32Array.from(opacity) };
+}
+
+/** `pick` moved by `matrix` (a split object's placement in the scan frame). */
+function placedPickTile(pick: PickTile, matrix: pc.Mat4): PickTile {
+  const positions = new Float32Array(pick.positions.length);
+  const point = new pc.Vec3();
+  for (let i = 0; i < pick.count; i++) {
+    point.set(
+      pick.positions[i * 3] ?? 0,
+      pick.positions[i * 3 + 1] ?? 0,
+      pick.positions[i * 3 + 2] ?? 0,
+    );
+    matrix.transformPoint(point, point);
+    positions[i * 3] = point.x;
+    positions[i * 3 + 1] = point.y;
+    positions[i * 3 + 2] = point.z;
+  }
+  return { ...pick, positions };
 }
 
 /** Frames a disposed tile's GPU resource outlives its entity: PlayCanvas's unified renderer
@@ -254,6 +295,8 @@ export function createBackend(
   const tiles = new Map<pc.Entity, TileBinding>();
   /** Where each entity was decoded to sit (its tile's centre), for `place`. */
   const origins = new WeakMap<pc.Entity, [number, number, number]>();
+  /** Tiles on screen now (added, not removed). */
+  const shown = new Set<pc.Entity>();
   let style: InstanceStyle | null = null;
   let motion: ScanMotion | null = null;
   let stateTexture: pc.Texture | null = null;
@@ -522,6 +565,7 @@ export function createBackend(
       ]);
       // glTF KHR_gaussian_splatting's convention: linear scale, opacity after the sigmoid.
       data.activated = true;
+      const pick = decoded.checksum !== undefined ? pickTileOf(decoded, decoded.checksum) : null;
       // As `reorderData`, keeping the order: the object ids are in the tile's own order.
       const order = data.calcMortonOrder();
       data.reorder(order);
@@ -532,8 +576,9 @@ export function createBackend(
       origins.set(entity, origin);
       entity.addComponent("gsplat", { resource });
       resources.set(entity, resource);
-      if (decoded.checksum !== undefined) {
+      if (decoded.checksum !== undefined && pick) {
         const binding: TileBinding = {
+          pick,
           checksum: decoded.checksum,
           order,
           resource,
@@ -547,6 +592,7 @@ export function createBackend(
           skinSet: new Set(),
           glsl: null,
           restCenters: null,
+          placedPick: null,
         };
         tiles.set(entity, binding);
         if (style || motion) {
@@ -558,16 +604,19 @@ export function createBackend(
     },
     add: (entity) => {
       app.root.addChild(entity);
+      shown.add(entity);
       addedAt.set(entity, framesDrawn);
     },
     isDrawn: (entity, sinceMs) =>
       framesDrawn - (addedAt.get(entity) ?? framesDrawn) >= SETTLE_FRAMES && sinceMs >= SETTLE_MS,
     remove: (entity) => {
       if (entity.parent) entity.parent.removeChild(entity);
+      shown.delete(entity);
     },
     dispose: (entity) => {
       tiles.delete(entity);
       sortDirty.delete(entity);
+      shown.delete(entity);
       const resource = resources.get(entity);
       entity.destroy();
       if (resource) doomed.push({ resource, at: framesDrawn });
@@ -575,11 +624,15 @@ export function createBackend(
     place: (entity, matrix) => {
       const origin = origins.get(entity) ?? [0, 0, 0];
       if (matrix === null) {
+        const tile = tiles.get(entity);
+        if (tile) tile.placedPick = null;
         entity.setLocalPosition(...origin);
         entity.setLocalRotation(pc.Quat.IDENTITY);
         return;
       }
       placement.set(Array.from(matrix));
+      const tile = tiles.get(entity);
+      if (tile) tile.placedPick = placedPickTile(tile.pick, placement);
       placement.transformPoint(placedPosition.set(...origin), placedPosition);
       placedRotation.setFromMat4(placement);
       entity.setLocalPosition(placedPosition);
@@ -616,6 +669,14 @@ export function createBackend(
       app.scene.gsplat.splatBudget = drawn;
     },
     setInstances,
+    pickTiles: () => {
+      const out: PickTile[] = [];
+      for (const entity of shown) {
+        const tile = tiles.get(entity);
+        if (tile) out.push(tile.placedPick ?? tile.pick);
+      }
+      return out;
+    },
     instanceTiles: () => {
       let matched = 0;
       for (const tile of tiles.values()) if (tile.matched) matched += 1;

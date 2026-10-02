@@ -15,15 +15,21 @@ export function MotionRendererNote({ assetId }: { assetId?: string }) {
   );
   const setSettings = useSettings((s) => s.set);
   if (!gap) return null;
+  // One line in the objects panel's note style; the reason is the line's tooltip.
   return (
-    <div className="instance-panel__gap" role="note" data-testid="motion-renderer-gap">
-      <p>Wind sway and live telemetry need the Cesium renderer. {gap.reason}</p>
+    <div
+      className="objects-panel__gap objects-panel__gap--line"
+      role="note"
+      title={gap.reason}
+      data-testid="motion-renderer-gap"
+    >
+      <p>Wind and telemetry need the Cesium renderer.</p>
       <GlassButton
         size="sm"
         variant="ghost"
         onClick={() => setSettings({ splatRenderer: "cesium" })}
       >
-        Use the Cesium renderer
+        Use Cesium
       </GlassButton>
     </div>
   );
