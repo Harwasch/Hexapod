@@ -24,8 +24,16 @@ YARD = Path(__file__).resolve().parents[3] / "data" / "tiles" / "synthetic-yard"
 
 
 @pytest.fixture(scope="module")
-def yard() -> tuple[Splats, vc.ConeGrid]:
+def yard(tmp_path_factory: pytest.TempPathFactory) -> tuple[Splats, vc.ConeGrid]:
+    """The yard's source PLY: the checkout's when generated (it is gitignored), else a fresh
+    one, as `test_segment_scene` does."""
     ply = YARD / "source" / "splat.ply"
+    if not ply.exists():
+        import synthetic_yard
+        from synthetic_tree import write_ply
+
+        ply = tmp_path_factory.mktemp("yard") / "splat.ply"
+        write_ply(ply, synthetic_yard.generate_yard()[0])
     layout = splat_tiles.ply_layout(ply)
     grid = vc.cone_grid(layout, np.ones(layout.count, bool))
     return load_ply(ply), grid
