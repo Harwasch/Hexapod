@@ -15,7 +15,14 @@ import {
   useLiving,
   type LivingSiteStatus,
 } from "@/state/living";
-import { QUALITY_SSE, useSettings, type SplatRenderer } from "@/state/settings";
+import { rendererReadout, useScanRendererStatus } from "@/lib/rendererReadout";
+import {
+  QUALITY_SSE,
+  useRendererOverride,
+  useSettings,
+  useSplatRenderer,
+  type SplatRenderer,
+} from "@/state/settings";
 import { useUi } from "@/state/ui";
 import { useViewer } from "@/state/viewer";
 
@@ -414,9 +421,37 @@ export function SettingsSheet() {
 /** Who draws a splat, side by side for comparison (settings `splatRenderer`). */
 const RENDERERS: { value: SplatRenderer; label: string; ariaLabel: string }[] = [
   { value: "playcanvas", label: "PlayCanvas", ariaLabel: "Draw splats with PlayCanvas" },
+  {
+    value: "playcanvas-webgpu",
+    label: "WebGPU",
+    ariaLabel: "Draw splats with PlayCanvas on WebGPU (beta)",
+  },
   { value: "spark", label: "Spark", ariaLabel: "Draw splats with Spark" },
   { value: "cesium", label: "Cesium", ariaLabel: "Draw splats with CesiumJS" },
 ];
+
+/**
+ * Under the renderer switch: what draws now and how fast it drew while the camera last moved
+ * (lib/rendererReadout.ts) -- the developer readouts' line, here too because a phone hides the
+ * bottom bar and a phone is where WebGPU is to be judged (docs/WEBGPU_TRIAL.md) -- and a word
+ * when the page address chose the renderer for this visit (`?renderer=`).
+ */
+function RendererNow({ chosen, fromAddress }: { chosen: SplatRenderer; fromAddress: boolean }) {
+  const scan = useScanRendererStatus(chosen !== "cesium");
+  const now = rendererReadout(chosen, scan);
+  const parts = [
+    fromAddress ? "Chosen by the page address for this visit" : null,
+    scan?.active ? `Now: ${now.label}` : null,
+    now.meter,
+    now.notice,
+  ].filter((part): part is string => part !== null);
+  if (parts.length === 0) return null;
+  return (
+    <div className="setting__hint" data-testid="splat-renderer-now">
+      {parts.join(" · ")}
+    </div>
+  );
+}
 
 /**
  * What a developer or deployer tunes and an operator never needs: which engine draws splats,
@@ -425,6 +460,8 @@ const RENDERERS: { value: SplatRenderer; label: string; ariaLabel: string }[] = 
  */
 function AdvancedSection() {
   const s = useSettings();
+  const splatRenderer = useSplatRenderer();
+  const fromAddress = useRendererOverride((o) => o.renderer !== null);
   const bounds = QUALITY_SSE[s.quality];
   const manual = s.manualScreenSpaceError;
   return (
@@ -448,17 +485,19 @@ function AdvancedSection() {
         <Row
           id="splat-renderer-label"
           label="Splat renderer"
-          hint="Who draws Gaussian splats, for comparison; the globe, navigation and tools stay CesiumJS"
+          hint="Who draws Gaussian splats, for comparison; the globe, navigation and tools stay CesiumJS. WebGPU is PlayCanvas on WebGPU, in beta: WebGL2 where a device has none"
           control={
             <GlassSegmentedControl
               aria-label="Splat renderer"
               data-testid="splat-renderer"
-              value={s.splatRenderer}
-              onValueChange={(splatRenderer) => s.set({ splatRenderer })}
+              block
+              value={splatRenderer}
+              onValueChange={(next) => s.set({ splatRenderer: next })}
               options={RENDERERS}
             />
           }
         />
+        <RendererNow chosen={splatRenderer} fromAddress={fromAddress} />
         <Row
           id="manual-sse-label"
           label="Manual screen-space error"

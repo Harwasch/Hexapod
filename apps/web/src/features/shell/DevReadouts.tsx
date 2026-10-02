@@ -3,22 +3,19 @@ import { KeyRound, X } from "lucide-react";
 import { formatAltitude, formatResolution, SCALE_BAND_LABELS } from "@twin/geo";
 
 import { representationLabel } from "@/lib/format";
+import { rendererReadout, useScanRendererStatus } from "@/lib/rendererReadout";
 import { useLayers } from "@/state/layers";
-import { useSettings, type SplatRenderer } from "@/state/settings";
+import { useSettings, useSplatRenderer } from "@/state/settings";
 import { useSites } from "@/state/sites";
 import { useViewer } from "@/state/viewer";
 
 import { useDemoKeyNotice } from "../notices/connection";
 
-const RENDERER_NAMES: Record<SplatRenderer, string> = {
-  playcanvas: "PlayCanvas",
-  spark: "Spark",
-  cesium: "CesiumJS",
-};
-
 /**
  * Camera and renderer telemetry for whoever is building or deploying this: altitude, scale,
- * metres per pixel, which world and which renderer draws the model, and the setup note about
+ * metres per pixel, which world and which renderer draws the model -- for a splat scan the
+ * engine and graphics API, how fast it drew while the camera last moved, and why the WebGPU
+ * trial fell back to WebGL2 when it did (lib/rendererReadout.ts) -- and the setup note about
  * the shared demo map key. Settings › Advanced › Show developer readouts; off by default.
  */
 export function DevReadouts() {
@@ -26,7 +23,7 @@ export function DevReadouts() {
   const camera = useViewer((s) => s.camera);
   const worldLabel = useViewer((s) => s.worldLabel);
   const units = useSettings((s) => s.units);
-  const splatRenderer = useSettings((s) => s.splatRenderer);
+  const splatRenderer = useSplatRenderer();
   const activeSiteId = useSites((s) => s.activeSiteId);
   const representation = useSites((s) =>
     activeSiteId ? s.representation[activeSiteId] : undefined,
@@ -39,6 +36,9 @@ export function DevReadouts() {
   );
   const loading = assetsLoading || layersLoading;
   const demoKey = useDemoKeyNotice();
+  const splat = representation === "gaussian-splat";
+  const scan = useScanRendererStatus(enabled && splat && splatRenderer !== "cesium");
+  const renderer = rendererReadout(splatRenderer, scan);
   if (!enabled) return null;
   return (
     <div className="glass glass--strong dev-readouts mc-mono" data-testid="status-bar">
@@ -64,11 +64,29 @@ export function DevReadouts() {
           <span className="dev-readouts__sep" />
           <span>
             {representationLabel(representation)}
-            {representation === "gaussian-splat" && (
-              <span className="mc-muted"> · {RENDERER_NAMES[splatRenderer]}</span>
+            {splat && (
+              <span className="mc-muted" data-testid="status-splat-renderer">
+                {" "}
+                · {renderer.label}
+              </span>
             )}
           </span>
+          {splat && renderer.meter && (
+            <span className="mc-muted" data-testid="status-splat-meter">
+              {renderer.meter}
+            </span>
+          )}
         </>
+      )}
+      {/* The WebGPU trial on WebGL2, and why: one line, the reason in full on hover. */}
+      {splat && renderer.notice && (
+        <span
+          className="dev-readouts__note"
+          title={renderer.notice}
+          data-testid="status-splat-notice"
+        >
+          <span>{renderer.notice}</span>
+        </span>
       )}
       {demoKey.show && (
         <span
