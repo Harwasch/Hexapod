@@ -862,8 +862,15 @@ export class SiteManager {
     this.reportLoad(siteId, { phase: "streaming", progress: LOAD_PROGRESS.streaming });
     let peak = 0;
     const span = 1 - LOAD_PROGRESS.streaming;
+    // Only while this asset is the one shown: Splat / Mesh / Points can change mid-stream, and
+    // the record then belongs to the representation shown now (`restartLoad`).
+    const shown = (): boolean => {
+      const entry = this.loaded.get(siteId);
+      return entry !== undefined && this.pickAsset(entry, entry.representation)?.id === asset.id;
+    };
     const offProgress = tileset.loadProgress.addEventListener(
       (pending: number, processing: number) => {
+        if (!shown()) return;
         const left = pending + processing;
         peak = Math.max(peak, left);
         if (peak > 0) {
@@ -871,13 +878,18 @@ export class SiteManager {
         }
       },
     );
-    const offReady = tileset.initialTilesLoaded.addEventListener(() => {
+    // `initialTilesLoaded` is raised once in a tileset's life; a model shown again later (a
+    // representation switched back to) finishes on `allTilesLoaded`, raised on every drain.
+    const done = (): void => {
       offProgress();
       offReady();
-      if (this.loads.get(siteId)?.phase === "streaming")
+      offAll();
+      if (shown() && this.loads.get(siteId)?.phase === "streaming")
         this.reportLoad(siteId, { phase: "ready" });
-    });
-    handle.unsubscribe.push(offProgress, offReady);
+    };
+    const offReady = tileset.initialTilesLoaded.addEventListener(done);
+    const offAll = tileset.allTilesLoaded.addEventListener(done);
+    handle.unsubscribe.push(offProgress, offReady, offAll);
   }
 
   /** Bounding sphere of the active representation (loaded tileset) or the footprint. */
@@ -903,6 +915,7 @@ export class SiteManager {
     this.active.representation = representation;
     this.active.temporalAssetId = null;
     this.events.emit("representation", { siteId: this.active.site.id, representation });
+    this.restartLoad(this.active);
     await this.showRepresentation(this.active, representation);
   }
 
@@ -918,7 +931,24 @@ export class SiteManager {
         representation: asset.representation,
       });
     }
+    this.restartLoad(this.active);
     await this.showRepresentation(this.active, asset.representation);
+  }
+
+  /**
+   * Another model is about to be shown at a loaded site (Splat / Mesh / Points, a version, the
+   * asset's Retry): the site's load record is about the model shown, so one that ended in an
+   * error, or is still following the previous model, starts over at `model`. A model already
+   * loaded is `ready` at once (`watchFirstTiles`). It used to keep the error: after the mesh
+   * failed, switching back to a splat that was fine still said "Couldn't load the 3D model",
+   * since `watchFirstTiles` leaves an errored record alone. A record that reached `ready`
+   * stays: from there the asset's own state speaks (features/sites/siteLoad.ts).
+   */
+  private restartLoad(active: ActiveSite): void {
+    const siteId = active.site.id;
+    const load = this.loads.get(siteId);
+    if (!load || load.phase === "ready") return;
+    this.startLoad(siteId, "model", load.flight);
   }
 
   /** Every asset handle of every loaded site. */

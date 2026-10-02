@@ -199,6 +199,10 @@ test.describe("catalog", () => {
     await load.getByRole("button", { name: "Retry" }).click();
     await expect.poll(() => tilesetRequests.length, { timeout: 15_000 }).toBeGreaterThan(0);
     await expect(load).toContainText("Couldn’t load the 3D model", { timeout: 30_000 });
+    // Back to the splat: the mesh's failure is not said about it. (Ion is out of reach here,
+    // so the splat is being asked for again; it used to keep the mesh's error from the start.)
+    await switcher.getByRole("radio", { name: /Splat/ }).click();
+    await expect(load).toContainText("Loading 3D model", { timeout: 5_000 });
   });
 
   test("layer toggle updates runtime state and About sheet shows provenance", async ({ app }) => {
