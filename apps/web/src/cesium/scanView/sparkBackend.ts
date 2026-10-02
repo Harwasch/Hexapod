@@ -456,6 +456,13 @@ export function createBackend(
       }
       return out;
     },
+    // Spark generates into `current` and draws `display` until the sort of `current` lands
+    // (asynchronously, at most every `minSortIntervalMs`): only then is the frame the state.
+    settled: () =>
+      !spark.sorting &&
+      !spark.sortDirty &&
+      spark.sortTimeoutId === -1 &&
+      spark.display === spark.current,
     instanceTiles: () => {
       let matched = 0;
       for (const tile of tiles.values()) if (tile.matched) matched += 1;

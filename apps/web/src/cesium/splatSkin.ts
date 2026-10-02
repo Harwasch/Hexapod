@@ -427,11 +427,16 @@ export class SplatSkinning implements SplatMotionPart {
   setHandles(skinId: number, handles: ArrayLike<number> | null): void {
     const skin = this.doc.byId.get(skinId);
     if (!skin) return;
+    // The same handles again (a driver ticking at a held clock) change nothing: no version
+    // bump, so a dedicated renderer does not regenerate and re-sort for them.
+    const current = this.#driven.get(skinId);
     if (handles === null) {
+      if (current === undefined) return;
       this.#driven.delete(skinId);
     } else {
       const copy = new Float64Array(skin.handles * HANDLE_FLOATS);
       for (let i = 0; i < Math.min(copy.length, handles.length); i += 1) copy[i] = handles[i] ?? 0;
+      if (current?.every((v, i) => Object.is(v, copy[i]))) return;
       this.#driven.set(skinId, copy);
     }
     this.#motionVersion += 1;

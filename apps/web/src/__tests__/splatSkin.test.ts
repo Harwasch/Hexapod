@@ -331,6 +331,26 @@ describe("the skin part", () => {
     expect(handles.uploads.length).toBe(writes + 1);
     expect(handles.uploads.at(-1)?.height).toBe(1);
   });
+
+  it("does nothing for the same handles again (a driver at a held clock)", () => {
+    const handles = factory.made[2];
+    if (!handles) throw new Error("no handle texture");
+    const z = new Float64Array(12).fill(0.01);
+    skinning.setInstanceHandles(10, z);
+    const version = skinning.motionVersion;
+    const writes = handles.uploads.length;
+    skinning.setInstanceHandles(10, Float64Array.from(z));
+    expect(skinning.motionVersion).toBe(version);
+    expect(handles.uploads.length).toBe(writes);
+    skinning.setInstanceHandles(10, null);
+    const rested = skinning.motionVersion;
+    expect(rested).toBe(version + 1);
+    skinning.setInstanceHandles(10, null);
+    expect(skinning.motionVersion).toBe(rested);
+    z[3] = 0.02;
+    skinning.setInstanceHandles(10, z);
+    expect(skinning.motionVersion).toBe(rested + 1);
+  });
 });
 
 describe("the motion chain", () => {

@@ -177,16 +177,22 @@ export interface ScanRendererStatus {
   motion: { updates: number; skinned: number; redrawn: number } | null;
   /** Split objects drawn beside the scan (scanObjects.ts). */
   objects: number;
+  /** Whether the renderer shows what it was last asked for (`ScanBackend.settled`). */
+  settled: boolean;
 }
 
 interface Session {
   kind: SplatRendererKind;
   key: string;
   stop(): void;
-  status(): Omit<ScanRendererStatus, "kind" | "active" | "instances" | "motion" | "objects">;
+  status(): Omit<
+    ScanRendererStatus,
+    "kind" | "active" | "instances" | "motion" | "objects" | "settled"
+  >;
   instances(): { tiles: number; matched: number } | null;
   motion(): ScanRendererStatus["motion"];
   objects(): number;
+  settled(): boolean;
 }
 
 /** How the host makes its renderers. */
@@ -323,6 +329,7 @@ export class ScanRendererHost {
       instances: this.session?.instances() ?? null,
       motion: this.session?.motion() ?? null,
       objects: this.session?.objects() ?? 0,
+      settled: this.session?.settled() ?? true,
       error: inner.error ?? this.lastError,
     };
   }
@@ -595,6 +602,7 @@ export class ScanRendererHost {
       instances: () => backend.instanceTiles?.() ?? null,
       motion: () => motionStatus(motionLink, backend),
       objects: () => objects.count,
+      settled: () => backend.settled?.() ?? true,
       status: () => ({
         tiles: streamer.drawn.length,
         gaussians: streamer.drawnGaussians,
@@ -683,6 +691,7 @@ export class ScanRendererHost {
       instances: () => null,
       motion: () => null,
       objects: () => objects.count,
+      settled: () => backend.settled?.() ?? true,
       stop: () => {
         unlinkInstances();
         motion?.dispose();

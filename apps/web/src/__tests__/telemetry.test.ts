@@ -565,6 +565,20 @@ describe("the rigid part", () => {
     expect(uniforms.u_rigidIds?.()).toEqual({ ids: true });
   });
 
+  it("does nothing for the same motion again (a driver at a held clock)", () => {
+    const { rigid } = setup();
+    const motion = { rotation: quatFromYaw(0.6), translation: [1.5, 1.8, 0.3] as const };
+    rigid.setInstanceMotion(8, motion);
+    const version = rigid.motionVersion;
+    rigid.setInstanceMotion(8, { rotation: [...motion.rotation], translation: [1.5, 1.8, 0.3] });
+    expect(rigid.motionVersion).toBe(version);
+    rigid.setInstanceMotion(8, { rotation: motion.rotation, translation: [1.5, 1.8, 0.4] });
+    expect(rigid.motionVersion).toBe(version + 1);
+    rigid.setInstanceMotion(8, null);
+    rigid.setInstanceMotion(8, null);
+    expect(rigid.motionVersion).toBe(version + 2);
+  });
+
   it("moves exactly the bound instance's splats by the motion, in the baked frame", () => {
     const { rigid, primitive } = setup();
     const motion = relativeMotion(

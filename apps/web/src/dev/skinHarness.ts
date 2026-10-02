@@ -221,17 +221,21 @@ export async function startSkinHarness(options: {
     if (host) await converge();
   };
   /**
-   * A dedicated renderer sorts (and Spark generates) over the frames after a change: drawn
-   * until two frames running are the same, so a frame read is the state, not the way to it.
+   * A dedicated renderer catches up over the frames after a change: drawn until it says it
+   * shows what it was asked for (`settled`: Spark draws a new generation only once its
+   * asynchronous sort lands, and frames repeat while it waits) and two frames running are the
+   * same, so a frame read is the state, not the way to it.
    */
   const converge = async (): Promise<void> => {
     let last = pixels().data;
-    for (let frame = 0; frame < 40; frame += 1) {
+    for (let frame = 0; frame < 600; frame += 1) {
       await nextFrame(scene);
       const now = pixels().data;
-      if (now.length === last.length && now.every((v, i) => v === last[i])) return;
+      const same = now.length === last.length && now.every((v, i) => v === last[i]);
+      if (same && (host?.status().settled ?? true)) return;
       last = now;
     }
+    throw new Error("the splat renderer never settled");
   };
   const part = (): SplatSkinning => {
     const found = skinningOf(ASSET);

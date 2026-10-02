@@ -415,15 +415,10 @@ for (const renderer of ["playcanvas", "spark"] as const) {
       expect(measures.baseRest).toBeLessThan(0.15 * measures.treeSways);
       expect(measures.otherTree).toBeLessThan(0.002);
       expect(measures.stillShrub).toBeLessThan(0.002);
-      // The same steps give the same splats. PlayCanvas draws them in the same order, pixel for
-      // pixel; Spark's sorter keeps splats at equal depth in the order it last had them, so a
-      // replay reached from another frame may blend a few of those the other way round (a
-      // handful of pixels, a few levels): bounded here, exact otherwise.
-      if (renderer === "playcanvas") expect(measures.replay).toBe(0);
-      else {
-        expect(measures.replay).toBeLessThan(0.002);
-        expect(measures.replayMax).toBeLessThan(24);
-      }
+      // The same steps give the same frame, and calm the measured one, exactly under both:
+      // frames are read once the renderer has settled (skinHarness `converge`; Spark draws a
+      // new state only when its asynchronous sort of it lands).
+      expect(measures.replay).toBe(0);
       expect(measures.calm).toBe(0);
     });
 

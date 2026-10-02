@@ -70,6 +70,12 @@ export interface ScanBackend<M> {
    * objects in the scene (cesium/sceneSelect). Absent when the renderer cannot say.
    */
   pickTiles?(): readonly PickTile[];
+  /**
+   * Whether the screen shows what was last asked for: false while the renderer is still
+   * catching up on its own (Spark draws a new generation only once its asynchronous sort of
+   * it lands, and keeps drawing the previous one until then). Absent: always.
+   */
+  settled?(): boolean;
   /** Tiles loaded now, and how many of them carry object ids: for tests and diagnostics. */
   instanceTiles?(): { tiles: number; matched: number };
   /**

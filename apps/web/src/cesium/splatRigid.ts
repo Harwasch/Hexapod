@@ -44,6 +44,13 @@ import { foldHandle } from "./splatSkin";
 import { setSortMotion } from "./splatSorter";
 import { sameMatrix } from "./splatTiles";
 
+/** Whether two rigid motions are the same numbers (a driver setting the same pose again). */
+function sameRigidMotion(a: RigidMotion, b: RigidMotion): boolean {
+  for (let i = 0; i < 4; i += 1) if (!Object.is(a.rotation[i], b.rotation[i])) return false;
+  for (let i = 0; i < 3; i += 1) if (!Object.is(a.translation[i], b.translation[i])) return false;
+  return true;
+}
+
 /** Texels a row of either texture holds. */
 export const RIGID_TEXTURE_WIDTH = 1024;
 /** Instance ids a slot texel holds. */
@@ -281,6 +288,8 @@ export class SplatRigidMotion implements SplatMotionPart {
       this.#rewriteSlots();
       return;
     }
+    const current = this.#byInstance.get(id);
+    if (current !== undefined && sameRigidMotion(current, motion)) return;
     if (slot === undefined) {
       slot = 1;
       const used = new Set(this.#slotOf.values());
