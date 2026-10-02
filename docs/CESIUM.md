@@ -264,6 +264,12 @@ tileset hidden for its frame and solids. The overlay is held to the globe's rule
   views on the way, fetching and abandoning each.
 - **A stopped session lets go of its GPU context** (`WEBGL_lose_context`) and Spark of its
   workers; every session gets a new canvas.
+- **Nothing it throws reaches the globe.** Its frame is drawn inside the globe's `postRender`,
+  which CesiumJS raises outside the try that turns a render error into `renderError`: a throw
+  there (the renderer, the tile planner, the hand-over) stopped CesiumWidget's render loop for
+  good, with no recovery. A frame that throws now stops the overlay (`overlayFrames.ts`); the
+  host retires that session, says why in a toast and its status, and does not start the same
+  renderer on that scan again until it is chosen again.
 - **PlayCanvas can draw on WebGPU, as a trial** (`playcanvas-webgpu`, Settings › Advanced or
   `?renderer=webgpu`; off by default): the same renderer on an asynchronously made WebGPU
   device, with WGSL ports of the objects' shader and the GPU sort PlayCanvas uses there, which
