@@ -20,6 +20,18 @@
  * a work-buffer modifier reads it with the shared state table when PlayCanvas copies the tile
  * into the buffer it sorts and draws from. A change of what is hidden or highlighted updates
  * the table and marks every tile for a new copy: no tile is decoded or uploaded again.
+ *
+ * Two entry points, one renderer. `createBackend` is the default: PlayCanvas's `Application`,
+ * which always makes a WebGL2 device. `createWebgpuBackend` is the WebGPU trial
+ * (docs/WEBGPU_TRIAL.md): the device is made first and asynchronously, WebGPU preferred,
+ * PlayCanvas's own WebGL2 fallback after it, and the app is an `AppBase` with only what this
+ * renderer uses (a camera, gsplats, the gsplat asset handler). On WebGPU three things differ:
+ * the work-buffer modifier is WGSL (PlayCanvas picks the language by device); PlayCanvas sorts
+ * on the GPU in the frame that draws, so a new tile is drawn by the first ready frame after it
+ * goes in and no sort result arrives later to ask for the frame that confirms it -- the
+ * renderer asks for it (`frameWanted`) instead; and a device can be lost for good (a driver
+ * reset, a GPU process crash), which the host answers by drawing with WebGL2 instead
+ * (`hooks.deviceLost`).
  */
 
 import * as pc from "playcanvas";
@@ -29,9 +41,14 @@ import type { TileNode } from "@/view/tiles";
 
 import { INSTANCE_TEXTURE_WIDTH } from "../splatInstances";
 import { splatMinPixelSize } from "./quality";
-import { idsInResourceOrder, SCAN_INSTANCE_RULE_GLSL, type InstanceStyle } from "./scanInstances";
+import {
+  idsInResourceOrder,
+  SCAN_INSTANCE_RULE_GLSL,
+  SCAN_INSTANCE_RULE_WGSL,
+  type InstanceStyle,
+} from "./scanInstances";
 import { countOverlayLoopTick } from "./stats";
-import type { BackendHooks, ScanBackend, ScanPose } from "./types";
+import type { BackendHooks, GraphicsApi, ScanBackend, ScanPose, SplatRendererKind } from "./types";
 
 interface Decoded {
   id: number;
@@ -73,6 +90,36 @@ void modifySplatColor(vec3 center, inout vec4 color) {
 }
 `;
 
+/**
+ * The same modifier in WGSL, for PlayCanvas on WebGPU: PlayCanvas's WGSL signatures for the
+ * three functions (`gsplatModifyVS`), the colour passed by pointer, and the id stream's
+ * `loadSplatInstance()` returning a `vec4u` (an R32U stream reads as `texture_2d<u32>`).
+ */
+export const PLAYCANVAS_INSTANCE_WGSL = `
+uniform uInstanceParams: vec4f;
+uniform uInstanceTint: vec4f;
+uniform uInstanceDim: vec4f;
+var uInstanceState: texture_2d<f32>;
+${SCAN_INSTANCE_RULE_WGSL}
+fn modifySplatCenter(center: ptr<function, vec3f>) {
+}
+fn modifySplatRotationScale(originalCenter: vec3f, modifiedCenter: vec3f, rotation: ptr<function, vec4f>, scale: ptr<function, vec3f>) {
+}
+fn modifySplatColor(center: vec3f, color: ptr<function, vec4f>) {
+    if (uniform.uInstanceParams.x < 0.5) {
+        return;
+    }
+    *color = hexapodInstanceColor(loadSplatInstance().r, *color);
+}
+`;
+
+/** The modifier in both languages: PlayCanvas takes the one its device speaks
+ *  (`GSplatComponent.setWorkBufferModifier`), so hide and highlight work on either API. */
+export const PLAYCANVAS_INSTANCE_MODIFIER = {
+  glsl: PLAYCANVAS_INSTANCE_GLSL,
+  wgsl: PLAYCANVAS_INSTANCE_WGSL,
+} as const;
+
 /** What a tile needs to take its ids: its digest, and where each original splat went. */
 interface TileBinding {
   checksum: string;
@@ -112,18 +159,111 @@ function workerCount(): number {
 /** The `frame:ready` handler's arguments (gsplat/system.d.ts EVENT_FRAMEREADY). */
 type FrameReady = (camera: unknown, layer: unknown, ready: boolean, loadingCount: number) => void;
 
+/** The overlay's canvas: transparent, premultiplied, no multisampling (splats are smooth). */
+const DEVICE_OPTIONS = {
+  alpha: true,
+  antialias: false,
+  premultipliedAlpha: true,
+  powerPreference: "high-performance",
+} as const;
+
+/** PlayCanvas on WebGL2, the default: its `Application`, which always makes a WebGL2 device. */
 export function createBackend(
   canvas: HTMLCanvasElement,
   budget: number,
   hooks: BackendHooks,
 ): Promise<ScanBackend<pc.Entity>> {
-  const app = new pc.Application(canvas, {
-    graphicsDeviceOptions: {
-      alpha: true,
-      antialias: false,
-      premultipliedAlpha: true,
-      powerPreference: "high-performance",
-    },
+  const app = new pc.Application(canvas, { graphicsDeviceOptions: { ...DEVICE_OPTIONS } });
+  return Promise.resolve(assemble(app, budget, hooks, { name: "playcanvas", note: null }));
+}
+
+/**
+ * Why WebGPU was not used when PlayCanvas fell back to WebGL2 by itself (it logs the reason
+ * and moves on): the browser has none, the page is not a secure context, or no adapter or
+ * device came (PlayCanvas also declines PowerVR GPUs' WebGPU).
+ */
+export function whyNoWebgpu(
+  gpu: unknown = typeof navigator === "undefined"
+    ? undefined
+    : (navigator as { gpu?: unknown }).gpu,
+  secure: boolean = typeof window === "undefined" || window.isSecureContext,
+): string {
+  if (!gpu) return secure ? "this browser has no WebGPU" : "WebGPU needs a secure (https) page";
+  return "no WebGPU adapter or device";
+}
+
+/**
+ * PlayCanvas on WebGPU, the trial (docs/WEBGPU_TRIAL.md). `createGraphicsDevice` tries WebGPU
+ * and then WebGL2 on the same canvas -- WebGPU takes the canvas only once its adapter and
+ * device exist, so a WebGL2 fallback still can -- and after that, silently, a Null device that
+ * draws nothing. A Null device is refused here (the host then draws with `createBackend` on a
+ * fresh canvas); a WebGL2 one is used, and says why (`apiNote`).
+ */
+export async function createWebgpuBackend(
+  canvas: HTMLCanvasElement,
+  budget: number,
+  hooks: BackendHooks,
+): Promise<ScanBackend<pc.Entity>> {
+  const device = (await pc.createGraphicsDevice(canvas, {
+    ...DEVICE_OPTIONS,
+    deviceTypes: [pc.DEVICETYPE_WEBGPU, pc.DEVICETYPE_WEBGL2],
+    // Not for a headset: an XR-compatible adapter can be another GPU than the display's.
+    xrCompatible: false,
+  })) as pc.GraphicsDevice;
+  if (device.isNull || (!device.isWebGPU && !device.isWebGL2)) {
+    device.destroy();
+    throw new Error("PlayCanvas started neither WebGPU nor WebGL2 (its Null device draws nothing)");
+  }
+  // `Application` would make a WebGL2 device of its own: the app is assembled around this one,
+  // with only what the renderer uses.
+  const app = new pc.AppBase(canvas);
+  const options = new pc.AppOptions();
+  options.graphicsDevice = device;
+  options.componentSystems = [pc.CameraComponentSystem, pc.GSplatComponentSystem];
+  options.resourceHandlers = [pc.GSplatHandler];
+  app.init(options);
+  return assemble(app, budget, hooks, {
+    name: "playcanvas-webgpu",
+    note: device.isWebGPU ? null : `WebGPU unavailable: ${whyNoWebgpu()}`,
+  });
+}
+
+/** What a lost WebGPU device says (`GPUDeviceLostInfo`). */
+interface LostInfo {
+  reason: string;
+  message: string;
+}
+
+/** The `lost` promise of a WebGPU device (`GPUDevice.lost`); null on WebGL2. */
+function webgpuLost(device: pc.GraphicsDevice): Promise<LostInfo> | null {
+  const wgpu = (device as unknown as { wgpu?: { lost?: Promise<LostInfo> } }).wgpu;
+  return wgpu?.lost ?? null;
+}
+
+/** Everything but making the app and its device: the same renderer on either API. */
+function assemble(
+  app: pc.AppBase,
+  budget: number,
+  hooks: BackendHooks,
+  identity: { name: SplatRendererKind; note: string | null },
+): ScanBackend<pc.Entity> {
+  const api: GraphicsApi = app.graphicsDevice.isWebGPU ? "webgpu" : "webgl2";
+  // On WebGPU PlayCanvas sorts on the GPU, in the frame that draws (gsplat-params.js,
+  // `_resolveRenderer`): no sort result comes back later to ask for the frame that confirms a
+  // new tile is drawn, so this renderer asks for it itself (`render`).
+  const sortsOnGpu = app.graphicsDevice.isWebGPU;
+  /** The device is gone for good: nothing more is drawn, and the host replaces the renderer. */
+  let lost = false;
+  /** The renderer is letting go of its device itself: that loss is not news. */
+  let destroying = false;
+  // PlayCanvas answers a lost WebGPU device by making another on the same canvas. A loss on a
+  // phone is mostly memory pressure or a GPU process restart, which a new WebGPU device meets
+  // again; the trial's answer is the API every device here has drawn with, WebGL2, on a fresh
+  // canvas (the host's), so a lost device costs the scan's tiles once, not the view.
+  void webgpuLost(app.graphicsDevice)?.then((info) => {
+    if (destroying) return;
+    lost = true;
+    hooks.deviceLost?.(`WebGPU device lost: ${info.message || info.reason}`);
   });
   app.setCanvasFillMode(pc.FILLMODE_NONE);
   app.setCanvasResolution(pc.RESOLUTION_AUTO);
@@ -213,7 +353,7 @@ export function createBackend(
       texture.unlock();
       tile.doc = style.doc;
       tile.matched = listed !== undefined;
-      component.setWorkBufferModifier({ glsl: PLAYCANVAS_INSTANCE_GLSL });
+      component.setWorkBufferModifier(PLAYCANVAS_INSTANCE_MODIFIER);
     }
     if (stateTexture) component.setParameter("uInstanceState", stateTexture);
     component.setParameter("uInstanceTint", tint);
@@ -252,6 +392,8 @@ export function createBackend(
   let lastReadyFrame = -1;
   let frameReadySeen = false;
   const addedAt = new WeakMap<pc.Entity, number>();
+  /** Added and not yet confirmed drawn by a ready frame two frames on (`isDrawn`). */
+  const unconfirmed = new Set<pc.Entity>();
   const doomed: { resource: pc.GSplatResource; at: number }[] = [];
   const target = new pc.Vec3();
   const up = new pc.Vec3();
@@ -298,7 +440,9 @@ export function createBackend(
   };
 
   const backend: ScanBackend<pc.Entity> = {
-    name: "playcanvas",
+    name: identity.name,
+    api,
+    apiNote: identity.note,
     loadFactor: 1,
     load: async (tilesetUrl: string, tile: TileNode, signal?: AbortSignal) => {
       const decoded = await decode(new URL(tile.uri, tilesetUrl).toString());
@@ -314,24 +458,32 @@ export function createBackend(
     add: (entity) => {
       app.root.addChild(entity);
       addedAt.set(entity, framesDrawn);
+      unconfirmed.add(entity);
     },
     // Drawn once a rendered frame after the one that took it in showed every change sorted;
-    // without `frame:ready`, after a few rendered frames.
+    // without `frame:ready`, after a few rendered frames. The same on WebGPU, where the frame
+    // that takes a tile in can report ready before PlayCanvas's update has made the tile part
+    // of what it draws (its streaming update runs in its own loop, after the frame): one more
+    // ready frame is the proof, and `render` asks for it.
     isDrawn: (entity, sinceMs) => {
       const added = addedAt.get(entity) ?? framesDrawn;
       if (frameReadySeen) return lastReadyFrame >= added + 2;
       return framesDrawn - added >= SETTLE_FRAMES && sinceMs >= SETTLE_MS;
     },
     remove: (entity) => {
+      unconfirmed.delete(entity);
       if (entity.parent) entity.parent.removeChild(entity);
     },
     dispose: (entity) => {
+      unconfirmed.delete(entity);
       tiles.delete(entity);
       const resource = resources.get(entity);
       entity.destroy();
       if (resource) doomed.push({ resource, at: framesDrawn });
     },
     render: (pose: ScanPose) => {
+      // A lost device draws nothing; the host is already replacing this renderer.
+      if (lost) return;
       if (
         pose.width !== size.width ||
         pose.height !== size.height ||
@@ -363,6 +515,15 @@ export function createBackend(
       }
       // A frame drawn may have started a sort or a load: the loop watches for it.
       resumeLoop();
+      // Sorted on the GPU, this frame was ready and a tile added lately still needs a ready
+      // frame two on to count as drawn: nothing else will ask for that frame (no sort result
+      // comes back), so this one does -- one frame per batch of tiles, none at rest.
+      for (const entity of unconfirmed) {
+        if (lastReadyFrame >= (addedAt.get(entity) ?? 0) + 2) unconfirmed.delete(entity);
+      }
+      if (sortsOnGpu && lastReadyFrame === framesDrawn && unconfirmed.size > 0) {
+        hooks.frameWanted();
+      }
     },
     setBudget: (drawn) => {
       app.scene.gsplat.splatBudget = drawn;
@@ -406,9 +567,17 @@ export function createBackend(
       // PlayCanvas only lets go of its context (`gl = null`), and the browser frees a
       // context's memory whenever it collects the canvas -- with a new canvas and context per
       // session, a few sessions in a visit held several. Losing it frees it now, once
-      // PlayCanvas has taken its own handlers off the canvas.
+      // PlayCanvas has taken its own handlers off the canvas. A WebGPU device is destroyed by
+      // PlayCanvas itself (`GPUDevice.destroy`), which frees its memory at once.
+      destroying = true;
       const gl = (app.graphicsDevice as unknown as { gl?: WebGLRenderingContext | null }).gl;
-      app.destroy();
+      try {
+        app.destroy();
+      } catch (error) {
+        // A lost WebGPU device can refuse what PlayCanvas does on the way out; nothing of it is
+        // drawn again either way.
+        if (!lost) throw error;
+      }
       gl?.getExtension("WEBGL_lose_context")?.loseContext();
     },
   };
@@ -429,6 +598,7 @@ export function createBackend(
     if (ready) lastReadyFrame = framesDrawn;
   }) as FrameReady);
   // A sort that finished while the loop was paused: the loop hands it over (`frame:request`).
+  // (Sorted on the CPU only: a GPU sort finishes in the frame that draws.)
   app.scene.on("gsplat:sorted", resumeLoop);
-  return Promise.resolve(backend);
+  return backend;
 }

@@ -42,6 +42,7 @@ import { DEFAULT_SPLAT_RENDERER } from "@/state/settings";
 import { TileStreamer, type View } from "@/view/stream";
 import { parseTileset, type TileNode } from "@/view/tiles";
 
+import { FrameMeter, type FrameReading } from "./frameMeter";
 import { Handover } from "./handover";
 import { OverlayFrames, OverlayInputs, type FrameOutcome } from "./overlayFrames";
 import { scanPose } from "./pose";
@@ -49,7 +50,7 @@ import { globePixelRatio, maxShDegree, overlayPixelRatio, type GlobeResolution }
 import { linkScanInstances } from "./scanInstances";
 import { countOverlayDraw } from "./stats";
 import { TileWork } from "./tileWork";
-import type { BackendHooks, ScanBackend, SplatRendererKind } from "./types";
+import type { BackendHooks, GraphicsApi, ScanBackend, SplatRendererKind } from "./types";
 
 const log = createLogger("scan-renderer");
 
@@ -161,10 +162,19 @@ export async function findNativeLod(
   return null;
 }
 
-/** What the page's tests and the debug panel read. */
+/** What the page's tests, the debug panel and the developer readouts read. */
 export interface ScanRendererStatus {
   kind: SplatRendererKind;
   active: boolean;
+  /** The graphics API the renderer draws with now, or null while none draws. */
+  api: GraphicsApi | null;
+  /**
+   * Why it does not draw with what was chosen, in one line, or null: the WebGPU trial on
+   * WebGL2 because the browser has no WebGPU, or because the WebGPU device was lost.
+   */
+  notice: string | null;
+  /** How fast it drew during the latest camera motion (frameMeter.ts), or null. */
+  meter: FrameReading | null;
   tiles: number;
   gaussians: number;
   frames: number;
@@ -182,12 +192,20 @@ export interface ScanRendererStatus {
 interface Session {
   kind: SplatRendererKind;
   key: string;
+  /** The one start this session came from: what a lost device names (`deviceLost`). */
+  token: object;
+  api: GraphicsApi;
+  notice: string | null;
   stop(): void;
-  status(): Omit<ScanRendererStatus, "kind" | "active" | "instances">;
+  status(): Omit<ScanRendererStatus, "kind" | "active" | "instances" | "api" | "notice" | "meter">;
+  meter(now: number): FrameReading | null;
   instances(): { tiles: number; matched: number } | null;
   /** Fetches what a camera at `pose` will draw (a flight's destination); null forgets it. */
   prefetch(pose: CameraPose | null): void;
 }
+
+/** A session as drawing makes it; `start` adds which start, API and notice it is. */
+type SessionCore = Omit<Session, "token" | "api" | "notice">;
 
 /** A renderer's module: what `loadBackend` fetches (tests hand the host their own). */
 export interface BackendModule {
@@ -198,9 +216,13 @@ export interface BackendModule {
   ): Promise<ScanBackend<unknown>>;
 }
 
-function loadBackend(kind: Exclude<SplatRendererKind, "cesium">): Promise<BackendModule> {
-  // Each renderer is its own chunk, fetched only when chosen.
-  return kind === "spark" ? import("./sparkBackend") : import("./playcanvasBackend");
+async function loadBackend(kind: Exclude<SplatRendererKind, "cesium">): Promise<BackendModule> {
+  // Each renderer is its own chunk, fetched only when chosen; PlayCanvas's two share one.
+  if (kind === "spark") return import("./sparkBackend");
+  const playcanvas = await import("./playcanvasBackend");
+  return kind === "playcanvas-webgpu"
+    ? { createBackend: playcanvas.createWebgpuBackend }
+    : playcanvas;
 }
 
 /** A camera pose in Earth-fixed coordinates. */
@@ -292,6 +314,14 @@ export class ScanRendererHost {
   /** A flight's destination being prefetched, and until when (`prefetchScanDestination`). */
   private destination: { pose: CameraPose; until: number } | null = null;
   private destinationTimer: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * Why the WebGPU trial draws with WebGL2 for the rest of this visit, once WebGPU failed to
+   * start or its device was lost: every later session goes straight to WebGL2 rather than
+   * meet the same failure per scan. Choosing the renderer again tries WebGPU again.
+   */
+  private webgpuFailed: string | null = null;
+  /** Starts whose device was lost before their session existed (`deviceLost`). */
+  private readonly lostStarts = new WeakSet<object>();
 
   constructor(
     private readonly viewer: HostViewer,
@@ -309,6 +339,7 @@ export class ScanRendererHost {
   setRenderer(kind: SplatRendererKind): void {
     if (kind === this.kind) return;
     this.kind = kind;
+    if (kind === "playcanvas-webgpu") this.webgpuFailed = null;
     this.sync();
   }
 
@@ -341,7 +372,8 @@ export class ScanRendererHost {
   }
 
   status(): ScanRendererStatus {
-    const inner = this.session?.status() ?? {
+    const session = this.session;
+    const inner = session?.status() ?? {
       tiles: 0,
       gaussians: 0,
       frames: 0,
@@ -353,9 +385,12 @@ export class ScanRendererHost {
     };
     return {
       kind: this.kind,
-      active: this.session !== null,
+      active: session !== null,
+      api: session?.api ?? null,
+      notice: session?.notice ?? null,
+      meter: session?.meter(performance.now()) ?? null,
       ...inner,
-      instances: this.session?.instances() ?? null,
+      instances: session?.instances() ?? null,
       error: inner.error ?? this.lastError,
     };
   }
@@ -383,9 +418,15 @@ export class ScanRendererHost {
     if (kind === "cesium" || !target) return;
     this.starting = this.start(kind, target)
       .then((session) => {
-        // Chosen away from while it started: undone at once.
-        if (this.kind !== kind || this.target?.key !== target.key) session.stop();
-        else {
+        // Chosen away from while it started, or its device lost on the way: undone at once
+        // (the `finally` below starts the replacement).
+        if (
+          this.kind !== kind ||
+          this.target?.key !== target.key ||
+          this.lostStarts.has(session.token)
+        ) {
+          session.stop();
+        } else {
           this.session = session;
           // A flight under way when the scan came in: its destination still counts.
           const destination = this.destination;
@@ -413,12 +454,8 @@ export class ScanRendererHost {
     };
   }
 
-  private async start(
-    kind: Exclude<SplatRendererKind, "cesium">,
-    target: ScanTarget,
-  ): Promise<Session> {
-    this.lastError = null;
-    const { viewer } = this;
+  /** A new transparent canvas for a renderer, right above the globe's. */
+  private overlayCanvas(kind: SplatRendererKind): HTMLCanvasElement {
     const canvas = document.createElement("canvas");
     canvas.dataset.scanRenderer = kind;
     Object.assign(canvas.style, {
@@ -429,8 +466,39 @@ export class ScanRendererHost {
       pointerEvents: "none",
     });
     // Right above the globe's canvas, under Cesium's credits and every panel.
-    viewer.canvas.insertAdjacentElement("afterend", canvas);
+    this.viewer.canvas.insertAdjacentElement("afterend", canvas);
+    return canvas;
+  }
+
+  /**
+   * A renderer lost its GPU device for good (`BackendHooks.deviceLost`; WebGPU only): the
+   * session it belongs to is replaced by one drawing with WebGL2, on a new canvas, and draws
+   * again from the start. Later sessions this visit go straight to WebGL2 (`webgpuFailed`).
+   */
+  private deviceLost(token: object, reason: string): void {
+    if (this.lostStarts.has(token)) return;
+    this.lostStarts.add(token);
+    this.webgpuFailed = reason;
+    log.warn("splat renderer lost its device; drawing with WebGL2 instead", { reason });
+    // Never torn down from inside the renderer's own callback. A session still starting is
+    // dropped as it arrives (`sync`).
+    setTimeout(() => {
+      const session = this.session;
+      if (session?.token !== token) return;
+      session.stop();
+      this.session = null;
+      this.sync();
+    }, 0);
+  }
+
+  private async start(
+    kind: Exclude<SplatRendererKind, "cesium">,
+    target: ScanTarget,
+  ): Promise<Session> {
+    this.lastError = null;
     const budget = deviceSplatBudget();
+    /** This start, as a lost device names it. */
+    const token = {};
     // The session's frame driver exists only once the session does; until then a renderer's
     // request for a frame is dropped (nothing is drawn before the first frame anyway).
     const wake = { frame: (_reason: string): void => undefined };
@@ -439,16 +507,45 @@ export class ScanRendererHost {
       frameWanted: () => wake.frame("renderer"),
       work,
       maxShDegree: maxShDegree(isHandheld()),
+      deviceLost: (reason) => this.deviceLost(token, reason),
     };
-    let backend: ScanBackend<unknown>;
-    try {
-      backend = await (await this.backends(kind)).createBackend(canvas, budget, hooks);
-    } catch (error) {
-      canvas.remove();
-      throw error;
+    const create = async (
+      module: Exclude<SplatRendererKind, "cesium">,
+    ): Promise<{ canvas: HTMLCanvasElement; backend: ScanBackend<unknown> }> => {
+      const canvas = this.overlayCanvas(kind);
+      try {
+        return {
+          canvas,
+          backend: await (await this.backends(module)).createBackend(canvas, budget, hooks),
+        };
+      } catch (error) {
+        canvas.remove();
+        throw error;
+      }
+    };
+    // The WebGPU trial never leaves a scan undrawn: when WebGPU does not start (or PlayCanvas
+    // started nothing but its Null device), or failed earlier this visit, PlayCanvas on WebGL2
+    // draws it -- the default renderer, on a canvas no WebGPU context ever touched -- and the
+    // developer readouts say why.
+    let made: { canvas: HTMLCanvasElement; backend: ScanBackend<unknown> } | null = null;
+    if (kind === "playcanvas-webgpu" && this.webgpuFailed === null) {
+      try {
+        made = await create(kind);
+      } catch (error) {
+        this.webgpuFailed = `WebGPU did not start: ${error instanceof Error ? error.message : String(error)}`;
+        log.warn("WebGPU splat renderer did not start; drawing with WebGL2", {
+          error: this.webgpuFailed,
+        });
+      }
     }
+    made ??= await create(kind === "playcanvas-webgpu" ? "playcanvas" : kind);
+    const { canvas, backend } = made;
+    const api = backend.api ?? "webgl2";
+    canvas.dataset.api = api;
+    const notice = kind === "playcanvas-webgpu" ? (backend.apiNote ?? this.webgpuFailed) : null;
     try {
-      return await this.run(kind, target, canvas, backend, budget, wake, work);
+      const session = await this.run(kind, target, canvas, backend, budget, wake, work);
+      return Object.assign(session, { token, api, notice });
     } catch (error) {
       // Whatever failed before the first frame leaves nothing behind.
       work.stop();
@@ -466,7 +563,7 @@ export class ScanRendererHost {
     budget: number,
     wake: { frame: (reason: string) => void },
     work: TileWork,
-  ): Promise<Session> {
+  ): Promise<SessionCore> {
     const { viewer } = this;
     const url = new URL(target.tileset.resource.url, location.href).toString();
     if (backend.streamNative) {
@@ -532,6 +629,7 @@ export class ScanRendererHost {
     let lastMotionFrameAt = 0;
     let lastMotionAt = 0;
     let frames = 0;
+    const meter = new FrameMeter();
     const handheld = isHandheld();
     const inputs = new OverlayInputs();
     const inputSize = (): { width: number; height: number; pixelRatio: number } => ({
@@ -623,7 +721,9 @@ export class ScanRendererHost {
           replanAt = lastPlan + REPLAN_MS;
         }
       }
+      const drawStart = performance.now();
       backend.render(pose);
+      if (motion) meter.record(drawStart, performance.now() - drawStart);
       countOverlayDraw(canvas, pose.pixelRatio);
       inputs.commit(camera, size, toWorld);
       const step = handover.tick(performance.now());
@@ -699,6 +799,7 @@ export class ScanRendererHost {
         );
       },
       instances: () => backend.instanceTiles?.() ?? null,
+      meter: (now) => meter.reading(now),
       status: () => ({
         tiles: streamer.drawn.length,
         gaussians: streamer.drawnGaussians,
@@ -725,7 +826,7 @@ export class ScanRendererHost {
     tilesetUrl: string,
     wake: { frame: (reason: string) => void },
     work: TileWork,
-  ): Promise<Session | null> {
+  ): Promise<SessionCore | null> {
     if (!backend.streamNative) return null;
     const extras = (target.tileset.root as { extras?: unknown } | undefined)?.extras;
     const lodUrl = await findNativeLod(tilesetUrl, extras);
@@ -744,6 +845,7 @@ export class ScanRendererHost {
     });
     let lastMotionAt = 0;
     let frames = 0;
+    const meter = new FrameMeter();
     // Streaming and sorting are the renderer's: it asks for a frame when it has new detail or
     // a new order (`hooks.frameWanted`); the camera, the canvas and the settle are this one's.
     const frame = (): FrameOutcome => {
@@ -752,10 +854,10 @@ export class ScanRendererHost {
       Matrix4.inverseTransformation(tileset.root.computedTransform, toLocal);
       const camera = viewer.camera;
       const now = performance.now();
-      if (
+      const motion =
         !Cartesian3.equalsEpsilon(camera.positionWC, lastEye, 0, 1e-3) ||
-        !Cartesian3.equalsEpsilon(camera.directionWC, lastDirection, 1e-5)
-      ) {
+        !Cartesian3.equalsEpsilon(camera.directionWC, lastDirection, 1e-5);
+      if (motion) {
         lastMotionAt = now;
         Cartesian3.clone(camera.positionWC, lastEye);
         Cartesian3.clone(camera.directionWC, lastDirection);
@@ -764,9 +866,11 @@ export class ScanRendererHost {
       work.moving = moving;
       const size = inputSize();
       const ratio = overlayPixelRatio(this.globeResolution(), { handheld, moving });
+      const drawStart = performance.now();
       backend.render(
         scanPose(camera, toLocal, { width: size.width, height: size.height, pixelRatio: ratio }),
       );
+      if (motion) meter.record(drawStart, performance.now() - drawStart);
       countOverlayDraw(canvas, ratio);
       inputs.commit(camera, size, tileset.root.computedTransform);
       frames += 1;
@@ -794,6 +898,7 @@ export class ScanRendererHost {
       kind,
       key: target.key,
       instances: () => null,
+      meter: (now) => meter.reading(now),
       // The renderer chooses its own level of detail from its own camera.
       prefetch: () => undefined,
       stop: () => {

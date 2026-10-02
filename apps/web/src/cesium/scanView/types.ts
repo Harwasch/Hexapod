@@ -3,8 +3,14 @@ import type { TileNode } from "@/view/tiles";
 import type { InstanceStyle } from "./scanInstances";
 import type { TileWork } from "./tileWork";
 
-/** What draws a splat scan on the globe: CesiumJS itself, or a dedicated splat renderer. */
-export type SplatRendererKind = "cesium" | "spark" | "playcanvas";
+/**
+ * What draws a splat scan on the globe: CesiumJS itself, or a dedicated splat renderer --
+ * PlayCanvas on WebGL2, PlayCanvas on WebGPU where the device has it (a trial), or Spark.
+ */
+export type SplatRendererKind = "cesium" | "spark" | "playcanvas" | "playcanvas-webgpu";
+
+/** The graphics API a dedicated renderer draws with. */
+export type GraphicsApi = "webgl2" | "webgpu";
 
 /** Cesium's camera in the scan's own east/north/up metres (the frame its splats are in). */
 export interface ScanPose {
@@ -33,6 +39,12 @@ export interface BackendHooks {
   work: TileWork;
   /** Spherical-harmonic bands a tile keeps (quality.ts). */
   maxShDegree: number;
+  /**
+   * The renderer lost its GPU device for good and draws nothing more (a WebGPU device lost
+   * to a driver reset, a GPU process crash, memory pressure): the host replaces it with the
+   * WebGL2 renderer and draws again. `reason` is one line for the developer readouts.
+   */
+  deviceLost?(reason: string): void;
 }
 
 /** A scan the renderer streams by itself (ScanBackend.streamNative). */
@@ -49,6 +61,13 @@ export interface NativeStream {
  */
 export interface ScanBackend<M> {
   readonly name: SplatRendererKind;
+  /** What it draws with (the developer readouts); WebGL2 when it does not say. */
+  readonly api?: GraphicsApi;
+  /**
+   * Why it does not draw with what was asked of it, in one line, or null: a WebGPU back-end
+   * that came up on WebGL2 because the browser has no WebGPU or no adapter for it.
+   */
+  readonly apiNote?: string | null;
   /**
    * Gaussians streamed per gaussian drawn: a renderer with its own level of detail (Spark's
    * LoD trees) is given more than it draws and picks; one without draws all it is given.

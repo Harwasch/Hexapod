@@ -12,7 +12,7 @@ import { useLiving } from "@/state/living";
 import { useMission } from "@/state/mission";
 import { useMeasurements } from "@/state/measurements";
 import { useSelection } from "@/state/selection";
-import { useSettings } from "@/state/settings";
+import { useSettings, useSplatRenderer } from "@/state/settings";
 import { useSites } from "@/state/sites";
 import { useToasts } from "@/state/toasts";
 import { useUi } from "@/state/ui";
@@ -208,8 +208,9 @@ export function SceneBridge() {
     scene?.explore.setSpeed(exploreSpeed);
   }, [scene, exploreSpeed]);
 
-  // Splat renderer → scene (CesiumJS, Spark or PlayCanvas; cesium/scanView).
-  const splatRenderer = useSettings((s) => s.splatRenderer);
+  // Splat renderer → scene (CesiumJS, Spark or PlayCanvas on WebGL2 or WebGPU;
+  // cesium/scanView): the page address's choice for this visit (`?renderer=`), else the setting.
+  const splatRenderer = useSplatRenderer();
   useEffect(() => {
     scene?.setSplatRenderer(splatRenderer);
   }, [scene, splatRenderer]);

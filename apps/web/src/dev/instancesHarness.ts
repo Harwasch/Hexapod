@@ -12,8 +12,9 @@
  * With `renderer: "playcanvas"` the scan is drawn as the app draws it by default: CesiumJS's
  * tileset hidden (but loaded, for its frame and its instances.json) and PlayCanvas streaming
  * the same tiles over it (cesium/scanView), with the objects bound by tile checksum there
- * (scanView/scanInstances.ts); `renderer: "spark"` the same with Spark. Measures then read both canvases, the globe's under the
- * renderer's.
+ * (scanView/scanInstances.ts); `renderer: "spark"` the same with Spark, and
+ * `renderer: "playcanvas-webgpu"` PlayCanvas on WebGPU (its WGSL modifier) where the browser
+ * has it. Measures then read both canvases, the globe's under the renderer's.
  *
  * Loaded dynamically by the spec; nothing imports it, so it never reaches the production
  * bundle. Headless GL is SwiftShader: pixels are counted, not eyeballed.
@@ -32,6 +33,7 @@ import {
 } from "cesium";
 
 import { ScanRendererHost, type ScanRendererStatus } from "@/cesium/scanView/ScanRendererHost";
+import type { SplatRendererKind } from "@/cesium/scanView/types";
 import { attachInstances, instanceSphere, type InstancePrimitive } from "@/cesium/splatInstances";
 import { incrementalSplats, keepOffscreenSplats, splatTilesetOf } from "@/cesium/splatInternals";
 import { cesiumViewConeGpu, SplatViewCones } from "@/cesium/splatViewCones";
@@ -111,9 +113,9 @@ export async function startInstancesHarness(options: {
   /** 16 by default; a low one draws the leaves wherever the camera is. */
   maximumScreenSpaceError?: number;
   /** Who draws the splats: CesiumJS (default) or PlayCanvas over it, as the app's default. */
-  renderer?: "cesium" | "playcanvas" | "spark";
+  renderer?: SplatRendererKind;
 }): Promise<InstancesHarness> {
-  const dedicated = options.renderer === "playcanvas" || options.renderer === "spark";
+  const dedicated = options.renderer !== undefined && options.renderer !== "cesium";
   if (dedicated) {
     // The renderer's own canvas keeps its pixels between frames, so they can be counted.
     const getContext = Object.getOwnPropertyDescriptor(HTMLCanvasElement.prototype, "getContext")
