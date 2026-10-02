@@ -24,6 +24,7 @@ import type { Emitter } from "@/lib/emitter";
 import { isTyping } from "@/lib/hotkeys";
 import { throttle } from "@/lib/throttle";
 
+import type { ArrivalPose } from "./flightRetarget";
 import type { SplatCollider } from "./SplatCollider";
 import type { SceneEvents } from "./types";
 
@@ -34,6 +35,14 @@ export interface FlyOptions {
   /** Degrees (negative looks down). */
   pitch?: number;
   onComplete?: () => void;
+  /** Called instead when the flight is replaced or cancelled before it arrives. */
+  onCancel?: () => void;
+  /**
+   * The flight's time curve, quadratic in-out (Cesium's) by default. A flight that replaces
+   * one already under way passes a curve that starts at the camera's current speed
+   * (flightRetarget.ts), so the hand-over is not a stop and a re-launch.
+   */
+  easing?: (time: number) => number;
 }
 
 const scratchCarto = new Cartographic();
@@ -936,9 +945,10 @@ export class CameraController {
         roll: 0,
       },
       duration: options.durationS ?? this.durationFor(destination),
-      easingFunction: EasingFunction.QUADRATIC_IN_OUT,
+      easingFunction: options.easing ?? EasingFunction.QUADRATIC_IN_OUT,
       pitchAdjustHeight: this.pitchAdjustHeight(height),
       complete: options.onComplete,
+      cancel: options.onCancel,
     });
   }
 
@@ -978,15 +988,54 @@ export class CameraController {
     });
   }
 
+  /** How far from a sphere's centre `flyToBoundingSphere` arrives. */
+  private arrivalRange(sphere: BoundingSphere, rangeMultiplier = 3.2): number {
+    // Whole sites never arrive closer than 30 m; a hand-sized object arrives at a few
+    // times its own radius so it fills the view.
+    const floor = sphere.radius < OBJECT_ARRIVAL_RADIUS_M ? 0.3 : 30;
+    return Math.max(sphere.radius * rangeMultiplier, floor);
+  }
+
+  /**
+   * Where `flyToBoundingSphere` would put the camera, as a pose `flyTo` can fly to: for a
+   * flight that may be re-pointed on the way (SiteManager.flyTo), which needs to know where
+   * it is going and to compare one destination with the next.
+   */
+  sphereArrival(
+    sphere: BoundingSphere,
+    options: { heading?: number; pitch?: number; rangeMultiplier?: number } = {},
+  ): ArrivalPose {
+    const range = this.arrivalRange(sphere, options.rangeMultiplier);
+    const heading = options.heading ?? 100;
+    const pitch = options.pitch ?? DEFAULT_ARRIVAL_PITCH;
+    const h = CesiumMath.toRadians(heading);
+    const p = CesiumMath.toRadians(pitch);
+    // Looking along (east sin h cos p, north cos h cos p, up sin p) at the centre, from
+    // `range` back along that line, in the centre's east-north-up frame.
+    const local = new Cartesian3(
+      -Math.sin(h) * Math.cos(p) * range,
+      -Math.cos(h) * Math.cos(p) * range,
+      -Math.sin(p) * range,
+    );
+    const frame = Transforms.eastNorthUpToFixedFrame(sphere.center);
+    const position = Cartographic.fromCartesian(
+      Matrix4.multiplyByPoint(frame, local, new Cartesian3()),
+    );
+    return {
+      longitude: CesiumMath.toDegrees(position.longitude),
+      latitude: CesiumMath.toDegrees(position.latitude),
+      height: position.height,
+      heading,
+      pitch,
+    };
+  }
+
   /** Steep approach to a sphere, looking down at it: the standard "arrive at a site" move. */
   flyToBoundingSphere(
     sphere: BoundingSphere,
     options: FlyOptions & { rangeMultiplier?: number } = {},
   ): void {
-    // Whole sites never arrive closer than 30 m; a hand-sized object arrives at a few
-    // times its own radius so it fills the view.
-    const floor = sphere.radius < OBJECT_ARRIVAL_RADIUS_M ? 0.3 : 30;
-    const range = Math.max(sphere.radius * (options.rangeMultiplier ?? 3.2), floor);
+    const range = this.arrivalRange(sphere, options.rangeMultiplier);
     const pitch = CesiumMath.toRadians(options.pitch ?? DEFAULT_ARRIVAL_PITCH);
     const arrivalHeight =
       Cartographic.fromCartesian(sphere.center).height + range * Math.sin(-pitch);
@@ -1058,7 +1107,8 @@ export class CameraController {
     this.viewer.camera.cancelFlight();
   }
 
-  private durationFor(destination: Cartesian3): number {
+  /** How long a flight from here to `destination` takes (s): every fly-to's own pace. */
+  durationFor(destination: Cartesian3): number {
     const distance = Cartesian3.distance(this.viewer.camera.positionWC, destination);
     // ~1.5 s for a local hop, ~5 s from orbit; never sluggish.
     return CesiumMath.clamp(1.2 + Math.log10(Math.max(distance, 10)) * 0.55, 1.2, 5.5);
