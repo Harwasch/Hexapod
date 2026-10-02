@@ -190,6 +190,36 @@ def test_round_trip_and_size_on_the_yard(tmp_path):
     assert len((tmp_path / "skin.json").read_bytes()) < 400 * len(tiles) + 2500 * 3
     for s in document["skins"]:
         assert len(s["eigenvalues"]) == len(s["support"]) == s["handles"] - 1
+        m = s["handles"]
+        assert (
+            len(s["dynamics"]["mass"]) == len(s["dynamics"]["anchor"]["gram"]) == m * (m + 1) // 2
+        )
+
+
+def test_dynamics_grams_are_the_weights_moments_and_the_anchor_is_the_base():
+    skin = tree_skin()
+    points = tree_points()
+    m = skin.handles
+    w = np.c_[np.ones(len(points)), skin.weights(points)]
+    assert skin.mass.shape == skin.anchor_gram.shape == (m, m)
+    # M is the Gram over the fit points (the unique splat centres), w_0 = 1 on the diagonal.
+    unique = np.unique(points, axis=0)
+    wu = np.c_[np.ones(len(unique)), skin.weights(unique)]
+    assert np.allclose(skin.mass, wu.T @ wu / len(wu), atol=1e-9)
+    assert skin.mass[0, 0] == pytest.approx(1.0)
+    assert np.allclose(skin.mass, skin.mass.T) and np.allclose(skin.anchor_gram, skin.anchor_gram.T)
+    # Positive definite: the handles are independent fields.
+    assert np.linalg.eigvalsh(skin.mass).min() > 0
+    # The anchor is the lowest band: a tenth of the height above the lowest splat.
+    mask, band = skin_scene.anchor_mask(unique)
+    height = np.ptp(unique[:, 2])
+    assert band >= 0.1 * height - 1e-12 and band == pytest.approx(skin.anchor_band)
+    assert unique[mask, 2].max() <= unique[:, 2].min() + band + 1e-12
+    assert skin.anchor_splats == int(mask.sum()) > 0
+    # Some handle directions leave the base still while moving the crown: G y = μ M y, √μ small.
+    mu = np.linalg.eigvals(np.linalg.solve(skin.mass, skin.anchor_gram)).real
+    assert (np.sqrt(np.clip(mu, 0, None)) < 0.05).sum() >= 3
+    assert w.shape[1] == m
 
 
 def test_the_committed_yard_skin_is_current():
@@ -197,11 +227,16 @@ def test_the_committed_yard_skin_is_current():
     blob = (YARD / "skin" / "skin.bin").read_bytes()
     built = skin_scene.build(yard_tiles(), yard_instances()["instances"], only=FIXTURE_ONLY)
     assert committed["tiles"] == built.document["tiles"]
+    loose = ("eigenvalues", "support", "dynamics")
     for a, b in zip(committed["skins"], built.document["skins"], strict=True):
-        assert {k: v for k, v in a.items() if k not in ("eigenvalues", "support")} == {
-            k: v for k, v in b.items() if k not in ("eigenvalues", "support")
+        assert {k: v for k, v in a.items() if k not in loose} == {
+            k: v for k, v in b.items() if k not in loose
         }
         assert np.allclose(a["eigenvalues"], b["eigenvalues"], rtol=1e-4)
+        da, db = a["dynamics"], b["dynamics"]
+        assert np.allclose(da["mass"], db["mass"], rtol=1e-3, atol=1e-5)
+        assert np.allclose(da["anchor"]["gram"], db["anchor"]["gram"], rtol=1e-3, atol=1e-5)
+        assert da["anchor"]["splats"] == db["anchor"]["splats"]
     # The last bit of a weight may differ between BLAS kernels; never more than one step.
     fresh = np.frombuffer(built.blob, np.int8).astype(int)
     assert len(fresh) == len(blob)

@@ -40,6 +40,7 @@ import {
   parsePlantBinding,
   parseRig,
   prepareLivingMotion,
+  SkinWindField,
   sortStaleness,
   WIND_CALM,
   type FlutterField,
@@ -60,11 +61,13 @@ import {
 } from "@/state/living";
 
 import { rigUrlFor } from "./livingRigs";
+import { describeFromStore, SkinWindDriver } from "./skinWind";
 import type { PerformanceManager } from "./PerformanceManager";
 import type { SiteManager } from "./SiteManager";
 import type { MotionTextureFactory } from "./splatGpuMotion";
 import { cesiumMotionTextures } from "./splatGpuTextures";
 import { splatTilesetOf } from "./splatInternals";
+import { attachedSkins, onSkinsChanged } from "./splatSkin";
 import {
   SplatDeformer,
   type DeformerMotion,
@@ -100,6 +103,12 @@ export function sceneSeconds(currentTime: JulianDate): number {
  * the other candidate say so out loud rather than leaving it to be guessed at again.
  */
 const STALLED_CLOCK_TICKS = 120;
+
+/**
+ * Seeds the one turbulence field every scene-object skin reads (`SkinWindField`): fixed, so a
+ * frame is a function of the scene clock and the wind's history alone.
+ */
+export const SKIN_WIND_SEED = 0x5c1d;
 
 /**
  * Why a refusal is permanent, in words a person can act on. Only `refused` phases appear here:
@@ -281,6 +290,13 @@ export class LivingSurveyManager {
   #gpuWanted = true;
   /** `performance.now()` after which the cost readout may next be republished. */
   #nextCostPublish = 0;
+  /** Scene-object skins the wind drives (`skinWind.ts`), by asset id. */
+  readonly #skinDrivers = new Map<string, SkinWindDriver>();
+  readonly #skinField = new SkinWindField(SKIN_WIND_SEED);
+  /** Skins the wind drove at the last tick: part of whether the scene animates. */
+  #skinsDriven = 0;
+  /** Main-thread milliseconds per frame the skins' wind took, as a rolling mean. */
+  readonly #skinCost = new RollingMean(MOTION_COST_WINDOW);
 
   constructor(
     viewer: Viewer,
@@ -312,6 +328,10 @@ export class LivingSurveyManager {
       events.on("asset", ({ patch }) => {
         if (patch.loadState !== undefined) this.reconcile();
       }),
+      // Skins attach when their files load, after the asset is ready.
+      onSkinsChanged(() => {
+        if (!this.#destroyed) this.#afterEntriesChanged();
+      }),
     );
     this.reconcile();
   }
@@ -342,7 +362,12 @@ export class LivingSurveyManager {
     this.#publish();
     // Dropping to calm must still reach the GPU: the deformer owes one restoring write, and
     // without a frame to do it in the tree would stay bent at whatever the last gust left.
-    if (this.#entries.size > 0) this.#viewer.scene.requestRender();
+    if (this.#entries.size > 0 || attachedSkins().size > 0) this.#viewer.scene.requestRender();
+  }
+
+  /** Main-thread milliseconds a frame the scene-object skins' wind takes (rolling mean). */
+  get skinWindMs(): number | null {
+    return roundMs(this.#skinCost.mean);
   }
 
   /** What decides whether a site may use the GPU path. */
@@ -458,6 +483,9 @@ export class LivingSurveyManager {
     this.#removeTick = null;
     for (const entry of this.#entries.values()) entry.deformer.destroy();
     this.#entries.clear();
+    for (const driver of this.#skinDrivers.values()) driver.rest();
+    this.#skinDrivers.clear();
+    this.#skinsDriven = 0;
     this.#pending.clear();
     this.#declined.clear();
     this.#holds = 0;
@@ -608,28 +636,67 @@ export class LivingSurveyManager {
 
   /** Starts or stops the tick, re-decides `animating`, and publishes — never from the tick. */
   #afterEntriesChanged(): void {
-    if (this.#entries.size > 0 && this.#removeTick === null) {
+    const active = this.#entries.size > 0 || attachedSkins().size > 0;
+    if (active && this.#removeTick === null) {
       // preUpdate fires every widget tick even in request-render mode; preRender would not.
       // Do not re-wrap `tileset.update`: GaussianSplatPrimitive already owns that slot.
       this.#removeTick = this.#viewer.scene.preUpdate.addEventListener(this.#tick);
-    } else if (this.#entries.size === 0 && this.#removeTick !== null) {
+    } else if (!active && this.#removeTick !== null) {
       this.#removeTick();
       this.#removeTick = null;
       this.#wasDisplaced = false;
     }
     this.#refreshAnimating();
     this.#publish();
-    if (this.#entries.size > 0) this.#viewer.scene.requestRender();
+    if (active) this.#viewer.scene.requestRender();
   }
 
   #refreshAnimating(): void {
-    this.#performance.setAnimating(this.#wind.strength > 0 && this.#entries.size > 0);
+    this.#performance.setAnimating(
+      this.#wind.strength > 0 && (this.#entries.size > 0 || this.#skinsDriven > 0),
+    );
+  }
+
+  /**
+   * Sways every attached scene-object skin (`skinWind.ts`) under the scene's wind, at scene
+   * time `t`. Drivers follow the attached parts; calm (or a hold) hands every skin `null`.
+   */
+  #tickSkins(t: number, wind: WindSettings): void {
+    const skins = attachedSkins();
+    if (skins.size === 0 && this.#skinDrivers.size === 0) return;
+    const started = performance.now();
+    let changed = false;
+    let driven = 0;
+    let moving = 0;
+    for (const [assetId, driver] of this.#skinDrivers) {
+      if (skins.get(assetId) !== driver.target) this.#skinDrivers.delete(assetId);
+    }
+    for (const [assetId, part] of skins) {
+      let driver = this.#skinDrivers.get(assetId);
+      if (driver === undefined) {
+        driver = new SkinWindDriver(part, describeFromStore(assetId), this.#skinField);
+        this.#skinDrivers.set(assetId, driver);
+      }
+      const tick = driver.tick(t, wind);
+      changed ||= tick.changed;
+      driven += tick.driven;
+      moving += tick.moving;
+    }
+    if (moving > 0) this.#skinCost.push(performance.now() - started);
+    if (changed) this.#viewer.scene.requestRender();
+    if (driven !== this.#skinsDriven) {
+      this.#skinsDriven = driven;
+      this.#refreshAnimating();
+      this.#publish();
+    }
   }
 
   readonly #tick = (): void => {
-    if (this.#destroyed || this.#entries.size === 0) return;
+    if (this.#destroyed) return;
     const wind = this.#holds > 0 ? WIND_CALM : this.#wind;
     const t = sceneSeconds(this.#viewer.clock.currentTime);
+    this.#tickSkins(t, wind);
+    if (this.#entries.size === 0) return;
     this.#checkClock(t, wind.strength > 0);
     let displaced = false;
     let phaseChanged = false;
@@ -776,7 +843,7 @@ export class LivingSurveyManager {
             : this.#maxDisplacement(entry, wind) / REFERENCE_GAUSSIAN_SCALE_M,
       });
     }
-    return { wind, animating: wind.strength > 0 && ready, sites };
+    return { wind, animating: wind.strength > 0 && (ready || this.#skinsDriven > 0), sites };
   }
 
   /** Takes a site's splat primitive out of incremental mode, now and for its lifetime. */

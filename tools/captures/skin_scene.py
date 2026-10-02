@@ -101,6 +101,10 @@ NODES_MIN = 48
 NODES_MAX = 600
 #: A uniform material: only Poisson's ratio shapes the modes.
 POISSON = 0.45
+#: Anchor splats (`anchor_mask`): the lowest tenth of an object's height ...
+ANCHOR_BAND = 0.1
+#: ... and at least this many median splat spacings.
+ANCHOR_SPACINGS = 3
 
 
 def handle_count(diagonal_m: float) -> int:
@@ -213,6 +217,10 @@ class Skin:
     centres: np.ndarray  # per learned handle, |w|-weighted centre, rest frame
     radii: np.ndarray  # per learned handle, |w|-weighted rms distance from it
     seconds: float
+    mass: np.ndarray  # (m, m): mean over the object's splats of w_i w_j, w_0 = 1
+    anchor_gram: np.ndarray  # (m, m): the same over its anchor splats (`anchor_mask`)
+    anchor_splats: int
+    anchor_band: float  # metres above its lowest splat
 
     def weights(self, positions: np.ndarray) -> np.ndarray:
         """Learned weights at `positions` (tileset frame), (n, handles − 1), normalised."""
@@ -259,6 +267,7 @@ def fit_skin(points: np.ndarray, index: int, instance: int, *, seed: int = 0) ->
     mass = w.sum(0).clip(1e-12)
     centres = (w.T @ local) / mass[:, None]
     radii = np.sqrt((w * ((local[:, None, :] - centres[None]) ** 2).sum(-1)).sum(0) / mass)
+    gram, anchor_gram, anchors, band = modal_grams(points, raw * norm[None, :])
     return Skin(
         index=index,
         instance=instance,
@@ -273,7 +282,54 @@ def fit_skin(points: np.ndarray, index: int, instance: int, *, seed: int = 0) ->
         centres=centres,
         radii=radii,
         seconds=time.perf_counter() - started,
+        mass=gram,
+        anchor_gram=anchor_gram,
+        anchor_splats=anchors,
+        anchor_band=band,
     )
+
+
+def anchor_mask(points: np.ndarray) -> tuple[np.ndarray, float]:
+    """Where an object meets what holds it: its splats within `ANCHOR_BAND` of its height (at
+    least `ANCHOR_SPACINGS` median splat spacings) above its lowest one. Returns the mask and
+    the band in metres.
+
+    Measured on the yard: contact with unskinned neighbours (splats within two spacings of a
+    static splat) anchors a shrub wherever it touches the next shrub, up to its top, and leaves
+    it no direction to move in; the lowest band leaves the tree 12 of its 14 handle directions
+    and a 1 m shrub 2 of 8 that keep the base within 5% of still (`ANCHOR_TOLERANCE` in
+    packages/world/src/skinWind.ts)."""
+    points = np.asarray(points, np.float64)
+    if len(points) < 2:
+        return np.ones(len(points), bool), 0.0
+    distance, _ = cKDTree(points).query(points, k=2)
+    spacing = float(np.median(distance[:, 1]))
+    low = float(points[:, 2].min())
+    height = float(points[:, 2].max()) - low
+    band = max(ANCHOR_BAND * height, ANCHOR_SPACINGS * spacing)
+    return points[:, 2] <= low + band, band
+
+
+def modal_grams(
+    points: np.ndarray, learned: np.ndarray
+) -> tuple[np.ndarray, np.ndarray, int, float]:
+    """What a modal driver needs beyond the eigenvalues (SCENE_OBJECTS.md §4, `dynamics`): the
+    weights' Gram over the object's splats, `M_ij = mean(w_i w_j)` with `w_0 = 1` -- the
+    handles' mass matrix for translations; its row 0 is each handle's mean weight, how much a
+    uniform force drives it -- and the same over its anchor splats (`anchor_mask`), with
+    their count and band."""
+    w = np.c_[np.ones(len(learned)), learned]
+    gram = w.T @ w / max(len(w), 1)
+    mask, band = anchor_mask(points)
+    a = w[mask]
+    anchor_gram = a.T @ a / max(len(a), 1)
+    return gram, anchor_gram, int(mask.sum()), band
+
+
+def _upper(matrix: np.ndarray) -> list[float]:
+    """A symmetric matrix's upper triangle, row by row, to five significant digits."""
+    rows, cols = np.triu_indices(matrix.shape[0])
+    return [float(f"{v:.5g}") + 0.0 for v in matrix[rows, cols]]
 
 
 # ------------------------------------------------------------------------- quantise, deform
@@ -542,6 +598,15 @@ def build(
                     {"centre": _round(c), "radius": round(float(r), 4)}
                     for c, r in zip(s.centres, s.radii, strict=True)
                 ],
+                "dynamics": {
+                    "mass": _upper(s.mass),
+                    "anchor": {
+                        "source": "base",
+                        "splats": s.anchor_splats,
+                        "band": round(s.anchor_band, 4),
+                        "gram": _upper(s.anchor_gram),
+                    },
+                },
             }
             for s in skins
         ],

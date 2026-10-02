@@ -9,6 +9,10 @@
  * tileset is attached as `SiteManager` attaches one (`attachInstances`, `attachSkin`), so
  * hiding and highlighting compose with the motion exactly as in the app.
  *
+ * `windOn` / `advance` / `windOff` drive every skin with the wind (`cesium/skinWind.ts`) on a
+ * harness clock that moves only when told to, so a frame is a function of the steps taken: the
+ * driver for e2e/wind.spec.ts.
+ *
  * Loaded dynamically by the spec; nothing imports it, so it never reaches the production
  * bundle. Headless GL is SwiftShader: pixels are counted, not eyeballed.
  */
@@ -21,16 +25,19 @@ import {
   Color,
   HeadingPitchRange,
   Math as CesiumMath,
+  Matrix4,
   SceneTransforms,
   type Scene,
 } from "cesium";
 
+import { describeFromStore, SkinWindDriver } from "@/cesium/skinWind";
 import { attachInstances, instanceSphere } from "@/cesium/splatInstances";
 import { incrementalSplats, keepOffscreenSplats, splatTilesetOf } from "@/cesium/splatInternals";
 import { motionChainOf } from "@/cesium/splatMotionChain";
 import { attachSkin, skinningOf, type SplatSkinning } from "@/cesium/splatSkin";
 import { withDescendants } from "@/lib/instances";
 import { HANDLE_FLOATS, rigidHandle } from "@/lib/skin";
+import { SkinWindField, WIND_CALM, type WindSettings } from "@twin/world";
 import { useInstances } from "@/state/instances";
 
 const BACKGROUND = "#10141a";
@@ -79,6 +86,16 @@ export interface SkinHarness {
   rectOf(id: number, grow?: number): Rect | null;
   /** The motion chain's parts and whether a Jacobian is declared. */
   hooks(): { motion: string[]; jacobian: string[]; skin: boolean; active: boolean };
+  /** Wind on every skin at `strength` towards `bearingDeg`, the harness clock set to `t0`. */
+  windOn(strength: number, bearingDeg: number, t0?: number, seed?: number): Promise<void>;
+  /** Moves the harness clock `seconds` on in steps of `1/fps`, then renders. */
+  advance(seconds: number, fps?: number): Promise<void>;
+  /** Calm: every skin handed `null`; waits for the frame. */
+  windOff(): Promise<void>;
+  /** What the wind driver made of each skin: its material, whether it sways. */
+  windSkins(): { instance: number; wind: boolean; stiffness: number; evidence: string }[];
+  /** A square on screen around a point of skin `instance`'s rest frame (from its origin). */
+  pointRect(instance: number, local: [number, number, number], radiusM: number): Rect | null;
 }
 
 function nextFrame(scene: Scene): Promise<void> {
@@ -132,6 +149,14 @@ export async function startSkinHarness(options: {
   };
   const frames: Uint8ClampedArray[] = [];
   let wobbleOff: (() => void) | undefined;
+  let windClock = 0;
+  let windSettings: WindSettings = WIND_CALM;
+  let windDriver: SkinWindDriver | undefined;
+  let windTickOff: (() => void) | undefined;
+  const windDriverFor = (seed: number): SkinWindDriver => {
+    windDriver ??= new SkinWindDriver(part(), describeFromStore(ASSET), new SkinWindField(seed));
+    return windDriver;
+  };
 
   function pixels(): { data: Uint8ClampedArray; width: number; height: number } {
     const canvas = scene.canvas;
@@ -321,6 +346,77 @@ export async function startSkinHarness(options: {
       const side = SceneTransforms.worldToWindowCoordinates(scene, edge, new Cartesian2());
       if (!side) return null;
       const radius = Math.hypot(side.x - centre.x, side.y - centre.y) * grow;
+      const ratio = scene.canvas.width / Math.max(1, scene.canvas.clientWidth);
+      return {
+        x: (centre.x - radius) * ratio,
+        y: (centre.y - radius) * ratio,
+        width: 2 * radius * ratio,
+        height: 2 * radius * ratio,
+      };
+    },
+    async windOn(strength, bearingDeg, t0 = 0, seed = 1) {
+      windDriver?.rest();
+      windDriver = undefined;
+      windTickOff?.();
+      const driver = windDriverFor(seed);
+      windClock = t0;
+      windSettings = { strength, bearingDeg };
+      windTickOff = scene.preUpdate.addEventListener(() => {
+        driver.tick(windClock, windSettings);
+      });
+      await settle(2);
+    },
+    async advance(seconds, fps = 30) {
+      const steps = Math.round(seconds * fps);
+      const start = windClock;
+      // The state lives on a fixed grid, so ticking the driver through the steps without
+      // drawing each one lands where drawing them would (SwiftShader frames are slow).
+      for (let k = 1; k <= steps; k += 1) {
+        windClock = start + k / fps;
+        windDriver?.tick(windClock, windSettings);
+      }
+      await settle(2);
+    },
+    async windOff() {
+      windSettings = WIND_CALM;
+      await settle(4);
+      windTickOff?.();
+      windTickOff = undefined;
+    },
+    windSkins() {
+      const driver = windDriver;
+      return part().doc.skins.map(({ instance }) => {
+        const material = driver?.material(instance);
+        return {
+          instance,
+          wind: material?.wind ?? false,
+          stiffness: material?.stiffness ?? 0,
+          evidence: material?.evidence ?? "none",
+        };
+      });
+    },
+    pointRect(instance, local, radiusM) {
+      const skin = part().doc.byInstance.get(instance);
+      const root = tileset.root as { computedTransform?: Matrix4 };
+      if (!skin || !root.computedTransform) return null;
+      const point = Matrix4.multiplyByPoint(
+        root.computedTransform,
+        new Cartesian3(
+          skin.origin[0] + local[0],
+          skin.origin[1] + local[1],
+          skin.origin[2] + local[2],
+        ),
+        new Cartesian3(),
+      );
+      const centre = SceneTransforms.worldToWindowCoordinates(scene, point, new Cartesian2());
+      const edge = Cartesian3.add(
+        point,
+        Cartesian3.multiplyByScalar(scene.camera.rightWC, radiusM, new Cartesian3()),
+        new Cartesian3(),
+      );
+      const side = SceneTransforms.worldToWindowCoordinates(scene, edge, new Cartesian2());
+      if (!centre || !side) return null;
+      const radius = Math.hypot(side.x - centre.x, side.y - centre.y);
       const ratio = scene.canvas.width / Math.max(1, scene.canvas.clientWidth);
       return {
         x: (centre.x - radius) * ratio,
