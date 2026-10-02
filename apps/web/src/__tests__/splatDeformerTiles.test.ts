@@ -39,6 +39,7 @@ import {
 } from "@/cesium/splatCaptureRegistry";
 import { transformPositions } from "@/cesium/splatFrames";
 import { evaluateSplatMotion } from "@/cesium/splatGpuMotion";
+import { hasMotionPart } from "@/cesium/splatMotionChain";
 import { bitsToFloat32, positionWordOffset, splatTextureLayout } from "@/cesium/splatTexels";
 
 import { canonicalPositions, fixtureRig } from "./splatFixture";
@@ -417,7 +418,7 @@ describe("the GPU path", () => {
     let status = deformer.apply(...frameAt(0, STILL));
     expect(status.phase).toBe("ready");
     expect(status.motion).toBe("gpu");
-    expect(primitive.vertexMotion).toBe(deformer.gpuMotion);
+    expect(hasMotionPart(primitive, deformer.gpuMotion)).toBe(true);
 
     // Nothing drawn displaced until the engine has built a command with the hook in it.
     status = deformer.apply(...frameAt(5));

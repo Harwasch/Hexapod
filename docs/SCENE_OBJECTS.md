@@ -126,7 +126,105 @@ Written beside the measured tiles; read by the viewer, the skinning step and the
 The measured tileset's `root.extras.instances = { "uri": "instances.json", "count": n }`, so
 the viewer finds it without probing (the same pattern as `viewCones` and `inferredLayers`).
 
+### `skin.json` + `skin.bin` (step B2)
+
+Written by `tools/captures/skin_scene.py TILES_DIR instances.json [--out DIR] [--link]`, one
+skin per object whose behaviour is `in-place` or `movable`: the **coarsest** such instance on a
+splat's ancestor chain owns it (a tree, not each branch), so the skin is smooth across parts.
+
+```jsonc
+{
+  "format": "hexapod.skin", "version": 1,
+  "frame": "tileset local ENU (the root transform's frame), metres",
+  "formula": "x' = x + sum_j w_j(x) * Z_j * [x - origin; 1] ...",
+  "method": { "name": "simplicits-rkpm", "source": "NVIDIA Kaolin (Apache-2.0) ...",
+              "material": { "uniform": true, "poisson": 0.45 } },
+  "weights": { "file": "skin.bin", "dtype": "int8", "rowBytes": 16, "scale": 0.007874, "rows": 12568 },
+  "skins": [
+    {
+      "id": 1,                     // 1-based; 0 means none
+      "instance": 1,               // the instances.json id it moves (with its descendants)
+      "handles": 14,               // m, the constant handle included (8..16)
+      "origin": [x, y, z],         // rest frame origin: the object's base (bounds' base centre)
+      "scale": 4.84,               // half its largest extent, metres
+      "splats": 8980, "nodes": 600,// fit points and RKPM kernels
+      "eigenvalues": [ ... ],      // per learned handle 1..m-1: stiffness (unit box, E = 1)
+      "support": [ { "centre": [x, y, z], "radius": 1.9 }, ... ]  // per learned handle, rest frame
+    }
+  ],
+  "tiles": { "<tile checksum>": { "skins": [skin, count, ...], "row": 0 } },
+  "tilesEncoding": "rle [skin, count, ...] in the tile's own order (0: no skin); ..."
+}
+```
+
+- **Motion.** `x' = x + Σ_j w_j(x) · Z_j · [x − origin; 1]`, `Z_j` a 3×4 affine (row-major)
+  per handle per frame, in the rest frame (tileset axes, about `origin`). Handle 0 is the
+  constant field, `w_0 ≡ 1`, not stored: `Z_0 = [R − I | t]` moves the object rigidly and
+  exactly. Handles `1..m−1` are the smallest elastic eigenmodes (`H c = λ M c`), each scaled to
+  `max |w| = 1` (positive) over the object's splats, so `Z_j` is "the displacement where handle
+  j acts fully". Signed, never normalised to sum to one.
+- **Handles per object**: `m = clamp(round(8 + 2·log2(d / 2 m)), 8, 16)` for a bounds diagonal
+  `d` (8 at 2 m, 12 at 8 m, 16 from 32 m), and at most its node count allows. Nodes: an eighth
+  of its splats, 48 to 600; at most 4000 integration points.
+- **`skin.bin`**: one 16-byte row per **skinned** splat (unskinned splats take none), in each
+  tile's order from `row`, tiles in checksum order. Byte `k` is handle `k + 1`'s weight,
+  `int8 = round(127·w)` (weight = byte × `weights.scale`), unused bytes 0. 16 bytes is one
+  RGBA32UI texel, the viewer's upload unit. Merged level-of-detail parents are evaluated at
+  their own position (the RKPM basis is defined everywhere), not fitted.
+- **Dense, not top-k** (measured, `skin_scene.sparsity_report`, synthetic tree, 13 handles,
+  random handles whose largest displacement is 5% of its half-height; error as a share of the
+  rms displacement):
+
+  | weights          | bytes/splat | rms error | max error | kNN stretch p99 | stretch max |
+  | ---------------- | ----------- | --------- | --------- | --------------- | ----------- |
+  | float32 (dense)  | 48          | 0         | 0         | 1.046           | 1.16        |
+  | **int8 (dense)** | **16**      | **0.65%** | **1.8%**  | **1.050**       | **1.17**    |
+  | top-8, int8      | 12          | 4.2%      | 14%       | 1.057           | 1.39        |
+  | top-4, int8      | 6           | 22%       | 102%      | 1.088           | 3.03        |
+  | top-2, int8      | 3           | 53%       | 147%      | 1.135           | 4.61        |
+
+  The eigenmodes are global (non-zero almost everywhere), so keeping the k largest per splat
+  switches modes on and off between neighbours and tears; on the yard's objects top-4 is 22–55%
+  rms error. Dense int8 is within 1% everywhere measured (yard: 0.5–0.8% rms, ≤ 2.2% max).
+- **Size**: 16 B per skinned splat, nothing for static ones; `skin.json` ~0.4 KB per tile plus
+  ~1.3 KB per skin. The yard fixture: 4 skins, 12,568 rows, `skin.bin` 201 KB, `skin.json`
+  6.5 KB. Everything skinned in the yard would be 727 KB (45k splats; gzip 446 KB) against
+  688 KB of splat tiles: the cost is only worth paying for what moves.
+- **Smoothness** (tests on the synthetic tree, int8 weights): random handles at 2% of its
+  half-height stretch kNN edges by p99 1.022 (max 1.09), and the deformation's Jacobian stays
+  positive (min det 0.88); the constant handle as a rotation keeps every edge to 1e-12. One
+  handle pushed a full metre on the 6.5 m tree (15% of its height) does fold (min det ≈ 0): a
+  driver keeps a handle's displacement below its `support` radius.
+- **Fit cost** (NumPy port, 4 shared CPUs): 3–8 s for a 7–12k-splat object at 600 nodes, under
+  a second below 2k splats; the torch path the evaluation used took 389 s for the tree.
+- **Root extras**: `root.extras.skin = { "uri": "skin.json", "count": n }` (`--link`), like
+  `instances`.
+
+**Viewer** (step B3, `apps/web/src/cesium/splatSkin.ts`, `lib/skin.ts`): a part of the
+splat primitive's motion chain (`splatMotionChain.ts`; the Living Survey's rig is another), so
+motion composes with the visibility chain (hide, view cones) and the colour hook (highlight),
+which all see the displaced position. Per splat, uploaded per tile as the instance ids are
+(un-bake, checksum, decode): its skin id (RGBA32UI, four a texel) and its row (RGBA32UI, one a
+texel). Per skin, 64 RGBA32F texels: `(moving, m)` then `Z_j`'s rows folded into the baked
+frame (`A_b = L·A·L⁻¹`, `t_b = L·(t − A·o) − A_b·b`), uploaded when a driver sets them, one
+row per 16 skins. A skin at rest costs one fetch; nothing moving costs none. **Covariances**
+follow `J = I + Σ_j w_j A_j` through the engine patch's optional `splatVertexJacobian`
+(`J·Σ·Jᵀ`); dropped is the weights' gradient term `Σ_j Z_j[x;1]∇w_jᵀ` -- exact for the
+constant handle, 0.14 at most (against 1 on the diagonal) for the tree's 2% random handles.
+The sorter still orders by rest positions. **Drivers** (C1 wind, C3 telemetry) call
+`skinningOf(assetId).setInstanceHandles(instanceId, Z)` with `12·m` numbers (rest frame) per
+frame, or `null` for rest; `skin.json`'s `eigenvalues` and `support` are what a modal wind
+model needs (a handle's stiffness, and where it acts).
+
 ### Fixture and browser checks
+
+`data/tiles/synthetic-yard/skin/` is the yard's tree (instance 1), a snag (9) and two shrubs
+(10, 12) skinned (`skin_scene.py ... --only 1,9,10,12`), beside `instances/`;
+`test_skin_scene.py` rebuilds it and compares. `apps/web/e2e/skin.spec.ts` drives it in a real
+CesiumJS (`src/dev/skinHarness.ts`): the driven tree's pixels move while an unskinned tree and
+an undriven skinned shrub do not, rest is the measured frame pixel for pixel, the constant
+handle lifts a shrub whole, a hidden object stays hidden while it moves, and a shrub scaled up
+stays filled only with the covariance following.
 
 `data/tiles/synthetic-yard/instances/` is the committed yard segmented against its own labels
 (`segment_scene.py ... --truth labels.json --tile-gaussians 6000`). It sits beside `splat/`,
@@ -162,6 +260,9 @@ See [LIVING_PLAN.md](LIVING_PLAN.md).
 - Browser runtime: for wind (small strain), linear/modal dynamics with a prefactored
   `(M/h² + K)`, about 40k flops per object per frame: tens of objects are trivial in JS.
   Full Neo-Hookean Newton only with few cubature points (Q ≈ 200–300, m ≈ 8–10).
-- Covariances follow the skin's Jacobian, which includes the weights' gradients: store
-  ∇w per splat or drop that term (to measure).
+- Covariances follow the skin's Jacobian, which includes the weights' gradients. **Decided
+  (B3): drop that term** and draw covariances through `I + Σ w_j A_j`; on the tree it is at
+  most 0.14 (against 1) for strong-wind amplitudes and exactly 0 for the constant handle.
+  Storing ∇w would cost 3·(m−1) more numbers per splat. Revisit if a driver pushes handles
+  past their `support` radius.
 - SAM 3 / some lifting methods carry their own licences; SAM 2 is Apache-2.0.
