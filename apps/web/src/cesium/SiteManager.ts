@@ -720,6 +720,11 @@ export class SiteManager {
     const tolerance = Math.max(0.05, 0.03 * Cartesian3.distance(camera.positionWC, previous));
     if (samePose(flight.pose, pose, Cartesian3.distance(previous, destination), tolerance)) return;
     if (flight.state === "flying") {
+      // The leg's time can be up before Cesium has called it complete (a hidden tab draws no
+      // frames; slow frames finish late), and then there is no speed to carry on with: the
+      // camera is at the old pose, or still on its way and about to jump there, at rest. A
+      // fresh leg from rest, then. Dropping the better pose here landed the camera at the
+      // summary's centroid, and the settle window never saw it.
       const next = retarget(
         {
           elapsedS: (performance.now() - flight.startedAt) / 1000,
@@ -729,11 +734,9 @@ export class SiteManager {
         },
         remainingM,
         RETARGET_MIN_S,
-      );
-      if (next) {
-        log.info("flight re-pointed", { site: flight.siteId, durationS: next.durationS });
-        this.fly(serial, flight.siteId, pose, next.durationS, next.easing, remainingM);
-      }
+      ) ?? { durationS: this.camera.durationFor(destination), easing: quadraticInOut };
+      log.info("flight re-pointed", { site: flight.siteId, durationS: next.durationS });
+      this.fly(serial, flight.siteId, pose, next.durationS, next.easing, remainingM);
       return;
     }
     const landed = flight.landed;

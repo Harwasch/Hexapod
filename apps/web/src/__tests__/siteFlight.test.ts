@@ -208,6 +208,27 @@ describe("SiteManager.flyTo", () => {
     expect(loads.every((load) => load.flight)).toBe(true);
   });
 
+  it("keeps a better pose that arrives after the leg's time is up but before it completed", async () => {
+    const { manager, flights } = harness();
+    const record = deferred<Site | null>();
+    manager.setCatalog([summary], () => record.promise);
+    const done = manager.flyTo(SITE_ID);
+    // Past the first leg's 4 s, with Cesium not having called it complete (a hidden tab).
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(flights).toHaveLength(1);
+    record.resolve(site());
+    await done;
+    // A fresh leg for the bookmark, from rest, rather than landing at the summary's centre.
+    expect(flights).toHaveLength(2);
+    expect(flights[1]?.longitude).toBe(BOOKMARK.longitude);
+    expect(flights[1]?.height).toBe(BOOKMARK.height);
+    const easing = flights[1]?.options.easing;
+    expect(easing && easingSlope(easing, 0)).toBeCloseTo(0, 2);
+    // The first leg's late completion, replaced, changes nothing.
+    flights[0]?.options.onComplete?.();
+    expect(flights).toHaveLength(2);
+  });
+
   it("flies straight to the bookmark when the record is already known", async () => {
     const { manager, flights } = harness();
     manager.setCatalog([summary], () => Promise.resolve(site()));
