@@ -150,7 +150,12 @@ def test_a_wake_that_starts_everything_does_not_look_again() -> None:
     assert later == []
 
 
-def test_failures_are_logged_never_raised(caplog: pytest.LogCaptureFixture) -> None:
+def test_failures_are_logged_never_raised(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # alembic/env.py's `fileConfig` (the `engine` fixture runs it, earlier in a full run)
+    # disables every logger that already exists, this one included.
+    monkeypatch.setattr(worker_wake.log, "disabled", False)
     down = FakeFly([machine("w1", "stopped")])
     down.status = 503
     assert wake_workers(fly_settings(), transport=down.transport) is None
