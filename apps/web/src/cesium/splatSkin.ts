@@ -288,6 +288,7 @@ export class SplatSkinning implements SplatMotionPart {
   #positions: Float32Array | undefined;
   #incremental = false;
   #covered = 0;
+  #motionVersion = 0;
   #bake: number[] | undefined;
   #inverse: number[] | undefined;
   readonly #unlisted = new Set<string>();
@@ -345,6 +346,7 @@ export class SplatSkinning implements SplatMotionPart {
   set covariance(value: boolean) {
     if (value === this.#covariance) return;
     this.#covariance = value;
+    this.#motionVersion += 1;
     const primitive = this.#primitive;
     if (primitive && hasMotionPart(primitive, this)) {
       removeMotionPart(primitive, this);
@@ -355,6 +357,22 @@ export class SplatSkinning implements SplatMotionPart {
   /** Whether the shader would act this frame. */
   get active(): boolean {
     return this.#drawActive();
+  }
+
+  /**
+   * Bumped whenever a driver sets handles or covariances are switched: what a dedicated splat
+   * renderer polls to redraw the skins it applies itself (`scanView/scanMotion.ts`).
+   */
+  get motionVersion(): number {
+    return this.#motionVersion;
+  }
+
+  /**
+   * The handles every driven skin holds now, by skin id (rest frame, as `setHandles` took
+   * them; a new array each time they are set): what any renderer draws the skins from.
+   */
+  get drivenSkins(): ReadonlyMap<number, Float64Array> {
+    return this.#driven;
   }
 
   /** Whether any skin is moving. */
@@ -416,6 +434,7 @@ export class SplatSkinning implements SplatMotionPart {
       for (let i = 0; i < Math.min(copy.length, handles.length); i += 1) copy[i] = handles[i] ?? 0;
       this.#driven.set(skinId, copy);
     }
+    this.#motionVersion += 1;
     this.#writeSkin(skin);
     this.#ensureTextures();
   }

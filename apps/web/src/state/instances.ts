@@ -44,6 +44,13 @@ interface InstancesState {
    */
   gaps: Record<string, RendererGap>;
   setGap: (assetId: string, gap: RendererGap | null) => void;
+  /**
+   * Per asset id, set while the splat renderer drawing it cannot move its objects (skins in
+   * the wind, telemetry; `cesium/scanView/scanMotion.ts`): the objects panel and the wind
+   * control say so and offer the CesiumJS renderer.
+   */
+  motionGaps: Record<string, RendererGap>;
+  setMotionGap: (assetId: string, gap: RendererGap | null) => void;
   setTable: (
     assetId: string,
     table: { instances: Instance[]; propertyNames: string[] } | null,
@@ -73,21 +80,35 @@ function patch(
   return { assets: { ...state.assets, [assetId]: { ...current, ...change(current) } } };
 }
 
+/** `gaps` with `assetId`'s set to `gap` (or cleared), or `gaps` itself when nothing changes. */
+function withGap(
+  gaps: Record<string, RendererGap>,
+  assetId: string,
+  gap: RendererGap | null,
+): Record<string, RendererGap> {
+  const current = gaps[assetId];
+  if (gap === null) {
+    if (!current) return gaps;
+    return Object.fromEntries(Object.entries(gaps).filter(([id]) => id !== assetId));
+  }
+  if (current?.renderer === gap.renderer && current.reason === gap.reason) return gaps;
+  return { ...gaps, [assetId]: gap };
+}
+
 export const useInstances = create<InstancesState>()((set) => ({
   assets: {},
   dimOthers: true,
   gaps: {},
   setGap: (assetId, gap) =>
     set((s) => {
-      const current = s.gaps[assetId];
-      if (gap === null) {
-        if (!current) return s;
-        return {
-          gaps: Object.fromEntries(Object.entries(s.gaps).filter(([id]) => id !== assetId)),
-        };
-      }
-      if (current?.renderer === gap.renderer && current.reason === gap.reason) return s;
-      return { gaps: { ...s.gaps, [assetId]: gap } };
+      const gaps = withGap(s.gaps, assetId, gap);
+      return gaps === s.gaps ? s : { gaps };
+    }),
+  motionGaps: {},
+  setMotionGap: (assetId, gap) =>
+    set((s) => {
+      const motionGaps = withGap(s.motionGaps, assetId, gap);
+      return motionGaps === s.motionGaps ? s : { motionGaps };
     }),
   setTable: (assetId, table) =>
     set((s) => {

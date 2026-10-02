@@ -1,6 +1,7 @@
 import type { TileNode } from "@/view/tiles";
 
 import type { InstanceStyle } from "./scanInstances";
+import type { ScanMotion } from "./scanMotion";
 
 /** What draws a splat scan on the globe: CesiumJS itself, or a dedicated splat renderer. */
 export type SplatRendererKind = "cesium" | "spark" | "playcanvas";
@@ -65,5 +66,18 @@ export interface ScanBackend<M> {
   setInstances?(style: InstanceStyle | null): void;
   /** Tiles loaded now, and how many of them carry object ids: for tests and diagnostics. */
   instanceTiles?(): { tiles: number; matched: number };
+  /**
+   * Moves the scan's objects as `motion` says (scanMotion.ts: skins and rigid motions the
+   * shared drivers set), on every tile loaded now or later; null draws every splat at rest.
+   * Absent when the renderer cannot, and the panels then offer CesiumJS's renderer.
+   */
+  setMotion?(motion: ScanMotion | null): void;
+  /** Tiles loaded now that carry skin weights, and those redrawn for motion so far. */
+  motionTiles?(): { skinned: number; redrawn: number };
+  /**
+   * Draws `mesh` -- a split object's tile -- under `matrix` (column-major 4x4, the scan's
+   * frame; a rigid motion), or where it was decoded with null.
+   */
+  place?(mesh: M, matrix: readonly number[] | null): void;
   destroy(): void;
 }

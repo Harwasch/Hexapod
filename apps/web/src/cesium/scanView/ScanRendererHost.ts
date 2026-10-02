@@ -36,6 +36,8 @@ import { parseTileset, type TileNode } from "@/view/tiles";
 import { Handover } from "./handover";
 import { scanPose } from "./pose";
 import { linkScanInstances } from "./scanInstances";
+import { ScanMotionLink } from "./scanMotion";
+import { ScanObjects } from "./scanObjects";
 import type { ScanBackend, ScanPose, SplatRendererKind } from "./types";
 
 const log = createLogger("scan-renderer");
@@ -166,18 +168,37 @@ export interface ScanRendererStatus {
   cached: number;
   /** Tiles that can carry object ids, and those the scan's instances.json lists, or null. */
   instances: { tiles: number; matched: number } | null;
+  /**
+   * The scan's moving objects (scanMotion.ts): motions handed to the renderer, tiles carrying
+   * skin weights, and tile redraws for motion; null while the renderer moves nothing.
+   */
+  motion: { updates: number; skinned: number; redrawn: number } | null;
+  /** Split objects drawn beside the scan (scanObjects.ts). */
+  objects: number;
 }
 
 interface Session {
   kind: SplatRendererKind;
   key: string;
   stop(): void;
-  status(): Omit<ScanRendererStatus, "kind" | "active" | "instances">;
+  status(): Omit<ScanRendererStatus, "kind" | "active" | "instances" | "motion" | "objects">;
   instances(): { tiles: number; matched: number } | null;
+  motion(): ScanRendererStatus["motion"];
+  objects(): number;
+}
+
+/** How the host makes its renderers. */
+export interface ScanRendererOptions {
+  /** Keeps each drawn frame readable after it is shown (harnesses read pixels back). */
+  preserveDrawingBuffer?: boolean;
 }
 
 interface BackendModule {
-  createBackend(canvas: HTMLCanvasElement, budget: number): Promise<ScanBackend<unknown>>;
+  createBackend(
+    canvas: HTMLCanvasElement,
+    budget: number,
+    options?: ScanRendererOptions,
+  ): Promise<ScanBackend<unknown>>;
 }
 
 /** Frames in a row the overlay waits for the globe's own while the camera moves. */
@@ -233,6 +254,27 @@ function loadBackend(kind: Exclude<SplatRendererKind, "cesium">): Promise<Backen
   return kind === "spark" ? import("./sparkBackend") : import("./playcanvasBackend");
 }
 
+/** The scan tileset's root extras (what it declares: instances, skin, objects, ...). */
+function rootExtrasOf(tileset: Cesium3DTileset): unknown {
+  return (tileset.root as { extras?: unknown } | undefined)?.extras;
+}
+
+/** The scan tileset's root transform as it is declared, column-major (the splats' frame). */
+function rootTransformArray(tileset: Cesium3DTileset): number[] {
+  const transform = (tileset.root as { transform?: Matrix4 } | undefined)?.transform;
+  return Matrix4.toArray(transform ?? Matrix4.IDENTITY);
+}
+
+/** What a session reports of its moving objects. */
+function motionStatus(
+  link: ScanMotionLink | null,
+  backend: ScanBackend<unknown>,
+): ScanRendererStatus["motion"] {
+  if (!link || !backend.setMotion) return null;
+  const tiles = backend.motionTiles?.() ?? { skinned: 0, redrawn: 0 };
+  return { updates: link.updates, ...tiles };
+}
+
 export class ScanRendererHost {
   private kind: SplatRendererKind = DEFAULT_SPLAT_RENDERER;
   private target: ScanTarget | null = null;
@@ -240,7 +282,10 @@ export class ScanRendererHost {
   private starting: Promise<void> | null = null;
   private lastError: string | null = null;
 
-  constructor(private readonly viewer: Pick<Viewer, "camera" | "canvas" | "scene">) {}
+  constructor(
+    private readonly viewer: Pick<Viewer, "camera" | "canvas" | "scene">,
+    private readonly options: ScanRendererOptions = {},
+  ) {}
 
   get renderer(): SplatRendererKind {
     return this.kind;
@@ -274,6 +319,8 @@ export class ScanRendererHost {
       active: this.session !== null,
       ...inner,
       instances: this.session?.instances() ?? null,
+      motion: this.session?.motion() ?? null,
+      objects: this.session?.objects() ?? 0,
       error: inner.error ?? this.lastError,
     };
   }
@@ -331,7 +378,7 @@ export class ScanRendererHost {
     const budget = deviceSplatBudget();
     let backend: ScanBackend<unknown>;
     try {
-      backend = await (await loadBackend(kind)).createBackend(canvas, budget);
+      backend = await (await loadBackend(kind)).createBackend(canvas, budget, this.options);
     } catch (error) {
       canvas.remove();
       throw error;
@@ -401,6 +448,13 @@ export class ScanRendererHost {
     streamer.onArrival = () => {
       arrived = true;
     };
+    // The scan's objects move as the shared drivers move them (scanMotion.ts), and its split
+    // objects are drawn where their poses put them (scanObjects.ts).
+    const extras = rootExtrasOf(target.tileset);
+    const motionLink = target.assetId
+      ? new ScanMotionLink(target.assetId, backend, { native: false, extras })
+      : null;
+    const objects = new ScanObjects<unknown>(backend, target.assetId);
 
     const toLocal = new Matrix4();
     const toWorld = new Matrix4();
@@ -485,6 +539,8 @@ export class ScanRendererHost {
         Cartesian3.clone(camera.directionWC, lastDirection);
         streamer.update(view(pose));
       }
+      motionLink?.update();
+      objects.tick();
       backend.render(pose);
       handover.tick(performance.now());
       frames += 1;
@@ -500,6 +556,7 @@ export class ScanRendererHost {
     }
     handover.show(root, performance.now());
     streamer.adopt(tree.root, root);
+    void objects.load(url, extras, rootTransformArray(target.tileset));
     stopDriving = driveWithGlobe(viewer.scene, viewer.camera, tick);
     const unlinkInstances = target.assetId
       ? linkScanInstances(target.assetId, backend, false)
@@ -511,12 +568,16 @@ export class ScanRendererHost {
       key: target.key,
       stop: () => {
         unlinkInstances();
+        motionLink?.dispose();
+        objects.stop();
         stopDriving?.();
         streamer.stop();
         backend.destroy();
         canvas.remove();
       },
       instances: () => backend.instanceTiles?.() ?? null,
+      motion: () => motionStatus(motionLink, backend),
+      objects: () => objects.count,
       status: () => ({
         tiles: streamer.drawn.length,
         gaussians: streamer.drawnGaussians,
@@ -543,7 +604,7 @@ export class ScanRendererHost {
     tilesetUrl: string,
   ): Promise<Session | null> {
     if (!backend.streamNative) return null;
-    const extras = (target.tileset.root as { extras?: unknown } | undefined)?.extras;
+    const extras = rootExtrasOf(target.tileset);
     const lodUrl = await findNativeLod(tilesetUrl, extras);
     if (lodUrl === null) return null;
     const stream = await backend.streamNative(lodUrl);
@@ -580,8 +641,17 @@ export class ScanRendererHost {
       );
       frames += 1;
     };
-    const stopDriving = driveWithGlobe(viewer.scene, viewer.camera, tick);
-    // The native package's splats carry no object ids: the objects panel says so.
+    // The native package carries no tile checksums: no object ids, no skins (the panels say
+    // so); split objects are tiles of their own, drawn as in any session.
+    const motion = target.assetId
+      ? new ScanMotionLink(target.assetId, backend, { native: true, extras })
+      : null;
+    const objects = new ScanObjects<unknown>(backend, target.assetId);
+    void objects.load(tilesetUrl, extras, rootTransformArray(target.tileset));
+    const stopDriving = driveWithGlobe(viewer.scene, viewer.camera, () => {
+      objects.tick();
+      tick();
+    });
     const unlinkInstances = target.assetId
       ? linkScanInstances(target.assetId, backend, true)
       : () => undefined;
@@ -590,8 +660,12 @@ export class ScanRendererHost {
       kind,
       key: target.key,
       instances: () => null,
+      motion: () => null,
+      objects: () => objects.count,
       stop: () => {
         unlinkInstances();
+        motion?.dispose();
+        objects.stop();
         stopDriving();
         stream.stop();
         backend.destroy();

@@ -9,6 +9,8 @@ import { formatSplats, type SearchResult } from "@/lib/instances";
 import { useInstances } from "@/state/instances";
 import { useSettings } from "@/state/settings";
 
+import { MotionRendererNote } from "./MotionRendererNote";
+
 /** Moves focus between the rows' main buttons with the arrow keys; Escape goes back up. */
 function moveFocus(event: KeyboardEvent<HTMLElement>, list: HTMLElement | null): void {
   if (!list) return;
@@ -109,6 +111,7 @@ export function InstancePanel({ assetId }: { assetId: string }) {
           </GlassButton>
         </div>
       )}
+      <MotionRendererNote assetId={assetId} />
       {entry.matches.length > 0 && (
         <div className="instance-panel__matches" role="group" aria-label="All matches">
           <span className="instance-panel__count" role="status" data-testid="instance-count">
