@@ -321,9 +321,9 @@ touched, for 8 s. A flight somebody else cancelled is never re-pointed.
 
 Each site's load is a record in `state/sites.ts` (`siteLoads`): phase `details` → `model` →
 `streaming` → `ready`, or `error` with a message and whether retrying can help;
-`retrySiteLoad(siteId)` tries again (flying there again if a fly-to had asked). Each leg's
-destination is also announced as a `flight-destination` event, for renderers that want to
-prefetch the data there.
+`retrySiteLoad(siteId)` tries again (flying there again if a fly-to had asked). Each leg also
+hands its destination to the splat overlay (`prefetchScanDestination`, above); a re-pointed
+leg replaces that prefetch and a cancelled flight stops it.
 
 ## Explore mode
 

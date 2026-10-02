@@ -27,6 +27,7 @@ import { AdaptiveSplatBudget } from "@/lib/splatBudget";
 import { DEFAULT_SPLAT_RENDERER } from "@/state/settings";
 import type { SiteLoad } from "@/state/sites";
 
+import { prefetchScanDestination } from "./scanView/ScanRendererHost";
 import type { SplatRendererKind } from "./scanView/types";
 import type { Emitter } from "@/lib/emitter";
 import { createLogger, describeError } from "@/lib/log";
@@ -242,6 +243,8 @@ export class SiteManager {
   private readonly detailFailedAt = new Map<string, number>();
   private flight: SiteFlight | null = null;
   private flightSerial = 0;
+  /** Stops the scan renderer's prefetch of the current leg's destination. */
+  private cancelPrefetch: (() => void) | null = null;
   /** Every site currently loaded in the scene, keyed by site id. Sites can overlap (a hand-sized
    *  object registered on top of a campus), so several stay loaded at once. */
   private readonly loaded = new Map<string, ActiveSite>();
@@ -634,7 +637,16 @@ export class SiteManager {
     // onCancel must find itself already superseded.
     this.flight = flight;
     this.flightTarget = siteId;
-    this.events.emit("flight-destination", { siteId, pose });
+    // A scan drawn by a dedicated renderer (Spark, PlayCanvas) streams through an overlay that
+    // Cesium's own destination preloading never reaches; fetch what it will show from where
+    // this leg ends, during the flight. A re-pointed leg replaces the prefetch; the prefetch
+    // ends itself on arrival or after 15 s (scanView/ScanRendererHost.ts).
+    this.cancelPrefetch?.();
+    this.cancelPrefetch = prefetchScanDestination({
+      position: Cartesian3.fromDegrees(pose.longitude, pose.latitude, pose.height),
+      heading: CesiumMath.toRadians(pose.heading),
+      pitch: CesiumMath.toRadians(pose.pitch),
+    });
     const settle = () => {
       if (this.flightTarget === siteId) this.flightTarget = null;
       this.checkProximity(true);
@@ -646,6 +658,7 @@ export class SiteManager {
       easing,
       onComplete: () => {
         if (this.flight !== flight) return;
+        this.cancelPrefetch = null;
         const camera = this.viewer.camera;
         flight.state = "landed";
         flight.landed = {
@@ -658,8 +671,11 @@ export class SiteManager {
       onCancel: () => {
         // Replaced by our own re-pointing: the new leg carries on.
         if (this.flight !== flight) return;
-        // Somebody else took the camera (another fly-to, a search result): let it go.
+        // Somebody else took the camera (another fly-to, a search result): let it go, and stop
+        // fetching for a destination nobody is going to.
         flight.state = "cancelled";
+        this.cancelPrefetch?.();
+        this.cancelPrefetch = null;
         settle();
       },
     });
@@ -1542,6 +1558,8 @@ export class SiteManager {
 
   destroy(): void {
     for (const off of this.unsubscribe) off();
+    this.cancelPrefetch?.();
+    this.cancelPrefetch = null;
     this.deactivate();
   }
 }

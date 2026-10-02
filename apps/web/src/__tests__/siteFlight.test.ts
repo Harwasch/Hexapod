@@ -21,6 +21,17 @@ import type { SceneEvents } from "@/cesium/types";
 import { Emitter } from "@/lib/emitter";
 import type { SiteLoad } from "@/state/sites";
 
+/** The scan renderer's destination prefetch, recorded instead of run. */
+const prefetch = vi.hoisted(() => ({ destinations: [] as unknown[], cancelled: 0 }));
+vi.mock("@/cesium/scanView/ScanRendererHost", () => ({
+  prefetchScanDestination: (destination: unknown) => {
+    prefetch.destinations.push(destination);
+    return () => {
+      prefetch.cancelled += 1;
+    };
+  },
+}));
+
 const SITE_ID = "11111111-1111-4111-8111-111111111111";
 const LON = -122.13;
 const LAT = 47.64;
@@ -157,7 +168,11 @@ function deferred<T>() {
 }
 
 describe("SiteManager.flyTo", () => {
-  beforeEach(() => vi.useFakeTimers());
+  beforeEach(() => {
+    vi.useFakeTimers();
+    prefetch.destinations = [];
+    prefetch.cancelled = 0;
+  });
   afterEach(() => vi.useRealTimers());
 
   it("leaves on the click for the summary's pose, before the record has answered", async () => {
@@ -256,18 +271,33 @@ describe("SiteManager.flyTo", () => {
     expect(flights).toHaveLength(1);
   });
 
-  it("announces each destination, for whatever prefetches the data there", async () => {
-    const { manager, events } = harness();
-    const destinations: number[] = [];
-    events.on("flight-destination", ({ pose }) => destinations.push(pose.longitude));
+  it("prefetches each leg's destination for the scan renderer, and drops the ones abandoned", async () => {
+    const { manager, flights } = harness();
     const record = deferred<Site | null>();
     manager.setCatalog([summary], () => record.promise);
     const done = manager.flyTo(SITE_ID);
     await vi.advanceTimersByTimeAsync(800);
     record.resolve(site());
     await done;
-    expect(destinations).toHaveLength(2);
-    expect(destinations[1]).toBe(BOOKMARK.longitude);
+    // The summary's leg, then the bookmark's, which replaced it.
+    expect(prefetch.destinations).toHaveLength(2);
+    expect(prefetch.cancelled).toBe(1);
+    const destination = prefetch.destinations[1] as {
+      position: Cartesian3;
+      heading: number;
+      pitch: number;
+    };
+    expect(
+      Cartesian3.distance(
+        destination.position,
+        Cartesian3.fromDegrees(BOOKMARK.longitude, BOOKMARK.latitude, BOOKMARK.height),
+      ),
+    ).toBeLessThan(1e-6);
+    expect(destination.heading).toBeCloseTo(CesiumMath.toRadians(BOOKMARK.heading), 9);
+    expect(destination.pitch).toBeCloseTo(CesiumMath.toRadians(BOOKMARK.pitch), 9);
+    // Somebody else takes the camera: nothing is fetched for a destination nobody reaches.
+    flights[1]?.options.onCancel?.();
+    expect(prefetch.cancelled).toBe(2);
   });
 });
 
