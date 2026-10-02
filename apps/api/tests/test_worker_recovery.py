@@ -13,6 +13,13 @@ fail before its fix:
 * a **stage that finished while its worker was uploading it** is finished on resume from
   its `step.json`, not run (and billed) again, and a stop no longer waits out a long
   upload;
+* an **out-of-memory the attempt got past** is not the verdict on its later failure;
+* a worker **short of room** still re-attaches to a detached run whose workdir it has;
+* a worker that **lost its lease to another** detaches its GPU call for that worker
+  instead of cancelling the call it has just adopted.
+
+The fifth finding -- the call of a job cancelled while no worker held it -- has a file of
+its own, `tests/test_worker_reaper.py`.
 """
 
 from __future__ import annotations
@@ -34,9 +41,21 @@ from app.storage import S3Storage
 from app.worker import registration, retry
 from app.worker.disk import GB
 from app.worker.loop import Worker
+from app.worker.pipeline_bridge import CALL_BOOK, CallBook
 from app.worker.runner import JobSupervisor
 from tests.test_worker import config, make_capture, queue_job, steps_by_stage, wait_until
-from tests.test_worker_stops import Pings, claimed, in_background, recipe_process, watched
+from tests.test_worker_stops import (
+    Pings,
+    alive,
+    call_running,
+    claimed,
+    fake_modal,  # noqa: F401 - a fixture, used by name
+    in_background,
+    ledger,
+    modal_config,
+    recipe_process,
+    watched,
+)
 
 # --------------------------------------------------------------------------------------
 # A cancel that lands while the worker waits to try a stage again
@@ -420,3 +439,51 @@ def test_short_of_room_the_worker_still_re_attaches_to_a_detached_run_whose_work
     for waiting in (queued, elsewhere):
         row = db.get(Job, waiting.id)
         assert row is not None and row.claimed_by is None
+
+
+# --------------------------------------------------------------------------------------
+# A lease lost to another worker: its call is that worker's now
+# --------------------------------------------------------------------------------------
+
+
+def test_a_worker_that_lost_its_lease_to_another_detaches_the_call_it_adopted(
+    db: Session,
+    sessions: sessionmaker[Session],
+    storage: S3Storage,
+    tmp_path: Path,
+    fake_modal: Path,  # noqa: F811
+) -> None:
+    """Two slots on one volume (`WORKER_CONCURRENCY` >= 2): one lets its lease lapse, the
+    other reclaims the job and its recipe process re-attaches to the GPU call. The first
+    used to answer LOST with SIGUSR2 -- cancelling the very call the second had adopted,
+    and striking it from the `calls.json` they share. A job held by another worker is
+    that worker's to resume: the call is detached for it, and nothing is cancelled."""
+    job = queue_job(db, make_capture(db), "t-gpu-slow")
+    claimed(sessions, job)
+    workdir = tmp_path / "runs" / str(job.id)
+    thread, result = in_background(JobSupervisor(sessions, storage, modal_config(tmp_path)), job.id)
+    assert wait_until(lambda: call_running(workdir, fake_modal), timeout=60), "never dispatched"
+    call_id = call_running(workdir, fake_modal)
+    assert call_id is not None
+
+    # What the other slot's claim does to the row once the lease has lapsed.
+    db.execute(
+        update(Job)
+        .where(Job.id == job.id)
+        .values(
+            claimed_by="worker-b", lease_expires_at=datetime.now(tz=UTC) + timedelta(seconds=30)
+        )
+    )
+    db.commit()
+    thread.join(timeout=30)
+
+    assert result == ["lost"]
+    assert ledger(fake_modal, "cancelled.txt") == [], "the other worker's call was cancelled"
+    assert alive(int((fake_modal / call_id / "pid").read_text()))
+    book = CallBook.read(workdir / "stages" / "train" / CALL_BOOK)
+    assert book.detached and [r.handle.id for r in book.calls.values()] == [call_id]
+
+    outcome = JobSupervisor(sessions, storage, modal_config(tmp_path, "worker-b")).run(job.id)
+
+    assert outcome == "complete"
+    assert ledger(fake_modal, "spawned.txt") == [call_id], "one call, picked up by the other"

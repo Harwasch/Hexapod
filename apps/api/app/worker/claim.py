@@ -199,6 +199,15 @@ def heartbeat(db: Session, job_id: uuid.UUID, *, worker_id: str, lease_s: float)
     return Heartbeat.CANCELLED if status is RunStatus.CANCELLED else Heartbeat.LOST
 
 
+def resumed_elsewhere(db: Session, job_id: uuid.UUID) -> bool:
+    """For a job this worker has just lost: is it still in progress -- another worker's
+    now, or about to be? Then its run goes on there, and so should its remote call. A job
+    finished, dead-lettered or gone is not, and its call is nobody's. Commits."""
+    status = db.scalar(select(Job.status).where(Job.id == job_id))
+    db.commit()
+    return status is RunStatus.IN_PROGRESS
+
+
 def holder(db: Session, job_id: uuid.UUID) -> str:
     """Who has a job now and in what state, for the log line of a slot that lost it."""
     found = db.execute(

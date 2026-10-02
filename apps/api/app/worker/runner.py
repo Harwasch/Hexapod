@@ -507,9 +507,18 @@ class JobSupervisor:
                 )
                 if beat is not claim.Heartbeat.HELD:
                     # Cancelled, or reclaimed while this worker was not looking. Either
-                    # way the child must stop now, not at the end of its stage -- and its
-                    # remote call with it: nobody here is going to poll it again.
-                    _stop(process, self._config.terminate_grace_s, CANCEL_SIGNAL)
+                    # way the child must stop now, not at the end of its stage. A cancel
+                    # takes its remote call with it. A job reclaimed by another worker
+                    # does not: that worker's recipe process re-attaches to the call --
+                    # from the `calls.json` the two share, when they share a volume (two
+                    # slots, `WORKER_CONCURRENCY` >= 2) -- and a cancel from here stopped
+                    # the very call it had adopted and struck it from the book (until the
+                    # 2026-10 review). So the call is detached for it; one on another
+                    # volume is cancelled by that worker, from the row's copy of it.
+                    signum = CANCEL_SIGNAL
+                    if beat is claim.Heartbeat.LOST and claim.resumed_elsewhere(db, job.id):
+                        signum = DETACH_SIGNAL
+                    _stop(process, self._config.terminate_grace_s, signum)
                     state.outcome = "cancelled" if beat is claim.Heartbeat.CANCELLED else "lost"
                     if beat is claim.Heartbeat.LOST:
                         self._log_lost(db, job.id)

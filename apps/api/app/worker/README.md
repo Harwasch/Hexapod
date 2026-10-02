@@ -99,7 +99,8 @@ stopping the child, and `child.Interrupts` turns it into an exception the pipeli
 
 | why the recipe process stops | signal | what happens to the call |
 | --- | --- | --- |
-| the job was cancelled, or the lease was lost | SIGUSR2 | cancelled (Modal: containers terminated); what it billed goes into the ledger |
+| the job was cancelled, or the lease was lost and the job is over | SIGUSR2 | cancelled (Modal: containers terminated); what it billed goes into the ledger |
+| the lease was lost to a worker that now holds the job (two slots, one volume) | SIGUSR1 | left running for that worker, which re-attaches to it (or, on another volume, cancels it from the row) |
 | this worker is shutting down (a deploy) | SIGUSR1 | left running, recorded as `detached`; the next worker **re-attaches** (`FunctionCall.from_id`) instead of submitting again, at the same attempt |
 | the process or the worker is killed outright | — | nothing runs; the record is still there and the retry (a new attempt) adopts the call |
 | the workdir is gone (another machine) | — | the call's id is on the step's row (`metrics.remoteCalls`, copied every heartbeat); the next worker writes it back as `orphaned` and the call is cancelled before anything runs |
@@ -274,7 +275,9 @@ own recipe process, claim the next -- and nothing about a job is shared between 
 
 - each slot claims with its own id, `host:pid/<n>` (one slot keeps the plain `host:pid`),
   so `claimed_by`, the heartbeat and `_still_ours` behave exactly as between two separate
-  workers: a lease one slot let lapse and another reclaimed is *lost* to the first;
+  workers: a lease one slot let lapse and another reclaimed is *lost* to the first, which
+  stops its recipe process with a **detach**, not a cancel -- the GPU call is the other
+  slot's now, adopted from the `calls.json` the two share;
 - each job's lease is renewed by a `claim.LeaseKeeper` thread of its own, for as long as
   its supervisor holds it, and a cancel is seen by that slot's heartbeat and stops that
   job's recipe process only;
