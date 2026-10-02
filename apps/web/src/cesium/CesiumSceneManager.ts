@@ -123,8 +123,8 @@ export class CesiumSceneManager {
     // since 1.145 the widget itself owns what the app used of Viewer -- entities, data sources,
     // the clock and its ticking, resizing. Constructing a Viewer is what put `@cesium/widgets`
     // in the bundle (the widgets, knockout, their view models: 226 kB of the engine chunk, and
-    // widgets.css): code that ran only to build DOM nobody saw. The DOM Viewer did build that the app relies
-    // on is rebuilt here: a `.cesium-viewer` host and, after the widget, the
+    // widgets.css): code that ran only to build DOM nobody saw. The DOM of Viewer's that the
+    // app does rely on is rebuilt here: a `.cesium-viewer` host and, after the widget, the
     // `.cesium-viewer-bottom` credit bar that CreditSlot moves into the HUD. The host is
     // removed on destroy, so CreditSlot's cleanup finds the bar's home gone and drops it too.
     const host = document.createElement("div");
