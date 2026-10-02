@@ -107,33 +107,50 @@ function pinnedHost(value) {
 }
 
 /**
- * The Content-Type for a key, or null when its extension is not on the list. Read from
- * the decoded key, because that is the object R2 will serve: `x%2Ehtml` is `x.html`.
+ * The key as R2 will read it, or null where it does not decode. Every decision about an
+ * object -- its type, its lifetime -- is made on this, because this is the object R2 will
+ * serve: `x%2Ehtml` is `x.html`, and `tileset%2Ejson` is `tileset.json`.
  *
  * @param {string} key the key as the browser encoded it
  * @returns {string | null}
  */
-function contentTypeFor(key) {
-  let decoded;
+function decodedKey(key) {
   try {
-    decoded = decodeURIComponent(key);
+    return decodeURIComponent(key);
   } catch {
     return null;
   }
-  const name = decoded.slice(decoded.lastIndexOf("/") + 1);
-  const dot = name.lastIndexOf(".");
+}
+
+/**
+ * The Content-Type for a decoded key, or null when its extension is not on the list.
+ *
+ * @param {string} name the decoded key
+ * @returns {string | null}
+ */
+function contentTypeFor(name) {
+  const file = name.slice(name.lastIndexOf("/") + 1);
+  const dot = file.lastIndexOf(".");
   if (dot <= 0) return null;
-  return CONTENT_TYPES.get(name.slice(dot + 1).toLowerCase()) ?? null;
+  return CONTENT_TYPES.get(file.slice(dot + 1).toLowerCase()) ?? null;
 }
 
-/** @param {string} key */
-function immutable(key) {
-  return key.startsWith("runs/") && !/\.json(\?|$)/.test(key);
+/**
+ * Whether a decoded key may be cached for a year. Its JSON test is the extension's, in any
+ * case, exactly as `contentTypeFor` reads it: it once looked at the key as the browser
+ * encoded it, case and all, so `runs/<id>/tileset%2Ejson` or `tileset.JSON` -- labelled
+ * JSON by the content type, which decodes and lower-cases -- was cached for a year as if it
+ * were a tile, and a backfill's rewrite of it never reached anyone.
+ *
+ * @param {string} name the decoded key
+ */
+function immutable(name) {
+  return name.startsWith("runs/") && !/\.json$/i.test(name);
 }
 
-/** @param {string} key */
-function cacheControl(key) {
-  return immutable(key)
+/** @param {string} name the decoded key */
+function cacheControl(name) {
+  return immutable(name)
     ? `public, max-age=${YEAR_S}, immutable`
     : `public, max-age=${SHORT_S}, stale-while-revalidate=604800`;
 }
@@ -168,20 +185,25 @@ export async function onRequest({ request, env }) {
   const host = slash > 0 ? rest.slice(0, slash).toLowerCase() : "";
   const key = slash > 0 ? rest.slice(slash + 1) : "";
   if (pinned === null || host !== pinned || key === "") return notFound();
-  const contentType = contentTypeFor(key);
-  if (contentType === null) return notFound();
+  const name = decodedKey(key);
+  const contentType = name === null ? null : contentTypeFor(name);
+  if (name === null || contentType === null) return notFound();
 
   const headers = new Headers();
   for (const name of FORWARDED) {
     const value = request.headers.get(name);
     if (value) headers.set(name, value);
   }
-  const lifetime = immutable(key) ? YEAR_S : SHORT_S;
+  const lifetime = immutable(name) ? YEAR_S : SHORT_S;
   const upstream = await fetch(`https://${pinned}/${key}`, {
     method: request.method,
     headers,
-    // Where the platform allows it, the edge keeps a copy too.
-    cf: { cacheEverything: true, cacheTtl: lifetime },
+    // Where the platform allows it, the edge keeps a copy too -- of an answer that is the
+    // object, and of nothing else. A plain `cacheTtl` applies to every cacheable status,
+    // 404 included, so a tile asked for a moment before its copy landed (or a sidecar a
+    // backfill adds later) would have been "not found" at the edge for a year. A negative
+    // TTL is Cloudflare's "do not cache".
+    cf: { cacheEverything: true, cacheTtlByStatus: { "200-299": lifetime, "300-599": -1 } },
   });
   if (!upstream.ok && upstream.status !== 304) {
     // The status, and nothing of R2's error page: there is no body here worth serving
@@ -198,6 +220,6 @@ export async function onRequest({ request, env }) {
   const response = new Response(upstream.body, upstream);
   response.headers.set("Content-Type", contentType);
   for (const [name, value] of Object.entries(SECURITY_HEADERS)) response.headers.set(name, value);
-  response.headers.set("Cache-Control", cacheControl(key));
+  response.headers.set("Cache-Control", cacheControl(name));
   return response;
 }

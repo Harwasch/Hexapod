@@ -90,7 +90,7 @@ def test_the_cache_rule_is_the_tile_proxys_rule() -> None:
     """`functions/r2/[[path]].js` decides the same thing for the proxy. The two are kept
     in step by hand, so this reads the function and checks the parts that decide."""
     source = (REPO_ROOT / "functions" / "r2" / "[[path]].js").read_text()
-    assert 'key.startsWith("runs/") && !/\\.json(\\?|$)/.test(key)' in source
+    assert 'name.startsWith("runs/") && !/\\.json$/i.test(name)' in source
     year = re.search(r"const YEAR_S = (\d+);", source)
     short = re.search(r"const SHORT_S = (\d+);", source)
     assert year and short
@@ -101,7 +101,12 @@ def test_the_cache_rule_is_the_tile_proxys_rule() -> None:
     run = f"runs/{JOB}/package/splat"
     for key in (f"{run}/splat_3-5.glb", f"{run}/collision.bin", f"{run}/x.spz", f"{run}/a.webp"):
         assert cache_control_for(key) == IMMUTABLE_CACHE, key
-    for key in (f"{run}/tileset.json", f"runs/{JOB}/register/registration.json", "sites/a/b.glb"):
+    for key in (
+        f"{run}/tileset.json",
+        f"{run}/tileset.JSON",
+        f"runs/{JOB}/register/registration.json",
+        "sites/a/b.glb",
+    ):
         assert cache_control_for(key) == SHORT_CACHE, key
 
 

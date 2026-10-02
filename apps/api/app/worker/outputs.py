@@ -153,7 +153,9 @@ IMMUTABLE_CACHE = "public, max-age=31536000, immutable"
 #: revalidated. Tileset JSON is here because a backfill rewrites it in place
 #: (collision-backfill.yml adds `extras.collision` to a published `tileset.json`).
 SHORT_CACHE = "public, max-age=300, stale-while-revalidate=604800"
-_JSON_KEY = re.compile(r"\.json(\?|$)")
+#: JSON by its extension, in any case: the proxy decides on the decoded key and reads its
+#: extension case-blind, as it does for the Content-Type it labels the object with.
+_JSON_KEY = re.compile(r"\.json$", re.IGNORECASE)
 
 
 def cache_control_for(key: str) -> str:

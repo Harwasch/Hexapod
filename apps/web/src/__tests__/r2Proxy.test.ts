@@ -55,6 +55,11 @@ function fetched(): { url: string; init: RequestInit }[] {
   }));
 }
 
+/** The edge cache lifetimes the function asked Cloudflare for, by upstream status. */
+function edgeTtl(init: RequestInit): unknown {
+  return (init as { cf?: { cacheTtlByStatus?: unknown } }).cf?.cacheTtlByStatus;
+}
+
 describe("the /r2 tile proxy", () => {
   beforeEach(() => bucket());
   afterEach(() => vi.unstubAllGlobals());
@@ -198,6 +203,29 @@ describe("the /r2 tile proxy", () => {
     expect(unchanged.headers.get("Cache-Control")).toBe(
       "public, max-age=300, stale-while-revalidate=604800",
     );
+  });
+
+  it("decides the lifetime on the key R2 reads: an encoded or upper-case .json is JSON", async () => {
+    for (const key of ["runs/a/tileset%2Ejson", "runs/a/tileset.JSON", "runs/a/tileset%2EJson"]) {
+      const response = await onRequest({ request: get(`/r2/${OURS}/${key}`), env });
+      expect(response.status, key).toBe(200);
+      expect(response.headers.get("Content-Type"), key).toBe("application/json");
+      expect(response.headers.get("Cache-Control"), key).toBe(
+        "public, max-age=300, stale-while-revalidate=604800",
+      );
+    }
+    for (const { init } of fetched()) {
+      expect(edgeTtl(init)).toEqual({ "200-299": 300, "300-599": -1 });
+    }
+  });
+
+  it("keeps an edge copy of the object only, never of a 404 or a 304", async () => {
+    await onRequest({ request: get(`/r2/${OURS}/runs/a/0.glb`), env });
+    const { init } = fetched()[0] ?? { init: {} };
+    // A year for what the bucket answered with the object, and not cached otherwise: a
+    // plain cacheTtl would have kept a tile's 404 at the edge for as long as the tile.
+    expect(edgeTtl(init)).toEqual({ "200-299": 31536000, "300-599": -1 });
+    expect((init as { cf?: Record<string, unknown> }).cf).not.toHaveProperty("cacheTtl");
   });
 
   it("answers only GET and HEAD", async () => {
