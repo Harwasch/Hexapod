@@ -186,6 +186,31 @@ class Settings(BaseSettings):
     # lease, heartbeat and recipe process (app/worker/loop.py). 1 until raised: the
     # worker's README gives the memory each slot costs on the 2 GB machine.
     worker_concurrency: int = Field(default=1, ge=1, le=8)
+    # Slots on top of those that only claim a recipe with no `gpu:` stage -- today
+    # `splat-ingest` -- so a one-minute ingest does not wait behind a two-hour training
+    # run, and two training runs (two GPUs billed, two videos on the 20 GB volume) never
+    # share the machine. The worker reads the recipes at start-up to know which qualify.
+    worker_cpu_only_slots: int = Field(default=0, ge=0, le=4)
+    # An idle worker polls every `worker_idle_s` for this long, then backs off -- doubling
+    # a period at a time -- to `worker_idle_max_s`. A queue checked every 2 s forever is a
+    # database that never scales to zero.
+    worker_idle_backoff_after_s: float = 60.0
+    worker_idle_max_s: float = 30.0
+    # With nothing running and nothing claimed for this long, the worker exits 0 and its
+    # machine stops (fly.toml restarts it only on failure); the API starts it again when
+    # it queues a job (app/services/worker_wake.py). 0 polls forever -- which is what a
+    # checkout wants, having nothing to start it again: .env.example sets 0.
+    worker_idle_exit_s: float = Field(default=900.0, ge=0)
+
+    # --- Waking the worker (app/services/worker_wake.py) ----------------------------
+    # A Fly token that may start this app's machines (`fly tokens create deploy`). Unset,
+    # queueing a job wakes nothing, which is right for development: there is no machine.
+    fly_api_token: str | None = None
+    # Set by Fly on every machine; the app whose `worker` machines a new job starts.
+    fly_app_name: str | None = None
+    # A healthchecks.io-style check URL. Queueing a job pings `<url>/start`; the worker
+    # pings `<url>` when it claims one, so a job queued and never claimed raises an alert.
+    queue_check_url: str | None = None
 
     api_host: str = "0.0.0.0"  # noqa: S104 - container default, documented in DEPLOYMENT.md
     api_port: int = 8000

@@ -172,8 +172,10 @@ def claims(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[tuple[str, uuid.UUI
     made: list[tuple[str, uuid.UUID]] = []
     guard = threading.Lock()
 
-    def recording(db: Session, *, worker_id: str, lease_s: float) -> Job | None:
-        job = claim_next(db, worker_id=worker_id, lease_s=lease_s)
+    def recording(
+        db: Session, *, worker_id: str, lease_s: float, recipes: frozenset[str] | None = None
+    ) -> Job | None:
+        job = claim_next(db, worker_id=worker_id, lease_s=lease_s, recipes=recipes)
         if job is not None:
             with guard:
                 made.append((worker_id, job.id))
@@ -340,3 +342,126 @@ def test_a_resumed_job_fetches_the_files_an_interrupted_download_did_not(
 
     assert (inputs / "part-1.MOV").read_bytes() == b"first"
     assert (inputs / "part-2.MOV").read_bytes() == b"second"
+
+
+# --------------------------------------------------------------------------------------
+# A CPU-only slot: a quick ingest does not queue behind a training run
+# --------------------------------------------------------------------------------------
+#
+# `WORKER_CONCURRENCY=1` meant a one-minute `splat-ingest` waited behind a two-hour
+# `photo-reconstruct`; `2` was rejected because two training runs at once are two GPUs
+# billed and two videos on a 20 GB volume. A CPU-only slot claims only recipes with no
+# `gpu:` stage. Below, `t-slow` stands in for the training run (it is not in the slot's
+# set) and `t-three` for the ingest, so the property is tested with real claims, leases
+# and recipe processes without a GPU stage having to run.
+
+TEST_RECIPES = Path(__file__).resolve().parent / "recipes"
+
+
+def test_a_filtered_claim_takes_the_oldest_job_of_its_recipes_and_nothing_else(
+    db: Session, sessions: sessionmaker[Session]
+) -> None:
+    capture = make_capture(db)
+    training = queue_job(db, capture, "t-slow")
+    ingest = queue_job(db, capture, "t-three")
+    session = sessions()
+    try:
+        # An empty set claims nothing, and asks the database nothing.
+        assert claim_next(session, worker_id="cpu", lease_s=30, recipes=frozenset()) is None
+        taken = claim_next(session, worker_id="cpu", lease_s=30, recipes=frozenset({"t-three"}))
+        assert taken is not None and taken.id == ingest.id
+        # The older job is still there, for a slot with no filter.
+        assert claim_next(session, worker_id="cpu", lease_s=30, recipes={"t-three"}) is None
+        anyone = claim_next(session, worker_id="general", lease_s=30)
+        assert anyone is not None and anyone.id == training.id
+    finally:
+        session.close()
+
+
+def test_the_cpu_only_set_is_read_from_the_recipes(tmp_path: Path) -> None:
+    """`gpu:` is the routing signal, so it is also what decides: Lane 1 qualifies, Lane 2
+    does not, and the test recipes are judged the same way (`t-gpu` has a `gpu:` stage)."""
+    recipes = worker_loop.cpu_only_recipes(TEST_RECIPES)
+    assert {"splat-ingest", "t-three", "t-slow", "t-ingest"} <= recipes
+    assert "photo-reconstruct" not in recipes
+    assert "t-gpu" not in recipes
+
+    # A deployment's own recipe of the same name is the one judged, as it is the one run;
+    # one that does not load is left to a general slot to dead-letter.
+    local = tmp_path / "recipes"
+    local.mkdir()
+    (local / "splat-ingest.yaml").write_text(
+        "name: splat-ingest\nversion: 9\ndescription: now trained\ninputs: []\n"
+        "stages:\n  - { id: train, impl: t_first, gpu: { tier: l4 } }\n"
+    )
+    (local / "broken.yaml").write_text("name: broken\nstages: 3\n")
+    (local / "unparsable.yaml").write_text("name: [unclosed\n")
+    overridden = worker_loop.cpu_only_recipes(local)
+    assert "splat-ingest" not in overridden
+    assert not {"broken", "unparsable"} & overridden
+    assert "t-three" not in overridden  # this directory has no t-three; the shipped set stays
+    assert "splat-ingest" in recipes
+
+
+def test_the_setting_adds_slots_beside_the_general_ones(
+    sessions: sessionmaker[Session], storage: S3Storage, tmp_path: Path
+) -> None:
+    settings = Settings(worker_concurrency=1, worker_cpu_only_slots=1, worker_workdir=str(tmp_path))
+    resolved = WorkerConfig.from_settings(settings)
+    assert resolved.cpu_only_slots == 1 and resolved.total_slots == 2
+
+    worker = Worker(sessions, storage, config(tmp_path, cpu_only_slots=1))
+    general, cpu = worker.slot_configs()
+    assert (general.worker_id, general.recipes) == ("worker-a/0", None)
+    assert cpu.worker_id == "worker-a/1"
+    assert cpu.recipes is not None and "t-three" in cpu.recipes and "t-gpu" not in cpu.recipes
+
+    # A deployment whose every recipe trains runs without the slot rather than idling one.
+    none = Worker(sessions, storage, config(tmp_path, cpu_only_slots=1), cpu_recipes=frozenset())
+    assert none.slots == 1
+    assert [c.worker_id for c in none.slot_configs()] == ["worker-a"]
+    # And a worker with more slots gets a pool to match: three sessions a slot at most.
+    assert worker_loop.pool_size_for(1) == 5
+    assert worker_loop.pool_size_for(8) == 25
+
+
+def test_a_cpu_only_slot_runs_an_ingest_beside_a_training_run_but_never_a_second_one(
+    db: Session,
+    sessions: sessionmaker[Session],
+    storage: S3Storage,
+    tmp_path: Path,
+    claims: list[tuple[str, uuid.UUID]],
+) -> None:
+    capture = make_capture(db)
+    training = queue_job(db, capture, "t-slow")
+    ingest = queue_job(db, capture, "t-three")
+    second_training = queue_job(db, capture, "t-slow")
+    worker = Worker(
+        sessions,
+        storage,
+        config(tmp_path, concurrency=1, cpu_only_slots=1),
+        cpu_recipes=frozenset({"t-three"}),
+    )
+    stop = threading.Event()
+    loop = threading.Thread(target=lambda: worker.run_forever(stop=stop), daemon=True)
+    loop.start()
+    try:
+        # The ingest finishes while the training run is still in its 30-second stage.
+        assert wait_until(lambda: _job(db, ingest).status is RunStatus.COMPLETE, timeout=30)
+        assert _running_two(db, training)
+        assert _job(db, training).claimed_by == "worker-a/0"
+        # And the slot that ran it, idle again and polling, does not take the second one.
+        time.sleep(FAST_LEASE_S * 2)
+        assert _job(db, second_training).status is RunStatus.NOT_STARTED
+        assert _job(db, second_training).claimed_by is None
+        assert _running_two(db, training)
+    finally:
+        stop.set()
+        loop.join(timeout=30)
+    assert not loop.is_alive()
+    assert ("worker-a/1", ingest.id) in claims
+    assert ("worker-a/0", training.id) in claims
+    assert all(job_id != second_training.id for _, job_id in claims)
+    # A stop hands the training run back exactly as a one-slot worker would.
+    handed_back = _job(db, training)
+    assert handed_back.claimed_by is None and handed_back.lease_expires_at is None

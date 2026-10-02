@@ -57,6 +57,23 @@ class WorkerConfig:
     tidy_finished_runs: bool = True
     #: Jobs supervised at once, one slot each (`loop.Worker.run_forever`).
     concurrency: int = 1
+    #: Slots *beside* those that only claim a recipe with no `gpu:` stage (today
+    #: `splat-ingest`), so a one-minute ingest is not queued behind a two-hour training run
+    #: and two training runs never share the machine. `loop.Worker` works out which
+    #: recipes qualify, from the recipes themselves, when it starts.
+    cpu_only_slots: int = 0
+    #: The recipes this configuration's slot may claim; None is any. Set per slot by
+    #: `for_slot`, never from the environment: it is derived, not configured.
+    recipes: frozenset[str] | None = None
+    #: The idle poll backs off: `idle_s` for the first `idle_backoff_after_s` of an empty
+    #: queue, then doubling a period at a time up to `idle_max_s` (`loop.poll_delay`).
+    idle_backoff_after_s: float = 60.0
+    idle_max_s: float = 30.0
+    #: Exit, with status 0, once nothing has been running or claimed for this long, so
+    #: the machine stops and the database can scale to zero; the API starts it again when
+    #: it queues a job (`app/services/worker_wake.py`). 0 polls forever, which is what a
+    #: worker built directly -- a test, a checkout with nothing to restart it -- gets.
+    idle_exit_s: float = 0.0
 
     @staticmethod
     def from_settings(settings: Settings | None = None) -> WorkerConfig:
@@ -85,9 +102,18 @@ class WorkerConfig:
             max_preemptions=resolved.worker_max_preemptions,
             retry_backoff_s=resolved.worker_retry_backoff_s,
             concurrency=resolved.worker_concurrency,
+            cpu_only_slots=resolved.worker_cpu_only_slots,
+            idle_backoff_after_s=resolved.worker_idle_backoff_after_s,
+            idle_max_s=resolved.worker_idle_max_s,
+            idle_exit_s=resolved.worker_idle_exit_s,
         )
 
-    def for_slot(self, slot: int) -> WorkerConfig:
+    @property
+    def total_slots(self) -> int:
+        """Every slot the worker runs: the general ones and the CPU-only ones."""
+        return max(1, self.concurrency) + max(0, self.cpu_only_slots)
+
+    def for_slot(self, slot: int, *, recipes: frozenset[str] | None = None) -> WorkerConfig:
         """The configuration one slot of a concurrent worker supervises its job with.
 
         The same in every way but the id, which gets the slot's number: a claim, a
@@ -96,10 +122,14 @@ class WorkerConfig:
         lapsed and was reclaimed inside the same process. With one id per slot they
         behave exactly as separate workers do, which is what `SKIP LOCKED` is built for.
         A single-slot worker keeps the plain id it always had.
+
+        `recipes` is what a CPU-only slot is restricted to; the general slots pass None.
+        Numbering runs on across both kinds (`/0` general, `/1` CPU-only, for one of
+        each), so an id in `claimed_by` names exactly one slot.
         """
-        if self.concurrency <= 1:
+        if self.total_slots <= 1:
             return self
-        return replace(self, worker_id=f"{self.worker_id}/{slot}")
+        return replace(self, worker_id=f"{self.worker_id}/{slot}", recipes=recipes)
 
     def workdir_for(self, job_id: object) -> Path:
         return self.workdir_root / str(job_id)
