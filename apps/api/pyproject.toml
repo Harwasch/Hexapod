@@ -133,6 +133,11 @@ module = [
   "runners",
   "sfm",
   "splat_tiles",
+  # splat_tiles imports view_cones, which reaches rig_tiles, synthetic_tree, motion_params.
+  "view_cones",
+  "rig_tiles",
+  "synthetic_tree",
+  "motion_params",
   "stages",
   "training",
   "video",
