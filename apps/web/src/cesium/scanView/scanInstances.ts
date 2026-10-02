@@ -19,6 +19,7 @@
 
 import { withDescendants, type InstancesDoc } from "@/lib/instances";
 import { useInstances } from "@/state/instances";
+import { effectiveDoc, onCustomSetsChange } from "@/state/sceneSelect";
 
 import {
   HIGHLIGHT_STYLE,
@@ -119,6 +120,15 @@ export function idsInResourceOrder(
   return out;
 }
 
+/**
+ * The scan's `instances.json` with the objects painted in this browser drawn as ids of their
+ * own (lib/customSets.ts): what the back-ends draw from.
+ */
+export function paintedDocOf(assetId: string): InstancesDoc | undefined {
+  const base = instancesDocOf(assetId);
+  return base ? effectiveDoc(assetId, base) : undefined;
+}
+
 /** Why a back-end cannot apply the style, or null when it can. */
 export function instanceGap(
   backend: Pick<ScanBackend<unknown>, "setInstances" | "name">,
@@ -142,7 +152,7 @@ export function linkScanInstances(
   assetId: string,
   backend: ScanBackend<unknown>,
   native: boolean,
-  docOf: (assetId: string) => InstancesDoc | undefined = instancesDocOf,
+  docOf: (assetId: string) => InstancesDoc | undefined = paintedDocOf,
 ): () => void {
   const gap = instanceGap(backend, native);
   const store = useInstances;
@@ -173,9 +183,11 @@ export function linkScanInstances(
     backend.setInstances?.(instanceStyle(doc, entry.hidden, entry.highlighted, state.dimOthers));
   };
   const off = store.subscribe(push);
+  const offCustom = onCustomSetsChange(assetId, push);
   push();
   return () => {
     off();
+    offCustom();
     backend.setInstances?.(null);
   };
 }

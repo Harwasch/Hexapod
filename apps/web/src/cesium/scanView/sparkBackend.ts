@@ -28,7 +28,8 @@ import * as THREE from "three";
 import { checksumPositions } from "@twin/world";
 
 import { tileInstanceIds, type InstancesDoc } from "@/lib/instances";
-import { spzPositions } from "@/lib/spzPositions";
+import type { PickTile } from "@/lib/splatPick";
+import { spzPickData } from "@/lib/spzPositions";
 import { loadSplatTile } from "@/view/sparkStream";
 
 import { INSTANCE_TEXTURE_WIDTH } from "../splatInstances";
@@ -75,6 +76,8 @@ interface SparkTile {
   doc: InstancesDoc | null;
   matched: boolean;
   ids: THREE.DataTexture | null;
+  /** The tile's splats for picking, in its own order (cesium/sceneSelect). */
+  pick: PickTile;
 }
 
 export function createBackend(canvas: HTMLCanvasElement): Promise<ScanBackend<SplatMesh>> {
@@ -96,6 +99,8 @@ export function createBackend(canvas: HTMLCanvasElement): Promise<ScanBackend<Sp
 
   // The scan's objects: the shared state table and the rule's numbers, as dyno uniforms.
   const tiles = new Map<SplatMesh, SparkTile>();
+  /** Tiles on screen now (added, not removed). */
+  const shown = new Set<SplatMesh>();
   let style: InstanceStyle | null = null;
   let stateTexture: THREE.DataTexture | null = null;
   const state = dyno.dynoSampler2D(new THREE.DataTexture());
@@ -188,11 +193,14 @@ export function createBackend(canvas: HTMLCanvasElement): Promise<ScanBackend<Sp
         extSplats: true,
         signal,
       });
-      const positions = await spzPositions(bytes).catch(() => undefined);
-      if (positions) {
+      const data = await spzPickData(bytes).catch(() => undefined);
+      if (data) {
+        const checksum = checksumPositions(data.positions);
+        const count = data.positions.length / 3;
         const binding: SparkTile = {
-          checksum: checksumPositions(positions),
-          count: positions.length / 3,
+          checksum,
+          count,
+          pick: { checksum, count, ...data },
           doc: null,
           matched: false,
           ids: null,
@@ -202,14 +210,29 @@ export function createBackend(canvas: HTMLCanvasElement): Promise<ScanBackend<Sp
       }
       return mesh;
     },
-    add: (mesh) => scene.add(mesh),
-    remove: (mesh) => scene.remove(mesh),
+    add: (mesh) => {
+      scene.add(mesh);
+      shown.add(mesh);
+    },
+    remove: (mesh) => {
+      scene.remove(mesh);
+      shown.delete(mesh);
+    },
     dispose: (mesh) => {
+      shown.delete(mesh);
       tiles.get(mesh)?.ids?.dispose();
       tiles.delete(mesh);
       mesh.dispose();
     },
     setInstances,
+    pickTiles: () => {
+      const out: PickTile[] = [];
+      for (const mesh of shown) {
+        const tile = tiles.get(mesh);
+        if (tile) out.push(tile.pick);
+      }
+      return out;
+    },
     instanceTiles: () => {
       let matched = 0;
       for (const tile of tiles.values()) if (tile.matched) matched += 1;

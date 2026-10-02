@@ -615,6 +615,66 @@ without dimming, both primitive modes, and composition with the view cones.
 `e2e/instancesScan.spec.ts` runs the same steps on any segmented scan
 (`INSTANCES_SCAN_DIR=...`) and saves screenshots.
 
+### Selecting in the scene
+
+The viewer selects objects where they are drawn, not only from the panel. It works the same way
+under every splat renderer (PlayCanvas, Spark, CesiumJS) because picking runs on the CPU over
+the tiles the renderer draws now:
+
+- **Pick sources** (`cesium/sceneSelect/pickSources.ts`). Per asset, the renderer drawing the
+  scan provides its drawn tiles as `PickTile`s. A `PickTile` holds each tile's own positions in
+  the scan's frame (the order and frame its checksum, and so its ids, are keyed by), each
+  splat's largest axis and its opacity.
+  - PlayCanvas keeps these from the worker's decode, before its Morton reorder.
+  - Spark reads them from the SPZ (`spzPickData`).
+  - CesiumJS un-bakes the committed snapshot's tiles (`cesiumPickSource.ts`).
+  - A dedicated renderer registers above CesiumJS, so whichever draws the scan is the one
+    picked from.
+- **Click** (`lib/splatPick.ts`). A ray through the cursor tests the splats as soft spheres. It
+  uses a per-tile index: Morton-ordered blocks of 64 splats, one box each. The hits are
+  composited front to back (`T · α`), so splats behind a solid surface count for almost
+  nothing. Hidden objects' splats let the ray through. The hit splats' leaf ids give the
+  candidates (`lib/sceneSelect.ts`):
+  - the strongest leaf's chain, from the leaf up to the top level;
+  - then the other instances hit near the front.
+
+  The first choice is the smallest instance in the chain that is at least 48 px across on
+  screen.
+
+- **Cycling**. `[` / `]`, Tab / Shift+Tab (from the scene), Alt+wheel or the wheel over the
+  chip move between candidates. Esc clears the selection.
+- **The chip** (`features/sites/SceneSelectChip.tsx`). It sits by the cursor and shows
+  "Tree · 2 of 4": the top tag, else the category, else "Object N". It offers **Hide**, **Show
+  only**, **Fly to**, the brush and **Clear**. The selection is the objects store's highlight:
+  the controller writes it through `useInstances.highlight`, expanded to descendants.
+- **Brush** (`B`, or the chip's brush; `lib/splatPaint.ts`). The camera holds still while you
+  paint. Every drawn splat is projected once, and 3 px cells keep the nearest depth of their
+  fairly solid splats (an approximation of the rendered depth). A splat counts as painted when
+  it is near its cell's front and the cell is under a stroke. Shift adds to the painted area,
+  Alt takes away, and a plain stroke starts again. The match is the instance, at any level,
+  with the best intersection over union. The IoU is weighted by opacity and counts only
+  visible splats, so an object's hidden back does not count against it.
+- **Painted objects** (`lib/customSets.ts`). When the best IoU is below 0.5, the chip offers
+  **Use painted area**. This keeps the exact splats as an object of the viewer's own:
+  - It is stored per scan in this browser (`localStorage`,
+    `hexapod.customObjects.<asset>`) as `{ key, name, tiles: { checksum: [start, length, …] },
+splats, bounds }`.
+  - It is drawn through the same pipeline: `withCustomSets` gives each set an id past the
+    file's (`maxId + 1`, …), relabels its splats in the tile runs, and appends it as a
+    top-level instance. Every renderer reads ids by checksum from that document
+    (`paintedDocOf`, `SplatInstances.setDoc`), so it hides and highlights like any instance.
+  - While the set exists, its splats no longer carry their segmented id.
+
+The controller is `cesium/sceneSelect/SceneSelectController.ts`, and its state is in
+`state/sceneSelect.ts`. Unit tests are in `__tests__/sceneSelect.test.ts`, and
+`e2e/sceneSelect.spec.ts` runs on the yard (`src/dev/sceneSelectHarness.ts`) under PlayCanvas,
+Spark and CesiumJS. The e2e checks that:
+
+- clicking the tree's crown selects the tree or a part of it;
+- `]` goes to the parent and `[` comes back;
+- painting over shrub 10 selects that shrub;
+- **Hide** in the chip removes it from the frame.
+
 ## 5. Storage by behaviour
 
 | Behaviour                                   | Storage                             | Why                                                                                                                                                     |
