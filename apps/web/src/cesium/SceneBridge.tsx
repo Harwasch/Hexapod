@@ -52,6 +52,7 @@ export function SceneBridge() {
       scene.events.on("layer", ({ id, patch }) => layers.update(id, patch)),
       scene.events.on("asset", ({ id, patch }) => sites.updateAsset(id, patch)),
       scene.events.on("site-near", (id) => sites.setNearSite(id)),
+      scene.events.on("site-in-view", (id) => sites.setInViewSite(id)),
       scene.events.on("site-active", (id) => sites.setActiveSite(id)),
       scene.events.on("representation", ({ siteId, representation }) =>
         sites.setRepresentation(siteId, representation),

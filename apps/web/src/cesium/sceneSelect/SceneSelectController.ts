@@ -9,7 +9,9 @@
  *   meets; the instance with most of the pixel, its chain up to the top level and the other
  *   instances met near the front are the candidates (lib/sceneSelect.ts), and the smallest of
  *   the chain that is big enough on screen is chosen. `[` / `]`, Tab / Shift+Tab, or the wheel
- *   with Alt held (or over the chip) cycle; Escape clears.
+ *   with Alt held (or over the chip) cycle; Escape clears. In the app the click is the map's
+ *   own (SelectionManager asks `click` first, so a hit on the scan takes the click from the
+ *   Location and site cards); standalone it is a press released where it began.
  * - **Brush** (`B`, or the chip's brush): strokes on screen collect the front-most splats under
  *   them -- Shift adds to the painted area, Alt takes away, a plain stroke starts again -- and
  *   the instance (any level) with the best intersection over union is selected. Below
@@ -57,7 +59,7 @@ import {
   visibleSplats,
   type ScreenSplats,
 } from "@/lib/splatPaint";
-import { castRay, hitWeights, type PickTile } from "@/lib/splatPick";
+import { castRay, hitWeights, labelsNear, type PickTile } from "@/lib/splatPick";
 import { useInstances } from "@/state/instances";
 import { selectedId, useSceneSelect } from "@/state/sceneSelect";
 
@@ -67,9 +69,22 @@ import { pickAssets, pickSourceOf } from "./pickSources";
 
 const log = createLogger("scene-select");
 
-/** A press that moves less than this (CSS px) and is released within `CLICK_MS` is a click. */
+/**
+ * A press released less than this (CSS px) from where it began is a click, however long it
+ * took, as CesiumJS's own click: a frame of a big scan on a slow GPU holds the page for a
+ * second or more, so a release is often handled long after it happened.
+ */
 const CLICK_PX = 5;
-const CLICK_MS = 600;
+/**
+ * A click whose labelled splats are less than this share of its unlabelled ones is labelled
+ * from the splats drawn around it instead (`labelsNear`): within the first of
+ * `NEAR_LABEL_PIXELS` pixels' width at its distance that finds any (never less than
+ * `NEAR_LABEL_MIN_M`). From 400 m the camp's coarse canopy splats sit 8 to 17 m from the
+ * nearest labelled one, some 15 to 30 pixels.
+ */
+const UNLABELLED_SHARE = 0.25;
+const NEAR_LABEL_PIXELS = [6, 24, 64] as const;
+const NEAR_LABEL_MIN_M = 0.15;
 /** Screen cells the brush and the depth test work in (CSS px). */
 const CELL_PX = 3;
 
@@ -83,6 +98,11 @@ export interface SelectViewer {
 export interface SceneSelectOptions {
   /** Whether clicks select now (measuring and exploring take the pointer). */
   enabled?: () => boolean;
+  /**
+   * Whether the controller tells clicks from drags itself (true, the default), or is handed
+   * them through `click` (the app: SelectionManager's click, so one click opens one thing).
+   */
+  ownClicks?: boolean;
 }
 
 /** One scan's view while painting: its tiles projected, and the brush. */
@@ -113,6 +133,12 @@ function editable(target: EventTarget | null): boolean {
   return element.closest("input, textarea, select, [contenteditable='true']") !== null;
 }
 
+/** Takes the focus from a field (a panel's search box), so the scene's keys reach the scene. */
+function blurEditable(): void {
+  const active = document.activeElement;
+  if (active instanceof HTMLElement && editable(active)) active.blur();
+}
+
 /** Instance ids of a tile in a document, decoded once per document. */
 class TileIds {
   #doc: InstancesDoc | null = null;
@@ -135,9 +161,10 @@ class TileIds {
 export class SceneSelectController {
   readonly #viewer: SelectViewer;
   readonly #enabled: () => boolean;
+  readonly #ownClicks: boolean;
   readonly #ids = new TileIds();
   readonly #off: (() => void)[] = [];
-  #down: { x: number; y: number; at: number; id: number } | null = null;
+  #down: { x: number; y: number; id: number } | null = null;
   #stroke: { x: number; y: number; value: 0 | 1 } | null = null;
   #paintView: PaintView | null = null;
   #painted: Painted | null = null;
@@ -149,6 +176,7 @@ export class SceneSelectController {
   constructor(viewer: SelectViewer, options: SceneSelectOptions = {}) {
     this.#viewer = viewer;
     this.#enabled = options.enabled ?? (() => true);
+    this.#ownClicks = options.ownClicks ?? true;
     const canvas = viewer.canvas;
     const on = <K extends keyof HTMLElementEventMap>(
       target: HTMLElement | Window,
@@ -178,6 +206,22 @@ export class SceneSelectController {
   }
 
   // ---- Picking ---------------------------------------------------------------------------
+
+  /**
+   * A click at (`x`, `y`), CSS px from the canvas's top left: picks there unless painting or
+   * disabled. True when the click is taken: an object of a scan was selected, or the brush is
+   * out.
+   */
+  click(x: number, y: number): boolean {
+    if (!this.#enabled()) return false;
+    // While painting, a dab of the brush is not a click on the map.
+    if (useSceneSelect.getState().mode === "paint") return true;
+    const rect = this.#viewer.canvas.getBoundingClientRect();
+    const hit = this.pickAt(x, y, { x: x + rect.left, y: y + rect.top });
+    // The keys cycle at once: a search box still focused would take them.
+    if (hit) blurEditable();
+    return hit;
+  }
 
   /** Picks at (`x`, `y`), CSS px from the canvas's top left; true when an object was hit. */
   pickAt(x: number, y: number, anchor?: { x: number; y: number }): boolean {
@@ -216,7 +260,57 @@ export class SceneSelectController {
       );
       const front = hits[0];
       if (!front) continue;
-      const weights = hitWeights(hits, (hit) => ids[hit.tile]?.[hit.index] ?? 0);
+      const idOf = (tile: number, index: number): number => ids[tile]?.[index] ?? 0;
+      let weights = hitWeights(hits, (hit) => idOf(hit.tile, hit.index));
+      // Mostly unlabelled (a coarse level of detail's merged splats, far off): the labelled
+      // splats drawn around where the ray met the scan say what is there.
+      const unlabelled = weights.get(0)?.weight ?? 0;
+      let labelled = 0;
+      for (const [id, w] of weights) if (id !== 0) labelled += w.weight;
+      if (labelled < UNLABELLED_SHARE * unlabelled) {
+        const d = Math.hypot(direction.x, direction.y, direction.z) || 1;
+        const point: [number, number, number] = [
+          origin.x + (direction.x / d) * front.t,
+          origin.y + (direction.y / d) * front.t,
+          origin.z + (direction.z / d) * front.t,
+        ];
+        // Widening: far off, a coarse tile's labelled splats can be metres apart.
+        let found = false;
+        for (const pixels of NEAR_LABEL_PIXELS) {
+          const radius = Math.max(NEAR_LABEL_MIN_M, front.t * pixelAngle * pixels);
+          const near = labelsNear(
+            tiles,
+            point,
+            radius,
+            idOf,
+            hidden.size ? (tile, index) => !hidden.has(idOf(tile, index)) : undefined,
+          );
+          if (near.size === 0) continue;
+          for (const entry of near.values()) entry.t = front.t;
+          weights = near;
+          found = true;
+          break;
+        }
+        // Nothing labelled near where the ray met the scan (the camera inside a coarse
+        // canopy's haze): the first labelled object along the ray, the haze let through.
+        if (!found) {
+          const behind = castRay(
+            tiles,
+            {
+              origin: [origin.x, origin.y, origin.z],
+              direction: [direction.x, direction.y, direction.z],
+            },
+            {
+              pixelAngle,
+              include: (tile, index) => {
+                const id = idOf(tile, index);
+                return id !== 0 && !hidden.has(id);
+              },
+            },
+          );
+          if (behind.length > 0) weights = hitWeights(behind, (hit) => idOf(hit.tile, hit.index));
+        }
+      }
       if (!best || front.t < best.t) best = { assetId, doc, t: front.t, weights };
     }
     if (!best) {
@@ -451,7 +545,7 @@ export class SceneSelectController {
       this.#beginStroke(p.x, p.y, e.altKey ? "subtract" : e.shiftKey ? "add" : "replace");
       return;
     }
-    this.#down = { ...p, at: performance.now(), id: e.pointerId };
+    if (this.#ownClicks) this.#down = { ...p, id: e.pointerId };
   }
 
   #onMove(e: PointerEvent): void {
@@ -471,8 +565,7 @@ export class SceneSelectController {
     if (down?.id !== e.pointerId || e.button !== 0 || !this.#enabled()) return;
     const p = this.#local(e);
     if (Math.hypot(p.x - down.x, p.y - down.y) > CLICK_PX) return;
-    if (performance.now() - down.at > CLICK_MS) return;
-    this.pickAt(p.x, p.y, { x: e.clientX, y: e.clientY });
+    this.click(p.x, p.y);
   }
 
   #onKey(e: KeyboardEvent): void {

@@ -3,7 +3,11 @@ import { create } from "zustand";
 import type { InferredEvidence } from "@/lib/inferred";
 
 interface InferredState {
-  /** Whether inferred layers are drawn at all. On: the scan reads whole, and is labelled. */
+  /**
+   * Whether inferred layers are drawn at all. Off until a person opts in (the switcher's
+   * "Inferred fill"): what an image model guessed is not shown as if it were the scan, and
+   * from outside a scan its fill reads as blotchy sheets beyond the measured edge.
+   */
   show: boolean;
   /** The inferred layers loaded beside each measured asset. */
   layers: Record<string, InferredEvidence[]>;
@@ -12,7 +16,7 @@ interface InferredState {
 }
 
 export const useInferred = create<InferredState>()((set) => ({
-  show: true,
+  show: false,
   layers: {},
   setShow: (show) => set({ show }),
   setLayers: (assetId, layers) =>

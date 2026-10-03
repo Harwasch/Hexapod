@@ -10,6 +10,7 @@ import type { Layer, SiteAsset } from "@twin/contracts";
 import { deviceSplatBudget } from "@/lib/detail";
 import { tileUrl } from "@/lib/tileProxy";
 
+import { IonAssetMissingError, ionAssetKnownMissing } from "../ion";
 import { incrementalSplats, keepOffscreenSplats } from "../splatInternals";
 
 /** The incremental splat texture starts at this many times the device's splat budget: room
@@ -72,6 +73,9 @@ export async function createSiteTileset(
       maximumAttenuation: shading?.maximumAttenuation ?? undefined,
     };
   }
+  // An ion asset this key was told lately it cannot see is not asked for again.
+  if (asset.source.type === "cesium-ion" && ionAssetKnownMissing(asset.source.assetId))
+    throw new IonAssetMissingError(asset.source.assetId);
   const tileset = await (asset.source.type === "cesium-ion"
     ? Cesium3DTileset.fromIonAssetId(asset.source.assetId, options)
     : Cesium3DTileset.fromUrl(await tileUrl(asset.source.url), options));

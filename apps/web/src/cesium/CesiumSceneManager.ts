@@ -201,7 +201,10 @@ export class CesiumSceneManager {
     this.selection.setCollider(this.collider);
     this.sceneSelect = new SceneSelectController(this.viewer, {
       enabled: () => this.selectionWanted(),
+      ownClicks: false,
     });
+    // One click, one answer: an object of a scan under the cursor first, else the cards.
+    this.selection.setClickClaim((position) => this.sceneSelect.click(position.x, position.y));
     this.measurement = new MeasurementManager(this.viewer, this.events);
     this.mission = new MissionManager(this.viewer, this.events, this.camera);
     this.areas = new AreaEditor(this.viewer, this.events);

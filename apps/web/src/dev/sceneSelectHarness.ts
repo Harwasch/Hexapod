@@ -33,6 +33,7 @@ import { attachInstances, instanceSphere } from "@/cesium/splatInstances";
 import { incrementalSplats, keepOffscreenSplats } from "@/cesium/splatInternals";
 import { SceneSelectChip } from "@/features/sites/SceneSelectChip";
 import { tileInstanceIds, withDescendants } from "@/lib/instances";
+import { castRay } from "@/lib/splatPick";
 import { useInstances } from "@/state/instances";
 import { selectedId, useSceneSelect } from "@/state/sceneSelect";
 // The glass styles the chip is drawn with in the app (its buttons are @twin/ui's).
@@ -74,6 +75,19 @@ export interface SceneSelectHarness {
   /** How far the pixels of `rect` moved from what `hold` kept: mean absolute difference, 0..1. */
   changed(rect: Rect): number;
   frames(count: number): Promise<void>;
+  /** What a pick at (`x`, `y`) (CSS px) meets: the source's tiles, those with ids, the hits. */
+  probe(
+    x: number,
+    y: number,
+  ): {
+    renderer: string | null;
+    tiles: number;
+    splats: number;
+    withIds: number;
+    hits: number;
+    idHits: number;
+    front: number | null;
+  };
 }
 
 function nextFrame(scene: Scene): Promise<void> {
@@ -306,5 +320,36 @@ export async function startSceneSelectHarness(options: {
       return sum / ((now.length / 4) * 3 * 255);
     },
     frames: settle,
+    probe(x, y) {
+      const source = pickSourceOf(ASSET);
+      const doc = paintedDocOf(ASSET);
+      const toWorld = source?.toWorld();
+      const tiles = source?.tiles() ?? [];
+      const ids = doc ? tiles.map((tile) => tileInstanceIds(doc, tile.checksum)) : [];
+      const out = {
+        renderer: source?.renderer ?? null,
+        tiles: tiles.length,
+        splats: tiles.reduce((n, t) => n + t.count, 0),
+        withIds: ids.filter((list, i) => list?.length === tiles[i]?.count).length,
+        hits: 0,
+        idHits: 0,
+        front: null as number | null,
+      };
+      const ray = scene.camera.getPickRay(new Cartesian2(x, y));
+      if (!toWorld || !ray) return out;
+      const toLocal = Matrix4.inverseTransformation(toWorld, new Matrix4());
+      const o = Matrix4.multiplyByPoint(toLocal, ray.origin, new Cartesian3());
+      const d = Matrix4.multiplyByPointAsVector(toLocal, ray.direction, new Cartesian3());
+      const frustum = scene.camera.frustum as { fovy?: number };
+      const hits = castRay(
+        tiles,
+        { origin: [o.x, o.y, o.z], direction: [d.x, d.y, d.z] },
+        { pixelAngle: (frustum.fovy ?? 1) / Math.max(1, scene.canvas.clientHeight) },
+      );
+      out.hits = hits.length;
+      out.idHits = hits.filter((h) => (ids[h.tile]?.[h.index] ?? 0) !== 0).length;
+      out.front = hits[0]?.t ?? null;
+      return out;
+    },
   };
 }
