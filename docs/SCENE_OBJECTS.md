@@ -661,3 +661,93 @@ See [LIVING_PLAN.md](LIVING_PLAN.md).
   Storing ∇w would cost 3·(m−1) more numbers per splat. Revisit if a driver pushes handles
   past their `support` radius.
 - SAM 3 / some lifting methods carry their own licences; SAM 2 is Apache-2.0.
+
+## 8. Publishing beside the tiles: one publisher
+
+Everything in §4 is published beside a scan's tiles, and since the one-publisher change only
+the API writes it there: `POST /api/v1/assets/{id}/sidecars` cuts a new generation holding
+the current tiles, every sidecar they already have and the staged files, with the merged
+root extras in a `tileset.json` written last, and repoints the asset under a row lock
+(docs/DEPLOYMENT.md, "Sidecars: one publisher"; `apps/api/app/services/attach.py`). A
+worker republish carries each sidecar of the live generation into the run's new one only
+where it still holds for the new splats (`apps/api/app/worker/carry.py`), and flags the
+asset for each kind it drops (`sidecarFlags` on the asset: "Objects need re-segmenting").
+
+### What each kind depends on
+
+Read off the code that writes each one; `apps/api/app/services/sidecars.py` (`KINDS`) is
+the table the API and the worker use, and `tests/test_sidecar_attach.py` holds it to this.
+
+| Kind             | Beside `tileset.json`                    | Declared by                                   | Written by                                              | Bound to                                                                                                                                                                                                                                                                  | Class             | On a republish of new tiles                             | Flag when dropped                                      |
+| ---------------- | ---------------------------------------- | --------------------------------------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------- | ------------------------------------------------------- | ------------------------------------------------------ |
+| `instances`      | `instances.json`, `instances.emb`        | `extras.instances`                            | `segment_scene.py` (segment.yml, publish-instances.yml) | `tiles`: each tile's FNV-1a checksum of its decoded float32 positions (`synthetic_tree.checksum_positions`) to run-length ids in that tile's gaussian order; coarse tiles' ids by kNN from the leaf splats (`rebind_instances.py`), still keyed by those tiles' checksums | splats            | carried only onto the same tiles                        | Objects need re-segmenting                             |
+| `skin`           | `skin.json`, `skin.bin`                  | `extras.skin`                                 | `skin_scene.py`                                         | tile checksums to skin runs and rows of `skin.bin` in each tile's order; each skin moves an instance id                                                                                                                                                                   | splats            | carried only onto the same tiles                        | Skins need refitting                                   |
+| `materials`      | `materials.json`                         | `extras.materials`                            | the video teacher (C2)                                  | one record per `instances.json` id                                                                                                                                                                                                                                        | follows instances | carried exactly when `instances` is                     | Materials need re-pointing at the new objects          |
+| `telemetry`      | `telemetry.json`                         | `extras.telemetry`                            | deployment data (C3)                                    | bindings by `instances.json` id                                                                                                                                                                                                                                           | follows instances | carried exactly when `instances` is                     | Telemetry bindings need re-pointing                    |
+| `objects`        | `objects/<id>/…`, `fills/<id>/…`         | `extras.objects`, `extras.split`              | `split_objects.py` (C4)                                 | rewrites the scan's own tiles without the objects and binds the object tiles in `instances.json`. **Not attachable**: a split is a new tileset, not files beside one                                                                                                      | splats            | carried only onto the same tiles                        | Split objects need re-splitting                        |
+| `collision`      | `collision.bin`                          | `extras.collision`                            | the packer (`convert`), or collision-backfill.yml       | `splat_tiles.collision_grid`: the solid cells of the kept splats (`opacity_min`) in the tileset's local ENU frame; the backfill refuses unless the leaves hold exactly the PLY's kept gaussians                                                                           | splats            | the run's own replaces it; else dropped                 | Collision needs a backfill                             |
+| `viewCones`      | `viewcones.bin`                          | `extras.viewCones`                            | the packer, or `splat_tiles.py viewcones`               | per cell of the splats' grid, the directions it was seen from                                                                                                                                                                                                             | splats            | the run's own replaces it; else dropped                 | View cones need rebuilding                             |
+| `inferredLayers` | `inferred/<name>/…`                      | `extras.inferredLayers` (`[{uri, evidence}]`) | `teacher_fill.py` (fill.yml, publish-fill.yml)          | nothing of the splats: a tileset of its own whose root transform is the scan's (publish-fill.yml checks it), drawn with the scan's model matrix. World-space in the scan's frame, no splat indices, no checksums                                                          | independent       | carried                                                 | (only when it cannot be carried at all)                |
+| `nativeLod`      | `sog/lod-meta.json`, `sog/*.webp`        | `extras.nativeLod` (optional: the web probes) | streamed-lod-backfill.yml (splat-transform)             | every leaf tile's SPZ merged, Morton-ordered and decimated: the splats themselves, re-encoded                                                                                                                                                                             | splats            | carried only onto the same tiles                        | Streamed LOD needs a backfill                          |
+| `rig`            | `rig.json`, `motion.json`, `plants.json` | the asset's `renderConfig.rigUrl`             | living-plants.yml (`scene_plants.py`)                   | the rig is stamped with the published tiles' checksums (`rig_tiles.stamp`) and `plants.json` binds per tile checksum; the viewer refuses a tile the binding does not list                                                                                                 | splats            | carried only onto the same tiles; else `rigUrl` cleared | Plants need re-rigging                                 |
+| anything else    | —                                        | an extras key none of the above               | —                                                       | unknown                                                                                                                                                                                                                                                                   | —                 | carried onto the same tiles; else dropped               | Unrecognised sidecar extras.`<key>` needs re-attaching |
+
+**"The same tiles"** is checked, not assumed: the tileset without its root extras (the tree,
+its bounds and errors, every content uri) and every tile's size and ETag must be equal
+(`sidecars.tiles_fingerprint`). Same bytes mean same positions, so every checksum a binding
+holds is still right. It is sufficient, not necessary — a re-pack that left every position
+where it was (another `--sh-degree`, say) fails it and drops what it could have kept — and
+that is the safe side: a kind dropped by mistake is flagged and rebuilt, one kept by mistake
+hides and moves the wrong splats. A retried register, or a republish of the same bytes,
+passes it; a new reconstruction or a Refine never does. The attach's `basedOn` check is the
+same test: sidecars computed on the legacy prefix may be attached to a generation an attach
+cut from it, never to one a republish wrote.
+
+### What each workflow sends
+
+The rewiring is a later wave; this is what each one will need. Common to all five: the
+publish job gets `API_WRITE_TOKEN` and `TWIN_API_URL` (living-plants.yml has both already)
+and the private bucket's name for staging (`vars.R2_BUCKET || 'twin-assets'`); it uploads to
+`staging/assets/<asset id>/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT/` with the R2 pair it already
+has, laid out as beside `tileset.json`, and POSTs `{stagingPrefix, basedOn, files, extras}`
+(curl in docs/DEPLOYMENT.md). It no longer reads, diffs or uploads a `tileset.json`, and no
+longer writes to the public bucket. A 409 means the tiles changed under it: run it again on
+the asset's current tiles.
+
+- **publish-instances.yml.** Needs each scan's **asset id**, not only its URL: once a scan
+  has been attached to, its URL is a generation, and the legacy URL in
+  `infra/modal/segment.py` `SCANS` no longer names what the site shows (it still serves the
+  same tiles, which is why it is accepted as `basedOn`). So `SCANS` becomes, or gains, a map
+  to asset ids, and the build reads the current URL from `GET /api/v1/assets/{id}`
+  (`source.url`). `build` keeps the binding check (every tile's checksum a key, runs covering
+  its gaussians) against those tiles and drops `link_instances` and the tileset diff;
+  `publish` stages `instances.json` and `instances.emb` and sends
+  `files: ["instances.json", "instances.emb"]`,
+  `extras: {"instances": {"uri": "instances.json", "count": <instances>}}`, `basedOn` the URL
+  it bound against.
+- **publish-fill.yml.** The same asset-id lookup for `scan`. `build` keeps the layer checks
+  and the frame check (the layer's root transform against the **current** tileset's) and
+  drops the tileset rewrite; `publish` stages `inferred/<name>/…` (the layer's
+  `tileset.json`, tiles and sidecars) and sends only its own entry,
+  `extras: {"inferredLayers": [{"uri": "inferred/<name>/tileset.json", "evidence": {…}}]}`:
+  the API merges the list by uri, so another fill's entry stays.
+- **collision-backfill.yml.** It already has the asset (`capture.json`: `asset.id`,
+  `asset.source.url`). `build` keeps `splat_tiles.py collision` and its identity check and
+  keeps only `root.extras.collision` from the tileset it writes; `publish` stages
+  `collision.bin` and sends `files: ["collision.bin"]`, `extras: {"collision": {…}}`,
+  `basedOn: asset.source.url`. It gains `API_WRITE_TOKEN` and `TWIN_API_URL`.
+- **streamed-lod-backfill.yml.** Its input becomes an asset (or capture) id instead of a
+  tileset URL, the URL read from the API; `publish` stages `sog/lod-meta.json` and the
+  chunks under `sog/` and sends them in `files`, with `extras: {"nativeLod":
+"sog/lod-meta.json"}` so the viewer need not probe, and `basedOn` the tileset whose leaves
+  it merged. A staged `sog/` replaces the old one whole. It gains `API_WRITE_TOKEN` and
+  `TWIN_API_URL`.
+- **living-plants.yml.** `publish` stages `rig.json`, `motion.json` and `plants.json` and
+  sends `files` with those three, `rigUrl: "rig.json"` and `basedOn: asset.source.url`, in
+  place of the in-place upload **and** the separate `PATCH /assets/{id}` of
+  `renderConfig.rigUrl` (which replaced the whole render config, racing every other writer
+  of it).
+
+`segment.yml`, `fill.yml` and the Modal apps read tiles by URL and are unchanged, except
+that they too should take the current URL from the API rather than `SCANS` once a scan has
+moved.
