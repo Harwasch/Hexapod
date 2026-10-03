@@ -190,6 +190,23 @@ a {
   font-weight: 600;
 }
 
+/* What a republish could not carry (sidecarFlags): a badge per dropped kind. */
+.admin-flags {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  vertical-align: middle;
+}
+
+.admin-flag-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: var(--space-3) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
 /* ---- Tables -------------------------------------------------------------- */
 
 .admin-table,
