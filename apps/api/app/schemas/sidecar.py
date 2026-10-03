@@ -54,8 +54,11 @@ class SidecarAttach(CamelModel):
         description=(
             "Keys to set on the root tile's `extras`, each replaced whole -- except a list "
             "of `{uri, ...}` entries (`inferredLayers`), merged into the current list by "
-            "`uri`, so send only your own entry; `null` removes a key. A `uri` a key names "
-            "must be in the new generation."
+            "`uri`, so send only your own entry; `null` removes a key, and with it the "
+            "kind's files where none of them is staged. A `uri` a key names must be in the "
+            "new generation. Setting or removing a kind's key, like staging one of its "
+            "files, drops the kinds keyed by its ids (materials and telemetry by "
+            "`instances`) unless they are sent too."
         ),
     )
     rig_url: str | None = Field(
@@ -82,6 +85,14 @@ class SidecarAttachment(CamelModel):
     attached: list[str]
     #: Sidecar kinds carried over from the previous generation.
     carried: list[str]
+    #: Sidecar kinds the previous generation had and this one does not: keyed by the ids of
+    #: a kind this attach replaced (materials and telemetry, when it replaced `instances`)
+    #: and not sent with it. Each is flagged on the asset (`asset.sidecarFlags`) with why.
+    dropped: list[str]
+    #: Paths beside the previous `tileset.json` that the new generation does not have: the
+    #: old files of a kind this attach replaced (a directory unit's stale chunks, the
+    #: unstaged siblings of a staged file) and the files of every dropped kind.
+    removed: list[str]
     #: The root extras keys the new `tileset.json` declares.
     extras: list[str]
     asset: AssetRead

@@ -119,14 +119,15 @@ class RenderConfig(CamelModel):
 
 
 class SidecarFlag(CamelModel):
-    """A sidecar a republish could not carry into the asset's new generation.
+    """A sidecar a republish or an attach could not carry into the asset's new generation.
 
     Sidecars (`instances.json`, `collision.bin`, an inferred fill, `sog/`, a plant rig) are
     published beside the tiles. When a run publishes new tiles, each kind is carried only
     where it still holds for the new splats -- objects, skins and a rig where every new
     tile's positions are ones they bind, a grid or the streamed LOD only onto the very same
     tiles; otherwise it is dropped, the viewer loses it, and this says so until the kind is
-    attached again. See docs/SCENE_OBJECTS.md, section 8.
+    attached again. An attach that replaces `instances` drops what is keyed by its ids
+    (materials, telemetry) the same way. See docs/SCENE_OBJECTS.md, section 8.
     """
 
     #: The sidecar kind: `instances`, `skin`, `materials`, `telemetry`, `objects`,
@@ -137,7 +138,7 @@ class SidecarFlag(CamelModel):
     action: str
     #: Why it was dropped.
     reason: str
-    #: The run whose publish dropped it.
+    #: The run whose publish dropped it; None where an attach did.
     job_id: uuid.UUID | None
     flagged_at: datetime
 

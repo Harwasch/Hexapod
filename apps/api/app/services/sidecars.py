@@ -46,7 +46,8 @@ code that writes each one (docs/SCENE_OBJECTS.md, section 8, has the table):
   rewrote the tiles. These are carried only when the new tiles are the same tiles
   (`tiles_fingerprint`).
 * `INSTANCES` -- keyed by `instances.json` ids (`materials.json`, `telemetry.json`). A
-  re-segmentation renumbers them, so they go wherever `instances` goes.
+  re-segmentation renumbers them, so they go wherever `instances` goes: dropped by a
+  republish that drops `instances`, and by an attach that replaces it (`followers`).
 * `FRAME` -- placed in the tileset's local frame with no splat indices or checksums: an
   inferred layer is a tileset of its own whose root transform is the scan's
   (publish-fill.yml checks exactly that). It is carried whatever the splats are.
@@ -89,7 +90,10 @@ class SidecarKind:
     contents belong to the kind. A staged file under a directory kind replaces the old
     contents of its *unit* -- the first `unit_depth` segments of its path: one fill's
     `inferred/<name>/`, or all of `sog/` -- so a smaller re-run leaves no stale chunk
-    behind. `action` is what the asset's flag says when the kind is dropped.
+    behind. A staged file of a kind without directories replaces the kind's whole file set
+    (`instances.json` takes the old `instances.emb` with it), because one tool writes them
+    together from the same inputs. `action` is what the asset's flag says when the kind is
+    dropped.
     """
 
     name: str
@@ -595,6 +599,18 @@ def discover(extras: Mapping[str, Any], rels: Collection[str]) -> dict[str, tupl
 def _declared(value: Any) -> bool:
     """Whether an extras value declares something: `nativeLod: false` says there is none."""
     return value is not None and value is not False and value != [] and value != {}
+
+
+def followers(names: Collection[str]) -> list[str]:
+    """Every kind keyed by the ids of one of `names` (`follows`), and by theirs in turn, in
+    `KINDS` order: the kinds that hold only where those do (materials and telemetry, where
+    `instances` goes)."""
+    found: set[str] = set()
+    leaders = set(names)
+    while leaders:
+        leaders = {kind.name for kind in KINDS if kind.follows in leaders} - found
+        found |= leaders
+    return [kind.name for kind in KINDS if kind.name in found]
 
 
 def unknown_extras(extras: Mapping[str, Any]) -> list[str]:

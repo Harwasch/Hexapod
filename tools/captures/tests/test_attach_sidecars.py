@@ -331,6 +331,25 @@ def test_attach_sends_the_rig_url_when_the_manifest_sets_one(api: StubApi, tmp_p
     assert api.requests[0]["body"]["files"] == ["motion.json", "plants.json", "rig.json"]
 
 
+def test_the_report_says_what_the_attach_dropped_and_why(
+    api: StubApi, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """New objects take the materials keyed by the old ones with them; the log says so."""
+    out = instances_dir(tmp_path)
+    attach.write_manifest(out, asset_id=ASSET, based_on=CURRENT)
+    reason = "it names instances ids, and an attach replaced instances"
+    answer = attachment(
+        dropped=["materials"],
+        removed=["materials.json"],
+        asset={"sidecarFlags": [{"kind": "materials", "reason": reason}]},
+    )
+    api.on("POST", f"/api/v1/assets/{ASSET}/sidecars", (200, answer))
+    attach.attach(out, api=api.url, s3=StubS3(), bucket="b", write_token="t")
+    printed = capsys.readouterr().out
+    assert f"- dropped materials: {reason}" in printed
+    assert "not copied from the previous generation: ['materials.json']" in printed
+
+
 def test_a_busy_asset_is_asked_again(api: StubApi, tmp_path: Path) -> None:
     out = instances_dir(tmp_path)
     attach.write_manifest(out, asset_id=ASSET, based_on=CURRENT)

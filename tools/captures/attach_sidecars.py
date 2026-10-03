@@ -455,6 +455,13 @@ def report(answer: Mapping[str, Any]) -> None:
             f"{answer.get('copied')} objects copied, {len(answer.get('staged') or [])} staged"
         ),
     ]
+    if answer.get("dropped"):
+        # Keyed by the ids of a kind this attach replaced, and not sent with it.
+        flags = (answer.get("asset") or {}).get("sidecarFlags") or []
+        reasons = {flag.get("kind"): flag.get("reason") for flag in flags}
+        lines += [f"- dropped {name}: {reasons.get(name, '')}" for name in answer["dropped"]]
+    if answer.get("removed"):
+        lines.append(f"- not copied from the previous generation: {answer['removed']}")
     print("\n".join(lines))
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:

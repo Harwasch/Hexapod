@@ -326,6 +326,162 @@ def test_a_second_fill_is_declared_beside_the_first_not_instead_of_it(
     assert [layer["evidence"]["views"] for layer in layers] == [12, 99]
 
 
+# --- what an attach replaces ----------------------------------------------------------
+
+MATERIALS_EXTRAS = {"uri": "materials.json", "count": 2}
+TELEMETRY_EXTRAS = {"uri": "telemetry.json", "streams": 1}
+
+
+def a_scan_with_objects(buckets: Publisher) -> None:
+    """A generation with objects (both files), the materials and telemetry keyed by their
+    ids, and a backfilled grid."""
+    put_scan(
+        buckets.public,
+        LIVE_DIR,
+        sidecars={
+            **INSTANCES_FILES,
+            "materials.json": b'{"old": "materials"}',
+            "telemetry.json": b'{"old": "telemetry"}',
+            "collision.bin": b"grid",
+        },
+        extras={
+            "instances": INSTANCES_EXTRAS,
+            "materials": MATERIALS_EXTRAS,
+            "telemetry": TELEMETRY_EXTRAS,
+            "collision": COLLISION_EXTRAS,
+        },
+    )
+
+
+def test_new_objects_drop_and_flag_what_was_keyed_by_the_old_ones(
+    db: Session, buckets: Publisher, client: TestClient
+) -> None:
+    """A re-segmentation renumbers the objects. The old `instances.emb` (rows are the old
+    ids), `materials.json` and `telemetry.json` (keyed by them) would describe the wrong
+    objects, so none of them is copied forward: the emb goes with the `instances.json` it
+    belonged to, and materials and telemetry are dropped, keys and files, and flagged --
+    as a republish that dropped the objects would (carry.py)."""
+    a_scan_with_objects(buckets)
+    asset = an_asset(db, LIVE_URL)
+    prefix = stage(buckets.private, asset.id, {"instances.json": b'{"new": "objects"}'})
+
+    response = attach(client, asset, prefix, extras={"instances": INSTANCES_EXTRAS})
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    now = files_under(buckets.public, directory_of(body["url"]))
+    assert set(now) == {*TILES, "instances.json", "collision.bin", "tileset.json"}
+    assert now["instances.json"] == b'{"new": "objects"}'
+    extras = tileset_at(buckets.public, body["url"])["root"]["extras"]
+    assert set(extras) == {"gaussians", "instances", "collision"}
+    assert body["attached"] == ["instances"]
+    assert body["carried"] == ["collision"]
+    assert body["dropped"] == ["materials", "telemetry"]
+    assert body["removed"] == ["instances.emb", "materials.json", "telemetry.json"]
+    flags = {flag["kind"]: flag for flag in body["asset"]["sidecarFlags"]}
+    assert set(flags) == {"materials", "telemetry"}
+    for name, flag in flags.items():
+        assert flag["action"] == sidecars.KINDS_BY_NAME[name].action
+        assert "an attach replaced instances" in flag["reason"]
+        assert flag["jobId"] is None
+    db.expire_all()
+    stored = db.get(Asset, asset.id)
+    assert stored is not None
+    assert sorted(flag["kind"] for flag in stored.sidecar_flags) == ["materials", "telemetry"]
+
+
+def test_objects_attached_with_their_materials_keep_both_and_flag_nothing(
+    db: Session, buckets: Publisher, client: TestClient
+) -> None:
+    """Sent in one request, the materials are the caller's word that they name the new
+    ids: both land, nothing is dropped, and a flag either had is cleared."""
+    put_scan(
+        buckets.public,
+        LIVE_DIR,
+        sidecars={**INSTANCES_FILES, "materials.json": b'{"old": "materials"}'},
+        extras={"instances": INSTANCES_EXTRAS, "materials": MATERIALS_EXTRAS},
+    )
+    asset = an_asset(db, LIVE_URL)
+    asset.sidecar_flags = [
+        sidecars.flag("materials", action="Materials", reason="x", job_id=None, at=_now())
+    ]
+    db.commit()
+    new = {
+        "instances.json": b'{"new": "objects"}',
+        "instances.emb": b"\2\3",
+        "materials.json": b'{"new": "materials"}',
+    }
+    prefix = stage(buckets.private, asset.id, new)
+
+    response = attach(
+        client,
+        asset,
+        prefix,
+        extras={"instances": INSTANCES_EXTRAS, "materials": MATERIALS_EXTRAS},
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    now = files_under(buckets.public, directory_of(body["url"]))
+    assert {name: now[name] for name in new} == new
+    extras = tileset_at(buckets.public, body["url"])["root"]["extras"]
+    assert {"instances", "materials"} <= set(extras)
+    assert body["attached"] == ["instances", "materials"]
+    assert (body["dropped"], body["removed"]) == ([], [])
+    assert body["asset"]["sidecarFlags"] == []
+
+
+def test_an_independent_kind_leaves_the_objects_and_what_is_keyed_by_them_alone(
+    db: Session, buckets: Publisher, client: TestClient
+) -> None:
+    """An inferred layer is placed in the scan's frame and names no object: attaching one
+    replaces nothing of the objects, the materials or the telemetry."""
+    a_scan_with_objects(buckets)
+    asset = an_asset(db, LIVE_URL)
+    before = files_under(buckets.public, LIVE_DIR)
+    prefix = stage(buckets.private, asset.id, FILL_FILES)
+
+    response = attach(client, asset, prefix, extras={"inferredLayers": FILL_EXTRAS})
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    now = files_under(buckets.public, directory_of(body["url"]))
+    for name in (*INSTANCES_FILES, "materials.json", "telemetry.json", "collision.bin"):
+        assert now[name] == before[name], name
+    extras = tileset_at(buckets.public, body["url"])["root"]["extras"]
+    assert extras["materials"] == MATERIALS_EXTRAS
+    assert extras["telemetry"] == TELEMETRY_EXTRAS
+    assert body["attached"] == ["inferredLayers"]
+    assert body["carried"] == ["collision", "instances", "materials", "telemetry"]
+    assert (body["dropped"], body["removed"]) == ([], [])
+    assert body["asset"]["sidecarFlags"] == []
+
+
+def test_a_kind_set_to_null_goes_with_its_files_and_what_was_keyed_by_it(
+    db: Session, buckets: Publisher, client: TestClient
+) -> None:
+    """`null` removes a kind, not just its key: undeclared files left behind would still
+    be found beside the tileset. The materials keyed by the removed objects go too,
+    flagged; the telemetry, set to null in the same request, goes unflagged."""
+    a_scan_with_objects(buckets)
+    asset = an_asset(db, LIVE_URL)
+    prefix = f"staging/assets/{asset.id}/run-1/"
+
+    response = attach(client, asset, prefix, extras={"instances": None, "telemetry": None})
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    now = files_under(buckets.public, directory_of(body["url"]))
+    assert set(now) == {*TILES, "collision.bin", "tileset.json"}
+    assert set(tileset_at(buckets.public, body["url"])["root"]["extras"]) == {
+        "gaussians",
+        "collision",
+    }
+    assert body["dropped"] == ["materials"]
+    assert [flag["kind"] for flag in body["asset"]["sidecarFlags"]] == ["materials"]
+    assert "an attach removed instances" in body["asset"]["sidecarFlags"][0]["reason"]
+
+
 # --- legacy prefixes -----------------------------------------------------------------
 
 
@@ -697,6 +853,15 @@ def test_every_kind_is_classified_by_what_it_depends_on() -> None:
         "rig": "positions",
     }
     assert {kind.name for kind in sidecars.KINDS if not kind.attachable} == {"objects"}
+    # A kind keyed by ids says whose; an attach that replaces those drops it.
+    follows = {kind.name: kind.follows for kind in sidecars.KINDS if kind.follows}
+    assert follows == {"materials": "instances", "telemetry": "instances"}
+    assert all(
+        (kind.depends is sidecars.Dependence.INSTANCES) == (kind.follows is not None)
+        for kind in sidecars.KINDS
+    )
+    assert sidecars.followers(["instances"]) == ["materials", "telemetry"]
+    assert sidecars.followers(["inferredLayers", "collision"]) == []
     # Every kind bound to positions says where it lists them, in a file it owns.
     for kind in sidecars.KINDS:
         assert bool(kind.checksums) == (kind.depends is sidecars.Dependence.POSITIONS), kind

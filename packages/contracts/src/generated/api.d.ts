@@ -129,7 +129,7 @@ export interface paths {
         put?: never;
         /**
          * Attach sidecars to an asset by cutting a new generation
-         * @description The one way to publish files beside a scan's tiles (`instances.json`, `collision.bin`, an inferred fill under `inferred/<name>/`, `sog/`, a plant rig). Stage them in the private bucket under `staging/assets/<asset id>/<token>/`, laid out as they should sit beside `tileset.json`, then call this. The asset's current tiles and every sidecar it already has are copied server side into a **new** generation with the staged files beside them, `tileset.json` with the merged root `extras` is written last, all of it immutable, and the asset's URL moves to it. Attaches to one asset are serialized: a second waits and builds on the first's generation. 409 when `basedOn` no longer holds the asset's tiles (a republish replaced them), when the asset is not a run's tileset in the public bucket, or when another attach held the asset too long; 422 for a staged file outside the rules (path, extension, size, a tile or `tileset.json`). See docs/DEPLOYMENT.md.
+         * @description The one way to publish files beside a scan's tiles (`instances.json`, `collision.bin`, an inferred fill under `inferred/<name>/`, `sog/`, a plant rig). Stage them in the private bucket under `staging/assets/<asset id>/<token>/`, laid out as they should sit beside `tileset.json`, then call this. The asset's current tiles and every sidecar it already has are copied server side into a **new** generation with the staged files beside them, `tileset.json` with the merged root `extras` is written last, all of it immutable, and the asset's URL moves to it. What the request replaces is not copied: a staged kind's old files (its whole file set, or the directory unit), and the kinds keyed by a replaced kind's ids (materials and telemetry by `instances`), which are dropped and flagged on the asset unless the request sends them too. Attaches to one asset are serialized: a second waits and builds on the first's generation. 409 when `basedOn` no longer holds the asset's tiles (a republish replaced them), when the asset is not a run's tileset in the public bucket, or when another attach held the asset too long; 422 for a staged file outside the rules (path, extension, size, a tile or `tileset.json`). See docs/DEPLOYMENT.md.
          */
         post: operations["attach_sidecars_api_v1_assets__asset_id__sidecars_post"];
         delete?: never;
@@ -3118,7 +3118,7 @@ export interface components {
             basedOn: string;
             /**
              * Extras
-             * @description Keys to set on the root tile's `extras`, each replaced whole -- except a list of `{uri, ...}` entries (`inferredLayers`), merged into the current list by `uri`, so send only your own entry; `null` removes a key. A `uri` a key names must be in the new generation.
+             * @description Keys to set on the root tile's `extras`, each replaced whole -- except a list of `{uri, ...}` entries (`inferredLayers`), merged into the current list by `uri`, so send only your own entry; `null` removes a key, and with it the kind's files where none of them is staged. A `uri` a key names must be in the new generation. Setting or removing a kind's key, like staging one of its files, drops the kinds keyed by its ids (materials and telemetry by `instances`) unless they are sent too.
              */
             extras?: {
                 [key: string]: unknown;
@@ -3151,12 +3151,16 @@ export interface components {
             carried: string[];
             /** Copied */
             copied: number;
+            /** Dropped */
+            dropped: string[];
             /** Extras */
             extras: string[];
             /** Generation */
             generation: string;
             /** Previousurl */
             previousUrl: string;
+            /** Removed */
+            removed: string[];
             /** Staged */
             staged: string[];
             /** Url */
@@ -3164,14 +3168,15 @@ export interface components {
         };
         /**
          * SidecarFlag
-         * @description A sidecar a republish could not carry into the asset's new generation.
+         * @description A sidecar a republish or an attach could not carry into the asset's new generation.
          *
          *     Sidecars (`instances.json`, `collision.bin`, an inferred fill, `sog/`, a plant rig) are
          *     published beside the tiles. When a run publishes new tiles, each kind is carried only
          *     where it still holds for the new splats -- objects, skins and a rig where every new
          *     tile's positions are ones they bind, a grid or the streamed LOD only onto the very same
          *     tiles; otherwise it is dropped, the viewer loses it, and this says so until the kind is
-         *     attached again. See docs/SCENE_OBJECTS.md, section 8.
+         *     attached again. An attach that replaces `instances` drops what is keyed by its ids
+         *     (materials, telemetry) the same way. See docs/SCENE_OBJECTS.md, section 8.
          */
         SidecarFlag: {
             /** Action */

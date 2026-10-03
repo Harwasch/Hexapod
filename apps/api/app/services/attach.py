@@ -17,8 +17,14 @@ never written in place. Instead, holding the asset's row lock:
 4. a new generation is written: every current object (tiles, and every sidecar the
    current generation already has) copied server side, the staged files beside them, and
    last -- once every copy has returned -- `tileset.json` with the merged root extras. All
-   of it immutable: nothing writes a generation twice, so a browser may keep it a year;
-5. the asset's URL moves to the new `tileset.json` and the transaction commits.
+   of it immutable: nothing writes a generation twice, so a browser may keep it a year.
+   What the request replaces is not copied (`_plan`): the old files of a kind it stages
+   (the whole file set, or the directory unit), and every kind keyed by the ids of a kind
+   it replaces -- materials and telemetry, when it replaces `instances` -- unless it sends
+   those too;
+5. the asset's URL moves to the new `tileset.json`, each kind dropped that way is flagged
+   on the asset (`sidecar_flags`, as a republish flags what it cannot carry), and the
+   transaction commits.
 
 A second attach on the same asset waits on the row lock and then builds on the first's
 generation, so neither loses the other's files; the worker's register takes the same lock
@@ -40,6 +46,7 @@ import logging
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 from pydantic import HttpUrl, TypeAdapter, ValidationError
@@ -66,6 +73,14 @@ LOCK_WAIT = "60s"
 HOLD_LIMIT = "600s"
 #: Postgres's SQLSTATE for `lock_timeout`.
 LOCK_NOT_AVAILABLE = "55P03"
+
+#: Why an attach drops a kind keyed by another's ids: a republish's rule (`carry._why_not`,
+#: "it names instances ids, and instances was not carried"), for what an attach did to it.
+LEADER_REPLACED = (
+    "it names {follows} ids, and an attach replaced {follows}: it was bound to the previous "
+    "ones ({basis})"
+)
+LEADER_REMOVED = "it names {follows} ids, and an attach removed {follows} ({basis})"
 
 _URL = TypeAdapter(HttpUrl)
 
@@ -164,18 +179,12 @@ def _attach(
                 "cannot be attached beside them"
             )
 
-    # What the staged files replace: the same path, or the whole unit of a directory kind
-    # (one fill's `inferred/<name>/`, all of `sog/`), so a smaller re-run leaves no stale
-    # chunk behind.
-    units = set()
-    for rel in staged:
-        kind = sidecars.KINDS_BY_NAME.get(owners.get(rel, ""))
-        units.add(kind.unit(rel) if kind is not None else rel)
-    kept = {
-        rel: item
-        for rel, item in current.objects.items()
-        if rel != here.entry and (rel in tiles or not _replaced(rel, units))
-    }
+    # What the request replaces, and what was keyed by that and goes with it (`_plan`).
+    plan = _plan(current, here.entry, tiles, old_extras, staged, owners, patch)
+    for name in plan.dropped:
+        for key in sidecars.KINDS_BY_NAME[name].extras:
+            extras.pop(key, None)
+    kept = plan.kept
     final = set(kept) | set(staged) | {here.entry}
     for key, value in patch.items():
         for uri in sidecars.referenced_uris(key, value):
@@ -232,6 +241,18 @@ def _attach(
     present = sidecars.discover(extras, final - tiles - {here.entry})
     carried = sorted(set(present) - set(attached))
     cleared = set(attached) | ({"rig"} if rig_set and payload.rig_url is not None else set())
+    removed = sorted(plan.had_files - final)
+    now = datetime.now(tz=UTC)
+    flags = [
+        sidecars.flag(
+            name,
+            action=sidecars.KINDS_BY_NAME[name].action,
+            reason=reason,
+            job_id=None,
+            at=now,
+        )
+        for name, reason in plan.dropped.items()
+    ]
 
     asset.source = {**dict(asset.source), "url": new_url}
     if rig_set:
@@ -241,12 +262,12 @@ def _attach(
         else:
             render["rigUrl"] = payload.rig_url
         asset.render_config = render
-    asset.sidecar_flags = sidecars.updated_flags(asset.sidecar_flags, clear=cleared)
+    asset.sidecar_flags = sidecars.updated_flags(asset.sidecar_flags, clear=cleared, add=flags)
     db.commit()
     db.refresh(asset)
     log.info(
         "sidecars: asset %s moved from %s to generation %s (%d copied, %d staged; attached %s, "
-        "carried %s)",
+        "carried %s, dropped %s, removed %s)",
         asset.id,
         url,
         generation,
@@ -254,7 +275,11 @@ def _attach(
         len(staged),
         attached,
         carried,
+        sorted(plan.dropped),
+        removed,
     )
+    for name, reason in plan.dropped.items():
+        log.warning("sidecars: %s dropped from asset %s: %s", name, asset.id, reason)
     return (
         SidecarAttachment(
             url=new_url,
@@ -264,11 +289,84 @@ def _attach(
             staged=sorted(staged),
             attached=attached,
             carried=carried,
+            dropped=sorted(plan.dropped),
+            removed=removed,
             extras=sorted(extras),
             asset=asset_to_read(asset),
         ),
         [item.key for item in staged.values()],
     )
+
+
+@dataclass(frozen=True)
+class _Plan:
+    """What of the current generation goes into the new one."""
+
+    #: The current objects copied forward: the tiles, and every file nothing replaced.
+    kept: dict[str, ObjectSummary]
+    #: Kinds the current generation has that the new one drops, each with the reason.
+    dropped: dict[str, str]
+    #: Every sidecar file of the current generation, which `removed` is reckoned from.
+    had_files: set[str]
+
+
+def _plan(
+    current: _Directory,
+    entry: str,
+    tiles: set[str],
+    old_extras: dict[str, Any],
+    staged: dict[str, ObjectSummary],
+    owners: dict[str, str],
+    patch: dict[str, Any],
+) -> _Plan:
+    """What the request replaces, and so what of the current generation is not copied.
+
+    * A staged file replaces the same path. One under a directory kind replaces its whole
+      unit (one fill's `inferred/<name>/`, all of `sog/`), so a smaller re-run leaves no
+      stale chunk; one of any other kind replaces the kind's whole file set, so a new
+      `instances.json` takes the old `instances.emb` -- whose rows were the old ids -- with
+      it. A sibling meant to stay is staged again: one tool writes a kind's files together
+      from the same inputs, and nothing here can tell that an old one matches a new one.
+    * A kind's root extras key set to null, with none of its files staged, removes the
+      kind: its files go with the key.
+    * A kind keyed by another's ids (`follows`: materials and telemetry by
+      `instances.json`'s) holds only where that kind does, the rule a republish applies
+      (`carry._why_not`). When the request replaces the kind it follows -- stages a file of
+      it, or sets or removes its key -- it is dropped, files and key, and flagged on the
+      asset; unless the request sends it too (stages a file of it, or sets or removes its
+      key), which is the caller saying what it is bound to now.
+    """
+    rels = set(current.objects) - tiles - {entry}
+    had_owners = sidecars.assign(old_extras, rels)
+    had = sidecars.discover(old_extras, rels)
+    by_key = sidecars.KINDS_BY_EXTRAS
+    staged_kinds = {owners[rel] for rel in staged if rel in owners}
+    patched = {by_key[key].name for key in patch if key in by_key}
+    removing = {by_key[key].name for key, v in patch.items() if v is None and key in by_key}
+    removing -= staged_kinds
+    replacing = staged_kinds | patched
+
+    dropped: dict[str, str] = {}
+    for name in sidecars.followers(replacing):
+        if name not in had or name in replacing:
+            continue
+        kind = sidecars.KINDS_BY_NAME[name]
+        template = LEADER_REMOVED if kind.follows in removing else LEADER_REPLACED
+        dropped[name] = template.format(follows=kind.follows, basis=kind.basis)
+
+    whole = set(dropped) | removing
+    whole |= {name for name in staged_kinds if not sidecars.KINDS_BY_NAME[name].dirs}
+    units = set()
+    for rel in staged:
+        owner = sidecars.KINDS_BY_NAME.get(owners.get(rel, ""))
+        units.add(owner.unit(rel) if owner is not None else rel)
+    kept = {
+        rel: item
+        for rel, item in current.objects.items()
+        if rel != entry
+        and (rel in tiles or not (_replaced(rel, units) or had_owners.get(rel, "") in whole))
+    }
+    return _Plan(kept=kept, dropped=dropped, had_files=rels)
 
 
 def _lock(db: Session, asset_id: uuid.UUID) -> Asset:

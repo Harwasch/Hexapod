@@ -959,6 +959,23 @@ splats. The attach's `basedOn` check is the byte test (the API does not download
 sidecars computed on the legacy prefix may be attached to a generation an attach cut from
 it, never to one a republish wrote.
 
+**An attach replaces what it sends, and what was keyed by it** (`attach._plan`). A staged
+file replaces the same path; under `inferred/<name>/` or `sog/` it replaces that whole
+directory, and of any other kind it replaces the kind's whole file set: a new
+`instances.json` without an `instances.emb` leaves the generation with no `instances.emb`,
+since the old one's rows were the old ids. A sibling meant to stay is staged again; there is
+no "keep" — one tool writes a kind's files together, and the API cannot tell an old one still
+matches a new one. A kind's key set to `null` with none of its files staged removes the kind,
+files and key. And the class "follows instances" holds on an attach as on a republish: an
+attach that replaces `instances` (stages one of its files, or sets or removes
+`extras.instances`) drops `materials` and `telemetry`, files and keys, and flags each on the
+asset ("Materials need re-pointing at the new objects", reason "it names instances ids, and
+an attach replaced instances…", no `jobId`) — unless the same request sends them too, which
+is the caller's word that they name the new ids. The response lists them in `dropped`, and
+every path of the previous generation the new one lacks in `removed`. An attach of anything
+else (a fill, a grid, the streamed LOD, a rig) leaves objects, materials and telemetry as
+they were.
+
 ### What each workflow sends
 
 All five go through one script, `tools/captures/attach_sidecars.py` (tested against a stub

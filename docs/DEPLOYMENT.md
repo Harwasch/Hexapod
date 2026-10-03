@@ -699,13 +699,13 @@ published directory in place any more.
 **`POST /api/v1/assets/{asset_id}/sidecars`**, with `Authorization: Bearer
 $API_WRITE_TOKEN`:
 
-| Field           | Required | Meaning                                                                                                                                                                                                 |
-| --------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `stagingPrefix` | yes      | `staging/assets/<asset id>/<token>/` in the **private** bucket (`OBJECT_STORAGE_BUCKET`); the token is letters, digits, `.`, `_`, `-` (a run id and attempt). Every object under it is attached.        |
-| `basedOn`       | yes      | the tileset URL the files were computed against. Accepted when the asset's current tiles are those tiles — the same URL, or a later generation another attach cut from them; **409** after a republish. |
-| `files`         | no       | exactly the paths that must be staged; a partial upload is then a 422 instead of an attach.                                                                                                             |
-| `extras`        | no       | root `extras` keys to set, each replaced whole; `null` removes one. A list of `{uri, …}` entries (`inferredLayers`) is merged **by uri**, so send only your own entry. Every `uri` named must exist.    |
-| `rigUrl`        | no       | sets `renderConfig.rigUrl` in the same transaction as the new URL (`null` clears it) — the separate PATCH `living-plants.yml` made raced with everything else.                                          |
+| Field           | Required | Meaning                                                                                                                                                                                                                                         |
+| --------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `stagingPrefix` | yes      | `staging/assets/<asset id>/<token>/` in the **private** bucket (`OBJECT_STORAGE_BUCKET`); the token is letters, digits, `.`, `_`, `-` (a run id and attempt). Every object under it is attached.                                                |
+| `basedOn`       | yes      | the tileset URL the files were computed against. Accepted when the asset's current tiles are those tiles — the same URL, or a later generation another attach cut from them; **409** after a republish.                                         |
+| `files`         | no       | exactly the paths that must be staged; a partial upload is then a 422 instead of an attach.                                                                                                                                                     |
+| `extras`        | no       | root `extras` keys to set, each replaced whole; `null` removes one, and the kind's files where none is staged. A list of `{uri, …}` entries (`inferredLayers`) is merged **by uri**, so send only your own entry. Every `uri` named must exist. |
+| `rigUrl`        | no       | sets `renderConfig.rigUrl` in the same transaction as the new URL (`null` clears it) — the separate PATCH `living-plants.yml` made raced with everything else.                                                                                  |
 
 The staged layout is the layout beside `tileset.json`: `staging/…/run-7/instances.json`
 lands at `<new generation>/instances.json`, `staging/…/run-7/inferred/fixer/0.glb` at
@@ -727,18 +727,27 @@ What the API does, holding the asset's row lock (`app/services/attach.py`):
    tile's size and ETag);
 3. writes a **new** generation, `runs/<job>/p<generation>/…`: every current object — tiles
    and every sidecar already there — copied server side, eight at a time; the staged files
-   beside them (a staged file under `inferred/<name>/` or `sog/` replaces that whole
-   directory, so a smaller rebuild leaves no stale chunk); and **last**, once every copy has
-   returned, `tileset.json` with the merged root extras. Every object gets
-   `Cache-Control: public, max-age=31536000, immutable`, `tileset.json` included: nothing
-   ever writes a generation twice;
+   beside them; and **last**, once every copy has returned, `tileset.json` with the merged
+   root extras. Every object gets `Cache-Control: public, max-age=31536000, immutable`,
+   `tileset.json` included: nothing ever writes a generation twice. What the request
+   replaces is not copied:
+   - a staged file under `inferred/<name>/` or `sog/` replaces that whole directory, so a
+     smaller rebuild leaves no stale chunk; a staged file of any other kind replaces the
+     kind's whole file set — a new `instances.json` alone leaves no old `instances.emb`
+     behind. Stage a sibling again to keep it;
+   - a kind's key set to `null`, with none of its files staged, takes its files with it;
+   - a kind keyed by the ids of one the request replaces — `materials` and `telemetry`,
+     when it stages an `instances` file or sets or removes `extras.instances` — is dropped,
+     files and key, unless the request sends it too (docs/SCENE_OBJECTS.md, section 8);
 4. moves the asset's URL to the new `tileset.json`, clears the asset's flags for the kinds it
-   attached, commits, and deletes the staged files.
+   attached, flags each kind it dropped (as a republish does, with no `jobId`), commits, and
+   deletes the staged files.
 
-It answers with `url`, `previousUrl`, `generation`, `copied`, `staged`, `attached` and
-`carried` (sidecar kinds), the root `extras` keys now declared, and the asset. A failure
-before the commit leaves the asset exactly as it was: the half-written generation is keys
-nothing points at, and the staged files stay for a retry.
+It answers with `url`, `previousUrl`, `generation`, `copied`, `staged`, `attached`,
+`carried` and `dropped` (sidecar kinds), `removed` (the previous generation's paths the new
+one lacks), the root `extras` keys now declared, and the asset. A failure before the commit
+leaves the asset exactly as it was: the half-written generation is keys nothing points at,
+and the staged files stay for a retry.
 
 **Serialised per asset.** The attach takes `SELECT … FOR UPDATE` on the asset, so a second
 attach waits (up to 60 s, then 409 — retry) and builds on the first's generation; neither
