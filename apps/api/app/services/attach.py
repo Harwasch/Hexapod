@@ -20,8 +20,8 @@ never written in place. Instead, holding the asset's row lock:
    of it immutable: nothing writes a generation twice, so a browser may keep it a year.
    What the request replaces is not copied (`_plan`): the old files of a kind it stages
    (the whole file set, or the directory unit), and every kind keyed by the ids of a kind
-   it replaces -- materials and telemetry, when it replaces `instances` -- unless it sends
-   those too;
+   it replaces -- the skin, materials and telemetry, when it replaces `instances` --
+   unless it sends those too;
 5. the asset's URL moves to the new `tileset.json`, each kind dropped that way is flagged
    on the asset (`sidecar_flags`, as a republish flags what it cannot carry), and the
    transaction commits.
@@ -343,7 +343,7 @@ def _plan(
       from the same inputs, and nothing here can tell that an old one matches a new one.
     * A kind's root extras key set to null, with none of its files staged, removes the
       kind: its files go with the key.
-    * A kind keyed by another's ids (`follows`: materials and telemetry by
+    * A kind keyed by another's ids (`follows`: the skin, materials and telemetry by
       `instances.json`'s) holds only where that kind does, the rule a republish applies
       (`carry._why_not`). When the request replaces the kind it follows -- stages a file of
       it, or sets or removes its key -- it is dropped, files and key, and flagged on the

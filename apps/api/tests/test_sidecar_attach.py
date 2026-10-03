@@ -390,6 +390,34 @@ def test_new_objects_drop_and_flag_what_was_keyed_by_the_old_ones(
     assert sorted(flag["kind"] for flag in stored.sidecar_flags) == ["materials", "telemetry"]
 
 
+def test_new_objects_drop_and_flag_the_skin_that_moved_the_old_ones(
+    db: Session, buckets: Publisher, client: TestClient
+) -> None:
+    """Each skin moves an instances.json id: the splats under it may not have moved, but the
+    object it names is a different one once the objects are renumbered."""
+    put_scan(
+        buckets.public,
+        LIVE_DIR,
+        sidecars={**INSTANCES_FILES, "skin.json": b'{"old": "skin"}', "skin.bin": b"\1"},
+        extras={"instances": INSTANCES_EXTRAS, "skin": {"uri": "skin.json"}},
+    )
+    asset = an_asset(db, LIVE_URL)
+    new = {"instances.json": b'{"new": "objects"}', "instances.emb": b"\2\3"}
+    prefix = stage(buckets.private, asset.id, new)
+
+    response = attach(client, asset, prefix, extras={"instances": INSTANCES_EXTRAS})
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    now = files_under(buckets.public, directory_of(body["url"]))
+    assert "skin.json" not in now and "skin.bin" not in now
+    assert "skin" not in tileset_at(buckets.public, body["url"])["root"]["extras"]
+    assert body["dropped"] == ["skin"]
+    (flag,) = body["asset"]["sidecarFlags"]
+    assert flag["kind"] == "skin" and flag["action"] == "Skins need refitting"
+    assert "an attach replaced instances" in flag["reason"]
+
+
 def test_objects_attached_with_their_materials_keep_both_and_flag_nothing(
     db: Session, buckets: Publisher, client: TestClient
 ) -> None:
@@ -901,12 +929,14 @@ def test_every_kind_is_classified_by_what_it_depends_on() -> None:
     assert {kind.name for kind in sidecars.KINDS if not kind.attachable} == {"objects"}
     # A kind keyed by ids says whose; an attach that replaces those drops it.
     follows = {kind.name: kind.follows for kind in sidecars.KINDS if kind.follows}
-    assert follows == {"materials": "instances", "telemetry": "instances"}
+    # The skin is also bound to the splats (positions), and moves instances ids.
+    assert follows == {"skin": "instances", "materials": "instances", "telemetry": "instances"}
     assert all(
-        (kind.depends is sidecars.Dependence.INSTANCES) == (kind.follows is not None)
+        kind.follows is not None
         for kind in sidecars.KINDS
+        if kind.depends is sidecars.Dependence.INSTANCES
     )
-    assert sidecars.followers(["instances"]) == ["materials", "telemetry"]
+    assert sidecars.followers(["instances"]) == ["skin", "materials", "telemetry"]
     assert sidecars.followers(["inferredLayers", "collision"]) == []
     # Every kind bound to positions says where it lists them, in a file it owns.
     for kind in sidecars.KINDS:

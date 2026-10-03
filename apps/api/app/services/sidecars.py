@@ -102,7 +102,8 @@ class SidecarKind:
     dirs: tuple[str, ...] = ()
     unit_depth: int = 1
     depends: Dependence = Dependence.TILES
-    #: The kind `INSTANCES` kinds follow, by name.
+    #: The kind whose ids this one names, by name: every `INSTANCES` kind, and the skin
+    #: (bound to positions too). An attach that replaces that kind drops this one.
     follows: str | None = None
     basis: str = ""
     action: str = ""
@@ -145,6 +146,9 @@ SKIN = SidecarKind(
     extras=("skin",),
     files=("skin.json", "skin.bin"),
     depends=Dependence.POSITIONS,
+    # Bound to the splats (a republish carries it on their checksums) and to the objects:
+    # an attach that replaces instances.json renumbers the ids its skins move.
+    follows="instances",
     checksums=(("skin.json", "tiles"),),
     basis=(
         "`tiles` maps tile checksums to skin runs and to rows of skin.bin in each tile's "
@@ -603,7 +607,7 @@ def _declared(value: Any) -> bool:
 
 def followers(names: Collection[str]) -> list[str]:
     """Every kind keyed by the ids of one of `names` (`follows`), and by theirs in turn, in
-    `KINDS` order: the kinds that hold only where those do (materials and telemetry, where
+    `KINDS` order: the kinds that hold only where those do (the skin, materials and telemetry, where
     `instances` goes)."""
     found: set[str] = set()
     leaders = set(names)

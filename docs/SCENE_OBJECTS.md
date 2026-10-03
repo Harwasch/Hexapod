@@ -968,13 +968,13 @@ no "keep" — one tool writes a kind's files together, and the API cannot tell a
 matches a new one. A kind's key set to `null` with none of its files staged removes the kind,
 files and key. And the class "follows instances" holds on an attach as on a republish: an
 attach that replaces `instances` (stages one of its files, or sets or removes
-`extras.instances`) drops `materials` and `telemetry`, files and keys, and flags each on the
-asset ("Materials need re-pointing at the new objects", reason "it names instances ids, and
+`extras.instances`) drops the `skin`, `materials` and `telemetry`, files and keys, and flags
+each on the asset ("Materials need re-pointing at the new objects", "Skins need refitting"; reason "it names instances ids, and
 an attach replaced instances…", no `jobId`) — unless the same request sends them too, which
 is the caller's word that they name the new ids. The response lists them in `dropped`, and
 every path of the previous generation the new one lacks in `removed`. An attach of anything
-else (a fill, a grid, the streamed LOD, a rig) leaves objects, materials and telemetry as
-they were.
+else (a fill, a grid, the streamed LOD, a rig) leaves objects, the skin, materials and
+telemetry as they were.
 
 ### What each workflow sends
 
