@@ -25,8 +25,9 @@
  *
  * Drawn on demand: Spark has no loop of its own -- it sorts in a worker when a frame is drawn
  * and the view or the splats changed -- and says when a sort it started has finished
- * (`onDirty`), which is when the host draws the frame that shows it (overlayFrames.ts). A
- * tile's centres are digested within the main thread's frame budget (`hooks.work`).
+ * (`onDirty`), which is when the host draws the frame that shows it (overlayFrames.ts); what
+ * it says while a frame is being drawn is that frame's, and asks for none. A tile's centres are
+ * digested within the main thread's frame budget (`hooks.work`).
  */
 
 import { dyno, SparkRenderer, type SplatMesh } from "@sparkjsdev/spark";
@@ -182,11 +183,20 @@ export function createBackend(
   });
   renderer.setClearColor(0x000000, 0);
   const scene = new THREE.Scene();
-  // A sort finished (or the splats were regenerated): the next frame shows it.
+  /** Inside `renderer.render`: what Spark says there is about the frame being drawn. */
+  let drawing = false;
+  // A sort finished: the next frame shows it. Spark says so as well while a frame it draws
+  // regenerates the splats (`onBeforeRender`), which is no reason for another: that frame draws
+  // the new splats, and new tiles come in with the sort that lands them, which says so. Asked
+  // for, the next frame regenerated again -- Spark does whenever the camera is away from where
+  // the sort in flight was taken -- and asked again: a still view after a move drew the same
+  // frame every display frame until that sort landed, seconds under a software GPU.
   const spark = new SparkRenderer({
     renderer,
     enableLod: false,
-    onDirty: () => hooks.frameWanted(),
+    onDirty: () => {
+      if (!drawing) hooks.frameWanted();
+    },
   });
   scene.add(spark);
   const camera = new THREE.PerspectiveCamera();
@@ -541,7 +551,12 @@ export function createBackend(
       camera.near = pose.near;
       camera.far = pose.far;
       camera.updateProjectionMatrix();
-      renderer.render(scene, camera);
+      drawing = true;
+      try {
+        renderer.render(scene, camera);
+      } finally {
+        drawing = false;
+      }
     },
     destroy: () => {
       for (const tile of tiles.values()) {
