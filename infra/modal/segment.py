@@ -21,25 +21,37 @@ weights volume once. Run from the repository root (`.github/workflows/segment.ym
     modal run infra/modal/segment.py                    # the scans in SCANS, in parallel
     modal run infra/modal/segment.py --names spool --views 24
 
-**What a call reserves, and what that costs.** An L4 with `CPU_CORES` cores and
-`MEMORY_MIB` of memory -- chosen on cost, from the camp (below) -- and, for a scan of more
-than `LARGE_TILES` tiles, `LARGE_CPU_CORES` and `LARGE_MEMORY_MIB` through
-`Function.with_options` (modal 1.5.5, the version `.github/workflows/segment.yml` pins).
-The render processes are not a fixed number: `segment_scene.default_workers` derives them
-from the reservation it is told (`--cpus`, `--memory-gb`) -- one per reserved core, no more
-than the memory left after the scan and the models are loaded holds at
-`RENDER_WORKER_BYTES` each -- because inside the container the host's cores and memory
-are visible, not the reservation, and a hard `--workers 24` on 8 cores forks three
-renders per core and pays for the burst (Modal bills max(reserved, used)).
+**What a call reserves, and what that costs.** An L4, and cores and memory sized from the
+scan before it is spawned (`sizing`; its constants, and the runs each comes from, are
+together below). The scan's tileset.json is read here first -- it names every tile's
+gaussians -- and the views a run can keep follow from `--views`, `MAX_VIEWS` and the
+coverage rounds. The cores are a few render processes' worth whatever the scan, because
+SAM 2.1's masks on the GPU set the pace; the memory is what the main process holds (the
+models, the scan and the copy its views are drawn from, the views kept for `describe`)
+plus the render processes. Both go to `Function.with_options` (modal 1.5.5, the version
+`.github/workflows/segment.yml` pins) as `(request, limit)`: Modal bills max(request,
+used), and the limit -- `CPU_HEADROOM` and `MEMORY_HEADROOM` times the request -- is a hard
+ceiling, so an estimate that is low costs a little more, or throttles, instead of failing.
+The render processes follow from the request, never the limit:
+`segment_scene.default_workers` derives them from what it is told (`--cpus`,
+`--memory-gb`) -- the reserved cores less `MAIN_PROCESS_CORES`, no more than the memory
+left after the scan and the models holds -- because inside the container the host's cores
+and memory are visible, not the reservation, and a hard `--workers 24` on 8 cores forks
+three renders per core and pays for the burst.
+Every run logs its peaks (`usage` in its summary.json, and one printed line) so the
+estimate can be tuned.
 """
 
 from __future__ import annotations
 
+import contextlib
 import json
+import math
 import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Iterator
 from pathlib import Path
 
 import modal
@@ -104,52 +116,6 @@ image = (
 )
 
 
-#: The reservation every call gets, chosen on cost. Measured on the camp (22.6M gaussians,
-#: ~110 m, 252 views; 2026-10-02, L4): **8 cores and 32 GiB, 1,416 s for $0.56**, against
-#: 32 cores and 96 GiB, 1,217 s for $1.04 -- 14% faster for 86% more, because SAM 2.1's
-#: masks on the GPU (695 s of the camp's) are the bulk and the CPU renders overlap them.
-#: At Modal's per-second rates -- L4 $0.80/h, a core $0.047/h, a GiB $0.008/h, which
-#: reproduce both figures -- 8 cores and 32 GiB are $0.63/h of CPU and memory beside the
-#: L4, and the camp's run is $0.32 of GPU, $0.15 of cores and $0.10 of memory.
-CPU_CORES = 8.0
-MEMORY_MIB = 32 * 1024
-
-#: A scan of more tiles than this gets the large reservation: twice the camp, whose
-#: tileset.json names 514 (22.7M gaussians; `tiles_in` counts the LOD parents as well as
-#: the leaves, each at most 100k gaussians -- the package stage's `tile_gaussians`), so
-#: about 45M gaussians. What grows with the scan is what the main process holds --
-#: the scan whole, its index, every view kept for `describe` (segment_scene's docstring:
-#: the camp ran "on 15 GB") -- and at twice the camp that alone leaves 32 GiB room for one
-#: render at `RENDER_WORKER_BYTES`, so the renders, not the masks, would set the pace,
-#: and a little more would not fit at all. The view count does not grow past
-#: `MAX_VIEWS` (480), so time grows about with the views: **expected, not measured**, about
-#: twice the camp's 24 min at 16 cores and 64 GiB, ~$1.6 a scan ($0.80/h of L4 and $1.27/h
-#: of cores and memory).
-LARGE_TILES = 1000
-LARGE_CPU_CORES = 16.0
-LARGE_MEMORY_MIB = 64 * 1024
-
-
-def tiles_in(document: dict) -> int:
-    """How many tiles (content URIs, parents included) a tileset.json names."""
-    count = 0
-    stack = [document["root"]]
-    while stack:
-        tile = stack.pop()
-        if tile.get("content", {}).get("uri"):
-            count += 1
-        stack.extend(tile.get("children", []))
-    return count
-
-
-def reservation(tiles: int) -> tuple[float, int]:
-    """(cores, MiB) for a scan of `tiles` tiles: the default, or the large one past
-    `LARGE_TILES` (see there for why, and what it is expected to cost)."""
-    if tiles > LARGE_TILES:
-        return LARGE_CPU_CORES, LARGE_MEMORY_MIB
-    return CPU_CORES, MEMORY_MIB
-
-
 #: Gaussians larger than this (largest axis, metres) are left out of the views: the camp's
 #: floaters (0.4% of it), which gsplat draws as blobs over a view from outside.
 MAX_SCALE_M = 0.5
@@ -159,6 +125,327 @@ COVERAGE_VIEWS = 96
 #: Also embed every crop kind and score `segment_scene.describe_variants` (variants.json,
 #: variants.npz): to compare how instances are described. It costs a third more time.
 VARIANTS = False
+
+
+# ------------------------------------------------------------------- what a run reserves
+#
+# Every constant of the estimate is here, with the run it was calibrated from. v2 has not
+# been measured at these sizes, so the memory terms are derived from segment_scene's code
+# (what it holds, and when) and the ceiling over them is generous. Each run logs its peaks
+# -- `usage` in its summary.json, beside `sizing` (the estimate it ran on, term by term in
+# `termsGiB`), and one `<name>: peak ...` line -- and the constants are re-tuned from those:
+#   * BASE_BYTES: `mainPeakGiB` of a small scan (spool, pumpkin), less its `scan` and
+#     `views` terms, which are small there;
+#   * SCAN_BYTES_PER_GAUSSIAN: the slope of `mainPeakGiB` (less the views term) against
+#     `gaussians`, from a small scan to the camp;
+#   * RENDER_WORKER_BYTES (and segment_scene's, which must match): `workerPeakGiB`, what
+#     a render worker held of its own (not `workerResidentGiB`, which counts the pages it
+#     shares with the main process from the fork);
+#   * MEMORY_HEADROOM: down towards 1.5 once `containerPeakGiB` (or main + workers) has
+#     stayed near the request on all three scans;
+#   * the cores: `gpuBusyShare` near 1 with `coresUsed` under the request says the masks
+#     set the pace, as assumed; a GPU that idles while `coresUsed` sits at the request says
+#     the renders do (RENDER_S_PER_VIEW is too low; `run.timingsS.renderS` is the time the
+#     GPU waited for views).
+
+GIB = 1 << 30
+MIB = 1 << 20
+GPU = "L4"
+
+#: Modal's per-second rates, per hour: the L4, a core, a GiB. They reproduce both v1 camp
+#: bills (2026-10-02, 252 views): 8 cores and 32 GiB, 1,416 s for $0.56, against 32 cores
+#: and 96 GiB, 1,217 s for $1.04 -- 14% faster for 86% more.
+L4_PER_HOUR = 0.80
+CORE_PER_HOUR = 0.047
+GIB_PER_HOUR = 0.008
+
+#: **Cores.** The L4 is paced by SAM 2.1's masks (that v1 camp run: 695 s over 252 views,
+#: 2.8 s a view at 32 points a side), while a render process takes ~8 s a view (the same
+#: run, 24 of them): the renders overlap the masks, which is why 32 cores were only 14%
+#: faster than 8. v2 adds work on the GPU's side of each view (gsplat's raster), not the
+#: CPU's, so render processes enough to feed the masks, with `RENDER_SLACK` for slow views,
+#: are enough at any scan size: a view's samples are capped (`splat_render.render`'s
+#: `sample_budget`) and a local view sees one footprint, so a larger scan has more views,
+#: not slower ones. Plus `MAIN_PROCESS_CORES` for the process that rasterizes, masks and
+#: votes each view.
+MASK_S_PER_VIEW = 2.8
+RENDER_S_PER_VIEW = 8.0
+RENDER_SLACK = 1.25
+#: segment_scene.MAIN_PROCESS_CORES: of the cores requested, the ones it does not render on.
+MAIN_PROCESS_CORES = 2
+RENDER_WORKERS = math.ceil(RENDER_S_PER_VIEW / MASK_S_PER_VIEW * RENDER_SLACK)  # 4
+CPU_CORES = float(RENDER_WORKERS + MAIN_PROCESS_CORES)  # 6
+#: The CPU limit over the request: room for the single-process phases' bursts (the lift's
+#: KD-tree queries use every core they see), throttled past it.
+CPU_HEADROOM = 1.5
+MIN_CPU_CORES, MAX_CPU_CORES = 4.0, 16.0
+
+#: **Memory: what the main process holds at its peak** -- the end of the last coverage
+#: round's renders, the views all kept and the render processes all running. Afterwards
+#: the renders are gone, and what the lift, `describe` and the tile binding add is less
+#: than they held. Unmeasured for v2, so derived from segment_scene's code:
+#: the process with its models (`load_masks`, `load_embedder`): Python, numpy, scipy, torch
+#: 2.4 with a CUDA context and its libraries (~3 GiB resident), SAM 2.1 tiny and SigLIP 2
+#: base, whose weights are on the GPU once loaded ...
+BASE_BYTES = 4 * GIB
+#: ... per gaussian (the tileset's leaves, which `splat_render.load_tileset` loads): the
+#: scan as `Splats` in float64 (positions 24, rotations 32, scales 24, colours 24,
+#: opacities 8: 112), the copy its views are drawn from (`segment`: `splats.take(keep)`
+#: without the floaters past `--max-scale-m`, 112 more), the cell of each in both (int32,
+#: 4 + 4), the scale test's `largest` and `keep` (8 + 8) and the `SplatIndex` order (8).
+#: The transients (the tiles' concatenation, the cells' and the index's sorts, the gsplat
+#: upload) come before the views and the render processes are held ...
+SCAN_BYTES_PER_GAUSSIAN = 256
+#: ... per view kept for `describe` (`segment_scene.View`, 512 x 384): the image and the
+#: CPU's samples (uint8 x 3 each), the cell and its purity per pixel (int32, float32), and
+#: the view's votes (`_Votes`: 20 bytes a visible cell, up to ~50k cells) ...
+VIEW_WIDTH, VIEW_HEIGHT = 512, 384  # segment_scene.VIEW_WIDTH, VIEW_HEIGHT
+VOTE_BYTES = 1 << 20
+VIEW_BYTES = VIEW_WIDTH * VIEW_HEIGHT * (3 + 3 + 4 + 4) + VOTE_BYTES
+#: (segment_scene.MAX_VIEWS: the plan's views in all, local ones included) ...
+MAX_VIEWS = 480
+#: ... and per render process (segment_scene's, the room `default_workers` divides): a
+#: camp view renders in 1.6-1.9 GB at most (v1, 2026-10-02), its per-sample arrays capped
+#: by `render`'s sample budget; past 62.5M gaussians a whole-scan view's culling (40 bytes
+#: a gaussian) is more.
+RENDER_WORKER_BYTES = 2.5e9
+RENDER_BYTES_PER_GAUSSIAN = 40
+#: The memory limit over the request. Nothing of v2's memory has been measured, so it is
+#: twice the estimate: the limit is not billed (only use above the request is), and a run
+#: OOM-killed at its limit wastes the whole run, while one that needs twice the estimate
+#: under it costs `GIB_PER_HOUR` a GiB more. Bring it down once the logged peaks agree.
+MEMORY_HEADROOM = 2.0
+MIN_MEMORY_MIB, MAX_MEMORY_MIB = 16 * 1024, 128 * 1024
+MAX_MEMORY_LIMIT_MIB = 192 * 1024
+#: A leaf tile without `extras.gaussians` counts as the package stage's most
+#: (`tile_gaussians`); a scan whose tileset.json cannot be read here is sized as the camp
+#: (22,577,243 leaf gaussians in 514 tiles).
+TILE_GAUSSIANS = 100_000
+FALLBACK_GAUSSIANS = 22_577_243
+
+#: **Expected, not measured.** The estimate at the defaults (24 views, 2 coverage rounds:
+#: up to 672 views), the scans' sizes from their tileset.json (2026-10-03). The times are
+#: guesses: the camp's v2 run (segment.yml run 37100026825) took 2,351 s on 32 cores and
+#: 96 GiB, about $2.00, and 4 render processes are taken to add ~15% (8 cores did to v1);
+#: the small scans ~250 views of 2.8 s, the models' loading and `describe`.
+#:
+#:   scan     leaf gaussians  tiles  cores (limit)  GiB (limit)  ~time   ~$/h   ~$ a run
+#:   spool           153,566      3     6 (9)        16 (32)    15 min  1.21    0.30
+#:   pumpkin         387,813      7     6 (9)        16 (32)    15 min  1.21    0.30
+#:   camp         22,577,243    514     6 (9)        22 (44)    45 min  1.26    0.94
+#:   (2x camp)    45,000,000      -     6 (9)        27 (54)       -    1.30      -
+
+
+def scan_size(document: dict) -> dict[str, int]:
+    """A tileset.json's size: its tiles (content URIs, parents included), its leaf gaussians
+    -- what segment_scene loads (`splat_render.load_tileset`) -- and its parents', from the
+    `extras.gaussians` that `splat_tiles.convert` writes on every tile (a leaf without one
+    counts as `TILE_GAUSSIANS`)."""
+    tiles = leaves = parents = 0
+    stack = [document["root"]]
+    while stack:
+        tile = stack.pop()
+        children = tile.get("children", [])
+        if tile.get("content", {}).get("uri"):
+            tiles += 1
+            count = tile.get("extras", {}).get("gaussians")
+            if children:
+                parents += int(count or 0)
+            else:
+                leaves += TILE_GAUSSIANS if count is None else int(count)
+        stack.extend(children)
+    return {"tiles": tiles, "gaussians": leaves, "parentGaussians": parents}
+
+
+def planned_views(views: int, coverage_rounds: int) -> int:
+    """The most views a run renders and keeps: `plan_views` makes `views` and local views up
+    to `MAX_VIEWS` in all (how many local ones is known only once planned, so the most), and
+    each coverage round up to `COVERAGE_VIEWS` more."""
+    return max(views, MAX_VIEWS) + max(coverage_rounds, 0) * COVERAGE_VIEWS
+
+
+def render_worker_bytes(gaussians: int) -> float:
+    """One render process's peak (segment_scene.render_worker_bytes)."""
+    return max(RENDER_WORKER_BYTES, RENDER_BYTES_PER_GAUSSIAN * float(gaussians))
+
+
+def sizing(gaussians: int, *, views: int = 24, coverage_rounds: int = COVERAGE_ROUNDS) -> dict:
+    """The reservation for a scan of `gaussians` leaf gaussians: requests, limits and the
+    estimate's terms (GiB), as the summary keeps them.
+
+    Memory: `BASE_BYTES`, the scan (`SCAN_BYTES_PER_GAUSSIAN`), the views it can keep
+    (`planned_views` of `VIEW_BYTES`) and the render processes (`render_worker_bytes`),
+    rounded up to a GiB within `MIN_MEMORY_MIB` and `MAX_MEMORY_MIB`; the limit
+    `MEMORY_HEADROOM` times that. Cores: `CPU_CORES` within `MIN_CPU_CORES` and
+    `MAX_CPU_CORES`, whatever the scan; the limit `CPU_HEADROOM` times that. `workers` is
+    what `segment_scene.default_workers` forks from the request -- never the limit -- the
+    cores less `MAIN_PROCESS_CORES`, as many as the memory left after the rest holds."""
+    cores = min(max(CPU_CORES, MIN_CPU_CORES), MAX_CPU_CORES)
+    worker = render_worker_bytes(gaussians)
+    count = planned_views(views, coverage_rounds)
+    terms = {
+        "base": float(BASE_BYTES),
+        "scan": float(SCAN_BYTES_PER_GAUSSIAN) * gaussians,
+        "views": float(count * VIEW_BYTES),
+    }
+    held = sum(terms.values())
+    renders = max(1, int(cores) - MAIN_PROCESS_CORES)
+    memory_mib = math.ceil((held + renders * worker) / GIB) * 1024
+    memory_mib = min(max(memory_mib, MIN_MEMORY_MIB), MAX_MEMORY_MIB)
+    workers = max(1, min(renders, int((memory_mib * MIB - held) // worker)))
+    terms["workers"] = workers * worker
+    return {
+        "gaussians": int(gaussians),
+        "views": count,
+        "cores": cores,
+        "coresLimit": cores * CPU_HEADROOM,
+        "memoryMiB": memory_mib,
+        "memoryLimitMiB": max(
+            memory_mib, min(int(memory_mib * MEMORY_HEADROOM), MAX_MEMORY_LIMIT_MIB)
+        ),
+        "workers": workers,
+        "termsGiB": {k: round(v / GIB, 2) for k, v in terms.items()},
+        "dollarsPerHour": round(
+            L4_PER_HOUR + cores * CORE_PER_HOUR + memory_mib / 1024 * GIB_PER_HOUR, 3
+        ),
+    }
+
+
+def options(plan: dict) -> dict:
+    """`Function.with_options`' arguments for a `sizing`: (request, limit) pairs."""
+    return {
+        "gpu": GPU,
+        "cpu": (float(plan["cores"]), float(plan["coresLimit"])),
+        "memory": (int(plan["memoryMiB"]), int(plan["memoryLimitMiB"])),
+    }
+
+
+#: What the function's decorator reserves -- a call spawned without `with_options` -- the
+#: estimate for a camp-sized scan. `main` spawns each scan on its own.
+DEFAULT_SIZING = sizing(FALLBACK_GAUSSIANS)
+
+
+def sizing_line(name: str, size: dict | None, plan: dict) -> str:
+    """The line `main` prints for a scan before spawning it."""
+    tiles = "?" if size is None else size["tiles"]
+    return (
+        f"{name}: {tiles} tiles, {plan['gaussians']:,} gaussians, up to {plan['views']} views"
+        f" -> {plan['cores']:g} cores (limit {plan['coresLimit']:g}),"
+        f" {plan['memoryMiB'] / 1024:g} GiB (limit {plan['memoryLimitMiB'] / 1024:g}) on an"
+        f" {GPU}, {plan['workers']} render workers; ~${plan['dollarsPerHour']:.2f}/h"
+    )
+
+
+# ------------------------------------------------------------------- what a run used
+
+#: nvidia-smi's GPU utilization (%) and memory (MiB), sampled this often (seconds) while
+#: segment_scene runs.
+GPU_SAMPLE_S = 2
+GPU_QUERY = (
+    "nvidia-smi",
+    "--query-gpu=utilization.gpu,memory.used",
+    "--format=csv,noheader,nounits",
+    "-l",
+    str(GPU_SAMPLE_S),
+)
+#: segment_scene.CGROUP_PEAK_FILES: the container's peak memory, cgroup v2 then v1.
+CGROUP_PEAK_FILES = (
+    "/sys/fs/cgroup/memory.peak",
+    "/sys/fs/cgroup/memory/memory.max_usage_in_bytes",
+)
+
+
+@contextlib.contextmanager
+def gpu_samples(path: Path) -> Iterator[None]:
+    """nvidia-smi's samples (`GPU_QUERY`) into `path` while the block runs; none where
+    there is no nvidia-smi."""
+    process = None
+    try:
+        with path.open("w", encoding="utf-8") as out:
+            process = subprocess.Popen(GPU_QUERY, stdout=out, stderr=subprocess.DEVNULL)
+    except OSError:
+        process = None
+    try:
+        yield
+    finally:
+        if process is not None:
+            process.terminate()
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                process.kill()
+
+
+def gpu_usage(text: str) -> dict[str, float]:
+    """nvidia-smi's samples (`utilization.gpu, memory.used` a line) as the GPU's busy share
+    -- their mean: each is the share of nvidia-smi's sample period a kernel ran -- and its
+    peak memory; empty without samples."""
+    busy: list[float] = []
+    used: list[float] = []
+    for line in text.splitlines():
+        parts = [part.strip() for part in line.split(",")]
+        try:
+            utilisation, memory = float(parts[0]), float(parts[1])
+        except (ValueError, IndexError):
+            continue
+        busy.append(utilisation)
+        used.append(memory)
+    if not busy:
+        return {}
+    return {
+        "gpuBusyShare": round(sum(busy) / len(busy) / 100, 3),
+        "gpuPeakGiB": round(max(used) / 1024, 2),
+        "gpuSamples": len(busy),
+    }
+
+
+def container_peak_gib(files: tuple[str, ...] = CGROUP_PEAK_FILES) -> float | None:
+    """The container's peak memory (every process in it, shared pages once), or None
+    where no cgroup file keeps it."""
+    for name in files:
+        try:
+            return round(int(Path(name).read_text().split()[0]) / GIB, 2)
+        except (OSError, ValueError, IndexError):
+            continue
+    return None
+
+
+def call_usage(run: dict | None, gpu_text: str) -> dict:
+    """What a call used at its peak: segment_scene's `usage` from its summary (`run`: its
+    main process, what a render worker held of its own, CPU seconds, wall time, cores
+    busy), the
+    container's peak over the whole call (the fetch and the report too) where the cgroup
+    keeps it, the largest process the call ran (`resource`'s RUSAGE_CHILDREN: there even
+    when segment_scene failed), and the GPU's busy share and peak memory."""
+    import resource
+
+    usage = dict((run or {}).get("usage", {}))
+    largest = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss  # KiB on Linux
+    usage["largestProcessGiB"] = round(largest * 1024 / GIB, 2)
+    container = container_peak_gib()
+    if container is not None:
+        usage["containerPeakGiB"] = container
+    usage.update(gpu_usage(gpu_text))
+    return usage
+
+
+def usage_line(name: str, summary: dict) -> str:
+    """The line `main` prints for a scan once it is done: its peaks against its sizing."""
+    plan = summary.get("sizing") or {}
+    usage = summary.get("usage") or {}
+
+    def gib(key: str) -> str:
+        value = usage.get(key)
+        return "?" if value is None else f"{value:g} GiB"
+
+    busy = usage.get("gpuBusyShare")
+    return (
+        f"{name}: peak {gib('mainPeakGiB')} main, {gib('workerPeakGiB')} a render worker,"
+        f" {gib('containerPeakGiB')} container; requested {plan.get('memoryMiB', 0) / 1024:g}"
+        f" GiB (limit {plan.get('memoryLimitMiB', 0) / 1024:g}); {usage.get('coresUsed', '?')}"
+        f" of {plan.get('cores', 0):g} cores busy; GPU busy"
+        f" {'?' if busy is None else f'{busy:.0%}'}; {summary.get('totalS', '?')} s"
+    )
 
 
 def segment_argv(
@@ -173,9 +460,10 @@ def segment_argv(
     cache: Path | None = None,
 ) -> list[str]:
     """`segment_scene.py`'s command line for one scan in `work` (the call's scratch
-    directory: variants and debug sheets go there): the views drawn by `renderer` without
-    the floaters past `MAX_SCALE_M`, `coverage_rounds` rounds of `COVERAGE_VIEWS`, and the
-    reservation, not a worker count, so the render processes follow the memory the scan
+    directory: variants, debug sheets and the run's summary, `run.json`, go there): the
+    views drawn by `renderer` without the floaters past `MAX_SCALE_M`, `coverage_rounds`
+    rounds of `COVERAGE_VIEWS`, and the reservation's request (`cpus`, `memory_mib`; never
+    the limit), not a worker count, so the render processes follow the memory the scan
     leaves (`default_workers`)."""
     return [
         sys.executable,
@@ -205,6 +493,8 @@ def segment_argv(
         str(int(cpus)),
         "--memory-gb",
         f"{memory_mib / 1024:g}",
+        "--summary",
+        str(work / "run.json"),
         *(["--cache", str(cache)] if cache is not None else []),
     ]
 
@@ -256,12 +546,12 @@ def _fetch(url: str, out: Path) -> int:
 
 @app.function(
     image=image,
-    gpu="L4",
-    # Views render in forked processes, as many as this reservation holds
-    # (`segment_scene.default_workers`), while the GPU masks them. A large scan's call
-    # overrides both (`reservation`, `Function.with_options`).
-    cpu=CPU_CORES,
-    memory=MEMORY_MIB,
+    gpu=GPU,
+    # Views render in forked processes, as many as the request holds
+    # (`segment_scene.default_workers`), while the GPU masks them. Each call in `main`
+    # overrides both with its scan's own (request, limit) (`sizing`, `with_options`).
+    cpu=options(DEFAULT_SIZING)["cpu"],
+    memory=options(DEFAULT_SIZING)["memory"],
     volumes={"/weights": WEIGHTS},
     timeout=3 * 3600,
 )
@@ -272,16 +562,17 @@ def segment_scan(
     keep_masks: bool = False,
     renderer: str = "gsplat",
     coverage_rounds: int = COVERAGE_ROUNDS,
-    cpus: float = CPU_CORES,
-    memory_mib: int = MEMORY_MIB,
+    plan: dict | None = None,
 ) -> dict:
     """Segment one published scan; returns the files (bytes) and the run's summary.
     `keep_masks`: also return `masks.tar` (every view's masks and the cameras, the
     `--cache` files that are not views), to lift again elsewhere without a GPU.
-    `cpus` and `memory_mib` are what this call reserved -- the caller chose them -- which
-    the container cannot see for itself."""
+    `plan` is the `sizing` this call was spawned on (default `DEFAULT_SIZING`, the
+    decorator's), which the container cannot see for itself: its request goes to
+    segment_scene, and the summary keeps it beside what the run used (`usage`)."""
     import tarfile
 
+    plan = plan or DEFAULT_SIZING
     started = time.time()
     with tempfile.TemporaryDirectory() as work:
         tiles = Path(work) / "tiles"
@@ -295,25 +586,34 @@ def segment_scan(
             before.write_bytes(_get(url.rsplit("/", 1)[0] + "/instances.json", 120))
         except RuntimeError:
             before = None
-        run = subprocess.run(  # noqa: S603 - fixed argv; only paths we made vary
-            segment_argv(
-                tiles,
-                Path(work),
-                views=views,
-                cpus=cpus,
-                memory_mib=memory_mib,
-                renderer=renderer,
-                coverage_rounds=coverage_rounds,
-                cache=cache if keep_masks else None,
-            ),
-            cwd=CAPTURES,
-            capture_output=True,
-            text=True,
-        )
+        gpu = Path(work) / "gpu.csv"
+        with gpu_samples(gpu):
+            run = subprocess.run(  # noqa: S603 - fixed argv; only paths we made vary
+                segment_argv(
+                    tiles,
+                    Path(work),
+                    views=views,
+                    cpus=plan["cores"],
+                    memory_mib=plan["memoryMiB"],
+                    renderer=renderer,
+                    coverage_rounds=coverage_rounds,
+                    cache=cache if keep_masks else None,
+                ),
+                cwd=CAPTURES,
+                capture_output=True,
+                text=True,
+            )
         WEIGHTS.commit()
         log = run.stdout[-20000:] + run.stderr[-20000:]
+        try:
+            segmentation = json.loads((Path(work) / "run.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):  # it failed before its summary
+            segmentation = {}
+        gpu_text = gpu.read_text(encoding="utf-8") if gpu.exists() else ""
         if run.returncode != 0:
-            return {"name": name, "ok": False, "log": log}
+            # What it used up to there still says whether it was the memory.
+            usage = call_usage(segmentation, gpu_text)
+            return {"name": name, "ok": False, "sizing": plan, "usage": usage, "log": log}
         segmented = time.time()
         files = {
             k: (tiles / k).read_bytes()
@@ -358,11 +658,13 @@ def segment_scan(
             "name": name,
             "ok": True,
             "tiles": count,
-            "cpus": cpus,
-            "memoryMiB": memory_mib,
+            "sizing": plan,
             "fetchS": round(fetched, 1),
             "segmentS": round(segmented - started - fetched, 1),
             "totalS": round(time.time() - started, 1),
+            # Peaks over the whole call (the report too), to tune `sizing`'s constants.
+            "usage": call_usage(segmentation, gpu_text),
+            "run": {k: v for k, v in segmentation.items() if k != "usage"},
             "files": files,
             "log": log,
         }
@@ -379,9 +681,11 @@ def main(
 ) -> None:
     """Segment the named scans in parallel containers; write each result under `out/`.
 
-    Each scan's reservation follows its size (`reservation`): its tileset.json is read
-    here first -- a few kB -- to count its tiles, and a scan past `LARGE_TILES` is spawned
-    on `segment_scan.with_options(cpu=..., memory=...)`, a container pool of its own.
+    Each scan's reservation follows its size (`sizing`): its tileset.json is read here
+    first -- a few kB, hundreds for the camp -- for its tiles and gaussians, and it is
+    spawned on `segment_scan.with_options(gpu=, cpu=(request, limit), memory=(request,
+    limit))` (`options`), a container pool of its own. Once done, a line says what it used
+    against that (`usage_line`); summary.json keeps both.
     """
     chosen = [n.strip() for n in names.split(",") if n.strip()]
     failed = []
@@ -389,27 +693,30 @@ def main(
     for name in chosen:
         url = SCANS[name]
         try:
-            tiles = tiles_in(json.loads(_get(url, 120)))
-        except (RuntimeError, OSError, ValueError, KeyError) as error:
+            size = scan_size(json.loads(_get(url, 120)))
+        except (RuntimeError, OSError, ValueError, KeyError, TypeError) as error:
             # The container fetches the same URL and will say what is wrong with it.
-            sys.stdout.write(f"{name}: could not count tiles ({error}); default reservation\n")
-            tiles = 0
-        cpus, memory_mib = reservation(tiles)
-        function = (
-            segment_scan
-            if (cpus, memory_mib) == (CPU_CORES, MEMORY_MIB)
-            else segment_scan.with_options(cpu=cpus, memory=memory_mib)
-        )
-        sys.stdout.write(
-            f"{name}: {tiles} tiles -> {cpus:g} cores, {memory_mib // 1024} GiB on an L4\n"
-        )
+            sys.stdout.write(f"{name}: could not read its size ({error}); sized as the camp\n")
+            size = None
+        gaussians = FALLBACK_GAUSSIANS if size is None else size["gaussians"]
+        plan = sizing(gaussians, views=views, coverage_rounds=coverage_rounds)
+        sys.stdout.write(sizing_line(name, size, plan) + "\n")
         calls.append(
-            function.spawn(
-                name, url, views, keep_masks, renderer, coverage_rounds, cpus, memory_mib
+            (
+                name,
+                plan,
+                segment_scan.with_options(**options(plan)).spawn(
+                    name, url, views, keep_masks, renderer, coverage_rounds, plan
+                ),
             )
         )
-    for call in calls:
-        result = call.get()
+    for name, plan, call in calls:
+        try:
+            result = call.get()
+        except Exception as error:  # noqa: BLE001 - e.g. a container killed at its memory limit
+            # The other scans' results are still written.
+            log = f"{type(error).__name__}: {error}"
+            result = {"name": name, "ok": False, "sizing": plan, "log": log}
         folder = Path(out) / result["name"]
         folder.mkdir(parents=True, exist_ok=True)
         (folder / "log.txt").write_text(result["log"], encoding="utf-8")
@@ -418,6 +725,7 @@ def main(
         summary = {k: v for k, v in result.items() if k not in ("files", "log")}
         (folder / "summary.json").write_text(json.dumps(summary, indent=1), encoding="utf-8")
         sys.stdout.write(json.dumps(summary) + "\n")
+        sys.stdout.write(usage_line(result["name"], summary) + "\n")
         if not result["ok"]:
             failed.append(result["name"])
     if failed:

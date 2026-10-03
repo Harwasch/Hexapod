@@ -62,10 +62,9 @@ All of these are general models; none knows our scenes.
    local views that scale with its area -- obliques per footprint anchor, placed by line of
    sight, and more eye-height views -- each with a far plane, up to a cap (252 on the camp).
    They render in forked workers while the GPU masks the ones already done -- as many as
-   the Modal call's reservation holds (8 CPUs and 32 GiB on an L4: the camp in 1,416 s for
-   $0.56; a scan past 1,000 tiles -- twice the camp's 514 -- gets 16 and 64 GiB;
-   `infra/modal/segment.py`), not a fixed count, since the masks rather than the renders
-   set the pace. On a GPU the image the mask model sees is rasterized by gsplat
+   the Modal call's request holds (sized from the scan: "What a run reserves", below), not
+   a fixed count, since the masks rather than the renders set the pace. On a GPU the image
+   the mask model sees is rasterized by gsplat
    (`--renderer gsplat`, as a viewer draws it; the per-pixel splat ids still come from the
    CPU's samples of the same camera), without the floaters larger than `--max-scale-m`
    (0.5 m). Then **coverage rounds**
@@ -141,6 +140,30 @@ All of these are general models; none knows our scenes.
    21% -> 28% Trees, 13% -> 12% Shrubs. Worse: the camp now has 6% Household and 4% Sky
    (labels such as "map" and "plume" on crowns), and only 4.3k of 28.4k instances are
    described.
+
+**What a run reserves** (`infra/modal/segment.py`, `sizing`). Each scan is sized before it
+is spawned, from its tileset.json (every tile names its gaussians). An L4; 6 cores whatever
+the scan -- 4 render processes, enough to keep SAM 2.1's masks fed (v1 on the camp: 2.8 s
+of masks against ~8 s of rendering a view, so 32 cores were only 14% faster than 8: 1,217 s
+for $1.04 against 1,416 s for $0.56), and 2 for the process that rasterizes, masks and
+votes; and memory for what that process holds at its peak, the end of the last coverage
+round: 4 GiB of process and models, 256 bytes a gaussian (the scan in float64 and the copy
+its views are drawn from), ~3.8 MB for each of up to 672 views kept for describing, and
+2.5 GB for each render process. Both go to Modal as (request, limit), the limit 1.5x the
+cores and 2x the memory: Modal bills max(request, used), so an estimate that is low costs a
+little more, or throttles, instead of failing; and the render processes follow the request,
+never the limit. Every run writes its peaks into its summary.json (`usage`: the main
+process's and a render process's peak memory, the container's, CPU seconds, cores busy, the
+GPU's busy share) beside the estimate (`sizing`), and prints them in one line, so the
+estimate's constants (in segment.py, with the runs they come from) can be tuned.
+**Estimated, not measured** -- v2's memory has not been measured yet, and the times are
+guesses (its camp took 2,351 s on 32 cores and 96 GiB, about $2.00):
+
+| scan    | leaf gaussians | request (limit)           | ~time  | ~$ a run |
+| ------- | -------------- | ------------------------- | ------ | -------- |
+| spool   | 153,566        | 6 cores (9), 16 GiB (32)  | 15 min | 0.30     |
+| pumpkin | 387,813        | 6 cores (9), 16 GiB (32)  | 15 min | 0.30     |
+| camp    | 22,577,243     | 6 cores (9), 22 GiB (44)  | 45 min | 0.94     |
 
 ## 4. Data contract (v1)
 

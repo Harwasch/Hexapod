@@ -90,10 +90,13 @@ waiting (24 workers, ~8 s a view each, overlapped with masking), SAM 2.1 masks 6
 a view at 32 points a side: now the bulk), votes 11 s, lift 103 s, describe 60 s (1.9k of
 7.3k instances); ~20 min in all. Before (24 views, one render process, the per-view lift):
 render 406 s, lift 81 s, describe 604 s, and one instance held 26% of the scan. A camp view
-renders in 1.6-1.9 GB at most (`RENDER_WORKER_BYTES`). Since the masks are the bulk, the
-Modal function now reserves 8 CPUs and 32 GiB (measured on the camp: 1,416 s for $0.56,
-against 1,217 s for $1.04 on 32 and 96 GiB), and the render processes follow from that
-reservation (`--cpus`, `--memory-gb`; `default_workers`) rather than a fixed 24.
+renders in 1.6-1.9 GB at most (`RENDER_WORKER_BYTES`). Since the masks are the bulk
+(measured on the camp: 1,416 s for $0.56 on 8 CPUs and 32 GiB, against 1,217 s for $1.04
+on 32 and 96 GiB), the Modal function sizes each run from its scan -- a few render
+processes' worth of cores, memory for what this process holds (`infra/modal/segment.py`'s
+estimate) -- and the render processes follow from that request (`--cpus`, `--memory-gb`;
+`default_workers`) rather than a fixed 24. Each run logs its peaks (`peak_usage`, in the
+summary and one `usage:` line) to tune that estimate.
 
 Usage:
     python segment_scene.py SPLAT.ply TILES_DIR --masks segment_models:Sam2Masks \\
@@ -195,8 +198,19 @@ OBLIQUE_CLEAR = 0.9
 OBLIQUE_MIN_CLEAR = 0.6
 #: Extra eye-height observer views per target.
 EYE_VIEWS = 2
-#: What one render worker may hold at its peak (a view of the 22.6M-gaussian camp: < 2 GB).
+#: What one render worker may hold at its peak (a view of the 22.6M-gaussian camp: < 2 GB):
+#: mostly `render`'s per-sample arrays, which its `sample_budget` bounds whatever the scan ...
 RENDER_WORKER_BYTES = 2.5e9
+#: ... and per gaussian a view sees, before any sample is drawn: the candidate rows
+#: `SplatIndex.visible` returns (8 bytes, held through the render) and `render`'s kept rows
+#: and radii with their concatenation (32). A view of the whole scan sees every gaussian, so
+#: past RENDER_WORKER_BYTES / this (62.5M gaussians) this sets the peak
+#: (`render_worker_bytes`).
+RENDER_BYTES_PER_GAUSSIAN = 40
+#: Of the cores a run reserves (`--cpus`), this process keeps these: it rasterizes, masks
+#: and votes each view while the renders run (with torch's host threads,
+#: `segment_models.GPU_HOST_THREADS`). The rest render (`default_workers`).
+MAIN_PROCESS_CORES = 2
 #: At most this many views in all (rings, observers, local).
 MAX_VIEWS = 480
 #: Splats sampled for the scan's extent and the observers' clearance test (seeded).
@@ -857,21 +871,46 @@ def render_views(
         # An executor, not a Pool: a worker that dies (out of memory) fails the run
         # (BrokenProcessPool) rather than leaving it waiting for a view forever.
         context = mp.get_context("fork")
-        with ProcessPoolExecutor(min(workers, len(cameras)), mp_context=context) as pool:
-            yield from pool.map(_render_job, range(len(cameras)))
+        peak = context.Value("d", 0.0)
+        _POOL_STATE["peak"] = peak
+        try:
+            with ProcessPoolExecutor(
+                min(workers, len(cameras)), mp_context=context, initializer=_worker_start
+            ) as pool:
+                yield from pool.map(_render_job, range(len(cameras)))
+        finally:
+            _WORKER_PEAK["bytes"] = max(_WORKER_PEAK["bytes"], float(peak.value))
     finally:
         _POOL_STATE.clear()
 
 
 #: What forked render workers read (set by `render_views` before the fork).
 _POOL_STATE: dict[str, object] = {}
+#: The most one render worker held of its own -- its peak resident set less the one it was
+#: forked with, which counts every page it shares with this process -- over this process's
+#: renders (`peak_usage`'s `workerPeakGiB`, what `RENDER_WORKER_BYTES` is tuned from).
+_WORKER_PEAK = {"bytes": 0.0}
+
+
+def _worker_start() -> None:
+    """In a forked render worker: its resident set as forked (the shared pages)."""
+    _POOL_STATE["forkedRss"] = _resident_bytes() or 0.0
+
+
+def _peak_resident_bytes() -> float:
+    """This process's peak resident set (`ru_maxrss`: KiB on Linux, bytes on macOS)."""
+    import resource
+    import sys
+
+    unit = 1 if sys.platform == "darwin" else 1024
+    return float(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * unit)
 
 
 def _render_job(k: int) -> View:
     state = _POOL_STATE
     cameras = state["cameras"]
     assert isinstance(cameras, list)
-    return cached_view(
+    view = cached_view(
         state["cache"],  # type: ignore[arg-type]
         state["splats"],  # type: ignore[arg-type]
         cameras[k],
@@ -880,6 +919,12 @@ def _render_job(k: int) -> View:
         state["index"],  # type: ignore[arg-type]
         str(state.get("tag", "")),
     )
+    peak = state.get("peak")
+    if peak is not None:  # a forked worker: what it holds over what it shares
+        own = _peak_resident_bytes() - float(state.get("forkedRss", 0.0))  # type: ignore[arg-type]
+        with peak.get_lock():  # type: ignore[attr-defined]
+            peak.value = max(peak.value, own)  # type: ignore[attr-defined]
+    return view
 
 
 def _memory_room() -> float | None:
@@ -905,35 +950,119 @@ def _resident_bytes() -> float | None:
     return None
 
 
-def default_workers(cpus: int | None = None, memory_bytes: float | None = None) -> int:
+def render_worker_bytes(gaussians: int) -> float:
+    """What one render worker may hold at its peak, for a scan of `gaussians`:
+    `RENDER_WORKER_BYTES`, or `RENDER_BYTES_PER_GAUSSIAN` a gaussian when that is more (a
+    view of the whole of a scan past ~62M gaussians). infra/modal/segment.py sizes a run's
+    memory with the same rule."""
+    return max(RENDER_WORKER_BYTES, RENDER_BYTES_PER_GAUSSIAN * float(gaussians))
+
+
+def default_workers(
+    cpus: int | None = None,
+    memory_bytes: float | None = None,
+    worker_bytes: float = RENDER_WORKER_BYTES,
+) -> int:
     """Processes to render with: the CPUs this process may use, no more than the memory
-    left holds at `RENDER_WORKER_BYTES` each.
+    left holds at `worker_bytes` each (`render_worker_bytes` of the scan).
 
     `cpus` and `memory_bytes` are the container's *reservation*, when the caller knows it:
-    a Modal function's `cpu=` and `memory=` (infra/modal/segment.py passes them as
-    `--cpus` / `--memory-gb`). Inside the container what shows need not be what was
-    reserved -- tools/pipeline found thread pools sized to the *host's* core count there
-    (its README, "One slow part"), and Modal lets a container burst past its reservation
-    when the host has room and bills max(reserved, used) -- so sizing by what is visible
-    can fork a render per host core onto 8 paid-for ones, and pay for the burst. With
-    them, the CPUs are the reserved ones and the room is the reservation less what this
-    process already holds (the scan, its index, the models: this is called after they are
-    loaded), or the cgroup's room if that is smaller. A render over the room is one more
-    process waiting for memory, so the room caps the count as the cores do.
+    a Modal function's `cpu=` and `memory=` requests (infra/modal/segment.py passes them as
+    `--cpus` / `--memory-gb`; the request, never the limit above it). Inside the container
+    what shows need not be what was reserved -- tools/pipeline found thread pools sized to
+    the *host's* core count there (its README, "One slow part"), and Modal lets a container
+    burst past its request up to its limit and bills max(requested, used) -- so sizing by
+    what is visible can fork a render per host core onto 6 paid-for ones, and pay for the
+    burst. With them, the renders get the reserved cores less `MAIN_PROCESS_CORES` (this
+    process masks while they render), and the room is the reservation less what this
+    process already holds (the scan, its index, the views so far, the models once loaded),
+    or the cgroup's room if that is smaller. A render over the room is one more process
+    waiting for memory, so the room caps the count as the cores do.
     """
     if cpus is None:
         try:
             cpus = len(os.sched_getaffinity(0))
         except AttributeError:  # not Linux
             cpus = os.cpu_count() or 1
+    else:
+        cpus = int(cpus) - MAIN_PROCESS_CORES
     room = _memory_room()
     if memory_bytes is not None:
         held = _resident_bytes() or 0.0
         reserved = max(0.0, float(memory_bytes) - held)
         room = reserved if room is None else min(room, reserved)
     if room is not None:
-        cpus = min(cpus, int(room // RENDER_WORKER_BYTES))
+        cpus = min(cpus, int(room // worker_bytes))
     return max(1, cpus)
+
+
+#: Where the container's peak memory is, when the kernel keeps it: cgroup v2, then v1.
+CGROUP_PEAK_FILES = (
+    "/sys/fs/cgroup/memory.peak",
+    "/sys/fs/cgroup/memory/memory.max_usage_in_bytes",
+)
+
+
+def _cgroup_peak() -> float | None:
+    """The container's peak memory in bytes (every process in it, shared pages once), or
+    None where no cgroup file says it."""
+    for name in CGROUP_PEAK_FILES:
+        try:
+            return float(int(Path(name).read_text().split()[0]))
+        except (OSError, ValueError, IndexError):
+            continue
+    return None
+
+
+def peak_usage(started: float, now: float | None = None) -> dict[str, float | None]:
+    """What this run used at its peak, so infra/modal/segment.py's estimate can be tuned:
+    this process's peak resident set (`mainPeakGiB`: the scan, its copy for the views, the
+    views, the models); the most a render worker held of its own (`workerPeakGiB`: its peak
+    over the resident set it was forked with; None if no worker was forked) and the largest
+    worker's whole peak resident set (`workerResidentGiB`, `RUSAGE_CHILDREN`: it counts the
+    pages it shares with this process, so it is not what a worker adds); the container's own
+    peak where the cgroup keeps it (`containerPeakGiB`); CPU seconds of this process and of
+    the workers, wall time since `started` (`time.time()`), and the cores busy on average
+    (`coresUsed`)."""
+    import resource
+    import sys
+
+    unit = 1 if sys.platform == "darwin" else 1024  # ru_maxrss: bytes on macOS, else KiB
+    me = resource.getrusage(resource.RUSAGE_SELF)
+    workers = resource.getrusage(resource.RUSAGE_CHILDREN)
+    wall = max((time.time() if now is None else now) - started, 1e-9)
+    main_cpu = me.ru_utime + me.ru_stime
+    worker_cpu = workers.ru_utime + workers.ru_stime
+    container = _cgroup_peak()
+    gib = float(1 << 30)
+    own = _WORKER_PEAK["bytes"]
+    return {
+        "wallS": round(wall, 1),
+        "mainPeakGiB": round(me.ru_maxrss * unit / gib, 2),
+        "workerPeakGiB": round(own / gib, 2) if own > 0 else None,
+        "workerResidentGiB": (
+            round(workers.ru_maxrss * unit / gib, 2) if workers.ru_maxrss else None
+        ),
+        "containerPeakGiB": None if container is None else round(container / gib, 2),
+        "mainCpuS": round(main_cpu, 1),
+        "workerCpuS": round(worker_cpu, 1),
+        "coresUsed": round((main_cpu + worker_cpu) / wall, 2),
+    }
+
+
+def usage_line(usage: dict[str, float | None]) -> str:
+    """`peak_usage` as the one line a run prints."""
+
+    def gib(key: str) -> str:
+        value = usage.get(key)
+        return "?" if value is None else f"{value:g} GiB"
+
+    return (
+        f"usage: peak {gib('mainPeakGiB')} main, {gib('workerPeakGiB')} a render worker, "
+        f"{gib('containerPeakGiB')} container; {usage.get('coresUsed')} cores busy on "
+        f"average ({usage.get('mainCpuS')} s main + {usage.get('workerCpuS')} s workers of CPU)"
+        f" over {usage.get('wallS')} s"
+    )
 
 
 # ------------------------------------------------------------------------- the oracle
@@ -2523,9 +2652,9 @@ def segment(
     `cache`: a directory where each view and its masks are kept as they are made, so a
     stopped run resumes (views and masks are most of the time on a large scan).
     `progress(message)` is told as each view is done. `workers`: render processes; by
-    default `default_workers(cpus, memory_bytes)` for each batch of views, once the scan and
-    its index are held -- the container's reservation when `cpus` / `memory_bytes` give it,
-    else what this process may use.
+    default `default_workers(cpus, memory_bytes, render_worker_bytes(...))` for each batch of
+    views, once the scan and its index are held -- the container's reservation when `cpus` /
+    `memory_bytes` give it, else what this process may use.
 
     `renderer` (`make_renderer("gsplat")`): the image of every view the mask and image
     models see is drawn by it (labels still come from the CPU renderer's samples, the same
@@ -2568,6 +2697,8 @@ def segment(
     views: list[View] = []
     view_votes: list[_Votes] = []
     clock = {"renderS": 0.0, "rasterS": 0.0, "masksS": 0.0, "votesS": 0.0}
+    # Render processes per batch of views, for the summary (`stats["renderWorkers"]`).
+    batch_sizes: list[int] = []
 
     def run_views(batch: Sequence[Camera]) -> None:
         # Views render in forked workers while this process masks the ones already done
@@ -2578,7 +2709,10 @@ def segment(
             source = source_factory(list(batch))
         first = len(views)
         # Sized now, with the scan, its index and the views so far held (`default_workers`).
-        batch_workers = workers or default_workers(cpus, memory_bytes)
+        batch_workers = workers or default_workers(
+            cpus, memory_bytes, render_worker_bytes(len(view_splats))
+        )
+        batch_sizes.append(batch_workers)
         if progress is not None:
             progress(f"render workers: {batch_workers}")
         mark = time.perf_counter()
@@ -2651,6 +2785,7 @@ def segment(
     lifted.stats["coverageRounds"] = coverage
     lifted.stats["unassignedShare"] = round(float(final), 4)
     lifted.stats["views"] = len(views)
+    lifted.stats["renderWorkers"] = batch_sizes
     # Rendering overlaps masking: renderS is the time spent waiting for views.
     timings.update(clock)
     mark = time.perf_counter()
@@ -2699,6 +2834,7 @@ def truth_levels(labels: dict, rows: np.ndarray, colours: np.ndarray) -> list[np
 
 
 def main() -> None:
+    started = time.time()
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -2761,19 +2897,30 @@ def main() -> None:
         "the memory left, at RENDER_WORKER_BYTES each)",
     )
     parser.add_argument(
-        "--cpus", type=int, default=None, help="the container's reserved cores (Modal cpu=)"
+        "--cpus",
+        type=int,
+        default=None,
+        help="the container's reserved cores (Modal's cpu= request), this process's "
+        "MAIN_PROCESS_CORES among them",
     )
     parser.add_argument(
         "--memory-gb",
         type=float,
         default=None,
-        help="the container's reserved memory in GiB (Modal memory=), less what is loaded",
+        help="the container's reserved memory in GiB (Modal's memory= request), less what is "
+        "loaded",
     )
     parser.add_argument("--save-dir", type=Path, default=None, help="write the views here")
     parser.add_argument(
         "--cache", type=Path, default=None, help="keep views and masks here; a rerun resumes"
     )
     parser.add_argument("--render-instances", type=Path, default=None, help="a PNG to check")
+    parser.add_argument(
+        "--summary",
+        type=Path,
+        default=None,
+        help="also write the run's summary (stats, timings, peak usage) here as JSON",
+    )
     parser.add_argument("--out", type=Path, default=None, help="default: the tiles directory")
     parser.add_argument("--opacity-min", type=float, default=scene_plants.PACKAGE_OPACITY_MIN)
     parser.add_argument("--tile-gaussians", type=int, default=scene_plants.PACKAGE_TILE_GAUSSIANS)
@@ -2879,17 +3026,20 @@ def main() -> None:
         render_instances(
             splats, objects, cameras, args.render_instances, index=SplatIndex.build(splats)
         )
-    print(
-        json.dumps(
-            {
-                "instances": len(result.instances),
-                "assignedShare": round(float((result.splat_id > 0).mean()), 4),
-                **result.lifted.stats,
-                "timingsS": {k: round(v, 2) for k, v in result.timings.items()},
-            },
-            indent=1,
-        )
-    )
+    # Peaks of the whole run (the binding included), for infra/modal/segment.py's estimate.
+    usage = {"gaussians": len(splats), **peak_usage(started)}
+    print(usage_line(usage), flush=True)
+    summary = {
+        "instances": len(result.instances),
+        "assignedShare": round(float((result.splat_id > 0).mean()), 4),
+        **result.lifted.stats,
+        "timingsS": {k: round(v, 2) for k, v in result.timings.items()},
+        "usage": usage,
+    }
+    if args.summary:
+        args.summary.parent.mkdir(parents=True, exist_ok=True)
+        args.summary.write_text(json.dumps(summary, indent=1), encoding="utf-8")
+    print(json.dumps(summary, indent=1))
 
 
 if __name__ == "__main__":
