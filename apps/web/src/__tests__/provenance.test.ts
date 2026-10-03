@@ -45,6 +45,7 @@ function asset(over: Partial<SiteAsset> = {}): SiteAsset {
       heightOffsetM: 0,
     },
     defaultVisible: true,
+    sidecarFlags: [],
     createdAt: NOW,
     updatedAt: NOW,
     ...over,

@@ -15,6 +15,7 @@ from app.schemas.asset import (
     CrsMetadata,
     RenderConfig,
     ResolutionMetadata,
+    SidecarFlag,
     TilesUrlSource,
     provider_for_source,
 )
@@ -143,6 +144,7 @@ def asset_to_read(asset: Asset) -> AssetRead:
         provenance=Provenance.model_validate(provenance_raw) if provenance_raw else None,
         render_config=RenderConfig.model_validate(render_raw),
         default_visible=asset.default_visible,
+        sidecar_flags=[SidecarFlag.model_validate(entry) for entry in asset.sidecar_flags or []],
         created_at=asset.created_at,
         updated_at=asset.updated_at,
     )

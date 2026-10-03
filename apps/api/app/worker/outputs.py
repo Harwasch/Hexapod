@@ -169,9 +169,11 @@ def upload_log(
 #: the generation layout (`app/services/published.py`), because the API's sidecar attach
 #: writes generations too.
 #: For everything else: five minutes, then served stale for up to a week while it is
-#: revalidated. Tileset JSON is here because a backfill rewrites it in place
-#: (collision-backfill.yml adds `extras.collision` to a published `tileset.json`), and a
-#: run's own keys in the private bucket are here because a Refine or a retry rewrites them.
+#: revalidated. Tileset JSON is here because the backfill workflows rewrote it in place
+#: (collision-backfill.yml added `extras.collision` to a published `tileset.json`) until
+#: sidecars went through the API's attach, which cuts a generation of its own and writes
+#: even its JSON immutable (`app/services/attach.py`); and a run's own keys in the private
+#: bucket are here because a Refine or a retry rewrites them.
 SHORT_CACHE = "public, max-age=300, stale-while-revalidate=604800"
 #: JSON by its extension, in any case: the proxy decides on the decoded key and reads its
 #: extension case-blind, as it does for the Content-Type it labels the object with.
