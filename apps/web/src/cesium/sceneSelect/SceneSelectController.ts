@@ -103,6 +103,12 @@ export interface SceneSelectOptions {
    * them through `click` (the app: SelectionManager's click, so one click opens one thing).
    */
   ownClicks?: boolean;
+  /**
+   * How Fly to moves the camera: the app's camera controller (`CameraController.flyToObject`,
+   * the pace, range and destination prefetch of every fly-to there). Standalone, CesiumJS's
+   * own flight.
+   */
+  fly?: (sphere: BoundingSphere) => void;
 }
 
 /** One scan's view while painting: its tiles projected, and the brush. */
@@ -162,6 +168,7 @@ export class SceneSelectController {
   readonly #viewer: SelectViewer;
   readonly #enabled: () => boolean;
   readonly #ownClicks: boolean;
+  readonly #fly: ((sphere: BoundingSphere) => void) | null;
   readonly #ids = new TileIds();
   readonly #off: (() => void)[] = [];
   #down: { x: number; y: number; id: number } | null = null;
@@ -181,6 +188,7 @@ export class SceneSelectController {
     this.#viewer = viewer;
     this.#enabled = options.enabled ?? (() => true);
     this.#ownClicks = options.ownClicks ?? true;
+    this.#fly = options.fly ?? null;
     const canvas = viewer.canvas;
     const on = <K extends keyof HTMLElementEventMap>(
       target: HTMLElement | Window,
@@ -436,11 +444,20 @@ export class SceneSelectController {
     if (assetId) useInstances.getState().showAll(assetId);
   }
 
+  /**
+   * Flies to the selection. In the app through the camera controller (`fly`), so the flight
+   * paces, ranges and prefetches as every other fly-to and a site flight still settling gives
+   * the camera up to it; standalone, CesiumJS's own flight.
+   */
   flyTo(): void {
     const s = this.selection();
     if (!s) return;
     const sphere = instanceSphere(s.assetId, s.id);
     if (!sphere) return;
+    if (this.#fly) {
+      this.#fly(BoundingSphere.clone(sphere));
+      return;
+    }
     const camera = this.#viewer.camera;
     camera.flyToBoundingSphere(BoundingSphere.clone(sphere), {
       offset: new HeadingPitchRange(camera.heading, CesiumMath.toRadians(-35), 0),

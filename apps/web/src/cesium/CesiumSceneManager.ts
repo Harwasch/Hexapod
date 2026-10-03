@@ -37,7 +37,11 @@ import { installCameraPickHook } from "./cameraPickHook";
 import { installSplatDecoder } from "./splatDecoder";
 import { installSplatSorter } from "./splatSorter";
 import { UiActivity } from "./uiActivity";
-import { ScanRendererHost, type ScanRendererStatus } from "./scanView/ScanRendererHost";
+import {
+  prefetchScanDestination,
+  ScanRendererHost,
+  type ScanRendererStatus,
+} from "./scanView/ScanRendererHost";
 import { SceneSelectController } from "./sceneSelect/SceneSelectController";
 import type { SplatRendererKind } from "./scanView/types";
 import type { Geocoder, SceneEvents } from "./types";
@@ -238,9 +242,13 @@ export class CesiumSceneManager {
       this.sites,
     );
     this.selection.setCollider(this.collider);
+    // Fly to goes through the camera controller: its pace and range, and the dedicated
+    // renderer's destination prefetch.
+    this.camera.setDestinationPrefetch(prefetchScanDestination);
     this.sceneSelect = new SceneSelectController(this.viewer, {
       enabled: () => this.selectionWanted(),
       ownClicks: false,
+      fly: (sphere) => this.camera.flyToObject(sphere),
     });
     // One click, one answer: an object of a scan under the cursor first, else the cards.
     this.selection.setClickClaim((position) => this.sceneSelect.click(position.x, position.y));

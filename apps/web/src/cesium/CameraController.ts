@@ -25,6 +25,7 @@ import { isTyping } from "@/lib/hotkeys";
 import { throttle } from "@/lib/throttle";
 
 import type { ArrivalPose } from "./flightRetarget";
+import type { ScanDestination } from "./scanView/ScanRendererHost";
 import type { SplatCollider } from "./SplatCollider";
 import type { SceneEvents } from "./types";
 
@@ -89,6 +90,8 @@ const OBJECT_ARRIVAL_RADIUS_M = 30;
 const SURFACE_ZOOM_STEP = 0.75;
 /** Arrival tilt for fly-tos: mostly looking at the ground, still showing facades. */
 const DEFAULT_ARRIVAL_PITCH = -45;
+/** Arrival tilt for an object of a scan: lower, so its sides show as well as its top. */
+const OBJECT_ARRIVAL_PITCH = -35;
 /** A flight that arcs at least this far above both of its ends looks straight down at the top. */
 const LOOK_DOWN_CLIMB_M = 150;
 
@@ -157,6 +160,14 @@ export class CameraController {
   private lastGood: Cartesian3 | null = null;
   private wheelOcclusion: { x: number; y: number; at: number; occluded: boolean } | null = null;
   private hinted = false;
+  /** Every flight this controller has started (`flights`). */
+  private flightCount = 0;
+  /**
+   * Fetches ahead what a dedicated splat renderer will show where a flight ends, returning its
+   * cancel (`prefetchScanDestination`, set by the scene manager; SiteManager's fly-to does the
+   * same for its own legs).
+   */
+  private prefetch: ((destination: ScanDestination) => () => void) | null = null;
 
   constructor(
     private readonly viewer: CesiumWidget,
@@ -932,7 +943,23 @@ export class CameraController {
     this.emitPose();
   }
 
+  /**
+   * How many flights this controller has started. Code that flew the camera and may steer it
+   * again later (SiteManager settling on a better pose after landing) compares it with the
+   * count after its own flight: a newer flight -- an object flown to, a search result -- has
+   * the camera now.
+   */
+  get flights(): number {
+    return this.flightCount;
+  }
+
+  /** Where a flight's destination prefetch comes from (`prefetchScanDestination`). */
+  setDestinationPrefetch(prefetch: ((destination: ScanDestination) => () => void) | null): void {
+    this.prefetch = prefetch;
+  }
+
   flyTo(longitude: number, latitude: number, height: number, options: FlyOptions = {}): void {
+    this.flightCount += 1;
     const pose = this.pose();
     const heading = options.heading ?? pose.heading;
     const pitch = options.pitch ?? DEFAULT_ARRIVAL_PITCH;
@@ -971,6 +998,7 @@ export class CameraController {
     north: number,
     options: FlyOptions = {},
   ): void {
+    this.flightCount += 1;
     this.viewer.camera.flyTo({
       destination: Rectangle.fromDegrees(west, south, east, north),
       duration: options.durationS ?? 2.2,
@@ -1035,6 +1063,7 @@ export class CameraController {
     sphere: BoundingSphere,
     options: FlyOptions & { rangeMultiplier?: number } = {},
   ): void {
+    this.flightCount += 1;
     const range = this.arrivalRange(sphere, options.rangeMultiplier);
     const pitch = CesiumMath.toRadians(options.pitch ?? DEFAULT_ARRIVAL_PITCH);
     const arrivalHeight =
@@ -1045,11 +1074,35 @@ export class CameraController {
       easingFunction: EasingFunction.QUADRATIC_IN_OUT,
       pitchAdjustHeight: this.pitchAdjustHeight(arrivalHeight),
       complete: options.onComplete,
+      cancel: options.onCancel,
     });
+  }
+
+  /**
+   * Flies to an object of a scan (scene selection's Fly to, an object picked in the objects
+   * panel): looks down at it from `pitch`, keeping the heading the camera has, at the range,
+   * pace and pitch curve of every fly-to here. A scan drawn by a dedicated renderer fetches
+   * what the destination shows during the flight, as a site fly-to does; the fetch ends on
+   * arrival by itself, or when another flight cancels this one. A site flight still settling
+   * leaves the camera to it (`flights`).
+   */
+  flyToObject(sphere: BoundingSphere, options: { pitch?: number } = {}): void {
+    const heading = CesiumMath.toDegrees(this.viewer.camera.heading);
+    const pitch = options.pitch ?? OBJECT_ARRIVAL_PITCH;
+    const cancelPrefetch = this.prefetch?.({
+      boundingSphere: sphere,
+      offset: new HeadingPitchRange(
+        CesiumMath.toRadians(heading),
+        CesiumMath.toRadians(pitch),
+        this.arrivalRange(sphere),
+      ),
+    });
+    this.flyToBoundingSphere(sphere, { heading, pitch, onCancel: cancelPrefetch });
   }
 
   /** Rotates the view so north is up while keeping the position and tilt. */
   resetNorth(): void {
+    this.flightCount += 1;
     const camera = this.viewer.camera;
     camera.flyTo({
       destination: camera.positionWC.clone(),
@@ -1061,6 +1114,7 @@ export class CameraController {
 
   /** Looks straight down from the current position (feels like a 2D map). */
   topDown(): void {
+    this.flightCount += 1;
     const camera = this.viewer.camera;
     const target = this.distanceToSurfaceAtCenter();
     const carto = Cartographic.clone(camera.positionCartographic, scratchCarto);
@@ -1095,6 +1149,7 @@ export class CameraController {
 
   /** Home: the whole planet, oriented towards the given longitude. */
   flyHome(longitude = -110, latitude = 30): void {
+    this.flightCount += 1;
     this.viewer.camera.flyTo({
       destination: Cartesian3.fromDegrees(longitude, latitude, 18_000_000),
       orientation: { heading: 0, pitch: -CesiumMath.PI_OVER_TWO, roll: 0 },

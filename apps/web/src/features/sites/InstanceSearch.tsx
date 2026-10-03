@@ -183,7 +183,10 @@ function CategoryRow({
     if (selectedAt >= 0) selectedRef.current?.scrollIntoView?.({ block: "nearest" });
   }, [selectedAt, open]);
 
-  /** Highlights the object, selects it in the scene (the chip offers its actions), flies to it. */
+  /**
+   * Highlights the object, selects it in the scene (the chip offers its actions), and flies to
+   * it as the chip's Fly to does (`CameraController.flyToObject`).
+   */
   const selectObject = (object: SceneObject): void => {
     const focus: Focus = { kind: "object", id: object.id };
     const clearing = sameFocus(entry.focus, focus) || selected === object.id;
@@ -196,7 +199,7 @@ function CategoryRow({
     toggleFocus(assetId, focus);
     picking.select(assetId, [object.id], 1, 0, null);
     const sphere = instanceSphere(assetId, object.id);
-    if (sphere && scene) scene.camera.flyToBoundingSphere(sphere, { pitch: -35 });
+    if (sphere && scene) scene.camera.flyToObject(sphere);
   };
 
   return (
