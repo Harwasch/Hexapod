@@ -615,14 +615,15 @@ repointed there only once the whole tileset is in, and the live generation is ne
 written again: a republish that fails changes nothing a viewer sees, and leaves the site
 as it was. The generation is a hash of the published objects' keys, sizes and ETags, so
 publishing the same bytes again lands on the same keys (a retried `register` keeps the
-browser's cache); without ETags it is random. A motion rig (`renderConfig.rigUrl`, written
-by `living-plants.yml` beside the tiles it was stamped on) is dropped when the site moves
-to new tiles; rig them again to animate them.
+browser's cache); without ETags it is random. What was attached beside the live tiles —
+objects, a fill, a backfilled grid, the streamed LOD, a plant rig — is carried into the new
+generation only where it still holds for the new splats, and what is not is flagged on the
+asset ("Sidecars: one publisher", below).
 
 `Cache-Control` follows from that, by one rule shared with the tile proxy
 (`functions/r2/[[path]].js`, `outputs.cache_control_for`): a year and `immutable` for a
 non-JSON key inside a generation, five minutes with a week of `stale-while-revalidate`
-for everything else — JSON (backfills rewrite `tileset.json` in place), `sites/`, the
+for everything else — JSON (backfill workflows used to rewrite `tileset.json` in place), `sites/`, the
 run's own keys in the private bucket (uploaded with the short lifetime, because a Refine
 rewrites them), and copies published before generations existed. Each copy is written
 with the lifetime of the key it lands on, so a browser reading the public bucket's own
@@ -675,6 +676,125 @@ has to be committed), applies the document with `aws s3api put-bucket-cors` agai
 `https://<account-id>.r2.cloudflarestorage.com` with `--region auto`, and then prints what
 the bucket reports back. **Read that output.** It is the first time any of this meets a real
 R2 API.
+
+### Sidecars: one publisher
+
+A scan's directory holds more than its tiles. Other steps add files beside them and declare
+them on the root tile's `extras`, where the web finds them: the segmentation's
+`instances.json` (+ `.emb`), a backfilled `collision.bin`, an inferred fill under
+`inferred/<name>/`, PlayCanvas's streamed level of detail under `sog/`, a plant rig
+(`rig.json`, `motion.json`, `plants.json`, named by the asset's `renderConfig.rigUrl`). The
+GitHub workflows that make them (`publish-instances.yml`, `publish-fill.yml`,
+`collision-backfill.yml`, `streamed-lod-backfill.yml`, `living-plants.yml`) used to write
+them **in place**: read the live `tileset.json`, inject a key, write it back. That breaks
+three ways — two runs at once drop each other's key; inside a generation, served
+`immutable` for a year, a rewritten file is stale in every cache that holds it; and a worker
+republish cuts a generation from the run's own outputs, which have none of them, so
+objects, collision, fill and streamed LOD vanished from the live site.
+
+So there is **one publisher: the API.** A workflow stages its files and asks the API to
+attach them; the API cuts a new generation and repoints the asset. Nothing writes a
+published directory in place any more.
+
+**`POST /api/v1/assets/{asset_id}/sidecars`**, with `Authorization: Bearer
+$API_WRITE_TOKEN`:
+
+| Field           | Required | Meaning                                                                                                                                                                                                 |
+| --------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `stagingPrefix` | yes      | `staging/assets/<asset id>/<token>/` in the **private** bucket (`OBJECT_STORAGE_BUCKET`); the token is letters, digits, `.`, `_`, `-` (a run id and attempt). Every object under it is attached.        |
+| `basedOn`       | yes      | the tileset URL the files were computed against. Accepted when the asset's current tiles are those tiles — the same URL, or a later generation another attach cut from them; **409** after a republish. |
+| `files`         | no       | exactly the paths that must be staged; a partial upload is then a 422 instead of an attach.                                                                                                             |
+| `extras`        | no       | root `extras` keys to set, each replaced whole; `null` removes one. A list of `{uri, …}` entries (`inferredLayers`) is merged **by uri**, so send only your own entry. Every `uri` named must exist.    |
+| `rigUrl`        | no       | sets `renderConfig.rigUrl` in the same transaction as the new URL (`null` clears it) — the separate PATCH `living-plants.yml` made raced with everything else.                                          |
+
+The staged layout is the layout beside `tileset.json`: `staging/…/run-7/instances.json`
+lands at `<new generation>/instances.json`, `staging/…/run-7/inferred/fixer/0.glb` at
+`<new generation>/inferred/fixer/0.glb`. A staged file is refused (422, before anything is
+copied) unless every path segment is plain (letters, digits, `.`, `_`, `-`, not starting
+with `.`; at most six segments), its extension is one the tile proxy serves (`json`, `glb`,
+`bin`, `emb`, `f32`, `u8`, `webp`), it is at most 1 GiB, and the attach holds at most 5,000
+files and 8 GiB. It may not be `tileset.json` (the API writes that) or one of the scan's tiles,
+and nothing under `objects/` or `fills/` (a split rewrites the scan's tiles; it is a new
+tileset, not files beside one). `extras.gaussians` belongs to the tileset and cannot be set.
+
+What the API does, holding the asset's row lock (`app/services/attach.py`):
+
+1. lists the asset's current directory in the public bucket — a generation, or a **legacy
+   prefix** published before generations (`runs/<job>/package/splat/`: the spool, pumpkin
+   and camp scans, infra/modal/segment.py `SCANS`) — and refuses an asset that is not a
+   run's tileset there (an ion asset, a seeded `sites/` scan: 409);
+2. checks `basedOn` holds the same tiles (the tileset without its root extras, and every
+   tile's size and ETag);
+3. writes a **new** generation, `runs/<job>/p<generation>/…`: every current object — tiles
+   and every sidecar already there — copied server side, eight at a time; the staged files
+   beside them (a staged file under `inferred/<name>/` or `sog/` replaces that whole
+   directory, so a smaller rebuild leaves no stale chunk); and **last**, once every copy has
+   returned, `tileset.json` with the merged root extras. Every object gets
+   `Cache-Control: public, max-age=31536000, immutable`, `tileset.json` included: nothing
+   ever writes a generation twice;
+4. moves the asset's URL to the new `tileset.json`, clears the asset's flags for the kinds it
+   attached, commits, and deletes the staged files.
+
+It answers with `url`, `previousUrl`, `generation`, `copied`, `staged`, `attached` and
+`carried` (sidecar kinds), the root `extras` keys now declared, and the asset. A failure
+before the commit leaves the asset exactly as it was: the half-written generation is keys
+nothing points at, and the staged files stay for a retry.
+
+**Serialised per asset.** The attach takes `SELECT … FOR UPDATE` on the asset, so a second
+attach waits (up to 60 s, then 409 — retry) and builds on the first's generation; neither
+loses the other's files. The lock is held across the copies — seconds for a thousand tiles
+— with `idle_in_transaction_session_timeout` set to ten minutes for that transaction alone,
+so a process that freezes holding it is cut off by the database rather than by TCP hours
+later. The worker's `register` takes the same lock before it repoints: if an attach moved
+the asset while the run was publishing, it publishes again on top of the attach's
+generation (up to three times, then the run's tiles are withheld and the site is left as the
+attaches made it).
+
+**A republish carries what still holds** (`app/worker/carry.py`). Before copying, the worker
+reads the live generation and decides each sidecar kind by what it depends on (the table is
+docs/SCENE_OBJECTS.md, section 8): a kind bound to the splats (objects, skins, collision,
+view cones, `sog/`, the rig) is carried only when the new tiles are the very same tiles; a
+kind keyed by instance ids (materials, telemetry) goes with `instances`; an inferred fill,
+placed in the scan's frame with no splat indices, is always carried; a kind the run makes
+itself (the packer's `collision.bin`, `viewcones.bin`) is replaced by the run's. Every
+dropped kind becomes a flag on the asset — `sidecarFlags` in every asset response, e.g.
+`{"kind": "instances", "action": "Objects need re-segmenting", "reason": …, "jobId": …}` —
+and a warning in the worker's log; attaching that kind again clears it. With one bucket
+nothing can be carried (a run's tileset is its own keys), so everything is dropped and
+flagged.
+
+**A workflow's publish step**, after uploading with the R2 pair it already has (`aws s3 cp
+--recursive out/ s3://$R2_BUCKET/$PREFIX --endpoint-url https://$ACCOUNT.r2.cloudflarestorage.com`):
+
+```bash
+PREFIX="staging/assets/$ASSET_ID/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT/"
+curl --fail-with-body -sS -X POST "$TWIN_API_URL/api/v1/assets/$ASSET_ID/sidecars" \
+  -H "Authorization: Bearer $API_WRITE_TOKEN" -H "Content-Type: application/json" \
+  -d "$(jq -n --arg prefix "$PREFIX" --arg base "$BASED_ON" --slurpfile extras extras.json \
+        '{stagingPrefix: $prefix, basedOn: $base, extras: $extras[0]}')"
+```
+
+What each of the five workflows stages and sends is in docs/SCENE_OBJECTS.md, section 8.
+They need `API_WRITE_TOKEN` and `TWIN_API_URL`, and the private bucket's name for staging;
+once they are rewired, none of them writes to the public bucket, which is a credential that
+can then be narrowed (below).
+
+**Two operator steps.** A lifecycle rule that expires `staging/` in the private bucket after
+a week, for attaches that failed and were never retried:
+
+```bash
+aws s3api put-bucket-lifecycle-configuration --bucket twin-assets \
+  --endpoint-url https://<account-id>.r2.cloudflarestorage.com --region auto \
+  --lifecycle-configuration '{"Rules":[{"ID":"staging","Status":"Enabled","Filter":{"Prefix":"staging/"},"Expiration":{"Days":7}}]}'
+```
+
+And migration 0009 (`assets.sidecar_flags`), which `release_command` applies on deploy.
+
+`Cache-Control`, once more: an attach writes its whole generation immutable, JSON included.
+The worker's own publish still writes a generation's JSON with the short lifetime, and the
+tile proxy still serves JSON short whatever the object says — both from when workflows
+rewrote `tileset.json` in place. That is only slower than it needs to be, never wrong; both
+can move to immutable together once the workflows call the API.
 
 ### Narrowing the credentials: operator steps
 

@@ -25,10 +25,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.models.enums import ArtifactKind
+from app.services.published import IMMUTABLE_CACHE as IMMUTABLE_CACHE
 from app.services.published import is_published
 from app.storage import ObjectStorage
 from app.storage.null import StorageUnavailableError
-from app.worker.parallel import each
+from app.storage.parallel import each
 from app.worker.pipeline_bridge import ArtifactRef, Workdir
 from app.worker.pipeline_bridge import checkpoint_key as stage_checkpoint_key
 
@@ -164,13 +165,15 @@ def upload_log(
 
 
 #: `Cache-Control` for an object that is written once: a published generation's tiles,
-#: thumbnail and coverage cloud (`app/services/published.py`). A browser that has one
-#: never asks again.
-IMMUTABLE_CACHE = "public, max-age=31536000, immutable"
+#: thumbnail and coverage cloud. A browser that has one never asks again. Defined beside
+#: the generation layout (`app/services/published.py`), because the API's sidecar attach
+#: writes generations too.
 #: For everything else: five minutes, then served stale for up to a week while it is
-#: revalidated. Tileset JSON is here because a backfill rewrites it in place
-#: (collision-backfill.yml adds `extras.collision` to a published `tileset.json`), and a
-#: run's own keys in the private bucket are here because a Refine or a retry rewrites them.
+#: revalidated. Tileset JSON is here because the backfill workflows rewrote it in place
+#: (collision-backfill.yml added `extras.collision` to a published `tileset.json`) until
+#: sidecars went through the API's attach, which cuts a generation of its own and writes
+#: even its JSON immutable (`app/services/attach.py`); and a run's own keys in the private
+#: bucket are here because a Refine or a retry rewrites them.
 SHORT_CACHE = "public, max-age=300, stale-while-revalidate=604800"
 #: JSON by its extension, in any case: the proxy decides on the decoded key and reads its
 #: extension case-blind, as it does for the Content-Type it labels the object with.
@@ -231,7 +234,7 @@ def upload_artifact(
     """Upload one artifact and describe the row it becomes.
 
     A directory artifact is uploaded member by member under one prefix, eight at a time
-    (`app.worker.parallel`: normalize's frames and package's tiles are hundreds of small
+    (`app.storage.parallel`: normalize's frames and package's tiles are hundreds of small
     objects whose cost is round trips), and still becomes **one** row — the artifact is
     the tileset, not each of its tiles. `storage_key` is that prefix, `bytes` and
     `checksum` are the pipeline's own figures for the whole directory, so the row and

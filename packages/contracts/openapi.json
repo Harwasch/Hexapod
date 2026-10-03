@@ -731,6 +731,13 @@
               }
             ]
           },
+          "sidecarFlags": {
+            "items": {
+              "$ref": "#/components/schemas/SidecarFlag"
+            },
+            "title": "Sidecarflags",
+            "type": "array"
+          },
           "siteId": {
             "anyOf": [
               {
@@ -809,6 +816,7 @@
           "provenance",
           "renderConfig",
           "defaultVisible",
+          "sidecarFlags",
           "createdAt",
           "updatedAt"
         ],
@@ -6677,6 +6685,177 @@
         "title": "ScaleSource",
         "type": "string"
       },
+      "SidecarAttach": {
+        "additionalProperties": false,
+        "description": "Attach the files staged under `stagingPrefix` to an asset's tileset.",
+        "properties": {
+          "basedOn": {
+            "description": "The tileset URL the sidecars were computed against. The attach goes ahead when the asset's current tiles are those tiles -- the same URL, or a later generation cut by another attach, which copies the tiles unchanged -- and is refused with 409 when a republish has replaced them.",
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Basedon",
+            "type": "string"
+          },
+          "extras": {
+            "additionalProperties": true,
+            "description": "Keys to set on the root tile's `extras`, each replaced whole -- except a list of `{uri, ...}` entries (`inferredLayers`), merged into the current list by `uri`, so send only your own entry; `null` removes a key. A `uri` a key names must be in the new generation.",
+            "title": "Extras",
+            "type": "object"
+          },
+          "files": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 5000,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional: exactly the paths that must be staged. A partial upload is then refused instead of attached.",
+            "title": "Files"
+          },
+          "rigUrl": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional: the asset's `renderConfig.rigUrl`, relative to the tileset, set in the same transaction as the new URL; `null` clears it. Omitted, unchanged.",
+            "title": "Rigurl"
+          },
+          "stagingPrefix": {
+            "description": "Where the files were staged in the private bucket: `staging/assets/<asset id>/<token>/`, the token a workflow run id or similar. Every object under it is attached at its path relative to it, beside `tileset.json`.",
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Stagingprefix",
+            "type": "string"
+          }
+        },
+        "required": [
+          "stagingPrefix",
+          "basedOn"
+        ],
+        "title": "SidecarAttach",
+        "type": "object"
+      },
+      "SidecarAttachment": {
+        "additionalProperties": false,
+        "description": "The generation an attach cut, and the asset now pointing at it.",
+        "properties": {
+          "asset": {
+            "$ref": "#/components/schemas/AssetRead"
+          },
+          "attached": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Attached",
+            "type": "array"
+          },
+          "carried": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Carried",
+            "type": "array"
+          },
+          "copied": {
+            "title": "Copied",
+            "type": "integer"
+          },
+          "extras": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Extras",
+            "type": "array"
+          },
+          "generation": {
+            "title": "Generation",
+            "type": "string"
+          },
+          "previousUrl": {
+            "title": "Previousurl",
+            "type": "string"
+          },
+          "staged": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Staged",
+            "type": "array"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url",
+          "previousUrl",
+          "generation",
+          "copied",
+          "staged",
+          "attached",
+          "carried",
+          "extras",
+          "asset"
+        ],
+        "title": "SidecarAttachment",
+        "type": "object"
+      },
+      "SidecarFlag": {
+        "additionalProperties": false,
+        "description": "A sidecar a republish could not carry into the asset's new generation.\n\nSidecars (`instances.json`, `collision.bin`, an inferred fill, `sog/`, a plant rig) are\npublished beside the tiles. When a run publishes new tiles, each kind bound to the\nsplats is carried only if the new tiles are the very same ones; otherwise it is\ndropped, the viewer loses it, and this says so until the kind is attached again. See\ndocs/SCENE_OBJECTS.md, section 8.",
+        "properties": {
+          "action": {
+            "title": "Action",
+            "type": "string"
+          },
+          "flaggedAt": {
+            "format": "date-time",
+            "title": "Flaggedat",
+            "type": "string"
+          },
+          "jobId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Jobid"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "action",
+          "reason",
+          "jobId",
+          "flaggedAt"
+        ],
+        "title": "SidecarFlag",
+        "type": "object"
+      },
       "SiteCreate": {
         "additionalProperties": false,
         "properties": {
@@ -8395,6 +8574,105 @@
           }
         ],
         "summary": "Update an asset",
+        "tags": [
+          "assets"
+        ]
+      }
+    },
+    "/api/v1/assets/{asset_id}/sidecars": {
+      "post": {
+        "description": "The one way to publish files beside a scan's tiles (`instances.json`, `collision.bin`, an inferred fill under `inferred/<name>/`, `sog/`, a plant rig). Stage them in the private bucket under `staging/assets/<asset id>/<token>/`, laid out as they should sit beside `tileset.json`, then call this. The asset's current tiles and every sidecar it already has are copied server side into a **new** generation with the staged files beside them, `tileset.json` with the merged root `extras` is written last, all of it immutable, and the asset's URL moves to it. Attaches to one asset are serialized: a second waits and builds on the first's generation. 409 when `basedOn` no longer holds the asset's tiles (a republish replaced them), when the asset is not a run's tileset in the public bucket, or when another attach held the asset too long; 422 for a staged file outside the rules (path, extension, size, a tile or `tileset.json`). See docs/DEPLOYMENT.md.",
+        "operationId": "attach_sidecars_api_v1_assets__asset_id__sidecars_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "asset_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Asset Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SidecarAttach"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SidecarAttachment"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Object storage is not configured"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Attach sidecars to an asset by cutting a new generation",
         "tags": [
           "assets"
         ]

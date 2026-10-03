@@ -111,6 +111,10 @@ from app.worker.publish import Publisher
 
 log = logging.getLogger("app.worker")
 
+#: Publishes of one finished run before its tiles are withheld: each further one is
+#: because an attach moved the site while the run was publishing (registration.LiveMoved).
+REPUBLISH_ATTEMPTS = 3
+
 #: `type(PreemptedError).__name__`, as it arrives over the child's line protocol. The
 #: one place the cloud runner's "the machine was taken back" is translated into a
 #: supervisor decision.
@@ -780,48 +784,93 @@ class JobSupervisor:
             else None
         )
         published = None
-        if document is not None:
-            # Publishing is minutes for a large capture, and a deploy's SIGTERM that
-            # waited for it was SIGKILLed at the 30 s `kill_timeout`. Every stage is
-            # finished on its row by now, so a worker that lets go here costs the next
-            # one a publish -- idempotent copies -- and no stage.
-            if self._stopping(db, job, stop):
+        for attempt in range(1, REPUBLISH_ATTEMPTS + 1):
+            if document is not None:
+                # Publishing is minutes for a large capture, and a deploy's SIGTERM that
+                # waited for it was SIGKILLed at the 30 s `kill_timeout`. Every stage is
+                # finished on its row by now, so a worker that lets go here costs the next
+                # one a publish -- idempotent copies -- and no stage.
+                if self._stopping(db, job, stop):
+                    return "lost"
+                # The tileset the site shows now: the sidecars beside it that still hold
+                # for the new tiles are carried into the new generation (worker/carry.py).
+                live = registration.live_tileset_url(db, db.get(Capture, job.capture_id))
+                # Copy to the public bucket first, with no transaction open: for a large
+                # capture it takes minutes, and a session idle in a transaction that long
+                # is killed by the database (see registration.publish_outputs).
+                _end_transaction(db)
+                published = registration.publish_outputs(
+                    self._storage,
+                    publish=self._publish,
+                    job_id=job.id,
+                    registration=document,
+                    tiles_stage_id=state.stage_producing("splat"),
+                    thumbnail_stage_id=state.stage_producing("thumbnail.jpg"),
+                    coverage_stage_id=state.stage_producing("coverage_enu.ply"),
+                    carry_from=live,
+                )
+                if self._stopping(db, job, stop):
+                    return "lost"
+            if not self._still_ours(db, job):
                 return "lost"
-            # Copy to the public bucket first, with no transaction open: for a large
-            # capture it takes minutes, and a session idle in a transaction that long is
-            # killed by the database (see registration.publish_outputs).
-            _end_transaction(db)
-            published = registration.publish_outputs(
-                self._storage,
-                publish=self._publish,
-                job_id=job.id,
-                registration=document,
-                tiles_stage_id=state.stage_producing("splat"),
-                thumbnail_stage_id=state.stage_producing("thumbnail.jpg"),
-                coverage_stage_id=state.stage_producing("coverage_enu.ply"),
+            capture = db.get(Capture, job.capture_id)
+            if capture is not None and document is not None:
+                try:
+                    registration.register(
+                        db,
+                        self._storage,
+                        publish=self._publish,
+                        capture=capture,
+                        job_id=job.id,
+                        registration=document,
+                        tiles_stage_id=state.stage_producing("splat"),
+                        thumbnail_stage_id=state.stage_producing("thumbnail.jpg"),
+                        coverage_stage_id=state.stage_producing("coverage_enu.ply"),
+                        published=published,
+                    )
+                except registration.LiveMoved as moved:
+                    # An attach cut a generation while this run was publishing, and
+                    # repointing would drop what it attached. Nothing was written; publish
+                    # again on top of it.
+                    db.rollback()
+                    log.warning(
+                        "worker: job %s: the site moved to %s while publishing (attempt %d); "
+                        "publishing again on top of it",
+                        job.id,
+                        moved.url,
+                        attempt,
+                    )
+                    continue
+            elif capture is not None:
+                # A recipe with no `register` stage still finished; the capture is processed
+                # even though there is nothing to put on the globe.
+                capture.status = CaptureStatus.COMPLETE
+            break
+        else:
+            # The site kept moving under every publish. Its new tiles are withheld, as for a
+            # publish that failed: the site stays as the attaches left it, and the run --
+            # which succeeded -- still completes.
+            log.error(
+                "worker: job %s: the site moved under %d publishes; its tiles are withheld",
+                job.id,
+                REPUBLISH_ATTEMPTS,
             )
-            if self._stopping(db, job, stop):
+            if not self._still_ours(db, job):
                 return "lost"
-        if not self._still_ours(db, job):
-            return "lost"
-        capture = db.get(Capture, job.capture_id)
-        if capture is not None and document is not None:
-            registration.register(
-                db,
-                self._storage,
-                publish=self._publish,
-                capture=capture,
-                job_id=job.id,
-                registration=document,
-                tiles_stage_id=state.stage_producing("splat"),
-                thumbnail_stage_id=state.stage_producing("thumbnail.jpg"),
-                coverage_stage_id=state.stage_producing("coverage_enu.ply"),
-                published=published,
-            )
-        elif capture is not None:
-            # A recipe with no `register` stage still finished; the capture is processed
-            # even though there is nothing to put on the globe.
-            capture.status = CaptureStatus.COMPLETE
+            capture = db.get(Capture, job.capture_id)
+            if capture is not None and document is not None:
+                registration.register(
+                    db,
+                    self._storage,
+                    publish=self._publish,
+                    capture=capture,
+                    job_id=job.id,
+                    registration=document,
+                    tiles_stage_id=state.stage_producing("splat"),
+                    published=registration.Published(
+                        tileset=None, thumbnail=None, coverage=None, withheld=True
+                    ),
+                )
         job.status = RunStatus.COMPLETE
         job.error = None
         self._close(job)

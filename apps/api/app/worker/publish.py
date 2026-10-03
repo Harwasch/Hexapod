@@ -53,15 +53,16 @@ from __future__ import annotations
 import hashlib
 import logging
 import secrets
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
 from app.services.published import GENERATION_LENGTH, published_key
+from app.services.sidecars import content_type_for
 from app.storage import ObjectStorage
 from app.storage.base import ObjectSummary
 from app.storage.null import StorageUnavailableError
+from app.storage.parallel import TRANSFER_WORKERS, each
 from app.worker.outputs import cache_control_for, member_content_type
-from app.worker.parallel import TRANSFER_WORKERS, each
 
 log = logging.getLogger("app.worker")
 
@@ -106,7 +107,9 @@ class Publisher:
         except StorageUnavailableError:
             return None
 
-    def generation(self, prefixes: Iterable[str] = (), keys: Iterable[str] = ()) -> str | None:
+    def generation(
+        self, prefixes: Iterable[str] = (), keys: Iterable[str] = (), also: Iterable[str] = ()
+    ) -> str | None:
         """The generation one publish of these objects writes into, or None with one bucket.
 
         A hash of every object's key, size and ETag: the same bytes give the same
@@ -116,6 +119,8 @@ class Publisher:
         (an object without an ETag, a listing that fails) the generation is random, which
         is always correct and only costs the reuse. Every object a publish copies should
         be named here, so that one generation holds the tileset and what goes with it.
+        `also` is more lines of the same shape, for what is not in the private bucket: the
+        sidecars a republish carries from the live generation (`carry.CarryPlan.lines`).
         """
         if not self.splits_buckets:
             return None
@@ -127,6 +132,7 @@ class Publisher:
                 head = self.private.head_object(key)
                 if head is not None:
                     lines.append(f"{key}\t{head.size}\t{head.etag or ''}")
+            lines += list(also)
         except Exception:
             log.warning("publish: could not read what is being published; a fresh generation")
             return _fresh_generation()
@@ -164,7 +170,15 @@ class Publisher:
             raise PublishError(f"could not publish {key}: {error}") from error
         return self.url(target)
 
-    def publish_tree(self, prefix: str, entry: str, *, generation: str | None = None) -> str | None:
+    def publish_tree(
+        self,
+        prefix: str,
+        entry: str,
+        *,
+        generation: str | None = None,
+        carried: Sequence[tuple[str, str]] = (),
+        document: bytes | None = None,
+    ) -> str | None:
         """Copy every object under `prefix` into `generation`, and return `entry`'s URL.
 
         A 3D tileset is a `tileset.json` and the tiles it names, so publishing the entry
@@ -185,6 +199,12 @@ class Publisher:
         raises, and `publish_outputs` registers no site -- the stray tiles left in the
         public bucket are in a generation nothing points at, and the live one, if there
         is one, was never touched.
+
+        `carried` are sidecars a republish keeps from the live generation (`app/worker/
+        carry.py`): `(key in the public bucket, path beside the new tileset.json)`, copied
+        within the public bucket alongside the members. `document`, when given, is the
+        `tileset.json` to write instead of copying the run's own -- the same tileset with
+        the carried root extras -- and it too goes last.
         """
         if not self.splits_buckets:
             return self.url(entry)
@@ -204,10 +224,37 @@ class Publisher:
             )
         generation = generation or self.generation(prefixes=[prefix]) or ""
         members = [key for key in keys if key != entry]
+        base = prefix.rstrip("/") + "/"
+        directory = published_key(base, generation)
+        own = {key[len(base) :] for key in keys}
+        # The run's own file wins over a carried one of the same name.
+        kept = [(key, rel) for key, rel in carried if rel not in own]
+
+        def one(item: tuple[str, str | None]) -> None:
+            key, rel = item
+            if rel is None:
+                self._copy(key, generation)
+            else:
+                target = directory + rel
+                self.public.copy_object(
+                    self.public.bucket,
+                    key,
+                    target,
+                    content_type=content_type_for(rel),
+                    cache_control=cache_control_for(target),
+                )
+
+        work: list[tuple[str, str | None]] = [(key, None) for key in members] + list(kept)
         try:
-            each(lambda key: self._copy(key, generation), members, workers=PUBLISH_WORKERS)
+            each(one, work, workers=PUBLISH_WORKERS)
             # The barrier: only now that every member is in place does the root go across.
-            self._copy(entry, generation)
+            if document is None:
+                self._copy(entry, generation)
+            else:
+                target = published_key(entry, generation)
+                self.public.put_object(
+                    target, document, "application/json", cache_control=cache_control_for(target)
+                )
         except StorageUnavailableError:
             return None
         except Exception as error:

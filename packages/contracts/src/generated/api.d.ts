@@ -118,6 +118,26 @@ export interface paths {
         patch: operations["update_asset_api_v1_assets__asset_id__patch"];
         trace?: never;
     };
+    "/api/v1/assets/{asset_id}/sidecars": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Attach sidecars to an asset by cutting a new generation
+         * @description The one way to publish files beside a scan's tiles (`instances.json`, `collision.bin`, an inferred fill under `inferred/<name>/`, `sog/`, a plant rig). Stage them in the private bucket under `staging/assets/<asset id>/<token>/`, laid out as they should sit beside `tileset.json`, then call this. The asset's current tiles and every sidecar it already has are copied server side into a **new** generation with the staged files beside them, `tileset.json` with the merged root `extras` is written last, all of it immutable, and the asset's URL moves to it. Attaches to one asset are serialized: a second waits and builds on the first's generation. 409 when `basedOn` no longer holds the asset's tiles (a republish replaced them), when the asset is not a run's tileset in the public bucket, or when another attach held the asset too long; 422 for a staged file outside the rules (path, extension, size, a tile or `tileset.json`). See docs/DEPLOYMENT.md.
+         */
+        post: operations["attach_sidecars_api_v1_assets__asset_id__sidecars_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/captures": {
         parameters: {
             query?: never;
@@ -1065,6 +1085,8 @@ export interface components {
             renderConfig: components["schemas"]["RenderConfig"];
             representation: components["schemas"]["Representation"];
             resolution: components["schemas"]["ResolutionMetadata"] | null;
+            /** Sidecarflags */
+            sidecarFlags: components["schemas"]["SidecarFlag"][];
             /** Siteid */
             siteId: string | null;
             /** Source */
@@ -3084,6 +3106,87 @@ export interface components {
          * @enum {string}
          */
         ScaleSource: "arkit" | "exif-gps" | "manual" | "unresolved";
+        /**
+         * SidecarAttach
+         * @description Attach the files staged under `stagingPrefix` to an asset's tileset.
+         */
+        SidecarAttach: {
+            /**
+             * Basedon
+             * @description The tileset URL the sidecars were computed against. The attach goes ahead when the asset's current tiles are those tiles -- the same URL, or a later generation cut by another attach, which copies the tiles unchanged -- and is refused with 409 when a republish has replaced them.
+             */
+            basedOn: string;
+            /**
+             * Extras
+             * @description Keys to set on the root tile's `extras`, each replaced whole -- except a list of `{uri, ...}` entries (`inferredLayers`), merged into the current list by `uri`, so send only your own entry; `null` removes a key. A `uri` a key names must be in the new generation.
+             */
+            extras?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Files
+             * @description Optional: exactly the paths that must be staged. A partial upload is then refused instead of attached.
+             */
+            files?: string[] | null;
+            /**
+             * Rigurl
+             * @description Optional: the asset's `renderConfig.rigUrl`, relative to the tileset, set in the same transaction as the new URL; `null` clears it. Omitted, unchanged.
+             */
+            rigUrl?: string | null;
+            /**
+             * Stagingprefix
+             * @description Where the files were staged in the private bucket: `staging/assets/<asset id>/<token>/`, the token a workflow run id or similar. Every object under it is attached at its path relative to it, beside `tileset.json`.
+             */
+            stagingPrefix: string;
+        };
+        /**
+         * SidecarAttachment
+         * @description The generation an attach cut, and the asset now pointing at it.
+         */
+        SidecarAttachment: {
+            asset: components["schemas"]["AssetRead"];
+            /** Attached */
+            attached: string[];
+            /** Carried */
+            carried: string[];
+            /** Copied */
+            copied: number;
+            /** Extras */
+            extras: string[];
+            /** Generation */
+            generation: string;
+            /** Previousurl */
+            previousUrl: string;
+            /** Staged */
+            staged: string[];
+            /** Url */
+            url: string;
+        };
+        /**
+         * SidecarFlag
+         * @description A sidecar a republish could not carry into the asset's new generation.
+         *
+         *     Sidecars (`instances.json`, `collision.bin`, an inferred fill, `sog/`, a plant rig) are
+         *     published beside the tiles. When a run publishes new tiles, each kind bound to the
+         *     splats is carried only if the new tiles are the very same ones; otherwise it is
+         *     dropped, the viewer loses it, and this says so until the kind is attached again. See
+         *     docs/SCENE_OBJECTS.md, section 8.
+         */
+        SidecarFlag: {
+            /** Action */
+            action: string;
+            /**
+             * Flaggedat
+             * Format: date-time
+             */
+            flaggedAt: string;
+            /** Jobid */
+            jobId: string | null;
+            /** Kind */
+            kind: string;
+            /** Reason */
+            reason: string;
+        };
         /** SiteCreate */
         SiteCreate: {
             /** Assets */
@@ -3526,6 +3629,9 @@ export type SchemaRepresentation = components['schemas']['Representation'];
 export type SchemaResolutionMetadata = components['schemas']['ResolutionMetadata'];
 export type SchemaRunStatus = components['schemas']['RunStatus'];
 export type SchemaScaleSource = components['schemas']['ScaleSource'];
+export type SchemaSidecarAttach = components['schemas']['SidecarAttach'];
+export type SchemaSidecarAttachment = components['schemas']['SidecarAttachment'];
+export type SchemaSidecarFlag = components['schemas']['SidecarFlag'];
 export type SchemaSiteCreate = components['schemas']['SiteCreate'];
 export type SchemaSiteQuality = components['schemas']['SiteQuality'];
 export type SchemaSiteRead = components['schemas']['SiteRead'];
@@ -4074,6 +4180,77 @@ export interface operations {
             };
             /** @description Validation error */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    attach_sidecars_api_v1_assets__asset_id__sidecars_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                asset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SidecarAttach"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SidecarAttachment"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Object storage is not configured */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

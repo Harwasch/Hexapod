@@ -30,7 +30,7 @@ _MISSING_CODES = frozenset({"404", "NoSuchKey", "NotFound"})
 _SINGLE_PUT_BYTES = 8 * 1024 * 1024
 
 #: botocore keeps 10 connections per client by default. The worker moves a directory's
-#: objects eight at a time (`app.worker.parallel`), and any one of those may be a managed
+#: objects eight at a time (`app.storage.parallel`), and any one of those may be a managed
 #: multipart transfer with threads of its own; at 10 the pool would discard and reopen
 #: connections -- a TLS handshake to R2 each time -- rather than reuse them.
 MAX_POOL_CONNECTIONS = 32
@@ -86,9 +86,21 @@ class S3Storage:
 
     # --- reads -------------------------------------------------------------
 
-    def put_object(self, key: str, data: bytes, content_type: str) -> StoredObject:
-        response = self._client.put_object(
-            Bucket=self._bucket, Key=key, Body=data, ContentType=content_type
+    def put_object(
+        self, key: str, data: bytes, content_type: str, *, cache_control: str | None = None
+    ) -> StoredObject:
+        response = (
+            self._client.put_object(
+                Bucket=self._bucket,
+                Key=key,
+                Body=data,
+                ContentType=content_type,
+                CacheControl=cache_control,
+            )
+            if cache_control
+            else self._client.put_object(
+                Bucket=self._bucket, Key=key, Body=data, ContentType=content_type
+            )
         )
         return StoredObject(
             key=key,

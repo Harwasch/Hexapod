@@ -218,7 +218,7 @@ registered nothing when the POST failed.
 A deployment with no bucket still runs: the log and artifact uploads are skipped and say
 so by leaving `log_key` null, rather than failing the job.
 
-A directory artifact's members go up eight at a time (`parallel.py`; normalize's frames and
+A directory artifact's members go up eight at a time (`app/storage/parallel.py`; normalize's frames and
 package's tiles are hundreds of small objects whose cost is round trips), and every
 artifact object is written with the `Cache-Control` a browser should get for it
 (`outputs.cache_control_for`, the same rule as the tile proxy in `functions/r2/[[path]].js`).
@@ -241,6 +241,15 @@ rewrites its own keys: the site moves to the new generation only once it is comp
 live one is never written again -- so `immutable` holds there and only there -- and a
 republish that fails leaves the site, its thumbnail and its overlay as they were. A run's
 own keys are uploaded with the short lifetime for the same reason.
+
+A republish also reads the live generation first (`carry.py`) and carries into the new one
+each sidecar attached beside the old tiles that still holds for the new splats -- an
+inferred fill always; objects, `sog/`, a rig only onto the very same tiles -- and `register`
+flags the asset for each kind it drops (`assets.sidecar_flags`, "Objects need
+re-segmenting"). `register` takes the asset's row lock, the one the API's sidecar attach
+takes, and repoints only if the asset still points where the publish carried from;
+otherwise the run publishes again on top of the attach (docs/DEPLOYMENT.md, "Sidecars: one
+publisher").
 
 Every run that ends — finished, failed or cancelled — drops its `inputs/` (a copy of what
 is in the bucket, which a retry fetches again) and every stage's `work/` (scratch);
