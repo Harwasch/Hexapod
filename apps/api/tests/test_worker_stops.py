@@ -698,6 +698,32 @@ def test_short_of_room_the_worker_tidies_and_evicts_old_finished_runs_and_nothin
     assert (busy / "stages" / "one" / "work" / "x.bin").is_file()
 
 
+def test_measuring_room_creates_nothing_and_reads_the_nearest_existing_parent(
+    sessions: sessionmaker[Session], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The image's user cannot create /app/var: a worker with no root yet must still be
+    # able to ask about room (CI's `--once` with nothing queued), and creating the root is
+    # a run's business.
+    root = tmp_path / "var" / "worker"
+    asked: list[Path] = []
+    real = shutil.disk_usage
+
+    def disk_usage(path: Path) -> object:
+        asked.append(Path(path))
+        return real(path)
+
+    monkeypatch.setattr(shutil, "disk_usage", disk_usage)
+    guard = DiskGuard(sessions, root, min_free_gb=0.001, evict_after_days=7)
+
+    assert guard.free_bytes() > 0
+    assert guard.room_to_claim()
+    assert not root.exists() and not root.parent.exists()
+    assert asked and set(asked) == {tmp_path}
+    root.mkdir(parents=True)
+    guard.free_bytes()
+    assert asked[-1] == root
+
+
 def test_with_nothing_left_to_evict_the_worker_does_not_claim_and_says_so(
     db: Session,
     sessions: sessionmaker[Session],

@@ -78,8 +78,15 @@ class DiskGuard:
         self._complained = float("-inf")
 
     def free_bytes(self) -> int:
-        self._root.mkdir(parents=True, exist_ok=True)
-        return shutil.disk_usage(self._root).free
+        """Free space on the filesystem the root is on, or will be: measured at its
+        nearest existing ancestor, creating nothing. A worker that has never run a job
+        may have no root yet, and making one is a run's business, not a question about
+        room -- the image's user cannot create /app/var, so CI's `--once` with nothing
+        queued failed here before it asked the queue anything."""
+        path = self._root
+        while not path.exists() and path != path.parent:
+            path = path.parent
+        return shutil.disk_usage(path).free
 
     def room_to_claim(self) -> bool:
         """True when there is room for another run, after making some if there was not."""
