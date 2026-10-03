@@ -766,6 +766,13 @@ and a warning in the worker's log; attaching that kind again clears it. With one
 nothing can be carried (a run's tileset is its own keys), so everything is dropped and
 flagged.
 
+**What a run provides is only what this attempt wrote.** A Refine re-runs the same job, and
+its `package` uploads into the same `runs/<job>/<stage>/splat/` in the private bucket as the
+first attempt did. The worker now removes whatever is under that prefix and not in the
+upload (`outputs._prune`): a `collision.bin` the first packer wrote and the second did not
+would otherwise have been published beside the new tiles and read by the carry plan as the
+new run's own grid, replacing the live one.
+
 **The workflows' side: one script.** The five workflows that publish beside the tiles —
 `publish-instances.yml`, `publish-fill.yml`, `collision-backfill.yml`,
 `streamed-lod-backfill.yml`, `living-plants.yml` — all go through
