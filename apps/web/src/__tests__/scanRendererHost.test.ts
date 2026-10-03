@@ -6,13 +6,37 @@
 import { Cartesian3, Event, Matrix4, PerspectiveFrustum, type Cesium3DTileset } from "cesium";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { RigidMotion } from "@twin/world";
+
 import {
   ScanRendererHost,
   prefetchScanDestination,
   type BackendModule,
 } from "@/cesium/scanView/ScanRendererHost";
+import type { ScanMotion } from "@/cesium/scanView/scanMotion";
 import type { BackendHooks, ScanBackend, ScanPose } from "@/cesium/scanView/types";
+import type * as Telemetry from "@/cesium/telemetry";
+import { useSceneObjects } from "@/state/sceneObjects";
 import { RETRY_FAILED_MS, TileStreamer } from "@/view/stream";
+
+/**
+ * Telemetry's rigid part as the motion link reads it (`telemetryOf(assetId).rigid`), per asset
+ * id: a test moves an object as the driver does -- a new `motionVersion` -- and asks the globe
+ * for a frame, as the driver's `requestRender` does.
+ */
+const telemetry = vi.hoisted(
+  () =>
+    new Map<string, { rigid: { instanceMotions: Map<number, unknown>; motionVersion: number } }>(),
+);
+vi.mock("@/cesium/telemetry", async (importOriginal) => {
+  const actual = await importOriginal<typeof Telemetry>();
+  return {
+    ...actual,
+    telemetryOf: (assetId: string) =>
+      (telemetry.get(assetId) as ReturnType<typeof actual.telemetryOf>) ??
+      actual.telemetryOf(assetId),
+  };
+});
 
 /** A scan at the origin: a root over two regions 40 m apart, each a merged parent of leaves. */
 const TILESET = {
@@ -69,7 +93,17 @@ interface Rig {
 let served: unknown = TILESET;
 
 async function rig(
-  options: { tileset?: unknown; position?: Cartesian3; direction?: Cartesian3 } = {},
+  options: {
+    tileset?: unknown;
+    position?: Cartesian3;
+    direction?: Cartesian3;
+    /** The scan's asset id: its objects and motion are linked by it. */
+    assetId?: string;
+    /** More of the root's extras (objects, motion). */
+    extras?: Record<string, unknown>;
+    /** What the renderer can do beyond the basics (setMotion, place, frameDueBy). */
+    backend?: Partial<ScanBackend<string>>;
+  } = {},
 ): Promise<Rig> {
   if (options.tileset) served = options.tileset;
   const renders: ScanPose[] = [];
@@ -102,6 +136,7 @@ async function rig(
     destroy: () => {
       destroyed += 1;
     },
+    ...options.backend,
   };
   const module: BackendModule = {
     createBackend: (_canvas, _budget, given) => {
@@ -131,11 +166,18 @@ async function rig(
   const host = new ScanRendererHost(viewer as never, { backends: () => Promise.resolve(module) });
   const tileset = {
     resource: { url: "https://scan.test/tileset.json" },
-    root: { computedTransform: Matrix4.IDENTITY.clone(), extras: { nativeLod: false } },
+    root: {
+      computedTransform: Matrix4.IDENTITY.clone(),
+      extras: { nativeLod: false, ...options.extras },
+    },
     isDestroyed: () => false,
   } as unknown as Cesium3DTileset;
   host.setRenderer("playcanvas");
-  host.setTarget({ key: "scan", tileset });
+  host.setTarget({
+    key: "scan",
+    tileset,
+    ...(options.assetId ? { assetId: options.assetId } : {}),
+  });
   const globe = (): void => {
     postRender.raiseEvent();
   };
@@ -390,6 +432,133 @@ describe("what wakes the splat overlay", () => {
     expect(r.budgets.at(-1)).toBeLessThan(3_000_000);
     // The frame that moved it asked for another: drawn without the globe.
     expect(r.renders.length).toBeGreaterThan(renders);
+    r.host.destroy();
+  });
+});
+
+describe("the scan's objects moving under the overlay", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({
+      toFake: [
+        "setTimeout",
+        "clearTimeout",
+        "requestAnimationFrame",
+        "cancelAnimationFrame",
+        "performance",
+      ],
+    });
+    served = TILESET;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(new Response(JSON.stringify(served), { status: 200 }))),
+    );
+  });
+  afterEach(() => {
+    telemetry.clear();
+    useSceneObjects.setState({ objects: {}, poses: {} });
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    document.body.innerHTML = "";
+  });
+
+  it("draws as a driver moves an object, and nothing at all once the motion stops", async () => {
+    const motions: (ScanMotion | null)[] = [];
+    const r = await rig({
+      assetId: "camp",
+      backend: { setMotion: (motion) => void motions.push(motion) },
+    });
+    await settle(r);
+    // The session handed the renderer its first motion (nothing moving) as it started.
+    const handedAtStart = motions.length;
+    expect(handedAtStart).toBe(1);
+    // At rest, with the globe rendering for something else: no frame, no motion handed.
+    let before = r.renders.length;
+    await r.run(2000, true);
+    expect(r.renders.length).toBe(before);
+    expect(motions.length).toBe(handedAtStart);
+
+    // Telemetry moves an object: each step a new motion version and a globe frame (the
+    // driver's requestRender); the overlay draws each one, with the motion handed first.
+    const rigid = { instanceMotions: new Map<number, RigidMotion>(), motionVersion: 0 };
+    telemetry.set("camp", { rigid });
+    for (let step = 1; step <= 10; step += 1) {
+      rigid.motionVersion = step;
+      r.globe();
+      await r.run(16);
+    }
+    expect(r.renders.length - before).toBe(10);
+    expect(motions.length - handedAtStart).toBe(10);
+    expect(r.host.status().motion).toMatchObject({ updates: handedAtStart + 10 });
+
+    // The motion stops (the object stays where it was moved): nothing more is drawn, the
+    // globe rendering or not.
+    before = r.renders.length;
+    await r.run(3000, true);
+    await r.run(2000);
+    expect(r.renders.length).toBe(before);
+    expect(motions.length - handedAtStart).toBe(10);
+    r.host.destroy();
+    // Stopping hands the renderer no motion at all.
+    expect(motions.at(-1)).toBeNull();
+  });
+
+  it("draws a split object as it loads and as its pose is set, and nothing at rest", async () => {
+    const placed: (readonly number[] | null)[] = [];
+    const object = { uri: "objects/7/tileset.json", instance: 7, origin: [0, 0, 0] };
+    const r = await rig({
+      assetId: "camp",
+      extras: { objects: [object] },
+      backend: { place: (_mesh, matrix) => void placed.push(matrix) },
+    });
+    await settle(r);
+    // Loaded (its own tileset, its root tile) and placed at its declared pose.
+    expect(r.host.status().objects).toBe(1);
+    expect(placed).toHaveLength(1);
+    const before = r.renders.length;
+    await r.run(2000, true);
+    expect(r.renders.length).toBe(before);
+
+    // Moved by hand (or a driver): no camera moves, the overlay still draws it.
+    useSceneObjects
+      .getState()
+      .setPose("camp", 7, { translation: [1, 0, 0], rotation: [0, 0, 0, 1] });
+    await r.run(100);
+    expect(r.renders.length).toBe(before + 1);
+    expect(placed).toHaveLength(2);
+    expect(placed.at(-1)?.[12]).toBeCloseTo(1);
+    // Another asset's pose is not this scan's.
+    useSceneObjects
+      .getState()
+      .setPose("elsewhere", 7, { translation: [5, 0, 0], rotation: [0, 0, 0, 1] });
+    await r.run(1000, true);
+    expect(r.renders.length).toBe(before + 1);
+    r.host.destroy();
+  });
+
+  it("draws by the time the renderer says held-back work is due, though nothing else moves", async () => {
+    // A renderer that held a moving object's re-sort back (playcanvasBackend's
+    // SORT_REFRESH_MS): due at `due`; the frame drawn then does it, and nothing is due after.
+    let due: number | null = null;
+    const r = await rig({
+      backend: {
+        frameDueBy: () => {
+          if (due !== null && performance.now() >= due) due = null;
+          return due;
+        },
+      },
+    });
+    await settle(r);
+    const before = r.renders.length;
+    due = performance.now() + 100;
+    // The frame that held it back (the last step of a motion).
+    r.hooks().frameWanted();
+    await r.run(32);
+    expect(r.renders.length).toBe(before + 1);
+    await r.run(200);
+    expect(r.renders.length).toBe(before + 2);
+    expect(due).toBeNull();
+    await r.run(3000);
+    expect(r.renders.length).toBe(before + 2);
     r.host.destroy();
   });
 });
