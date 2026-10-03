@@ -156,6 +156,28 @@ def test_the_client_calls_what_the_app_defines() -> None:
     assert constants["COSMOS_FPS"] == wmc.VideoClips(model="Cosmos", remote=None).fps  # type: ignore[arg-type]
 
 
+def test_video_clips_chain_each_call_from_the_last_frame() -> None:
+    sent: list[np.ndarray] = []
+
+    def remote(cls: str, method: str, request: dict) -> dict:
+        still = wmc.decode_png(request["image"])
+        sent.append(still)
+        # Each frame a little brighter than the one before: the last is the next start.
+        frames = [np.clip(still.astype(int) + 10 * k, 0, 255).astype(np.uint8) for k in range(4)]
+        return {"mp4": wmc.encode_mp4(frames, 24.0), "fps": 24.0, "model": "fake", "seconds": 2.0}
+
+    source = wmc.VideoClips(model="Wan", remote=remote, chain=3, steps=20)
+    (clip,) = source.clips([np.full((32, 48, 3), 50, np.uint8)], [None], seeds=(1,))
+    assert len(clip) == 4 + 3 + 3  # the joins' repeated frames dropped
+    assert [round(float(s.mean())) for s in sent] == pytest.approx([50, 80, 110], abs=3)
+    assert abs(float(clip[-1].mean()) - 140) <= 8  # MJPG shifts the colour a little
+    assert [r["link"] for r in source.received] == [0, 1, 2]
+    assert len({r["seed"] for r in source.received}) == 3
+    assert source.name == "wan2.2-ti2v-5b-chain3"
+    with pytest.raises(ValueError):
+        wmc.VideoClips(chain=0)
+
+
 def test_presmooth_fills_the_gaps_between_samples_and_leaves_empty_space_dark() -> None:
     rgb = np.zeros((40, 40, 3), np.uint8)
     rgb[::2, 0:20:2] = (200, 100, 50)  # samples on every other pixel, left half

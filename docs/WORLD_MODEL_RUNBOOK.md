@@ -9,7 +9,7 @@ oscillators for motion). This page covers swapping in the real models on Modal.
 | B: fill (holes) | `InpaintFiller` (Telea)        | Qwen-Image inpainting ControlNet; LaMa; SDXL inpainting | `InpaintQwen.inpaint`, `InpaintSDXL.inpaint` | `world_model_client:GenerativeFiller` |
 | B: refine       | `distill_fill.torch_rasterize` | gsplat 1.5.3                                            | `Distill.run`                                | `teacher_fill.py fill --distill N`    |
 | A: motion       | `OscillatorClips`              | Wan 2.2 TI2V-5B                                         | `Wan.clip`                                   | `teacher_motion.py --source wan`      |
-| A: motion (alt) | (same)                         | Cosmos-Predict2.5-2B                                    | `Cosmos.clip`                                | `teacher_motion.py --source cosmos`   |
+| A: motion (alt) | (same)                         | Cosmos-Predict2-2B                                      | `Cosmos.clip`                                | `teacher_motion.py --source cosmos`   |
 | C2: materials   | `teacher_materials.py synth`   | Wan / Cosmos                                            | `Wan.clip`                                   | `teacher_materials.py world`          |
 
 Code: `infra/modal/world_models.py` (server), `tools/captures/world_model_client.py`
@@ -17,13 +17,13 @@ Code: `infra/modal/world_models.py` (server), `tools/captures/world_model_client
 
 ## 1. Credentials
 
-| Need                  | Where it goes                                        | Why                                                                                                                      |
-| --------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| Modal token           | `MODAL_TOKEN_ID` / `MODAL_TOKEN_SECRET` in the shell | deploy and call                                                                                                          |
-| Hugging Face token    | Modal secret `huggingface` (`HF_TOKEN`)              | Wan, Cosmos weights (Fixer's `nvidia/Fixer` is not gated and needs none); the workspace had no such secret on 2026-10-02 |
-| HF licence acceptance | huggingface.co, on the token's account               | Cosmos only: Cosmos-Predict2.5-2B, Cosmos-Reason1-7B, Cosmos-Guardrail1 (all gated; `harwasch` had none on 2026-10-01)   |
-| ~~NGC API key~~       | not needed                                           | Fixer's NGC container is replaced by the same environment built from cosmos-predict2's `uv.lock` (section 5)             |
-| R2 credentials        | already used by `infra/modal/app.py`                 | only to publish an inferred layer                                                                                        |
+| Need                  | Where it goes                                        | Why                                                                                                                              |
+| --------------------- | ---------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| Modal token           | `MODAL_TOKEN_ID` / `MODAL_TOKEN_SECRET` in the shell | deploy and call                                                                                                                  |
+| Hugging Face token    | Modal secret `huggingface-secret` (found by prefix)  | Wan, Cosmos weights (Fixer's `nvidia/Fixer` is not gated and needs none); token of account `harwasch` (section 8)                |
+| HF licence acceptance | huggingface.co, on the token's account               | Cosmos only: nvidia/Cosmos-Predict2-2B-Video2World and nvidia/Cosmos-1.0-Guardrail (both still 403 for `harwasch` on 2026-10-03) |
+| ~~NGC API key~~       | not needed                                           | Fixer's NGC container is replaced by the same environment built from cosmos-predict2's `uv.lock` (section 5)                     |
+| R2 credentials        | already used by `infra/modal/app.py`                 | only to publish an inferred layer                                                                                                |
 
 ```sh
 modal secret create huggingface HF_TOKEN=hf_...   # for Wan / Cosmos only
@@ -246,3 +246,46 @@ whose model it cannot read, and fetches the weights into the volume once. Runs 3
 - **Next.** A hole wants the generative fill inside it and the scan's own lighting: Qwen
   chained is the one to keep for split objects. The prompt would gain from a caption of the
   surroundings (the tags miss "straw"); the camp wants Fixer, or a multi-view model.
+
+## 9. Dream clips and C2 on generated footage (2026-10-03, branch `wm-dream`)
+
+Runner: `infra/modal/dream.py` + `.github/workflows/dream.yml` (deploys `world_models.py`,
+then runs). Run 37079912011 is the complete one. Video models are diffusers 0.40 /
+transformers 5 / torch 2.8 on H100s (`world_models.video_image`); `world_models.access()`
+reports what the token can read.
+
+- **Wan 2.2 TI2V-5B runs**: 1280x704, 121 frames at 24 fps (5.04 s), 50 steps,
+  **~178 s of H100 per clip** warm (176-181 s over 24 clips), plus ~~25 s of model load per
+  new container (117 s on the very first, downloading into the weights volume). At Modal's
+  H100 rate (~~$3.95/h) that is about **$0.20 per clip**.
+- **Cosmos-Predict2-2B Video2World does not run yet**: the token's account (`harwasch`)
+  gets 403 on `nvidia/Cosmos-Predict2-2B-Video2World` and `nvidia/Cosmos-1.0-Guardrail`
+  (the guardrail the diffusers pipeline builds; its prompt model Qwen3Guard is open).
+  Accept both licences on huggingface.co. A model whose start fails is retried by Modal
+  without end (run 37054515134 waited 4 h), so `dream.py` now skips a model `access()`
+  reports unreadable, and waits on every call with a timeout.
+- **Starts**: gsplat renders over a pale sky from eye-level candidates scored by coverage
+  and depth (`starts/*-candidates.png`). The camp's two from its clearing look like
+  photographs; the pumpkin's (1.4 m over the patch) is a close, low view.
+- **Clips** (`gentle`, `gusty`, `rain` x 3 starts): the camera stays put (the sign, trunks
+  and benches do not move); `gusty` moves canopy and ferns visibly more than `gentle`;
+  `rain` adds faint streaks and little else. On the pumpkin the model reinvents the
+  foreground: the pumpkin turns into a leaf blowing through. A view where plants, not an
+  object, fill the frame is what the motion teachers want.
+- **C2** (`teacher_materials.py world`, strength 0.1 assumed, `--auto-bearing`, gsplat
+  still, three Wan calls chained = 361 frames, 15.0 s): 4 of 5 camp plants `fitted`
+  (`fitted-generated`), the 9.7 m tree 231 `weak` (445 of 14,387 px unoccluded from its
+  best bearing). Fitted c / zeta / D against the prior (3.6-3.9 / 0.10 / 0.025):
+  225 bush 0.9 m 5.0 / 0.62 / 0.008; 244 bush 1.0 m 24.0 / 0.49 / 0.010; 113 bush 4 m
+  30.7 / 0.95 / 0.034; 414 conifer 3.8 m 20.7 / 0.69 / 0.148.
+- **Read them as "no resonance seen"**, not as materials. The tracked spectra are a
+  smooth decay from 0.5 to 8 Hz (`materials/instance-*/spectrum.png`) with no peak, two
+  orders below what the prior predicts at 0.5 Hz; the fit reaches for very stiff,
+  overdamped (resonance above the band, flat response), two of four past the grid's
+  6x-prior edge and a third at it. Wan's breeze is small, broadband jitter of foliage, not the sway of an
+  anchored modal structure.
+- **Clip length**: 5 s gives Welch segments of ~1.25 s (lowest band ~1.6 Hz); three
+  chained calls (15 s) reach ~0.5 Hz. A shrub's 2-8 Hz would be inside that, a tree's
+  0.17-0.3 Hz is not. Chaining holds the pose at the joins but drifts colour (the 15 s
+  clip desaturates) and restarts the motion's phase each 5 s; longer chains need the
+  tracker to re-anchor per link. More length will not by itself make the fit physical.
