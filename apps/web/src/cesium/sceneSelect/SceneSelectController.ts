@@ -169,6 +169,10 @@ export class SceneSelectController {
   #paintView: PaintView | null = null;
   #painted: Painted | null = null;
   #overlay: HTMLCanvasElement | null = null;
+  /** The brush overlay's pixels, kept between strokes (one buffer a size, not one a move). */
+  #overlayImage: ImageData | null = null;
+  /** Removes the wheel listener while one is attached (`#syncWheel`). */
+  #wheelOff: (() => void) | null = null;
   /** The highlight this controller set: cleared when the selection is. */
   #lit: { assetId: string; id: number } | null = null;
   #cameraInputs: boolean | null = null;
@@ -194,15 +198,42 @@ export class SceneSelectController {
     on(window, "pointerup", (e) => this.#onUp(e));
     on(window, "pointercancel", () => this.#endStroke(false));
     on(window, "keydown", (e) => this.#onKey(e));
-    on(window, "wheel", (e) => this.#onWheel(e), true);
     this.#off.push(useSceneSelect.subscribe((state, previous) => this.#follow(state, previous)));
+    this.#syncWheel(useSceneSelect.getState());
   }
 
   destroy(): void {
     for (const off of this.#off.splice(0)) off();
+    this.#wheelOff?.();
+    this.#wheelOff = null;
     this.#setCameraInputs(true);
     this.#overlay?.remove();
     this.#overlay = null;
+    this.#overlayImage = null;
+  }
+
+  /** Whether a wheel listener is attached now (tests). */
+  get listensToWheel(): boolean {
+    return this.#wheelOff !== null;
+  }
+
+  /**
+   * The wheel (with Alt) sizes the brush or cycles the candidates -- so it is listened to only
+   * while there is a brush or more than one candidate. A window listener in the capture phase
+   * that may cancel (`passive: false`) makes the browser wait for script on every wheel tick
+   * before it scrolls or zooms anything; attached for good, it did so for the globe's own zoom
+   * all the time.
+   */
+  #syncWheel(state: ReturnType<typeof useSceneSelect.getState>): void {
+    const wanted = state.mode === "paint" || (state.index >= 0 && state.candidates.length > 1);
+    if (wanted && !this.#wheelOff) {
+      const listener = (e: WheelEvent): void => this.#onWheel(e);
+      window.addEventListener("wheel", listener, { capture: true, passive: false });
+      this.#wheelOff = () => window.removeEventListener("wheel", listener, { capture: true });
+    } else if (!wanted && this.#wheelOff) {
+      this.#wheelOff();
+      this.#wheelOff = null;
+    }
   }
 
   // ---- Picking ---------------------------------------------------------------------------
@@ -616,6 +647,7 @@ export class SceneSelectController {
     state: ReturnType<typeof useSceneSelect.getState>,
     previous: ReturnType<typeof useSceneSelect.getState>,
   ): void {
+    this.#syncWheel(state);
     const id = selectedId(state);
     if (id !== selectedId(previous) || state.assetId !== previous.assetId) {
       const lit = this.#lit;
@@ -790,15 +822,27 @@ export class SceneSelectController {
       this.#overlay = overlay;
     }
     const { cols, rows, data } = view.mask;
-    overlay.width = cols;
-    overlay.height = rows;
+    // Resized only when the view's grid changes: setting a canvas's size reallocates and
+    // clears it, and this runs on every move of a stroke.
+    if (overlay.width !== cols) overlay.width = cols;
+    if (overlay.height !== rows) overlay.height = rows;
     overlay.style.imageRendering = "pixelated";
     const context = overlay.getContext("2d");
     if (!context) return;
-    const image = context.createImageData(cols, rows);
+    let image = this.#overlayImage;
+    if (image?.width !== cols || image.height !== rows) {
+      image = context.createImageData(cols, rows);
+      this.#overlayImage = image;
+    }
+    const pixels = image.data;
+    pixels.fill(0);
     for (let i = 0; i < data.length; i++) {
       if (!data[i]) continue;
-      image.data.set([90, 170, 255, 90], i * 4);
+      const at = i * 4;
+      pixels[at] = 90;
+      pixels[at + 1] = 170;
+      pixels[at + 2] = 255;
+      pixels[at + 3] = 90;
     }
     context.putImageData(image, 0, 0);
   }
