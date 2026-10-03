@@ -2,7 +2,8 @@ name: Segment scans (Modal GPU)
 
 # Runs tools/captures/segment_scene.py with SAM 2.1 and SigLIP 2 on a Modal GPU for the
 # published scans named in infra/modal/segment.py, and uploads instances.json,
-# instances.emb and a colour-by-instance PNG per scan as an artifact. Nothing is published.
+# instances.emb, report.json and compare.png (against what is published) per scan as an
+# artifact. Nothing is published.
 #
 # On a push to `living-models` (or a `seg-*` working branch) that touches the segmentation code (workflow_dispatch only
 # works once this file is on the default branch). The Modal token is the repository's.
@@ -14,6 +15,7 @@ on:
       - infra/modal/segment.py
       - tools/captures/segment_scene.py
       - tools/captures/segment_models.py
+      - tools/captures/instances_report.py
       - .github/workflows/segment.yml
   workflow_dispatch:
     inputs:

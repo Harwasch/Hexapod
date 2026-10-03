@@ -9,6 +9,7 @@ checked against the v1 contract (docs/SCENE_OBJECTS.md §4) and the committed ti
 from __future__ import annotations
 
 import json
+import math
 import shutil
 from pathlib import Path
 
@@ -441,3 +442,128 @@ def test_a_cached_run_resumes_with_the_same_result(run: dict, tmp_path: Path) ->
     assert len(calls) == 4  # nothing asked again
     assert np.array_equal(first.splat_id, second.splat_id)
     assert len(list((tmp_path / "cache").glob("view-*.npz"))) == 4
+
+
+# ------------------------------------------------------------------ coverage and meaning
+
+
+def test_coverage_views_aim_at_what_is_unassigned() -> None:
+    """Targets are where the unassigned splats are, each with `COVERAGE_SHOTS` looking at
+    it (one from eye height, looking up into a crown); nothing unassigned, no views."""
+    rng = np.random.default_rng(3)
+    ground = np.c_[rng.uniform(-20, 20, (4000, 2)), rng.uniform(0, 0.2, 4000)]
+    crown = np.c_[rng.normal(15, 0.8, (300, 2)), rng.uniform(4, 7, 300)]
+    centroids = np.concatenate([ground, crown])
+    missing = np.r_[np.zeros(len(ground)), np.full(len(crown), 3.0)]
+    edge = 0.2
+    cameras = ss.coverage_views(centroids, missing, edge, budget=12)
+    assert 0 < len(cameras) <= 12
+    assert len(cameras) % len(ss.COVERAGE_SHOTS) == 0
+    for camera in cameras:
+        # Each looks at a target inside the crown.
+        axis = camera.rotation[2]
+        t = np.linalg.lstsq(axis[:, None], (crown.mean(axis=0) - camera.centre), rcond=None)[0]
+        nearest = camera.centre + axis * t[0]
+        assert np.min(np.linalg.norm(crown - nearest, axis=1)) < 1.5
+        assert math.isfinite(camera.far) and camera.far > t[0]
+    low = [c for c in cameras if c.centre[2] < 3.0]
+    assert low and all(c.rotation[2, 2] > 0 for c in low)  # looking up
+    assert ss.coverage_views(centroids, np.zeros(len(centroids)), edge) == []
+
+
+def test_unseen_cells_take_a_label_within_their_reach() -> None:
+    """A cell no view saw takes its nearest seen cell's labels within `FILL_CELLS` edges, or
+    within its own reach when that is farther (a floater left out of the views)."""
+    seen = np.c_[np.arange(12) * 0.1, np.zeros((12, 2))]
+    centroids = np.concatenate([seen, [[2.1, 0, 0], [5.0, 0, 0]]])
+    counts = np.full(len(centroids), 40)
+    one = ss._Votes(
+        np.arange(12, dtype=np.int32), np.ones(12, np.float32), np.zeros((1, 12), np.int32)
+    )
+    votes = [one] * 6
+    plain = ss.lift(votes, centroids, counts, 0.1, 1)
+    assert plain.cell_id[0] > 0 and plain.cell_id[12] == 0 and plain.cell_id[13] == 0
+    reach = np.r_[np.zeros(12), 1.5, 1.5]
+    reached = ss.lift(votes, centroids, counts, 0.1, 1, cell_reach=reach)
+    assert reached.cell_id[12] == reached.cell_id[0] and reached.cell_id[13] == 0
+
+
+def test_coverage_rounds_assign_more_of_the_scan(run: dict) -> None:
+    """From a few views, a coverage round adds views where splats are left without an
+    instance, and fewer are left."""
+    splats, levels = run["splats"], run["levels"]
+    cameras = [v.camera for v in run["result"].views][:3]
+    args = {
+        "cameras": cameras,
+        "source_factory": lambda c: ss.OracleMasks(splats, levels, c),
+        "cells": run["result"].cells,
+    }
+    before = ss.segment(splats, None, ss.FakeEmbedder(), VOCABULARY, **args)
+    after = ss.segment(
+        splats, None, ss.FakeEmbedder(), VOCABULARY, coverage_rounds=1, coverage_budget=12, **args
+    )
+    rounds = after.lifted.stats["coverageRounds"]
+    assert len(rounds) == 1 and 0 < rounds[0]["views"] <= 12
+    assert len(after.views) == 3 + rounds[0]["views"]
+    assert (after.splat_id == 0).mean() < (before.splat_id == 0).mean()
+
+
+def test_described_instances_carry_a_category_and_portraits_are_embedded(run: dict) -> None:
+    """With a renderer, each described instance's crops include portraits of its own splats;
+    its category (tags and the category head) is written as given."""
+    result = run["result"]
+    seen: list[np.ndarray] = []
+
+    class Recording(ss.FakeEmbedder):
+        def embed_images(self, images):
+            seen.extend(images)
+            return super().embed_images(images)
+
+    instances = ss.describe(
+        result.lifted, run["splats"], result.cell, result.views[:6], Recording(), VOCABULARY,
+        renderer=ss.CpuRenderer(), render_splats=run["splats"], render_cell=result.cell, kinds=("context", "black", "portrait"),
+    )  # fmt: skip
+    by_kind: dict[str, np.ndarray] = {}
+    again = ss.describe(
+        result.lifted, run["splats"], result.cell, result.views[:6], ss.FakeEmbedder(),
+        VOCABULARY, renderer=ss.CpuRenderer(), render_splats=run["splats"],
+        render_cell=result.cell, by_kind=by_kind,
+    )  # fmt: skip
+    assert {"context", "alone", "portrait"} <= set(by_kind)
+    mixed = ss._normalise(sum(by_kind[k] for k in ss.DESCRIBE_KINDS))
+    np.testing.assert_allclose(mixed, np.stack([i.embedding for i in again]), atol=1e-9)
+    distributions: dict[str, np.ndarray] = {}
+    variants = ss.describe_variants(ss.FakeEmbedder(), VOCABULARY, by_kind, distributions)
+    rows = distributions["context/rows"]
+    assert distributions["context/head"].shape == (rows.size, len(distributions["categories"]))
+    assert "context+black@0.5" in variants
+    # The category: each described kind's distribution, averaged, mixed with the parent's.
+    described = np.array([i.category is not None for i in again])
+    expected = ss._categories_by_kind(
+        ss.FakeEmbedder(), {k: by_kind[k] for k in sorted(ss.DESCRIBE_KINDS)}, described,
+        VOCABULARY, None, result.lifted.parent,
+    )  # fmt: skip
+    assert expected == [i.category for i in again]
+    portraits = [i for i in seen if i.shape == (ss.PORTRAIT_PX, ss.PORTRAIT_PX, 3)]
+    assert portraits and all(max(i.shape[:2]) <= ss.CROP_MAX_SIDE for i in seen)
+    ids = scene_categories.category_ids()
+    for inst in instances:
+        assert (inst.category in ids) if inst.tags else inst.category is None
+    document = ss.instances_document(
+        instances, {}, embedding_model="fake", dim=64, vocabulary_model="fake",
+        vocabulary_size=len(VOCABULARY),
+    )  # fmt: skip
+    for record, inst in zip(document["instances"], instances, strict=True):
+        if inst.category is not None:
+            assert record["category"] == inst.category
+
+
+def test_given_categories_take_the_place_of_the_tags_vote() -> None:
+    records = [
+        {"id": 1, "parent": None, "tags": [{"label": "dirt", "score": 0.5}], "splats": 10},
+        {"id": 2, "parent": 1, "tags": [], "splats": 5},
+    ]
+    labels = {"dirt": "ground"}
+    assert scene_categories.instance_categories(records, labels) == {1: "ground", 2: "ground"}
+    given = scene_categories.instance_categories(records, labels, given={1: "produce"})
+    assert given == {1: "produce", 2: "produce"}
