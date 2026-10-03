@@ -1558,18 +1558,18 @@ def behaviour(properties: dict[str, float]) -> str:
     return "static"
 
 
-#: The crops an instance can be described by: from the views' images in context and alone,
-#: the same from the CPU's point samples (when the views were drawn by another renderer),
-#: and portraits of its own splats.
+#: The crops an instance can be described by: from the views' images (`CROP_SPECS`), the
+#: same from the CPU's point samples (`-samples`, when the views were drawn by another
+#: renderer), and portraits of its own splats.
 CROP_KINDS = (
-    "context", "alone", "wide", "context-samples", "alone-samples", "wide-samples", "portrait",
+    "context", "plain", "alone", "black", "wide", "wide-black",
+    "context-samples", "plain-samples", "alone-samples", "black-samples", "wide-samples",
+    "wide-black-samples", "portrait",
 )  # fmt: skip
-DESCRIBE_KINDS = ("context", "alone", "portrait")
-#: The wide crop: this many times the instance's box, at least `WIDE_MIN_PX` a side, what is
-#: not the instance dimmed to `WIDE_DIM`.
+DESCRIBE_KINDS = ("context", "black")
+#: The wide crop: this many times the instance's box, at least `WIDE_MIN_PX` a side.
 WIDE_FACTOR = 3.0
 WIDE_MIN_PX = 224
-WIDE_DIM = 0.7
 #: Crops embedded at a time (bounds what `describe` holds).
 EMBED_CHUNK = 512
 #: A view is used for an instance's crops when it shows at least this share of the pixels
@@ -1577,9 +1577,7 @@ EMBED_CHUNK = 512
 #: frame counts its pixels at `TRUNCATED_WEIGHT`.
 CROP_MIN_SHARE = 0.25
 TRUNCATED_WEIGHT = 0.5
-#: The context crop dims what is not the instance to this share of its brightness; the
-#: masked crop replaces it by `BACKGROUND_GREY` (both square, so nothing is stretched).
-CONTEXT_DIM = 0.4
+#: The grey of portraits' backgrounds (and of an empty crop).
 BACKGROUND_GREY = 0.5
 #: Crops are scaled down to at most this side (the image model sees 224).
 CROP_MAX_SIDE = 256
@@ -1685,15 +1683,31 @@ def _save_gallery(path: Path, rows: list[list[np.ndarray]], side: int = 128) -> 
     sheet.save(path, quality=85)
 
 
+#: The crops of an instance in a view, by kind: the frame (`pad`: its box padded `CROP_PAD`;
+#: `tight`: its box; `wide`: `WIDE_FACTOR` times its box, at least `WIDE_MIN_PX`) and what
+#: becomes of the pixels that are not the instance (scaled by a factor, or filled with a grey
+#: level). All square.
+CROP_SPECS: dict[str, tuple[str, str, float]] = {
+    "context": ("pad", "scale", 0.4),
+    "plain": ("pad", "scale", 1.0),
+    "alone": ("tight", "fill", 0.5),
+    "black": ("tight", "fill", 0.0),
+    "wide": ("wide", "scale", 0.7),
+    "wide-black": ("wide", "fill", 0.0),
+}
+
+
 def _crops(
-    view: View, image: np.ndarray, box: np.ndarray, cell_id: np.ndarray, ids: np.ndarray
-) -> list[np.ndarray]:
-    """Three square crops of an instance in a view: in context (its box padded `CROP_PAD`,
-    what is not the instance dimmed to `CONTEXT_DIM`), alone (its box, what is not the
-    instance grey) and wide (`WIDE_FACTOR` times its box, at least `WIDE_MIN_PX`, the rest
-    dimmed to `WIDE_DIM`: a part with the whole it is part of). The instance's pixels are
-    those whose cell carries one of `ids` (it and the instances below it), closed over the
-    renderer's speckle (a 3x3 closing)."""
+    view: View,
+    image: np.ndarray,
+    box: np.ndarray,
+    cell_id: np.ndarray,
+    ids: np.ndarray,
+    kinds: Sequence[str] = tuple(CROP_SPECS),
+) -> dict[str, np.ndarray]:
+    """Square crops of an instance in a view, one per kind of `CROP_SPECS`. The instance's
+    pixels are those whose cell carries one of `ids` (it and the instances below it), closed
+    over the renderer's speckle (a 3x3 closing)."""
     import cv2
 
     h, w = image.shape[:2]
@@ -1703,26 +1717,25 @@ def _crops(
     pad_y = max(CROP_PAD * bh, (MIN_CROP_PX - bh) / 2, 0)
     half = max(WIDE_FACTOR * max(bw, bh), WIDE_MIN_PX) / 2
     cx, cy = (x0 + x1 + 1) / 2, (y0 + y1 + 1) / 2
-    out = []
-    for (xa, ya, xb, yb), outside in (
-        (_square(x0 - pad_x, y0 - pad_y, x1 + 1 + pad_x, y1 + 1 + pad_y, w, h), "dim"),
-        (_square(x0 - 1, y0 - 1, x1 + 2, y1 + 2, w, h), "grey"),
-        (_square(cx - half, cy - half, cx + half, cy + half, w, h), "wide"),
-    ):
+    frames = {
+        "pad": _square(x0 - pad_x, y0 - pad_y, x1 + 1 + pad_x, y1 + 1 + pad_y, w, h),
+        "tight": _square(x0 - 1, y0 - 1, x1 + 2, y1 + 2, w, h),
+        "wide": _square(cx - half, cy - half, cx + half, cy + half, w, h),
+    }
+    out: dict[str, np.ndarray] = {}
+    for kind in kinds:
+        frame, how, value = CROP_SPECS[kind]
+        xa, ya, xb, yb = frames[frame]
         owner = view.cell[ya:yb, xa:xb]
         pid = np.where(owner >= 0, cell_id[np.maximum(owner, 0)], 0)
         inside = np.isin(pid, ids).astype(np.uint8)
         inside = cv2.morphologyEx(inside, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8)) > 0
         crop = image[ya:yb, xa:xb].astype(np.float64)
-        if outside == "dim":
-            crop = np.where(inside[..., None], crop, CONTEXT_DIM * crop)
-        elif outside == "wide":
-            crop = np.where(inside[..., None], crop, WIDE_DIM * crop)
-        else:
-            crop = np.where(inside[..., None], crop, 255.0 * BACKGROUND_GREY)
+        rest = value * crop if how == "scale" else np.full_like(crop, 255.0 * value)
+        crop = np.where(inside[..., None], crop, rest)
         if not crop.size:
             crop = np.full((1, 1, 3), 255.0 * BACKGROUND_GREY)
-        out.append(_shrink(np.round(crop).astype(np.uint8)))
+        out[kind] = _shrink(np.round(crop).astype(np.uint8))
     return out
 
 
@@ -1893,20 +1906,17 @@ def describe(
             gallery.append([])
         for v in _crop_views(area[:, k], boxes[:, k], views):
             view = views[v]
-            context, alone, wide = _crops(
-                view, view.rgb, boxes[v, k], lifted.cell_id, subtree_ids[k]
-            )
-            add("context", int(k), context)
-            add("alone", int(k), alone)
-            add("wide", int(k), wide)
-            sampled = {"context-samples", "alone-samples", "wide-samples"}
-            if view.samples is not None and collect & sampled:
-                context, alone, wide = _crops(
-                    view, view.samples, boxes[v, k], lifted.cell_id, subtree_ids[k]
-                )
-                add("context-samples", int(k), context)
-                add("alone-samples", int(k), alone)
-                add("wide-samples", int(k), wide)
+            drawn = [c for c in CROP_SPECS if c in collect]
+            for kind, crop in _crops(
+                view, view.rgb, boxes[v, k], lifted.cell_id, subtree_ids[k], drawn
+            ).items():
+                add(kind, int(k), crop)
+            sampled = [c for c in CROP_SPECS if f"{c}-samples" in collect]
+            if view.samples is not None and sampled:
+                for kind, crop in _crops(
+                    view, view.samples, boxes[v, k], lifted.cell_id, subtree_ids[k], sampled
+                ).items():
+                    add(f"{kind}-samples", int(k), crop)
             if portrait is not None and "portrait" in collect:
                 shot = portrait(subtree_ids[k], view.camera, lo[k], hi[k], centroid[k])
                 add("portrait", int(k), shot)
@@ -2048,13 +2058,16 @@ def _tag_scores(embedder: Embedder, embedding: np.ndarray, words: Sequence[str])
 
 #: `describe_variants`: crop kinds compared, and the category head's weights.
 VARIANT_KINDS = (
-    ("context",), ("alone",), ("portrait",), ("context-samples",), ("alone-samples",),
-    ("context", "alone"), ("context", "portrait"), ("context", "alone", "portrait"),
-    ("context-samples", "alone-samples"), ("context", "context-samples"),
-    ("wide",), ("wide-samples",), ("context", "wide"), ("wide", "wide-samples"),
-    ("context", "context-samples", "wide", "wide-samples"),
+    ("context",), ("plain",), ("alone",), ("black",), ("wide",), ("wide-black",),
+    ("context-samples",), ("plain-samples",), ("black-samples",), ("wide-samples",),
+    ("context", "alone"), ("context", "black"), ("plain", "black"), ("wide", "black"),
+    ("wide", "wide-black"), ("context", "wide", "black"), ("context", "wide", "alone"),
+    ("plain", "wide", "black"), ("context", "black", "wide-black"),
+    ("context", "context-samples", "black", "black-samples"),
+    ("plain-samples", "black-samples"), ("plain", "plain-samples", "black"),
+    ("context", "plain-samples", "black"), ("wide", "plain-samples", "black"),
 )  # fmt: skip
-VARIANT_HEAD_WEIGHTS = (0.0, 0.5, 1.0)
+VARIANT_HEAD_WEIGHTS = (0.0, 0.5)
 
 
 def describe_variants(

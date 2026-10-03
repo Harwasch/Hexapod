@@ -521,7 +521,7 @@ def test_described_instances_carry_a_category_and_portraits_are_embedded(run: di
 
     instances = ss.describe(
         result.lifted, run["splats"], result.cell, result.views[:6], Recording(), VOCABULARY,
-        renderer=ss.CpuRenderer(), render_splats=run["splats"], render_cell=result.cell,
+        renderer=ss.CpuRenderer(), render_splats=run["splats"], render_cell=result.cell, kinds=("context", "black", "portrait"),
     )  # fmt: skip
     by_kind: dict[str, np.ndarray] = {}
     again = ss.describe(
@@ -536,8 +536,8 @@ def test_described_instances_carry_a_category_and_portraits_are_embedded(run: di
     variants = ss.describe_variants(ss.FakeEmbedder(), VOCABULARY, by_kind, distributions)
     rows = distributions["context/rows"]
     assert distributions["context/head"].shape == (rows.size, len(distributions["categories"]))
-    assert "context+alone+portrait@0.5" in variants
-    assert variants["context+alone+portrait@0.5"]["category"] == [i.category for i in again]
+    assert "context+black@0.5" in variants
+    assert variants["context+black@0.5"]["category"] == [i.category for i in again]
     portraits = [i for i in seen if i.shape == (ss.PORTRAIT_PX, ss.PORTRAIT_PX, 3)]
     assert portraits and all(max(i.shape[:2]) <= ss.CROP_MAX_SIDE for i in seen)
     ids = scene_categories.category_ids()
