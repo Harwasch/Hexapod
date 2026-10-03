@@ -37,8 +37,8 @@ from importlib.util import find_spec
 from pathlib import Path
 
 from app.storage import ObjectStorage
-from app.worker.parallel import TRANSFER_WORKERS as PARALLEL_WORKERS
-from app.worker.parallel import each
+from app.storage.parallel import TRANSFER_WORKERS as PARALLEL_WORKERS
+from app.storage.parallel import each
 from app.worker.pipeline_bridge import (
     PROVIDERS,
     CloudRunner,
@@ -180,7 +180,7 @@ class ObjectStoreTransfer:
 
 #: How many objects of one directory move at once. A frames artifact is ~100 objects of
 #: 0.2-2 MB, and one request at a time spends most of its time on each request's round
-#: trip rather than on bytes. The number, and why it is eight, is `app.worker.parallel`'s,
+#: trip rather than on bytes. The number, and why it is eight, is `app.storage.parallel`'s,
 #: shared with the artifact uploads and the publish copies.
 TRANSFER_WORKERS = PARALLEL_WORKERS
 

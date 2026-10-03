@@ -39,6 +39,11 @@ import re
 #: Hex digits in a generation: 64 bits, unique per job for as many publishes as it gets.
 GENERATION_LENGTH = 16
 
+#: `Cache-Control` for an object that is written once: everything inside a generation that
+#: `outputs.cache_control_for` calls immutable, and every object the sidecar attach writes
+#: (`app/services/attach.py`). A browser that has one never asks again.
+IMMUTABLE_CACHE = "public, max-age=31536000, immutable"
+
 _GENERATION = re.compile(rf"[0-9a-f]{{{GENERATION_LENGTH}}}")
 
 #: A key inside a published generation. The only keys that are written exactly once.

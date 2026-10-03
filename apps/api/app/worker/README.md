@@ -218,7 +218,7 @@ registered nothing when the POST failed.
 A deployment with no bucket still runs: the log and artifact uploads are skipped and say
 so by leaving `log_key` null, rather than failing the job.
 
-A directory artifact's members go up eight at a time (`parallel.py`; normalize's frames and
+A directory artifact's members go up eight at a time (`app/storage/parallel.py`; normalize's frames and
 package's tiles are hundreds of small objects whose cost is round trips), and every
 artifact object is written with the `Cache-Control` a browser should get for it
 (`outputs.cache_control_for`, the same rule as the tile proxy in `functions/r2/[[path]].js`).

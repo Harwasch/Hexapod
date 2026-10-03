@@ -6,9 +6,12 @@ artifact ~100 JPEGs -- and every one of them is a request whose time is mostly a
 trip to R2, not bytes. One at a time, the 514-tile publish took about eight minutes on
 the worker. The same requests eight at a time spend the round trips side by side.
 
-Shared by the three places that move a directory of objects: the cloud transfer
-(`cloud.ObjectStoreTransfer`), the artifact upload (`outputs.upload_artifact`) and the
-publish copy (`publish.Publisher.publish_tree`).
+Shared by every place that moves a directory of objects: the worker's cloud transfer
+(`cloud.ObjectStoreTransfer`), its artifact upload (`outputs.upload_artifact`) and its
+publish copy (`publish.Publisher.publish_tree`), and the API's sidecar attach
+(`app/services/attach.py`), which cuts a generation the same way. It lives under
+`app.storage` rather than `app.worker` because the API uses it too, and nothing in the
+API imports the worker package.
 """
 
 from __future__ import annotations

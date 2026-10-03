@@ -60,8 +60,8 @@ from app.services.published import GENERATION_LENGTH, published_key
 from app.storage import ObjectStorage
 from app.storage.base import ObjectSummary
 from app.storage.null import StorageUnavailableError
+from app.storage.parallel import TRANSFER_WORKERS, each
 from app.worker.outputs import cache_control_for, member_content_type
-from app.worker.parallel import TRANSFER_WORKERS, each
 
 log = logging.getLogger("app.worker")
 

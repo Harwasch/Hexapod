@@ -98,7 +98,13 @@ class ObjectStorage(Protocol):
         """
         ...
 
-    def put_object(self, key: str, data: bytes, content_type: str) -> StoredObject: ...
+    def put_object(
+        self, key: str, data: bytes, content_type: str, *, cache_control: str | None = None
+    ) -> StoredObject:
+        """Write a small object whole. `cache_control`, where given, is stored on it as its
+        `Cache-Control`, as for `upload_file`: a published generation's `tileset.json`,
+        written last by the sidecar attach, says how long a browser may keep it."""
+        ...
 
     def upload_file(
         self, key: str, source: Path, content_type: str, *, cache_control: str | None = None

@@ -32,7 +32,9 @@ class NullStorage:
         deciding whether it has anywhere to publish to, which must not be an error."""
         return ""
 
-    def put_object(self, key: str, data: bytes, content_type: str) -> StoredObject:
+    def put_object(
+        self, key: str, data: bytes, content_type: str, *, cache_control: str | None = None
+    ) -> StoredObject:
         raise StorageUnavailableError(_UNAVAILABLE)
 
     def upload_file(
