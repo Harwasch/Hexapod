@@ -148,11 +148,12 @@ jobs:
   # software GL is CPU-bound, so a runner keeps `workers: 1` (apps/web/playwright.config.ts)
   # and the parallelism is across runners instead -- each shard a fresh runner with its own
   # dev server (18 of the 23 specs load /src/ modules -- the dev harnesses -- which only the
-  # dev server serves). `fullyParallel` is off, so Playwright shards by file: on 2026-10-02
-  # the 122 tests split 39, 28, 25 and 30 (app, admin and captures in the first). Expected,
-  # not yet measured: ~12-15 min a shard after ~3 min of install, so ~15-18 min of wall time
-  # for the same runner-minutes. Not `needs: web`: a shard does not use the build, so it
-  # starts at once rather than after lint, typecheck, unit tests and the build.
+  # dev server serves). Each shard runs every fourth test of the full listing (round robin,
+  # `--test-list`), not a quarter of the files: `--shard` cuts the list into consecutive
+  # slices, by file or by test, so the long scenes that sit together (motionRenderers'
+  # 600-900 s budgets, livingSurveyPerf) all landed on one runner -- on 2026-10-03 the
+  # shards took 17, 10, 12 and 33 minutes. Not `needs: web`: a shard does not use the build,
+  # so it starts at once rather than after lint, typecheck, unit tests and the build.
   e2e-shard:
     name: Web · Playwright (shard ${{ matrix.shard }}/4)
     runs-on: ubuntu-latest
@@ -172,8 +173,18 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @twin/web exec playwright install --with-deps chromium
+      # This shard's tests: every fourth line of the listing, starting at its own. The four
+      # residues cover the listing once, so no test is run twice or dropped.
+      - name: This shard's tests
+        run: |
+          pnpm --filter @twin/web exec playwright test --list --reporter=list \
+            | grep ' › ' | sed 's/^ *//' > "$RUNNER_TEMP/all-tests.txt"
+          awk -v n=4 -v i=${{ matrix.shard }} 'NR % n == i % n' "$RUNNER_TEMP/all-tests.txt" \
+            > "$RUNNER_TEMP/shard-tests.txt"
+          echo "$(wc -l < "$RUNNER_TEMP/shard-tests.txt") of $(wc -l < "$RUNNER_TEMP/all-tests.txt") tests"
+          test -s "$RUNNER_TEMP/shard-tests.txt"
       # E2E_BLOB: the config's blob reporter, merged into one HTML report by e2e-report.
-      - run: pnpm --filter @twin/web exec playwright test --shard=${{ matrix.shard }}/4
+      - run: pnpm --filter @twin/web exec playwright test --test-list "$RUNNER_TEMP/shard-tests.txt"
         env:
           E2E_BLOB: "1"
       - uses: actions/upload-artifact@v4

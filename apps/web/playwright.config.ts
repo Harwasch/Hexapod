@@ -41,9 +41,9 @@ export default defineConfig({
   fullyParallel: false,
   workers: 1,
   retries: process.env.CI ? 1 : 0,
-  // CI runs the suite in shards (`--shard=i/n`, .github/workflows/ci.yml), one runner each
-  // at `workers: 1`; each shard writes a blob report (`E2E_BLOB`) that the e2e-report job
-  // merges into the one HTML report a single run would have written.
+  // CI runs the suite in shards (every fourth test, as a `--test-list`: .github/workflows/
+  // ci.yml), one runner each at `workers: 1`; each shard writes a blob report (`E2E_BLOB`)
+  // that the e2e-report job merges into the one HTML report a single run would have written.
   reporter: process.env.CI
     ? process.env.E2E_BLOB
       ? [["list"], ["blob"]]
