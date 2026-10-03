@@ -154,6 +154,9 @@ runs the job on an L4 (`run_job_gsplat`). Runs 36992095315 (gsplat), 36994749804
   the hole. Held-out psnrFill/psnrHole (gsplat): yard Telea 16.71/15.56, Fixer t250
   16.53, t100 16.53, t50 16.53; spool Telea 8.05/7.37, Fixer t250 7.52, t100 7.48, t50 7.47.
   Telea is ahead on both; on the spool Fixer's fill views are near the hole's own score.
+- **Published.** Fixer t50 + Distill 1500 from run 36997466266 (job `fill-camp-fixer-t50`)
+  is on the live camp tileset as `inferred/fixer-t50/` (`publish-fill.yml`, which re-links
+  it onto the current published tileset.json rather than the run's measured-tileset.json).
 
 ## 7. Split objects: the pumpkin's hole (2026-10-02, branch `wm-c4`)
 
