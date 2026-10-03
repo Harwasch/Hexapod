@@ -418,12 +418,16 @@ def publish_outputs(
     thumbnail_stage_id: str | None = None,
     coverage_stage_id: str | None = None,
     carry_from: str | None = None,
+    tiles_dir: Path | None = None,
 ) -> Published:
     """Copy the run's browser-facing outputs to the public bucket. No database here.
 
     `carry_from` is the tileset the site shows now (`live_tileset_url`): the sidecars beside
     it that still hold for the new tiles go into the new generation with them
     (`app/worker/carry.py`), and the rest are reported as dropped, for `register` to flag.
+    `tiles_dir` is the run's tileset directory in the workdir, where the worker still has
+    it: what a kind bound to positions is checked against, read from disk rather than
+    downloaded again.
 
     This is object-store I/O proportional to the tileset -- 514 tiles took ~8 min on the
     worker one copy at a time, and `Publisher.publish_tree` now copies eight at a time
@@ -457,6 +461,7 @@ def publish_outputs(
                 live_url=carry_from,
                 tiles_prefix=tiles,
                 entry=f"{tiles}/tileset.json",
+                tiles_dir=tiles_dir,
             )
             if tiles is not None
             else CarryPlan(based_on=carry_from)

@@ -772,6 +772,16 @@ class JobSupervisor:
                 return None
         return dict(document)
 
+    def _tiles_dir(self, job: Job, state: _RunState) -> Path | None:
+        """The run's packaged tileset in its workdir, if it is still there: what a carried
+        kind bound to positions is checked against (`carry.plan_carry`). A workdir another
+        machine has is not here, and the check reads the bucket instead."""
+        ref = state.ref("splat")
+        if ref is None:
+            return None
+        found = self._config.workdir_for(job.id) / ref.path
+        return found if found.is_dir() else None
+
     # --- terminal states ----------------------------------------------------------
 
     def _finish_complete(
@@ -808,6 +818,7 @@ class JobSupervisor:
                     thumbnail_stage_id=state.stage_producing("thumbnail.jpg"),
                     coverage_stage_id=state.stage_producing("coverage_enu.ply"),
                     carry_from=live,
+                    tiles_dir=self._tiles_dir(job, state),
                 )
                 if self._stopping(db, job, stop):
                     return "lost"

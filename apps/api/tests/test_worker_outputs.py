@@ -253,6 +253,27 @@ def test_a_failed_upload_fails_the_artifact(storage: S3Storage, tmp_path: Path) 
     assert len(slow.uploads) < 32
 
 
+def test_a_directory_uploaded_again_keeps_nothing_the_earlier_attempt_left(
+    storage: S3Storage, tmp_path: Path
+) -> None:
+    """A Refine re-runs the same job into the same prefix. A grid or a tile the first
+    package wrote and the second did not would otherwise sit beside the new ones -- and be
+    published with them, a stale `collision.bin` passing for the new run's own."""
+    first = a_package(tmp_path / "first", tiles=4)
+    assert upload_artifact(storage, tmp_path / "first", JOB, tiles_ref()) is not None
+    second = a_package(tmp_path / "second", tiles=2)
+    (second / "collision.bin").unlink()
+    (second / "splat_0.glb").write_bytes(b"refined")
+
+    assert upload_artifact(storage, tmp_path / "second", JOB, tiles_ref()) is not None
+
+    prefix = f"runs/{JOB}/package/splat/"
+    listed = {item.key[len(prefix) :] for item in storage.list_objects(prefix).objects}
+    assert listed == {"tileset.json", "splat_0.glb", "splat_1.glb"}
+    assert storage.get_object(f"{prefix}splat_0.glb") == b"refined"
+    assert {p.name for p in first.iterdir()} > listed
+
+
 # --- dispatched stages: copied within the bucket, not uploaded again --------------------
 
 

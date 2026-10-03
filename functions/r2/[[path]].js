@@ -7,12 +7,12 @@
  * queue behind each other -- with no Cache-Control, so a browser revalidates or refetches
  * tiles it already has. Here the browser gets HTTP/2 or 3 from the nearest Cloudflare edge,
  * one connection, and a cache lifetime: a year, immutable, for the binary content of a
- * published generation (`runs/<job>/p<generation>/...`, which every publish writes afresh
- * and nothing writes again: apps/api/app/services/published.py), and five minutes with a
- * week of stale-while-revalidate for anything else -- tileset JSON, which a backfill may
- * rewrite in place (collision-backfill.yml adds `extras.collision`), the sidecars the
- * backfills write beside it (`REWRITTEN_BESIDE`), `sites/<slug>/...`, which can be
- * republished, and a run's copies from before generations, which were.
+ * published generation (`runs/<job>/p<generation>/...`, which every publish and every
+ * sidecar attach writes afresh and nothing writes again: apps/api/app/services/published.py,
+ * attach.py), and five minutes with a week of stale-while-revalidate for anything else --
+ * JSON, `sites/<slug>/...`, which can be republished, and a run's copies from before
+ * generations (`runs/<job>/package/splat/...`), which were, and beside which the backfill
+ * workflows used to write their sidecars in place.
  *
  * **One host, and never the upstream's Content-Type.** Whatever this answers is served from
  * the web app's origin, which is the origin the console keeps the write token on
@@ -59,16 +59,6 @@ const SHORT_S = 300;
  * tests/test_worker_outputs.py holds this to.
  */
 const PUBLISHED_KEY = /^runs\/[^/]+\/p[0-9a-f]{16}\//;
-/**
- * What a workflow writes beside a published tileset after the publish, under the same name
- * each time it runs again -- inside the generation, since that is where the tileset is:
- * `instances.emb` (publish-instances.yml, with the instances.json it goes with),
- * `collision.bin` (collision-backfill.yml), `sog/...` (streamed-lod-backfill.yml) and
- * `inferred/<layer>/...` (publish-fill.yml). Not written exactly once, so not immutable: a
- * year of the old `instances.emb` under a new `instances.json` would pair one segmentation's
- * embeddings with another's objects.
- */
-const REWRITTEN_BESIDE = /\/(?:instances\.emb|collision\.bin|sog\/.+|inferred\/.+)$/;
 
 /**
  * What the public bucket holds, by extension, and the only types this will label anything
@@ -158,12 +148,21 @@ function contentTypeFor(name) {
 }
 
 /**
- * Whether a decoded key may be cached for a year: inside a published generation, not JSON,
- * and not a sidecar a workflow writes there again (`REWRITTEN_BESIDE`). It was every non-JSON
- * key under `runs/`, and a phone's Refine rewrites a run's tiles under the same names -- so
- * the preview's tiles stayed cached, at the edge and in browsers, under the new
- * `tileset.json`. A publish now writes a generation of its own, and only a generation's own
- * keys are never rewritten.
+ * Whether a decoded key may be cached for a year: inside a published generation, and not
+ * JSON. It was every non-JSON key under `runs/`, and a phone's Refine rewrites a run's tiles
+ * under the same names -- so the preview's tiles stayed cached, at the edge and in browsers,
+ * under the new `tileset.json`. A publish now writes a generation of its own, and only a
+ * generation's own keys are never rewritten.
+ *
+ * A generation's sidecars included. They were held short while the backfill workflows wrote
+ * `instances.emb`, `collision.bin`, `sog/...` and `inferred/<layer>/...` beside a published
+ * tileset in place, inside its generation, under the same names on every run (a year of an
+ * old `instances.emb` under a new `instances.json` pairs one segmentation's embeddings with
+ * another's objects). Every one of them now attaches through the API, which copies the
+ * generation into a new one with the new files beside it (apps/api/app/services/attach.py),
+ * so nothing writes a generation's sidecar twice either. Where those workflows did write in
+ * place for good -- the legacy prefixes, `runs/<job>/package/splat/`, published before
+ * generations -- is outside any generation, and short whatever the file.
  *
  * Its JSON test is the extension's, in any case, exactly as `contentTypeFor` reads it: it
  * once looked at the key as the browser encoded it, case and all, so
@@ -174,7 +173,7 @@ function contentTypeFor(name) {
  * @param {string} name the decoded key
  */
 function immutable(name) {
-  return PUBLISHED_KEY.test(name) && !/\.json$/i.test(name) && !REWRITTEN_BESIDE.test(name);
+  return PUBLISHED_KEY.test(name) && !/\.json$/i.test(name);
 }
 
 /** @param {string} name the decoded key */

@@ -18,7 +18,9 @@ import { EmptyState, GlassBadge, GlassButton, Spinner } from "@twin/ui";
 import { captureKindLabel, captureStatusLabel, uploadStatusLabel } from "@/lib/labels";
 
 import { formatBytes, formatDate, shortId } from "./format";
-import { siteIndex, useCaptures, useJobs, useReconciliation, useSites } from "./queries";
+import { siteIndex, useAssets, useCaptures, useJobs, useReconciliation, useSites } from "./queries";
+import { flaggedAssets, flaggedBySite } from "./sidecarFlags";
+import { FlaggedAssets, SidecarNotice } from "./SidecarNotice";
 
 function runsOf(jobs: Job[] | undefined, captureId: string): Job[] {
   return (jobs ?? []).filter((job) => job.captureId === captureId);
@@ -175,8 +177,11 @@ export function CapturesView({ onLaunch }: { onLaunch: (captureId: string) => vo
   const captures = useCaptures();
   const jobs = useJobs();
   const sites = useSites();
+  const assets = useAssets();
   const [open, setOpen] = useState<string | null>(null);
   const names = siteIndex(sites.data);
+  // What a republish dropped, per site: shown beside the capture that became it.
+  const flags = flaggedBySite(assets.data);
 
   if (captures.isPending) return <Spinner />;
   if (captures.isError) {
@@ -190,6 +195,8 @@ export function CapturesView({ onLaunch }: { onLaunch: (captureId: string) => vo
 
   return (
     <>
+      <FlaggedAssets assets={flaggedAssets(assets.data)} siteNames={names} />
+
       <section className="admin-card" aria-labelledby="captures-heading">
         <div className="admin-card__head">
           <h2 id="captures-heading">Captures</h2>
@@ -273,7 +280,14 @@ export function CapturesView({ onLaunch }: { onLaunch: (captureId: string) => vo
                         </GlassBadge>
                       </td>
                       <td className="admin-num">{runs.length}</td>
-                      <td>{capture.siteId ? (names[capture.siteId] ?? "registered") : "—"}</td>
+                      <td>
+                        {capture.siteId ? (names[capture.siteId] ?? "registered") : "—"}
+                        {capture.siteId && (
+                          <SidecarNotice
+                            flags={(flags[capture.siteId] ?? []).flatMap((asset) => asset.flags)}
+                          />
+                        )}
+                      </td>
                       <td>
                         <GlassButton
                           size="sm"

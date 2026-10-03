@@ -9,30 +9,37 @@ name: Streamed LOD backfill
 #   chunks by itself against a splat budget. A trace of it walking Fort Clatsop held the main
 #   thread 18% of the time at 60-117 fps. The globe's PlayCanvas renderer streams this
 #   package when a scan has one (apps/web/src/cesium/scanView, `NATIVE_LOD_PATH`).
-# * **What it does.** Reads the published tileset.json, takes every leaf tile's SPZ (the leaves
-#   hold every packaged gaussian once, in the tileset's own frame), merges them with
-#   splat-transform, orders them along a Morton curve, halves them four times (uniform
-#   decimation: adaptive decimation of a scan this size wants a GPU), and writes
-#   `sog/lod-meta.json` with the five levels. `publish` (only when asked) puts `sog/` beside
-#   the tileset. The tileset and the asset are untouched.
+# * **What it does.** Reads the asset's CURRENT tileset URL from the API, takes every leaf
+#   tile's SPZ (the leaves hold every packaged gaussian once, in the tileset's own frame),
+#   merges them with splat-transform, orders them along a Morton curve, halves them four
+#   times (uniform decimation: adaptive decimation of a scan this size wants a GPU), and
+#   writes `sog/lod-meta.json` with the five levels, and the request beside them
+#   (`attach.json`: the asset, `basedOn` the tileset whose leaves it merged,
+#   `extras.nativeLod` so the viewer need not probe). The publish step (only when asked)
+#   stages `sog/` in the private bucket and asks the API to attach it
+#   (tools/captures/attach_sidecars.py); a staged `sog/` replaces the old one whole. Nothing
+#   here writes the public bucket or a tileset.json (docs/DEPLOYMENT.md, "Sidecars: one
+#   publisher").
 # * **How to run it.** `workflow_dispatch` once this file is on the default branch; before
-#   that, push a commit whose message carries `[streamedlod|tileset=<url>]`, adding
-#   `|publish` to publish. The URL must be the tileset's under the public bucket.
+#   that, push a commit whose message carries `[streamedlod|asset=<uuid>]`, adding
+#   `|publish` to publish. The asset is the scan's gaussian-splat asset (GET
+#   /api/v1/assets lists them).
 #
-# Secrets, for `publish` only: CLOUDFLARE_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY;
-# variables R2_PUBLIC_BUCKET (or R2_BUCKET), R2_PUBLIC_URL.
+# Variables: TWIN_API_URL. For publishing only, secrets CLOUDFLARE_ACCOUNT_ID,
+# R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, API_WRITE_TOKEN and the variable R2_BUCKET (the
+# private bucket).
 
 on:
   push:
     branches: [living-models]
   workflow_dispatch:
     inputs:
-      tileset:
-        description: "The published tileset.json's URL"
+      asset:
+        description: "The scan's gaussian-splat asset id (a UUID)"
         type: string
         required: true
       publish:
-        description: "Publish sog/ beside the tileset"
+        description: "Attach sog/ beside the tileset, through the API"
         type: boolean
         default: false
 
@@ -44,7 +51,7 @@ jobs:
       contains(github.event.head_commit.message, '[streamedlod|')
     runs-on: ubuntu-latest
     outputs:
-      tileset: ${{ steps.plan.outputs.tileset }}
+      asset: ${{ steps.plan.outputs.asset }}
       publish: ${{ steps.plan.outputs.publish }}
     steps:
       # Read as data, validated here, never interpolated into a shell line.
@@ -52,12 +59,12 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
           MESSAGE: ${{ github.event.head_commit.message }}
-          TILESET: ${{ inputs.tileset }}
+          ASSET: ${{ inputs.asset }}
           PUBLISH: ${{ inputs.publish }}
         run: |
           python3 - <<'PY' >> "$GITHUB_OUTPUT"
           import os, re
-          options = {"tileset": "", "publish": "false"}
+          options = {"asset": "", "publish": "false"}
           if os.environ["EVENT"] == "workflow_dispatch":
               for name in options:
                   options[name] = os.environ.get(name.upper(), "") or options[name]
@@ -68,10 +75,8 @@ jobs:
                   if name not in options:
                       raise SystemExit(f"unknown option {name!r} in the [streamedlod] token")
                   options[name] = value if value else "true"
-          valid = {
-              "tileset": r"https://[A-Za-z0-9.-]+/[A-Za-z0-9._/-]+/tileset\.json",
-              "publish": r"true|false",
-          }
+          uuid = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+          valid = {"asset": uuid, "publish": r"true|false"}
           for name, pattern in valid.items():
               if not re.fullmatch(pattern, options[name]):
                   raise SystemExit(f"{name}={options[name]!r} is not {pattern}")
@@ -81,16 +86,35 @@ jobs:
           cat "$GITHUB_OUTPUT"
 
   build:
-    name: sog/ from the published tiles
+    name: sog/ from the asset's current tiles
     needs: plan
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    # One backfill per asset at a time; the API serializes attaches to one asset anyway.
+    concurrency:
+      group: streamed-lod-${{ needs.plan.outputs.asset }}
+      cancel-in-progress: false
     env:
-      TILESET: ${{ needs.plan.outputs.tileset }}
+      ASSET: ${{ needs.plan.outputs.asset }}
+      TWIN_API_URL: ${{ vars.TWIN_API_URL || 'https://twin-api.fly.dev' }}
     steps:
       # The runner context is not available to a job's env, so the work directory is set here.
       - name: Work directory
         run: echo "WORK=$RUNNER_TEMP/work" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: The asset's current tileset
+        run: |
+          uv run --no-project python tools/captures/attach_sidecars.py resolve --asset "$ASSET" \
+            --out "$RUNNER_TEMP/asset.json"
+          python3 - <<'PY' >> "$GITHUB_ENV"
+          import json, os, re
+          url = json.load(open(os.environ["RUNNER_TEMP"] + "/asset.json"))["url"]
+          # Read as data and checked before it goes anywhere near a shell line.
+          if not re.fullmatch(r"https://[A-Za-z0-9.-]+/[A-Za-z0-9._/-]+/tileset\.json", url):
+              raise SystemExit(f"the asset's tileset {url!r} is not a tileset.json URL")
+          print(f"TILESET={url}")
+          PY
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -142,44 +166,28 @@ jobs:
           st lod0.ply -l 0 lod1.ply -l 1 lod2.ply -l 2 lod3.ply -l 3 lod4.ply -l 4 out/sog/lod-meta.json
           du -sh out/sog
           echo "### sog/ for $TILESET: $(du -sh out/sog | cut -f1), $(find out/sog -type f | wc -l) files" >> "$GITHUB_STEP_SUMMARY"
-      - name: Publish sog/ beside the tileset
+      - name: The request that attaches sog/
+        run: |
+          uv run --no-project python tools/captures/attach_sidecars.py manifest "$WORK/out" \
+            --asset "$ASSET" --based-on "$TILESET" --extras '{"nativeLod": "sog/lod-meta.json"}' \
+            > /dev/null
+          echo "$(jq '.files | length' "$WORK/out/attach.json") files to attach to asset \`$ASSET\`" >> "$GITHUB_STEP_SUMMARY"
+      - name: Stage sog/, and attach it
         if: needs.plan.outputs.publish == 'true'
         env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           OBJECT_STORAGE_ENDPOINT_URL: https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
           OBJECT_STORAGE_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY_ID }}
           OBJECT_STORAGE_SECRET_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          OBJECT_STORAGE_PUBLIC_BUCKET: ${{ vars.R2_PUBLIC_BUCKET || format('{0}-public', vars.R2_BUCKET || 'twin-assets') }}
-          OBJECT_STORAGE_PUBLIC_URL: ${{ vars.R2_PUBLIC_URL }}
+          OBJECT_STORAGE_BUCKET: ${{ vars.R2_BUCKET || 'twin-assets' }}
+          API_WRITE_TOKEN: ${{ secrets.API_WRITE_TOKEN }}
         run: |
-          python3 -m pip install --quiet boto3
-          python3 - <<'PY'
-          import os
-          import boto3
-          tileset = os.environ["TILESET"]
-          public = os.environ["OBJECT_STORAGE_PUBLIC_URL"].rstrip("/") + "/"
-          if not tileset.startswith(public):
-              raise SystemExit(f"{tileset} is not under the public bucket's URL {public}")
-          prefix = tileset[len(public):].rsplit("/", 1)[0] + "/sog"
-          s3 = boto3.client(
-              "s3",
-              endpoint_url=os.environ["OBJECT_STORAGE_ENDPOINT_URL"],
-              aws_access_key_id=os.environ["OBJECT_STORAGE_ACCESS_KEY"],
-              aws_secret_access_key=os.environ["OBJECT_STORAGE_SECRET_KEY"],
-              region_name="auto",
-          )
-          bucket = os.environ["OBJECT_STORAGE_PUBLIC_BUCKET"]
-          root = os.path.join(os.environ["WORK"], "out", "sog")
-          files = sorted(
-              os.path.relpath(os.path.join(d, f), root)
-              for d, _, names in os.walk(root) for f in names
-          )
-          # The chunks first and lod-meta.json last: a client that finds the index finds
-          # everything it names.
-          files.sort(key=lambda name: name == "lod-meta.json")
-          kinds = {".webp": "image/webp", ".json": "application/json"}
-          for name in files:
-              kind = kinds.get(os.path.splitext(name)[1], "application/octet-stream")
-              s3.upload_file(os.path.join(root, name), bucket, f"{prefix}/{name}",
-                             ExtraArgs={"ContentType": kind})
-          print(f"{len(files)} files to {bucket}/{prefix}/")
-          PY
+          missing=""
+          for name in CLOUDFLARE_ACCOUNT_ID OBJECT_STORAGE_ACCESS_KEY OBJECT_STORAGE_SECRET_KEY API_WRITE_TOKEN; do
+            if [ -z "${!name:-}" ]; then missing="$missing $name"; fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::missing:$missing. See docs/DEPLOYMENT.md."
+            exit 1
+          fi
+          uv run --no-project --with boto3 python tools/captures/attach_sidecars.py attach "$WORK/out"

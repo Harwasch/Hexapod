@@ -752,9 +752,12 @@ attaches made it).
 
 **A republish carries what still holds** (`app/worker/carry.py`). Before copying, the worker
 reads the live generation and decides each sidecar kind by what it depends on (the table is
-docs/SCENE_OBJECTS.md, section 8): a kind bound to the splats (objects, skins, collision,
-view cones, `sog/`, the rig) is carried only when the new tiles are the very same tiles; a
-kind keyed by instance ids (materials, telemetry) goes with `instances`; an inferred fill,
+docs/SCENE_OBJECTS.md, section 8): a kind bound to the splats' positions (objects, skins,
+the rig) is carried when every new tile's position checksum — computed by the worker from
+the run's own tiles, with the function the binding was written with — is one its binding
+lists, so a re-pack with another spherical-harmonics degree keeps it; a kind bound to the
+tiles' bytes (collision, view cones, `sog/`) is carried only when the new tiles are the very
+same tiles; a kind keyed by instance ids (materials, telemetry) goes with `instances`; an inferred fill,
 placed in the scan's frame with no splat indices, is always carried; a kind the run makes
 itself (the packer's `collision.bin`, `viewcones.bin`) is replaced by the run's. Every
 dropped kind becomes a flag on the asset — `sidecarFlags` in every asset response, e.g.
@@ -763,8 +766,26 @@ and a warning in the worker's log; attaching that kind again clears it. With one
 nothing can be carried (a run's tileset is its own keys), so everything is dropped and
 flagged.
 
-**A workflow's publish step**, after uploading with the R2 pair it already has (`aws s3 cp
---recursive out/ s3://$R2_BUCKET/$PREFIX --endpoint-url https://$ACCOUNT.r2.cloudflarestorage.com`):
+**What a run provides is only what this attempt wrote.** A Refine re-runs the same job, and
+its `package` uploads into the same `runs/<job>/<stage>/splat/` in the private bucket as the
+first attempt did. The worker now removes whatever is under that prefix and not in the
+upload (`outputs._prune`): a `collision.bin` the first packer wrote and the second did not
+would otherwise have been published beside the new tiles and read by the carry plan as the
+new run's own grid, replacing the live one.
+
+**The workflows' side: one script.** The five workflows that publish beside the tiles —
+`publish-instances.yml`, `publish-fill.yml`, `collision-backfill.yml`,
+`streamed-lod-backfill.yml`, `living-plants.yml` — all go through
+`tools/captures/attach_sidecars.py`, and none of them writes the public bucket or a
+`tileset.json` any more. The build job resolves the asset's **current** tileset
+(`attach_sidecars.py resolve`: `GET /api/v1/assets/{id}`), checks its files against it, and
+writes the request beside them as `attach.json` (`attach_sidecars.py manifest`), kept in the
+review artifact. The publish job runs `attach_sidecars.py attach <dir>`: it uploads the files
+with the R2 pair to `staging/assets/<asset id>/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT/` in the
+private bucket (clearing anything a failed earlier try left under that prefix), POSTs the
+request, retries a 409 that says another attach holds the asset, and ends with exit status 3
+on a 409 that says the tiles changed under it — run the workflow again on the asset's current
+tiles. By hand, the same request is:
 
 ```bash
 PREFIX="staging/assets/$ASSET_ID/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT/"
@@ -774,10 +795,49 @@ curl --fail-with-body -sS -X POST "$TWIN_API_URL/api/v1/assets/$ASSET_ID/sidecar
         '{stagingPrefix: $prefix, basedOn: $base, extras: $extras[0]}')"
 ```
 
-What each of the five workflows stages and sends is in docs/SCENE_OBJECTS.md, section 8.
-They need `API_WRITE_TOKEN` and `TWIN_API_URL`, and the private bucket's name for staging;
-once they are rewired, none of them writes to the public bucket, which is a credential that
-can then be narrowed (below).
+What each workflow stages and sends is in docs/SCENE_OBJECTS.md, section 8. What their
+publish jobs read:
+
+| Name                    | Kind     | Read by                                       | For                                                        |
+| ----------------------- | -------- | --------------------------------------------- | ---------------------------------------------------------- |
+| `API_WRITE_TOKEN`       | secret   | all five                                      | the attach is a write                                      |
+| `CLOUDFLARE_ACCOUNT_ID` | secret   | all five                                      | the R2 endpoint, `https://<id>.r2.cloudflarestorage.com`   |
+| `R2_ACCESS_KEY_ID`      | secret   | all five                                      | staging in the private bucket                              |
+| `R2_SECRET_ACCESS_KEY`  | secret   | all five                                      | its other half                                             |
+| `R2_BUCKET`             | variable | all five (default `twin-assets`)              | the **private** bucket the API reads `staging/` from       |
+| `TWIN_API_URL`          | variable | all five (default `https://twin-api.fly.dev`) | the API the asset is read from and the attach is sent to   |
+| `SCAN_ASSET_IDS`        | variable | publish-instances, publish-fill               | which asset each scan of infra/modal/segment.py `SCANS` is |
+
+None of them needs the public bucket's name or URL any more. They still use the repository's
+one R2 pair, which can write the public bucket too; a pair scoped to the private bucket alone
+would do for all five, but it would have to live under other secret names, because
+`R2_ACCESS_KEY_ID` is also what provisioning gives the API (below).
+
+**`SCAN_ASSET_IDS`: what the owner fills in.** publish-instances and publish-fill name a scan
+the way segment.yml and fill.yml do (`spool`, `pumpkin`, `camp`: infra/modal/segment.py
+`SCANS`, legacy public URLs), but an attach is to an **asset**, and asset ids are random
+UUIDs the production database made, not knowable from the repository (the seed data has no
+run scans). Set the repository variable to a JSON object naming the three:
+
+```bash
+curl -s "$TWIN_API_URL/api/v1/assets" | jq '[.[] | select(.source.url? // "" |
+  test("/runs/(8e1cc115-cb80-4af2-81fc-dccaf6b65891|430c1932-5b6a-47b1-bb71-bb7fa2fec86b|50c25673-0940-4574-9b96-0b21362f83ca)/"))
+  | {id, name, url: .source.url}]'
+# then, in Settings → Secrets and variables → Actions → Variables:
+#   SCAN_ASSET_IDS = {"spool": "<id>", "pumpkin": "<id>", "camp": "<id>"}
+```
+
+Until it is set, `attach_sidecars.py resolve --scan` finds a scan's asset by its run — the
+one gaussian-splat asset whose tileset is under `runs/<job>/` of the scan's legacy URL — and
+says so in the log; no match, or more than one, is a refusal that names the variable. The
+other three workflows take the asset from the capture (collision-backfill, living-plants:
+`fetch_capture.py`) or as their input (streamed-lod-backfill: `asset=<uuid>`).
+
+**Split objects are not attached.** `split_objects.py` rewrites the scan's own tiles, so a
+split is a new tileset, not files beside one; fill.yml's `split:<scan>` jobs only keep it in
+their artifact for review, nothing publishes it, and the attach refuses `objects/`, `fills/`,
+`extras.objects` and `extras.split`. Publishing a split needs a replace-tiles publish
+(docs/SCENE_OBJECTS.md, section 8), left until a split is wanted on the live site.
 
 **Two operator steps.** A lifecycle rule that expires `staging/` in the private bucket after
 a week, for attaches that failed and were never retried:
@@ -790,11 +850,15 @@ aws s3api put-bucket-lifecycle-configuration --bucket twin-assets \
 
 And migration 0009 (`assets.sidecar_flags`), which `release_command` applies on deploy.
 
-`Cache-Control`, once more: an attach writes its whole generation immutable, JSON included.
-The worker's own publish still writes a generation's JSON with the short lifetime, and the
-tile proxy still serves JSON short whatever the object says — both from when workflows
-rewrote `tileset.json` in place. That is only slower than it needs to be, never wrong; both
-can move to immutable together once the workflows call the API.
+`Cache-Control`, once more: an attach writes its whole generation immutable, JSON included,
+and since every workflow goes through it nothing writes a generation twice — so the tile
+proxy now serves every non-JSON key inside a generation for a year, sidecars too
+(`collision.bin`, `instances.emb`, `sog/`, `inferred/…`; it used to keep those short, when
+backfills rewrote them in place). A legacy prefix (`runs/<job>/package/splat/`, written in
+place for years) is outside any generation and stays short. The worker's own publish still
+writes a generation's JSON with the short lifetime, and the proxy still serves JSON short
+whatever the object says; that is only slower than it needs to be, never wrong, and the two
+can move to immutable together.
 
 ### Narrowing the credentials: operator steps
 
@@ -1061,7 +1125,8 @@ is optional; the default is in the right-hand column.
 | `NEON_PROJECT_NAME`          | `hexapod-twin`             | which Neon project to find or create                                                          |
 | `NEON_REGION_ID`             | `aws-us-east-1`            | Neon's name for the region `fly.toml`'s `primary_region` is in                                |
 | `FLY_ORG`                    | `personal`                 | the Fly organization to create the app in                                                     |
-| `TWIN_API_URL`               | `https://twin-api.fly.dev` | the API `living-plants.yml` reads a capture from and patches its splat asset through          |
+| `TWIN_API_URL`               | `https://twin-api.fly.dev` | the API the five sidecar workflows read an asset from and attach through                      |
+| `SCAN_ASSET_IDS`             | _(found by run)_           | `{"spool": "<asset id>", …}`: which asset each segmented scan is ("Sidecars: one publisher")  |
 
 The first two are marked _(passed in)_ because `provision.yml` computes them and hands them
 to `deploy.yml` directly — a provisioned first deploy needs no variables set at all. A

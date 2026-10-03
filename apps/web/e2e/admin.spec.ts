@@ -232,6 +232,40 @@ const catalogue = {
   ],
 };
 
+/** The back paddock's splat, whose objects a republish could not carry onto new tiles. */
+const assets = [
+  {
+    id: "66666666-6666-4666-8666-666666666666",
+    siteId: "33333333-3333-4333-8333-333333333333",
+    provider: "3d-tiles-url",
+    name: "Back paddock splat",
+    representation: "gaussian-splat",
+    source: { type: "3d-tiles-url", url: "https://tiles.example.com/runs/x/tileset.json" },
+    footprint: null,
+    observedAt: null,
+    validFrom: null,
+    validTo: null,
+    resolution: null,
+    crs: null,
+    license: null,
+    attribution: [],
+    provenance: null,
+    renderConfig: {},
+    defaultVisible: true,
+    sidecarFlags: [
+      {
+        kind: "instances",
+        action: "Objects need re-segmenting",
+        reason: "the run published new tiles whose positions are not all ones it was bound to",
+        jobId: RUN_FULL,
+        flaggedAt: "2026-09-20T10:05:00Z",
+      },
+    ],
+    createdAt: "2026-09-18T09:10:00Z",
+    updatedAt: "2026-09-20T10:05:00Z",
+  },
+];
+
 /** Every read the console makes, answered from the fixtures above. */
 async function mockApi(page: Page, launched: { body: unknown }[]) {
   await page.route("**/api/v1/captures?**", async (route) => {
@@ -249,6 +283,9 @@ async function mockApi(page: Page, launched: { body: unknown }[]) {
         { id: "33333333-3333-4333-8333-333333333333", slug: "back-paddock", name: "Back paddock" },
       ],
     });
+  });
+  await page.route("**/api/v1/assets", async (route) => {
+    await route.fulfill({ json: assets });
   });
   await page.route("**/api/v1/storage/reconciliation**", async (route) => {
     await route.fulfill({ json: reconciliation });
@@ -284,6 +321,19 @@ test.describe("the data console", () => {
     await page.getByRole("button", { name: "Show Back paddock" }).click();
     await expect(page.getByText("sha256:3f9a")).toBeVisible();
     await expect(page.getByText(`captures/${CAPTURE_A}/source/scan.ply`)).toBeVisible();
+  });
+
+  test("says which scan lost its objects to a republish, beside the capture", async ({ page }) => {
+    await mockApi(page, []);
+    await page.goto("/admin.html");
+
+    const card = page.getByTestId("flagged-assets");
+    await expect(card).toContainText("Back paddock splat");
+    await expect(card).toContainText("Objects need re-segmenting");
+    const row = page.getByTestId("capture-row").first();
+    await expect(row.getByTestId("sidecar-flag")).toHaveText("Objects need re-segmenting");
+    await expect(row.getByTestId("sidecar-flag")).toHaveAttribute("title", /positions/);
+    await expect(page.getByTestId("capture-row").nth(1).getByTestId("sidecar-flag")).toHaveCount(0);
   });
 
   test("reconciles storage against the database in both directions", async ({ page }) => {

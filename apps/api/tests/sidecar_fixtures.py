@@ -7,15 +7,20 @@ and whatever sidecars a test puts beside them.
 
 from __future__ import annotations
 
+import gzip
 import json
+import struct
 import uuid
 from collections.abc import Iterator, Mapping
+from pathlib import Path
 from typing import Any
 
 import boto3
+import numpy as np
 from moto import mock_aws
 from sqlalchemy.orm import Session
 
+from app.config import REPO_ROOT
 from app.models import Asset
 from app.models.enums import AssetProvider, Representation
 from app.storage import ObjectStorage, S3Storage
@@ -163,3 +168,84 @@ FILL_FILES = {
     "inferred/fixer/tileset.json": json.dumps(a_tileset(("f0.glb",))).encode(),
     "inferred/fixer/f0.glb": b"fill glb",
 }
+
+
+# --- real splat tiles ----------------------------------------------------------------
+
+#: The committed fixture tree packed into 21 level-of-detail tiles, and the same tree packed
+#: again with spherical harmonics (tools/captures splat_tiles.py `--sh-degree`): every tile's
+#: bytes differ, every position is where it was. `rig.json` beside the first lists the tiles'
+#: position checksums, stamped by tools/captures (`rig_tiles.stamp`).
+TREE_LOD = REPO_ROOT / "data" / "tiles" / "synthetic-tree-lod"
+TREE_SH = REPO_ROOT / "data" / "tiles" / "synthetic-tree-sh"
+
+
+def fixture_scan(directory: Path) -> tuple[dict[str, Any], dict[str, bytes]]:
+    """A committed tileset: its document and every tile it names, by uri."""
+    document: dict[str, Any] = json.loads((directory / "tileset.json").read_text())
+    uris: list[str] = []
+    stack: list[Any] = [document["root"]]
+    while stack:
+        tile = stack.pop()
+        uri = tile.get("content", {}).get("uri")
+        if uri:
+            uris.append(uri)
+        stack.extend(tile.get("children", []))
+    return document, {uri: (directory / uri).read_bytes() for uri in sorted(uris)}
+
+
+SPZ_MAGIC = 0x5053474E
+
+
+def splat_glb(
+    positions: np.ndarray | list[list[float]],
+    *,
+    version: int = 2,
+    fractional_bits: int = 12,
+    fill: int = 0,
+    sh_degree: int = 0,
+) -> bytes:
+    """A one-primitive splat GLB as `splat_tiles.build_glb` lays it out: an SPZ stream of
+    these positions (24-bit fixed point), every other byte `fill`, `sh_degree` bands of
+    harmonics after them -- so two tiles can hold the same positions in different bytes."""
+    xyz = np.asarray(positions, dtype=np.float64).reshape(-1, 3)
+    count = xyz.shape[0]
+    fixed = np.round(xyz * (1 << fractional_bits)).astype(np.int64) & 0xFFFFFF
+    packed = np.stack([(fixed >> shift) & 0xFF for shift in (0, 8, 16)], axis=-1)
+    rotation = 3 if version == 2 else 4
+    rest = bytes([fill]) * ((1 + 3 + 3 + rotation) * count)
+    harmonics = bytes([fill]) * (3 * (0, 3, 8, 15)[sh_degree] * count)
+    header = struct.pack("<IIIBBBB", SPZ_MAGIC, version, count, sh_degree, fractional_bits, 0, 0)
+    spz = gzip.compress(header + packed.astype(np.uint8).tobytes() + rest + harmonics, mtime=0)
+    gltf = {
+        "asset": {"version": "2.0"},
+        "buffers": [{"byteLength": len(spz)}],
+        "bufferViews": [{"buffer": 0, "byteOffset": 0, "byteLength": len(spz)}],
+        "meshes": [
+            {
+                "primitives": [
+                    {
+                        "attributes": {},
+                        "extensions": {
+                            "KHR_gaussian_splatting": {
+                                "extensions": {
+                                    "KHR_gaussian_splatting_compression_spz_2": {"bufferView": 0}
+                                }
+                            }
+                        },
+                    }
+                ]
+            }
+        ],
+    }
+    text = json.dumps(gltf).encode()
+    text += b" " * (-len(text) % 4)
+    binary = spz + b"\0" * (-len(spz) % 4)
+    total = 12 + 8 + len(text) + 8 + len(binary)
+    return (
+        struct.pack("<4sII", b"glTF", 2, total)
+        + struct.pack("<II", len(text), 0x4E4F534A)
+        + text
+        + struct.pack("<II", len(binary), 0x004E4942)
+        + binary
+    )

@@ -20,6 +20,7 @@ import type {
   JobCreate,
   PipelineCatalogue,
   Site,
+  SiteAsset,
   SiteSummary,
   StorageReconciliation,
 } from "@twin/contracts";
@@ -33,6 +34,7 @@ export const adminKeys = {
   reconciliation: ["admin", "reconciliation"] as const,
   recipes: ["admin", "recipes"] as const,
   sites: ["admin", "sites"] as const,
+  assets: ["admin", "assets"] as const,
 };
 
 /**
@@ -77,6 +79,19 @@ export function useSites() {
     queryKey: adminKeys.sites,
     queryFn: () => unwrap<SiteSummary[]>(api.GET("/api/v1/sites")),
     staleTime: 60_000,
+  });
+}
+
+/**
+ * Every asset, for what a republish could not carry onto new tiles (`sidecarFlags`): the
+ * notices beside each capture's site and the list above the table. Polled with the tables,
+ * because a run finishing is what sets them and an attach is what clears them.
+ */
+export function useAssets() {
+  return useQuery({
+    queryKey: adminKeys.assets,
+    queryFn: () => unwrap<SiteAsset[]>(api.GET("/api/v1/assets", {})),
+    refetchInterval: POLL_MS,
   });
 }
 

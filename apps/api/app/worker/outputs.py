@@ -269,6 +269,7 @@ def upload_artifact(
                     )
 
                 each(one, _members(source))
+            _prune(storage, key, {m.relative_to(source).as_posix() for m in _members(source)})
         else:
             if not source.is_file():
                 return None
@@ -290,6 +291,24 @@ def upload_artifact(
 
 def _members(directory: Path) -> list[Path]:
     return sorted(path for path in directory.rglob("*") if path.is_file())
+
+
+def _prune(storage: ObjectStorage, key: str, members: set[str]) -> None:
+    """Delete what is under a directory artifact's prefix and not in this upload.
+
+    A Refine re-runs the same job, and its `package` uploads into the same
+    `runs/<job>/<stage>/splat/` as the first: every member it writes is overwritten, and
+    one the first wrote and it did not -- a `collision.bin` the first packer wrote, tiles of
+    a coarser plan -- was left beside the new ones. The publish copies the whole prefix,
+    and the carry plan reads a kind as the run's own by its files there
+    (`carry.plan_carry`), so a stale grid passed for the new run's and replaced the live
+    one. After the upload the prefix holds exactly the directory, as the row (`bytes`,
+    `checksum`: the pipeline's figures for the directory) says it does.
+    """
+    stale = sorted(set(_sizes_under(storage, f"{key}/")) - members)
+    if stale:
+        log.info("worker: %s: removing %d objects an earlier attempt left", key, len(stale))
+        each(lambda rel: storage.delete_object(f"{key}/{rel}"), stale)
 
 
 def _check(stopping: Stopping | None, ref: ArtifactRef) -> None:

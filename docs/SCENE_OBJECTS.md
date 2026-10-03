@@ -881,76 +881,109 @@ asset for each kind it drops (`sidecarFlags` on the asset: "Objects need re-segm
 Read off the code that writes each one; `apps/api/app/services/sidecars.py` (`KINDS`) is
 the table the API and the worker use, and `tests/test_sidecar_attach.py` holds it to this.
 
-| Kind             | Beside `tileset.json`                    | Declared by                                   | Written by                                              | Bound to                                                                                                                                                                                                                                                                  | Class             | On a republish of new tiles                             | Flag when dropped                                      |
-| ---------------- | ---------------------------------------- | --------------------------------------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------- | ------------------------------------------------------- | ------------------------------------------------------ |
-| `instances`      | `instances.json`, `instances.emb`        | `extras.instances`                            | `segment_scene.py` (segment.yml, publish-instances.yml) | `tiles`: each tile's FNV-1a checksum of its decoded float32 positions (`synthetic_tree.checksum_positions`) to run-length ids in that tile's gaussian order; coarse tiles' ids by kNN from the leaf splats (`rebind_instances.py`), still keyed by those tiles' checksums | splats            | carried only onto the same tiles                        | Objects need re-segmenting                             |
-| `skin`           | `skin.json`, `skin.bin`                  | `extras.skin`                                 | `skin_scene.py`                                         | tile checksums to skin runs and rows of `skin.bin` in each tile's order; each skin moves an instance id                                                                                                                                                                   | splats            | carried only onto the same tiles                        | Skins need refitting                                   |
-| `materials`      | `materials.json`                         | `extras.materials`                            | the video teacher (C2)                                  | one record per `instances.json` id                                                                                                                                                                                                                                        | follows instances | carried exactly when `instances` is                     | Materials need re-pointing at the new objects          |
-| `telemetry`      | `telemetry.json`                         | `extras.telemetry`                            | deployment data (C3)                                    | bindings by `instances.json` id                                                                                                                                                                                                                                           | follows instances | carried exactly when `instances` is                     | Telemetry bindings need re-pointing                    |
-| `objects`        | `objects/<id>/…`, `fills/<id>/…`         | `extras.objects`, `extras.split`              | `split_objects.py` (C4)                                 | rewrites the scan's own tiles without the objects and binds the object tiles in `instances.json`. **Not attachable**: a split is a new tileset, not files beside one                                                                                                      | splats            | carried only onto the same tiles                        | Split objects need re-splitting                        |
-| `collision`      | `collision.bin`                          | `extras.collision`                            | the packer (`convert`), or collision-backfill.yml       | `splat_tiles.collision_grid`: the solid cells of the kept splats (`opacity_min`) in the tileset's local ENU frame; the backfill refuses unless the leaves hold exactly the PLY's kept gaussians                                                                           | splats            | the run's own replaces it; else dropped                 | Collision needs a backfill                             |
-| `viewCones`      | `viewcones.bin`                          | `extras.viewCones`                            | the packer, or `splat_tiles.py viewcones`               | per cell of the splats' grid, the directions it was seen from                                                                                                                                                                                                             | splats            | the run's own replaces it; else dropped                 | View cones need rebuilding                             |
-| `inferredLayers` | `inferred/<name>/…`                      | `extras.inferredLayers` (`[{uri, evidence}]`) | `teacher_fill.py` (fill.yml, publish-fill.yml)          | nothing of the splats: a tileset of its own whose root transform is the scan's (publish-fill.yml checks it), drawn with the scan's model matrix. World-space in the scan's frame, no splat indices, no checksums                                                          | independent       | carried                                                 | (only when it cannot be carried at all)                |
-| `nativeLod`      | `sog/lod-meta.json`, `sog/*.webp`        | `extras.nativeLod` (optional: the web probes) | streamed-lod-backfill.yml (splat-transform)             | every leaf tile's SPZ merged, Morton-ordered and decimated: the splats themselves, re-encoded                                                                                                                                                                             | splats            | carried only onto the same tiles                        | Streamed LOD needs a backfill                          |
-| `rig`            | `rig.json`, `motion.json`, `plants.json` | the asset's `renderConfig.rigUrl`             | living-plants.yml (`scene_plants.py`)                   | the rig is stamped with the published tiles' checksums (`rig_tiles.stamp`) and `plants.json` binds per tile checksum; the viewer refuses a tile the binding does not list                                                                                                 | splats            | carried only onto the same tiles; else `rigUrl` cleared | Plants need re-rigging                                 |
-| anything else    | —                                        | an extras key none of the above               | —                                                       | unknown                                                                                                                                                                                                                                                                   | —                 | carried onto the same tiles; else dropped               | Unrecognised sidecar extras.`<key>` needs re-attaching |
+| Kind             | Beside `tileset.json`                    | Declared by                                   | Written by                                              | Bound to                                                                                                                                                                                                                                                                  | Class             | On a republish of new tiles                                                                               | Flag when dropped                                      |
+| ---------------- | ---------------------------------------- | --------------------------------------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------- | --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| `instances`      | `instances.json`, `instances.emb`        | `extras.instances`                            | `segment_scene.py` (segment.yml, publish-instances.yml) | `tiles`: each tile's FNV-1a checksum of its decoded float32 positions (`synthetic_tree.checksum_positions`) to run-length ids in that tile's gaussian order; coarse tiles' ids by kNN from the leaf splats (`rebind_instances.py`), still keyed by those tiles' checksums | positions         | carried when every new tile's position checksum is in `instances.json`                                    | Objects need re-segmenting                             |
+| `skin`           | `skin.json`, `skin.bin`                  | `extras.skin`                                 | `skin_scene.py`                                         | tile checksums to skin runs and rows of `skin.bin` in each tile's order; each skin moves an instance id                                                                                                                                                                   | positions         | carried when every new tile's position checksum is in `skin.json`                                         | Skins need refitting                                   |
+| `materials`      | `materials.json`                         | `extras.materials`                            | the video teacher (C2)                                  | one record per `instances.json` id                                                                                                                                                                                                                                        | follows instances | carried exactly when `instances` is                                                                       | Materials need re-pointing at the new objects          |
+| `telemetry`      | `telemetry.json`                         | `extras.telemetry`                            | deployment data (C3)                                    | bindings by `instances.json` id                                                                                                                                                                                                                                           | follows instances | carried exactly when `instances` is                                                                       | Telemetry bindings need re-pointing                    |
+| `objects`        | `objects/<id>/…`, `fills/<id>/…`         | `extras.objects`, `extras.split`              | `split_objects.py` (C4)                                 | rewrites the scan's own tiles without the objects and binds the object tiles in `instances.json`. **Not attachable**: a split is a new tileset, not files beside one                                                                                                      | tile bytes        | carried only onto the same tiles                                                                          | Split objects need re-splitting                        |
+| `collision`      | `collision.bin`                          | `extras.collision`                            | the packer (`convert`), or collision-backfill.yml       | `splat_tiles.collision_grid`: the solid cells of the kept splats (`opacity_min`) in the tileset's local ENU frame; the backfill refuses unless the leaves hold exactly the PLY's kept gaussians                                                                           | tile bytes        | the run's own replaces it; else dropped                                                                   | Collision needs a backfill                             |
+| `viewCones`      | `viewcones.bin`                          | `extras.viewCones`                            | the packer, or `splat_tiles.py viewcones`               | per cell of the splats' grid, the directions it was seen from                                                                                                                                                                                                             | tile bytes        | the run's own replaces it; else dropped                                                                   | View cones need rebuilding                             |
+| `inferredLayers` | `inferred/<name>/…`                      | `extras.inferredLayers` (`[{uri, evidence}]`) | `teacher_fill.py` (fill.yml, publish-fill.yml)          | nothing of the splats: a tileset of its own whose root transform is the scan's (publish-fill.yml checks it), drawn with the scan's model matrix. World-space in the scan's frame, no splat indices, no checksums                                                          | independent       | carried                                                                                                   | (only when it cannot be carried at all)                |
+| `nativeLod`      | `sog/lod-meta.json`, `sog/*.webp`        | `extras.nativeLod` (optional: the web probes) | streamed-lod-backfill.yml (splat-transform)             | every leaf tile's SPZ merged, Morton-ordered and decimated: the splats themselves, re-encoded                                                                                                                                                                             | tile bytes        | carried only onto the same tiles                                                                          | Streamed LOD needs a backfill                          |
+| `rig`            | `rig.json`, `motion.json`, `plants.json` | the asset's `renderConfig.rigUrl`             | living-plants.yml (`scene_plants.py`)                   | the rig is stamped with the published tiles' checksums (`rig_tiles.stamp`) and `plants.json` binds per tile checksum; the viewer refuses a tile the binding does not list                                                                                                 | positions         | carried when every new tile's position checksum is in `rig.json` and `plants.json`; else `rigUrl` cleared | Plants need re-rigging                                 |
+| anything else    | —                                        | an extras key none of the above               | —                                                       | unknown                                                                                                                                                                                                                                                                   | —                 | carried onto the same tiles; else dropped                                                                 | Unrecognised sidecar extras.`<key>` needs re-attaching |
 
-**"The same tiles"** is checked, not assumed: the tileset without its root extras (the tree,
-its bounds and errors, every content uri) and every tile's size and ETag must be equal
-(`sidecars.tiles_fingerprint`). Same bytes mean same positions, so every checksum a binding
-holds is still right. It is sufficient, not necessary — a re-pack that left every position
-where it was (another `--sh-degree`, say) fails it and drops what it could have kept — and
-that is the safe side: a kind dropped by mistake is flagged and rebuilt, one kept by mistake
-hides and moves the wrong splats. A retried register, or a republish of the same bytes,
-passes it; a new reconstruction or a Refine never does. The attach's `basedOn` check is the
-same test: sidecars computed on the legacy prefix may be attached to a generation an attach
-cut from it, never to one a republish wrote.
+**"The same splats"** is checked, not assumed, and how depends on the class. A kind bound to
+**positions** (objects, skins, the rig) holds on new tiles exactly when the viewer would draw
+them with it: every tile of the new tileset must have a position checksum its binding lists
+(`instances.json` and `skin.json` key their `tiles` by it, `rig.json` lists `tileChecksums`
+and `plants.json` keys its `tiles`). The worker has the new tiles, so it computes each tile's
+checksum with the function the bindings were written with (`apps/api/app/worker/positions.py`,
+a transcription of `rig_tiles.tile_positions` and `synthetic_tree.checksum_positions`, held to
+`checksum_vectors.json` and the fixture tree's stamped `rig.json`) and stops at the first tile
+no binding lists: a re-pack that left every position where it was — another `--sh-degree`,
+`ship_sh_degree` — keeps them (`data/tiles/synthetic-tree-sh` against `synthetic-tree-lod`
+is the test), a new reconstruction or a Refine does not. A kind bound to the **splats' bytes**
+(collision, view cones, `sog/`, a split) is carried only when the tileset without its root
+extras (the tree, its bounds and errors, every content uri) and every tile's size and ETag
+are equal (`sidecars.tiles_fingerprint`): nothing records what a grid was computed from, and
+`sog/` is the old encoding itself, harmonics and all. Both err on the safe side — a kind
+dropped by mistake is flagged and rebuilt, one kept by mistake hides and moves the wrong
+splats. The attach's `basedOn` check is the byte test (the API does not download tiles):
+sidecars computed on the legacy prefix may be attached to a generation an attach cut from
+it, never to one a republish wrote.
 
 ### What each workflow sends
 
-The rewiring is a later wave; this is what each one will need. Common to all five: the
-publish job gets `API_WRITE_TOKEN` and `TWIN_API_URL` (living-plants.yml has both already)
-and the private bucket's name for staging (`vars.R2_BUCKET || 'twin-assets'`); it uploads to
-`staging/assets/<asset id>/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT/` with the R2 pair it already
-has, laid out as beside `tileset.json`, and POSTs `{stagingPrefix, basedOn, files, extras}`
-(curl in docs/DEPLOYMENT.md). It no longer reads, diffs or uploads a `tileset.json`, and no
-longer writes to the public bucket. A 409 means the tiles changed under it: run it again on
-the asset's current tiles.
+All five go through one script, `tools/captures/attach_sidecars.py` (tested against a stub
+bucket and a stub API in `tools/captures/tests/test_attach_sidecars.py`). The `build` job
+finds the asset and its **current** tileset URL (`GET /api/v1/assets/{id}`, `source.url`),
+checks its files against that tileset, and writes the request beside them as `attach.json`
+(`attach_sidecars.py manifest`: `assetId`, `basedOn`, `files`, `extras`, `rigUrl`), so the
+review artifact is exactly what will be sent. The `publish` job (only when asked) runs
+`attach_sidecars.py attach` on that directory: it uploads the files to
+`staging/assets/<asset id>/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT/` in the private bucket
+(`vars.R2_BUCKET || 'twin-assets'`) with the R2 pair, laid out as beside `tileset.json`,
+and POSTs `{stagingPrefix, basedOn, files, extras, rigUrl?}` with `API_WRITE_TOKEN` to
+`TWIN_API_URL`. A 409 because another attach holds the asset is retried; a 409 because the
+tiles changed under the run ends it (exit status 3): run it again on the asset's current
+tiles. No workflow reads, diffs or uploads a `tileset.json` any more, and none writes to the
+public bucket. docs/DEPLOYMENT.md ("Sidecars: one publisher") lists the secrets and
+variables.
 
-- **publish-instances.yml.** Needs each scan's **asset id**, not only its URL: once a scan
-  has been attached to, its URL is a generation, and the legacy URL in
-  `infra/modal/segment.py` `SCANS` no longer names what the site shows (it still serves the
-  same tiles, which is why it is accepted as `basedOn`). So `SCANS` becomes, or gains, a map
-  to asset ids, and the build reads the current URL from `GET /api/v1/assets/{id}`
-  (`source.url`). `build` keeps the binding check (every tile's checksum a key, runs covering
-  its gaussians) against those tiles and drops `link_instances` and the tileset diff;
-  `publish` stages `instances.json` and `instances.emb` and sends
-  `files: ["instances.json", "instances.emb"]`,
+- **publish-instances.yml.** A scan is named as in `infra/modal/segment.py` `SCANS`, whose
+  URLs are the legacy prefixes segment.yml read. The asset comes from the repository
+  variable `SCAN_ASSET_IDS` (`{"camp": "<asset id>", ...}`), or, where that has no entry,
+  from the one gaussian-splat asset whose tileset is the scan's run (`runs/<job>/…`, at the
+  legacy prefix or in a generation cut from it); anything else is a refusal naming the
+  variable. `build` fetches the asset's current tileset and every tile and keeps the binding
+  check (every tile's checksum a key, runs covering its gaussians) against **those** tiles;
+  `link_instances` and the tileset diff are gone. It sends
+  `files: ["instances.emb", "instances.json"]`,
   `extras: {"instances": {"uri": "instances.json", "count": <instances>}}`, `basedOn` the URL
   it bound against.
-- **publish-fill.yml.** The same asset-id lookup for `scan`. `build` keeps the layer checks
-  and the frame check (the layer's root transform against the **current** tileset's) and
-  drops the tileset rewrite; `publish` stages `inferred/<name>/…` (the layer's
-  `tileset.json`, tiles and sidecars) and sends only its own entry,
-  `extras: {"inferredLayers": [{"uri": "inferred/<name>/tileset.json", "evidence": {…}}]}`:
-  the API merges the list by uri, so another fill's entry stays.
-- **collision-backfill.yml.** It already has the asset (`capture.json`: `asset.id`,
-  `asset.source.url`). `build` keeps `splat_tiles.py collision` and its identity check and
-  keeps only `root.extras.collision` from the tileset it writes; `publish` stages
-  `collision.bin` and sends `files: ["collision.bin"]`, `extras: {"collision": {…}}`,
-  `basedOn: asset.source.url`. It gains `API_WRITE_TOKEN` and `TWIN_API_URL`.
-- **streamed-lod-backfill.yml.** Its input becomes an asset (or capture) id instead of a
-  tileset URL, the URL read from the API; `publish` stages `sog/lod-meta.json` and the
-  chunks under `sog/` and sends them in `files`, with `extras: {"nativeLod":
-"sog/lod-meta.json"}` so the viewer need not probe, and `basedOn` the tileset whose leaves
-  it merged. A staged `sog/` replaces the old one whole. It gains `API_WRITE_TOKEN` and
-  `TWIN_API_URL`.
-- **living-plants.yml.** `publish` stages `rig.json`, `motion.json` and `plants.json` and
-  sends `files` with those three, `rigUrl: "rig.json"` and `basedOn: asset.source.url`, in
-  place of the in-place upload **and** the separate `PATCH /assets/{id}` of
+- **publish-fill.yml.** The same asset lookup for `scan`. `build` keeps the layer checks and
+  the frame check, now against the **current** tileset's root transform, and stages
+  `inferred/<name>/…` (the layer's `tileset.json`, tiles and sidecars), sending only its own
+  entry, `extras: {"inferredLayers": [{"uri": "inferred/<name>/tileset.json", "evidence":
+{…}}]}`: the API merges the list by uri, so another fill's entry stays, and a staged
+  `inferred/<name>/` replaces that layer's old files whole.
+- **collision-backfill.yml.** The asset is the capture's splat asset (`fetch_capture.py`'s
+  `capture.json`). `build` keeps `splat_tiles.py collision`, its identity check, and the
+  check that the command changed the tileset by `extras.collision` alone; it sends
+  `files: ["collision.bin"]`, `extras: {"collision": {…}}` as the command declared it, and
+  `basedOn` the asset's URL the tiles were fetched from.
+- **streamed-lod-backfill.yml.** Its input is the asset id (`[streamedlod|asset=<uuid>]`),
+  the tileset read from the API. It stages `sog/lod-meta.json` and every chunk under `sog/`
+  and sends them in `files`, with `extras: {"nativeLod": "sog/lod-meta.json"}` so the viewer
+  need not probe, and `basedOn` the tileset whose leaves it merged. A staged `sog/` replaces
+  the old one whole.
+- **living-plants.yml.** It stages `rig.json`, `motion.json` and `plants.json` and sends
+  them in `files` with `rigUrl: "rig.json"` and `basedOn` the asset's URL the tiles were
+  fetched from, in place of the in-place upload **and** the separate `PATCH /assets/{id}` of
   `renderConfig.rigUrl` (which replaced the whole render config, racing every other writer
   of it).
 
-`segment.yml`, `fill.yml` and the Modal apps read tiles by URL and are unchanged, except
-that they too should take the current URL from the API rather than `SCANS` once a scan has
-moved.
+Each publish job is in a concurrency group of its workflow and target (streamed-lod-backfill,
+which publishes from its build job, puts that whole job in one), so two runs on one scan queue
+rather than interleave; the API's row lock is what makes interleaving safe in any case.
+
+**Split objects are not published, and stay out of this.** `split_objects.py` (C4) rewrites
+the scan's own tiles without the chosen objects and writes the objects as tilesets of their
+own under `objects/` and `fills/`, binding them in `instances.json`. fill.yml's `split:<scan>`
+jobs run it on Modal and keep the result (`split.tar.gz`) in the run's `fill` artifact for
+review; no workflow publishes it, and the attach refuses `objects/`, `fills/`,
+`extras.objects` and `extras.split` (`attachable=False`). Publishing one is a different
+operation from an attach — a **replace-tiles** publish: a new generation whose tiles are the
+split's, with `instances.json` re-bound to those tiles' checksums, and everything else bound
+to the old tiles (collision, view cones, `sog/`, a rig, skins) dropped and flagged as a
+republish would. That belongs beside the worker's publish (`carry.py` already decides what
+survives new tiles), and is left until something needs a split on the live site.
+
+`segment.yml`, `fill.yml` and the Modal apps read tiles by URL and are unchanged: they read
+`SCANS`' legacy URLs, which keep serving the same tiles after an attach (an attach copies
+tiles into a new generation and never deletes the legacy prefix). Once a scan is republished
+with new tiles, a segmentation of the legacy URL no longer binds the asset's tiles, and
+publish-instances refuses it at the binding check.
