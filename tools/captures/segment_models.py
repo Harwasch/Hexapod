@@ -230,6 +230,17 @@ class ZeroShotScoring:
         e = np.exp(logits)
         return e / e.sum(axis=1, keepdims=True)
 
+    def score_categories(
+        self, embedding: np.ndarray, prompts: Sequence[Sequence[str]]
+    ) -> np.ndarray:
+        """(n, len(prompts)) probabilities: softmax over groups of phrasings, each group's
+        text embeddings averaged (`segment_scene.category_scores`' head)."""
+        cache = self.__dict__.setdefault("_banks", {})
+        key = ("categories", tuple(tuple(p) for p in prompts))
+        if key not in cache:
+            cache[key] = text_bank(self, prompts)
+        return _softmax(TEMPERATURE * np.atleast_2d(embedding) @ cache[key].T)
+
     def score_properties(self, embedding: np.ndarray) -> dict[str, np.ndarray]:
         """Per property (`ATTRIBUTE_PROMPTS`), (n,) in 0..1."""
         cache = self.__dict__.setdefault("_banks", {})

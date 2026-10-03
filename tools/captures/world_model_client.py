@@ -316,48 +316,76 @@ def presmooth(rgb: np.ndarray, sigma: float) -> np.ndarray:
 
 @dataclass
 class VideoClips:
-    """Wan 2.2 (`model="Wan"`) or Cosmos-Predict2.5 (`model="Cosmos"`) as a
-    `teacher_motion.ClipSource`. `fps` is the model's and is checked against each reply."""
+    """Wan 2.2 TI2V-5B (`model="Wan"`) or Cosmos-Predict2 Video2World (`model="Cosmos"`) as
+    a `teacher_motion.ClipSource`. `fps` is the model's and is checked against each reply.
+
+    `chain` > 1 makes each clip longer than the model's ~5 s: the next clip starts from the
+    last frame of the one before and is appended without its first frame (the same picture),
+    so the pose is continuous at the joins though the motion's phase is not."""
 
     model: str = "Wan"
     prompt: str = PLANT_PROMPT
     frames: int | None = None
     remote: Remote = modal_remote
+    chain: int = 1
+    steps: int | None = None
     fps: float = field(init=False)
-    #: What each clip came back as, for the lesson's provenance.
+    #: What each model call came back as, for the lesson's provenance (and GPU time).
     received: list[dict] = field(default_factory=list, init=False)
 
     def __post_init__(self) -> None:
         if self.model not in ("Wan", "Cosmos"):
             raise ValueError(f"model {self.model!r}: Wan or Cosmos")
+        if self.chain < 1:
+            raise ValueError("chain: at least 1")
         self.fps = 24.0 if self.model == "Wan" else 16.0
 
     @property
     def name(self) -> str:
-        return {"Wan": "wan2.2-ti2v-5b", "Cosmos": "cosmos-predict2.5-2b"}[self.model]
+        base = {"Wan": "wan2.2-ti2v-5b", "Cosmos": "cosmos-predict2-2b-video2world"}[self.model]
+        return base + (f"-chain{self.chain}" if self.chain > 1 else "")
+
+    def clip(self, still: np.ndarray, seed: int) -> list[np.ndarray]:
+        """One clip of `still` (uint8, or floats in 0..1), `chain` model calls long, at the
+        still's size."""
+        u8 = still if still.dtype == np.uint8 else np.round(np.clip(still, 0, 1) * 255)
+        u8 = np.ascontiguousarray(u8, dtype=np.uint8)
+        out: list[np.ndarray] = []
+        start = u8
+        for link in range(self.chain):
+            request: dict = {
+                "image": encode_png(start),
+                "prompt": self.prompt,
+                "seed": int(seed) + 7919 * link,
+            }
+            if self.frames is not None:
+                request["frames"] = self.frames
+            if self.steps is not None:
+                request["steps"] = self.steps
+            response = self.remote(self.model, "clip", request)
+            if abs(float(response["fps"]) - self.fps) > 1e-6:
+                raise ValueError(f"{self.model} sent {response['fps']} fps, not {self.fps}")
+            frames = [_resize(f, u8.shape[1], u8.shape[0]) for f in decode_mp4(response["mp4"])]
+            self.received.append(
+                {
+                    "model": response.get("model"),
+                    "seed": request["seed"],
+                    "link": link,
+                    "frames": len(frames),
+                    "seconds": response.get("seconds"),
+                    "loadSeconds": response.get("loadSeconds"),
+                }
+            )
+            out.extend(frames if link == 0 else frames[1:])
+            start = frames[-1]
+        return out
 
     def clips(
         self, stills: Sequence[np.ndarray], cameras: Sequence[object], seeds: Sequence[int]
     ) -> list[list[np.ndarray]]:
         """Clip `k` is of still `k % len(stills)`: every still once per seed."""
-        out = []
-        for seed in seeds:
-            for c, still in enumerate(stills):
-                u8 = still if still.dtype == np.uint8 else np.round(np.clip(still, 0, 1) * 255)
-                u8 = u8.astype(np.uint8)
-                request: dict = {
-                    "image": encode_png(u8),
-                    "prompt": self.prompt,
-                    "seed": int(seed) * 1000 + c,
-                }
-                if self.frames is not None:
-                    request["frames"] = self.frames
-                response = self.remote(self.model, "clip", request)
-                if abs(float(response["fps"]) - self.fps) > 1e-6:
-                    raise ValueError(f"{self.model} sent {response['fps']} fps, not {self.fps}")
-                frames = [_resize(f, u8.shape[1], u8.shape[0]) for f in decode_mp4(response["mp4"])]
-                self.received.append(
-                    {"model": response.get("model"), "seed": request["seed"], "frames": len(frames)}
-                )
-                out.append(frames)
-        return out
+        return [
+            self.clip(still, int(seed) * 1000 + c)
+            for seed in seeds
+            for c, still in enumerate(stills)
+        ]

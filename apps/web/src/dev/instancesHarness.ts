@@ -34,10 +34,13 @@ import {
 
 import type { CesiumSceneManager } from "@/cesium/CesiumSceneManager";
 import { ScanRendererHost, type ScanRendererStatus } from "@/cesium/scanView/ScanRendererHost";
+import { paintedDocOf } from "@/cesium/scanView/scanInstances";
+import { pickSourceOf } from "@/cesium/sceneSelect/pickSources";
 import { attachInstances, instanceSphere, type InstancePrimitive } from "@/cesium/splatInstances";
 import { incrementalSplats, keepOffscreenSplats, splatTilesetOf } from "@/cesium/splatInternals";
 import { cesiumViewConeGpu, SplatViewCones } from "@/cesium/splatViewCones";
 import { visibilityChainOf } from "@/cesium/splatVisibility";
+import { tileInstanceIds } from "@/lib/instances";
 import { cellCount, loadViewCones, viewConesMetaOf } from "@/lib/viewCones";
 import { useInstances } from "@/state/instances";
 
@@ -96,6 +99,18 @@ export interface InstancesHarness {
   changed(): number;
   /** The scan's categories as the objects panel lists them, largest first. */
   categories(): { id: string; name: string; objects: number; splats: number }[];
+  /**
+   * The splats drawn now (the renderer's tiles, as scene selection reads them): how many,
+   * in how many tiles, how many tiles carry ids, how many splats carry none (id 0), and how
+   * many are in `category`'s objects.
+   */
+  drawn(category: string): {
+    tiles: number;
+    tilesWithIds: number;
+    splats: number;
+    unlabelled: number;
+    inCategory: number;
+  };
 }
 
 function nextFrame(scene: Scene): Promise<void> {
@@ -370,6 +385,26 @@ export async function startInstancesHarness(options: {
         objects: g.objects.length,
         splats: g.splats,
       })),
+    drawn(category) {
+      const tiles = pickSourceOf(ASSET)?.tiles() ?? [];
+      const doc = paintedDocOf(ASSET);
+      const categoryOf = useInstances.getState().assets[ASSET]?.index.categoryOf;
+      const out = { tiles: tiles.length, tilesWithIds: 0, splats: 0, unlabelled: 0, inCategory: 0 };
+      for (const tile of tiles) {
+        const ids = doc ? tileInstanceIds(doc, tile.checksum) : undefined;
+        out.splats += tile.count;
+        if (ids?.length !== tile.count) {
+          out.unlabelled += tile.count;
+          continue;
+        }
+        out.tilesWithIds += 1;
+        for (const id of ids) {
+          if (id === 0) out.unlabelled += 1;
+          else if (categoryOf?.get(id) === category) out.inCategory += 1;
+        }
+      }
+      return out;
+    },
     async cones(mode) {
       const target = primitive();
       if (!file || !below || !target) throw new Error("no view-cone grid on this tileset");

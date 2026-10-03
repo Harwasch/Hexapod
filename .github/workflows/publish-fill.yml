@@ -1,0 +1,285 @@
+name: Publish fill
+
+# An inferred layer (what an image model filled in where a scan never looked,
+# tools/captures/teacher_fill.py; docs/WORLD_MODEL_RUNBOOK.md §6) published beside a scan's
+# tiles, so the viewer's "Inferred fill" toggle shows it on the live site. Opt-in, and never
+# run by default.
+#
+# * **What it does.** `build`: takes one job folder of a `fill.yml` run's `fill` artifact
+#   (`inferred.tar.gz`, the layer's own tileset), checks the layer is whole (every tile and
+#   sidecar it names is there and is what it says, the frame is the scan's, its evidence says
+#   `inferred`), fetches the scan's CURRENT published tileset.json and declares the layer on
+#   it as `root.extras.inferredLayers` (teacher_fill.link_inferred, uri
+#   `inferred/<name>/tileset.json`, relative to the tileset as apps/web/src/lib/inferred.ts
+#   resolves it). The fill run's own measured-tileset.json is not used: the published one may
+#   have gained extras since (instances). It refuses a tileset.json that would change by more
+#   than that key, and keeps the result as an artifact to review.
+#   `publish` (only when asked): uploads the layer's files first, under `inferred/<name>/`
+#   beside the tileset, then the tileset.json that names them, at the tileset's own URL.
+# * **How to run it.** `workflow_dispatch` once this file is on the default branch; before
+#   that, push a commit whose message carries
+#   `[fill|run=<fill.yml run id>|job=<artifact folder>|scan=camp]`, adding `|name=<layer>`
+#   to name the folder (default: the job folder without `fill-<scan>-`) and `|publish` to
+#   publish.
+#
+# Secrets, for `publish` only: CLOUDFLARE_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY;
+# variables R2_PUBLIC_BUCKET (or R2_BUCKET), R2_PUBLIC_URL.
+
+on:
+  push:
+    branches: [living-models]
+  workflow_dispatch:
+    inputs:
+      run:
+        description: "The fill.yml run whose `fill` artifact holds the layer"
+        type: string
+        required: true
+      job:
+        description: "The job's folder in that artifact, e.g. fill-camp-fixer-t50"
+        type: string
+        required: true
+      scan:
+        description: "The scan it fills (infra/modal/segment.py SCANS)"
+        type: string
+        default: camp
+      name:
+        description: "The layer's folder under inferred/ (default: the job without fill-<scan>-)"
+        type: string
+        default: ""
+      publish:
+        description: "Publish beside the tiles (otherwise build and review only)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  plan:
+    name: What to run
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      contains(github.event.head_commit.message, '[fill|')
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.plan.outputs.run }}
+      job: ${{ steps.plan.outputs.job }}
+      scan: ${{ steps.plan.outputs.scan }}
+      name: ${{ steps.plan.outputs.name }}
+      publish: ${{ steps.plan.outputs.publish }}
+    steps:
+      # Read as data, validated here, never interpolated into a shell line.
+      - id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          MESSAGE: ${{ github.event.head_commit.message }}
+          RUN: ${{ inputs.run }}
+          JOB: ${{ inputs.job }}
+          SCAN: ${{ inputs.scan }}
+          NAME: ${{ inputs.name }}
+          PUBLISH: ${{ inputs.publish }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import os, re
+          options = {"run": "", "job": "", "scan": "camp", "name": "", "publish": "false"}
+          if os.environ["EVENT"] == "workflow_dispatch":
+              for name in options:
+                  options[name] = os.environ.get(name.upper(), "") or options[name]
+          else:
+              found = re.search(r"\[fill([^\]]*)\]", os.environ.get("MESSAGE", ""))
+              for part in (found.group(1) if found else "").split("|")[1:]:
+                  name, _, value = part.partition("=")
+                  if name not in options:
+                      raise SystemExit(f"unknown option {name!r} in the [fill] token")
+                  options[name] = value if value else "true"
+          if not options["name"]:
+              prefix = f"fill-{options['scan']}-"
+              job = options["job"]
+              options["name"] = job[len(prefix):] if job.startswith(prefix) else job
+          valid = {"run": r"[0-9]+", "job": r"[a-z0-9][a-z0-9-]*", "scan": r"[a-z0-9-]+",
+                   "name": r"[a-z0-9][a-z0-9-]*", "publish": r"true|false"}
+          for name, pattern in valid.items():
+              if not re.fullmatch(pattern, options[name]):
+                  raise SystemExit(f"{name}={options[name]!r} is not {pattern}")
+          for name, value in options.items():
+              print(f"{name}={value}")
+          PY
+          cat "$GITHUB_OUTPUT"
+
+  build:
+    name: Check the layer and link it
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      JOB: ${{ needs.plan.outputs.job }}
+      SCAN: ${{ needs.plan.outputs.scan }}
+      LAYER: ${{ needs.plan.outputs.name }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: fill
+          path: ${{ runner.temp }}/fill
+          run-id: ${{ needs.plan.outputs.run }}
+          github-token: ${{ github.token }}
+      - name: The layer checked, the current published tileset, and the link
+        working-directory: tools/captures
+        run: |
+          uv sync --frozen
+          uv run --with modal==1.5.5 python - <<'PY' | tee -a "$GITHUB_STEP_SUMMARY"
+          import importlib.util, json, os, struct, tarfile, urllib.request
+          from pathlib import Path
+
+          import rig_tiles
+          import teacher_fill
+
+          # The scans' URLs and the user agent the bucket accepts, from the segmentation app.
+          spec = importlib.util.spec_from_file_location("segment_app", "../../infra/modal/segment.py")
+          app = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(app)
+          scan, layer = os.environ["SCAN"], os.environ["LAYER"]
+          url = app.SCANS[scan]
+
+          def get(url):
+              request = urllib.request.Request(url, headers={"User-Agent": app.USER_AGENT})
+              with urllib.request.urlopen(request, timeout=300) as response:
+                  return response.read()
+
+          temp = Path(os.environ["RUNNER_TEMP"])
+          src = temp / "fill" / os.environ["JOB"]
+          out = temp / "out" / scan
+          dest = out / "inferred" / layer
+          dest.mkdir(parents=True)
+
+          # The layer: one folder of plain files, nothing else in the archive.
+          with tarfile.open(src / "inferred.tar.gz") as tar:
+              for member in tar.getmembers():
+                  parts = Path(member.name).parts
+                  if member.isdir():
+                      continue
+                  if not member.isfile() or len(parts) != 2 or parts[0] != "inferred":
+                      raise SystemExit(f"unexpected {member.name!r} in inferred.tar.gz")
+                  (dest / parts[1]).write_bytes(tar.extractfile(member).read())
+          inferred = json.loads((dest / "tileset.json").read_text())
+          extras = inferred["root"].get("extras", {})
+          evidence = extras.get("evidence") or {}
+          if evidence.get("kind") != "inferred":
+              raise SystemExit("the layer's root carries no inferred evidence")
+          uris = rig_tiles.tile_uris(inferred)
+          if not uris:
+              raise SystemExit("the layer has no tiles")
+          for uri in uris:
+              path = dest / uri
+              if "/" in uri or ".." in uri or not path.is_file():
+                  raise SystemExit(f"tile {uri} is missing from the layer")
+              data = path.read_bytes()
+              magic, version, length = struct.unpack_from("<4sII", data)
+              if magic != b"glTF" or version != 2 or length != len(data):
+                  raise SystemExit(f"tile {uri} is not a whole binary glTF")
+          sidecars = [v["uri"] for v in extras.values() if isinstance(v, dict) and "uri" in v]
+          for uri in sidecars:
+              if not (dest / uri).is_file():
+                  raise SystemExit(f"sidecar {uri} is missing from the layer")
+          unnamed = sorted({p.name for p in dest.iterdir()} - {"tileset.json", *uris, *sidecars})
+          if unnamed:
+              raise SystemExit(f"files the layer does not name: {unnamed}")
+
+          # The current published tileset, the layer declared on it, nothing else changed.
+          (out / "tileset.json").write_bytes(get(url))
+          before = json.loads((out / "tileset.json").read_text())
+          if inferred["root"]["transform"] != before["root"]["transform"]:
+              raise SystemExit("the layer is not in the published tileset's frame")
+          layers = teacher_fill.link_inferred(out / "tileset.json", dest / "tileset.json")
+          after = json.loads((out / "tileset.json").read_text())
+          mine = [entry for entry in layers if entry["uri"] == f"inferred/{layer}/tileset.json"]
+          if len(mine) != 1 or mine[0]["evidence"] != evidence:
+              raise SystemExit(f"the link is not inferred/{layer}/tileset.json: {layers}")
+          after["root"]["extras"].pop("inferredLayers")
+          kept = before["root"].get("extras", {}).pop("inferredLayers", None)
+          if not before["root"].get("extras"):
+              before["root"].pop("extras", None)
+              if not after["root"]["extras"]:
+                  after["root"].pop("extras")
+          if before != after:
+              raise SystemExit("tileset.json would change by more than extras.inferredLayers")
+          (out / "url.txt").write_text(url)
+          size = sum(p.stat().st_size for p in dest.iterdir())
+          print("## Inferred fill\n")
+          print(f"- **{scan}**: {url}")
+          print(f"- layer `inferred/{layer}/`: {len(uris)} tiles, {len(sidecars)} sidecars, "
+                f"{size:,} bytes; {evidence['filler']}, {evidence['views']} views, "
+                f"{evidence['gaussians']:,} gaussians, mean confidence {evidence['meanConfidence']}")
+          print(f"- tileset.json: extras keys {sorted(json.loads((out / 'tileset.json').read_text())['root']['extras'])}"
+                f"; layers declared {[entry['uri'] for entry in layers]}"
+                f"{' (replacing a previous list)' if kept else ''}")
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: inferred-fill
+          path: ${{ runner.temp }}/out/
+          if-no-files-found: error
+
+  publish:
+    name: Publish beside the tiles
+    needs: [plan, build]
+    if: needs.plan.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      OBJECT_STORAGE_ENDPOINT_URL: https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
+      OBJECT_STORAGE_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY_ID }}
+      OBJECT_STORAGE_SECRET_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      OBJECT_STORAGE_PUBLIC_BUCKET: ${{ vars.R2_PUBLIC_BUCKET || format('{0}-public', vars.R2_BUCKET || 'twin-assets') }}
+      OBJECT_STORAGE_PUBLIC_URL: ${{ vars.R2_PUBLIC_URL }}
+    steps:
+      - name: The secrets this job needs
+        run: |
+          missing=""
+          for name in OBJECT_STORAGE_ACCESS_KEY OBJECT_STORAGE_SECRET_KEY OBJECT_STORAGE_PUBLIC_URL; do
+            if [ -z "${!name:-}" ]; then missing="$missing $name"; fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::missing:$missing. See docs/DEPLOYMENT.md."
+            exit 1
+          fi
+      - uses: actions/download-artifact@v4
+        with:
+          name: inferred-fill
+          path: out
+      - uses: astral-sh/setup-uv@v6
+      - name: The layer's files, then the tileset.json that names it
+        run: |
+          uv run --with boto3 python - <<'PY'
+          import os
+          from pathlib import Path
+          import boto3
+          public = os.environ["OBJECT_STORAGE_PUBLIC_URL"].rstrip("/") + "/"
+          s3 = boto3.client(
+              "s3",
+              endpoint_url=os.environ["OBJECT_STORAGE_ENDPOINT_URL"],
+              aws_access_key_id=os.environ["OBJECT_STORAGE_ACCESS_KEY"],
+              aws_secret_access_key=os.environ["OBJECT_STORAGE_SECRET_KEY"],
+              region_name="auto",
+          )
+          bucket = os.environ["OBJECT_STORAGE_PUBLIC_BUCKET"]
+          kinds = {".json": "application/json", ".glb": "model/gltf-binary"}
+          for folder in sorted(p for p in Path("out").iterdir() if p.is_dir()):
+              url = (folder / "url.txt").read_text().strip()
+              if not url.startswith(public):
+                  raise SystemExit(f"{url} is not under the public bucket's URL {public}")
+              prefix = url[len(public):].rsplit("/", 1)[0]
+              # The layer first, its own tileset.json last: a tileset.json naming files not
+              # there yet would be a 404 to every client that loads it in between.
+              files = sorted(p for p in (folder / "inferred").rglob("*") if p.is_file())
+              files.sort(key=lambda p: p.name == "tileset.json")
+              for path in [*files, folder / "tileset.json"]:
+                  key = f"{prefix}/{path.relative_to(folder).as_posix()}"
+                  kind = kinds.get(path.suffix, "application/octet-stream")
+                  s3.upload_file(str(path), bucket, key, ExtraArgs={"ContentType": kind})
+                  print(f"{bucket}/{key} ({kind}, {path.stat().st_size:,} bytes)")
+          PY

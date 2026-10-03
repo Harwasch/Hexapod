@@ -63,6 +63,9 @@ env:
 jobs:
   fill:
     name: Fill on a Modal GPU
+    # A push whose message carries [skip-fill] (one that only shares a file with the fill
+    # code, such as world_model_client.py) starts no fill run.
+    if: github.event_name != 'push' || !contains(github.event.head_commit.message, '[skip-fill]')
     runs-on: ubuntu-latest
     timeout-minutes: 300
     env:

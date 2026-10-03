@@ -176,3 +176,49 @@ def test_it_recovers_the_material_it_was_shown(snag, start: str):
     assert abs(m.stiffness / truth.stiffness - 1) < 0.05, fit.to_json()
     assert abs(m.damping / truth.damping - 1) < 0.35, fit.to_json()
     assert abs(m.drag / truth.drag - 1) < 0.2, fit.to_json()
+
+
+def test_an_occluded_bearing_sees_less_of_the_object():
+    s = scene()
+    bearing, tried = tmat.best_bearing(s, 9, bearings=(0, 90, 180, 270), width=96, height=64)
+    counts = {t["bearing"]: t["visible"] for t in tried}
+    assert counts[bearing] == max(counts.values()) > 0
+    assert all(t["visible"] <= t["covered"] for t in tried)
+
+
+def test_world_tracks_and_fits_what_the_video_model_sent(tmp_path: Path, monkeypatch):
+    """`world` end to end with the video model stood in for by the browser's own sway of the
+    snag: the still, the clip, the camera and the fit come back, with the bearing chosen."""
+    import world_model_client
+
+    prior = _prior(9)
+    truth = sw.SkinMaterial(prior.stiffness, 0.07, prior.drag)
+
+    class Clips:
+        name = "fake-world-model"
+
+        def __init__(self, **options: object) -> None:
+            self.options, self.fps, self.received = options, 15.0, []
+
+        def clips(self, stills, cameras, seeds):
+            (camera,) = cameras
+            clip = tmat.render_clip(
+                scene(), 9, truth, WIND, seed=3, seconds=12, fps=15, camera=camera
+            )
+            self.received.append({"seconds": 1.0})
+            return [clip.frames]
+
+    monkeypatch.setattr(world_model_client, "VideoClips", Clips)
+    argv = ["world", str(YARD / "splat"), str(YARD / "skin"), "--instance", "9"]
+    argv += ["--instances", str(YARD / "instances" / "instances.json"), "--strength", "0.5"]
+    argv += ["--width", "160", "--height", "120", "--auto-bearing", "--chain", "2"]
+    argv += ["--materials", str(tmp_path / "m.json"), "--report", str(tmp_path / "r.json")]
+    argv += ["--save", str(tmp_path / "save")]
+    assert tmat.main(argv) == 0
+    (report,) = json.loads((tmp_path / "r.json").read_text())
+    assert report["bearing"] in range(0, 360, 30) and report["visible"] > 0
+    assert report["status"] in ("fitted", "weak") and report["clipFrames"] == 180
+    assert report["calls"] == [{"seconds": 1.0}]
+    saved = tmp_path / "save" / "instance-9"
+    for name in ("still.png", "camera.json", "clip-0.avi", "observation.npz"):
+        assert (saved / name).exists()

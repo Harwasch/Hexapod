@@ -26,6 +26,19 @@ most `MAX_VIEWS`. Views render in forked workers (`render_views`: the scan share
 copy-on-write, `splat_render.SplatIndex` culling what a view cannot reach, the same frames
 as one process) while this process masks and votes each view as it arrives.
 
+**Images** (`--renderer gsplat`, `make_renderer`). What the mask and image models see is
+rasterized by gsplat on a GPU, as a viewer draws the scan -- not the CPU renderer's point
+samples, speckle on black, far from the photos the models know; the per-pixel cells still
+come from the CPU's samples of the same camera. `--max-scale-m` leaves the floaters out of
+the views (gaussians larger than that, which a rasterizer draws as blobs over a view); an
+unseen cell takes its nearest seen cell's instance within its own reach (`lift`).
+
+**Coverage** (`coverage_views`, `--coverage-rounds`). After the lift, views are aimed at
+what is still without an instance -- the coarse rim of a capture, a forest's crowns, a
+corner the plan missed: unassigned splats binned in 3D, the heaviest bins targets, each seen
+by two obliques and once from eye height (looking up into a canopy), from the azimuth with
+the clearest line of sight; then everything is lifted again from all the votes.
+
 **Votes.** In one view, a cell is *in* a mask when at least `MASK_SHARE` of its visible
 (purity-weighted) pixels are; overlapping masks of one level go to the one holding the larger
 share. A cell is *visible* in a view with at least `MIN_VISIBLE_PX` of weight. A mask over
@@ -58,8 +71,13 @@ tree. Splat ids are the deepest instance (leaf-level), as the contract says.
 
 **Meaning.** Instances whose best view gives them `DESCRIBE_MIN_PX` pixels are described;
 smaller ones keep no embedding and no tags (they stay in the hierarchy, with their nearest
-described ancestor's properties). Per instance, crops of the `CROP_VIEWS` views where its splats cover most pixels
-(bounding box padded `CROP_PAD`) are embedded and averaged (`embedding`, L2-normalised).
+described ancestor's properties). Per instance, from the `CROP_VIEWS` views where it covers
+most pixels (counted at half where it runs off the frame), square crops are embedded and
+averaged (`embedding`, L2-normalised): in context (box padded `CROP_PAD`, the rest dimmed),
+alone (its own pixels on grey), and with a renderer a portrait of its own splats from that
+view's side, framed to its box at `PORTRAIT_PX` (no occluder, its own resolution).
+`category`: a zero-shot head over the categories' prompts (`category_scores`) mixed with
+its best labels' categories (`_categories`).
 `tags`: softmax over the whole vocabulary of `LOGIT_SCALE` x cosine, top `TAGS_TOP_K`.
 `properties`: per attribute, a two-way softmax of `LOGIT_SCALE` x cosine between a positive
 and a contrast prompt (`PROPERTY_PROMPTS`), so each is a probability on its own and the
@@ -181,6 +199,24 @@ MAX_VIEWS = 480
 #: Splats sampled for the scan's extent and the observers' clearance test (seeded).
 PLAN_SAMPLE = 400_000
 
+#: Coverage rounds (`coverage_views`): after a lift, views aimed at what is still without an
+#: instance, at most this many a round ...
+COVERAGE_VIEWS = 96
+#: ... `len(COVERAGE_SHOTS)` per target: (elevation in degrees, distance as a factor of the
+#: distance where the frame spans one footprint). The last is from eye height (`EYE_M`
+#: above the target's local ground), looking at the target -- up into a canopy.
+COVERAGE_SHOTS = ((40.0, 1.0), (25.0, 0.6), (None, 0.8))
+EYE_M = 1.6
+#: Azimuths tried per shot (the clearest line of sight wins).
+COVERAGE_AZIMUTHS = 8
+#: Targets: unassigned splats binned in 3D at half a footprint; a bin needs this many, and
+#: targets are at least half a footprint apart.
+COVERAGE_MIN_SPLATS = 40
+#: A round is not run once less than this share of the splats is without an instance.
+COVERAGE_MIN_SHARE = 0.002
+#: Rounds by default (the CLI's `--coverage-rounds`).
+COVERAGE_ROUNDS = 2
+
 #: The smallest voxel cell edge tried, metres; it grows by `CELL_GROWTH` until the scan has
 #: at most `MAX_CELLS` cells and at least `SPLATS_PER_CELL` splats per cell on average.
 CELL_M = 0.05
@@ -219,9 +255,13 @@ NEIGHBOUR_CELLS = 3.0
 #: neighbours' region, up to this many steps out (`_absorb`).
 MIN_REGION_CELLS = 8
 ABSORB_ROUNDS = 3
-#: An instance needs at least this many splats.
+#: An instance needs at least this many splats, or `MIN_INSTANCE_CELLS` cells: where a scan
+#: is sparse (the coarse rim of a capture: a gaussian a cell) a tree is a few dozen splats.
 MIN_INSTANCE_SPLATS = 30
-#: Cells no view saw take the nearest seen cell's labels within this many cell edges.
+MIN_INSTANCE_CELLS = 16
+#: Cells no view saw take the nearest seen cell's labels within this many cell edges, or
+#: within twice their largest gaussian's scale when that is farther (a gaussian left out of
+#: the views, `max_scale_m`, reaches its neighbours).
 FILL_CELLS = 3.0
 
 #: An instance is described (crops embedded, tags) when its best view gives it at least
@@ -610,11 +650,7 @@ def plan_views(
                     )
                     candidates += [reach * f * direction for f in OBLIQUE_DISTANCES]
                 offsets = np.asarray(candidates)
-                # Line of sight: probes from the eye towards the target, each clear when no
-                # sampled splat is within `OBLIQUE_CLEARANCE` of a footprint.
-                points = target + offsets[:, None, :] * probes[None, ::-1, None]
-                gap = sight.query(points.reshape(-1, 3), k=1)[0].reshape(len(offsets), -1)
-                clear = (gap >= OBLIQUE_CLEARANCE * footprint).mean(axis=1)
+                clear = _clear_share(sight, target, offsets, probes, footprint)
                 good = np.flatnonzero(clear >= OBLIQUE_CLEAR)
                 pick = int(good[0]) if good.size else int(np.argmax(clear))
                 if clear[pick] >= OBLIQUE_MIN_CLEAR:
@@ -644,6 +680,121 @@ def plan_views(
     ]
 
 
+def _clear_share(
+    sight: cKDTree, target: np.ndarray, offsets: np.ndarray, probes: np.ndarray, footprint: float
+) -> np.ndarray:
+    """Line of sight per candidate eye (`target + offset`): the share of probes from the eye
+    towards the target that are clear, i.e. have no point of `sight` within
+    `OBLIQUE_CLEARANCE` of a footprint."""
+    points = target + offsets[:, None, :] * probes[None, ::-1, None]
+    gap = sight.query(points.reshape(-1, 3), k=1)[0].reshape(len(offsets), -1)
+    return (gap >= OBLIQUE_CLEARANCE * footprint).mean(axis=1)
+
+
+def coverage_views(
+    centroids: np.ndarray,
+    missing: np.ndarray,
+    edge: float,
+    *,
+    budget: int = COVERAGE_VIEWS,
+    width: int = VIEW_WIDTH,
+    height: int = VIEW_HEIGHT,
+    fov_deg: float = VIEW_FOV_DEG,
+    up: tuple[float, float, float] = (0.0, 0.0, 1.0),
+) -> list[Camera]:
+    """Views aimed at what a lift left without an instance (a coverage round).
+
+    `missing`: per cell, its splats that carry no instance (0 for the rest). They are binned
+    in 3D at half a footprint (`view_footprint(edge)`), so a canopy and the ground under it
+    are separate targets; the heaviest bins with at least `COVERAGE_MIN_SPLATS` become
+    targets (the weighted mean of their cells), greedily, at least half a footprint apart,
+    up to `budget // len(COVERAGE_SHOTS)`. Each target gets `COVERAGE_SHOTS`: obliques at
+    two scales and one from eye height above its local ground (the 5th percentile height of
+    the cells within half a footprint), each from the azimuth (of `COVERAGE_AZIMUTHS`, turned
+    by the golden angle per target) with the clearest line of sight past the occupied cells
+    (`_clear_share`), with a far plane a footprint past the target. Nothing here knows the
+    scene: the rim of a capture, a forest's crowns and a corner the plan missed are all just
+    places with unassigned splats."""
+    centroids = np.asarray(centroids, np.float64)
+    missing = np.asarray(missing, np.float64)
+    per_target = len(COVERAGE_SHOTS)
+    if budget < per_target or not (missing > 0).any():
+        return []
+    footprint = view_footprint(edge, width)
+    step = footprint / 2
+    where = np.flatnonzero(missing > 0)
+    pts, w = centroids[where], missing[where]
+    key3 = np.floor((pts - pts.min(axis=0)) / step).astype(np.int64)
+    dims = key3.max(axis=0) + 1
+    key = (key3[:, 0] * dims[1] + key3[:, 1]) * dims[2] + key3[:, 2]
+    keys, inverse = np.unique(key, return_inverse=True)
+    weight = np.bincount(inverse, w, keys.size)
+    centre = np.stack([np.bincount(inverse, w * pts[:, k], keys.size) for k in range(3)], 1)
+    centre /= weight[:, None]
+    order = np.argsort(-weight, kind="stable")
+    order = order[weight[order] >= COVERAGE_MIN_SPLATS]
+    targets: list[np.ndarray] = []
+    for b in order:
+        if len(targets) >= budget // per_target:
+            break
+        if targets and np.min(np.linalg.norm(np.asarray(targets) - centre[b], axis=1)) < step:
+            continue
+        targets.append(centre[b])
+    if not targets:
+        return []
+    sight = cKDTree(centroids)
+    flat = cKDTree(centroids[:, :2])
+    half_fov = math.radians(fov_deg) / 2
+    reach = footprint / 2 / math.tan(half_fov)
+    probes = np.linspace(OBLIQUE_PROBE_FROM, 1.0, OBLIQUE_PROBES)
+    golden = math.pi * (3 - math.sqrt(5))
+    up_a = np.asarray(up, np.float64)
+    cameras: list[Camera] = []
+    for i, target in enumerate(targets):
+        near = flat.query_ball_point(target[:2], step)
+        ground = float(np.percentile(centroids[near, 2], 5)) if near else float(target[2])
+        azimuths = i * golden + 2 * math.pi * np.arange(COVERAGE_AZIMUTHS) / COVERAGE_AZIMUTHS
+        for j, (elevation_deg, factor) in enumerate(COVERAGE_SHOTS):
+            if elevation_deg is None:
+                # From eye height, `factor` of the reach away horizontally.
+                offsets = np.stack(
+                    [
+                        reach * factor * np.cos(azimuths),
+                        reach * factor * np.sin(azimuths),
+                        np.full(azimuths.size, ground + EYE_M - target[2]),
+                    ],
+                    1,
+                )
+            else:
+                e = math.radians(elevation_deg)
+                offsets = (
+                    reach
+                    * factor
+                    * np.stack(
+                        [
+                            math.cos(e) * np.cos(azimuths),
+                            math.cos(e) * np.sin(azimuths),
+                            np.full(azimuths.size, math.sin(e)),
+                        ],
+                        1,
+                    )
+                )
+            clear = _clear_share(sight, target, offsets, probes, footprint)
+            # Ties (all clear, as at the open rim) turn with the shot, so shots differ.
+            pick = int(np.argmax(clear + 1e-6 * np.roll(np.arange(azimuths.size) == 0, j * 3)))
+            eye = target + offsets[pick]
+            if np.linalg.norm(eye - target) < 1e-6:
+                continue
+            far = float(np.linalg.norm(offsets[pick])) + footprint
+            cameras.append(
+                Camera.look_at(
+                    eye, target, fov_deg=fov_deg, width=width, height=height,
+                    up=tuple(up_a), far=far,
+                )
+            )  # fmt: skip
+    return cameras
+
+
 @dataclass
 class View:
     """One rendered view: the image a mask model sees, and per pixel which cell owns it."""
@@ -655,6 +806,8 @@ class View:
     cell: np.ndarray
     #: (h, w) float32: that cell's share of the pixel's coverage.
     purity: np.ndarray
+    #: (h, w, 3) uint8: the CPU renderer's point samples, when `rgb` was drawn by another.
+    samples: np.ndarray | None = None
 
 
 def render_view(
@@ -679,6 +832,7 @@ def render_views(
     index: SplatIndex | None = None,
     workers: int = 1,
     cache: Path | None = None,
+    tag: str = "",
 ) -> Iterator[View]:
     """The views, in camera order, rendered by `workers` processes. The processes are forked
     (the scan is shared copy-on-write, not copied), each renders whole views, and the views
@@ -690,7 +844,7 @@ def render_views(
     n_cells = int(cells.max()) + 1 if cells.size else 0
     _POOL_STATE.update(
         splats=splats, cameras=list(cameras), cells=cells, index=index, cache=cache,
-        n_cells=n_cells,
+        n_cells=n_cells, tag=tag,
     )  # fmt: skip
     try:
         if workers <= 1 or len(cameras) <= 1 or "fork" not in mp.get_all_start_methods():
@@ -721,6 +875,7 @@ def _render_job(k: int) -> View:
         state["cells"],  # type: ignore[arg-type]
         int(state["n_cells"]),  # type: ignore[arg-type]
         state["index"],  # type: ignore[arg-type]
+        str(state.get("tag", "")),
     )
 
 
@@ -1238,8 +1393,12 @@ def lift(
     cell_counts: np.ndarray,
     edge: float,
     levels: int,
+    cell_reach: np.ndarray | None = None,
 ) -> Lifted:
-    """Instances from the views' votes (module docstring: stages 1-2, fill, hierarchy)."""
+    """Instances from the views' votes (module docstring: stages 1-2, fill, hierarchy).
+    `cell_reach`: per cell, how far (metres) its unseen splats reach (twice their largest
+    scale); an unseen cell takes the nearest seen cell's labels within `FILL_CELLS` edges or
+    that reach, whichever is farther."""
     n_cells = len(centroids)
     a, b = _cell_graph(centroids, edge)
     seen = np.zeros(n_cells, bool)
@@ -1260,17 +1419,23 @@ def lift(
         joined = _absorb(joined, a, b, seen)
         stats[f"level{level}Rounds"] = rounds
         valid = joined >= 0
-        size = np.bincount(joined[valid], cell_counts[valid])
-        joined[valid & (size[np.maximum(joined, 0)] < MIN_INSTANCE_SPLATS)] = -1
+        top = int(joined.max()) + 1 if joined.size else 0
+        size = np.bincount(joined[valid], cell_counts[valid], minlength=max(top, 1))
+        cells = np.bincount(joined[valid], minlength=max(top, 1))
+        small = (size < MIN_INSTANCE_SPLATS) & (cells < MIN_INSTANCE_CELLS)
+        joined[valid & small[np.maximum(joined, 0)]] = -1
         labels[level] = joined + 1
         stats[f"level{level}Instances"] = int(np.unique(joined[joined >= 0]).size)
     unseen = np.flatnonzero(~seen)
     if unseen.size and seen.any():
         seen_index = np.flatnonzero(seen)
+        bound = np.full(unseen.size, FILL_CELLS * edge)
+        if cell_reach is not None:
+            bound = np.maximum(bound, np.asarray(cell_reach, np.float64)[unseen])
         distance, nearest = cKDTree(centroids[seen_index]).query(
-            centroids[unseen], k=1, distance_upper_bound=FILL_CELLS * edge, workers=-1
+            centroids[unseen], k=1, distance_upper_bound=float(bound.max()), workers=-1
         )
-        ok = np.isfinite(distance)
+        ok = np.isfinite(distance) & (distance <= bound)
         labels[:, unseen[ok]] = labels[:, seen_index[nearest[ok]]]
         stats["filledCells"] = int(ok.sum())
     return _hierarchy(labels, cell_counts, stats)
@@ -1290,10 +1455,11 @@ def _hierarchy(labels: np.ndarray, cell_counts: np.ndarray, stats: dict[str, obj
         key = current[has] * (int(labels[level].max()) + 1) + labels[level][has]
         keys, inverse = np.unique(key, return_inverse=True)
         sizes = np.bincount(inverse, cell_counts[has])
+        n_cells_of = np.bincount(inverse)
         node_of_key = np.zeros(keys.size, np.int64)
         for k in range(keys.size):
             parent = int(keys[k] // (int(labels[level].max()) + 1))
-            if sizes[k] < MIN_INSTANCE_SPLATS:
+            if sizes[k] < MIN_INSTANCE_SPLATS and n_cells_of[k] < MIN_INSTANCE_CELLS:
                 node_of_key[k] = parent
             elif parent and sizes[k] >= totals[parent - 1]:
                 node_of_key[k] = parent  # the whole parent: not a new instance
@@ -1346,6 +1512,8 @@ class Instance:
     tags: list[dict[str, object]]
     properties: dict[str, float]
     behaviour: str
+    #: Its broad scene category when described (`describe`); else the document's rule.
+    category: str | None = None
 
 
 def _ancestors(parent: np.ndarray) -> list[list[int]]:
@@ -1390,6 +1558,244 @@ def behaviour(properties: dict[str, float]) -> str:
     return "static"
 
 
+#: The crops an instance can be described by: from the views' images (`CROP_SPECS`), the
+#: same from the CPU's point samples (`-samples`, when the views were drawn by another
+#: renderer), and portraits of its own splats.
+CROP_KINDS = (
+    "context", "plain", "alone", "black", "wide", "wide-black",
+    "context-samples", "plain-samples", "alone-samples", "black-samples", "wide-samples",
+    "wide-black-samples", "portrait",
+)  # fmt: skip
+DESCRIBE_KINDS = ("plain-samples", "black-samples", "alone-samples")
+#: The wide crop: this many times the instance's box, at least `WIDE_MIN_PX` a side.
+WIDE_FACTOR = 3.0
+WIDE_MIN_PX = 224
+#: Crops embedded at a time (bounds what `describe` holds).
+EMBED_CHUNK = 512
+#: A view is used for an instance's crops when it shows at least this share of the pixels
+#: of the instance's best view (and `MIN_VIEW_PX`); a view where the instance runs off the
+#: frame counts its pixels at `TRUNCATED_WEIGHT`.
+CROP_MIN_SHARE = 0.25
+TRUNCATED_WEIGHT = 0.5
+#: The grey of portraits' backgrounds (and of an empty crop).
+BACKGROUND_GREY = 0.5
+#: Crops are scaled down to at most this side (the image model sees 224).
+CROP_MAX_SIDE = 256
+#: Portraits: an instance's own splats alone on grey, square, framed to its box.
+PORTRAIT_PX = 224
+PORTRAIT_FOV_DEG = 40.0
+#: The category, per crop kind: `CATEGORY_HEAD_WEIGHT` of the zero-shot head over the
+#: categories' prompts, the rest from the `CATEGORY_TAGS` best labels' probabilities summed
+#: per category; averaged over the kinds, then each instance's distribution is mixed with its
+#: parent's at `CATEGORY_PARENT_WEIGHT` (a part is seen with what it is part of). Measured
+#: (2026-10-03, pumpkin and camp): the head pulls a conifer's parts to "bush" and a hay bed to
+#: "sky", so it is weighed 0; the parent mix raises the camp canopy's Trees from 0.23 to 0.28.
+CATEGORY_HEAD_WEIGHT = 0.0
+CATEGORY_TAGS = 10
+CATEGORY_PARENT_WEIGHT = 1.0
+
+
+@runtime_checkable
+class SplatRenderer(Protocol):
+    """Draws splats for a camera: `splat_render.GsplatRenderer` on a GPU, `CpuRenderer`."""
+
+    name: str
+
+    def __call__(
+        self,
+        splats: Splats,
+        camera: Camera,
+        *,
+        background: tuple[float, float, float] = (0.0, 0.0, 0.0),
+        rows: np.ndarray | None = None,
+    ) -> object:
+        """A `splat_render.Frame` of `splats` (only `rows` of them, when given)."""
+        ...
+
+
+class CpuRenderer:
+    """`splat_render.render` as a `SplatRenderer` (tests; the views' own renderer)."""
+
+    name = "cpu"
+
+    def __call__(self, splats, camera, *, background=(0.0, 0.0, 0.0), rows=None):
+        return render(splats if rows is None else splats.take(rows), camera, background=background)
+
+
+def make_renderer(spec: str) -> SplatRenderer | None:
+    """`cpu` (None: the views keep the point-sampled image their labels come with) or
+    `gsplat` (`splat_render.GsplatRenderer`, CUDA: the views are rasterized, as a viewer
+    draws them, for the mask and image models; labels still come from the CPU's samples)."""
+    if spec == "cpu":
+        return None
+    if spec == "gsplat":
+        from splat_render import GsplatRenderer
+
+        return GsplatRenderer()
+    raise ValueError(f"renderer {spec!r}: 'cpu' or 'gsplat'")
+
+
+def _crop_views(area: np.ndarray, boxes: np.ndarray, views: Sequence[View]) -> list[int]:
+    """An instance's views for crops: up to `CROP_VIEWS`, by pixels (counted at
+    `TRUNCATED_WEIGHT` where its box touches the frame's edge), each with at least
+    `CROP_MIN_SHARE` of the best one's pixels and `MIN_VIEW_PX`."""
+    if area.size == 0:
+        return []
+    weight = area.astype(np.float64).copy()
+    for v in np.flatnonzero(area > 0):
+        h, w = views[v].cell.shape
+        x0, y0, x1, y1 = boxes[v]
+        if x0 <= 0 or y0 <= 0 or x1 >= w - 1 or y1 >= h - 1:
+            weight[v] *= TRUNCATED_WEIGHT
+    order = np.argsort(-weight, kind="stable")[:CROP_VIEWS]
+    floor = max(MIN_VIEW_PX, CROP_MIN_SHARE * float(weight[order[0]]))
+    return [int(v) for v in order if weight[v] >= floor and area[v] > 0]
+
+
+def _square(x0: float, y0: float, x1: float, y1: float, w: int, h: int) -> tuple[int, ...]:
+    """The box grown to a square about its centre, within the frame where it can be."""
+    side = max(x1 - x0, y1 - y0)
+    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+    xa, ya = round(cx - side / 2), round(cy - side / 2)
+    xa = min(max(xa, 0), max(w - int(side), 0))
+    ya = min(max(ya, 0), max(h - int(side), 0))
+    return xa, ya, min(w, xa + math.ceil(side)), min(h, ya + math.ceil(side))
+
+
+def _shrink(image: np.ndarray) -> np.ndarray:
+    """At most `CROP_MAX_SIDE` a side (area-averaged), uint8."""
+    from PIL import Image
+
+    h, w = image.shape[:2]
+    if max(h, w) <= CROP_MAX_SIDE:
+        return np.ascontiguousarray(image, np.uint8)
+    scale = CROP_MAX_SIDE / max(h, w)
+    size = (max(1, round(w * scale)), max(1, round(h * scale)))
+    return np.asarray(Image.fromarray(np.ascontiguousarray(image, np.uint8)).resize(size, 4))
+
+
+def _save_gallery(path: Path, rows: list[list[np.ndarray]], side: int = 128) -> None:
+    """Rows of crops, each scaled to `side` square, as one JPEG (a check of what was seen)."""
+    from PIL import Image
+
+    width = max((len(r) for r in rows), default=1)
+    sheet = Image.new("RGB", (width * side, len(rows) * side))
+    for i, row in enumerate(rows):
+        for j, crop in enumerate(row):
+            tile = Image.fromarray(np.ascontiguousarray(crop, np.uint8)).resize((side, side))
+            sheet.paste(tile, (j * side, i * side))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    sheet.save(path, quality=85)
+
+
+#: The crops of an instance in a view, by kind: the frame (`pad`: its box padded `CROP_PAD`;
+#: `tight`: its box; `wide`: `WIDE_FACTOR` times its box, at least `WIDE_MIN_PX`) and what
+#: becomes of the pixels that are not the instance (scaled by a factor, or filled with a grey
+#: level). All square.
+CROP_SPECS: dict[str, tuple[str, str, float]] = {
+    "context": ("pad", "scale", 0.4),
+    "plain": ("pad", "scale", 1.0),
+    "alone": ("tight", "fill", 0.5),
+    "black": ("tight", "fill", 0.0),
+    "wide": ("wide", "scale", 0.7),
+    "wide-black": ("wide", "fill", 0.0),
+}
+
+
+def _crops(
+    view: View,
+    image: np.ndarray,
+    box: np.ndarray,
+    cell_id: np.ndarray,
+    ids: np.ndarray,
+    kinds: Sequence[str] = tuple(CROP_SPECS),
+) -> dict[str, np.ndarray]:
+    """Square crops of an instance in a view, one per kind of `CROP_SPECS`. The instance's
+    pixels are those whose cell carries one of `ids` (it and the instances below it), closed
+    over the renderer's speckle (a 3x3 closing)."""
+    import cv2
+
+    h, w = image.shape[:2]
+    x0, y0, x1, y1 = (float(b) for b in box)
+    bw, bh = x1 - x0 + 1, y1 - y0 + 1
+    pad_x = max(CROP_PAD * bw, (MIN_CROP_PX - bw) / 2, 0)
+    pad_y = max(CROP_PAD * bh, (MIN_CROP_PX - bh) / 2, 0)
+    half = max(WIDE_FACTOR * max(bw, bh), WIDE_MIN_PX) / 2
+    cx, cy = (x0 + x1 + 1) / 2, (y0 + y1 + 1) / 2
+    frames = {
+        "pad": _square(x0 - pad_x, y0 - pad_y, x1 + 1 + pad_x, y1 + 1 + pad_y, w, h),
+        "tight": _square(x0 - 1, y0 - 1, x1 + 2, y1 + 2, w, h),
+        "wide": _square(cx - half, cy - half, cx + half, cy + half, w, h),
+    }
+    out: dict[str, np.ndarray] = {}
+    for kind in kinds:
+        frame, how, value = CROP_SPECS[kind]
+        xa, ya, xb, yb = frames[frame]
+        owner = view.cell[ya:yb, xa:xb]
+        pid = np.where(owner >= 0, cell_id[np.maximum(owner, 0)], 0)
+        inside = np.isin(pid, ids).astype(np.uint8)
+        inside = cv2.morphologyEx(inside, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8)) > 0
+        crop = image[ya:yb, xa:xb].astype(np.float64)
+        rest = value * crop if how == "scale" else np.full_like(crop, 255.0 * value)
+        crop = np.where(inside[..., None], crop, rest)
+        if not crop.size:
+            crop = np.full((1, 1, 3), 255.0 * BACKGROUND_GREY)
+        out[kind] = _shrink(np.round(crop).astype(np.uint8))
+    return out
+
+
+def _portraits(
+    lifted: Lifted,
+    renderer: SplatRenderer | None,
+    splats: Splats | None,
+    cell: np.ndarray | None,
+):
+    """`portrait(ids, camera, lo, hi, centroid)`: the splats of the instances `ids` alone,
+    on grey, `PORTRAIT_PX` square, from the side `camera` saw them, framed to their box
+    (`lo`, `hi`) -- no occluder, no background, at a resolution of its own whatever its size
+    in the view. None without a renderer."""
+    if renderer is None or splats is None or cell is None:
+        return None
+    leaf = lifted.cell_id[np.asarray(cell)]
+    order = np.argsort(leaf, kind="stable")
+    bounds = np.searchsorted(leaf[order], np.arange(lifted.parent.size + 2))
+    grey = (BACKGROUND_GREY,) * 3
+    half = math.radians(PORTRAIT_FOV_DEG) / 2
+
+    def portrait(ids, camera, lo, hi, centroid) -> np.ndarray:
+        rows = np.concatenate([order[bounds[i] : bounds[i + 1]] for i in ids])
+        radius = max(0.5 * float(np.linalg.norm(np.asarray(hi) - np.asarray(lo))), 1e-3)
+        towards = np.asarray(centroid, np.float64) - np.asarray(camera.centre, np.float64)
+        towards /= max(float(np.linalg.norm(towards)), 1e-9)
+        eye = np.asarray(centroid, np.float64) - towards * (1.05 * radius / math.sin(half))
+        shot = Camera.look_at(
+            eye, centroid, fov_deg=PORTRAIT_FOV_DEG, width=PORTRAIT_PX, height=PORTRAIT_PX
+        )
+        frame = renderer(splats, shot, background=grey, rows=np.sort(rows))
+        return np.round(np.clip(frame.rgb, 0, 1) * 255).astype(np.uint8)
+
+    return portrait
+
+
+def category_scores(embedder: Embedder, embedding: np.ndarray) -> tuple[list[str], np.ndarray]:
+    """The zero-shot category head: per embedding row, a softmax over the categories that
+    have prompts (`scene_categories.CATEGORIES`, each its phrasings' text embeddings
+    averaged), at `LOGIT_SCALE`. An embedder that scores for itself (`score_categories`)
+    uses its own banks."""
+    prompted = [c for c in scene_categories.CATEGORIES if c.prompts]
+    ids = [c.id for c in prompted]
+    own = getattr(embedder, "score_categories", None)
+    if own is not None:
+        return ids, np.asarray(own(embedding, [c.prompts for c in prompted]), np.float64)
+    flat = [p for c in prompted for p in c.prompts]
+    text = np.asarray(embedder.embed_texts(flat), np.float64).reshape(len(flat), -1)
+    bank, k = [], 0
+    for c in prompted:
+        bank.append(text[k : k + len(c.prompts)].mean(axis=0))
+        k += len(c.prompts)
+    return ids, _softmax(LOGIT_SCALE * np.atleast_2d(embedding) @ _normalise(np.stack(bank)).T)
+
+
 def describe(
     lifted: Lifted,
     splats: Splats,
@@ -1397,10 +1803,28 @@ def describe(
     views: Sequence[View],
     embedder: Embedder,
     vocabulary: Sequence[str],
+    *,
+    renderer: SplatRenderer | None = None,
+    render_splats: Splats | None = None,
+    render_cell: np.ndarray | None = None,
+    categories: dict[str, str] | None = None,
+    kinds: Sequence[str] | None = None,
+    by_kind: dict[str, np.ndarray] | None = None,
+    debug_dir: Path | None = None,
 ) -> list[Instance]:
     """Per instance: bounds, centroid and splat counts, views, crops embedded, tags,
-    properties and behaviour. Bounds and centroid cover the instance with its children;
-    `splats` counts only the splats that carry its id (the contract's leaf level)."""
+    properties, category and behaviour. Bounds and centroid cover the instance with its
+    children; `splats` counts only the splats that carry its id (the contract's leaf level).
+
+    Crops (`_crops`) from its best views (`_crop_views`), and with a `renderer`, a portrait
+    of its own splats from each of those views' sides (`_portraits`: `render_splats`, the
+    splats the views were drawn from, and their cells `render_cell`). The category is voted
+    by its tags' labels (`categories`, label to category; default the committed file) and
+    a zero-shot head over the categories' own prompts (`category_scores`).
+
+    `kinds`: which crops make the embedding (`CROP_KINDS`; default `DESCRIBE_KINDS`).
+    `by_kind`: filled with every kind's own embedding (each crop kind is then made), to
+    compare them. `debug_dir`: a sheet of some instances' crops is written there."""
     n = lifted.parent.size
     if n == 0:
         return []
@@ -1427,7 +1851,7 @@ def describe(
     area = np.zeros((len(views), n))
     boxes = np.zeros((len(views), n, 4))  # x0, y0, x1, y1
     for v, view in enumerate(views):
-        h, w = view.cell.shape
+        w = view.cell.shape[1]
         owner = view.cell.reshape(-1)
         pid = np.where(owner >= 0, lifted.cell_id[np.maximum(owner, 0)], 0)
         has = pid > 0
@@ -1451,26 +1875,68 @@ def describe(
     # than `DESCRIBE_MIN_PX` pixels (with its children) keeps no embedding and no tags, and
     # takes its properties from its nearest described ancestor.
     described = area.max(axis=0) >= DESCRIBE_MIN_PX if len(views) else np.zeros(n, bool)
-    crops: list[np.ndarray] = []
-    owner_of_crop: list[int] = []
-    for k in np.flatnonzero(described):
-        best = [v for v in np.argsort(-area[:, k], kind="stable")[:CROP_VIEWS] if area[v, k] > 0]
-        for v in best:
-            image = views[v].rgb
-            h, w = image.shape[:2]
-            x0, y0, x1, y1 = boxes[v, k]
-            pad_x = max(CROP_PAD * (x1 - x0 + 1), (MIN_CROP_PX - (x1 - x0 + 1)) / 2, 0)
-            pad_y = max(CROP_PAD * (y1 - y0 + 1), (MIN_CROP_PX - (y1 - y0 + 1)) / 2, 0)
-            xa, xb = int(max(0, x0 - pad_x)), int(min(w, x1 + 1 + pad_x))
-            ya, yb = int(max(0, y0 - pad_y)), int(min(h, y1 + 1 + pad_y))
-            crops.append(np.ascontiguousarray(image[ya:yb, xa:xb]))
-            owner_of_crop.append(k)
+    # Per instance, the leaf ids below it (itself included): what its pixels and splats are.
+    subtree: list[list[int]] = [[] for _ in range(n)]
+    for k, chain in enumerate(_ancestors(lifted.parent)):
+        for a in chain:
+            subtree[a].append(k + 1)
+    subtree_ids = [np.asarray(ids, np.int64) for ids in subtree]
+    portrait = _portraits(lifted, renderer, render_splats, render_cell)
     dim = int(embedder.dim)
-    embedding = np.zeros((n, dim))
-    if crops:
-        rows = np.asarray(embedder.embed_images(crops), np.float64).reshape(len(crops), dim)
-        np.add.at(embedding, np.asarray(owner_of_crop), rows)
-    embedding = _normalise(embedding)
+    wanted = set(DESCRIBE_KINDS if kinds is None else kinds)
+    collect = wanted | (set(CROP_KINDS) if by_kind is not None else set())
+    sums: dict[str, np.ndarray] = {}
+    crops: list[np.ndarray] = []
+    owner_of_crop: list[tuple[str, int]] = []
+    shown = set(np.flatnonzero(described)[:: max(1, int(described.sum()) // 48)].tolist())
+    gallery: list[list[np.ndarray]] = []
+
+    def add(kind: str, k: int, crop: np.ndarray) -> None:
+        if kind in collect:
+            crops.append(crop)
+            owner_of_crop.append((kind, k))
+            if debug_dir is not None and k in shown:
+                gallery[-1].append(crop)
+
+    def flush() -> None:
+        if crops:
+            rows = np.asarray(embedder.embed_images(crops), np.float64).reshape(len(crops), dim)
+            for (kind, k), row in zip(owner_of_crop, rows, strict=True):
+                sums.setdefault(kind, np.zeros((n, dim)))[k] += row
+            crops.clear()
+            owner_of_crop.clear()
+
+    for k in np.flatnonzero(described):
+        if debug_dir is not None and k in shown:
+            gallery.append([])
+        for v in _crop_views(area[:, k], boxes[:, k], views):
+            view = views[v]
+            drawn = [c for c in CROP_SPECS if c in collect]
+            for kind, crop in _crops(
+                view, view.rgb, boxes[v, k], lifted.cell_id, subtree_ids[k], drawn
+            ).items():
+                add(kind, int(k), crop)
+            sampled = [c for c in CROP_SPECS if f"{c}-samples" in collect]
+            if sampled:
+                # Without another renderer, the view's image is the CPU's samples.
+                image = view.rgb if view.samples is None else view.samples
+                for kind, crop in _crops(
+                    view, image, boxes[v, k], lifted.cell_id, subtree_ids[k], sampled
+                ).items():
+                    add(f"{kind}-samples", int(k), crop)
+            if portrait is not None and "portrait" in collect:
+                shot = portrait(subtree_ids[k], view.camera, lo[k], hi[k], centroid[k])
+                add("portrait", int(k), shot)
+        if len(crops) >= EMBED_CHUNK:
+            flush()
+    flush()
+    # Each kind weighs the same, however many crops of it there were.
+    parts = [_normalise(sums[c]) for c in sorted(wanted) if c in sums]
+    embedding = _normalise(sum(parts, np.zeros((n, dim))))
+    if by_kind is not None:
+        by_kind.update({kind: _normalise(rows) for kind, rows in sums.items()})
+    if debug_dir is not None and gallery:
+        _save_gallery(debug_dir / "crops.jpg", gallery)
 
     words = list(vocabulary)
     names = list(PROPERTY_PROMPTS)
@@ -1496,6 +1962,10 @@ def describe(
         property_scores = _softmax(logits)[:, :, 0]
 
     has_embedding = np.any(embedding != 0, axis=1)
+    kind_rows = {c: _normalise(sums[c]) for c in sorted(wanted) if c in sums}
+    category = _categories_by_kind(
+        embedder, kind_rows, has_embedding, words, categories, lifted.parent
+    )
     # Properties of what was not described: its nearest described ancestor's (parents come
     # first in id order), else none.
     source = np.where(has_embedding, np.arange(n), -1)
@@ -1526,9 +1996,168 @@ def describe(
                 tags=tags,
                 properties=properties,
                 behaviour=behaviour(properties),
+                category=category[k],
             )
         )
     return instances
+
+
+def _categories(
+    embedder: Embedder,
+    embedding: np.ndarray,
+    described: np.ndarray,
+    tag_scores: np.ndarray,
+    words: Sequence[str],
+    labels: dict[str, str] | None,
+    head_weight: float = CATEGORY_HEAD_WEIGHT,
+) -> list[str | None]:
+    """Per instance, its category when described: `CATEGORY_HEAD_WEIGHT` of the zero-shot
+    head (`category_scores`) and the rest from its `CATEGORY_TAGS` best labels, each
+    label's probability added to its category and the sum normalised (the head alone when
+    none of them has a category). None for what is not described."""
+    out: list[str | None] = [None] * len(embedding)
+    ids, rows, head, tags, total = _category_parts(
+        embedder, embedding, described, tag_scores, words, labels
+    )
+    if rows.size == 0:
+        return out
+    mixed = np.where(total > 0, head_weight * head + (1 - head_weight) * tags, head)
+    best = np.argmax(mixed, axis=1)
+    for r, k in enumerate(rows):
+        out[k] = ids[int(best[r])]
+    return out
+
+
+def _categories_by_kind(
+    embedder: Embedder,
+    kind_rows: dict[str, np.ndarray],
+    described: np.ndarray,
+    words: Sequence[str],
+    labels: dict[str, str] | None,
+    parent: np.ndarray,
+    head_weight: float = CATEGORY_HEAD_WEIGHT,
+    parent_weight: float = CATEGORY_PARENT_WEIGHT,
+) -> list[str | None]:
+    """Per instance, its category when described: per crop kind (`kind_rows`, each kind's
+    own embedding), the distribution `_categories` takes the best of; their mean; then,
+    parents first, mixed with the parent's (when described) at `parent_weight`. None for
+    what is not described."""
+    n = len(described)
+    out: list[str | None] = [None] * n
+    rows = np.flatnonzero(described)
+    if rows.size == 0 or not kind_rows:
+        return out
+    labels = scene_categories.load() if labels is None else labels
+    total = None
+    ids: list[str] = []
+    for embedding in kind_rows.values():
+        scores = _tag_scores(embedder, embedding, words) if words else np.zeros((n, 0))
+        ids, at, head, tags, mass = _category_parts(
+            embedder, embedding, described, scores, words, labels
+        )
+        mixed = np.where(mass > 0, head_weight * head + (1 - head_weight) * tags, head)
+        full = np.zeros((n, len(ids)))
+        full[at] = mixed
+        total = full if total is None else total + full
+    assert total is not None
+    p = total / len(kind_rows)
+    for k in range(n):  # parents have lower ids
+        a = int(parent[k]) - 1
+        if described[k] and a >= 0 and described[a] and parent_weight > 0:
+            p[k] = (p[k] + parent_weight * p[a]) / (1 + parent_weight)
+    for k in rows:
+        out[int(k)] = ids[int(np.argmax(p[k]))]
+    return out
+
+
+def _category_parts(
+    embedder: Embedder,
+    embedding: np.ndarray,
+    described: np.ndarray,
+    tag_scores: np.ndarray,
+    words: Sequence[str],
+    labels: dict[str, str] | None,
+) -> tuple[list[str], np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """`_categories`' inputs: the category ids, the described rows, the head's and the
+    tags' distributions over the categories (rows), and the tags' total per row."""
+    rows = np.flatnonzero(described)
+    if rows.size == 0:
+        return [], rows, np.zeros((0, 0)), np.zeros((0, 0)), np.zeros((0, 1))
+    labels = scene_categories.load() if labels is None else labels
+    ids, head = category_scores(embedder, embedding[rows])
+    column = {c: j for j, c in enumerate(ids)}
+    votes = np.zeros_like(head)
+    if words and tag_scores.shape[1]:
+        top = np.argsort(-tag_scores[rows], axis=1, kind="stable")[:, :CATEGORY_TAGS]
+        for r in range(rows.size):
+            for t in top[r]:
+                c = labels.get(words[t]) or labels.get(words[t].strip().lower())
+                if c in column:
+                    votes[r, column[c]] += tag_scores[rows[r], t]
+    total = votes.sum(axis=1, keepdims=True)
+    tags = np.divide(votes, total, out=np.zeros_like(votes), where=total > 0)
+    return ids, rows, head, tags, total
+
+
+def _tag_scores(embedder: Embedder, embedding: np.ndarray, words: Sequence[str]) -> np.ndarray:
+    """(n, len(words)) tag probabilities, as `describe` scores them."""
+    own = getattr(embedder, "score_tags", None)
+    if own is not None:
+        return np.asarray(own(embedding, list(words)), np.float64)
+    text = np.asarray(embedder.embed_texts(list(words)), np.float64)
+    return _softmax(LOGIT_SCALE * embedding @ text.T)
+
+
+#: `describe_variants`: crop kinds compared, and the category head's weights.
+VARIANT_KINDS = (
+    ("context",), ("plain",), ("alone",), ("black",), ("wide",), ("wide-black",),
+    ("context-samples",), ("plain-samples",), ("black-samples",), ("wide-samples",),
+    ("context", "alone"), ("context", "black"), ("plain", "black"), ("wide", "black"),
+    ("wide", "wide-black"), ("context", "wide", "black"), ("context", "wide", "alone"),
+    ("plain", "wide", "black"), ("context", "black", "wide-black"),
+    ("context", "context-samples", "black", "black-samples"),
+    ("plain-samples", "black-samples"), ("plain", "plain-samples", "black"),
+    ("context", "plain-samples", "black"), ("wide", "plain-samples", "black"),
+)  # fmt: skip
+VARIANT_HEAD_WEIGHTS = (0.0, 0.5)
+
+
+def describe_variants(
+    embedder: Embedder,
+    vocabulary: Sequence[str],
+    by_kind: dict[str, np.ndarray],
+    distributions: dict[str, np.ndarray] | None = None,
+) -> dict[str, dict[str, list]]:
+    """Per variant (`VARIANT_KINDS` x `VARIANT_HEAD_WEIGHTS`, named `kinds@weight`), each
+    instance's category and best label as `describe` would give them from those crops: to
+    measure which crops describe a scan best, on the same instances. `distributions`, when
+    given, gets per single crop kind its described rows' head and tag distributions over
+    the categories (`<kind>/head`, `<kind>/tags`, `<kind>/rows`) and `categories`."""
+    words = list(vocabulary)
+    labels = scene_categories.load()
+    out: dict[str, dict[str, list]] = {}
+    if distributions is not None:
+        for kind, embedding in by_kind.items():
+            has = np.any(embedding != 0, axis=1)
+            scores = _tag_scores(embedder, embedding, words)
+            ids, rows, head, tags, _ = _category_parts(
+                embedder, embedding, has, scores, words, labels
+            )
+            distributions["categories"] = np.asarray(ids)
+            distributions[f"{kind}/rows"] = rows.astype(np.int32)
+            distributions[f"{kind}/head"] = head.astype(np.float16)
+            distributions[f"{kind}/tags"] = tags.astype(np.float16)
+    for kinds in VARIANT_KINDS:
+        if not all(k in by_kind for k in kinds):
+            continue
+        embedding = _normalise(sum(by_kind[k] for k in kinds))
+        has = np.any(embedding != 0, axis=1)
+        scores = _tag_scores(embedder, embedding, words)
+        top = [words[int(t)] if h else None for t, h in zip(scores.argmax(axis=1), has)]
+        for weight in VARIANT_HEAD_WEIGHTS:
+            category = _categories(embedder, embedding, has, scores, words, labels, weight)
+            out[f"{'+'.join(kinds)}@{weight:g}"] = {"category": category, "top": top}
+    return out
 
 
 # ------------------------------------------------------------------------------ writers
@@ -1601,7 +2230,9 @@ def instances_document(
     """`instances.json` v1 (docs/SCENE_OBJECTS.md §4), keys in the contract's order. Each
     instance also carries its broad scene `category` (`scene_categories.instance_categories`
     over `categories`, label to category id; default the committed `data/categories.json`),
-    which the viewer otherwise works out from the tags itself."""
+    which the viewer otherwise works out from the tags itself. A described instance's own
+    `category` (`describe`: its tags and the category head) is kept; the rest follow from
+    it by the same rule."""
     records = [
         {
             "id": i.id,
@@ -1619,7 +2250,8 @@ def instances_document(
         for i in instances
     ]
     labels = scene_categories.load() if categories is None else categories
-    assigned = scene_categories.instance_categories(records, labels)
+    given = {i.id: i.category for i in instances if i.category is not None}
+    assigned = scene_categories.instance_categories(records, labels, given=given)
     for record in records:
         record["category"] = assigned.get(int(record["id"]), scene_categories.OTHER)
     return {
@@ -1722,8 +2354,8 @@ def collect_votes(
     return [vote(v, m, n_cells, levels) for v, m in zip(views, all_masks)], levels, all_masks
 
 
-def _cache_key(camera: Camera, n_cells: int) -> str:
-    text = json.dumps([camera.to_json(), n_cells], sort_keys=True)
+def _cache_key(camera: Camera, n_cells: int, tag: str = "") -> str:
+    text = json.dumps([camera.to_json(), n_cells] + ([tag] if tag else []), sort_keys=True)
     return hashlib.sha1(text.encode()).hexdigest()[:16]
 
 
@@ -1734,12 +2366,13 @@ def cached_view(
     cells: np.ndarray,
     n_cells: int,
     index: SplatIndex | None = None,
+    tag: str = "",
 ) -> View:
-    """`render_view`, kept in `cache` (keyed by the camera and the cell count) so a run that
-    is stopped picks up where it was rather than rendering again."""
+    """`render_view`, kept in `cache` (keyed by the camera, the cell count and `tag`, what
+    else chose the splats) so a run that is stopped picks up where it was."""
     if cache is None:
         return render_view(splats, camera, cells, index)
-    path = cache / f"view-{_cache_key(camera, n_cells)}.npz"
+    path = cache / f"view-{_cache_key(camera, n_cells, tag)}.npz"
     if path.exists():
         with np.load(path) as z:
             return View(camera, z["rgb"], z["cell"], z["purity"])
@@ -1750,12 +2383,42 @@ def cached_view(
     return view
 
 
-def cached_masks(cache: Path | None, view: View, source: MaskSource, n_cells: int) -> list[Mask]:
-    """`source.masks(view.rgb)`, kept in `cache` beside the view (per mask source)."""
+def cached_raster(
+    cache: Path | None,
+    renderer: SplatRenderer,
+    splats: Splats,
+    camera: Camera,
+    n_cells: int,
+    tag: str = "",
+    index: SplatIndex | None = None,
+) -> np.ndarray:
+    """The view's image drawn by `renderer` (uint8), kept in `cache` like the view;
+    `index` hands it only the gaussians that can reach the frame."""
+    path = None
+    if cache is not None:
+        path = cache / f"raster-{_cache_key(camera, n_cells, tag)}-{renderer.name}.npz"
+        if path.exists():
+            with np.load(path) as z:
+                return z["rgb"]
+    rows = None if index is None else index.visible(camera)
+    frame = renderer(splats, camera, rows=rows)
+    rgb = np.round(np.clip(frame.rgb, 0, 1) * 255).astype(np.uint8)
+    if path is not None:
+        tmp = path.with_suffix(".tmp.npz")
+        np.savez_compressed(tmp, rgb=rgb)
+        tmp.replace(path)
+    return rgb
+
+
+def cached_masks(
+    cache: Path | None, view: View, source: MaskSource, n_cells: int, tag: str = ""
+) -> list[Mask]:
+    """`source.masks(view.rgb)`, kept in `cache` beside the view (per mask source, and per
+    `tag`: what drew the image)."""
     if cache is None:
         return source.masks(view.rgb)
     name = hashlib.sha1(str(getattr(source, "name", "")).encode()).hexdigest()[:8]
-    path = cache / f"masks-{_cache_key(view.camera, n_cells)}-{name}.npz"
+    path = cache / f"masks-{_cache_key(view.camera, n_cells, tag)}-{name}.npz"
     if path.exists():
         with np.load(path) as z:
             return [
@@ -1786,13 +2449,15 @@ class Segmentation:
     #: What `lift` was given, so it can be re-run (`relift`).
     votes: list[_Votes] = field(default_factory=list)
     cells: tuple[np.ndarray, np.ndarray, np.ndarray, float] | None = None
+    #: Per cell, how far its unseen splats reach (`lift`'s `cell_reach`).
+    reach: np.ndarray | None = None
 
     def relift(self) -> Lifted:
         """`lift` again from the same votes (it is deterministic)."""
         assert self.cells is not None
         _, centroids, counts, edge = self.cells
         levels = int(self.lifted.stats["levels"])
-        return lift(self.votes, centroids, counts, edge, levels)
+        return lift(self.votes, centroids, counts, edge, levels, cell_reach=self.reach)
 
 
 def segment(
@@ -1809,20 +2474,46 @@ def segment(
     progress=None,
     workers: int | None = None,
     max_views: int = MAX_VIEWS,
+    renderer: SplatRenderer | None = None,
+    max_scale_m: float | None = None,
+    coverage_rounds: int = 0,
+    coverage_budget: int = COVERAGE_VIEWS,
+    describe_kinds: Sequence[str] | None = None,
+    by_kind: dict[str, np.ndarray] | None = None,
+    debug_dir: Path | None = None,
 ) -> Segmentation:
     """Cells, views, masks, votes, lifting and meaning, for a scan held in memory.
 
-    `source_factory(cameras)` builds a mask source that needs the cameras (`OracleMasks`).
+    `source_factory(cameras)` builds a mask source that needs the cameras (`OracleMasks`;
+    called again for each coverage round's cameras).
     `cache`: a directory where each view and its masks are kept as they are made, so a
     stopped run resumes (views and masks are most of the time on a large scan).
     `progress(message)` is told as each view is done. `workers`: render processes
-    (default: the CPUs this process may use)."""
+    (default: the CPUs this process may use).
+
+    `renderer` (`make_renderer("gsplat")`): the image of every view the mask and image
+    models see is drawn by it (labels still come from the CPU renderer's samples, the same
+    camera), and the instances' portraits too (`describe`). `max_scale_m`: the views leave
+    out gaussians larger than this (largest axis) -- the floaters at a capture's edge, which
+    a rasterizer draws as blobs over a view; they take their cell's instance, or the nearest
+    seen cell's within their own reach (`lift`'s `cell_reach`). `coverage_rounds`: after
+    the lift, up to this many rounds of `coverage_views` (at most `coverage_budget` views
+    each) aimed at what is still without an instance, each followed by a lift of all the
+    votes; a round is not run once less than `COVERAGE_MIN_SHARE` of the splats is left.
+    `describe_kinds`, `by_kind`, `debug_dir`: `describe`'s `kinds`, `by_kind` and
+    `debug_dir` (which also gets a sheet of some views, as drawn and as sampled)."""
     timings: dict[str, float] = {}
     mark = time.perf_counter()
     cell, centroids, counts, edge = cells or supervoxels(splats.positions)
     timings["cellsS"] = time.perf_counter() - mark
     mark = time.perf_counter()
-    index = SplatIndex.build(splats)
+    largest = np.asarray(splats.scales).max(axis=1)
+    if max_scale_m is None:
+        view_splats, view_cell = splats, cell
+    else:
+        keep = np.flatnonzero(largest <= max_scale_m)
+        view_splats, view_cell = splats.take(keep), cell[keep]
+    index = SplatIndex.build(view_splats)
     if cameras is None:
         cameras = plan_views(
             splats.positions,
@@ -1836,47 +2527,106 @@ def segment(
     if cache is not None:
         cache.mkdir(parents=True, exist_ok=True)
     n_cells = len(centroids)
-    # Views render in forked workers while this process masks the ones already done (the
-    # mask model's GPU context starts after the fork). Each view's masks become its votes
-    # and are dropped; the views are kept for `describe`.
+    tag = "" if max_scale_m is None else f"max{max_scale_m:g}"
+    from_factory = source is None
     views: list[View] = []
     view_votes: list[_Votes] = []
-    render_s = masks_s = votes_s = 0.0
-    mark = time.perf_counter()
-    rendered = render_views(
-        splats, cameras, cell, index=index, workers=workers or default_workers(), cache=cache
-    )
-    for k, view in enumerate(rendered):
-        views.append(view)
-        now = time.perf_counter()
-        render_s += now - mark
-        if progress:
-            progress(f"view {k + 1}/{len(cameras)} rendered")
-        if source is None:
-            source = source_factory(cameras)
-        masks = cached_masks(cache, view, source, n_cells)
-        voted = time.perf_counter()
-        view_levels = max((m.level for m in masks), default=0) + 1
-        view_votes.append(vote(view, masks, n_cells, view_levels))
-        if progress:
-            progress(f"view {k + 1}/{len(cameras)} masked ({len(masks)} masks)")
+    clock = {"renderS": 0.0, "rasterS": 0.0, "masksS": 0.0, "votesS": 0.0}
+
+    def run_views(batch: Sequence[Camera]) -> None:
+        # Views render in forked workers while this process masks the ones already done
+        # (the mask model's GPU context starts after the first fork). Each view's masks
+        # become its votes and are dropped; the views are kept for `describe`.
+        nonlocal source
+        if from_factory:
+            source = source_factory(list(batch))
+        first = len(views)
         mark = time.perf_counter()
-        masks_s += voted - now
-        votes_s += mark - voted
-    del index
-    levels = max((v.masks.shape[0] for v in view_votes), default=1)
-    votes = [_pad_levels(v, levels) for v in view_votes]
-    # Rendering overlaps masking: renderS is the time spent waiting for views.
-    timings["renderS"] = render_s
-    timings["masksS"] = masks_s
-    timings["votesS"] = votes_s
+        rendered = render_views(
+            view_splats, batch, view_cell, index=index,
+            workers=workers or default_workers(), cache=cache, tag=tag,
+        )  # fmt: skip
+        for k, view in enumerate(rendered):
+            now = time.perf_counter()
+            clock["renderS"] += now - mark
+            if renderer is not None:
+                view = View(
+                    view.camera,
+                    cached_raster(cache, renderer, view_splats, view.camera, n_cells, tag, index),
+                    view.cell,
+                    view.purity,
+                    samples=view.rgb,
+                )
+            rastered = time.perf_counter()
+            clock["rasterS"] += rastered - now
+            views.append(view)
+            if progress:
+                progress(f"view {first + k + 1}/{first + len(batch)} rendered")
+            masks = cached_masks(
+                cache, view, source, n_cells, tag + ("" if renderer is None else renderer.name)
+            )
+            voted = time.perf_counter()
+            view_levels = max((m.level for m in masks), default=0) + 1
+            view_votes.append(vote(view, masks, n_cells, view_levels))
+            if progress:
+                progress(f"view {first + k + 1}/{first + len(batch)} masked ({len(masks)} masks)")
+            mark = time.perf_counter()
+            clock["masksS"] += voted - rastered
+            clock["votesS"] += mark - voted
+
+    # Unseen cells reach as far as twice their largest gaussian (a floater left out of the
+    # views carries the instance of what it hangs over).
+    reach = np.zeros(n_cells)
+    np.maximum.at(reach, cell, 2.0 * largest)
+
+    def lift_all() -> tuple[Lifted, int]:
+        levels = max((v.masks.shape[0] for v in view_votes), default=1)
+        votes = [_pad_levels(v, levels) for v in view_votes]
+        lifted = lift(votes, centroids, counts, edge, levels, cell_reach=reach)
+        lifted.stats["cellEdgeM"] = round(edge, 4)
+        lifted.stats["levels"] = levels
+        return lifted, levels
+
+    run_views(cameras)
     mark = time.perf_counter()
-    lifted = lift(votes, centroids, counts, edge, levels)
-    lifted.stats["cellEdgeM"] = round(edge, 4)
-    lifted.stats["levels"] = levels
+    lifted, levels = lift_all()
     timings["liftS"] = time.perf_counter() - mark
+    coverage: list[dict[str, float]] = []
+    for _ in range(coverage_rounds):
+        missing = np.where(lifted.cell_id == 0, counts, 0)
+        share = float(missing.sum()) / max(float(counts.sum()), 1.0)
+        if share < COVERAGE_MIN_SHARE:
+            break
+        mark = time.perf_counter()
+        extra = coverage_views(centroids, missing, edge, budget=coverage_budget)
+        timings["planS"] += time.perf_counter() - mark
+        if not extra:
+            break
+        coverage.append({"unassignedShare": round(share, 4), "views": len(extra)})
+        run_views(extra)
+        mark = time.perf_counter()
+        lifted, levels = lift_all()
+        timings["liftS"] += time.perf_counter() - mark
+    final = np.where(lifted.cell_id == 0, counts, 0).sum() / max(float(counts.sum()), 1.0)
+    lifted.stats["coverageRounds"] = coverage
+    lifted.stats["unassignedShare"] = round(float(final), 4)
+    lifted.stats["views"] = len(views)
+    # Rendering overlaps masking: renderS is the time spent waiting for views.
+    timings.update(clock)
     mark = time.perf_counter()
-    instances = describe(lifted, splats, cell, views, embedder, vocabulary)
+    votes = [_pad_levels(v, levels) for v in view_votes]
+    if debug_dir is not None and views:
+        picked = views[:: max(1, len(views) // 24)]
+        _save_gallery(
+            debug_dir / "views.jpg",
+            [[v.rgb] + ([v.samples] if v.samples is not None else []) for v in picked],
+            side=256,
+        )
+    instances = describe(
+        lifted, splats, cell, views, embedder, vocabulary,
+        renderer=renderer, render_splats=view_splats, render_cell=view_cell,
+        kinds=describe_kinds, by_kind=by_kind, debug_dir=debug_dir,
+    )  # fmt: skip
     timings["describeS"] = time.perf_counter() - mark
     return Segmentation(
         lifted.cell_id[cell],
@@ -1887,6 +2637,7 @@ def segment(
         timings,
         votes,
         (cell, centroids, counts, edge),
+        reach,
     )
 
 
@@ -1931,6 +2682,38 @@ def main() -> None:
         "--max-views", type=int, default=MAX_VIEWS, help="at most this many with local views"
     )
     parser.add_argument(
+        "--renderer",
+        choices=("cpu", "gsplat"),
+        default="cpu",
+        help="what draws the views' images and the portraits (gsplat: a CUDA GPU)",
+    )
+    parser.add_argument(
+        "--max-scale-m",
+        type=float,
+        default=None,
+        help="leave gaussians larger than this (largest axis, metres) out of the views",
+    )
+    parser.add_argument(
+        "--coverage-rounds",
+        type=int,
+        default=COVERAGE_ROUNDS,
+        help="rounds of views aimed at what is still without an instance",
+    )
+    parser.add_argument(
+        "--coverage-views", type=int, default=COVERAGE_VIEWS, help="at most this many a round"
+    )
+    parser.add_argument(
+        "--describe-kinds",
+        default=",".join(DESCRIBE_KINDS),
+        help=f"crops an instance is described by, of {', '.join(CROP_KINDS)}",
+    )
+    parser.add_argument(
+        "--variants", type=Path, default=None, help="write describe_variants here (JSON)"
+    )
+    parser.add_argument(
+        "--debug-dir", type=Path, default=None, help="sheets of some views and crops"
+    )
+    parser.add_argument(
         "--workers", type=int, default=None, help="render processes (default: usable CPUs)"
     )
     parser.add_argument("--save-dir", type=Path, default=None, help="write the views here")
@@ -1963,6 +2746,7 @@ def main() -> None:
             if line.strip() and not line.lstrip().startswith("#")
         ]
     source = load_masks(args.masks) if args.masks else None
+    by_kind: dict[str, np.ndarray] | None = {} if args.variants else None
     factory = None
     if args.truth:
         truth = json.loads(args.truth.read_text(encoding="utf-8"))
@@ -1979,7 +2763,19 @@ def main() -> None:
         source_factory=factory,
         cache=args.cache,
         progress=lambda message: print(message, flush=True),
+        renderer=make_renderer(args.renderer),
+        max_scale_m=args.max_scale_m,
+        coverage_rounds=args.coverage_rounds,
+        coverage_budget=args.coverage_views,
+        describe_kinds=[k for k in args.describe_kinds.split(",") if k],
+        by_kind=by_kind,
+        debug_dir=args.debug_dir,
     )
+    if args.variants:
+        distributions: dict[str, np.ndarray] = {}
+        variants = describe_variants(embedder, vocabulary, by_kind, distributions)
+        args.variants.write_text(json.dumps(variants, separators=(",", ":")), encoding="utf-8")
+        np.savez_compressed(args.variants.with_suffix(".npz"), **distributions)
     if from_tiles:
         tiles = tile_binding_by_position(args.tiles, splats.positions, result.splat_id)
     else:

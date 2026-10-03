@@ -1,7 +1,15 @@
 import { ArcGisMapService, Credit, CreditDisplay, Ion } from "cesium";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { configureIonToken, demoteDefaultTokenNotices } from "@/cesium/ion";
+import {
+  configureIonToken,
+  demoteDefaultTokenNotices,
+  ION_MISSING_TTL_MS,
+  IonAssetMissingError,
+  ionAssetKnownMissing,
+  isIonNotFound,
+  rememberIonAssetMissing,
+} from "@/cesium/ion";
 
 /** What CesiumJS hands back from `getDefaultTokenCredit`, minus the types it does not declare. */
 interface DefaultKeyedService {
@@ -62,5 +70,22 @@ describe("attribution", () => {
     expect(google.showOnScreen).toBe(true);
     expect(CreditDisplay.cesiumCredit.showOnScreen).toBe(ionLogoOnScreen);
     expect(CreditDisplay.cesiumCredit.html).toContain("ion-credit.png");
+  });
+});
+
+describe("ion assets the key cannot see", () => {
+  it("are remembered per key for a while, and count as not found", () => {
+    localStorage.removeItem("hexapod.ion.missing");
+    const now = 1_000_000;
+    expect(ionAssetKnownMissing(1415196, now)).toBe(false);
+    rememberIonAssetMissing(1415196, now);
+    expect(ionAssetKnownMissing(1415196, now + 1000)).toBe(true);
+    expect(ionAssetKnownMissing(42, now)).toBe(false);
+    expect(ionAssetKnownMissing(1415196, now + ION_MISSING_TTL_MS + 1)).toBe(false);
+    // Another key may see it.
+    Ion.defaultAccessToken = "another-key-entirely";
+    expect(ionAssetKnownMissing(1415196, now + 1000)).toBe(false);
+    expect(isIonNotFound(new IonAssetMissingError(1415196))).toBe(true);
+    localStorage.removeItem("hexapod.ion.missing");
   });
 });

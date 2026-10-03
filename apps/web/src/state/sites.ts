@@ -18,12 +18,15 @@ interface SitesState {
   activeSiteId: string | null;
   /** Site the camera is currently inside/near (drives representation control visibility). */
   nearSiteId: string | null;
+  /** Loaded site the camera still frames, from near or a few km out (keeps its controls up). */
+  inViewSiteId: string | null;
   representation: Record<string, Representation>;
   /** Selected temporal version (asset id) per site, when several exist. */
   temporalAsset: Record<string, string>;
   assets: Record<string, AssetRuntime>;
   setActiveSite: (id: string | null) => void;
   setNearSite: (id: string | null) => void;
+  setInViewSite: (id: string | null) => void;
   setRepresentation: (siteId: string, representation: Representation) => void;
   setTemporalAsset: (siteId: string, assetId: string) => void;
   updateAsset: (assetId: string, patch: Partial<AssetRuntime>) => void;
@@ -42,11 +45,13 @@ export const defaultAssetRuntime: AssetRuntime = {
 export const useSites = create<SitesState>()((set) => ({
   activeSiteId: null,
   nearSiteId: null,
+  inViewSiteId: null,
   representation: {},
   temporalAsset: {},
   assets: {},
   setActiveSite: (activeSiteId) => set({ activeSiteId }),
   setNearSite: (nearSiteId) => set({ nearSiteId }),
+  setInViewSite: (inViewSiteId) => set({ inViewSiteId }),
   setRepresentation: (siteId, representation) =>
     set((s) => ({ representation: { ...s.representation, [siteId]: representation } })),
   setTemporalAsset: (siteId, assetId) =>

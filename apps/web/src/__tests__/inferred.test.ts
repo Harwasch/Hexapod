@@ -89,6 +89,10 @@ describe("inferred layers", () => {
     expect(urls).toEqual(["https://tiles.example/site/splat/inferred/tileset.json"]);
     expect(added).toEqual([child]);
     expect(useInferred.getState().layers["asset-1"]?.[0]?.views).toBe(6);
+    // Off until a person opts in.
+    preUpdate.raiseEvent();
+    expect(child.show).toBe(false);
+    useInferred.getState().setShow(true);
     preUpdate.raiseEvent();
     expect(child.show).toBe(true);
     expect(Matrix4.equals(child.modelMatrix, parent.modelMatrix)).toBe(true);
@@ -101,5 +105,6 @@ describe("inferred layers", () => {
     expect(child.show).toBe(false);
     dispose();
     expect(useInferred.getState().layers["asset-1"]).toBeUndefined();
+    useInferred.getState().setShow(false);
   });
 });
