@@ -34,7 +34,7 @@ import { timed } from "@/lib/timing";
 
 import type { CameraController } from "./CameraController";
 import type { ClippingManager } from "./ClippingManager";
-import { isIonAuthError, isIonNotFound } from "./ion";
+import { isIonAuthError, isIonNotFound, rememberIonAssetMissing } from "./ion";
 import { devicePixelError, type PerformanceManager } from "./PerformanceManager";
 import { groundAt, measuredClamp, type MeasuredGround } from "./placement";
 import { createSiteTileset, tileCacheBudget } from "./providers/tiles";
@@ -60,6 +60,18 @@ const REPRESENTATION_ORDER: Representation[] = [
 const ACTIVATE_DISTANCE_M = 40_000;
 const DEACTIVATE_DISTANCE_M = 400_000;
 const NEAR_ALTITUDE_M = 6_000;
+
+/**
+ * Whether the camera still frames a site, for keeping its controls on screen: near it (its
+ * ground position within six radii, below NEAR_ALTITUDE_M), or within NEAR_ALTITUDE_M of it
+ * (plus six radii) in a straight line. The first alone dropped the controls of a pitched view
+ * zoomed out to a couple of kilometres, whose ground position is kilometres short of the site
+ * it looks at.
+ */
+export function framesSite(distanceM: number, altitudeM: number, radiusM: number): boolean {
+  if (distanceM < radiusM * 6 && altitudeM < NEAR_ALTITUDE_M) return true;
+  return Math.hypot(distanceM, Math.max(0, altitudeM)) < NEAR_ALTITUDE_M + radiusM * 6;
+}
 /** Sites smaller than this are ranked as if they were this big, so tiny objects do not win by default. */
 const MIN_SITE_RADIUS_M = 30;
 /** Object scale engages within this distance of a hand-sized model's surface. */
@@ -172,6 +184,9 @@ export class SiteManager {
   /** The site the representation switcher, clipping and the HUD refer to. */
   private primaryId: string | null = null;
   private nearId: string | null = null;
+  private inViewId: string | null = null;
+  /** Assets whose missing ion asset was logged (once each). */
+  private readonly missingIonLogged = new Set<string>();
   private objectScale = false;
   private screenSpaceError = 16;
   /** The gaussians this device draws at once (lib/detail.ts), read once. */
@@ -588,6 +603,25 @@ export class SiteManager {
         return tileset;
       })
       .catch((error: unknown) => {
+        if (asset.source.type === "cesium-ion" && isIonNotFound(error)) {
+          // An asset the catalog names but the key's account was never given (the seeded San
+          // Francisco mesh, ion asset 1415196, loads by proximity near the Bay Area scans):
+          // skipped quietly, remembered so it is not asked for again, said once.
+          const message = "Cesium ion has no asset with this ID that the map key can see.";
+          rememberIonAssetMissing(asset.source.assetId);
+          if (!this.missingIonLogged.has(asset.id)) {
+            this.missingIonLogged.add(asset.id);
+            log.info("ion asset not available to this key; skipped", {
+              asset: asset.id,
+              ionAsset: asset.source.assetId,
+            });
+          }
+          this.events.emit("asset", {
+            id: asset.id,
+            patch: { loadState: "error", error: message },
+          });
+          return null;
+        }
         const message = isIonAuthError(error)
           ? "Cesium ion refused this asset: the map key has no access to it."
           : isIonNotFound(error)
@@ -940,6 +974,12 @@ export class SiteManager {
     if (near !== this.nearId) {
       this.nearId = near;
       this.events.emit("site-near", near);
+    }
+    const inView =
+      best && framesSite(best.distance, pose.altitude, best.radius) ? best.summary.id : null;
+    if (inView !== this.inViewId) {
+      this.inViewId = inView;
+      this.events.emit("site-in-view", inView);
     }
     this.performance.reportContext(pose.altitude, near !== null);
     this.updateObjectScale();

@@ -23,13 +23,17 @@ const RENDERERS: { value: SplatRenderer; label: string; ariaLabel: string }[] = 
   { value: "cesium", label: "Cesium", ariaLabel: "Draw splats with CesiumJS" },
 ];
 
-/** [Splat] [Mesh] [Points] — appears when the camera is near a loaded site. Switching keeps the camera. */
+/**
+ * [Splat] [Mesh] [Points] — appears while the camera is near a loaded site or still frames it
+ * (SiteManager `framesSite`). Switching keeps the camera.
+ */
 export function RepresentationSwitcher() {
   const scene = useScene();
   const splatRenderer = useSettings((s) => s.splatRenderer);
   const setSettings = useSettings((s) => s.set);
   const activeSiteId = useSites((s) => s.activeSiteId);
   const nearSiteId = useSites((s) => s.nearSiteId);
+  const inViewSiteId = useSites((s) => s.inViewSiteId);
   const representation = useSites((s) =>
     activeSiteId ? s.representation[activeSiteId] : undefined,
   );
@@ -40,7 +44,10 @@ export function RepresentationSwitcher() {
   const setShowInferred = useInferred((s) => s.setShow);
   const shownAsset = site?.assets.find((a) => a.representation === representation);
   const evidence = shownAsset ? (inferred[shownAsset.id] ?? []) : [];
-  const visible = Boolean(site && nearSiteId === activeSiteId);
+  // Up while the active site is near or still framed (a pitched view kilometres out).
+  const visible = Boolean(
+    site && activeSiteId && (nearSiteId === activeSiteId || inViewSiteId === activeSiteId),
+  );
   const available = ORDER.filter((rep) => site?.assets.some((a) => a.representation === rep));
   const options = ORDER.map((rep) => {
     const asset = site?.assets.find((a) => a.representation === rep);

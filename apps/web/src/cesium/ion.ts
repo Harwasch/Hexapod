@@ -65,7 +65,62 @@ export function isIonAuthError(error: unknown): boolean {
 }
 
 export function isIonNotFound(error: unknown): boolean {
-  return /\b404\b/.test(describe(error));
+  return error instanceof IonAssetMissingError || /\b404\b/.test(describe(error));
+}
+
+/** Where the ion assets found missing for a key are remembered (this device only). */
+const MISSING_KEY = "hexapod.ion.missing";
+/** How long a missing asset is believed: the key's account can be given it later. */
+export const ION_MISSING_TTL_MS = 3 * 24 * 3600 * 1000;
+const MISSING_MAX = 100;
+
+/** The ion asset `assetId` as seen by the key in use (another key may see what this one does not). */
+function missingEntry(assetId: number): string {
+  return `${Ion.defaultAccessToken.slice(-12)}:${String(assetId)}`;
+}
+
+function rememberedMissing(): [string, number][] {
+  try {
+    const raw: unknown = JSON.parse(localStorage.getItem(MISSING_KEY) ?? "[]");
+    if (!Array.isArray(raw)) return [];
+    return raw.filter(
+      (e): e is [string, number] =>
+        Array.isArray(e) && typeof e[0] === "string" && typeof e[1] === "number",
+    );
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Whether ion answered 404 for `assetId` with this key lately (`rememberIonAssetMissing`): the
+ * catalog can name an asset the key's account was never given (a seeded comparison site's
+ * asset-depot mesh), and asking again only puts another 404 in the console.
+ */
+export function ionAssetKnownMissing(assetId: number, now = Date.now()): boolean {
+  const entry = missingEntry(assetId);
+  return rememberedMissing().some(([key, at]) => key === entry && now - at < ION_MISSING_TTL_MS);
+}
+
+export function rememberIonAssetMissing(assetId: number, now = Date.now()): void {
+  const entry = missingEntry(assetId);
+  try {
+    const list = rememberedMissing().filter(
+      ([key, at]) => key !== entry && now - at < ION_MISSING_TTL_MS,
+    );
+    list.push([entry, now]);
+    localStorage.setItem(MISSING_KEY, JSON.stringify(list.slice(-MISSING_MAX)));
+  } catch {
+    // Storage may be blocked: the asset is then asked for again next time.
+  }
+}
+
+/** Thrown instead of asking ion for an asset it answered 404 for lately. */
+export class IonAssetMissingError extends Error {
+  constructor(assetId: number) {
+    super(`Cesium ion asset ${String(assetId)} is not available to this key (404, remembered).`);
+    this.name = "IonAssetMissingError";
+  }
 }
 
 function describe(error: unknown): string {
