@@ -1566,7 +1566,7 @@ CROP_KINDS = (
     "context-samples", "plain-samples", "alone-samples", "black-samples", "wide-samples",
     "wide-black-samples", "portrait",
 )  # fmt: skip
-DESCRIBE_KINDS = ("context", "black")
+DESCRIBE_KINDS = ("plain-samples", "black-samples", "alone-samples")
 #: The wide crop: this many times the instance's box, at least `WIDE_MIN_PX` a side.
 WIDE_FACTOR = 3.0
 WIDE_MIN_PX = 224
@@ -1584,10 +1584,15 @@ CROP_MAX_SIDE = 256
 #: Portraits: an instance's own splats alone on grey, square, framed to its box.
 PORTRAIT_PX = 224
 PORTRAIT_FOV_DEG = 40.0
-#: The category: `CATEGORY_HEAD_WEIGHT` of the zero-shot head over the categories' prompts,
-#: the rest from the `CATEGORY_TAGS` best labels' probabilities summed per category.
-CATEGORY_HEAD_WEIGHT = 0.5
+#: The category, per crop kind: `CATEGORY_HEAD_WEIGHT` of the zero-shot head over the
+#: categories' prompts, the rest from the `CATEGORY_TAGS` best labels' probabilities summed
+#: per category; averaged over the kinds, then each instance's distribution is mixed with its
+#: parent's at `CATEGORY_PARENT_WEIGHT` (a part is seen with what it is part of). Measured
+#: (2026-10-03, pumpkin and camp): the head pulls a conifer's parts to "bush" and a hay bed to
+#: "sky", so it is weighed 0; the parent mix raises the camp canopy's Trees from 0.23 to 0.28.
+CATEGORY_HEAD_WEIGHT = 0.0
 CATEGORY_TAGS = 10
+CATEGORY_PARENT_WEIGHT = 1.0
 
 
 @runtime_checkable
@@ -1912,9 +1917,11 @@ def describe(
             ).items():
                 add(kind, int(k), crop)
             sampled = [c for c in CROP_SPECS if f"{c}-samples" in collect]
-            if view.samples is not None and sampled:
+            if sampled:
+                # Without another renderer, the view's image is the CPU's samples.
+                image = view.rgb if view.samples is None else view.samples
                 for kind, crop in _crops(
-                    view, view.samples, boxes[v, k], lifted.cell_id, subtree_ids[k], sampled
+                    view, image, boxes[v, k], lifted.cell_id, subtree_ids[k], sampled
                 ).items():
                     add(f"{kind}-samples", int(k), crop)
             if portrait is not None and "portrait" in collect:
@@ -1955,7 +1962,10 @@ def describe(
         property_scores = _softmax(logits)[:, :, 0]
 
     has_embedding = np.any(embedding != 0, axis=1)
-    category = _categories(embedder, embedding, has_embedding, tag_scores, words, categories)
+    kind_rows = {c: _normalise(sums[c]) for c in sorted(wanted) if c in sums}
+    category = _categories_by_kind(
+        embedder, kind_rows, has_embedding, words, categories, lifted.parent
+    )
     # Properties of what was not described: its nearest described ancestor's (parents come
     # first in id order), else none.
     source = np.where(has_embedding, np.arange(n), -1)
@@ -2015,6 +2025,48 @@ def _categories(
     best = np.argmax(mixed, axis=1)
     for r, k in enumerate(rows):
         out[k] = ids[int(best[r])]
+    return out
+
+
+def _categories_by_kind(
+    embedder: Embedder,
+    kind_rows: dict[str, np.ndarray],
+    described: np.ndarray,
+    words: Sequence[str],
+    labels: dict[str, str] | None,
+    parent: np.ndarray,
+    head_weight: float = CATEGORY_HEAD_WEIGHT,
+    parent_weight: float = CATEGORY_PARENT_WEIGHT,
+) -> list[str | None]:
+    """Per instance, its category when described: per crop kind (`kind_rows`, each kind's
+    own embedding), the distribution `_categories` takes the best of; their mean; then,
+    parents first, mixed with the parent's (when described) at `parent_weight`. None for
+    what is not described."""
+    n = len(described)
+    out: list[str | None] = [None] * n
+    rows = np.flatnonzero(described)
+    if rows.size == 0 or not kind_rows:
+        return out
+    labels = scene_categories.load() if labels is None else labels
+    total = None
+    ids: list[str] = []
+    for embedding in kind_rows.values():
+        scores = _tag_scores(embedder, embedding, words) if words else np.zeros((n, 0))
+        ids, at, head, tags, mass = _category_parts(
+            embedder, embedding, described, scores, words, labels
+        )
+        mixed = np.where(mass > 0, head_weight * head + (1 - head_weight) * tags, head)
+        full = np.zeros((n, len(ids)))
+        full[at] = mixed
+        total = full if total is None else total + full
+    assert total is not None
+    p = total / len(kind_rows)
+    for k in range(n):  # parents have lower ids
+        a = int(parent[k]) - 1
+        if described[k] and a >= 0 and described[a] and parent_weight > 0:
+            p[k] = (p[k] + parent_weight * p[a]) / (1 + parent_weight)
+    for k in rows:
+        out[int(k)] = ids[int(np.argmax(p[k]))]
     return out
 
 

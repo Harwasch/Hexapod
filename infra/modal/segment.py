@@ -104,6 +104,9 @@ MAX_SCALE_M = 0.5
 #: Coverage rounds after the first lift, and views per round (`segment_scene.coverage_views`).
 COVERAGE_ROUNDS = 2
 COVERAGE_VIEWS = 96
+#: Also embed every crop kind and score `segment_scene.describe_variants` (variants.json,
+#: variants.npz): to compare how instances are described. It costs a third more time.
+VARIANTS = False
 
 #: The public bucket answers Python's default user agent with 403 (Cloudflare's bot rules);
 #: curl's is let through.
@@ -209,8 +212,7 @@ def segment_scan(
                 str(COVERAGE_VIEWS),
                 "--workers",
                 str(RENDER_WORKERS),
-                "--variants",
-                str(Path(work) / "variants.json"),
+                *(["--variants", str(Path(work) / "variants.json")] if VARIANTS else []),
                 "--debug-dir",
                 str(Path(work) / "debug"),
                 *(["--cache", str(cache)] if keep_masks else []),

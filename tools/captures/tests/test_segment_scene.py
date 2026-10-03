@@ -537,7 +537,13 @@ def test_described_instances_carry_a_category_and_portraits_are_embedded(run: di
     rows = distributions["context/rows"]
     assert distributions["context/head"].shape == (rows.size, len(distributions["categories"]))
     assert "context+black@0.5" in variants
-    assert variants["context+black@0.5"]["category"] == [i.category for i in again]
+    # The category: each described kind's distribution, averaged, mixed with the parent's.
+    described = np.array([i.category is not None for i in again])
+    expected = ss._categories_by_kind(
+        ss.FakeEmbedder(), {k: by_kind[k] for k in sorted(ss.DESCRIBE_KINDS)}, described,
+        VOCABULARY, None, result.lifted.parent,
+    )  # fmt: skip
+    assert expected == [i.category for i in again]
     portraits = [i for i in seen if i.shape == (ss.PORTRAIT_PX, ss.PORTRAIT_PX, 3)]
     assert portraits and all(max(i.shape[:2]) <= ss.CROP_MAX_SIDE for i in seen)
     ids = scene_categories.category_ids()
