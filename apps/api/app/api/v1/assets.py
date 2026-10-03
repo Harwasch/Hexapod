@@ -59,6 +59,16 @@ def delete_asset(asset_id: uuid.UUID, db: DbSession) -> None:
 
 
 SIDECAR_RESPONSES: dict[int | str, dict[str, Any]] = {
+    409: {
+        "model": Problem,
+        "description": (
+            "Refused, and `code` says why: `tiles_changed` -- `basedOn` no longer holds the "
+            "asset's tiles, so compute the sidecars again on its current tileset; `busy` -- "
+            "another attach or a publish held the asset, so retry; `not_attachable` -- the "
+            "asset or its directory cannot take an attach (not a run's 3D Tiles in the "
+            "public bucket, not a tileset, too many objects, an object too large to copy)"
+        ),
+    },
     503: {"model": Problem, "description": "Object storage is not configured"},
 }
 
@@ -82,10 +92,12 @@ SIDECAR_RESPONSES: dict[int | str, dict[str, Any]] = {
         "(materials and telemetry by `instances`), which are dropped and flagged on the "
         "asset unless the request sends them too. "
         "Attaches to one asset are serialized: a second waits and builds on the first's "
-        "generation. 409 when `basedOn` no longer holds the asset's tiles (a republish "
-        "replaced them), when the asset is not a run's tileset in the public bucket, or "
-        "when another attach held the asset too long; 422 for a staged file outside the "
-        "rules (path, extension, size, a tile or `tileset.json`). See docs/DEPLOYMENT.md."
+        "generation. 409, with the Problem's `code`, when `basedOn` no longer holds the "
+        "asset's tiles (`tiles_changed`: a republish replaced them), when another attach "
+        "held the asset too long (`busy`), or when the asset cannot take an attach "
+        "(`not_attachable`: not a run's tileset in the public bucket, say); 422 for a staged "
+        "file outside the rules (path, extension, size, a tile or `tileset.json`). See "
+        "docs/DEPLOYMENT.md."
     ),
 )
 def attach_sidecars(

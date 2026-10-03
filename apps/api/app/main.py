@@ -53,8 +53,9 @@ def _problem(
     title: str,
     detail: str | None = None,
     errors: list[dict[str, object]] | None = None,
+    code: str | None = None,
 ) -> JSONResponse:
-    payload = Problem(title=title, status=status_code, detail=detail, errors=errors)
+    payload = Problem(title=title, status=status_code, detail=detail, errors=errors, code=code)
     return JSONResponse(
         status_code=status_code,
         content=payload.model_dump(mode="json", by_alias=True, exclude_none=True),
@@ -164,7 +165,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.exception_handler(ConflictError)
     async def conflict_handler(_: Request, exc: ConflictError) -> JSONResponse:
-        return _problem(status.HTTP_409_CONFLICT, "Conflict", str(exc))
+        return _problem(status.HTTP_409_CONFLICT, "Conflict", str(exc), code=exc.code)
 
     @app.exception_handler(UnauthorizedError)
     async def unauthorized_handler(_: Request, exc: UnauthorizedError) -> JSONResponse:

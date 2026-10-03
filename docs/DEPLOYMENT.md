@@ -749,6 +749,15 @@ one lacks), the root `extras` keys now declared, and the asset. A failure before
 leaves the asset exactly as it was: the half-written generation is keys nothing points at,
 and the staged files stay for a retry.
 
+Every 409 says why in the Problem's `code` (an RFC 9457 extension member; other errors
+have none), so a client branches on it rather than on the words of `detail`:
+
+| `code`           | Means                                                                                                                                                            | Do                                                     |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| `tiles_changed`  | `basedOn` no longer holds the asset's tiles: a republish replaced them                                                                                           | compute the files again on the asset's current tileset |
+| `busy`           | another attach, or a worker's register, held the asset past the 60 s lock wait                                                                                   | retry                                                  |
+| `not_attachable` | the asset cannot take an attach: not a run's 3D Tiles in the public bucket, its `tileset.json` missing or not a tileset, too many objects, one too large to copy | neither; fix the asset or the bucket                   |
+
 **Serialised per asset.** The attach takes `SELECT … FOR UPDATE` on the asset, so a second
 attach waits (up to 60 s, then 409 — retry) and builds on the first's generation; neither
 loses the other's files. The lock is held across the copies — seconds for a thousand tiles
@@ -792,9 +801,9 @@ writes the request beside them as `attach.json` (`attach_sidecars.py manifest`),
 review artifact. The publish job runs `attach_sidecars.py attach <dir>`: it uploads the files
 with the R2 pair to `staging/assets/<asset id>/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT/` in the
 private bucket (clearing anything a failed earlier try left under that prefix), POSTs the
-request, retries a 409 that says another attach holds the asset, and ends with exit status 3
-on a 409 that says the tiles changed under it — run the workflow again on the asset's current
-tiles. By hand, the same request is:
+request, retries a 409 whose `code` is `busy`, and ends with exit status 3 on one whose
+`code` is `tiles_changed` — run the workflow again on the asset's current tiles — and with
+exit status 1 and the API's own `detail` on any other refusal. By hand, the same request is:
 
 ```bash
 PREFIX="staging/assets/$ASSET_ID/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT/"

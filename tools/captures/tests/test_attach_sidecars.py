@@ -28,6 +28,7 @@ PUBLIC = "https://pub-0123.r2.dev"
 LEGACY = f"{PUBLIC}/runs/{JOB}/package/splat/tileset.json"
 CURRENT = f"{PUBLIC}/runs/{JOB}/p0123456789abcdef/package/splat/tileset.json"
 API_SIDECARS = Path(__file__).resolve().parents[3] / "apps/api/app/services/sidecars.py"
+API_ATTACH = API_SIDECARS.with_name("attach.py")
 
 
 class StubS3:
@@ -283,6 +284,14 @@ def test_the_rules_are_the_apis() -> None:
         assert spelled[1] == getattr(attach, name.lstrip("_")).pattern, name
 
 
+def test_the_409_codes_are_the_apis() -> None:
+    """What `attach` branches on is the `code` the API's attach puts on each 409."""
+    codes = dict(re.findall(r'^([A-Z_]+) = "([a-z_]+)"$', API_ATTACH.read_text(), re.MULTILINE))
+    assert codes["BUSY"] == attach.BUSY
+    assert codes["TILES_CHANGED"] == attach.TILES_CHANGED_CODE
+    assert set(codes) >= {"BUSY", "TILES_CHANGED", "NOT_ATTACHABLE"}
+
+
 # --- attach -----------------------------------------------------------------------------
 
 
@@ -353,7 +362,12 @@ def test_the_report_says_what_the_attach_dropped_and_why(
 def test_a_busy_asset_is_asked_again(api: StubApi, tmp_path: Path) -> None:
     out = instances_dir(tmp_path)
     attach.write_manifest(out, asset_id=ASSET, based_on=CURRENT)
-    busy = {"detail": f"another attach or publish of asset {ASSET} is in progress; retry shortly"}
+    busy = {
+        "title": "Conflict",
+        "status": 409,
+        "detail": f"another attach or publish of asset {ASSET} is in progress; retry shortly",
+        "code": "busy",
+    }
     api.on(
         "POST", f"/api/v1/assets/{ASSET}/sidecars", (409, busy), (409, busy), (200, attachment())
     )
@@ -370,7 +384,7 @@ def test_tiles_that_changed_under_the_run_end_it_with_its_own_status(
 ) -> None:
     out = instances_dir(tmp_path)
     attach.write_manifest(out, asset_id=ASSET, based_on=LEGACY)
-    changed = {"detail": "the asset's tiles are no longer the ones at ..."}
+    changed = {"detail": "the asset's tiles are no longer the ones at ...", "code": "tiles_changed"}
     api.on("POST", f"/api/v1/assets/{ASSET}/sidecars", (409, changed))
 
     with pytest.raises(attach.AttachError) as refused:
@@ -379,6 +393,59 @@ def test_tiles_that_changed_under_the_run_end_it_with_its_own_status(
     assert refused.value.code == attach.TILES_CHANGED
     assert "run the workflow again on its current tiles" in refused.value.message
     assert len(api.requests) == 1
+
+
+@pytest.mark.parametrize(
+    "refused",
+    [
+        {"detail": f"asset {ASSET} is not a 3D Tiles URL, so it has no sidecars"},
+        {"detail": "runs/x/p0/package/splat/ holds more than 20000 objects"},
+        {"detail": "0/0.glb is too large for one server-side copy"},
+        {"detail": "runs/x/p0/package/splat/tileset.json is not a tileset: no root tile"},
+        # The words of the others are no reason; only the code is.
+        {"detail": "the asset's tiles are no longer the ones at ..."},
+        {"detail": "another attach or publish of asset ... is in progress; retry shortly"},
+    ],
+)
+def test_a_409_that_is_neither_busy_nor_changed_tiles_ends_with_the_apis_words(
+    api: StubApi, tmp_path: Path, refused: dict[str, str]
+) -> None:
+    """The API answers 409 for an asset that cannot take an attach at all, too: not the
+    tiles changing under the run (computing again would not help), not worth a wait."""
+    out = instances_dir(tmp_path)
+    attach.write_manifest(out, asset_id=ASSET, based_on=CURRENT)
+    coded = {**refused, "code": "not_attachable"}
+    for body in (coded, refused):
+        api.requests.clear()
+        api.on("POST", f"/api/v1/assets/{ASSET}/sidecars", (409, body))
+        waits: list[float] = []
+        with pytest.raises(attach.AttachError) as stopped:
+            attach.attach(
+                out, api=api.url, s3=StubS3(), bucket="b", write_token="t", sleep=waits.append
+            )
+        assert stopped.value.code == 1
+        assert stopped.value.message.endswith(f": {refused['detail']}")
+        assert ("(not_attachable)" in stopped.value.message) == ("code" in body)
+        assert "run the workflow again" not in stopped.value.message
+        assert (len(api.requests), waits) == (1, [])
+
+
+def test_an_asset_busy_past_the_retries_ends_with_the_apis_words(
+    api: StubApi, tmp_path: Path
+) -> None:
+    out = instances_dir(tmp_path)
+    attach.write_manifest(out, asset_id=ASSET, based_on=CURRENT)
+    busy = {"detail": "another attach or publish of asset ... is in progress", "code": "busy"}
+    api.on("POST", f"/api/v1/assets/{ASSET}/sidecars", (409, busy))
+    waits: list[float] = []
+    with pytest.raises(attach.AttachError) as stopped:
+        attach.attach(
+            out, api=api.url, s3=StubS3(), bucket="b", write_token="t", sleep=waits.append
+        )
+    assert stopped.value.code == 1
+    assert "409" in stopped.value.message and "(busy)" in stopped.value.message
+    assert len(api.requests) == attach.BUSY_RETRIES + 1
+    assert waits == [attach.BUSY_WAIT_S] * attach.BUSY_RETRIES
 
 
 def test_any_other_refusal_is_reported_whole(api: StubApi, tmp_path: Path) -> None:

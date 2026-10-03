@@ -9,7 +9,17 @@ class NotFoundError(Exception):
 
 
 class ConflictError(Exception):
-    pass
+    """A request the resource's current state refuses. A 409.
+
+    `code`, where the service gives one, is a machine-readable reason, answered as the
+    Problem's `code` so a client can branch on it rather than on the words of `detail`:
+    the sidecar attach's `tiles_changed`, `busy` and `not_attachable`
+    (`app/services/attach.py`).
+    """
+
+    def __init__(self, message: str, *, code: str | None = None) -> None:
+        super().__init__(message)
+        self.code = code
 
 
 class UnauthorizedError(Exception):

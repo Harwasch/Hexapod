@@ -988,9 +988,10 @@ review artifact is exactly what will be sent. The `publish` job (only when asked
 `staging/assets/<asset id>/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT/` in the private bucket
 (`vars.R2_BUCKET || 'twin-assets'`) with the R2 pair, laid out as beside `tileset.json`,
 and POSTs `{stagingPrefix, basedOn, files, extras, rigUrl?}` with `API_WRITE_TOKEN` to
-`TWIN_API_URL`. A 409 because another attach holds the asset is retried; a 409 because the
-tiles changed under the run ends it (exit status 3): run it again on the asset's current
-tiles. No workflow reads, diffs or uploads a `tileset.json` any more, and none writes to the
+`TWIN_API_URL`. The API says why it refused in the 409's `code`: `busy` (another attach
+holds the asset) is retried; `tiles_changed` (the tiles changed under the run) ends it with
+exit status 3, so run it again on the asset's current tiles; `not_attachable` and every other
+refusal end it with exit status 1 and the API's words. No workflow reads, diffs or uploads a `tileset.json` any more, and none writes to the
 public bucket. docs/DEPLOYMENT.md ("Sidecars: one publisher") lists the secrets and
 variables.
 

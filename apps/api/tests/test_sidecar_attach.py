@@ -559,6 +559,7 @@ def test_an_attach_computed_on_tiles_a_republish_replaced_is_refused(
     )
     assert response.status_code == 409
     assert "no longer the ones" in response.json()["detail"]
+    assert response.json()["code"] == attach_service.TILES_CHANGED == "tiles_changed"
     assert files_under(buckets.public, "") == before
     db.expire_all()
     assert db.get(Asset, asset.id).source["url"] == LIVE_URL  # type: ignore[union-attr]
@@ -665,6 +666,50 @@ def test_an_asset_that_is_not_a_run_tileset_in_the_public_bucket_has_no_generati
         json={"stagingPrefix": prefix, "basedOn": LIVE_URL},
     )
     assert response.status_code == status
+    assert response.json()["code"] == attach_service.NOT_ATTACHABLE == "not_attachable"
+
+
+def _too_many(real: Any) -> Any:
+    def listing(storage: Any, directory: str, **kwargs: Any) -> Any:
+        if directory.startswith("runs/"):
+            raise sidecars.TooManyObjects(f"{directory} holds more than 20000 objects")
+        return real(storage, directory, **kwargs)
+
+    return listing
+
+
+@pytest.mark.parametrize(
+    ("why", "words"),
+    [
+        ("missing", "is not in the public bucket"),
+        ("broken", "is not a tileset"),
+        ("too big", "too large for one server-side copy"),
+        ("too many", "more than 20000 objects"),
+    ],
+)
+def test_a_directory_that_cannot_take_an_attach_is_a_409_that_says_so(
+    db: Session,
+    buckets: Publisher,
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    why: str,
+    words: str,
+) -> None:
+    """Not "the tiles changed": computing the files again would not help, and the
+    workflow's script tells the two apart by `code`, not by these words."""
+    if why == "broken":
+        buckets.public.put_object(LIVE_DIR + "tileset.json", b"{not json", "application/json")
+    elif why != "missing":
+        put_scan(buckets.public, LIVE_DIR)
+    if why == "too big":
+        monkeypatch.setattr(sidecars, "MAX_COPY_BYTES", 4)
+    if why == "too many":
+        monkeypatch.setattr(sidecars, "list_directory", _too_many(sidecars.list_directory))
+    asset = an_asset(db, LIVE_URL)
+    response = attach(client, asset, stage(buckets.private, asset.id, INSTANCES_FILES))
+    assert response.status_code == 409, response.text
+    assert words in response.json()["detail"]
+    assert response.json()["code"] == "not_attachable"
 
 
 def test_an_unknown_asset_is_a_404(buckets: Publisher, client: TestClient) -> None:
@@ -819,7 +864,7 @@ def test_an_attach_that_cannot_get_the_lock_in_time_is_a_409(
         transaction = holder.begin()
         holder.execute(text("SELECT id FROM assets WHERE id = :id FOR UPDATE"), {"id": asset.id})
         try:
-            with pytest.raises(ConflictError, match="in progress"):
+            with pytest.raises(ConflictError, match="in progress") as busy:
                 attach_service.attach_sidecars(
                     db,
                     asset.id,
@@ -830,6 +875,7 @@ def test_an_attach_that_cannot_get_the_lock_in_time_is_a_409(
                     staging=buckets.private,
                     public=buckets.public,
                 )
+            assert busy.value.code == attach_service.BUSY == "busy"
         finally:
             transaction.rollback()
 

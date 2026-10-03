@@ -27,8 +27,9 @@ that directory. Subcommands::
     attach_sidecars.py attach DIR                               # stage, POST, report
 
 ``resolve`` prints ``{"assetId", "url", "name"}``. ``attach`` exits 0 when the asset moved
-to the new generation, 3 on a 409 that means the tiles changed under the run (compute again
-on the asset's current tiles), 1 on anything else.
+to the new generation, 3 on a 409 whose ``code`` is ``tiles_changed`` (the tiles changed under
+the run: compute again on the asset's current tiles), and 1 on anything else -- with the
+API's own detail -- after retrying a 409 whose ``code`` is ``busy``.
 
 Environment: ``TWIN_API_URL`` (the API's origin; ``--api``), and for ``attach``
 ``API_WRITE_TOKEN`` and the private bucket -- ``OBJECT_STORAGE_ENDPOINT_URL``,
@@ -89,8 +90,12 @@ POST_TIMEOUT_S = 900
 #: A 409 because another attach (or a worker's publish) holds the asset is retried.
 BUSY_RETRIES = 4
 BUSY_WAIT_S = 30.0
-#: The API's words for that 409 (app/services/attach.py), against "the tiles changed".
-BUSY = "in progress"
+#: The API's machine-readable reasons for a 409, its Problem's `code`
+#: (app/services/attach.py; tests/test_attach_sidecars.py reads them from there). Every
+#: other 409 -- an asset that is not a run's 3D Tiles, a directory too big to copy -- is
+#: `not_attachable`, and neither waiting nor computing again would change it.
+BUSY = "busy"
+TILES_CHANGED_CODE = "tiles_changed"
 #: `attach`'s exit status for a 409 that means the tiles changed under the run.
 TILES_CHANGED = 3
 
@@ -430,20 +435,34 @@ def attach(
         if status == 200 and isinstance(answer, dict):
             report(answer)
             return answer
-        detail = json.dumps(answer) if not isinstance(answer, str) else answer
-        if status == 409 and BUSY in detail and attempt <= BUSY_RETRIES:
+        code, detail = refusal(answer)
+        if status == 409 and code == BUSY and attempt <= BUSY_RETRIES:
             print(f"attach_sidecars: the asset is busy ({detail}); again in {BUSY_WAIT_S:.0f} s")
             sleep(BUSY_WAIT_S)
             continue
-        if status == 409:
+        if status == 409 and code == TILES_CHANGED_CODE:
             raise AttachError(
                 f"409 from {url}: {detail}. The asset's tiles are no longer the ones these "
                 f"files were computed against ({manifest['basedOn']}); run the workflow again "
                 "on its current tiles.",
                 TILES_CHANGED,
             )
-        raise AttachError(f"{status} from {url}: {detail}")
+        raise AttachError(f"{status} from {url}" + (f" ({code})" if code else "") + f": {detail}")
     raise AttachError("unreachable")  # pragma: no cover - the loop returns or raises
+
+
+def refusal(answer: Any) -> tuple[str | None, str]:
+    """A refusal's `code` (None where it has none) and the API's own words for it: the
+    Problem's `detail`, or the whole body where it has none (a request validation error's
+    `errors`, a proxy's page)."""
+    if isinstance(answer, dict):
+        code = answer.get("code")
+        detail = answer.get("detail")
+        return (
+            code if isinstance(code, str) else None,
+            detail if isinstance(detail, str) else json.dumps(answer),
+        )
+    return None, answer if isinstance(answer, str) else json.dumps(answer)
 
 
 def report(answer: Mapping[str, Any]) -> None:

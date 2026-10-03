@@ -74,6 +74,15 @@ HOLD_LIMIT = "600s"
 #: Postgres's SQLSTATE for `lock_timeout`.
 LOCK_NOT_AVAILABLE = "55P03"
 
+#: What each 409 means, as the Problem's `code` -- what tools/captures/attach_sidecars.py
+#: branches on, rather than on the words of the detail:
+#: `basedOn` no longer holds the asset's tiles; compute the files again on its current ones.
+TILES_CHANGED = "tiles_changed"
+#: another attach, or a worker's register, held the asset past `LOCK_WAIT`; retry.
+BUSY = "busy"
+#: the asset or its directory cannot take an attach at all; retrying will not help.
+NOT_ATTACHABLE = "not_attachable"
+
 #: Why an attach drops a kind keyed by another's ids: a republish's rule (`carry._why_not`,
 #: "it names instances ids, and instances was not carried"), for what an attach did to it.
 LEADER_REPLACED = (
@@ -146,12 +155,15 @@ def _attach(
     source = asset.source if isinstance(asset.source, dict) else {}
     url = source.get("url")
     if source.get("type") != "3d-tiles-url" or not isinstance(url, str):
-        raise ConflictError(f"asset {asset.id} is not a 3D Tiles URL, so it has no sidecars")
+        raise ConflictError(
+            f"asset {asset.id} is not a 3D Tiles URL, so it has no sidecars", code=NOT_ATTACHABLE
+        )
     here = sidecars.locate(url, public)
     if here is None:
         raise ConflictError(
             f"asset {asset.id}'s tileset ({url}) is not a run's tileset in the public bucket "
-            "(runs/<job>/...), so there is no generation to cut from it"
+            "(runs/<job>/...), so there is no generation to cut from it",
+            code=NOT_ATTACHABLE,
         )
     current = _read(public, here)
     _check_base(public, payload.based_on, url, current)
@@ -204,7 +216,9 @@ def _attach(
         )
     too_big = sorted(rel for rel, item in kept.items() if item.size > sidecars.MAX_COPY_BYTES)
     if too_big:
-        raise ConflictError(f"{too_big[0]} is too large for one server-side copy")
+        raise ConflictError(
+            f"{too_big[0]} is too large for one server-side copy", code=NOT_ATTACHABLE
+        )
 
     body = sidecars.serialize(sidecars.with_extras(current.document, extras))
     generation = sidecars.generation_from(
@@ -384,7 +398,8 @@ def _lock(db: Session, asset_id: uuid.UUID) -> Asset:
         db.rollback()
         if getattr(error.orig, "sqlstate", None) == LOCK_NOT_AVAILABLE:
             raise ConflictError(
-                f"another attach or publish of asset {asset_id} is in progress; retry shortly"
+                f"another attach or publish of asset {asset_id} is in progress; retry shortly",
+                code=BUSY,
             ) from error
         raise
     if asset is None:
@@ -397,13 +412,15 @@ def _read(public: ObjectStorage, location: sidecars.TilesetLocation) -> _Directo
     try:
         objects = sidecars.list_directory(public, location.directory)
     except sidecars.TooManyObjects as error:
-        raise ConflictError(str(error)) from error
+        raise ConflictError(str(error), code=NOT_ATTACHABLE) from error
     if location.entry not in objects:
-        raise ConflictError(f"{location.key} is not in the public bucket")
+        raise ConflictError(f"{location.key} is not in the public bucket", code=NOT_ATTACHABLE)
     try:
         document = sidecars.parse_tileset(public.get_object(location.key))
     except sidecars.TilesetError as error:
-        raise ConflictError(f"{location.key} is not a tileset: {error}") from error
+        raise ConflictError(
+            f"{location.key} is not a tileset: {error}", code=NOT_ATTACHABLE
+        ) from error
     return _Directory(location=location, objects=objects, document=document)
 
 
@@ -431,7 +448,8 @@ def _check_base(public: ObjectStorage, based_on: str, url: str, current: _Direct
         raise ConflictError(
             f"the asset's tiles are no longer the ones at {based_on}: it points at {url}, "
             "which a republish wrote. Compute the sidecars against that tileset and stage "
-            "them again."
+            "them again.",
+            code=TILES_CHANGED,
         )
 
 

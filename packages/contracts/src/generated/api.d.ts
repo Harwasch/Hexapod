@@ -129,7 +129,7 @@ export interface paths {
         put?: never;
         /**
          * Attach sidecars to an asset by cutting a new generation
-         * @description The one way to publish files beside a scan's tiles (`instances.json`, `collision.bin`, an inferred fill under `inferred/<name>/`, `sog/`, a plant rig). Stage them in the private bucket under `staging/assets/<asset id>/<token>/`, laid out as they should sit beside `tileset.json`, then call this. The asset's current tiles and every sidecar it already has are copied server side into a **new** generation with the staged files beside them, `tileset.json` with the merged root `extras` is written last, all of it immutable, and the asset's URL moves to it. What the request replaces is not copied: a staged kind's old files (its whole file set, or the directory unit), and the kinds keyed by a replaced kind's ids (materials and telemetry by `instances`), which are dropped and flagged on the asset unless the request sends them too. Attaches to one asset are serialized: a second waits and builds on the first's generation. 409 when `basedOn` no longer holds the asset's tiles (a republish replaced them), when the asset is not a run's tileset in the public bucket, or when another attach held the asset too long; 422 for a staged file outside the rules (path, extension, size, a tile or `tileset.json`). See docs/DEPLOYMENT.md.
+         * @description The one way to publish files beside a scan's tiles (`instances.json`, `collision.bin`, an inferred fill under `inferred/<name>/`, `sog/`, a plant rig). Stage them in the private bucket under `staging/assets/<asset id>/<token>/`, laid out as they should sit beside `tileset.json`, then call this. The asset's current tiles and every sidecar it already has are copied server side into a **new** generation with the staged files beside them, `tileset.json` with the merged root `extras` is written last, all of it immutable, and the asset's URL moves to it. What the request replaces is not copied: a staged kind's old files (its whole file set, or the directory unit), and the kinds keyed by a replaced kind's ids (materials and telemetry by `instances`), which are dropped and flagged on the asset unless the request sends them too. Attaches to one asset are serialized: a second waits and builds on the first's generation. 409, with the Problem's `code`, when `basedOn` no longer holds the asset's tiles (`tiles_changed`: a republish replaced them), when another attach held the asset too long (`busy`), or when the asset cannot take an attach (`not_attachable`: not a run's tileset in the public bucket, say); 422 for a staged file outside the rules (path, extension, size, a tile or `tileset.json`). See docs/DEPLOYMENT.md.
          */
         post: operations["attach_sidecars_api_v1_assets__asset_id__sidecars_post"];
         delete?: never;
@@ -2875,6 +2875,11 @@ export interface components {
          * @description RFC 9457-style error payload.
          */
         Problem: {
+            /**
+             * Code
+             * @description A machine-readable reason, where the endpoint gives one: what a client branches on, rather than the words of `detail`. The sidecar attach's 409s say `tiles_changed`, `busy` or `not_attachable`.
+             */
+            code?: string | null;
             /** Detail */
             detail?: string | null;
             /** Errors */
@@ -4237,7 +4242,7 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
-            /** @description Conflict */
+            /** @description Refused, and `code` says why: `tiles_changed` -- `basedOn` no longer holds the asset's tiles, so compute the sidecars again on its current tileset; `busy` -- another attach or a publish held the asset, so retry; `not_attachable` -- the asset or its directory cannot take an attach (not a run's 3D Tiles in the public bucket, not a tileset, too many objects, an object too large to copy) */
             409: {
                 headers: {
                     [name: string]: unknown;
