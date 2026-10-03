@@ -573,19 +573,20 @@ def test_each_batch_of_views_is_sized_from_the_reservation(
     run: dict, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """With no `workers`, the render processes come from the reservation the caller passed
-    (`default_workers(cpus, memory_bytes)`, infra/modal/segment.py's `--cpus` / `--memory-gb`),
-    asked again for each batch of views -- the first and every coverage round -- and said."""
+    (`default_workers(cpus, memory_bytes, worker_bytes)`, infra/modal/segment.py's `--cpus` /
+    `--memory-gb`, and what a render of this scan may hold), asked again for each batch of
+    views -- the first and every coverage round -- said, and kept in the stats."""
     splats, levels = run["splats"], run["levels"]
-    asked: list[tuple[object, object]] = []
+    asked: list[tuple[object, object, object]] = []
 
-    def default_workers(cpus=None, memory_bytes=None):
-        asked.append((cpus, memory_bytes))
+    def default_workers(cpus=None, memory_bytes=None, worker_bytes=None):
+        asked.append((cpus, memory_bytes, worker_bytes))
         return 1
 
     monkeypatch.setattr(ss, "default_workers", default_workers)
     said: list[str] = []
     cameras = [v.camera for v in run["result"].views][:2]
-    ss.segment(
+    sized = ss.segment(
         splats,
         None,
         ss.FakeEmbedder(),
@@ -596,8 +597,9 @@ def test_each_batch_of_views_is_sized_from_the_reservation(
         cpus=8,
         memory_bytes=32 * float(1 << 30),
     )
-    assert asked and set(asked) == {(8, 32 * float(1 << 30))}
+    assert asked and set(asked) == {(8, 32 * float(1 << 30), ss.RENDER_WORKER_BYTES)}
     assert "render workers: 1" in said
+    assert sized.lifted.stats["renderWorkers"] == [1] * len(asked)
     # A count given is used as it is.
     asked.clear()
     ss.segment(
